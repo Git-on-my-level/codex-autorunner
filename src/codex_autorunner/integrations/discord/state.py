@@ -35,7 +35,6 @@ State authority boundary
 from __future__ import annotations
 
 import asyncio
-import enum
 import json
 import logging
 import sqlite3
@@ -54,52 +53,54 @@ DISCORD_INTERACTION_LEDGER_RETENTION_DAYS = 14
 _UNSET = object()
 _logger = logging.getLogger(__name__)
 
+_VALID_SCHEDULER_STATES = frozenset(
+    {
+        "received",
+        "dispatch_ready",
+        "dispatch_ack_pending",
+        "queue_wait_ack_pending",
+        "acknowledged",
+        "scheduled",
+        "waiting_on_resources",
+        "executing",
+        "delivery_pending",
+        "delivery_replaying",
+        "delivery_expired",
+        "recovery_scheduled",
+        "completed",
+        "abandoned",
+    }
+)
 
-class InteractionSchedulerState(str, enum.Enum):
-    RECEIVED = "received"
-    DISPATCH_READY = "dispatch_ready"
-    DISPATCH_ACK_PENDING = "dispatch_ack_pending"
-    QUEUE_WAIT_ACK_PENDING = "queue_wait_ack_pending"
-    ACKNOWLEDGED = "acknowledged"
-    SCHEDULED = "scheduled"
-    WAITING_ON_RESOURCES = "waiting_on_resources"
-    EXECUTING = "executing"
-    DELIVERY_PENDING = "delivery_pending"
-    DELIVERY_REPLAYING = "delivery_replaying"
-    DELIVERY_EXPIRED = "delivery_expired"
-    RECOVERY_SCHEDULED = "recovery_scheduled"
-    COMPLETED = "completed"
-    ABANDONED = "abandoned"
-
-
-class InteractionExecutionStatus(str, enum.Enum):
-    RECEIVED = "received"
-    ACKNOWLEDGED = "acknowledged"
-    RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    TIMEOUT = "timeout"
-    CANCELLED = "cancelled"
+_VALID_EXECUTION_STATUSES = frozenset(
+    {
+        "received",
+        "acknowledged",
+        "running",
+        "completed",
+        "failed",
+        "timeout",
+        "cancelled",
+    }
+)
 
 
 def _normalize_interaction_scheduler_state(value: str) -> str:
     normalized = str(value or "").strip()
     if not normalized:
         raise ValueError("interaction scheduler state must be a non-empty string")
-    try:
-        return InteractionSchedulerState(normalized).value
-    except ValueError as exc:
-        raise ValueError(f"unknown interaction scheduler state: {normalized}") from exc
+    if normalized not in _VALID_SCHEDULER_STATES:
+        raise ValueError(f"unknown interaction scheduler state: {normalized}")
+    return normalized
 
 
 def _normalize_interaction_execution_status(value: str) -> str:
     normalized = str(value or "").strip()
     if not normalized:
         raise ValueError("interaction execution status must be a non-empty string")
-    try:
-        return InteractionExecutionStatus(normalized).value
-    except ValueError as exc:
-        raise ValueError(f"unknown interaction execution status: {normalized}") from exc
+    if normalized not in _VALID_EXECUTION_STATUSES:
+        raise ValueError(f"unknown interaction execution status: {normalized}")
+    return normalized
 
 
 @dataclass(frozen=True)
@@ -142,7 +143,7 @@ class InteractionLedgerRecord:
     route_key: Optional[str] = None
     handler_id: Optional[str] = None
     conversation_id: Optional[str] = None
-    scheduler_state: str = InteractionSchedulerState.RECEIVED
+    scheduler_state: str = "received"
     resource_keys: tuple[str, ...] = ()
     payload_json: Optional[dict[str, Any]] = None
     envelope_json: Optional[dict[str, Any]] = None
@@ -150,7 +151,7 @@ class InteractionLedgerRecord:
     attempt_count: int = 0
     ack_mode: Optional[str] = None
     ack_completed_at: Optional[str] = None
-    execution_status: str = InteractionExecutionStatus.RECEIVED
+    execution_status: str = "received"
     execution_started_at: Optional[str] = None
     execution_finished_at: Optional[str] = None
     execution_error: Optional[str] = None
@@ -1664,8 +1665,8 @@ class DiscordStateStore:
                         guild_id,
                         user_id,
                         metadata_blob,
-                        InteractionSchedulerState.RECEIVED.value,
-                        InteractionExecutionStatus.RECEIVED.value,
+                        "received",
+                        "received",
                         now,
                         now,
                         now,
@@ -2209,7 +2210,7 @@ class DiscordStateStore:
         conn = self._connection_sync()
         now = now_iso()
         error_text = str(execution_error)[:500] if execution_error is not None else None
-        if normalized_execution_status == InteractionExecutionStatus.RUNNING.value:
+        if normalized_execution_status == "running":
             with conn:
                 conn.execute(
                     """

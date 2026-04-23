@@ -41,25 +41,41 @@ from typing import Any, Mapping, Optional
 
 from .text_utils import _normalize_text
 
+_STATUS_ACTIVE = "active"
+_STATUS_ARCHIVED = "archived"
+_STATUS_IDLE = "idle"
+_STATUS_RUNNING = "running"
+_STATUS_PAUSED = "paused"
+_STATUS_COMPLETED = "completed"
+_STATUS_INTERRUPTED = "interrupted"
+_STATUS_FAILED = "failed"
 
-class ManagedThreadStatus(str, Enum):
-    ACTIVE = "active"
-    ARCHIVED = "archived"
-    IDLE = "idle"
-    RUNNING = "running"
-    PAUSED = "paused"
-    COMPLETED = "completed"
-    INTERRUPTED = "interrupted"
-    FAILED = "failed"
+_OP_REUSABLE = "reusable"
+_OP_ATTENTION_REQUIRED = "attention_required"
 
+_VALID_STATUSES = frozenset(
+    {
+        _STATUS_ACTIVE,
+        _STATUS_ARCHIVED,
+        _STATUS_IDLE,
+        _STATUS_RUNNING,
+        _STATUS_PAUSED,
+        _STATUS_COMPLETED,
+        _STATUS_INTERRUPTED,
+        _STATUS_FAILED,
+    }
+)
 
-class ManagedThreadOperatorStatus(str, Enum):
-    IDLE = "idle"
-    RUNNING = "running"
-    PAUSED = "paused"
-    REUSABLE = "reusable"
-    ATTENTION_REQUIRED = "attention_required"
-    ARCHIVED = "archived"
+_VALID_OPERATOR_STATUSES = frozenset(
+    {
+        _STATUS_IDLE,
+        _STATUS_RUNNING,
+        _STATUS_PAUSED,
+        _OP_REUSABLE,
+        _OP_ATTENTION_REQUIRED,
+        _STATUS_ARCHIVED,
+    }
+)
 
 
 class ManagedThreadStatusReason(str, Enum):
@@ -75,10 +91,10 @@ class ManagedThreadStatusReason(str, Enum):
 
 TERMINAL_STATUSES = frozenset(
     {
-        ManagedThreadStatus.COMPLETED.value,
-        ManagedThreadStatus.INTERRUPTED.value,
-        ManagedThreadStatus.FAILED.value,
-        ManagedThreadStatus.ARCHIVED.value,
+        _STATUS_COMPLETED,
+        _STATUS_INTERRUPTED,
+        _STATUS_FAILED,
+        _STATUS_ARCHIVED,
     }
 )
 
@@ -86,57 +102,57 @@ TRANSITION_TABLE: tuple[dict[str, Any], ...] = (
     {
         "signal": ManagedThreadStatusReason.THREAD_CREATED.value,
         "from": "*",
-        "to": ManagedThreadStatus.IDLE.value,
+        "to": _STATUS_IDLE,
     },
     {
         "signal": ManagedThreadStatusReason.THREAD_RESUMED.value,
         "from": (
-            ManagedThreadStatus.PAUSED.value,
-            ManagedThreadStatus.ARCHIVED.value,
+            _STATUS_PAUSED,
+            _STATUS_ARCHIVED,
         ),
-        "to": ManagedThreadStatus.IDLE.value,
+        "to": _STATUS_IDLE,
     },
     {
         "signal": ManagedThreadStatusReason.TURN_STARTED.value,
         "from": (
-            ManagedThreadStatus.IDLE.value,
-            ManagedThreadStatus.COMPLETED.value,
-            ManagedThreadStatus.INTERRUPTED.value,
-            ManagedThreadStatus.FAILED.value,
-            ManagedThreadStatus.PAUSED.value,
+            _STATUS_IDLE,
+            _STATUS_COMPLETED,
+            _STATUS_INTERRUPTED,
+            _STATUS_FAILED,
+            _STATUS_PAUSED,
         ),
-        "to": ManagedThreadStatus.RUNNING.value,
+        "to": _STATUS_RUNNING,
     },
     {
         "signal": ManagedThreadStatusReason.THREAD_COMPACTED.value,
         "from": (
-            ManagedThreadStatus.IDLE.value,
-            ManagedThreadStatus.COMPLETED.value,
-            ManagedThreadStatus.INTERRUPTED.value,
-            ManagedThreadStatus.FAILED.value,
-            ManagedThreadStatus.PAUSED.value,
+            _STATUS_IDLE,
+            _STATUS_COMPLETED,
+            _STATUS_INTERRUPTED,
+            _STATUS_FAILED,
+            _STATUS_PAUSED,
         ),
-        "to": ManagedThreadStatus.PAUSED.value,
+        "to": _STATUS_PAUSED,
     },
     {
         "signal": ManagedThreadStatusReason.MANAGED_TURN_COMPLETED.value,
-        "from": (ManagedThreadStatus.RUNNING.value,),
-        "to": ManagedThreadStatus.COMPLETED.value,
+        "from": (_STATUS_RUNNING,),
+        "to": _STATUS_COMPLETED,
     },
     {
         "signal": ManagedThreadStatusReason.MANAGED_TURN_FAILED.value,
-        "from": (ManagedThreadStatus.RUNNING.value,),
-        "to": ManagedThreadStatus.FAILED.value,
+        "from": (_STATUS_RUNNING,),
+        "to": _STATUS_FAILED,
     },
     {
         "signal": ManagedThreadStatusReason.MANAGED_TURN_INTERRUPTED.value,
-        "from": (ManagedThreadStatus.RUNNING.value,),
-        "to": ManagedThreadStatus.INTERRUPTED.value,
+        "from": (_STATUS_RUNNING,),
+        "to": _STATUS_INTERRUPTED,
     },
     {
         "signal": ManagedThreadStatusReason.THREAD_ARCHIVED.value,
         "from": "*",
-        "to": ManagedThreadStatus.ARCHIVED.value,
+        "to": _STATUS_ARCHIVED,
     },
 )
 
@@ -173,7 +189,7 @@ def normalize_status_timestamp(value: Optional[str]) -> str:
 
 @dataclass(frozen=True)
 class ManagedThreadStatusSnapshot:
-    status: str = ManagedThreadStatus.IDLE.value
+    status: str = _STATUS_IDLE
     reason_code: str = ManagedThreadStatusReason.THREAD_CREATED.value
     changed_at: str = ""
     terminal: bool = False
@@ -189,12 +205,12 @@ class ManagedThreadStatusSnapshot:
             data.get("status")
         )
         if status is None:
-            status = ManagedThreadStatus.IDLE.value
+            status = _STATUS_IDLE
         reason_code = _normalize_text(
             data.get("status_reason_code") or data.get("status_reason")
         ) or (
             ManagedThreadStatusReason.THREAD_ARCHIVED.value
-            if status == ManagedThreadStatus.ARCHIVED.value
+            if status == _STATUS_ARCHIVED
             else ManagedThreadStatusReason.THREAD_CREATED.value
         )
         changed_at = normalize_status_timestamp(
@@ -238,9 +254,7 @@ def build_managed_thread_status_snapshot(
 ) -> ManagedThreadStatusSnapshot:
     reason_code = _normalize_reason(reason)
     transition = _TRANSITIONS.get(reason_code)
-    target = (
-        transition["to"] if transition is not None else ManagedThreadStatus.IDLE.value
-    )
+    target = transition["to"] if transition is not None else _STATUS_IDLE
     return ManagedThreadStatusSnapshot(
         status=target,
         reason_code=reason_code,
@@ -299,7 +313,7 @@ def backfill_managed_thread_status(
 ) -> ManagedThreadStatusSnapshot:
     normalized_lifecycle = str(lifecycle_status or "").strip().lower()
     normalized_turn = str(latest_turn_status or "").strip().lower()
-    if normalized_lifecycle == ManagedThreadStatus.ARCHIVED.value:
+    if normalized_lifecycle == _STATUS_ARCHIVED:
         return build_managed_thread_status_snapshot(
             reason=ManagedThreadStatusReason.THREAD_ARCHIVED,
             changed_at=changed_at,
@@ -343,31 +357,29 @@ def derive_managed_thread_operator_status(
     normalized_lifecycle = str(lifecycle_status or "").strip().lower()
     normalized_runtime = str(normalized_status or "").strip().lower()
 
-    if normalized_lifecycle == ManagedThreadStatus.ARCHIVED.value:
-        return ManagedThreadOperatorStatus.ARCHIVED.value
-    if normalized_runtime == ManagedThreadStatus.COMPLETED.value:
-        return ManagedThreadOperatorStatus.REUSABLE.value
-    if normalized_runtime == ManagedThreadStatus.INTERRUPTED.value:
-        return ManagedThreadOperatorStatus.REUSABLE.value
-    if normalized_runtime == ManagedThreadStatus.FAILED.value:
-        return ManagedThreadOperatorStatus.ATTENTION_REQUIRED.value
+    if normalized_lifecycle == _STATUS_ARCHIVED:
+        return _STATUS_ARCHIVED
+    if normalized_runtime == _STATUS_COMPLETED:
+        return _OP_REUSABLE
+    if normalized_runtime == _STATUS_INTERRUPTED:
+        return _OP_REUSABLE
+    if normalized_runtime == _STATUS_FAILED:
+        return _OP_ATTENTION_REQUIRED
     if normalized_runtime in {
-        ManagedThreadStatus.IDLE.value,
-        ManagedThreadStatus.RUNNING.value,
-        ManagedThreadStatus.PAUSED.value,
-        ManagedThreadOperatorStatus.ARCHIVED.value,
+        _STATUS_IDLE,
+        _STATUS_RUNNING,
+        _STATUS_PAUSED,
+        _STATUS_ARCHIVED,
     }:
         return normalized_runtime
-    if normalized_lifecycle == ManagedThreadStatus.ACTIVE.value:
-        return ManagedThreadOperatorStatus.IDLE.value
-    if normalized_lifecycle == ManagedThreadStatus.ARCHIVED.value:
-        return ManagedThreadOperatorStatus.ARCHIVED.value
-    return ManagedThreadOperatorStatus.IDLE.value
+    if normalized_lifecycle == _STATUS_ACTIVE:
+        return _STATUS_IDLE
+    if normalized_lifecycle == _STATUS_ARCHIVED:
+        return _STATUS_ARCHIVED
+    return _STATUS_IDLE
 
 
 __all__ = [
-    "ManagedThreadOperatorStatus",
-    "ManagedThreadStatus",
     "ManagedThreadStatusReason",
     "ManagedThreadStatusSnapshot",
     "TERMINAL_STATUSES",
