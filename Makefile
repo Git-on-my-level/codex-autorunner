@@ -8,6 +8,12 @@ PYTHON := $(shell if [ -x $(VENV_PYTHON) ]; then echo $(VENV_PYTHON); else echo 
 export PATH := $(CURDIR)/$(VENV)/bin:$(PATH)
 HOST ?= 127.0.0.1
 PORT ?= 4173
+# Web UI screenshot pack (`make ui-qa-screens`); see scripts/ui_qa/generate_manifest.py
+UI_QA_HOST ?= $(HOST)
+UI_QA_PORT ?= $(PORT)
+UI_QA_OUT ?= .codex-autorunner/render/ui_qa
+UI_QA_VIEWPORT ?= 1400x900
+UI_QA_READY_TIMEOUT ?= 120
 HUB_HOST ?= 127.0.0.1
 HUB_PORT ?= 4517
 HUB_BASE_PATH ?= /car
@@ -21,7 +27,7 @@ PIPX_ROOT ?= $(HOME)/.local/pipx
 PIPX_VENV ?= $(PIPX_ROOT)/venvs/codex-autorunner
 PIPX_PYTHON ?= $(PIPX_VENV)/bin/python
 
-.PHONY: install dev hooks build test test-fast test-full test-chat-platform-contract test-chat-surface-lab test-managed-thread-cutover check check-full check-extended preflight-hub-startup format serve serve-dev launchd-hub deadcode-baseline venv venv-dev setup npm-install car-artifacts lint-html dom-check frontend-check _inject-static-banners agent-compatibility-check agent-compatibility-refresh protocol-schemas-check protocol-schemas-refresh typecheck-strict perf-idle-cpu perf-chat-latency-budgets perf-chat-seeded-exploration
+.PHONY: install dev hooks build test test-fast test-full test-chat-platform-contract test-chat-surface-lab test-managed-thread-cutover check check-full check-extended preflight-hub-startup format serve serve-dev ui-qa-screens launchd-hub deadcode-baseline venv venv-dev setup npm-install car-artifacts lint-html dom-check frontend-check _inject-static-banners agent-compatibility-check agent-compatibility-refresh protocol-schemas-check protocol-schemas-refresh typecheck-strict perf-idle-cpu perf-chat-latency-budgets perf-chat-seeded-exploration
 
 _inject-static-banners:
 	pnpm run postbuild
@@ -178,6 +184,23 @@ serve: build
 
 serve-dev: venv-dev
 	CAR_DEV_INCLUDE_ROOT_REPO=1 $(VENV_PYTHON) -m uvicorn codex_autorunner.server:create_hub_app --factory --reload --host $(HOST) --port $(PORT) --reload-dir src --reload-include '*.py' --reload-include '*.js' --reload-include '*.css' --reload-include '*.html' --reload-include '*.json' --reload-exclude '**/worktrees/**' --reload-exclude '**/.codex-autorunner/**' --reload-exclude '.codex-autorunner/**' --timeout-graceful-shutdown 1
+
+# Playwright full-page: hub home plus each repo tab under /repos/{id}/?tab=... (see scripts/ui_qa/generate_manifest.py).
+# Requires: pip install '.[browser]' and `python -m playwright install chromium`.
+# If no repo is in .codex-autorunner/manifest.yml, set UI_QA_REPO_ID. Output directory: $(UI_QA_OUT) (see .gitignore).
+ui-qa-screens: build
+	@mkdir -p $(UI_QA_OUT)
+	@set -e; \
+	UI_QA_HUB_ROOT='$(CURDIR)'; export UI_QA_HUB_ROOT; \
+	GEN="$$($(PYTHON) scripts/ui_qa/generate_manifest.py)"; \
+	$(PYTHON) -m codex_autorunner.cli render demo \
+		--serve-cmd '$(PYTHON) -m codex_autorunner.cli serve --host $(UI_QA_HOST) --port $(UI_QA_PORT)' \
+		--ready-url 'http://$(UI_QA_HOST):$(UI_QA_PORT)/health' \
+		--ready-timeout-seconds $(UI_QA_READY_TIMEOUT) \
+		--path / \
+		--script "$$GEN" \
+		--out-dir '$(UI_QA_OUT)' \
+		--viewport '$(UI_QA_VIEWPORT)'
 
 launchd-hub:
 	@LABEL="$(LAUNCH_LABEL)" \
