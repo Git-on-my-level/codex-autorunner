@@ -730,15 +730,13 @@ async def test_managed_thread_delivery_result_retires_uncovered_progress_after_f
         managed_thread_runtime._managed_thread_request_for_app(app),
         thread_store=store,
         thread=created,
-        finalized=managed_thread_runtime._PmaManagedThreadFinalizedExecution(
-            result=managed_thread_runtime.ManagedThreadFinalizationResult(
-                status="ok",
-                assistant_text="assistant-output",
-                error=None,
-                managed_thread_id=managed_thread_id,
-                managed_turn_id="managed-turn-1",
-                backend_thread_id="backend-thread-1",
-            )
+        finalized=managed_thread_runtime.ManagedThreadFinalizationResult(
+            status="ok",
+            assistant_text="assistant-output",
+            error=None,
+            managed_thread_id=managed_thread_id,
+            managed_turn_id="managed-turn-1",
+            backend_thread_id="backend-thread-1",
         ),
         response_payload={},
         progress_targets=(("discord", "channel-1"),),
@@ -796,15 +794,13 @@ async def test_managed_thread_delivery_result_skips_cleanup_for_covered_progress
         managed_thread_runtime._managed_thread_request_for_app(app),
         thread_store=store,
         thread=created,
-        finalized=managed_thread_runtime._PmaManagedThreadFinalizedExecution(
-            result=managed_thread_runtime.ManagedThreadFinalizationResult(
-                status="ok",
-                assistant_text="assistant-output",
-                error=None,
-                managed_thread_id=managed_thread_id,
-                managed_turn_id="managed-turn-1",
-                backend_thread_id="backend-thread-1",
-            )
+        finalized=managed_thread_runtime.ManagedThreadFinalizationResult(
+            status="ok",
+            assistant_text="assistant-output",
+            error=None,
+            managed_thread_id=managed_thread_id,
+            managed_turn_id="managed-turn-1",
+            backend_thread_id="backend-thread-1",
         ),
         response_payload={},
         progress_targets=(("discord", "channel-1"),),
@@ -859,15 +855,13 @@ async def test_managed_thread_delivery_result_retires_progress_targets_when_deli
             managed_thread_runtime._managed_thread_request_for_app(app),
             thread_store=store,
             thread=created,
-            finalized=managed_thread_runtime._PmaManagedThreadFinalizedExecution(
-                result=managed_thread_runtime.ManagedThreadFinalizationResult(
-                    status="ok",
-                    assistant_text="assistant-output",
-                    error=None,
-                    managed_thread_id=managed_thread_id,
-                    managed_turn_id="managed-turn-1",
-                    backend_thread_id="backend-thread-1",
-                )
+            finalized=managed_thread_runtime.ManagedThreadFinalizationResult(
+                status="ok",
+                assistant_text="assistant-output",
+                error=None,
+                managed_thread_id=managed_thread_id,
+                managed_turn_id="managed-turn-1",
+                backend_thread_id="backend-thread-1",
             ),
             response_payload={},
             progress_targets=(("discord", "channel-1"),),

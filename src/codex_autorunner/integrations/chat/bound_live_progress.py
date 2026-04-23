@@ -944,7 +944,7 @@ def build_bound_chat_live_progress_session(
         if surface_kind == "telegram":
             max_length = max(max_length, _TELEGRAM_MAX_PROGRESS_LEN)
         else:
-            max_length = _DISCORD_MAX_PROGRESS_LEN
+            max_length = max(max_length, _DISCORD_MAX_PROGRESS_LEN)
     tracker = TurnProgressTracker(
         started_at=time.monotonic(),
         agent=agent,

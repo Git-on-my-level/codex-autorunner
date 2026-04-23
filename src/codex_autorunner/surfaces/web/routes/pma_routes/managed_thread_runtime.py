@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Callable, Optional, cast
@@ -86,11 +85,6 @@ logger = logging.getLogger(__name__)
 
 PMA_TIMEOUT_SECONDS = 7200
 _DEFAULT_PMA_TIMEOUT_SECONDS = 7200
-
-
-@dataclass(frozen=True)
-class _PmaManagedThreadFinalizedExecution:
-    result: ManagedThreadFinalizationResult
 
 
 def _build_managed_thread_orchestration_service(
@@ -275,12 +269,10 @@ async def _run_managed_thread_execution(
         managed_thread_id=managed_thread_id,
         message_text=started.request.message_text,
     )
-    finalized = _PmaManagedThreadFinalizedExecution(
-        result=await coordinator.run_started_execution(
-            started,
-            hooks=queue_progress.hooks,
-            runtime_event_state=RuntimeThreadRunEventState(),
-        )
+    finalized = await coordinator.run_started_execution(
+        started,
+        hooks=queue_progress.hooks,
+        runtime_event_state=RuntimeThreadRunEventState(),
     )
     return await _deliver_managed_thread_execution_result(
         request,
@@ -288,9 +280,7 @@ async def _run_managed_thread_execution(
         thread=thread,
         finalized=finalized,
         response_payload=dict(delivery_payload or {}),
-        progress_targets=queue_progress.surface_targets_for(
-            finalized.result.managed_turn_id
-        ),
+        progress_targets=queue_progress.surface_targets_for(finalized.managed_turn_id),
         clear_progress_targets=queue_progress.clear_surface_targets,
     )
 
@@ -340,7 +330,7 @@ async def _finalize_managed_thread_execution(
     started: RuntimeThreadExecution,
     fallback_backend_thread_id: Optional[str] = None,
     on_progress_event: Optional[Any] = None,
-) -> _PmaManagedThreadFinalizedExecution:
+) -> ManagedThreadFinalizationResult:
     managed_thread_id = (
         normalize_optional_text(getattr(started.thread, "thread_target_id", None))
         or normalize_optional_text(thread.get("managed_thread_id"))
@@ -356,13 +346,10 @@ async def _finalize_managed_thread_execution(
         managed_thread_id=managed_thread_id,
         message_text=started.request.message_text,
     )
-    finalized = await coordinator.run_started_execution(
+    return await coordinator.run_started_execution(
         started,
         hooks=ManagedThreadExecutionHooks(on_progress_event=on_progress_event),
         runtime_event_state=RuntimeThreadRunEventState(),
-    )
-    return _PmaManagedThreadFinalizedExecution(
-        result=finalized,
     )
 
 
@@ -371,12 +358,12 @@ async def _deliver_managed_thread_execution_result(
     *,
     thread_store: PmaThreadStore,
     thread: dict[str, Any],
-    finalized: _PmaManagedThreadFinalizedExecution,
+    finalized: ManagedThreadFinalizationResult,
     response_payload: dict[str, Any],
     progress_targets: tuple[tuple[str, str], ...] = (),
     clear_progress_targets: Optional[Callable[[str], None]] = None,
 ) -> dict[str, Any]:
-    finalized_result = finalized.result
+    finalized_result = finalized
     managed_thread_id = finalized_result.managed_thread_id
     managed_turn_id = finalized_result.managed_turn_id
     current_thread_row = thread_store.get_thread(managed_thread_id) or thread
@@ -576,9 +563,7 @@ def ensure_managed_thread_queue_worker(app: Any, managed_thread_id: str) -> None
 
     async def _deliver_with_progress_targets(*args: Any, **kwargs: Any) -> Any:
         finalized = kwargs.get("finalized")
-        managed_turn_id = str(
-            getattr(getattr(finalized, "result", None), "managed_turn_id", "") or ""
-        ).strip()
+        managed_turn_id = str(getattr(finalized, "managed_turn_id", "") or "").strip()
         return await _deliver_managed_thread_execution_result(
             *args,
             **kwargs,
