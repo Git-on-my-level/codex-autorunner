@@ -29,6 +29,8 @@ from codex_autorunner.integrations.github.polling import (
     GitHubPollingConfig,
     GitHubScmPollingService,
 )
+
+pytestmark = pytest.mark.integration
 from codex_autorunner.integrations.github.publisher import (
     build_react_pr_review_comment_executor,
 )

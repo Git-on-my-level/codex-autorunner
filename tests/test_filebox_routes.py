@@ -4,6 +4,8 @@ from fastapi.testclient import TestClient
 from codex_autorunner.core import filebox
 from codex_autorunner.server import create_hub_app
 
+pytestmark = pytest.mark.slow
+
 
 def test_hub_filebox_delete_ignores_legacy_duplicates(hub_env) -> None:
     app = create_hub_app(hub_env.hub_root)

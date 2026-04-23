@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.integration
+
 from codex_autorunner.integrations.chat import parity_checker
 from codex_autorunner.integrations.chat.action_ux_contract import (
     CHAT_ACTION_UX_CONTRACT,

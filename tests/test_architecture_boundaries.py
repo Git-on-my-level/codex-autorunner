@@ -471,6 +471,11 @@ def test_side_processes_do_not_import_hub_supervisor() -> None:
     ), "Side-process modules must not import HubSupervisor:\n" + "\n".join(violations)
 
 
+test_side_processes_do_not_import_hub_supervisor = pytest.mark.slow(
+    test_side_processes_do_not_import_hub_supervisor
+)
+
+
 def test_side_processes_do_not_use_notification_store_directly() -> None:
     violations: list[str] = []
     for path in _side_process_files():
@@ -592,6 +597,11 @@ def test_side_processes_do_not_import_polling_owners() -> None:
         "Side-process modules must not import hub-owned polling workers/services:\n"
         + "\n".join(violations)
     )
+
+
+test_side_processes_do_not_import_polling_owners = pytest.mark.slow(
+    test_side_processes_do_not_import_polling_owners
+)
 
 
 # ---------------------------------------------------------------------------

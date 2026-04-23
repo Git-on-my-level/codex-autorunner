@@ -1,11 +1,14 @@
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
 from codex_autorunner.core.config import load_hub_config
 from codex_autorunner.manifest import load_manifest, save_manifest
 from codex_autorunner.server import create_hub_app
+
+pytestmark = pytest.mark.slow
 
 
 def test_static_assets_served_with_base_path(tmp_path: Path) -> None:

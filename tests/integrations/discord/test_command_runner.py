@@ -652,7 +652,7 @@ async def test_shutdown_cancels_running_tasks() -> None:
     await asyncio.sleep(0.02)
     assert runner.active_task_count == 1
 
-    await runner.shutdown()
+    await runner.shutdown(grace_seconds=0.05)
     assert runner.active_task_count == 0
 
 

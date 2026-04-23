@@ -4,11 +4,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from codex_autorunner.agents.registry import (
     get_agent_descriptor,
     get_registered_agents,
 )
 from codex_autorunner.integrations.chat.agents import CHAT_AGENT_DEFINITIONS
+
+pytestmark = pytest.mark.integration
 
 
 def _discord_test_config(root: Path):

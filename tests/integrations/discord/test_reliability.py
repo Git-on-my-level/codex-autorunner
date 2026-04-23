@@ -55,6 +55,8 @@ from codex_autorunner.integrations.discord.response_helpers import DiscordRespon
 from codex_autorunner.integrations.discord.service import DiscordBotService
 from codex_autorunner.integrations.discord.state import DiscordStateStore
 
+pytestmark = pytest.mark.slow
+
 DISCORD_ACK_WINDOW_SECONDS = 3.0
 
 

@@ -1,6 +1,9 @@
+import pytest
 from fastapi.testclient import TestClient
 
 from codex_autorunner.server import create_hub_app
+
+pytestmark = pytest.mark.slow
 
 
 def test_repo_openapi_contract_has_core_paths(hub_env) -> None:

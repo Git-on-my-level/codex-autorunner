@@ -4,6 +4,7 @@ import json
 import shutil
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from codex_autorunner.bootstrap import seed_hub_files
@@ -221,3 +222,8 @@ def test_hub_orchestration_canary_command(tmp_path: Path) -> None:
     assert payload["recovery"]["discord_bound_checkpoint_restore"]["backend_turn_id"]
     assert "tool_call" in payload["trace_validation"]["families"]
     shutil.rmtree(hub_root, ignore_errors=True)
+
+
+test_hub_orchestration_canary_command = pytest.mark.slow(
+    test_hub_orchestration_canary_command
+)

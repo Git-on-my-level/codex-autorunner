@@ -204,7 +204,7 @@ if [[ "$RUN_CORE" == true ]]; then
       FAST_TEST_REPORT_ARGS=(
         "$FAST_TEST_JUNIT"
         --repo-root "$REPO_ROOT"
-        --max-duration "${CODEX_FAST_TEST_MAX_DURATION_SECONDS:-1.0}"
+        --max-duration "${CODEX_FAST_TEST_MAX_DURATION_SECONDS:-0.2}"
         --max-report "${CODEX_FAST_TEST_REPORT_LIMIT:-20}"
       )
       if [[ "${CODEX_FAST_TEST_VERIFY_NODEIDS:-0}" == "1" ]]; then
@@ -233,7 +233,7 @@ if [[ "$RUN_CORE" == true ]]; then
         FAST_TEST_REPORT_ARGS=(
           "$FAST_TEST_JUNIT"
           --repo-root "$REPO_ROOT"
-          --max-duration "${CODEX_FAST_TEST_MAX_DURATION_SECONDS:-1.0}"
+          --max-duration "${CODEX_FAST_TEST_MAX_DURATION_SECONDS:-0.2}"
           --max-report "${CODEX_FAST_TEST_REPORT_LIMIT:-20}"
           --fail-on-violation
         )

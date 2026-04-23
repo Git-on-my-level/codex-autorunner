@@ -1,5 +1,9 @@
 # ruff: noqa: F401
 
+import pytest
+
+pytestmark = pytest.mark.slow
+
 from tests.integrations.telegram.test_newt_workspace_commands import (
     test_newt_branch_name_includes_chat_identity,
     test_newt_dirty_worktree_reports_blockers_with_submodule_context,

@@ -9,6 +9,8 @@ from typing import Any
 
 import pytest
 
+pytestmark = pytest.mark.integration
+
 from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
 from codex_autorunner.core.flows import FlowStore
 from codex_autorunner.core.flows.models import FlowRunStatus

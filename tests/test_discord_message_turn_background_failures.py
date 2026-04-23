@@ -10,6 +10,7 @@ import pytest
 
 import codex_autorunner.integrations.discord.message_turns as discord_message_turns_module
 import codex_autorunner.integrations.discord.service as discord_service_module
+import codex_autorunner.integrations.discord.service_lifecycle as discord_service_lifecycle_module
 from codex_autorunner.integrations.chat.dispatcher import build_dispatch_context
 from codex_autorunner.integrations.discord.message_turns import (
     bind_discord_progress_task_context,
@@ -26,6 +27,8 @@ from tests.discord_message_turns_support import (
     _FakeRest,
     _message_create,
 )
+
+pytestmark = pytest.mark.slow
 
 
 class _FakeIngress:
@@ -802,8 +805,8 @@ async def test_shutdown_timeout_reconciles_supervised_progress_leases(
         lambda _service: _FakeThreadService(execution_status="running"),
     )
     monkeypatch.setattr(
-        discord_service_module,
-        "DISCORD_BACKGROUND_TASK_SHUTDOWN_GRACE_SECONDS",
+        discord_service_lifecycle_module,
+        "_DISCORD_BACKGROUND_TASK_SHUTDOWN_GRACE_SECONDS",
         0.0,
     )
 

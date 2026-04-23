@@ -43,6 +43,8 @@ from codex_autorunner.integrations.discord.service import (
 )
 from codex_autorunner.integrations.discord.state import DiscordStateStore
 
+pytestmark = pytest.mark.slow
+
 
 def _logged_events(
     caplog: pytest.LogCaptureFixture, logger_name: str

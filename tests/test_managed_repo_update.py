@@ -5,11 +5,15 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
 from codex_autorunner.core.managed_repo_update import refresh_hub_managed_repos
 from codex_autorunner.core.ticket_linter_cli import _SCRIPT as LINTER_SCRIPT
 from codex_autorunner.core.ticket_linter_cli import LINTER_REL_PATH
 from codex_autorunner.manifest import Manifest, save_manifest
+
+pytestmark = pytest.mark.slow
 
 
 def test_refresh_hub_managed_repos_reseeds_repo_helpers(tmp_path: Path) -> None:

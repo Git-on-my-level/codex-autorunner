@@ -1,5 +1,9 @@
 # ruff: noqa: F401
 
+import pytest
+
+pytestmark = pytest.mark.slow
+
 from tests.pma_context_support import (
     test_build_hub_snapshot_auto_dismisses_unrecoverable_stopped_run_after_grace,
     test_build_hub_snapshot_clears_stale_exit_code_when_last_run_id_is_rewritten,

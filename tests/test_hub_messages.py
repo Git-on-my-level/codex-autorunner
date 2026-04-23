@@ -5,6 +5,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+
+pytestmark = pytest.mark.slow
 import yaml
 from fastapi.testclient import TestClient
 

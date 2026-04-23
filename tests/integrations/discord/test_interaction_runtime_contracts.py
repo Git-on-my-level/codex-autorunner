@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+import pytest
+
 DISCORD_DIR = (
     Path(__file__).resolve().parents[3]
     / "src"
@@ -67,6 +69,8 @@ HANDLER_FACING_PRIVATE_RUNTIME_METHODS = {
     "_send_followup_ephemeral",
     "_send_followup_public",
 }
+
+pytestmark = pytest.mark.slow
 
 
 def _attribute_call_users(

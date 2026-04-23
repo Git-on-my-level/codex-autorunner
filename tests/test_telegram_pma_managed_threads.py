@@ -1,5 +1,9 @@
 # ruff: noqa: F401
 
+import pytest
+
+pytestmark = pytest.mark.slow
+
 from tests.telegram_pma_managed_thread_support import (
     test_managed_thread_queue_worker_wraps_execution_with_typing_indicator,
     test_pma_followup_turn_without_new_thread_reuses_managed_thread_and_registry,

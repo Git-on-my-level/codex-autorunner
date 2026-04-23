@@ -17,6 +17,8 @@ from codex_autorunner.integrations.discord.config import (
 from codex_autorunner.integrations.discord.service import DiscordBotService
 from codex_autorunner.integrations.discord.state import DiscordStateStore
 
+pytestmark = pytest.mark.integration
+
 
 class _FakeRest:
     async def bulk_overwrite_application_commands(

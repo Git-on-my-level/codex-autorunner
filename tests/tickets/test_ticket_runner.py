@@ -7,6 +7,8 @@ from typing import Callable
 
 import pytest
 
+pytestmark = pytest.mark.slow
+
 from codex_autorunner.agents.hermes_identity import CanonicalHermesIdentity
 from codex_autorunner.tickets import runner as runner_module
 from codex_autorunner.tickets import runner_selection as runner_selection_module

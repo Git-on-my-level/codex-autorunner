@@ -15,6 +15,8 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 
+pytestmark = pytest.mark.integration
+
 from codex_autorunner.core.filebox import (
     inbox_dir,
     outbox_dir,

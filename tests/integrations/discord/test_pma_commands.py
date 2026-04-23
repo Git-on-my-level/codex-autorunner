@@ -7,6 +7,8 @@ from typing import Any
 
 import pytest
 
+pytestmark = pytest.mark.integration
+
 from codex_autorunner.integrations.discord.config import (
     DiscordBotConfig,
     DiscordBotDispatchConfig,

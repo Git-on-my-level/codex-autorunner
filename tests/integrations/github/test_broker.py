@@ -370,6 +370,11 @@ def test_slow_concurrent_cached_read_waits_for_shared_lease(
     assert runner_calls["count"] == 1
 
 
+test_slow_concurrent_cached_read_waits_for_shared_lease = pytest.mark.slow(
+    test_slow_concurrent_cached_read_waits_for_shared_lease
+)
+
+
 def test_waiting_cacheable_read_respects_check_false_on_cooldown(
     tmp_path: Path,
 ) -> None:

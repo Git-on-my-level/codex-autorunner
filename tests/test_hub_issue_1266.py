@@ -15,6 +15,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+
+pytestmark = pytest.mark.slow
 from fastapi.testclient import TestClient
 
 from codex_autorunner.core.hub import (

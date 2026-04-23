@@ -309,6 +309,12 @@ def test_list_agents_merges_alias_only_hermes_profiles(monkeypatch) -> None:
         "codex_autorunner.integrations.chat.agents.chat_hermes_profile_options",
         _fake_options,
     )
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.web.routes.agents.get_available_agents",
+        lambda _state: {
+            "hermes": SimpleNamespace(name="Hermes", capabilities=set()),
+        },
+    )
 
     app = FastAPI()
     app.state.app_server_supervisor = MagicMock()
