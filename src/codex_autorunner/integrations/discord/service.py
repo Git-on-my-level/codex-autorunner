@@ -131,6 +131,11 @@ from ...integrations.chat.agents import (
     resolve_chat_runtime_agent,
     valid_chat_agent_values,
 )
+from ...integrations.chat.bound_live_progress import (
+    bound_chat_progress_delivered_message_id,
+    mark_bound_chat_progress_delivered,
+    retire_bound_chat_progress_outbox_records,
+)
 from ...integrations.chat.channel_directory import ChannelDirectoryStore
 from ...integrations.chat.collaboration_policy import (
     CollaborationEvaluationContext,
@@ -786,6 +791,7 @@ class DiscordBotService:
             else DiscordOutboxManager(
                 self._store,
                 send_message=self._send_channel_message,
+                edit_message=self._edit_channel_message,
                 delete_message=self._delete_channel_message,
                 on_delivered=self._handle_discord_outbox_delivery,
                 logger=logger,
@@ -3911,6 +3917,18 @@ class DiscordBotService:
             self._rest, self._logger, channel_id, payload
         )
 
+    async def _edit_channel_message(
+        self,
+        channel_id: str,
+        message_id: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        return await self._rest.edit_channel_message(
+            channel_id=channel_id,
+            message_id=message_id,
+            payload=payload,
+        )
+
     async def _delete_channel_message(self, channel_id: str, message_id: str) -> None:
         await _delete_channel_message_impl(self._rest, channel_id, message_id)
 
@@ -3939,6 +3957,119 @@ class DiscordBotService:
         await _handle_discord_outbox_delivery_impl(
             self._hub_client, self._logger, record, delivered_message_id
         )
+        delivered_id = (
+            delivered_message_id.strip()
+            if isinstance(delivered_message_id, str)
+            else ""
+        )
+        if (
+            record.operation == "send"
+            and record.record_id.startswith("managed-thread-progress:")
+            and delivered_id
+        ):
+            mark_bound_chat_progress_delivered(
+                hub_root=self._config.root,
+                delivery_record_id=record.record_id,
+                delivered_message_id=delivered_id,
+            )
+        cleanup_payload = (
+            record.payload_json.get("_codex_autorunner_cleanup")
+            if isinstance(record.payload_json, dict)
+            else None
+        )
+        if not delivered_id:
+            if (
+                record.operation == "send"
+                and isinstance(cleanup_payload, dict)
+                and cleanup_payload.get("kind") == "managed_thread_live_progress"
+            ):
+                progress_send_record_id = (
+                    await retire_bound_chat_progress_outbox_records(
+                        store=self._store,
+                        surface_kind="discord",
+                        surface_key=str(
+                            cleanup_payload.get("surface_key") or ""
+                        ).strip(),
+                        managed_thread_id=str(
+                            cleanup_payload.get("managed_thread_id") or ""
+                        ).strip(),
+                        managed_turn_id=str(
+                            cleanup_payload.get("managed_turn_id") or ""
+                        ).strip(),
+                    )
+                )
+                progress_message_id = (
+                    bound_chat_progress_delivered_message_id(
+                        hub_root=self._config.root,
+                        delivery_record_id=progress_send_record_id,
+                    )
+                    or ""
+                )
+                if progress_message_id:
+                    try:
+                        await self._store.enqueue_outbox(
+                            OutboxRecord(
+                                record_id=(
+                                    "managed-thread-progress-failure:"
+                                    f"{progress_send_record_id}"
+                                ),
+                                channel_id=record.channel_id,
+                                message_id=progress_message_id,
+                                operation="edit",
+                                payload_json={
+                                    "content": format_discord_message(
+                                        "Status: this turn finished, but Discord "
+                                        "failed before the final reply was "
+                                        "delivered. Please retry if needed."
+                                    ),
+                                    "components": [],
+                                },
+                                created_at=now_iso(),
+                            )
+                        )
+                    except (OSError, RuntimeError):
+                        log_event(
+                            self._logger,
+                            logging.WARNING,
+                            "discord.outbox.progress_failure_cleanup_failed",
+                            record_id=record.record_id,
+                            progress_message_id=progress_message_id,
+                        )
+            return
+        if not isinstance(cleanup_payload, dict):
+            return
+        if cleanup_payload.get("kind") != "managed_thread_live_progress":
+            return
+        managed_thread_id = str(cleanup_payload.get("managed_thread_id") or "").strip()
+        managed_turn_id = str(cleanup_payload.get("managed_turn_id") or "").strip()
+        surface_key = str(cleanup_payload.get("surface_key") or "").strip()
+        if not managed_thread_id or not managed_turn_id or not surface_key:
+            return
+        progress_send_record_id = await retire_bound_chat_progress_outbox_records(
+            store=self._store,
+            surface_kind="discord",
+            surface_key=surface_key,
+            managed_thread_id=managed_thread_id,
+            managed_turn_id=managed_turn_id,
+        )
+        progress_message_id = (
+            bound_chat_progress_delivered_message_id(
+                hub_root=self._config.root,
+                delivery_record_id=progress_send_record_id,
+            )
+            or ""
+        )
+        if progress_message_id:
+            await self._delete_channel_message_safe(
+                surface_key,
+                progress_message_id,
+                record_id=(
+                    "discord:managed-thread-progress-cleanup:"
+                    f"{progress_send_record_id}"
+                ),
+            )
+            return
+        await self._store.mark_outbox_delivered(progress_send_record_id)
 
     async def _delete_channel_message_safe(
         self,

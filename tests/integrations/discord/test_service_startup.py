@@ -142,6 +142,35 @@ async def test_service_startup_starts_gateway_before_command_sync_finishes(
 
 
 @pytest.mark.anyio
+async def test_service_startup_runs_managed_thread_recovery_hook(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    called: list[str] = []
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test.discord.startup.recovery"),
+        rest_client=_FakeRest(),
+        gateway_client=_FakeGateway(),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    monkeypatch.setattr(
+        discord_service_module,
+        "_recover_managed_thread_executions_on_startup_impl",
+        lambda owner: called.append(owner.__class__.__name__) or asyncio.sleep(0),
+    )
+
+    try:
+        await service.run_forever()
+        assert called == ["DiscordBotService"]
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_service_exposes_app_server_event_buffer_context(
     tmp_path: Path, monkeypatch
 ) -> None:

@@ -45,6 +45,8 @@ def _outbox_key(
 OUTBOX_KEY_HELPER = _outbox_key
 OUTBOX_OPERATION_SEND_DELETE_PLACEHOLDER = "send_delete_placeholder"
 OUTBOX_OPERATION_SEND_KEEP_PLACEHOLDER = "send_keep_placeholder"
+OUTBOX_OPERATION_EDIT = "edit"
+OUTBOX_OPERATION_DELETE = "delete"
 
 
 def _should_delete_placeholder_on_delivery(record: OutboxRecord) -> bool:
@@ -273,6 +275,21 @@ class TelegramOutboxManager:
                     attempts=record.attempts,
                     conversation_id=conversation_id,
                 )
+                if self._on_delivered is not None:
+                    try:
+                        await self._on_delivered(record, None)
+                    except (
+                        Exception
+                    ):  # intentional: user-supplied callback must not break give-up cleanup
+                        log_event(
+                            self._logger,
+                            logging.WARNING,
+                            "telegram.outbox.give_up_callback_failed",
+                            record_id=record.record_id,
+                            chat_id=record.chat_id,
+                            thread_id=record.thread_id,
+                            conversation_id=conversation_id,
+                        )
                 if record.outbox_key:
                     records = await self._store.list_outbox()
                     for r in records:
@@ -305,25 +322,61 @@ class TelegramOutboxManager:
         with self._conversation_context(record.chat_id, record.thread_id):
             try:
                 delivered_message_id: Optional[int] = None
-                try:
-                    response = await self._send_message(
+                if record.operation in {
+                    None,
+                    "",
+                    OUTBOX_OPERATION_SEND_DELETE_PLACEHOLDER,
+                    OUTBOX_OPERATION_SEND_KEEP_PLACEHOLDER,
+                    "send",
+                }:
+                    try:
+                        response = await self._send_message(
+                            record.chat_id,
+                            record.text,
+                            thread_id=record.thread_id,
+                            reply_to=record.reply_to_message_id,
+                            overflow_mode_override=record.overflow_mode_override,
+                        )
+                    except TypeError as exc:
+                        if "overflow_mode_override" not in str(exc):
+                            raise
+                        response = await self._send_message(
+                            record.chat_id,
+                            record.text,
+                            thread_id=record.thread_id,
+                            reply_to=record.reply_to_message_id,
+                        )
+                    if isinstance(response, int):
+                        delivered_message_id = response
+                elif record.operation == OUTBOX_OPERATION_EDIT:
+                    if record.message_id is None:
+                        raise RuntimeError(
+                            "Unsupported Telegram outbox edit operation: missing message id"
+                        )
+                    edit_ok = await self._edit_message_text(
                         record.chat_id,
+                        record.message_id,
                         record.text,
-                        thread_id=record.thread_id,
-                        reply_to=record.reply_to_message_id,
-                        overflow_mode_override=record.overflow_mode_override,
+                        message_thread_id=record.thread_id,
                     )
-                except TypeError as exc:
-                    if "overflow_mode_override" not in str(exc):
-                        raise
-                    response = await self._send_message(
+                    if edit_ok is False:
+                        raise RuntimeError("Telegram edit returned false")
+                elif record.operation == OUTBOX_OPERATION_DELETE:
+                    if record.message_id is None:
+                        raise RuntimeError(
+                            "Unsupported Telegram outbox delete operation: missing message id"
+                        )
+                    delete_ok = await self._delete_message(
                         record.chat_id,
-                        record.text,
-                        thread_id=record.thread_id,
-                        reply_to=record.reply_to_message_id,
+                        record.message_id,
+                        record.thread_id,
                     )
-                if isinstance(response, int):
-                    delivered_message_id = response
+                    if delete_ok is False:
+                        raise RuntimeError("Telegram delete returned false")
+                else:
+                    raise RuntimeError(
+                        f"Unsupported Telegram outbox operation: {record.operation}"
+                    )
             except Exception as exc:
                 retry_after = _extract_retry_after_seconds(exc)
                 if not isinstance(exc, (TelegramAPIError, OSError, RuntimeError)):

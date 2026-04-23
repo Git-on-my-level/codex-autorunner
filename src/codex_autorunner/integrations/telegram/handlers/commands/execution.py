@@ -71,6 +71,11 @@ from .....integrations.app_server.threads import (
     pma_legacy_migration_fallback_keys,
     pma_topic_scoped_key,
 )
+from .....integrations.chat.bound_live_progress import (
+    build_bound_chat_queue_execution_controller,
+    cleanup_bound_chat_live_progress_success,
+    resolve_bound_chat_queue_progress_context,
+)
 from .....integrations.chat.chat_ux_telemetry import (
     ChatUxFailureReason,
     ChatUxMilestone,
@@ -99,6 +104,7 @@ from .....integrations.chat.managed_thread_turns import (
     ManagedThreadCoordinatorHooks,
     ManagedThreadDurableDeliveryHooks,
     ManagedThreadErrorMessages,
+    ManagedThreadExecutionHooks,
     ManagedThreadFinalizationResult,
     ManagedThreadSurfaceInfo,
     ManagedThreadTargetRequest,
@@ -854,6 +860,7 @@ def _sync_pma_registry_thread_id(
 def _build_telegram_runner_hooks(
     handlers: Any,
     *,
+    managed_thread_id: str,
     chat_id: int,
     thread_id: Optional[int],
     topic_key: str,
@@ -902,6 +909,9 @@ def _build_telegram_runner_hooks(
                 return ManagedThreadDeliverySendResult()
 
             async def _cleanup(context: ManagedThreadDeliveryCleanupContext) -> None:
+                target_topic_key = str(
+                    context.transport_target.get("topic_key") or topic_key
+                )
                 await handlers._flush_outbox_files(
                     SimpleNamespace(
                         workspace_path=context.transport_target.get("workspace_path"),
@@ -910,9 +920,19 @@ def _build_telegram_runner_hooks(
                     chat_id=target_chat_id,
                     thread_id=target_thread_id,
                     reply_to=None,
-                    topic_key=str(
-                        context.transport_target.get("topic_key") or topic_key
+                    topic_key=target_topic_key,
+                )
+                await cleanup_bound_chat_live_progress_success(
+                    hub_root=handlers._config.root,
+                    raw_config=(
+                        handlers._config.raw
+                        if isinstance(getattr(handlers._config, "raw", None), dict)
+                        else {}
                     ),
+                    surface_kind="telegram",
+                    surface_key=target_topic_key,
+                    managed_thread_id=record.managed_thread_id,
+                    managed_turn_id=record.managed_turn_id,
                 )
 
             return await deliver_managed_thread_terminal_record(
@@ -948,6 +968,17 @@ def _build_telegram_runner_hooks(
                 },
             )
         ),
+    )
+    hub_root, raw_config = resolve_bound_chat_queue_progress_context(
+        handlers,
+        fallback_root=state_root,
+    )
+    queue_progress = build_bound_chat_queue_execution_controller(
+        hub_root=hub_root,
+        raw_config=raw_config,
+        managed_thread_id=managed_thread_id,
+        surface_targets=(("telegram", topic_key),),
+        base_hooks=ManagedThreadExecutionHooks(),
     )
 
     async def _run_with_telegram_typing_indicator(work: Any) -> None:
@@ -1016,6 +1047,7 @@ def _build_telegram_runner_hooks(
         durable_delivery=durable_delivery,
         deliver_result=_deliver_queued_result,
         run_with_indicator=_run_with_telegram_typing_indicator,
+        queue_execution_hooks=queue_progress.hooks,
     )
 
 
@@ -1160,6 +1192,7 @@ async def _run_telegram_managed_thread_turn(
 
     runner_hooks = _build_telegram_runner_hooks(
         handlers,
+        managed_thread_id=managed_thread_id,
         chat_id=message.chat_id,
         thread_id=message.thread_id,
         topic_key=topic_key,
@@ -1375,6 +1408,20 @@ async def _run_telegram_managed_thread_turn(
                     message.chat_id,
                     prepared_placeholder_id,
                     thread_id=message.thread_id,
+                )
+            if chat_ux_snapshot is not None and (
+                response_sent or getattr(_flow, "durable_delivery_performed", False)
+            ):
+                chat_ux_snapshot.record(ChatUxMilestone.TERMINAL_DELIVERY)
+                emit_chat_ux_timing(
+                    handlers._logger,
+                    logging.INFO,
+                    chat_ux_snapshot,
+                    event_suffix="managed_thread_turn",
+                    topic_key=topic_key,
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    status=finalized.status,
                 )
             if interrupt_status_fallback_text:
                 await handlers._clear_interrupt_status_message(

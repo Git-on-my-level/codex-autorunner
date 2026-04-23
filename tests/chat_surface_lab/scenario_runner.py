@@ -165,11 +165,13 @@ class _SurfaceRunContext:
     rest_client: Optional[FakeDiscordRest] = None
     bot_client: Optional[FakeTelegramBot] = None
     active_task: Optional[asyncio.Task[Any]] = None
+    active_tasks: dict[str, asyncio.Task[Any]] = field(default_factory=dict)
     result: Optional[Any] = None
     thread_target_id: Optional[str] = None
     execution_id: Optional[str] = None
     telegram_thread_id: Optional[int] = DEFAULT_TELEGRAM_THREAD_ID
     surface_metadata: dict[str, Any] = field(default_factory=dict)
+    observations: dict[str, Any] = field(default_factory=dict)
     latest_wakeup: Optional[dict[str, Any]] = None
 
 
@@ -365,10 +367,18 @@ class ChatSurfaceScenarioRunner:
                 log_records=log_records,
             )
         finally:
-            if context.active_task is not None and not context.active_task.done():
-                context.active_task.cancel()
+            pending_tasks = tuple(dict.fromkeys(context.active_tasks.values()))
+            if (
+                context.active_task is not None
+                and context.active_task not in pending_tasks
+            ):
+                pending_tasks = (*pending_tasks, context.active_task)
+            for task in pending_tasks:
+                if task.done():
+                    continue
+                task.cancel()
                 with contextlib.suppress(Exception):
-                    await context.active_task
+                    await task
             await context.harness.close()
             await runtime.close()
             while timeout_restorers:
@@ -430,19 +440,29 @@ class ChatSurfaceScenarioRunner:
         return thread_target_id
 
     async def _await_surface_settled(self, context: _SurfaceRunContext) -> None:
-        if context.surface != SurfaceKind.DISCORD:
+        if context.surface == SurfaceKind.DISCORD:
+            assert isinstance(context.harness, DiscordSurfaceHarness)
+            service = context.harness.service
+            if service is None:
+                return
+            deadline = (
+                asyncio.get_running_loop().time() + context.harness.timeout_seconds
+            )
+            while service._background_tasks:
+                if asyncio.get_running_loop().time() >= deadline:
+                    raise TimeoutError(
+                        "DiscordSurfaceHarness background tasks did not drain"
+                    )
+                await asyncio.sleep(0.01)
             return
-        assert isinstance(context.harness, DiscordSurfaceHarness)
+        assert isinstance(context.harness, TelegramSurfaceHarness)
         service = context.harness.service
         if service is None:
             return
-        deadline = asyncio.get_running_loop().time() + context.harness.timeout_seconds
-        while service._background_tasks:
-            if asyncio.get_running_loop().time() >= deadline:
-                raise TimeoutError(
-                    "DiscordSurfaceHarness background tasks did not drain"
-                )
-            await asyncio.sleep(0.01)
+        await asyncio.wait_for(
+            drain_telegram_spawned_tasks(service),
+            timeout=context.harness.timeout_seconds,
+        )
 
     def _refresh_surface_result_metadata(
         self,
@@ -570,27 +590,32 @@ class ChatSurfaceScenarioRunner:
             text = str(action.payload.get("text") or "").strip()
             if not text:
                 raise AssertionError("start_message requires payload.text")
+            task_id = self._normalize_optional_text(action.payload.get("task_id"))
+            task_key = task_id or "active"
             if context.surface == SurfaceKind.DISCORD:
                 assert isinstance(context.harness, DiscordSurfaceHarness)
                 attachments = _build_discord_attachment_payloads(
                     action.payload.get("attachments")
                 )
-                context.active_task = context.harness.start_message(
+                task = context.harness.start_message(
                     text,
                     attachments=attachments,
                     rest_client=context.rest_client,
                 )
-                return
-            assert isinstance(context.harness, TelegramSurfaceHarness)
-            context.telegram_thread_id = _optional_int(
-                action.payload.get("thread_id"),
-                default=DEFAULT_TELEGRAM_THREAD_ID,
-            )
-            context.active_task = context.harness.start_message(
-                text,
-                thread_id=context.telegram_thread_id,
-                bot_client=context.bot_client,
-            )
+            else:
+                assert isinstance(context.harness, TelegramSurfaceHarness)
+                context.telegram_thread_id = _optional_int(
+                    action.payload.get("thread_id"),
+                    default=DEFAULT_TELEGRAM_THREAD_ID,
+                )
+                task = context.harness.start_message(
+                    text,
+                    thread_id=context.telegram_thread_id,
+                    bot_client=context.bot_client,
+                )
+            context.active_tasks[task_key] = task
+            if task_key == "active":
+                context.active_task = task
             return
 
         if action.kind == "wait_for_running_execution":
@@ -614,6 +639,12 @@ class ChatSurfaceScenarioRunner:
                 )
             context.thread_target_id = thread_target_id
             context.execution_id = execution_id
+            save_as = self._normalize_optional_text(action.payload.get("save_as"))
+            if save_as is not None:
+                context.observations[save_as] = {
+                    "thread_target_id": thread_target_id,
+                    "execution_id": execution_id,
+                }
             return
 
         if action.kind == "submit_active_message":
@@ -644,6 +675,42 @@ class ChatSurfaceScenarioRunner:
             )
             return
 
+        if action.kind == "start_active_message":
+            text = str(action.payload.get("text") or "").strip()
+            if not text:
+                raise AssertionError("start_active_message requires payload.text")
+            task_id = self._normalize_optional_text(action.payload.get("task_id"))
+            task_key = task_id or "active"
+            if context.surface == SurfaceKind.DISCORD:
+                assert isinstance(context.harness, DiscordSurfaceHarness)
+                attachments = _build_discord_attachment_payloads(
+                    action.payload.get("attachments")
+                )
+                task = context.harness.start_active_message(
+                    text,
+                    attachments=attachments,
+                    message_id=str(action.payload.get("message_id") or "m-2"),
+                )
+            else:
+                assert isinstance(context.harness, TelegramSurfaceHarness)
+                context.telegram_thread_id = _optional_int(
+                    action.payload.get("thread_id"),
+                    default=DEFAULT_TELEGRAM_THREAD_ID,
+                )
+                task = context.harness.start_active_message(
+                    text,
+                    thread_id=context.telegram_thread_id,
+                    message_id=_optional_int(
+                        action.payload.get("message_id"),
+                        default=2,
+                    ),
+                    update_id=_optional_int(action.payload.get("update_id"), default=2),
+                )
+            context.active_tasks[task_key] = task
+            if task_key == "active":
+                context.active_task = task
+            return
+
         if action.kind == "wait_for_log_event":
             event_name = str(action.payload.get("event_name") or "").strip()
             if not event_name:
@@ -653,28 +720,170 @@ class ChatSurfaceScenarioRunner:
                 default=2.0,
             )
             field_name = self._normalize_optional_text(action.payload.get("field"))
+            expect_field_exists = bool(action.payload.get("field_exists", False))
+            has_expected_value = "equals" in action.payload
             expected_value = action.payload.get("equals")
+            predicate = None
+            if field_name is not None and expect_field_exists:
+
+                def _predicate(record: dict[str, Any]) -> bool:
+                    return record.get(field_name) is not None
+
+                predicate = _predicate
+            elif field_name is not None and has_expected_value:
+
+                def _predicate(record: dict[str, Any]) -> bool:
+                    return record.get(field_name) == expected_value
+
+                predicate = _predicate
             if context.surface == SurfaceKind.DISCORD:
                 assert isinstance(context.harness, DiscordSurfaceHarness)
                 await context.harness.wait_for_log_event(
                     event_name,
                     timeout_seconds=timeout_seconds,
-                    predicate=(
-                        None
-                        if field_name is None
-                        else lambda record: record.get(field_name) == expected_value
-                    ),
+                    predicate=predicate,
                 )
             else:
                 assert isinstance(context.harness, TelegramSurfaceHarness)
                 await context.harness.wait_for_log_event(
                     event_name,
                     timeout_seconds=timeout_seconds,
-                    predicate=(
-                        None
-                        if field_name is None
-                        else lambda record: record.get(field_name) == expected_value
-                    ),
+                    predicate=predicate,
+                )
+            return
+
+        if action.kind == "capture_observation":
+            observation_name = self._normalize_optional_text(action.payload.get("name"))
+            if observation_name is None:
+                raise AssertionError("capture_observation requires payload.name")
+            context.observations[observation_name] = self._compute_observation(
+                context=context,
+                payload=action.payload,
+            )
+            return
+
+        if action.kind == "wait_for_observation_delta":
+            observation_name = self._normalize_optional_text(action.payload.get("name"))
+            if observation_name is None:
+                raise AssertionError("wait_for_observation_delta requires payload.name")
+            if observation_name not in context.observations:
+                raise AssertionError(
+                    f"wait_for_observation_delta missing baseline {observation_name!r}"
+                )
+            baseline = context.observations[observation_name]
+            if not isinstance(baseline, (int, float)):
+                raise AssertionError(
+                    "wait_for_observation_delta requires a numeric baseline"
+                )
+            timeout_seconds = _optional_float(
+                action.payload.get("timeout_seconds"),
+                default=2.0,
+            )
+            min_delta = _optional_float(
+                action.payload.get("min_delta"),
+                default=1.0,
+            )
+            deadline = asyncio.get_running_loop().time() + max(timeout_seconds, 0.0)
+            while True:
+                current = self._compute_observation(
+                    context=context,
+                    payload=action.payload,
+                )
+                if not isinstance(current, (int, float)):
+                    raise AssertionError(
+                        "wait_for_observation_delta requires a numeric observation"
+                    )
+                if float(current) >= float(baseline) + float(min_delta):
+                    save_as = self._normalize_optional_text(
+                        action.payload.get("save_as")
+                    )
+                    if save_as is not None:
+                        context.observations[save_as] = current
+                    return
+                if asyncio.get_running_loop().time() >= deadline:
+                    raise TimeoutError(
+                        "observation did not advance: "
+                        f"{observation_name} baseline={baseline} current={current}"
+                    )
+                await asyncio.sleep(0.01)
+
+        if action.kind == "assert_observation_delta":
+            observation_name = self._normalize_optional_text(action.payload.get("name"))
+            if observation_name is None:
+                raise AssertionError("assert_observation_delta requires payload.name")
+            if observation_name not in context.observations:
+                raise AssertionError(
+                    f"assert_observation_delta missing baseline {observation_name!r}"
+                )
+            baseline = context.observations[observation_name]
+            if not isinstance(baseline, (int, float)):
+                raise AssertionError(
+                    "assert_observation_delta requires a numeric baseline"
+                )
+            current = self._compute_observation(
+                context=context,
+                payload=action.payload,
+            )
+            if not isinstance(current, (int, float)):
+                raise AssertionError(
+                    "assert_observation_delta requires a numeric observation"
+                )
+            expected_delta = _optional_float(
+                action.payload.get("expected_delta"),
+                default=0.0,
+            )
+            expected_value = float(baseline) + float(expected_delta)
+            if float(current) != expected_value:
+                raise AssertionError(
+                    "unexpected observation delta: "
+                    f"{observation_name} baseline={baseline} current={current} "
+                    f"expected_delta={expected_delta}"
+                )
+            return
+
+        if action.kind == "assert_execution_transition":
+            from_name = self._normalize_optional_text(action.payload.get("from"))
+            to_name = self._normalize_optional_text(action.payload.get("to"))
+            if from_name is None or to_name is None:
+                raise AssertionError(
+                    "assert_execution_transition requires payload.from and payload.to"
+                )
+            previous = context.observations.get(from_name)
+            current = context.observations.get(to_name)
+            if not isinstance(previous, dict) or not isinstance(current, dict):
+                raise AssertionError(
+                    "assert_execution_transition requires saved execution observations"
+                )
+            previous_thread_target_id = self._normalize_optional_text(
+                previous.get("thread_target_id")
+            )
+            current_thread_target_id = self._normalize_optional_text(
+                current.get("thread_target_id")
+            )
+            previous_execution_id = self._normalize_optional_text(
+                previous.get("execution_id")
+            )
+            current_execution_id = self._normalize_optional_text(
+                current.get("execution_id")
+            )
+            if (
+                previous_thread_target_id is None
+                or current_thread_target_id is None
+                or previous_execution_id is None
+                or current_execution_id is None
+            ):
+                raise AssertionError(
+                    "assert_execution_transition requires thread and execution ids"
+                )
+            if current_thread_target_id != previous_thread_target_id:
+                raise AssertionError(
+                    "assert_execution_transition expected the same thread target: "
+                    f"{previous_thread_target_id!r} != {current_thread_target_id!r}"
+                )
+            if current_execution_id == previous_execution_id:
+                raise AssertionError(
+                    "assert_execution_transition expected a new execution id: "
+                    f"{previous_execution_id!r}"
                 )
             return
 
@@ -934,16 +1143,22 @@ class ChatSurfaceScenarioRunner:
             return
 
         if action.kind == "await_active_message":
-            if context.active_task is None:
-                raise AssertionError("await_active_message requires an active task")
+            task_id = self._normalize_optional_text(action.payload.get("task_id"))
+            task_key = task_id or "active"
+            task = context.active_tasks.get(task_key)
+            if task is None:
+                raise AssertionError(f"await_active_message requires task {task_key!r}")
             try:
-                context.result = await context.active_task
+                context.result = await task
             except asyncio.CancelledError:
                 context.result = self._refresh_surface_result_metadata(context)
+            if task_key == "active":
+                context.active_task = None
+            context.active_tasks.pop(task_key, None)
             return
 
         if action.kind == "restart_surface_harness":
-            if context.active_task is not None and not context.active_task.done():
+            if any(not task.done() for task in context.active_tasks.values()):
                 raise AssertionError(
                     "restart_surface_harness requires no active in-flight task"
                 )
@@ -953,6 +1168,8 @@ class ChatSurfaceScenarioRunner:
             context.result = None
             context.rest_client = None
             context.bot_client = None
+            context.active_task = None
+            context.active_tasks.clear()
             context.harness = self._build_harness(
                 scenario=scenario,
                 surface=context.surface,
@@ -1334,6 +1551,160 @@ class ChatSurfaceScenarioRunner:
                 )
             )
         return observed
+
+    def _compute_observation(
+        self,
+        *,
+        context: _SurfaceRunContext,
+        payload: dict[str, Any],
+    ) -> Any:
+        observation_kind = self._normalize_optional_text(payload.get("observation"))
+        if observation_kind is None:
+            raise AssertionError("observation payload requires payload.observation")
+        if observation_kind == "log_event_count":
+            return self._count_log_records(context=context, payload=payload)
+        if observation_kind == "message_count_matching_text":
+            return sum(
+                1
+                for message in self._iter_surface_messages(context)
+                if self._message_matches_observation(
+                    str(message.get("text") or ""),
+                    payload=payload,
+                )
+            )
+        if observation_kind == "max_message_id_by_text":
+            target_text = self._normalize_optional_text(payload.get("text"))
+            if target_text is None:
+                raise AssertionError(
+                    "max_message_id_by_text observation requires payload.text"
+                )
+            matching_ids: list[int] = []
+            for message in self._iter_surface_messages(context):
+                if str(message.get("text") or "") != target_text:
+                    continue
+                message_id = message.get("message_id")
+                if isinstance(message_id, int):
+                    matching_ids.append(message_id)
+                    continue
+                normalized_id = self._normalize_optional_text(message_id)
+                if normalized_id is None:
+                    continue
+                with contextlib.suppress(ValueError):
+                    matching_ids.append(int(normalized_id))
+            return max(matching_ids, default=0)
+        raise AssertionError(f"unsupported observation kind: {observation_kind}")
+
+    def _message_matches_observation(
+        self,
+        text: str,
+        *,
+        payload: dict[str, Any],
+    ) -> bool:
+        exact_text = self._normalize_optional_text(payload.get("text"))
+        if exact_text is not None and text != exact_text:
+            return False
+        contains_text = self._normalize_optional_text(payload.get("contains"))
+        if contains_text is not None and contains_text not in text:
+            return False
+        starts_with = self._normalize_optional_text(payload.get("starts_with"))
+        if starts_with is not None and not text.startswith(starts_with):
+            return False
+        contains_any = payload.get("contains_any")
+        if contains_any is not None:
+            if not isinstance(contains_any, list) or not contains_any:
+                raise AssertionError(
+                    "message_count_matching_text payload.contains_any must be a non-empty list"
+                )
+            normalized_values = [
+                str(item).strip() for item in contains_any if str(item).strip()
+            ]
+            if not normalized_values:
+                raise AssertionError(
+                    "message_count_matching_text payload.contains_any must contain text"
+                )
+            if not any(candidate in text for candidate in normalized_values):
+                return False
+        return True
+
+    def _count_log_records(
+        self,
+        *,
+        context: _SurfaceRunContext,
+        payload: dict[str, Any],
+    ) -> int:
+        event_name = self._normalize_optional_text(payload.get("event_name"))
+        if event_name is None:
+            raise AssertionError(
+                "log_event_count observation requires payload.event_name"
+            )
+        field_name = self._normalize_optional_text(payload.get("field"))
+        expect_field_exists = bool(payload.get("field_exists", False))
+        has_expected_value = "equals" in payload
+        expected_value = payload.get("equals")
+        count = 0
+        for record in self._iter_log_records(context):
+            if record.get("event") != event_name:
+                continue
+            if field_name is not None and expect_field_exists:
+                if record.get(field_name) is None:
+                    continue
+            elif field_name is not None and has_expected_value:
+                if record.get(field_name) != expected_value:
+                    continue
+            count += 1
+        return count
+
+    def _iter_log_records(
+        self, context: _SurfaceRunContext
+    ) -> Sequence[dict[str, Any]]:
+        log_capture = getattr(context.harness, "_log_capture", None)
+        records = getattr(log_capture, "records", None)
+        if isinstance(records, list):
+            return records
+        return ()
+
+    def _iter_surface_messages(
+        self,
+        context: _SurfaceRunContext,
+    ) -> Sequence[dict[str, Any]]:
+        if context.surface == SurfaceKind.DISCORD:
+            assert isinstance(context.harness, DiscordSurfaceHarness)
+            rest = context.harness.rest
+            if rest is None:
+                return ()
+            messages: list[dict[str, Any]] = []
+            for item in rest.channel_messages:
+                payload = item.get("payload")
+                if not isinstance(payload, dict):
+                    continue
+                messages.append(
+                    {
+                        "message_id": item.get("id"),
+                        "text": payload.get("content"),
+                    }
+                )
+            for item in rest.followup_messages:
+                payload = item.get("payload")
+                if not isinstance(payload, dict):
+                    continue
+                messages.append(
+                    {
+                        "message_id": payload.get("message_id"),
+                        "text": payload.get("content"),
+                    }
+                )
+            return tuple(messages)
+        assert isinstance(context.harness, TelegramSurfaceHarness)
+        bot = context.harness.bot
+        if bot is None:
+            return ()
+        return tuple(
+            {
+                "message_id": item.get("message_id"),
+                "text": item.get("text"),
+            }
+            for item in bot.messages
+        )
 
     def _apply_timeout_faults(
         self,

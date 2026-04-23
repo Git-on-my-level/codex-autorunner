@@ -111,7 +111,6 @@ from .errors import (
 )
 from .managed_thread_routing import (
     _build_discord_managed_thread_coordinator,
-    _build_discord_queue_worker_hooks,
     _build_discord_runner_hooks,
     _build_managed_thread_input_items,
     _DiscordManagedThreadStatus,
@@ -2097,13 +2096,7 @@ async def _run_discord_orchestrated_turn_for_message(
         workspace_root=workspace_root,
         public_execution_error=public_execution_error,
     )
-    queue_worker_hooks = _build_discord_queue_worker_hooks(
-        service,
-        channel_id=channel_id,
-        managed_thread_id=managed_thread_id,
-        workspace_root=workspace_root,
-        public_execution_error=public_execution_error,
-    )
+    queue_worker_hooks = runner_hooks.queue_worker_hooks()
     _first_progress_recorded = False
 
     async def _handle_progress_event(run_event: Any) -> None:
@@ -2139,6 +2132,7 @@ async def _run_discord_orchestrated_turn_for_message(
             else queue_worker_hooks.deliver_result
         ),
         run_with_indicator=queue_worker_hooks.run_with_indicator,
+        queue_execution_hooks=queue_worker_hooks.execution_hooks,
     )
     progress_backend_turn_id: Optional[str] = None
 

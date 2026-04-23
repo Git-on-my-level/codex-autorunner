@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional, Protocol
 
+from .chat_bindings import active_chat_binding_metadata_by_thread
 from .config import load_hub_config
 from .pr_binding_resolver import resolve_binding_for_scm_event
 from .pr_bindings import PrBinding
@@ -239,14 +240,27 @@ def _intent_priority(intent: ReactionIntent) -> tuple[int, str]:
 
 def _publish_notice_payload(
     *,
+    hub_root: Path,
     thread_target_id: str,
     message: str,
 ) -> dict[str, Any]:
-    return {
+    payload: dict[str, Any] = {
         "delivery": "bound",
         "thread_target_id": thread_target_id,
         "message": message,
     }
+    binding = active_chat_binding_metadata_by_thread(hub_root=hub_root).get(
+        thread_target_id
+    )
+    if isinstance(binding, Mapping):
+        surface_kind = _normalize_text(binding.get("binding_kind"))
+        surface_key = _normalize_text(binding.get("binding_id"))
+        if surface_kind is not None and surface_key is not None:
+            payload["delivery_target"] = {
+                "surface_kind": surface_kind,
+                "surface_key": surface_key,
+            }
+    return payload
 
 
 def _parse_iso_datetime(value: object) -> Optional[datetime]:
@@ -755,6 +769,7 @@ class ScmAutomationService:
         )
         payload = with_correlation_id(
             _publish_notice_payload(
+                hub_root=self._hub_root,
                 thread_target_id=thread_target_id,
                 message=_review_comment_notice_message(
                     tracking,
