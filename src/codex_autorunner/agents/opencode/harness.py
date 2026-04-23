@@ -22,8 +22,7 @@ import httpx
 from ...core.logging_utils import log_event
 from ...core.orchestration.interfaces import FreshConversationRequiredError
 from ...core.orchestration.runtime_thread_events import (
-    RuntimeThreadRunEventState,
-    normalize_runtime_thread_raw_event,
+    RuntimeEventDriver,
 )
 from ...core.orchestration.turn_event_buffer import TurnEventBuffer
 from ...core.sse import SSEEvent
@@ -981,15 +980,15 @@ class OpenCodeHarness(AgentHarness):
                 ) as exc:
                     stream_error = exc
 
-                normalized_state = RuntimeThreadRunEventState()
-                for raw_event in raw_events:
-                    await normalize_runtime_thread_raw_event(
-                        raw_event, normalized_state
-                    )
-                assistant_text = normalized_state.best_assistant_text().strip()
+                runtime_driver = RuntimeEventDriver()
+                await runtime_driver.consume_raw_events(
+                    raw_events,
+                    store_raw_event=False,
+                )
+                assistant_text = runtime_driver.best_assistant_text().strip()
                 errors = (
-                    [normalized_state.last_error_message]
-                    if normalized_state.last_error_message
+                    [runtime_driver.state.last_error_message]
+                    if runtime_driver.state.last_error_message
                     else []
                 )
                 if not assistant_text and not errors:

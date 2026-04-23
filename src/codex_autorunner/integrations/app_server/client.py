@@ -282,6 +282,34 @@ class CodexAppServerClient:
     async def start(self) -> None:
         await self._ensure_process()
 
+    def configure_runtime_callbacks(
+        self,
+        *,
+        approval_handler: Optional[ApprovalHandler] = None,
+        question_handler: Optional[UserInputHandler] = None,
+        notification_handler: Optional[NotificationHandler] = None,
+        default_approval_decision: Optional[str] = None,
+    ) -> None:
+        self._approval_handler = approval_handler
+        self._question_handler = question_handler
+        self._notification_handler = notification_handler
+        if (
+            isinstance(default_approval_decision, str)
+            and default_approval_decision.strip()
+        ):
+            self._default_approval_decision = default_approval_decision.strip()
+        self._approval_adapter = RawApprovalRequestAdapter(
+            self._approval_handler,
+            default_decision=self._default_approval_decision,
+        )
+        self._user_input_adapter = RawUserInputRequestAdapter(
+            self._question_handler,
+            default_result_factory=self._default_user_input_result,
+        )
+        self._notification_adapter = RawNotificationAdapter(
+            self._notification_handler,
+        )
+
     @property
     def runtime_instance_id(self) -> Optional[str]:
         return self._runtime_instance_id

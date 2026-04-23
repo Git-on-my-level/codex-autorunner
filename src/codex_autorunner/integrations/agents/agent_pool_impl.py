@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
 import logging
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, AsyncIterator, Optional, cast
+from typing import Any, Optional, cast
 
 from ...agents.base import (
     harness_progress_event_stream,
@@ -25,28 +24,15 @@ from ...core.orchestration import (
     build_harness_backed_orchestration_service,
 )
 from ...core.orchestration.cold_trace_store import ColdTraceWriter
-from ...core.orchestration.opencode_event_fields import (
-    extract_message_id as _event_extract_message_id,
-)
-from ...core.orchestration.opencode_event_fields import (
-    extract_message_role as _event_extract_message_role,
-)
-from ...core.orchestration.opencode_event_fields import (
-    extract_output_delta as _event_extract_output_delta,
-)
-from ...core.orchestration.opencode_event_fields import (
-    extract_part_type as _event_extract_part_type,
-)
 from ...core.orchestration.runtime_thread_events import (
-    RuntimeThreadRunEventState,
+    RuntimeEventDriver,
+    decode_runtime_raw_messages,
     merge_runtime_thread_raw_events,
-    normalize_runtime_thread_message_payload,
 )
 from ...core.orchestration.runtime_threads import (
     RuntimeThreadExecution,
     begin_next_queued_runtime_thread_execution,
 )
-from ...core.orchestration.stream_text_merge import merge_assistant_stream_text
 from ...core.orchestration.turn_timeline import (
     append_turn_events_to_cold_trace,
     persist_turn_timeline,
@@ -55,11 +41,12 @@ from ...core.pma_thread_store import PmaThreadStore
 from ...core.ports.run_event import (
     Completed,
     Failed,
+    OutputDelta,
     RunEvent,
+    TokenUsage,
     is_terminal_run_event,
     now_iso,
 )
-from ...core.sse import parse_sse_lines
 from ...core.state import RunnerState
 from ...core.text_utils import _normalize_optional_text
 from ...manifest import ManifestError, load_manifest
@@ -101,55 +88,35 @@ def _find_hub_root(repo_root: Path) -> Path:
     return repo_root.resolve()
 
 
-def _runtime_message_id(params: dict[str, Any]) -> Optional[str]:
-    value = _event_extract_message_id(params)
-    if not isinstance(value, str):
-        return None
-    stripped = value.strip()
-    return stripped or None
-
-
-def _runtime_message_role(params: dict[str, Any]) -> Optional[str]:
-    role = _event_extract_message_role(params)
-    if not isinstance(role, str):
-        return None
-    normalized = role.strip().lower()
-    return normalized or None
-
-
-def _runtime_message_delta(params: dict[str, Any]) -> Optional[str]:
-    delta = _event_extract_output_delta(params, include_part_text=False)
-    return delta or None
-
-
-def _runtime_part_type(
-    params: dict[str, Any], part_types: Optional[dict[str, str]] = None
-) -> str:
-    return _event_extract_part_type(params, part_types=part_types)
-
-
-async def _iter_sse_lines(raw_event: str) -> AsyncIterator[str]:
-    for line in raw_event.splitlines():
-        yield line
-    yield ""
-
-
 @dataclass
 class _RuntimeEventSummary:
-    assistant_parts: list[str] = field(default_factory=list)
-    log_lines: list[str] = field(default_factory=list)
-    token_usage: Optional[dict[str, Any]] = None
+    driver: RuntimeEventDriver = field(default_factory=RuntimeEventDriver)
     streamed_live: bool = False
-    message_roles: dict[str, str] = field(default_factory=dict)
-    pending_stream_by_message: dict[str, str] = field(default_factory=dict)
-    pending_stream_no_id: str = ""
-    message_roles_seen: bool = False
-    opencode_part_types: dict[str, str] = field(default_factory=dict)
-    timeline_state: RuntimeThreadRunEventState = field(
-        default_factory=RuntimeThreadRunEventState
-    )
-    timeline_events: list[RunEvent] = field(default_factory=list)
     streamed_raw_events: list[Any] = field(default_factory=list)
+
+    @property
+    def assistant_parts(self) -> list[str]:
+        return self.driver.assistant_parts
+
+    @property
+    def log_lines(self) -> list[str]:
+        return self.driver.log_lines
+
+    @property
+    def token_usage(self) -> Optional[dict[str, Any]]:
+        return self.driver.token_usage
+
+    @token_usage.setter
+    def token_usage(self, value: Optional[dict[str, Any]]) -> None:
+        self.driver.token_usage = value
+
+    @property
+    def timeline_state(self):
+        return self.driver.state
+
+    @property
+    def timeline_events(self) -> list[RunEvent]:
+        return self.driver.run_events
 
 
 def _final_run_event(
@@ -164,6 +131,39 @@ def _final_run_event(
         timestamp=now_iso(),
         error_message=error or _DEFAULT_EXECUTION_ERROR,
     )
+
+
+def _raw_message_has_explicit_delta(message: dict[str, Any]) -> bool:
+    params = message.get("params")
+    if not isinstance(params, dict):
+        return False
+    direct_delta = params.get("delta")
+    if isinstance(direct_delta, str) and direct_delta:
+        return True
+    if isinstance(direct_delta, dict):
+        for key in ("text", "content"):
+            value = direct_delta.get(key)
+            if isinstance(value, str) and value:
+                return True
+    properties = params.get("properties")
+    if not isinstance(properties, dict):
+        return False
+    nested_delta = properties.get("delta")
+    if isinstance(nested_delta, str) and nested_delta:
+        return True
+    if isinstance(nested_delta, dict):
+        for key in ("text", "content"):
+            value = nested_delta.get(key)
+            if isinstance(value, str) and value:
+                return True
+    return False
+
+
+def _raw_message_should_emit_agent_delta(message: dict[str, Any]) -> bool:
+    method = str(message.get("method") or "").strip()
+    if method in {"message.part.updated", "message.part.delta"}:
+        return _raw_message_has_explicit_delta(message)
+    return True
 
 
 class DefaultAgentPool:
@@ -388,166 +388,52 @@ class DefaultAgentPool:
             ),
         )
 
-    async def _decode_runtime_messages(self, raw_event: Any) -> list[dict[str, Any]]:
-        if isinstance(raw_event, dict):
-            if isinstance(raw_event.get("message"), dict):
-                return [dict(raw_event["message"])]
-            if isinstance(raw_event.get("method"), str):
-                return [dict(raw_event)]
-            return []
-        if not isinstance(raw_event, str):
-            return []
-        text = raw_event.strip()
-        if not text:
-            return []
-        if not text.startswith("event:") and not text.startswith("data:"):
-            try:
-                parsed = json.loads(text)
-            except json.JSONDecodeError:
-                return []
-            return await self._decode_runtime_messages(parsed)
-
-        messages: list[dict[str, Any]] = []
-        async for event in parse_sse_lines(_iter_sse_lines(raw_event)):
-            if not event.data:
-                continue
-            try:
-                parsed = json.loads(event.data)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(parsed, dict):
-                if isinstance(parsed.get("message"), dict):
-                    messages.append(dict(parsed["message"]))
-                elif isinstance(parsed.get("method"), str):
-                    messages.append(dict(parsed))
-        return messages
-
-    def _emit_runtime_message(
+    async def _emit_runtime_raw_event(
         self,
-        message: dict[str, Any],
+        raw_event: Any,
         *,
         emit_event: Optional[EmitEventFn],
         turn_id: str,
         summary: _RuntimeEventSummary,
         timestamp: Optional[str] = None,
     ) -> None:
-        summary.timeline_events.extend(
-            normalize_runtime_thread_message_payload(
-                {"message": message},
-                summary.timeline_state,
-                timestamp=timestamp,
-            )
+        run_events = await summary.driver.consume_raw_event(
+            raw_event,
+            timestamp=timestamp,
+            store_raw_event=False,
         )
+        raw_messages = await decode_runtime_raw_messages(raw_event)
         if emit_event is not None:
-            emit_event(
-                FlowEventType.APP_SERVER_EVENT,
-                {"message": message, "turn_id": turn_id},
+            emit_agent_delta = any(
+                _raw_message_should_emit_agent_delta(message)
+                for message in raw_messages
             )
-
-        method = str(message.get("method") or "").strip()
-        params = message.get("params")
-        if not isinstance(params, dict):
-            params = {}
-
-        def _emit_assistant_delta(delta_text: str) -> None:
-            summary.assistant_parts.append(delta_text)
-            if emit_event is not None:
+            for message in raw_messages:
                 emit_event(
-                    FlowEventType.AGENT_STREAM_DELTA,
-                    {"delta": delta_text, "turn_id": turn_id},
+                    FlowEventType.APP_SERVER_EVENT,
+                    {"message": message, "turn_id": turn_id},
                 )
-
-        usage_raw = params.get("tokenUsage") or params.get("usage")
-        if isinstance(usage_raw, dict):
-            usage = dict(usage_raw)
-            summary.token_usage = usage
-            if emit_event is not None:
-                emit_event(
-                    FlowEventType.TOKEN_USAGE,
-                    {"usage": usage, "turn_id": turn_id},
-                )
-
-        item = params.get("item")
-        if method == "item/completed" and isinstance(item, dict):
-            item_type = str(item.get("type") or "").strip()
-            if item_type == "agentMessage":
-                item_text = _normalize_optional_text(item.get("text"))
-                if item_text:
-                    summary.assistant_parts.append(item_text)
-                    if emit_event is not None:
-                        emit_event(
-                            FlowEventType.AGENT_STREAM_DELTA,
-                            {"delta": item_text, "turn_id": turn_id},
-                        )
-            return
-
-        if method in {"message.updated", "message.completed"}:
-            message_id = _runtime_message_id(params)
-            role = _runtime_message_role(params)
-            if message_id and role:
-                summary.message_roles[message_id] = role
-                summary.message_roles_seen = True
-                if role == "assistant":
-                    pending = summary.pending_stream_by_message.pop(message_id, "")
-                    if pending:
-                        _emit_assistant_delta(pending)
-                    if summary.pending_stream_no_id:
-                        pending_no_id = summary.pending_stream_no_id
-                        summary.pending_stream_no_id = ""
-                        _emit_assistant_delta(pending_no_id)
-                elif role == "user":
-                    summary.pending_stream_by_message.pop(message_id, None)
-                    summary.pending_stream_no_id = ""
-
-        delta = _runtime_message_delta(params)
-        if delta is None:
-            return
-
-        delta_type = _normalize_optional_text(
-            params.get("deltaType") or params.get("delta_type")
-        )
-        if delta_type is None:
-            lowered = method.lower()
-            if method in {"outputDelta", "item/agentMessage/delta", "message.delta"}:
-                delta_type = "assistant_stream"
-            elif method in {"message.part.updated", "message.part.delta"}:
-                part_type = _runtime_part_type(params, summary.opencode_part_types)
-                if part_type in {"", "text"}:
-                    message_id = _runtime_message_id(params)
-                    role = summary.message_roles.get(message_id or "")
-                    if role == "user":
-                        return
-                    if role == "assistant":
-                        delta_type = "assistant_stream"
-                    elif message_id:
-                        summary.pending_stream_by_message[message_id] = (
-                            merge_assistant_stream_text(
-                                summary.pending_stream_by_message.get(message_id, ""),
-                                delta,
-                            )
-                        )
-                        return
-                    elif not summary.message_roles_seen:
-                        delta_type = "assistant_stream"
-                    else:
-                        summary.pending_stream_no_id = merge_assistant_stream_text(
-                            summary.pending_stream_no_id,
-                            delta,
-                        )
-                        return
-                elif part_type == "reasoning":
-                    delta_type = "thinking"
-            elif "reasoning" in lowered:
-                delta_type = "thinking"
-            elif lowered.endswith("outputdelta"):
-                delta_type = "log_line"
-
-        if delta_type in {"assistant_stream", "assistant_message"}:
-            _emit_assistant_delta(delta)
-            return
-
-        if delta_type == "log_line":
-            summary.log_lines.append(delta)
+            for run_event in run_events:
+                if (
+                    isinstance(run_event, OutputDelta)
+                    and run_event.delta_type
+                    in {
+                        "assistant_stream",
+                        "assistant_message",
+                    }
+                    and emit_agent_delta
+                ):
+                    emit_event(
+                        FlowEventType.AGENT_STREAM_DELTA,
+                        {"delta": run_event.content, "turn_id": turn_id},
+                    )
+                elif isinstance(run_event, TokenUsage) and isinstance(
+                    run_event.usage, dict
+                ):
+                    emit_event(
+                        FlowEventType.TOKEN_USAGE,
+                        {"usage": dict(run_event.usage), "turn_id": turn_id},
+                    )
 
     async def _stream_execution_events(
         self,
@@ -570,15 +456,14 @@ class DefaultAgentPool:
                 backend_turn_id,
             ):
                 summary.streamed_raw_events.append(raw_event)
-                for message in await self._decode_runtime_messages(raw_event):
-                    self._emit_runtime_message(
-                        message,
-                        emit_event=emit_event,
-                        turn_id=backend_turn_id,
-                        summary=summary,
-                        timestamp=now_iso(),
-                    )
-                    summary.streamed_live = True
+                await self._emit_runtime_raw_event(
+                    raw_event,
+                    emit_event=emit_event,
+                    turn_id=backend_turn_id,
+                    summary=summary,
+                    timestamp=now_iso(),
+                )
+                summary.streamed_live = True
         except (
             RuntimeError,
             OSError,
@@ -601,14 +486,13 @@ class DefaultAgentPool:
         summary: _RuntimeEventSummary,
     ) -> None:
         for raw_event in raw_events:
-            for message in await self._decode_runtime_messages(raw_event):
-                self._emit_runtime_message(
-                    message,
-                    emit_event=emit_event,
-                    turn_id=turn_id,
-                    summary=summary,
-                    timestamp=now_iso(),
-                )
+            await self._emit_runtime_raw_event(
+                raw_event,
+                emit_event=emit_event,
+                turn_id=turn_id,
+                summary=summary,
+                timestamp=now_iso(),
+            )
 
     async def _summarize_runtime_raw_events(
         self,
@@ -666,7 +550,7 @@ class DefaultAgentPool:
                 )
             assistant_text = (
                 _normalize_optional_text(result.assistant_text)
-                or "".join(summary.assistant_parts).strip()
+                or summary.driver.best_assistant_text()
             )
             normalized_status = str(result.status or "").strip().lower()
             if result.errors:
@@ -779,7 +663,7 @@ class DefaultAgentPool:
         final_text = (
             assistant_text
             if assistant_text
-            else "".join(effective_summary.assistant_parts).strip()
+            else effective_summary.driver.best_assistant_text()
         )
         terminal_event = _final_run_event(
             status=status,
