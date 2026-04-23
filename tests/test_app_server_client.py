@@ -19,6 +19,11 @@ from codex_autorunner.integrations.app_server.protocol_helpers import (
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "app_server_fixture.py"
 
 
+@pytest.fixture(autouse=True)
+def _fast_turn_completion_settle(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(app_server_client, "_TURN_COMPLETION_SETTLE_SECONDS", 0.01)
+
+
 def fixture_command(scenario: str) -> list[str]:
     return [sys.executable, "-u", str(FIXTURE_PATH), "--scenario", scenario]
 
