@@ -1,13 +1,17 @@
 import { REPO_ID, HUB_BASE } from "./env.js";
+import { initUiMockFromUrl } from "./uiMock.js";
 import {
+  api,
   flash,
-  getAuthToken,
   repairModalBackgroundIfStuck,
-  resolvePath,
   updateUrlParams,
 } from "./utils.js";
 
 let pmaInitialized = false;
+let emptyRouteHandled = false;
+const PMA_EMPTY_HERO_TEXT =
+  "Get started — ask the PM Agent to add your first repo";
+const PMA_DEFAULT_HERO_TEXT = "Project Manager";
 let hubModulePromise: Promise<typeof import("./hub.js")> | null = null;
 let pmaModulePromise: Promise<typeof import("./pma.js")> | null = null;
 let notificationsModulePromise: Promise<typeof import("./notifications.js")> | null =
@@ -121,6 +125,9 @@ function showPMAView(): void {
   updateModeToggle("pma");
   void initPMAView().then(() => {
     setPMARefreshActiveIfLoaded(true);
+    void loadPMAModule().then(({ drainPendingPrompt }) => {
+      drainPendingPrompt();
+    });
   });
   updateUrlParams({ view: "pma" });
 }
@@ -145,17 +152,9 @@ function updateModeToggle(mode: "manual" | "pma"): void {
 }
 
 async function probePMAEnabled(): Promise<boolean> {
-  const headers: Record<string, string> = {};
-  const token = getAuthToken();
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
-  }
   try {
-    const res = await fetch(resolvePath("/hub/pma/agents"), {
-      method: "GET",
-      headers,
-    });
-    return res.ok;
+    await api("/hub/pma/agents", { method: "GET" });
+    return true;
   } catch {
     return false;
   }
@@ -214,6 +213,37 @@ async function initHubShell(): Promise<void> {
   if (requestedPMA) {
     showPMAView();
   }
+
+  const requestedManual = urlParams.get("view") === "manual";
+  document.addEventListener("hub:repo-count", (evt) => {
+    const detail = (evt as CustomEvent<{ count?: number }>).detail;
+    const count = typeof detail?.count === "number" ? detail.count : 0;
+    updatePMAHeroForEmptyState(count === 0);
+    if (
+      !emptyRouteHandled &&
+      count === 0 &&
+      !requestedManual &&
+      !requestedPMA
+    ) {
+      emptyRouteHandled = true;
+      showPMAView();
+    } else if (count > 0) {
+      emptyRouteHandled = true;
+    }
+  });
+
+  const { initWalkthrough } = await import("./walkthrough.js");
+  initWalkthrough();
+}
+
+function updatePMAHeroForEmptyState(empty: boolean): void {
+  const heroText = document.querySelector<HTMLElement>(
+    "#pma-shell .hub-hero-text"
+  );
+  const h1 = heroText?.querySelector("h1");
+  if (!heroText || !h1) return;
+  heroText.classList.toggle("hub-hero-text--empty", empty);
+  h1.textContent = empty ? PMA_EMPTY_HERO_TEXT : PMA_DEFAULT_HERO_TEXT;
 }
 
 async function initRepoShell(): Promise<void> {
@@ -343,6 +373,7 @@ function dismissBootLoader(): void {
 
 function bootstrap() {
   dismissBootLoader();
+  initUiMockFromUrl();
 
   if (!REPO_ID) {
     void initHubShell();

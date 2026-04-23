@@ -611,6 +611,7 @@ export function renderSummary(repos, hubData) {
     if (pmaLastScanEl) {
         pmaLastScanEl.textContent = formatTimeCompact(hubData.last_scan_at);
     }
+    document.dispatchEvent(new CustomEvent("hub:repo-count", { detail: { count: repos.length } }));
 }
 export function renderRepos(repos, hubChannelEntries, pinnedParentRepoIds) {
     if (!repoListEl)

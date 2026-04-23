@@ -1,7 +1,8 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
 import { api, flash } from "./utils.js";
 import { HUB_CACHE_TTL_MS, HUB_USAGE_CACHE_KEY, saveSessionCache, loadSessionCache, loadHubBootstrapCache, saveHubBootstrapCache, indexHubUsage, } from "./hubCache.js";
-import { registerAutoRefresh } from "./autoRefresh.js";
+import { registerAutoRefresh, setAutoRefreshEnabled } from "./autoRefresh.js";
+import { isUiMockActive } from "./uiMock.js";
 import { renderReposWithScroll, renderAgentWorkspaces, renderSummary, } from "./hubRepoCards.js";
 import { loadUpdateTargetOptions, handleSystemUpdate, } from "./systemUpdateUi.js";
 import { getHubData, applyHubData, getHubChannelEntries, getPinnedParentRepoIds, startHubJob, } from "./hubActions.js";
@@ -219,6 +220,9 @@ async function checkUpdateStatus() {
 }
 export { loadUpdateTargetOptions, handleSystemUpdate };
 export function bootstrapHubData() {
+    if (isUiMockActive()) {
+        setAutoRefreshEnabled(false, "ui mock");
+    }
     const hubData = getHubData();
     const cachedHub = loadHubBootstrapCache();
     if (cachedHub) {

@@ -574,6 +574,30 @@ async function finalizePMAResponse(responseText, options = {}) {
         void fileBoxCtrl?.refresh();
     })();
 }
+/**
+ * Applies a walkthrough preset from sessionStorage (set before navigating to PMA).
+ * Does not auto-send: the spec is to prefill the composer so the user can review and send.
+ * Exported so the hub shell can run this after `showPMAView` when PMA was already initialized.
+ */
+function drainPendingPrompt() {
+    let pending = "";
+    try {
+        pending = sessionStorage.getItem("car-pma-pending-prompt") || "";
+        if (pending)
+            sessionStorage.removeItem("car-pma-pending-prompt");
+    }
+    catch {
+        return;
+    }
+    if (!pending)
+        return;
+    const elements = getElements();
+    if (!elements.input)
+        return;
+    elements.input.value = pending;
+    elements.input.dispatchEvent(new Event("input", { bubbles: true }));
+    elements.input.focus();
+}
 async function initPMA() {
     const elements = getElements();
     if (!elements.shell)
@@ -607,6 +631,7 @@ async function initPMA() {
     attachHandlers();
     setPMAView(loadPMAView(), { persist: false });
     initNotificationBell();
+    drainPendingPrompt();
     // If we refreshed mid-turn, recover the final output from the server.
     await resumePendingTurn();
     // If the page refreshes/navigates while a turn is running, avoid showing a noisy
@@ -1272,6 +1297,21 @@ function attachHandlers() {
             void sendMessage();
         });
     }
+    document.addEventListener("pma:inject-prompt", (evt) => {
+        const detail = evt.detail;
+        const prompt = typeof detail?.prompt === "string" ? detail.prompt : "";
+        if (!prompt || !elements.input)
+            return;
+        try {
+            sessionStorage.removeItem("car-pma-pending-prompt");
+        }
+        catch {
+            // ignore
+        }
+        elements.input.value = prompt;
+        elements.input.dispatchEvent(new Event("input", { bubbles: true }));
+        elements.input.focus();
+    });
     if (elements.cancelBtn) {
         elements.cancelBtn.addEventListener("click", () => {
             void cancelRequest({ clearPending: true, interruptServer: true });
@@ -1412,4 +1452,4 @@ const __pmaTest = {
     buildOutboxAttachmentSummary,
     shouldAppendAsyncOutboxSummary,
 };
-export { __pmaTest, initPMA };
+export { __pmaTest, drainPendingPrompt, initPMA };

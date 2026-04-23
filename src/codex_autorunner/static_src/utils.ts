@@ -1,5 +1,6 @@
 import { CONSTANTS } from "./constants.js";
 import { BASE_PATH } from "./env.js";
+import { getUiMockJsonForRequest } from "./uiMock.js";
 
 const toast = document.getElementById("toast");
 const decoder = new TextDecoder();
@@ -226,6 +227,10 @@ export async function api(path: string, options: ApiOptions = {}): Promise<unkno
     headers,
   };
   const target = resolvePath(path);
+  const mockJson = getUiMockJsonForRequest(target, options.method);
+  if (mockJson !== null) {
+    return Promise.resolve(mockJson);
+  }
   const token = getAuthToken();
   if (token && !headers.Authorization) {
     headers.Authorization = `Bearer ${token}`;

@@ -1,6 +1,7 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
 import { CONSTANTS } from "./constants.js";
 import { BASE_PATH } from "./env.js";
+import { getUiMockJsonForRequest } from "./uiMock.js";
 const toast = document.getElementById("toast");
 const decoder = new TextDecoder();
 const AUTH_TOKEN_KEY = "car_auth_token";
@@ -218,6 +219,10 @@ export async function api(path, options = {}) {
         headers,
     };
     const target = resolvePath(path);
+    const mockJson = getUiMockJsonForRequest(target, options.method);
+    if (mockJson !== null) {
+        return Promise.resolve(mockJson);
+    }
     const token = getAuthToken();
     if (token && !headers.Authorization) {
         headers.Authorization = `Bearer ${token}`;

@@ -718,6 +718,9 @@ export function renderSummary(repos: HubRepo[], hubData: HubData): void {
   if (pmaLastScanEl) {
     pmaLastScanEl.textContent = formatTimeCompact(hubData.last_scan_at);
   }
+  document.dispatchEvent(
+    new CustomEvent("hub:repo-count", { detail: { count: repos.length } })
+  );
 }
 
 export function renderRepos(repos: HubRepo[], hubChannelEntries: HubChannelEntry[], pinnedParentRepoIds: Set<string>): void {
