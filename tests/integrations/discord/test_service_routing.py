@@ -5041,6 +5041,11 @@ async def test_car_model_rejects_invalid_opencode_model_name(tmp_path: Path) -> 
         outbox_manager=_FakeOutboxManager(),
     )
 
+    async def _no_model_items(**_kw: Any) -> list[tuple[str, str]] | None:
+        return None
+
+    service._list_model_items_for_binding = _no_model_items  # type: ignore[assignment]
+
     try:
         await service._handle_car_model(
             interaction_id="inter-1",
@@ -7533,10 +7538,10 @@ async def test_dispatch_deferred_slash_commands_ack_before_prior_handler_finishe
 
     task = asyncio.create_task(service.run_forever())
     try:
-        for _ in range(50):
+        for _ in range(100):
             if len(rest.interaction_responses) >= 2:
                 break
-            await asyncio.sleep(0.01)
+            await asyncio.sleep(0.002)
 
         assert [item["interaction_id"] for item in rest.interaction_responses] == [
             "inter-1",
@@ -7656,14 +7661,14 @@ async def test_message_turn_waits_for_ingressed_slash_command_to_finish(
         await service._on_dispatch("INTERACTION_CREATE", interaction)
         await service._on_dispatch("MESSAGE_CREATE", message_payload)
 
-        for _ in range(50):
+        for _ in range(100):
             if any(
                 "Queued (waiting for available worker...)"
                 in item["payload"].get("content", "")
                 for item in rest.channel_messages
             ):
                 break
-            await asyncio.sleep(0.01)
+            await asyncio.sleep(0.002)
 
         assert observed == ["newt:start"]
         assert message_turn_started.is_set() is False
@@ -11102,7 +11107,7 @@ async def test_typing_indicator_can_remain_visible_briefly_after_local_end(
         assert rest.typing_calls[:2] == ["channel-1", "channel-1"]
         assert not await service._typing_session_active("channel-1")
         assert rest.typing_visible("channel-1")
-        await asyncio.sleep(0.15)
+        await asyncio.sleep(0.10)
         assert not rest.typing_visible("channel-1")
     finally:
         await store.close()
