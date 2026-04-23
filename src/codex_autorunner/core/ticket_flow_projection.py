@@ -12,6 +12,7 @@ from .config import load_repo_config
 from .flows.models import FlowRunRecord, FlowRunStatus
 from .flows.store import FlowStore
 from .freshness import build_freshness_payload
+from .state_roots import resolve_repo_flows_db_path, resolve_repo_state_root
 from .text_utils import _iso_now
 
 _COMPLETED_FLOW_STATUSES = {"completed", "done"}
@@ -116,7 +117,7 @@ def _extract_pr_url(data: dict[str, Any], body: Optional[str]) -> Optional[str]:
 
 
 def collect_ticket_flow_census(repo_root: Path) -> TicketFlowCensus:
-    ticket_dir = repo_root / ".codex-autorunner" / "tickets"
+    ticket_dir = resolve_repo_state_root(repo_root) / "tickets"
     try:
         ticket_paths = list_ticket_paths(ticket_dir)
     except (OSError, ValueError):
@@ -200,7 +201,7 @@ def resolve_authoritative_ticket_flow_run(
             represented_run_id=represented_run_id,
         )
 
-    db_path = repo_root / ".codex-autorunner" / "flows.db"
+    db_path = resolve_repo_flows_db_path(repo_root)
     if not db_path.exists():
         return None
 

@@ -12,6 +12,7 @@ from .pma_chat_delivery import (
     notify_preferred_bound_chat_for_workspace,
     notify_primary_pma_chat_for_repo,
 )
+from .state_roots import resolve_repo_flows_db_path
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +66,7 @@ async def _can_auto_resume_run(repo_root: Path, run_id: str) -> bool:
     from .flows.models import FlowRunStatus
     from .flows.store import FlowStore
 
-    db_path = repo_root / ".codex-autorunner" / "flows.db"
+    db_path = resolve_repo_flows_db_path(repo_root)
     if not db_path.exists():
         return False
     try:

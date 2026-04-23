@@ -47,6 +47,7 @@ from ....core.managed_processes import reap_managed_processes
 from ....core.orchestration import build_ticket_flow_orchestration_service
 from ....core.orchestration.models import FlowRunTarget
 from ....core.runtime import RuntimeContext
+from ....core.state_roots import resolve_repo_flows_db_path, resolve_repo_state_root
 from ....core.utils import resolve_executable
 from ....flows.ticket_flow.runtime_helpers import (
     ensure_ticket_flow_worker,
@@ -114,9 +115,10 @@ def register_flow_commands(
         raise AssertionError("Unreachable")  # satisfies mypy return
 
     def _ticket_flow_paths(engine: RuntimeContext) -> tuple[Path, Path, Path]:
-        db_path = engine.repo_root / ".codex-autorunner" / "flows.db"
-        artifacts_root = engine.repo_root / ".codex-autorunner" / "flows"
-        ticket_dir = engine.repo_root / ".codex-autorunner" / "tickets"
+        state_root = resolve_repo_state_root(engine.repo_root)
+        db_path = resolve_repo_flows_db_path(engine.repo_root)
+        artifacts_root = state_root / "flows"
+        ticket_dir = state_root / "tickets"
         return db_path, artifacts_root, ticket_dir
 
     @dataclass(frozen=True)
@@ -1103,7 +1105,7 @@ def register_flow_commands(
         Use --dry-run to preview.
         """
         engine = require_repo_config(repo, hub)
-        db_path = engine.repo_root / ".codex-autorunner" / "flows.db"
+        db_path = resolve_repo_flows_db_path(engine.repo_root)
         if not db_path.exists():
             raise_exit("Flow database not found at .codex-autorunner/flows.db")
 
@@ -1220,7 +1222,7 @@ def register_flow_commands(
         Active runs are never touched.
         """
         engine = require_repo_config(repo, hub)
-        db_path = engine.repo_root / ".codex-autorunner" / "flows.db"
+        db_path = resolve_repo_flows_db_path(engine.repo_root)
         if not db_path.exists():
             raise_exit("Flow database not found at .codex-autorunner/flows.db")
 

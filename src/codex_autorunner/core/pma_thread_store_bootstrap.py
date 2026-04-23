@@ -12,6 +12,7 @@ from .orchestration.sqlite import (
     open_orchestration_sqlite,
     prepare_orchestration_sqlite,
 )
+from .state_roots import resolve_hub_pma_threads_db_path
 from .time_utils import now_iso
 
 PMA_THREADS_DB_FILENAME = "threads.sqlite3"
@@ -19,7 +20,7 @@ _PMA_THREAD_STORE_PREPARED_KEY = "pma_thread_store_prepare_v1"
 
 
 def default_pma_threads_db_path(hub_root: Path) -> Path:
-    return hub_root / ".codex-autorunner" / "pma" / PMA_THREADS_DB_FILENAME
+    return resolve_hub_pma_threads_db_path(hub_root)
 
 
 def pma_threads_db_lock_path(db_path: Path) -> Path:

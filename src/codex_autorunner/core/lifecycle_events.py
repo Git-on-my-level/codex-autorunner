@@ -15,6 +15,11 @@ from .orchestration.sqlite import (
     open_orchestration_sqlite,
     resolve_orchestration_sqlite_path,
 )
+from .sqlite_utils import connect_sqlite
+from .state_roots import (
+    resolve_hub_lifecycle_events_db_path,
+    resolve_hub_lifecycle_events_path,
+)
 from .text_utils import lock_path_for
 from .utils import atomic_write
 
@@ -72,11 +77,11 @@ class LegacyLifecycleLoadResult:
 
 
 def default_lifecycle_events_path(hub_root: Path) -> Path:
-    return hub_root / ".codex-autorunner" / LIFECYCLE_EVENTS_FILENAME
+    return resolve_hub_lifecycle_events_path(hub_root)
 
 
 def default_lifecycle_events_db_path(hub_root: Path) -> Path:
-    return hub_root / ".codex-autorunner" / LIFECYCLE_EVENTS_DB_FILENAME
+    return resolve_hub_lifecycle_events_db_path(hub_root)
 
 
 class _LegacyJsonLifecycleEventStore:
@@ -272,10 +277,7 @@ class _SqliteLifecycleEventStore:
         existing.data = data
 
     def _connect(self) -> sqlite3.Connection:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(self._path)
-        conn.row_factory = sqlite3.Row
-        return conn
+        return connect_sqlite(self._path)
 
     def _initialize_schema(self) -> None:
         with self._connect() as conn:

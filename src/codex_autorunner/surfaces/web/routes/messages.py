@@ -33,6 +33,7 @@ from ....core.flows.failure_diagnostics import (
 from ....core.flows.models import FlowRunStatus
 from ....core.flows.store import FlowStore
 from ....core.flows.workspace_root import resolve_ticket_flow_workspace_root
+from ....core.state_roots import resolve_repo_flows_db_path
 from ....core.utils import find_repo_root
 from ....tickets.files import safe_relpath
 from ....tickets.outbox import parse_dispatch, resolve_outbox_paths
@@ -57,7 +58,7 @@ _logger = logging.getLogger(__name__)
 
 
 def _flows_db_path(repo_root: Path) -> Path:
-    return repo_root / ".codex-autorunner" / "flows.db"
+    return resolve_repo_flows_db_path(repo_root)
 
 
 def _resolve_workspace_root(record_input: dict[str, Any], repo_root: Path) -> Path:

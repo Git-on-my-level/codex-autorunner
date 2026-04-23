@@ -24,6 +24,7 @@ from .flows.models import (
 from .flows.store import FlowStore
 from .flows.worker_process import check_worker_health, read_worker_crash_info
 from .flows.workspace_root import resolve_ticket_flow_workspace_root
+from .state_roots import resolve_repo_flows_db_path
 from .ticket_flow_projection import select_authoritative_run_record
 from .ticket_flow_summary import build_ticket_flow_summary
 
@@ -516,7 +517,7 @@ def get_latest_ticket_flow_run_state_with_record(
         )
         return run_state, record
 
-    db_path = repo_root / ".codex-autorunner" / "flows.db"
+    db_path = resolve_repo_flows_db_path(repo_root)
     if store is None and not db_path.exists():
         return None, None
     try:

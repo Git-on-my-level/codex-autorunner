@@ -60,6 +60,7 @@ from .pma_thread_store_rows import (
 from .pma_thread_store_rows import (
     workspace_head_branch as _workspace_head_branch,
 )
+from .sqlite_utils import ensure_columns
 from .text_utils import _json_dumps, _json_loads_object
 from .time_utils import now_iso
 
@@ -84,16 +85,6 @@ class ManagedThreadNotActiveError(RuntimeError):
         super().__init__(detail)
         self.managed_thread_id = managed_thread_id
         self.status = status
-
-
-def _table_columns(conn: Any, table_name: str) -> set[str]:
-    rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
-    columns: set[str] = set()
-    for row in rows:
-        name = row["name"] if "name" in row.keys() else None
-        if isinstance(name, str) and name:
-            columns.add(name)
-    return columns
 
 
 def _resolve_stale_running_threshold_seconds(
@@ -194,44 +185,20 @@ def _ensure_schema(conn: Any) -> None:
             """
         )
 
-    thread_columns = _table_columns(conn, "pma_managed_threads")
-    for statement in (
+    ensure_columns(
+        conn,
+        "pma_managed_threads",
         (
-            "resource_kind",
-            "ALTER TABLE pma_managed_threads ADD COLUMN resource_kind TEXT",
+            ("resource_kind", "resource_kind TEXT"),
+            ("resource_id", "resource_id TEXT"),
+            ("normalized_status", "normalized_status TEXT"),
+            ("status_reason_code", "status_reason_code TEXT"),
+            ("status_updated_at", "status_updated_at TEXT"),
+            ("status_terminal", "status_terminal INTEGER"),
+            ("status_turn_id", "status_turn_id TEXT"),
+            ("metadata_json", "metadata_json TEXT NOT NULL DEFAULT '{}'"),
         ),
-        (
-            "resource_id",
-            "ALTER TABLE pma_managed_threads ADD COLUMN resource_id TEXT",
-        ),
-        (
-            "normalized_status",
-            "ALTER TABLE pma_managed_threads ADD COLUMN normalized_status TEXT",
-        ),
-        (
-            "status_reason_code",
-            "ALTER TABLE pma_managed_threads ADD COLUMN status_reason_code TEXT",
-        ),
-        (
-            "status_updated_at",
-            "ALTER TABLE pma_managed_threads ADD COLUMN status_updated_at TEXT",
-        ),
-        (
-            "status_terminal",
-            "ALTER TABLE pma_managed_threads ADD COLUMN status_terminal INTEGER",
-        ),
-        (
-            "status_turn_id",
-            "ALTER TABLE pma_managed_threads ADD COLUMN status_turn_id TEXT",
-        ),
-        (
-            "metadata_json",
-            "ALTER TABLE pma_managed_threads ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'",
-        ),
-    ):
-        if statement[0] not in thread_columns:
-            with conn:
-                conn.execute(statement[1])
+    )
     with conn:
         conn.execute(
             """

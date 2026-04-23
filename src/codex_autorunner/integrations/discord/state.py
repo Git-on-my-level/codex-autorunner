@@ -44,8 +44,16 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional, cast
 
-from ...core.sqlite_utils import connect_sqlite
+from ...core.sqlite_utils import (
+    SqliteMigrationStep,
+    apply_versioned_schema,
+    connect_sqlite,
+    ensure_columns,
+    read_schema_version,
+    write_schema_version,
+)
 from ...core.state import now_iso
+from ...core.state_roots import resolve_discord_state_path
 from ..chat.agents import normalize_hermes_profile
 
 DISCORD_STATE_SCHEMA_VERSION = 13
@@ -249,6 +257,10 @@ class DiscordStateStore:
     @property
     def path(self) -> Path:
         return self._db_path
+
+    @classmethod
+    def default_path(cls, hub_root: Path, raw_config: Optional[dict[str, Any]]) -> Path:
+        return resolve_discord_state_path(hub_root, raw_config)
 
     async def initialize(self) -> None:
         await self._run(self._ensure_initialized_sync)
@@ -730,25 +742,6 @@ class DiscordStateStore:
         with conn:
             conn.execute(
                 """
-                CREATE TABLE IF NOT EXISTS schema_info (
-                    version INTEGER NOT NULL
-                )
-                """
-            )
-            row = conn.execute(
-                "SELECT version FROM schema_info ORDER BY version DESC LIMIT 1"
-            ).fetchone()
-            if row is None:
-                conn.execute(
-                    "INSERT INTO schema_info(version) VALUES (?)",
-                    (DISCORD_STATE_SCHEMA_VERSION,),
-                )
-                current_version = DISCORD_STATE_SCHEMA_VERSION
-            else:
-                current_version = int(row["version"] or 1)
-
-            conn.execute(
-                """
                 CREATE TABLE IF NOT EXISTS channel_bindings (
                     channel_id TEXT PRIMARY KEY,
                     guild_id TEXT,
@@ -864,150 +857,216 @@ class DiscordStateStore:
                     ON interaction_ledger(execution_status)
                 """
             )
+            if read_schema_version(conn) is None:
+                write_schema_version(conn, 0)
+            apply_versioned_schema(
+                conn,
+                schema_name="discord_state",
+                target_version=DISCORD_STATE_SCHEMA_VERSION,
+                steps=(
+                    SqliteMigrationStep(
+                        version=1, name="bootstrap", apply=lambda _conn: None
+                    ),
+                    SqliteMigrationStep(
+                        version=2,
+                        name="outbox_operation_id",
+                        apply=self._migration_v2,
+                    ),
+                    SqliteMigrationStep(
+                        version=3,
+                        name="pause_dispatch_columns",
+                        apply=self._migration_v3,
+                    ),
+                    SqliteMigrationStep(
+                        version=4,
+                        name="dispatch_tracking_columns",
+                        apply=self._migration_v4,
+                    ),
+                    SqliteMigrationStep(
+                        version=5,
+                        name="pma_state_columns",
+                        apply=self._migration_v5,
+                    ),
+                    SqliteMigrationStep(
+                        version=6,
+                        name="resource_columns",
+                        apply=self._migration_v6,
+                    ),
+                    SqliteMigrationStep(
+                        version=7,
+                        name="agent_columns",
+                        apply=self._migration_v7,
+                    ),
+                    SqliteMigrationStep(
+                        version=8,
+                        name="approval_columns",
+                        apply=self._migration_v8,
+                    ),
+                    SqliteMigrationStep(
+                        version=9,
+                        name="rollout_and_terminal_columns",
+                        apply=self._migration_v9,
+                    ),
+                    SqliteMigrationStep(
+                        version=10,
+                        name="pending_compact_columns",
+                        apply=self._migration_v10,
+                    ),
+                    SqliteMigrationStep(
+                        version=11,
+                        name="interaction_route_columns",
+                        apply=self._migration_v11,
+                    ),
+                    SqliteMigrationStep(
+                        version=12,
+                        name="interaction_payload_columns",
+                        apply=self._migration_v12,
+                    ),
+                    SqliteMigrationStep(
+                        version=13,
+                        name="interaction_completion_columns",
+                        apply=self._migration_v13,
+                    ),
+                ),
+            )
             conn.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_discord_interaction_ledger_scheduler_state
                     ON interaction_ledger(scheduler_state)
                 """
             )
-            self._ensure_channel_binding_columns(conn)
-            self._ensure_interaction_ledger_columns(conn)
-            self._ensure_outbox_columns(conn)
-            if current_version < DISCORD_STATE_SCHEMA_VERSION:
-                conn.execute(
-                    "UPDATE schema_info SET version = ?",
-                    (DISCORD_STATE_SCHEMA_VERSION,),
-                )
 
-    def _ensure_outbox_columns(self, conn: sqlite3.Connection) -> None:
-        rows = conn.execute("PRAGMA table_info(outbox)").fetchall()
-        names = {str(row["name"]) for row in rows}
-        if "operation_id" not in names:
-            conn.execute("ALTER TABLE outbox ADD COLUMN operation_id TEXT")
+    def _migration_v2(self, conn: sqlite3.Connection) -> None:
+        ensure_columns(conn, "outbox", (("operation_id", "operation_id TEXT"),))
 
-    def _ensure_channel_binding_columns(self, conn: sqlite3.Connection) -> None:
-        rows = conn.execute("PRAGMA table_info(channel_bindings)").fetchall()
-        names = {str(row["name"]) for row in rows}
-        if "last_pause_run_id" not in names:
-            conn.execute(
-                "ALTER TABLE channel_bindings ADD COLUMN last_pause_run_id TEXT"
-            )
-        if "last_pause_dispatch_seq" not in names:
-            conn.execute(
-                "ALTER TABLE channel_bindings ADD COLUMN last_pause_dispatch_seq TEXT"
-            )
-        if "last_dispatch_run_id" not in names:
-            conn.execute(
-                "ALTER TABLE channel_bindings ADD COLUMN last_dispatch_run_id TEXT"
-            )
-        if "last_dispatch_seq" not in names:
-            conn.execute(
-                "ALTER TABLE channel_bindings ADD COLUMN last_dispatch_seq TEXT"
-            )
-        if "pma_enabled" not in names:
-            conn.execute(
-                "ALTER TABLE channel_bindings ADD COLUMN pma_enabled INTEGER NOT NULL DEFAULT 0"
-            )
-        if "pma_prev_workspace_path" not in names:
-            conn.execute(
-                "ALTER TABLE channel_bindings ADD COLUMN pma_prev_workspace_path TEXT"
-            )
-        if "pma_prev_repo_id" not in names:
-            conn.execute(
-                "ALTER TABLE channel_bindings ADD COLUMN pma_prev_repo_id TEXT"
-            )
-        if "resource_kind" not in names:
-            conn.execute("ALTER TABLE channel_bindings ADD COLUMN resource_kind TEXT")
-        if "resource_id" not in names:
-            conn.execute("ALTER TABLE channel_bindings ADD COLUMN resource_id TEXT")
-        if "pma_prev_resource_kind" not in names:
-            conn.execute(
-                "ALTER TABLE channel_bindings ADD COLUMN pma_prev_resource_kind TEXT"
-            )
-        if "pma_prev_resource_id" not in names:
-            conn.execute(
-                "ALTER TABLE channel_bindings ADD COLUMN pma_prev_resource_id TEXT"
-            )
-        if "agent" not in names:
-            conn.execute("ALTER TABLE channel_bindings ADD COLUMN agent TEXT")
-        if "agent_profile" not in names:
-            conn.execute("ALTER TABLE channel_bindings ADD COLUMN agent_profile TEXT")
-        if "model_override" not in names:
-            conn.execute("ALTER TABLE channel_bindings ADD COLUMN model_override TEXT")
-        if "reasoning_effort" not in names:
-            conn.execute(
-                "ALTER TABLE channel_bindings ADD COLUMN reasoning_effort TEXT"
-            )
-        if "approval_mode" not in names:
-            conn.execute("ALTER TABLE channel_bindings ADD COLUMN approval_mode TEXT")
-        if "approval_policy" not in names:
-            conn.execute("ALTER TABLE channel_bindings ADD COLUMN approval_policy TEXT")
-        if "sandbox_policy" not in names:
-            conn.execute("ALTER TABLE channel_bindings ADD COLUMN sandbox_policy TEXT")
-        if "rollout_path" not in names:
-            conn.execute("ALTER TABLE channel_bindings ADD COLUMN rollout_path TEXT")
-        if "last_terminal_run_id" not in names:
-            conn.execute(
-                "ALTER TABLE channel_bindings ADD COLUMN last_terminal_run_id TEXT"
-            )
-        if "pending_compact_seed" not in names:
-            conn.execute(
-                "ALTER TABLE channel_bindings ADD COLUMN pending_compact_seed TEXT"
-            )
-        if "pending_compact_session_key" not in names:
-            conn.execute(
-                "ALTER TABLE channel_bindings ADD COLUMN pending_compact_session_key TEXT"
-            )
+    def _migration_v3(self, conn: sqlite3.Connection) -> None:
+        ensure_columns(
+            conn,
+            "channel_bindings",
+            (
+                ("last_pause_run_id", "last_pause_run_id TEXT"),
+                ("last_pause_dispatch_seq", "last_pause_dispatch_seq TEXT"),
+            ),
+        )
 
-    def _ensure_interaction_ledger_columns(self, conn: sqlite3.Connection) -> None:
-        rows = conn.execute("PRAGMA table_info(interaction_ledger)").fetchall()
-        names = {str(row["name"]) for row in rows}
-        if not names:
-            return
-        if "route_key" not in names:
-            conn.execute("ALTER TABLE interaction_ledger ADD COLUMN route_key TEXT")
-        if "handler_id" not in names:
-            conn.execute("ALTER TABLE interaction_ledger ADD COLUMN handler_id TEXT")
-        if "conversation_id" not in names:
-            conn.execute(
-                "ALTER TABLE interaction_ledger ADD COLUMN conversation_id TEXT"
-            )
-        if "scheduler_state" not in names:
-            conn.execute(
-                "ALTER TABLE interaction_ledger ADD COLUMN scheduler_state TEXT NOT NULL DEFAULT 'received'"
-            )
-        if "resource_keys_json" not in names:
-            conn.execute(
-                "ALTER TABLE interaction_ledger ADD COLUMN resource_keys_json TEXT"
-            )
-        if "payload_json" not in names:
-            conn.execute("ALTER TABLE interaction_ledger ADD COLUMN payload_json TEXT")
-        if "envelope_json" not in names:
-            conn.execute("ALTER TABLE interaction_ledger ADD COLUMN envelope_json TEXT")
-        if "delivery_cursor_json" not in names:
-            conn.execute(
-                "ALTER TABLE interaction_ledger ADD COLUMN delivery_cursor_json TEXT"
-            )
-        if "attempt_count" not in names:
-            conn.execute(
-                "ALTER TABLE interaction_ledger ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0"
-            )
-        if "execution_error" not in names:
-            conn.execute(
-                "ALTER TABLE interaction_ledger ADD COLUMN execution_error TEXT"
-            )
-        if "final_delivery_status" not in names:
-            conn.execute(
-                "ALTER TABLE interaction_ledger ADD COLUMN final_delivery_status TEXT"
-            )
-        if "final_delivery_error" not in names:
-            conn.execute(
-                "ALTER TABLE interaction_ledger ADD COLUMN final_delivery_error TEXT"
-            )
-        if "original_response_message_id" not in names:
-            conn.execute(
-                "ALTER TABLE interaction_ledger ADD COLUMN original_response_message_id TEXT"
-            )
+    def _migration_v4(self, conn: sqlite3.Connection) -> None:
+        ensure_columns(
+            conn,
+            "channel_bindings",
+            (
+                ("last_dispatch_run_id", "last_dispatch_run_id TEXT"),
+                ("last_dispatch_seq", "last_dispatch_seq TEXT"),
+            ),
+        )
+
+    def _migration_v5(self, conn: sqlite3.Connection) -> None:
+        ensure_columns(
+            conn,
+            "channel_bindings",
+            (
+                ("pma_enabled", "pma_enabled INTEGER NOT NULL DEFAULT 0"),
+                ("pma_prev_workspace_path", "pma_prev_workspace_path TEXT"),
+                ("pma_prev_repo_id", "pma_prev_repo_id TEXT"),
+            ),
+        )
+
+    def _migration_v6(self, conn: sqlite3.Connection) -> None:
+        ensure_columns(
+            conn,
+            "channel_bindings",
+            (
+                ("resource_kind", "resource_kind TEXT"),
+                ("resource_id", "resource_id TEXT"),
+                ("pma_prev_resource_kind", "pma_prev_resource_kind TEXT"),
+                ("pma_prev_resource_id", "pma_prev_resource_id TEXT"),
+            ),
+        )
+
+    def _migration_v7(self, conn: sqlite3.Connection) -> None:
+        ensure_columns(
+            conn,
+            "channel_bindings",
+            (
+                ("agent", "agent TEXT"),
+                ("agent_profile", "agent_profile TEXT"),
+                ("model_override", "model_override TEXT"),
+                ("reasoning_effort", "reasoning_effort TEXT"),
+            ),
+        )
+
+    def _migration_v8(self, conn: sqlite3.Connection) -> None:
+        ensure_columns(
+            conn,
+            "channel_bindings",
+            (
+                ("approval_mode", "approval_mode TEXT"),
+                ("approval_policy", "approval_policy TEXT"),
+                ("sandbox_policy", "sandbox_policy TEXT"),
+            ),
+        )
+
+    def _migration_v9(self, conn: sqlite3.Connection) -> None:
+        ensure_columns(
+            conn,
+            "channel_bindings",
+            (
+                ("rollout_path", "rollout_path TEXT"),
+                ("last_terminal_run_id", "last_terminal_run_id TEXT"),
+            ),
+        )
+
+    def _migration_v10(self, conn: sqlite3.Connection) -> None:
+        ensure_columns(
+            conn,
+            "channel_bindings",
+            (
+                ("pending_compact_seed", "pending_compact_seed TEXT"),
+                ("pending_compact_session_key", "pending_compact_session_key TEXT"),
+            ),
+        )
+
+    def _migration_v11(self, conn: sqlite3.Connection) -> None:
+        ensure_columns(
+            conn,
+            "interaction_ledger",
+            (
+                ("route_key", "route_key TEXT"),
+                ("handler_id", "handler_id TEXT"),
+                ("conversation_id", "conversation_id TEXT"),
+                (
+                    "scheduler_state",
+                    "scheduler_state TEXT NOT NULL DEFAULT 'received'",
+                ),
+                ("resource_keys_json", "resource_keys_json TEXT"),
+            ),
+        )
+
+    def _migration_v12(self, conn: sqlite3.Connection) -> None:
+        ensure_columns(
+            conn,
+            "interaction_ledger",
+            (
+                ("payload_json", "payload_json TEXT"),
+                ("envelope_json", "envelope_json TEXT"),
+                ("delivery_cursor_json", "delivery_cursor_json TEXT"),
+                ("attempt_count", "attempt_count INTEGER NOT NULL DEFAULT 0"),
+                ("execution_error", "execution_error TEXT"),
+            ),
+        )
+
+    def _migration_v13(self, conn: sqlite3.Connection) -> None:
+        ensure_columns(
+            conn,
+            "interaction_ledger",
+            (
+                ("final_delivery_status", "final_delivery_status TEXT"),
+                ("final_delivery_error", "final_delivery_error TEXT"),
+                (
+                    "original_response_message_id",
+                    "original_response_message_id TEXT",
+                ),
+            ),
+        )
 
     def _upsert_binding_sync(
         self,

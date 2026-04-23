@@ -5,6 +5,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Callable
 
+from ..sqlite_utils import table_columns, table_exists
 from ..time_utils import now_iso
 from .models import OrchestrationTableDefinition
 
@@ -338,23 +339,11 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
 
 
 def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
-    row = conn.execute(
-        """
-        SELECT name
-          FROM sqlite_master
-         WHERE type = 'table'
-           AND name = ?
-        """,
-        (table_name,),
-    ).fetchone()
-    return row is not None
+    return table_exists(conn, table_name)
 
 
 def _table_columns(conn: sqlite3.Connection, table_name: str) -> set[str]:
-    if not _table_exists(conn, table_name):
-        return set()
-    rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
-    return {str(row["name"]) for row in rows if row["name"] is not None}
+    return table_columns(conn, table_name)
 
 
 def _column_not_null(
@@ -380,10 +369,11 @@ def _ensure_column(
     if column_name in _table_columns(conn, table_name):
         return
     try:
-        conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {ddl}")
+        statement = f"ALTER TABLE {table_name} "
+        statement += f"ADD COLUMN {ddl}"
+        conn.execute(statement)
     except sqlite3.OperationalError as exc:
-        message = str(exc).lower()
-        if f"duplicate column name: {column_name}".lower() not in message:
+        if f"duplicate column name: {column_name}".lower() not in str(exc).lower():
             raise
 
 

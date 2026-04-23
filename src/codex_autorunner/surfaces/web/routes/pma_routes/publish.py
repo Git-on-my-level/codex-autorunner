@@ -6,6 +6,9 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
+from .....core.chat_bindings import (
+    resolve_chat_state_path as resolve_configured_chat_state_path,
+)
 from .....core.logging_utils import log_event
 from .....core.pma_chat_delivery import deliver_pma_notification
 from .....core.ports.run_event import TokenUsage
@@ -30,18 +33,12 @@ def normalize_optional_text(value: Any) -> Optional[str]:
 def resolve_chat_state_path(
     request: Request, *, section: str, default_state_file: str
 ) -> Path:
-    hub_root = request.app.state.config.root
-    raw = getattr(request.app.state.config, "raw", {})
-    section_cfg = raw.get(section) if isinstance(raw, dict) else {}
-    if not isinstance(section_cfg, dict):
-        section_cfg = {}
-    state_file = section_cfg.get("state_file")
-    if not isinstance(state_file, str) or not state_file.strip():
-        state_file = default_state_file
-    state_path = Path(state_file)
-    if not state_path.is_absolute():
-        state_path = (hub_root / state_path).resolve()
-    return state_path
+    return resolve_configured_chat_state_path(
+        hub_root=request.app.state.config.root,
+        raw_config=getattr(request.app.state.config, "raw", {}),
+        section=section,
+        default_state_file=default_state_file,
+    )
 
 
 def resolve_publish_repo_id(

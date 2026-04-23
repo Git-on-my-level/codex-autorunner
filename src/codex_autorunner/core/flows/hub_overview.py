@@ -7,6 +7,7 @@ from typing import Any
 
 from ...manifest import Manifest
 from ..chat_bindings import active_chat_binding_counts
+from ..state_roots import resolve_repo_flows_db_path
 from .models import FlowRunStatus
 from .store import FlowStore
 
@@ -72,7 +73,7 @@ def _resolve_worktrees_root(hub_root: Path, raw_config: Mapping[str, Any]) -> Pa
 
 
 def _has_active_ticket_flow(repo_root: Path) -> bool | None:
-    db_path = repo_root / ".codex-autorunner" / "flows.db"
+    db_path = resolve_repo_flows_db_path(repo_root)
     if not db_path.exists():
         return False
     try:
@@ -171,7 +172,7 @@ def build_hub_flow_overview_entries(
         if not repo_root.exists() or not repo_root.is_dir():
             continue
         flows_root = repo_root / ".codex-autorunner" / "flows"
-        flows_db = repo_root / ".codex-autorunner" / "flows.db"
+        flows_db = resolve_repo_flows_db_path(repo_root)
         if not flows_root.exists() and not flows_db.exists():
             continue
         suffix = _worktree_suffix(repo_id)

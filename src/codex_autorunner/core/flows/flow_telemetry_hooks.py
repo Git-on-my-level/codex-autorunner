@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 from ..config import ConfigError, FlowRetentionConfig, load_repo_config
+from ..state_roots import resolve_repo_flows_db_path
 from .flow_housekeeping import HousekeepResult, execute_housekeep
 from .store import FlowStore
 
@@ -35,7 +36,7 @@ def _resolve_retention_config(repo_root: Path) -> FlowRetentionConfig:
 
 
 def _open_store(repo_root: Path) -> Optional[FlowStore]:
-    db_path = repo_root / ".codex-autorunner" / "flows.db"
+    db_path = resolve_repo_flows_db_path(repo_root)
     if not db_path.exists():
         return None
     try:
@@ -54,7 +55,7 @@ def _run_housekeep(
     run_ids: Optional[Sequence[str]] = None,
     include_all_terminal: bool = False,
 ) -> Optional[HousekeepResult]:
-    db_path = repo_root / ".codex-autorunner" / "flows.db"
+    db_path = resolve_repo_flows_db_path(repo_root)
     if not db_path.exists():
         return None
     try:
@@ -142,7 +143,7 @@ def housekeep_sweep_repos(
     """
     result = SweepResult()
     for repo_root in repo_roots:
-        db_path = repo_root / ".codex-autorunner" / "flows.db"
+        db_path = resolve_repo_flows_db_path(repo_root)
         if not db_path.exists():
             continue
         result.repos_scanned += 1

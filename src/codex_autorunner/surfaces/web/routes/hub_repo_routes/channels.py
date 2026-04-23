@@ -20,6 +20,7 @@ from .....core.logging_utils import safe_log
 from .....core.managed_thread_identity import (
     ManagedThreadIdentityStore,
     file_chat_discord_key,
+    normalize_feature_key,
     pma_base_key,
     pma_topic_scoped_key,
 )
@@ -243,10 +244,13 @@ class HubChannelService:
                 thread_map = {}
             thread_map_cache[canonical_workspace] = thread_map
         try:
-            resolved = thread_map.get(registry_key)
+            normalized_registry_key = normalize_feature_key(registry_key)
+            resolved = thread_map.get(normalized_registry_key)
+            if not isinstance(resolved, str) or not resolved:
+                resolved = thread_map.get(registry_key)
             if isinstance(resolved, str) and resolved:
                 return resolved
-        except TypeError:
+        except (TypeError, ValueError):
             return None
         return None
 

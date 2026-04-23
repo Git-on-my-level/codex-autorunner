@@ -60,6 +60,7 @@ from .hub_worktree_lifecycle import (
     WorktreeHubContext,
 )
 from .state import now_iso
+from .state_roots import resolve_repo_flows_db_path
 from .utils import is_within, subprocess_env
 
 if TYPE_CHECKING:
@@ -1159,7 +1160,7 @@ class WorktreeManager:
         total_flow_count = 0
         for entry in manifest.repos:
             repo_root = (self._hub_config.root / entry.path).resolve()
-            db_path = repo_root / ".codex-autorunner" / "flows.db"
+            db_path = resolve_repo_flows_db_path(repo_root)
             if not db_path.exists():
                 continue
             try:

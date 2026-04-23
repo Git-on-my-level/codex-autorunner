@@ -49,6 +49,7 @@ from ..archive_retention import (
 from ..config import ConfigError, load_repo_config
 from ..pma_thread_store import PmaThreadStore
 from ..sqlite_utils import connect_sqlite
+from ..state_roots import resolve_hub_manifest_path, resolve_repo_flows_db_path
 from .models import FlowRunStatus
 from .store import FlowStore
 
@@ -202,7 +203,7 @@ def build_flow_archive_entries(
 def _find_hub_root(repo_root: Path) -> Path:
     current = repo_root.resolve()
     while True:
-        manifest_path = current / ".codex-autorunner" / "manifest.yml"
+        manifest_path = resolve_hub_manifest_path(current)
         if manifest_path.exists():
             return current
         parent = current.parent
@@ -213,11 +214,11 @@ def _find_hub_root(repo_root: Path) -> Path:
 
 
 def _has_hub_manifest(hub_root: Path) -> bool:
-    return (hub_root / ".codex-autorunner" / "manifest.yml").exists()
+    return resolve_hub_manifest_path(hub_root).exists()
 
 
 def _resolve_repo_id(repo_root: Path, hub_root: Path) -> Optional[str]:
-    manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
+    manifest_path = resolve_hub_manifest_path(hub_root)
     try:
         manifest = load_manifest(manifest_path, hub_root)
     except ManifestError:
@@ -239,6 +240,7 @@ def _archive_ticket_flow_pma_threads(repo_root: Path, run_id: str) -> dict[str, 
     store = PmaThreadStore(hub_root)
     repo_id = _resolve_repo_id(repo_root, hub_root)
     archived_thread_ids: list[str] = []
+    matched_workspace_threads = False
 
     for thread in store.list_threads(status="active", limit=None):
         managed_thread_id = thread.get("managed_thread_id")
@@ -250,6 +252,7 @@ def _archive_ticket_flow_pma_threads(repo_root: Path, run_id: str) -> dict[str, 
             or Path(workspace_root).resolve() != repo_root
         ):
             continue
+        matched_workspace_threads = True
         thread_repo_id = thread.get("repo_id")
         if (
             repo_id
@@ -278,9 +281,17 @@ def _archive_ticket_flow_pma_threads(repo_root: Path, run_id: str) -> dict[str, 
         store.archive_thread(managed_thread_id.strip())
         archived_thread_ids.append(managed_thread_id.strip())
 
+    if hub_root != repo_root and repo_id is None and not matched_workspace_threads:
+        return {
+            "archived_pma_threads": 0,
+            "archived_pma_thread_ids": [],
+            "archived_pma_threads_skipped": "hub_manifest_missing",
+        }
+
     return {
         "archived_pma_threads": len(archived_thread_ids),
         "archived_pma_thread_ids": archived_thread_ids,
+        "archived_pma_threads_skipped": None,
     }
 
 
@@ -472,7 +483,7 @@ def archive_terminal_flow_runs(
     if maintain_db and deleted_run_ids:
         _checkpoint_and_vacuum_flow_db(
             store=store,
-            db_path=repo_root / ".codex-autorunner" / "flows.db",
+            db_path=resolve_repo_flows_db_path(repo_root),
             repo_root=repo_root,
             vacuum=vacuum,
         )
@@ -499,7 +510,7 @@ def archive_flow_run_artifacts(
     force_attestation: Mapping[str, object] | None = None,
 ) -> dict[str, Any]:
     repo_root = repo_root.resolve()
-    db_path = repo_root / ".codex-autorunner" / "flows.db"
+    db_path = resolve_repo_flows_db_path(repo_root)
     if not db_path.exists():
         raise ValueError("Flow database not found.")
 

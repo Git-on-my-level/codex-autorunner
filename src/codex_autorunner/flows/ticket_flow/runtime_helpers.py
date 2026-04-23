@@ -26,6 +26,7 @@ from ...core.flows.workspace_root import (
 )
 from ...core.orchestration.models import FlowRunTarget
 from ...core.runtime import RuntimeContext
+from ...core.state_roots import resolve_repo_flows_db_path, resolve_repo_state_root
 from ...integrations.agents import build_backend_orchestrator
 from ...integrations.agents.build_agent_pool import build_agent_pool
 from ...tickets import DEFAULT_MAX_TOTAL_TURNS
@@ -51,8 +52,9 @@ class TicketFlowRuntimeResources:
 
 def build_ticket_flow_runtime_resources(repo_root: Path) -> TicketFlowRuntimeResources:
     repo_root = repo_root.resolve()
-    db_path = repo_root / ".codex-autorunner" / "flows.db"
-    artifacts_root = repo_root / ".codex-autorunner" / "flows"
+    state_root = resolve_repo_state_root(repo_root)
+    db_path = resolve_repo_flows_db_path(repo_root)
+    artifacts_root = state_root / "flows"
 
     config = load_repo_config(repo_root)
     backend_orchestrator = build_backend_orchestrator(repo_root, config)
@@ -149,7 +151,7 @@ async def stop_ticket_flow_run(repo_root: Path, run_id: str) -> FlowRunRecord:
 
 def _open_ticket_flow_store(repo_root: Path) -> FlowStore:
     repo_root = repo_root.resolve()
-    db_path = repo_root / ".codex-autorunner" / "flows.db"
+    db_path = resolve_repo_flows_db_path(repo_root)
     durable = False
     if find_nearest_hub_config_path(repo_root) is not None:
         config = load_repo_config(repo_root)
