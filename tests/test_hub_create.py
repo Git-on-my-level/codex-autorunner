@@ -12,11 +12,7 @@ from codex_autorunner.core.config import (
     load_hub_config,
 )
 from codex_autorunner.core.git_utils import run_git
-from codex_autorunner.core.hub import HubSupervisor
-from codex_autorunner.integrations.agents.wiring import (
-    build_agent_backend_factory,
-    build_app_server_supervisor_factory,
-)
+from codex_autorunner.core.hub_repo_manager import RepoManager
 from tests.conftest import write_test_config
 
 
@@ -37,6 +33,19 @@ def _init_git_repo(path: Path) -> None:
         ],
         path,
         check=True,
+    )
+
+
+def _make_repo_manager(hub_root: Path, **cfg_overrides) -> RepoManager:
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    for k, v in cfg_overrides.items():
+        cfg["hub"][k] = v
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    hub_config = load_hub_config(hub_root)
+    return RepoManager(
+        hub_config,
+        on_invalidate_cache=lambda: None,
+        on_snapshot_for_repo=lambda rid: None,
     )
 
 
@@ -61,49 +70,24 @@ def test_hub_create_repo_cli(tmp_path: Path):
 
 def test_hub_create_repo_rejects_outside_repos_root(tmp_path: Path):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    cfg["hub"]["repos_root"] = "workspace"
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-
-    supervisor = HubSupervisor(
-        load_hub_config(hub_root),
-        backend_factory_builder=build_agent_backend_factory,
-        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
-    )
+    rm = _make_repo_manager(hub_root, repos_root="workspace")
     with pytest.raises(ValueError):
-        supervisor.create_repo("bad", repo_path=Path(".."))
+        rm.create_repo("bad", repo_path=Path(".."))
 
 
 def test_hub_create_repo_rejects_duplicate_id(tmp_path: Path):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    cfg["hub"]["repos_root"] = "workspace"
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-
-    supervisor = HubSupervisor(
-        load_hub_config(hub_root),
-        backend_factory_builder=build_agent_backend_factory,
-        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
-    )
-    supervisor.create_repo("demo")
+    rm = _make_repo_manager(hub_root, repos_root="workspace")
+    rm.create_repo("demo")
     with pytest.raises(ValueError, match="Repo id demo already exists"):
-        supervisor.create_repo("demo", repo_path=Path("other"))
+        rm.create_repo("demo", repo_path=Path("other"))
 
 
 def test_hub_create_repo_rejects_paths_under_worktrees_root(tmp_path: Path):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    cfg["hub"]["repos_root"] = "."
-    cfg["hub"]["worktrees_root"] = "worktrees"
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-
-    supervisor = HubSupervisor(
-        load_hub_config(hub_root),
-        backend_factory_builder=build_agent_backend_factory,
-        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
-    )
+    rm = _make_repo_manager(hub_root, repos_root=".", worktrees_root="worktrees")
     with pytest.raises(ValueError, match="must not live under worktrees_root"):
-        supervisor.create_repo("bad", repo_path=Path("worktrees/bad"))
+        rm.create_repo("bad", repo_path=Path("worktrees/bad"))
 
 
 def test_hub_clone_repo_cli(tmp_path: Path):
@@ -139,21 +123,14 @@ def test_hub_clone_repo_cli(tmp_path: Path):
 
 def test_hub_clone_repo_rejects_duplicate_id(tmp_path: Path):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    cfg["hub"]["repos_root"] = "workspace"
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    rm = _make_repo_manager(hub_root, repos_root="workspace")
 
     source_repo = tmp_path / "source"
     _init_git_repo(source_repo)
 
-    supervisor = HubSupervisor(
-        load_hub_config(hub_root),
-        backend_factory_builder=build_agent_backend_factory,
-        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
-    )
-    supervisor.create_repo("demo")
+    rm.create_repo("demo")
     with pytest.raises(ValueError, match="Repo id demo already exists"):
-        supervisor.clone_repo(
+        rm.clone_repo(
             git_url=str(source_repo),
             repo_id="demo",
             repo_path=Path("other"),

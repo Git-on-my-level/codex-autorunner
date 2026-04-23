@@ -3,10 +3,11 @@ import shlex
 from pathlib import Path
 from typing import Optional
 
+import pytest
 from typer.testing import CliRunner
 
-from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.cli import app
+from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.force_attestation import (
     FORCE_ATTESTATION_REQUIRED_ERROR,
     FORCE_ATTESTATION_REQUIRED_PHRASE,
@@ -17,6 +18,61 @@ from codex_autorunner.core.hub import (
     RepoSnapshot,
     RepoStatus,
 )
+from tests.conftest import write_test_config
+
+
+def _seed_minimal_hub(hub_root: Path) -> None:
+    hub_root.mkdir(parents=True, exist_ok=True)
+    cfg = dict(DEFAULT_HUB_CONFIG)
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+
+@pytest.fixture(autouse=True)
+def _patch_supervisor(monkeypatch: pytest.MonkeyPatch) -> None:
+    _real_init = HubSupervisor.__init__
+
+    def _fast_init(self, hub_config, **kwargs):
+        import threading
+
+        from codex_autorunner.core.hub_topology import load_hub_state
+
+        self.hub_config = hub_config
+        self.state_path = hub_config.root / ".codex-autorunner" / "hub_state.json"
+        self.state = load_hub_state(self.state_path, hub_config.root)
+        self._backend_orchestrator_builder = kwargs.get("backend_orchestrator_builder")
+        self._backend_factory_builder = kwargs.get("backend_factory_builder")
+        self._app_server_supervisor_factory_builder = kwargs.get(
+            "app_server_supervisor_factory_builder"
+        )
+        self._scm_poll_processor = kwargs.get("scm_poll_processor")
+        self._list_cache = None
+        self._list_cache_at = None
+        self._list_lock = threading.Lock()
+        self._repo_manager = type(
+            "_RM", (), {"archive_repo_state": lambda *a, **k: {}}
+        )()
+        self._worktree_manager = type(
+            "_WM",
+            (),
+            {
+                "cleanup_worktree": lambda s, **k: _real_cleanup(self, **k),
+            },
+        )()
+
+    def _real_cleanup(self, **kwargs):
+        import logging
+
+        from codex_autorunner.core.force_attestation import enforce_force_attestation
+
+        enforce_force_attestation(
+            force=kwargs.get("force", False),
+            force_attestation=kwargs.get("force_attestation"),
+            logger=logging.getLogger(__name__),
+            action="cleanup",
+        )
+        return {"status": "ok"}
+
+    monkeypatch.setattr(HubSupervisor, "__init__", _fast_init)
 
 
 def _snapshot(
@@ -53,8 +109,7 @@ def _snapshot(
 
 def test_cli_hub_worktree_list_filters_worktrees(tmp_path, monkeypatch) -> None:
     hub_root = tmp_path / "hub"
-    hub_root.mkdir()
-    seed_hub_files(hub_root, force=True)
+    _seed_minimal_hub(hub_root)
 
     base = _snapshot(tmp_path, "base", kind="base")
     worktree = _snapshot(
@@ -77,8 +132,7 @@ def test_cli_hub_worktree_list_filters_worktrees(tmp_path, monkeypatch) -> None:
 
 def test_cli_hub_worktree_list_uses_cached_repo_listing(tmp_path, monkeypatch) -> None:
     hub_root = tmp_path / "hub"
-    hub_root.mkdir()
-    seed_hub_files(hub_root, force=True)
+    _seed_minimal_hub(hub_root)
 
     base = _snapshot(tmp_path, "base", kind="base")
     worktree = _snapshot(
@@ -104,8 +158,7 @@ def test_cli_hub_worktree_list_uses_cached_repo_listing(tmp_path, monkeypatch) -
 
 def test_cli_hub_repos_lists_repos_in_table(tmp_path, monkeypatch) -> None:
     hub_root = tmp_path / "hub"
-    hub_root.mkdir()
-    seed_hub_files(hub_root, force=True)
+    _seed_minimal_hub(hub_root)
 
     base = _snapshot(tmp_path, "base", kind="base", branch="main")
     worktree = _snapshot(
@@ -136,8 +189,7 @@ def test_cli_hub_repos_lists_repos_in_table(tmp_path, monkeypatch) -> None:
 
 def test_cli_hub_repos_json_emits_machine_readable_rows(tmp_path, monkeypatch) -> None:
     hub_root = tmp_path / "hub"
-    hub_root.mkdir()
-    seed_hub_files(hub_root, force=True)
+    _seed_minimal_hub(hub_root)
 
     base = _snapshot(tmp_path, "base", kind="base", branch="main")
 
@@ -164,8 +216,7 @@ def test_cli_hub_repos_json_emits_machine_readable_rows(tmp_path, monkeypatch) -
 
 def test_cli_hub_worktree_scan_filters_worktrees_json(tmp_path, monkeypatch) -> None:
     hub_root = tmp_path / "hub"
-    hub_root.mkdir()
-    seed_hub_files(hub_root, force=True)
+    _seed_minimal_hub(hub_root)
 
     base = _snapshot(tmp_path, "base", kind="base")
     worktree = _snapshot(
@@ -197,8 +248,7 @@ def test_cli_hub_worktree_scan_filters_worktrees_json(tmp_path, monkeypatch) -> 
 
 def test_cli_hub_worktree_create_prints_details(tmp_path, monkeypatch) -> None:
     hub_root = tmp_path / "hub"
-    hub_root.mkdir()
-    seed_hub_files(hub_root, force=True)
+    _seed_minimal_hub(hub_root)
 
     worktree = _snapshot(
         tmp_path, "base--feature", kind="worktree", worktree_of="base", branch="feature"
@@ -230,8 +280,7 @@ def test_cli_hub_worktree_create_prints_details(tmp_path, monkeypatch) -> None:
 
 def test_cli_hub_scan_includes_recommended_commands(tmp_path, monkeypatch) -> None:
     hub_root = tmp_path / "hub"
-    hub_root.mkdir()
-    seed_hub_files(hub_root, force=True)
+    _seed_minimal_hub(hub_root)
 
     base = _snapshot(tmp_path, "base", kind="base")
     worktree = _snapshot(
@@ -253,8 +302,7 @@ def test_cli_hub_scan_includes_recommended_commands(tmp_path, monkeypatch) -> No
 
 def test_cli_hub_worktree_cleanup_calls_supervisor(tmp_path, monkeypatch) -> None:
     hub_root = tmp_path / "hub"
-    hub_root.mkdir()
-    seed_hub_files(hub_root, force=True)
+    _seed_minimal_hub(hub_root)
 
     calls = {}
 
@@ -303,8 +351,7 @@ def test_cli_hub_worktree_cleanup_calls_supervisor(tmp_path, monkeypatch) -> Non
 
 def test_cli_hub_worktree_cleanup_archives_by_default(tmp_path, monkeypatch) -> None:
     hub_root = tmp_path / "hub"
-    hub_root.mkdir()
-    seed_hub_files(hub_root, force=True)
+    _seed_minimal_hub(hub_root)
 
     calls = {}
 
@@ -348,8 +395,7 @@ def test_cli_hub_worktree_cleanup_archives_by_default(tmp_path, monkeypatch) -> 
 
 def test_cli_hub_worktree_cleanup_forwards_force_flag(tmp_path, monkeypatch) -> None:
     hub_root = tmp_path / "hub"
-    hub_root.mkdir()
-    seed_hub_files(hub_root, force=True)
+    _seed_minimal_hub(hub_root)
 
     calls = {}
 
@@ -401,8 +447,7 @@ def test_cli_hub_worktree_cleanup_forwards_force_flag(tmp_path, monkeypatch) -> 
 
 def test_cli_hub_worktree_cleanup_force_requires_attestation(tmp_path) -> None:
     hub_root = tmp_path / "hub"
-    hub_root.mkdir()
-    seed_hub_files(hub_root, force=True)
+    _seed_minimal_hub(hub_root)
 
     runner = CliRunner()
     result = runner.invoke(
@@ -425,8 +470,7 @@ def test_cli_hub_worktree_cleanup_prints_docker_cleanup_status(
     tmp_path, monkeypatch
 ) -> None:
     hub_root = tmp_path / "hub"
-    hub_root.mkdir()
-    seed_hub_files(hub_root, force=True)
+    _seed_minimal_hub(hub_root)
 
     def _fake_cleanup(
         self,
@@ -484,8 +528,7 @@ def test_cli_hub_worktree_archive_uses_cleanup_with_archive(
     tmp_path, monkeypatch
 ) -> None:
     hub_root = tmp_path / "hub"
-    hub_root.mkdir()
-    seed_hub_files(hub_root, force=True)
+    _seed_minimal_hub(hub_root)
 
     calls = {}
 
@@ -558,8 +601,7 @@ def test_cli_hub_worktree_archive_surfaces_failure_reason_cleanly(
     tmp_path, monkeypatch
 ) -> None:
     hub_root = tmp_path / "hub"
-    hub_root.mkdir()
-    seed_hub_files(hub_root, force=True)
+    _seed_minimal_hub(hub_root)
 
     def _fake_cleanup(
         self,
@@ -603,8 +645,7 @@ def test_cli_hub_worktree_archive_forwards_archive_profile(
     tmp_path, monkeypatch
 ) -> None:
     hub_root = tmp_path / "hub"
-    hub_root.mkdir()
-    seed_hub_files(hub_root, force=True)
+    _seed_minimal_hub(hub_root)
 
     calls: dict[str, object] = {}
 
@@ -634,8 +675,7 @@ def test_cli_hub_worktree_archive_forwards_archive_profile(
 
 def test_cli_hub_worktree_setup_posts_commands_payload(tmp_path, monkeypatch) -> None:
     hub_root = tmp_path / "hub"
-    hub_root.mkdir()
-    seed_hub_files(hub_root, force=True)
+    _seed_minimal_hub(hub_root)
 
     captured: dict[str, object] = {}
 

@@ -7,7 +7,7 @@ import pytest
 from typer.testing import CliRunner
 
 import codex_autorunner.core.flows.archive_helpers as archive_helpers_module
-from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
+from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.cli import app
 from codex_autorunner.core.flows.archive_helpers import archive_flow_run_artifacts
 from codex_autorunner.core.flows.models import FlowRunStatus
@@ -62,10 +62,13 @@ def _seed_contextspace(repo_root: Path) -> None:
 
 def _setup_repo(tmp_path: Path) -> Path:
     repo_root = tmp_path / "repo"
-    repo_root.mkdir(parents=True)
-    (repo_root / ".git").mkdir()
+    ca_dir = repo_root / ".codex-autorunner"
+    (repo_root / ".git").mkdir(parents=True)
+    (ca_dir / "tickets").mkdir(parents=True)
+    (ca_dir / "contextspace").mkdir(parents=True)
+    for name in ("active_context.md", "decisions.md", "spec.md"):
+        (ca_dir / "contextspace" / name).write_text("", encoding="utf-8")
     seed_hub_files(tmp_path, force=True)
-    seed_repo_files(repo_root, git_required=False)
     return repo_root
 
 
@@ -83,11 +86,7 @@ class _RecordingSqliteConnection:
 def test_ticket_flow_archive_moves_run_artifacts_and_deletes_run(
     tmp_path: Path,
 ) -> None:
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir(parents=True)
-    (repo_root / ".git").mkdir()
-    seed_hub_files(tmp_path, force=True)
-    seed_repo_files(repo_root, git_required=False)
+    repo_root = _setup_repo(tmp_path)
 
     run_id = "99999999-9999-9999-9999-999999999999"
     _seed_repo_run(repo_root, run_id, FlowRunStatus.STOPPED)
@@ -287,9 +286,11 @@ def test_ticket_flow_archive_skips_pma_archival_without_hub_manifest(
     tmp_path: Path,
 ) -> None:
     repo_root = tmp_path / "repo"
+    ca_dir = repo_root / ".codex-autorunner"
     repo_root.mkdir(parents=True)
     (repo_root / ".git").mkdir()
-    seed_repo_files(repo_root, git_required=False)
+    (ca_dir / "tickets").mkdir(parents=True)
+    (ca_dir / "contextspace").mkdir(parents=True)
 
     run_id = "56565656-5656-5656-5656-565656565656"
     _seed_repo_run(repo_root, run_id, FlowRunStatus.STOPPED)
@@ -369,9 +370,11 @@ def test_ticket_flow_archive_searches_full_ancestor_chain_for_hub_manifest(
     hub_root = tmp_path / "hub"
     seed_hub_files(hub_root, force=True)
     repo_root = hub_root / "a" / "b" / "c" / "d" / "e" / "f" / "repo"
+    ca_dir = repo_root / ".codex-autorunner"
     repo_root.mkdir(parents=True)
     (repo_root / ".git").mkdir()
-    seed_repo_files(repo_root, git_required=False)
+    (ca_dir / "tickets").mkdir(parents=True)
+    (ca_dir / "contextspace").mkdir(parents=True)
 
     run_id = "90909090-9090-9090-9090-909090909090"
     _seed_repo_run(repo_root, run_id, FlowRunStatus.STOPPED)

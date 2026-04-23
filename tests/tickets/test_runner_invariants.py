@@ -836,38 +836,6 @@ class TestLoopGuardIntegrationInvariants:
         self, tmp_path: Path
     ) -> None:
         """Loop guard must not trigger pause when lint_retry_mode is active."""
-        import subprocess
-
-        workspace_root = tmp_path
-        subprocess.run(
-            ["git", "init"], cwd=workspace_root, check=True, capture_output=True
-        )
-        subprocess.run(
-            ["git", "config", "user.email", "test@example.com"],
-            cwd=workspace_root,
-            check=True,
-            capture_output=True,
-        )
-        subprocess.run(
-            ["git", "config", "user.name", "Test User"],
-            cwd=workspace_root,
-            check=True,
-            capture_output=True,
-        )
-        (workspace_root / "README.md").write_text("seed\n", encoding="utf-8")
-        subprocess.run(
-            ["git", "add", "README.md"],
-            cwd=workspace_root,
-            check=True,
-            capture_output=True,
-        )
-        subprocess.run(
-            ["git", "commit", "-m", "init"],
-            cwd=workspace_root,
-            check=True,
-            capture_output=True,
-        )
-
         state = {
             "loop_guard": {
                 "ticket": "tkt-lint-retry",

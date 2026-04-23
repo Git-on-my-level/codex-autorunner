@@ -1,4 +1,4 @@
-import json
+import copy
 from pathlib import Path
 
 import yaml
@@ -272,7 +272,7 @@ def test_manifest_roundtrip_preserves_invalid_destination_payload(
 
 def test_discovery_adds_repo_and_autoinits(tmp_path: Path):
     hub_root = tmp_path / "hub"
-    config = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    config = copy.deepcopy(DEFAULT_HUB_CONFIG)
     config["hub"]["repos_root"] = "workspace"
     config_path = hub_root / CONFIG_FILENAME
     write_test_config(config_path, config)
@@ -309,7 +309,7 @@ def test_discovery_adds_repo_and_autoinits(tmp_path: Path):
 
 def test_discovery_sanitizes_repo_ids(tmp_path: Path):
     hub_root = tmp_path / "hub"
-    config = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    config = copy.deepcopy(DEFAULT_HUB_CONFIG)
     config["hub"]["repos_root"] = "workspace"
     config_path = hub_root / CONFIG_FILENAME
     write_test_config(config_path, config)
@@ -333,7 +333,7 @@ def test_discovery_sanitizes_repo_ids(tmp_path: Path):
 
 def test_discovery_repairs_linked_worktrees_misregistered_as_base(tmp_path: Path):
     hub_root = tmp_path / "hub"
-    config = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    config = copy.deepcopy(DEFAULT_HUB_CONFIG)
     config["hub"]["repos_root"] = "workspace"
     config_path = hub_root / CONFIG_FILENAME
     write_test_config(config_path, config)
@@ -395,7 +395,7 @@ def test_discovery_skips_hub_root_repo_by_default(tmp_path: Path):
     (hub_root / ".git").mkdir(parents=True, exist_ok=True)
     seed_repo_files(hub_root, force=False, git_required=False)
 
-    config = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    config = copy.deepcopy(DEFAULT_HUB_CONFIG)
     config["hub"]["repos_root"] = "."
     config_path = hub_root / CONFIG_FILENAME
     write_test_config(config_path, config)
@@ -417,7 +417,7 @@ def test_discovery_includes_hub_root_repo_when_enabled(tmp_path: Path):
     (hub_root / ".git").mkdir(parents=True, exist_ok=True)
     seed_repo_files(hub_root, force=False, git_required=False)
 
-    config = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    config = copy.deepcopy(DEFAULT_HUB_CONFIG)
     config["hub"]["repos_root"] = "."
     config["hub"]["include_root_repo"] = True
     config_path = hub_root / CONFIG_FILENAME
@@ -445,7 +445,7 @@ def test_discovery_removes_existing_hub_root_repo_when_disabled(tmp_path: Path):
     (hub_root / ".git").mkdir(parents=True, exist_ok=True)
     seed_repo_files(hub_root, force=False, git_required=False)
 
-    config = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    config = copy.deepcopy(DEFAULT_HUB_CONFIG)
     config["hub"]["repos_root"] = "."
     config["hub"]["include_root_repo"] = False
     config_path = hub_root / CONFIG_FILENAME
