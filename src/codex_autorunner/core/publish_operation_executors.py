@@ -546,8 +546,10 @@ def _repair_scm_thread_binding(
     )
 
 
-def build_enqueue_managed_turn_executor(*, hub_root: Path) -> PublishActionExecutor:
-    store = PmaThreadStore(hub_root)
+def build_enqueue_managed_turn_executor(
+    *, hub_root: Path, thread_store: Optional[PmaThreadStore] = None
+) -> PublishActionExecutor:
+    store = thread_store or PmaThreadStore(hub_root)
 
     def executor(operation: PublishOperation) -> dict[str, Any]:
         payload = _normalize_mapping(operation.payload)
@@ -740,8 +742,9 @@ def build_notify_chat_executor(
     *,
     hub_root: Path,
     run_coroutine: Optional[Callable[[Coroutine[Any, Any, Any]], Any]] = None,
+    thread_store: Optional[PmaThreadStore] = None,
 ) -> PublishActionExecutor:
-    store = PmaThreadStore(hub_root)
+    store = thread_store or PmaThreadStore(hub_root)
     coroutine_runner = run_coroutine or _run_coroutine_sync
 
     def executor(operation: PublishOperation) -> dict[str, Any]:
