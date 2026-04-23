@@ -1742,6 +1742,78 @@ async def test_finalize_managed_thread_execution_logs_timeout_source(
 
 
 @pytest.mark.anyio
+async def test_finalize_managed_thread_execution_uses_idle_only_timeout_mode_for_pma(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = _started_execution_with_backend_ids(tmp_path)
+    fake_hub_client = _FakeHubPersistenceClient()
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "harness_supports_progress_event_stream",
+        lambda _harness: False,
+    )
+    captured_kwargs: dict[str, Any] = {}
+
+    async def _capture_outcome(*args: Any, **kwargs: Any) -> RuntimeThreadOutcome:
+        _ = args
+        captured_kwargs.update(kwargs)
+        return RuntimeThreadOutcome(
+            status="ok",
+            assistant_text="fixture reply",
+            error=None,
+            backend_thread_id="session-1",
+            backend_turn_id="turn-1",
+        )
+
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "await_runtime_thread_outcome",
+        _capture_outcome,
+    )
+
+    orchestration_service = SimpleNamespace(
+        get_thread_target=lambda managed_thread_id: SimpleNamespace(
+            backend_thread_id="session-1"
+        ),
+        get_thread_runtime_binding=lambda managed_thread_id: SimpleNamespace(
+            backend_thread_id="session-1"
+        ),
+        record_execution_result=lambda *args, **kwargs: SimpleNamespace(
+            status="ok",
+            error=None,
+        ),
+    )
+
+    result = await managed_thread_turns_module.finalize_managed_thread_execution(
+        orchestration_service=orchestration_service,
+        started=started,
+        state_root=tmp_path,
+        hub_client=fake_hub_client,
+        surface=managed_thread_turns_module.ManagedThreadSurfaceInfo(
+            log_label="Discord",
+            surface_kind="discord",
+            surface_key="discord:chan-1:msg-1",
+        ),
+        errors=managed_thread_turns_module.ManagedThreadErrorMessages(
+            public_execution_error="Discord PMA execution failed",
+            timeout_error="Discord PMA turn timed out",
+            interrupted_error="Discord PMA turn interrupted",
+            timeout_seconds=42,
+            stall_timeout_seconds=42,
+            idle_timeout_only=True,
+        ),
+        logger=logging.getLogger("test.managed_thread.idle_only"),
+        turn_preview="preview",
+    )
+
+    assert result.status == "ok"
+    assert captured_kwargs["timeout_seconds"] is None
+    assert captured_kwargs["stall_timeout_seconds"] == 42
+    assert captured_kwargs["stall_timeout_replaces_wall_clock_timeout"] is True
+
+
+@pytest.mark.anyio
 async def test_finalize_managed_thread_execution_prefers_recorded_interrupt_over_runtime_timeout(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

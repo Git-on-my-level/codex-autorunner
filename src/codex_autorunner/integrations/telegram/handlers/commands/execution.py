@@ -191,8 +191,10 @@ TELEGRAM_PMA_TIMEOUT_ERROR = "Telegram PMA turn timed out"
 TELEGRAM_REPO_TIMEOUT_ERROR = "Telegram turn timed out"
 TELEGRAM_PMA_INTERRUPTED_ERROR = "Telegram PMA turn interrupted"
 TELEGRAM_REPO_INTERRUPTED_ERROR = "Telegram turn interrupted"
-TELEGRAM_PMA_TIMEOUT_SECONDS = 7200
-_DEFAULT_TELEGRAM_PMA_TIMEOUT_SECONDS = 7200
+TELEGRAM_PMA_IDLE_TIMEOUT_SECONDS = 1800
+TELEGRAM_PMA_TIMEOUT_SECONDS = TELEGRAM_PMA_IDLE_TIMEOUT_SECONDS
+_DEFAULT_TELEGRAM_PMA_IDLE_TIMEOUT_SECONDS = 1800
+_DEFAULT_TELEGRAM_REPO_TURN_TIMEOUT_SECONDS = 7200
 
 
 @dataclass
@@ -603,9 +605,9 @@ def _build_telegram_managed_thread_coordinator(
     pma_enabled: bool,
 ) -> ManagedThreadTurnCoordinator:
     timeout_seconds = (
-        _load_telegram_pma_turn_timeout_seconds(handlers)
+        _load_telegram_pma_turn_idle_timeout_seconds(handlers)
         if pma_enabled
-        else float(_DEFAULT_TELEGRAM_PMA_TIMEOUT_SECONDS)
+        else float(_DEFAULT_TELEGRAM_REPO_TURN_TIMEOUT_SECONDS)
     )
     return ManagedThreadTurnCoordinator(
         orchestration_service=orchestration_service,
@@ -632,6 +634,8 @@ def _build_telegram_managed_thread_coordinator(
             timeout_error=timeout_error,
             interrupted_error=interrupted_error,
             timeout_seconds=timeout_seconds,
+            stall_timeout_seconds=timeout_seconds if pma_enabled else None,
+            idle_timeout_only=pma_enabled,
         ),
         logger=getattr(handlers, "_logger", logging.getLogger(__name__)),
         turn_preview="",
@@ -642,18 +646,24 @@ def _build_telegram_managed_thread_coordinator(
     )
 
 
-def _load_telegram_pma_turn_timeout_seconds(handlers: Any) -> float:
+def _load_telegram_pma_turn_idle_timeout_seconds(handlers: Any) -> float:
     overridden_timeout = globals().get(
-        "TELEGRAM_PMA_TIMEOUT_SECONDS",
-        _DEFAULT_TELEGRAM_PMA_TIMEOUT_SECONDS,
+        "TELEGRAM_PMA_IDLE_TIMEOUT_SECONDS",
+        _DEFAULT_TELEGRAM_PMA_IDLE_TIMEOUT_SECONDS,
     )
-    if overridden_timeout != _DEFAULT_TELEGRAM_PMA_TIMEOUT_SECONDS:
+    if overridden_timeout != _DEFAULT_TELEGRAM_PMA_IDLE_TIMEOUT_SECONDS:
         return float(overridden_timeout)
+    legacy_timeout = globals().get(
+        "TELEGRAM_PMA_TIMEOUT_SECONDS",
+        _DEFAULT_TELEGRAM_PMA_IDLE_TIMEOUT_SECONDS,
+    )
+    if legacy_timeout != _DEFAULT_TELEGRAM_PMA_IDLE_TIMEOUT_SECONDS:
+        return float(legacy_timeout)
 
     supervisor = getattr(handlers, "_hub_supervisor", None)
     configured_timeout = getattr(
         getattr(getattr(supervisor, "hub_config", None), "pma", None),
-        "turn_timeout_seconds",
+        "turn_idle_timeout_seconds",
         None,
     )
     if configured_timeout is not None:
@@ -663,18 +673,18 @@ def _load_telegram_pma_turn_timeout_seconds(handlers: Any) -> float:
     if hub_root is None:
         hub_root = getattr(getattr(handlers, "_config", None), "root", None)
     if hub_root is None:
-        return float(_DEFAULT_TELEGRAM_PMA_TIMEOUT_SECONDS)
+        return float(_DEFAULT_TELEGRAM_PMA_IDLE_TIMEOUT_SECONDS)
     try:
         hub_config = load_hub_config(Path(hub_root))
     except (ConfigError, OSError, RuntimeError, TypeError, ValueError):
-        return float(_DEFAULT_TELEGRAM_PMA_TIMEOUT_SECONDS)
+        return float(_DEFAULT_TELEGRAM_PMA_IDLE_TIMEOUT_SECONDS)
     configured_timeout = getattr(
         getattr(hub_config, "pma", None),
-        "turn_timeout_seconds",
+        "turn_idle_timeout_seconds",
         None,
     )
     if configured_timeout is None:
-        return float(_DEFAULT_TELEGRAM_PMA_TIMEOUT_SECONDS)
+        return float(_DEFAULT_TELEGRAM_PMA_IDLE_TIMEOUT_SECONDS)
     return float(configured_timeout)
 
 

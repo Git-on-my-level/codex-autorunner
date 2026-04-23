@@ -111,12 +111,11 @@ from .errors import (
 )
 from .managed_thread_routing import (
     _build_discord_managed_thread_coordinator,
-    _build_discord_queue_worker_hooks,
     _build_discord_runner_hooks,
     _build_managed_thread_input_items,
     _DiscordManagedThreadStatus,
     _evict_cached_runtime_supervisors,
-    _load_discord_pma_turn_timeout_seconds,  # noqa: F401  re-export for test monkeypatch compat
+    _load_discord_pma_turn_idle_timeout_seconds,  # noqa: F401  re-export for test monkeypatch compat
     build_discord_thread_orchestration_service,
     resolve_discord_thread_target,
 )
@@ -166,8 +165,9 @@ _logger = logging.getLogger(__name__)
 
 DISCORD_PMA_PUBLIC_EXECUTION_ERROR = "Discord PMA turn failed"
 DISCORD_REPO_PUBLIC_EXECUTION_ERROR = "Discord turn failed"
-DISCORD_PMA_TIMEOUT_SECONDS = 7200
-_DEFAULT_DISCORD_PMA_TIMEOUT_SECONDS = 7200
+DISCORD_PMA_IDLE_TIMEOUT_SECONDS = 1800
+DISCORD_PMA_TIMEOUT_SECONDS = DISCORD_PMA_IDLE_TIMEOUT_SECONDS
+_DEFAULT_DISCORD_PMA_IDLE_TIMEOUT_SECONDS = 1800
 DISCORD_PMA_STALL_TIMEOUT_SECONDS = 1800
 _DEFAULT_DISCORD_PMA_STALL_TIMEOUT_SECONDS = 1800
 DISCORD_PMA_SUBMISSION_TIMEOUT_SECONDS = 300.0
@@ -2096,13 +2096,7 @@ async def _run_discord_orchestrated_turn_for_message(
         workspace_root=workspace_root,
         public_execution_error=public_execution_error,
     )
-    queue_worker_hooks = _build_discord_queue_worker_hooks(
-        service,
-        channel_id=channel_id,
-        managed_thread_id=managed_thread_id,
-        workspace_root=workspace_root,
-        public_execution_error=public_execution_error,
-    )
+    queue_worker_hooks = runner_hooks.queue_worker_hooks()
     _first_progress_recorded = False
 
     async def _handle_progress_event(run_event: Any) -> None:

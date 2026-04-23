@@ -13,7 +13,7 @@ from ...integrations.chat.managed_thread_startup_recovery import (
 from .managed_thread_delivery import build_discord_managed_thread_durable_delivery_hooks
 from .managed_thread_routing import (
     _build_discord_managed_thread_coordinator,
-    _build_discord_queue_worker_hooks,
+    _build_discord_runner_hooks,
 )
 from .message_turns import build_discord_thread_orchestration_service
 from .progress_leases import (
@@ -61,13 +61,13 @@ async def recover_managed_thread_executions_on_startup(service: Any) -> None:
             interrupted_error="Discord PMA turn interrupted",
             pma_enabled=True,
         )
-        queue_worker_hooks = _build_discord_queue_worker_hooks(
+        queue_worker_hooks = _build_discord_runner_hooks(
             owner,
             channel_id=surface_key,
             managed_thread_id=managed_thread_id,
             workspace_root=Path(str(workspace_root)),
             public_execution_error=public_execution_error,
-        )
+        ).queue_worker_hooks()
         coordinator.ensure_queue_worker(
             task_map=_get_discord_thread_queue_task_map(owner),
             managed_thread_id=managed_thread_id,

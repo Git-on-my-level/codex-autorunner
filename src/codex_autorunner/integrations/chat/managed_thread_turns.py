@@ -206,6 +206,7 @@ class ManagedThreadErrorMessages:
     interrupted_error: str
     timeout_seconds: float
     stall_timeout_seconds: Optional[float] = None
+    idle_timeout_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -2356,8 +2357,11 @@ async def finalize_managed_thread_execution(
                 await_runtime_thread_outcome(
                     started,
                     interrupt_event=None,
-                    timeout_seconds=errors.timeout_seconds,
+                    timeout_seconds=(
+                        None if errors.idle_timeout_only else errors.timeout_seconds
+                    ),
                     stall_timeout_seconds=errors.stall_timeout_seconds,
+                    stall_timeout_replaces_wall_clock_timeout=errors.idle_timeout_only,
                     execution_error_message=errors.public_execution_error,
                     terminal_state=terminal_state,
                     observe_progress_events=False,

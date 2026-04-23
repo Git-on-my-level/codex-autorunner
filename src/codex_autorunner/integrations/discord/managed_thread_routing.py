@@ -12,9 +12,7 @@ from ...core.hub_control_plane import (
     RemoteSurfaceBindingStore,
     RemoteThreadExecutionStore,
 )
-from ...core.orchestration import (
-    build_harness_backed_orchestration_service,
-)
+from ...core.orchestration import build_harness_backed_orchestration_service
 from ...core.orchestration.bindings import OrchestrationBindingStore
 from ...integrations.chat.agents import resolve_chat_runtime_agent
 from ..chat.bound_live_progress import (
@@ -48,7 +46,8 @@ from .rendering import (
 
 _logger = logging.getLogger(__name__)
 
-_DEFAULT_DISCORD_PMA_TIMEOUT_SECONDS = 7200
+_DEFAULT_DISCORD_REPO_TURN_TIMEOUT_SECONDS = 7200
+_DEFAULT_DISCORD_PMA_IDLE_TIMEOUT_SECONDS = 1800
 _DEFAULT_DISCORD_PMA_STALL_TIMEOUT_SECONDS = 1800
 _build_managed_thread_input_items = _shared_build_managed_thread_input_items
 
@@ -322,9 +321,9 @@ def _build_discord_managed_thread_coordinator(
     pma_enabled: bool,
 ) -> ManagedThreadTurnCoordinator:
     timeout_seconds = (
-        _load_discord_pma_turn_timeout_seconds(service)
+        _load_discord_pma_turn_idle_timeout_seconds(service)
         if pma_enabled
-        else float(_DEFAULT_DISCORD_PMA_TIMEOUT_SECONDS)
+        else float(_DEFAULT_DISCORD_REPO_TURN_TIMEOUT_SECONDS)
     )
     stall_timeout_seconds = (
         _load_discord_pma_turn_stall_timeout_seconds(
@@ -354,37 +353,44 @@ def _build_discord_managed_thread_coordinator(
             interrupted_error=interrupted_error,
             timeout_seconds=timeout_seconds,
             stall_timeout_seconds=stall_timeout_seconds,
+            idle_timeout_only=pma_enabled,
         ),
         logger=getattr(service, "_logger", _logger),
         turn_preview="",
         preview_builder=lambda message_text: truncate_for_discord(
-            message_text,
-            max_len=120,
+            message_text, max_len=120
         ),
     )
 
 
-def _load_discord_pma_turn_timeout_seconds(service: Any) -> float:
+def _load_discord_pma_turn_idle_timeout_seconds(service: Any) -> float:
     from . import message_turns as _mt
 
-    overridden_timeout = getattr(
+    new_timeout = getattr(
+        _mt,
+        "DISCORD_PMA_IDLE_TIMEOUT_SECONDS",
+        _DEFAULT_DISCORD_PMA_IDLE_TIMEOUT_SECONDS,
+    )
+    if new_timeout != _DEFAULT_DISCORD_PMA_IDLE_TIMEOUT_SECONDS:
+        return float(new_timeout)
+    legacy_timeout = getattr(
         _mt,
         "DISCORD_PMA_TIMEOUT_SECONDS",
-        _DEFAULT_DISCORD_PMA_TIMEOUT_SECONDS,
+        _DEFAULT_DISCORD_PMA_IDLE_TIMEOUT_SECONDS,
     )
-    if overridden_timeout != _DEFAULT_DISCORD_PMA_TIMEOUT_SECONDS:
-        return float(overridden_timeout)
+    if legacy_timeout != _DEFAULT_DISCORD_PMA_IDLE_TIMEOUT_SECONDS:
+        return float(legacy_timeout)
     try:
         hub_config = load_hub_config(Path(service._config.root))
     except (ConfigError, OSError, RuntimeError, TypeError, ValueError):
-        return float(_DEFAULT_DISCORD_PMA_TIMEOUT_SECONDS)
+        return float(_DEFAULT_DISCORD_PMA_IDLE_TIMEOUT_SECONDS)
     configured_timeout = getattr(
         getattr(hub_config, "pma", None),
-        "turn_timeout_seconds",
+        "turn_idle_timeout_seconds",
         None,
     )
     if configured_timeout is None:
-        return float(_DEFAULT_DISCORD_PMA_TIMEOUT_SECONDS)
+        return float(_DEFAULT_DISCORD_PMA_IDLE_TIMEOUT_SECONDS)
     return float(configured_timeout)
 
 
@@ -419,9 +425,7 @@ def _build_discord_runner_hooks(
             return
         await work()
 
-    async def _on_execution_started(
-        started_execution: Any,
-    ) -> None:
+    async def _on_execution_started(started_execution: Any) -> None:
         service._register_discord_turn_approval_context(
             started_execution=started_execution,
             channel_id=channel_id,
@@ -510,20 +514,3 @@ def _build_discord_runner_hooks(
         run_with_indicator=_run_with_discord_typing_indicator,
         queue_execution_hooks=queue_progress.hooks,
     )
-
-
-def _build_discord_queue_worker_hooks(
-    service: Any,
-    *,
-    channel_id: str,
-    managed_thread_id: str,
-    workspace_root: Path,
-    public_execution_error: str,
-) -> Any:
-    return _build_discord_runner_hooks(
-        service,
-        channel_id=channel_id,
-        managed_thread_id=managed_thread_id,
-        workspace_root=workspace_root,
-        public_execution_error=public_execution_error,
-    ).queue_worker_hooks()

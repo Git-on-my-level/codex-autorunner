@@ -49,7 +49,7 @@ from .tail_stream import resolve_resume_after
 
 logger = logging.getLogger(__name__)
 
-PMA_TIMEOUT_SECONDS = 7200
+PMA_TURN_IDLE_TIMEOUT_SECONDS = 1800
 
 
 def _get_pma_config(request: Request) -> dict[str, Any]:
@@ -57,16 +57,16 @@ def _get_pma_config(request: Request) -> dict[str, Any]:
     return pma_config_from_raw(raw)
 
 
-def _pma_turn_timeout_seconds(request: Request) -> float:
+def _pma_turn_idle_timeout_seconds(request: Request) -> float:
     overridden_timeout = globals().get(
-        "PMA_TIMEOUT_SECONDS",
+        "PMA_TURN_IDLE_TIMEOUT_SECONDS",
         DEFAULT_PMA_TIMEOUT_SECONDS,
     )
     if overridden_timeout != DEFAULT_PMA_TIMEOUT_SECONDS:
         return float(overridden_timeout)
     configured_timeout = getattr(
         getattr(request.app.state.config, "pma", None),
-        "turn_timeout_seconds",
+        "turn_idle_timeout_seconds",
         None,
     )
     if configured_timeout is None:
@@ -238,14 +238,14 @@ async def _ensure_lane_worker_for_app(
             runtime,
             item,
             _AppRequest(app),
-            turn_timeout_seconds=_pma_turn_timeout_seconds_from_app(app),
+            turn_timeout_seconds=_pma_turn_idle_timeout_seconds_from_app(app),
         ),
     )
 
 
-def _pma_turn_timeout_seconds_from_app(app: Any) -> float:
+def _pma_turn_idle_timeout_seconds_from_app(app: Any) -> float:
     overridden_timeout = globals().get(
-        "PMA_TIMEOUT_SECONDS",
+        "PMA_TURN_IDLE_TIMEOUT_SECONDS",
         DEFAULT_PMA_TIMEOUT_SECONDS,
     )
     if overridden_timeout != DEFAULT_PMA_TIMEOUT_SECONDS:
@@ -258,7 +258,7 @@ def _pma_turn_timeout_seconds_from_app(app: Any) -> float:
         "pma",
         None,
     )
-    configured_timeout = getattr(configured_timeout, "turn_timeout_seconds", None)
+    configured_timeout = getattr(configured_timeout, "turn_idle_timeout_seconds", None)
     if configured_timeout is None:
         return float(DEFAULT_PMA_TIMEOUT_SECONDS)
     return float(configured_timeout)
@@ -400,14 +400,14 @@ def build_chat_runtime_router(
                 runtime,
                 item,
                 request,
-                turn_timeout_seconds=_pma_turn_timeout_seconds(request),
+                turn_timeout_seconds=_pma_turn_idle_timeout_seconds(request),
             ),
         )
 
         try:
             result = await asyncio.wait_for(
                 result_future,
-                timeout=_pma_turn_timeout_seconds(request),
+                timeout=_pma_turn_idle_timeout_seconds(request),
             )
         except asyncio.TimeoutError:
             return {"status": "error", "detail": "PMA chat timed out"}
