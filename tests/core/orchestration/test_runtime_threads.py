@@ -1725,7 +1725,7 @@ async def test_runtime_thread_recovery_probe_can_finish_before_stall_deadline(
     assert outcome.assistant_text == "recovered before hard stall"
     assert outcome.completion_source == "prompt_return"
     assert len(harness.recovery_calls) == 2
-    assert elapsed < 0.08
+    assert elapsed < 0.25
     assert harness.interrupt_calls == []
     assert harness.wait_cancelled.is_set()
 

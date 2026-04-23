@@ -18,7 +18,6 @@ from codex_autorunner.core.hub_inbox_resolution import (
     record_message_pending_auto_dismiss,
     record_message_resolution,
 )
-from codex_autorunner.core.hub_lifecycle import HubLifecycleWorker
 from codex_autorunner.core.orchestration import OrchestrationBindingStore
 from codex_autorunner.core.pma_audit import PmaActionType, PmaAuditLog
 from codex_autorunner.core.pma_context import (
@@ -33,27 +32,10 @@ from codex_autorunner.core.state import RunnerState, save_state
 from codex_autorunner.manifest import load_manifest, save_manifest
 
 
-def _fast_lifecycle_worker_stop(self):
-    with self._thread_lock:
-        thread = self._thread
-        if thread is None:
-            return
-        self._stop_event.set()
-    thread.join(timeout=0.001)
-    with self._thread_lock:
-        if self._thread is thread:
-            self._thread = None
-
-
-HubLifecycleWorker.stop = _fast_lifecycle_worker_stop
-
-_orig_reconcile = HubSupervisor._reconcile_startup
-HubSupervisor._reconcile_startup = lambda self: None
-
-
 def _build_supervisor(hub_root: Path) -> HubSupervisor:
     config = load_hub_config(hub_root)
-    return HubSupervisor(config, start_lifecycle_worker=False)
+    with patch.object(HubSupervisor, "_reconcile_startup", lambda self: None):
+        return HubSupervisor(config, start_lifecycle_worker=False)
 
 
 def _write_hub_config(hub_root: Path, data: dict) -> None:
