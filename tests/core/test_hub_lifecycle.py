@@ -184,7 +184,7 @@ def test_hub_lifecycle_worker_logs_and_keeps_polling_after_failure(caplog) -> No
     worker = HubLifecycleWorker(
         process_once=_process_once,
         poll_interval_seconds=0.01,
-        join_timeout_seconds=0.5,
+        join_timeout_seconds=0.1,
         logger=logger,
     )
 
@@ -193,7 +193,7 @@ def test_hub_lifecycle_worker_logs_and_keeps_polling_after_failure(caplog) -> No
         try:
             wait_for_thread_event(
                 completed,
-                timeout_seconds=1.0,
+                timeout_seconds=0.5,
                 description="lifecycle worker retry cycle to complete",
             )
         finally:
@@ -220,7 +220,7 @@ def test_hub_lifecycle_worker_stops_after_unrecoverable_schema_error(caplog) -> 
     worker = HubLifecycleWorker(
         process_once=_process_once,
         poll_interval_seconds=0.01,
-        join_timeout_seconds=0.5,
+        join_timeout_seconds=0.1,
         logger=logger,
     )
 
@@ -229,7 +229,7 @@ def test_hub_lifecycle_worker_stops_after_unrecoverable_schema_error(caplog) -> 
         try:
             wait_for_thread_event(
                 attempted,
-                timeout_seconds=1.0,
+                timeout_seconds=0.5,
                 description="lifecycle worker to attempt processing once",
             )
         finally:
@@ -251,14 +251,14 @@ def test_hub_lifecycle_worker_stop_clears_dead_thread_after_self_termination() -
     worker = HubLifecycleWorker(
         process_once=_process_once,
         poll_interval_seconds=0.01,
-        join_timeout_seconds=0.5,
+        join_timeout_seconds=0.1,
         logger=logger,
     )
 
     worker.start()
     thread = worker._thread
     assert thread is not None
-    thread.join(timeout=1.0)
+    thread.join(timeout=0.5)
     assert thread.is_alive() is False
 
     worker.stop()
@@ -275,15 +275,15 @@ def test_hub_lifecycle_worker_adaptive_backoff_on_idle() -> None:
     def _process_once():
         nonlocal call_count
         call_count += 1
-        if call_count >= 3:
+        if call_count >= 2:
             completed.set()
         return False
 
     worker = HubLifecycleWorker(
         process_once=_process_once,
         poll_interval_seconds=0.01,
-        max_poll_interval_seconds=10.0,
-        join_timeout_seconds=0.5,
+        max_poll_interval_seconds=0.5,
+        join_timeout_seconds=0.1,
         logger=logger,
     )
 
@@ -291,13 +291,13 @@ def test_hub_lifecycle_worker_adaptive_backoff_on_idle() -> None:
     try:
         wait_for_thread_event(
             completed,
-            timeout_seconds=5.0,
+            timeout_seconds=1.0,
             description="lifecycle worker idle backoff cycles",
         )
     finally:
         worker.stop()
 
-    assert call_count >= 3
+    assert call_count >= 2
     assert worker._idle_streak > 0
     assert worker._current_interval() > worker._base_poll_interval_seconds
 
@@ -310,15 +310,15 @@ def test_hub_lifecycle_worker_resets_backoff_on_productive() -> None:
     def _process_once():
         nonlocal call_count
         call_count += 1
-        if call_count >= 4:
+        if call_count >= 3:
             completed.set()
-        return call_count == 3
+        return call_count == 2
 
     worker = HubLifecycleWorker(
         process_once=_process_once,
         poll_interval_seconds=0.01,
-        max_poll_interval_seconds=0.5,
-        join_timeout_seconds=0.5,
+        max_poll_interval_seconds=0.2,
+        join_timeout_seconds=0.1,
         logger=logger,
     )
 
@@ -326,13 +326,13 @@ def test_hub_lifecycle_worker_resets_backoff_on_productive() -> None:
     try:
         wait_for_thread_event(
             completed,
-            timeout_seconds=5.0,
+            timeout_seconds=1.0,
             description="lifecycle worker backoff reset cycle",
         )
     finally:
         worker.stop()
 
-    assert call_count >= 4
+    assert call_count >= 3
 
 
 def test_lifecycle_event_processor_reports_processed_count() -> None:
@@ -371,7 +371,7 @@ def test_hub_lifecycle_worker_wake_resets_idle_streak() -> None:
         call_count += 1
         if call_count == 1:
             first_call.set()
-            wake_done.wait(timeout=2.0)
+            wake_done.wait(timeout=0.5)
             streak_after_wake = worker._idle_streak
         elif call_count == 2:
             second_call.set()
@@ -380,8 +380,8 @@ def test_hub_lifecycle_worker_wake_resets_idle_streak() -> None:
     worker = HubLifecycleWorker(
         process_once=_process_once,
         poll_interval_seconds=0.01,
-        max_poll_interval_seconds=5.0,
-        join_timeout_seconds=0.5,
+        max_poll_interval_seconds=0.5,
+        join_timeout_seconds=0.1,
         logger=logger,
     )
 
@@ -389,7 +389,7 @@ def test_hub_lifecycle_worker_wake_resets_idle_streak() -> None:
     try:
         wait_for_thread_event(
             first_call,
-            timeout_seconds=1.0,
+            timeout_seconds=0.5,
             description="lifecycle worker first call",
         )
         worker._idle_streak = 5
@@ -397,7 +397,7 @@ def test_hub_lifecycle_worker_wake_resets_idle_streak() -> None:
         wake_done.set()
         wait_for_thread_event(
             second_call,
-            timeout_seconds=1.0,
+            timeout_seconds=0.5,
             description="lifecycle worker second call after wake",
         )
     finally:

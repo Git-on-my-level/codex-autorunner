@@ -80,8 +80,7 @@ def test_lifecycle_dispatch_auto_resolve_does_not_enqueue_pma(
 ) -> None:
     hub_root = tmp_path / "hub"
     _write_hub_config(hub_root, dispatch_interception=True)
-    supervisor = HubSupervisor(load_hub_config(hub_root))
-    supervisor._stop_lifecycle_event_processor()
+    supervisor = HubSupervisor(load_hub_config(hub_root), start_lifecycle_worker=False)
 
     try:
         repo_root = hub_root / "repo-1"
@@ -105,8 +104,7 @@ def test_lifecycle_dispatch_auto_resolve_does_not_enqueue_pma(
 def test_lifecycle_dispatch_escalate_enqueues_pma(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     _write_hub_config(hub_root, dispatch_interception=True)
-    supervisor = HubSupervisor(load_hub_config(hub_root))
-    supervisor._stop_lifecycle_event_processor()
+    supervisor = HubSupervisor(load_hub_config(hub_root), start_lifecycle_worker=False)
 
     try:
         repo_root = hub_root / "repo-1"
@@ -136,8 +134,7 @@ def test_lifecycle_dispatch_escalate_enqueues_pma(tmp_path: Path) -> None:
 def test_lifecycle_flow_failed_enqueues_pma(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     _write_hub_config(hub_root, dispatch_interception=False)
-    supervisor = HubSupervisor(load_hub_config(hub_root))
-    supervisor._stop_lifecycle_event_processor()
+    supervisor = HubSupervisor(load_hub_config(hub_root), start_lifecycle_worker=False)
 
     try:
         supervisor.lifecycle_emitter.emit_flow_failed("repo-1", "run-1")
@@ -163,8 +160,7 @@ def test_lifecycle_reactive_disabled_skips_enqueue(tmp_path: Path) -> None:
         dispatch_interception=False,
         extra_lines=["  reactive_enabled: false"],
     )
-    supervisor = HubSupervisor(load_hub_config(hub_root))
-    supervisor._stop_lifecycle_event_processor()
+    supervisor = HubSupervisor(load_hub_config(hub_root), start_lifecycle_worker=False)
 
     try:
         supervisor.lifecycle_emitter.emit_flow_failed("repo-1", "run-1")
@@ -187,8 +183,7 @@ def test_lifecycle_reactive_allowlist_filters(tmp_path: Path) -> None:
             "    - flow_failed",
         ],
     )
-    supervisor = HubSupervisor(load_hub_config(hub_root))
-    supervisor._stop_lifecycle_event_processor()
+    supervisor = HubSupervisor(load_hub_config(hub_root), start_lifecycle_worker=False)
 
     try:
         supervisor.lifecycle_emitter.emit_flow_completed("repo-1", "run-1")
@@ -208,8 +203,7 @@ def test_lifecycle_reactive_debounce(tmp_path: Path) -> None:
         dispatch_interception=False,
         extra_lines=["  reactive_debounce_seconds: 3600"],
     )
-    supervisor = HubSupervisor(load_hub_config(hub_root))
-    supervisor._stop_lifecycle_event_processor()
+    supervisor = HubSupervisor(load_hub_config(hub_root), start_lifecycle_worker=False)
 
     try:
         supervisor.lifecycle_emitter.emit_flow_failed("repo-1", "run-1")
@@ -235,8 +229,7 @@ def test_lifecycle_reactive_origin_blocklist(tmp_path: Path) -> None:
         dispatch_interception=False,
         extra_lines=["  reactive_origin_blocklist:", "    - pma"],
     )
-    supervisor = HubSupervisor(load_hub_config(hub_root))
-    supervisor._stop_lifecycle_event_processor()
+    supervisor = HubSupervisor(load_hub_config(hub_root), start_lifecycle_worker=False)
 
     try:
         supervisor.lifecycle_emitter.emit_flow_failed("repo-1", "run-1", origin="pma")
@@ -260,8 +253,7 @@ def test_lifecycle_reactive_rate_limit(tmp_path: Path) -> None:
             "  max_actions_per_window: 1",
         ],
     )
-    supervisor = HubSupervisor(load_hub_config(hub_root))
-    supervisor._stop_lifecycle_event_processor()
+    supervisor = HubSupervisor(load_hub_config(hub_root), start_lifecycle_worker=False)
 
     try:
         supervisor.lifecycle_emitter.emit_flow_failed("repo-1", "run-1")
@@ -287,8 +279,7 @@ def test_lifecycle_reactive_circuit_breaker(tmp_path: Path) -> None:
             "  circuit_breaker_cooldown_seconds: 3600",
         ],
     )
-    supervisor = HubSupervisor(load_hub_config(hub_root))
-    supervisor._stop_lifecycle_event_processor()
+    supervisor = HubSupervisor(load_hub_config(hub_root), start_lifecycle_worker=False)
 
     try:
         checker = supervisor.get_pma_safety_checker()
@@ -318,8 +309,7 @@ def test_lifecycle_processing_failures_retry_then_quarantine(
             "  lifecycle_retry_max_backoff_seconds: 0",
         ],
     )
-    supervisor = HubSupervisor(load_hub_config(hub_root))
-    supervisor._stop_lifecycle_event_processor()
+    supervisor = HubSupervisor(load_hub_config(hub_root), start_lifecycle_worker=False)
 
     try:
         supervisor.lifecycle_emitter.emit_flow_failed("repo-1", "run-1")
@@ -381,8 +371,7 @@ def test_lifecycle_subscription_enqueues_wakeup_payload(tmp_path: Path) -> None:
         dispatch_interception=False,
         extra_lines=["  reactive_enabled: false"],
     )
-    supervisor = HubSupervisor(load_hub_config(hub_root))
-    supervisor._stop_lifecycle_event_processor()
+    supervisor = HubSupervisor(load_hub_config(hub_root), start_lifecycle_worker=False)
 
     try:
         store = supervisor.get_pma_automation_store()
@@ -430,8 +419,7 @@ def test_automation_timer_due_drains_to_pma_queue(tmp_path: Path) -> None:
         dispatch_interception=False,
         extra_lines=["  reactive_enabled: false"],
     )
-    supervisor = HubSupervisor(load_hub_config(hub_root))
-    supervisor._stop_lifecycle_event_processor()
+    supervisor = HubSupervisor(load_hub_config(hub_root), start_lifecycle_worker=False)
 
     try:
         store = supervisor.get_pma_automation_store()
@@ -481,8 +469,7 @@ def test_flow_completion_subscription_can_trigger_next_lane(tmp_path: Path) -> N
         dispatch_interception=False,
         extra_lines=["  reactive_enabled: false"],
     )
-    supervisor = HubSupervisor(load_hub_config(hub_root))
-    supervisor._stop_lifecycle_event_processor()
+    supervisor = HubSupervisor(load_hub_config(hub_root), start_lifecycle_worker=False)
 
     try:
         store = supervisor.get_pma_automation_store()
@@ -526,8 +513,7 @@ def test_drain_automation_wakeup_copies_delivery_target_from_subscription(
         dispatch_interception=False,
         extra_lines=["  reactive_enabled: false"],
     )
-    supervisor = HubSupervisor(load_hub_config(hub_root))
-    supervisor._stop_lifecycle_event_processor()
+    supervisor = HubSupervisor(load_hub_config(hub_root), start_lifecycle_worker=False)
 
     try:
         store = supervisor.get_pma_automation_store()
@@ -568,8 +554,7 @@ def test_drain_automation_wakeups_requests_lane_worker_start(tmp_path: Path) -> 
         dispatch_interception=False,
         extra_lines=["  reactive_enabled: false"],
     )
-    supervisor = HubSupervisor(load_hub_config(hub_root))
-    supervisor._stop_lifecycle_event_processor()
+    supervisor = HubSupervisor(load_hub_config(hub_root), start_lifecycle_worker=False)
 
     try:
         started_lanes: list[str] = []
@@ -604,8 +589,7 @@ def test_drain_automation_wakeups_from_thread_without_event_loop(
         dispatch_interception=False,
         extra_lines=["  reactive_enabled: false"],
     )
-    supervisor = HubSupervisor(load_hub_config(hub_root))
-    supervisor._stop_lifecycle_event_processor()
+    supervisor = HubSupervisor(load_hub_config(hub_root), start_lifecycle_worker=False)
 
     try:
         store = supervisor.get_pma_automation_store()

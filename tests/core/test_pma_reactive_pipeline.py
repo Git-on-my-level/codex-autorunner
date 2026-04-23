@@ -65,7 +65,7 @@ async def _process_one_item(
 
     worker = PmaLaneWorker("pma:default", queue, executor)
     await worker.start()
-    await asyncio.wait_for(processed.wait(), timeout=2.0)
+    await asyncio.wait_for(processed.wait(), timeout=0.5)
     await worker.stop()
 
 
@@ -73,8 +73,7 @@ async def _process_one_item(
 async def test_reactive_flow_failed_writes_transcript_web_sink(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     _write_hub_config(hub_root)
-    supervisor = HubSupervisor(load_hub_config(hub_root))
-    supervisor._stop_lifecycle_event_processor()
+    supervisor = HubSupervisor(load_hub_config(hub_root), start_lifecycle_worker=False)
 
     try:
         supervisor.lifecycle_emitter.emit_flow_failed(
@@ -110,8 +109,7 @@ async def test_reactive_dispatch_created_does_not_enqueue_telegram_outbox(
 ) -> None:
     hub_root = tmp_path / "hub"
     _write_hub_config(hub_root)
-    supervisor = HubSupervisor(load_hub_config(hub_root))
-    supervisor._stop_lifecycle_event_processor()
+    supervisor = HubSupervisor(load_hub_config(hub_root), start_lifecycle_worker=False)
 
     try:
         repo_root = hub_root / "repo-1"
