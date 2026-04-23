@@ -84,15 +84,16 @@ def _canonicalize_subscription_entry(data: dict[str, Any]) -> dict[str, Any]:
     canonical.pop("notify_once", None)
     metadata_raw = data.get("metadata")
     metadata = dict(metadata_raw) if isinstance(metadata_raw, dict) else {}
+    resolved_max = _resolve_subscription_max_matches(
+        max_matches=data.get("max_matches"),
+        notify_once=data.get("notify_once"),
+        metadata=metadata,
+    )
     metadata.pop("notify_once", None)
     return {
         **canonical,
         "metadata": metadata,
-        "max_matches": _resolve_subscription_max_matches(
-            max_matches=data.get("max_matches"),
-            notify_once=data.get("notify_once"),
-            metadata=metadata,
-        ),
+        "max_matches": resolved_max,
     }
 
 
