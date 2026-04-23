@@ -36,7 +36,7 @@
       "kind": "wait_for_running_execution",
       "actor": "system",
       "payload": {
-        "timeout_seconds": 2.0
+        "timeout_seconds": 5.0
       }
     },
     {

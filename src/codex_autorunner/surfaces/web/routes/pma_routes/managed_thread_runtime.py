@@ -528,8 +528,9 @@ async def _run_managed_thread_execution(
         outcome = await await_runtime_thread_outcome(
             started,
             interrupt_event=None,
-            timeout_seconds=idle_timeout_seconds,
+            timeout_seconds=None,
             stall_timeout_seconds=idle_timeout_seconds,
+            stall_timeout_replaces_wall_clock_timeout=True,
             execution_error_message=MANAGED_THREAD_PUBLIC_EXECUTION_ERROR,
         )
     except Exception:  # intentional: top-level error handler for execution outcome

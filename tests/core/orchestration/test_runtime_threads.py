@@ -1769,7 +1769,7 @@ async def test_runtime_thread_timeout_cancels_wait_collector(
     assert harness.wait_cancelled.is_set()
 
 
-async def test_runtime_thread_progress_stall_timeout_replaces_hard_wall_clock(
+async def test_runtime_thread_progress_stall_timeout_keeps_hard_wall_clock_by_default(
     tmp_path: Path,
 ) -> None:
     @dataclass
@@ -1831,6 +1831,82 @@ async def test_runtime_thread_progress_stall_timeout_replaces_hard_wall_clock(
             interrupt_event=asyncio.Event(),
             timeout_seconds=0.03,
             stall_timeout_seconds=0.05,
+            execution_error_message="Managed thread execution failed",
+        ),
+        timeout=1,
+    )
+
+    assert outcome.status == "error"
+    assert outcome.error == "Runtime thread timed out"
+    assert outcome.completion_source == "timeout"
+    assert harness.interrupt_calls == [
+        (workspace_root, "backend-thread-1", "backend-turn-1")
+    ]
+
+
+async def test_runtime_thread_progress_stall_timeout_can_replace_hard_wall_clock(
+    tmp_path: Path,
+) -> None:
+    @dataclass
+    class _HarnessWithPeriodicProgress(_HarnessWithWait):
+        capabilities: frozenset[str] = frozenset(
+            ["durable_threads", "message_turns", "interrupt", "event_streaming"]
+        )
+
+        async def wait_for_turn(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            turn_id: Optional[str],
+            *,
+            timeout: Optional[float] = None,
+        ) -> TerminalTurnResult:
+            _ = workspace_root, conversation_id, turn_id, timeout
+            await asyncio.sleep(0.12)
+            return TerminalTurnResult(
+                status="ok",
+                assistant_text="completed after steady progress",
+                raw_events=[],
+                errors=[],
+            )
+
+        async def stream_events(
+            self, workspace_root: Path, conversation_id: str, turn_id: str
+        ):
+            _ = workspace_root, conversation_id, turn_id
+            for _ in range(6):
+                await asyncio.sleep(0.02)
+                yield {
+                    "message": {
+                        "method": "session/update",
+                        "params": {
+                            "update": {"sessionUpdate": "agent_message_chunk"},
+                            "text": "tick",
+                        },
+                    }
+                }
+
+    harness = _HarnessWithPeriodicProgress()
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+
+    started = await begin_runtime_thread_execution(
+        service,
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="user-visible prompt",
+        ),
+    )
+    outcome = await asyncio.wait_for(
+        await_runtime_thread_outcome(
+            started,
+            interrupt_event=asyncio.Event(),
+            timeout_seconds=0.03,
+            stall_timeout_seconds=0.05,
+            stall_timeout_replaces_wall_clock_timeout=True,
             execution_error_message="Managed thread execution failed",
         ),
         timeout=1,

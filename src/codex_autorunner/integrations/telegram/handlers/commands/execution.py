@@ -629,6 +629,7 @@ def _build_telegram_managed_thread_coordinator(
             interrupted_error=interrupted_error,
             timeout_seconds=timeout_seconds,
             stall_timeout_seconds=timeout_seconds if pma_enabled else None,
+            idle_timeout_only=pma_enabled,
         ),
         logger=getattr(handlers, "_logger", logging.getLogger(__name__)),
         turn_preview="",

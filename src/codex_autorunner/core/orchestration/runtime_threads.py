@@ -186,11 +186,18 @@ async def await_runtime_thread_outcome(
     interrupt_event: Optional[asyncio.Event],
     timeout_seconds: Optional[float],
     stall_timeout_seconds: Optional[float] = None,
+    stall_timeout_replaces_wall_clock_timeout: bool = False,
     execution_error_message: str,
     terminal_state: Optional[RuntimeTurnTerminalStateMachine] = None,
     observe_progress_events: bool = True,
 ) -> RuntimeThreadOutcome:
-    """Wait for a started runtime-thread execution to reach a terminal outcome."""
+    """Wait for a started runtime-thread execution to reach a terminal outcome.
+
+    By default, callers that provide both ``timeout_seconds`` and
+    ``stall_timeout_seconds`` get both protections: a hard wall-clock cap plus a
+    progress-stall guard. PMA managed-thread callers can opt into idle-only
+    semantics by setting ``stall_timeout_replaces_wall_clock_timeout=True``.
+    """
 
     backend_thread_id = execution.thread.backend_thread_id or ""
     backend_turn_id = execution.execution.backend_id
@@ -210,10 +217,22 @@ async def await_runtime_thread_outcome(
             timeout=None,
         )
     )
+    resolved_timeout_seconds = (
+        float(timeout_seconds)
+        if timeout_seconds is not None and float(timeout_seconds) > 0.0
+        else None
+    )
+    resolved_stall_timeout_seconds = (
+        float(stall_timeout_seconds)
+        if stall_timeout_seconds is not None and float(stall_timeout_seconds) > 0.0
+        else None
+    )
     timeout_task = None
-    if timeout_seconds is not None and float(timeout_seconds) > 0.0:
-        if stall_timeout_seconds is None or float(stall_timeout_seconds) <= 0.0:
-            timeout_task = asyncio.create_task(asyncio.sleep(float(timeout_seconds)))
+    if resolved_timeout_seconds is not None and (
+        resolved_stall_timeout_seconds is None
+        or not stall_timeout_replaces_wall_clock_timeout
+    ):
+        timeout_task = asyncio.create_task(asyncio.sleep(resolved_timeout_seconds))
     interrupt_task = (
         asyncio.create_task(_wait_for_interrupt(interrupt_event))
         if interrupt_event is not None
@@ -221,13 +240,15 @@ async def await_runtime_thread_outcome(
     )
     terminal_wait_task = asyncio.create_task(state.terminal_signal_waiter().wait())
     stall_task = (
-        asyncio.create_task(_wait_for_progress_stall(state, stall_timeout_seconds))
-        if stall_timeout_seconds is not None and float(stall_timeout_seconds) > 0.0
+        asyncio.create_task(
+            _wait_for_progress_stall(state, resolved_stall_timeout_seconds)
+        )
+        if resolved_stall_timeout_seconds is not None
         else None
     )
     recovery_probe_task = None
     recovery_probe_interval = _stall_recovery_probe_interval_seconds(
-        stall_timeout_seconds
+        resolved_stall_timeout_seconds
     )
     if recovery_probe_interval is not None and _harness_supports_stall_recovery(
         execution.harness

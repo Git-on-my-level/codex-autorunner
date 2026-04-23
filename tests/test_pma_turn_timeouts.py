@@ -122,6 +122,7 @@ class TestPmaTimeoutIsolationInvariants:
         )
         assert coordinator.errors.timeout_seconds == 42.0
         assert coordinator.errors.stall_timeout_seconds == 42.0
+        assert coordinator.errors.idle_timeout_only is True
 
     def test_telegram_pma_surface_uses_hub_config_timeout(self, tmp_path: Path) -> None:
         _write_hub_config(tmp_path, timeout_seconds=55)
@@ -143,6 +144,7 @@ class TestPmaTimeoutIsolationInvariants:
         )
         assert coordinator.errors.timeout_seconds == 55.0
         assert coordinator.errors.stall_timeout_seconds == 55.0
+        assert coordinator.errors.idle_timeout_only is True
 
     def test_discord_repo_surface_always_uses_legacy_7200_regardless_of_config(
         self, tmp_path: Path
@@ -159,6 +161,7 @@ class TestPmaTimeoutIsolationInvariants:
             pma_enabled=False,
         )
         assert coordinator.errors.timeout_seconds == 7200.0
+        assert coordinator.errors.idle_timeout_only is False
 
     def test_discord_pma_surface_stall_timeout_caps_at_total_timeout(
         self, tmp_path: Path, monkeypatch
@@ -181,6 +184,7 @@ class TestPmaTimeoutIsolationInvariants:
         )
         assert coordinator.errors.timeout_seconds == 42.0
         assert coordinator.errors.stall_timeout_seconds == 42.0
+        assert coordinator.errors.idle_timeout_only is True
 
     def test_telegram_repo_surface_always_uses_legacy_7200_regardless_of_config(
         self, tmp_path: Path
@@ -203,3 +207,4 @@ class TestPmaTimeoutIsolationInvariants:
             pma_enabled=False,
         )
         assert coordinator.errors.timeout_seconds == 7200.0
+        assert coordinator.errors.idle_timeout_only is False

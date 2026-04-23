@@ -363,12 +363,12 @@ def _build_discord_managed_thread_coordinator(
             interrupted_error=interrupted_error,
             timeout_seconds=timeout_seconds,
             stall_timeout_seconds=stall_timeout_seconds,
+            idle_timeout_only=pma_enabled,
         ),
         logger=getattr(service, "_logger", _logger),
         turn_preview="",
         preview_builder=lambda message_text: truncate_for_discord(
-            message_text,
-            max_len=120,
+            message_text, max_len=120
         ),
     )
 

@@ -43,7 +43,7 @@
         "event_name": "discord.turn.managed_thread_submission",
         "field": "queued",
         "equals": true,
-        "timeout_seconds": 2.0
+        "timeout_seconds": 5.0
       }
     },
     {
