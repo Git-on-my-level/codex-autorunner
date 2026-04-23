@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import asyncio
 import json
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Optional
 
@@ -20,7 +18,6 @@ from codex_autorunner.core.orchestration.runtime_bindings import (
 )
 from codex_autorunner.core.orchestration.runtime_threads import RuntimeThreadOutcome
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
-from codex_autorunner.core.orchestration.turn_timeline import list_turn_timeline
 from codex_autorunner.core.pma_context import format_pma_discoverability_preamble
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.pr_bindings import PrBindingStore
@@ -31,6 +28,207 @@ from codex_autorunner.integrations.github import (
 from codex_autorunner.surfaces.web.routes.pma_routes import managed_thread_runtime
 
 pytestmark = pytest.mark.slow
+
+
+def _patch_outcome_driven_finalization(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    outcome_builder: Any,
+) -> None:
+    async def _fake_run_started_execution(
+        self: Any,
+        started: Any,
+        *,
+        hooks: Any = None,
+        runtime_event_state: Any = None,
+    ) -> Any:
+        on_started = getattr(hooks, "on_execution_started", None)
+        on_finalized = getattr(hooks, "on_execution_finalized", None)
+        on_error = getattr(hooks, "on_execution_error", None)
+        on_finished = getattr(hooks, "on_execution_finished", None)
+        if callable(on_started):
+            await on_started(started)
+        try:
+            outcome = await outcome_builder(
+                orchestration_service=self.orchestration_service,
+                started=started,
+                state_root=self.state_root,
+                hub_client=self.hub_client,
+                surface=self.surface,
+                errors=self.errors,
+                logger=self.logger,
+                turn_preview=self.turn_preview,
+                raw_config=self.raw_config,
+                runtime_event_state=runtime_event_state,
+                on_progress_event=getattr(hooks, "on_progress_event", None),
+            )
+            orchestration_service = self.orchestration_service
+            managed_thread_id = str(
+                getattr(started.thread, "thread_target_id", None)
+                or getattr(started.request, "target_id", None)
+                or ""
+            )
+            managed_turn_id = str(getattr(started.execution, "execution_id", "") or "")
+            if outcome.status == "ok":
+                if callable(
+                    getattr(orchestration_service, "record_execution_result", None)
+                ):
+                    orchestration_service.record_execution_result(
+                        managed_thread_id,
+                        managed_turn_id,
+                        status="ok",
+                        assistant_text=outcome.assistant_text,
+                        error=None,
+                        backend_turn_id=outcome.backend_turn_id,
+                        transcript_turn_id=managed_turn_id,
+                    )
+            elif outcome.status == "interrupted":
+                recorder = getattr(
+                    orchestration_service, "record_execution_interrupted", None
+                )
+                if callable(recorder):
+                    recorder(managed_thread_id, managed_turn_id)
+            elif callable(
+                getattr(orchestration_service, "record_execution_result", None)
+            ):
+                orchestration_service.record_execution_result(
+                    managed_thread_id,
+                    managed_turn_id,
+                    status="error",
+                    assistant_text="",
+                    error=outcome.error,
+                    backend_turn_id=outcome.backend_turn_id,
+                    transcript_turn_id=None,
+                )
+            finalized = managed_thread_runtime.ManagedThreadFinalizationResult(
+                status=outcome.status,
+                assistant_text=outcome.assistant_text if outcome.status == "ok" else "",
+                error=outcome.error,
+                managed_thread_id=managed_thread_id,
+                managed_turn_id=managed_turn_id,
+                backend_thread_id=(
+                    outcome.backend_thread_id
+                    or getattr(started.thread, "backend_thread_id", None)
+                ),
+            )
+            if callable(on_finalized):
+                await on_finalized(started, finalized)
+            return finalized
+        except BaseException as exc:
+            if callable(on_error):
+                await on_error(started, exc)
+            raise
+        finally:
+            if callable(on_finished):
+                await on_finished(started)
+
+    monkeypatch.setattr(
+        managed_thread_runtime.ManagedThreadTurnCoordinator,
+        "run_started_execution",
+        _fake_run_started_execution,
+    )
+
+
+def test_finalized_with_backend_thread_fallback_prefers_finalized_value() -> None:
+    finalized = managed_thread_runtime.ManagedThreadFinalizationResult(
+        status="ok",
+        assistant_text="done",
+        error=None,
+        managed_thread_id="thread-1",
+        managed_turn_id="turn-1",
+        backend_thread_id="backend-finalized",
+    )
+    started = SimpleNamespace(
+        thread=SimpleNamespace(backend_thread_id="backend-started")
+    )
+
+    result = managed_thread_runtime._finalized_with_backend_thread_fallback(
+        finalized,
+        started=started,
+        fallback_backend_thread_id="backend-fallback",
+    )
+
+    assert result is finalized
+
+
+def test_finalized_with_backend_thread_fallback_uses_started_then_fallback() -> None:
+    finalized = managed_thread_runtime.ManagedThreadFinalizationResult(
+        status="ok",
+        assistant_text="done",
+        error=None,
+        managed_thread_id="thread-1",
+        managed_turn_id="turn-1",
+        backend_thread_id=None,
+    )
+
+    started_result = managed_thread_runtime._finalized_with_backend_thread_fallback(
+        finalized,
+        started=SimpleNamespace(
+            thread=SimpleNamespace(backend_thread_id="backend-started")
+        ),
+        fallback_backend_thread_id="backend-fallback",
+    )
+    fallback_result = managed_thread_runtime._finalized_with_backend_thread_fallback(
+        finalized,
+        started=SimpleNamespace(thread=SimpleNamespace(backend_thread_id=None)),
+        fallback_backend_thread_id="backend-fallback",
+    )
+
+    assert started_result.backend_thread_id == "backend-started"
+    assert fallback_result.backend_thread_id == "backend-fallback"
+
+
+@pytest.mark.anyio
+async def test_pma_queue_finalizer_returns_managed_thread_finalization_result(
+    hub_env,
+    monkeypatch,
+) -> None:
+    app = build_pma_hub_app(hub_env.hub_root)
+    request = managed_thread_runtime._managed_thread_request_for_app(app)
+
+    async def _fake_run_started_execution(
+        self: Any,
+        started: Any,
+        *,
+        hooks: Any = None,
+        runtime_event_state: Any = None,
+    ) -> Any:
+        _ = self, started, hooks, runtime_event_state
+        return managed_thread_runtime.ManagedThreadFinalizationResult(
+            status="ok",
+            assistant_text="assistant-output",
+            error=None,
+            managed_thread_id="thread-1",
+            managed_turn_id="turn-1",
+            backend_thread_id=None,
+        )
+
+    monkeypatch.setattr(
+        managed_thread_runtime.ManagedThreadTurnCoordinator,
+        "run_started_execution",
+        _fake_run_started_execution,
+    )
+
+    finalized = await managed_thread_runtime._finalize_managed_thread_execution(
+        request,
+        service=SimpleNamespace(),
+        thread_store=SimpleNamespace(),
+        thread={"managed_thread_id": "thread-1"},
+        started=SimpleNamespace(
+            request=SimpleNamespace(message_text="hello"),
+            thread=SimpleNamespace(
+                thread_target_id="thread-1",
+                backend_thread_id=None,
+            ),
+        ),
+        fallback_backend_thread_id="backend-fallback",
+    )
+
+    assert isinstance(
+        finalized,
+        managed_thread_runtime.ManagedThreadFinalizationResult,
+    )
+    assert finalized.backend_thread_id == "backend-fallback"
 
 
 @pytest.mark.anyio
@@ -156,8 +354,18 @@ async def test_recover_orphaned_managed_thread_executions_restores_backend_ids_f
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("surface_kind", "surface_key", "client_turn_id"),
+    (
+        ("discord", "channel-123", "discord:channel-123:run-1"),
+        ("telegram", "123:456", "telegram:123:456:run-1"),
+    ),
+)
 async def test_recover_orphaned_managed_thread_executions_skips_chat_bound_threads(
     hub_env,
+    surface_kind: str,
+    surface_key: str,
+    client_turn_id: str,
 ) -> None:
     app = build_pma_hub_app(hub_env.hub_root)
     store = PmaThreadStore(hub_env.hub_root)
@@ -171,11 +379,11 @@ async def test_recover_orphaned_managed_thread_executions_skips_chat_bound_threa
     running = store.create_turn(
         managed_thread_id,
         prompt="running",
-        client_turn_id="discord:channel-123:run-1",
+        client_turn_id=client_turn_id,
     )
     bindings.upsert_binding(
-        surface_kind="discord",
-        surface_key="channel-123",
+        surface_kind=surface_kind,
+        surface_key=surface_key,
         thread_target_id=managed_thread_id,
         agent_id="codex",
         repo_id=hub_env.repo_id,
@@ -389,10 +597,9 @@ def test_managed_thread_message_route_uses_orchestration_service_seam(
         "begin_runtime_thread_execution",
         _fake_begin,
     )
-    monkeypatch.setattr(
-        managed_thread_runtime,
-        "await_runtime_thread_outcome",
-        _fake_await,
+    _patch_outcome_driven_finalization(
+        monkeypatch,
+        outcome_builder=_fake_await,
     )
 
     with TestClient(app) as client:
@@ -422,6 +629,430 @@ def test_managed_thread_message_route_uses_orchestration_service_seam(
     )
     assert fake_service.record_calls[0]["status"] == "ok"
     assert fake_service.record_calls[0]["execution_id"] == "managed-turn-1"
+
+
+def test_managed_thread_message_route_uses_bound_progress_controller_for_direct_execution(
+    hub_env,
+    monkeypatch,
+) -> None:
+    app = build_pma_hub_app(hub_env.hub_root)
+    store = PmaThreadStore(hub_env.hub_root)
+    created = store.create_thread(
+        "codex", hub_env.repo_root.resolve(), repo_id=hub_env.repo_id
+    )
+    managed_thread_id = str(created["managed_thread_id"])
+    call_order: list[str] = []
+    controller_kwargs: dict[str, Any] = {}
+
+    class FakeController:
+        def __init__(self) -> None:
+            self.hooks = SimpleNamespace(
+                on_execution_started=self._on_started,
+                on_execution_finished=self._on_finished,
+                on_execution_finalized=self._on_finalized,
+                on_execution_error=self._on_error,
+                on_progress_event=None,
+            )
+
+        async def _on_started(self, started: Any) -> None:
+            _ = started
+            call_order.append("progress:start")
+
+        async def _on_finished(self, started: Any) -> None:
+            _ = started
+            call_order.append("progress:finished")
+
+        async def _on_finalized(self, started: Any, finalized: Any) -> None:
+            _ = started
+            call_order.append(f"progress:finalized:{finalized.status}")
+
+        async def _on_error(self, started: Any, exc: BaseException) -> None:
+            _ = started, exc
+            call_order.append("progress:error")
+
+        def surface_targets_for(
+            self, managed_turn_id: str
+        ) -> tuple[tuple[str, str], ...]:
+            call_order.append(f"progress:targets:{managed_turn_id}")
+            return ()
+
+        def clear_surface_targets(self, managed_turn_id: str) -> None:
+            call_order.append(f"progress:clear:{managed_turn_id}")
+
+    class FakeService:
+        def get_thread_target(self, thread_target_id: str):
+            return SimpleNamespace(
+                thread_target_id=thread_target_id,
+                backend_thread_id="backend-thread-1",
+            )
+
+        def record_execution_result(self, *args, **kwargs):
+            _ = args, kwargs
+            return SimpleNamespace(status="ok", error=None)
+
+        def get_execution(self, thread_target_id: str, execution_id: str):
+            _ = thread_target_id, execution_id
+            return None
+
+    async def _fake_begin(
+        service, request, *, client_request_id=None, sandbox_policy=None
+    ):
+        _ = service, client_request_id, sandbox_policy
+        return SimpleNamespace(
+            execution=SimpleNamespace(
+                execution_id="managed-turn-1",
+                backend_id="backend-turn-1",
+            ),
+            thread=SimpleNamespace(
+                backend_thread_id="backend-thread-1",
+                thread_target_id=managed_thread_id,
+                agent_id="codex",
+            ),
+            workspace_root=hub_env.repo_root.resolve(),
+            request=request,
+            harness=None,
+        )
+
+    async def _fake_await(*args, **kwargs):
+        _ = args, kwargs
+        return RuntimeThreadOutcome(
+            status="ok",
+            assistant_text="assistant-output",
+            error=None,
+            backend_thread_id="backend-thread-1",
+            backend_turn_id="backend-turn-1",
+        )
+
+    async def _fake_deliver(*args, **kwargs):
+        _ = args, kwargs
+        call_order.append("deliver:assistant")
+        return SimpleNamespace(target_count=1, published_count=1, covered_targets=())
+
+    async def _fake_notify(*args, **kwargs):
+        _ = args, kwargs
+        call_order.append("notify:terminal")
+
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "_build_managed_thread_orchestration_service",
+        lambda request, *, thread_store=None: FakeService(),
+    )
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "begin_runtime_thread_execution",
+        _fake_begin,
+    )
+    _patch_outcome_driven_finalization(
+        monkeypatch,
+        outcome_builder=_fake_await,
+    )
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "build_bound_chat_queue_execution_controller",
+        lambda **kwargs: controller_kwargs.update(kwargs) or FakeController(),
+    )
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "deliver_bound_chat_assistant_output",
+        _fake_deliver,
+    )
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "notify_managed_thread_terminal_transition",
+        _fake_notify,
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/messages",
+            json={"message": "hello from route"},
+        )
+
+    assert response.status_code == 200
+    assert controller_kwargs["retain_completed_surface_targets"] is True
+    assert callable(controller_kwargs["surface_target_resolver"])
+    assert call_order == [
+        "progress:start",
+        "progress:finalized:ok",
+        "progress:finished",
+        "progress:targets:managed-turn-1",
+        "deliver:assistant",
+        "notify:terminal",
+        "progress:clear:managed-turn-1",
+    ]
+
+
+@pytest.mark.anyio
+async def test_managed_thread_delivery_result_retires_uncovered_progress_after_final_delivery_enqueue(
+    hub_env,
+    monkeypatch,
+) -> None:
+    app = build_pma_hub_app(hub_env.hub_root)
+    store = PmaThreadStore(hub_env.hub_root)
+    created = store.create_thread(
+        "codex", hub_env.repo_root.resolve(), repo_id=hub_env.repo_id
+    )
+    managed_thread_id = str(created["managed_thread_id"])
+    call_order: list[str] = []
+
+    async def _fake_deliver(*args, **kwargs):
+        _ = args, kwargs
+        call_order.append("deliver:assistant")
+        return SimpleNamespace(
+            target_count=1,
+            published_count=1,
+            covered_targets=(),
+        )
+
+    async def _fake_notify(*args, **kwargs):
+        _ = args, kwargs
+        call_order.append("notify:terminal")
+
+    async def _fake_cleanup(**kwargs: Any) -> None:
+        _ = kwargs
+        call_order.append("cleanup:progress")
+
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "deliver_bound_chat_assistant_output",
+        _fake_deliver,
+    )
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "notify_managed_thread_terminal_transition",
+        _fake_notify,
+    )
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "cleanup_bound_chat_live_progress_success",
+        _fake_cleanup,
+    )
+
+    result = await managed_thread_runtime._deliver_managed_thread_execution_result(
+        managed_thread_runtime._managed_thread_request_for_app(app),
+        thread_store=store,
+        thread=created,
+        finalized=managed_thread_runtime.ManagedThreadFinalizationResult(
+            status="ok",
+            assistant_text="assistant-output",
+            error=None,
+            managed_thread_id=managed_thread_id,
+            managed_turn_id="managed-turn-1",
+            backend_thread_id="backend-thread-1",
+        ),
+        response_payload={},
+        progress_targets=(("discord", "channel-1"),),
+        clear_progress_targets=lambda turn_id: call_order.append(f"clear:{turn_id}"),
+    )
+
+    assert result["status"] == "ok"
+    assert call_order == [
+        "deliver:assistant",
+        "notify:terminal",
+        "cleanup:progress",
+        "clear:managed-turn-1",
+    ]
+
+
+@pytest.mark.anyio
+async def test_managed_thread_delivery_result_skips_cleanup_for_covered_progress_targets(
+    hub_env,
+    monkeypatch,
+) -> None:
+    app = build_pma_hub_app(hub_env.hub_root)
+    store = PmaThreadStore(hub_env.hub_root)
+    created = store.create_thread(
+        "codex", hub_env.repo_root.resolve(), repo_id=hub_env.repo_id
+    )
+    managed_thread_id = str(created["managed_thread_id"])
+
+    async def _fake_deliver(*args, **kwargs):
+        _ = args, kwargs
+        return SimpleNamespace(covered_targets=(("discord", "channel-1"),))
+
+    async def _fake_notify(*args, **kwargs):
+        _ = args, kwargs
+
+    async def _fake_cleanup(**kwargs: Any) -> None:
+        raise AssertionError(f"unexpected cleanup call: {kwargs}")
+
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "deliver_bound_chat_assistant_output",
+        _fake_deliver,
+    )
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "notify_managed_thread_terminal_transition",
+        _fake_notify,
+    )
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "cleanup_bound_chat_live_progress_success",
+        _fake_cleanup,
+    )
+
+    result = await managed_thread_runtime._deliver_managed_thread_execution_result(
+        managed_thread_runtime._managed_thread_request_for_app(app),
+        thread_store=store,
+        thread=created,
+        finalized=managed_thread_runtime.ManagedThreadFinalizationResult(
+            status="ok",
+            assistant_text="assistant-output",
+            error=None,
+            managed_thread_id=managed_thread_id,
+            managed_turn_id="managed-turn-1",
+            backend_thread_id="backend-thread-1",
+        ),
+        response_payload={},
+        progress_targets=(("discord", "channel-1"),),
+        clear_progress_targets=lambda _turn_id: None,
+    )
+
+    assert result["status"] == "ok"
+
+
+@pytest.mark.anyio
+async def test_managed_thread_delivery_result_retires_progress_targets_when_delivery_fails(
+    hub_env,
+    monkeypatch,
+) -> None:
+    app = build_pma_hub_app(hub_env.hub_root)
+    store = PmaThreadStore(hub_env.hub_root)
+    created = store.create_thread(
+        "codex", hub_env.repo_root.resolve(), repo_id=hub_env.repo_id
+    )
+    managed_thread_id = str(created["managed_thread_id"])
+    cleared_turn_ids: list[str] = []
+    cleanup_calls: list[dict[str, Any]] = []
+
+    async def _fake_deliver(*args, **kwargs):
+        _ = args, kwargs
+        raise RuntimeError("delivery failed")
+
+    async def _fake_notify(*args, **kwargs):
+        raise AssertionError("notify should not run after delivery failure")
+
+    async def _fake_cleanup_failure(**kwargs: Any) -> None:
+        cleanup_calls.append(dict(kwargs))
+
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "deliver_bound_chat_assistant_output",
+        _fake_deliver,
+    )
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "notify_managed_thread_terminal_transition",
+        _fake_notify,
+    )
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "cleanup_bound_chat_live_progress_failure",
+        _fake_cleanup_failure,
+    )
+
+    with pytest.raises(RuntimeError, match="delivery failed"):
+        await managed_thread_runtime._deliver_managed_thread_execution_result(
+            managed_thread_runtime._managed_thread_request_for_app(app),
+            thread_store=store,
+            thread=created,
+            finalized=managed_thread_runtime.ManagedThreadFinalizationResult(
+                status="ok",
+                assistant_text="assistant-output",
+                error=None,
+                managed_thread_id=managed_thread_id,
+                managed_turn_id="managed-turn-1",
+                backend_thread_id="backend-thread-1",
+            ),
+            response_payload={},
+            progress_targets=(("discord", "channel-1"),),
+            clear_progress_targets=cleared_turn_ids.append,
+        )
+
+    assert cleared_turn_ids == ["managed-turn-1"]
+    assert cleanup_calls == [
+        {
+            "hub_root": app.state.config.root,
+            "raw_config": app.state.config.raw,
+            "surface_kind": "discord",
+            "surface_key": "channel-1",
+            "managed_thread_id": managed_thread_id,
+            "managed_turn_id": "managed-turn-1",
+            "failure_message": "Final response delivery failed. Please retry.",
+        }
+    ]
+
+
+def test_pma_queue_worker_uses_contextual_delivery_helper_for_progress_targets(
+    hub_env,
+    monkeypatch,
+) -> None:
+    app = build_pma_hub_app(hub_env.hub_root)
+    store = PmaThreadStore(hub_env.hub_root)
+    created = store.create_thread(
+        "codex", hub_env.repo_root.resolve(), repo_id=hub_env.repo_id
+    )
+    managed_thread_id = str(created["managed_thread_id"])
+    captured: dict[str, Any] = {}
+
+    class FakeController:
+        def __init__(self) -> None:
+            self.hooks = SimpleNamespace()
+
+        def surface_targets_for(
+            self, managed_turn_id: str
+        ) -> tuple[tuple[str, str], ...]:
+            return (("discord", f"target-for:{managed_turn_id}"),)
+
+        def clear_surface_targets(self, managed_turn_id: str) -> None:
+            captured["cleared_turn_id"] = managed_turn_id
+
+    def _fake_ensure_queue_worker(*args: Any, **kwargs: Any) -> None:
+        captured["deliver_result"] = kwargs["deliver_managed_thread_execution_result"]
+        captured["hooks"] = kwargs["hooks"]
+
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "build_bound_chat_queue_execution_controller",
+        lambda **kwargs: (
+            captured.__setitem__("controller_kwargs", dict(kwargs)) or FakeController()
+        ),
+    )
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "ensure_queue_worker",
+        _fake_ensure_queue_worker,
+    )
+
+    managed_thread_runtime.ensure_managed_thread_queue_worker(app, managed_thread_id)
+
+    hooks = captured["hooks"]
+    assert hooks.deliver_result is None
+    assert hooks.queue_execution_hooks is not None
+    assert captured["controller_kwargs"]["retain_completed_surface_targets"] is True
+    assert callable(captured["controller_kwargs"]["surface_target_resolver"])
+
+
+def test_resolve_pma_chat_bound_surface_targets_selects_single_owner() -> None:
+    thread_store = SimpleNamespace(
+        get_running_turn=lambda managed_thread_id: {
+            "client_turn_id": f"discord:channel-1:{managed_thread_id}"
+        }
+    )
+    service = SimpleNamespace(
+        thread_store=thread_store,
+        list_bindings=lambda **kwargs: (
+            [SimpleNamespace(surface_key="channel-1")]
+            if kwargs["surface_kind"] == "discord"
+            else [SimpleNamespace(surface_key="chat-1:55")]
+        ),
+    )
+
+    assert managed_thread_runtime._resolve_pma_chat_bound_surface_targets(
+        service=service,
+        managed_thread_id="thread-1",
+    ) == (("discord", "channel-1"),)
 
 
 def test_managed_thread_message_route_honors_explicit_core_context_profile(
@@ -508,10 +1139,9 @@ def test_managed_thread_message_route_honors_explicit_core_context_profile(
         "begin_runtime_thread_execution",
         _fake_begin,
     )
-    monkeypatch.setattr(
-        managed_thread_runtime,
-        "await_runtime_thread_outcome",
-        _fake_await,
+    _patch_outcome_driven_finalization(
+        monkeypatch,
+        outcome_builder=_fake_await,
     )
 
     with TestClient(app) as client:
@@ -602,10 +1232,9 @@ def test_managed_thread_message_route_self_claims_existing_pr_binding(
         "begin_runtime_thread_execution",
         _fake_begin,
     )
-    monkeypatch.setattr(
-        managed_thread_runtime,
-        "await_runtime_thread_outcome",
-        _fake_await,
+    _patch_outcome_driven_finalization(
+        monkeypatch,
+        outcome_builder=_fake_await,
     )
 
     with TestClient(app) as client:
@@ -729,10 +1358,9 @@ def test_managed_thread_message_route_self_claims_discovered_pr_binding(
         "begin_runtime_thread_execution",
         _fake_begin,
     )
-    monkeypatch.setattr(
-        managed_thread_runtime,
-        "await_runtime_thread_outcome",
-        _fake_await,
+    _patch_outcome_driven_finalization(
+        monkeypatch,
+        outcome_builder=_fake_await,
     )
     monkeypatch.setattr(
         managed_thread_pr_binding_module,
@@ -852,10 +1480,9 @@ def test_managed_thread_message_route_honors_explicit_approval_override(
         "begin_runtime_thread_execution",
         _fake_begin,
     )
-    monkeypatch.setattr(
-        managed_thread_runtime,
-        "await_runtime_thread_outcome",
-        _fake_await,
+    _patch_outcome_driven_finalization(
+        monkeypatch,
+        outcome_builder=_fake_await,
     )
 
     with TestClient(app) as client:
@@ -950,10 +1577,9 @@ def test_managed_thread_message_route_injects_core_context_when_profile_is_core(
         "begin_runtime_thread_execution",
         _fake_begin,
     )
-    monkeypatch.setattr(
-        managed_thread_runtime,
-        "await_runtime_thread_outcome",
-        _fake_await,
+    _patch_outcome_driven_finalization(
+        monkeypatch,
+        outcome_builder=_fake_await,
     )
 
     with TestClient(app) as client:
@@ -1037,10 +1663,9 @@ def test_managed_thread_message_route_uses_live_runtime_binding_for_compact_seed
         "begin_runtime_thread_execution",
         _fake_begin,
     )
-    monkeypatch.setattr(
-        managed_thread_runtime,
-        "await_runtime_thread_outcome",
-        _fake_await,
+    _patch_outcome_driven_finalization(
+        monkeypatch,
+        outcome_builder=_fake_await,
     )
 
     with TestClient(app) as client:
@@ -1118,10 +1743,9 @@ def test_managed_thread_message_route_preserves_literal_message_whitespace(
         "begin_runtime_thread_execution",
         _fake_begin,
     )
-    monkeypatch.setattr(
-        managed_thread_runtime,
-        "await_runtime_thread_outcome",
-        _fake_await,
+    _patch_outcome_driven_finalization(
+        monkeypatch,
+        outcome_builder=_fake_await,
     )
 
     literal_message = "  keep literal backticks `glm-5-turbo`\nsecond line\n"
@@ -1140,7 +1764,7 @@ def test_managed_thread_message_route_preserves_literal_message_whitespace(
     assert runtime_prompt.endswith("\n</user_message>\n")
 
 
-def test_managed_thread_message_persists_full_timeline_from_raw_events(
+def test_managed_thread_message_route_delegates_harness_to_shared_finalization(
     hub_env,
     monkeypatch,
 ) -> None:
@@ -1150,39 +1774,11 @@ def test_managed_thread_message_persists_full_timeline_from_raw_events(
         "codex", hub_env.repo_root.resolve(), repo_id=hub_env.repo_id
     )
     managed_thread_id = str(created["managed_thread_id"])
-    raw_events = (
-        {
-            "message": {
-                "method": "item/toolCall/start",
-                "params": {
-                    "item": {"toolCall": {"name": "shell", "input": {"cmd": "pwd"}}}
-                },
-            }
-        },
-        {
-            "message": {
-                "method": "item/toolCall/end",
-                "params": {
-                    "name": "shell",
-                    "result": {"stdout": str(hub_env.repo_root)},
-                },
-            }
-        },
-    )
-    stream_started = False
+    captured: dict[str, Any] = {}
 
     class FakeHarness:
         def supports(self, capability: str) -> bool:
             return capability == "event_streaming"
-
-        async def stream_events(
-            self, workspace_root: Path, conversation_id: str, turn_id: str
-        ):
-            nonlocal stream_started
-            _ = workspace_root, conversation_id, turn_id
-            yield raw_events[0]
-            stream_started = True
-            await asyncio.Future()
 
     class FakeService:
         def get_thread_target(self, thread_target_id: str):
@@ -1217,23 +1813,31 @@ def test_managed_thread_message_persists_full_timeline_from_raw_events(
                 backend_id="backend-turn-1",
                 status="running",
             ),
-            thread=SimpleNamespace(backend_thread_id="backend-thread-1"),
+            thread=SimpleNamespace(
+                thread_target_id=managed_thread_id,
+                backend_thread_id="backend-thread-1",
+            ),
             workspace_root=hub_env.repo_root.resolve(),
             request=request,
             harness=FakeHarness(),
         )
 
-    async def _fake_await(*args, **kwargs):
-        _ = args, kwargs
-        while not stream_started:
-            await asyncio.sleep(0)
-        return RuntimeThreadOutcome(
+    async def _fake_run_started_execution(
+        self: Any,
+        started: Any,
+        *,
+        hooks: Any = None,
+        runtime_event_state: Any = None,
+    ):
+        _ = self, hooks, runtime_event_state
+        captured["started"] = started
+        return managed_thread_runtime.ManagedThreadFinalizationResult(
             status="ok",
             assistant_text="assistant-output",
             error=None,
+            managed_thread_id=managed_thread_id,
+            managed_turn_id="managed-turn-raw-events",
             backend_thread_id="backend-thread-1",
-            backend_turn_id="backend-turn-1",
-            raw_events=(raw_events[1],),
         )
 
     monkeypatch.setattr(
@@ -1247,9 +1851,9 @@ def test_managed_thread_message_persists_full_timeline_from_raw_events(
         _fake_begin,
     )
     monkeypatch.setattr(
-        managed_thread_runtime,
-        "await_runtime_thread_outcome",
-        _fake_await,
+        managed_thread_runtime.ManagedThreadTurnCoordinator,
+        "run_started_execution",
+        _fake_run_started_execution,
     )
 
     with TestClient(app) as client:
@@ -1259,24 +1863,7 @@ def test_managed_thread_message_persists_full_timeline_from_raw_events(
         )
 
     assert response.status_code == 200
-    timeline = list_turn_timeline(
-        hub_env.hub_root, execution_id="managed-turn-raw-events"
-    )
-    assert [entry["event_type"] for entry in timeline] == [
-        "tool_call",
-        "tool_result",
-        "turn_completed",
-    ]
-    checkpoint = ColdTraceStore(hub_env.hub_root).load_checkpoint(
-        "managed-turn-raw-events"
-    )
-    assert checkpoint is not None
-    assert checkpoint.trace_manifest_id
-    manifest = ColdTraceStore(hub_env.hub_root).get_manifest_by_trace_id(
-        checkpoint.trace_manifest_id
-    )
-    assert manifest is not None
-    assert manifest.event_count == 3
+    assert isinstance(captured["started"].harness, FakeHarness)
 
 
 def test_zeroclaw_managed_thread_projects_compat_agents_file_for_core_profile(
@@ -1347,10 +1934,9 @@ def test_zeroclaw_managed_thread_projects_compat_agents_file_for_core_profile(
         "begin_runtime_thread_execution",
         _fake_begin,
     )
-    monkeypatch.setattr(
-        managed_thread_runtime,
-        "await_runtime_thread_outcome",
-        _fake_await,
+    _patch_outcome_driven_finalization(
+        monkeypatch,
+        outcome_builder=_fake_await,
     )
 
     with TestClient(app) as client:

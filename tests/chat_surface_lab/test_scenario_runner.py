@@ -55,12 +55,52 @@ async def test_runner_executes_queued_visibility_matrix(
 
     result = await runner.run_scenario(scenario)
     assert result.skipped is False
-    assert len(result.surface_results) == 1
-    discord = result.surface_results[0]
-    assert discord.surface.value == "discord"
-    assert discord.execution_status == "interrupted"
+    assert len(result.surface_results) == 2
+    statuses = {
+        surface.surface.value: surface.execution_status
+        for surface in result.surface_results
+    }
+    assert statuses == {"discord": "interrupted", "telegram": "interrupted"}
+    assert (
+        sum(
+            1
+            for budget in result.observed_budgets
+            if budget.budget_id == "queue_visible"
+        )
+        == 2
+    )
+    discord = next(
+        surface
+        for surface in result.surface_results
+        if surface.surface.value == "discord"
+    )
+    assert not any(
+        record.get("event") == "discord.background_task.shutdown_timeout"
+        for record in discord.log_records
+    )
+    telegram = next(
+        surface
+        for surface in result.surface_results
+        if surface.surface.value == "telegram"
+    )
     assert any(
-        budget.budget_id == "queue_visible" for budget in result.observed_budgets
+        record.get("event") == "chat_ux_timing.telegram.managed_thread_turn"
+        and record.get("chat_ux_delta_queue_visible_ms") is not None
+        for record in telegram.log_records
+    )
+    assert (
+        sum(
+            1
+            for record in telegram.log_records
+            if record.get("event") == "telegram.progress.first"
+        )
+        >= 2
+    )
+    telegram_texts = [str(event.text or "") for event in telegram.transcript.events]
+    assert any(
+        "Queued requests (1)" in text
+        or "Queued (waiting for available worker...)" in text
+        for text in telegram_texts
     )
 
 

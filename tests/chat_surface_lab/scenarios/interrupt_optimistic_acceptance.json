@@ -11,8 +11,8 @@
     "scenario": "official_prompt_hang"
   },
   "harness_timeouts": {
-    "discord": 15.0,
-    "telegram": 15.0
+    "discord": 25.0,
+    "telegram": 25.0
   },
   "approval_mode": "yolo",
   "actions": [

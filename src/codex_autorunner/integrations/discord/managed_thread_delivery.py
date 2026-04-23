@@ -16,6 +16,7 @@ from ...integrations.chat.managed_thread_turns import (
     build_managed_thread_delivery_intent,
     render_managed_thread_delivery_record_text,
 )
+from ..chat.bound_live_progress import cleanup_bound_chat_live_progress_success
 from ..chat.managed_thread_delivery_support import (
     ManagedThreadDeliveryCleanupContext,
     ManagedThreadDeliverySendResult,
@@ -129,6 +130,18 @@ async def deliver_discord_managed_thread_record(
                 "discord:managed-thread-progress-cleanup:"
                 f"{record.managed_thread_id}:{record.managed_turn_id}"
             ),
+        )
+        await cleanup_bound_chat_live_progress_success(
+            hub_root=service._config.root,
+            raw_config=(
+                service._config.raw
+                if isinstance(getattr(service._config, "raw", None), dict)
+                else {}
+            ),
+            surface_kind="discord",
+            surface_key=target_channel_id,
+            managed_thread_id=record.managed_thread_id,
+            managed_turn_id=record.managed_turn_id,
         )
 
     return await deliver_managed_thread_terminal_record(

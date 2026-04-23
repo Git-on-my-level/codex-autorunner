@@ -20,8 +20,10 @@ OUTBOX_MAX_ATTEMPTS = 5
 OUTBOX_IMMEDIATE_RETRY_DELAYS = (0.0, 1.0, 2.0)
 _OUTBOX_PROGRESS_KEY = "_codex_autorunner_outbox"
 _OUTBOX_PROGRESS_CHUNK_INDEX = "discord_chunk_start_index"
+_OUTBOX_CLEANUP_KEY = "_codex_autorunner_cleanup"
 
 SendMessageFn = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
+EditMessageFn = Callable[[str, str, dict[str, Any]], Awaitable[Any]]
 DeleteMessageFn = Callable[[str, str], Awaitable[None]]
 DeliveredCallback = Callable[[OutboxRecord, Optional[str]], Awaitable[None]]
 
@@ -111,6 +113,7 @@ def _with_discord_chunk_start_index(
 def _discord_send_payload(payload_json: dict[str, Any]) -> dict[str, Any]:
     send_payload = dict(payload_json)
     send_payload.pop(_OUTBOX_PROGRESS_KEY, None)
+    send_payload.pop(_OUTBOX_CLEANUP_KEY, None)
     return send_payload
 
 
@@ -142,6 +145,7 @@ class DiscordOutboxManager:
         store: DiscordStateStore,
         *,
         send_message: SendMessageFn,
+        edit_message: Optional[EditMessageFn] = None,
         delete_message: Optional[DeleteMessageFn] = None,
         on_delivered: Optional[DeliveredCallback] = None,
         logger: logging.Logger,
@@ -153,6 +157,7 @@ class DiscordOutboxManager:
     ) -> None:
         self._store = store
         self._send_message = send_message
+        self._edit_message = edit_message
         self._delete_message = delete_message
         self._on_delivered = on_delivered
         self._logger = logger
@@ -325,6 +330,26 @@ class DiscordOutboxManager:
                     )
                     return False
                 await self._delete_message(current.channel_id, current.message_id)
+            elif current.operation == "edit":
+                if (
+                    self._edit_message is None
+                    or not isinstance(current.message_id, str)
+                    or not current.message_id
+                ):
+                    await self._store.record_outbox_failure(
+                        current.record_id,
+                        error=(
+                            "Unsupported Discord outbox edit operation: "
+                            "missing edit handler or message id"
+                        ),
+                        retry_after_seconds=None,
+                    )
+                    return False
+                await self._edit_message(
+                    current.channel_id,
+                    current.message_id,
+                    _discord_send_payload(current.payload_json),
+                )
             else:
                 await self._store.record_outbox_failure(
                     current.record_id,
@@ -354,11 +379,7 @@ class DiscordOutboxManager:
         if self._on_delivered is not None:
             try:
                 await self._on_delivered(current, delivered_message_id)
-            except (
-                RuntimeError,
-                TypeError,
-                ValueError,
-            ):  # callback must not disrupt delivery
+            except Exception:  # callback must not disrupt delivery
                 self._logger.warning(
                     "discord.outbox.delivery_callback_failed record_id=%s",
                     current.record_id,
@@ -375,6 +396,15 @@ class DiscordOutboxManager:
             record.attempts,
             record.last_error,
         )
+        if self._on_delivered is not None:
+            try:
+                await self._on_delivered(record, None)
+            except Exception:  # callback must not disrupt give-up cleanup
+                self._logger.warning(
+                    "discord.outbox.give_up_callback_failed record_id=%s",
+                    record.record_id,
+                    exc_info=True,
+                )
         await self._store.mark_outbox_delivered(record.record_id)
 
     async def _mark_records_delivered(self, record: OutboxRecord) -> None:

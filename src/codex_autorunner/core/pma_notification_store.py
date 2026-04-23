@@ -317,6 +317,24 @@ class PmaNotificationStore:
             ).fetchone()
         return _conversation_from_row(row) if row is not None else None
 
+    def get_by_delivery_record_id(
+        self, delivery_record_id: str
+    ) -> Optional[NotificationConversation]:
+        normalized_record_id = _normalize_text(delivery_record_id)
+        if normalized_record_id is None:
+            return None
+        with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            row = conn.execute(
+                """
+                SELECT *
+                  FROM orch_notification_conversations
+                 WHERE delivery_record_id = ?
+                 LIMIT 1
+                """,
+                (normalized_record_id,),
+            ).fetchone()
+        return _conversation_from_row(row) if row is not None else None
+
 
 __all__ = [
     "NotificationConversation",

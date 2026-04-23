@@ -12,6 +12,11 @@ from ..chat.action_ux_contract import (
     callback_entry_bypasses_queue,
     telegram_callback_ux_contract_for_callback,
 )
+from ..chat.chat_ux_telemetry import (
+    ChatUxMilestone,
+    ChatUxTimingSnapshot,
+    emit_chat_ux_timing,
+)
 from ..chat.queue_status import build_queue_item_preview
 from .adapter import (
     TelegramUpdate,
@@ -365,6 +370,16 @@ async def _dispatch_message(
                 **enqueue_kwargs,
             )
         if is_busy:
+            queue_snapshot = ChatUxTimingSnapshot(
+                platform="telegram",
+                conversation_id=context.topic_key,
+                channel_id=(
+                    str(message.chat_id) if message.chat_id is not None else None
+                ),
+            )
+            queue_snapshot.record(ChatUxMilestone.RAW_EVENT_RECEIVED)
+            queue_snapshot.record(ChatUxMilestone.ACK_FINISHED)
+            queue_snapshot.record(ChatUxMilestone.FIRST_VISIBLE_FEEDBACK)
             refresh_queue_status = getattr(
                 handlers,
                 "_refresh_topic_queue_status_message",
@@ -376,6 +391,18 @@ async def _dispatch_message(
                     chat_id=message.chat_id,
                     thread_id=message.thread_id,
                     reply_to_message_id=message.message_id,
+                )
+                queue_snapshot.record(ChatUxMilestone.QUEUE_VISIBLE)
+                queue_snapshot.record(ChatUxMilestone.TERMINAL_DELIVERY)
+                emit_chat_ux_timing(
+                    handlers._logger,
+                    logging.INFO,
+                    queue_snapshot,
+                    event_suffix="managed_thread_turn",
+                    topic_key=context.topic_key,
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    status="queued",
                 )
         return
     await _with_chat_operation(

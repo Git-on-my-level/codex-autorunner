@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import sqlite3
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
@@ -19,10 +20,20 @@ from .....core.orchestration.cold_trace_store import ColdTraceStore
 from .....core.pma_thread_store import PmaThreadStore
 from .....core.time_utils import now_iso
 from .....integrations.app_server.event_buffer import AppServerEventBuffer
-from .....integrations.discord.rendering import (
-    chunk_discord_message,
-    format_discord_message,
+from .....integrations.chat.bound_live_progress import (
+    build_bound_chat_progress_cleanup_metadata,
 )
+from .....integrations.chat.managed_thread_startup_recovery import (
+    find_surface_key_for_running_execution,
+)
+from .....integrations.chat.managed_thread_turns import (
+    ManagedThreadCoordinatorHooks,
+    ManagedThreadQueueWorkerHooks,
+)
+from .....integrations.chat.managed_thread_turns import (
+    ensure_managed_thread_queue_worker as ensure_shared_managed_thread_queue_worker,
+)
+from .....integrations.discord.rendering import format_discord_message
 from .....integrations.discord.state import DiscordStateStore
 from .....integrations.discord.state import OutboxRecord as DiscordOutboxRecord
 from .....integrations.telegram.state import OutboxRecord as TelegramOutboxRecord
@@ -32,11 +43,7 @@ from .automation_adapter import (
     get_automation_store,
     normalize_optional_text,
 )
-from .publish import (
-    PMA_DISCORD_MESSAGE_MAX_LEN,
-    enqueue_with_retry,
-    resolve_chat_state_path,
-)
+from .publish import enqueue_with_retry, resolve_chat_state_path
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +53,13 @@ MANAGED_THREAD_INTERRUPT_FAILED_DETAIL = (
 )
 BOUND_CHAT_SURFACE_KINDS = frozenset({"discord", "telegram"})
 BOUND_CHAT_CLIENT_TURN_PREFIXES = ("discord:", "telegram:")
+
+
+@dataclass(frozen=True)
+class BoundChatAssistantDeliveryResult:
+    target_count: int = 0
+    published_count: int = 0
+    covered_targets: tuple[tuple[str, str], ...] = ()
 
 
 def _interrupt_recovered_lost_backend_payload(
@@ -227,85 +241,92 @@ def ensure_queue_worker(
     *,
     managed_thread_request_for_app: Any,
     build_service_for_app: Any,
-    run_managed_thread_execution: Any,
+    finalize_managed_thread_execution: Any,
+    deliver_managed_thread_execution_result: Any,
     track_managed_thread_task: Any,
+    hooks: Optional[
+        ManagedThreadQueueWorkerHooks | ManagedThreadCoordinatorHooks
+    ] = None,
 ) -> None:
     task_map = getattr(app.state, "pma_managed_thread_queue_tasks", None)
     if not isinstance(task_map, dict):
         task_map = {}
         app.state.pma_managed_thread_queue_tasks = task_map
-    existing = task_map.get(managed_thread_id)
-    if isinstance(existing, asyncio.Task) and not existing.done():
-        return
+    request = managed_thread_request_for_app(app)
+    thread_store = PmaThreadStore(app.state.config.root)
+    service = build_service_for_app(
+        app,
+        thread_store=thread_store,
+    )
 
-    worker_task: Optional[asyncio.Task[Any]] = None
-
-    async def _queue_worker() -> None:
-        from .....core.orchestration.runtime_threads import (
-            begin_next_queued_runtime_thread_execution,
+    async def _finalize_started_execution(started: Any) -> Any:
+        current_thread_row = thread_store.get_thread(managed_thread_id) or {}
+        return await finalize_managed_thread_execution(
+            request,
+            service=service,
+            thread_store=thread_store,
+            thread=current_thread_row,
+            started=started,
         )
 
-        request = managed_thread_request_for_app(app)
-        try:
-            thread_store = PmaThreadStore(app.state.config.root)
-            service = build_service_for_app(
-                app,
-                thread_store=thread_store,
-            )
-            while True:
-                if service.get_running_execution(managed_thread_id) is not None:
-                    await asyncio.sleep(0.1)
-                    continue
-                started = await begin_next_queued_runtime_thread_execution(
-                    service,
-                    managed_thread_id,
-                )
-                if started is None:
-                    break
-                current_thread_row = thread_store.get_thread(managed_thread_id) or {}
-                await run_managed_thread_execution(
-                    request,
-                    service=service,
-                    thread_store=thread_store,
-                    thread=current_thread_row,
-                    started=started,
-                )
-        except BaseException:
-            logger.exception(
-                "Managed-thread queue worker failed (managed_thread_id=%s)",
-                managed_thread_id,
-            )
-            try:
-                thread_store = PmaThreadStore(app.state.config.root)
-                service = build_service_for_app(app, thread_store=thread_store)
-                running = service.get_running_execution(managed_thread_id)
-                if running is not None:
-                    service.record_execution_result(
-                        managed_thread_id,
-                        running.execution_id,
-                        status="error",
-                        assistant_text="",
-                        error="Queue worker terminated unexpectedly",
-                        backend_turn_id=None,
-                        transcript_turn_id=None,
-                    )
-            except (OSError, RuntimeError):  # intentional: cleanup in error handler
-                logger.exception(
-                    "Failed to clean up running execution after queue worker failure "
-                    "(managed_thread_id=%s)",
-                    managed_thread_id,
-                )
-            raise
-        finally:
-            if (
-                worker_task is not None
-                and task_map.get(managed_thread_id) is worker_task
-            ):
-                task_map.pop(managed_thread_id, None)
+    async def _deliver_result(finalized: Any) -> None:
+        current_thread_row = thread_store.get_thread(managed_thread_id) or {}
+        await deliver_managed_thread_execution_result(
+            request,
+            thread_store=thread_store,
+            thread=current_thread_row,
+            finalized=finalized,
+            response_payload={},
+        )
 
-    worker_task = asyncio.create_task(_queue_worker())
-    task_map[managed_thread_id] = worker_task
-    track_managed_thread_task(app, worker_task)
+    resolved_hooks: Optional[ManagedThreadQueueWorkerHooks]
+    if hooks is None:
+        resolved_hooks = None
+    elif isinstance(hooks, ManagedThreadCoordinatorHooks):
+        resolved_hooks = hooks.queue_worker_hooks()
+    else:
+        resolved_hooks = hooks
+
+    shared_kwargs = dict(
+        task_map=task_map,
+        managed_thread_id=managed_thread_id,
+        orchestration_service=service,
+        spawn_task=lambda coro: _spawn_and_track_managed_thread_task(
+            app,
+            coro,
+            track_managed_thread_task=track_managed_thread_task,
+        ),
+        finalize_started_execution=_finalize_started_execution,
+        poll_interval_seconds=0.1,
+    )
+    ensure_shared_managed_thread_queue_worker(
+        **shared_kwargs,
+        durable_delivery=(
+            None if resolved_hooks is None else resolved_hooks.durable_delivery
+        ),
+        deliver_result=(
+            _deliver_result
+            if resolved_hooks is None
+            else (resolved_hooks.deliver_result or _deliver_result)
+        ),
+        run_with_indicator=(
+            None if resolved_hooks is None else resolved_hooks.run_with_indicator
+        ),
+        execution_hooks=(
+            None if resolved_hooks is None else resolved_hooks.execution_hooks
+        ),
+    )
+
+
+def _spawn_and_track_managed_thread_task(
+    app: Any,
+    coro: Any,
+    *,
+    track_managed_thread_task: Any,
+) -> asyncio.Task[Any]:
+    task = asyncio.create_task(coro)
+    track_managed_thread_task(app, task)
+    return task
 
 
 async def restart_queue_workers(
@@ -320,16 +341,22 @@ async def restart_queue_workers(
         ensure_queue_worker_callback(app, managed_thread_id)
 
 
-def _has_bound_chat_surface(
-    binding_store: OrchestrationBindingStore, managed_thread_id: str
+def _has_owning_bound_chat_surface(
+    binding_store: OrchestrationBindingStore,
+    managed_thread_id: str,
+    *,
+    thread_store: PmaThreadStore,
 ) -> bool:
     return any(
-        binding.surface_kind in BOUND_CHAT_SURFACE_KINDS
-        for binding in binding_store.list_bindings(
-            thread_target_id=managed_thread_id,
-            include_disabled=False,
+        find_surface_key_for_running_execution(
+            binding_store,
+            thread_store,
+            managed_thread_id=managed_thread_id,
+            surface_kind=surface_kind,
             limit=1000,
         )
+        is not None
+        for surface_kind in BOUND_CHAT_SURFACE_KINDS
     )
 
 
@@ -397,8 +424,10 @@ async def recover_orphaned_executions(
                     execution = (
                         service.get_running_execution(managed_thread_id) or execution
                     )
-            if _has_bound_chat_surface(
-                binding_store, managed_thread_id
+            if _has_owning_bound_chat_surface(
+                binding_store,
+                managed_thread_id,
+                thread_store=thread_store,
             ) and _is_chat_origin_running_execution(thread_store, managed_thread_id):
                 continue
             has_turn = getattr(app_server_events, "has_turn", None)
@@ -461,10 +490,10 @@ async def deliver_bound_chat_assistant_output(
     managed_thread_id: str,
     managed_turn_id: str,
     assistant_text: str,
-) -> None:
+) -> BoundChatAssistantDeliveryResult:
     message = str(assistant_text or "").strip()
     if not message:
-        return
+        return BoundChatAssistantDeliveryResult()
 
     hub_root = request.app.state.config.root
     binding_store = OrchestrationBindingStore(hub_root)
@@ -478,11 +507,14 @@ async def deliver_bound_chat_assistant_output(
         if binding.surface_kind in BOUND_CHAT_SURFACE_KINDS
     ]
     if not bindings:
-        return
+        return BoundChatAssistantDeliveryResult()
 
     discord_store: Optional[DiscordStateStore] = None
     telegram_store: Optional[TelegramStateStore] = None
     created_at = now_iso()
+    target_count = 0
+    published_count = 0
+    covered_targets: list[tuple[str, str]] = []
     try:
         for binding in bindings:
             try:
@@ -498,36 +530,40 @@ async def deliver_bound_chat_assistant_output(
                     channel_id = normalize_optional_text(binding.surface_key)
                     if channel_id is None:
                         continue
-                    chunks = chunk_discord_message(
-                        format_discord_message(message),
-                        max_len=PMA_DISCORD_MESSAGE_MAX_LEN,
-                        with_numbering=False,
+                    target_count += 1
+                    digest = hashlib.sha256(
+                        f"managed-thread:{managed_turn_id}:discord:{channel_id}".encode(
+                            "utf-8"
+                        )
+                    ).hexdigest()[:24]
+                    record_id = f"managed-thread:{digest}"
+                    if await discord_store.get_outbox(record_id) is not None:
+                        covered_targets.append(("discord", channel_id))
+                        continue
+                    record = DiscordOutboxRecord(
+                        record_id=record_id,
+                        channel_id=channel_id,
+                        message_id=None,
+                        operation="send",
+                        payload_json={
+                            "content": format_discord_message(message),
+                            "_codex_autorunner_cleanup": (
+                                build_bound_chat_progress_cleanup_metadata(
+                                    surface_kind="discord",
+                                    surface_key=channel_id,
+                                    managed_thread_id=managed_thread_id,
+                                    managed_turn_id=managed_turn_id,
+                                )
+                            ),
+                        },
+                        created_at=created_at,
                     )
-                    if not chunks:
-                        chunks = [format_discord_message(message)]
-                    for index, chunk in enumerate(chunks, start=1):
-                        digest = hashlib.sha256(
-                            (
-                                f"managed-thread:{managed_turn_id}:discord:{channel_id}:{index}"
-                            ).encode("utf-8")
-                        ).hexdigest()[:24]
-                        record_id = f"managed-thread:{digest}"
-                        if await discord_store.get_outbox(record_id) is not None:
-                            continue
-                        record = DiscordOutboxRecord(
-                            record_id=record_id,
-                            channel_id=channel_id,
-                            message_id=None,
-                            operation="send",
-                            payload_json={"content": chunk},
-                            created_at=created_at,
-                        )
-                        store = discord_store
-                        await enqueue_with_retry(
-                            lambda record=record, store=store: store.enqueue_outbox(
-                                record
-                            )
-                        )
+                    store = discord_store
+                    await enqueue_with_retry(
+                        lambda record=record, store=store: store.enqueue_outbox(record)
+                    )
+                    covered_targets.append(("discord", channel_id))
+                    published_count += 1
                     continue
 
                 if binding.surface_kind != "telegram":
@@ -551,6 +587,7 @@ async def deliver_bound_chat_assistant_output(
                         surface_key,
                     )
                     continue
+                target_count += 1
                 digest = hashlib.sha256(
                     (
                         f"managed-thread:{managed_turn_id}:telegram:{chat_id}:{thread_id or 'root'}"
@@ -558,6 +595,7 @@ async def deliver_bound_chat_assistant_output(
                 ).hexdigest()[:24]
                 record_id = f"managed-thread:{digest}"
                 if await telegram_store.get_outbox(record_id) is not None:
+                    covered_targets.append(("telegram", surface_key))
                     continue
                 outbox_key = f"managed-thread:{managed_turn_id}:{chat_id}:{thread_id or 'root'}:send"
                 telegram_record = TelegramOutboxRecord(
@@ -571,6 +609,12 @@ async def deliver_bound_chat_assistant_output(
                     operation="send",
                     message_id=None,
                     outbox_key=outbox_key,
+                    delivery_metadata=build_bound_chat_progress_cleanup_metadata(
+                        surface_kind="telegram",
+                        surface_key=surface_key,
+                        managed_thread_id=managed_thread_id,
+                        managed_turn_id=managed_turn_id,
+                    ),
                 )
                 telegram_delivery_store = telegram_store
                 await enqueue_with_retry(
@@ -578,6 +622,8 @@ async def deliver_bound_chat_assistant_output(
                         record
                     )
                 )
+                covered_targets.append(("telegram", surface_key))
+                published_count += 1
             except (
                 RuntimeError,
                 OSError,
@@ -611,6 +657,11 @@ async def deliver_bound_chat_assistant_output(
                 RuntimeError,
             ):  # intentional: best-effort store close
                 logger.exception("Failed to close telegram bound-chat delivery store")
+    return BoundChatAssistantDeliveryResult(
+        target_count=target_count,
+        published_count=published_count,
+        covered_targets=tuple(covered_targets),
+    )
 
 
 async def notify_managed_thread_terminal_transition(
