@@ -53,8 +53,9 @@ class ActiveWorkSummary:
 class OrchestrationBindingStore:
     """Authoritative hub-SQLite binding CRUD and cross-surface query support."""
 
-    def __init__(self, hub_root: Path) -> None:
+    def __init__(self, hub_root: Path, *, durable: bool = True) -> None:
         self._hub_root = Path(hub_root)
+        self._durable = durable
 
     def upsert_binding(
         self,
@@ -86,7 +87,7 @@ class OrchestrationBindingStore:
 
         timestamp = now_iso()
         payload = json.dumps(metadata or {}, sort_keys=True, ensure_ascii=True)
-        with open_orchestration_sqlite(self._hub_root) as conn:
+        with open_orchestration_sqlite(self._hub_root, durable=self._durable) as conn:
             row = conn.execute(
                 """
                 SELECT *
@@ -95,7 +96,7 @@ class OrchestrationBindingStore:
                    AND surface_key = ?
                    AND disabled_at IS NULL
                  LIMIT 1
-                """,
+                 """,
                 (normalized_surface_kind, normalized_surface_key),
             ).fetchone()
             if row is not None:
@@ -220,7 +221,7 @@ class OrchestrationBindingStore:
                    AND surface_key = ?
                    AND disabled_at IS NULL
                  LIMIT 1
-                """,
+                 """,
                 (normalized_surface_kind, normalized_surface_key),
             ).fetchone()
         if refreshed is None:
@@ -232,7 +233,7 @@ class OrchestrationBindingStore:
         if normalized_binding_id is None:
             return None
         timestamp = now_iso()
-        with open_orchestration_sqlite(self._hub_root) as conn:
+        with open_orchestration_sqlite(self._hub_root, durable=self._durable) as conn:
             row = conn.execute(
                 """
                 SELECT *
@@ -283,7 +284,9 @@ class OrchestrationBindingStore:
         if not include_disabled:
             query += " AND disabled_at IS NULL"
         query += " ORDER BY updated_at DESC, created_at DESC LIMIT 1"
-        with open_orchestration_sqlite(self._hub_root) as conn:
+        with open_orchestration_sqlite(
+            self._hub_root, durable=self._durable, migrate=False
+        ) as conn:
             row = conn.execute(query, params).fetchone()
         return _binding_from_row(row) if row is not None else None
 
@@ -332,7 +335,9 @@ class OrchestrationBindingStore:
             filters.append("b.surface_kind = ?")
             params.append(normalized_surface_kind)
         where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
-        with open_orchestration_sqlite(self._hub_root) as conn:
+        with open_orchestration_sqlite(
+            self._hub_root, durable=self._durable, migrate=False
+        ) as conn:
             rows = conn.execute(
                 f"""
                 SELECT
@@ -410,7 +415,9 @@ class OrchestrationBindingStore:
             filters.append("t.agent_id = ?")
             params.append(normalized_agent_id)
         where_clause = " AND ".join(filters)
-        with open_orchestration_sqlite(self._hub_root) as conn:
+        with open_orchestration_sqlite(
+            self._hub_root, durable=self._durable, migrate=False
+        ) as conn:
             rows = conn.execute(
                 f"""
                 WITH running_work AS (

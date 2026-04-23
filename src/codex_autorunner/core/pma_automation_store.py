@@ -379,8 +379,9 @@ class PmaAutomationWakeup:
 
 
 class PmaAutomationStore:
-    def __init__(self, hub_root: Path) -> None:
+    def __init__(self, hub_root: Path, *, durable: bool = True) -> None:
         self._hub_root = hub_root
+        self._durable = durable
         self._persistence = PmaAutomationPersistence(hub_root)
         self._path = self._persistence.path
 
@@ -407,7 +408,7 @@ class PmaAutomationStore:
         try:
             with open_orchestration_sqlite(
                 self._hub_root,
-                durable=True,
+                durable=self._durable,
                 migrate=False,
             ) as conn:
                 subscriptions = self._load_subscriptions_from_sqlite(conn)
@@ -491,7 +492,7 @@ class PmaAutomationStore:
         state["subscriptions"] = [entry.to_dict() for entry in subscriptions]
         state["timers"] = [entry.to_dict() for entry in filtered_timers]
         state["wakeups"] = [entry.to_dict() for entry in filtered_wakeups]
-        with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+        with open_orchestration_sqlite(self._hub_root, durable=self._durable) as conn:
             with conn:
                 conn.execute("DELETE FROM orch_automation_wakeups")
                 conn.execute("DELETE FROM orch_automation_timers")
@@ -1300,7 +1301,9 @@ class PmaAutomationStore:
                 "Creating PMA subscription with empty event_types; subscription will match all events"
             )
         with file_lock(self._lock_path()):
-            with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            with open_orchestration_sqlite(
+                self._hub_root, durable=self._durable
+            ) as conn:
                 with conn:
                     if key is not None:
                         existing = self._find_active_subscription_by_key(conn, key)
@@ -1407,7 +1410,9 @@ class PmaAutomationStore:
             return False
         stamp = _iso_now()
         with file_lock(self._lock_path()):
-            with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            with open_orchestration_sqlite(
+                self._hub_root, durable=self._durable
+            ) as conn:
                 with conn:
                     cursor = conn.execute(
                         """
@@ -1432,7 +1437,9 @@ class PmaAutomationStore:
         if target_id is None:
             return False
         with file_lock(self._lock_path()):
-            with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            with open_orchestration_sqlite(
+                self._hub_root, durable=self._durable
+            ) as conn:
                 with conn:
                     row = conn.execute(
                         "SELECT state FROM orch_automation_subscriptions WHERE subscription_id = ?",
@@ -1479,7 +1486,9 @@ class PmaAutomationStore:
     ) -> list[dict[str, Any]]:
         target_state = _normalize_text(state_filter)
         with file_lock(self._lock_path()):
-            with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            with open_orchestration_sqlite(
+                self._hub_root, durable=self._durable
+            ) as conn:
                 query = "SELECT * FROM orch_automation_subscriptions"
                 params: tuple[Any, ...] = ()
                 if target_state is not None:
@@ -1624,7 +1633,9 @@ class PmaAutomationStore:
         if normalized_due_at is None:
             raise ValueError("due_at is required")
         with file_lock(self._lock_path()):
-            with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            with open_orchestration_sqlite(
+                self._hub_root, durable=self._durable
+            ) as conn:
                 with conn:
                     normalized_subscription_id = _normalize_text(subscription_id)
                     if normalized_subscription_id is not None:
@@ -1715,7 +1726,9 @@ class PmaAutomationStore:
         if cancelled_at is None:
             cancelled_at = _iso_now()
         with file_lock(self._lock_path()):
-            with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            with open_orchestration_sqlite(
+                self._hub_root, durable=self._durable
+            ) as conn:
                 with conn:
                     if reason is not None:
                         cursor = conn.execute(
@@ -1750,7 +1763,9 @@ class PmaAutomationStore:
         if target_id is None:
             return False
         with file_lock(self._lock_path()):
-            with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            with open_orchestration_sqlite(
+                self._hub_root, durable=self._durable
+            ) as conn:
                 with conn:
                     row = conn.execute(
                         "SELECT state FROM orch_automation_timers WHERE timer_id = ?",

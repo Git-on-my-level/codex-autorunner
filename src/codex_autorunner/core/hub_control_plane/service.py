@@ -220,7 +220,9 @@ class HubSharedStateService:
         self._durable_writes = bool(durable_writes)
         self._logger = logger or logging.getLogger(__name__)
         self._notification_store = PmaNotificationStore(self._hub_root)
-        self._binding_store = OrchestrationBindingStore(self._hub_root)
+        self._binding_store = OrchestrationBindingStore(
+            self._hub_root, durable=self._durable_writes
+        )
         self._thread_store = PmaThreadStore(
             self._hub_root,
             durable=self._durable_writes,

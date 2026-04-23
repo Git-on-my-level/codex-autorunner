@@ -53,10 +53,12 @@ def _create_repo_thread(
     *,
     repo_id: str = "repo-1",
     head_branch: str = "feature/login",
+    thread_store: PmaThreadStore | None = None,
 ) -> str:
     workspace_root = hub_root / "worktrees" / head_branch.replace("/", "-")
     workspace_root.mkdir(parents=True, exist_ok=True)
-    created = PmaThreadStore(hub_root).create_thread(
+    store = thread_store or PmaThreadStore(hub_root)
+    created = store.create_thread(
         "codex",
         workspace_root,
         repo_id=repo_id,
@@ -71,10 +73,11 @@ def _create_terminal_repo_thread(
     repo_id: str = "repo-1",
     head_branch: str = "feature/login",
     archive: bool = False,
+    thread_store: PmaThreadStore | None = None,
 ) -> str:
     workspace_root = hub_root / "worktrees" / head_branch.replace("/", "-")
     workspace_root.mkdir(parents=True, exist_ok=True)
-    store = PmaThreadStore(hub_root)
+    store = thread_store or PmaThreadStore(hub_root)
     created = store.create_thread(
         "codex",
         workspace_root,
@@ -93,7 +96,8 @@ def test_resolve_binding_for_pr_event_creates_binding_and_attaches_matching_thre
     tmp_path: Path,
 ) -> None:
     hub_root = tmp_path / "hub"
-    thread_target_id = _create_repo_thread(hub_root)
+    thread_store = PmaThreadStore(hub_root)
+    thread_target_id = _create_repo_thread(hub_root, thread_store=thread_store)
 
     binding = resolve_binding_for_scm_event(hub_root, _make_event())
 
@@ -112,12 +116,13 @@ def test_resolve_binding_for_repeated_pr_event_updates_existing_binding_without_
     tmp_path: Path,
 ) -> None:
     hub_root = tmp_path / "hub"
+    thread_store = PmaThreadStore(hub_root)
 
     created = resolve_binding_for_scm_event(hub_root, _make_event())
     assert created is not None
     assert created.thread_target_id is None
 
-    thread_target_id = _create_repo_thread(hub_root)
+    thread_target_id = _create_repo_thread(hub_root, thread_store=thread_store)
     updated = resolve_binding_for_scm_event(
         hub_root,
         _make_event(action="synchronize", state="open"),
@@ -162,7 +167,8 @@ def test_resolve_binding_for_closed_or_merged_pr_updates_existing_binding_state(
     tmp_path: Path,
 ) -> None:
     hub_root = tmp_path / "hub"
-    thread_target_id = _create_repo_thread(hub_root)
+    thread_store = PmaThreadStore(hub_root)
+    thread_target_id = _create_repo_thread(hub_root, thread_store=thread_store)
 
     created = resolve_binding_for_scm_event(hub_root, _make_event())
     assert created is not None
@@ -184,7 +190,10 @@ def test_resolve_binding_for_pr_event_attaches_recent_archived_matching_thread(
     tmp_path: Path,
 ) -> None:
     hub_root = tmp_path / "hub"
-    thread_target_id = _create_terminal_repo_thread(hub_root, archive=True)
+    thread_store = PmaThreadStore(hub_root)
+    thread_target_id = _create_terminal_repo_thread(
+        hub_root, archive=True, thread_store=thread_store
+    )
 
     binding = resolve_binding_for_scm_event(hub_root, _make_event())
 
@@ -198,9 +207,12 @@ def test_resolve_binding_for_pr_event_ignores_stale_archived_matching_thread(
     hub_root = tmp_path / "hub"
     os.environ["CAR_LEGACY_MIRROR_ENABLED"] = "true"
     try:
-        thread_target_id = _create_terminal_repo_thread(hub_root, archive=True)
+        thread_store = PmaThreadStore(hub_root)
+        thread_target_id = _create_terminal_repo_thread(
+            hub_root, archive=True, thread_store=thread_store
+        )
 
-        with open_sqlite(PmaThreadStore(hub_root).path) as legacy_conn:
+        with open_sqlite(thread_store.path) as legacy_conn:
             with legacy_conn:
                 legacy_conn.execute(
                     """

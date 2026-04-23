@@ -212,7 +212,7 @@ def _write_orchestration_binding(
     workspace_path: str,
     agent_id: str = "codex",
 ) -> None:
-    initialize_orchestration_sqlite(hub_root)
+    initialize_orchestration_sqlite(hub_root, durable=False)
     workspace_root = Path(workspace_path)
     workspace_root.mkdir(parents=True, exist_ok=True)
     thread_store = PmaThreadStore(hub_root)
@@ -222,7 +222,7 @@ def _write_orchestration_binding(
         repo_id=repo_id,
         name=f"{surface_kind} binding",
     )
-    OrchestrationBindingStore(hub_root).upsert_binding(
+    OrchestrationBindingStore(hub_root, durable=False).upsert_binding(
         surface_kind=surface_kind,
         surface_key=surface_key,
         thread_target_id=str(thread["managed_thread_id"]),

@@ -15,12 +15,19 @@ from codex_autorunner.core.pma_thread_store import (
 )
 
 
-def _create_managed_thread(tmp_path, *, surface_kind: str | None = None) -> str:
-    thread_store = PmaThreadStore(tmp_path)
-    thread = thread_store.create_thread("codex", tmp_path)
+def _create_managed_thread(
+    tmp_path,
+    *,
+    surface_kind: str | None = None,
+    thread_store: PmaThreadStore | None = None,
+    binding_store: OrchestrationBindingStore | None = None,
+) -> str:
+    ts = thread_store or PmaThreadStore(tmp_path)
+    thread = ts.create_thread("codex", tmp_path)
     thread_id = str(thread["managed_thread_id"])
     if surface_kind is not None:
-        OrchestrationBindingStore(tmp_path).upsert_binding(
+        bs = binding_store or OrchestrationBindingStore(tmp_path)
+        bs.upsert_binding(
             surface_kind=surface_kind,
             surface_key=f"{surface_kind}:binding-1",
             thread_target_id=thread_id,
@@ -83,7 +90,7 @@ def test_explicit_prepare_runs_legacy_backfill_once(tmp_path, monkeypatch) -> No
     prepare_pma_thread_store(tmp_path, durable=False)
     prepare_pma_thread_store(tmp_path, durable=False)
 
-    store = PmaAutomationStore(tmp_path)
+    store = PmaAutomationStore(tmp_path, durable=False)
     state = store.load()
     created, deduped = store.upsert_subscription(
         event_types=["flow_failed"],
@@ -298,8 +305,9 @@ def test_subscription_lane_id_flows_into_transition_wakeup(tmp_path) -> None:
 def test_create_subscription_accepts_singular_event_type_and_triggers_transition(
     tmp_path,
 ) -> None:
-    store = PmaAutomationStore(tmp_path)
-    thread_id = _create_managed_thread(tmp_path)
+    store = PmaAutomationStore(tmp_path, durable=False)
+    ts = PmaThreadStore(tmp_path)
+    thread_id = _create_managed_thread(tmp_path, thread_store=ts)
     subscription = store.create_subscription(
         {
             "event_type": "managed_thread_completed",
@@ -348,7 +356,7 @@ def test_create_subscription_warns_when_event_types_empty(
 
 
 def test_create_subscription_auto_resolves_lane_from_thread_binding(tmp_path) -> None:
-    store = PmaAutomationStore(tmp_path)
+    store = PmaAutomationStore(tmp_path, durable=False)
     thread_id = _create_managed_thread(tmp_path, surface_kind="discord")
 
     subscription = store.create_subscription(
@@ -369,9 +377,15 @@ def test_create_subscription_auto_resolves_lane_from_thread_binding(tmp_path) ->
 def test_create_subscription_prefers_origin_thread_binding_for_defaults(
     tmp_path,
 ) -> None:
-    store = PmaAutomationStore(tmp_path)
-    managed_thread_id = _create_managed_thread(tmp_path)
-    origin_thread_id = _create_managed_thread(tmp_path, surface_kind="discord")
+    store = PmaAutomationStore(tmp_path, durable=False)
+    ts = PmaThreadStore(tmp_path)
+    bs = OrchestrationBindingStore(tmp_path, durable=False)
+    managed_thread_id = _create_managed_thread(
+        tmp_path, thread_store=ts, binding_store=bs
+    )
+    origin_thread_id = _create_managed_thread(
+        tmp_path, surface_kind="discord", thread_store=ts, binding_store=bs
+    )
 
     subscription = store.create_subscription(
         {
@@ -392,8 +406,9 @@ def test_create_subscription_prefers_origin_thread_binding_for_defaults(
 def test_create_subscription_reuses_covering_auto_subscription_for_auto_keys(
     tmp_path,
 ) -> None:
-    store = PmaAutomationStore(tmp_path)
-    thread_id = _create_managed_thread(tmp_path)
+    store = PmaAutomationStore(tmp_path, durable=False)
+    ts = PmaThreadStore(tmp_path)
+    thread_id = _create_managed_thread(tmp_path, thread_store=ts)
 
     first = store.create_subscription(
         {
@@ -433,7 +448,7 @@ def test_create_subscription_reuses_covering_auto_subscription_for_auto_keys(
 def test_notify_transition_copies_subscription_delivery_target_into_wakeup(
     tmp_path,
 ) -> None:
-    store = PmaAutomationStore(tmp_path)
+    store = PmaAutomationStore(tmp_path, durable=False)
     thread_id = _create_managed_thread(tmp_path, surface_kind="telegram")
 
     subscription = store.create_subscription(

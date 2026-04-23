@@ -459,7 +459,7 @@ def _read_orchestration_binding_rows(
     if not db_path.exists():
         return []
     try:
-        with open_orchestration_sqlite(hub_root) as conn:
+        with open_orchestration_sqlite(hub_root, durable=False, migrate=False) as conn:
             rows = conn.execute(
                 """
                 SELECT
@@ -530,7 +530,7 @@ def active_chat_binding_metadata_by_thread(
     """Return active chat-binding metadata keyed by orchestration thread id."""
 
     try:
-        with open_orchestration_sqlite(hub_root) as conn:
+        with open_orchestration_sqlite(hub_root, durable=False, migrate=False) as conn:
             rows = conn.execute(
                 """
                 SELECT
@@ -631,7 +631,7 @@ def _active_pma_thread_counts(
 ) -> dict[str, int]:
     counts: Counter[str] = Counter()
     try:
-        store = PmaThreadStore(hub_root)
+        store = PmaThreadStore.connect_readonly(hub_root)
         raw_counts = store.count_threads_by_repo(status="active")
     except (OSError, RuntimeError, ValueError, sqlite3.OperationalError):
         raw_counts = {}
