@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import asyncio
+import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,7 +24,6 @@ from codex_autorunner.core.publish_operation_executors import (
 from codex_autorunner.core.scm_automation_service import ScmAutomationService
 from codex_autorunner.core.scm_events import ScmEventStore
 from codex_autorunner.core.scm_polling_watches import ScmPollingWatchStore
-from codex_autorunner.integrations.discord.state import DiscordStateStore
 from codex_autorunner.integrations.github.polling import (
     GitHubPollingConfig,
     GitHubScmPollingService,
@@ -211,6 +210,150 @@ def _write_discord_binding(
         conn.close()
 
 
+def _write_discord_binding_full(
+    db_path: Path,
+    *,
+    channel_id: str,
+    workspace_path: str,
+    repo_id: str | None = None,
+    updated_at: str = "2026-03-30T00:00:00Z",
+) -> None:
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path)
+    try:
+        with conn:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS schema_info (version INTEGER NOT NULL)"
+            )
+            conn.execute(
+                "INSERT INTO schema_info(version) VALUES (13) ON CONFLICT DO NOTHING"
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS channel_bindings (
+                    channel_id TEXT PRIMARY KEY,
+                    guild_id TEXT,
+                    workspace_path TEXT NOT NULL,
+                    repo_id TEXT,
+                    last_dispatch_run_id TEXT,
+                    last_dispatch_seq TEXT,
+                    last_pause_run_id TEXT,
+                    last_pause_dispatch_seq TEXT,
+                    pma_enabled INTEGER NOT NULL DEFAULT 0,
+                    pma_prev_workspace_path TEXT,
+                    pma_prev_repo_id TEXT,
+                    resource_kind TEXT,
+                    resource_id TEXT,
+                    pma_prev_resource_kind TEXT,
+                    pma_prev_resource_id TEXT,
+                    agent TEXT,
+                    agent_profile TEXT,
+                    model_override TEXT,
+                    reasoning_effort TEXT,
+                    approval_mode TEXT,
+                    approval_policy TEXT,
+                    sandbox_policy TEXT,
+                    rollout_path TEXT,
+                    last_terminal_run_id TEXT,
+                    pending_compact_seed TEXT,
+                    pending_compact_session_key TEXT,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO channel_bindings (
+                    channel_id, guild_id, workspace_path, repo_id, updated_at
+                )
+                VALUES (?, NULL, ?, ?, ?)
+                ON CONFLICT(channel_id) DO UPDATE SET
+                    workspace_path=excluded.workspace_path,
+                    repo_id=excluded.repo_id,
+                    updated_at=excluded.updated_at
+                """,
+                (channel_id, workspace_path, repo_id, updated_at),
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS outbox (
+                    record_id TEXT PRIMARY KEY,
+                    channel_id TEXT NOT NULL,
+                    message_id TEXT,
+                    operation TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    next_attempt_at TEXT,
+                    created_at TEXT NOT NULL,
+                    last_error TEXT,
+                    operation_id TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS turn_progress_leases (
+                    lease_id TEXT PRIMARY KEY,
+                    managed_thread_id TEXT NOT NULL,
+                    execution_id TEXT,
+                    channel_id TEXT NOT NULL,
+                    message_id TEXT NOT NULL,
+                    source_message_id TEXT,
+                    state TEXT NOT NULL,
+                    progress_label TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS interaction_ledger (
+                    interaction_id TEXT PRIMARY KEY,
+                    interaction_token TEXT NOT NULL,
+                    interaction_kind TEXT NOT NULL,
+                    channel_id TEXT NOT NULL,
+                    guild_id TEXT,
+                    user_id TEXT,
+                    metadata_json TEXT NOT NULL,
+                    route_key TEXT,
+                    handler_id TEXT,
+                    conversation_id TEXT,
+                    scheduler_state TEXT NOT NULL DEFAULT 'received',
+                    resource_keys_json TEXT,
+                    payload_json TEXT,
+                    envelope_json TEXT,
+                    delivery_cursor_json TEXT,
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    ack_mode TEXT,
+                    ack_completed_at TEXT,
+                    execution_status TEXT NOT NULL,
+                    execution_started_at TEXT,
+                    execution_finished_at TEXT,
+                    execution_error TEXT,
+                    final_delivery_status TEXT,
+                    final_delivery_error TEXT,
+                    original_response_message_id TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    last_seen_at TEXT NOT NULL
+                )
+                """
+            )
+            for ddl in (
+                "CREATE INDEX IF NOT EXISTS idx_discord_outbox_next_attempt ON outbox(next_attempt_at)",
+                "CREATE INDEX IF NOT EXISTS idx_discord_outbox_created ON outbox(created_at)",
+                "CREATE INDEX IF NOT EXISTS idx_discord_turn_progress_thread_exec ON turn_progress_leases(managed_thread_id, execution_id, updated_at)",
+                "CREATE INDEX IF NOT EXISTS idx_discord_turn_progress_channel_message ON turn_progress_leases(channel_id, message_id, updated_at)",
+                "CREATE INDEX IF NOT EXISTS idx_discord_interaction_ledger_last_seen ON interaction_ledger(last_seen_at)",
+                "CREATE INDEX IF NOT EXISTS idx_discord_interaction_ledger_execution_status ON interaction_ledger(execution_status)",
+                "CREATE INDEX IF NOT EXISTS idx_discord_interaction_ledger_scheduler_state ON interaction_ledger(scheduler_state)",
+            ):
+                conn.execute(ddl)
+    finally:
+        conn.close()
+
+
 def _write_manifest(hub_root: Path, *, repo_rel: str, repo_id: str = "repo-1") -> None:
     manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
@@ -229,6 +372,27 @@ def _write_manifest(hub_root: Path, *, repo_rel: str, repo_id: str = "repo-1") -
         + "\n",
         encoding="utf-8",
     )
+
+
+class _SimpleOutboxRecord:
+    __slots__ = ("channel_id", "payload_json")
+
+    def __init__(self, channel_id: str, payload_json: str) -> None:
+        self.channel_id = channel_id
+        self.payload_json = json.loads(payload_json)
+
+
+def _read_outbox_records(db_path: Path) -> list[_SimpleOutboxRecord]:
+    if not db_path.exists():
+        return []
+    conn = sqlite3.connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT channel_id, payload_json FROM outbox ORDER BY created_at ASC"
+        ).fetchall()
+        return [_SimpleOutboxRecord(row[0], row[1]) for row in rows]
+    finally:
+        conn.close()
 
 
 def _polling_config(
@@ -1353,23 +1517,14 @@ def test_process_due_watches_reacts_then_wakes_thread_and_notifies_bound_chat(
     )
     _write_manifest(hub_root, repo_rel="repo")
 
-    async def _bind_discord() -> None:
-        store = DiscordStateStore(
-            hub_root / ".codex-autorunner" / "discord_state.sqlite3"
-        )
-        try:
-            await store.initialize()
-            await store.upsert_binding(
-                channel_id="repo-discord",
-                guild_id=None,
-                workspace_path=str(workspace_root),
-                repo_id="repo-1",
-            )
-        finally:
-            await store.close()
-
-    asyncio.run(_bind_discord())
-    thread = PmaThreadStore(hub_root).create_thread(
+    _write_discord_binding_full(
+        hub_root / ".codex-autorunner" / "discord_state.sqlite3",
+        channel_id="repo-discord",
+        workspace_path=str(workspace_root),
+        repo_id="repo-1",
+    )
+    _thread_store = PmaThreadStore(hub_root)
+    thread = _thread_store.create_thread(
         "codex",
         workspace_root,
         repo_id="repo-1",
@@ -1478,9 +1633,13 @@ def test_process_due_watches_reacts_then_wakes_thread_and_notifies_bound_chat(
                 github_service_factory=_ReactionGitHubService,
             ),
             "enqueue_managed_turn": build_enqueue_managed_turn_executor(
-                hub_root=hub_root
+                hub_root=hub_root,
+                thread_store=_thread_store,
             ),
-            "notify_chat": build_notify_chat_executor(hub_root=hub_root),
+            "notify_chat": build_notify_chat_executor(
+                hub_root=hub_root,
+                thread_store=_thread_store,
+            ),
         },
     )
     processed_operations = []
@@ -1530,19 +1689,12 @@ def test_process_due_watches_reacts_then_wakes_thread_and_notifies_bound_chat(
     assert notify_result.response["published"] == 1
     assert reaction_calls == [("acme", "widgets", str(hub_root), 2844, "eyes")]
 
-    turns = PmaThreadStore(hub_root).list_turns(thread["managed_thread_id"], limit=10)
+    turns = _thread_store.list_turns(thread["managed_thread_id"], limit=10)
     assert len(turns) == 1
 
-    async def _load_outbox() -> list[object]:
-        store = DiscordStateStore(
-            hub_root / ".codex-autorunner" / "discord_state.sqlite3"
-        )
-        try:
-            return await store.list_outbox()
-        finally:
-            await store.close()
-
-    outbox = asyncio.run(_load_outbox())
+    outbox = _read_outbox_records(
+        hub_root / ".codex-autorunner" / "discord_state.sqlite3"
+    )
     assert any(
         record.channel_id == "repo-discord"
         and "started the latest pr review batch"
@@ -1566,23 +1718,14 @@ def test_process_due_watches_keeps_distinct_bound_notices_for_multiple_review_co
     )
     _write_manifest(hub_root, repo_rel="repo")
 
-    async def _bind_discord() -> None:
-        store = DiscordStateStore(
-            hub_root / ".codex-autorunner" / "discord_state.sqlite3"
-        )
-        try:
-            await store.initialize()
-            await store.upsert_binding(
-                channel_id="repo-discord",
-                guild_id=None,
-                workspace_path=str(workspace_root),
-                repo_id="repo-1",
-            )
-        finally:
-            await store.close()
-
-    asyncio.run(_bind_discord())
-    thread = PmaThreadStore(hub_root).create_thread(
+    _write_discord_binding_full(
+        hub_root / ".codex-autorunner" / "discord_state.sqlite3",
+        channel_id="repo-discord",
+        workspace_path=str(workspace_root),
+        repo_id="repo-1",
+    )
+    _thread_store = PmaThreadStore(hub_root)
+    thread = _thread_store.create_thread(
         "codex",
         workspace_root,
         repo_id="repo-1",
@@ -1699,9 +1842,13 @@ def test_process_due_watches_keeps_distinct_bound_notices_for_multiple_review_co
                 github_service_factory=_ReactionGitHubService,
             ),
             "enqueue_managed_turn": build_enqueue_managed_turn_executor(
-                hub_root=hub_root
+                hub_root=hub_root,
+                thread_store=_thread_store,
             ),
-            "notify_chat": build_notify_chat_executor(hub_root=hub_root),
+            "notify_chat": build_notify_chat_executor(
+                hub_root=hub_root,
+                thread_store=_thread_store,
+            ),
         },
     )
     processed_operations = []
@@ -1748,16 +1895,9 @@ def test_process_due_watches_keeps_distinct_bound_notices_for_multiple_review_co
         len({operation.payload["correlation_id"] for operation in notify_results}) == 2
     )
 
-    async def _load_outbox() -> list[object]:
-        store = DiscordStateStore(
-            hub_root / ".codex-autorunner" / "discord_state.sqlite3"
-        )
-        try:
-            return await store.list_outbox()
-        finally:
-            await store.close()
-
-    outbox = asyncio.run(_load_outbox())
+    outbox = _read_outbox_records(
+        hub_root / ".codex-autorunner" / "discord_state.sqlite3"
+    )
     contents = [
         str(record.payload_json.get("content", ""))
         for record in outbox
