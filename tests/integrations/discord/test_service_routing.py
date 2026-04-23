@@ -11324,3 +11324,154 @@ async def test_run_agent_turn_for_message_forwards_repo_delivery_suppression(
         assert captured["suppress_managed_thread_delivery"] is True
     finally:
         await store.close()
+
+
+@pytest.mark.anyio
+async def test_reconcile_background_task_failure_does_not_fabricate_channel_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from codex_autorunner.integrations.discord.service_lifecycle import (
+        reconcile_background_task_failure,
+    )
+
+    sent_messages: list[dict[str, Any]] = []
+    log_events: list[dict[str, Any]] = []
+
+    async def _fake_reconcile(service, **kwargs):  # type: ignore[no-untyped-def]
+        return 0
+
+    def _fake_log_event(logger, level, event_name, **kwargs):  # type: ignore[no-untyped-def]
+        log_events.append({"level": level, "event_name": event_name, **kwargs})
+
+    import codex_autorunner.integrations.discord.message_turns as _msg_turns
+    import codex_autorunner.integrations.discord.service_lifecycle as _lifecycle_mod
+
+    monkeypatch.setattr(
+        _msg_turns, "reconcile_discord_turn_progress_leases", _fake_reconcile
+    )
+    monkeypatch.setattr(_lifecycle_mod, "log_event", _fake_log_event)
+
+    class _FakeService:
+        def __init__(self) -> None:
+            self._logger = logging.getLogger("test")
+
+        async def _send_channel_message_safe(
+            self, channel_id: str, payload: dict[str, Any]
+        ) -> None:
+            sent_messages.append({"channel_id": channel_id, "payload": payload})
+
+    task_context = {
+        "failure_note": "worker lost",
+        "channel_id": "channel-1",
+        "managed_thread_id": "thread-1",
+        "execution_id": "exec-1",
+        "lease_id": "lease-1",
+    }
+
+    result = await reconcile_background_task_failure(_FakeService(), task_context)
+
+    assert result == 0
+    assert sent_messages == []
+    reconcile_failures = [
+        e
+        for e in log_events
+        if e["event_name"] == "discord.background_task.reconcile_failed"
+    ]
+    assert len(reconcile_failures) == 1
+    assert reconcile_failures[0]["channel_id"] == "channel-1"
+    assert reconcile_failures[0]["managed_thread_id"] == "thread-1"
+    assert reconcile_failures[0]["level"] == logging.ERROR
+
+
+@pytest.mark.anyio
+async def test_reconcile_background_task_failure_sends_channel_message_when_explicitly_allowed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from codex_autorunner.integrations.discord.service_lifecycle import (
+        reconcile_background_task_failure,
+    )
+
+    sent_messages: list[dict[str, Any]] = []
+
+    async def _fake_reconcile(service, **kwargs):  # type: ignore[no-untyped-def]
+        return 0
+
+    def _fake_log_event(logger, level, event_name, **kwargs):  # type: ignore[no-untyped-def]
+        pass
+
+    import codex_autorunner.integrations.discord.message_turns as _msg_turns
+    import codex_autorunner.integrations.discord.service_lifecycle as _lifecycle_mod
+
+    monkeypatch.setattr(
+        _msg_turns, "reconcile_discord_turn_progress_leases", _fake_reconcile
+    )
+    monkeypatch.setattr(_lifecycle_mod, "log_event", _fake_log_event)
+
+    class _FakeService:
+        def __init__(self) -> None:
+            self._logger = logging.getLogger("test")
+
+        async def _send_channel_message_safe(
+            self, channel_id: str, payload: dict[str, Any]
+        ) -> None:
+            sent_messages.append({"channel_id": channel_id, "payload": payload})
+
+    task_context = {
+        "failure_note": "worker lost",
+        "channel_id": "channel-1",
+    }
+
+    result = await reconcile_background_task_failure(
+        _FakeService(), task_context, allow_channel_fallback=True
+    )
+
+    assert result == 0
+    assert len(sent_messages) == 1
+    assert sent_messages[0]["payload"]["content"] == "worker lost"
+
+
+@pytest.mark.anyio
+async def test_reconcile_background_task_failure_returns_count_on_successful_reconcile(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from codex_autorunner.integrations.discord.service_lifecycle import (
+        reconcile_background_task_failure,
+    )
+
+    sent_messages: list[dict[str, Any]] = []
+
+    async def _fake_reconcile(service, **kwargs):  # type: ignore[no-untyped-def]
+        return 2
+
+    def _fake_log_event(logger, level, event_name, **kwargs):  # type: ignore[no-untyped-def]
+        pass
+
+    import codex_autorunner.integrations.discord.message_turns as _msg_turns
+    import codex_autorunner.integrations.discord.service_lifecycle as _lifecycle_mod
+
+    monkeypatch.setattr(
+        _msg_turns, "reconcile_discord_turn_progress_leases", _fake_reconcile
+    )
+    monkeypatch.setattr(_lifecycle_mod, "log_event", _fake_log_event)
+
+    class _FakeService:
+        def __init__(self) -> None:
+            self._logger = logging.getLogger("test")
+
+        async def _send_channel_message_safe(
+            self, channel_id: str, payload: dict[str, Any]
+        ) -> None:
+            sent_messages.append({"channel_id": channel_id, "payload": payload})
+
+    task_context = {
+        "failure_note": "worker lost",
+        "channel_id": "channel-1",
+    }
+
+    result = await reconcile_background_task_failure(_FakeService(), task_context)
+
+    assert result == 2
+    assert sent_messages == []

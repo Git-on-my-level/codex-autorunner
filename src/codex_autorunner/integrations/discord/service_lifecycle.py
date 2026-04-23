@@ -307,7 +307,7 @@ async def reconcile_background_task_failure(
     service: Any,
     task_context: dict[str, Any],
     *,
-    allow_channel_fallback: bool = True,
+    allow_channel_fallback: bool = False,
 ) -> int:
     from .message_turns import (
         reconcile_discord_turn_progress_leases,
@@ -348,6 +348,16 @@ async def reconcile_background_task_failure(
     )
     if reconciled:
         return int(reconciled)
+    log_event(
+        service._logger,
+        logging.ERROR,
+        "discord.background_task.reconcile_failed",
+        failure_note=failure_note,
+        channel_id=task_context.get("channel_id"),
+        managed_thread_id=task_context.get("managed_thread_id"),
+        execution_id=task_context.get("execution_id"),
+        lease_id=task_context.get("lease_id"),
+    )
     if not allow_channel_fallback:
         return 0
     fallback_channel_id = (

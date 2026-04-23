@@ -801,25 +801,7 @@ async def handle_flow_status(
                     )
                 return
             if not explicit_run_requested:
-                summary_text = build_flow_status_summary_fallback(workspace_root)
-                if summary_text:
-                    if update_message:
-                        await update_runtime_component_message(
-                            service,
-                            interaction_id,
-                            interaction_token,
-                            summary_text,
-                            components=[],
-                        )
-                    else:
-                        await service.send_or_respond_public_with_components(
-                            interaction_id=interaction_id,
-                            interaction_token=interaction_token,
-                            deferred=deferred_public,
-                            text=summary_text,
-                            components=[],
-                        )
-                    return
+                pass
             message = (
                 f"Ticket_flow run {run_id_opt.strip()} not found."
                 if explicit_run_requested
