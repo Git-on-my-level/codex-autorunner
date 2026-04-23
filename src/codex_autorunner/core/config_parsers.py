@@ -21,7 +21,7 @@ from .app_server_command import resolve_app_server_command
 from .config_contract import ConfigError
 from .config_layering import (
     PMA_DEFAULT_MAX_TEXT_CHARS,
-    PMA_DEFAULT_TURN_TIMEOUT_SECONDS,
+    PMA_DEFAULT_TURN_IDLE_TIMEOUT_SECONDS,
     _default_update_linux_service_names,
 )
 from .config_types import (
@@ -650,10 +650,31 @@ def _parse_pma_config(
             return fallback
         return value if value > 0 else fallback
 
-    turn_timeout_seconds = _parse_positive_int(
-        "turn_timeout_seconds",
-        PMA_DEFAULT_TURN_TIMEOUT_SECONDS,
+    idle_timeout_raw = cfg.get(
+        "turn_idle_timeout_seconds",
+        cfg.get(
+            "turn_timeout_seconds",
+            defaults.get(
+                "turn_idle_timeout_seconds",
+                defaults.get(
+                    "turn_timeout_seconds",
+                    PMA_DEFAULT_TURN_IDLE_TIMEOUT_SECONDS,
+                ),
+            ),
+        ),
     )
+    if isinstance(idle_timeout_raw, bool):
+        turn_idle_timeout_seconds = PMA_DEFAULT_TURN_IDLE_TIMEOUT_SECONDS
+    else:
+        try:
+            parsed_idle_timeout = int(idle_timeout_raw)
+        except (ValueError, TypeError):
+            parsed_idle_timeout = PMA_DEFAULT_TURN_IDLE_TIMEOUT_SECONDS
+        turn_idle_timeout_seconds = (
+            parsed_idle_timeout
+            if parsed_idle_timeout > 0
+            else PMA_DEFAULT_TURN_IDLE_TIMEOUT_SECONDS
+        )
     max_repos = _parse_positive_int("max_repos", 25)
     max_messages = _parse_positive_int("max_messages", 10)
     max_text_chars = _parse_positive_int("max_text_chars", PMA_DEFAULT_MAX_TEXT_CHARS)
@@ -788,7 +809,7 @@ def _parse_pma_config(
         profile=profile,
         model=model,
         reasoning=reasoning,
-        turn_timeout_seconds=turn_timeout_seconds,
+        turn_idle_timeout_seconds=turn_idle_timeout_seconds,
         managed_thread_terminal_followup_default=managed_thread_terminal_followup_default,
         max_upload_bytes=max_upload_bytes,
         max_repos=max_repos,

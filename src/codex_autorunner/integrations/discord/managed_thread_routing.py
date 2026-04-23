@@ -43,7 +43,8 @@ from .rendering import (
 
 _logger = logging.getLogger(__name__)
 
-_DEFAULT_DISCORD_PMA_TIMEOUT_SECONDS = 7200
+_DEFAULT_DISCORD_REPO_TURN_TIMEOUT_SECONDS = 7200
+_DEFAULT_DISCORD_PMA_IDLE_TIMEOUT_SECONDS = 1800
 _DEFAULT_DISCORD_PMA_STALL_TIMEOUT_SECONDS = 1800
 
 
@@ -330,9 +331,9 @@ def _build_discord_managed_thread_coordinator(
     pma_enabled: bool,
 ) -> ManagedThreadTurnCoordinator:
     timeout_seconds = (
-        _load_discord_pma_turn_timeout_seconds(service)
+        _load_discord_pma_turn_idle_timeout_seconds(service)
         if pma_enabled
-        else float(_DEFAULT_DISCORD_PMA_TIMEOUT_SECONDS)
+        else float(_DEFAULT_DISCORD_REPO_TURN_TIMEOUT_SECONDS)
     )
     stall_timeout_seconds = (
         _load_discord_pma_turn_stall_timeout_seconds(
@@ -372,27 +373,34 @@ def _build_discord_managed_thread_coordinator(
     )
 
 
-def _load_discord_pma_turn_timeout_seconds(service: Any) -> float:
+def _load_discord_pma_turn_idle_timeout_seconds(service: Any) -> float:
     from . import message_turns as _mt
 
-    overridden_timeout = getattr(
+    new_timeout = getattr(
+        _mt,
+        "DISCORD_PMA_IDLE_TIMEOUT_SECONDS",
+        _DEFAULT_DISCORD_PMA_IDLE_TIMEOUT_SECONDS,
+    )
+    if new_timeout != _DEFAULT_DISCORD_PMA_IDLE_TIMEOUT_SECONDS:
+        return float(new_timeout)
+    legacy_timeout = getattr(
         _mt,
         "DISCORD_PMA_TIMEOUT_SECONDS",
-        _DEFAULT_DISCORD_PMA_TIMEOUT_SECONDS,
+        _DEFAULT_DISCORD_PMA_IDLE_TIMEOUT_SECONDS,
     )
-    if overridden_timeout != _DEFAULT_DISCORD_PMA_TIMEOUT_SECONDS:
-        return float(overridden_timeout)
+    if legacy_timeout != _DEFAULT_DISCORD_PMA_IDLE_TIMEOUT_SECONDS:
+        return float(legacy_timeout)
     try:
         hub_config = load_hub_config(Path(service._config.root))
     except (ConfigError, OSError, RuntimeError, TypeError, ValueError):
-        return float(_DEFAULT_DISCORD_PMA_TIMEOUT_SECONDS)
+        return float(_DEFAULT_DISCORD_PMA_IDLE_TIMEOUT_SECONDS)
     configured_timeout = getattr(
         getattr(hub_config, "pma", None),
-        "turn_timeout_seconds",
+        "turn_idle_timeout_seconds",
         None,
     )
     if configured_timeout is None:
-        return float(_DEFAULT_DISCORD_PMA_TIMEOUT_SECONDS)
+        return float(_DEFAULT_DISCORD_PMA_IDLE_TIMEOUT_SECONDS)
     return float(configured_timeout)
 
 

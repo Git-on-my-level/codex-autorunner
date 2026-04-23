@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any, Optional
@@ -39,10 +40,35 @@ from .....integrations.app_server import is_missing_thread_error
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_PMA_TIMEOUT_SECONDS = 7200
+DEFAULT_PMA_TIMEOUT_SECONDS = 1800
 SUCCESSFUL_COMPLETION_STATUSES = frozenset(
     {"ok", "completed", "complete", "done", "success"}
 )
+
+
+class _TurnActivityTracker:
+    def __init__(self) -> None:
+        self._last_activity_monotonic = time.monotonic()
+
+    def note_activity(self) -> None:
+        self._last_activity_monotonic = time.monotonic()
+
+    @property
+    def last_activity_monotonic(self) -> float:
+        return self._last_activity_monotonic
+
+
+async def _wait_for_idle_timeout(
+    tracker: _TurnActivityTracker, idle_timeout_seconds: float
+) -> None:
+    timeout_seconds = max(float(idle_timeout_seconds), 0.0)
+    deadline = tracker.last_activity_monotonic + timeout_seconds
+    while True:
+        deadline = max(deadline, tracker.last_activity_monotonic + timeout_seconds)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        await asyncio.sleep(min(remaining, 0.25))
 
 
 def requires_fresh_pma_conversation(exc: Exception) -> bool:
@@ -300,6 +326,7 @@ async def execute_harness_turn(
 
     streamed_raw_events: list[Any] = []
     stream_task: Optional[asyncio.Task[None]] = None
+    activity_tracker = _TurnActivityTracker()
     if harness_allows_parallel_event_stream(harness):
 
         async def _collect_events() -> None:
@@ -310,6 +337,7 @@ async def execute_harness_turn(
                 turn_id,
             ):
                 streamed_raw_events.append(raw_event)
+                activity_tracker.note_activity()
 
         stream_task = asyncio.create_task(_collect_events())
 
@@ -321,7 +349,9 @@ async def execute_harness_turn(
             timeout=None,
         )
     )
-    timeout_task = asyncio.create_task(asyncio.sleep(resolved_timeout_seconds))
+    timeout_task = asyncio.create_task(
+        _wait_for_idle_timeout(activity_tracker, resolved_timeout_seconds)
+    )
     interrupt_task = asyncio.create_task(interrupt_event.wait())
     try:
         done, _ = await asyncio.wait(

@@ -86,8 +86,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-PMA_TIMEOUT_SECONDS = 7200
-_DEFAULT_PMA_TIMEOUT_SECONDS = 7200
+PMA_TURN_IDLE_TIMEOUT_SECONDS = 1800
+_DEFAULT_PMA_TURN_IDLE_TIMEOUT_SECONDS = 1800
 
 
 def _build_managed_thread_orchestration_service(
@@ -110,20 +110,20 @@ def _build_managed_thread_orchestration_service_for_app(
     )
 
 
-def _pma_turn_timeout_seconds(request: Request) -> float:
+def _pma_turn_idle_timeout_seconds(request: Request) -> float:
     overridden_timeout = globals().get(
-        "PMA_TIMEOUT_SECONDS",
-        _DEFAULT_PMA_TIMEOUT_SECONDS,
+        "PMA_TURN_IDLE_TIMEOUT_SECONDS",
+        _DEFAULT_PMA_TURN_IDLE_TIMEOUT_SECONDS,
     )
-    if overridden_timeout != _DEFAULT_PMA_TIMEOUT_SECONDS:
+    if overridden_timeout != _DEFAULT_PMA_TURN_IDLE_TIMEOUT_SECONDS:
         return float(overridden_timeout)
     configured_timeout = getattr(
         getattr(request.app.state.config, "pma", None),
-        "turn_timeout_seconds",
+        "turn_idle_timeout_seconds",
         None,
     )
     if configured_timeout is None:
-        return float(_DEFAULT_PMA_TIMEOUT_SECONDS)
+        return float(_DEFAULT_PMA_TURN_IDLE_TIMEOUT_SECONDS)
     return float(configured_timeout)
 
 
@@ -524,10 +524,12 @@ async def _run_managed_thread_execution(
 
         stream_task = asyncio.create_task(_collect_timeline())
     try:
+        idle_timeout_seconds = _pma_turn_idle_timeout_seconds(request)
         outcome = await await_runtime_thread_outcome(
             started,
             interrupt_event=None,
-            timeout_seconds=_pma_turn_timeout_seconds(request),
+            timeout_seconds=idle_timeout_seconds,
+            stall_timeout_seconds=idle_timeout_seconds,
             execution_error_message=MANAGED_THREAD_PUBLIC_EXECUTION_ERROR,
         )
     except Exception:  # intentional: top-level error handler for execution outcome

@@ -184,7 +184,7 @@ async def await_runtime_thread_outcome(
     execution: RuntimeThreadExecution,
     *,
     interrupt_event: Optional[asyncio.Event],
-    timeout_seconds: float,
+    timeout_seconds: Optional[float],
     stall_timeout_seconds: Optional[float] = None,
     execution_error_message: str,
     terminal_state: Optional[RuntimeTurnTerminalStateMachine] = None,
@@ -210,7 +210,10 @@ async def await_runtime_thread_outcome(
             timeout=None,
         )
     )
-    timeout_task = asyncio.create_task(asyncio.sleep(timeout_seconds))
+    timeout_task = None
+    if timeout_seconds is not None and float(timeout_seconds) > 0.0:
+        if stall_timeout_seconds is None or float(stall_timeout_seconds) <= 0.0:
+            timeout_task = asyncio.create_task(asyncio.sleep(float(timeout_seconds)))
     interrupt_task = (
         asyncio.create_task(_wait_for_interrupt(interrupt_event))
         if interrupt_event is not None
@@ -241,10 +244,11 @@ async def await_runtime_thread_outcome(
         )
 
     try:
-        wait_tasks = {collector_task, timeout_task}
+        wait_tasks = {collector_task, terminal_wait_task}
+        if timeout_task is not None:
+            wait_tasks.add(timeout_task)
         if interrupt_task is not None:
             wait_tasks.add(interrupt_task)
-        wait_tasks.add(terminal_wait_task)
         if stall_task is not None:
             wait_tasks.add(stall_task)
         if recovery_probe_task is not None:
@@ -267,7 +271,7 @@ async def await_runtime_thread_outcome(
                     backend_turn_id,
                 )
                 return state.build_interrupted_outcome(RUNTIME_THREAD_INTERRUPTED_ERROR)
-            if timeout_task in done:
+            if timeout_task is not None and timeout_task in done:
                 await execution.harness.interrupt(
                     execution.workspace_root,
                     backend_thread_id,
@@ -303,7 +307,9 @@ async def await_runtime_thread_outcome(
             detail or execution_error_message
         )
     finally:
-        cleanup_tasks: list[asyncio.Task[Any]] = [timeout_task, terminal_wait_task]
+        cleanup_tasks: list[asyncio.Task[Any]] = [terminal_wait_task]
+        if timeout_task is not None:
+            cleanup_tasks.append(timeout_task)
         if not collector_task.done():
             cleanup_tasks.append(collector_task)
         if interrupt_task is not None:
