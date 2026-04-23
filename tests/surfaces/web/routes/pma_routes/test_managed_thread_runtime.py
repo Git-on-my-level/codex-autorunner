@@ -1150,6 +1150,42 @@ def test_resolve_pma_chat_bound_surface_targets_uses_execution_metadata() -> Non
     ) == (("discord", "channel-1"), ("telegram", "chat-1:55"))
 
 
+def test_resolve_pma_chat_bound_surface_targets_skips_running_turn_for_pre_submit_requests() -> (
+    None
+):
+    service = SimpleNamespace(
+        thread_store=SimpleNamespace(
+            get_running_turn=lambda managed_thread_id: {
+                "metadata": {
+                    "bound_chat_execution": {
+                        "origin": {
+                            "kind": "surface",
+                            "surface_kind": "discord",
+                            "surface_key": "active-channel",
+                        },
+                        "progress_targets": [
+                            {
+                                "surface_kind": "discord",
+                                "surface_key": "active-channel",
+                            }
+                        ],
+                    }
+                }
+            }
+        ),
+        list_bindings=lambda **kwargs: [
+            SimpleNamespace(surface_kind="telegram", surface_key="chat-1:55")
+        ],
+    )
+
+    assert managed_thread_runtime._resolve_pma_chat_bound_surface_targets(
+        service=service,
+        managed_thread_id="thread-1",
+        started=None,
+        allow_running_turn_fallback=False,
+    ) == (("telegram", "chat-1:55"),)
+
+
 def test_managed_thread_message_route_persists_pma_bound_chat_execution_metadata(
     hub_env,
     monkeypatch,
@@ -1270,6 +1306,141 @@ def test_managed_thread_message_route_persists_pma_bound_chat_execution_metadata
         "origin": {"kind": "pma_web"},
         "progress_targets": [
             {"surface_kind": "discord", "surface_key": "channel-1"},
+            {"surface_kind": "telegram", "surface_key": "100:200"},
+        ],
+    }
+
+
+def test_managed_thread_message_route_uses_binding_targets_for_queued_pma_execution(
+    hub_env,
+    monkeypatch,
+) -> None:
+    app = build_pma_hub_app(hub_env.hub_root)
+    store = PmaThreadStore(hub_env.hub_root)
+    bindings = OrchestrationBindingStore(hub_env.hub_root)
+    created = store.create_thread(
+        "codex",
+        hub_env.repo_root.resolve(),
+        repo_id=hub_env.repo_id,
+    )
+    managed_thread_id = str(created["managed_thread_id"])
+    bindings.upsert_binding(
+        surface_kind="telegram",
+        surface_key="100:200",
+        thread_target_id=managed_thread_id,
+        agent_id="codex",
+        repo_id=hub_env.repo_id,
+    )
+    captured: dict[str, Any] = {}
+
+    class FakeService:
+        def get_thread_target(self, thread_target_id: str):
+            return SimpleNamespace(
+                thread_target_id=thread_target_id,
+                backend_thread_id="backend-thread-1",
+            )
+
+        def record_execution_result(
+            self,
+            thread_target_id: str,
+            execution_id: str,
+            *,
+            status: str,
+            assistant_text: Optional[str] = None,
+            error: Optional[str] = None,
+            backend_turn_id: Optional[str] = None,
+            transcript_turn_id: Optional[str] = None,
+        ):
+            _ = (
+                thread_target_id,
+                execution_id,
+                assistant_text,
+                error,
+                backend_turn_id,
+                transcript_turn_id,
+            )
+            return SimpleNamespace(status=status, error=None)
+
+        def get_execution(self, thread_target_id: str, execution_id: str):
+            _ = thread_target_id, execution_id
+            return None
+
+        def list_bindings(self, **kwargs: Any):
+            return bindings.list_bindings(**kwargs)
+
+        thread_store = SimpleNamespace(
+            get_running_turn=lambda managed_thread_id: {
+                "metadata": {
+                    "bound_chat_execution": {
+                        "origin": {
+                            "kind": "surface",
+                            "surface_kind": "discord",
+                            "surface_key": "active-channel",
+                        },
+                        "progress_targets": [
+                            {
+                                "surface_kind": "discord",
+                                "surface_key": "active-channel",
+                            }
+                        ],
+                    }
+                }
+            }
+        )
+
+    async def _fake_begin(
+        service, request, *, client_request_id=None, sandbox_policy=None
+    ):
+        _ = service, client_request_id, sandbox_policy
+        captured["request"] = request
+        return SimpleNamespace(
+            execution=SimpleNamespace(
+                execution_id="managed-turn-1",
+                backend_id="backend-turn-1",
+                metadata=request.metadata,
+            ),
+            thread=SimpleNamespace(
+                backend_thread_id="backend-thread-1",
+            ),
+            workspace_root=hub_env.repo_root.resolve(),
+            request=request,
+        )
+
+    async def _fake_await(*args, **kwargs):
+        _ = args, kwargs
+        return RuntimeThreadOutcome(
+            status="ok",
+            assistant_text="assistant-output",
+            error=None,
+            backend_thread_id="backend-thread-1",
+            backend_turn_id="backend-turn-1",
+        )
+
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "_build_managed_thread_orchestration_service",
+        lambda request, *, thread_store=None: FakeService(),
+    )
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "begin_runtime_thread_execution",
+        _fake_begin,
+    )
+    _patch_outcome_driven_finalization(
+        monkeypatch,
+        outcome_builder=_fake_await,
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/messages",
+            json={"message": "hello from route"},
+        )
+
+    assert response.status_code == 200
+    assert captured["request"].metadata["bound_chat_execution"] == {
+        "origin": {"kind": "pma_web"},
+        "progress_targets": [
             {"surface_kind": "telegram", "surface_key": "100:200"},
         ],
     }

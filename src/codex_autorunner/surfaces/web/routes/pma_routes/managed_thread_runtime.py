@@ -267,6 +267,7 @@ def _resolve_pma_chat_bound_surface_targets(
     service: Any,
     managed_thread_id: str,
     started: Any | None = None,
+    allow_running_turn_fallback: bool = True,
 ) -> tuple[tuple[str, str], ...]:
     started_execution = getattr(started, "execution", None)
     started_metadata = getattr(started_execution, "metadata", None)
@@ -277,7 +278,7 @@ def _resolve_pma_chat_bound_surface_targets(
         if explicit_targets:
             return explicit_targets
     thread_store = getattr(service, "thread_store", None)
-    if thread_store is not None:
+    if allow_running_turn_fallback and thread_store is not None:
         running_turn = thread_store.get_running_turn(managed_thread_id)
         explicit_targets = bound_chat_progress_targets_from_execution_mapping(
             running_turn
@@ -763,6 +764,7 @@ def build_managed_thread_runtime_routes(
             progress_targets = _resolve_pma_chat_bound_surface_targets(
                 service=service,
                 managed_thread_id=managed_thread_id,
+                allow_running_turn_fallback=False,
             )
             started_execution = await begin_runtime_thread_execution(
                 service,
