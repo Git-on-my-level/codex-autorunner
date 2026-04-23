@@ -190,10 +190,55 @@ def resolve_bound_chat_queue_progress_context(
     config = getattr(owner, "_config", None)
     hub_root = getattr(config, "root", None)
     raw_config = getattr(config, "raw", None)
+    resolved_raw: dict[str, Any] = (
+        dict(raw_config) if isinstance(raw_config, Mapping) else {}
+    )
+    if config is not None:
+        _maybe_overlay_live_surface_config(
+            resolved_raw,
+            section="discord_bot",
+            bot_token=getattr(config, "bot_token", None),
+            state_file=getattr(config, "state_file", None),
+            marker_fields=("application_id", "app_id_env"),
+            config=config,
+        )
+        _maybe_overlay_live_surface_config(
+            resolved_raw,
+            section="telegram_bot",
+            bot_token=getattr(config, "bot_token", None),
+            state_file=getattr(config, "state_file", None),
+            marker_fields=("allowed_chat_ids", "api_base_url"),
+            config=config,
+        )
     return (
         hub_root if isinstance(hub_root, Path) else Path(fallback_root),
-        raw_config if isinstance(raw_config, Mapping) else {},
+        resolved_raw,
     )
+
+
+def _maybe_overlay_live_surface_config(
+    raw_config: dict[str, Any],
+    *,
+    section: str,
+    bot_token: Any,
+    state_file: Any,
+    marker_fields: tuple[str, ...],
+    config: Any,
+) -> None:
+    has_marker = any(hasattr(config, field) for field in marker_fields)
+    token = str(bot_token or "").strip()
+    state_path = str(state_file).strip() if state_file is not None else ""
+    if not has_marker or (not token and not state_path):
+        return
+    existing = raw_config.get(section)
+    section_config = dict(existing) if isinstance(existing, Mapping) else {}
+    if token and not str(section_config.get("bot_token") or "").strip():
+        section_config["bot_token"] = token
+    if state_path and not str(section_config.get("state_file") or "").strip():
+        section_config["state_file"] = state_path
+    if token and "enabled" not in section_config:
+        section_config["enabled"] = True
+    raw_config[section] = section_config
 
 
 class _BaseBoundProgressAdapter:

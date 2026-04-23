@@ -21,6 +21,7 @@ from codex_autorunner.integrations.chat.bound_live_progress import (
     build_bound_chat_progress_cleanup_metadata,
     build_bound_chat_queue_execution_controller,
     mark_bound_chat_progress_delivered,
+    resolve_bound_chat_queue_progress_context,
 )
 from codex_autorunner.integrations.chat.managed_thread_turns import (
     ManagedThreadFinalizationResult,
@@ -227,6 +228,102 @@ async def test_bound_chat_queue_execution_controller_finalizes_error_session(
 
     assert controller.surface_targets_for("turn-2") == ()
     assert calls == ["start", "finalize:error:boom", "close"]
+
+
+@pytest.mark.anyio
+async def test_resolve_bound_chat_queue_progress_context_injects_discord_service_credentials(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeBindingStore:
+        def __init__(self, _hub_root: Path) -> None:
+            _ = _hub_root
+
+        def list_bindings(self, **_: object) -> list[object]:
+            return [
+                type(
+                    "Binding",
+                    (),
+                    {"surface_kind": "discord", "surface_key": "channel-1"},
+                )()
+            ]
+
+    class FakeDiscordRestClient:
+        def __init__(self, *, bot_token: str) -> None:
+            assert bot_token == "discord-token"
+
+        async def create_channel_message(
+            self,
+            *,
+            channel_id: str,
+            payload: dict[str, object],
+        ) -> dict[str, str]:
+            assert channel_id == "channel-1"
+            assert "content" in payload
+            return {"id": "discord-msg-1"}
+
+        async def edit_channel_message(self, **_: object) -> dict[str, object]:
+            return {}
+
+        async def delete_channel_message(self, **_: object) -> None:
+            return None
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(progress_module, "OrchestrationBindingStore", FakeBindingStore)
+    monkeypatch.setattr(progress_module, "DiscordRestClient", FakeDiscordRestClient)
+
+    state_path = tmp_path / ".codex-autorunner" / "discord_state.sqlite3"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    owner = SimpleNamespace(
+        _config=SimpleNamespace(
+            root=tmp_path,
+            raw={"discord_bot": {"state_file": str(state_path)}},
+            bot_token="discord-token",
+            application_id="app-1",
+            state_file=state_path,
+        )
+    )
+
+    hub_root, raw_config = resolve_bound_chat_queue_progress_context(
+        owner,
+        fallback_root=tmp_path / "fallback",
+    )
+
+    assert hub_root == tmp_path
+    assert raw_config["discord_bot"]["bot_token"] == "discord-token"
+    assert raw_config["discord_bot"]["state_file"] == str(state_path)
+
+    store = DiscordStateStore(state_path)
+    try:
+        await store.initialize()
+        session = build_bound_chat_live_progress_session(
+            hub_root=hub_root,
+            raw_config=raw_config,
+            managed_thread_id="thread-1",
+            managed_turn_id="turn-1",
+            agent="codex",
+            model="gpt-5",
+        )
+
+        await session.start()
+
+        assert await store.list_outbox() == []
+        notification_store = PmaNotificationStore(hub_root)
+        conversation = notification_store.get_by_delivery_record_id(
+            bound_chat_progress_send_record_id(
+                surface_kind="discord",
+                surface_key="channel-1",
+                managed_thread_id="thread-1",
+                managed_turn_id="turn-1",
+            )
+        )
+        assert conversation is not None
+        assert conversation.delivered_message_id == "discord-msg-1"
+        await session.close()
+    finally:
+        await store.close()
 
 
 @pytest.mark.anyio
