@@ -241,8 +241,13 @@ async def test_dispatch_update_uses_shared_ledger_to_reject_restart_duplicate_ca
             executions.append("handled")
             return None
 
+        async def _answer_callback(_callback, _text=""):  # type: ignore[no-untyped-def]
+            return None
+
         service._handle_callback = _handle_callback  # type: ignore[assignment]
         restarted._handle_callback = _handle_callback  # type: ignore[assignment]
+        service._answer_callback = _answer_callback  # type: ignore[assignment]
+        restarted._answer_callback = _answer_callback  # type: ignore[assignment]
 
         update = TelegramUpdate(update_id=41, message=None, callback=callback)
         await dispatch_update(service, update)

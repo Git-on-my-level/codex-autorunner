@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any, Optional
 
 import pytest
 
@@ -19,6 +17,8 @@ async def test_repo_turn_notifies_user_when_runtime_binding_restarts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    support.patch_sqlite_connection_cache(monkeypatch)
+
     record = support.TelegramTopicRecord(
         pma_enabled=False,
         workspace_path=str(tmp_path),
@@ -27,108 +27,8 @@ async def test_repo_turn_notifies_user_when_runtime_binding_restarts(
     )
     handler = support._ManagedThreadPMAHandler(record, tmp_path)
 
-    class _FakeHarness:
-        display_name = "Fake"
-        capabilities = frozenset(
-            {
-                "durable_threads",
-                "message_turns",
-                "interrupt",
-                "event_streaming",
-            }
-        )
-
-        def __init__(self) -> None:
-            self.start_calls: list[tuple[str, str]] = []
-            self._conversation_count = 0
-
-        async def ensure_ready(self, workspace_root: Path) -> None:
-            assert workspace_root == tmp_path
-
-        async def backend_runtime_instance_id(
-            self, workspace_root: Path
-        ) -> Optional[str]:
-            assert workspace_root == tmp_path
-            return "runtime-test-1"
-
-        def supports(self, capability: str) -> bool:
-            return capability in self.capabilities
-
-        async def new_conversation(
-            self, workspace_root: Path, title: Optional[str] = None
-        ) -> SimpleNamespace:
-            _ = workspace_root, title
-            self._conversation_count += 1
-            return SimpleNamespace(id=f"repo-backend-thread-{self._conversation_count}")
-
-        async def resume_conversation(
-            self, workspace_root: Path, conversation_id: str
-        ) -> SimpleNamespace:
-            _ = workspace_root
-            return SimpleNamespace(id=conversation_id)
-
-        async def start_turn(
-            self,
-            workspace_root: Path,
-            conversation_id: str,
-            prompt: str,
-            model: Optional[str],
-            reasoning: Optional[str],
-            *,
-            approval_mode: Optional[str],
-            sandbox_policy: Optional[Any],
-            input_items: Optional[list[dict[str, Any]]] = None,
-        ) -> SimpleNamespace:
-            _ = model, reasoning, approval_mode, sandbox_policy, input_items
-            assert workspace_root == tmp_path
-            self.start_calls.append((conversation_id, prompt))
-            turn_id = f"{conversation_id}:turn-{len(self.start_calls)}"
-            return SimpleNamespace(conversation_id=conversation_id, turn_id=turn_id)
-
-        async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
-            raise AssertionError("review mode should not be used in this test")
-
-        async def wait_for_turn(
-            self,
-            workspace_root: Path,
-            conversation_id: str,
-            turn_id: Optional[str],
-            *,
-            timeout: Optional[float] = None,
-        ) -> SimpleNamespace:
-            _ = workspace_root, timeout
-            assert isinstance(turn_id, str)
-            return SimpleNamespace(
-                status="ok",
-                assistant_text=f"reply for {conversation_id}/{turn_id}",
-                errors=[],
-            )
-
-        async def interrupt(
-            self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
-        ) -> None:
-            _ = workspace_root, conversation_id, turn_id
-
-        async def stream_events(
-            self, workspace_root: Path, conversation_id: str, turn_id: str
-        ):
-            _ = workspace_root, conversation_id, turn_id
-            if False:
-                yield ""
-
-    harness = _FakeHarness()
-    monkeypatch.setattr(
-        support.execution_commands_module,
-        "get_registered_agents",
-        lambda context=None: {
-            "codex": support.AgentDescriptor(
-                id="codex",
-                name="Codex",
-                capabilities=harness.capabilities,
-                make_harness=lambda _ctx: harness,
-            )
-        },
-    )
+    harness = support._SessionRecoveryFakeHarness(thread_prefix="repo-backend-thread")
+    support.patch_registered_agents(monkeypatch, harness)
 
     first_message = support.TelegramMessage(
         update_id=1,
@@ -176,5 +76,5 @@ async def test_repo_turn_notifies_user_when_runtime_binding_restarts(
     assert handler._sent[-1].startswith(_SESSION_NOTICE) or (
         any(s.startswith(_SESSION_NOTICE) for s in handler._sent)
     )
-    assert "reply for repo-backend-thread-2/" in "".join(handler._sent)
+    assert "reply for repo-backend-thread-2:turn-2" in "".join(handler._sent)
     assert record.active_thread_id == "repo-backend-thread-2"

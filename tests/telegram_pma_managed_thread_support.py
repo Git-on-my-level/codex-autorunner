@@ -1,9 +1,11 @@
 import asyncio
 import contextlib
 import logging
+import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 import anyio
 import pytest
@@ -53,6 +55,208 @@ from codex_autorunner.integrations.telegram.notifications import (
 from codex_autorunner.integrations.telegram.state import (
     TelegramTopicRecord,
 )
+
+
+class _SqliteConnectionCache:
+    def __init__(self) -> None:
+        self._cache: dict[str, sqlite3.Connection] = {}
+
+    @contextmanager
+    def open_sqlite(
+        self,
+        path: Path,
+        durable: bool = False,
+        *,
+        busy_timeout_ms: Optional[int] = None,
+    ) -> Iterator[sqlite3.Connection]:
+        path_str = str(path)
+        if path_str not in self._cache:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            conn = sqlite3.connect(path_str)
+            conn.row_factory = sqlite3.Row
+            timeout = busy_timeout_ms if busy_timeout_ms is not None else 5000
+            for pragma in (
+                "PRAGMA journal_mode=WAL;",
+                "PRAGMA synchronous=NORMAL;",
+                "PRAGMA foreign_keys=ON;",
+                f"PRAGMA busy_timeout={max(0, timeout)};",
+                "PRAGMA temp_store=MEMORY;",
+            ):
+                conn.execute(pragma)
+            self._cache[path_str] = conn
+        yield self._cache[path_str]
+        self._cache[path_str].commit()
+
+    def close_all(self) -> None:
+        for conn in self._cache.values():
+            try:
+                conn.close()
+            except Exception:
+                pass
+        self._cache.clear()
+
+
+def patch_sqlite_connection_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> _SqliteConnectionCache:
+    import codex_autorunner.core.sqlite_utils as _sqlite_utils
+
+    cache = _SqliteConnectionCache()
+
+    @contextmanager
+    def _cached_open(
+        path: Path,
+        durable: bool = False,
+        *,
+        busy_timeout_ms: Optional[int] = None,
+    ) -> Iterator[sqlite3.Connection]:
+        path_str = str(path)
+        if path_str not in cache._cache:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            conn = sqlite3.connect(path_str, check_same_thread=False)
+            conn.row_factory = sqlite3.Row
+            timeout = busy_timeout_ms if busy_timeout_ms is not None else 5000
+            for pragma in (
+                "PRAGMA journal_mode=WAL;",
+                "PRAGMA synchronous=NORMAL;",
+                "PRAGMA foreign_keys=ON;",
+                f"PRAGMA busy_timeout={max(0, timeout)};",
+                "PRAGMA temp_store=MEMORY;",
+            ):
+                conn.execute(pragma)
+            cache._cache[path_str] = conn
+        yield cache._cache[path_str]
+        cache._cache[path_str].commit()
+
+    monkeypatch.setattr(_sqlite_utils, "open_sqlite", _cached_open)
+    _patch_targets = [
+        "codex_autorunner.core.orchestration.sqlite",
+        "codex_autorunner.core.orchestration.verification",
+        "codex_autorunner.core.orchestration.migrate_legacy_state",
+        "codex_autorunner.core.chat_bindings",
+        "codex_autorunner.core.pma_thread_mirror",
+        "codex_autorunner.core.hub_projection_store",
+        "codex_autorunner.core.state",
+    ]
+    for _mod_path in _patch_targets:
+        try:
+            _mod = __import__(_mod_path, fromlist=["open_sqlite"])
+        except ImportError:
+            continue
+        if hasattr(_mod, "open_sqlite"):
+            monkeypatch.setattr(_mod, "open_sqlite", _cached_open)
+    return cache
+
+
+def patch_registered_agents(
+    monkeypatch: pytest.MonkeyPatch,
+    harness: Any,
+) -> None:
+    from codex_autorunner.agents.registry import AgentDescriptor
+
+    _agents = {
+        "codex": AgentDescriptor(
+            id="codex",
+            name="Codex",
+            capabilities=harness.capabilities,
+            make_harness=lambda _ctx: harness,
+        )
+    }
+    monkeypatch.setattr(
+        execution_commands_module,
+        "get_registered_agents",
+        lambda context=None: _agents,
+    )
+    import codex_autorunner.agents.registry as _registry
+
+    monkeypatch.setattr(
+        _registry,
+        "get_registered_agents",
+        lambda context=None: _agents,
+    )
+
+
+class _SessionRecoveryFakeHarness:
+    display_name = "Fake"
+    capabilities = frozenset(
+        {"durable_threads", "message_turns", "interrupt", "event_streaming"}
+    )
+
+    def __init__(
+        self,
+        *,
+        thread_prefix: str = "sr-thread",
+        track_start_calls: bool = True,
+    ) -> None:
+        self._conversation_count = 0
+        self._thread_prefix = thread_prefix
+        self.start_calls: list[tuple[str, str]] = []
+        self._track_start_calls = track_start_calls
+
+    async def ensure_ready(self, workspace_root: Path) -> None:
+        pass
+
+    async def backend_runtime_instance_id(self, workspace_root: Path) -> Optional[str]:
+        return "runtime-test-sr"
+
+    def supports(self, capability: str) -> bool:
+        return capability in self.capabilities
+
+    async def new_conversation(
+        self, workspace_root: Path, title: Optional[str] = None
+    ) -> SimpleNamespace:
+        self._conversation_count += 1
+        return SimpleNamespace(id=f"{self._thread_prefix}-{self._conversation_count}")
+
+    async def resume_conversation(
+        self, workspace_root: Path, conversation_id: str
+    ) -> SimpleNamespace:
+        return SimpleNamespace(id=conversation_id)
+
+    async def start_turn(
+        self,
+        workspace_root: Path,
+        conversation_id: str,
+        prompt: str,
+        model: Optional[str],
+        reasoning: Optional[str],
+        *,
+        approval_mode: Optional[str],
+        sandbox_policy: Optional[Any],
+        input_items: Optional[list[dict[str, Any]]] = None,
+    ) -> SimpleNamespace:
+        if self._track_start_calls:
+            self.start_calls.append((conversation_id, prompt))
+        turn_id = f"{conversation_id}:turn-{len(self.start_calls) if self._track_start_calls else 1}"
+        return SimpleNamespace(conversation_id=conversation_id, turn_id=turn_id)
+
+    async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
+        raise AssertionError("review mode should not be used in this test")
+
+    async def wait_for_turn(
+        self,
+        workspace_root: Path,
+        conversation_id: str,
+        turn_id: Optional[str],
+        *,
+        timeout: Optional[float] = None,
+    ) -> SimpleNamespace:
+        return SimpleNamespace(
+            status="ok",
+            assistant_text=f"reply for {turn_id}",
+            errors=[],
+        )
+
+    async def interrupt(
+        self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
+    ) -> None:
+        pass
+
+    async def stream_events(
+        self, workspace_root: Path, conversation_id: str, turn_id: str
+    ):
+        if False:
+            yield ""
 
 
 class _NoopSupervisor:

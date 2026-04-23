@@ -881,11 +881,12 @@ class TestSessionRecoveryInvariants:
         runtime restart), the second turn must emit a session-recovery notice
         prepended to the response.
         """
-        from codex_autorunner.agents.registry import AgentDescriptor
         from codex_autorunner.core.orchestration.runtime_bindings import (
             clear_runtime_thread_binding,
         )
         from tests import telegram_pma_managed_thread_support as support
+
+        support.patch_sqlite_connection_cache(monkeypatch)
 
         _SESSION_NOTICE = "Notice: I started a new live session for this conversation."
 
@@ -897,97 +898,10 @@ class TestSessionRecoveryInvariants:
         )
         handler = support._ManagedThreadPMAHandler(record, tmp_path)
 
-        class _FakeHarness:
-            display_name = "Fake"
-            capabilities = frozenset(
-                {"durable_threads", "message_turns", "interrupt", "event_streaming"}
-            )
-
-            def __init__(self) -> None:
-                self.start_calls: list[tuple[str, str]] = []
-                self._conversation_count = 0
-
-            async def ensure_ready(self, workspace_root: Path) -> None:
-                assert workspace_root == tmp_path
-
-            async def backend_runtime_instance_id(
-                self, workspace_root: Path
-            ) -> Optional[str]:
-                return "runtime-inv-1"
-
-            def supports(self, capability: str) -> bool:
-                return capability in self.capabilities
-
-            async def new_conversation(
-                self, workspace_root: Path, title: Optional[str] = None
-            ) -> SimpleNamespace:
-                self._conversation_count += 1
-                return SimpleNamespace(
-                    id=f"inv-backend-thread-{self._conversation_count}"
-                )
-
-            async def resume_conversation(
-                self, workspace_root: Path, conversation_id: str
-            ) -> SimpleNamespace:
-                return SimpleNamespace(id=conversation_id)
-
-            async def start_turn(
-                self,
-                workspace_root: Path,
-                conversation_id: str,
-                prompt: str,
-                model: Optional[str],
-                reasoning: Optional[str],
-                *,
-                approval_mode: Optional[str],
-                sandbox_policy: Optional[Any],
-                input_items: Optional[list[dict[str, Any]]] = None,
-            ) -> SimpleNamespace:
-                self.start_calls.append((conversation_id, prompt))
-                turn_id = f"{conversation_id}:turn-{len(self.start_calls)}"
-                return SimpleNamespace(conversation_id=conversation_id, turn_id=turn_id)
-
-            async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
-                raise AssertionError("review should not be used")
-
-            async def wait_for_turn(
-                self,
-                workspace_root: Path,
-                conversation_id: str,
-                turn_id: Optional[str],
-                *,
-                timeout: Optional[float] = None,
-            ) -> SimpleNamespace:
-                return SimpleNamespace(
-                    status="ok",
-                    assistant_text=f"reply for {turn_id}",
-                    errors=[],
-                )
-
-            async def interrupt(
-                self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
-            ) -> None:
-                pass
-
-            async def stream_events(
-                self, workspace_root: Path, conversation_id: str, turn_id: str
-            ):
-                if False:
-                    yield ""
-
-        harness = _FakeHarness()
-        monkeypatch.setattr(
-            support.execution_commands_module,
-            "get_registered_agents",
-            lambda context=None: {
-                "codex": AgentDescriptor(
-                    id="codex",
-                    name="Codex",
-                    capabilities=harness.capabilities,
-                    make_harness=lambda _ctx: harness,
-                )
-            },
+        harness = support._SessionRecoveryFakeHarness(
+            thread_prefix="inv-backend-thread"
         )
+        support.patch_registered_agents(monkeypatch, harness)
 
         first_message = support.TelegramMessage(
             update_id=1,
@@ -1040,8 +954,9 @@ class TestSessionRecoveryInvariants:
     async def test_consecutive_turns_without_restart_do_not_emit_recovery_notice(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from codex_autorunner.agents.registry import AgentDescriptor
         from tests import telegram_pma_managed_thread_support as support
+
+        support.patch_sqlite_connection_cache(monkeypatch)
 
         _SESSION_NOTICE = "Notice: I started a new live session for this conversation."
 
@@ -1053,93 +968,11 @@ class TestSessionRecoveryInvariants:
         )
         handler = support._ManagedThreadPMAHandler(record, tmp_path)
 
-        class _FakeHarness:
-            display_name = "Fake"
-            capabilities = frozenset(
-                {"durable_threads", "message_turns", "interrupt", "event_streaming"}
-            )
-
-            def __init__(self) -> None:
-                self._conversation_count = 0
-
-            async def ensure_ready(self, workspace_root: Path) -> None:
-                pass
-
-            async def backend_runtime_instance_id(
-                self, workspace_root: Path
-            ) -> Optional[str]:
-                return "runtime-inv-2"
-
-            def supports(self, capability: str) -> bool:
-                return capability in self.capabilities
-
-            async def new_conversation(
-                self, workspace_root: Path, title: Optional[str] = None
-            ) -> SimpleNamespace:
-                self._conversation_count += 1
-                return SimpleNamespace(id=f"inv2-thread-{self._conversation_count}")
-
-            async def resume_conversation(
-                self, workspace_root: Path, conversation_id: str
-            ) -> SimpleNamespace:
-                return SimpleNamespace(id=conversation_id)
-
-            async def start_turn(
-                self,
-                workspace_root: Path,
-                conversation_id: str,
-                prompt: str,
-                model: Optional[str],
-                reasoning: Optional[str],
-                *,
-                approval_mode: Optional[str],
-                sandbox_policy: Optional[Any],
-                input_items: Optional[list[dict[str, Any]]] = None,
-            ) -> SimpleNamespace:
-                turn_id = f"{conversation_id}:turn-1"
-                return SimpleNamespace(conversation_id=conversation_id, turn_id=turn_id)
-
-            async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
-                raise AssertionError("review should not be used")
-
-            async def wait_for_turn(
-                self,
-                workspace_root: Path,
-                conversation_id: str,
-                turn_id: Optional[str],
-                *,
-                timeout: Optional[float] = None,
-            ) -> SimpleNamespace:
-                return SimpleNamespace(
-                    status="ok",
-                    assistant_text="normal reply",
-                    errors=[],
-                )
-
-            async def interrupt(
-                self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
-            ) -> None:
-                pass
-
-            async def stream_events(
-                self, workspace_root: Path, conversation_id: str, turn_id: str
-            ):
-                if False:
-                    yield ""
-
-        harness = _FakeHarness()
-        monkeypatch.setattr(
-            support.execution_commands_module,
-            "get_registered_agents",
-            lambda context=None: {
-                "codex": AgentDescriptor(
-                    id="codex",
-                    name="Codex",
-                    capabilities=harness.capabilities,
-                    make_harness=lambda _ctx: harness,
-                )
-            },
+        harness = support._SessionRecoveryFakeHarness(
+            thread_prefix="inv2-thread",
+            track_start_calls=False,
         )
+        support.patch_registered_agents(monkeypatch, harness)
 
         first_message = support.TelegramMessage(
             update_id=1,
