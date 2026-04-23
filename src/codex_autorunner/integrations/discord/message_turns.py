@@ -116,7 +116,7 @@ from .managed_thread_routing import (
     _build_managed_thread_input_items,
     _DiscordManagedThreadStatus,
     _evict_cached_runtime_supervisors,
-    _load_discord_pma_turn_timeout_seconds,  # noqa: F401  re-export for test monkeypatch compat
+    _load_discord_pma_turn_idle_timeout_seconds,  # noqa: F401  re-export for test monkeypatch compat
     build_discord_thread_orchestration_service,
     resolve_discord_thread_target,
 )
@@ -166,8 +166,9 @@ _logger = logging.getLogger(__name__)
 
 DISCORD_PMA_PUBLIC_EXECUTION_ERROR = "Discord PMA turn failed"
 DISCORD_REPO_PUBLIC_EXECUTION_ERROR = "Discord turn failed"
-DISCORD_PMA_TIMEOUT_SECONDS = 7200
-_DEFAULT_DISCORD_PMA_TIMEOUT_SECONDS = 7200
+DISCORD_PMA_IDLE_TIMEOUT_SECONDS = 1800
+DISCORD_PMA_TIMEOUT_SECONDS = DISCORD_PMA_IDLE_TIMEOUT_SECONDS
+_DEFAULT_DISCORD_PMA_IDLE_TIMEOUT_SECONDS = 1800
 DISCORD_PMA_STALL_TIMEOUT_SECONDS = 1800
 _DEFAULT_DISCORD_PMA_STALL_TIMEOUT_SECONDS = 1800
 DISCORD_PMA_SUBMISSION_TIMEOUT_SECONDS = 300.0

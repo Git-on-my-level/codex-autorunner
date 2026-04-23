@@ -19,16 +19,19 @@ from tests.conftest import write_test_config
 def _write_hub_config(root: Path, *, timeout_seconds: int) -> None:
     config = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
     config.setdefault("pma", {})
-    config["pma"]["turn_timeout_seconds"] = timeout_seconds
+    config["pma"]["turn_idle_timeout_seconds"] = timeout_seconds
     write_test_config(root / CONFIG_FILENAME, config)
 
 
-def test_discord_pma_turn_timeout_reads_hub_config(tmp_path: Path) -> None:
+def test_discord_pma_turn_idle_timeout_reads_hub_config(tmp_path: Path) -> None:
     _write_hub_config(tmp_path, timeout_seconds=123)
 
     service = SimpleNamespace(_config=SimpleNamespace(root=tmp_path))
 
-    assert discord_message_turns._load_discord_pma_turn_timeout_seconds(service) == 123
+    assert (
+        discord_message_turns._load_discord_pma_turn_idle_timeout_seconds(service)
+        == 123
+    )
 
 
 def test_discord_repo_managed_thread_coordinator_ignores_pma_turn_timeout(
@@ -50,7 +53,7 @@ def test_discord_repo_managed_thread_coordinator_ignores_pma_turn_timeout(
     assert coordinator.errors.timeout_seconds == 7200.0
 
 
-def test_telegram_pma_turn_timeout_reads_hub_config(tmp_path: Path) -> None:
+def test_telegram_pma_turn_idle_timeout_reads_hub_config(tmp_path: Path) -> None:
     _write_hub_config(tmp_path, timeout_seconds=234)
 
     handlers = SimpleNamespace(
@@ -59,7 +62,9 @@ def test_telegram_pma_turn_timeout_reads_hub_config(tmp_path: Path) -> None:
         _hub_supervisor=None,
     )
 
-    assert telegram_execution._load_telegram_pma_turn_timeout_seconds(handlers) == 234
+    assert (
+        telegram_execution._load_telegram_pma_turn_idle_timeout_seconds(handlers) == 234
+    )
 
 
 def test_telegram_repo_managed_thread_coordinator_ignores_pma_turn_timeout(
@@ -87,17 +92,19 @@ def test_telegram_repo_managed_thread_coordinator_ignores_pma_turn_timeout(
     assert coordinator.errors.timeout_seconds == 7200.0
 
 
-def test_web_pma_turn_timeout_reads_request_config() -> None:
+def test_web_pma_turn_idle_timeout_reads_request_config() -> None:
     request = SimpleNamespace(
         app=SimpleNamespace(
             state=SimpleNamespace(
-                config=SimpleNamespace(pma=SimpleNamespace(turn_timeout_seconds=345))
+                config=SimpleNamespace(
+                    pma=SimpleNamespace(turn_idle_timeout_seconds=345)
+                )
             )
         )
     )
 
-    assert chat_runtime._pma_turn_timeout_seconds(request) == 345
-    assert managed_thread_runtime._pma_turn_timeout_seconds(request) == 345
+    assert chat_runtime._pma_turn_idle_timeout_seconds(request) == 345
+    assert managed_thread_runtime._pma_turn_idle_timeout_seconds(request) == 345
 
 
 class TestPmaTimeoutIsolationInvariants:
@@ -115,6 +122,7 @@ class TestPmaTimeoutIsolationInvariants:
         )
         assert coordinator.errors.timeout_seconds == 42.0
         assert coordinator.errors.stall_timeout_seconds == 42.0
+        assert coordinator.errors.idle_timeout_only is True
 
     def test_telegram_pma_surface_uses_hub_config_timeout(self, tmp_path: Path) -> None:
         _write_hub_config(tmp_path, timeout_seconds=55)
@@ -135,6 +143,8 @@ class TestPmaTimeoutIsolationInvariants:
             pma_enabled=True,
         )
         assert coordinator.errors.timeout_seconds == 55.0
+        assert coordinator.errors.stall_timeout_seconds == 55.0
+        assert coordinator.errors.idle_timeout_only is True
 
     def test_discord_repo_surface_always_uses_legacy_7200_regardless_of_config(
         self, tmp_path: Path
@@ -151,6 +161,7 @@ class TestPmaTimeoutIsolationInvariants:
             pma_enabled=False,
         )
         assert coordinator.errors.timeout_seconds == 7200.0
+        assert coordinator.errors.idle_timeout_only is False
 
     def test_discord_pma_surface_stall_timeout_caps_at_total_timeout(
         self, tmp_path: Path, monkeypatch
@@ -173,6 +184,7 @@ class TestPmaTimeoutIsolationInvariants:
         )
         assert coordinator.errors.timeout_seconds == 42.0
         assert coordinator.errors.stall_timeout_seconds == 42.0
+        assert coordinator.errors.idle_timeout_only is True
 
     def test_telegram_repo_surface_always_uses_legacy_7200_regardless_of_config(
         self, tmp_path: Path
@@ -195,3 +207,4 @@ class TestPmaTimeoutIsolationInvariants:
             pma_enabled=False,
         )
         assert coordinator.errors.timeout_seconds == 7200.0
+        assert coordinator.errors.idle_timeout_only is False

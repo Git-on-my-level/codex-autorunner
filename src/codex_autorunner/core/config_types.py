@@ -118,7 +118,7 @@ class PmaConfig:
     profile: Optional[str]
     model: Optional[str]
     reasoning: Optional[str]
-    turn_timeout_seconds: int
+    turn_idle_timeout_seconds: int
     managed_thread_terminal_followup_default: bool
     max_upload_bytes: int
     max_repos: int
@@ -151,6 +151,10 @@ class PmaConfig:
     orchestration_compaction_max_hot_rows: int = 16
     orchestration_hot_history_retention_days: int = 30
     orchestration_cold_trace_retention_days: int = 90
+
+    @property
+    def turn_timeout_seconds(self) -> int:
+        return self.turn_idle_timeout_seconds
 
 
 @dataclasses.dataclass

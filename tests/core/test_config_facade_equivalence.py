@@ -144,6 +144,12 @@ class TestConstantEquivalence:
             == config_layering.PMA_DEFAULT_TURN_TIMEOUT_SECONDS
         )
 
+    def test_pma_default_turn_idle_timeout_seconds(self) -> None:
+        assert (
+            facade.PMA_DEFAULT_TURN_IDLE_TIMEOUT_SECONDS
+            == config_layering.PMA_DEFAULT_TURN_IDLE_TIMEOUT_SECONDS
+        )
+
     def test_pma_default_max_text_chars(self) -> None:
         assert (
             facade.PMA_DEFAULT_MAX_TEXT_CHARS
