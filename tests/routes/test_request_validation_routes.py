@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 from tests.conftest import write_test_config
 
@@ -12,7 +12,9 @@ from codex_autorunner.surfaces.web.app import create_repo_app
 from codex_autorunner.surfaces.web.schemas import TemplateRepoUpdateRequest
 
 
-def _client_for_repo(repo_root: Path) -> TestClient:
+@pytest.fixture(scope="module")
+def _validation_env(tmp_path_factory):
+    repo_root = tmp_path_factory.mktemp("repo")
     hub_root = repo_root
     seed_hub_files(hub_root, force=True)
     seed_repo_files(repo_root, git_required=False)
@@ -30,13 +32,12 @@ def _client_for_repo(repo_root: Path) -> TestClient:
         ],
     }
     write_test_config(hub_root / CONFIG_FILENAME, config)
-    return TestClient(create_repo_app(repo_root))
+    app = create_repo_app(repo_root)
+    yield TestClient(app), repo_root
 
 
-def test_session_settings_rejects_unknown_keys(tmp_path: Path) -> None:
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-    client = _client_for_repo(repo_root)
+def test_session_settings_rejects_unknown_keys(_validation_env) -> None:
+    client, _repo_root = _validation_env
 
     response = client.post(
         "/api/session/settings",
@@ -51,10 +52,8 @@ def test_session_settings_rejects_unknown_keys(tmp_path: Path) -> None:
     assert any(item["loc"][-1] == "autorunner_model_overide" for item in detail)
 
 
-def test_template_repo_create_rejects_unknown_keys(tmp_path: Path) -> None:
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-    client = _client_for_repo(repo_root)
+def test_template_repo_create_rejects_unknown_keys(_validation_env) -> None:
+    client, _repo_root = _validation_env
 
     response = client.post(
         "/api/templates/repos",
@@ -71,10 +70,8 @@ def test_template_repo_create_rejects_unknown_keys(tmp_path: Path) -> None:
     assert any(item["loc"][-1] == "unexpected" for item in detail)
 
 
-def test_template_repo_update_rejects_unknown_keys(tmp_path: Path) -> None:
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-    client = _client_for_repo(repo_root)
+def test_template_repo_update_rejects_unknown_keys(_validation_env) -> None:
+    client, _repo_root = _validation_env
 
     response = client.put(
         "/api/templates/repos/existing",
@@ -93,10 +90,8 @@ def test_template_repo_update_schema_accepts_default_ref_alias() -> None:
     assert payload.model_dump(exclude_unset=True) == {"default_ref": "stable"}
 
 
-def test_template_apply_rejects_unknown_keys(tmp_path: Path) -> None:
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-    client = _client_for_repo(repo_root)
+def test_template_apply_rejects_unknown_keys(_validation_env) -> None:
+    client, _repo_root = _validation_env
 
     response = client.post(
         "/api/templates/apply",
@@ -111,10 +106,8 @@ def test_template_apply_rejects_unknown_keys(tmp_path: Path) -> None:
     assert any(item["loc"][-1] == "set_agentt" for item in detail)
 
 
-def test_run_start_rejects_unknown_keys(tmp_path: Path) -> None:
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-    client = _client_for_repo(repo_root)
+def test_run_start_rejects_unknown_keys(_validation_env) -> None:
+    client, _repo_root = _validation_env
 
     response = client.post(
         "/api/run/start",

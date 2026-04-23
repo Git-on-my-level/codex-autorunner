@@ -4,6 +4,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
 from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
@@ -13,11 +14,14 @@ from codex_autorunner.surfaces.web.app import create_repo_app
 from codex_autorunner.surfaces.web.routes import flows as flows_route_module
 
 
-def _client_for_repo(repo_root: Path) -> TestClient:
+@pytest.fixture(scope="module")
+def _flow_archive_env(tmp_path_factory):
+    repo_root = tmp_path_factory.mktemp("repo")
     seed_hub_files(repo_root.parent, force=True)
     seed_repo_files(repo_root, git_required=False)
     (repo_root / ".git").mkdir(exist_ok=True)
-    return TestClient(create_repo_app(repo_root))
+    app = create_repo_app(repo_root)
+    yield TestClient(app), repo_root
 
 
 def _create_run(repo_root: Path, run_id: str, status: FlowRunStatus) -> None:
@@ -50,11 +54,9 @@ def _seed_ticket_state(repo_root: Path, run_id: str) -> None:
 
 
 def test_archive_route_deletes_run_record_by_default(
-    tmp_path: Path, monkeypatch
+    _flow_archive_env, monkeypatch
 ) -> None:
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-    client = _client_for_repo(repo_root)
+    client, repo_root = _flow_archive_env
     run_id = str(uuid.uuid4())
     _create_run(repo_root, run_id, FlowRunStatus.COMPLETED)
     captured: list[dict[str, Any]] = []
@@ -91,11 +93,9 @@ def test_archive_route_deletes_run_record_by_default(
 
 
 def test_archive_route_cleans_live_contextspace_after_archiving(
-    tmp_path: Path,
+    _flow_archive_env,
 ) -> None:
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-    client = _client_for_repo(repo_root)
+    client, repo_root = _flow_archive_env
     run_id = str(uuid.uuid4())
     _create_run(repo_root, run_id, FlowRunStatus.COMPLETED)
     _seed_ticket_state(repo_root, run_id)

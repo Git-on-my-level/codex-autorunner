@@ -56,18 +56,18 @@ def _write_snapshot(
     return snapshot_root
 
 
-def _client_for_repo(repo_root: Path) -> TestClient:
+@pytest.fixture(scope="module")
+def _archive_env(tmp_path_factory):
+    repo_root = tmp_path_factory.mktemp("repo")
     seed_hub_files(repo_root, force=True)
     seed_repo_files(repo_root, git_required=False)
     (repo_root / ".git").mkdir(exist_ok=True)
     app = create_repo_app(repo_root)
-    return TestClient(app)
+    yield TestClient(app), repo_root
 
 
-def test_archive_snapshots_list_and_detail(tmp_path: Path) -> None:
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-    client = _client_for_repo(repo_root)
+def test_archive_snapshots_list_and_detail(_archive_env) -> None:
+    client, repo_root = _archive_env
 
     _write_snapshot(repo_root, "wt1", "snap-no-meta", with_meta=False)
     _write_snapshot(repo_root, "wt2", "snap-with-meta", with_meta=True)
@@ -94,19 +94,15 @@ def test_archive_snapshots_list_and_detail(tmp_path: Path) -> None:
     assert detail2.json()["snapshot"]["status"] == "complete"
 
 
-def test_archive_missing_snapshot_returns_404(tmp_path: Path) -> None:
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-    client = _client_for_repo(repo_root)
+def test_archive_missing_snapshot_returns_404(_archive_env) -> None:
+    client, _repo_root = _archive_env
 
     res = client.get("/api/archive/snapshots/missing")
     assert res.status_code == 404
 
 
-def test_archive_traversal_is_rejected(tmp_path: Path) -> None:
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-    client = _client_for_repo(repo_root)
+def test_archive_traversal_is_rejected(_archive_env) -> None:
+    client, repo_root = _archive_env
 
     _write_snapshot(repo_root, "wt1", "snap1", with_meta=False)
 
@@ -127,10 +123,8 @@ def test_archive_traversal_is_rejected(tmp_path: Path) -> None:
     assert res.status_code == 400
 
 
-def test_archive_tree_and_file_reads(tmp_path: Path) -> None:
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-    client = _client_for_repo(repo_root)
+def test_archive_tree_and_file_reads(_archive_env) -> None:
+    client, repo_root = _archive_env
 
     _write_snapshot(repo_root, "wt1", "snap1", with_meta=False)
 
@@ -157,10 +151,8 @@ def test_archive_tree_and_file_reads(tmp_path: Path) -> None:
     assert download.content == b"Archived context"
 
 
-def test_local_archive_tree_reads_any_archived_run_content(tmp_path: Path) -> None:
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-    client = _client_for_repo(repo_root)
+def test_local_archive_tree_reads_any_archived_run_content(_archive_env) -> None:
+    client, repo_root = _archive_env
 
     run_root = repo_root / ".codex-autorunner" / "archive" / "runs" / "run-123"
     (run_root / "contextspace").mkdir(parents=True, exist_ok=True)
@@ -193,12 +185,10 @@ def test_local_archive_tree_reads_any_archived_run_content(tmp_path: Path) -> No
     assert download.content == b"Local archived context"
 
 
-def test_local_archive_symlink_escape_is_rejected(tmp_path: Path) -> None:
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-    client = _client_for_repo(repo_root)
+def test_local_archive_symlink_escape_is_rejected(_archive_env) -> None:
+    client, repo_root = _archive_env
 
-    outside_root = tmp_path / "outside-run"
+    outside_root = repo_root.parent / "outside-run"
     (outside_root / "contextspace").mkdir(parents=True, exist_ok=True)
     (outside_root / "contextspace" / "active_context.md").write_text(
         "Escaped local archived context", encoding="utf-8"
@@ -227,10 +217,8 @@ def test_local_archive_symlink_escape_is_rejected(tmp_path: Path) -> None:
     assert download.status_code == 400
 
 
-def test_local_archive_rejects_traversal_in_run_id(tmp_path: Path) -> None:
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-    client = _client_for_repo(repo_root)
+def test_local_archive_rejects_traversal_in_run_id(_archive_env) -> None:
+    client, _repo_root = _archive_env
 
     res = client.get("/api/archive/local/tree", params={"run_id": "../escape"})
     assert res.status_code == 400
@@ -242,10 +230,8 @@ def test_local_archive_rejects_traversal_in_run_id(tmp_path: Path) -> None:
     assert res.status_code == 400
 
 
-def test_archive_tree_rejects_empty_snapshot_id(tmp_path: Path) -> None:
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-    client = _client_for_repo(repo_root)
+def test_archive_tree_rejects_empty_snapshot_id(_archive_env) -> None:
+    client, _repo_root = _archive_env
 
     res = client.get(
         "/api/archive/tree", params={"snapshot_id": "", "path": "contextspace"}
@@ -253,10 +239,8 @@ def test_archive_tree_rejects_empty_snapshot_id(tmp_path: Path) -> None:
     assert res.status_code in (400, 404)
 
 
-def test_archive_file_read_rejects_absolute_path(tmp_path: Path) -> None:
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-    client = _client_for_repo(repo_root)
+def test_archive_file_read_rejects_absolute_path(_archive_env) -> None:
+    client, repo_root = _archive_env
     _write_snapshot(repo_root, "wt1", "snap1", with_meta=False)
 
     res = client.get(
@@ -266,10 +250,8 @@ def test_archive_file_read_rejects_absolute_path(tmp_path: Path) -> None:
     assert res.status_code == 400
 
 
-def test_local_archive_file_read_rejects_absolute_path(tmp_path: Path) -> None:
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-    client = _client_for_repo(repo_root)
+def test_local_archive_file_read_rejects_absolute_path(_archive_env) -> None:
+    client, repo_root = _archive_env
 
     run_root = repo_root / ".codex-autorunner" / "archive" / "runs" / "run-456"
     run_root.mkdir(parents=True, exist_ok=True)
@@ -281,10 +263,8 @@ def test_local_archive_file_read_rejects_absolute_path(tmp_path: Path) -> None:
     assert res.status_code == 400
 
 
-def test_archive_snapshots_only_lists_snapshots_with_meta(tmp_path: Path) -> None:
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-    client = _client_for_repo(repo_root)
+def test_archive_snapshots_only_lists_snapshots_with_meta(_archive_env) -> None:
+    client, repo_root = _archive_env
 
     _write_snapshot(repo_root, "wt1", "snap-no-meta", with_meta=False)
     _write_snapshot(repo_root, "wt1", "snap-with-meta", with_meta=True)
@@ -296,10 +276,8 @@ def test_archive_snapshots_only_lists_snapshots_with_meta(tmp_path: Path) -> Non
     assert "snap-no-meta" not in snapshot_ids
 
 
-def test_archive_download_rejects_path_traversal(tmp_path: Path) -> None:
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-    client = _client_for_repo(repo_root)
+def test_archive_download_rejects_path_traversal(_archive_env) -> None:
+    client, repo_root = _archive_env
     _write_snapshot(repo_root, "wt1", "snap1", with_meta=False)
 
     res = client.get(

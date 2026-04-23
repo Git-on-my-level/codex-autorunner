@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from pathlib import Path
-
+import pytest
 from fastapi.testclient import TestClient
 
 from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
@@ -9,28 +8,26 @@ from codex_autorunner.contextspace.paths import CONTEXTSPACE_DOC_KINDS
 from codex_autorunner.surfaces.web.app import create_repo_app
 
 
-def _client_for_repo(repo_root: Path) -> TestClient:
+@pytest.fixture(scope="module")
+def _contextspace_env(tmp_path_factory):
+    repo_root = tmp_path_factory.mktemp("repo")
     seed_hub_files(repo_root.parent, force=True)
     seed_repo_files(repo_root, git_required=False)
     (repo_root / ".git").mkdir(exist_ok=True)
     app = create_repo_app(repo_root)
-    return TestClient(app)
+    yield TestClient(app), repo_root
 
 
-def test_contextspace_rejects_invalid_doc_kind(tmp_path: Path) -> None:
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-    client = _client_for_repo(repo_root)
+def test_contextspace_rejects_invalid_doc_kind(_contextspace_env) -> None:
+    client, _repo_root = _contextspace_env
 
     res = client.put("/api/contextspace/binary", json={"content": "nope"})
     assert res.status_code == 400
     assert res.json()["detail"] == "invalid contextspace doc kind"
 
 
-def test_contextspace_get_includes_catalog(tmp_path: Path) -> None:
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-    client = _client_for_repo(repo_root)
+def test_contextspace_get_includes_catalog(_contextspace_env) -> None:
+    client, _repo_root = _contextspace_env
 
     res = client.get("/api/contextspace")
     assert res.status_code == 200
@@ -38,10 +35,8 @@ def test_contextspace_get_includes_catalog(tmp_path: Path) -> None:
     assert [entry["kind"] for entry in payload["kinds"]] == list(CONTEXTSPACE_DOC_KINDS)
 
 
-def test_contextspace_tree_lists_seeded_docs(tmp_path: Path) -> None:
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-    client = _client_for_repo(repo_root)
+def test_contextspace_tree_lists_seeded_docs(_contextspace_env) -> None:
+    client, _repo_root = _contextspace_env
 
     res = client.get("/api/contextspace/tree")
 
@@ -55,10 +50,8 @@ def test_contextspace_tree_lists_seeded_docs(tmp_path: Path) -> None:
     assert isinstance(nodes["active_context.md"]["size"], int)
 
 
-def test_contextspace_put_rejects_unknown_keys(tmp_path: Path) -> None:
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-    client = _client_for_repo(repo_root)
+def test_contextspace_put_rejects_unknown_keys(_contextspace_env) -> None:
+    client, _repo_root = _contextspace_env
 
     res = client.put(
         "/api/contextspace/active_context",

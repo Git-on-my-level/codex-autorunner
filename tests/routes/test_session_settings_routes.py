@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from unittest.mock import PropertyMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
 from tests.conftest import write_test_config
 
@@ -13,7 +13,9 @@ from codex_autorunner.surfaces.web.app import create_repo_app
 from codex_autorunner.surfaces.web.runner_manager import RunnerManager
 
 
-def _client_for_repo(repo_root: Path) -> TestClient:
+@pytest.fixture(scope="module")
+def _settings_env(tmp_path_factory):
+    repo_root = tmp_path_factory.mktemp("repo")
     hub_root = repo_root
     seed_hub_files(hub_root, force=True)
     seed_repo_files(repo_root, git_required=False)
@@ -21,13 +23,24 @@ def _client_for_repo(repo_root: Path) -> TestClient:
     write_test_config(
         hub_root / CONFIG_FILENAME, json.loads(json.dumps(DEFAULT_HUB_CONFIG))
     )
-    return TestClient(create_repo_app(repo_root))
+    app = create_repo_app(repo_root)
+    yield TestClient(app), repo_root
 
 
-def test_session_settings_round_trip_persists_values(tmp_path: Path) -> None:
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-    client = _client_for_repo(repo_root)
+def test_session_settings_round_trip_persists_values(_settings_env) -> None:
+    client, _repo_root = _settings_env
+
+    client.post(
+        "/api/session/settings",
+        json={
+            "autorunner_model_override": "",
+            "autorunner_effort_override": "",
+            "autorunner_approval_policy": "",
+            "autorunner_sandbox_mode": "",
+            "autorunner_workspace_write_network": None,
+            "runner_stop_after_runs": None,
+        },
+    )
 
     initial = client.get("/api/session/settings")
     assert initial.status_code == 200
@@ -67,10 +80,8 @@ def test_session_settings_round_trip_persists_values(tmp_path: Path) -> None:
     assert refreshed.json() == response.json()
 
 
-def test_session_settings_allow_clearing_values(tmp_path: Path) -> None:
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-    client = _client_for_repo(repo_root)
+def test_session_settings_allow_clearing_values(_settings_env) -> None:
+    client, _repo_root = _settings_env
 
     seeded = client.post(
         "/api/session/settings",
@@ -108,10 +119,8 @@ def test_session_settings_allow_clearing_values(tmp_path: Path) -> None:
     }
 
 
-def test_session_settings_reject_changes_while_run_is_active(tmp_path: Path) -> None:
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-    client = _client_for_repo(repo_root)
+def test_session_settings_reject_changes_while_run_is_active(_settings_env) -> None:
+    client, _repo_root = _settings_env
 
     with patch.object(RunnerManager, "running", new_callable=PropertyMock) as running:
         running.return_value = True

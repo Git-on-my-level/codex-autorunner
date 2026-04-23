@@ -5,6 +5,7 @@ import sqlite3
 import uuid
 from pathlib import Path
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -21,7 +22,14 @@ def _reset_state() -> None:
     pass
 
 
-def test_bootstrap_reuses_active_run_with_hint(tmp_path, monkeypatch):
+@pytest.fixture(scope="module")
+def _flow_client():
+    app = FastAPI()
+    app.include_router(flow_routes.build_flow_routes())
+    yield TestClient(app)
+
+
+def test_bootstrap_reuses_active_run_with_hint(tmp_path, monkeypatch, _flow_client):
     _reset_state()
     monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
 
@@ -73,11 +81,7 @@ def test_bootstrap_reuses_active_run_with_hint(tmp_path, monkeypatch):
 
     monkeypatch.setattr(flow_routes, "_start_flow_worker", fake_start_worker)
 
-    app = FastAPI()
-    app.include_router(flow_routes.build_flow_routes())
-
-    with TestClient(app) as client:
-        resp = client.post("/api/flows/ticket_flow/bootstrap", json={})
+    resp = _flow_client.post("/api/flows/ticket_flow/bootstrap", json={})
     assert resp.status_code == 200
     payload = resp.json()
     assert payload["id"] == run_id
@@ -85,7 +89,9 @@ def test_bootstrap_reuses_active_run_with_hint(tmp_path, monkeypatch):
     assert spawned["count"] == 1
 
 
-def test_start_reuses_active_run_when_latest_is_terminal(tmp_path, monkeypatch):
+def test_start_reuses_active_run_when_latest_is_terminal(
+    tmp_path, monkeypatch, _flow_client
+):
     _reset_state()
     seed_hub_files(tmp_path, force=True)
     monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
@@ -157,11 +163,7 @@ def test_start_reuses_active_run_when_latest_is_terminal(tmp_path, monkeypatch):
 
     monkeypatch.setattr(flow_routes, "_start_flow_worker", fake_start_worker)
 
-    app = FastAPI()
-    app.include_router(flow_routes.build_flow_routes())
-
-    with TestClient(app) as client:
-        resp = client.post("/api/flows/ticket_flow/start", json={})
+    resp = _flow_client.post("/api/flows/ticket_flow/start", json={})
 
     assert resp.status_code == 200
     payload = resp.json()
@@ -170,7 +172,7 @@ def test_start_reuses_active_run_when_latest_is_terminal(tmp_path, monkeypatch):
     assert spawned["count"] == 1
 
 
-def test_bootstrap_honors_force_new(tmp_path, monkeypatch):
+def test_bootstrap_honors_force_new(tmp_path, monkeypatch, _flow_client):
     _reset_state()
     monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
 
@@ -218,7 +220,7 @@ def test_bootstrap_honors_force_new(tmp_path, monkeypatch):
     monkeypatch.setattr(
         flow_routes,
         "check_worker_health",
-        lambda *_, **__: FlowWorkerHealth(  # type: ignore[arg-type]
+        lambda *_, **__: FlowWorkerHealth(
             status="dead",
             pid=None,
             cmdline=[],
@@ -231,30 +233,24 @@ def test_bootstrap_honors_force_new(tmp_path, monkeypatch):
         ),
     )
 
-    # Force new should ignore the existing run and create a new one.
-    app = FastAPI()
-    app.include_router(flow_routes.build_flow_routes())
-
-    with TestClient(app) as client:
-        resp = client.post(
-            "/api/flows/ticket_flow/bootstrap",
-            json={"metadata": {"force_new": True}},
-        )
+    resp = _flow_client.post(
+        "/api/flows/ticket_flow/bootstrap",
+        json={"metadata": {"force_new": True}},
+    )
     assert resp.status_code == 200
     payload = resp.json()
     assert payload["id"] != existing.id
     assert payload.get("state", {}).get("hint") is None
 
 
-def test_bootstrap_skips_seeding_when_tickets_exist(tmp_path, monkeypatch):
-    """Bootstrap should not create a new ticket when any ticket already exists."""
-
+def test_bootstrap_skips_seeding_when_tickets_exist(
+    tmp_path, monkeypatch, _flow_client
+):
     _reset_state()
     monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
 
     ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
     ticket_dir.mkdir(parents=True, exist_ok=True)
-    # Simulate an existing ticket with a non-001 index
     (ticket_dir / "TICKET-010.md").write_text(
         "--\nagent: codex\ndone: false\n--\n", encoding="utf-8"
     )
@@ -284,14 +280,9 @@ def test_bootstrap_skips_seeding_when_tickets_exist(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(flow_routes, "_start_flow_worker", lambda *_, **__: None)
 
-    app = FastAPI()
-    app.include_router(flow_routes.build_flow_routes())
-
-    with TestClient(app) as client:
-        resp = client.post("/api/flows/ticket_flow/bootstrap", json={})
+    resp = _flow_client.post("/api/flows/ticket_flow/bootstrap", json={})
 
     assert resp.status_code == 200
-    # Should not seed TICKET-001 because tickets already exist
     assert not (ticket_dir / "TICKET-001.md").exists()
 
 
@@ -330,8 +321,7 @@ def test_start_flow_worker_skips_when_process_alive(tmp_path, monkeypatch):
     assert proc is None
 
 
-def test_ticket_flow_start_rejects_no_tickets(tmp_path, monkeypatch):
-    """Starting ticket_flow should fail when no tickets exist."""
+def test_ticket_flow_start_rejects_no_tickets(tmp_path, monkeypatch, _flow_client):
     _reset_state()
     monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
 
@@ -359,11 +349,7 @@ def test_ticket_flow_start_rejects_no_tickets(tmp_path, monkeypatch):
         lambda _repo_root, _flow_type, _state: StubController(store),
     )
 
-    app = FastAPI()
-    app.include_router(flow_routes.build_flow_routes())
-
-    with TestClient(app) as client:
-        resp = client.post("/api/flows/ticket_flow/start", json={})
+    resp = _flow_client.post("/api/flows/ticket_flow/start", json={})
 
     assert resp.status_code == 400
     payload = resp.json()
@@ -373,7 +359,9 @@ def test_ticket_flow_start_rejects_no_tickets(tmp_path, monkeypatch):
     assert "/api/flows/ticket_flow/bootstrap" in payload["detail"]
 
 
-def test_ticket_flow_start_rejects_no_tickets_with_force_new(tmp_path, monkeypatch):
+def test_ticket_flow_start_rejects_no_tickets_with_force_new(
+    tmp_path, monkeypatch, _flow_client
+):
     _reset_state()
     monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
 
@@ -401,14 +389,10 @@ def test_ticket_flow_start_rejects_no_tickets_with_force_new(tmp_path, monkeypat
         lambda _repo_root, _flow_type, _state: StubController(store),
     )
 
-    app = FastAPI()
-    app.include_router(flow_routes.build_flow_routes())
-
-    with TestClient(app) as client:
-        resp = client.post(
-            "/api/flows/ticket_flow/start",
-            json={"metadata": {"force_new": True}},
-        )
+    resp = _flow_client.post(
+        "/api/flows/ticket_flow/start",
+        json={"metadata": {"force_new": True}},
+    )
 
     assert resp.status_code == 400
     payload = resp.json()
@@ -418,7 +402,9 @@ def test_ticket_flow_start_rejects_no_tickets_with_force_new(tmp_path, monkeypat
     assert "/api/flows/ticket_flow/bootstrap" in payload["detail"]
 
 
-def test_ticket_flow_start_rejects_when_ticket_path_is_file(tmp_path, monkeypatch):
+def test_ticket_flow_start_rejects_when_ticket_path_is_file(
+    tmp_path, monkeypatch, _flow_client
+):
     _reset_state()
     monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
 
@@ -450,11 +436,7 @@ def test_ticket_flow_start_rejects_when_ticket_path_is_file(tmp_path, monkeypatc
         lambda _repo_root, _flow_type, _state: StubController(store),
     )
 
-    app = FastAPI()
-    app.include_router(flow_routes.build_flow_routes())
-
-    with TestClient(app) as client:
-        resp = client.post("/api/flows/ticket_flow/start", json={})
+    resp = _flow_client.post("/api/flows/ticket_flow/start", json={})
 
     assert resp.status_code == 400
     payload = resp.json()
@@ -465,8 +447,7 @@ def test_ticket_flow_start_rejects_when_ticket_path_is_file(tmp_path, monkeypatc
     )
 
 
-def test_ticket_flow_start_allows_with_tickets(tmp_path, monkeypatch):
-    """Starting ticket_flow with force_new should succeed when tickets omit ticket_id."""
+def test_ticket_flow_start_allows_with_tickets(tmp_path, monkeypatch, _flow_client):
     _reset_state()
     monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
 
@@ -502,21 +483,19 @@ def test_ticket_flow_start_allows_with_tickets(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(flow_routes, "_start_flow_worker", lambda *_, **__: None)
 
-    app = FastAPI()
-    app.include_router(flow_routes.build_flow_routes())
-
-    with TestClient(app) as client:
-        resp = client.post(
-            "/api/flows/ticket_flow/start",
-            json={"metadata": {"force_new": True}},
-        )
+    resp = _flow_client.post(
+        "/api/flows/ticket_flow/start",
+        json={"metadata": {"force_new": True}},
+    )
 
     assert resp.status_code == 200
     payload = resp.json()
     assert "id" in payload
 
 
-def test_bootstrap_retries_when_flow_db_recovery_succeeds(tmp_path, monkeypatch):
+def test_bootstrap_retries_when_flow_db_recovery_succeeds(
+    tmp_path, monkeypatch, _flow_client
+):
     _reset_state()
     monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
     monkeypatch.setattr(flow_routes, "_start_flow_worker", lambda *_, **__: None)
@@ -570,18 +549,16 @@ def test_bootstrap_retries_when_flow_db_recovery_succeeds(tmp_path, monkeypatch)
 
     monkeypatch.setattr(flow_routes, "_get_flow_controller", fake_get_controller)
 
-    app = FastAPI()
-    app.include_router(flow_routes.build_flow_routes())
-
-    with TestClient(app) as client:
-        resp = client.post("/api/flows/ticket_flow/bootstrap", json={})
+    resp = _flow_client.post("/api/flows/ticket_flow/bootstrap", json={})
 
     assert resp.status_code == 200
     assert calls["count"] == 2
     store.close()
 
 
-def test_bootstrap_returns_503_on_sqlite_error_without_recovery(tmp_path, monkeypatch):
+def test_bootstrap_returns_503_on_sqlite_error_without_recovery(
+    tmp_path, monkeypatch, _flow_client
+):
     _reset_state()
     monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
     monkeypatch.setattr(flow_routes, "_start_flow_worker", lambda *_, **__: None)
@@ -615,18 +592,14 @@ def test_bootstrap_returns_503_on_sqlite_error_without_recovery(tmp_path, monkey
         lambda _repo_root, _flow_type, _state: FailController(),
     )
 
-    app = FastAPI()
-    app.include_router(flow_routes.build_flow_routes())
-
-    with TestClient(app) as client:
-        resp = client.post("/api/flows/ticket_flow/bootstrap", json={})
+    resp = _flow_client.post("/api/flows/ticket_flow/bootstrap", json={})
 
     assert resp.status_code == 503
     assert resp.json()["detail"] == "Flows database unavailable"
 
 
 def test_bootstrap_returns_503_when_retry_attempt_hits_sqlite_error(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, _flow_client
 ):
     _reset_state()
     monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
@@ -667,11 +640,7 @@ def test_bootstrap_returns_503_when_retry_attempt_hits_sqlite_error(
 
     monkeypatch.setattr(flow_routes, "_get_flow_controller", fake_get_controller)
 
-    app = FastAPI()
-    app.include_router(flow_routes.build_flow_routes())
-
-    with TestClient(app) as client:
-        resp = client.post("/api/flows/ticket_flow/bootstrap", json={})
+    resp = _flow_client.post("/api/flows/ticket_flow/bootstrap", json={})
 
     assert calls["count"] == 2
     assert resp.status_code == 503
