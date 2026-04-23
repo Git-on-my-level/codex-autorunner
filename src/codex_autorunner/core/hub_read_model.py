@@ -13,7 +13,6 @@ from typing import Any, Optional, Protocol, cast
 
 from ..tickets.files import safe_relpath
 from ..tickets.models import Dispatch
-from ..tickets.outbox import parse_dispatch, resolve_outbox_paths
 from .capability_hints import build_hub_capability_hints, build_repo_capability_hints
 from .chat_bindings import active_chat_binding_counts_by_source
 from .config import (
@@ -23,7 +22,6 @@ from .config import (
     ROOT_OVERRIDE_FILENAME,
 )
 from .filebox import BOXES, empty_listing
-from .flows.workspace_root import resolve_ticket_flow_workspace_root
 from .freshness import (
     build_freshness_payload,
     iso_now,
@@ -54,6 +52,9 @@ from .pma_context import (
     enrich_pma_file_inbox_entry,
 )
 from .pma_thread_store import default_pma_threads_db_path
+from .ticket_flow_operator import (
+    latest_ticket_flow_dispatch as _latest_ticket_flow_dispatch,
+)
 
 _HUB_SNAPSHOT_CACHE_TTL_SECONDS = 2.0
 _REPO_CAPABILITY_HINT_CACHE_TTL_SECONDS = 30.0
@@ -178,99 +179,12 @@ def _serialize_latest_dispatch_response(
 def latest_dispatch(
     repo_root: Path, run_id: str, input_data: dict
 ) -> Optional[dict[str, Any]]:
-    try:
-        workspace_root = resolve_ticket_flow_workspace_root(input_data, repo_root)
-        outbox_paths = resolve_outbox_paths(
-            workspace_root=workspace_root, run_id=run_id
-        )
-        history_dir = outbox_paths.dispatch_history_dir
-        if not history_dir.exists() or not history_dir.is_dir():
-            return None
-
-        def _list_files(dispatch_dir: Path) -> list[str]:
-            files: list[str] = []
-            for child in sorted(dispatch_dir.iterdir(), key=lambda p: p.name):
-                if child.name.startswith(".") or child.name == "DISPATCH.md":
-                    continue
-                if child.is_file():
-                    files.append(child.name)
-            return files
-
-        seq_dirs = [
-            child
-            for child in history_dir.iterdir()
-            if child.is_dir() and len(child.name) == 4 and child.name.isdigit()
-        ]
-        if not seq_dirs:
-            return None
-        seq_dirs = sorted(seq_dirs, key=lambda p: p.name, reverse=True)
-        latest_seq = int(seq_dirs[0].name)
-        handoff_candidate: Optional[dict[str, Any]] = None
-        non_summary_candidate: Optional[dict[str, Any]] = None
-        turn_summary_candidate: Optional[dict[str, Any]] = None
-        error_candidate: Optional[dict[str, Any]] = None
-
-        for seq_dir in seq_dirs:
-            seq = int(seq_dir.name)
-            dispatch_path = seq_dir / "DISPATCH.md"
-            dispatch, errors = parse_dispatch(dispatch_path)
-            if errors or dispatch is None:
-                if seq == latest_seq:
-                    return _serialize_latest_dispatch_response(
-                        seq=seq,
-                        repo_root=repo_root,
-                        dispatch_dir=seq_dir,
-                        dispatch=None,
-                        errors=errors,
-                        files=[],
-                    )
-                if error_candidate is None:
-                    error_candidate = {"seq": seq, "dir": seq_dir, "errors": errors}
-                continue
-            candidate = {"seq": seq, "dir": seq_dir, "dispatch": dispatch}
-            if dispatch.is_handoff and handoff_candidate is None:
-                handoff_candidate = candidate
-            if dispatch.mode != "turn_summary" and non_summary_candidate is None:
-                non_summary_candidate = candidate
-            if dispatch.mode == "turn_summary" and turn_summary_candidate is None:
-                turn_summary_candidate = candidate
-            if handoff_candidate and non_summary_candidate and turn_summary_candidate:
-                break
-
-        selected = handoff_candidate or non_summary_candidate or turn_summary_candidate
-        if not selected:
-            if error_candidate is not None:
-                return _serialize_latest_dispatch_response(
-                    seq=error_candidate["seq"],
-                    repo_root=repo_root,
-                    dispatch_dir=cast(Path, error_candidate["dir"]),
-                    dispatch=None,
-                    errors=cast(list[str], error_candidate["errors"]),
-                    files=[],
-                )
-            return None
-        selected_dir = cast(Path, selected["dir"])
-        dispatch = cast(Dispatch, selected["dispatch"])
-        return _serialize_latest_dispatch_response(
-            seq=cast(int, selected["seq"]),
-            repo_root=repo_root,
-            dispatch_dir=selected_dir,
-            dispatch=dispatch,
-            errors=[],
-            files=_list_files(selected_dir),
-            turn_summary_seq=(
-                cast(int, turn_summary_candidate["seq"])
-                if turn_summary_candidate is not None
-                else None
-            ),
-            turn_summary=(
-                cast(Dispatch, turn_summary_candidate["dispatch"])
-                if turn_summary_candidate is not None
-                else None
-            ),
-        )
-    except Exception:
-        return None
+    return _latest_ticket_flow_dispatch(
+        repo_root,
+        run_id,
+        input_data,
+        include_turn_summary=True,
+    )
 
 
 def _build_snapshot_settings(context: Any, requested: set[str]) -> _HubSnapshotSettings:

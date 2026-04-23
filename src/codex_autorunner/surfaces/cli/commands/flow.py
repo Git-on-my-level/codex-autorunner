@@ -9,13 +9,12 @@ import signal
 import threading
 import traceback
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional, cast
 
 import typer
 
-from ....core.config import ConfigError
 from ....core.flows import FlowController, FlowStore
 from ....core.flows.flow_housekeeping import (
     FlowRetentionConfig,
@@ -31,7 +30,6 @@ from ....core.flows.models import (
     flow_run_duration_seconds,
     format_flow_duration,
 )
-from ....core.flows.start_policy import evaluate_ticket_start_policy
 from ....core.flows.telemetry_export import export_all_runs
 from ....core.flows.ux_helpers import build_flow_status_snapshot
 from ....core.flows.worker_process import (
@@ -48,7 +46,14 @@ from ....core.orchestration import build_ticket_flow_orchestration_service
 from ....core.orchestration.models import FlowRunTarget
 from ....core.runtime import RuntimeContext
 from ....core.state_roots import resolve_repo_flows_db_path, resolve_repo_state_root
-from ....core.utils import resolve_executable
+from ....core.ticket_flow_operator import (
+    PreflightCheck,
+    PreflightReport,
+)
+from ....core.ticket_flow_operator import (
+    ticket_flow_preflight as shared_ticket_flow_preflight,
+)
+from ....core.utils import resolve_executable  # noqa: F401
 from ....flows.ticket_flow.runtime_helpers import (
     ensure_ticket_flow_worker,
     flow_run_record_from_target,
@@ -58,7 +63,6 @@ from ....flows.ticket_flow.runtime_helpers import (
     stop_ticket_flow_worker,
 )
 from ....tickets import DEFAULT_MAX_TOTAL_TURNS, AgentPool
-from ....tickets.files import list_ticket_paths, read_ticket
 from ..hub_path_option import hub_root_path_option
 
 logger = logging.getLogger(__name__)
@@ -121,40 +125,6 @@ def register_flow_commands(
         ticket_dir = state_root / "tickets"
         return db_path, artifacts_root, ticket_dir
 
-    @dataclass(frozen=True)
-    class PreflightCheck:
-        check_id: str
-        status: str  # ok | warning | error
-        message: str
-        fix: Optional[str] = None
-        details: list[str] = field(default_factory=list)
-
-        def to_dict(self) -> dict:
-            return {
-                "id": self.check_id,
-                "status": self.status,
-                "message": self.message,
-                "fix": self.fix,
-                "details": list(self.details),
-            }
-
-    @dataclass(frozen=True)
-    class PreflightReport:
-        checks: list[PreflightCheck]
-
-        def has_errors(self) -> bool:
-            return any(check.status == "error" for check in self.checks)
-
-        def to_dict(self) -> dict:
-            return {
-                "ok": sum(1 for check in self.checks if check.status == "ok"),
-                "warnings": sum(
-                    1 for check in self.checks if check.status == "warning"
-                ),
-                "errors": sum(1 for check in self.checks if check.status == "error"),
-                "checks": [check.to_dict() for check in self.checks],
-            }
-
     def _print_preflight_report(report: PreflightReport) -> None:
         for check in report.checks:
             status = check.status.upper()
@@ -165,214 +135,11 @@ def register_flow_commands(
                 parts.append(f"fix: {check.fix}")
             typer.echo(" ".join(parts))
 
-    def _ticket_lint_details(ticket_dir: Path) -> dict[str, list[str]]:
-        policy = evaluate_ticket_start_policy(ticket_dir)
-        return {
-            "invalid_filenames": list(policy.invalid_filenames),
-            "duplicate_indices": list(policy.duplicate_indices),
-            "frontmatter": list(policy.frontmatter),
-        }
-
     def _ticket_flow_preflight(
         engine: RuntimeContext, ticket_dir: Path
     ) -> PreflightReport:
-        checks: list[PreflightCheck] = []
-
-        state_root = engine.repo_root / ".codex-autorunner"
-        if state_root.exists():
-            checks.append(
-                PreflightCheck(
-                    check_id="repo_initialized",
-                    status="ok",
-                    message="Repo initialized (.codex-autorunner present).",
-                )
-            )
-        else:
-            checks.append(
-                PreflightCheck(
-                    check_id="repo_initialized",
-                    status="error",
-                    message="Repo not initialized (.codex-autorunner missing).",
-                    fix="Run `car init` in the repo root.",
-                )
-            )
-
-        if ticket_dir.exists():
-            checks.append(
-                PreflightCheck(
-                    check_id="ticket_dir",
-                    status="ok",
-                    message=f"Ticket directory found: {ticket_dir.relative_to(engine.repo_root)}.",
-                )
-            )
-        else:
-            checks.append(
-                PreflightCheck(
-                    check_id="ticket_dir",
-                    status="error",
-                    message="Ticket directory missing.",
-                    fix="Run `car ticket-flow bootstrap` to create the ticket dir and seed TICKET-001.",
-                )
-            )
-
-        ticket_paths = list_ticket_paths(ticket_dir)
-        if ticket_paths:
-            checks.append(
-                PreflightCheck(
-                    check_id="tickets_present",
-                    status="ok",
-                    message=f"Found {len(ticket_paths)} ticket(s).",
-                )
-            )
-        else:
-            checks.append(
-                PreflightCheck(
-                    check_id="tickets_present",
-                    status="error",
-                    message="No tickets found.",
-                    fix="Create tickets under .codex-autorunner/tickets or run `car ticket-flow bootstrap`.",
-                )
-            )
-
-        lint_details = _ticket_lint_details(ticket_dir)
-        if lint_details["invalid_filenames"]:
-            checks.append(
-                PreflightCheck(
-                    check_id="ticket_filenames",
-                    status="error",
-                    message="Invalid ticket filenames detected.",
-                    fix="Rename tickets to TICKET-<number>[suffix].md (e.g. TICKET-001-foo.md).",
-                    details=lint_details["invalid_filenames"],
-                )
-            )
-        else:
-            checks.append(
-                PreflightCheck(
-                    check_id="ticket_filenames",
-                    status="ok",
-                    message="Ticket filenames are valid.",
-                )
-            )
-
-        if lint_details["duplicate_indices"]:
-            checks.append(
-                PreflightCheck(
-                    check_id="duplicate_indices",
-                    status="error",
-                    message="Duplicate ticket indices detected.",
-                    fix="Rename or remove duplicates so each index is unique.",
-                    details=lint_details["duplicate_indices"],
-                )
-            )
-        else:
-            checks.append(
-                PreflightCheck(
-                    check_id="duplicate_indices",
-                    status="ok",
-                    message="Ticket indices are unique.",
-                )
-            )
-
-        if lint_details["frontmatter"]:
-            checks.append(
-                PreflightCheck(
-                    check_id="frontmatter",
-                    status="error",
-                    message="Ticket frontmatter validation failed.",
-                    fix="Fix the YAML frontmatter in the listed tickets.",
-                    details=lint_details["frontmatter"],
-                )
-            )
-        else:
-            checks.append(
-                PreflightCheck(
-                    check_id="frontmatter",
-                    status="ok",
-                    message="Ticket frontmatter passes validation.",
-                )
-            )
-
-        ticket_docs = []
-        for path in ticket_paths:
-            doc, errors = read_ticket(path)
-            if doc is not None and not errors:
-                ticket_docs.append(doc)
-
-        if ticket_docs:
-            agents = sorted({doc.frontmatter.agent for doc in ticket_docs})
-            agent_errors: list[str] = []
-            agent_warnings: list[str] = []
-
-            if "codex" in agents:
-                app_cmd = engine.config.app_server.command or []
-                app_binary = app_cmd[0] if app_cmd else None
-                resolved = resolve_executable(app_binary) if app_binary else None
-                if not resolved:
-                    agent_errors.append(
-                        "codex: app_server command not available in PATH."
-                    )
-
-            if "opencode" in agents:
-                opencode_cmd = engine.config.agent_serve_command("opencode")
-                opencode_binary: Optional[str] = None
-                if opencode_cmd:
-                    opencode_binary = resolve_executable(opencode_cmd[0])
-                if not opencode_binary:
-                    try:
-                        opencode_binary = resolve_executable(
-                            engine.config.agent_binary("opencode")
-                        )
-                    except ConfigError:
-                        opencode_binary = None
-                if not opencode_binary:
-                    agent_errors.append(
-                        "opencode: backend unavailable (missing binary/serve command)."
-                    )
-
-            for agent in agents:
-                if agent in ("codex", "opencode", "user"):
-                    continue
-                agent_warnings.append(
-                    f"{agent}: availability not verified; ensure its backend is configured."
-                )
-
-            if agent_errors:
-                checks.append(
-                    PreflightCheck(
-                        check_id="agents",
-                        status="error",
-                        message="One or more agents are unavailable.",
-                        fix="Install missing agents or update agents.<id>.binary/serve_command in config.",
-                        details=agent_errors,
-                    )
-                )
-            elif agent_warnings:
-                checks.append(
-                    PreflightCheck(
-                        check_id="agents",
-                        status="warning",
-                        message="Agents detected but availability could not be verified.",
-                        details=agent_warnings,
-                    )
-                )
-            else:
-                checks.append(
-                    PreflightCheck(
-                        check_id="agents",
-                        status="ok",
-                        message="All referenced agents appear available.",
-                    )
-                )
-        else:
-            checks.append(
-                PreflightCheck(
-                    check_id="agents",
-                    status="warning",
-                    message="Agent availability skipped (no valid tickets to inspect).",
-                )
-            )
-
-        return PreflightReport(checks=checks)
+        _ = ticket_dir
+        return shared_ticket_flow_preflight(engine.repo_root, config=engine.config)
 
     def _open_flow_store(engine: RuntimeContext) -> FlowStore:
         db_path, _, _ = _ticket_flow_paths(engine)

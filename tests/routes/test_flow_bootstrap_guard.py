@@ -33,6 +33,13 @@ def test_bootstrap_reuses_active_run_with_hint(tmp_path, monkeypatch, _flow_clie
     _reset_state()
     monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
 
+    ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    (ticket_dir / "TICKET-001.md").write_text(
+        '---\nticket_id: "tkt_guard_bootstrap001"\nagent: codex\ndone: false\n---\n',
+        encoding="utf-8",
+    )
+
     db_path = tmp_path / ".codex-autorunner" / "flows.db"
     store = FlowStore(db_path)
     store.initialize()
@@ -87,6 +94,44 @@ def test_bootstrap_reuses_active_run_with_hint(tmp_path, monkeypatch, _flow_clie
     assert payload["id"] == run_id
     assert payload["state"]["hint"] == "active_run_reused"
     assert spawned["count"] == 1
+
+
+def test_ticket_flow_start_blocks_completed_run_with_pending_tickets(
+    tmp_path, monkeypatch, _flow_client
+):
+    _reset_state()
+    seed_hub_files(tmp_path, force=True)
+    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
+
+    ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    (ticket_dir / "TICKET-001.md").write_text(
+        '---\nticket_id: "tkt_guard_pending001"\nagent: codex\ndone: false\n---\n',
+        encoding="utf-8",
+    )
+
+    db_path = tmp_path / ".codex-autorunner" / "flows.db"
+    store = FlowStore(db_path)
+    store.initialize()
+    run_id = str(uuid.uuid4())
+    store.create_flow_run(
+        run_id=run_id,
+        flow_type="ticket_flow",
+        input_data={},
+        metadata={},
+        state={},
+        current_step="ticket_turn",
+    )
+    store.update_flow_run_status(run_id, FlowRunStatus.COMPLETED)
+    store.close()
+
+    resp = _flow_client.post("/api/flows/ticket_flow/start", json={})
+
+    assert resp.status_code == 409
+    payload = resp.json()
+    assert payload["detail"]["run_id"] == run_id
+    assert payload["detail"]["pending_ticket_count"] == 1
+    assert "force_new=true" in payload["detail"]["message"]
 
 
 def test_start_reuses_active_run_when_latest_is_terminal(
