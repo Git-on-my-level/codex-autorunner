@@ -47,12 +47,14 @@ const state: {
   enabled: boolean;
   repos: TemplateRepo[];
   busy: boolean;
+  loadFailed: boolean;
 } = {
   mode: "create",
   editId: null,
   enabled: false,
   repos: [],
   busy: false,
+  loadFailed: false,
 };
 
 function setBusy(busy: boolean): void {
@@ -115,6 +117,13 @@ function renderRepos(): void {
   const { list } = els();
   if (!list) return;
   list.innerHTML = "";
+  if (state.loadFailed) {
+    const hint = document.createElement("div");
+    hint.className = "muted small";
+    hint.textContent = "Failed to load template repos \u2014 refresh to retry.";
+    list.appendChild(hint);
+    return;
+  }
   if (!state.enabled) {
     const hint = document.createElement("div");
     hint.className = "muted small";
@@ -168,10 +177,27 @@ export async function loadTemplateRepos(): Promise<void> {
   if (!list) return;
   try {
     const data = (await api("/api/templates/repos")) as TemplateReposResponse;
-    state.enabled = Boolean(data.enabled);
-    state.repos = Array.isArray(data.repos) ? data.repos : [];
+    if (!data || typeof data !== "object") {
+      state.loadFailed = true;
+      state.enabled = false;
+      state.repos = [];
+      renderRepos();
+      flash("Template repos response was unreadable", "error");
+      return;
+    }
+    state.loadFailed = false;
+    state.enabled = typeof data.enabled === "boolean" ? data.enabled : false;
+    state.repos = Array.isArray(data.repos)
+      ? data.repos.filter(
+          (r): r is TemplateRepo =>
+            r != null &&
+            typeof (r as TemplateRepo).id === "string" &&
+            typeof (r as TemplateRepo).url === "string"
+        )
+      : [];
     renderRepos();
   } catch (err) {
+    state.loadFailed = true;
     state.enabled = false;
     state.repos = [];
     renderRepos();

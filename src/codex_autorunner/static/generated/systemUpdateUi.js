@@ -8,24 +8,39 @@ export async function loadUpdateTargetOptions(selectId) {
     if (!select)
         return;
     const isInitialized = select.dataset.updateTargetsInitialized === "1";
-    let payload;
+    const previousValue = select.value;
+    let payload = null;
+    let loadFailed = false;
     try {
         payload = (await api("/system/update/targets", {
             method: "GET",
         }));
     }
     catch (_err) {
+        loadFailed = true;
+    }
+    const { options, defaultTarget } = updateTargetOptionsFromResponse(loadFailed ? null : payload);
+    select.replaceChildren();
+    if (loadFailed) {
+        const errorOption = document.createElement("option");
+        errorOption.value = "";
+        errorOption.textContent = "Failed to load update targets \u2014 refresh to retry";
+        select.appendChild(errorOption);
+        select.disabled = true;
         return;
     }
-    const { options, defaultTarget } = updateTargetOptionsFromResponse(payload);
-    if (!options.length)
+    if (!options.length) {
+        const emptyOption = document.createElement("option");
+        emptyOption.value = "";
+        emptyOption.textContent = "No update targets available";
+        select.appendChild(emptyOption);
+        select.disabled = true;
         return;
-    const previous = normalizeUpdateTarget(select.value || "all");
+    }
+    select.disabled = false;
+    const previous = normalizeUpdateTarget(previousValue || "all");
     const hasPrevious = options.some((item) => item.value === previous);
-    const fallback = options.some((item) => item.value === defaultTarget)
-        ? defaultTarget
-        : options[0].value;
-    select.replaceChildren();
+    const hasDefault = options.some((item) => item.value === defaultTarget);
     options.forEach((item) => {
         const option = document.createElement("option");
         option.value = item.value;
@@ -33,10 +48,14 @@ export async function loadUpdateTargetOptions(selectId) {
         select.appendChild(option);
     });
     if (isInitialized) {
-        select.value = hasPrevious ? previous : fallback;
+        select.value = hasPrevious
+            ? previous
+            : hasDefault
+                ? defaultTarget
+                : options[0].value;
     }
     else {
-        select.value = fallback;
+        select.value = hasDefault ? defaultTarget : options[0].value;
         select.dataset.updateTargetsInitialized = "1";
     }
 }
@@ -54,10 +73,10 @@ export async function handleSystemUpdate(btnId, targetSelectId) {
         check = (await api("/system/update/check"));
     }
     catch (err) {
-        check = {
-            update_available: true,
-            message: err.message || "Unable to check for updates.",
-        };
+        flash(`Unable to check for updates: ${err.message || "unknown error"}`, "error");
+        btn.disabled = false;
+        btn.textContent = originalText;
+        return;
     }
     if (!check?.update_available) {
         flash(check?.message || "No update available.", "info");

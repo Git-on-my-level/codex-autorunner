@@ -144,12 +144,14 @@ test("profile picker only shows for agents that expose profiles", async () => {
             id: "hermes",
             name: "Hermes",
             capabilities: ["message_turns"],
+            default_profile: "m4-pma",
             profiles: [{ id: "m4-pma", display_name: "M4 PMA" }],
           },
           {
             id: "custom-agent",
             name: "Custom Agent",
             capabilities: ["message_turns"],
+            default_profile: "fast",
             profiles: [{ id: "fast", display_name: "Fast" }],
           },
         ],
@@ -215,4 +217,181 @@ test("profile picker only shows for agents that expose profiles", async () => {
 
   assert.equal(profileSelect.classList.contains("hidden"), true);
   assert.equal(profileSelect.disabled, true);
+});
+
+test("shows error state when agents API returns malformed response", async () => {
+  __agentControlsTest.reset();
+  localStorage.clear();
+
+  globalThis.fetch = async (url) => {
+    const href = String(url);
+    if (href.endsWith("/hub/pma/agents")) {
+      return jsonResponse({ agents: "not-an-array" });
+    }
+    throw new Error(`Unexpected fetch: ${href}`);
+  };
+
+  const agentSelect = document.getElementById("agent");
+  const modelSelect = document.getElementById("model");
+
+  initAgentControls({ agentSelect, modelSelect });
+  await refreshAgentControls({ force: true, reason: "manual" });
+
+  assert.equal(__agentControlsTest.agentsLoadFailed, true);
+  assert.equal(agentSelect.disabled, true);
+  assert.equal(
+    agentSelect.options[0].textContent,
+    "Failed to load agents \u2014 refresh to retry"
+  );
+  assert.equal(modelSelect.disabled, true);
+});
+
+test("shows no-agents state when agents API returns empty list", async () => {
+  __agentControlsTest.reset();
+  localStorage.clear();
+
+  globalThis.fetch = async (url) => {
+    const href = String(url);
+    if (href.endsWith("/hub/pma/agents")) {
+      return jsonResponse({ agents: [], default: "codex" });
+    }
+    throw new Error(`Unexpected fetch: ${href}`);
+  };
+
+  const agentSelect = document.getElementById("agent");
+  const modelSelect = document.getElementById("model");
+
+  initAgentControls({ agentSelect, modelSelect });
+  await refreshAgentControls({ force: true, reason: "manual" });
+
+  assert.equal(__agentControlsTest.agentsLoadFailed, false);
+  assert.equal(agentSelect.disabled, true);
+  assert.equal(
+    agentSelect.options[0].textContent,
+    "No agents available"
+  );
+  assert.equal(modelSelect.disabled, true);
+});
+
+test("shows error state when agents API throws", async () => {
+  __agentControlsTest.reset();
+  localStorage.clear();
+
+  globalThis.fetch = async () => {
+    throw new Error("Network error");
+  };
+
+  const agentSelect = document.getElementById("agent");
+  const modelSelect = document.getElementById("model");
+
+  initAgentControls({ agentSelect, modelSelect });
+  await refreshAgentControls({ force: true, reason: "manual" });
+
+  assert.equal(__agentControlsTest.agentsLoadFailed, true);
+  assert.equal(agentSelect.disabled, true);
+  assert.equal(
+    agentSelect.options[0].textContent,
+    "Failed to load agents \u2014 refresh to retry"
+  );
+});
+
+test("does not silently pick first model when catalog has no default", async () => {
+  __agentControlsTest.reset();
+  localStorage.clear();
+
+  globalThis.fetch = async (url) => {
+    const href = String(url);
+    if (href.endsWith("/hub/pma/agents")) {
+      return jsonResponse({
+        agents: [
+          {
+            id: "codex",
+            name: "Codex",
+            capabilities: ["model_listing"],
+          },
+        ],
+        default: "codex",
+      });
+    }
+    if (href.endsWith("/hub/pma/agents/codex/models")) {
+      return jsonResponse({
+        default_model: "",
+        models: [
+          { id: "model-a", display_name: "Model A", supports_reasoning: false, reasoning_options: [] },
+          { id: "model-b", display_name: "Model B", supports_reasoning: false, reasoning_options: [] },
+        ],
+      });
+    }
+    throw new Error(`Unexpected fetch: ${href}`);
+  };
+
+  const agentSelect = document.getElementById("agent");
+  const modelSelect = document.getElementById("model");
+
+  initAgentControls({ agentSelect, modelSelect });
+  await refreshAgentControls({ force: true, reason: "manual" });
+
+  assert.equal(agentSelect.value, "codex");
+  assert.equal(modelSelect.disabled, false);
+  assert.equal(modelSelect.value, "");
+  assert.equal(modelSelect.options.length, 3);
+  assert.equal(modelSelect.options[0].textContent, "Select a model\u2026");
+  assert.equal(modelSelect.options[0].disabled, true);
+});
+
+test("does not silently pick first profile when agent has no default_profile", async () => {
+  __agentControlsTest.reset();
+  localStorage.clear();
+
+  globalThis.fetch = async (url) => {
+    const href = String(url);
+    if (href.endsWith("/hub/pma/agents")) {
+      return jsonResponse({
+        agents: [
+          {
+            id: "codex",
+            name: "Codex",
+            capabilities: ["model_listing"],
+          },
+          {
+            id: "hermes",
+            name: "Hermes",
+            capabilities: ["message_turns"],
+            profiles: [
+              { id: "alpha", display_name: "Alpha" },
+              { id: "beta", display_name: "Beta" },
+            ],
+          },
+        ],
+        default: "codex",
+      });
+    }
+    if (href.endsWith("/hub/pma/agents/codex/models")) {
+      return jsonResponse({
+        default_model: "m1",
+        models: [
+          { id: "m1", display_name: "M1", supports_reasoning: false, reasoning_options: [] },
+        ],
+      });
+    }
+    throw new Error(`Unexpected fetch: ${href}`);
+  };
+
+  const agentSelect = document.getElementById("agent");
+  const profileSelect = document.getElementById("profile");
+  const modelSelect = document.getElementById("model");
+
+  initAgentControls({ agentSelect, profileSelect, modelSelect });
+  await refreshAgentControls({ force: true, reason: "manual" });
+
+  agentSelect.value = "hermes";
+  agentSelect.dispatchEvent(new Event("change", { bubbles: true }));
+  await waitForUi();
+  await waitForUi();
+
+  assert.equal(profileSelect.classList.contains("hidden"), false);
+  assert.equal(profileSelect.disabled, false);
+  assert.equal(profileSelect.value, "");
+  assert.equal(profileSelect.options[0].textContent, "Select a profile\u2026");
+  assert.equal(profileSelect.options[0].disabled, true);
 });
