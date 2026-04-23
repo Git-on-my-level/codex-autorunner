@@ -8,12 +8,12 @@ from typing import Any, Optional
 from ...core.orchestration import (
     ManagedThreadDeliveryAttemptResult,
     ManagedThreadDeliveryOutcome,
-    SQLiteManagedThreadDeliveryEngine,
+)
+from ...integrations.chat.managed_thread_surface_kernel import (
+    build_managed_thread_terminal_delivery_hooks,
 )
 from ...integrations.chat.managed_thread_turns import (
-    ManagedThreadDurableDeliveryHooks,
     ManagedThreadSurfaceInfo,
-    build_managed_thread_delivery_intent,
     render_managed_thread_delivery_record_text,
 )
 from ..chat.bound_live_progress import cleanup_bound_chat_live_progress_success
@@ -167,46 +167,130 @@ def build_discord_managed_thread_durable_delivery_hooks(
     managed_thread_id: str,
     workspace_root: Path,
     public_execution_error: str,
-) -> ManagedThreadDurableDeliveryHooks:
+) -> Any:
     state_root = Path(getattr(getattr(service, "_config", None), "root", Path.cwd()))
-    engine = SQLiteManagedThreadDeliveryEngine(state_root)
 
-    class _DiscordManagedThreadDeliveryAdapter:
-        @property
-        def adapter_key(self) -> str:
-            return "discord"
-
-        async def deliver_managed_thread_record(
-            self, record: Any, *, claim: Any
-        ) -> Any:
-            return await deliver_discord_managed_thread_record(
-                service,
-                record,
-                claim=claim,
-                channel_id_fallback=channel_id,
-                base_record_label="discord-queued",
-                error_record_label="discord-queued-error",
-                default_execution_error=public_execution_error,
+    async def _send_success(
+        record: Any,
+        _context: ManagedThreadDeliveryCleanupContext,
+    ) -> ManagedThreadDeliverySendResult:
+        target_channel_id = _resolve_delivery_channel_id(record, fallback=channel_id)
+        assistant_text = render_managed_thread_delivery_record_text(record)
+        formatted = (
+            format_discord_message(assistant_text)
+            if assistant_text
+            else "(No response text returned.)"
+        )
+        chunks = chunk_discord_message(
+            formatted,
+            max_len=DISCORD_MAX_MESSAGE_LENGTH,
+            with_numbering=False,
+        )
+        if not chunks:
+            chunks = [formatted]
+        base_record_id = (
+            f"discord-queued:{record.managed_thread_id}:{record.managed_turn_id}"
+        )
+        for chunk_index, chunk in enumerate(chunks, start=1):
+            record_id = (
+                f"{base_record_id}:chunk:{chunk_index}"
+                if len(chunks) > 1
+                else base_record_id
             )
-
-    return ManagedThreadDurableDeliveryHooks(
-        engine=engine,
-        adapter=_DiscordManagedThreadDeliveryAdapter(),
-        build_delivery_intent=lambda finalized: (
-            None
-            if finalized.status == "interrupted"
-            else build_managed_thread_delivery_intent(
-                finalized,
-                surface=ManagedThreadSurfaceInfo(
-                    log_label="Discord",
-                    surface_kind="discord",
-                    surface_key=channel_id,
-                ),
-                transport_target={"channel_id": channel_id},
-                metadata={
-                    "managed_thread_id": managed_thread_id,
-                    "workspace_root": str(workspace_root),
-                },
+            delivered = await service._send_channel_message_safe(
+                target_channel_id,
+                {"content": chunk},
+                record_id=record_id,
             )
+            if not delivered:
+                return ManagedThreadDeliverySendResult(
+                    error=f"discord_send_deferred:{record_id}",
+                )
+        return ManagedThreadDeliverySendResult(
+            adapter_cursor={"chunk_count": len(chunks)},
+        )
+
+    async def _send_failure(
+        record: Any,
+        _context: ManagedThreadDeliveryCleanupContext,
+    ) -> ManagedThreadDeliverySendResult:
+        target_channel_id = _resolve_delivery_channel_id(record, fallback=channel_id)
+        delivered = await service._send_channel_message_safe(
+            target_channel_id,
+            {
+                "content": (
+                    f"Turn failed: {record.envelope.error_text or public_execution_error}"
+                )
+            },
+            record_id=(
+                f"discord-queued-error:{record.managed_thread_id}:{record.managed_turn_id}"
+            ),
+        )
+        if not delivered:
+            return ManagedThreadDeliverySendResult(
+                error="discord_error_notice_deferred",
+            )
+        return ManagedThreadDeliverySendResult()
+
+    async def _cleanup(
+        record: Any,
+        context: ManagedThreadDeliveryCleanupContext,
+    ) -> None:
+        target_channel_id = _resolve_delivery_channel_id(record, fallback=channel_id)
+        raw_path = context.metadata.get("workspace_root")
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            cleanup_workspace_root = None
+        else:
+            cleanup_workspace_root = Path(raw_path)
+        flush = getattr(service, "_flush_outbox_files", None)
+        if callable(flush) and cleanup_workspace_root is not None:
+            await flush(
+                workspace_root=cleanup_workspace_root,
+                channel_id=target_channel_id,
+            )
+        completion_note = (
+            "Status: this turn already failed."
+            if str(record.envelope.final_status or "").strip().lower() == "error"
+            else "Status: this turn already completed."
+        )
+        await cleanup_discord_terminal_progress_leases(
+            service,
+            managed_thread_id=record.managed_thread_id,
+            execution_id=record.managed_turn_id,
+            channel_id=target_channel_id,
+            note=completion_note,
+            record_prefix=(
+                "discord:managed-thread-progress-cleanup:"
+                f"{record.managed_thread_id}:{record.managed_turn_id}"
+            ),
+        )
+        await cleanup_bound_chat_live_progress_success(
+            hub_root=service._config.root,
+            raw_config=(
+                service._config.raw
+                if isinstance(getattr(service._config, "raw", None), dict)
+                else {}
+            ),
+            surface_kind="discord",
+            surface_key=target_channel_id,
+            managed_thread_id=record.managed_thread_id,
+            managed_turn_id=record.managed_turn_id,
+        )
+
+    return build_managed_thread_terminal_delivery_hooks(
+        state_root=state_root,
+        surface=ManagedThreadSurfaceInfo(
+            log_label="Discord",
+            surface_kind="discord",
+            surface_key=channel_id,
         ),
+        adapter_key="discord",
+        transport_target={"channel_id": channel_id},
+        metadata={
+            "managed_thread_id": managed_thread_id,
+            "workspace_root": str(workspace_root),
+        },
+        send_success=_send_success,
+        send_failure=_send_failure,
+        cleanup=_cleanup,
     )
