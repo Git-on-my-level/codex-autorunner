@@ -24,6 +24,7 @@ class ExecutionCreateRequest:
     model: Optional[str] = None
     reasoning: Optional[str] = None
     client_request_id: Optional[str] = None
+    metadata: dict[str, Any] = field(default_factory=dict)
     queue_payload: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -42,11 +43,12 @@ class ExecutionCreateRequest:
             model=normalize_optional_text(data.get("model")),
             reasoning=normalize_optional_text(data.get("reasoning")),
             client_request_id=normalize_optional_text(data.get("client_request_id")),
+            metadata=copy_mapping(data.get("metadata")),
             queue_payload=copy_mapping(data.get("queue_payload")),
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "thread_target_id": self.thread_target_id,
             "prompt": self.prompt,
             "request_kind": self.request_kind,
@@ -56,6 +58,9 @@ class ExecutionCreateRequest:
             "client_request_id": self.client_request_id,
             "queue_payload": dict(self.queue_payload),
         }
+        if self.metadata:
+            payload["metadata"] = dict(self.metadata)
+        return payload
 
 
 @dataclass(frozen=True)

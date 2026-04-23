@@ -24,13 +24,14 @@ from .....core.pma_thread_store import (
     PmaThreadStore,
 )
 from .....core.text_utils import _truncate_text
+from .....integrations.chat.bound_chat_execution_metadata import (
+    bound_chat_progress_targets_from_execution_mapping,
+    merge_bound_chat_execution_metadata,
+)
 from .....integrations.chat.bound_live_progress import (
     build_bound_chat_queue_execution_controller,
     cleanup_bound_chat_live_progress_failure,
     cleanup_bound_chat_live_progress_success,
-)
-from .....integrations.chat.managed_thread_startup_recovery import (
-    find_surface_key_for_running_execution,
 )
 from .....integrations.chat.managed_thread_turns import (
     ManagedThreadCoordinatorHooks,
@@ -139,6 +140,62 @@ def _track_managed_thread_task(app: Any, task: asyncio.Task[Any]) -> None:
     task.add_done_callback(lambda done: task_pool.discard(done))
 
 
+async def _recover_pma_bound_chat_execution(
+    app: Any,
+    *,
+    service: Any,
+    thread_store: PmaThreadStore,
+    managed_thread_id: str,
+    thread: Any,
+    execution: Any,
+) -> bool:
+    workspace_root = normalize_optional_text(getattr(thread, "workspace_root", None))
+    execution_id = normalize_optional_text(getattr(execution, "execution_id", None))
+    if workspace_root is None or execution_id is None:
+        return False
+    running_turn = thread_store.get_turn(managed_thread_id, execution_id)
+    if running_turn is None:
+        return False
+    harness_for_thread = getattr(service, "_harness_for_thread", None)
+    if not callable(harness_for_thread):
+        return False
+    metadata = running_turn.get("metadata")
+    request_kind = str(running_turn.get("request_kind") or "").strip().lower()
+    request = MessageRequest(
+        target_id=managed_thread_id,
+        target_kind="thread",
+        message_text=normalize_optional_text(running_turn.get("prompt")) or "",
+        kind="review" if request_kind == "review" else "message",
+        model=normalize_optional_text(running_turn.get("model")),
+        reasoning=normalize_optional_text(running_turn.get("reasoning")),
+        metadata=dict(metadata) if isinstance(metadata, dict) else {},
+    )
+    started = RuntimeThreadExecution(
+        service=service,
+        harness=harness_for_thread(thread),
+        thread=thread,
+        execution=execution,
+        workspace_root=Path(workspace_root),
+        request=request,
+    )
+    current_thread_row = thread_store.get_thread(managed_thread_id) or {}
+
+    async def _runner() -> None:
+        await _run_managed_thread_execution(
+            _managed_thread_request_for_app(app),
+            service=service,
+            thread_store=thread_store,
+            thread=current_thread_row,
+            started=started,
+            fallback_backend_thread_id=normalize_optional_text(
+                getattr(thread, "backend_thread_id", None)
+            ),
+        )
+
+    _track_managed_thread_task(app, asyncio.create_task(_runner()))
+    return True
+
+
 def _resolve_repo_raw_config_for_workspace(
     request: Request,
     *,
@@ -209,28 +266,44 @@ def _resolve_pma_chat_bound_surface_targets(
     *,
     service: Any,
     managed_thread_id: str,
+    started: Any | None = None,
+    allow_running_turn_fallback: bool = True,
 ) -> tuple[tuple[str, str], ...]:
+    started_execution = getattr(started, "execution", None)
+    started_metadata = getattr(started_execution, "metadata", None)
+    if isinstance(started_metadata, dict):
+        explicit_targets = bound_chat_progress_targets_from_execution_mapping(
+            {"metadata": started_metadata}
+        )
+        if explicit_targets:
+            return explicit_targets
     thread_store = getattr(service, "thread_store", None)
-    if thread_store is None:
+    if allow_running_turn_fallback and thread_store is not None:
+        running_turn = thread_store.get_running_turn(managed_thread_id)
+        explicit_targets = bound_chat_progress_targets_from_execution_mapping(
+            running_turn
+        )
+        if explicit_targets:
+            return explicit_targets
+    list_bindings = getattr(service, "list_bindings", None)
+    if not callable(list_bindings):
         return ()
     targets: list[tuple[str, str]] = []
-    for surface_kind in ("discord", "telegram"):
-        surface_key = find_surface_key_for_running_execution(
-            service,
-            thread_store,
-            managed_thread_id=managed_thread_id,
-            surface_kind=surface_kind,
-            limit=1000,
-        )
-        if surface_key is not None:
-            targets.append((surface_kind, surface_key))
-    if len(targets) > 1:
-        logger.warning(
-            "Ambiguous PMA chat-bound surface ownership; suppressing live progress fanout (managed_thread_id=%s, targets=%s)",
-            managed_thread_id,
-            targets,
-        )
-        return ()
+    seen: set[tuple[str, str]] = set()
+    for binding in list_bindings(
+        thread_target_id=managed_thread_id,
+        include_disabled=False,
+        limit=1000,
+    ):
+        surface_kind = normalize_optional_text(getattr(binding, "surface_kind", None))
+        surface_key = normalize_optional_text(getattr(binding, "surface_key", None))
+        if surface_kind not in {"discord", "telegram"} or surface_key is None:
+            continue
+        pair = (surface_kind, surface_key)
+        if pair in seen:
+            continue
+        seen.add(pair)
+        targets.append(pair)
     return tuple(targets)
 
 
@@ -279,6 +352,7 @@ async def _run_managed_thread_execution(
         surface_target_resolver=lambda _started: _resolve_pma_chat_bound_surface_targets(
             service=service,
             managed_thread_id=managed_thread_id,
+            started=_started,
         ),
         retain_completed_surface_targets=True,
     )
@@ -577,6 +651,7 @@ def ensure_managed_thread_queue_worker(app: Any, managed_thread_id: str) -> None
         return _resolve_pma_chat_bound_surface_targets(
             service=service,
             managed_thread_id=managed_thread_id,
+            started=_started,
         )
 
     queue_progress = build_bound_chat_queue_execution_controller(
@@ -626,6 +701,7 @@ async def recover_orphaned_managed_thread_executions(app: Any) -> None:
     await recover_orphaned_executions(
         app,
         build_service_for_app=_build_managed_thread_orchestration_service_for_app,
+        recover_bound_progress_execution=_recover_pma_bound_chat_execution,
     )
 
 
@@ -685,6 +761,11 @@ def build_managed_thread_runtime_routes(
             )
         sync_zeroclaw_context_if_needed(thread=thread, options=options)
         try:
+            progress_targets = _resolve_pma_chat_bound_surface_targets(
+                service=service,
+                managed_thread_id=managed_thread_id,
+                allow_running_turn_fallback=False,
+            )
             started_execution = await begin_runtime_thread_execution(
                 service,
                 MessageRequest(
@@ -697,10 +778,14 @@ def build_managed_thread_runtime_routes(
                     reasoning=options.reasoning,
                     approval_mode=options.approval_policy,
                     context_profile=options.context_profile,
-                    metadata={
-                        "runtime_prompt": options.execution_prompt,
-                        "execution_error_message": MANAGED_THREAD_PUBLIC_EXECUTION_ERROR,
-                    },
+                    metadata=merge_bound_chat_execution_metadata(
+                        {
+                            "runtime_prompt": options.execution_prompt,
+                            "execution_error_message": MANAGED_THREAD_PUBLIC_EXECUTION_ERROR,
+                        },
+                        origin_kind="pma_web",
+                        progress_targets=progress_targets,
+                    ),
                 ),
                 sandbox_policy=options.sandbox_policy,
             )

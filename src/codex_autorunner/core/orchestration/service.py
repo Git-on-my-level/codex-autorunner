@@ -270,6 +270,7 @@ class PmaThreadExecutionStore(ThreadExecutionStore):
         model: Optional[str] = None,
         reasoning: Optional[str] = None,
         client_request_id: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
         queue_payload: Optional[dict[str, Any]] = None,
     ) -> ExecutionRecord:
         created = self._store.create_turn(
@@ -280,6 +281,7 @@ class PmaThreadExecutionStore(ThreadExecutionStore):
             model=model,
             reasoning=reasoning,
             client_turn_id=client_request_id,
+            metadata=metadata,
             queue_payload=queue_payload,
         )
         return _execution_record_from_store_row(created)
@@ -1047,6 +1049,7 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
             model=request.model,
             reasoning=request.reasoning,
             client_request_id=client_request_id,
+            metadata=request.metadata,
             queue_payload=queue_payload,
         )
         _record_thread_activity_best_effort(

@@ -79,6 +79,7 @@ from ...integrations.chat.models import ChatMessageEvent
 from ...integrations.chat.runtime_thread_errors import (
     sanitize_runtime_thread_error,
 )
+from ..chat.bound_chat_execution_metadata import merge_bound_chat_execution_metadata
 from ..chat.managed_thread_progress_projector import (
     ManagedThreadProgressProjector,
 )
@@ -2419,6 +2420,7 @@ async def _run_discord_orchestrated_turn_for_message(
         and existing_session_prompt_text.strip()
     ):
         metadata["existing_session_runtime_prompt"] = existing_session_prompt_text
+    surface_key = managed_thread_surface_key or channel_id
     return await run_managed_surface_turn(
         MessageRequest(
             target_id=thread.thread_target_id,
@@ -2429,7 +2431,13 @@ async def _run_discord_orchestrated_turn_for_message(
             reasoning=reasoning_effort,
             approval_mode=approval_mode,
             input_items=execution_input_items,
-            metadata=metadata,
+            metadata=merge_bound_chat_execution_metadata(
+                metadata,
+                origin_kind="surface",
+                origin_surface_kind="discord",
+                origin_surface_key=surface_key,
+                progress_targets=(("discord", surface_key),),
+            ),
         ),
         config=ManagedSurfaceRunnerConfig(
             coordinator=coordinator,

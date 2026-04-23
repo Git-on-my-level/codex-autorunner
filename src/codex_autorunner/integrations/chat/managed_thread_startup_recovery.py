@@ -6,6 +6,9 @@ from types import SimpleNamespace
 from typing import Any, Callable, Optional
 
 from ...core.logging_utils import log_event
+from .bound_chat_execution_metadata import (
+    bound_chat_origin_matches_surface_from_execution_mapping,
+)
 from .managed_thread_turns import (
     ManagedThreadDurableDeliveryHooks,
     ManagedThreadExecutionHooks,
@@ -36,10 +39,6 @@ def _normalized_optional_text(value: Any) -> Optional[str]:
     return normalized or None
 
 
-def _surface_client_turn_prefix(*, surface_kind: str, surface_key: str) -> str:
-    return f"{surface_kind}:{surface_key}:"
-
-
 def _safe_list_bindings(binding_store: Any, **kwargs: Any) -> tuple[Any, ...]:
     list_bindings = getattr(binding_store, "list_bindings", None)
     if not callable(list_bindings):
@@ -61,16 +60,10 @@ def surface_owns_running_execution(
     if not callable(get_running_turn):
         return False
     running_turn = get_running_turn(managed_thread_id)
-    client_turn_id = _normalized_optional_text(
-        running_turn.get("client_turn_id") if running_turn is not None else None
-    )
-    if client_turn_id is None:
-        return False
-    return client_turn_id.lower().startswith(
-        _surface_client_turn_prefix(
-            surface_kind=surface_kind,
-            surface_key=surface_key,
-        ).lower()
+    return bound_chat_origin_matches_surface_from_execution_mapping(
+        running_turn,
+        surface_kind=surface_kind,
+        surface_key=surface_key,
     )
 
 
@@ -113,19 +106,16 @@ def surface_owns_pending_queue(
     get_turn = getattr(thread_store, "get_turn", None)
     if not callable(list_pending) or not callable(get_turn):
         return False
-    prefix = _surface_client_turn_prefix(
-        surface_kind=surface_kind,
-        surface_key=surface_key,
-    ).lower()
     for item in list_pending(managed_thread_id, limit=_PENDING_QUEUE_SCAN_LIMIT) or ():
         managed_turn_id = _normalized_optional_text(item.get("managed_turn_id"))
         if managed_turn_id is None:
             continue
         turn = get_turn(managed_thread_id, managed_turn_id)
-        client_turn_id = _normalized_optional_text(
-            turn.get("client_turn_id") if turn is not None else None
-        )
-        if client_turn_id is not None and client_turn_id.lower().startswith(prefix):
+        if bound_chat_origin_matches_surface_from_execution_mapping(
+            turn,
+            surface_kind=surface_kind,
+            surface_key=surface_key,
+        ):
             return True
     return False
 

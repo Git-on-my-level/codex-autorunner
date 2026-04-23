@@ -936,6 +936,7 @@ class PmaThreadStore:
         model: Optional[str] = None,
         reasoning: Optional[str] = None,
         client_turn_id: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
         queue_payload: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         managed_turn_id = str(uuid.uuid4())
@@ -988,11 +989,12 @@ class PmaThreadStore:
                         error_text,
                         model_id,
                         reasoning_level,
+                        metadata_json,
                         transcript_mirror_id,
                         started_at,
                         finished_at,
                         created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         managed_turn_id,
@@ -1006,6 +1008,7 @@ class PmaThreadStore:
                         None,
                         model,
                         reasoning,
+                        _json_dumps(dict(metadata or {})),
                         None,
                         started_at,
                         None,

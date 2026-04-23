@@ -8,7 +8,7 @@ from typing import Callable
 from ..time_utils import now_iso
 from .models import OrchestrationTableDefinition
 
-ORCHESTRATION_SCHEMA_VERSION = 22
+ORCHESTRATION_SCHEMA_VERSION = 23
 
 
 @dataclass(frozen=True)
@@ -1303,6 +1303,15 @@ def _apply_v22(conn: sqlite3.Connection) -> None:
     )
 
 
+def _apply_v23(conn: sqlite3.Connection) -> None:
+    _ensure_column(
+        conn,
+        "orch_thread_executions",
+        "metadata_json",
+        "metadata_json TEXT NOT NULL DEFAULT '{}'",
+    )
+
+
 _MIGRATIONS = (
     _MigrationStep(1, "create_core_orchestration_schema", _apply_v1),
     _MigrationStep(2, "add_binding_and_flow_projection_scaffolding", _apply_v2),
@@ -1338,6 +1347,7 @@ _MIGRATIONS = (
     ),
     _MigrationStep(21, "add_chat_operation_ledger", _apply_v21),
     _MigrationStep(22, "add_managed_thread_delivery_ledger", _apply_v22),
+    _MigrationStep(23, "add_execution_metadata", _apply_v23),
 )
 
 

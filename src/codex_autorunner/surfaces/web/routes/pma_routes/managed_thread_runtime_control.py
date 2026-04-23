@@ -20,11 +20,12 @@ from .....core.orchestration.cold_trace_store import ColdTraceStore
 from .....core.pma_thread_store import PmaThreadStore
 from .....core.time_utils import now_iso
 from .....integrations.app_server.event_buffer import AppServerEventBuffer
+from .....integrations.chat.bound_chat_execution_metadata import (
+    bound_chat_progress_targets_from_execution_mapping,
+    execution_mapping_has_chat_surface_origin,
+)
 from .....integrations.chat.bound_live_progress import (
     build_bound_chat_progress_cleanup_metadata,
-)
-from .....integrations.chat.managed_thread_startup_recovery import (
-    find_surface_key_for_running_execution,
 )
 from .....integrations.chat.managed_thread_turns import (
     ManagedThreadCoordinatorHooks,
@@ -52,7 +53,6 @@ MANAGED_THREAD_INTERRUPT_FAILED_DETAIL = (
     "Interrupt attempt failed; the active managed turn is still running"
 )
 BOUND_CHAT_SURFACE_KINDS = frozenset({"discord", "telegram"})
-BOUND_CHAT_CLIENT_TURN_PREFIXES = ("discord:", "telegram:")
 
 
 @dataclass(frozen=True)
@@ -347,16 +347,33 @@ def _has_owning_bound_chat_surface(
     *,
     thread_store: PmaThreadStore,
 ) -> bool:
+    running_turn = thread_store.get_running_turn(managed_thread_id)
+    progress_targets = set(
+        bound_chat_progress_targets_from_execution_mapping(running_turn)
+    )
+    if progress_targets:
+        for binding in binding_store.list_bindings(
+            thread_target_id=managed_thread_id,
+            include_disabled=False,
+            limit=1000,
+        ):
+            surface_kind = normalize_optional_text(
+                getattr(binding, "surface_kind", None)
+            )
+            surface_key = normalize_optional_text(getattr(binding, "surface_key", None))
+            if surface_kind is None or surface_key is None:
+                continue
+            if (surface_kind, surface_key) in progress_targets:
+                return True
+        return False
     return any(
-        find_surface_key_for_running_execution(
-            binding_store,
-            thread_store,
-            managed_thread_id=managed_thread_id,
-            surface_kind=surface_kind,
+        normalize_optional_text(getattr(binding, "surface_kind", None))
+        in BOUND_CHAT_SURFACE_KINDS
+        for binding in binding_store.list_bindings(
+            thread_target_id=managed_thread_id,
+            include_disabled=False,
             limit=1000,
         )
-        is not None
-        for surface_kind in BOUND_CHAT_SURFACE_KINDS
     )
 
 
@@ -364,21 +381,14 @@ def _is_chat_origin_running_execution(
     thread_store: PmaThreadStore, managed_thread_id: str
 ) -> bool:
     running_turn = thread_store.get_running_turn(managed_thread_id)
-    client_turn_id = normalize_optional_text(
-        running_turn.get("client_turn_id") if running_turn is not None else None
-    )
-    if not client_turn_id:
-        return False
-    client_turn_id = client_turn_id.lower()
-    return any(
-        client_turn_id.startswith(prefix) for prefix in BOUND_CHAT_CLIENT_TURN_PREFIXES
-    )
+    return execution_mapping_has_chat_surface_origin(running_turn)
 
 
 async def recover_orphaned_executions(
     app: Any,
     *,
     build_service_for_app: Any,
+    recover_bound_progress_execution: Any | None = None,
 ) -> None:
     thread_store = PmaThreadStore(app.state.config.root)
     checkpoint_store = ColdTraceStore(app.state.config.root)
@@ -428,8 +438,21 @@ async def recover_orphaned_executions(
                 binding_store,
                 managed_thread_id,
                 thread_store=thread_store,
-            ) and _is_chat_origin_running_execution(thread_store, managed_thread_id):
-                continue
+            ):
+                if _is_chat_origin_running_execution(thread_store, managed_thread_id):
+                    continue
+                if (
+                    recover_bound_progress_execution is not None
+                    and await recover_bound_progress_execution(
+                        app,
+                        service=service,
+                        thread_store=thread_store,
+                        managed_thread_id=managed_thread_id,
+                        thread=thread,
+                        execution=execution,
+                    )
+                ):
+                    continue
             has_turn = getattr(app_server_events, "has_turn", None)
             if (
                 callable(has_turn)

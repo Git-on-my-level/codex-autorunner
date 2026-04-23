@@ -206,6 +206,7 @@ class ThreadExecutionStore(Protocol):
         model: Optional[str] = None,
         reasoning: Optional[str] = None,
         client_request_id: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
         queue_payload: Optional[dict[str, Any]] = None,
     ) -> ExecutionRecord: ...
 
