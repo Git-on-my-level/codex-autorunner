@@ -213,7 +213,7 @@ async def test_slow_handler_does_not_block_new_interaction() -> None:
     payload_slow = _slash_payload()
 
     runner.submit(ctx_slow, payload_slow)
-    await asyncio.sleep(0.02)
+    await asyncio.sleep(0.01)
     assert runner.active_task_count == 1
 
     ingress_ack_time = asyncio.get_event_loop().time()
@@ -230,7 +230,10 @@ async def test_slow_handler_does_not_block_new_interaction() -> None:
     assert fast_elapsed < 1.0
 
     slow_done.set()
-    await asyncio.sleep(0.05)
+    for _ in range(30):
+        if runner.active_task_count == 0:
+            break
+        await asyncio.sleep(0.005)
     assert runner.active_task_count == 0
 
 
@@ -271,7 +274,7 @@ async def test_queued_workspace_slash_command_sends_public_queue_notice() -> Non
         resource_keys=(f"conversation:{first_conversation_id}", workspace_key),
         conversation_id=first_conversation_id,
     )
-    await asyncio.wait_for(first_started.wait(), timeout=1.0)
+    await asyncio.wait_for(first_started.wait(), timeout=0.5)
 
     runner.submit(
         _make_ctx(
@@ -292,7 +295,7 @@ async def test_queued_workspace_slash_command_sends_public_queue_notice() -> Non
         conversation_id=second_conversation_id,
     )
 
-    await asyncio.sleep(0.05)
+    await asyncio.sleep(0.02)
     service._send_or_respond_public.assert_awaited_once()
     assert service._send_or_respond_public.await_args.kwargs["text"] == (
         "Queued behind /car newt in another channel bound to the same workspace; "
@@ -300,7 +303,7 @@ async def test_queued_workspace_slash_command_sends_public_queue_notice() -> Non
     )
 
     release_first.set()
-    await asyncio.wait_for(runner.shutdown(grace_seconds=5.0), timeout=6.0)
+    await asyncio.wait_for(runner.shutdown(grace_seconds=1.0), timeout=2.0)
 
 
 @pytest.mark.anyio
@@ -338,7 +341,7 @@ async def test_queued_same_channel_slash_command_sends_channel_queue_notice() ->
         resource_keys=(conversation_key,),
         conversation_id=conversation_id,
     )
-    await asyncio.wait_for(first_started.wait(), timeout=1.0)
+    await asyncio.wait_for(first_started.wait(), timeout=0.5)
 
     runner.submit(
         _make_ctx(
@@ -357,14 +360,14 @@ async def test_queued_same_channel_slash_command_sends_channel_queue_notice() ->
         conversation_id=conversation_id,
     )
 
-    await asyncio.sleep(0.05)
+    await asyncio.sleep(0.02)
     service._send_or_respond_ephemeral.assert_awaited()
     assert service._send_or_respond_ephemeral.await_args.kwargs["text"] == (
         "Queued behind /car status in this channel; will run when it finishes."
     )
 
     release_first.set()
-    await asyncio.wait_for(runner.shutdown(grace_seconds=5.0), timeout=6.0)
+    await asyncio.wait_for(runner.shutdown(grace_seconds=1.0), timeout=2.0)
 
 
 @pytest.mark.anyio
@@ -418,11 +421,11 @@ async def test_submit_preserves_explicit_submission_order_for_same_channel() -> 
         submission_order=1,
     )
 
-    await asyncio.sleep(0.05)
+    await asyncio.sleep(0.02)
     assert started_ids == ["inter-1"]
 
     release_first.set()
-    await asyncio.wait_for(runner.shutdown(grace_seconds=5.0), timeout=6.0)
+    await asyncio.wait_for(runner.shutdown(grace_seconds=1.0), timeout=2.0)
     assert started_ids == ["inter-1", "inter-2"]
 
 
@@ -460,12 +463,12 @@ async def test_skip_submission_order_releases_later_interaction() -> None:
         conversation_id=conversation_id,
         submission_order=2,
     )
-    await asyncio.sleep(0.05)
+    await asyncio.sleep(0.02)
     assert started.is_set() is False
 
     runner.skip_submission_order(1)
-    await asyncio.wait_for(started.wait(), timeout=1.0)
-    await asyncio.wait_for(runner.shutdown(grace_seconds=5.0), timeout=6.0)
+    await asyncio.wait_for(started.wait(), timeout=0.5)
+    await asyncio.wait_for(runner.shutdown(grace_seconds=1.0), timeout=2.0)
 
 
 @pytest.mark.anyio
@@ -478,14 +481,14 @@ async def test_submit_event_after_submit_reuses_existing_submission_loop() -> No
     )
 
     runner.submit(_make_ctx(), _slash_payload())
-    await asyncio.sleep(0.05)
+    await asyncio.sleep(0.02)
     submission_task = runner._submission_task
 
     runner.submit_event({"kind": "message"})
-    await asyncio.sleep(0.05)
+    await asyncio.sleep(0.02)
 
     assert runner._submission_task is submission_task
-    await asyncio.wait_for(runner.shutdown(grace_seconds=5.0), timeout=6.0)
+    await asyncio.wait_for(runner.shutdown(grace_seconds=1.0), timeout=2.0)
 
 
 @pytest.mark.anyio
@@ -499,14 +502,20 @@ async def test_timeout_enforcement() -> None:
 
     runner = CommandRunner(
         service,
-        config=RunnerConfig(timeout_seconds=0.1, stalled_warning_seconds=None),
+        config=RunnerConfig(timeout_seconds=0.02, stalled_warning_seconds=None),
         logger=service._logger,
     )
     ctx = _make_ctx()
     payload = _slash_payload()
 
     runner.submit(ctx, payload)
-    await asyncio.sleep(0.3)
+    for _ in range(50):
+        if (
+            service._send_or_respond_ephemeral.await_count > 0
+            and runner.active_task_count == 0
+        ):
+            break
+        await asyncio.sleep(0.005)
 
     service._send_or_respond_ephemeral.assert_awaited()
     assert runner.active_task_count == 0
@@ -523,14 +532,17 @@ async def test_timeout_sends_user_message() -> None:
 
     runner = CommandRunner(
         service,
-        config=RunnerConfig(timeout_seconds=0.05, stalled_warning_seconds=None),
+        config=RunnerConfig(timeout_seconds=0.02, stalled_warning_seconds=None),
         logger=service._logger,
     )
     ctx = _make_ctx()
     payload = _slash_payload()
 
     runner.submit(ctx, payload)
-    await asyncio.sleep(0.3)
+    for _ in range(50):
+        if service._send_or_respond_ephemeral.await_count > 0:
+            break
+        await asyncio.sleep(0.005)
 
     service._send_or_respond_ephemeral.assert_awaited_once()
     call_kwargs = service._send_or_respond_ephemeral.call_args[1]
@@ -560,16 +572,16 @@ async def test_shutdown_waits_for_timeout_followup_tasks() -> None:
 
     runner = CommandRunner(
         service,
-        config=RunnerConfig(timeout_seconds=0.05, stalled_warning_seconds=None),
+        config=RunnerConfig(timeout_seconds=0.02, stalled_warning_seconds=None),
         logger=service._logger,
     )
     ctx = _make_ctx()
     payload = _slash_payload()
 
     runner.submit(ctx, payload)
-    shutdown_task = asyncio.create_task(runner.shutdown(grace_seconds=0.2))
+    shutdown_task = asyncio.create_task(runner.shutdown(grace_seconds=0.1))
 
-    await asyncio.wait_for(followup_started.wait(), timeout=1.0)
+    await asyncio.wait_for(followup_started.wait(), timeout=0.5)
     await shutdown_task
 
     assert followup_cancelled.is_set()
@@ -582,7 +594,7 @@ async def test_none_timeout_allows_long_running_handler() -> None:
     finished = asyncio.Event()
 
     async def slow_handler(*args: Any, **kwargs: Any) -> None:
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(0.03)
         finished.set()
 
     service._handle_car_command.side_effect = slow_handler
@@ -596,11 +608,11 @@ async def test_none_timeout_allows_long_running_handler() -> None:
     payload = _slash_payload()
 
     runner.submit(ctx, payload)
-    await asyncio.wait_for(finished.wait(), timeout=1.0)
+    await asyncio.wait_for(finished.wait(), timeout=0.2)
     for _ in range(20):
         if runner.active_task_count == 0:
             break
-        await asyncio.sleep(0.01)
+        await asyncio.sleep(0.005)
 
     service._send_or_respond_ephemeral.assert_not_awaited()
     assert runner.active_task_count == 0
@@ -624,7 +636,10 @@ async def test_handler_error_sends_error_followup() -> None:
     payload = _slash_payload()
 
     runner.submit(ctx, payload)
-    await asyncio.sleep(0.05)
+    for _ in range(30):
+        if service._respond_ephemeral.await_count > 0:
+            break
+        await asyncio.sleep(0.005)
 
     service._respond_ephemeral.assert_awaited()
     call_args = service._respond_ephemeral.call_args
@@ -649,7 +664,7 @@ async def test_shutdown_cancels_running_tasks() -> None:
     payload = _slash_payload()
 
     runner.submit(ctx, payload)
-    await asyncio.sleep(0.02)
+    await asyncio.sleep(0.01)
     assert runner.active_task_count == 1
 
     await runner.shutdown(grace_seconds=0.05)
@@ -731,7 +746,10 @@ async def test_autocomplete_interaction_routing() -> None:
         logger=service._logger,
     )
     runner.submit(ctx, payload)
-    await asyncio.sleep(0.05)
+    for _ in range(30):
+        if service._handle_command_autocomplete.await_count > 0:
+            break
+        await asyncio.sleep(0.005)
 
     service._handle_command_autocomplete.assert_awaited_once()
     call_args = service._handle_command_autocomplete.call_args
@@ -764,7 +782,10 @@ async def test_modal_submit_routing() -> None:
         logger=service._logger,
     )
     runner.submit(ctx, payload)
-    await asyncio.sleep(0.05)
+    for _ in range(30):
+        if service._handle_ticket_modal_submit.await_count > 0:
+            break
+        await asyncio.sleep(0.005)
 
     service._handle_ticket_modal_submit.assert_awaited_once()
     call_args = service._handle_ticket_modal_submit.call_args
@@ -783,7 +804,10 @@ async def test_pma_command_routing() -> None:
         logger=service._logger,
     )
     runner.submit(ctx, payload)
-    await asyncio.sleep(0.05)
+    for _ in range(30):
+        if service._handle_pma_command.await_count > 0:
+            break
+        await asyncio.sleep(0.005)
 
     service._handle_pma_command.assert_awaited_once()
 
@@ -819,13 +843,16 @@ async def test_multiple_submits_concurrent() -> None:
         )
         runner.submit(ctx, _slash_payload())
 
-    await asyncio.sleep(0.05)
+    await asyncio.sleep(0.02)
     assert runner.active_task_count == 5
     assert handler_count == 5
 
     for evt in handler_events:
         evt.set()
-    await asyncio.sleep(0.05)
+    for _ in range(30):
+        if runner.active_task_count == 0:
+            break
+        await asyncio.sleep(0.005)
     assert runner.active_task_count == 0
 
 
@@ -877,7 +904,7 @@ async def test_interaction_handler_concurrency_is_bounded() -> None:
     assert service._handle_car_command.await_count == 2
 
     release_handlers.set()
-    await runner.shutdown(grace_seconds=5.0)
+    await runner.shutdown(grace_seconds=1.0)
     assert service._handle_car_command.await_count == 4
 
 
@@ -929,7 +956,7 @@ async def test_queue_wait_ack_happens_before_waiting_for_handler_slot() -> None:
         resource_keys=("conversation:discord:chan-1:guild-1",),
         conversation_id="discord:chan-1:guild-1",
     )
-    await asyncio.wait_for(slot_holder_started.wait(), timeout=1.0)
+    await asyncio.wait_for(slot_holder_started.wait(), timeout=0.5)
 
     waiter_ctx = _make_ctx(
         interaction_id="waiter",
@@ -950,12 +977,12 @@ async def test_queue_wait_ack_happens_before_waiting_for_handler_slot() -> None:
         queue_wait_ack_policy="defer_ephemeral",
     )
 
-    await asyncio.wait_for(queue_wait_acked.wait(), timeout=1.0)
+    await asyncio.wait_for(queue_wait_acked.wait(), timeout=0.5)
     # The waiter handler has not started yet because the global slot is still held.
     assert service._handle_car_command.await_count == 1
 
     release_slot_holder.set()
-    await runner.shutdown(grace_seconds=5.0)
+    await runner.shutdown(grace_seconds=1.0)
     assert service._handle_car_command.await_count == 2
 
 
@@ -973,7 +1000,7 @@ async def test_submit_event_delegates_to_dispatch_chat_event() -> None:
 
     fake_event = object()
     runner.submit_event(fake_event)
-    await runner.shutdown(grace_seconds=2.0)
+    await runner.shutdown(grace_seconds=1.0)
 
     dispatch_event.assert_awaited_once_with(fake_event)
 
@@ -986,7 +1013,7 @@ async def test_submit_event_preserves_arrival_order() -> None:
     async def track_dispatch(event: Any) -> None:
         dispatched_order.append(event["label"])
         if event.get("block"):
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0.02)
 
     service._dispatch_chat_event = track_dispatch
 
@@ -1000,7 +1027,7 @@ async def test_submit_event_preserves_arrival_order() -> None:
     runner.submit_event({"label": "second", "block": False})
     runner.submit_event({"label": "third", "block": False})
 
-    await runner.shutdown(grace_seconds=5.0)
+    await runner.shutdown(grace_seconds=1.0)
     assert dispatched_order == ["first", "second", "third"]
 
 
@@ -1054,12 +1081,12 @@ async def test_submit_serializes_fifo_within_conversation() -> None:
         conversation_id=conversation_id,
     )
 
-    await asyncio.wait_for(first_started.wait(), timeout=1.0)
-    await asyncio.sleep(0.05)
+    await asyncio.wait_for(first_started.wait(), timeout=0.5)
+    await asyncio.sleep(0.02)
     assert started_ids == ["inter-1"]
 
     release_first.set()
-    await runner.shutdown(grace_seconds=5.0)
+    await runner.shutdown(grace_seconds=1.0)
     assert started_ids == ["inter-1", "inter-2"]
 
 
@@ -1108,7 +1135,7 @@ async def test_submit_allows_other_conversations_to_run() -> None:
         resource_keys=(f"conversation:{conversation_id_first}",),
         conversation_id=conversation_id_first,
     )
-    await asyncio.wait_for(first_started.wait(), timeout=1.0)
+    await asyncio.wait_for(first_started.wait(), timeout=0.5)
 
     runner.submit(
         ctx_second,
@@ -1116,10 +1143,10 @@ async def test_submit_allows_other_conversations_to_run() -> None:
         resource_keys=(f"conversation:{conversation_id_second}",),
         conversation_id=conversation_id_second,
     )
-    await asyncio.wait_for(second_started.wait(), timeout=1.0)
+    await asyncio.wait_for(second_started.wait(), timeout=0.5)
 
     release_first.set()
-    await runner.shutdown(grace_seconds=5.0)
+    await runner.shutdown(grace_seconds=1.0)
 
 
 @pytest.mark.anyio
@@ -1151,7 +1178,13 @@ async def test_component_interaction_routes_through_handle_component() -> None:
         logger=service._logger,
     )
     runner.submit(ctx, payload)
-    await asyncio.sleep(0.05)
+    for _ in range(30):
+        if (
+            service._handle_approval_component.await_count > 0
+            and runner.active_task_count == 0
+        ):
+            break
+        await asyncio.sleep(0.005)
 
     service._handle_approval_component.assert_awaited_once()
     assert runner.active_task_count == 0
@@ -1181,7 +1214,10 @@ async def test_component_select_with_values_routes_correctly() -> None:
         logger=service._logger,
     )
     runner.submit(ctx, payload)
-    await asyncio.sleep(0.05)
+    for _ in range(30):
+        if service._handle_ticket_browser_page_component.await_count > 0:
+            break
+        await asyncio.sleep(0.005)
 
     service._handle_ticket_browser_page_component.assert_awaited_once()
     call_kwargs = service._handle_ticket_browser_page_component.call_args
@@ -1211,7 +1247,10 @@ async def test_component_without_custom_id_responds_error() -> None:
         logger=service._logger,
     )
     runner.submit(ctx, payload)
-    await asyncio.sleep(0.05)
+    for _ in range(30):
+        if service._respond_ephemeral.await_count > 0:
+            break
+        await asyncio.sleep(0.005)
 
     service._respond_ephemeral.assert_awaited()
     call_args = service._respond_ephemeral.call_args
@@ -1241,7 +1280,10 @@ async def test_unknown_component_responds_unknown_message() -> None:
         logger=service._logger,
     )
     runner.submit(ctx, payload)
-    await asyncio.sleep(0.05)
+    for _ in range(30):
+        if service._respond_ephemeral.await_count > 0:
+            break
+        await asyncio.sleep(0.005)
 
     service._respond_ephemeral.assert_awaited()
     call_args = service._respond_ephemeral.call_args

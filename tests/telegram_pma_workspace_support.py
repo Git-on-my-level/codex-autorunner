@@ -116,6 +116,14 @@ class _PMAWorkspaceHandler(WorkspaceCommands):
             return record.agent
         return "codex"
 
+    def _effective_runtime_agent(self, _record: Optional["TelegramTopicRecord"]) -> str:
+        return "codex"
+
+    def _effective_agent_profile(
+        self, _record: Optional["TelegramTopicRecord"]
+    ) -> Optional[str]:
+        return None
+
 
 class _NewtRouterStub:
     def __init__(self, record: TelegramTopicRecord) -> None:
@@ -169,8 +177,29 @@ class _NewtHandler(WorkspaceCommands):
         self._sent: list[str] = []
         self.app_server_supervisor = _NewtSupervisorStub()
         self.app_server_events = _NewtEventsStub()
-        self._hub_client = _InProcessHubControlPlaneClient(hub_root)
+        self.__hub_client: Optional[_InProcessHubControlPlaneClient] = None
         self._hub_handshake_compatibility = SimpleNamespace(compatible=True)
+
+    @property
+    def _hub_client(self) -> _InProcessHubControlPlaneClient:
+        if self.__hub_client is None:
+            self.__hub_client = _InProcessHubControlPlaneClient(self._hub_root)
+        return self.__hub_client
+
+    @_hub_client.setter
+    def _hub_client(self, value: Optional[_InProcessHubControlPlaneClient]) -> None:
+        self.__hub_client = value
+
+    def _effective_agent(self, _record: Optional["TelegramTopicRecord"]) -> str:
+        return "codex"
+
+    def _effective_runtime_agent(self, _record: Optional["TelegramTopicRecord"]) -> str:
+        return "codex"
+
+    def _effective_agent_profile(
+        self, _record: Optional["TelegramTopicRecord"]
+    ) -> Optional[str]:
+        return None
 
     async def _resolve_topic_key(self, chat_id: int, thread_id: Optional[int]) -> str:
         return f"{chat_id}:{thread_id}"
@@ -1058,6 +1087,15 @@ async def test_resume_thread_by_id_rebinds_managed_thread_before_topic_mirror_up
                 record.thread_ids = [active_thread_id]
             return record
 
+        def _effective_agent(self, _record: object) -> str:
+            return "codex"
+
+        def _effective_runtime_agent(self, _record: object) -> str:
+            return "codex"
+
+        def _effective_agent_profile(self, _record: object) -> Optional[str]:
+            return None
+
     async def _fake_resolve_telegram_managed_thread(
         _handlers: Any, **kwargs: Any
     ) -> tuple[Any, Any]:
@@ -1176,6 +1214,12 @@ async def test_apply_compact_summary_uses_shared_lifecycle_before_topic_mirror_u
             self, _chat_id: int, _thread_id: Optional[int]
         ) -> str:
             return "123:root"
+
+        def _effective_runtime_agent(self, _record: object) -> str:
+            return "codex"
+
+        def _effective_agent_profile(self, _record: object) -> Optional[str]:
+            return None
 
     monkeypatch.setattr(
         execution_commands_module,
@@ -1319,6 +1363,12 @@ async def test_apply_compact_summary_preserves_pma_mode_for_replacement_thread(
             apply_thread_result_flags.append(sync_binding)
             record.active_thread_id = active_thread_id
             return record
+
+        def _effective_runtime_agent(self, _record: object) -> str:
+            return "codex"
+
+        def _effective_agent_profile(self, _record: object) -> Optional[str]:
+            return None
 
     async def _fake_replace_surface_thread(
         _orchestration_service: Any,
@@ -1822,6 +1872,14 @@ class _PMAWorkspaceHandlerWithScopedKey(WorkspaceCommands):
         if record and record.agent:
             return record.agent
         return "codex"
+
+    def _effective_runtime_agent(self, _record: Optional["TelegramTopicRecord"]) -> str:
+        return "codex"
+
+    def _effective_agent_profile(
+        self, _record: Optional["TelegramTopicRecord"]
+    ) -> Optional[str]:
+        return None
 
 
 @pytest.mark.anyio
