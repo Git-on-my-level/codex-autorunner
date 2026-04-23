@@ -71,6 +71,9 @@ from .....integrations.app_server.threads import (
     pma_legacy_migration_fallback_keys,
     pma_topic_scoped_key,
 )
+from .....integrations.chat.bound_chat_execution_metadata import (
+    merge_bound_chat_execution_metadata,
+)
 from .....integrations.chat.bound_live_progress import (
     build_bound_chat_queue_execution_controller,
     cleanup_bound_chat_live_progress_success,
@@ -1570,7 +1573,13 @@ async def _run_telegram_managed_thread_turn(
             reasoning=record.effort,
             approval_mode=approval_policy,
             input_items=execution_input_items,
-            metadata=metadata,
+            metadata=merge_bound_chat_execution_metadata(
+                metadata,
+                origin_kind="surface",
+                origin_surface_kind="telegram",
+                origin_surface_key=topic_key,
+                progress_targets=(("telegram", topic_key),),
+            ),
         ),
         config=ManagedSurfaceRunnerConfig(
             coordinator=coordinator,

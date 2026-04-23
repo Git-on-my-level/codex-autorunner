@@ -234,6 +234,7 @@ def test_create_finish_turn_and_query(tmp_path: Path) -> None:
         model="gpt-test",
         reasoning="high",
         client_turn_id="client-1",
+        metadata={"bound_chat_execution": {"origin": {"kind": "pma_web"}}},
     )
     assert turn["status"] == "running"
     assert turn["request_kind"] == "review"
@@ -255,6 +256,9 @@ def test_create_finish_turn_and_query(tmp_path: Path) -> None:
     assert fetched["backend_turn_id"] == "backend-turn-1"
     assert fetched["transcript_turn_id"] == "transcript-1"
     assert fetched["finished_at"]
+    assert fetched["metadata"] == {
+        "bound_chat_execution": {"origin": {"kind": "pma_web"}}
+    }
 
     listed = store.list_turns(thread["managed_thread_id"])
     assert len(listed) == 1

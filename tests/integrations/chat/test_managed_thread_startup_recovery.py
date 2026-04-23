@@ -349,6 +349,73 @@ def test_find_surface_key_for_running_execution_returns_none_without_matching_bi
     )
 
 
+def test_find_surface_key_for_running_execution_uses_metadata_origin() -> None:
+    class FakeBindingStore:
+        def list_bindings(self, **kwargs: object):
+            assert kwargs["surface_kind"] == "discord"
+            return [
+                SimpleNamespace(surface_key="channel-other"),
+                SimpleNamespace(surface_key="channel-owned"),
+            ]
+
+    class FakeThreadStore:
+        def get_running_turn(self, managed_thread_id: str):
+            assert managed_thread_id == "thread-1"
+            return {
+                "metadata": {
+                    "bound_chat_execution": {
+                        "origin": {
+                            "kind": "surface",
+                            "surface_kind": "discord",
+                            "surface_key": "channel-owned",
+                        }
+                    }
+                }
+            }
+
+    assert (
+        recovery_module.find_surface_key_for_running_execution(
+            FakeBindingStore(),
+            FakeThreadStore(),
+            managed_thread_id="thread-1",
+            surface_kind="discord",
+        )
+        == "channel-owned"
+    )
+
+
+def test_surface_owns_pending_queue_uses_metadata_origin_without_client_turn_id() -> (
+    None
+):
+    class FakeThreadStore:
+        def list_pending_turn_queue_items(self, managed_thread_id: str, limit=200):
+            assert managed_thread_id == "thread-1"
+            assert limit == recovery_module._PENDING_QUEUE_SCAN_LIMIT
+            return [{"managed_turn_id": "turn-queued-1"}]
+
+        def get_turn(self, managed_thread_id: str, managed_turn_id: str):
+            assert managed_thread_id == "thread-1"
+            assert managed_turn_id == "turn-queued-1"
+            return {
+                "metadata": {
+                    "bound_chat_execution": {
+                        "origin": {
+                            "kind": "surface",
+                            "surface_kind": "telegram",
+                            "surface_key": "100:200",
+                        }
+                    }
+                }
+            }
+
+    assert recovery_module.surface_owns_pending_queue(
+        FakeThreadStore(),
+        managed_thread_id="thread-1",
+        surface_kind="telegram",
+        surface_key="100:200",
+    )
+
+
 @pytest.mark.anyio
 async def test_startup_recovery_rearms_pending_queue_for_single_owned_binding(
     monkeypatch: pytest.MonkeyPatch,
