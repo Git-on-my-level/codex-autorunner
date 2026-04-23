@@ -8,9 +8,11 @@ dataclasses.  Registered on the ``thread_app`` typer via
 
 import json
 import logging
+import shutil
 import sys
 from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
 from typing import Any, Optional
 
@@ -82,6 +84,28 @@ from .pma_control_plane import (
 )
 
 logger = logging.getLogger(__name__)
+
+_THREAD_OUTPUT_CURSOR_RELATIVE_PATH = (
+    Path(".codex-autorunner") / "pma" / "thread_output_cursors.json"
+)
+_DEFAULT_OUTPUT_PAGE_LINES = 20
+
+
+class _PmaVerbosityLevel(str, Enum):
+    INFO = "info"
+    DEBUG = "debug"
+
+
+@dataclass(frozen=True)
+class _AssistantTextWindow:
+    text: str
+    start_line: int
+    end_line: int
+    total_lines: int
+    has_more: bool
+    next_line: Optional[int]
+    page_lines: int
+    auto_paginated: bool
 
 
 def _resolve_hub_path(path: Optional[Path]) -> Path:
@@ -198,6 +222,254 @@ def _echo_delivered_message(message: str) -> None:
     typer.echo(message, nl=False)
     if not message.endswith("\n"):
         typer.echo()
+
+
+def _thread_output_cursor_path(hub_root: Path) -> Path:
+    return hub_root / _THREAD_OUTPUT_CURSOR_RELATIVE_PATH
+
+
+def _load_thread_output_cursors(hub_root: Path) -> dict[str, Any]:
+    path = _thread_output_cursor_path(hub_root)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _save_thread_output_cursors(hub_root: Path, payload: dict[str, Any]) -> None:
+    path = _thread_output_cursor_path(hub_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _clear_thread_output_cursor(
+    hub_root: Path, *, command_name: str, managed_thread_id: str
+) -> None:
+    payload = _load_thread_output_cursors(hub_root)
+    cursor_key = f"{command_name}:{managed_thread_id}"
+    if cursor_key not in payload:
+        return
+    payload.pop(cursor_key, None)
+    if payload:
+        _save_thread_output_cursors(hub_root, payload)
+        return
+    path = _thread_output_cursor_path(hub_root)
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return
+    except OSError:
+        logger.debug("Failed to delete empty thread output cursor file: %s", path)
+
+
+def _auto_output_page_lines() -> int:
+    try:
+        lines = shutil.get_terminal_size(fallback=(80, 24)).lines
+    except OSError:
+        lines = 24
+    return max(_DEFAULT_OUTPUT_PAGE_LINES, lines - 4)
+
+
+def _parse_output_lines_spec(value: str) -> tuple[Optional[int], Optional[int]]:
+    raw = str(value or "").strip()
+    if not raw:
+        raise typer.BadParameter("lines cannot be empty", param_hint="--lines")
+    if ":" not in raw:
+        end_line = _coerce_optional_int(raw)
+        if end_line is None or end_line <= 0:
+            raise typer.BadParameter(
+                "lines must be a positive integer or START:END",
+                param_hint="--lines",
+            )
+        return 1, end_line
+
+    start_text, end_text = raw.split(":", 1)
+    start_line = _coerce_optional_int(start_text) if start_text.strip() else None
+    end_line = _coerce_optional_int(end_text) if end_text.strip() else None
+    if start_line is not None and start_line <= 0:
+        raise typer.BadParameter(
+            "line ranges are 1-based and must be positive",
+            param_hint="--lines",
+        )
+    if end_line is not None and end_line <= 0:
+        raise typer.BadParameter(
+            "line ranges are 1-based and must be positive",
+            param_hint="--lines",
+        )
+    if start_line is None and end_line is None:
+        raise typer.BadParameter(
+            "Provide at least one bound for --lines (for example 1:50 or 100:)",
+            param_hint="--lines",
+        )
+    if start_line is not None and end_line is not None and end_line < start_line:
+        raise typer.BadParameter(
+            "The end of --lines must be greater than or equal to the start",
+            param_hint="--lines",
+        )
+    return start_line, end_line
+
+
+def _assistant_text_lines(text: str) -> list[str]:
+    if not text:
+        return []
+    return text.splitlines()
+
+
+def _resolve_assistant_text_window(
+    *,
+    assistant_text: str,
+    lines_spec: Optional[str],
+    continue_output: bool,
+    command_name: str,
+    hub_root: Path,
+    managed_thread_id: str,
+    managed_turn_id: str,
+) -> _AssistantTextWindow:
+    if continue_output and lines_spec:
+        raise typer.BadParameter(
+            "Choose either --lines or --continue, not both.",
+            param_hint="--lines / --continue",
+        )
+
+    all_lines = _assistant_text_lines(assistant_text)
+    total_lines = len(all_lines)
+    if total_lines == 0:
+        _clear_thread_output_cursor(
+            hub_root, command_name=command_name, managed_thread_id=managed_thread_id
+        )
+        return _AssistantTextWindow(
+            text="",
+            start_line=0,
+            end_line=0,
+            total_lines=0,
+            has_more=False,
+            next_line=None,
+            page_lines=0,
+            auto_paginated=False,
+        )
+
+    start_line: Optional[int] = None
+    end_line: Optional[int] = None
+    auto_paginated = False
+    page_lines = 0
+    cursor_key = f"{command_name}:{managed_thread_id}"
+    if continue_output:
+        payload = _load_thread_output_cursors(hub_root)
+        saved_cursor = payload.get(cursor_key)
+        if not isinstance(saved_cursor, dict):
+            raise typer.BadParameter(
+                "No saved assistant_text cursor for this thread. Start without --continue first.",
+                param_hint="--continue",
+            )
+        saved_turn_id = str(saved_cursor.get("managed_turn_id") or "").strip()
+        if saved_turn_id and saved_turn_id != managed_turn_id:
+            raise typer.BadParameter(
+                "The saved assistant_text cursor points at a different turn. "
+                "Re-run without --continue or pass --turn to read the earlier turn.",
+                param_hint="--continue",
+            )
+        start_line = _coerce_optional_int(saved_cursor.get("next_line"))
+        page_lines = _coerce_optional_int(saved_cursor.get("page_lines")) or 0
+        if start_line is None or start_line <= 0:
+            raise typer.BadParameter(
+                "The saved assistant_text cursor is invalid. Re-run without --continue.",
+                param_hint="--continue",
+            )
+        if page_lines <= 0:
+            page_lines = _auto_output_page_lines()
+        end_line = min(total_lines, start_line + page_lines - 1)
+        auto_paginated = True
+    elif lines_spec:
+        start_line, end_line = _parse_output_lines_spec(lines_spec)
+        if start_line is None:
+            start_line = 1
+        if end_line is None:
+            end_line = total_lines
+        if start_line > total_lines:
+            raise typer.BadParameter(
+                f"assistant_text only has {total_lines} line(s); requested start line {start_line}.",
+                param_hint="--lines",
+            )
+    else:
+        page_lines = _auto_output_page_lines()
+        if total_lines > page_lines:
+            start_line = 1
+            end_line = min(total_lines, page_lines)
+            auto_paginated = True
+        else:
+            start_line = 1
+            end_line = total_lines
+
+    selected_lines = all_lines[start_line - 1 : end_line]
+    rendered_text = "\n".join(selected_lines)
+    has_more = end_line < total_lines
+    next_line = end_line + 1 if has_more else None
+
+    if auto_paginated and has_more:
+        payload = _load_thread_output_cursors(hub_root)
+        payload[cursor_key] = {
+            "managed_turn_id": managed_turn_id,
+            "next_line": next_line,
+            "page_lines": page_lines,
+            "updated_at": datetime.utcnow().isoformat() + "Z",
+        }
+        _save_thread_output_cursors(hub_root, payload)
+    else:
+        _clear_thread_output_cursor(
+            hub_root, command_name=command_name, managed_thread_id=managed_thread_id
+        )
+
+    return _AssistantTextWindow(
+        text=rendered_text,
+        start_line=start_line,
+        end_line=end_line,
+        total_lines=total_lines,
+        has_more=has_more,
+        next_line=next_line,
+        page_lines=page_lines or max(1, end_line - start_line + 1),
+        auto_paginated=auto_paginated,
+    )
+
+
+def _render_assistant_text_window(
+    *,
+    window: _AssistantTextWindow,
+    output_file: Optional[Path],
+    label: str = "assistant_text",
+) -> None:
+    if output_file is not None:
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        output_file.write_text(window.text, encoding="utf-8")
+        if window.total_lines > 0:
+            typer.echo(
+                f"Wrote {label} lines {window.start_line}:{window.end_line} to {output_file}"
+            )
+        else:
+            typer.echo(f"Wrote empty {label} to {output_file}")
+        return
+
+    typer.echo(f"{label}:")
+    if window.text:
+        typer.echo(window.text, nl=False)
+        if not window.text.endswith("\n"):
+            typer.echo()
+    else:
+        typer.echo("(empty)")
+
+    if window.has_more and window.next_line is not None:
+        next_end_line = min(
+            window.total_lines,
+            window.next_line + max(window.page_lines, 1) - 1,
+        )
+        typer.echo(
+            "note: "
+            f"{label} paginated lines {window.start_line}:{window.end_line} "
+            f"of {window.total_lines}. Re-run with --continue or "
+            f"--lines {window.next_line}:{next_end_line}."
+        )
 
 
 def _format_archived_thread_line(thread: dict[str, Any]) -> str:
@@ -443,9 +715,9 @@ class _PmaTailSnapshot:
 
     def render_lines(self) -> list[str]:
         lines = [
-            "turn="
+            "managed_turn_id="
             + self.managed_turn_id
-            + " status="
+            + " turn_status="
             + self.turn_status
             + " activity="
             + self.activity
@@ -493,7 +765,7 @@ class _PmaQueuedTurnSnapshot:
 
     def render_line(self) -> str:
         return (
-            "queued_turn="
+            "queued_turn_id="
             + self.managed_turn_id
             + " enqueued="
             + self.enqueued_at
@@ -508,11 +780,12 @@ class _PmaThreadStatusSnapshot:
     agent: str
     owner_label: str
     operator_status: str
-    last_turn_outcome: str
+    runtime_status: str
+    lifecycle_status: str
     is_alive: bool
     status_reason: str
     managed_turn_id: str
-    turn_state: str
+    turn_status: str
     activity: str
     phase: str
     elapsed_seconds: Optional[int]
@@ -521,6 +794,8 @@ class _PmaThreadStatusSnapshot:
     diagnostics: Optional[_PmaActiveTurnDiagnostics]
     last_tool: Optional[_PmaLastToolSnapshot]
     recent_progress: tuple[_PmaTailEvent, ...]
+    latest_turn_id: str
+    latest_assistant_text: str
     latest_output_excerpt: str
     queue_depth: int
     queued_turns: tuple[_PmaQueuedTurnSnapshot, ...]
@@ -542,21 +817,19 @@ class _PmaThreadStatusSnapshot:
             managed_thread_id=str(payload.get("managed_thread_id") or ""),
             agent=str(thread.get("agent") or "-"),
             owner_label=_format_resource_owner_label(thread),
-            operator_status=derive_managed_thread_operator_status(
+            operator_status=str(payload.get("operator_status") or "").strip()
+            or derive_managed_thread_operator_status(
                 normalized_status=raw_thread_status,
                 lifecycle_status=str(thread.get("lifecycle_status") or "-"),
             ),
-            last_turn_outcome=(
-                raw_thread_status
-                if raw_thread_status in {"completed", "interrupted", "failed"}
-                else "-"
-            ),
+            runtime_status=raw_thread_status,
+            lifecycle_status=str(thread.get("lifecycle_status") or "-"),
             is_alive=bool(payload.get("is_alive")),
             status_reason=str(
                 payload.get("status_reason") or thread.get("status_reason") or "-"
             ),
             managed_turn_id=str(turn.get("managed_turn_id") or "-"),
-            turn_state=str(turn.get("status") or "-"),
+            turn_status=str(turn.get("status") or "-"),
             activity=str(turn.get("activity") or "-"),
             phase=str(turn.get("phase") or "-"),
             elapsed_seconds=_coerce_optional_int(turn.get("elapsed_seconds")),
@@ -573,6 +846,8 @@ class _PmaThreadStatusSnapshot:
                 )
                 if (event := _PmaTailEvent.from_dict(item)) is not None
             ),
+            latest_turn_id=str(payload.get("latest_turn_id") or "").strip(),
+            latest_assistant_text=str(payload.get("latest_assistant_text") or ""),
             latest_output_excerpt=str(
                 payload.get("latest_output_excerpt") or ""
             ).strip(),
@@ -591,16 +866,17 @@ class _PmaThreadStatusSnapshot:
                     f"id={self.managed_thread_id}",
                     f"agent={self.agent}",
                     self.owner_label,
-                    f"status={self.operator_status}",
-                    f"last_turn={self.last_turn_outcome}",
+                    f"operator_status={self.operator_status}",
+                    f"runtime_status={self.runtime_status}",
+                    f"lifecycle_status={self.lifecycle_status}",
                     f"alive={'yes' if self.is_alive else 'no'}",
                 ]
             ),
-            f"reason={self.status_reason}",
-            "turn="
+            f"status_reason={self.status_reason}",
+            "managed_turn_id="
             + self.managed_turn_id
-            + " status="
-            + self.turn_state
+            + " turn_status="
+            + self.turn_status
             + " activity="
             + self.activity
             + " phase="
@@ -628,7 +904,7 @@ class _PmaThreadStatusSnapshot:
             lines.append(f"queued={self.queue_depth}")
             lines.extend(item.render_line() for item in self.queued_turns[:5])
         if self.latest_output_excerpt:
-            lines.append("latest output:")
+            lines.append("assistant_text_excerpt:")
             lines.append(self.latest_output_excerpt)
         return [line for line in lines if line]
 
@@ -651,6 +927,45 @@ def _render_thread_status_snapshot(data: dict[str, Any]) -> None:
     snapshot = _PmaThreadStatusSnapshot.from_dict(data)
     for line in snapshot.render_lines():
         typer.echo(line)
+
+
+def _resolve_latest_managed_turn_id(config, *, managed_thread_id: str) -> str:
+    turns_data = _request_json(
+        "GET",
+        _build_pma_url(config, f"/threads/{managed_thread_id}/turns"),
+        token_env=config.server_auth_token_env,
+        params={"limit": 1},
+    )
+    turns = turns_data.get("turns", []) if isinstance(turns_data, dict) else []
+    if not isinstance(turns, list) or not turns:
+        raise ValueError("No turns found")
+    latest_turn = turns[0] if isinstance(turns[0], dict) else {}
+    latest_turn_id = str(latest_turn.get("managed_turn_id") or "").strip()
+    if not latest_turn_id:
+        raise ValueError("Failed to resolve latest turn id")
+    return latest_turn_id
+
+
+def _fetch_managed_turn_payload(
+    config,
+    *,
+    managed_thread_id: str,
+    managed_turn_id: Optional[str] = None,
+) -> tuple[str, dict[str, Any]]:
+    resolved_turn_id = str(
+        managed_turn_id or ""
+    ).strip() or _resolve_latest_managed_turn_id(
+        config,
+        managed_thread_id=managed_thread_id,
+    )
+    turn_data = _request_json(
+        "GET",
+        _build_pma_url(
+            config, f"/threads/{managed_thread_id}/turns/{resolved_turn_id}"
+        ),
+        token_env=config.server_auth_token_env,
+    )
+    return resolved_turn_id, turn_data if isinstance(turn_data, dict) else {}
 
 
 def _normalize_thread_compact_scope(
@@ -1025,13 +1340,42 @@ def pma_thread_status(
     since: Optional[str] = typer.Option(
         None, "--since", help="Only include events newer than duration (e.g. 5m)"
     ),
-    level: str = typer.Option("info", "--level", help="Verbosity level (info|debug)"),
+    level: _PmaVerbosityLevel = typer.Option(
+        _PmaVerbosityLevel.INFO,
+        "--level",
+        help="Tail verbosity for recent_progress and diagnostics (accepted: info, debug)",
+    ),
+    include_output: bool = typer.Option(
+        False,
+        "--output",
+        help="Include assistant_text for the latest turn, with automatic pagination",
+    ),
+    output_lines: Optional[str] = typer.Option(
+        None,
+        "--lines",
+        help="assistant_text line range (1-based), for example 1:80 or 100:",
+    ),
+    continue_output: bool = typer.Option(
+        False,
+        "--continue",
+        help="Continue assistant_text pagination from the prior status --output call",
+    ),
+    output_file: Optional[Path] = typer.Option(
+        None,
+        "--output-file",
+        help="Write assistant_text to a file instead of printing it",
+    ),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     path: Optional[Path] = hub_root_path_option(),
 ):
-    """Show unified managed-thread status in one view."""
+    """Show unified managed-thread status.
+
+    Canonical field names in the text view match the API model:
+    `operator_status`, `runtime_status`, `managed_turn_id`, `turn_status`,
+    `status_reason`, and `assistant_text`.
+    """
     hub_root = _resolve_hub_path(path)
-    params: dict[str, Any] = {"limit": limit, "level": level}
+    params: dict[str, Any] = {"limit": limit, "level": level.value}
     if since:
         params["since"] = since
     try:
@@ -1053,6 +1397,25 @@ def pma_thread_status(
         typer.echo(json.dumps(data, indent=2))
         return
     _render_thread_status_snapshot(data)
+    if not include_output:
+        return
+
+    snapshot = _PmaThreadStatusSnapshot.from_dict(data)
+    window = _resolve_assistant_text_window(
+        assistant_text=snapshot.latest_assistant_text,
+        lines_spec=output_lines,
+        continue_output=continue_output,
+        command_name="status",
+        hub_root=hub_root,
+        managed_thread_id=managed_thread_id,
+        managed_turn_id=snapshot.latest_turn_id or snapshot.managed_turn_id,
+    )
+    typer.echo()
+    _render_assistant_text_window(
+        window=window,
+        output_file=output_file,
+        label="assistant_text",
+    )
 
 
 def pma_thread_send(
@@ -1085,10 +1448,10 @@ def pma_thread_send(
     notify_on: Optional[str] = typer.Option(
         None,
         "--notify-on",
-        help="Auto-subscribe for lifecycle events (supported: terminal)",
+        help="Create a wake-up subscription for lifecycle events (accepted: terminal)",
     ),
     notify_lane: Optional[str] = typer.Option(
-        None, "--notify-lane", help="Lane id used for terminal notifications"
+        None, "--notify-lane", help="Lane id used for wake-up delivery"
     ),
     notify_once: bool = typer.Option(
         True,
@@ -1098,7 +1461,12 @@ def pma_thread_send(
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     path: Optional[Path] = hub_root_path_option(),
 ):
-    """Send a message to a managed PMA thread."""
+    """Send a message to a managed PMA thread.
+
+    When follow-up subscriptions are enabled, the acceptance line includes the
+    created `subscription_id`. Use `car pma thread status --output` or
+    `car pma thread output` to read `assistant_text` after the wake-up fires.
+    """
     message_body = _resolve_message_body(
         message=message,
         message_file=message_file,
@@ -1201,7 +1569,7 @@ def pma_thread_send(
                 managed_thread_id=managed_thread_id,
                 follow=True,
                 since=None,
-                level="info",
+                level=_PmaVerbosityLevel.INFO,
                 limit=50,
                 output_json=True,
                 path=path,
@@ -1220,7 +1588,7 @@ def pma_thread_send(
                 managed_thread_id=managed_thread_id,
                 follow=True,
                 since=None,
-                level="info",
+                level=_PmaVerbosityLevel.INFO,
                 limit=50,
                 output_json=False,
                 path=path,
@@ -1236,7 +1604,7 @@ def pma_thread_send(
                 status_data = {}
             excerpt = str(status_data.get("latest_output_excerpt") or "").strip()
             if excerpt:
-                typer.echo("\nlatest output:")
+                typer.echo("\nassistant_text_excerpt:")
                 typer.echo(excerpt)
         return
 
@@ -1286,10 +1654,10 @@ def pma_thread_turns(
         typer.echo(
             " ".join(
                 [
-                    str(turn.get("managed_turn_id") or ""),
-                    f"status={turn.get('status') or ''}",
-                    f"started={turn.get('started_at') or ''}",
-                    f"finished={turn.get('finished_at') or ''}",
+                    f"managed_turn_id={turn.get('managed_turn_id') or ''}",
+                    f"turn_status={turn.get('status') or ''}",
+                    f"started_at={turn.get('started_at') or ''}",
+                    f"finished_at={turn.get('finished_at') or ''}",
                 ]
             ).strip()
         )
@@ -1299,33 +1667,40 @@ def pma_thread_output(
     managed_thread_id: str = typer.Option(
         ..., "--id", help="Managed PMA thread id", show_default=False
     ),
+    managed_turn_id: Optional[str] = typer.Option(
+        None,
+        "--turn",
+        help="Managed turn id. Defaults to the latest turn on the thread.",
+    ),
+    output_lines: Optional[str] = typer.Option(
+        None,
+        "--lines",
+        help="assistant_text line range (1-based), for example 1:80 or 100:",
+    ),
+    continue_output: bool = typer.Option(
+        False,
+        "--continue",
+        help="Continue assistant_text pagination from the prior output call",
+    ),
+    output_file: Optional[Path] = typer.Option(
+        None,
+        "--output-file",
+        help="Write assistant_text to a file instead of printing it",
+    ),
     path: Optional[Path] = hub_root_path_option(),
 ):
-    """Print assistant_text for the latest turn of a managed PMA thread."""
+    """Print `assistant_text` for a managed PMA thread turn.
+
+    This is the first-class CLI surface for `/threads/{thread}/turns/{turn}` and
+    supports line ranges, continuation-based pagination, and file export.
+    """
     hub_root = _resolve_hub_path(path)
     try:
         config = load_hub_config(hub_root)
-        turns_data = _request_json(
-            "GET",
-            _build_pma_url(config, f"/threads/{managed_thread_id}/turns"),
-            token_env=config.server_auth_token_env,
-            params={"limit": 1},
-        )
-        turns = turns_data.get("turns", []) if isinstance(turns_data, dict) else []
-        if not isinstance(turns, list) or not turns:
-            typer.echo("No turns found", err=True)
-            raise typer.Exit(code=1) from None
-        latest_turn = turns[0] if isinstance(turns[0], dict) else {}
-        latest_turn_id = latest_turn.get("managed_turn_id") if latest_turn else None
-        if not isinstance(latest_turn_id, str) or not latest_turn_id:
-            typer.echo("Failed to resolve latest turn id", err=True)
-            raise typer.Exit(code=1) from None
-        turn_data = _request_json(
-            "GET",
-            _build_pma_url(
-                config, f"/threads/{managed_thread_id}/turns/{latest_turn_id}"
-            ),
-            token_env=config.server_auth_token_env,
+        resolved_turn_id, turn_data = _fetch_managed_turn_payload(
+            config,
+            managed_thread_id=managed_thread_id,
+            managed_turn_id=managed_turn_id,
         )
     except httpx.HTTPError as exc:
         typer.echo(f"HTTP error: {exc}", err=True)
@@ -1338,7 +1713,116 @@ def pma_thread_output(
 
     turn = turn_data.get("turn", {}) if isinstance(turn_data, dict) else {}
     assistant_text = turn.get("assistant_text") if isinstance(turn, dict) else ""
-    typer.echo(str(assistant_text or ""))
+    window = _resolve_assistant_text_window(
+        assistant_text=str(assistant_text or ""),
+        lines_spec=output_lines,
+        continue_output=continue_output,
+        command_name="output",
+        hub_root=hub_root,
+        managed_thread_id=managed_thread_id,
+        managed_turn_id=resolved_turn_id,
+    )
+    _render_assistant_text_window(
+        window=window,
+        output_file=output_file,
+        label="assistant_text",
+    )
+
+
+def pma_thread_subscribe(
+    managed_thread_id: str = typer.Option(
+        ..., "--id", help="Managed PMA thread id", show_default=False
+    ),
+    event_types: Optional[list[str]] = typer.Option(
+        None,
+        "--event",
+        help="Lifecycle event type to subscribe to. Repeat to add more values.",
+    ),
+    lane_id: Optional[str] = typer.Option(
+        None,
+        "--lane",
+        help="Lane id for wake-up delivery. Defaults from the thread binding when possible.",
+    ),
+    notify_once: bool = typer.Option(
+        True,
+        "--once/--persistent",
+        help="Auto-cancel the subscription after the first matching wake-up",
+    ),
+    confirm_duplicate: bool = typer.Option(
+        False,
+        "--confirm-duplicate",
+        help="Allow a duplicate subscription even when an active auto-subscription already covers this thread",
+    ),
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    path: Optional[Path] = hub_root_path_option(),
+):
+    """Create a thread-scoped wake-up subscription without raw curl.
+
+    This command always targets one managed thread via `thread_id`. For repo- or
+    run-scoped automation, use the lower-level `/hub/pma/subscriptions` API.
+    """
+    hub_root = _resolve_hub_path(path)
+    normalized_event_types = [
+        str(item).strip().lower() for item in (event_types or []) if str(item).strip()
+    ] or [
+        "managed_thread_completed",
+        "managed_thread_failed",
+        "managed_thread_interrupted",
+    ]
+    payload: dict[str, Any] = {
+        "thread_id": managed_thread_id,
+        "event_types": normalized_event_types,
+        "notify_once": notify_once,
+    }
+    if lane_id:
+        payload["lane_id"] = lane_id
+    if confirm_duplicate:
+        payload["confirm"] = True
+
+    try:
+        config = load_hub_config(hub_root)
+        data = _request_json(
+            "POST",
+            _build_pma_url(config, "/subscriptions"),
+            payload,
+            token_env=config.server_auth_token_env,
+        )
+    except httpx.HTTPError as exc:
+        typer.echo(f"HTTP error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    except (ValueError, OSError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+
+    if output_json:
+        typer.echo(json.dumps(data, indent=2))
+        return
+
+    subscription = data.get("subscription", {}) if isinstance(data, dict) else {}
+    if not isinstance(subscription, dict):
+        typer.echo("Subscription creation failed", err=True)
+        raise typer.Exit(code=1) from None
+    summary = " ".join(
+        [
+            f"subscription_id={subscription.get('subscription_id') or '-'}",
+            "scope=thread",
+            f"thread_id={subscription.get('thread_id') or managed_thread_id}",
+            f"lane_id={subscription.get('lane_id') or '-'}",
+            "events="
+            + ",".join(
+                str(item)
+                for item in (subscription.get("event_types") or normalized_event_types)
+            ),
+        ]
+    ).strip()
+    typer.echo(summary)
+    warning = str(data.get("warning") or "").strip()
+    if warning:
+        typer.echo(f"note: {warning}")
+    typer.echo(
+        "next: wait for the wake-up, then read assistant_text with "
+        f"`car pma thread output --id {managed_thread_id}`."
+    )
 
 
 def pma_thread_tail(
@@ -1351,14 +1835,18 @@ def pma_thread_tail(
     since: Optional[str] = typer.Option(
         None, "--since", help="Only include events newer than duration (e.g. 5m)"
     ),
-    level: str = typer.Option("info", "--level", help="Verbosity level (info|debug)"),
+    level: _PmaVerbosityLevel = typer.Option(
+        _PmaVerbosityLevel.INFO,
+        "--level",
+        help="Tail verbosity for event payloads (accepted: info, debug)",
+    ),
     limit: int = typer.Option(50, "--limit", min=1, help="Maximum events to include"),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     path: Optional[Path] = hub_root_path_option(),
 ):
     """Show managed-thread tail/progress events."""
     hub_root = _resolve_hub_path(path)
-    params: dict[str, Any] = {"limit": limit, "level": level}
+    params: dict[str, Any] = {"limit": limit, "level": level.value}
     if since:
         params["since"] = since
     try:
@@ -1914,6 +2402,7 @@ def register_thread_commands(app: typer.Typer) -> None:
     app.command("send")(pma_thread_send)
     app.command("turns")(pma_thread_turns)
     app.command("output")(pma_thread_output)
+    app.command("subscribe")(pma_thread_subscribe)
     app.command("tail")(pma_thread_tail)
     app.command("compact")(pma_thread_compact)
     app.command("resume")(pma_thread_resume)

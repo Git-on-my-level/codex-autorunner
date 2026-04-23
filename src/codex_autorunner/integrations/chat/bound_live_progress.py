@@ -1077,8 +1077,11 @@ def build_bound_chat_queue_execution_controller(
             result = base.on_execution_started(started)
             if inspect.isawaitable(result):
                 await result
+        started_execution = getattr(started, "execution", None)
+        started_thread = getattr(started, "thread", None)
+        started_request = getattr(started, "request", None)
         current_turn_id = str(
-            getattr(started.execution, "execution_id", "") or ""
+            getattr(started_execution, "execution_id", "") or ""
         ).strip()
         try:
             current_session = build_bound_chat_live_progress_session(
@@ -1086,8 +1089,8 @@ def build_bound_chat_queue_execution_controller(
                 raw_config=raw_config,
                 managed_thread_id=managed_thread_id,
                 managed_turn_id=current_turn_id,
-                agent=str(getattr(started.thread, "agent_id", "") or "agent"),
-                model=getattr(started.request, "model", None),
+                agent=str(getattr(started_thread, "agent_id", "") or "agent"),
+                model=getattr(started_request, "model", None),
                 surface_targets=(
                     surface_target_resolver(started)
                     if surface_target_resolver is not None
@@ -1129,14 +1132,20 @@ def build_bound_chat_queue_execution_controller(
         current_session = None
         current_turn_id = None
         if session is not None:
-            normalized_status = str(finalized.status or "").strip().lower()
+            if isinstance(finalized, Mapping):
+                finalized_status = finalized.get("status")
+                finalized_error = finalized.get("error")
+            else:
+                finalized_status = getattr(finalized, "status", None)
+                finalized_error = getattr(finalized, "error", None)
+            normalized_status = str(finalized_status or "").strip().lower()
             if normalized_status == "ok":
                 if retain_completed_surface_targets and turn_id:
                     completed_surface_targets[turn_id] = session.surface_targets
             else:
                 await session.finalize(
-                    status=finalized.status,
-                    failure_message=finalized.error,
+                    status=str(finalized_status or "").strip() or "error",
+                    failure_message=finalized_error,
                 )
             await session.close()
         if base.on_execution_finalized is not None:

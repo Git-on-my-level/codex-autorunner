@@ -333,6 +333,7 @@ class ManagedThreadSendResponse:
     error: str
     next_step: str
     notification_mode: str
+    notification_subscription_id: str
     notification_lane: str
 
     @classmethod
@@ -357,6 +358,14 @@ class ManagedThreadSendResponse:
             next_step=str(payload.get("next_step") or "").strip(),
             notification_mode=str(
                 ((payload.get("notification") or {}).get("mode") or "")
+            ).strip(),
+            notification_subscription_id=str(
+                (
+                    ((payload.get("notification") or {}).get("subscription") or {}).get(
+                        "subscription_id"
+                    )
+                    or ""
+                )
             ).strip(),
             notification_lane=str(
                 (
@@ -385,7 +394,9 @@ class ManagedThreadSendResponse:
         if self.queue_depth is not None:
             line += f" queue_depth={self.queue_depth}"
         if self.notification_mode:
-            line += f" wakeup={self.notification_mode}"
+            line += f" subscription={self.notification_mode}"
+            if self.notification_subscription_id:
+                line += f" subscription_id={self.notification_subscription_id}"
             if self.notification_lane:
                 line += f" lane={self.notification_lane}"
         return line

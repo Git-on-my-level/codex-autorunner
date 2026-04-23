@@ -1495,10 +1495,15 @@ async def _finalize_queue_worker_failure(
     error: str,
 ) -> ManagedThreadFinalizationResult:
     detail = error.strip() or _QUEUE_WORKER_FAILURE_ERROR
+    started_thread = getattr(started_execution, "thread", None)
+    started_turn = getattr(started_execution, "execution", None)
+    managed_thread_id: str = getattr(started_thread, "thread_target_id", "") or ""
+    managed_turn_id: str = getattr(started_turn, "execution_id", "") or ""
+    backend_thread_id: str | None = getattr(started_thread, "backend_thread_id", None)
     try:
         orchestration_service.record_execution_result(
-            started_execution.thread.thread_target_id,
-            started_execution.execution.execution_id,
+            managed_thread_id,
+            managed_turn_id,
             status="error",
             assistant_text="",
             error=detail,
@@ -1526,13 +1531,9 @@ async def _finalize_queue_worker_failure(
         status="error",
         assistant_text="",
         error=detail,
-        managed_thread_id=started_execution.thread.thread_target_id,
-        managed_turn_id=started_execution.execution.execution_id,
-        backend_thread_id=getattr(
-            started_execution.thread,
-            "backend_thread_id",
-            None,
-        ),
+        managed_thread_id=managed_thread_id,
+        managed_turn_id=managed_turn_id,
+        backend_thread_id=backend_thread_id,
         token_usage=None,
     )
 
@@ -1819,11 +1820,21 @@ def _managed_thread_delivery_trace_fields(
 def _queue_worker_trace_fields(
     started_execution: RuntimeThreadExecution,
 ) -> dict[str, Any]:
+    started_thread = getattr(started_execution, "thread", None)
+    started_turn = getattr(started_execution, "execution", None)
     return {
-        "managed_thread_id": started_execution.thread.thread_target_id,
-        "managed_turn_id": started_execution.execution.execution_id,
+        "managed_thread_id": getattr(
+            started_thread,
+            "thread_target_id",
+            None,
+        ),
+        "managed_turn_id": getattr(
+            started_turn,
+            "execution_id",
+            None,
+        ),
         "backend_thread_id": getattr(
-            started_execution.thread,
+            started_thread,
             "backend_thread_id",
             None,
         ),

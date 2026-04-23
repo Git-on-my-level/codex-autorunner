@@ -87,6 +87,7 @@ from ..chat.managed_thread_turns import (
     ManagedThreadCoordinatorHooks,
     ManagedThreadFinalizationResult,
     ManagedThreadQueuedExecutionStarter,
+    ManagedThreadQueueWorkerHooks,
     ManagedThreadTurnCoordinator,  # noqa: F401  re-export for test monkeypatch compat
     complete_managed_thread_execution,
     render_managed_thread_response_text,
@@ -345,6 +346,34 @@ def _managed_thread_surface_key_for_notification_reply(
     if isinstance(notification_id, str) and notification_id.strip():
         return notification_surface_key(notification_id)
     return None
+
+
+def _build_discord_queue_worker_hooks(
+    service: Any,
+    *,
+    channel_id: str,
+    managed_thread_id: str,
+    public_execution_error: str,
+    workspace_root: Optional[Path] = None,
+) -> Any:
+    resolved_workspace_root = workspace_root
+    if resolved_workspace_root is None:
+        resolved_workspace_root = canonicalize_path(
+            Path(getattr(getattr(service, "_config", None), "root", Path(".")))
+        )
+    runner_hooks = _build_discord_runner_hooks(
+        service,
+        channel_id=channel_id,
+        managed_thread_id=managed_thread_id,
+        workspace_root=resolved_workspace_root,
+        public_execution_error=public_execution_error,
+    ).queue_worker_hooks()
+    return ManagedThreadQueueWorkerHooks(
+        durable_delivery=None,
+        deliver_result=runner_hooks.deliver_result,
+        run_with_indicator=runner_hooks.run_with_indicator,
+        execution_hooks=runner_hooks.execution_hooks,
+    )
 
 
 def _resolve_discord_turn_policies(
@@ -1828,11 +1857,22 @@ async def _run_discord_orchestrated_turn_for_message(
     progress_execution_id: Optional[str] = None
     progress_lease_id = uuid.uuid4().hex
     active_progress_labels = {"working", "queued", "running", "review"}
-    reusable_progress_message_id = _claim_discord_reusable_progress_message(
-        service,
-        thread_target_id=managed_thread_id,
-        source_message_id=source_message_id,
+    reusable_progress_message_id: Optional[str] = None
+    claim_queued_notice_progress_message = getattr(
+        service, "_claim_queued_notice_progress_message", None
     )
+    if callable(claim_queued_notice_progress_message):
+        with contextlib.suppress(TypeError):
+            reusable_progress_message_id = claim_queued_notice_progress_message(
+                channel_id=channel_id,
+                source_message_id=source_message_id,
+            )
+    if not reusable_progress_message_id:
+        reusable_progress_message_id = _claim_discord_reusable_progress_message(
+            service,
+            thread_target_id=managed_thread_id,
+            source_message_id=source_message_id,
+        )
 
     async def _load_progress_lease() -> Any:
         return await _get_discord_progress_lease(service, lease_id=progress_lease_id)

@@ -78,6 +78,50 @@ shared orchestration service seam. PMA keeps its operator-facing response
 shape, but the web and CLI surfaces no longer treat direct PMA store access as
 the primary runtime-thread query/control path.
 
+## CLI Naming And Output Retrieval
+
+The PMA thread CLI now renders the same canonical nouns exposed by the API:
+
+- `operator_status`: operator-facing headline (`idle`, `running`, `reusable`, ...)
+- `runtime_status`: persisted raw managed-thread runtime status
+- `lifecycle_status`: write-admission state (`active` or `archived`)
+- `status_reason`: last raw transition reason
+- `managed_turn_id`: turn identifier
+- `turn_status`: status of the active/latest turn snapshot
+- `assistant_text`: full turn output
+
+CLI surfaces:
+
+- `car pma thread status --id <thread>` shows the status snapshot plus
+  `assistant_text_excerpt`.
+- `car pma thread status --id <thread> --output` prints paginated
+  `assistant_text` for the latest turn.
+- `car pma thread output --id <thread> [--turn <managed_turn_id>]` prints
+  paginated `assistant_text` directly from the turn record.
+- Both `status --output` and `thread output` support:
+  - `--lines 100:200` for explicit 1-based line slices
+  - `--continue` to resume the saved pagination cursor
+  - `--output-file <path>` to write the selected `assistant_text` slice to disk
+
+`--level` on `thread status` and `thread tail` only accepts `info` or `debug`.
+
+## Wake-Up Flow
+
+Recommended PMA managed-thread wake-up flow:
+
+1. Send work with `car pma thread send --id <thread> --message-file <prompt.md>`.
+2. Note the returned `subscription_id` when terminal follow-up is enabled.
+3. If you need a manual thread-scoped subscription, use
+   `car pma thread subscribe --id <thread>` instead of raw `curl`.
+4. When the wake-up fires, inspect `assistant_text` with
+   `car pma thread status --id <thread> --output` or
+   `car pma thread output --id <thread>`.
+5. Cancel persistent subscriptions with `car hub subscription cancel --id <subscription_id>`.
+
+Thread-scoped subscriptions are supported on creation with `thread_id`. When
+`thread_id` is omitted, the subscription is repo- or run-scoped and may match
+any managed thread in that scope.
+
 ## Resource Ownership And Bindings
 
 Every PMA managed thread is a durable CAR thread target owned by a typed

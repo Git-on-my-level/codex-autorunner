@@ -355,6 +355,29 @@ def test_create_subscription_warns_when_event_types_empty(
     )
 
 
+def test_create_subscription_warns_when_repo_scope_has_multiple_active_threads(
+    tmp_path,
+) -> None:
+    store = PmaAutomationStore(tmp_path, durable=False)
+    thread_store = PmaThreadStore(tmp_path)
+    thread_store.create_thread("codex", tmp_path, repo_id="repo-1")
+    thread_store.create_thread("codex", tmp_path, repo_id="repo-1")
+
+    result = store.create_subscription(
+        {
+            "event_type": "managed_thread_completed",
+            "repo_id": "repo-1",
+        }
+    )
+
+    assert result["subscription"]["repo_id"] == "repo-1"
+    assert (
+        result["warning"]
+        == "thread_id omitted; this subscription is repo-scoped and may match any of "
+        "2 active managed threads in repo repo-1. Pass thread_id to scope it to one managed thread."
+    )
+
+
 def test_create_subscription_auto_resolves_lane_from_thread_binding(tmp_path) -> None:
     store = PmaAutomationStore(tmp_path, durable=False)
     thread_id = _create_managed_thread(tmp_path, surface_kind="discord")

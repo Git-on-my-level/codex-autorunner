@@ -25,6 +25,7 @@ def test_pma_cli_thread_group_has_required_commands():
     assert "send" in output, "PMA thread should have 'send' command"
     assert "turns" in output, "PMA thread should have 'turns' command"
     assert "output" in output, "PMA thread should have 'output' command"
+    assert "subscribe" in output, "PMA thread should have 'subscribe' command"
     assert "tail" in output, "PMA thread should have 'tail' command"
     assert "compact" in output, "PMA thread should have 'compact' command"
     assert "fork" in output, "PMA thread should have 'fork' command"
@@ -70,6 +71,31 @@ def test_pma_cli_thread_status_help_shows_json_option():
     assert result.exit_code == 0
     output = result.stdout
     assert "--json" in output, "PMA thread status should support --json"
+    assert "--output" in output
+    assert "--lines" in output
+    assert "--continue" in output
+    assert "--output-file" in output
+
+
+def test_pma_cli_thread_output_help_shows_pagination_options() -> None:
+    runner = CliRunner()
+    result = runner.invoke(pma_app, ["thread", "output", "--help"])
+    assert result.exit_code == 0
+    output = result.stdout
+    assert "--turn" in output
+    assert "--lines" in output
+    assert "--continue" in output
+    assert "--output-file" in output
+
+
+def test_pma_cli_thread_subscribe_help_mentions_thread_scope() -> None:
+    runner = CliRunner()
+    result = runner.invoke(pma_app, ["thread", "subscribe", "--help"])
+    assert result.exit_code == 0
+    output = result.stdout
+    assert "--event" in output
+    assert "--lane" in output
+    assert "thread-scoped" in output.lower()
 
 
 def test_pma_cli_thread_fork_help_shows_json_option():
@@ -120,7 +146,7 @@ def test_pma_tail_snapshot_render_lines_use_typed_serializer() -> None:
     )
 
     assert snapshot.render_lines() == [
-        "turn=turn-9 status=running activity=waiting phase=tool elapsed=2m05s idle=35s",
+        "managed_turn_id=turn-9 turn_status=running activity=waiting phase=tool elapsed=2m05s idle=35s",
         "guidance: waiting on tool",
         "active_turn: kind=message model=gpt-5 reasoning=low stream=yes stalled=yes",
         "stall_reason: tool timeout",
@@ -192,13 +218,13 @@ def test_pma_thread_status_snapshot_render_lines_include_queue_and_excerpt() -> 
     lines = snapshot.render_lines()
 
     assert (
-        "id=thread-1 agent=codex repo=repo-1 status=reusable last_turn=completed alive=yes"
-        in lines
+        "id=thread-1 agent=codex repo=repo-1 operator_status=reusable "
+        "runtime_status=completed lifecycle_status=active alive=yes" in lines
     )
-    assert "reason=managed_turn_completed" in lines
+    assert "status_reason=managed_turn_completed" in lines
     assert (
-        "turn=turn-1 status=ok activity=completed phase=finalize elapsed=1m01s idle=0s"
-        in lines
+        "managed_turn_id=turn-1 turn_status=ok activity=completed "
+        "phase=finalize elapsed=1m01s idle=0s" in lines
     )
     assert "guidance: wrap up" in lines
     assert (
@@ -211,10 +237,10 @@ def test_pma_thread_status_snapshot_render_lines_include_queue_and_excerpt() -> 
     assert "[10:11:13] #3 assistant_output: Drafted a reply" in lines
     assert "queued=2" in lines
     assert (
-        "queued_turn=turn-2 enqueued=2026-03-17T10:12:00Z prompt=follow up on the same thread"
+        "queued_turn_id=turn-2 enqueued=2026-03-17T10:12:00Z prompt=follow up on the same thread"
         in lines
     )
-    assert lines[-2:] == ["latest output:", "assistant conclusion"]
+    assert lines[-2:] == ["assistant_text_excerpt:", "assistant conclusion"]
 
 
 def test_pma_thread_send_request_and_response_helpers() -> None:
@@ -272,7 +298,7 @@ def test_pma_thread_send_request_and_response_helpers() -> None:
     assert response.accepted_line() == (
         "send_state=accepted managed_turn_id=turn-2 "
         "active_managed_turn_id=turn-1 queue_depth=1 "
-        "wakeup=terminal lane=lane-1"
+        "subscription=terminal lane=lane-1"
     )
     assert response.delivered_message == "follow up"
     assert error_response.is_ok is False
@@ -435,7 +461,7 @@ def test_pma_cli_thread_query_commands_use_orchestration_routes(
     assert '"latest_assistant_text": "assistant conclusion"' in info_result.stdout
     assert status_result.exit_code == 0
     assert (
-        "id=thread-1 agent=codex repo=repo-1 status=reusable last_turn=completed"
+        "id=thread-1 agent=codex repo=repo-1 operator_status=reusable runtime_status=completed"
         in status_result.stdout
     )
     assert (
@@ -447,10 +473,12 @@ def test_pma_cli_thread_query_commands_use_orchestration_routes(
         "last_event: tool_completed @10:11:12 tool: status-check"
         in status_result.stdout
     )
-    assert "latest output:" in status_result.stdout
+    assert "assistant_text_excerpt:" in status_result.stdout
     assert "assistant conclusion" in status_result.stdout
     assert tail_result.exit_code == 0
-    assert "turn=turn-1 status=ok activity=completed" in tail_result.stdout
+    assert (
+        "managed_turn_id=turn-1 turn_status=ok activity=completed" in tail_result.stdout
+    )
     assert (
         "active_turn: kind=message model=gpt-5 reasoning=high stream=yes stalled=no"
         in tail_result.stdout
@@ -483,6 +511,237 @@ def test_pma_cli_thread_query_commands_use_orchestration_routes(
             "http://127.0.0.1:4321/hub/pma/threads/thread-1/tail",
             {"limit": 50, "level": "info"},
         ),
+    ]
+
+
+def test_pma_cli_thread_status_output_renders_paginated_assistant_text(
+    monkeypatch, tmp_path: Path
+) -> None:
+    assistant_text = "\n".join(f"line {index}" for index in range(1, 26))
+
+    monkeypatch.setattr(
+        pma_thread_commands,
+        "load_hub_config",
+        lambda hub_root: SimpleNamespace(
+            server_base_path="",
+            server_host="127.0.0.1",
+            server_port=4321,
+            server_auth_token_env=None,
+        ),
+    )
+    monkeypatch.setattr(
+        pma_thread_commands.shutil,
+        "get_terminal_size",
+        lambda fallback=(80, 24): SimpleNamespace(columns=80, lines=12),
+    )
+
+    def _fake_request_json(
+        method: str,
+        url: str,
+        payload=None,
+        token_env=None,
+        params=None,
+    ):
+        _ = method, payload, token_env, params
+        if url.endswith("/threads/thread-1/status"):
+            return {
+                "managed_thread_id": "thread-1",
+                "status": "completed",
+                "operator_status": "reusable",
+                "status_reason": "managed_turn_completed",
+                "thread": {
+                    "agent": "codex",
+                    "repo_id": "repo-1",
+                    "status": "completed",
+                    "lifecycle_status": "active",
+                },
+                "turn": {
+                    "managed_turn_id": "turn-1",
+                    "status": "ok",
+                    "activity": "completed",
+                    "phase": "finalize",
+                },
+                "latest_turn_id": "turn-1",
+                "latest_assistant_text": assistant_text,
+                "latest_output_excerpt": "line 1",
+            }
+        raise AssertionError(f"unexpected url: {url}")
+
+    monkeypatch.setattr(pma_thread_commands, "_request_json", _fake_request_json)
+
+    result = CliRunner().invoke(
+        pma_app,
+        [
+            "thread",
+            "status",
+            "--id",
+            "thread-1",
+            "--output",
+            "--path",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "assistant_text:" in result.stdout
+    assert "line 1" in result.stdout
+    assert "line 20" in result.stdout
+    assert "line 21" not in result.stdout
+    assert "--continue or --lines 21:25" in result.stdout
+
+
+def test_pma_cli_thread_output_supports_continue_and_output_file(
+    monkeypatch, tmp_path: Path
+) -> None:
+    assistant_text = "\n".join(f"line {index}" for index in range(1, 26))
+
+    monkeypatch.setattr(
+        pma_thread_commands,
+        "load_hub_config",
+        lambda hub_root: SimpleNamespace(
+            server_base_path="",
+            server_host="127.0.0.1",
+            server_port=4321,
+            server_auth_token_env=None,
+        ),
+    )
+    monkeypatch.setattr(
+        pma_thread_commands.shutil,
+        "get_terminal_size",
+        lambda fallback=(80, 24): SimpleNamespace(columns=80, lines=12),
+    )
+
+    def _fake_request_json(
+        method: str,
+        url: str,
+        payload=None,
+        token_env=None,
+        params=None,
+    ):
+        _ = method, payload, token_env
+        if url.endswith("/threads/thread-1/turns"):
+            assert params == {"limit": 1}
+            return {"turns": [{"managed_turn_id": "turn-1"}]}
+        if url.endswith("/threads/thread-1/turns/turn-1"):
+            return {
+                "turn": {"managed_turn_id": "turn-1", "assistant_text": assistant_text}
+            }
+        raise AssertionError(f"unexpected url: {url}")
+
+    monkeypatch.setattr(pma_thread_commands, "_request_json", _fake_request_json)
+    runner = CliRunner()
+
+    first = runner.invoke(
+        pma_app,
+        ["thread", "output", "--id", "thread-1", "--path", str(tmp_path)],
+    )
+    second = runner.invoke(
+        pma_app,
+        [
+            "thread",
+            "output",
+            "--id",
+            "thread-1",
+            "--continue",
+            "--path",
+            str(tmp_path),
+        ],
+    )
+    output_path = tmp_path / "assistant.txt"
+    file_result = runner.invoke(
+        pma_app,
+        [
+            "thread",
+            "output",
+            "--id",
+            "thread-1",
+            "--lines",
+            "24:25",
+            "--output-file",
+            str(output_path),
+            "--path",
+            str(tmp_path),
+        ],
+    )
+
+    assert first.exit_code == 0, first.output
+    assert "line 20" in first.stdout
+    assert "line 21" not in first.stdout
+    assert second.exit_code == 0, second.output
+    assert "line 21" in second.stdout
+    assert "line 25" in second.stdout
+    assert "line 1" not in second.stdout
+    assert file_result.exit_code == 0, file_result.output
+    assert output_path.read_text(encoding="utf-8") == "line 24\nline 25"
+
+
+def test_pma_cli_thread_subscribe_posts_thread_scoped_payload(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        pma_thread_commands,
+        "load_hub_config",
+        lambda hub_root: SimpleNamespace(
+            server_base_path="",
+            server_host="127.0.0.1",
+            server_port=4321,
+            server_auth_token_env=None,
+        ),
+    )
+    calls: list[tuple[str, str, dict[str, object]]] = []
+
+    def _fake_request_json(
+        method: str,
+        url: str,
+        payload=None,
+        token_env=None,
+        params=None,
+    ):
+        _ = token_env, params
+        calls.append((method, url, payload or {}))
+        return {
+            "subscription": {
+                "subscription_id": "sub-1",
+                "thread_id": "thread-1",
+                "lane_id": "lane-1",
+                "event_types": ["managed_thread_completed"],
+            }
+        }
+
+    monkeypatch.setattr(pma_thread_commands, "_request_json", _fake_request_json)
+
+    result = CliRunner().invoke(
+        pma_app,
+        [
+            "thread",
+            "subscribe",
+            "--id",
+            "thread-1",
+            "--event",
+            "managed_thread_completed",
+            "--lane",
+            "lane-1",
+            "--persistent",
+            "--path",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "subscription_id=sub-1 scope=thread thread_id=thread-1 lane_id=lane-1" in (
+        result.stdout
+    )
+    assert calls == [
+        (
+            "POST",
+            "http://127.0.0.1:4321/hub/pma/subscriptions",
+            {
+                "thread_id": "thread-1",
+                "event_types": ["managed_thread_completed"],
+                "notify_once": False,
+                "lane_id": "lane-1",
+            },
+        )
     ]
 
 
@@ -805,7 +1064,7 @@ def test_pma_cli_thread_send_reports_queued_busy_thread(
     assert "send_state=accepted managed_turn_id=turn-2" in result.stdout
     assert "active_managed_turn_id=turn-1" in result.stdout
     assert "queue_depth=1" in result.stdout
-    assert "wakeup=terminal lane=pma:default" in result.stdout
+    assert "subscription=terminal lane=pma:default" in result.stdout
     assert "delivered message:\nfollow up\n" in result.stdout
     assert captured["url"] == "http://127.0.0.1:4321/hub/pma/threads/thread-1/messages"
     assert captured["payload"] == {
