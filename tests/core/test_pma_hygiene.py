@@ -259,7 +259,7 @@ def test_apply_pma_hygiene_report_can_include_reviewed_thread_cleanup(hub_env) -
 
     blocked = apply_pma_hygiene_report(hub_root, report)
     assert blocked["attempted"] == 0
-    assert thread_store.get_thread(managed_thread_id)["status"] == "active"
+    assert thread_store.get_thread(managed_thread_id)["lifecycle_status"] == "active"
 
     applied = apply_pma_hygiene_report(
         hub_root, report, include_needs_confirmation=True
@@ -269,7 +269,7 @@ def test_apply_pma_hygiene_report_can_include_reviewed_thread_cleanup(hub_env) -
     assert applied["reviewed_attempted"] == 1
     assert applied["applied"] == 1
     assert applied["failed"] == 0
-    assert thread_store.get_thread(managed_thread_id)["status"] == "archived"
+    assert thread_store.get_thread(managed_thread_id)["lifecycle_status"] == "archived"
 
 
 def test_apply_pma_hygiene_report_revalidates_reviewed_thread_binding(hub_env) -> None:
@@ -303,7 +303,7 @@ def test_apply_pma_hygiene_report_revalidates_reviewed_thread_binding(hub_env) -
         applied["results"][0]["error"]
         == "Managed thread cleanup no longer safe: managed thread has an active binding"
     )
-    assert thread_store.get_thread(managed_thread_id)["status"] == "active"
+    assert thread_store.get_thread(managed_thread_id)["lifecycle_status"] == "active"
 
 
 def test_apply_pma_hygiene_report_revalidates_reviewed_thread_busy_state(
@@ -333,7 +333,7 @@ def test_apply_pma_hygiene_report_revalidates_reviewed_thread_busy_state(
         applied["results"][0]["error"]
         == "Managed thread cleanup no longer safe: managed thread has running work"
     )
-    assert thread_store.get_thread(managed_thread_id)["status"] == "active"
+    assert thread_store.get_thread(managed_thread_id)["lifecycle_status"] == "active"
 
 
 def test_apply_pma_hygiene_report_revalidates_reviewed_thread_lifecycle(
@@ -363,7 +363,7 @@ def test_apply_pma_hygiene_report_revalidates_reviewed_thread_lifecycle(
         applied["results"][0]["error"]
         == "Managed thread cleanup no longer safe: managed thread lifecycle is archived"
     )
-    assert thread_store.get_thread(managed_thread_id)["status"] == "archived"
+    assert thread_store.get_thread(managed_thread_id)["lifecycle_status"] == "archived"
 
 
 def test_build_pma_hygiene_report_canonicalizes_category_order(hub_env) -> None:

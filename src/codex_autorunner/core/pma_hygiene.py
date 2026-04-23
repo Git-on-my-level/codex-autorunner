@@ -198,22 +198,15 @@ def _build_thread_candidates(
         managed_thread_id = str(thread.get("managed_thread_id") or "").strip()
         if not managed_thread_id:
             continue
-        lifecycle_status = str(
-            thread.get("lifecycle_status") or thread.get("status") or ""
-        )
-        normalized_status = str(
-            thread.get("normalized_status") or thread.get("status") or ""
-        ).strip()
+        lifecycle_status = str(thread.get("lifecycle_status") or "")
+        normalized_status = str(thread.get("normalized_status") or "").strip()
         if lifecycle_status == "archived" or normalized_status == "archived":
             continue
         freshness = build_freshness_payload(
             generated_at=generated_at,
             stale_threshold_seconds=stale_threshold_seconds,
             candidates=[
-                (
-                    "thread_status_changed_at",
-                    thread.get("status_changed_at") or thread.get("status_updated_at"),
-                ),
+                ("thread_status_changed_at", thread.get("status_updated_at")),
                 ("thread_updated_at", thread.get("updated_at")),
             ],
         )
@@ -580,9 +573,7 @@ def _revalidate_managed_thread_cleanup(
     if not isinstance(thread, dict):
         return "managed thread no longer exists"
 
-    lifecycle_status = str(
-        thread.get("lifecycle_status") or thread.get("status") or ""
-    ).strip()
+    lifecycle_status = str(thread.get("lifecycle_status") or "").strip()
     normalized_status = str(thread.get("normalized_status") or "").strip()
     if lifecycle_status != "active":
         return f"managed thread lifecycle is {lifecycle_status or 'unknown'}"

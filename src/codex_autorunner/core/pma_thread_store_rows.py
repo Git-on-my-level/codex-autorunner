@@ -226,6 +226,26 @@ def enrich_thread_metadata_for_workspace(
     return payload
 
 
+def _canonicalize_thread_mapping(data: Mapping[str, Any]) -> dict[str, Any]:
+    record = dict(data)
+    lifecycle_status = (
+        coerce_text(record.get("lifecycle_status") or record.get("status")) or "active"
+    )
+    return {
+        **record,
+        "lifecycle_status": lifecycle_status,
+        "normalized_status": coerce_text(record.get("normalized_status")),
+        "status_reason_code": coerce_text(
+            record.get("status_reason_code") or record.get("status_reason")
+        ),
+        "status_updated_at": coerce_text(
+            record.get("status_updated_at") or record.get("status_changed_at")
+        ),
+        "status_terminal": bool(record.get("status_terminal")),
+        "status_turn_id": coerce_text(record.get("status_turn_id")),
+    }
+
+
 @dataclass(frozen=True)
 class PmaThreadRecord:
     managed_thread_id: str
@@ -235,13 +255,10 @@ class PmaThreadRecord:
     resource_id: Optional[str]
     workspace_root: str
     name: Optional[str]
-    status: str
     lifecycle_status: str
     normalized_status: str
     status_reason_code: Optional[str]
-    status_reason: Optional[str]
     status_updated_at: Optional[str]
-    status_changed_at: Optional[str]
     status_terminal: bool
     status_turn_id: Optional[str]
     last_turn_id: Optional[str]
@@ -253,13 +270,8 @@ class PmaThreadRecord:
 
     @classmethod
     def from_store_mapping(cls, data: Mapping[str, Any]) -> "PmaThreadRecord":
-        record = dict(data)
-        lifecycle_status = (
-            coerce_text(record.get("lifecycle_status") or record.get("status"))
-            or "active"
-        )
-        record["status"] = lifecycle_status
-        record["lifecycle_status"] = lifecycle_status
+        record = _canonicalize_thread_mapping(data)
+        lifecycle_status = str(record["lifecycle_status"])
         snapshot = ManagedThreadStatusSnapshot.from_mapping(record)
         raw_metadata = record.get("metadata")
         metadata = dict(raw_metadata) if isinstance(raw_metadata, dict) else {}
@@ -285,13 +297,10 @@ class PmaThreadRecord:
             resource_id=resource_id,
             workspace_root=workspace_root,
             name=coerce_text(record.get("name") or record.get("display_name")),
-            status=lifecycle_status,
             lifecycle_status=lifecycle_status,
             normalized_status=snapshot.status,
             status_reason_code=snapshot.reason_code,
-            status_reason=snapshot.reason_code,
             status_updated_at=snapshot.changed_at,
-            status_changed_at=snapshot.changed_at,
             status_terminal=bool(snapshot.terminal),
             status_turn_id=coerce_text(record.get("status_turn_id"))
             or snapshot.turn_id,
@@ -345,7 +354,26 @@ class PmaThreadRecord:
         return asdict(self)
 
     def to_thread_target(self) -> ThreadTarget:
-        return ThreadTarget.from_mapping(self.to_dict())
+        return ThreadTarget(
+            thread_target_id=self.managed_thread_id,
+            agent_id=self.agent,
+            repo_id=self.repo_id,
+            resource_kind=self.resource_kind,
+            resource_id=self.resource_id,
+            workspace_root=self.workspace_root,
+            display_name=self.name,
+            status=self.normalized_status,
+            lifecycle_status=self.lifecycle_status,
+            status_reason=self.status_reason_code,
+            status_changed_at=self.status_updated_at,
+            status_terminal=self.status_terminal,
+            status_turn_id=self.status_turn_id,
+            last_execution_id=self.last_turn_id,
+            last_message_preview=self.last_message_preview,
+            created_at=self.created_at,
+            updated_at=self.updated_at,
+            compact_seed=self.compact_seed,
+        )
 
 
 @dataclass(frozen=True)
