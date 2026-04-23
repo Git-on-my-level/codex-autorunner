@@ -13,6 +13,7 @@ from .....core.logging_utils import log_event
 from .....core.pma_chat_delivery import deliver_pma_notification
 from .....core.ports.run_event import TokenUsage
 from .....integrations.chat.turn_metrics import format_turn_footer
+from ...services.pma import get_pma_request_context
 
 if TYPE_CHECKING:
     from fastapi import Request
@@ -33,9 +34,10 @@ def normalize_optional_text(value: Any) -> Optional[str]:
 def resolve_chat_state_path(
     request: Request, *, section: str, default_state_file: str
 ) -> Path:
+    context = get_pma_request_context(request)
     return resolve_configured_chat_state_path(
-        hub_root=request.app.state.config.root,
-        raw_config=getattr(request.app.state.config, "raw", {}),
+        hub_root=context.hub_root,
+        raw_config=context.raw_config,
         section=section,
         default_state_file=default_state_file,
     )
@@ -47,8 +49,6 @@ def resolve_publish_repo_id(
     lifecycle_event: Optional[dict[str, Any]],
     wake_up: Optional[dict[str, Any]],
 ) -> Optional[str]:
-    from .....core.pma_thread_store import PmaThreadStore
-
     for candidate in (
         lifecycle_event.get("repo_id") if lifecycle_event else None,
         wake_up.get("repo_id") if wake_up else None,
@@ -65,7 +65,7 @@ def resolve_publish_repo_id(
     if not thread_id:
         return None
     try:
-        thread = PmaThreadStore(request.app.state.config.root).get_thread(thread_id)
+        thread = get_pma_request_context(request).thread_store().get_thread(thread_id)
     except (OSError, ValueError, RuntimeError):
         logger.exception(
             "Failed resolving managed thread repo for publish thread_id=%s",
@@ -83,8 +83,6 @@ def resolve_publish_workspace_root(
     lifecycle_event: Optional[dict[str, Any]],
     wake_up: Optional[dict[str, Any]],
 ) -> Optional[Path]:
-    from .....core.pma_thread_store import PmaThreadStore
-
     if isinstance(wake_up, dict):
         raw_workspace = normalize_optional_text(wake_up.get("workspace_root"))
         if raw_workspace:
@@ -101,7 +99,7 @@ def resolve_publish_workspace_root(
     if not thread_id:
         return None
     try:
-        thread = PmaThreadStore(request.app.state.config.root).get_thread(thread_id)
+        thread = get_pma_request_context(request).thread_store().get_thread(thread_id)
     except (OSError, ValueError, RuntimeError):
         logger.exception(
             "Failed resolving managed thread workspace for publish thread_id=%s",
@@ -250,7 +248,7 @@ async def publish_automation_result(
     lifecycle_event: Any,
     wake_up: Any,
 ) -> dict[str, Any]:
-    hub_root = request.app.state.config.root
+    hub_root = get_pma_request_context(request).hub_root
     lifecycle_event_dict = (
         lifecycle_event if isinstance(lifecycle_event, dict) else None
     )

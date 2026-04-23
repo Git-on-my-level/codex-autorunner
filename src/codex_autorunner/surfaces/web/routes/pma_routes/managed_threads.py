@@ -15,10 +15,8 @@ from .....agents.registry import (
 from .....core.chat_bindings import active_chat_binding_metadata_by_thread
 from .....core.orchestration import build_harness_backed_orchestration_service
 from .....core.orchestration.catalog import RuntimeAgentDescriptor
-from .....core.orchestration.cold_trace_store import ColdTraceStore
 from .....core.orchestration.turn_timeline import list_turn_timeline
 from .....core.pma_automation_store import PmaAutomationThreadNotFoundError
-from .....core.pma_thread_store import PmaThreadStore
 from ...schemas import (
     PmaAutomationSubscriptionCreateRequest,
     PmaAutomationTimerCancelRequest,
@@ -30,6 +28,7 @@ from ...schemas import (
     PmaManagedThreadForkRequest,
     PmaManagedThreadResumeRequest,
 )
+from ...services.pma import get_pma_request_context
 from ...services.pma.managed_thread_followup import (
     ManagedThreadAutomationClient,
     ManagedThreadAutomationUnavailable,
@@ -81,19 +80,21 @@ def _subscription_request_has_explicit_routing(payload: dict[str, Any]) -> bool:
 
 
 def build_managed_thread_orchestration_service(request: Request):
+    context = get_pma_request_context(request)
     try:
-        descriptors = get_registered_agents(request.app.state)
+        descriptors = get_registered_agents(context.agent_context)
     except TypeError as exc:
         if "positional argument" not in str(exc):
             raise
         descriptors = get_registered_agents()
 
     def _make_harness(agent_id: str, profile: Optional[str] = None):
-        cache = getattr(request.app.state, "_managed_thread_harness_cache", None)
-        if not isinstance(cache, dict):
-            cache = {}
-            request.app.state._managed_thread_harness_cache = cache
-        resolution = resolve_agent_runtime(agent_id, profile, context=request.app.state)
+        cache = context.managed_thread_harness_cache
+        resolution = resolve_agent_runtime(
+            agent_id,
+            profile,
+            context=context.agent_context,
+        )
         runtime_agent_id = resolution.runtime_agent_id
         runtime_profile = resolution.runtime_profile
         cache_key = (runtime_agent_id, runtime_profile or "")
@@ -105,7 +106,7 @@ def build_managed_thread_orchestration_service(request: Request):
             raise KeyError(f"Unknown agent definition '{runtime_agent_id}'")
         harness = descriptor.make_harness(
             wrap_requested_agent_context(
-                request.app.state,
+                context.agent_context,
                 agent_id=runtime_agent_id,
                 profile=runtime_profile,
             )
@@ -116,7 +117,7 @@ def build_managed_thread_orchestration_service(request: Request):
     return build_harness_backed_orchestration_service(
         descriptors=cast(dict[str, RuntimeAgentDescriptor], descriptors),
         harness_factory=_make_harness,
-        pma_thread_store=PmaThreadStore(request.app.state.config.root),
+        pma_thread_store=context.thread_store(),
     )
 
 
@@ -352,7 +353,8 @@ def build_managed_thread_crud_routes(
     async def create_managed_thread(
         request: Request, payload: PmaManagedThreadCreateRequest
     ) -> dict[str, Any]:
-        hub_root = request.app.state.config.root
+        context = get_pma_request_context(request)
+        hub_root = context.hub_root
         resolved = resolve_managed_thread_create_resolution(request, payload)
 
         service = build_managed_thread_orchestration_service(request)
@@ -430,7 +432,7 @@ def build_managed_thread_crud_routes(
             limit=query.limit,
         )
         binding_metadata = _load_chat_binding_metadata_by_thread(
-            request.app.state.config.root
+            get_pma_request_context(request).hub_root
         )
         return {
             "threads": [
@@ -449,7 +451,7 @@ def build_managed_thread_crud_routes(
         if thread is None:
             raise HTTPException(status_code=404, detail="Managed thread not found")
         binding_metadata = _load_chat_binding_metadata_by_thread(
-            request.app.state.config.root
+            get_pma_request_context(request).hub_root
         )
         serialized_thread = _attach_latest_execution_fields(
             _serialize_thread_target(
@@ -472,7 +474,8 @@ def build_managed_thread_crud_routes(
         summary = (payload.summary or "").strip()
         if not summary:
             raise HTTPException(status_code=400, detail="summary is required")
-        max_text_chars = int(request.app.state.config.pma.max_text_chars or 0)
+        context = get_pma_request_context(request)
+        max_text_chars = int(context.config.pma.max_text_chars or 0)
         if max_text_chars > 0 and len(summary) > max_text_chars:
             raise HTTPException(
                 status_code=400,
@@ -481,7 +484,7 @@ def build_managed_thread_crud_routes(
                 ),
             )
 
-        store = PmaThreadStore(request.app.state.config.root)
+        store = context.thread_store()
         thread = store.get_thread(managed_thread_id)
         if thread is None:
             raise HTTPException(status_code=404, detail="Managed thread not found")
@@ -509,9 +512,7 @@ def build_managed_thread_crud_routes(
         if updated is None:
             raise HTTPException(status_code=404, detail="Managed thread not found")
         thread_payload = _serialize_managed_thread(updated)
-        binding_metadata = _load_chat_binding_metadata_by_thread(
-            request.app.state.config.root
-        )
+        binding_metadata = _load_chat_binding_metadata_by_thread(context.hub_root)
         return {
             "thread": _apply_chat_binding_fields(
                 thread_payload,
@@ -538,7 +539,7 @@ def build_managed_thread_crud_routes(
         runtime_resolution = resolve_agent_runtime(
             source_thread.agent_id,
             source_thread.agent_profile,
-            context=request.app.state,
+            context=get_pma_request_context(request).agent_context,
         )
         if runtime_resolution.logical_agent_id != "hermes":
             raise HTTPException(
@@ -581,7 +582,8 @@ def build_managed_thread_crud_routes(
                 detail="Hermes runtime does not support session fork",
             )
 
-        store = PmaThreadStore(request.app.state.config.root)
+        context = get_pma_request_context(request)
+        store = context.thread_store()
         stored_source = store.get_thread(managed_thread_id)
         metadata = dict((stored_source or {}).get("metadata") or {})
         if source_thread.backend_runtime_instance_id:
@@ -619,9 +621,7 @@ def build_managed_thread_crud_routes(
                 ensure_ascii=True,
             ),
         )
-        binding_metadata = _load_chat_binding_metadata_by_thread(
-            request.app.state.config.root
-        )
+        binding_metadata = _load_chat_binding_metadata_by_thread(context.hub_root)
         return {
             "thread": _serialize_thread_target(
                 forked_thread,
@@ -650,7 +650,8 @@ def build_managed_thread_crud_routes(
         old_backend_thread_id = normalize_optional_text(thread.backend_thread_id)
         old_status = normalize_optional_text(thread.lifecycle_status)
         updated = service.resume_thread_target(managed_thread_id)
-        store = PmaThreadStore(request.app.state.config.root)
+        context = get_pma_request_context(request)
+        store = context.thread_store()
         store.append_action(
             "managed_thread_resume",
             managed_thread_id=managed_thread_id,
@@ -662,9 +663,7 @@ def build_managed_thread_crud_routes(
                 ensure_ascii=True,
             ),
         )
-        binding_metadata = _load_chat_binding_metadata_by_thread(
-            request.app.state.config.root
-        )
+        binding_metadata = _load_chat_binding_metadata_by_thread(context.hub_root)
         return {
             "thread": _serialize_thread_target(
                 updated,
@@ -683,15 +682,14 @@ def build_managed_thread_crud_routes(
 
         old_status = normalize_optional_text(thread.lifecycle_status)
         updated = service.archive_thread_target(managed_thread_id)
-        store = PmaThreadStore(request.app.state.config.root)
+        context = get_pma_request_context(request)
+        store = context.thread_store()
         store.append_action(
             "managed_thread_archive",
             managed_thread_id=managed_thread_id,
             payload_json=json.dumps({"old_status": old_status}, ensure_ascii=True),
         )
-        binding_metadata = _load_chat_binding_metadata_by_thread(
-            request.app.state.config.root
-        )
+        binding_metadata = _load_chat_binding_metadata_by_thread(context.hub_root)
         return {
             "thread": _serialize_thread_target(
                 updated,
@@ -704,7 +702,8 @@ def build_managed_thread_crud_routes(
         payload: PmaManagedThreadBulkArchiveRequest, request: Request
     ) -> dict[str, Any]:
         service = build_managed_thread_orchestration_service(request)
-        store = PmaThreadStore(request.app.state.config.root)
+        context = get_pma_request_context(request)
+        store = context.thread_store()
         archived_threads: list[Any] = []
         errors: list[dict[str, str]] = []
 
@@ -728,9 +727,7 @@ def build_managed_thread_crud_routes(
             )
             archived_threads.append(updated)
 
-        binding_metadata = _load_chat_binding_metadata_by_thread(
-            request.app.state.config.root
-        )
+        binding_metadata = _load_chat_binding_metadata_by_thread(context.hub_root)
         return {
             "threads": [
                 _serialize_thread_target(
@@ -755,7 +752,7 @@ def build_managed_thread_crud_routes(
             raise HTTPException(status_code=400, detail="limit must be greater than 0")
         limit = min(limit, 200)
 
-        store = PmaThreadStore(request.app.state.config.root)
+        store = get_pma_request_context(request).thread_store()
         thread = store.get_thread(managed_thread_id)
         if thread is None:
             raise HTTPException(status_code=404, detail="Managed thread not found")
@@ -771,8 +768,9 @@ def build_managed_thread_crud_routes(
         managed_turn_id: str,
         request: Request,
     ) -> dict[str, Any]:
-        hub_root = request.app.state.config.root
-        store = PmaThreadStore(hub_root)
+        context = get_pma_request_context(request)
+        hub_root = context.hub_root
+        store = context.thread_store()
         thread = store.get_thread(managed_thread_id)
         if thread is None:
             raise HTTPException(status_code=404, detail="Managed thread not found")
@@ -786,7 +784,7 @@ def build_managed_thread_crud_routes(
             execution_id=managed_turn_id,
         )
 
-        cold_store = ColdTraceStore(hub_root)
+        cold_store = context.cold_trace_store()
         manifest = cold_store.get_manifest(managed_turn_id)
         checkpoint = cold_store.load_checkpoint(managed_turn_id)
 

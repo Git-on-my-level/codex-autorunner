@@ -10,6 +10,7 @@ from .....agents.registry import resolve_agent_runtime
 from .....core.pma_lifecycle import PmaLifecycleRouter
 from .....core.text_utils import _normalize_optional_text
 from .....integrations.app_server.threads import pma_base_key
+from ...services.pma import get_pma_request_context
 from .hermes_supervisors import resolve_cached_hermes_supervisor
 
 logger = logging.getLogger(__name__)
@@ -32,13 +33,14 @@ async def maybe_fork_hermes_pma_session(
     hub_root: Path,
     stored_thread_id: Optional[str] = None,
 ) -> dict[str, Any]:
+    context = get_pma_request_context(request)
     current_agent = _normalize_optional_text(current.get("agent"))
     current_profile = _normalize_optional_text(current.get("profile"))
     current_thread_id = _normalize_optional_text(current.get("thread_id"))
     requested_runtime = resolve_agent_runtime(
         agent or current_agent or "codex",
         profile,
-        context=request.app.state,
+        context=context.agent_context,
     )
     if requested_runtime.logical_agent_id != "hermes":
         return {}
@@ -48,7 +50,7 @@ async def maybe_fork_hermes_pma_session(
         current_runtime = resolve_agent_runtime(
             current_agent,
             current_profile,
-            context=request.app.state,
+            context=context.agent_context,
         )
     if current_runtime is not None and (
         current_runtime.logical_agent_id != requested_runtime.logical_agent_id
@@ -60,7 +62,7 @@ async def maybe_fork_hermes_pma_session(
         current_thread_id = _normalize_optional_text(stored_thread_id)
     if not current_thread_id:
         current_thread_id = _normalize_optional_text(
-            request.app.state.app_server_threads.get_thread_id(
+            context.app_server_threads.get_thread_id(
                 pma_base_key(
                     requested_runtime.logical_agent_id,
                     requested_runtime.logical_profile,
@@ -96,7 +98,7 @@ async def maybe_fork_hermes_pma_session(
     if forked is None or not forked.session_id:
         return {}
 
-    request.app.state.app_server_threads.set_thread_id(
+    context.app_server_threads.set_thread_id(
         pma_base_key(
             requested_runtime.logical_agent_id,
             requested_runtime.logical_profile,
@@ -117,15 +119,16 @@ def resolve_preclear_hermes_fork_thread_id(
     agent: Optional[str],
     profile: Optional[str],
 ) -> Optional[str]:
+    context = get_pma_request_context(request)
     requested_runtime = resolve_agent_runtime(
         agent or _normalize_optional_text(current.get("agent")) or "codex",
         profile or _normalize_optional_text(current.get("profile")),
-        context=request.app.state,
+        context=context.agent_context,
     )
     if requested_runtime.logical_agent_id != "hermes":
         return None
     return _normalize_optional_text(
-        request.app.state.app_server_threads.get_thread_id(
+        context.app_server_threads.get_thread_id(
             pma_base_key(
                 requested_runtime.logical_agent_id,
                 requested_runtime.logical_profile,
@@ -173,12 +176,13 @@ async def new_pma_session_response(
     current: dict[str, Any],
     preclear_thread_id: Optional[str],
 ) -> dict[str, Any]:
+    context = get_pma_request_context(request)
 
     agent = _normalize_optional_text(payload.agent if payload else None)
     profile = _normalize_optional_text(payload.profile if payload else None)
     lane_id = ((payload.lane_id if payload else None) or "pma:default").strip()
 
-    hub_root = request.app.state.config.root
+    hub_root = context.hub_root
     lifecycle_router = PmaLifecycleRouter(hub_root)
     result = await lifecycle_router.new(
         agent=agent,

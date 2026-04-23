@@ -11,6 +11,10 @@ from .....agents.base import (
     harness_allows_parallel_event_stream,
 )
 from .....agents.codex.harness import CodexHarness
+from .....agents.registry import get_registered_agents as _get_registered_agents
+from .....core.orchestration import (
+    build_surface_orchestration_ingress as _build_surface_orchestration_ingress,
+)
 from .....core.pma_context import build_hub_snapshot as build_hub_snapshot
 from .....core.pma_context import format_pma_prompt as format_pma_prompt
 from .....core.pma_context import load_pma_prompt as load_pma_prompt
@@ -29,15 +33,16 @@ from ...schemas import (
     PmaStopRequest,
     PmaThreadResetRequest,
 )
+from ...services.pma import get_pma_request_context
 from ...services.pma.common import (
     build_idempotency_key as service_build_idempotency_key,
 )
-from ...services.pma.common import pma_config_from_raw
 from ..shared import SSE_HEADERS
 from .chat_queue_execution import execute_queue_item
 from .chat_runtime_execution import (
     DEFAULT_PMA_TIMEOUT_SECONDS,
     build_runtime_harness,
+    execute_opencode,
 )
 from .chat_session_management import (
     new_pma_session_response,
@@ -50,14 +55,17 @@ from .tail_stream import resolve_resume_after
 logger = logging.getLogger(__name__)
 
 PMA_TURN_IDLE_TIMEOUT_SECONDS = 1800
+get_registered_agents = _get_registered_agents
+build_surface_orchestration_ingress = _build_surface_orchestration_ingress
+_execute_opencode = execute_opencode
 
 
 def _get_pma_config(request: Request) -> dict[str, Any]:
-    raw = getattr(request.app.state.config, "raw", {})
-    return pma_config_from_raw(raw)
+    return get_pma_request_context(request).pma_config
 
 
 def _pma_turn_idle_timeout_seconds(request: Request) -> float:
+    context = get_pma_request_context(request)
     overridden_timeout = globals().get(
         "PMA_TURN_IDLE_TIMEOUT_SECONDS",
         DEFAULT_PMA_TIMEOUT_SECONDS,
@@ -65,7 +73,7 @@ def _pma_turn_idle_timeout_seconds(request: Request) -> float:
     if overridden_timeout != DEFAULT_PMA_TIMEOUT_SECONDS:
         return float(overridden_timeout)
     configured_timeout = getattr(
-        getattr(request.app.state.config, "pma", None),
+        getattr(context.config, "pma", None),
         "turn_idle_timeout_seconds",
         None,
     )
@@ -165,6 +173,7 @@ async def _interrupt_active(
     reason: str,
     source: str = "unknown",
 ) -> dict[str, Any]:
+    context = get_pma_request_context(request)
     event = await runtime.get_interrupt_event()
     event.set()
     current = await runtime.get_current_snapshot()
@@ -173,7 +182,7 @@ async def _interrupt_active(
     thread_id = current.get("thread_id")
     turn_id = current.get("turn_id")
     client_turn_id = current.get("client_turn_id")
-    hub_root = request.app.state.config.root
+    hub_root = context.hub_root
 
     from .....core.logging_utils import log_event
 
@@ -300,12 +309,13 @@ def build_chat_runtime_router(
     async def pma_active_status(
         request: Request, client_turn_id: Optional[str] = None
     ) -> dict[str, Any]:
+        context = get_pma_request_context(request)
         runtime = get_runtime_state()
         async with await runtime.get_pma_lock():
             current = dict(runtime.pma_current or {})
             last_result = dict(runtime.pma_last_result or {})
             active = bool(runtime.pma_active)
-        store = runtime.get_state_store(request.app.state.config.root)
+        store = runtime.get_state_store(context.hub_root)
         disk_state = store.load(ensure_exists=True)
         if isinstance(disk_state, dict):
             disk_current = (
@@ -333,6 +343,7 @@ def build_chat_runtime_router(
 
     @router.post("/chat")
     async def pma_chat(request: Request, payload: PmaChatRequest):
+        context = get_pma_request_context(request)
         pma_config = _get_pma_config(request)
         message = (payload.message or "").strip()
         stream = bool(payload.stream)
@@ -354,7 +365,7 @@ def build_chat_runtime_router(
             )
 
         runtime = get_runtime_state()
-        hub_root = request.app.state.config.root
+        hub_root = context.hub_root
         queue = runtime.get_pma_queue(hub_root)
 
         lane_id = "pma:default"
@@ -395,7 +406,7 @@ def build_chat_runtime_router(
         )
         await runtime.ensure_lane_worker(
             lane_id,
-            request,
+            context,
             lambda item: execute_queue_item(
                 runtime,
                 item,
@@ -433,9 +444,9 @@ def build_chat_runtime_router(
     async def pma_stop(
         request: Request, payload: Optional[PmaStopRequest] = None
     ) -> dict[str, Any]:
+        context = get_pma_request_context(request)
         lane_id = ((payload.lane_id if payload else None) or "pma:default").strip()
-        hub_root = request.app.state.config.root
-        lifecycle_router = PmaLifecycleRouter(hub_root)
+        lifecycle_router = PmaLifecycleRouter(context.hub_root)
 
         runtime = get_runtime_state()
         result = await lifecycle_router.stop(lane_id=lane_id)
@@ -476,12 +487,12 @@ def build_chat_runtime_router(
     async def reset_pma_session(
         request: Request, payload: Optional[PmaSessionResetRequest] = None
     ) -> dict[str, Any]:
+        context = get_pma_request_context(request)
         raw_agent = ((payload.agent if payload else None) or "").strip().lower()
         agent = raw_agent or None
         profile = _normalize_optional_text(payload.profile if payload else None)
 
-        hub_root = request.app.state.config.root
-        lifecycle_router = PmaLifecycleRouter(hub_root)
+        lifecycle_router = PmaLifecycleRouter(context.hub_root)
 
         result = await lifecycle_router.reset(agent=agent, profile=profile)
 
@@ -501,6 +512,7 @@ def build_chat_runtime_router(
     async def compact_pma_history(
         request: Request, payload: PmaHistoryCompactRequest
     ) -> dict[str, Any]:
+        context = get_pma_request_context(request)
         summary = (payload.summary or "").strip()
         agent = _normalize_optional_text(payload.agent)
         thread_id = _normalize_optional_text(payload.thread_id)
@@ -508,8 +520,7 @@ def build_chat_runtime_router(
         if not summary:
             raise HTTPException(status_code=400, detail="summary is required")
 
-        hub_root = request.app.state.config.root
-        lifecycle_router = PmaLifecycleRouter(hub_root)
+        lifecycle_router = PmaLifecycleRouter(context.hub_root)
 
         result = await lifecycle_router.compact(
             summary=summary, agent=agent, thread_id=thread_id
@@ -531,12 +542,12 @@ def build_chat_runtime_router(
     async def reset_pma_thread(
         request: Request, payload: Optional[PmaThreadResetRequest] = None
     ) -> dict[str, Any]:
+        context = get_pma_request_context(request)
         raw_agent = ((payload.agent if payload else None) or "").strip().lower()
         agent = raw_agent or None
         profile = _normalize_optional_text(payload.profile if payload else None)
 
-        hub_root = request.app.state.config.root
-        lifecycle_router = PmaLifecycleRouter(hub_root)
+        lifecycle_router = PmaLifecycleRouter(context.hub_root)
 
         result = await lifecycle_router.reset(agent=agent, profile=profile)
 
@@ -553,15 +564,17 @@ def build_chat_runtime_router(
 
     @router.get("/queue")
     async def pma_queue_status(request: Request) -> dict[str, Any]:
+        context = get_pma_request_context(request)
         runtime = get_runtime_state()
-        queue = runtime.get_pma_queue(request.app.state.config.root)
+        queue = runtime.get_pma_queue(context.hub_root)
         summary = await queue.get_queue_summary()
         return cast(dict[str, Any], summary)
 
     @router.get("/queue/{lane_id:path}")
     async def pma_lane_queue_status(request: Request, lane_id: str) -> dict[str, Any]:
+        context = get_pma_request_context(request)
         runtime = get_runtime_state()
-        queue = runtime.get_pma_queue(request.app.state.config.root)
+        queue = runtime.get_pma_queue(context.hub_root)
         items = await queue.list_items(lane_id)
         return {
             "lane_id": lane_id,
@@ -588,13 +601,14 @@ def build_chat_runtime_router(
         profile: Optional[str] = None,
         since_event_id: Optional[int] = None,
     ):
+        context = get_pma_request_context(request)
         agent_id = (agent or "").strip().lower()
         profile = _normalize_optional_text(profile)
         resume_after = resolve_resume_after(request, since_event_id)
         if not thread_id:
             raise HTTPException(status_code=400, detail="thread_id is required")
         harness = build_runtime_harness(request, agent_id, profile)
-        events = getattr(request.app.state, "app_server_events", None)
+        events = context.app_server_events
         if isinstance(harness, CodexHarness) and events is not None:
             return StreamingResponse(
                 events.stream(thread_id, turn_id, after_id=(resume_after or 0)),
@@ -609,7 +623,7 @@ def build_chat_runtime_router(
 
         async def _stream_events() -> Any:
             async for raw_event in harness.stream_events(
-                request.app.state.config.root, thread_id, turn_id
+                context.hub_root, thread_id, turn_id
             ):
                 payload = (
                     raw_event if isinstance(raw_event, dict) else {"value": raw_event}

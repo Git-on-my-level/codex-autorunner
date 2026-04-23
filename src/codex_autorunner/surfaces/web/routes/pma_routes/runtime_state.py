@@ -5,7 +5,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
+from typing import Any, Optional
 
 from .....core.pma_audit import PmaAuditLog
 from .....core.pma_lane_worker import PmaLaneWorker
@@ -13,10 +13,19 @@ from .....core.pma_queue import PmaQueue
 from .....core.pma_safety import PmaSafetyChecker, PmaSafetyConfig
 from .....core.pma_state import PmaStateStore
 
-if TYPE_CHECKING:
-    from fastapi import Request
-
 logger = logging.getLogger(__name__)
+
+
+def _resolve_context_hub_root(context: Any) -> Path:
+    hub_root = getattr(context, "hub_root", None)
+    if isinstance(hub_root, Path):
+        return hub_root
+    app = getattr(context, "app", None)
+    config = getattr(getattr(app, "state", None), "config", None)
+    hub_root = getattr(config, "root", None)
+    if isinstance(hub_root, Path):
+        return hub_root
+    raise AttributeError("PMA context does not provide hub_root")
 
 
 @dataclass
@@ -86,11 +95,11 @@ class PmaRuntimeState:
         return self.pma_state_store
 
     def get_safety_checker(
-        self, hub_root: Path, request: Optional["Request"] = None
+        self, hub_root: Path, context: Optional[Any] = None
     ) -> PmaSafetyChecker:
         supervisor = None
-        if request is not None:
-            supervisor = getattr(request.app.state, "hub_supervisor", None)
+        if context is not None:
+            supervisor = getattr(context, "hub_supervisor", None)
         if supervisor is not None:
             try:
                 checker = supervisor.ensure_pma_safety_checker()
@@ -104,7 +113,7 @@ class PmaRuntimeState:
                 )
 
         if self.pma_safety_checker is None or self.pma_safety_root != hub_root:
-            raw = getattr(request.app.state.config, "raw", {}) if request else {}
+            raw = getattr(context, "raw_config", {}) if context else {}
             pma_config = raw.get("pma", {}) if isinstance(raw, dict) else {}
             safety_config = PmaSafetyConfig(
                 dedup_window_seconds=pma_config.get("dedup_window_seconds", 300),
@@ -215,7 +224,7 @@ class PmaRuntimeState:
     async def ensure_lane_worker(
         self,
         lane_id: str,
-        request: Any,
+        context: Any,
         execute_callback: Any,
     ) -> None:
         existing = self.lane_workers.get(lane_id)
@@ -228,7 +237,7 @@ class PmaRuntimeState:
                 result_future.set_result(result)
             self.item_futures.pop(item.item_id, None)
 
-        queue = self.get_pma_queue(request.app.state.config.root)
+        queue = self.get_pma_queue(_resolve_context_hub_root(context))
         worker = PmaLaneWorker(
             lane_id,
             queue,

@@ -17,6 +17,7 @@ from .....core.pma_transcripts import PmaTranscriptStore
 from .....core.ports.run_event import RunEvent
 from .....core.text_utils import _normalize_optional_text, _truncate_text
 from .....core.time_utils import now_iso
+from ...services.pma import get_pma_request_context
 from .runtime_state import PmaRuntimeState
 
 logger = logging.getLogger(__name__)
@@ -240,7 +241,7 @@ async def finalize_result(
         except ValueError:
             logger.debug("Failed to compute PMA turn duration", exc_info=True)
 
-    hub_root = request.app.state.config.root
+    hub_root = get_pma_request_context(request).hub_root
     transcript_pointer = await persist_transcript(
         hub_root=hub_root,
         result=result,
