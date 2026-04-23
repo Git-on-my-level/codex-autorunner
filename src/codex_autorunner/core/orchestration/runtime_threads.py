@@ -14,8 +14,8 @@ from .runtime_turn_terminal_state import (
 )
 from .service import HarnessBackedOrchestrationService
 
-_INTERRUPT_POLL_INTERVAL_SECONDS = 0.05
-_STALL_POLL_INTERVAL_SECONDS = 0.25
+_INTERRUPT_POLL_INTERVAL_SECONDS = 0.01
+_STALL_POLL_INTERVAL_SECONDS = 0.05
 _STALL_RECOVERY_PROBE_INTERVAL_SECONDS = 15.0
 RUNTIME_THREAD_TIMEOUT_ERROR = "Runtime thread timed out"
 RUNTIME_THREAD_INTERRUPTED_ERROR = "Runtime thread interrupted"

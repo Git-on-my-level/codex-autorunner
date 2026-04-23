@@ -1631,7 +1631,7 @@ async def test_runtime_thread_stall_can_recover_from_harness_before_timeout(
             started,
             interrupt_event=None,
             timeout_seconds=5,
-            stall_timeout_seconds=0.05,
+            stall_timeout_seconds=0.02,
             execution_error_message="Managed thread execution failed",
         ),
         timeout=1,
@@ -1688,7 +1688,7 @@ async def test_runtime_thread_recovery_probe_can_finish_before_stall_deadline(
             )
 
     original_interval = runtime_threads_module._STALL_RECOVERY_PROBE_INTERVAL_SECONDS
-    runtime_threads_module._STALL_RECOVERY_PROBE_INTERVAL_SECONDS = 0.03
+    runtime_threads_module._STALL_RECOVERY_PROBE_INTERVAL_SECONDS = 0.01
     try:
         harness = _HarnessWithDelayedRecovery()
         service = _build_service(tmp_path, harness)
@@ -1710,7 +1710,7 @@ async def test_runtime_thread_recovery_probe_can_finish_before_stall_deadline(
                 started,
                 interrupt_event=None,
                 timeout_seconds=5,
-                stall_timeout_seconds=0.3,
+                stall_timeout_seconds=0.08,
                 execution_error_message="Managed thread execution failed",
             ),
             timeout=1,
@@ -1725,7 +1725,7 @@ async def test_runtime_thread_recovery_probe_can_finish_before_stall_deadline(
     assert outcome.assistant_text == "recovered before hard stall"
     assert outcome.completion_source == "prompt_return"
     assert len(harness.recovery_calls) == 2
-    assert elapsed < 0.25
+    assert elapsed < 0.08
     assert harness.interrupt_calls == []
     assert harness.wait_cancelled.is_set()
 
@@ -1787,7 +1787,7 @@ async def test_runtime_thread_progress_stall_timeout_keeps_hard_wall_clock_by_de
             timeout: Optional[float] = None,
         ) -> TerminalTurnResult:
             _ = workspace_root, conversation_id, turn_id, timeout
-            await asyncio.sleep(0.12)
+            await asyncio.sleep(0.04)
             return TerminalTurnResult(
                 status="ok",
                 assistant_text="completed after steady progress",
@@ -1800,7 +1800,7 @@ async def test_runtime_thread_progress_stall_timeout_keeps_hard_wall_clock_by_de
         ):
             _ = workspace_root, conversation_id, turn_id
             for _ in range(6):
-                await asyncio.sleep(0.02)
+                await asyncio.sleep(0.005)
                 yield {
                     "message": {
                         "method": "session/update",
@@ -1829,8 +1829,8 @@ async def test_runtime_thread_progress_stall_timeout_keeps_hard_wall_clock_by_de
         await_runtime_thread_outcome(
             started,
             interrupt_event=asyncio.Event(),
-            timeout_seconds=0.03,
-            stall_timeout_seconds=0.05,
+            timeout_seconds=0.01,
+            stall_timeout_seconds=0.02,
             execution_error_message="Managed thread execution failed",
         ),
         timeout=1,
@@ -1862,7 +1862,7 @@ async def test_runtime_thread_progress_stall_timeout_can_replace_hard_wall_clock
             timeout: Optional[float] = None,
         ) -> TerminalTurnResult:
             _ = workspace_root, conversation_id, turn_id, timeout
-            await asyncio.sleep(0.12)
+            await asyncio.sleep(0.04)
             return TerminalTurnResult(
                 status="ok",
                 assistant_text="completed after steady progress",
@@ -1875,7 +1875,7 @@ async def test_runtime_thread_progress_stall_timeout_can_replace_hard_wall_clock
         ):
             _ = workspace_root, conversation_id, turn_id
             for _ in range(6):
-                await asyncio.sleep(0.02)
+                await asyncio.sleep(0.005)
                 yield {
                     "message": {
                         "method": "session/update",
@@ -1904,8 +1904,8 @@ async def test_runtime_thread_progress_stall_timeout_can_replace_hard_wall_clock
         await_runtime_thread_outcome(
             started,
             interrupt_event=asyncio.Event(),
-            timeout_seconds=0.03,
-            stall_timeout_seconds=0.05,
+            timeout_seconds=0.01,
+            stall_timeout_seconds=0.02,
             stall_timeout_replaces_wall_clock_timeout=True,
             execution_error_message="Managed thread execution failed",
         ),
