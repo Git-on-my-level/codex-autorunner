@@ -6,6 +6,7 @@ import subprocess
 import uuid
 from dataclasses import asdict
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Optional, Union, cast
 
@@ -107,6 +108,34 @@ _logger = logging.getLogger(__name__)
 
 _supported_flow_types = ("ticket_flow",)
 _WorkerHandle = tuple[Optional[subprocess.Popen[Any]], Any, Any]
+
+
+class FlowStateOutcome(str, Enum):
+    VALID = "valid"
+    VALID_EMPTY = "valid_empty"
+    UNREADABLE = "unreadable"
+    MISMATCHED = "mismatched"
+
+
+def _validate_run_state(state: object) -> FlowStateOutcome:
+    if state is None:
+        return FlowStateOutcome.VALID_EMPTY
+    if not isinstance(state, dict):
+        return FlowStateOutcome.UNREADABLE
+    return FlowStateOutcome.VALID_EMPTY if not state else FlowStateOutcome.VALID
+
+
+def _validate_ticket_engine(
+    ticket_engine: object, outer_status: str
+) -> FlowStateOutcome:
+    if ticket_engine is None:
+        return FlowStateOutcome.VALID_EMPTY
+    if not isinstance(ticket_engine, dict):
+        return FlowStateOutcome.UNREADABLE
+    te_status = ticket_engine.get("status")
+    if isinstance(te_status, str) and te_status.strip() and te_status != outer_status:
+        return FlowStateOutcome.MISMATCHED
+    return FlowStateOutcome.VALID
 
 
 def _flow_paths(repo_root: Path) -> tuple[Path, Path]:
@@ -478,6 +507,9 @@ class FlowStatusResponse(BaseModel):
         worker_health: Optional[FlowWorkerHealth] = None,
     ) -> "FlowStatusResponse":
         state = record.state or {}
+        state_outcome = _validate_run_state(record.state)
+        if state_outcome == FlowStateOutcome.UNREADABLE:
+            state = {"_state_validation": state_outcome.value}
         reason_summary = None
         if isinstance(state, dict):
             value = state.get("reason_summary")
@@ -517,10 +549,17 @@ def _build_lite_flow_state(
     record: FlowRunRecord, snapshot: dict[str, Any], status: str
 ) -> dict[str, Any]:
     state = snapshot.get("state")
+    state_outcome = FlowStateOutcome.VALID
     if not isinstance(state, dict):
+        state_outcome = (
+            FlowStateOutcome.VALID_EMPTY
+            if state is None
+            else FlowStateOutcome.UNREADABLE
+        )
         state = record.state if isinstance(record.state, dict) else {}
 
-    raw_ticket_engine = state.get("ticket_engine")
+    raw_ticket_engine = state.get("ticket_engine") if isinstance(state, dict) else None
+    te_outcome = _validate_ticket_engine(raw_ticket_engine, status)
     ticket_engine = raw_ticket_engine if isinstance(raw_ticket_engine, dict) else {}
 
     current_ticket = snapshot.get("effective_current_ticket")
@@ -531,7 +570,7 @@ def _build_lite_flow_state(
     if not (isinstance(ticket_engine_status, str) and ticket_engine_status.strip()):
         ticket_engine_status = status
 
-    return {
+    result: dict[str, Any] = {
         "current_ticket": current_ticket,
         "status": status,
         "ticket_engine": {
@@ -543,6 +582,13 @@ def _build_lite_flow_state(
             "reason_details": ticket_engine.get("reason_details"),
         },
     }
+
+    if state_outcome == FlowStateOutcome.UNREADABLE:
+        result["_state_validation"] = state_outcome.value
+    if te_outcome in (FlowStateOutcome.UNREADABLE, FlowStateOutcome.MISMATCHED):
+        result["ticket_engine"]["_validation"] = te_outcome.value
+
+    return result
 
 
 def _build_flow_status_response(

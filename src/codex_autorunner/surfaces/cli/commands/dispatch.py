@@ -1,4 +1,5 @@
 import json
+from enum import Enum
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -8,6 +9,48 @@ import typer
 from ....core.config import HubConfig
 from ..hub_path_option import hub_root_path_option
 from .utils import raise_exit
+
+
+class DispatchThreadOutcome(str, Enum):
+    VALID = "valid"
+    UNREADABLE = "unreadable"
+    MISSING_RUN_KEY = "missing_run_key"
+
+
+def _validate_thread_status(
+    thread: object,
+) -> tuple[Optional[str], DispatchThreadOutcome]:
+    if not isinstance(thread, dict):
+        return None, DispatchThreadOutcome.UNREADABLE
+    run_data = thread.get("run")
+    if not isinstance(run_data, dict):
+        return None, DispatchThreadOutcome.MISSING_RUN_KEY
+    status = run_data.get("status")
+    if not isinstance(status, str) or not status.strip():
+        return None, DispatchThreadOutcome.UNREADABLE
+    return status, DispatchThreadOutcome.VALID
+
+
+def _validate_inbox_fallback(
+    inbox: object, repo_id: str, run_id: str
+) -> tuple[Optional[str], DispatchThreadOutcome]:
+    if not isinstance(inbox, dict):
+        return None, DispatchThreadOutcome.UNREADABLE
+    items = inbox.get("items")
+    if not isinstance(items, list):
+        return None, DispatchThreadOutcome.UNREADABLE
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("repo_id") or "") != repo_id:
+            continue
+        if str(item.get("run_id") or "") != run_id:
+            continue
+        status = item.get("status")
+        if isinstance(status, str) and status.strip():
+            return status, DispatchThreadOutcome.VALID
+        return None, DispatchThreadOutcome.UNREADABLE
+    return None, DispatchThreadOutcome.VALID
 
 
 def register_dispatch_commands(
@@ -101,32 +144,27 @@ def register_dispatch_commands(
                 cause=exc,
             )
 
-        run_status = (
-            (thread.get("run") or {}) if isinstance(thread, dict) else {}
-        ).get("status")
+        run_status, thread_outcome = _validate_thread_status(thread)
         if run_status != "paused":
             fallback_status = None
+            fallback_outcome = DispatchThreadOutcome.VALID
             try:
                 inbox = request_json_func(
                     "GET", inbox_url, token_env=config.server_auth_token_env
                 )
-                items = inbox.get("items", []) if isinstance(inbox, dict) else []
-                for item in items if isinstance(items, list) else []:
-                    if not isinstance(item, dict):
-                        continue
-                    if str(item.get("repo_id") or "") != repo_id:
-                        continue
-                    if str(item.get("run_id") or "") != run_id:
-                        continue
-                    fallback_status = item.get("status")
-                    break
+                fallback_status, fallback_outcome = _validate_inbox_fallback(
+                    inbox, repo_id, run_id
+                )
             except (
                 httpx.HTTPError,
                 httpx.ConnectError,
                 httpx.TimeoutException,
                 OSError,
             ):
-                fallback_status = None
+                fallback_status, fallback_outcome = (
+                    None,
+                    DispatchThreadOutcome.UNREADABLE,
+                )
 
             if run_status is None and fallback_status == "paused":
                 run_status = "paused"
@@ -134,8 +172,16 @@ def register_dispatch_commands(
                 hint = ""
                 if fallback_status is not None and fallback_status != run_status:
                     hint = f" (hub inbox sees status={fallback_status})"
+                elif fallback_outcome == DispatchThreadOutcome.UNREADABLE:
+                    hint = " (hub inbox unreadable)"
+                if thread_outcome == DispatchThreadOutcome.UNREADABLE:
+                    status_label = "unreadable (thread response malformed)"
+                elif thread_outcome == DispatchThreadOutcome.MISSING_RUN_KEY:
+                    status_label = "unreadable (thread missing 'run' key)"
+                else:
+                    status_label = run_status or "unknown"
                 raise_exit(
-                    f"Run {run_id} is not paused-awaiting-input (status={run_status or 'unknown'}).{hint}"
+                    f"Run {run_id} is not paused-awaiting-input (status={status_label}).{hint}"
                 )
 
         duplicate = False
