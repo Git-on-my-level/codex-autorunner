@@ -129,6 +129,108 @@ def _patch_outcome_driven_finalization(
     )
 
 
+def test_finalized_with_backend_thread_fallback_prefers_finalized_value() -> None:
+    finalized = managed_thread_runtime.ManagedThreadFinalizationResult(
+        status="ok",
+        assistant_text="done",
+        error=None,
+        managed_thread_id="thread-1",
+        managed_turn_id="turn-1",
+        backend_thread_id="backend-finalized",
+    )
+    started = SimpleNamespace(
+        thread=SimpleNamespace(backend_thread_id="backend-started")
+    )
+
+    result = managed_thread_runtime._finalized_with_backend_thread_fallback(
+        finalized,
+        started=started,
+        fallback_backend_thread_id="backend-fallback",
+    )
+
+    assert result is finalized
+
+
+def test_finalized_with_backend_thread_fallback_uses_started_then_fallback() -> None:
+    finalized = managed_thread_runtime.ManagedThreadFinalizationResult(
+        status="ok",
+        assistant_text="done",
+        error=None,
+        managed_thread_id="thread-1",
+        managed_turn_id="turn-1",
+        backend_thread_id=None,
+    )
+
+    started_result = managed_thread_runtime._finalized_with_backend_thread_fallback(
+        finalized,
+        started=SimpleNamespace(
+            thread=SimpleNamespace(backend_thread_id="backend-started")
+        ),
+        fallback_backend_thread_id="backend-fallback",
+    )
+    fallback_result = managed_thread_runtime._finalized_with_backend_thread_fallback(
+        finalized,
+        started=SimpleNamespace(thread=SimpleNamespace(backend_thread_id=None)),
+        fallback_backend_thread_id="backend-fallback",
+    )
+
+    assert started_result.backend_thread_id == "backend-started"
+    assert fallback_result.backend_thread_id == "backend-fallback"
+
+
+@pytest.mark.anyio
+async def test_pma_queue_finalizer_returns_managed_thread_finalization_result(
+    hub_env,
+    monkeypatch,
+) -> None:
+    app = build_pma_hub_app(hub_env.hub_root)
+    request = managed_thread_runtime._managed_thread_request_for_app(app)
+
+    async def _fake_run_started_execution(
+        self: Any,
+        started: Any,
+        *,
+        hooks: Any = None,
+        runtime_event_state: Any = None,
+    ) -> Any:
+        _ = self, started, hooks, runtime_event_state
+        return managed_thread_runtime.ManagedThreadFinalizationResult(
+            status="ok",
+            assistant_text="assistant-output",
+            error=None,
+            managed_thread_id="thread-1",
+            managed_turn_id="turn-1",
+            backend_thread_id=None,
+        )
+
+    monkeypatch.setattr(
+        managed_thread_runtime.ManagedThreadTurnCoordinator,
+        "run_started_execution",
+        _fake_run_started_execution,
+    )
+
+    finalized = await managed_thread_runtime._finalize_managed_thread_execution(
+        request,
+        service=SimpleNamespace(),
+        thread_store=SimpleNamespace(),
+        thread={"managed_thread_id": "thread-1"},
+        started=SimpleNamespace(
+            request=SimpleNamespace(message_text="hello"),
+            thread=SimpleNamespace(
+                thread_target_id="thread-1",
+                backend_thread_id=None,
+            ),
+        ),
+        fallback_backend_thread_id="backend-fallback",
+    )
+
+    assert isinstance(
+        finalized,
+        managed_thread_runtime.ManagedThreadFinalizationResult,
+    )
+    assert finalized.backend_thread_id == "backend-fallback"
+
+
 @pytest.mark.anyio
 async def test_restart_managed_thread_queue_workers_restores_pending_threads(
     hub_env,

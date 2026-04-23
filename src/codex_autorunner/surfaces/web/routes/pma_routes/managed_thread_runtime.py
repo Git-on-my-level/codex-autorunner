@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Callable, Optional, cast
@@ -233,6 +234,24 @@ def _resolve_pma_chat_bound_surface_targets(
     return tuple(targets)
 
 
+def _finalized_with_backend_thread_fallback(
+    finalized: ManagedThreadFinalizationResult,
+    *,
+    started: RuntimeThreadExecution,
+    fallback_backend_thread_id: Optional[str] = None,
+) -> ManagedThreadFinalizationResult:
+    resolved_backend_thread_id = (
+        normalize_optional_text(finalized.backend_thread_id)
+        or normalize_optional_text(getattr(started.thread, "backend_thread_id", None))
+        or normalize_optional_text(fallback_backend_thread_id)
+    )
+    if resolved_backend_thread_id == normalize_optional_text(
+        finalized.backend_thread_id
+    ):
+        return finalized
+    return replace(finalized, backend_thread_id=resolved_backend_thread_id)
+
+
 async def _run_managed_thread_execution(
     request: Request,
     *,
@@ -269,10 +288,14 @@ async def _run_managed_thread_execution(
         managed_thread_id=managed_thread_id,
         message_text=started.request.message_text,
     )
-    finalized = await coordinator.run_started_execution(
-        started,
-        hooks=queue_progress.hooks,
-        runtime_event_state=RuntimeThreadRunEventState(),
+    finalized = _finalized_with_backend_thread_fallback(
+        await coordinator.run_started_execution(
+            started,
+            hooks=queue_progress.hooks,
+            runtime_event_state=RuntimeThreadRunEventState(),
+        ),
+        started=started,
+        fallback_backend_thread_id=fallback_backend_thread_id,
     )
     return await _deliver_managed_thread_execution_result(
         request,
@@ -339,18 +362,23 @@ async def _finalize_managed_thread_execution(
     )
     if not managed_thread_id:
         raise RuntimeError("Managed-thread execution is missing thread_target_id")
-    _ = thread_store, fallback_backend_thread_id
+    _ = thread_store
     coordinator = _build_pma_managed_thread_coordinator(
         request,
         service=service,
         managed_thread_id=managed_thread_id,
         message_text=started.request.message_text,
     )
-    return await coordinator.run_started_execution(
-        started,
-        hooks=ManagedThreadExecutionHooks(on_progress_event=on_progress_event),
-        runtime_event_state=RuntimeThreadRunEventState(),
+    finalized = _finalized_with_backend_thread_fallback(
+        await coordinator.run_started_execution(
+            started,
+            hooks=ManagedThreadExecutionHooks(on_progress_event=on_progress_event),
+            runtime_event_state=RuntimeThreadRunEventState(),
+        ),
+        started=started,
+        fallback_backend_thread_id=fallback_backend_thread_id,
     )
+    return finalized
 
 
 async def _deliver_managed_thread_execution_result(
@@ -364,6 +392,8 @@ async def _deliver_managed_thread_execution_result(
     clear_progress_targets: Optional[Callable[[str], None]] = None,
 ) -> dict[str, Any]:
     finalized_result = finalized
+    managed_thread_id = finalized.managed_thread_id
+    managed_turn_id = finalized.managed_turn_id
     managed_thread_id = finalized_result.managed_thread_id
     managed_turn_id = finalized_result.managed_turn_id
     current_thread_row = thread_store.get_thread(managed_thread_id) or thread

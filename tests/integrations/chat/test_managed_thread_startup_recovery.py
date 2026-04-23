@@ -5,8 +5,19 @@ from types import SimpleNamespace
 
 import pytest
 
+from codex_autorunner.core.orchestration import SQLiteManagedThreadDeliveryEngine
 from codex_autorunner.integrations.chat import (
     managed_thread_startup_recovery as recovery_module,
+)
+from codex_autorunner.integrations.chat.managed_thread_delivery_support import (
+    ManagedThreadDeliverySendResult,
+    deliver_managed_thread_terminal_record,
+)
+from codex_autorunner.integrations.chat.managed_thread_turns import (
+    ManagedThreadDurableDeliveryHooks,
+    ManagedThreadExecutionHooks,
+    ManagedThreadSurfaceInfo,
+    build_managed_thread_delivery_intent,
 )
 
 
@@ -179,6 +190,133 @@ async def test_startup_recovery_runs_execution_hooks_for_recovered_running_turn(
     assert lifecycle == [
         "started:turn-1",
         "delivery",
+        "finalized:ok",
+        "finished:turn-1",
+    ]
+
+
+@pytest.mark.anyio
+async def test_startup_recovery_success_handoff_runs_delivery_cleanup_before_hooks(
+    tmp_path,
+) -> None:
+    lifecycle: list[str] = []
+
+    class FakeThreadStore:
+        def list_thread_ids_with_running_executions(self, limit=None):
+            _ = limit
+            return ["thread-1"]
+
+        def get_running_turn(self, managed_thread_id: str):
+            assert managed_thread_id == "thread-1"
+            return {"client_turn_id": "discord:channel-1:run-1"}
+
+    class FakeOrchestrationService:
+        thread_store = FakeThreadStore()
+
+        def get_thread_target(self, managed_thread_id: str):
+            assert managed_thread_id == "thread-1"
+            return SimpleNamespace(
+                backend_thread_id="backend-thread-1",
+                agent_id="codex",
+                workspace_root="/workspace/thread-1",
+            )
+
+        def get_running_execution(self, managed_thread_id: str):
+            assert managed_thread_id == "thread-1"
+            return SimpleNamespace(execution_id="turn-1")
+
+        def list_bindings(self, **kwargs: object):
+            assert kwargs["surface_kind"] == "discord"
+            return [SimpleNamespace(surface_key="channel-1")]
+
+        async def recover_running_execution_from_harness(
+            self,
+            managed_thread_id: str,
+            *,
+            default_error: str,
+        ):
+            assert managed_thread_id == "thread-1"
+            assert default_error == "Discord PMA turn failed"
+            return SimpleNamespace(
+                status="ok",
+                output_text="done",
+                error=None,
+                execution_id="turn-1",
+                backend_id="backend-turn-1",
+            )
+
+        def recover_running_execution_after_restart(self, managed_thread_id: str):
+            _ = managed_thread_id
+            return None
+
+    class _Adapter:
+        @property
+        def adapter_key(self) -> str:
+            return "discord"
+
+        async def deliver_managed_thread_record(self, record: object, *, claim: object):
+            _ = claim
+
+            async def _send_success(
+                _context: object,
+            ) -> ManagedThreadDeliverySendResult:
+                lifecycle.append("delivery")
+                return ManagedThreadDeliverySendResult()
+
+            async def _send_failure(
+                _context: object,
+            ) -> ManagedThreadDeliverySendResult:
+                raise AssertionError("error delivery should not run for ok recovery")
+
+            async def _cleanup(_context: object) -> None:
+                lifecycle.append("cleanup")
+
+            return await deliver_managed_thread_terminal_record(
+                record,
+                send_success=_send_success,
+                send_failure=_send_failure,
+                cleanup=_cleanup,
+            )
+
+    delivery_hooks = ManagedThreadDurableDeliveryHooks(
+        engine=SQLiteManagedThreadDeliveryEngine(tmp_path),
+        adapter=_Adapter(),
+        build_delivery_intent=lambda finalized: build_managed_thread_delivery_intent(
+            finalized,
+            surface=ManagedThreadSurfaceInfo(
+                log_label="Discord",
+                surface_kind="discord",
+                surface_key="channel-1",
+            ),
+            transport_target={"channel_id": "channel-1"},
+        ),
+    )
+
+    await recovery_module.recover_managed_thread_executions_on_startup(
+        SimpleNamespace(_logger=logging.getLogger("test.startup_recovery.cleanup")),
+        surface_kind="discord",
+        build_orchestration_service=lambda _service: FakeOrchestrationService(),
+        build_durable_delivery=lambda *_args: delivery_hooks,
+        build_execution_hooks=lambda *_args: ManagedThreadExecutionHooks(
+            on_execution_started=lambda started: lifecycle.append(
+                f"started:{started.execution.execution_id}"
+            ),
+            on_execution_finalized=lambda _started, finalized: lifecycle.append(
+                f"finalized:{finalized.status}"
+            ),
+            on_execution_finished=lambda started: lifecycle.append(
+                f"finished:{started.execution.execution_id}"
+            ),
+        ),
+        public_execution_error="Discord PMA turn failed",
+        failure_event_name="discord.turn.startup_execution_recovery_failed",
+        finished_event_name="discord.turn.startup_execution_recovery_finished",
+    )
+
+    assert lifecycle == [
+        "started:turn-1",
+        "delivery",
+        "cleanup",
         "finalized:ok",
         "finished:turn-1",
     ]
