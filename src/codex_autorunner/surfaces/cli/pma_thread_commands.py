@@ -393,6 +393,7 @@ def _resolve_assistant_text_window(
                 f"assistant_text only has {total_lines} line(s); requested start line {start_line}.",
                 param_hint="--lines",
             )
+        end_line = min(end_line, total_lines)
     else:
         page_lines = _auto_output_page_lines()
         if total_lines > page_lines:
