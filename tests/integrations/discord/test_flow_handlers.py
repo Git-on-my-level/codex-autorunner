@@ -568,7 +568,7 @@ async def test_flow_status_without_run_id_shows_no_current_run_for_history_only(
 
 
 @pytest.mark.anyio
-async def test_flow_status_without_run_uses_ticket_summary_fallback(
+async def test_flow_status_without_run_reports_no_runs_when_no_flow_exists(
     tmp_path: Path,
 ) -> None:
     workspace = _workspace(tmp_path)
@@ -599,10 +599,8 @@ async def test_flow_status_without_run_uses_ticket_summary_fallback(
         await _invoke_flow_status(service, workspace_root=workspace)
         assert len(rest.interaction_responses) == 1
         assert rest.interaction_responses[0]["payload"]["type"] == 5
-        payload = _latest_status_message(rest)
-        content = payload["content"]
-        assert content == "Status: Done\nTickets: 2/2"
-        assert not payload.get("components")
+        content = rest.followup_messages[0]["payload"]["content"]
+        assert content == "No ticket_flow runs found."
     finally:
         await store.close()
 

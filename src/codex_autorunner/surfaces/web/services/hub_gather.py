@@ -410,15 +410,23 @@ def _collect_pma_threads(
 
 def _load_repo_message_context(
     context: HubAppContext, requested: set[str]
-) -> _HubRepoMessageContext:
+) -> tuple[_HubRepoMessageContext, list[dict[str, str]]]:
+    unreadable_diagnostics: list[dict[str, str]] = []
     snapshots: list[Any] = []
     repo_roots: dict[str, Path] = {}
     hub_dismissals: dict[str, dict[str, Any]] = {}
     if requested & {"inbox", "action_queue"}:
         try:
             snapshots = context.supervisor.list_repos()
-        except (OSError, ValueError, RuntimeError):
+        except (OSError, ValueError, RuntimeError) as exc:
             snapshots = []
+            unreadable_diagnostics.append(
+                {
+                    "section": "inbox",
+                    "reason": str(exc) or type(exc).__name__,
+                    "source": "supervisor.list_repos",
+                }
+            )
         repo_roots = {
             snap.id: snap.path
             for snap in snapshots
@@ -427,11 +435,14 @@ def _load_repo_message_context(
         config_root = getattr(getattr(context, "config", None), "root", None)
         if isinstance(config_root, Path):
             hub_dismissals = load_hub_inbox_dismissals(config_root)
-    return _HubRepoMessageContext(
-        snapshots=snapshots,
-        repo_roots=repo_roots,
-        hub_dismissals=hub_dismissals,
-        repo_dismissals_by_id={},
+    return (
+        _HubRepoMessageContext(
+            snapshots=snapshots,
+            repo_roots=repo_roots,
+            hub_dismissals=hub_dismissals,
+            repo_dismissals_by_id={},
+        ),
+        unreadable_diagnostics,
     )
 
 
@@ -499,6 +510,7 @@ def _cached_repo_capability_hints(
     repo_id: str,
     repo_root: Path,
     repo_display_name: str,
+    unreadable_diagnostics: Optional[list[dict[str, str]]] = None,
 ) -> list[dict[str, Any]]:
     hub_root = getattr(getattr(context, "config", None), "root", None)
     cache_key = (
@@ -550,8 +562,16 @@ def _cached_repo_capability_hints(
             repo_root=repo_root,
             repo_display_name=repo_display_name,
         )
-    except (AttributeError, OSError, ValueError, RuntimeError):
+    except (AttributeError, OSError, ValueError, RuntimeError) as exc:
         hint_items = []
+        if unreadable_diagnostics is not None:
+            unreadable_diagnostics.append(
+                {
+                    "section": "inbox",
+                    "reason": str(exc) or type(exc).__name__,
+                    "source": f"build_repo_capability_hints:{repo_id}",
+                }
+            )
     stored_items = [dict(item) for item in hint_items]
     with _repo_capability_hint_cache_lock:
         _repo_capability_hint_cache[cache_key] = _RepoCapabilityHintCacheEntry(
@@ -636,6 +656,7 @@ def _collect_inbox_messages(
     scope_key: Optional[str],
     repo_context: _HubRepoMessageContext,
     filtered_action_queue: list[dict[str, Any]],
+    unreadable_diagnostics: list[dict[str, str]],
 ) -> list[dict[str, Any]]:
     if "inbox" not in requested:
         return []
@@ -643,8 +664,15 @@ def _collect_inbox_messages(
     messages: list[dict[str, Any]] = []
     try:
         hub_hint_items = build_hub_capability_hints(hub_config=context.config)
-    except (AttributeError, OSError, ValueError, RuntimeError):
+    except (AttributeError, OSError, ValueError, RuntimeError) as exc:
         hub_hint_items = []
+        unreadable_diagnostics.append(
+            {
+                "section": "inbox",
+                "reason": str(exc) or type(exc).__name__,
+                "source": "build_hub_capability_hints",
+            }
+        )
     for item in hub_hint_items:
         item_type = str(item.get("item_type") or "")
         run_id = str(item.get("run_id") or "").strip()
@@ -692,6 +720,7 @@ def _collect_inbox_messages(
             repo_id=repo_id,
             repo_root=repo_root,
             repo_display_name=repo_display_name,
+            unreadable_diagnostics=unreadable_diagnostics,
         )
         dismissals = _repo_dismissals(repo_context, repo_id, repo_root)
         for item in hint_items:
@@ -730,6 +759,7 @@ def _serialize_hub_snapshot(
     pma_files_detail: dict[str, list[dict[str, Any]]],
     automation: dict[str, Any],
     filtered_action_queue: list[dict[str, Any]],
+    unreadable_diagnostics: list[dict[str, str]],
 ) -> dict[str, Any]:
     snapshot = HubMessageSnapshotResponse(
         generated_at=generated_at,
@@ -740,6 +770,9 @@ def _serialize_hub_snapshot(
         ),
         automation=automation if "automation" in requested else None,
         action_queue=filtered_action_queue if "action_queue" in requested else None,
+        unreadable_diagnostics=(
+            unreadable_diagnostics if unreadable_diagnostics else None
+        ),
     )
     return snapshot.model_dump(exclude_none=True)
 
@@ -845,7 +878,8 @@ def gather_hub_message_snapshot(
             stale_threshold_seconds=settings.stale_threshold_seconds,
         )
 
-    repo_context = _load_repo_message_context(context, requested)
+    repo_context, repo_diagnostics = _load_repo_message_context(context, requested)
+    unreadable_diagnostics: list[dict[str, str]] = list(repo_diagnostics)
     filtered_action_queue = _filter_action_queue_items(
         action_queue,
         repo_context=repo_context,
@@ -858,6 +892,7 @@ def gather_hub_message_snapshot(
         scope_key=scope_key,
         repo_context=repo_context,
         filtered_action_queue=filtered_action_queue,
+        unreadable_diagnostics=unreadable_diagnostics,
     )
 
     snapshot = _serialize_hub_snapshot(
@@ -868,6 +903,7 @@ def gather_hub_message_snapshot(
         pma_files_detail=pma_files_detail,
         automation=automation,
         filtered_action_queue=filtered_action_queue,
+        unreadable_diagnostics=unreadable_diagnostics,
     )
     store_fingerprint = _hub_snapshot_fingerprint(
         context,

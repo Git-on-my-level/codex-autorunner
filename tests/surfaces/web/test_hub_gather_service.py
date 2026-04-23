@@ -67,10 +67,12 @@ def test_latest_dispatch_surfaces_unreadable_latest_dispatch(tmp_path) -> None:
     assert latest["errors"]
 
 
-def test_gather_hub_message_snapshot_returns_empty_items_on_supervisor_error() -> None:
+def test_gather_hub_message_snapshot_surfaces_unreadable_diagnostic_on_supervisor_error() -> (
+    None
+):
     context = SimpleNamespace(
         supervisor=SimpleNamespace(
-            list_repos=lambda: (_ for _ in ()).throw(RuntimeError)
+            list_repos=lambda: (_ for _ in ()).throw(RuntimeError("db down"))
         )
     )
     snapshot = hub_gather_service.gather_hub_message_snapshot(  # type: ignore[arg-type]
@@ -78,6 +80,13 @@ def test_gather_hub_message_snapshot_returns_empty_items_on_supervisor_error() -
         sections={"inbox"},
     )
     assert snapshot["items"] == []
+    assert "unreadable_diagnostics" in snapshot
+    diagnostics = snapshot["unreadable_diagnostics"]
+    assert len(diagnostics) >= 1
+    inbox_diag = diagnostics[0]
+    assert inbox_diag["section"] == "inbox"
+    assert "db down" in inbox_diag["reason"]
+    assert inbox_diag["source"] == "supervisor.list_repos"
 
 
 def test_gather_hub_message_snapshot_keeps_other_sections_on_supervisor_error(
@@ -94,7 +103,7 @@ def test_gather_hub_message_snapshot_keeps_other_sections_on_supervisor_error(
     )
     context = SimpleNamespace(
         supervisor=SimpleNamespace(
-            list_repos=lambda: (_ for _ in ()).throw(RuntimeError)
+            list_repos=lambda: (_ for _ in ()).throw(RuntimeError("db down"))
         ),
         config=SimpleNamespace(root=hub_root),
     )
@@ -106,6 +115,7 @@ def test_gather_hub_message_snapshot_keeps_other_sections_on_supervisor_error(
 
     assert snapshot["items"] == []
     assert snapshot["pma_threads"][0]["name"] == "snapshot-thread"
+    assert "unreadable_diagnostics" in snapshot
 
 
 def test_gather_hub_message_snapshot_only_serializes_requested_sections(
@@ -122,7 +132,7 @@ def test_gather_hub_message_snapshot_only_serializes_requested_sections(
     )
     context = SimpleNamespace(
         supervisor=SimpleNamespace(
-            list_repos=lambda: (_ for _ in ()).throw(RuntimeError)
+            list_repos=lambda: (_ for _ in ()).throw(RuntimeError("db down"))
         ),
         config=SimpleNamespace(root=hub_root),
     )
@@ -134,3 +144,21 @@ def test_gather_hub_message_snapshot_only_serializes_requested_sections(
 
     assert set(snapshot) == {"generated_at", "pma_threads"}
     assert snapshot["pma_threads"][0]["name"] == "requested-only-thread"
+
+
+def test_gather_valid_empty_inbox_has_no_unreadable_diagnostics(tmp_path) -> None:
+    hub_root = Path(tmp_path)
+    context = SimpleNamespace(
+        supervisor=SimpleNamespace(list_repos=lambda: []),
+        config=SimpleNamespace(
+            root=hub_root, pma=SimpleNamespace(enabled=True), raw={}
+        ),
+    )
+
+    snapshot = hub_gather_service.gather_hub_message_snapshot(
+        context,
+        sections={"inbox"},
+    )
+
+    assert snapshot["items"] == []
+    assert "unreadable_diagnostics" not in snapshot

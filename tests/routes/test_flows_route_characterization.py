@@ -19,6 +19,11 @@ from codex_autorunner.surfaces.web.routes.flow_routes.dependencies import (
 from codex_autorunner.surfaces.web.routes.flow_routes.status_history_routes import (
     build_status_history_routes,
 )
+from codex_autorunner.surfaces.web.routes.flows import (
+    FlowStateOutcome,
+    _validate_run_state,
+    _validate_ticket_engine,
+)
 
 
 def test_list_runs_falls_back_to_safe_listing_when_store_unavailable(
@@ -563,3 +568,187 @@ def test_extracted_status_history_router_uses_run_scoped_dispatch_history(
 
     assert file_res.status_code == 200
     assert file_res.text == "artifact payload\n"
+
+
+class TestValidateRunState:
+    def test_none_returns_valid_empty(self) -> None:
+        assert _validate_run_state(None) == FlowStateOutcome.VALID_EMPTY
+
+    def test_empty_dict_returns_valid_empty(self) -> None:
+        assert _validate_run_state({}) == FlowStateOutcome.VALID_EMPTY
+
+    def test_non_empty_dict_returns_valid(self) -> None:
+        assert _validate_run_state({"key": "value"}) == FlowStateOutcome.VALID
+
+    def test_non_dict_returns_unreadable(self) -> None:
+        assert _validate_run_state("not a dict") == FlowStateOutcome.UNREADABLE
+
+    def test_list_returns_unreadable(self) -> None:
+        assert _validate_run_state([1, 2]) == FlowStateOutcome.UNREADABLE
+
+    def test_int_returns_unreadable(self) -> None:
+        assert _validate_run_state(42) == FlowStateOutcome.UNREADABLE
+
+
+class TestValidateTicketEngine:
+    def test_none_returns_valid_empty(self) -> None:
+        assert _validate_ticket_engine(None, "running") == FlowStateOutcome.VALID_EMPTY
+
+    def test_non_dict_returns_unreadable(self) -> None:
+        assert _validate_ticket_engine("bad", "running") == FlowStateOutcome.UNREADABLE
+
+    def test_dict_without_status_returns_valid(self) -> None:
+        assert _validate_ticket_engine({}, "running") == FlowStateOutcome.VALID
+
+    def test_dict_with_matching_status_returns_valid(self) -> None:
+        te = {"status": "running"}
+        assert _validate_ticket_engine(te, "running") == FlowStateOutcome.VALID
+
+    def test_dict_with_mismatched_status_returns_mismatched(self) -> None:
+        te = {"status": "paused"}
+        assert _validate_ticket_engine(te, "running") == FlowStateOutcome.MISMATCHED
+
+    def test_dict_with_empty_status_string_returns_valid(self) -> None:
+        te = {"status": "  "}
+        assert _validate_ticket_engine(te, "running") == FlowStateOutcome.VALID
+
+    def test_dict_with_non_string_status_returns_valid(self) -> None:
+        te = {"status": 123}
+        assert _validate_ticket_engine(te, "running") == FlowStateOutcome.VALID
+
+
+def test_build_lite_flow_state_annotates_unreadable_snapshot_state(
+    tmp_path,
+) -> None:
+    record = FlowRunRecord(
+        id="run-unreadable",
+        flow_type="ticket_flow",
+        status=FlowRunStatus.RUNNING,
+        input_data={},
+        state={"ticket_engine": {"status": "running"}},
+        current_step=None,
+        stop_requested=False,
+        created_at="2026-01-01T00:00:00Z",
+        started_at=None,
+        finished_at=None,
+        error_message=None,
+        metadata={},
+    )
+    snapshot: dict[str, object] = {"state": "corrupt", "effective_current_ticket": None}
+    result = flow_routes._build_lite_flow_state(record, snapshot, "running")
+    assert result["_state_validation"] == "unreadable"
+    assert isinstance(result["ticket_engine"], dict)
+
+
+def test_build_lite_flow_state_annotates_mismatched_ticket_engine_status(
+    tmp_path,
+) -> None:
+    record = FlowRunRecord(
+        id="run-mismatch",
+        flow_type="ticket_flow",
+        status=FlowRunStatus.RUNNING,
+        input_data={},
+        state={
+            "ticket_engine": {
+                "status": "paused",
+                "current_ticket": "TICKET-001.md",
+            }
+        },
+        current_step=None,
+        stop_requested=False,
+        created_at="2026-01-01T00:00:00Z",
+        started_at=None,
+        finished_at=None,
+        error_message=None,
+        metadata={},
+    )
+    snapshot: dict[str, object] = {
+        "state": record.state,
+        "effective_current_ticket": "TICKET-001.md",
+    }
+    result = flow_routes._build_lite_flow_state(record, snapshot, "running")
+    assert "_state_validation" not in result
+    assert result["ticket_engine"]["_validation"] == "mismatched"
+    assert result["ticket_engine"]["status"] == "paused"
+
+
+def test_build_lite_flow_state_valid_empty_state_has_no_validation_key() -> None:
+    record = FlowRunRecord(
+        id="run-valid-empty",
+        flow_type="ticket_flow",
+        status=FlowRunStatus.RUNNING,
+        input_data={},
+        state={},
+        current_step=None,
+        stop_requested=False,
+        created_at="2026-01-01T00:00:00Z",
+        started_at=None,
+        finished_at=None,
+        error_message=None,
+        metadata={},
+    )
+    snapshot: dict[str, object] = {"state": {}, "effective_current_ticket": None}
+    result = flow_routes._build_lite_flow_state(record, snapshot, "running")
+    assert "_state_validation" not in result
+    assert "_validation" not in result["ticket_engine"]
+
+
+def test_build_lite_flow_state_annotates_unreadable_ticket_engine() -> None:
+    record = FlowRunRecord(
+        id="run-te-unreadable",
+        flow_type="ticket_flow",
+        status=FlowRunStatus.RUNNING,
+        input_data={},
+        state={"ticket_engine": "not a dict"},
+        current_step=None,
+        stop_requested=False,
+        created_at="2026-01-01T00:00:00Z",
+        started_at=None,
+        finished_at=None,
+        error_message=None,
+        metadata={},
+    )
+    snapshot: dict[str, object] = {
+        "state": record.state,
+        "effective_current_ticket": None,
+    }
+    result = flow_routes._build_lite_flow_state(record, snapshot, "running")
+    assert result["ticket_engine"]["_validation"] == "unreadable"
+
+
+def test_from_record_annotates_unreadable_state() -> None:
+    record = SimpleNamespace(
+        id="run-bad-state",
+        flow_type="ticket_flow",
+        status=FlowRunStatus.RUNNING,
+        input_data={},
+        state="corrupt",
+        current_step=None,
+        stop_requested=False,
+        created_at="2026-01-01T00:00:00Z",
+        started_at=None,
+        finished_at=None,
+        error_message=None,
+        metadata={},
+    )
+    response = flow_routes.FlowStatusResponse.from_record(record)
+    assert response.state.get("_state_validation") == "unreadable"
+
+
+def test_from_record_valid_state_has_no_validation_key() -> None:
+    record = FlowRunRecord(
+        id="run-ok",
+        flow_type="ticket_flow",
+        status=FlowRunStatus.RUNNING,
+        input_data={},
+        state={"ticket_engine": {"status": "running"}},
+        current_step=None,
+        stop_requested=False,
+        created_at="2026-01-01T00:00:00Z",
+        started_at=None,
+        finished_at=None,
+        error_message=None,
+        metadata={},
+    )
+    response = flow_routes.FlowStatusResponse.from_record(record)
+    assert "_state_validation" not in response.state

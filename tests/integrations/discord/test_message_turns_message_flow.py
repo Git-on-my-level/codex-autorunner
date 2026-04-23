@@ -5,7 +5,7 @@ from tests.discord_message_turns_support import (
     test_car_session_compact_finishes_interaction_when_finalize_fails,
     test_car_session_compact_keeps_previous_thread_when_summary_is_blank,
     test_car_session_compact_restores_previous_thread_when_seed_save_fails,
-    test_car_session_compact_uses_transcript_fallback_when_summary_is_blank,
+    test_car_session_compact_surfaces_empty_summary_without_transcript_fallback,
     test_message_create_after_compact_uses_pending_seed_and_clears_it,
     test_message_create_attachment_and_text_keeps_text_and_adds_file_context,
     test_message_create_attachment_only_downloads_to_inbox_and_runs_turn,

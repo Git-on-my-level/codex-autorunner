@@ -18,46 +18,6 @@ COMPACT_SUMMARY_PROMPT = (
     "Summarize the conversation so far into a concise context block I can paste into "
     "a new thread. Include goals, constraints, decisions, and current state."
 )
-COMPACT_FALLBACK_HISTORY_LIMIT = 5
-COMPACT_FALLBACK_PREVIEW_CHARS = 600
-
-
-async def _build_fallback_compact_summary(
-    service: Any,
-    *,
-    thread_target_id: str,
-) -> Optional[str]:
-    hub_client = getattr(service, "_hub_client", None)
-    if hub_client is None:
-        return None
-    from ....core.hub_control_plane import (
-        TranscriptHistoryRequest as _CPTranscriptRequest,
-    )
-
-    try:
-        response = await hub_client.get_transcript_history(
-            _CPTranscriptRequest(
-                target_kind="thread_target",
-                target_id=thread_target_id,
-                limit=COMPACT_FALLBACK_HISTORY_LIMIT,
-            )
-        )
-    except Exception:
-        return None
-    sections: list[str] = []
-    for index, entry in enumerate(reversed(response.entries), start=1):
-        preview = str(entry.get("preview") or entry.get("content") or "").strip()
-        if not preview:
-            continue
-        if len(preview) > COMPACT_FALLBACK_PREVIEW_CHARS:
-            preview = preview[: COMPACT_FALLBACK_PREVIEW_CHARS - 3].rstrip() + "..."
-        sections.append(f"Recent turn {index}:\n{preview}")
-    if not sections:
-        return None
-    return (
-        "Fallback context recovered from recent Discord thread transcripts.\n\n"
-        + "\n\n".join(sections)
-    )
 
 
 async def handle_car_compact(
@@ -183,14 +143,6 @@ async def handle_car_compact(
             else None
         )
         if not response_text:
-            response_text = (
-                await _build_fallback_compact_summary(
-                    service,
-                    thread_target_id=previous_thread_id,
-                )
-                or ""
-            )
-        if not response_text:
             log_event(
                 service._logger,
                 logging.WARNING,
@@ -222,15 +174,6 @@ async def handle_car_compact(
                 "active; please retry."
             )
             return
-        if not (turn_result.final_message or "").strip():
-            log_event(
-                service._logger,
-                logging.INFO,
-                "discord.compact.transcript_fallback_used",
-                channel_id=channel_id,
-                workspace_root=str(workspace_root),
-                previous_thread_id=previous_thread_id,
-            )
         try:
             (
                 _had_previous,

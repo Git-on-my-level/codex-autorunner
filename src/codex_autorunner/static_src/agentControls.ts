@@ -81,15 +81,14 @@ const STORAGE_KEYS = {
   reasoning: (agent: string) => `${STORAGE_PREFIX}.${agent}.reasoning`,
 } as const;
 
-const FALLBACK_AGENTS: Agent[] = [
-  { id: "codex", name: "Codex" },
-];
+const FALLBACK_AGENTS: Agent[] = [];
 
 const controls: AgentControl[] = [];
 let agentsLoaded = false;
+let agentsLoadFailed = false;
 let agentsLoadPromise: Promise<void> | null = null;
 let agentList: Agent[] = [...FALLBACK_AGENTS];
-let defaultAgent = "codex";
+let defaultAgent = "";
 const modelCatalogs = new Map<string, ModelCatalog | null>();
 const modelCatalogPromises = new Map<string, Promise<ModelCatalog | null>>();
 
@@ -181,10 +180,11 @@ function setSelectedReasoning(agent: string, reasoning: string): void {
 
 function ensureFallbackAgents(): void {
   if (!agentList.length) {
-    agentList = [...FALLBACK_AGENTS];
+    defaultAgent = "";
+    return;
   }
   if (!agentList.some((agent) => agent.id === defaultAgent)) {
-    defaultAgent = agentList[0]?.id || "codex";
+    defaultAgent = agentList[0].id;
   }
 }
 
@@ -240,18 +240,20 @@ async function loadAgents(): Promise<void> {
   agentsLoadPromise = (async () => {
     try {
       const data = await api(`${API_PREFIX}/agents`, { method: "GET" });
-      const agents = Array.isArray((data as { agents?: unknown[] })?.agents)
-        ? (data as { agents: unknown[] }).agents
-        : [];
+      const rawAgents = (data as { agents?: unknown })?.agents;
       if (
-        agents.length > 0 &&
-        agents.every((a) => a && typeof (a as Agent).id === "string")
+        Array.isArray(rawAgents) &&
+        rawAgents.every((a) => a && typeof (a as Agent).id === "string")
       ) {
-        agentList = agents as Agent[];
+        agentList = rawAgents as Agent[];
         defaultAgent = (data as { default?: string })?.default || defaultAgent;
+        agentsLoadFailed = false;
+      } else {
+        agentsLoadFailed = true;
       }
     } catch (err) {
-      console.warn("Failed to load agent list, using fallback", err);
+      console.warn("Failed to load agent list", err);
+      agentsLoadFailed = true;
     } finally {
       ensureFallbackAgents();
       agentsLoaded = true;
@@ -347,6 +349,17 @@ function ensureAgentOptions(select: HTMLSelectElement | null | undefined): void 
   if (!select) return;
   const selected = getSelectedAgent();
   select.innerHTML = "";
+  if (!agentList.length) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = agentsLoadFailed
+      ? "Failed to load agents \u2014 refresh to retry"
+      : "No agents available";
+    select.appendChild(option);
+    select.disabled = true;
+    return;
+  }
+  select.disabled = false;
   agentList.forEach((agent) => {
     const option = document.createElement("option");
     option.value = agent.id;
@@ -379,6 +392,11 @@ function ensureProfileOptions(
     return;
   }
   select.disabled = false;
+  const profilePlaceholder = document.createElement("option");
+  profilePlaceholder.value = "";
+  profilePlaceholder.textContent = "Select a profile\u2026";
+  profilePlaceholder.disabled = true;
+  select.appendChild(profilePlaceholder);
   profiles.forEach((profile) => {
     const option = document.createElement("option");
     option.value = profile.id;
@@ -411,6 +429,11 @@ function ensureModelOptions(
     return;
   }
   select.disabled = false;
+  const modelPlaceholder = document.createElement("option");
+  modelPlaceholder.value = "";
+  modelPlaceholder.textContent = "Select a model\u2026";
+  modelPlaceholder.disabled = true;
+  select.appendChild(modelPlaceholder);
   catalog.models.forEach((model) => {
     const option = document.createElement("option");
     option.value = model.id;
@@ -437,6 +460,11 @@ function ensureReasoningOptions(
     return;
   }
   select.disabled = false;
+  const reasoningPlaceholder = document.createElement("option");
+  reasoningPlaceholder.value = "";
+  reasoningPlaceholder.textContent = "Select reasoning\u2026";
+  reasoningPlaceholder.disabled = true;
+  select.appendChild(reasoningPlaceholder);
   model.reasoning_options.forEach((optionValue) => {
     const option = document.createElement("option");
     option.value = optionValue;
@@ -477,7 +505,7 @@ function resolveSelectedModel(agent: string, catalog: ModelCatalog | null): stri
   ) {
     return catalog.default_model;
   }
-  return catalog.models[0].id;
+  return "";
 }
 
 function resolveSelectedProfile(agent: string): string {
@@ -493,7 +521,7 @@ function resolveSelectedProfile(agent: string): string {
   if (defaultProfile && profiles.some((profile) => profile.id === defaultProfile)) {
     return defaultProfile;
   }
-  return profiles[0]?.id || "";
+  return "";
 }
 
 function resolveSelectedReasoning(
@@ -505,7 +533,7 @@ function resolveSelectedReasoning(
   if (stored && model.reasoning_options.includes(stored)) {
     return stored;
   }
-  return model.reasoning_options[0] || "";
+  return "";
 }
 
 async function loadAgentControlsPayload(): Promise<AgentControlsPayload> {
@@ -717,13 +745,17 @@ export async function ensureAgentCatalog(): Promise<void> {
 
 export const __agentControlsTest = {
   modelControlModeForAgent,
+  get agentsLoadFailed(): boolean {
+    return agentsLoadFailed;
+  },
   reset(): void {
     agentControlsRefresh.reset();
     controls.length = 0;
     agentsLoaded = false;
+    agentsLoadFailed = false;
     agentsLoadPromise = null;
     agentList = [...FALLBACK_AGENTS];
-    defaultAgent = "codex";
+    defaultAgent = "";
     modelCatalogs.clear();
     modelCatalogPromises.clear();
   },

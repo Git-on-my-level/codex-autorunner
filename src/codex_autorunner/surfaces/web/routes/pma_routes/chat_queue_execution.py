@@ -310,6 +310,12 @@ async def execute_queue_item(
     async def _resolve_no_flow(
         _request: SurfaceThreadMessageRequest,
     ) -> None:
+        """PMA web does not participate in paused-flow resolution.
+
+        Returning ``None`` signals the ingress layer that no flow target
+        exists to resume, which is the expected behavior for the web
+        surface.
+        """
         return None
 
     async def _submit_flow_reply(

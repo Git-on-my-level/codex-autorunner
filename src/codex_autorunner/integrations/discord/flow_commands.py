@@ -26,13 +26,8 @@ from ...core.flows.ux_helpers import (
     select_default_ticket_flow_run,
     select_ticket_flow_run_record,
     ticket_flow_archive_requires_force,
-    ticket_progress,
 )
 from ...core.logging_utils import log_event
-from ...core.ticket_flow_summary import (
-    build_ticket_flow_display,
-    format_ticket_flow_summary_lines,
-)
 from ...core.utils import atomic_write
 from ...integrations.github.service import GitHubError, GitHubService
 from ...tickets.outbox import resolve_outbox_paths
@@ -475,27 +470,6 @@ def build_flow_status_message(
     return response_text, build_flow_status_components(record, runs)
 
 
-def build_flow_status_summary_fallback(
-    workspace_root: Path,
-) -> Optional[str]:
-    progress = ticket_progress(workspace_root)
-    if int(progress.get("total", 0)) <= 0:
-        return None
-    display = build_ticket_flow_display(
-        status=None,
-        done_count=int(progress.get("done", 0)),
-        total_count=int(progress.get("total", 0)),
-        run_id=None,
-    )
-    from typing import Mapping
-
-    summary: Mapping[str, Any] = {**display, "current_step": None}
-    lines = format_ticket_flow_summary_lines(summary)
-    if not lines:
-        return None
-    return "\n".join(lines)
-
-
 async def prompt_flow_action_picker(
     service: Any,
     interaction_id: str,
@@ -800,26 +774,6 @@ async def handle_flow_status(
                         components=components,
                     )
                 return
-            if not explicit_run_requested:
-                summary_text = build_flow_status_summary_fallback(workspace_root)
-                if summary_text:
-                    if update_message:
-                        await update_runtime_component_message(
-                            service,
-                            interaction_id,
-                            interaction_token,
-                            summary_text,
-                            components=[],
-                        )
-                    else:
-                        await service.send_or_respond_public_with_components(
-                            interaction_id=interaction_id,
-                            interaction_token=interaction_token,
-                            deferred=deferred_public,
-                            text=summary_text,
-                            components=[],
-                        )
-                    return
             message = (
                 f"Ticket_flow run {run_id_opt.strip()} not found."
                 if explicit_run_requested

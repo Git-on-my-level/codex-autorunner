@@ -20,12 +20,6 @@ def _flatten_opencode_tokens(payload: dict[str, Any]) -> Optional[dict[str, Any]
     return flatten_usage(payload)
 
 
-def _extract_opencode_usage_value(
-    payload: dict[str, Any], keys: tuple[str, ...]
-) -> Optional[int]:
-    return extract_usage_field(payload, keys)
-
-
 def _build_opencode_token_usage(payload: dict[str, Any]) -> Optional[dict[str, Any]]:
     usage_payload = extract_usage(payload)
     if usage_payload is None:
@@ -75,6 +69,5 @@ def _build_opencode_token_usage(payload: dict[str, Any]) -> Optional[dict[str, A
 __all__ = [
     "_extract_opencode_usage_payload",
     "_flatten_opencode_tokens",
-    "_extract_opencode_usage_value",
     "_build_opencode_token_usage",
 ]
