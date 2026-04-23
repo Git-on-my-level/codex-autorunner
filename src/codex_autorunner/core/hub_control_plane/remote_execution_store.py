@@ -331,6 +331,7 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
         model: Optional[str] = None,
         reasoning: Optional[str] = None,
         client_request_id: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
         queue_payload: Optional[dict[str, Any]] = None,
     ) -> ExecutionRecord:
         response = self._run(
@@ -344,6 +345,7 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
                     model=model,
                     reasoning=reasoning,
                     client_request_id=client_request_id,
+                    metadata=dict(metadata or {}),
                     queue_payload=dict(queue_payload or {}),
                 )
             ),

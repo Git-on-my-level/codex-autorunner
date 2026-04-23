@@ -410,6 +410,76 @@ async def test_recover_orphaned_managed_thread_executions_skips_chat_bound_threa
     assert updated_running["error"] is None
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("surface_kind", "surface_key"),
+    (
+        ("discord", "channel-123"),
+        ("telegram", "123:456"),
+    ),
+)
+async def test_recover_orphaned_managed_thread_executions_skips_chat_bound_threads_with_metadata(
+    hub_env,
+    surface_kind: str,
+    surface_key: str,
+) -> None:
+    app = build_pma_hub_app(hub_env.hub_root)
+    store = PmaThreadStore(hub_env.hub_root)
+    bindings = OrchestrationBindingStore(hub_env.hub_root)
+    created = store.create_thread(
+        "codex",
+        hub_env.repo_root.resolve(),
+        repo_id=hub_env.repo_id,
+    )
+    managed_thread_id = str(created["managed_thread_id"])
+    running = store.create_turn(
+        managed_thread_id,
+        prompt="running",
+        metadata={
+            "bound_chat_execution": {
+                "origin": {
+                    "kind": "surface",
+                    "surface_kind": surface_kind,
+                    "surface_key": surface_key,
+                },
+                "progress_targets": [
+                    {
+                        "surface_kind": surface_kind,
+                        "surface_key": surface_key,
+                    }
+                ],
+            }
+        },
+    )
+    bindings.upsert_binding(
+        surface_kind=surface_kind,
+        surface_key=surface_key,
+        thread_target_id=managed_thread_id,
+        agent_id="codex",
+        repo_id=hub_env.repo_id,
+    )
+    store.set_thread_backend_id(managed_thread_id, "backend-thread-1")
+    clear_runtime_thread_binding(hub_env.hub_root, managed_thread_id)
+    with open_orchestration_sqlite(hub_env.hub_root) as conn:
+        with conn:
+            conn.execute(
+                """
+                UPDATE orch_thread_targets
+                   SET runtime_status = 'idle',
+                       status_turn_id = NULL
+                 WHERE thread_target_id = ?
+                """,
+                (managed_thread_id,),
+            )
+
+    await managed_thread_runtime.recover_orphaned_managed_thread_executions(app)
+
+    updated_running = store.get_turn(managed_thread_id, running["managed_turn_id"])
+    assert updated_running is not None
+    assert updated_running["status"] == "running"
+    assert updated_running["error"] is None
+
+
 def test_managed_thread_list_route_filters_by_status(hub_env) -> None:
     app = build_pma_hub_app(hub_env.hub_root)
     store = PmaThreadStore(hub_env.hub_root)
@@ -452,6 +522,7 @@ async def test_recover_orphaned_managed_thread_executions_recovers_pma_runs_on_c
     hub_env,
     surface_kind: str,
     surface_key: str,
+    monkeypatch,
 ) -> None:
     app = build_pma_hub_app(hub_env.hub_root)
     store = PmaThreadStore(hub_env.hub_root)
@@ -484,24 +555,37 @@ async def test_recover_orphaned_managed_thread_executions_recovers_pma_runs_on_c
                 """,
                 (managed_thread_id,),
             )
+    recovered: list[str] = []
+
+    async def _fake_recover_bound_progress_execution(
+        app_arg,
+        *,
+        service,
+        thread_store,
+        managed_thread_id: str,
+        thread,
+        execution,
+    ) -> bool:
+        _ = app_arg, service, thread_store, thread, execution
+        recovered.append(managed_thread_id)
+        return True
+
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "_recover_pma_bound_chat_execution",
+        _fake_recover_bound_progress_execution,
+    )
 
     await managed_thread_runtime.recover_orphaned_managed_thread_executions(app)
 
     updated_running = store.get_turn(managed_thread_id, running["managed_turn_id"])
     updated_queued = store.get_turn(managed_thread_id, queued["managed_turn_id"])
     assert updated_running is not None
-    assert updated_running["status"] == "error"
-    assert (
-        updated_running["error"]
-        == "Running execution could not be reattached after restart"
-    )
+    assert updated_running["status"] == "running"
+    assert updated_running["error"] is None
     assert updated_queued is not None
     assert updated_queued["status"] == "queued"
-
-    claimed = store.claim_next_queued_turn(managed_thread_id)
-    assert claimed is not None
-    claimed_turn, _queue_payload = claimed
-    assert claimed_turn["managed_turn_id"] == queued["managed_turn_id"]
+    assert recovered == [managed_thread_id]
 
 
 def test_managed_thread_message_route_uses_orchestration_service_seam(
@@ -1034,25 +1118,332 @@ def test_pma_queue_worker_uses_contextual_delivery_helper_for_progress_targets(
     assert callable(captured["controller_kwargs"]["surface_target_resolver"])
 
 
-def test_resolve_pma_chat_bound_surface_targets_selects_single_owner() -> None:
-    thread_store = SimpleNamespace(
-        get_running_turn=lambda managed_thread_id: {
-            "client_turn_id": f"discord:channel-1:{managed_thread_id}"
-        }
+def test_resolve_pma_chat_bound_surface_targets_uses_execution_metadata() -> None:
+    started = SimpleNamespace(
+        execution=SimpleNamespace(
+            metadata={
+                "bound_chat_execution": {
+                    "origin": {"kind": "pma_web"},
+                    "progress_targets": [
+                        {
+                            "surface_kind": "discord",
+                            "surface_key": "channel-1",
+                        },
+                        {
+                            "surface_kind": "telegram",
+                            "surface_key": "chat-1:55",
+                        },
+                    ],
+                }
+            }
+        )
     )
     service = SimpleNamespace(
-        thread_store=thread_store,
-        list_bindings=lambda **kwargs: (
-            [SimpleNamespace(surface_key="channel-1")]
-            if kwargs["surface_kind"] == "discord"
-            else [SimpleNamespace(surface_key="chat-1:55")]
-        ),
+        thread_store=SimpleNamespace(get_running_turn=lambda managed_thread_id: None),
+        list_bindings=lambda **kwargs: [],
     )
 
     assert managed_thread_runtime._resolve_pma_chat_bound_surface_targets(
         service=service,
         managed_thread_id="thread-1",
-    ) == (("discord", "channel-1"),)
+        started=started,
+    ) == (("discord", "channel-1"), ("telegram", "chat-1:55"))
+
+
+def test_resolve_pma_chat_bound_surface_targets_skips_running_turn_for_pre_submit_requests() -> (
+    None
+):
+    service = SimpleNamespace(
+        thread_store=SimpleNamespace(
+            get_running_turn=lambda managed_thread_id: {
+                "metadata": {
+                    "bound_chat_execution": {
+                        "origin": {
+                            "kind": "surface",
+                            "surface_kind": "discord",
+                            "surface_key": "active-channel",
+                        },
+                        "progress_targets": [
+                            {
+                                "surface_kind": "discord",
+                                "surface_key": "active-channel",
+                            }
+                        ],
+                    }
+                }
+            }
+        ),
+        list_bindings=lambda **kwargs: [
+            SimpleNamespace(surface_kind="telegram", surface_key="chat-1:55")
+        ],
+    )
+
+    assert managed_thread_runtime._resolve_pma_chat_bound_surface_targets(
+        service=service,
+        managed_thread_id="thread-1",
+        started=None,
+        allow_running_turn_fallback=False,
+    ) == (("telegram", "chat-1:55"),)
+
+
+def test_managed_thread_message_route_persists_pma_bound_chat_execution_metadata(
+    hub_env,
+    monkeypatch,
+) -> None:
+    app = build_pma_hub_app(hub_env.hub_root)
+    store = PmaThreadStore(hub_env.hub_root)
+    bindings = OrchestrationBindingStore(hub_env.hub_root)
+    created = store.create_thread(
+        "codex",
+        hub_env.repo_root.resolve(),
+        repo_id=hub_env.repo_id,
+    )
+    managed_thread_id = str(created["managed_thread_id"])
+    bindings.upsert_binding(
+        surface_kind="discord",
+        surface_key="channel-1",
+        thread_target_id=managed_thread_id,
+        agent_id="codex",
+        repo_id=hub_env.repo_id,
+    )
+    bindings.upsert_binding(
+        surface_kind="telegram",
+        surface_key="100:200",
+        thread_target_id=managed_thread_id,
+        agent_id="codex",
+        repo_id=hub_env.repo_id,
+    )
+    captured: dict[str, Any] = {}
+
+    class FakeService:
+        def get_thread_target(self, thread_target_id: str):
+            return SimpleNamespace(
+                thread_target_id=thread_target_id,
+                backend_thread_id="backend-thread-1",
+            )
+
+        def record_execution_result(
+            self,
+            thread_target_id: str,
+            execution_id: str,
+            *,
+            status: str,
+            assistant_text: Optional[str] = None,
+            error: Optional[str] = None,
+            backend_turn_id: Optional[str] = None,
+            transcript_turn_id: Optional[str] = None,
+        ):
+            _ = (
+                thread_target_id,
+                execution_id,
+                assistant_text,
+                error,
+                backend_turn_id,
+                transcript_turn_id,
+            )
+            return SimpleNamespace(status=status, error=None)
+
+        def get_execution(self, thread_target_id: str, execution_id: str):
+            _ = thread_target_id, execution_id
+            return None
+
+        def list_bindings(self, **kwargs: Any):
+            return bindings.list_bindings(**kwargs)
+
+        thread_store = store
+
+    async def _fake_begin(
+        service, request, *, client_request_id=None, sandbox_policy=None
+    ):
+        _ = service, client_request_id, sandbox_policy
+        captured["request"] = request
+        return SimpleNamespace(
+            execution=SimpleNamespace(
+                execution_id="managed-turn-1",
+                backend_id="backend-turn-1",
+                metadata=request.metadata,
+            ),
+            thread=SimpleNamespace(
+                backend_thread_id="backend-thread-1",
+            ),
+            workspace_root=hub_env.repo_root.resolve(),
+            request=request,
+        )
+
+    async def _fake_await(*args, **kwargs):
+        _ = args, kwargs
+        return RuntimeThreadOutcome(
+            status="ok",
+            assistant_text="assistant-output",
+            error=None,
+            backend_thread_id="backend-thread-1",
+            backend_turn_id="backend-turn-1",
+        )
+
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "_build_managed_thread_orchestration_service",
+        lambda request, *, thread_store=None: FakeService(),
+    )
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "begin_runtime_thread_execution",
+        _fake_begin,
+    )
+    _patch_outcome_driven_finalization(
+        monkeypatch,
+        outcome_builder=_fake_await,
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/messages",
+            json={"message": "hello from route"},
+        )
+
+    assert response.status_code == 200
+    assert captured["request"].metadata["bound_chat_execution"] == {
+        "origin": {"kind": "pma_web"},
+        "progress_targets": [
+            {"surface_kind": "discord", "surface_key": "channel-1"},
+            {"surface_kind": "telegram", "surface_key": "100:200"},
+        ],
+    }
+
+
+def test_managed_thread_message_route_uses_binding_targets_for_queued_pma_execution(
+    hub_env,
+    monkeypatch,
+) -> None:
+    app = build_pma_hub_app(hub_env.hub_root)
+    store = PmaThreadStore(hub_env.hub_root)
+    bindings = OrchestrationBindingStore(hub_env.hub_root)
+    created = store.create_thread(
+        "codex",
+        hub_env.repo_root.resolve(),
+        repo_id=hub_env.repo_id,
+    )
+    managed_thread_id = str(created["managed_thread_id"])
+    bindings.upsert_binding(
+        surface_kind="telegram",
+        surface_key="100:200",
+        thread_target_id=managed_thread_id,
+        agent_id="codex",
+        repo_id=hub_env.repo_id,
+    )
+    captured: dict[str, Any] = {}
+
+    class FakeService:
+        def get_thread_target(self, thread_target_id: str):
+            return SimpleNamespace(
+                thread_target_id=thread_target_id,
+                backend_thread_id="backend-thread-1",
+            )
+
+        def record_execution_result(
+            self,
+            thread_target_id: str,
+            execution_id: str,
+            *,
+            status: str,
+            assistant_text: Optional[str] = None,
+            error: Optional[str] = None,
+            backend_turn_id: Optional[str] = None,
+            transcript_turn_id: Optional[str] = None,
+        ):
+            _ = (
+                thread_target_id,
+                execution_id,
+                assistant_text,
+                error,
+                backend_turn_id,
+                transcript_turn_id,
+            )
+            return SimpleNamespace(status=status, error=None)
+
+        def get_execution(self, thread_target_id: str, execution_id: str):
+            _ = thread_target_id, execution_id
+            return None
+
+        def list_bindings(self, **kwargs: Any):
+            return bindings.list_bindings(**kwargs)
+
+        thread_store = SimpleNamespace(
+            get_running_turn=lambda managed_thread_id: {
+                "metadata": {
+                    "bound_chat_execution": {
+                        "origin": {
+                            "kind": "surface",
+                            "surface_kind": "discord",
+                            "surface_key": "active-channel",
+                        },
+                        "progress_targets": [
+                            {
+                                "surface_kind": "discord",
+                                "surface_key": "active-channel",
+                            }
+                        ],
+                    }
+                }
+            }
+        )
+
+    async def _fake_begin(
+        service, request, *, client_request_id=None, sandbox_policy=None
+    ):
+        _ = service, client_request_id, sandbox_policy
+        captured["request"] = request
+        return SimpleNamespace(
+            execution=SimpleNamespace(
+                execution_id="managed-turn-1",
+                backend_id="backend-turn-1",
+                metadata=request.metadata,
+            ),
+            thread=SimpleNamespace(
+                backend_thread_id="backend-thread-1",
+            ),
+            workspace_root=hub_env.repo_root.resolve(),
+            request=request,
+        )
+
+    async def _fake_await(*args, **kwargs):
+        _ = args, kwargs
+        return RuntimeThreadOutcome(
+            status="ok",
+            assistant_text="assistant-output",
+            error=None,
+            backend_thread_id="backend-thread-1",
+            backend_turn_id="backend-turn-1",
+        )
+
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "_build_managed_thread_orchestration_service",
+        lambda request, *, thread_store=None: FakeService(),
+    )
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "begin_runtime_thread_execution",
+        _fake_begin,
+    )
+    _patch_outcome_driven_finalization(
+        monkeypatch,
+        outcome_builder=_fake_await,
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/messages",
+            json={"message": "hello from route"},
+        )
+
+    assert response.status_code == 200
+    assert captured["request"].metadata["bound_chat_execution"] == {
+        "origin": {"kind": "pma_web"},
+        "progress_targets": [
+            {"surface_kind": "telegram", "surface_key": "100:200"},
+        ],
+    }
 
 
 def test_managed_thread_message_route_honors_explicit_core_context_profile(

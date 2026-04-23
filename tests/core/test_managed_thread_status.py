@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from codex_autorunner.core.managed_thread_status import (
-    ManagedThreadOperatorStatus,
     ManagedThreadStatusReason,
     backfill_managed_thread_status,
     build_managed_thread_status_snapshot,
@@ -155,7 +154,7 @@ def test_operator_status_marks_completed_active_threads_as_reusable() -> None:
             normalized_status="completed",
             lifecycle_status="active",
         )
-        == ManagedThreadOperatorStatus.REUSABLE.value
+        == "reusable"
     )
 
 
@@ -165,7 +164,7 @@ def test_operator_status_marks_interrupted_active_threads_as_reusable() -> None:
             normalized_status="interrupted",
             lifecycle_status="active",
         )
-        == ManagedThreadOperatorStatus.REUSABLE.value
+        == "reusable"
     )
 
 
@@ -175,7 +174,7 @@ def test_operator_status_marks_failed_active_threads_as_attention_required() -> 
             normalized_status="failed",
             lifecycle_status="active",
         )
-        == ManagedThreadOperatorStatus.ATTENTION_REQUIRED.value
+        == "attention_required"
     )
 
 
@@ -185,5 +184,5 @@ def test_operator_status_prefers_archived_lifecycle() -> None:
             normalized_status="completed",
             lifecycle_status="archived",
         )
-        == ManagedThreadOperatorStatus.ARCHIVED.value
+        == "archived"
     )

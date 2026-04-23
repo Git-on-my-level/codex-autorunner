@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import sqlite3
 import threading
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, Optional
 
 import codex_autorunner.core.chat_bindings as chat_bindings_module
 import codex_autorunner.core.hub_projection_store as projection_store_module
@@ -16,6 +19,12 @@ from codex_autorunner.surfaces.web.routes.hub_repo_routes import (
 )
 from codex_autorunner.surfaces.web.routes.hub_repo_routes import (
     repo_listing as hub_repo_listing_module,
+)
+from codex_autorunner.surfaces.web.routes.hub_repo_routes.channel_source_readers import (
+    parse_topic_identity,
+    read_discord_bindings,
+    read_orchestration_bindings,
+    read_telegram_bindings,
 )
 from codex_autorunner.surfaces.web.routes.hub_repo_routes.channels import (
     HubChannelService,
@@ -1227,3 +1236,476 @@ def test_hub_projection_store_namespace_constants_are_stable() -> None:
     assert CHAT_BINDING_PROJECTION_KEY == "active_by_source"
     assert HUB_SNAPSHOT_PROJECTION_NAMESPACE == "hub_snapshot_v1"
     assert REPO_CAPABILITY_HINT_PROJECTION_NAMESPACE == "repo_capability_hints_v1"
+
+
+def _make_context(tmp_path: Path) -> SimpleNamespace:
+    return SimpleNamespace(
+        config=SimpleNamespace(
+            root=tmp_path,
+            raw={},
+            pma=SimpleNamespace(freshness_stale_threshold_seconds=None),
+        ),
+        logger=logging.getLogger(__name__),
+    )
+
+
+def _create_discord_db(db_path: Path, rows: list[dict[str, Any]]) -> None:
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path)
+    try:
+        with conn:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS channel_bindings ("
+                "channel_id TEXT, guild_id TEXT, workspace_path TEXT, "
+                "repo_id TEXT, resource_kind TEXT, resource_id TEXT, "
+                "pma_enabled INTEGER, agent TEXT, agent_profile TEXT, "
+                "updated_at TEXT)"
+            )
+            for row in rows:
+                cols = ", ".join(row.keys())
+                placeholders = ", ".join("?" for _ in row)
+                conn.execute(
+                    f"INSERT INTO channel_bindings ({cols}) VALUES ({placeholders})",
+                    list(row.values()),
+                )
+    finally:
+        conn.close()
+
+
+def _create_telegram_db(
+    db_path: Path,
+    rows: list[dict[str, Any]],
+    *,
+    include_scope_table: bool = False,
+    scope_rows: Optional[list[dict[str, Any]]] = None,
+) -> None:
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path)
+    try:
+        with conn:
+            all_keys: set[str] = set()
+            for row in rows:
+                all_keys.update(row.keys())
+            col_defs = ", ".join(f"{col} TEXT" for col in sorted(all_keys))
+            conn.execute(f"CREATE TABLE IF NOT EXISTS telegram_topics ({col_defs})")
+            for row in rows:
+                cols = ", ".join(row.keys())
+                placeholders = ", ".join("?" for _ in row)
+                conn.execute(
+                    f"INSERT INTO telegram_topics ({cols}) VALUES ({placeholders})",
+                    list(row.values()),
+                )
+            if include_scope_table:
+                conn.execute(
+                    "CREATE TABLE IF NOT EXISTS telegram_topic_scopes "
+                    "(chat_id INTEGER, thread_id INTEGER, scope TEXT)"
+                )
+                for sr in scope_rows or []:
+                    conn.execute(
+                        "INSERT INTO telegram_topic_scopes (chat_id, thread_id, scope) VALUES (?, ?, ?)",
+                        (sr.get("chat_id"), sr.get("thread_id"), sr.get("scope")),
+                    )
+    finally:
+        conn.close()
+
+
+def _create_orchestration_db(
+    db_path: Path,
+    rows: list[dict[str, Any]],
+) -> None:
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path)
+    try:
+        with conn:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS orch_bindings ("
+                "surface_key TEXT, target_id TEXT, agent_id TEXT, "
+                "repo_id TEXT, resource_kind TEXT, resource_id TEXT, "
+                "mode TEXT, updated_at TEXT, disabled_at TEXT, "
+                "target_kind TEXT, surface_kind TEXT)"
+            )
+            for row in rows:
+                cols = ", ".join(row.keys())
+                placeholders = ", ".join("?" for _ in row)
+                conn.execute(
+                    f"INSERT INTO orch_bindings ({cols}) VALUES ({placeholders})",
+                    list(row.values()),
+                )
+    finally:
+        conn.close()
+
+
+class TestParseTopicIdentity:
+    def test_valid_colon_separated_key(self) -> None:
+        chat_id, thread_id, scope = parse_topic_identity(None, None, "123456:root")
+        assert chat_id == 123456
+        assert thread_id is None
+        assert scope is None
+
+    def test_valid_with_thread_and_scope(self) -> None:
+        chat_id, thread_id, scope = parse_topic_identity(
+            None, None, "123456:789:my-scope"
+        )
+        assert chat_id == 123456
+        assert thread_id == 789
+        assert scope == "my-scope"
+
+    def test_valid_direct_chat_id(self) -> None:
+        chat_id, thread_id, scope = parse_topic_identity(123456, None, "ignored")
+        assert chat_id == 123456
+        assert thread_id is None
+        assert scope is None
+
+    def test_valid_direct_chat_and_thread(self) -> None:
+        chat_id, thread_id, scope = parse_topic_identity(123456, 789, "ignored")
+        assert chat_id == 123456
+        assert thread_id == 789
+        assert scope is None
+
+    def test_malformed_single_token_returns_none(self) -> None:
+        chat_id, thread_id, scope = parse_topic_identity(None, None, "abc")
+        assert chat_id is None
+        assert thread_id is None
+        assert scope is None
+
+    def test_malformed_non_numeric_chat_id_returns_none(self) -> None:
+        chat_id, thread_id, scope = parse_topic_identity(None, None, "abc:root")
+        assert chat_id is None
+
+    def test_malformed_empty_string_returns_none(self) -> None:
+        chat_id, thread_id, scope = parse_topic_identity(None, None, "")
+        assert chat_id is None
+
+    def test_malformed_non_string_topic_returns_none(self) -> None:
+        chat_id, thread_id, scope = parse_topic_identity(None, None, 123)
+        assert chat_id is None
+
+    def test_malformed_bool_chat_id_falls_through_to_topic(self) -> None:
+        chat_id, thread_id, scope = parse_topic_identity(True, None, "123:root")
+        assert chat_id == 123
+        assert thread_id is None
+        assert scope is None
+
+    def test_malformed_bool_chat_id_without_topic_returns_none(self) -> None:
+        chat_id, thread_id, scope = parse_topic_identity(True, None, "bad")
+        assert chat_id is None
+
+    def test_malformed_bool_thread_id_rejected(self) -> None:
+        chat_id, thread_id, scope = parse_topic_identity(123, True, "123:root")
+        assert chat_id == 123
+        assert thread_id is None
+
+
+class TestReadDiscordBindings:
+    def test_valid_row_produces_binding(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "discord.sqlite3"
+        _create_discord_db(
+            db_path,
+            [
+                {"channel_id": "chan-1", "repo_id": "demo"},
+            ],
+        )
+        bindings = read_discord_bindings(db_path, {}, context=_make_context(tmp_path))
+        assert "discord:chan-1" in bindings
+        assert bindings["discord:chan-1"]["platform"] == "discord"
+        assert bindings["discord:chan-1"]["chat_id"] == "chan-1"
+
+    def test_nonexistent_db_returns_empty(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "missing.sqlite3"
+        bindings = read_discord_bindings(db_path, {}, context=_make_context(tmp_path))
+        assert bindings == {}
+
+    def test_malformed_non_string_channel_id_skipped(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "discord.sqlite3"
+        conn = sqlite3.connect(db_path)
+        try:
+            with conn:
+                conn.execute(
+                    "CREATE TABLE channel_bindings (channel_id INTEGER, repo_id TEXT)"
+                )
+                conn.execute("INSERT INTO channel_bindings VALUES (12345, 'demo')")
+        finally:
+            conn.close()
+        bindings = read_discord_bindings(db_path, {}, context=_make_context(tmp_path))
+        assert bindings == {}
+
+    def test_malformed_empty_channel_id_skipped(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "discord.sqlite3"
+        _create_discord_db(
+            db_path,
+            [
+                {"channel_id": "   ", "repo_id": "demo"},
+            ],
+        )
+        bindings = read_discord_bindings(db_path, {}, context=_make_context(tmp_path))
+        assert bindings == {}
+
+    def test_malformed_null_channel_id_skipped(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "discord.sqlite3"
+        conn = sqlite3.connect(db_path)
+        try:
+            with conn:
+                conn.execute(
+                    "CREATE TABLE channel_bindings (channel_id TEXT, repo_id TEXT)"
+                )
+                conn.execute("INSERT INTO channel_bindings VALUES (NULL, 'demo')")
+        finally:
+            conn.close()
+        bindings = read_discord_bindings(db_path, {}, context=_make_context(tmp_path))
+        assert bindings == {}
+
+    def test_mixed_valid_and_malformed_rows(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "discord.sqlite3"
+        _create_discord_db(
+            db_path,
+            [
+                {"channel_id": "good-channel", "repo_id": "demo"},
+                {"channel_id": None, "repo_id": "bad"},
+            ],
+        )
+        bindings = read_discord_bindings(db_path, {}, context=_make_context(tmp_path))
+        assert "discord:good-channel" in bindings
+        assert len(bindings) == 1
+
+
+class TestReadTelegramBindings:
+    def test_valid_row_produces_binding(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "telegram.sqlite3"
+        _create_telegram_db(
+            db_path,
+            [
+                {
+                    "topic_key": "123456:root",
+                    "chat_id": "123456",
+                    "thread_id": None,
+                },
+            ],
+        )
+        bindings = read_telegram_bindings(db_path, {}, context=_make_context(tmp_path))
+        assert "telegram:123456" in bindings
+        assert bindings["telegram:123456"]["platform"] == "telegram"
+
+    def test_malformed_topic_key_skipped(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "telegram.sqlite3"
+        _create_telegram_db(
+            db_path,
+            [
+                {"topic_key": "bad-key", "chat_id": None, "thread_id": None},
+            ],
+        )
+        bindings = read_telegram_bindings(db_path, {}, context=_make_context(tmp_path))
+        assert bindings == {}
+
+    def test_malformed_empty_topic_key_skipped(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "telegram.sqlite3"
+        _create_telegram_db(
+            db_path,
+            [
+                {"topic_key": "", "chat_id": None, "thread_id": None},
+            ],
+        )
+        bindings = read_telegram_bindings(db_path, {}, context=_make_context(tmp_path))
+        assert bindings == {}
+
+    def test_malformed_invalid_json_payload_skipped(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "telegram.sqlite3"
+        _create_telegram_db(
+            db_path,
+            [
+                {
+                    "topic_key": "123456:root",
+                    "chat_id": "123456",
+                    "thread_id": None,
+                    "payload_json": "not-valid-json{{{",
+                },
+            ],
+        )
+        bindings = read_telegram_bindings(db_path, {}, context=_make_context(tmp_path))
+        assert bindings == {}
+
+    def test_malformed_non_dict_json_payload_skipped(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "telegram.sqlite3"
+        _create_telegram_db(
+            db_path,
+            [
+                {
+                    "topic_key": "123456:root",
+                    "chat_id": "123456",
+                    "thread_id": None,
+                    "payload_json": "[1, 2, 3]",
+                },
+            ],
+        )
+        bindings = read_telegram_bindings(db_path, {}, context=_make_context(tmp_path))
+        assert bindings == {}
+
+    def test_valid_payload_json_produces_binding(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "telegram.sqlite3"
+        payload = json.dumps({"workspace_path": "/tmp/repo", "repo_id": "demo"})
+        _create_telegram_db(
+            db_path,
+            [
+                {
+                    "topic_key": "123456:root",
+                    "chat_id": "123456",
+                    "thread_id": None,
+                    "payload_json": payload,
+                },
+            ],
+        )
+        bindings = read_telegram_bindings(db_path, {}, context=_make_context(tmp_path))
+        assert "telegram:123456" in bindings
+
+    def test_missing_payload_json_column_still_works(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "telegram.sqlite3"
+        _create_telegram_db(
+            db_path,
+            [
+                {
+                    "topic_key": "123456:root",
+                    "chat_id": "123456",
+                    "thread_id": None,
+                },
+            ],
+        )
+        bindings = read_telegram_bindings(db_path, {}, context=_make_context(tmp_path))
+        assert "telegram:123456" in bindings
+
+    def test_mixed_valid_and_malformed_rows(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "telegram.sqlite3"
+        _create_telegram_db(
+            db_path,
+            [
+                {
+                    "topic_key": "123456:root",
+                    "chat_id": "123456",
+                    "thread_id": None,
+                },
+                {
+                    "topic_key": "bad-key",
+                    "chat_id": None,
+                    "thread_id": None,
+                },
+            ],
+        )
+        bindings = read_telegram_bindings(db_path, {}, context=_make_context(tmp_path))
+        assert "telegram:123456" in bindings
+        assert len(bindings) == 1
+
+
+class TestReadOrchestrationBindings:
+    def test_valid_row_produces_binding(self, tmp_path: Path) -> None:
+        orch_dir = tmp_path / ".codex-autorunner"
+        orch_dir.mkdir(parents=True, exist_ok=True)
+        db_path = orch_dir / "orchestration.sqlite3"
+        _create_orchestration_db(
+            db_path,
+            [
+                {
+                    "surface_key": "discord:chan-1",
+                    "target_id": "thread-abc",
+                    "agent_id": "codex",
+                    "repo_id": "demo",
+                    "resource_kind": "repo",
+                    "resource_id": "demo",
+                    "mode": None,
+                    "updated_at": None,
+                    "disabled_at": None,
+                    "target_kind": "thread",
+                    "surface_kind": "discord",
+                },
+            ],
+        )
+        bindings = read_orchestration_bindings(
+            tmp_path, surface_kind="discord", context=_make_context(tmp_path)
+        )
+        assert "discord:chan-1" in bindings
+
+    def test_malformed_empty_surface_key_skipped(self, tmp_path: Path) -> None:
+        orch_dir = tmp_path / ".codex-autorunner"
+        orch_dir.mkdir(parents=True, exist_ok=True)
+        db_path = orch_dir / "orchestration.sqlite3"
+        _create_orchestration_db(
+            db_path,
+            [
+                {
+                    "surface_key": "",
+                    "target_id": "thread-abc",
+                    "agent_id": "codex",
+                    "repo_id": None,
+                    "resource_kind": None,
+                    "resource_id": None,
+                    "mode": None,
+                    "updated_at": None,
+                    "disabled_at": None,
+                    "target_kind": "thread",
+                    "surface_kind": "discord",
+                },
+            ],
+        )
+        bindings = read_orchestration_bindings(
+            tmp_path, surface_kind="discord", context=_make_context(tmp_path)
+        )
+        assert bindings == {}
+
+    def test_malformed_empty_target_id_skipped(self, tmp_path: Path) -> None:
+        orch_dir = tmp_path / ".codex-autorunner"
+        orch_dir.mkdir(parents=True, exist_ok=True)
+        db_path = orch_dir / "orchestration.sqlite3"
+        _create_orchestration_db(
+            db_path,
+            [
+                {
+                    "surface_key": "discord:chan-1",
+                    "target_id": "   ",
+                    "agent_id": "codex",
+                    "repo_id": None,
+                    "resource_kind": None,
+                    "resource_id": None,
+                    "mode": None,
+                    "updated_at": None,
+                    "disabled_at": None,
+                    "target_kind": "thread",
+                    "surface_kind": "discord",
+                },
+            ],
+        )
+        bindings = read_orchestration_bindings(
+            tmp_path, surface_kind="discord", context=_make_context(tmp_path)
+        )
+        assert bindings == {}
+
+    def test_malformed_null_surface_key_skipped(self, tmp_path: Path) -> None:
+        orch_dir = tmp_path / ".codex-autorunner"
+        orch_dir.mkdir(parents=True, exist_ok=True)
+        db_path = orch_dir / "orchestration.sqlite3"
+        _create_orchestration_db(
+            db_path,
+            [
+                {
+                    "surface_key": None,
+                    "target_id": "thread-abc",
+                    "agent_id": "codex",
+                    "repo_id": None,
+                    "resource_kind": None,
+                    "resource_id": None,
+                    "mode": None,
+                    "updated_at": None,
+                    "disabled_at": None,
+                    "target_kind": "thread",
+                    "surface_kind": "discord",
+                },
+            ],
+        )
+        bindings = read_orchestration_bindings(
+            tmp_path, surface_kind="discord", context=_make_context(tmp_path)
+        )
+        assert bindings == {}
+
+    def test_nonexistent_db_returns_empty(self, tmp_path: Path) -> None:
+        bindings = read_orchestration_bindings(
+            tmp_path / "missing",
+            surface_kind="discord",
+            context=_make_context(tmp_path),
+        )
+        assert bindings == {}

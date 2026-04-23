@@ -26,6 +26,11 @@ from codex_autorunner.core.hub_lifecycle import HubLifecycleWorker
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.state import RunnerState, save_state
 from codex_autorunner.server import create_hub_app
+from codex_autorunner.surfaces.cli.commands.dispatch import (
+    DispatchThreadOutcome,
+    _validate_inbox_fallback,
+    _validate_thread_status,
+)
 from codex_autorunner.surfaces.web import app as web_app_module
 from codex_autorunner.surfaces.web import app_state as web_app_state_module
 from codex_autorunner.surfaces.web.services import hub_gather as hub_gather_service
@@ -1268,3 +1273,151 @@ def test_hub_messages_default_inbox_avoids_full_action_queue_collectors(
     payload = res.json()
     assert payload["items"][0]["run_id"] == run_id
     assert payload["items"][0]["queue_source"] == "ticket_flow_inbox"
+
+
+def test_hub_messages_surfaces_mismatched_ticket_engine_state(
+    hub_env, monkeypatch
+) -> None:
+    run_id = "aaaa0000-aaaa-aaaa-aaaa-aaaaaaaa0000"
+    db_path = hub_env.repo_root / ".codex-autorunner" / "flows.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    with FlowStore(db_path) as store:
+        store.initialize()
+        store.create_flow_run(
+            run_id,
+            "ticket_flow",
+            input_data={
+                "workspace_root": str(hub_env.repo_root),
+                "runs_dir": ".codex-autorunner/runs",
+            },
+            state={
+                "ticket_engine": {
+                    "status": "running",
+                    "current_ticket": ".codex-autorunner/tickets/TICKET-001.md",
+                }
+            },
+            metadata={},
+        )
+        store.update_flow_run_status(run_id, FlowRunStatus.PAUSED)
+    _write_dispatch_history(hub_env.repo_root, run_id, seq=1)
+
+    app = _build_hub_messages_app(hub_env.hub_root, monkeypatch)
+    with TestClient(app) as client:
+        res = client.get("/hub/messages")
+        assert res.status_code == 200
+        items = res.json()["items"]
+        assert len(items) == 1
+        item = items[0]
+        assert item["run_id"] == run_id
+        run_state = item.get("run_state") or {}
+        assert run_state.get("state") in ("paused", "blocked")
+
+
+def test_hub_messages_distinguishes_no_dispatch_from_unreadable_dispatch(
+    hub_env, monkeypatch
+) -> None:
+    no_dispatch_id = "bbbb0000-bbbb-bbbb-bbbb-bbbbbbbb0000"
+    _seed_paused_run(hub_env.repo_root, no_dispatch_id)
+
+    app = _build_hub_messages_app(hub_env.hub_root, monkeypatch)
+    with TestClient(app) as client:
+        res = client.get("/hub/messages")
+        assert res.status_code == 200
+        items = res.json()["items"]
+        no_dispatch_items = [i for i in items if i["run_id"] == no_dispatch_id]
+        assert len(no_dispatch_items) == 1
+        assert (
+            "paused without an actionable dispatch"
+            in (no_dispatch_items[0].get("reason") or "").lower()
+        )
+
+
+def test_hub_messages_surfaces_invalid_dispatch_mode_explicitly(
+    hub_env, monkeypatch
+) -> None:
+    unreadable_id = "dddd0000-dddd-dddd-dddd-dddddddd0000"
+    _seed_paused_run(hub_env.repo_root, unreadable_id)
+    _write_dispatch_history_raw(
+        hub_env.repo_root,
+        unreadable_id,
+        seq=1,
+        content="---\nmode: corrupt_mode\ntitle: Bad\n---\n\nBad dispatch\n",
+    )
+
+    app = _build_hub_messages_app(hub_env.hub_root, monkeypatch)
+    with TestClient(app) as client:
+        res = client.get("/hub/messages")
+        assert res.status_code == 200
+        items = res.json()["items"]
+        unreadable_items = [i for i in items if i["run_id"] == unreadable_id]
+        assert len(unreadable_items) == 1
+        unreadable_reason = (unreadable_items[0].get("reason") or "").lower()
+        assert "unreadable" in unreadable_reason or "invalid" in unreadable_reason
+
+
+class TestValidateThreadStatus:
+    def test_valid_dict_returns_status(self) -> None:
+        thread = {"run": {"status": "paused"}}
+        status, outcome = _validate_thread_status(thread)
+        assert status == "paused"
+        assert outcome == DispatchThreadOutcome.VALID
+
+    def test_non_dict_returns_unreadable(self) -> None:
+        status, outcome = _validate_thread_status("bad")
+        assert status is None
+        assert outcome == DispatchThreadOutcome.UNREADABLE
+
+    def test_none_returns_unreadable(self) -> None:
+        status, outcome = _validate_thread_status(None)
+        assert status is None
+        assert outcome == DispatchThreadOutcome.UNREADABLE
+
+    def test_missing_run_key_returns_missing_run_key(self) -> None:
+        status, outcome = _validate_thread_status({})
+        assert status is None
+        assert outcome == DispatchThreadOutcome.MISSING_RUN_KEY
+
+    def test_run_not_dict_returns_missing_run_key(self) -> None:
+        status, outcome = _validate_thread_status({"run": "not a dict"})
+        assert status is None
+        assert outcome == DispatchThreadOutcome.MISSING_RUN_KEY
+
+    def test_empty_status_returns_unreadable(self) -> None:
+        status, outcome = _validate_thread_status({"run": {"status": ""}})
+        assert status is None
+        assert outcome == DispatchThreadOutcome.UNREADABLE
+
+    def test_non_string_status_returns_unreadable(self) -> None:
+        status, outcome = _validate_thread_status({"run": {"status": 42}})
+        assert status is None
+        assert outcome == DispatchThreadOutcome.UNREADABLE
+
+
+class TestValidateInboxFallback:
+    def test_non_dict_inbox_returns_unreadable(self) -> None:
+        status, outcome = _validate_inbox_fallback("bad", "repo", "run")
+        assert status is None
+        assert outcome == DispatchThreadOutcome.UNREADABLE
+
+    def test_non_list_items_returns_unreadable(self) -> None:
+        status, outcome = _validate_inbox_fallback({"items": "bad"}, "repo", "run")
+        assert status is None
+        assert outcome == DispatchThreadOutcome.UNREADABLE
+
+    def test_no_matching_repo_returns_none_valid(self) -> None:
+        inbox = {"items": [{"repo_id": "other", "run_id": "run", "status": "paused"}]}
+        status, outcome = _validate_inbox_fallback(inbox, "repo", "run")
+        assert status is None
+        assert outcome == DispatchThreadOutcome.VALID
+
+    def test_matching_item_returns_status(self) -> None:
+        inbox = {"items": [{"repo_id": "repo", "run_id": "run", "status": "paused"}]}
+        status, outcome = _validate_inbox_fallback(inbox, "repo", "run")
+        assert status == "paused"
+        assert outcome == DispatchThreadOutcome.VALID
+
+    def test_matching_item_with_non_string_status_returns_unreadable(self) -> None:
+        inbox = {"items": [{"repo_id": "repo", "run_id": "run", "status": 42}]}
+        status, outcome = _validate_inbox_fallback(inbox, "repo", "run")
+        assert status is None
+        assert outcome == DispatchThreadOutcome.UNREADABLE

@@ -364,9 +364,15 @@ class PmaExecutionRecord:
     error: Optional[str]
     started_at: Optional[str]
     finished_at: Optional[str]
+    metadata: dict[str, Any]
 
     @classmethod
     def from_orchestration_row(cls, row: Any) -> "PmaExecutionRecord":
+        metadata = (
+            _json_loads_object(row["metadata_json"])
+            if "metadata_json" in row.keys()
+            else {}
+        )
         return cls(
             managed_turn_id=str(row["execution_id"]),
             managed_thread_id=str(row["thread_target_id"]),
@@ -382,6 +388,7 @@ class PmaExecutionRecord:
             error=coerce_text(row["error_text"]),
             started_at=coerce_text(row["started_at"]),
             finished_at=coerce_text(row["finished_at"]),
+            metadata=metadata,
         )
 
     def to_dict(self) -> dict[str, Any]:

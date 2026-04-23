@@ -901,3 +901,79 @@ async def test_submit_flow_reply_uses_service_auto_resume_wrapper(
 
     assert sent_messages == [(123, "Reply saved.", 456, 789)]
     assert resumed == [(workspace, "run-123")]
+
+
+@pytest.mark.asyncio
+async def test_pause_scan_distinguishes_valid_empty_from_unreadable(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "ws-distinguish"
+    workspace.mkdir()
+    _init_repo(workspace)
+    record = _DummyRecord(workspace)
+
+    calls: list[tuple[int, str, int | None]] = []
+
+    async def send_message_with_outbox(
+        chat_id: int, text: str, thread_id=None, reply_to=None
+    ):
+        calls.append((chat_id, text, thread_id))
+        return True
+
+    async def send_document(**kwargs):
+        return True
+
+    pause_config = PauseDispatchNotifications(
+        enabled=True,
+        send_attachments=False,
+        max_file_size_bytes=10,
+        chunk_long_messages=False,
+    )
+
+    load_results: list[Optional[tuple]] = [None]
+
+    bridge = TelegramTicketFlowBridge(
+        logger=logging.getLogger("test"),
+        store=_DummyStore({"123:456": record}),
+        pause_targets={},
+        send_message_with_outbox=send_message_with_outbox,
+        send_document=send_document,
+        pause_config=pause_config,
+        default_notification_chat_id=None,
+        hub_root=None,
+        manifest_path=None,
+        config_root=workspace,
+    )
+
+    bridge._load_ticket_flow_pause = lambda _path: load_results[0]  # type: ignore[assignment]
+
+    await bridge._notify_ticket_flow_pause(workspace, [("123:456", record)])
+    assert calls == []
+
+    _create_paused_run_with_dispatch(
+        workspace,
+        "run-valid",
+        "0001",
+        dispatch_text=("---\nmode: pause\ntitle: Valid\n---\n\nPlease review.\n"),
+    )
+    load_results[0] = (
+        "run-valid",
+        "0001",
+        "---\nmode: pause\ntitle: Valid\n---\n\nPlease review.\n",
+        None,
+        True,
+    )
+    await bridge._notify_ticket_flow_pause(workspace, [("123:456", record)])
+    assert len(calls) == 1
+    assert "Valid" in calls[0][1]
+    assert "Use `/flow resume`" in calls[0][1]
+
+    def _raise_db_error(_path: Path):
+        raise sqlite3.OperationalError("disk I/O error")
+
+    bridge._load_ticket_flow_pause = _raise_db_error  # type: ignore[assignment]
+    calls.clear()
+    await bridge._notify_ticket_flow_pause(workspace, [("123:456", record)])
+    assert len(calls) == 1
+    assert "degraded" in calls[0][1].lower()
+    assert "disk I/O error" in calls[0][1]

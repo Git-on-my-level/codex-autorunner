@@ -397,8 +397,19 @@ function setLoading(loading) {
 export async function checkTemplatesEnabled() {
     try {
         const data = (await api("/api/templates/repos"));
-        state.enabled = data.enabled;
-        state.repos = data.repos || [];
+        if (!data || typeof data !== "object") {
+            state.enabled = false;
+            state.repos = [];
+            const { dropdownToggle, overflowTemplate } = els();
+            dropdownToggle?.classList.add("hidden");
+            overflowTemplate?.classList.add("hidden");
+            return false;
+        }
+        state.enabled = typeof data.enabled === "boolean" ? data.enabled : false;
+        const rawRepos = Array.isArray(data.repos) ? data.repos : [];
+        state.repos = rawRepos.filter((r) => r != null &&
+            typeof r.id === "string" &&
+            typeof r.url === "string");
         const { dropdownToggle, overflowTemplate } = els();
         if (state.enabled) {
             dropdownToggle?.classList.remove("hidden");

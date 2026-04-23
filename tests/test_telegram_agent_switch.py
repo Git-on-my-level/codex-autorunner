@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 import pytest
 
+from codex_autorunner.integrations.telegram.chat_state_store import (
+    TelegramChatStateStore,
+)
 from codex_autorunner.integrations.telegram.handlers.commands.workspace import (
     WorkspaceCommands,
 )
 from codex_autorunner.integrations.telegram.state import (
+    TelegramStateStore,
     TelegramTopicRecord,
     ThreadSummary,
 )
@@ -31,6 +36,14 @@ class _AgentSwitchHandler(WorkspaceCommands):
 
 
 @pytest.mark.anyio
+async def test_chat_state_store_close_is_noop(tmp_path: Path) -> None:
+    state_store = TelegramStateStore(tmp_path / "test.db")
+    chat_store = TelegramChatStateStore(state_store)
+    result = await chat_store.close()
+    assert result is None
+    await state_store.close()
+
+
 async def test_apply_agent_change_resets_runtime_state_and_applies_default_model() -> (
     None
 ):

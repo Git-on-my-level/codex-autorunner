@@ -25,6 +25,8 @@ from .....integrations.chat.agents import (
     resolve_chat_agent_and_profile,
 )
 
+logger = logging.getLogger(__name__)
+
 if TYPE_CHECKING:
     from ...app_state import HubAppContext
 
@@ -284,6 +286,10 @@ def read_discord_bindings(
         for row in conn.execute(query).fetchall():
             channel_id = row["channel_id"]
             if not isinstance(channel_id, str) or not channel_id.strip():
+                logger.debug(
+                    "discord binding row skipped: channel_id is not a non-empty string (%r)",
+                    channel_id,
+                )
                 continue
             workspace_path_raw = (
                 row["workspace_path"] if "workspace_path" in columns else None
@@ -418,6 +424,10 @@ def read_telegram_bindings(
                 row["topic_key"],
             )
             if parsed_chat_id is None:
+                logger.debug(
+                    "telegram binding row skipped: topic_key=%r could not resolve chat_id",
+                    row["topic_key"],
+                )
                 continue
             row_scope = (
                 normalize_scope(row["scope"]) if "scope" in columns else parsed_scope
@@ -434,9 +444,19 @@ def read_telegram_bindings(
                 try:
                     candidate = json.loads(payload_json)
                 except json.JSONDecodeError:
-                    candidate = {}
-                if isinstance(candidate, dict):
-                    payload = candidate
+                    logger.warning(
+                        "telegram binding row skipped for topic_key=%r: payload_json is not valid JSON",
+                        row["topic_key"],
+                    )
+                    continue
+                if not isinstance(candidate, dict):
+                    logger.warning(
+                        "telegram binding row skipped for topic_key=%r: payload_json parsed to %s, expected dict",
+                        row["topic_key"],
+                        type(candidate).__name__,
+                    )
+                    continue
+                payload = candidate
             workspace_path_raw = (
                 row["workspace_path"]
                 if "workspace_path" in columns
@@ -565,6 +585,11 @@ def read_orchestration_bindings(
                 or not isinstance(target_id, str)
                 or not target_id.strip()
             ):
+                logger.debug(
+                    "orchestration binding row skipped: surface_key=%r, target_id=%r",
+                    surface_key,
+                    target_id,
+                )
                 continue
             bindings.setdefault(
                 surface_key.strip(),

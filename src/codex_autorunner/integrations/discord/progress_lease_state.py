@@ -87,7 +87,7 @@ class _DiscordTurnExecutionSupervision:
         self,
         *,
         failure_note: Optional[str] = None,
-        allow_channel_fallback: bool = True,
+        allow_channel_fallback: bool = False,
     ) -> int:
         context = dict(self.task_context)
         if isinstance(failure_note, str) and failure_note.strip():

@@ -284,9 +284,7 @@ class OrchestrationBindingStore:
         if not include_disabled:
             query += " AND disabled_at IS NULL"
         query += " ORDER BY updated_at DESC, created_at DESC LIMIT 1"
-        with open_orchestration_sqlite(
-            self._hub_root, durable=self._durable, migrate=False
-        ) as conn:
+        with open_orchestration_sqlite(self._hub_root, durable=self._durable) as conn:
             row = conn.execute(query, params).fetchone()
         return _binding_from_row(row) if row is not None else None
 
@@ -335,9 +333,7 @@ class OrchestrationBindingStore:
             filters.append("b.surface_kind = ?")
             params.append(normalized_surface_kind)
         where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
-        with open_orchestration_sqlite(
-            self._hub_root, durable=self._durable, migrate=False
-        ) as conn:
+        with open_orchestration_sqlite(self._hub_root, durable=self._durable) as conn:
             rows = conn.execute(
                 f"""
                 SELECT
@@ -415,9 +411,7 @@ class OrchestrationBindingStore:
             filters.append("t.agent_id = ?")
             params.append(normalized_agent_id)
         where_clause = " AND ".join(filters)
-        with open_orchestration_sqlite(
-            self._hub_root, durable=self._durable, migrate=False
-        ) as conn:
+        with open_orchestration_sqlite(self._hub_root, durable=self._durable) as conn:
             rows = conn.execute(
                 f"""
                 WITH running_work AS (

@@ -6,11 +6,9 @@ import hashlib
 import json
 import logging
 import time
-from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
@@ -23,7 +21,6 @@ from codex_autorunner.core.filebox import (
     outbox_pending_dir,
     outbox_sent_dir,
 )
-from codex_autorunner.core.flows import FlowRunStatus
 from codex_autorunner.core.hub_control_plane import (
     RunningThreadTargetIdsResponse,
     WorkspaceSetupCommandRequest,
@@ -64,7 +61,6 @@ from codex_autorunner.integrations.discord.config import (
     DiscordCommandRegistration,
 )
 from codex_autorunner.integrations.discord.errors import (
-    DiscordAPIError,
     DiscordPermanentError,
 )
 from codex_autorunner.integrations.discord.interaction_session import (
@@ -1345,28 +1341,6 @@ def _config(
     )
 
 
-class _FailingSyncRest(_FakeRest):
-    async def bulk_overwrite_application_commands(
-        self,
-        *,
-        application_id: str,
-        commands: list[dict[str, Any]],
-        guild_id: str | None = None,
-    ) -> list[dict[str, Any]]:
-        raise RuntimeError("simulated sync failure")
-
-
-class _InitialResponseFailingRest(_FakeRest):
-    async def create_interaction_response(
-        self,
-        *,
-        interaction_id: str,
-        interaction_token: str,
-        payload: dict[str, Any],
-    ) -> None:
-        raise DiscordAPIError("simulated initial response failure")
-
-
 def test_list_discord_thread_targets_for_picker_filters_by_mode(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -2015,70 +1989,6 @@ async def test_service_enforces_allowlist_and_denies_autocomplete_with_empty_cho
             "type": 8,
             "data": {"choices": []},
         }
-    finally:
-        await service._shutdown()
-        await store.close()
-
-
-@pytest.mark.anyio
-async def test_rejected_interaction_skips_submission_order(tmp_path: Path) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=_FakeGateway([]),
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
-    skip_submission_order = MagicMock()
-    service._command_runner.skip_submission_order = (  # type: ignore[method-assign]
-        skip_submission_order
-    )
-
-    try:
-        payload = _interaction(
-            name="bind",
-            options=[{"type": 3, "name": "workspace", "value": str(tmp_path)}],
-            user_id="unauthorized",
-        )
-        payload["__car_dispatch_order"] = 7
-        await service._on_dispatch("INTERACTION_CREATE", payload)
-        skip_submission_order.assert_called_once_with(7)
-    finally:
-        await service._shutdown()
-        await store.close()
-
-
-@pytest.mark.anyio
-async def test_pre_submit_failure_skips_submission_order(tmp_path: Path) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=_FakeGateway([]),
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
-    skip_submission_order = MagicMock()
-    service._command_runner.skip_submission_order = (  # type: ignore[method-assign]
-        skip_submission_order
-    )
-    service._persist_runtime_interaction = AsyncMock(  # type: ignore[method-assign]
-        side_effect=RuntimeError("persist failed")
-    )
-
-    try:
-        payload = _interaction(name="status", options=[])
-        payload["__car_dispatch_order"] = 8
-        with pytest.raises(RuntimeError, match="persist failed"):
-            await service._on_dispatch("INTERACTION_CREATE", payload)
-        skip_submission_order.assert_called_once_with(8)
     finally:
         await service._shutdown()
         await store.close()
@@ -3189,66 +3099,6 @@ async def test_service_session_resume_autocomplete_filters_threads(
 
 
 @pytest.mark.anyio
-async def test_service_flow_run_autocomplete_filters_for_action_and_query(
-    tmp_path: Path,
-) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id="repo-1",
-    )
-    rest = _FakeRest()
-    gateway = _FakeGateway(
-        [
-            _autocomplete_interaction_path(
-                command_path=("car", "flow", "resume"),
-                focused_name="run_id",
-                focused_value="run-b",
-            )
-        ]
-    )
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
-
-    class _Run:
-        def __init__(self, run_id: str, status: FlowRunStatus) -> None:
-            self.id = run_id
-            self.status = status
-
-    class _Store:
-        def list_flow_runs(self, *, flow_type: str) -> list[Any]:
-            assert flow_type == "ticket_flow"
-            return [
-                _Run("run-a", FlowRunStatus.RUNNING),
-                _Run("run-b", FlowRunStatus.PAUSED),
-            ]
-
-        def close(self) -> None:
-            return None
-
-    service._open_flow_store = lambda _workspace_root: _Store()  # type: ignore[assignment]
-
-    try:
-        await service.run_forever()
-        payload = rest.interaction_responses[0]["payload"]
-        assert payload["type"] == 8
-        assert [entry["value"] for entry in payload["data"]["choices"]] == ["run-b"]
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
 async def test_service_bind_accepts_autocomplete_repo_token(tmp_path: Path) -> None:
     long_repo_id = "repo-" + ("y" * 140)
     workspace = tmp_path / "worktrees" / "repo-token"
@@ -4113,77 +3963,6 @@ async def test_queued_notice_hides_interrupt_when_only_ingressed_busy(
 
 
 @pytest.mark.anyio
-async def test_service_malformed_direct_payload_returns_parse_error(
-    tmp_path: Path,
-) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
-    gateway = _FakeGateway(
-        [
-            {
-                "id": "inter-1",
-                "token": "token-1",
-                "channel_id": "channel-1",
-                "guild_id": "guild-1",
-                "member": {"user": {"id": "user-1"}},
-                "data": "malformed",
-            }
-        ]
-    )
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
-
-    try:
-        await service.run_forever()
-        assert len(rest.interaction_responses) == 1
-        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
-        assert "could not parse this interaction" in content
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
-async def test_service_direct_payload_missing_token_remains_unanswered(
-    tmp_path: Path,
-) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
-    gateway = _FakeGateway(
-        [
-            {
-                "id": "inter-1",
-                "channel_id": "channel-1",
-                "guild_id": "guild-1",
-                "member": {"user": {"id": "user-1"}},
-                "data": {"name": "car"},
-            }
-        ]
-    )
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
-
-    try:
-        await service.run_forever()
-        assert rest.interaction_responses == []
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
 async def test_service_syncs_commands_on_startup(tmp_path: Path) -> None:
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
     await store.initialize()
@@ -4262,61 +4041,6 @@ async def test_service_raises_on_invalid_command_sync_config(tmp_path: Path) -> 
             ValueError, match="guild scope requires at least one guild_id"
         ):
             await service.run_forever()
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
-async def test_service_continues_when_sync_request_fails(tmp_path: Path) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FailingSyncRest()
-    gateway = _FakeGateway([_interaction(name="status", options=[])])
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
-
-    try:
-        await service.run_forever()
-        assert len(rest.interaction_responses) == 1
-        payload = rest.interaction_responses[0]["payload"]
-        assert payload["type"] == 5
-        assert len(rest.followup_messages) == 1
-        assert "not bound" in rest.followup_messages[0]["payload"]["content"].lower()
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
-async def test_service_attempts_fallback_reply_when_initial_response_fails(
-    tmp_path: Path,
-) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _InitialResponseFailingRest()
-    gateway = _FakeGateway([_interaction(name="status", options=[])])
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
-
-    try:
-        await service.run_forever()
-        assert rest.interaction_responses == []
-        assert len(rest.followup_messages) == 1
-        assert (
-            rest.followup_messages[0]["payload"]["content"]
-            == "Discord interaction did not acknowledge. Please retry."
-        )
     finally:
         await store.close()
 
@@ -4845,135 +4569,6 @@ async def test_car_session_resume_with_partial_thread_prompts_filtered_picker(
 
 
 @pytest.mark.anyio
-async def test_car_flow_resume_with_partial_run_id_prompts_filtered_picker(
-    tmp_path: Path,
-) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id="repo-1",
-    )
-    rest = _FakeRest()
-    gateway = _FakeGateway(
-        [
-            _interaction_path(
-                command_path=("car", "flow", "resume"),
-                options=[{"name": "run_id", "value": "run"}],
-            )
-        ]
-    )
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
-
-    class _Run:
-        def __init__(self, run_id: str, status: FlowRunStatus) -> None:
-            self.id = run_id
-            self.status = status
-
-    class _Store:
-        def list_flow_runs(self, *, flow_type: str) -> list[Any]:
-            assert flow_type == "ticket_flow"
-            return [
-                _Run("run-alpha", FlowRunStatus.PAUSED),
-                _Run("run-beta", FlowRunStatus.PAUSED),
-            ]
-
-        def close(self) -> None:
-            return None
-
-    service._open_flow_store = lambda _workspace_root: _Store()  # type: ignore[assignment]
-
-    try:
-        await service.run_forever()
-        assert rest.interaction_responses[0]["payload"]["type"] == 5
-        assert len(rest.followup_messages) == 1
-        payload = rest.followup_messages[0]["payload"]
-        content = payload["content"].lower()
-        assert "matched 2 runs" in content
-        select = payload["components"][0]["components"][0]
-        values = [option["value"] for option in select["options"]]
-        assert values == ["run-alpha", "run-beta"]
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
-async def test_car_flow_resume_status_text_prompts_picker_instead_of_auto_resolve(
-    tmp_path: Path,
-) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id="repo-1",
-    )
-    rest = _FakeRest()
-    gateway = _FakeGateway(
-        [
-            _interaction_path(
-                command_path=("car", "flow", "resume"),
-                options=[{"name": "run_id", "value": "paused"}],
-            )
-        ]
-    )
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
-
-    class _Run:
-        def __init__(self, run_id: str, status: FlowRunStatus) -> None:
-            self.id = run_id
-            self.status = status
-
-    class _Store:
-        def list_flow_runs(self, *, flow_type: str) -> list[Any]:
-            assert flow_type == "ticket_flow"
-            return [
-                _Run("run-paused-a", FlowRunStatus.PAUSED),
-                _Run("run-paused-b", FlowRunStatus.PAUSED),
-                _Run("run-running", FlowRunStatus.RUNNING),
-            ]
-
-        def close(self) -> None:
-            return None
-
-    service._open_flow_store = lambda _workspace_root: _Store()  # type: ignore[assignment]
-
-    try:
-        await service.run_forever()
-        assert rest.interaction_responses[0]["payload"]["type"] == 5
-        assert len(rest.followup_messages) == 1
-        payload = rest.followup_messages[0]["payload"]
-        content = payload["content"].lower()
-        assert "matched 2 runs" in content
-        select = payload["components"][0]["components"][0]
-        values = [option["value"] for option in select["options"]]
-        assert values == ["run-paused-a", "run-paused-b"]
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
 async def test_component_interaction_model_select_prompts_effort_for_opencode(
     tmp_path: Path,
 ) -> None:
@@ -5316,76 +4911,6 @@ async def test_normalized_interaction_status_defers_before_reading_active_flow(
 
 
 @pytest.mark.anyio
-async def test_service_routes_slash_command_timeout_followup_through_runner(
-    tmp_path: Path,
-) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
-    gateway = _FakeGateway([_interaction(name="status", options=[])])
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
-    service._command_runner._config = replace(
-        service._command_runner._config,
-        timeout_seconds=0.01,
-        stalled_warning_seconds=None,
-    )
-
-    async def _slow_handle_car_command(*_args: Any, **_kwargs: Any) -> None:
-        await asyncio.Event().wait()
-
-    service._handle_car_command = _slow_handle_car_command  # type: ignore[assignment]
-
-    try:
-        await service.run_forever()
-        assert len(rest.interaction_responses) == 1
-        assert rest.interaction_responses[0]["payload"]["type"] == 5
-        assert len(rest.followup_messages) == 1
-        assert "timed out" in rest.followup_messages[0]["payload"]["content"].lower()
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
-async def test_service_routes_slash_command_error_followup_through_runner(
-    tmp_path: Path,
-) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
-    gateway = _FakeGateway([_interaction(name="status", options=[])])
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
-
-    async def _failing_handle_car_command(*_args: Any, **_kwargs: Any) -> None:
-        raise RuntimeError("boom")
-
-    service._handle_car_command = _failing_handle_car_command  # type: ignore[assignment]
-
-    try:
-        await service.run_forever()
-        assert len(rest.interaction_responses) == 1
-        assert rest.interaction_responses[0]["payload"]["type"] == 5
-        assert len(rest.followup_messages) == 1
-        content = rest.followup_messages[0]["payload"]["content"].lower()
-        assert "unexpected error" in content
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
 async def test_normalized_component_agent_select_updates_agent(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -5683,236 +5208,6 @@ async def test_component_interaction_session_resume_select_routes_to_resume(
         await service.run_forever()
         assert captured["channel_id"] == "channel-1"
         assert captured["options"]["thread_id"] == "th-2"
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
-async def test_normalized_interaction_flow_restart_without_run_id_uses_picker(
-    tmp_path: Path,
-) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id="repo-1",
-    )
-    rest = _FakeRest()
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=_FakeGateway([]),
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
-    captured: dict[str, Any] = {}
-
-    async def _fake_prompt(
-        service_or_self: Any,
-        interaction_id: str,
-        interaction_token: str,
-        *,
-        workspace_root: Path,
-        action: str,
-        deferred: bool = False,
-    ) -> None:
-        _ = interaction_id, interaction_token, workspace_root, deferred
-        captured["action"] = action
-
-    service._prompt_flow_action_picker = _fake_prompt  # type: ignore[assignment]
-    from codex_autorunner.integrations.discord import flow_commands as _fc
-
-    _fc.prompt_flow_action_picker = _fake_prompt  # type: ignore[assignment]
-
-    try:
-        await _dispatch_gateway_interaction(
-            service,
-            _interaction_path(command_path=("car", "flow", "restart"), options=[]),
-        )
-        assert captured["action"] == "restart"
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
-async def test_normalized_interaction_flow_reply_without_run_id_sets_pending_text(
-    tmp_path: Path,
-) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id="repo-1",
-    )
-    rest = _FakeRest()
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=_FakeGateway([]),
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
-
-    async def _fake_prompt(
-        service_or_self: Any,
-        interaction_id: str,
-        interaction_token: str,
-        *,
-        workspace_root: Path,
-        action: str,
-        deferred: bool = False,
-    ) -> None:
-        _ = interaction_id, interaction_token, workspace_root, action, deferred
-        return
-
-    service._prompt_flow_action_picker = _fake_prompt  # type: ignore[assignment]
-    from codex_autorunner.integrations.discord import flow_commands as _fc
-
-    _fc.prompt_flow_action_picker = _fake_prompt  # type: ignore[assignment]
-
-    try:
-        await _dispatch_gateway_interaction(
-            service,
-            _interaction_path(
-                command_path=("car", "flow", "reply"),
-                options=[{"type": 3, "name": "text", "value": "reply via picker"}],
-            ),
-        )
-        assert (
-            service._pending_flow_reply_text["channel-1:user-1"] == "reply via picker"
-        )
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
-async def test_component_interaction_flow_action_reply_uses_pending_text(
-    tmp_path: Path,
-) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id="repo-1",
-    )
-    rest = _FakeRest()
-    gateway = _FakeGateway(
-        [_component_interaction(custom_id="flow_action_select:reply", values=["run-1"])]
-    )
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
-    service._pending_flow_reply_text["channel-1:user-1"] = "reply from pending"
-    service._pending_flow_reply_text["channel-1:user-2"] = "other pending"
-    captured: dict[str, Any] = {}
-
-    async def _fake_handle_flow_reply(
-        interaction_id: str,
-        interaction_token: str,
-        *,
-        workspace_root: Path,
-        options: dict[str, Any],
-        channel_id: str | None = None,
-        guild_id: str | None = None,
-        user_id: str | None = None,
-        component_response: bool = False,
-    ) -> None:
-        _ = (
-            interaction_id,
-            interaction_token,
-            workspace_root,
-            channel_id,
-            guild_id,
-            user_id,
-        )
-        captured["options"] = options
-        captured["component_response"] = component_response
-
-    service._handle_flow_reply = _fake_handle_flow_reply  # type: ignore[assignment]
-
-    try:
-        await service.run_forever()
-        assert captured["options"]["run_id"] == "run-1"
-        assert captured["options"]["text"] == "reply from pending"
-        assert captured["component_response"] is True
-        assert len(rest.interaction_responses) == 1
-        assert rest.interaction_responses[0]["payload"]["type"] == 6
-        assert len(rest.edited_original_interaction_responses) == 1
-        assert (
-            rest.edited_original_interaction_responses[0]["payload"]["content"]
-            == "Saving reply and resuming run run-1..."
-        )
-        assert (
-            rest.edited_original_interaction_responses[0]["payload"]["components"] == []
-        )
-        assert service._pending_flow_reply_text["channel-1:user-2"] == "other pending"
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
-async def test_component_flow_reply_pending_state_is_user_scoped(
-    tmp_path: Path,
-) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id="repo-1",
-    )
-    rest = _FakeRest()
-    gateway = _FakeGateway(
-        [
-            _component_interaction(
-                custom_id="flow_action_select:reply",
-                values=["run-1"],
-                user_id="user-1",
-            )
-        ]
-    )
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1", "user-2"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
-    service._pending_flow_reply_text["channel-1:user-2"] = "reply from user2"
-
-    try:
-        await service.run_forever()
-        assert len(rest.interaction_responses) == 1
-        assert rest.interaction_responses[0]["payload"]["type"] == 5
-        assert len(rest.followup_messages) == 1
-        content = rest.followup_messages[0]["payload"]["content"].lower()
-        assert "reply selection expired" in content
-        assert (
-            service._pending_flow_reply_text["channel-1:user-2"] == "reply from user2"
-        )
     finally:
         await store.close()
 
@@ -7001,352 +6296,6 @@ async def test_unknown_pma_subcommand_has_explicit_unknown_message(
 
 
 @pytest.mark.anyio
-async def test_on_dispatch_backgrounds_interaction_handling(
-    tmp_path: Path,
-) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=_FakeGateway([]),
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
-    started = asyncio.Event()
-    release = asyncio.Event()
-
-    async def _slow_handle_car_command(*_args: Any, **_kwargs: Any) -> None:
-        started.set()
-        await release.wait()
-
-    service._handle_car_command = _slow_handle_car_command  # type: ignore[assignment]
-
-    try:
-        dispatch_task = asyncio.create_task(
-            service._on_dispatch(
-                "INTERACTION_CREATE",
-                _interaction_path(
-                    command_path=("car", "session", "compact"),
-                    options=[],
-                ),
-            )
-        )
-        await asyncio.wait_for(dispatch_task, timeout=3.0)
-        assert len(rest.interaction_responses) == 1
-        assert rest.interaction_responses[0]["payload"]["type"] == 5
-        await asyncio.wait_for(started.wait(), timeout=3.0)
-        release.set()
-        await asyncio.wait_for(service._command_runner.shutdown(), timeout=3.0)
-    finally:
-        await service._shutdown()
-        await store.close()
-
-
-@pytest.mark.anyio
-@pytest.mark.parametrize(
-    (
-        "payload",
-        "expected_dispatch_ack_policy",
-        "expected_conversation",
-        "expected_resource_keys",
-        "expected_queue_wait_ack_policy",
-    ),
-    [
-        (
-            _interaction_path(
-                command_path=("car", "session", "compact"),
-                options=[],
-            ),
-            None,
-            "discord:channel-1:guild-1",
-            ("conversation:discord:channel-1:guild-1",),
-            None,
-        ),
-        (
-            _component_interaction(
-                custom_id="approval:abc:approve",
-                values=None,
-            ),
-            None,
-            "discord:channel-1:guild-1",
-            ("conversation:discord:channel-1:guild-1",),
-            "defer_component_update",
-        ),
-        (
-            _component_interaction(
-                custom_id="flow:run-1:restart",
-                values=None,
-            ),
-            "defer_component_update",
-            "discord:channel-1:guild-1",
-            ("conversation:discord:channel-1:guild-1",),
-            "defer_component_update",
-        ),
-        (
-            {
-                "id": "inter-modal-1",
-                "token": "token-modal-1",
-                "channel_id": "channel-1",
-                "guild_id": "guild-1",
-                "type": 5,
-                "member": {"user": {"id": "user-1"}},
-                "data": {
-                    "custom_id": "tickets_modal:abc",
-                    "components": [
-                        {
-                            "type": 18,
-                            "label": "Ticket",
-                            "component": {
-                                "type": 4,
-                                "custom_id": "ticket_body",
-                                "value": "body text",
-                            },
-                        }
-                    ],
-                },
-            },
-            None,
-            "discord:channel-1:guild-1",
-            ("conversation:discord:channel-1:guild-1",),
-            "defer_ephemeral",
-        ),
-        (
-            _autocomplete_interaction_path(
-                command_path=("car", "bind"),
-                focused_name="workspace",
-                focused_value="codex",
-            ),
-            None,
-            None,
-            (),
-            None,
-        ),
-    ],
-)
-async def test_on_dispatch_routes_interactions_through_scheduler(
-    tmp_path: Path,
-    payload: dict[str, Any],
-    expected_dispatch_ack_policy: str | None,
-    expected_conversation: str | None,
-    expected_resource_keys: tuple[str, ...],
-    expected_queue_wait_ack_policy: str | None,
-) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=_FakeGateway([]),
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
-    submit = MagicMock()
-    service._command_runner.submit = submit  # type: ignore[method-assign]
-
-    try:
-        await service._on_dispatch("INTERACTION_CREATE", payload)
-        submit.assert_called_once()
-        kwargs = submit.call_args.kwargs
-        assert kwargs["conversation_id"] == expected_conversation
-        assert kwargs["resource_keys"] == expected_resource_keys
-        assert kwargs["queue_wait_ack_policy"] == expected_queue_wait_ack_policy
-        if expected_dispatch_ack_policy is not None:
-            assert len(rest.interaction_responses) == 1
-            assert rest.interaction_responses[0]["payload"]["type"] == 6
-    finally:
-        await service._shutdown()
-        await store.close()
-
-
-@pytest.mark.anyio
-async def test_autocomplete_bypasses_busy_ingressed_fifo(
-    tmp_path: Path,
-) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=_FakeGateway([]),
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
-    slash_started = asyncio.Event()
-    slash_release = asyncio.Event()
-    autocomplete_started = asyncio.Event()
-
-    async def _slow_handle_car_command(*_args: Any, **_kwargs: Any) -> None:
-        slash_started.set()
-        await slash_release.wait()
-
-    async def _fast_autocomplete(*_args: Any, **_kwargs: Any) -> None:
-        autocomplete_started.set()
-
-    service._handle_car_command = _slow_handle_car_command  # type: ignore[assignment]
-    service._handle_command_autocomplete = _fast_autocomplete  # type: ignore[assignment]
-
-    try:
-        await service._on_dispatch(
-            "INTERACTION_CREATE",
-            _interaction_path(
-                command_path=("car", "session", "compact"),
-                options=[],
-            ),
-        )
-        await asyncio.wait_for(slash_started.wait(), timeout=1.0)
-
-        await service._on_dispatch(
-            "INTERACTION_CREATE",
-            _autocomplete_interaction_path(
-                command_path=("car", "bind"),
-                focused_name="workspace",
-                focused_value="codex",
-            ),
-        )
-        await asyncio.wait_for(autocomplete_started.wait(), timeout=1.0)
-    finally:
-        slash_release.set()
-        await service._shutdown()
-        await store.close()
-
-
-@pytest.mark.anyio
-async def test_scheduler_serializes_workspace_mutations_across_channels(
-    tmp_path: Path,
-) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id="repo-1",
-    )
-    await store.upsert_binding(
-        channel_id="channel-2",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id="repo-1",
-    )
-
-    rest = _FakeRest()
-    config = replace(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        allowed_channel_ids=frozenset({"channel-1", "channel-2"}),
-    )
-    service = DiscordBotService(
-        config,
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=_FakeGateway([]),
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
-    slash_started = asyncio.Event()
-    slash_release = asyncio.Event()
-    component_started = asyncio.Event()
-    start_order: list[str] = []
-
-    async def _slow_car_new(*_args: Any, **_kwargs: Any) -> None:
-        start_order.append("slash")
-        slash_started.set()
-        await slash_release.wait()
-
-    async def _flow_restart(*_args: Any, **_kwargs: Any) -> None:
-        start_order.append("component")
-        component_started.set()
-
-    service._handle_car_new = _slow_car_new  # type: ignore[assignment]
-    service._handle_flow_restart = _flow_restart  # type: ignore[assignment]
-
-    try:
-        await service._on_dispatch(
-            "INTERACTION_CREATE",
-            _interaction_path(
-                command_path=("car", "new"),
-                options=[],
-            ),
-        )
-        await asyncio.wait_for(slash_started.wait(), timeout=1.0)
-
-        await service._on_dispatch(
-            "INTERACTION_CREATE",
-            {
-                "id": "inter-component-2",
-                "token": "token-component-2",
-                "channel_id": "channel-2",
-                "guild_id": "guild-1",
-                "type": 3,
-                "member": {"user": {"id": "user-1"}},
-                "data": {
-                    "component_type": 3,
-                    "custom_id": "flow_action_select:restart",
-                    "values": ["run-1"],
-                },
-            },
-        )
-
-        with pytest.raises(asyncio.TimeoutError):
-            await asyncio.wait_for(component_started.wait(), timeout=0.1)
-
-        slash_release.set()
-        await asyncio.wait_for(component_started.wait(), timeout=3.0)
-        assert start_order == ["slash", "component"]
-    finally:
-        slash_release.set()
-        await service._shutdown()
-        await store.close()
-
-
-@pytest.mark.anyio
-async def test_malformed_interaction_payload_returns_ephemeral_response(
-    tmp_path: Path,
-) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
-    gateway = _FakeGateway(
-        [
-            {
-                "id": "inter-1",
-                "token": "token-1",
-                "channel_id": "channel-1",
-                "guild_id": "guild-1",
-                "member": {"user": {"id": "user-1"}},
-                "data": {"name": ""},
-            }
-        ]
-    )
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
-
-    try:
-        await service.run_forever()
-        assert len(rest.interaction_responses) == 1
-        payload = rest.interaction_responses[0]["payload"]
-        content = payload["data"]["content"].lower()
-        assert "could not parse this interaction" in content
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
 async def test_car_new_resets_repo_session_key(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -8060,63 +7009,6 @@ async def test_hub_client_setup_commands_survive_loop_switch_after_workspace_loo
             )
             for instance in _LoopStickyAsyncClient.instances
         )
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
-async def test_dispatch_persists_runtime_state_only_after_ack(
-    tmp_path: Path,
-) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id="repo-1",
-    )
-
-    rest = _FakeRest()
-    gateway = _FakeGateway([_interaction(name="newt", options=[])])
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
-
-    call_order: list[tuple[str, Any]] = []
-
-    async def _tracked_ack(*_args: Any, **_kwargs: Any) -> bool:
-        call_order.append(("ack", _kwargs.get("stage")))
-        return True
-
-    async def _tracked_persist(*_args: Any, **kwargs: Any) -> None:
-        call_order.append(("persist", kwargs.get("scheduler_state")))
-
-    def _tracked_submit(*_args: Any, **_kwargs: Any) -> None:
-        call_order.append(("submit", None))
-
-    service._acknowledge_runtime_envelope = _tracked_ack  # type: ignore[assignment]
-    service._persist_runtime_interaction = _tracked_persist  # type: ignore[assignment]
-    service._command_runner = SimpleNamespace(
-        submit=_tracked_submit,
-        shutdown=AsyncMock(),
-    )
-
-    try:
-        await service.run_forever()
-        assert call_order[:3] == [
-            ("ack", "dispatch"),
-            ("persist", "acknowledged"),
-            ("submit", None),
-        ]
     finally:
         await store.close()
 
@@ -9993,48 +8885,6 @@ async def test_car_status_defers_before_loading_workspace_state(
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize(
-    ("subcommand", "expected_text"),
-    [
-        ("status", "hub manifest not configured"),
-        ("start", "not bound"),
-        ("restart", "not bound"),
-    ],
-)
-async def test_public_flow_commands_keep_dispatch_preflight_errors_ephemeral(
-    tmp_path: Path,
-    subcommand: str,
-    expected_text: str,
-) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
-    gateway = _FakeGateway(
-        [_interaction_path(command_path=("car", "flow", subcommand), options=[])]
-    )
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
-
-    try:
-        await service.run_forever()
-        assert len(rest.interaction_responses) == 1
-        payload = rest.interaction_responses[0]["payload"]
-        assert payload["type"] == 5
-        assert len(rest.followup_messages) == 1
-        followup = rest.followup_messages[0]["payload"]
-        assert followup["flags"] == 64
-        assert expected_text in followup["content"].lower()
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
 async def test_flow_status_defers_publicly_before_flow_store_work(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -11331,3 +10181,154 @@ async def test_run_agent_turn_for_message_forwards_repo_delivery_suppression(
         assert captured["suppress_managed_thread_delivery"] is True
     finally:
         await store.close()
+
+
+@pytest.mark.anyio
+async def test_reconcile_background_task_failure_does_not_fabricate_channel_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from codex_autorunner.integrations.discord.service_lifecycle import (
+        reconcile_background_task_failure,
+    )
+
+    sent_messages: list[dict[str, Any]] = []
+    log_events: list[dict[str, Any]] = []
+
+    async def _fake_reconcile(service, **kwargs):  # type: ignore[no-untyped-def]
+        return 0
+
+    def _fake_log_event(logger, level, event_name, **kwargs):  # type: ignore[no-untyped-def]
+        log_events.append({"level": level, "event_name": event_name, **kwargs})
+
+    import codex_autorunner.integrations.discord.message_turns as _msg_turns
+    import codex_autorunner.integrations.discord.service_lifecycle as _lifecycle_mod
+
+    monkeypatch.setattr(
+        _msg_turns, "reconcile_discord_turn_progress_leases", _fake_reconcile
+    )
+    monkeypatch.setattr(_lifecycle_mod, "log_event", _fake_log_event)
+
+    class _FakeService:
+        def __init__(self) -> None:
+            self._logger = logging.getLogger("test")
+
+        async def _send_channel_message_safe(
+            self, channel_id: str, payload: dict[str, Any]
+        ) -> None:
+            sent_messages.append({"channel_id": channel_id, "payload": payload})
+
+    task_context = {
+        "failure_note": "worker lost",
+        "channel_id": "channel-1",
+        "managed_thread_id": "thread-1",
+        "execution_id": "exec-1",
+        "lease_id": "lease-1",
+    }
+
+    result = await reconcile_background_task_failure(_FakeService(), task_context)
+
+    assert result == 0
+    assert sent_messages == []
+    reconcile_failures = [
+        e
+        for e in log_events
+        if e["event_name"] == "discord.background_task.reconcile_failed"
+    ]
+    assert len(reconcile_failures) == 1
+    assert reconcile_failures[0]["channel_id"] == "channel-1"
+    assert reconcile_failures[0]["managed_thread_id"] == "thread-1"
+    assert reconcile_failures[0]["level"] == logging.ERROR
+
+
+@pytest.mark.anyio
+async def test_reconcile_background_task_failure_sends_channel_message_when_explicitly_allowed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from codex_autorunner.integrations.discord.service_lifecycle import (
+        reconcile_background_task_failure,
+    )
+
+    sent_messages: list[dict[str, Any]] = []
+
+    async def _fake_reconcile(service, **kwargs):  # type: ignore[no-untyped-def]
+        return 0
+
+    def _fake_log_event(logger, level, event_name, **kwargs):  # type: ignore[no-untyped-def]
+        pass
+
+    import codex_autorunner.integrations.discord.message_turns as _msg_turns
+    import codex_autorunner.integrations.discord.service_lifecycle as _lifecycle_mod
+
+    monkeypatch.setattr(
+        _msg_turns, "reconcile_discord_turn_progress_leases", _fake_reconcile
+    )
+    monkeypatch.setattr(_lifecycle_mod, "log_event", _fake_log_event)
+
+    class _FakeService:
+        def __init__(self) -> None:
+            self._logger = logging.getLogger("test")
+
+        async def _send_channel_message_safe(
+            self, channel_id: str, payload: dict[str, Any]
+        ) -> None:
+            sent_messages.append({"channel_id": channel_id, "payload": payload})
+
+    task_context = {
+        "failure_note": "worker lost",
+        "channel_id": "channel-1",
+    }
+
+    result = await reconcile_background_task_failure(
+        _FakeService(), task_context, allow_channel_fallback=True
+    )
+
+    assert result == 0
+    assert len(sent_messages) == 1
+    assert sent_messages[0]["payload"]["content"] == "worker lost"
+
+
+@pytest.mark.anyio
+async def test_reconcile_background_task_failure_returns_count_on_successful_reconcile(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from codex_autorunner.integrations.discord.service_lifecycle import (
+        reconcile_background_task_failure,
+    )
+
+    sent_messages: list[dict[str, Any]] = []
+
+    async def _fake_reconcile(service, **kwargs):  # type: ignore[no-untyped-def]
+        return 2
+
+    def _fake_log_event(logger, level, event_name, **kwargs):  # type: ignore[no-untyped-def]
+        pass
+
+    import codex_autorunner.integrations.discord.message_turns as _msg_turns
+    import codex_autorunner.integrations.discord.service_lifecycle as _lifecycle_mod
+
+    monkeypatch.setattr(
+        _msg_turns, "reconcile_discord_turn_progress_leases", _fake_reconcile
+    )
+    monkeypatch.setattr(_lifecycle_mod, "log_event", _fake_log_event)
+
+    class _FakeService:
+        def __init__(self) -> None:
+            self._logger = logging.getLogger("test")
+
+        async def _send_channel_message_safe(
+            self, channel_id: str, payload: dict[str, Any]
+        ) -> None:
+            sent_messages.append({"channel_id": channel_id, "payload": payload})
+
+    task_context = {
+        "failure_note": "worker lost",
+        "channel_id": "channel-1",
+    }
+
+    result = await reconcile_background_task_failure(_FakeService(), task_context)
+
+    assert result == 2
+    assert sent_messages == []

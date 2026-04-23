@@ -117,6 +117,15 @@ def test_binding_store_disable_and_active_thread_lookup(tmp_path: Path) -> None:
     )
 
 
+def test_binding_store_read_apis_initialize_schema_on_fresh_hub(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    bindings = OrchestrationBindingStore(hub_root, durable=False)
+
+    assert bindings.get_binding(surface_kind="discord", surface_key="channel-1") is None
+    assert bindings.list_bindings(repo_id="repo-1") == []
+    assert bindings.list_active_work_summaries(repo_id="repo-1") == []
+
+
 def test_binding_store_lists_bindings_and_active_work_by_agent_and_repo(
     tmp_path: Path,
 ) -> None:

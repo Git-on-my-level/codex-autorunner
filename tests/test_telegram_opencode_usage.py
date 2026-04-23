@@ -3,6 +3,17 @@ from codex_autorunner.integrations.telegram.handlers.utils import (
 )
 
 
+def test_extract_opencode_usage_value_removed() -> None:
+    import importlib
+
+    module = importlib.import_module(
+        "codex_autorunner.integrations.telegram.handlers.utils"
+    )
+    assert not hasattr(
+        module, "_extract_opencode_usage_value"
+    ), "_extract_opencode_usage_value should have been removed"
+
+
 def test_build_opencode_token_usage_with_total_and_context() -> None:
     usage = _build_opencode_token_usage(
         {"totalTokens": 120, "modelContextWindow": 2000}

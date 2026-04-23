@@ -494,6 +494,7 @@ class HubSharedStateService:
                 model=request.model,
                 reasoning=request.reasoning,
                 client_request_id=request.client_request_id,
+                metadata=request.metadata or None,
                 queue_payload=request.queue_payload or None,
             )
         except (KeyError, RuntimeError, ValueError) as exc:

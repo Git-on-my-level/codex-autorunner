@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Literal, Mapping, Optional
 
 from ..car_context import CarContextProfile, normalize_car_context_profile
-from ..text_utils import _normalize_optional_text
+from ..text_utils import _json_loads_object, _normalize_optional_text
 
 TargetCapability = Literal[
     "durable_threads",
@@ -371,6 +371,7 @@ class ExecutionRecord:
     finished_at: Optional[str] = None
     error: Optional[str] = None
     output_text: Optional[str] = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any]) -> "ExecutionRecord":
@@ -386,6 +387,9 @@ class ExecutionRecord:
             raise ValueError(
                 "ExecutionRecord requires execution_id/managed_turn_id and target_id/managed_thread_id"
             )
+        metadata = data.get("metadata")
+        if not isinstance(metadata, dict):
+            metadata = _json_loads_object(data.get("metadata_json"))
         return cls(
             execution_id=execution_id,
             target_id=target_id,
@@ -401,6 +405,7 @@ class ExecutionRecord:
             output_text=_normalize_optional_text(
                 data.get("output_text") or data.get("assistant_text")
             ),
+            metadata=dict(metadata),
         )
 
     def to_dict(self) -> dict[str, Any]:
