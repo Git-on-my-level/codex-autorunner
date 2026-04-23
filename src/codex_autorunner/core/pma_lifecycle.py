@@ -22,14 +22,14 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Optional
 
-from .app_server_threads import (
-    PMA_KEY,
-    PMA_PREFIX,
-    AppServerThreadRegistry,
-    pma_prefixes_for_reset,
-)
 from .locks import file_lock
 from .logging_utils import log_event
+from .managed_thread_identity import (
+    PMA_KEY,
+    PMA_PREFIX,
+    ManagedThreadIdentityStore,
+    pma_prefixes_for_reset,
+)
 from .orchestration.legacy_backfill_gate import ensure_legacy_orchestration_backfill
 from .orchestration.sqlite import open_orchestration_sqlite
 from .pma_audit import PmaActionType
@@ -93,9 +93,7 @@ class PmaLifecycleRouter:
     def _clear_runtime_state_for_agent(
         self, agent: Optional[str], profile: Optional[str] = None
     ) -> tuple[list[str], list[str]]:
-        registry = AppServerThreadRegistry(
-            self._hub_root / ".codex-autorunner" / "app_server_threads.json"
-        )
+        registry = ManagedThreadIdentityStore(self._hub_root)
 
         cleared_thread_keys: list[str] = []
         cleared_prompt_state_keys: list[str] = []

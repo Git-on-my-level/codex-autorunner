@@ -3,6 +3,10 @@ from pathlib import Path
 
 import pytest
 
+from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
+from codex_autorunner.core.orchestration.verification import (
+    verify_thread_identity_parity,
+)
 from codex_autorunner.integrations.app_server.threads import (
     FILE_CHAT_HERMES_PREFIX,
     FILE_CHAT_OPENCODE_PREFIX,
@@ -54,6 +58,46 @@ def test_thread_registry_reset_all_clears_notice(tmp_path: Path) -> None:
     registry.reset_all()
 
     assert registry.corruption_notice() is None
+
+
+def test_thread_registry_imports_legacy_file_into_canonical_store(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "app_server_threads.json"
+    path.write_text(
+        json.dumps({"version": 1, "threads": {"pma": "thread-123"}}),
+        encoding="utf-8",
+    )
+
+    registry = AppServerThreadRegistry(path)
+
+    assert registry.get_thread_id("pma") == "thread-123"
+
+    with open_orchestration_sqlite(tmp_path, durable=False) as conn:
+        row = conn.execute(
+            """
+            SELECT thread_id
+              FROM orch_thread_identity_bindings
+             WHERE feature_key = 'pma'
+            """
+        ).fetchone()
+    assert row is not None
+    assert row["thread_id"] == "thread-123"
+
+
+def test_thread_registry_keeps_compatibility_cache_in_parity(
+    tmp_path: Path,
+) -> None:
+    registry = AppServerThreadRegistry(tmp_path)
+    registry.set_thread_id("pma", "thread-1")
+    registry.set_thread_id("pma.opencode", "thread-2")
+
+    parity = registry.compatibility_cache_parity()
+
+    assert parity["passed"] is True
+    with open_orchestration_sqlite(tmp_path, durable=False) as conn:
+        results = verify_thread_identity_parity(tmp_path, conn)
+    assert all(result.status == "passed" for result in results)
 
 
 def test_normalize_feature_key_accepts_pma() -> None:

@@ -17,15 +17,14 @@ from .....core.chat_bindings import (
 from .....core.flows import FlowEventType, FlowStore
 from .....core.git_utils import git_is_clean
 from .....core.logging_utils import safe_log
-from .....core.pma_context import (
-    get_latest_ticket_flow_run_state_with_record,
-)
-from .....integrations.app_server.threads import (
-    AppServerThreadRegistry,
-    default_app_server_threads_path,
+from .....core.managed_thread_identity import (
+    ManagedThreadIdentityStore,
     file_chat_discord_key,
     pma_base_key,
     pma_topic_scoped_key,
+)
+from .....core.pma_context import (
+    get_latest_ticket_flow_run_state_with_record,
 )
 from .....integrations.chat.channel_directory import (
     ChannelDirectoryStore,
@@ -234,9 +233,7 @@ class HubChannelService:
         if thread_map is None:
             thread_map = {}
             try:
-                registry = AppServerThreadRegistry(
-                    default_app_server_threads_path(Path(canonical_workspace))
-                )
+                registry = ManagedThreadIdentityStore(Path(canonical_workspace))
                 loaded = registry.load()
                 if isinstance(loaded, dict):
                     for key, value in loaded.items():

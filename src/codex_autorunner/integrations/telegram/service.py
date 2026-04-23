@@ -37,6 +37,7 @@ from ...core.hub_control_plane.service import (
 )
 from ...core.locks import FileLock, FileLockBusy
 from ...core.logging_utils import log_event
+from ...core.managed_thread_identity import ManagedThreadIdentityStore
 from ...core.orchestration import (
     ORCHESTRATION_SCHEMA_VERSION,
     ChatOperationState,
@@ -57,10 +58,6 @@ from ...core.text_delta_coalescer import TextDeltaCoalescer
 from ...core.utils import build_opencode_supervisor
 from ...flows.ticket_flow.runtime_helpers import build_ticket_flow_runtime_resources
 from ...housekeeping import HousekeepingConfig, run_housekeeping_for_roots
-from ...integrations.app_server.threads import (
-    AppServerThreadRegistry,
-    default_app_server_threads_path,
-)
 from ...manifest import load_manifest
 from ...tickets.replies import dispatch_reply, ensure_reply_dirs, resolve_reply_paths
 from ...voice import VoiceConfig, VoiceService
@@ -279,9 +276,7 @@ class TelegramBotService(
                 self._hub_config_path = root_hub_config
         if self._hub_root:
             try:
-                self._hub_thread_registry = AppServerThreadRegistry(
-                    default_app_server_threads_path(self._hub_root)
-                )
+                self._hub_thread_registry = ManagedThreadIdentityStore(self._hub_root)
             except (OSError, ValueError, TypeError) as exc:
                 log_event(
                     self._logger,
