@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from ...core.logging_utils import log_event
+from ...core.ports.run_event import RunNotice
+from .execution_event_journal import make_chat_execution_journal_notice
 
 
 class ChatUxMilestone(enum.Enum):
@@ -131,10 +133,25 @@ def emit_chat_ux_timing(
     *,
     event_suffix: str = "completed",
     **extra: Any,
-) -> None:
+) -> RunNotice:
     event_name = f"chat_ux_timing.{snapshot.platform}.{event_suffix}"
     log_event(logger, level, event_name, **snapshot.to_log_fields(), **extra)
     get_global_accumulator().record_snapshot(snapshot)
+    payload = snapshot.to_log_fields()
+    payload.update(dict(extra))
+    payload["event_name"] = event_name
+    payload["platform"] = snapshot.platform
+    return make_chat_execution_journal_notice(
+        domain="latency",
+        name="summary",
+        status=(
+            str(extra.get("status")).strip()
+            if extra.get("status") is not None
+            else None
+        ),
+        message=format_chat_ux_summary(snapshot),
+        data=payload,
+    )
 
 
 def format_chat_ux_summary(snapshot: ChatUxTimingSnapshot) -> str:

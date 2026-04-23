@@ -12,6 +12,12 @@ from .....core.chat_bindings import (
 from .....core.logging_utils import log_event
 from .....core.pma_chat_delivery import deliver_pma_notification
 from .....core.ports.run_event import TokenUsage
+from .....integrations.chat.execution_event_journal import (
+    append_chat_execution_journal_notices,
+    extract_token_usage_from_journal_events,
+    journal_events_from_run_events,
+    make_chat_execution_journal_notice,
+)
 from .....integrations.chat.turn_metrics import format_turn_footer
 from ...services.pma import get_pma_request_context
 
@@ -214,6 +220,11 @@ def _extract_result_token_usage(result: dict[str, Any]) -> Optional[dict[str, An
     timeline_events = result.get("timeline_events")
     if not isinstance(timeline_events, list):
         return None
+    usage = extract_token_usage_from_journal_events(
+        [event.to_dict() for event in journal_events_from_run_events(timeline_events)]
+    )
+    if usage is not None:
+        return usage
     for event in reversed(timeline_events):
         if isinstance(event, TokenUsage) and isinstance(event.usage, dict):
             return dict(event.usage)
@@ -356,6 +367,39 @@ async def publish_automation_result(
         repo_id=target_repo_id,
         correlation_id=correlation_id,
     )
+    journal_execution_id = normalize_optional_text(
+        result.get("turn_id") or result.get("client_turn_id") or client_turn_id_str
+    )
+    if journal_execution_id:
+        try:
+            append_chat_execution_journal_notices(
+                hub_root,
+                execution_id=journal_execution_id,
+                target_kind="lane",
+                target_id=normalize_optional_text((wake_up_dict or {}).get("lane_id"))
+                or "pma:default",
+                repo_id=target_repo_id,
+                notices=[
+                    make_chat_execution_journal_notice(
+                        domain="delivery",
+                        name="publish",
+                        message="PMA automation result publish completed",
+                        status=delivery_status,
+                        data={
+                            "route": outcome.get("route"),
+                            "targets": targets,
+                            "published": published,
+                            "repo_id": target_repo_id,
+                            "correlation_id": correlation_id,
+                        },
+                    )
+                ],
+            )
+        except (OSError, RuntimeError, TypeError, ValueError):
+            logger.exception(
+                "Failed to append PMA publish journal event turn_id=%s",
+                journal_execution_id,
+            )
     return {
         "delivery_status": delivery_status,
         "delivery_outcome": delivery_outcome,

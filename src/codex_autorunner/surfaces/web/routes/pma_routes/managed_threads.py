@@ -17,6 +17,7 @@ from .....core.orchestration import build_harness_backed_orchestration_service
 from .....core.orchestration.catalog import RuntimeAgentDescriptor
 from .....core.orchestration.turn_timeline import list_turn_timeline
 from .....core.pma_automation_store import PmaAutomationThreadNotFoundError
+from .....integrations.chat.execution_event_journal import list_chat_execution_journal
 from ...schemas import (
     PmaAutomationSubscriptionCreateRequest,
     PmaAutomationTimerCancelRequest,
@@ -783,6 +784,10 @@ def build_managed_thread_crud_routes(
             hub_root,
             execution_id=managed_turn_id,
         )
+        journal = list_chat_execution_journal(
+            hub_root,
+            execution_id=managed_turn_id,
+        )
 
         cold_store = context.cold_trace_store()
         manifest = cold_store.get_manifest(managed_turn_id)
@@ -813,6 +818,7 @@ def build_managed_thread_crud_routes(
 
         response: dict[str, Any] = {
             "turn": turn,
+            "journal": journal,
             "timeline": timeline,
             "trace_metadata": {
                 "hot_timeline_entries": len(timeline),

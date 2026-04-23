@@ -88,6 +88,9 @@ from .....integrations.chat.constants import (
     APP_SERVER_UNAVAILABLE_MESSAGE,
     TOPIC_NOT_BOUND_MESSAGE,
 )
+from .....integrations.chat.execution_event_journal import (
+    append_chat_execution_journal_notices,
+)
 from .....integrations.chat.managed_thread_delivery_support import (
     ManagedThreadDeliveryCleanupContext,
     ManagedThreadDeliverySendResult,
@@ -1228,12 +1231,18 @@ async def _run_telegram_managed_thread_turn(
     intermediate_response = ""
     backend_turn_id: Optional[str] = None
     queued_thread_id = str(thread.backend_thread_id or "") or None
+    queued_execution_id: Optional[str] = None
 
     async def _after_submission(submission: Any) -> None:
         nonlocal registered_turn_key
         nonlocal backend_turn_id
         nonlocal queued_thread_id
+        nonlocal queued_execution_id
         started_execution = submission.started_execution
+        queued_execution_id = (
+            str(getattr(started_execution.execution, "execution_id", "") or "").strip()
+            or None
+        )
         queued_thread_id = (
             str(
                 getattr(started_execution.thread, "backend_thread_id", "") or ""
@@ -1331,6 +1340,33 @@ async def _run_telegram_managed_thread_turn(
     async def _on_queued(_flow: Any) -> _TurnRunResult:
         if chat_ux_snapshot is not None:
             chat_ux_snapshot.record(ChatUxMilestone.QUEUE_VISIBLE)
+            if queued_execution_id is not None:
+                journal_notice = emit_chat_ux_timing(
+                    handlers._logger,
+                    logging.INFO,
+                    chat_ux_snapshot,
+                    event_suffix="managed_thread_turn",
+                    topic_key=topic_key,
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    status="queued",
+                    execution_id=queued_execution_id,
+                )
+                try:
+                    append_chat_execution_journal_notices(
+                        _telegram_state_root(handlers),
+                        execution_id=queued_execution_id,
+                        target_kind="thread_target",
+                        target_id=managed_thread_id,
+                        repo_id=repo_id or None,
+                        notices=[journal_notice],
+                    )
+                except (OSError, RuntimeError, TypeError, ValueError):
+                    handlers._logger.debug(
+                        "Telegram queued journal append failed for %s",
+                        queued_execution_id,
+                        exc_info=True,
+                    )
         return _TurnRunResult(
             record=record,
             thread_id=queued_thread_id,
@@ -1426,7 +1462,7 @@ async def _run_telegram_managed_thread_turn(
                 response_sent or getattr(_flow, "durable_delivery_performed", False)
             ):
                 chat_ux_snapshot.record(ChatUxMilestone.TERMINAL_DELIVERY)
-                emit_chat_ux_timing(
+                journal_notice = emit_chat_ux_timing(
                     handlers._logger,
                     logging.INFO,
                     chat_ux_snapshot,
@@ -1435,7 +1471,23 @@ async def _run_telegram_managed_thread_turn(
                     chat_id=message.chat_id,
                     thread_id=message.thread_id,
                     status=finalized.status,
+                    execution_id=finalized.managed_turn_id,
                 )
+                try:
+                    append_chat_execution_journal_notices(
+                        _telegram_state_root(handlers),
+                        execution_id=finalized.managed_turn_id,
+                        target_kind="thread_target",
+                        target_id=managed_thread_id,
+                        repo_id=repo_id or None,
+                        notices=[journal_notice],
+                    )
+                except (OSError, RuntimeError, TypeError, ValueError):
+                    handlers._logger.debug(
+                        "Telegram execution journal append failed for %s",
+                        finalized.managed_turn_id,
+                        exc_info=True,
+                    )
             if interrupt_status_fallback_text:
                 await handlers._clear_interrupt_status_message(
                     chat_id=message.chat_id,
@@ -1509,7 +1561,7 @@ async def _run_telegram_managed_thread_turn(
         )
         if chat_ux_snapshot is not None:
             chat_ux_snapshot.record(ChatUxMilestone.TERMINAL_DELIVERY)
-            emit_chat_ux_timing(
+            journal_notice = emit_chat_ux_timing(
                 handlers._logger,
                 logging.INFO,
                 chat_ux_snapshot,
@@ -1518,7 +1570,23 @@ async def _run_telegram_managed_thread_turn(
                 chat_id=message.chat_id,
                 thread_id=message.thread_id,
                 status="ok",
+                execution_id=finalized.managed_turn_id,
             )
+            try:
+                append_chat_execution_journal_notices(
+                    _telegram_state_root(handlers),
+                    execution_id=finalized.managed_turn_id,
+                    target_kind="thread_target",
+                    target_id=managed_thread_id,
+                    repo_id=repo_id or None,
+                    notices=[journal_notice],
+                )
+            except (OSError, RuntimeError, TypeError, ValueError):
+                handlers._logger.debug(
+                    "Telegram execution journal append failed for %s",
+                    finalized.managed_turn_id,
+                    exc_info=True,
+                )
         _delivery_handled = getattr(_flow, "durable_delivery_performed", False)
         return _TurnRunResult(
             record=record,

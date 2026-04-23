@@ -1729,11 +1729,16 @@ async def test_finalize_managed_thread_execution_logs_timeout_source(
     assert '"completion_source":"timeout"' in caplog.text
     assert '"managed_thread_id":"thread-1"' in caplog.text
     assert '"backend_thread_id":"session-1"' in caplog.text
-    assert len(fake_hub_client.timeline_requests) == 1
-    assert fake_hub_client.timeline_requests[0].metadata["status"] == "error"
-    assert fake_hub_client.timeline_requests[0].metadata["backend_turn_id"] == "turn-1"
+    assert len(fake_hub_client.timeline_requests) == 2
+    assert [
+        request.metadata["status"] for request in fake_hub_client.timeline_requests
+    ] == [
+        "running",
+        "error",
+    ]
+    assert fake_hub_client.timeline_requests[-1].metadata["backend_turn_id"] == "turn-1"
     assert (
-        fake_hub_client.timeline_requests[0].metadata["trace_manifest_id"] == "trace-1"
+        fake_hub_client.timeline_requests[-1].metadata["trace_manifest_id"] == "trace-1"
     )
     assert len(fake_hub_client.trace_requests) == 1
     assert fake_hub_client.trace_requests[0].backend_turn_id == "turn-1"
@@ -1983,13 +1988,13 @@ async def test_finalize_managed_thread_execution_propagates_session_recovery_met
         "recovered context from durable history."
     )
     assert result.fresh_backend_session_reason == "missing_backend_binding"
-    assert len(fake_hub_client.timeline_requests) == 1
+    assert len(fake_hub_client.timeline_requests) == 2
     assert (
-        fake_hub_client.timeline_requests[0].metadata["fresh_backend_session_started"]
+        fake_hub_client.timeline_requests[-1].metadata["fresh_backend_session_started"]
         is True
     )
     assert (
-        fake_hub_client.timeline_requests[0].metadata["fresh_backend_session_reason"]
+        fake_hub_client.timeline_requests[-1].metadata["fresh_backend_session_reason"]
         == "missing_backend_binding"
     )
     assert len(fake_hub_client.transcript_requests) == 1
@@ -2071,11 +2076,16 @@ async def test_finalize_managed_thread_execution_logs_finalization_failure_after
     assert "chat.managed_thread.finalization_failed_after_prompt_return" in caplog.text
     assert '"completion_source":"prompt_return"' in caplog.text
     assert '"managed_turn_id":"exec-1"' in caplog.text
-    assert len(fake_hub_client.timeline_requests) == 1
-    assert fake_hub_client.timeline_requests[0].metadata["status"] == "ok"
-    assert fake_hub_client.timeline_requests[0].metadata["backend_turn_id"] == "turn-1"
+    assert len(fake_hub_client.timeline_requests) == 2
+    assert [
+        request.metadata["status"] for request in fake_hub_client.timeline_requests
+    ] == [
+        "running",
+        "ok",
+    ]
+    assert fake_hub_client.timeline_requests[-1].metadata["backend_turn_id"] == "turn-1"
     assert (
-        fake_hub_client.timeline_requests[0].metadata["trace_manifest_id"] == "trace-1"
+        fake_hub_client.timeline_requests[-1].metadata["trace_manifest_id"] == "trace-1"
     )
     assert len(fake_hub_client.trace_requests) == 1
     assert fake_hub_client.trace_requests[0].backend_turn_id == "turn-1"
@@ -2523,22 +2533,25 @@ async def test_finalize_managed_thread_execution_batches_live_timeline_persisten
     )
 
     assert result.status == "ok"
-    assert len(fake_hub_client.timeline_requests) == 4
+    assert len(fake_hub_client.timeline_requests) == 5
     assert [request.start_index for request in fake_hub_client.timeline_requests] == [
         1,
         4,
         7,
         10,
+        11,
     ]
     assert [len(request.events) for request in fake_hub_client.timeline_requests] == [
         3,
         3,
         3,
         1,
+        1,
     ]
     assert [
         request.metadata["status"] for request in fake_hub_client.timeline_requests
     ] == [
+        "running",
         "running",
         "running",
         "running",
@@ -2652,7 +2665,7 @@ async def test_finalize_managed_thread_execution_flushes_live_timeline_on_delay_
         if r.metadata["status"] == "running"
     ]
     assert len(running) >= 2
-    assert [len(r.events) for r in running] == [1, 1]
+    assert [len(r.events) for r in running] == [2, 1]
 
 
 @pytest.mark.anyio
@@ -2733,7 +2746,7 @@ async def test_finalize_managed_thread_execution_continues_when_progress_pump_is
     assert result.status == "ok"
     assert "chat.managed_thread.turn_finalized" in caplog.text
     assert "chat.managed_thread.progress_pump_cancelled" in caplog.text
-    assert len(fake_hub_client.timeline_requests) == 1
+    assert len(fake_hub_client.timeline_requests) == 2
     assert len(fake_hub_client.trace_requests) == 1
 
 
