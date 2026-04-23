@@ -53,30 +53,6 @@ _STATUS_FAILED = "failed"
 _OP_REUSABLE = "reusable"
 _OP_ATTENTION_REQUIRED = "attention_required"
 
-_VALID_STATUSES = frozenset(
-    {
-        _STATUS_ACTIVE,
-        _STATUS_ARCHIVED,
-        _STATUS_IDLE,
-        _STATUS_RUNNING,
-        _STATUS_PAUSED,
-        _STATUS_COMPLETED,
-        _STATUS_INTERRUPTED,
-        _STATUS_FAILED,
-    }
-)
-
-_VALID_OPERATOR_STATUSES = frozenset(
-    {
-        _STATUS_IDLE,
-        _STATUS_RUNNING,
-        _STATUS_PAUSED,
-        _OP_REUSABLE,
-        _OP_ATTENTION_REQUIRED,
-        _STATUS_ARCHIVED,
-    }
-)
-
 
 class ManagedThreadStatusReason(str, Enum):
     THREAD_CREATED = "thread_created"
