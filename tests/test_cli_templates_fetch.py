@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 from typing import Optional
 
+import pytest
 import yaml
 from typer.testing import CliRunner
 
@@ -51,11 +52,24 @@ def _write_templates_config(
     )
 
 
-def test_templates_fetch_json(hub_env, tmp_path: Path) -> None:
-    repo_path = tmp_path / "templates_repo"
+@pytest.fixture(scope="module")
+def _shared_fetch_repo(tmp_path_factory):
+    base = tmp_path_factory.mktemp("shared_fetch")
+    repo_path = base / "templates_repo"
     branch = _init_repo(repo_path)
     content = "# Template\nHello"
     commit, blob_sha = _commit_file(repo_path, "tickets/TICKET-REVIEW.md", content)
+    return {
+        "repo_path": repo_path,
+        "branch": branch,
+        "commit": commit,
+        "blob_sha": blob_sha,
+        "content": content,
+    }
+
+
+def test_templates_fetch_json(_shared_fetch_repo, hub_env, tmp_path: Path) -> None:
+    shared = _shared_fetch_repo
 
     _write_templates_config(
         hub_env.hub_root,
@@ -63,9 +77,9 @@ def test_templates_fetch_json(hub_env, tmp_path: Path) -> None:
         repos=[
             {
                 "id": "local",
-                "url": str(repo_path),
+                "url": str(shared["repo_path"]),
                 "trusted": True,
-                "default_ref": branch,
+                "default_ref": shared["branch"],
             }
         ],
     )
@@ -86,12 +100,12 @@ def test_templates_fetch_json(hub_env, tmp_path: Path) -> None:
     assert result.exit_code == 0
     payload = json.loads(result.output)
 
-    assert payload["content"] == content
+    assert payload["content"] == shared["content"]
     assert payload["repo_id"] == "local"
     assert payload["path"] == "tickets/TICKET-REVIEW.md"
-    assert payload["ref"] == branch
-    assert payload["commit_sha"] == commit
-    assert payload["blob_sha"] == blob_sha
+    assert payload["ref"] == shared["branch"]
+    assert payload["commit_sha"] == shared["commit"]
+    assert payload["blob_sha"] == shared["blob_sha"]
     assert payload["trusted"] is True
     assert payload["scan_decision"] is None
 
@@ -118,8 +132,6 @@ def test_templates_fetch_disabled(hub_env) -> None:
 def test_templates_fetch_network_unavailable_includes_details(
     hub_env, tmp_path: Path
 ) -> None:
-    """Test that NetworkUnavailableError includes repo_id, ref, path, and git error details."""
-    # Configure a template repo that doesn't exist
     _write_templates_config(
         hub_env.hub_root,
         enabled=True,
@@ -134,8 +146,6 @@ def test_templates_fetch_network_unavailable_includes_details(
     )
 
     runner = CliRunner()
-
-    # Try to fetch from the non-existent repo - should fail with detailed error
     result = runner.invoke(
         app,
         [

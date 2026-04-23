@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Optional
 
+import pytest
 import yaml
 from typer.testing import CliRunner
 
@@ -51,41 +52,71 @@ def _write_templates_config(
     )
 
 
-def test_templates_apply_next_index_writes_file(hub_env, tmp_path: Path) -> None:
-    repo_path = tmp_path / "templates_repo"
-    branch = _init_repo(repo_path)
-    content = "---\nagent: codex\ndone: false\n---\n\n# Template\nHello\n"
-    _commit_file(repo_path, "tickets/TICKET-REVIEW.md", content)
+_APPLY_TEMPLATE_CONTENT = "---\nagent: codex\ndone: false\n---\n\n# Template\nHello\n"
+_APPLY_TEMPLATE_OVERRIDE_CONTENT = (
+    "---\nagent: opencode\ndone: false\n---\n\n# Template\nHello\n"
+)
 
+
+@pytest.fixture(scope="module")
+def _shared_apply_repo(tmp_path_factory):
+    base = tmp_path_factory.mktemp("shared_apply")
+    repo_path = base / "templates_repo"
+    branch = _init_repo(repo_path)
+    commit, blob_sha = _commit_file(
+        repo_path, "tickets/TICKET-REVIEW.md", _APPLY_TEMPLATE_CONTENT
+    )
+    return {
+        "repo_path": repo_path,
+        "branch": branch,
+        "commit": commit,
+        "blob_sha": blob_sha,
+    }
+
+
+def _apply_config(shared, hub_root, template_content=None):
+    if template_content is None:
+        template_content = _APPLY_TEMPLATE_CONTENT
     _write_templates_config(
-        hub_env.hub_root,
+        hub_root,
         enabled=True,
         repos=[
             {
                 "id": "local",
-                "url": str(repo_path),
+                "url": str(shared["repo_path"]),
                 "trusted": True,
-                "default_ref": branch,
+                "default_ref": shared["branch"],
             }
         ],
     )
+
+
+def _invoke_apply(hub_env, extra_args=None):
+    runner = CliRunner()
+    args = [
+        "templates",
+        "apply",
+        "local:tickets/TICKET-REVIEW.md",
+        "--repo",
+        str(hub_env.repo_root),
+    ]
+    if extra_args:
+        args.extend(extra_args)
+    return runner.invoke(app, args)
+
+
+def test_templates_apply_next_index_writes_file(
+    _shared_apply_repo, hub_env, tmp_path: Path
+) -> None:
+    shared = _shared_apply_repo
+    _apply_config(shared, hub_env.hub_root)
 
     ticket_dir = hub_env.repo_root / ".codex-autorunner" / "tickets"
     ticket_dir.mkdir(parents=True, exist_ok=True)
     (ticket_dir / "TICKET-001.md").write_text("---\nagent: codex\ndone: false\n---\n")
     (ticket_dir / "TICKET-003.md").write_text("---\nagent: codex\ndone: false\n---\n")
 
-    runner = CliRunner()
-    result = runner.invoke(
-        app,
-        [
-            "templates",
-            "apply",
-            "local:tickets/TICKET-REVIEW.md",
-            "--repo",
-            str(hub_env.repo_root),
-        ],
-    )
+    result = _invoke_apply(hub_env)
 
     assert result.exit_code == 0
     created_path = ticket_dir / "TICKET-002.md"
@@ -95,46 +126,21 @@ def test_templates_apply_next_index_writes_file(hub_env, tmp_path: Path) -> None
     )
     assert frontmatter["agent"] == "codex"
     assert frontmatter["done"] is False
-    assert frontmatter["template"] == f"local:tickets/TICKET-REVIEW.md@{branch}"
+    assert (
+        frontmatter["template"] == f"local:tickets/TICKET-REVIEW.md@{shared['branch']}"
+    )
     assert frontmatter["template_commit"]
     assert frontmatter["template_blob"]
     assert "Hello" in body
 
 
 def test_templates_apply_set_agent_overrides_frontmatter(
-    hub_env, tmp_path: Path
+    _shared_apply_repo, hub_env, tmp_path: Path
 ) -> None:
-    repo_path = tmp_path / "templates_repo"
-    branch = _init_repo(repo_path)
-    content = "---\nagent: opencode\ndone: false\n---\n\n# Template\nHello\n"
-    _commit_file(repo_path, "tickets/TICKET-REVIEW.md", content)
+    shared = _shared_apply_repo
+    _apply_config(shared, hub_env.hub_root)
 
-    _write_templates_config(
-        hub_env.hub_root,
-        enabled=True,
-        repos=[
-            {
-                "id": "local",
-                "url": str(repo_path),
-                "trusted": True,
-                "default_ref": branch,
-            }
-        ],
-    )
-
-    runner = CliRunner()
-    result = runner.invoke(
-        app,
-        [
-            "templates",
-            "apply",
-            "local:tickets/TICKET-REVIEW.md",
-            "--repo",
-            str(hub_env.repo_root),
-            "--set-agent",
-            "user",
-        ],
-    )
+    result = _invoke_apply(hub_env, ["--set-agent", "user"])
 
     assert result.exit_code == 0
     ticket_dir = hub_env.repo_root / ".codex-autorunner" / "tickets"
@@ -147,39 +153,12 @@ def test_templates_apply_set_agent_overrides_frontmatter(
 
 
 def test_templates_apply_with_provenance_includes_metadata(
-    hub_env, tmp_path: Path
+    _shared_apply_repo, hub_env, tmp_path: Path
 ) -> None:
-    """Test that --provenance adds provenance keys to ticket frontmatter."""
-    repo_path = tmp_path / "templates_repo"
-    branch = _init_repo(repo_path)
-    content = "---\nagent: codex\ndone: false\n---\n\n# Template\nHello\n"
-    commit, blob_sha = _commit_file(repo_path, "tickets/TICKET-REVIEW.md", content)
+    shared = _shared_apply_repo
+    _apply_config(shared, hub_env.hub_root)
 
-    _write_templates_config(
-        hub_env.hub_root,
-        enabled=True,
-        repos=[
-            {
-                "id": "local",
-                "url": str(repo_path),
-                "trusted": True,
-                "default_ref": branch,
-            }
-        ],
-    )
-
-    runner = CliRunner()
-    result = runner.invoke(
-        app,
-        [
-            "templates",
-            "apply",
-            "local:tickets/TICKET-REVIEW.md",
-            "--repo",
-            str(hub_env.repo_root),
-            "--provenance",
-        ],
-    )
+    result = _invoke_apply(hub_env, ["--provenance"])
 
     assert result.exit_code == 0
     ticket_dir = hub_env.repo_root / ".codex-autorunner" / "tickets"
@@ -190,52 +169,24 @@ def test_templates_apply_with_provenance_includes_metadata(
         created_path.read_text(encoding="utf-8")
     )
 
-    # Check provenance keys
-    assert frontmatter["template"] == f"local:tickets/TICKET-REVIEW.md@{branch}"
-    assert frontmatter["template_commit"] == commit
-    assert frontmatter["template_blob"] == blob_sha
+    assert (
+        frontmatter["template"] == f"local:tickets/TICKET-REVIEW.md@{shared['branch']}"
+    )
+    assert frontmatter["template_commit"] == shared["commit"]
+    assert frontmatter["template_blob"] == shared["blob_sha"]
     assert frontmatter["template_trusted"] is True
     assert frontmatter["template_scan"] == "skipped"
-
-    # Original frontmatter keys should be preserved
     assert frontmatter["agent"] == "codex"
     assert frontmatter["done"] is False
 
 
 def test_templates_apply_without_provenance_no_metadata(
-    hub_env, tmp_path: Path
+    _shared_apply_repo, hub_env, tmp_path: Path
 ) -> None:
-    """Test that --no-provenance (default) does not add provenance keys."""
-    repo_path = tmp_path / "templates_repo"
-    branch = _init_repo(repo_path)
-    content = "---\nagent: codex\ndone: false\n---\n\n# Template\nHello\n"
-    _commit_file(repo_path, "tickets/TICKET-REVIEW.md", content)
+    shared = _shared_apply_repo
+    _apply_config(shared, hub_env.hub_root)
 
-    _write_templates_config(
-        hub_env.hub_root,
-        enabled=True,
-        repos=[
-            {
-                "id": "local",
-                "url": str(repo_path),
-                "trusted": True,
-                "default_ref": branch,
-            }
-        ],
-    )
-
-    runner = CliRunner()
-    result = runner.invoke(
-        app,
-        [
-            "templates",
-            "apply",
-            "local:tickets/TICKET-REVIEW.md",
-            "--repo",
-            str(hub_env.repo_root),
-            "--no-provenance",
-        ],
-    )
+    result = _invoke_apply(hub_env, ["--no-provenance"])
 
     assert result.exit_code == 0
     ticket_dir = hub_env.repo_root / ".codex-autorunner" / "tickets"
@@ -246,36 +197,20 @@ def test_templates_apply_without_provenance_no_metadata(
         created_path.read_text(encoding="utf-8")
     )
 
-    # Provenance keys should not be present
     assert "template" not in frontmatter
     assert "template_commit" not in frontmatter
     assert "template_blob" not in frontmatter
     assert "template_trusted" not in frontmatter
     assert "template_scan" not in frontmatter
-
-    # Original frontmatter keys should be preserved
     assert frontmatter["agent"] == "codex"
     assert frontmatter["done"] is False
 
 
-def test_template_apply_rejects_removed_out_alias(hub_env, tmp_path: Path) -> None:
-    repo_path = tmp_path / "templates_repo"
-    branch = _init_repo(repo_path)
-    content = "---\nagent: codex\ndone: false\n---\n\n# Template\nHello\n"
-    _commit_file(repo_path, "tickets/TICKET-REVIEW.md", content)
-
-    _write_templates_config(
-        hub_env.hub_root,
-        enabled=True,
-        repos=[
-            {
-                "id": "local",
-                "url": str(repo_path),
-                "trusted": True,
-                "default_ref": branch,
-            }
-        ],
-    )
+def test_template_apply_rejects_removed_out_alias(
+    _shared_apply_repo, hub_env, tmp_path: Path
+) -> None:
+    shared = _shared_apply_repo
+    _apply_config(shared, hub_env.hub_root)
 
     runner = CliRunner()
     result = runner.invoke(
@@ -295,16 +230,7 @@ def test_template_apply_rejects_removed_out_alias(hub_env, tmp_path: Path) -> No
 
     created_path = hub_env.repo_root / ".codex-autorunner" / "tickets" / "TICKET-001.md"
     assert not created_path.exists()
-    result = runner.invoke(
-        app,
-        [
-            "templates",
-            "apply",
-            "local:tickets/TICKET-REVIEW.md",
-            "--repo",
-            str(hub_env.repo_root),
-        ],
-    )
+    result = _invoke_apply(hub_env)
 
     assert result.exit_code == 0
     assert created_path.exists()
@@ -313,4 +239,6 @@ def test_template_apply_rejects_removed_out_alias(hub_env, tmp_path: Path) -> No
     )
     assert frontmatter["agent"] == "codex"
     assert frontmatter["done"] is False
-    assert frontmatter["template"] == f"local:tickets/TICKET-REVIEW.md@{branch}"
+    assert (
+        frontmatter["template"] == f"local:tickets/TICKET-REVIEW.md@{shared['branch']}"
+    )

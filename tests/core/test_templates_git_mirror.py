@@ -39,31 +39,70 @@ def _commit_file(repo_path: Path, rel_path: str, content: str) -> tuple[str, str
     return commit, blob_sha
 
 
-def test_fetch_template_from_local_repo(tmp_path: Path) -> None:
-    repo_path = tmp_path / "repo"
-    branch = _init_repo(repo_path)
-    content = "# Template\nHello"
-    commit, blob_sha = _commit_file(repo_path, "tickets/TICKET-REVIEW.md", content)
+_SHARED_FILES = {
+    "TICKET-REVIEW.md": "# Template\nHello",
+    "TICKET-ONE.md": "# Template One\nOne",
+    "TICKET-TWO.md": "# Template Two\nTwo",
+    "TICKET-OK.md": "ok",
+}
 
-    repo = TemplateRepoConfig(
-        id="local",
-        url=str(repo_path),
-        trusted=True,
-        default_ref=branch,
-    )
-    hub_root = tmp_path / "hub"
+
+@pytest.fixture(scope="module")
+def _shared_mirror_repo(tmp_path_factory):
+    base = tmp_path_factory.mktemp("shared_mirror")
+    repo_path = base / "repo"
+    hub_root = base / "hub"
     hub_root.mkdir()
+    branch = _init_repo(repo_path)
+    for name, content in _SHARED_FILES.items():
+        fp = repo_path / "tickets" / name
+        fp.parent.mkdir(parents=True, exist_ok=True)
+        fp.write_text(content, encoding="utf-8")
+    run_git(["add", "tickets/"], repo_path, check=True)
+    run_git(["commit", "-m", "add templates"], repo_path, check=True)
+    commit = (run_git(["rev-parse", "HEAD"], repo_path).stdout or "").strip()
+    files = {}
+    for name, content in _SHARED_FILES.items():
+        rel = f"tickets/{name}"
+        tree_entry = (
+            run_git(["ls-tree", commit, "--", rel], repo_path).stdout or ""
+        ).strip()
+        files[name] = {
+            "blob_sha": tree_entry.split()[2],
+            "content": content,
+        }
+    return {
+        "repo_path": repo_path,
+        "branch": branch,
+        "commit": commit,
+        "files": files,
+        "hub_root": hub_root,
+    }
+
+
+def _mirror_config(shared, repo_id: str = "local") -> TemplateRepoConfig:
+    return TemplateRepoConfig(
+        id=repo_id,
+        url=str(shared["repo_path"]),
+        trusted=True,
+        default_ref=shared["branch"],
+    )
+
+
+def test_fetch_template_from_local_repo(_shared_mirror_repo) -> None:
+    shared = _shared_mirror_repo
+    review = shared["files"]["TICKET-REVIEW.md"]
 
     fetched = fetch_template(
-        repo=repo,
-        hub_root=hub_root,
+        repo=_mirror_config(shared),
+        hub_root=shared["hub_root"],
         template_ref="local:tickets/TICKET-REVIEW.md",
     )
 
-    assert fetched.commit_sha == commit
-    assert fetched.blob_sha == blob_sha
-    assert fetched.content == content
-    assert fetched.ref == branch
+    assert fetched.commit_sha == shared["commit"]
+    assert fetched.blob_sha == review["blob_sha"]
+    assert fetched.content == review["content"]
+    assert fetched.ref == shared["branch"]
 
 
 def test_fetch_template_offline_fallback(tmp_path: Path) -> None:
@@ -98,24 +137,13 @@ def test_fetch_template_offline_fallback(tmp_path: Path) -> None:
     assert fetched_again.content == content
 
 
-def test_fetch_template_missing_path(tmp_path: Path) -> None:
-    repo_path = tmp_path / "repo"
-    branch = _init_repo(repo_path)
-    _commit_file(repo_path, "tickets/TICKET-OK.md", "ok")
-
-    repo = TemplateRepoConfig(
-        id="local",
-        url=str(repo_path),
-        trusted=True,
-        default_ref=branch,
-    )
-    hub_root = tmp_path / "hub"
-    hub_root.mkdir()
+def test_fetch_template_missing_path(_shared_mirror_repo) -> None:
+    shared = _shared_mirror_repo
 
     with pytest.raises(TemplateNotFoundError):
         fetch_template(
-            repo=repo,
-            hub_root=hub_root,
+            repo=_mirror_config(shared),
+            hub_root=shared["hub_root"],
             template_ref="local:tickets/MISSING.md",
         )
 
@@ -139,7 +167,6 @@ def test_fetch_template_network_unavailable(tmp_path: Path) -> None:
 
 
 def test_fetch_template_content_change_changes_blob_sha(tmp_path: Path) -> None:
-    """Test that changing content in the same file results in a new blob_sha."""
     repo_path = tmp_path / "repo"
     branch = _init_repo(repo_path)
     initial_content = "# Initial Template\nHello"
@@ -185,42 +212,29 @@ def test_fetch_template_content_change_changes_blob_sha(tmp_path: Path) -> None:
     assert initial_blob_sha != modified_blob_sha
 
 
-def test_fetch_template_different_file_different_blob_sha(tmp_path: Path) -> None:
-    """Test that fetching different files results in different blob_shas."""
-    repo_path = tmp_path / "repo"
-    branch = _init_repo(repo_path)
-    content1 = "# Template One\nOne"
-    content2 = "# Template Two\nTwo"
-    _, blob_sha1 = _commit_file(repo_path, "tickets/TICKET-ONE.md", content1)
-    _, blob_sha2 = _commit_file(repo_path, "tickets/TICKET-TWO.md", content2)
-
-    repo = TemplateRepoConfig(
-        id="local",
-        url=str(repo_path),
-        trusted=True,
-        default_ref=branch,
-    )
-    hub_root = tmp_path / "hub"
-    hub_root.mkdir()
+def test_fetch_template_different_file_different_blob_sha(
+    _shared_mirror_repo,
+) -> None:
+    shared = _shared_mirror_repo
+    repo = _mirror_config(shared)
 
     fetched_one = fetch_template(
         repo=repo,
-        hub_root=hub_root,
+        hub_root=shared["hub_root"],
         template_ref="local:tickets/TICKET-ONE.md",
     )
     fetched_two = fetch_template(
         repo=repo,
-        hub_root=hub_root,
+        hub_root=shared["hub_root"],
         template_ref="local:tickets/TICKET-TWO.md",
     )
 
-    assert fetched_one.blob_sha == blob_sha1
-    assert fetched_two.blob_sha == blob_sha2
+    assert fetched_one.blob_sha == shared["files"]["TICKET-ONE.md"]["blob_sha"]
+    assert fetched_two.blob_sha == shared["files"]["TICKET-TWO.md"]["blob_sha"]
     assert fetched_one.blob_sha != fetched_two.blob_sha
 
 
 def test_fetch_template_with_explicit_ref(tmp_path: Path) -> None:
-    """Test fetching with explicit ref in template_ref string."""
     repo_path = tmp_path / "repo"
     _init_repo(repo_path, branch="main")
     content = "# Branch Template\nBranch content"
