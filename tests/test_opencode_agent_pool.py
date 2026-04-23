@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,6 +20,20 @@ from codex_autorunner.core.orchestration import ColdTraceStore
 from codex_autorunner.core.orchestration.turn_timeline import list_turn_timeline
 from codex_autorunner.integrations.agents.agent_pool_impl import DefaultAgentPool
 from codex_autorunner.tickets.agent_pool import AgentTurnRequest
+
+
+async def _await_until(
+    predicate,
+    *,
+    timeout_s: float = 2.0,
+    poll_s: float = 0.01,
+) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout_s
+    while asyncio.get_running_loop().time() < deadline:
+        if predicate():
+            return
+        await asyncio.sleep(poll_s)
+    raise AssertionError("timed out waiting for async condition")
 
 
 @dataclass
@@ -896,6 +911,13 @@ async def test_run_turn_persists_full_timeline_from_raw_events_after_partial_liv
             {"name": "shell", "result": {"stdout": str(tmp_path)}},
         ),
     ]
+    stream_started_event = asyncio.Event()
+    stream_release_event = asyncio.Event()
+
+    async def _release_stream_after_first_chunk() -> None:
+        await stream_started_event.wait()
+        stream_release_event.set()
+
     harness = _FakeHarness(
         [
             _HarnessScript(
@@ -903,20 +925,26 @@ async def test_run_turn_persists_full_timeline_from_raw_events_after_partial_liv
                 raw_events=streamed_raw_events[1:],
                 streamed_raw_events=streamed_raw_events,
                 stream_pause_after=1,
-                stream_release_event=asyncio.Event(),
-                stream_started_event=asyncio.Event(),
+                stream_release_event=stream_release_event,
+                stream_started_event=stream_started_event,
             )
         ]
     )
     pool = _make_pool(tmp_path, harness, approval_mode="yolo")
 
-    result = await pool.run_turn(
-        AgentTurnRequest(
-            agent_id="codex",
-            prompt="main",
-            workspace_root=tmp_path,
+    release_task = asyncio.create_task(_release_stream_after_first_chunk())
+    try:
+        result = await pool.run_turn(
+            AgentTurnRequest(
+                agent_id="codex",
+                prompt="main",
+                workspace_root=tmp_path,
+            )
         )
-    )
+    finally:
+        release_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await release_task
 
     timeline = list_turn_timeline(
         tmp_path,
@@ -1211,10 +1239,12 @@ async def test_run_turn_uses_profile_aware_runtime_resolution_for_hermes_queue_d
             )
         )
     )
-    await asyncio.sleep(0)
-
     service = pool._get_orchestration_service()  # type: ignore[attr-defined]
     assert service.get_running_execution(thread_id) is not None
+    await _await_until(
+        lambda: len(service.list_queued_executions(thread_id)) >= 1,
+        timeout_s=2.0,
+    )
     assert len(service.list_queued_executions(thread_id)) == 1
 
     release_first.set()
@@ -1304,10 +1334,12 @@ async def test_run_turn_queues_busy_delegated_thread_and_shows_active_work(
             )
         )
     )
-    await asyncio.sleep(0)
-
     service = pool._get_orchestration_service()  # type: ignore[attr-defined]
     assert service.get_running_execution(thread_id) is not None
+    await _await_until(
+        lambda: len(service.list_queued_executions(thread_id)) >= 1,
+        timeout_s=2.0,
+    )
     assert len(service.list_queued_executions(thread_id)) == 1
     assert harness.calls[0]["conversation_id"] == "session-1"
 

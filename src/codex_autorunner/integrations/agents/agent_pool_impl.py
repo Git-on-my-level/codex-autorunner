@@ -924,7 +924,9 @@ class DefaultAgentPool:
     async def run_turn(self, req: AgentTurnRequest) -> AgentTurnResult:
         agent_id = self._resolve_ticket_flow_agent_id(req.agent_id)
         options = req.options if isinstance(req.options, dict) else {}
-        agent_profile = _normalize_optional_text(options.get("profile"))
+        agent_profile = _normalize_optional_text(
+            options.get("profile") or options.get("agent_profile")
+        )
         model = _normalize_model(options.get("model"))
         reasoning = (
             options.get("reasoning")
