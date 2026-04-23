@@ -1,8 +1,11 @@
+import asyncio
 import json
+import logging
 import shlex
 import sqlite3
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Callable, Optional, cast
 from urllib.parse import urlencode
 
@@ -18,6 +21,9 @@ from ....core.destinations import (
 )
 from ....core.hub import HubSupervisor
 from ....core.hub_diagnostics import read_hub_endpoint
+from ....core.hub_projection_store import HubProjectionStore
+from ....core.hub_read_model import HubReadModelService
+from ....core.hub_repo_projection import HubRepoProjectionService
 from ....core.orchestration import (
     audit_execution_history,
     backfill_legacy_execution_history,
@@ -206,6 +212,25 @@ def register_hub_commands(
                 }
             )
         return _format_text_table_lines(columns, rows)
+
+    def _build_local_hub_read_model_service(
+        config: HubConfig,
+        supervisor: HubSupervisor,
+    ) -> HubReadModelService:
+        context = SimpleNamespace(
+            config=config,
+            supervisor=supervisor,
+            projection_store=HubProjectionStore(
+                config.root,
+                durable=bool(getattr(config, "durable_writes", False)),
+            ),
+            logger=logging.getLogger(__name__),
+        )
+        repo_projection = HubRepoProjectionService(context)
+        return HubReadModelService(
+            context,
+            repo_projection_provider=repo_projection,
+        )
 
     def _destination_issues(
         manifest: Manifest,
@@ -1399,16 +1424,24 @@ def register_hub_commands(
         """List hub repos."""
         config = require_hub_config(path)
         supervisor = build_supervisor(config)
-        payload = [
-            _repo_listing_payload(snapshot) for snapshot in supervisor.list_repos()
+        service = _build_local_hub_read_model_service(config, supervisor)
+        payload = asyncio.run(service.list_repos(sections={"repos"}))
+        repos = payload.get("repos", []) if isinstance(payload, dict) else []
+        summarized = [
+            (
+                _repo_listing_payload(SimpleNamespace(**repo))
+                if isinstance(repo, dict)
+                else {}
+            )
+            for repo in repos
         ]
         if output_json:
-            typer.echo(json.dumps({"repos": payload}, indent=2))
+            typer.echo(json.dumps({"repos": summarized}, indent=2))
             return
-        if not payload:
+        if not summarized:
             typer.echo("No repos.")
             return
-        for line in _render_repo_table(payload):
+        for line in _render_repo_table(summarized):
             typer.echo(line)
 
     @hub_app.command("cleanup")

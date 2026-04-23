@@ -15,6 +15,7 @@ ALLOWED_RAW_STATE_PATH_FILES = {
     "src/codex_autorunner/core/config_builders.py",
     "src/codex_autorunner/core/config_layering.py",
     "src/codex_autorunner/core/flows/pause_dispatch.py",
+    "src/codex_autorunner/core/hub_repo_projection.py",
     "src/codex_autorunner/core/hub_runner_orchestrator.py",
     "src/codex_autorunner/core/hub_topology.py",
     "src/codex_autorunner/core/pr_binding_runtime.py",
@@ -33,7 +34,6 @@ ALLOWED_RAW_STATE_PATH_FILES = {
     "src/codex_autorunner/integrations/telegram/ticket_flow_bridge.py",
     "src/codex_autorunner/surfaces/cli/commands/root.py",
     "src/codex_autorunner/surfaces/web/routes/hub_repo_routes/channels.py",
-    "src/codex_autorunner/surfaces/web/routes/hub_repo_routes/services.py",
 }
 ALLOWED_RAW_ALTER_ADD_COLUMN_FILES = {
     "src/codex_autorunner/core/sqlite_utils.py",
