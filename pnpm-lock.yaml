@@ -21,8 +21,8 @@ importers:
         specifier: ^17.5.0
         version: 17.5.0
       html-validate:
-        specifier: ^10.13.0
-        version: 10.13.0
+        specifier: ^10.13.1
+        version: 10.13.1
       jsdom:
         specifier: ^29.0.2
         version: 29.0.2
@@ -388,8 +388,8 @@ packages:
     resolution: {integrity: sha512-CV9TW3Y3f8/wT0BRFc1/KAVQ3TUHiXmaAb6VW9vtiMFf7SLoMd1PdAc4W3KFOFETBJUb90KatHqlsZMWV+R9Gg==}
     engines: {node: ^20.19.0 || ^22.12.0 || >=24.0.0}
 
-  html-validate@10.13.0:
-    resolution: {integrity: sha512-3Lw/gGLu6EmMsl8LzAYyolDapVfZf60i0azWKxeoklhmS0Y145igwQ+MOPqIGZLGC3uP8SOBNXwLbZVPU9Ok7w==}
+  html-validate@10.13.1:
+    resolution: {integrity: sha512-1ox3gMhul5GwXnftNEY5nqnEQJ1B2K1GNu2uSO3nJ6D3gmGh/xsKtcSi3zelHam1nFNXyC14vTay+gpS+tbsdA==}
     engines: {node: ^20.19.0 || ^22.16.0 || >= 24.0.0}
     hasBin: true
     peerDependencies:
@@ -1033,7 +1033,7 @@ snapshots:
     transitivePeerDependencies:
       - '@noble/hashes'
 
-  html-validate@10.13.0:
+  html-validate@10.13.1:
     dependencies:
       '@html-validate/stylish': 5.2.0
       '@sidvind/better-ajv-errors': 5.0.0(ajv@8.18.0)
