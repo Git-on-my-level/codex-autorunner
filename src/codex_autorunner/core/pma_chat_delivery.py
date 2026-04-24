@@ -203,6 +203,12 @@ async def deliver_pma_notification(
                     "targets": 1,
                     "published": 0,
                 }
+        if dispatch_decision.get("suppress_publish"):
+            return {
+                "route": "suppressed_duplicate",
+                "targets": 1,
+                "published": 0,
+            }
         if not persisted_attempts:
             return {"route": normalized_delivery, "targets": 0, "published": 0}
         from ..pma_chat_delivery_runtime import dispatch_pma_chat_delivery_intent

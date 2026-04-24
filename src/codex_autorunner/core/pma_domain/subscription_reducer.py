@@ -50,6 +50,7 @@ class ReduceTransitionResult:
     wakeup_intents: tuple[WakeupIntent, ...] = ()
     matched: int = 0
     created: int = 0
+    subscriptions_changed: int = 0
 
 
 def _subscription_matches_event(sub: PmaSubscription, event: TransitionEvent) -> bool:
@@ -86,6 +87,7 @@ def reduce_transition(
     new_intents: list[WakeupIntent] = []
     matched = 0
     created = 0
+    subscriptions_changed = 0
 
     for sub in subscriptions:
         if sub.state != SUBSCRIPTION_STATE_ACTIVE:
@@ -94,6 +96,7 @@ def reduce_transition(
 
         if sub.is_exhausted():
             updated_subs.append(replace(sub, state=SUBSCRIPTION_STATE_CANCELLED))
+            subscriptions_changed += 1
             continue
 
         if not _subscription_matches_event(sub, event):
@@ -115,6 +118,9 @@ def reduce_transition(
         if not isinstance(event_data, dict):
             event_data = {}
 
+        sub_reason = (sub.reason or "").strip()
+        wakeup_reason = sub_reason if sub_reason else event.reason
+
         new_intents.append(
             WakeupIntent(
                 source="transition",
@@ -124,7 +130,7 @@ def reduce_transition(
                 lane_id=sub.lane_id,
                 from_state=event.from_state,
                 to_state=event.to_state,
-                reason=event.reason,
+                reason=wakeup_reason,
                 timestamp="",
                 idempotency_key=wakeup_key,
                 subscription_id=sub.subscription_id,
@@ -149,6 +155,7 @@ def reduce_transition(
         wakeup_intents=tuple(new_intents),
         matched=matched,
         created=created,
+        subscriptions_changed=subscriptions_changed,
     )
 
 
