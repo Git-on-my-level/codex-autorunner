@@ -2,17 +2,17 @@
 /**
  * Ticket Editor Modal - handles creating, editing, and deleting tickets
  */
-import { api, confirmModal, flash, updateUrlParams, splitMarkdownFrontmatter } from "./utils.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
-import { publish } from "./bus.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
-import { clearTicketChatHistory } from "./ticketChatStorage.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
-import { setTicketIndex, sendTicketChat, cancelTicketChat, applyTicketPatch, discardTicketPatch, loadTicketPending, renderTicketChat, resetTicketChatState, restoreTicketChatSelectionToActiveTurn, syncTicketChatTargetToSelection, ticketChatState, resumeTicketPendingTurn, } from "./ticketChatActions.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
-import { initAgentControls } from "./agentControls.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
-import { initTicketVoice } from "./ticketVoice.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
-import { initTicketChatEvents, renderTicketEvents, renderTicketMessages } from "./ticketChatEvents.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
-import { initChatPasteUpload } from "./chatUploads.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
-import { DocEditor } from "./docEditor.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
-import { initTicketTemplates } from "./ticketTemplates.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
-import { DEFAULT_FRONTMATTER, sameUndoSnapshot, extractFrontmatter, getFrontmatterFromForm, setFrontmatterForm, refreshFrontmatterAgentProfileControls, syncFrontmatterAgentProfileControls, refreshFmModelOptions, refreshFmReasoningOptions, getCatalogForAgent, buildTicketContent, } from "./ticketEditorFrontmatter.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
+import { api, confirmModal, flash, updateUrlParams, splitMarkdownFrontmatter } from "./utils.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { publish } from "./bus.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { clearTicketChatHistory } from "./ticketChatStorage.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { setTicketIndex, sendTicketChat, cancelTicketChat, applyTicketPatch, discardTicketPatch, loadTicketPending, renderTicketChat, resetTicketChatState, restoreTicketChatSelectionToActiveTurn, syncTicketChatTargetToSelection, ticketChatState, resumeTicketPendingTurn, } from "./ticketChatActions.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { initAgentControls } from "./agentControls.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { initTicketVoice } from "./ticketVoice.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { initTicketChatEvents, renderTicketEvents, renderTicketMessages } from "./ticketChatEvents.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { initChatPasteUpload } from "./chatUploads.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { DocEditor } from "./docEditor.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { initTicketTemplates } from "./ticketTemplates.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { DEFAULT_FRONTMATTER, sameUndoSnapshot, extractFrontmatter, getFrontmatterFromForm, setFrontmatterForm, refreshFrontmatterAgentProfileControls, syncFrontmatterAgentProfileControls, refreshFmModelOptions, refreshFmReasoningOptions, getCatalogForAgent, buildTicketContent, } from "./ticketEditorFrontmatter.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
 const state = {
     isOpen: false,
     isClosing: false,

@@ -1,10 +1,10 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { api, flash } from "./utils.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
-import { importVersionedModule } from "./assetLoader.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
-import { renderMarkdown } from "./markdown.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
-import { resolvePath } from "./utils.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
-import { publish } from "./bus.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
-import { DISPATCH_PANEL_COLLAPSED_KEY, formatDispatchTime, formatNumber, formatElapsedSeconds, truncate, isFlowActiveStatus, } from "./ticketFlowState.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
+import { api, flash } from "./utils.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { importVersionedModule } from "./assetLoader.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { renderMarkdown } from "./markdown.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { resolvePath } from "./utils.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { publish } from "./bus.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { DISPATCH_PANEL_COLLAPSED_KEY, formatDispatchTime, formatNumber, formatElapsedSeconds, truncate, isFlowActiveStatus, } from "./ticketFlowState.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
 let dragSourceIndex = null;
 let dragTargetIndex = null;
 let dragPlaceAfter = false;

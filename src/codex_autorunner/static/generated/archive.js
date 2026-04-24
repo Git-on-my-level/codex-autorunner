@@ -1,8 +1,8 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { subscribe } from "./bus.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
-import { downloadArchiveFile, downloadLocalArchiveFile, fetchArchiveSnapshot, listArchiveSnapshots, listArchiveTree, listLocalArchiveTree, listLocalRunArchives, readArchiveFile, readLocalArchiveFile, } from "./archiveApi.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
-import { escapeHtml, flash, statusPill, setButtonLoading } from "./utils.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
-import { formatTimestamp, formatBytes } from "./formatUtils.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
+import { subscribe } from "./bus.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { downloadArchiveFile, downloadLocalArchiveFile, fetchArchiveSnapshot, listArchiveSnapshots, listArchiveTree, listLocalArchiveTree, listLocalRunArchives, readArchiveFile, readLocalArchiveFile, } from "./archiveApi.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { escapeHtml, flash, statusPill, setButtonLoading } from "./utils.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { formatTimestamp, formatBytes } from "./formatUtils.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
 let initialized = false;
 let snapshots = [];
 let localArchives = [];

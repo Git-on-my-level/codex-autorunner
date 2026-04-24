@@ -1,11 +1,11 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { api, flash } from "./utils.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
-import { HUB_CACHE_TTL_MS, HUB_USAGE_CACHE_KEY, saveSessionCache, loadSessionCache, loadHubBootstrapCache, saveHubBootstrapCache, indexHubUsage, } from "./hubCache.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
-import { registerAutoRefresh, setAutoRefreshEnabled } from "./autoRefresh.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
-import { isUiMockActive } from "./uiMock.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
-import { renderReposWithScroll, renderAgentWorkspaces, renderSummary, } from "./hubRepoCards.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
-import { loadUpdateTargetOptions, handleSystemUpdate, } from "./systemUpdateUi.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
-import { getHubData, applyHubData, getHubChannelEntries, getPinnedParentRepoIds, startHubJob, } from "./hubActions.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
+import { api, flash } from "./utils.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { HUB_CACHE_TTL_MS, HUB_USAGE_CACHE_KEY, saveSessionCache, loadSessionCache, loadHubBootstrapCache, saveHubBootstrapCache, indexHubUsage, } from "./hubCache.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { registerAutoRefresh, setAutoRefreshEnabled } from "./autoRefresh.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { isUiMockActive } from "./uiMock.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { renderReposWithScroll, renderAgentWorkspaces, renderSummary, } from "./hubRepoCards.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { loadUpdateTargetOptions, handleSystemUpdate, } from "./systemUpdateUi.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { getHubData, applyHubData, getHubChannelEntries, getPinnedParentRepoIds, startHubJob, } from "./hubActions.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
 export const HUB_REFRESH_ACTIVE_MS = 5000;
 export const HUB_REFRESH_IDLE_MS = 30000;
 const hubUsageMeta = document.getElementById("hub-usage-meta");

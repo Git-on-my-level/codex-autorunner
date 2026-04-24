@@ -1,8 +1,8 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { escapeHtml, statusPill, resolvePath } from "./utils.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
-import { preserveScroll } from "./preserve.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
-import { formatTokensCompact, getRepoUsage, getHubUsageUnmatched } from "./hubCache.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
-import { buildRepoGroups, compareReposForSort, hubViewPrefs, isCleanupBlockedByChatBinding, normalizedHubSearch, repoFlowStatus, repoMatchesFlowFilter, repoMatchesSearch, channelMatchesSearch, unboundManagedThreadCount, } from "./hubFilters.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
+import { escapeHtml, statusPill, resolvePath } from "./utils.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { preserveScroll } from "./preserve.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { formatTokensCompact, getRepoUsage, getHubUsageUnmatched } from "./hubCache.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { buildRepoGroups, compareReposForSort, hubViewPrefs, isCleanupBlockedByChatBinding, normalizedHubSearch, repoFlowStatus, repoMatchesFlowFilter, repoMatchesSearch, channelMatchesSearch, unboundManagedThreadCount, } from "./hubFilters.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
 let cleanupAllInFlight = false;
 export function setCleanupAllInFlight(value) {
     cleanupAllInFlight = value;

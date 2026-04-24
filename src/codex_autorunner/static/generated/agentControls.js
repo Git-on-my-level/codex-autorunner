@@ -1,7 +1,7 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { api, flash } from "./utils.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
-import { createSmartRefresh } from "./smartRefresh.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
-import { REPO_ID } from "./env.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
+import { api, flash } from "./utils.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { createSmartRefresh } from "./smartRefresh.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { REPO_ID } from "./env.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
 const API_PREFIX = REPO_ID ? "/api" : "/hub/pma";
 const STORAGE_PREFIX = REPO_ID ? "car.agent" : "car.pma.agent";
 const STORAGE_KEYS = {
@@ -282,13 +282,10 @@ function ensureProfileOptions(select, agentId) {
     if (!select)
         return;
     const profiles = agentProfiles(agentId);
-    select.classList.toggle("hidden", profiles.length === 0);
+    const hide = profiles.length === 0;
+    select.classList.toggle("hidden", hide);
     select.innerHTML = "";
-    if (!profiles.length) {
-        const option = document.createElement("option");
-        option.value = "";
-        option.textContent = "No profiles";
-        select.appendChild(option);
+    if (hide) {
         select.disabled = true;
         return;
     }
@@ -311,15 +308,13 @@ function ensureProfileOptions(select, agentId) {
 function ensureModelOptions(select, catalog, mode) {
     if (!select)
         return;
+    const showCatalog = mode === "catalog" &&
+        Boolean(catalog) &&
+        Array.isArray(catalog?.models) &&
+        (catalog?.models?.length ?? 0) > 0;
+    select.classList.toggle("hidden", !showCatalog);
     select.innerHTML = "";
-    if (mode !== "catalog" ||
-        !catalog ||
-        !Array.isArray(catalog.models) ||
-        !catalog.models.length) {
-        const option = document.createElement("option");
-        option.value = "";
-        option.textContent = mode === "manual" ? "Manual override" : "No models";
-        select.appendChild(option);
+    if (!showCatalog) {
         select.disabled = true;
         return;
     }
@@ -342,12 +337,10 @@ function ensureModelOptions(select, catalog, mode) {
 function ensureReasoningOptions(select, model) {
     if (!select)
         return;
+    const show = Boolean(model?.supports_reasoning && model.reasoning_options?.length);
+    select.classList.toggle("hidden", !show);
     select.innerHTML = "";
-    if (!model || !model.supports_reasoning || !model.reasoning_options?.length) {
-        const option = document.createElement("option");
-        option.value = "";
-        option.textContent = "None";
-        select.appendChild(option);
+    if (!show) {
         select.disabled = true;
         return;
     }
@@ -386,7 +379,7 @@ function resolveSelectedModel(agent, catalog) {
         catalog.models.some((entry) => entry.id === catalog.default_model)) {
         return catalog.default_model;
     }
-    return "";
+    return catalog.models[0]?.id || "";
 }
 function resolveSelectedProfile(agent) {
     const profiles = agentProfiles(agent);
@@ -401,16 +394,16 @@ function resolveSelectedProfile(agent) {
     if (defaultProfile && profiles.some((profile) => profile.id === defaultProfile)) {
         return defaultProfile;
     }
-    return "";
+    return profiles[0]?.id || "";
 }
 function resolveSelectedReasoning(agent, model) {
-    if (!model || !model.reasoning_options?.length)
+    if (!model?.supports_reasoning || !model.reasoning_options?.length)
         return "";
     const stored = getSelectedReasoning(agent);
     if (stored && model.reasoning_options.includes(stored)) {
         return stored;
     }
-    return "";
+    return model.reasoning_options[0] || "";
 }
 async function loadAgentControlsPayload() {
     try {

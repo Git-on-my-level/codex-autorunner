@@ -1,7 +1,7 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { CONSTANTS } from "./constants.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
-import { BASE_PATH } from "./env.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
-import { getUiMockJsonForRequest } from "./uiMock.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
+import { CONSTANTS } from "./constants.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { BASE_PATH } from "./env.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { getUiMockJsonForRequest } from "./uiMock.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
 const toast = document.getElementById("toast");
 const decoder = new TextDecoder();
 const AUTH_TOKEN_KEY = "car_auth_token";

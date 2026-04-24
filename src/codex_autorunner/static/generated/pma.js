@@ -2,19 +2,19 @@
 /**
  * PMA (Project Management Agent) - Hub-level chat interface
  */
-import { api, resolvePath, getAuthToken, flash, escapeHtml } from "./utils.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
-import { createDocChat, } from "./docChatCore.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
-import { initChatPasteUpload } from "./chatUploads.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
-import { DEFAULT_FILEBOX_BOX, FILEBOX_BOXES, } from "./fileboxCatalog.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
-import * as agentControlsModule from "./agentControls.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
-import { createFileBoxWidget } from "./fileboxUi.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
-import { readEventStream, handleStreamEvent, } from "./streamUtils.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
-import { newClientTurnId as newFileChatTurnId } from "./fileChat.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
-import { initNotificationBell } from "./notificationBell.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
-import { registerAutoRefresh } from "./autoRefresh.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
-import { CONSTANTS } from "./constants.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
-import { createTurnEventsController, cancelActiveTurnAndWait, scheduleRecoveryRetry, createTurnRecoveryTracker, ACTIVE_TURN_RECOVERY_STALE_MESSAGE, } from "./sharedTurnLifecycle.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
-import { loadPendingTurn, savePendingTurn, clearPendingTurn, } from "./turnResume.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
+import { api, resolvePath, getAuthToken, flash, escapeHtml } from "./utils.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { createDocChat, } from "./docChatCore.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { initChatPasteUpload } from "./chatUploads.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { DEFAULT_FILEBOX_BOX, FILEBOX_BOXES, } from "./fileboxCatalog.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import * as agentControlsModule from "./agentControls.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { createFileBoxWidget } from "./fileboxUi.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { readEventStream, handleStreamEvent, } from "./streamUtils.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { newClientTurnId as newFileChatTurnId } from "./fileChat.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { initNotificationBell } from "./notificationBell.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { registerAutoRefresh } from "./autoRefresh.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { CONSTANTS } from "./constants.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { createTurnEventsController, cancelActiveTurnAndWait, scheduleRecoveryRetry, createTurnRecoveryTracker, ACTIVE_TURN_RECOVERY_STALE_MESSAGE, } from "./sharedTurnLifecycle.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { loadPendingTurn, savePendingTurn, clearPendingTurn, } from "./turnResume.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
 // PMA is often the first lazily loaded surface users open after a rebuild. Use a
 // namespace import so a stale cached `agentControls.js` cannot fail module linking
 // before PMA gets a chance to render recovery/onboarding UI.

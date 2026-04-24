@@ -1,5 +1,5 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { api, resolvePath } from "./utils.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
+import { api, resolvePath } from "./utils.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
 export async function listArchiveSnapshots() {
     const res = (await api("/api/archive/snapshots"));
     return res?.snapshots ?? [];

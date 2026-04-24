@@ -339,6 +339,15 @@ const scenarios = {
         },
         pmaAgents: mockPmaAgentsList,
     }),
+    onboarding: bundle("onboarding", "First-run / clean slate (onboarding)", "Empty hub + mocked PMA agents. Pair with ?view=pma and ?carOnboarding=1 to reset the setup walkthrough strip (see walkthrough.ts).", {
+        hubData: {
+            repos: [],
+            agent_workspaces: [],
+            last_scan_at: null,
+            pinned_parent_repo_ids: [],
+        },
+        pmaAgents: mockPmaAgentsList,
+    }),
 };
 export const UI_MOCK_SCENARIO_ORDER = [
     "empty",
@@ -349,6 +358,7 @@ export const UI_MOCK_SCENARIO_ORDER = [
     "error-and-missing",
     "channel-directory",
     "usage-loading",
+    "onboarding",
     "pma-agents-ok",
 ];
 export function getUiMockScenarioList() {

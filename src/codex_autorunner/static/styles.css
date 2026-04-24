@@ -14727,83 +14727,29 @@ button.filebox-delete:hover {
   padding: 2px 6px;
 }
 
-/* ── Walkthrough strip ───────────────────────────────────────────── */
-.walkthrough-strip {
+/* ── No-agents notice (PMA) ─────────────────────────────────────── */
+.pma-no-agents-notice {
   display: flex;
-  align-items: center;
-  gap: var(--sp-4);
-  padding: var(--sp-3) var(--sp-6);
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-4) var(--sp-6);
   background: var(--panel);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--warning);
+  color: var(--text);
   font-size: 12px;
-  flex-wrap: wrap;
 }
 
-.walkthrough-step {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-4);
-  flex: 1;
-  min-width: 0;
-  flex-wrap: wrap;
+.pma-no-agents-notice strong {
+  color: var(--warning);
+  font-weight: 700;
 }
 
-.walkthrough-step-label {
-  white-space: nowrap;
-}
-
-.walkthrough-step-title {
-  color: var(--text);
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.walkthrough-chips {
-  display: flex;
-  gap: var(--sp-3);
-  flex-wrap: wrap;
-}
-
-.walkthrough-chip {
-  border-radius: 999px;
-  border: 1px solid var(--accent);
-  color: var(--accent);
-  background: transparent;
-  padding: var(--sp-2) var(--sp-4);
-  font-size: 11px;
+.pma-no-agents-notice code {
   font-family: inherit;
-  cursor: pointer;
-  transition: background 100ms ease;
-  white-space: nowrap;
-}
-
-.walkthrough-chip:hover {
+  color: var(--accent);
   background: var(--accent-glow);
-}
-
-.walkthrough-chip--skip {
-  border-color: var(--border);
-  color: var(--muted);
-}
-
-.walkthrough-chip--skip:hover {
-  background: transparent;
-  color: var(--text);
-}
-
-.walkthrough-close {
-  background: transparent;
-  border: none;
-  color: var(--muted);
-  cursor: pointer;
-  padding: var(--sp-2);
-  font-size: 13px;
-  margin-left: auto;
-  flex-shrink: 0;
-}
-
-.walkthrough-close:hover {
-  color: var(--text);
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius);
 }
 
 /* ── Empty-state PMA hero ───────────────────────────────────────── */

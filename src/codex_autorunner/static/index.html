@@ -24,50 +24,6 @@
   <div class="car-boot-loader" id="car-boot-loader"><div class="spinner"></div></div>
   <noscript><div style="color:#e5ecff;background:#0a0c12;display:flex;align-items:center;justify-content:center;height:100vh;font-family:system-ui,sans-serif">JavaScript is required to run Codex Autorunner.</div></noscript>
   <div class="hub-shell hidden" id="hub-shell">
-    <div class="walkthrough-strip hidden" id="walkthrough-strip" role="region"
-      aria-label="Setup walkthrough">
-      <div class="walkthrough-step" id="walkthrough-step-1">
-        <span class="walkthrough-step-label label">Step 1 of 3</span>
-        <span class="walkthrough-step-title">Set up chat notifications</span>
-        <div class="walkthrough-chips">
-          <button class="walkthrough-chip" data-wt-prompt="discord" type="button">
-            Set up Discord →
-          </button>
-          <button class="walkthrough-chip" data-wt-prompt="telegram" type="button">
-            Set up Telegram →
-          </button>
-          <button class="walkthrough-chip walkthrough-chip--skip" data-wt-skip type="button">
-            Skip
-          </button>
-        </div>
-      </div>
-      <div class="walkthrough-step hidden" id="walkthrough-step-2">
-        <span class="walkthrough-step-label label">Step 2 of 3</span>
-        <span class="walkthrough-step-title">Add your first repo</span>
-        <div class="walkthrough-chips">
-          <button class="walkthrough-chip" data-wt-prompt="add-repo" type="button">
-            Add a repo →
-          </button>
-          <button class="walkthrough-chip walkthrough-chip--skip" data-wt-skip type="button">
-            Skip
-          </button>
-        </div>
-      </div>
-      <div class="walkthrough-step hidden" id="walkthrough-step-3">
-        <span class="walkthrough-step-label label">Step 3 of 3</span>
-        <span class="walkthrough-step-title">Run your first ticket</span>
-        <div class="walkthrough-chips">
-          <button class="walkthrough-chip" data-wt-prompt="run-ticket" type="button">
-            Run a ticket →
-          </button>
-          <button class="walkthrough-chip walkthrough-chip--skip" data-wt-skip type="button">
-            Skip
-          </button>
-        </div>
-      </div>
-      <button class="walkthrough-close" id="walkthrough-close" type="button"
-        aria-label="Dismiss walkthrough">✕</button>
-    </div>
     <header class="hub-hero">
       <div class="hub-hero-text">
         <h1>CAR Hub</h1>
@@ -168,6 +124,10 @@
     </section>
   </div>
   <div class="hub-shell hidden" id="pma-shell" data-pma-view="chat">
+    <div class="pma-no-agents-notice hidden" id="pma-no-agents-notice" role="alert">
+      <strong>No supported AI agent installed.</strong>
+      <span>Install one of <code>codex</code>, <code>claude</code>, or <code>opencode</code> on this machine, then refresh this page. See the CAR docs for install steps.</span>
+    </div>
     <header class="hub-hero pma-hero">
       <div class="hub-hero-text pma-hero-text">
         <h1>Project Manager</h1>
