@@ -210,7 +210,7 @@ async function initHubShell() {
     if (requestedPMA) {
         showPMAView();
     }
-    if (!hasAgents && !requestedPMA) {
+    if (!hasAgents && !requestedPMA && !requestedManual) {
         // No supported agent installed — PMA chat can't run, just route so the user
         // sees the install notice instead of an empty hub.
         emptyRouteHandled = true;
