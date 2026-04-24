@@ -30,7 +30,7 @@ import logging
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import Any, Callable, Mapping, Optional
 
 from ...bootstrap import seed_repo_files
 from ...manifest import ManifestError, load_manifest
@@ -49,11 +49,23 @@ from ..archive_retention import (
 from ..config import ConfigError, load_repo_config
 from ..pma_thread_store import PmaThreadStore
 from ..sqlite_utils import connect_sqlite
+from ..state_lifecycle import (
+    DEFAULT_STATE_LIFECYCLE_CONTROLLER,
+    LifecycleArchiveSpec,
+    LifecycleReason,
+)
 from ..state_roots import resolve_hub_manifest_path, resolve_repo_flows_db_path
 from .models import FlowRunStatus
 from .store import FlowStore
 
 logger = logging.getLogger(__name__)
+
+
+def _static_path_resolver(path: Path) -> Callable[[Path], Path]:
+    def _resolve(_source_root: Path) -> Path:
+        return path
+
+    return _resolve
 
 
 def _run_archive_root(repo_root: Path) -> Path:
@@ -132,72 +144,104 @@ def build_flow_archive_entries(
     include_logs: bool = False,
     include_github_context: bool = False,
 ) -> list[ArchiveEntrySpec]:
-    entries: list[ArchiveEntrySpec] = []
+    specs: list[LifecycleArchiveSpec] = []
     if include_contextspace:
-        entries.append(
-            ArchiveEntrySpec(
-                label="contextspace",
-                source=_contextspace_source(source_root),
-                dest=dest_root / "contextspace",
+        specs.append(
+            LifecycleArchiveSpec(
+                family="contextspace",
+                key="contextspace",
+                archive_dest="contextspace",
+                archive_intents=frozenset({"flow_archive"}),
+                reason=LifecycleReason.REVIEW_ARTIFACT,
+                source_resolver=_contextspace_source,
             )
         )
     if include_flow_store:
-        entries.append(
-            ArchiveEntrySpec(
-                label="flows.db",
-                source=source_root / "flows.db",
-                dest=dest_root / "flows.db",
+        specs.append(
+            LifecycleArchiveSpec(
+                family="review_runs",
+                key="flows.db",
+                archive_dest="flows.db",
+                archive_intents=frozenset({"flow_archive"}),
+                reason=LifecycleReason.REVIEW_ARTIFACT,
             )
         )
     if include_config:
-        entries.append(
-            ArchiveEntrySpec(
-                label="config.yml",
-                source=source_root / "config.yml",
-                dest=dest_root / "config" / "config.yml",
+        specs.append(
+            LifecycleArchiveSpec(
+                family="config",
+                key="config.yml",
+                archive_dest="config/config.yml",
+                archive_intents=frozenset({"flow_archive"}),
+                reason=LifecycleReason.REVIEW_ARTIFACT,
             )
         )
     if include_runtime_state:
-        entries.extend(
+        specs.extend(
             [
-                ArchiveEntrySpec(
-                    label="state.sqlite3",
-                    source=source_root / "state.sqlite3",
-                    dest=dest_root / "state" / "state.sqlite3",
+                LifecycleArchiveSpec(
+                    family="runner_state",
+                    key="state.sqlite3",
+                    archive_dest="state/state.sqlite3",
+                    archive_intents=frozenset({"flow_archive"}),
+                    reason=LifecycleReason.COLD_TRACE,
                 ),
-                ArchiveEntrySpec(
-                    label="app_server_threads.json",
-                    source=source_root / "app_server_threads.json",
-                    dest=dest_root / "state" / "app_server_threads.json",
+                LifecycleArchiveSpec(
+                    family="runner_state",
+                    key="app_server_threads.json",
+                    archive_dest="state/app_server_threads.json",
+                    archive_intents=frozenset({"flow_archive"}),
+                    reason=LifecycleReason.COLD_TRACE,
                     required=False,
                 ),
             ]
         )
     if include_logs:
-        entries.extend(
+        specs.extend(
             [
-                ArchiveEntrySpec(
-                    label="codex-autorunner.log",
-                    source=source_root / "codex-autorunner.log",
-                    dest=dest_root / "logs" / "codex-autorunner.log",
+                LifecycleArchiveSpec(
+                    family="logs",
+                    key="codex-autorunner.log",
+                    archive_dest="logs/codex-autorunner.log",
+                    archive_intents=frozenset({"flow_archive"}),
+                    reason=LifecycleReason.COLD_TRACE,
                 ),
-                ArchiveEntrySpec(
-                    label="codex-server.log",
-                    source=source_root / "codex-server.log",
-                    dest=dest_root / "logs" / "codex-server.log",
+                LifecycleArchiveSpec(
+                    family="logs",
+                    key="codex-server.log",
+                    archive_dest="logs/codex-server.log",
+                    archive_intents=frozenset({"flow_archive"}),
+                    reason=LifecycleReason.COLD_TRACE,
                 ),
             ]
         )
     if include_github_context:
-        entries.append(
-            ArchiveEntrySpec(
-                label="github_context",
-                source=source_root / "github_context",
-                dest=dest_root / "github_context",
+        specs.append(
+            LifecycleArchiveSpec(
+                family="github_context",
+                key="github_context",
+                archive_dest="github_context",
+                archive_intents=frozenset({"flow_archive"}),
+                reason=LifecycleReason.REVIEW_ARTIFACT,
                 required=False,
             )
         )
-    return entries
+    transitions = DEFAULT_STATE_LIFECYCLE_CONTROLLER.plan_archive_transitions(
+        specs=specs,
+        source_root=source_root,
+        dest_root=dest_root,
+        intent="flow_archive",
+    )
+    return [
+        ArchiveEntrySpec(
+            label=transition.key,
+            source=transition.source,
+            dest=transition.dest,
+            mode=transition.mode,
+            required=transition.required,
+        )
+        for transition in transitions
+    ]
 
 
 def _find_hub_root(repo_root: Path) -> Path:
@@ -306,54 +350,88 @@ def _build_flow_archive_entries(
     flow_state_root = flow_run_artifacts_root(repo_root, run_id)
     target_runs_dir = _next_archive_dir(archive_root / "archived_runs")
     ticket_paths = list(list_ticket_paths(repo_root / ".codex-autorunner" / "tickets"))
-    entries = build_flow_archive_entries(
-        car_root,
-        archive_root,
-        include_contextspace=False,
-        include_config=False,
-        include_runtime_state=False,
-        include_logs=False,
-        include_github_context=True,
-    )
-    entries.append(
-        ArchiveEntrySpec(
-            label="contextspace",
-            source=_contextspace_source(car_root),
-            dest=archive_root / "contextspace",
-            mode="move",
+    transitions = list(
+        DEFAULT_STATE_LIFECYCLE_CONTROLLER.plan_archive_transitions(
+            specs=(
+                LifecycleArchiveSpec(
+                    family="github_context",
+                    key="github_context",
+                    archive_dest="github_context",
+                    archive_intents=frozenset({"ticket_flow_archive"}),
+                    reason=LifecycleReason.REVIEW_ARTIFACT,
+                    required=False,
+                ),
+                LifecycleArchiveSpec(
+                    family="contextspace",
+                    key="contextspace",
+                    archive_dest="contextspace",
+                    archive_intents=frozenset({"ticket_flow_archive"}),
+                    reason=LifecycleReason.REVIEW_ARTIFACT,
+                    mode="move",
+                    source_resolver=_contextspace_source,
+                ),
+                LifecycleArchiveSpec(
+                    family="review_runs",
+                    key=target_runs_dir.relative_to(archive_root).as_posix(),
+                    archive_dest=target_runs_dir.relative_to(archive_root).as_posix(),
+                    archive_intents=frozenset({"ticket_flow_archive"}),
+                    reason=LifecycleReason.REVIEW_ARTIFACT,
+                    mode="move",
+                    source_resolver=_static_path_resolver(run_dir),
+                ),
+                LifecycleArchiveSpec(
+                    family="review_runs",
+                    key="flow_state",
+                    archive_dest="flow_state",
+                    archive_intents=frozenset({"ticket_flow_archive"}),
+                    reason=LifecycleReason.COLD_TRACE,
+                    mode="move",
+                    required=False,
+                    source_resolver=_static_path_resolver(flow_state_root),
+                ),
+            ),
+            source_root=car_root,
+            dest_root=archive_root,
+            intent="ticket_flow_archive",
         )
     )
-    entries.extend(
-        ArchiveEntrySpec(
-            label=f"archived_tickets/{ticket_path.name}",
-            source=ticket_path,
-            dest=archive_root / "archived_tickets" / ticket_path.name,
-            mode="move",
-        )
-        for ticket_path in ticket_paths
-    )
-    entries.append(
-        ArchiveEntrySpec(
-            label=target_runs_dir.relative_to(archive_root).as_posix(),
-            source=run_dir,
-            dest=target_runs_dir,
-            mode="move",
-        )
-    )
-    entries.append(
-        ArchiveEntrySpec(
-            label="flow_state",
-            source=flow_state_root,
-            dest=archive_root / "flow_state",
-            mode="move",
-            required=False,
+    transitions.extend(
+        DEFAULT_STATE_LIFECYCLE_CONTROLLER.plan_archive_transitions(
+            specs=(
+                LifecycleArchiveSpec(
+                    family="tickets",
+                    key=f"archived_tickets/{ticket_path.name}",
+                    archive_dest=f"archived_tickets/{ticket_path.name}",
+                    archive_intents=frozenset({"ticket_flow_archive"}),
+                    reason=LifecycleReason.REVIEW_ARTIFACT,
+                    mode="move",
+                    source_resolver=_static_path_resolver(ticket_path),
+                )
+                for ticket_path in ticket_paths
+            ),
+            source_root=car_root,
+            dest_root=archive_root,
+            intent="ticket_flow_archive",
         )
     )
+    entries = [
+        ArchiveEntrySpec(
+            label=transition.key,
+            source=transition.source,
+            dest=transition.dest,
+            mode=transition.mode,
+            required=transition.required,
+        )
+        for transition in transitions
+    ]
     summary: dict[str, Any] = {
         "archive_root": str(archive_root),
         "archived_runs_dir": str(target_runs_dir),
         "archived_flow_state_dir": str(archive_root / "flow_state"),
         "ticket_count": len(ticket_paths),
+        "lifecycle": DEFAULT_STATE_LIFECYCLE_CONTROLLER.summarize_decisions(
+            transition.decision for transition in transitions
+        ),
     }
     return entries, summary
 
@@ -370,26 +448,50 @@ def _build_run_scoped_archive_entries(
     target_flow_state_dir = archive_root / "flow_state"
     if target_flow_state_dir.exists():
         target_flow_state_dir = _next_archive_dir(target_flow_state_dir)
+    transitions = DEFAULT_STATE_LIFECYCLE_CONTROLLER.plan_archive_transitions(
+        specs=(
+            LifecycleArchiveSpec(
+                family="review_runs",
+                key=target_runs_dir.relative_to(archive_root).as_posix(),
+                archive_dest=target_runs_dir.relative_to(archive_root).as_posix(),
+                archive_intents=frozenset({"run_scoped_archive"}),
+                reason=LifecycleReason.REVIEW_ARTIFACT,
+                mode="move",
+                required=False,
+                source_resolver=_static_path_resolver(run_dir),
+            ),
+            LifecycleArchiveSpec(
+                family="review_runs",
+                key=target_flow_state_dir.relative_to(archive_root).as_posix(),
+                archive_dest=target_flow_state_dir.relative_to(archive_root).as_posix(),
+                archive_intents=frozenset({"run_scoped_archive"}),
+                reason=LifecycleReason.COLD_TRACE,
+                mode="move",
+                required=False,
+                source_resolver=_static_path_resolver(flow_state_root),
+            ),
+        ),
+        source_root=archive_root,
+        dest_root=archive_root,
+        intent="run_scoped_archive",
+    )
     entries = [
         ArchiveEntrySpec(
-            label=target_runs_dir.relative_to(archive_root).as_posix(),
-            source=run_dir,
-            dest=target_runs_dir,
-            mode="move",
-            required=False,
-        ),
-        ArchiveEntrySpec(
-            label=target_flow_state_dir.relative_to(archive_root).as_posix(),
-            source=flow_state_root,
-            dest=target_flow_state_dir,
-            mode="move",
-            required=False,
-        ),
+            label=transition.key,
+            source=transition.source,
+            dest=transition.dest,
+            mode=transition.mode,
+            required=transition.required,
+        )
+        for transition in transitions
     ]
     summary: dict[str, Any] = {
         "archive_root": str(archive_root),
         "archived_runs_dir": str(target_runs_dir),
         "archived_flow_state_dir": str(target_flow_state_dir),
+        "lifecycle": DEFAULT_STATE_LIFECYCLE_CONTROLLER.summarize_decisions(
+            transition.decision for transition in transitions
+        ),
     }
     return entries, summary
 

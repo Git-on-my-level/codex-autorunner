@@ -5,6 +5,13 @@ from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable, Mapping, Optional
 
+from .state_lifecycle import (
+    DEFAULT_STATE_LIFECYCLE_CONTROLLER,
+    LifecycleDecision,
+    lifecycle_action_for_cleanup_action,
+    lifecycle_reason_for_cleanup_reason,
+)
+
 if TYPE_CHECKING:
     from ..housekeeping import HousekeepingRuleResult
     from .archive_retention import ArchivePruneSummary
@@ -246,6 +253,19 @@ def aggregate_cleanup_results(
     results: Iterable[CleanupResult],
 ) -> AggregatedCleanupResult:
     return AggregatedCleanupResult(results=tuple(results))
+
+
+def summarize_cleanup_plan_lifecycle(plan: CleanupPlan) -> Mapping[str, Any]:
+    decisions = (
+        LifecycleDecision(
+            family=plan.bucket.family,
+            action=lifecycle_action_for_cleanup_action(candidate.action),
+            reason=lifecycle_reason_for_cleanup_reason(candidate.reason),
+            subject=str(candidate.path),
+        )
+        for candidate in plan.candidates
+    )
+    return DEFAULT_STATE_LIFECYCLE_CONTROLLER.summarize_decisions(decisions)
 
 
 def adapt_archive_prune_summary_to_plan(
@@ -663,6 +683,7 @@ __all__ = [
     "make_cleanup_plan",
     "make_cleanup_result",
     "aggregate_cleanup_results",
+    "summarize_cleanup_plan_lifecycle",
     "adapt_archive_prune_summary_to_plan",
     "adapt_archive_prune_summary_to_result",
     "adapt_filebox_prune_summary_to_plan",
