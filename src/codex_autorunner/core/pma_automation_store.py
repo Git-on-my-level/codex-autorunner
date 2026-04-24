@@ -88,6 +88,62 @@ def _repo_scoped_subscription_warning(
     )
 
 
+def _resolve_subscription_max_matches(
+    *,
+    max_matches: Any,
+    notify_once: Any = None,
+    metadata: Optional[dict[str, Any]] = None,
+) -> Optional[int]:
+    resolved_max = _normalize_positive_int(max_matches, fallback=None)
+    if resolved_max is not None:
+        return resolved_max
+    if _normalize_bool(notify_once, fallback=False):
+        return 1
+    if isinstance(metadata, dict) and _normalize_bool(
+        metadata.get("notify_once"), fallback=False
+    ):
+        return 1
+    return None
+
+
+def _canonicalize_subscription_entry(data: dict[str, Any]) -> dict[str, Any]:
+    canonical = dict(data)
+    canonical.pop("notify_once", None)
+    metadata_raw = data.get("metadata")
+    metadata = dict(metadata_raw) if isinstance(metadata_raw, dict) else {}
+    resolved_max = _resolve_subscription_max_matches(
+        max_matches=data.get("max_matches"),
+        notify_once=data.get("notify_once"),
+        metadata=metadata,
+    )
+    metadata.pop("notify_once", None)
+    return {
+        **canonical,
+        "metadata": metadata,
+        "max_matches": resolved_max,
+    }
+
+
+def _canonicalize_automation_state(state: dict[str, Any]) -> dict[str, Any]:
+    canonical = default_pma_automation_state()
+    canonical["version"] = int(state.get("version", PMA_AUTOMATION_VERSION) or 1)
+    canonical["updated_at"] = (
+        _normalize_text(state.get("updated_at")) or canonical["updated_at"]
+    )
+    canonical["subscriptions"] = [
+        _canonicalize_subscription_entry(entry)
+        for entry in (state.get("subscriptions") or [])
+        if isinstance(entry, dict)
+    ]
+    canonical["timers"] = [
+        dict(entry) for entry in (state.get("timers") or []) if isinstance(entry, dict)
+    ]
+    canonical["wakeups"] = [
+        dict(entry) for entry in (state.get("wakeups") or []) if isinstance(entry, dict)
+    ]
+    return canonical
+
+
 @dataclass
 class PmaLifecycleSubscription:
     subscription_id: str
@@ -120,15 +176,10 @@ class PmaLifecycleSubscription:
         to_state: Optional[str] = None,
         reason: Optional[str] = None,
         idempotency_key: Optional[str] = None,
-        notify_once: Optional[bool] = None,
         max_matches: Optional[int] = None,
         metadata: Optional[dict[str, Any]] = None,
     ) -> "PmaLifecycleSubscription":
         stamp = _iso_now()
-        resolved_once = _normalize_bool(notify_once, fallback=None)
-        resolved_max = _normalize_positive_int(max_matches, fallback=None)
-        if resolved_max is None and resolved_once:
-            resolved_max = 1
         return cls(
             subscription_id=str(uuid.uuid4()),
             created_at=stamp,
@@ -143,49 +194,46 @@ class PmaLifecycleSubscription:
             to_state=_normalize_text(to_state),
             reason=_normalize_text(reason),
             idempotency_key=_normalize_text(idempotency_key),
-            max_matches=resolved_max,
+            max_matches=_normalize_positive_int(max_matches, fallback=None),
             match_count=0,
             metadata=dict(metadata or {}),
         )
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "PmaLifecycleSubscription":
+        canonical = _canonicalize_subscription_entry(data)
         subscription_id = _normalize_text(data.get("subscription_id")) or str(
             uuid.uuid4()
         )
         created_at = _normalize_text(data.get("created_at")) or _iso_now()
         updated_at = _normalize_text(data.get("updated_at")) or created_at
         state = _normalize_text(data.get("state")) or "active"
-        max_matches = _normalize_positive_int(data.get("max_matches"), fallback=None)
-        if max_matches is None and _normalize_bool(
-            data.get("notify_once"), fallback=False
-        ):
-            max_matches = 1
-        match_count = _normalize_non_negative_int(data.get("match_count"), fallback=0)
+        max_matches = _normalize_positive_int(
+            canonical.get("max_matches"), fallback=None
+        )
+        match_count = _normalize_non_negative_int(
+            canonical.get("match_count"), fallback=0
+        )
         if match_count is None:
             match_count = 0
-        metadata_raw = data.get("metadata")
+        metadata_raw = canonical.get("metadata")
         metadata: dict[str, Any] = (
             dict(metadata_raw) if isinstance(metadata_raw, dict) else {}
         )
-        if max_matches is None and _normalize_bool(
-            metadata.get("notify_once"), fallback=False
-        ):
-            max_matches = 1
         return cls(
             subscription_id=subscription_id,
             created_at=created_at,
             updated_at=updated_at,
             state=state.lower(),
-            event_types=_normalize_text_list(data.get("event_types") or []),
-            repo_id=_normalize_text(data.get("repo_id")),
-            run_id=_normalize_text(data.get("run_id")),
-            thread_id=_normalize_text(data.get("thread_id")),
-            lane_id=_normalize_lane_id(data.get("lane_id")),
-            from_state=_normalize_text(data.get("from_state")),
-            to_state=_normalize_text(data.get("to_state")),
-            reason=_normalize_text(data.get("reason")),
-            idempotency_key=_normalize_text(data.get("idempotency_key")),
+            event_types=_normalize_text_list(canonical.get("event_types") or []),
+            repo_id=_normalize_text(canonical.get("repo_id")),
+            run_id=_normalize_text(canonical.get("run_id")),
+            thread_id=_normalize_text(canonical.get("thread_id")),
+            lane_id=_normalize_lane_id(canonical.get("lane_id")),
+            from_state=_normalize_text(canonical.get("from_state")),
+            to_state=_normalize_text(canonical.get("to_state")),
+            reason=_normalize_text(canonical.get("reason")),
+            idempotency_key=_normalize_text(canonical.get("idempotency_key")),
             max_matches=max_matches,
             match_count=int(match_count),
             metadata=metadata,
@@ -426,7 +474,10 @@ class PmaAutomationStore:
                 return state
             state = self._persistence._load_unlocked()
             if state is not None:
-                return state
+                canonical_state = _canonicalize_automation_state(state)
+                if canonical_state != state:
+                    self._persistence._save_unlocked(canonical_state)
+                return canonical_state
             state = default_pma_automation_state()
             self._persistence._save_unlocked(state)
             return state
@@ -1346,8 +1397,11 @@ class PmaAutomationStore:
                         to_state=to_state,
                         reason=reason,
                         idempotency_key=key,
-                        notify_once=notify_once,
-                        max_matches=max_matches,
+                        max_matches=_resolve_subscription_max_matches(
+                            max_matches=max_matches,
+                            notify_once=notify_once,
+                            metadata=resolved_metadata,
+                        ),
                         metadata=resolved_metadata,
                     )
                     self._insert_subscription_row(conn, created)
@@ -1436,7 +1490,11 @@ class PmaAutomationStore:
             thread_id=normalized_thread_id,
         )
         if scope_warning:
-            result["warning"] = scope_warning
+            existing = result.get("warning")
+            if isinstance(existing, str) and existing.strip():
+                result["warning"] = f"{existing}\n{scope_warning}"
+            else:
+                result["warning"] = scope_warning
         return result
 
     def cancel_subscription(self, subscription_id: str) -> bool:

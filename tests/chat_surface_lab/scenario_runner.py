@@ -14,6 +14,9 @@ from fastapi.testclient import TestClient
 from codex_autorunner.browser.runtime import BrowserRuntime
 from codex_autorunner.core.chat_bindings import active_chat_binding_metadata_by_thread
 from codex_autorunner.core.pma_automation_store import PmaAutomationStore
+from codex_autorunner.integrations.chat.execution_event_journal import (
+    list_chat_execution_journal,
+)
 from codex_autorunner.integrations.chat.ux_regression_contract import (
     CHAT_UX_LATENCY_BUDGETS,
 )
@@ -144,6 +147,7 @@ class ScenarioSurfaceRunResult:
     transcript: TranscriptTimeline
     artifact_manifest: ArtifactManifest
     log_records: tuple[dict[str, Any], ...]
+    journal_events: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -354,6 +358,7 @@ class ChatSurfaceScenarioRunner:
                 browser_runtime=self._browser_runtime,
             )
             log_records = tuple(getattr(context.result, "log_records", []) or [])
+            journal_events = tuple(self._load_execution_journal(context))
             return ScenarioSurfaceRunResult(
                 surface=surface,
                 execution_status=self._normalize_optional_text(
@@ -365,6 +370,7 @@ class ChatSurfaceScenarioRunner:
                 transcript=transcript,
                 artifact_manifest=artifact_manifest,
                 log_records=log_records,
+                journal_events=journal_events,
             )
         finally:
             pending_tasks = tuple(dict.fromkeys(context.active_tasks.values()))
@@ -1521,8 +1527,8 @@ class ChatSurfaceScenarioRunner:
         for assertion in scenario.latency_budgets:
             if assertion.surface != surface_result.surface:
                 continue
-            record = _latest_log_record_with_numeric_field(
-                surface_result.log_records,
+            record = _latest_journal_event_with_numeric_field(
+                surface_result.journal_events,
                 event_name=assertion.event_name,
                 field=assertion.field,
             )
@@ -1551,6 +1557,47 @@ class ChatSurfaceScenarioRunner:
                 )
             )
         return observed
+
+    def _load_execution_journal(
+        self,
+        context: _SurfaceRunContext,
+    ) -> Sequence[dict[str, Any]]:
+        execution_ids: set[str] = set()
+        log_records = tuple(getattr(context.result, "log_records", []) or ())
+        current_execution_id = self._normalize_optional_text(context.execution_id)
+        if current_execution_id is not None:
+            execution_ids.add(current_execution_id)
+        result_execution_id = self._normalize_optional_text(
+            getattr(context.result, "execution_id", None)
+        )
+        if result_execution_id is not None:
+            execution_ids.add(result_execution_id)
+        for value in context.observations.values():
+            if not isinstance(value, dict):
+                continue
+            observed_execution_id = self._normalize_optional_text(
+                value.get("execution_id")
+            )
+            if observed_execution_id is not None:
+                execution_ids.add(observed_execution_id)
+        for record in log_records:
+            if not isinstance(record, dict):
+                continue
+            record_execution_id = self._normalize_optional_text(
+                record.get("execution_id")
+            )
+            if record_execution_id is not None:
+                execution_ids.add(record_execution_id)
+        journal_events: list[dict[str, Any]] = []
+        for execution_id in sorted(execution_ids):
+            journal_events.extend(
+                list_chat_execution_journal(
+                    context.harness.root,
+                    execution_id=execution_id,
+                )
+            )
+        journal_events.extend(_journal_events_from_log_records(log_records))
+        return journal_events
 
     def _compute_observation(
         self,
@@ -2223,6 +2270,55 @@ def _latest_log_record_with_numeric_field(
         if isinstance(value, (int, float)):
             return record
     return None
+
+
+def _latest_journal_event_with_numeric_field(
+    records: tuple[dict[str, Any], ...],
+    *,
+    event_name: str,
+    field: str,
+) -> Optional[dict[str, Any]]:
+    for record in reversed(records):
+        if str(record.get("domain") or "") != "latency":
+            continue
+        data = record.get("data")
+        if not isinstance(data, dict):
+            continue
+        if data.get("event_name") != event_name:
+            continue
+        value = data.get(field)
+        if isinstance(value, (int, float)):
+            return data
+    return None
+
+
+def _journal_events_from_log_records(
+    log_records: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    journal_events: list[dict[str, Any]] = []
+    for record in log_records:
+        if not isinstance(record, dict):
+            continue
+        latency_fields = {
+            key: value
+            for key, value in record.items()
+            if key.startswith("chat_ux_delta_") and isinstance(value, (int, float))
+        }
+        if not latency_fields:
+            continue
+        journal_events.append(
+            {
+                "timestamp": "",
+                "domain": "latency",
+                "name": "summary",
+                "status": _normalize_optional_string(record.get("status")),
+                "event_type": "log_projection",
+                "source_event_type": "structured_log",
+                "derived": False,
+                "data": {"event_name": record.get("event"), **latency_fields},
+            }
+        )
+    return journal_events
 
 
 def _first_text_index(events: list[TranscriptEvent], needle: str) -> Optional[int]:

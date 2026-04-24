@@ -9,6 +9,10 @@ from ....integrations.chat.chat_ux_telemetry import (
     ChatUxMilestone,
     ChatUxTimingSnapshot,
 )
+from ....integrations.chat.execution_event_journal import (
+    append_chat_execution_journal_notices,
+    make_chat_execution_journal_notice,
+)
 from ..errors import DiscordAPIError
 from ..interaction_runtime import (
     defer_and_update_runtime_component_message,
@@ -70,6 +74,32 @@ async def handle_cancel_turn_button(
         execution_id=execution_id,
         **cancel_snapshot.to_log_fields(),
     )
+    if execution_id:
+        try:
+            append_chat_execution_journal_notices(
+                service._config.root,
+                execution_id=execution_id,
+                target_kind="thread_target",
+                target_id=thread_target_id,
+                notices=[
+                    make_chat_execution_journal_notice(
+                        domain="latency",
+                        name="summary",
+                        status="interrupted",
+                        message="interrupt acknowledged",
+                        data={
+                            **cancel_snapshot.to_log_fields(),
+                            "event_name": "discord.turn.cancel_acknowledged",
+                        },
+                    )
+                ],
+            )
+        except (OSError, RuntimeError, TypeError, ValueError):
+            getattr(service, "_logger", _logger).debug(
+                "Failed appending Discord interrupt journal for %s",
+                execution_id,
+                exc_info=True,
+            )
     await service._handle_car_interrupt(
         interaction_id,
         interaction_token,

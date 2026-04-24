@@ -39,6 +39,7 @@ from .....core.flows.worker_process import FlowWorkerHealth, check_worker_health
 from .....core.logging_utils import log_event
 from .....core.orchestration import build_ticket_flow_orchestration_service
 from .....core.state import now_iso
+from .....core.state_roots import resolve_repo_flows_db_path, resolve_repo_state_root
 from .....core.ticket_flow_summary import (
     build_ticket_flow_display,
     format_ticket_flow_summary_lines,
@@ -70,13 +71,14 @@ _T = TypeVar("_T")
 
 def _flow_paths(repo_root: Path) -> tuple[Path, Path]:
     repo_root = repo_root.resolve()
-    db_path = repo_root / ".codex-autorunner" / "flows.db"
-    artifacts_root = repo_root / ".codex-autorunner" / "flows"
+    state_root = resolve_repo_state_root(repo_root)
+    db_path = resolve_repo_flows_db_path(repo_root)
+    artifacts_root = state_root / "flows"
     return db_path, artifacts_root
 
 
 def _ticket_dir(repo_root: Path) -> Path:
-    return repo_root.resolve() / ".codex-autorunner" / "tickets"
+    return resolve_repo_state_root(repo_root.resolve()) / "tickets"
 
 
 def _load_flow_store(repo_root: Path, hub_root: Optional[Path] = None) -> FlowStore:

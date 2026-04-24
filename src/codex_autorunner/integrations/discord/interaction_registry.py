@@ -32,6 +32,7 @@ from ..chat.action_ux_contract import (
     discord_scheduler_ack_strategy_for_entry,
     discord_slash_command_ux_contract_for_id,
 )
+from ..chat.command_kernel import discord_command_kernel_entry
 from .document_browser_component_handlers import (
     _handle_contextspace_back_component,
     _handle_contextspace_chunk_component,
@@ -1732,7 +1733,13 @@ def slash_command_ack_metadata_for_path(
     ux_entry = discord_slash_command_ux_contract_for_id(route.id)
     ack_policy = discord_ack_policy_for_entry(ux_entry)
     ack_timing = ux_entry.ack_timing if ux_entry is not None else "dispatch"
-    return ack_policy, ack_timing, route.requires_workspace
+    semantics = discord_command_kernel_entry(command_path)
+    requires_workspace = (
+        semantics.requires_bound_workspace
+        if semantics is not None
+        else route.requires_workspace
+    )
+    return ack_policy, ack_timing, requires_workspace
 
 
 def slash_command_workspace_lock_policy(

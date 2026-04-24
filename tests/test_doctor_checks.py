@@ -654,6 +654,47 @@ def test_pma_doctor_checks_valid_registered_agent():
     assert agent_checks[0].message == "Default agent: hermes"
 
 
+def test_pma_doctor_checks_reports_alias_backed_default_agent_readiness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    seed_hub_files(hub_root, force=True)
+
+    hub_config = load_hub_config(hub_root)
+    hub_config.pma.default_agent = "hermes-m4-pma"
+    hub_config.raw.setdefault("pma", {})["default_agent"] = "hermes-m4-pma"
+    hub_config.agents["hermes-m4-pma"] = AgentConfig(
+        backend="hermes",
+        binary="hermes-m4-pma",
+        serve_command=None,
+        base_url=None,
+        subagent_models=None,
+    )
+
+    monkeypatch.setattr(
+        "codex_autorunner.agents.registry.hermes_runtime_preflight",
+        lambda _config, *, agent_id="hermes", profile=None: type(
+            "Result",
+            (),
+            {
+                "status": "ready",
+                "message": f"Hermes {agent_id} ready.",
+                "fix": None,
+                "version": None,
+                "launch_mode": None,
+            },
+        )(),
+    )
+
+    checks = pma_doctor_checks(hub_config)
+
+    readiness = [c for c in checks if c.check_id == "pma.default_agent.runtime"]
+    assert len(readiness) == 1
+    assert readiness[0].passed is True
+    assert "hermes-m4-pma" in readiness[0].message
+
+
 def test_pma_doctor_checks_missing_state_file(tmp_path: Path):
     """Test PMA doctor checks with missing state file."""
     checks = pma_doctor_checks({"pma": {"enabled": True}}, repo_root=tmp_path)
@@ -962,7 +1003,7 @@ def test_zeroclaw_doctor_checks_report_missing_binary_for_enabled_workspaces(
 
     hub_config = load_hub_config(hub_root)
     monkeypatch.setattr(
-        "codex_autorunner.core.runtime.zeroclaw_runtime_preflight",
+        "codex_autorunner.agents.registry.zeroclaw_runtime_preflight",
         lambda _config: type(
             "Result",
             (),
@@ -1013,7 +1054,7 @@ def test_zeroclaw_doctor_checks_report_incompatible_runtime_for_enabled_workspac
 
     hub_config = load_hub_config(hub_root)
     monkeypatch.setattr(
-        "codex_autorunner.core.runtime.zeroclaw_runtime_preflight",
+        "codex_autorunner.agents.registry.zeroclaw_runtime_preflight",
         lambda _config: type(
             "Result",
             (),
@@ -1085,7 +1126,7 @@ def test_hermes_doctor_checks_report_missing_binary_for_enabled_workspaces(
 
     hub_config = load_hub_config(hub_root)
     monkeypatch.setattr(
-        "codex_autorunner.core.runtime.hermes_runtime_preflight",
+        "codex_autorunner.agents.registry.hermes_runtime_preflight",
         lambda _config: type(
             "Result",
             (),
@@ -1136,7 +1177,7 @@ def test_hermes_doctor_checks_report_incompatible_runtime_for_enabled_workspaces
 
     hub_config = load_hub_config(hub_root)
     monkeypatch.setattr(
-        "codex_autorunner.core.runtime.hermes_runtime_preflight",
+        "codex_autorunner.agents.registry.hermes_runtime_preflight",
         lambda _config: type(
             "Result",
             (),
@@ -1178,7 +1219,7 @@ def test_hermes_doctor_checks_report_configured_aliases_individually(
 
     observed_agent_ids: list[str] = []
 
-    def _fake_preflight(_config, *, agent_id="hermes"):
+    def _fake_preflight(_config, *, agent_id="hermes", profile=None):
         observed_agent_ids.append(agent_id)
         return type(
             "Result",
@@ -1193,7 +1234,7 @@ def test_hermes_doctor_checks_report_configured_aliases_individually(
         )()
 
     monkeypatch.setattr(
-        "codex_autorunner.core.runtime.hermes_runtime_preflight",
+        "codex_autorunner.agents.registry.hermes_runtime_preflight",
         _fake_preflight,
     )
 
@@ -1224,7 +1265,7 @@ def test_hermes_doctor_detects_prefix_alias_missing_backend_metadata(
 
     observed_agent_ids: list[str] = []
 
-    def _fake_preflight(_config, *, agent_id="hermes"):
+    def _fake_preflight(_config, *, agent_id="hermes", profile=None):
         observed_agent_ids.append(agent_id)
         return type(
             "Result",
@@ -1239,7 +1280,7 @@ def test_hermes_doctor_detects_prefix_alias_missing_backend_metadata(
         )()
 
     monkeypatch.setattr(
-        "codex_autorunner.core.runtime.hermes_runtime_preflight",
+        "codex_autorunner.agents.registry.hermes_runtime_preflight",
         _fake_preflight,
     )
 

@@ -9,6 +9,7 @@ from ...chat.command_contract import (
     TelegramResponsePolicy,
     telegram_command_metadata_for_name,
 )
+from ...chat.command_kernel import telegram_command_kernel_entry
 from ..adapter import TelegramMessage
 
 
@@ -29,6 +30,9 @@ def build_command_specs(handlers: Any) -> dict[str, CommandSpec]:
         description: str,
         handler: Callable[[TelegramMessage, str, Any], Awaitable[None]],
     ) -> CommandSpec:
+        semantics = telegram_command_kernel_entry(name)
+        if semantics is None:
+            raise ValueError(f"missing shared Telegram command kernel entry for {name}")
         policy = telegram_command_metadata_for_name(name)
         if policy is None:
             raise ValueError(f"missing Telegram command metadata for {name}")

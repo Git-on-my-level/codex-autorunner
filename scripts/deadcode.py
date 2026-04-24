@@ -80,7 +80,43 @@ def _python_name_token_counts(py_files: Sequence[Path]) -> Dict[str, int]:
                             counts[sub.id] = counts.get(sub.id, 0) + 1
                         elif isinstance(sub, ast.Attribute):
                             counts[sub.attr] = counts.get(sub.attr, 0) + 1
+        for exported_name in _python_exported_names(tree):
+            counts[exported_name] = counts.get(exported_name, 0) + 1
     return counts
+
+
+def _python_exported_names(tree: ast.Module) -> Set[str]:
+    exported: Set[str] = set()
+    for node in tree.body:
+        value: Optional[ast.AST] = None
+        if isinstance(node, ast.Assign):
+            if any(
+                isinstance(target, ast.Name) and target.id == "__all__"
+                for target in node.targets
+            ):
+                value = node.value
+        elif isinstance(node, ast.AnnAssign):
+            if isinstance(node.target, ast.Name) and node.target.id == "__all__":
+                value = node.value
+        elif isinstance(node, ast.AugAssign):
+            if isinstance(node.target, ast.Name) and node.target.id == "__all__":
+                value = node.value
+        if value is not None:
+            exported.update(_python_string_literals(value))
+    return exported
+
+
+def _python_string_literals(node: ast.AST) -> Set[str]:
+    values: Set[str] = set()
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        values.add(node.value)
+    elif isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        for element in node.elts:
+            values.update(_python_string_literals(element))
+    elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        values.update(_python_string_literals(node.left))
+        values.update(_python_string_literals(node.right))
+    return values
 
 
 def _python_module_level_defs(py_path: Path) -> List[Finding]:
@@ -133,7 +169,8 @@ def scan_python(src_root: Path) -> List[Finding]:
     for p in py_files:
         for d in _python_module_level_defs(p):
             # If the name token appears only once across src/ (the definition), it's likely unused.
-            # (Recursive calls, references from other modules, __all__, etc. all bump the count.)
+            # (Recursive calls, references from other modules, and top-level
+            # ``__all__`` exports all bump the count.)
             if token_counts.get(d.symbol, 0) <= 1:
                 suspects.append(d)
     return suspects

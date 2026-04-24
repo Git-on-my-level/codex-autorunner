@@ -16,6 +16,8 @@ from .....core.pma_context import (
 )
 from .....core.text_utils import _normalize_optional_text
 from .....integrations.app_server.threads import pma_automation_key, pma_base_key
+from .....integrations.github.context_injection import maybe_inject_github_context
+from ...services.pma import get_pma_request_context
 from ...services.pma.common import pma_config_from_raw
 from ..agent_profile_validation import resolve_requested_agent_profile
 from ..agents import _available_agents
@@ -28,8 +30,8 @@ logger = logging.getLogger(__name__)
 
 
 def _get_pma_config(request: Any) -> dict[str, Any]:
-    raw = getattr(request.app.state.config, "raw", {})
-    return pma_config_from_raw(raw)
+    context = get_pma_request_context(request)
+    return pma_config_from_raw(context.raw_config)
 
 
 def resolve_pma_session_key(
@@ -50,7 +52,8 @@ async def execute_queue_item(
     *,
     turn_timeout_seconds: Optional[float] = None,
 ) -> dict[str, Any]:
-    hub_root = request.app.state.config.root
+    context = get_pma_request_context(request)
+    hub_root = context.hub_root
     payload = item.payload
 
     client_turn_id = payload.get("client_turn_id")
@@ -138,7 +141,9 @@ async def execute_queue_item(
         from .....agents.registry import validate_agent_id
 
         try:
-            candidate = validate_agent_id(configured_default or "", request.app.state)
+            candidate = validate_agent_id(
+                configured_default or "", context.agent_context
+            )
         except ValueError:
             candidate = None
         if candidate and candidate in available_ids:
@@ -157,7 +162,7 @@ async def execute_queue_item(
     }
 
     try:
-        agent_id = validate_agent_id(agent or "", request.app.state)
+        agent_id = validate_agent_id(agent or "", context.agent_context)
     except ValueError:
         agent_id = _resolve_default_agent(available_ids, available_default)
 
@@ -168,7 +173,7 @@ async def execute_queue_item(
         default_profile=_normalize_optional_text(defaults.get("profile")),
     )
 
-    safety_checker = runtime.get_safety_checker(hub_root, request)
+    safety_checker = runtime.get_safety_checker(hub_root, context)
     safety_check = safety_checker.check_chat_start(agent_id, message, client_turn_id)
     if not safety_check.allowed:
         detail = safety_check.reason or "PMA action blocked by safety check"
@@ -201,21 +206,18 @@ async def execute_queue_item(
 
     try:
         prompt_base = load_pma_prompt(hub_root)
-        supervisor = getattr(request.app.state, "hub_supervisor", None)
-        from .. import pma as pma_routes
-
-        snapshot_builder = getattr(pma_routes, "build_hub_snapshot", build_hub_snapshot)
-        github_context_injector = getattr(
-            pma_routes,
-            "maybe_inject_github_context",
-            None,
+        supervisor = context.hub_supervisor
+        snapshot_builder = getattr(
+            context.ports, "build_hub_snapshot", build_hub_snapshot
         )
-        if github_context_injector is None:
-            from .....integrations.github.context_injection import (
-                maybe_inject_github_context as _default_injector,
+        github_context_injector = (
+            getattr(
+                context.ports,
+                "maybe_inject_github_context",
+                None,
             )
-
-            github_context_injector = _default_injector
+            or maybe_inject_github_context
+        )
 
         snapshot = await snapshot_builder(supervisor, hub_root=hub_root)
         prompt_state_key = resolve_pma_session_key(
@@ -293,9 +295,16 @@ async def execute_queue_item(
             turn_id=turn_id,
         )
 
-    registry = getattr(request.app.state, "app_server_threads", None)
+    registry = context.app_server_threads
 
-    ingress = build_surface_orchestration_ingress(
+    from . import chat_runtime as chat_runtime_routes
+
+    ingress_builder = getattr(
+        chat_runtime_routes,
+        "build_surface_orchestration_ingress",
+        build_surface_orchestration_ingress,
+    )
+    ingress = ingress_builder(
         event_sink=lambda orchestration_event: logger.info(
             "web.pma.%s surface=%s target_kind=%s target_id=%s status=%s meta=%s",
             orchestration_event.event_type,

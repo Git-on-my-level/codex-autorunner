@@ -177,22 +177,16 @@ class ManagedThreadStatusSnapshot:
     ) -> "ManagedThreadStatusSnapshot":
         if not isinstance(data, Mapping):
             return cls()
-        status = _normalize_text(data.get("normalized_status")) or _normalize_text(
-            data.get("status")
-        )
+        status = _normalize_text(data.get("normalized_status"))
         if status is None:
             status = _STATUS_IDLE
-        reason_code = _normalize_text(
-            data.get("status_reason_code") or data.get("status_reason")
-        ) or (
+        reason_code = _normalize_text(data.get("status_reason_code")) or (
             ManagedThreadStatusReason.THREAD_ARCHIVED.value
             if status == _STATUS_ARCHIVED
             else ManagedThreadStatusReason.THREAD_CREATED.value
         )
         changed_at = normalize_status_timestamp(
-            _normalize_text(
-                data.get("status_updated_at") or data.get("status_changed_at")
-            )
+            _normalize_text(data.get("status_updated_at"))
         )
         terminal_raw = data.get("status_terminal")
         terminal = (

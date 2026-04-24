@@ -46,7 +46,6 @@ from .....core.injected_context import wrap_injected_context
 from .....core.logging_utils import log_event
 from .....core.orchestration import (
     MessageRequest,
-    SQLiteManagedThreadDeliveryEngine,
     build_harness_backed_orchestration_service,
 )
 from .....core.orchestration.runtime_thread_events import (
@@ -75,7 +74,6 @@ from .....integrations.chat.bound_chat_execution_metadata import (
     merge_bound_chat_execution_metadata,
 )
 from .....integrations.chat.bound_live_progress import (
-    build_bound_chat_queue_execution_controller,
     cleanup_bound_chat_live_progress_success,
     resolve_bound_chat_queue_progress_context,
 )
@@ -90,10 +88,12 @@ from .....integrations.chat.constants import (
     APP_SERVER_UNAVAILABLE_MESSAGE,
     TOPIC_NOT_BOUND_MESSAGE,
 )
+from .....integrations.chat.execution_event_journal import (
+    append_chat_execution_journal_notices,
+)
 from .....integrations.chat.managed_thread_delivery_support import (
     ManagedThreadDeliveryCleanupContext,
     ManagedThreadDeliverySendResult,
-    deliver_managed_thread_terminal_record,
 )
 from .....integrations.chat.managed_thread_direct_delivery import (
     record_managed_thread_direct_delivery,
@@ -103,16 +103,17 @@ from .....integrations.chat.managed_thread_lifecycle import (
     replace_surface_thread,
     resolve_surface_thread_binding,
 )
+from .....integrations.chat.managed_thread_surface_kernel import (
+    build_managed_thread_surface_coordinator,
+    build_managed_thread_surface_queue_execution_hooks,
+    build_managed_thread_terminal_delivery_hooks,
+)
 from .....integrations.chat.managed_thread_turns import (
     ManagedThreadCoordinatorHooks,
-    ManagedThreadDurableDeliveryHooks,
-    ManagedThreadErrorMessages,
-    ManagedThreadExecutionHooks,
     ManagedThreadFinalizationResult,
     ManagedThreadSurfaceInfo,
     ManagedThreadTargetRequest,
     ManagedThreadTurnCoordinator,
-    build_managed_thread_delivery_intent,
     complete_managed_thread_execution,
     render_managed_thread_delivery_record_text,
     render_managed_thread_response_text,
@@ -612,7 +613,7 @@ def _build_telegram_managed_thread_coordinator(
         if pma_enabled
         else float(_DEFAULT_TELEGRAM_REPO_TURN_TIMEOUT_SECONDS)
     )
-    return ManagedThreadTurnCoordinator(
+    return build_managed_thread_surface_coordinator(
         orchestration_service=orchestration_service,
         state_root=_telegram_state_root(handlers),
         hub_client=getattr(handlers, "_hub_client", None),
@@ -632,14 +633,12 @@ def _build_telegram_managed_thread_coordinator(
                 "thread_id": thread_id,
             },
         ),
-        errors=ManagedThreadErrorMessages(
-            public_execution_error=public_execution_error,
-            timeout_error=timeout_error,
-            interrupted_error=interrupted_error,
-            timeout_seconds=timeout_seconds,
-            stall_timeout_seconds=timeout_seconds if pma_enabled else None,
-            idle_timeout_only=pma_enabled,
-        ),
+        public_execution_error=public_execution_error,
+        timeout_error=timeout_error,
+        interrupted_error=interrupted_error,
+        timeout_seconds=timeout_seconds,
+        stall_timeout_seconds=timeout_seconds if pma_enabled else None,
+        idle_timeout_only=pma_enabled,
         logger=getattr(handlers, "_logger", logging.getLogger(__name__)),
         turn_preview="",
         preview_builder=lambda message_text: _preview_from_text(
@@ -860,6 +859,89 @@ def _sync_pma_registry_thread_id(
     registry.set_thread_id(pma_key, backend_thread_id)
 
 
+def _build_telegram_success_delivery(
+    handlers: Any,
+    *,
+    chat_id: int,
+    thread_id: Optional[int],
+) -> Any:
+    async def _send_success(
+        record: Any,
+        context: ManagedThreadDeliveryCleanupContext,
+    ) -> ManagedThreadDeliverySendResult:
+        transport_target = dict(record.target.transport_target or {})
+        target_chat_id = int(transport_target.get("chat_id") or chat_id)
+        target_thread_id = transport_target.get("thread_id", thread_id)
+        await handlers._send_message(
+            target_chat_id,
+            render_managed_thread_delivery_record_text(record),
+            thread_id=target_thread_id,
+            reply_to=None,
+        )
+        return ManagedThreadDeliverySendResult()
+
+    return _send_success
+
+
+def _build_telegram_failure_delivery(
+    handlers: Any,
+    *,
+    chat_id: int,
+    thread_id: Optional[int],
+    public_execution_error: str,
+) -> Any:
+    async def _send_failure(
+        record: Any,
+        context: ManagedThreadDeliveryCleanupContext,
+    ) -> ManagedThreadDeliverySendResult:
+        transport_target = dict(record.target.transport_target or {})
+        target_chat_id = int(transport_target.get("chat_id") or chat_id)
+        target_thread_id = transport_target.get("thread_id", thread_id)
+        await handlers._send_message(
+            target_chat_id,
+            f"Turn failed: {record.envelope.error_text or public_execution_error}",
+            thread_id=target_thread_id,
+            reply_to=None,
+        )
+        return ManagedThreadDeliverySendResult()
+
+    return _send_failure
+
+
+def _build_telegram_delivery_cleanup(handlers: Any, *, topic_key: str) -> Any:
+    async def _cleanup(
+        record: Any, context: ManagedThreadDeliveryCleanupContext
+    ) -> None:
+        transport_target = dict(record.target.transport_target or {})
+        target_chat_id = int(transport_target.get("chat_id") or 0)
+        target_thread_id = transport_target.get("thread_id")
+        target_topic_key = str(context.transport_target.get("topic_key") or topic_key)
+        await handlers._flush_outbox_files(
+            SimpleNamespace(
+                workspace_path=context.transport_target.get("workspace_path"),
+                pma_enabled=bool(context.transport_target.get("pma_enabled")),
+            ),
+            chat_id=target_chat_id,
+            thread_id=target_thread_id,
+            reply_to=None,
+            topic_key=target_topic_key,
+        )
+        await cleanup_bound_chat_live_progress_success(
+            hub_root=handlers._config.root,
+            raw_config=(
+                handlers._config.raw
+                if isinstance(getattr(handlers._config, "raw", None), dict)
+                else {}
+            ),
+            surface_kind="telegram",
+            surface_key=target_topic_key,
+            managed_thread_id=record.managed_thread_id,
+            managed_turn_id=record.managed_turn_id,
+        )
+
+    return _cleanup
+
+
 def _build_telegram_runner_hooks(
     handlers: Any,
     *,
@@ -872,116 +954,47 @@ def _build_telegram_runner_hooks(
     pma_enabled: bool = False,
 ) -> ManagedThreadCoordinatorHooks:
     state_root = _telegram_state_root(handlers)
-    engine = SQLiteManagedThreadDeliveryEngine(state_root)
-
-    class _TelegramManagedThreadDeliveryAdapter:
-        @property
-        def adapter_key(self) -> str:
-            return "telegram"
-
-        async def deliver_managed_thread_record(
-            self, record: Any, *, claim: Any
-        ) -> Any:
-            _ = claim
-            transport_target = dict(record.target.transport_target or {})
-            target_chat_id = int(transport_target.get("chat_id") or chat_id)
-            target_thread_id = transport_target.get("thread_id", thread_id)
-
-            async def _send_success(
-                _context: ManagedThreadDeliveryCleanupContext,
-            ) -> ManagedThreadDeliverySendResult:
-                await handlers._send_message(
-                    target_chat_id,
-                    render_managed_thread_delivery_record_text(record),
-                    thread_id=target_thread_id,
-                    reply_to=None,
-                )
-                return ManagedThreadDeliverySendResult()
-
-            async def _send_failure(
-                _context: ManagedThreadDeliveryCleanupContext,
-            ) -> ManagedThreadDeliverySendResult:
-                await handlers._send_message(
-                    target_chat_id,
-                    (
-                        f"Turn failed: {record.envelope.error_text or public_execution_error}"
-                    ),
-                    thread_id=target_thread_id,
-                    reply_to=None,
-                )
-                return ManagedThreadDeliverySendResult()
-
-            async def _cleanup(context: ManagedThreadDeliveryCleanupContext) -> None:
-                target_topic_key = str(
-                    context.transport_target.get("topic_key") or topic_key
-                )
-                await handlers._flush_outbox_files(
-                    SimpleNamespace(
-                        workspace_path=context.transport_target.get("workspace_path"),
-                        pma_enabled=bool(context.transport_target.get("pma_enabled")),
-                    ),
-                    chat_id=target_chat_id,
-                    thread_id=target_thread_id,
-                    reply_to=None,
-                    topic_key=target_topic_key,
-                )
-                await cleanup_bound_chat_live_progress_success(
-                    hub_root=handlers._config.root,
-                    raw_config=(
-                        handlers._config.raw
-                        if isinstance(getattr(handlers._config, "raw", None), dict)
-                        else {}
-                    ),
-                    surface_kind="telegram",
-                    surface_key=target_topic_key,
-                    managed_thread_id=record.managed_thread_id,
-                    managed_turn_id=record.managed_turn_id,
-                )
-
-            return await deliver_managed_thread_terminal_record(
-                record,
-                send_success=_send_success,
-                send_failure=_send_failure,
-                cleanup=_cleanup,
-            )
-
-    durable_delivery = ManagedThreadDurableDeliveryHooks(
-        engine=engine,
-        adapter=_TelegramManagedThreadDeliveryAdapter(),
-        build_delivery_intent=lambda finalized: (
-            None
-            if finalized.status == "interrupted"
-            else build_managed_thread_delivery_intent(
-                finalized,
-                surface=ManagedThreadSurfaceInfo(
-                    log_label="Telegram",
-                    surface_kind="telegram",
-                    surface_key=topic_key,
-                    metadata={
-                        "chat_id": chat_id,
-                        "thread_id": thread_id,
-                    },
-                ),
-                transport_target={
-                    "chat_id": chat_id,
-                    "thread_id": thread_id,
-                    "topic_key": topic_key,
-                    "workspace_path": workspace_path,
-                    "pma_enabled": pma_enabled,
-                },
-            )
+    durable_delivery = build_managed_thread_terminal_delivery_hooks(
+        state_root=state_root,
+        surface=ManagedThreadSurfaceInfo(
+            log_label="Telegram",
+            surface_kind="telegram",
+            surface_key=topic_key,
+            metadata={
+                "chat_id": chat_id,
+                "thread_id": thread_id,
+            },
         ),
+        adapter_key="telegram",
+        transport_target={
+            "chat_id": chat_id,
+            "thread_id": thread_id,
+            "topic_key": topic_key,
+            "workspace_path": workspace_path,
+            "pma_enabled": pma_enabled,
+        },
+        send_success=_build_telegram_success_delivery(
+            handlers,
+            chat_id=chat_id,
+            thread_id=thread_id,
+        ),
+        send_failure=_build_telegram_failure_delivery(
+            handlers,
+            chat_id=chat_id,
+            thread_id=thread_id,
+            public_execution_error=public_execution_error,
+        ),
+        cleanup=_build_telegram_delivery_cleanup(handlers, topic_key=topic_key),
     )
     hub_root, raw_config = resolve_bound_chat_queue_progress_context(
         handlers,
         fallback_root=state_root,
     )
-    queue_progress = build_bound_chat_queue_execution_controller(
+    queue_execution_hooks = build_managed_thread_surface_queue_execution_hooks(
         hub_root=hub_root,
         raw_config=raw_config,
         managed_thread_id=managed_thread_id,
         surface_targets=(("telegram", topic_key),),
-        base_hooks=ManagedThreadExecutionHooks(),
     )
 
     async def _run_with_telegram_typing_indicator(work: Any) -> None:
@@ -1050,7 +1063,7 @@ def _build_telegram_runner_hooks(
         durable_delivery=durable_delivery,
         deliver_result=_deliver_queued_result,
         run_with_indicator=_run_with_telegram_typing_indicator,
-        queue_execution_hooks=queue_progress.hooks,
+        queue_execution_hooks=queue_execution_hooks,
     )
 
 
@@ -1218,12 +1231,18 @@ async def _run_telegram_managed_thread_turn(
     intermediate_response = ""
     backend_turn_id: Optional[str] = None
     queued_thread_id = str(thread.backend_thread_id or "") or None
+    queued_execution_id: Optional[str] = None
 
     async def _after_submission(submission: Any) -> None:
         nonlocal registered_turn_key
         nonlocal backend_turn_id
         nonlocal queued_thread_id
+        nonlocal queued_execution_id
         started_execution = submission.started_execution
+        queued_execution_id = (
+            str(getattr(started_execution.execution, "execution_id", "") or "").strip()
+            or None
+        )
         queued_thread_id = (
             str(
                 getattr(started_execution.thread, "backend_thread_id", "") or ""
@@ -1321,6 +1340,33 @@ async def _run_telegram_managed_thread_turn(
     async def _on_queued(_flow: Any) -> _TurnRunResult:
         if chat_ux_snapshot is not None:
             chat_ux_snapshot.record(ChatUxMilestone.QUEUE_VISIBLE)
+            if queued_execution_id is not None:
+                journal_notice = emit_chat_ux_timing(
+                    handlers._logger,
+                    logging.INFO,
+                    chat_ux_snapshot,
+                    event_suffix="managed_thread_turn",
+                    topic_key=topic_key,
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    status="queued",
+                    execution_id=queued_execution_id,
+                )
+                try:
+                    append_chat_execution_journal_notices(
+                        _telegram_state_root(handlers),
+                        execution_id=queued_execution_id,
+                        target_kind="thread_target",
+                        target_id=managed_thread_id,
+                        repo_id=repo_id or None,
+                        notices=[journal_notice],
+                    )
+                except (OSError, RuntimeError, TypeError, ValueError):
+                    handlers._logger.debug(
+                        "Telegram queued journal append failed for %s",
+                        queued_execution_id,
+                        exc_info=True,
+                    )
         return _TurnRunResult(
             record=record,
             thread_id=queued_thread_id,
@@ -1416,7 +1462,7 @@ async def _run_telegram_managed_thread_turn(
                 response_sent or getattr(_flow, "durable_delivery_performed", False)
             ):
                 chat_ux_snapshot.record(ChatUxMilestone.TERMINAL_DELIVERY)
-                emit_chat_ux_timing(
+                journal_notice = emit_chat_ux_timing(
                     handlers._logger,
                     logging.INFO,
                     chat_ux_snapshot,
@@ -1425,7 +1471,23 @@ async def _run_telegram_managed_thread_turn(
                     chat_id=message.chat_id,
                     thread_id=message.thread_id,
                     status=finalized.status,
+                    execution_id=finalized.managed_turn_id,
                 )
+                try:
+                    append_chat_execution_journal_notices(
+                        _telegram_state_root(handlers),
+                        execution_id=finalized.managed_turn_id,
+                        target_kind="thread_target",
+                        target_id=managed_thread_id,
+                        repo_id=repo_id or None,
+                        notices=[journal_notice],
+                    )
+                except (OSError, RuntimeError, TypeError, ValueError):
+                    handlers._logger.debug(
+                        "Telegram execution journal append failed for %s",
+                        finalized.managed_turn_id,
+                        exc_info=True,
+                    )
             if interrupt_status_fallback_text:
                 await handlers._clear_interrupt_status_message(
                     chat_id=message.chat_id,
@@ -1499,7 +1561,7 @@ async def _run_telegram_managed_thread_turn(
         )
         if chat_ux_snapshot is not None:
             chat_ux_snapshot.record(ChatUxMilestone.TERMINAL_DELIVERY)
-            emit_chat_ux_timing(
+            journal_notice = emit_chat_ux_timing(
                 handlers._logger,
                 logging.INFO,
                 chat_ux_snapshot,
@@ -1508,7 +1570,23 @@ async def _run_telegram_managed_thread_turn(
                 chat_id=message.chat_id,
                 thread_id=message.thread_id,
                 status="ok",
+                execution_id=finalized.managed_turn_id,
             )
+            try:
+                append_chat_execution_journal_notices(
+                    _telegram_state_root(handlers),
+                    execution_id=finalized.managed_turn_id,
+                    target_kind="thread_target",
+                    target_id=managed_thread_id,
+                    repo_id=repo_id or None,
+                    notices=[journal_notice],
+                )
+            except (OSError, RuntimeError, TypeError, ValueError):
+                handlers._logger.debug(
+                    "Telegram execution journal append failed for %s",
+                    finalized.managed_turn_id,
+                    exc_info=True,
+                )
         _delivery_handled = getattr(_flow, "durable_delivery_performed", False)
         return _TurnRunResult(
             record=record,

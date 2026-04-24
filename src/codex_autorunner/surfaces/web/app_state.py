@@ -26,6 +26,7 @@ from ...core.flows.workspace_root import resolve_ticket_flow_workspace_root
 from ...core.hub_control_plane.service import HubSharedStateService
 from ...core.hub_projection_store import HubProjectionStore
 from ...core.logging_utils import safe_log, setup_rotating_logger
+from ...core.managed_thread_identity import ManagedThreadIdentityStore
 from ...core.optional_dependencies import require_optional_dependencies
 from ...core.orchestration.sqlite import prepare_orchestration_sqlite
 from ...core.pma_thread_store import prepare_pma_thread_store
@@ -44,10 +45,6 @@ from ...integrations.app_server.client import ApprovalHandler, NotificationHandl
 from ...integrations.app_server.env import build_app_server_env
 from ...integrations.app_server.event_buffer import AppServerEventBuffer
 from ...integrations.app_server.supervisor import WorkspaceAppServerSupervisor
-from ...integrations.app_server.threads import (
-    AppServerThreadRegistry,
-    default_app_server_threads_path,
-)
 from ...tickets.replies import resolve_reply_paths
 from .hub_jobs import HubJobManager
 from .runner_manager import RunnerManager
@@ -77,7 +74,7 @@ class AppContext:
     manager: RunnerManager
     app_server_supervisor: Optional[WorkspaceAppServerSupervisor]
     app_server_prune_interval: Optional[float]
-    app_server_threads: AppServerThreadRegistry
+    app_server_threads: ManagedThreadIdentityStore
     app_server_events: AppServerEventBuffer
     opencode_supervisor: Optional[OpenCodeSupervisor]
     opencode_prune_interval: Optional[float]
@@ -109,7 +106,7 @@ class HubAppContext:
     job_manager: HubJobManager
     app_server_supervisor: Optional[WorkspaceAppServerSupervisor]
     app_server_prune_interval: Optional[float]
-    app_server_threads: AppServerThreadRegistry
+    app_server_threads: ManagedThreadIdentityStore
     app_server_events: AppServerEventBuffer
     opencode_supervisor: Optional[OpenCodeSupervisor]
     opencode_prune_interval: Optional[float]
@@ -472,9 +469,7 @@ def build_app_context(
         notification_handler=app_server_events.handle_notification,
         approval_handler=_file_write_approval_handler,
     )
-    app_server_threads = AppServerThreadRegistry(
-        default_app_server_threads_path(engine.repo_root)
-    )
+    app_server_threads = ManagedThreadIdentityStore(engine.repo_root)
     opencode_supervisor = build_opencode_supervisor_from_repo_config(
         config,
         workspace_root=engine.repo_root,
@@ -738,9 +733,7 @@ def build_hub_context(
         event_prefix="hub.app_server",
         notification_handler=app_server_events.handle_notification,
     )
-    app_server_threads = AppServerThreadRegistry(
-        default_app_server_threads_path(config.root)
-    )
+    app_server_threads = ManagedThreadIdentityStore(config.root)
     opencode_supervisor = build_opencode_supervisor_from_repo_config(
         cast(Any, config),
         workspace_root=config.root,

@@ -53,12 +53,14 @@ from .routes.hub_control_plane import build_hub_control_plane_routes
 from .routes.hub_messages import build_hub_messages_routes
 from .routes.hub_repos import HubMountManager, build_hub_repo_routes
 from .routes.pma import build_pma_routes
+from .routes.pma_routes import PmaRuntimeState
 from .routes.pma_routes.managed_thread_runtime import (
     recover_orphaned_managed_thread_executions,
     restart_managed_thread_queue_workers,
 )
 from .routes.scm_webhooks import build_scm_webhook_routes
 from .routes.system import build_system_routes
+from .services.pma import create_pma_application_container
 from .static_assets import (
     index_response_headers,
     render_index_html,
@@ -159,7 +161,12 @@ def create_hub_app(
     raw_config = getattr(context.config, "raw", {})
     pma_config = raw_config.get("pma", {}) if isinstance(raw_config, dict) else {}
     if isinstance(pma_config, dict) and pma_config.get("enabled"):
-        pma_router = build_pma_routes()
+        pma_container = create_pma_application_container(
+            runtime_state=PmaRuntimeState(),
+            host_state=app.state,
+        )
+        app.state.pma_container = pma_container
+        pma_router = build_pma_routes(container=pma_container)
         app.include_router(pma_router)
         app.state.pma_lane_worker_start = getattr(
             pma_router, "_pma_start_lane_worker", None

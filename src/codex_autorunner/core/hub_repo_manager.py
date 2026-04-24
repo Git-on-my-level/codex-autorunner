@@ -10,7 +10,6 @@ from ..bootstrap import seed_repo_files
 from ..manifest import (
     Manifest,
     ensure_unique_repo_id,
-    load_manifest,
     sanitize_repo_id,
     save_manifest,
 )
@@ -34,6 +33,7 @@ from .git_utils import (
     resolve_ref_sha,
     run_git,
 )
+from .hub_topology import HubTopologyRepository
 from .orchestration.sqlite import open_orchestration_sqlite
 from .pma_thread_store import PmaThreadStore
 from .utils import is_within
@@ -62,6 +62,7 @@ class RepoManager:
         self,
         hub_config: HubConfig,
         *,
+        topology_repository: HubTopologyRepository,
         on_invalidate_cache: Callable[[], None],
         on_snapshot_for_repo: Callable[[str], RepoSnapshot],
         on_stop_runner: Optional[Callable[..., None]] = None,
@@ -70,6 +71,7 @@ class RepoManager:
         runners: Optional[Dict[str, Any]] = None,
     ):
         self._hub_config = hub_config
+        self._topology_repository = topology_repository
         self._on_invalidate_cache = on_invalidate_cache
         self._on_snapshot_for_repo = on_snapshot_for_repo
         self._on_stop_runner = on_stop_runner
@@ -79,7 +81,7 @@ class RepoManager:
 
     def init_repo(self, repo_id: str) -> RepoSnapshot:
         self._on_invalidate_cache()
-        manifest = load_manifest(self._hub_config.manifest_path, self._hub_config.root)
+        manifest = self._topology_repository.load_manifest()
         repo = manifest.get(repo_id)
         if not repo:
             raise ValueError(f"Repo {repo_id} not found in manifest")
@@ -159,7 +161,7 @@ class RepoManager:
         force_attestation: Optional[Mapping[str, object]] = None,
     ) -> None:
         self._on_invalidate_cache()
-        manifest = load_manifest(self._hub_config.manifest_path, self._hub_config.root)
+        manifest = self._topology_repository.load_manifest()
         repo = manifest.get(repo_id)
         if not repo:
             raise ValueError(f"Repo {repo_id} not found in manifest")
@@ -193,9 +195,7 @@ class RepoManager:
                     force=force,
                     force_attestation=force_attestation,
                 )
-            manifest = load_manifest(
-                self._hub_config.manifest_path, self._hub_config.root
-            )
+            manifest = self._topology_repository.load_manifest()
             repo = manifest.get(repo_id)
             if not repo:
                 raise ValueError(f"Repo {repo_id} missing after worktree cleanup")
@@ -224,7 +224,7 @@ class RepoManager:
         if delete_dir and repo_root.exists():
             shutil.rmtree(repo_root)
 
-        manifest = load_manifest(self._hub_config.manifest_path, self._hub_config.root)
+        manifest = self._topology_repository.load_manifest()
         manifest.repos = [r for r in manifest.repos if r.id != repo_id]
         save_manifest(self._hub_config.manifest_path, manifest, self._hub_config.root)
         if self._on_list_repos is not None:
@@ -232,7 +232,7 @@ class RepoManager:
 
     def sync_main(self, repo_id: str) -> RepoSnapshot:
         self._on_invalidate_cache()
-        manifest = load_manifest(self._hub_config.manifest_path, self._hub_config.root)
+        manifest = self._topology_repository.load_manifest()
         repo = manifest.get(repo_id)
         if not repo:
             raise ValueError(f"Repo {repo_id} not found in manifest")
@@ -308,7 +308,7 @@ class RepoManager:
         archive_note: Optional[str] = None,
         archive_profile: Optional[str] = None,
     ) -> Dict[str, object]:
-        manifest = load_manifest(self._hub_config.manifest_path, self._hub_config.root)
+        manifest = self._topology_repository.load_manifest()
         entry = manifest.get(repo_id)
         if not entry:
             raise ValueError(f"Repo not found: {repo_id}")
@@ -370,7 +370,7 @@ class RepoManager:
         }
 
     def cleanup_repo_threads(self, *, repo_id: str) -> Dict[str, object]:
-        manifest = load_manifest(self._hub_config.manifest_path, self._hub_config.root)
+        manifest = self._topology_repository.load_manifest()
         entry = manifest.get(repo_id)
         if not entry or entry.kind != "base":
             raise ValueError(f"Base repo not found: {repo_id}")
@@ -402,7 +402,7 @@ class RepoManager:
         }
 
     def cleanup_all_repo_threads(self) -> Dict[str, object]:
-        manifest = load_manifest(self._hub_config.manifest_path, self._hub_config.root)
+        manifest = self._topology_repository.load_manifest()
         base_repo_paths = self._base_repo_paths(manifest)
         unbound_threads_by_repo = self._collect_unbound_repo_threads(manifest=manifest)
         dirty_repo_ids: list[str] = []
@@ -457,7 +457,7 @@ class RepoManager:
         }
 
     def check_repo_removal(self, repo_id: str) -> Dict[str, object]:
-        manifest = load_manifest(self._hub_config.manifest_path, self._hub_config.root)
+        manifest = self._topology_repository.load_manifest()
         repo = manifest.get(repo_id)
         if not repo:
             raise ValueError(f"Repo {repo_id} not found in manifest")
@@ -486,7 +486,7 @@ class RepoManager:
         }
 
     def unbound_repo_thread_counts(self) -> dict[str, int]:
-        manifest = load_manifest(self._hub_config.manifest_path, self._hub_config.root)
+        manifest = self._topology_repository.load_manifest()
         thread_ids_by_repo = self._collect_unbound_repo_threads(manifest=manifest)
         return {
             repo_id: len(thread_ids)
@@ -530,10 +530,7 @@ class RepoManager:
         manifest: Optional[Manifest] = None,
     ) -> dict[str, list[str]]:
         if manifest is None:
-            manifest = load_manifest(
-                self._hub_config.manifest_path,
-                self._hub_config.root,
-            )
+            manifest = self._topology_repository.load_manifest()
         base_repo_paths = self._base_repo_paths(manifest)
         if not base_repo_paths:
             return {}
@@ -604,7 +601,7 @@ class RepoManager:
         seed_git_required: bool,
     ) -> RepoSnapshot:
         self._on_invalidate_cache()
-        manifest = load_manifest(self._hub_config.manifest_path, self._hub_config.root)
+        manifest = self._topology_repository.load_manifest()
         self._validate_no_id_conflict(manifest, safe_repo_id, target)
         if target.exists() and not force:
             raise ValueError(f"Repo path already exists: {target}")

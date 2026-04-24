@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 
 from ..acp_lifecycle import analyze_acp_lifecycle_message
 from ..acp_lifecycle import (
@@ -104,6 +104,126 @@ DIRECT_RUN_EVENT_TYPES = (
     Failed,
     Started,
 )
+
+
+@dataclass
+class RuntimeEventDriver:
+    """Canonical reducer for raw runtime payloads into normalized run events."""
+
+    state: RuntimeThreadRunEventState = field(
+        default_factory=lambda: RuntimeThreadRunEventState()
+    )
+    raw_events: list[Any] = field(default_factory=list)
+    run_events: list[RunEvent] = field(default_factory=list)
+    assistant_parts: list[str] = field(default_factory=list)
+    log_lines: list[str] = field(default_factory=list)
+    token_usage: Optional[dict[str, Any]] = None
+
+    async def consume_raw_event(
+        self,
+        raw_event: Any,
+        *,
+        timestamp: Optional[str] = None,
+        store_raw_event: bool = True,
+    ) -> list[RunEvent]:
+        if store_raw_event:
+            self.raw_events.append(raw_event)
+        events = await normalize_runtime_progress_event(
+            raw_event,
+            self.state,
+        )
+        self._record_run_events(events)
+        return events
+
+    async def consume_raw_events(
+        self,
+        raw_events: Iterable[Any],
+        *,
+        timestamp: Optional[str] = None,
+        store_raw_event: bool = True,
+    ) -> list[RunEvent]:
+        normalized: list[RunEvent] = []
+        for raw_event in raw_events:
+            normalized.extend(
+                await self.consume_raw_event(
+                    raw_event,
+                    timestamp=timestamp,
+                    store_raw_event=store_raw_event,
+                )
+            )
+        return normalized
+
+    def append_run_event(self, event: RunEvent) -> None:
+        self._record_run_events([event])
+
+    def best_assistant_text(self) -> str:
+        assistant_text = self.state.best_assistant_text()
+        if isinstance(assistant_text, str) and assistant_text.strip():
+            return assistant_text
+        return "".join(self.assistant_parts).strip()
+
+    def merged_raw_events(self, raw_events: Iterable[Any]) -> list[Any]:
+        return merge_runtime_thread_raw_events(
+            self.raw_events,
+            list(raw_events),
+        )
+
+    def _record_run_events(self, events: list[RunEvent]) -> None:
+        if not events:
+            return
+        self.run_events.extend(events)
+        for event in events:
+            if isinstance(event, OutputDelta):
+                if event.delta_type in {
+                    RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+                    RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
+                }:
+                    self.assistant_parts.append(event.content)
+                    continue
+                if event.delta_type == RUN_EVENT_DELTA_TYPE_LOG_LINE:
+                    self.log_lines.append(event.content)
+                    continue
+            if isinstance(event, TokenUsage) and isinstance(event.usage, dict):
+                self.token_usage = dict(event.usage)
+
+
+async def decode_runtime_raw_messages(raw_event: Any) -> list[dict[str, Any]]:
+    if isinstance(raw_event, dict):
+        raw_sse = raw_event.get("raw_event")
+        if isinstance(raw_sse, str) and raw_sse.strip():
+            return await decode_runtime_raw_messages(raw_sse)
+        if isinstance(raw_event.get("message"), dict):
+            return [dict(raw_event["message"])]
+        if isinstance(raw_event.get("method"), str):
+            return [dict(raw_event)]
+        return []
+    if not isinstance(raw_event, str):
+        return []
+    text = raw_event.strip()
+    if not text:
+        return []
+    if not text.startswith("event:") and not text.startswith("data:"):
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            return []
+        return await decode_runtime_raw_messages(parsed)
+
+    messages: list[dict[str, Any]] = []
+    async for sse_event in _parse_runtime_thread_sse(text):
+        payload = _load_json_object(sse_event.data)
+        if sse_event.event in {"app-server", "event", "zeroclaw"}:
+            message = payload.get("message")
+            if isinstance(message, dict):
+                messages.append(dict(message))
+                continue
+        messages.append(
+            {
+                "method": sse_event.event,
+                "params": payload,
+            }
+        )
+    return messages
 
 
 def raw_event_message(raw_event: Any) -> dict[str, Any]:
@@ -1066,7 +1186,9 @@ def _output_delta_events(
     content = _extract_output_delta(params)
     if not content:
         return []
-    delta_type = _output_delta_type_for_method(method)
+    delta_type = str(params.get("deltaType") or params.get("delta_type") or "").strip()
+    if not delta_type:
+        delta_type = _output_delta_type_for_method(method)
     if delta_type == RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM:
         state.note_stream_text(content)
     return [
@@ -1405,7 +1527,9 @@ def _extract_part_id(
 
 
 __all__ = [
+    "RuntimeEventDriver",
     "RuntimeThreadRunEventState",
+    "decode_runtime_raw_messages",
     "merge_runtime_thread_raw_events",
     "normalize_runtime_thread_message",
     "normalize_runtime_thread_message_payload",

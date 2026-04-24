@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from .....core.flows import FlowStore
 from .....core.flows.models import FlowRunStatus
+from .....core.state_roots import resolve_repo_flows_db_path
 from .....manifest import load_manifest
 from ....chat.status_diagnostics import (
     StatusBlockContext,
@@ -193,7 +194,7 @@ class WorkspaceStatusMixin:
                     if not repo.enabled:
                         continue
                     repo_root = (hub_root / repo.path).resolve()
-                    db_path = repo_root / ".codex-autorunner" / "flows.db"
+                    db_path = resolve_repo_flows_db_path(repo_root)
                     if not db_path.exists():
                         idle_count += 1
                         continue
@@ -247,7 +248,7 @@ class WorkspaceStatusMixin:
 
         if record.workspace_path and not is_pma:
             repo_root = Path(record.workspace_path)
-            db_path = repo_root / ".codex-autorunner" / "flows.db"
+            db_path = resolve_repo_flows_db_path(repo_root)
             if db_path.exists():
                 store = FlowStore(db_path)
                 try:

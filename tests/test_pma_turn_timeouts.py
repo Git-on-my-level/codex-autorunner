@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.integrations.discord import message_turns as discord_message_turns
@@ -105,6 +108,73 @@ def test_web_pma_turn_idle_timeout_reads_request_config() -> None:
 
     assert chat_runtime._pma_turn_idle_timeout_seconds(request) == 345
     assert managed_thread_runtime._pma_turn_idle_timeout_seconds(request) == 345
+
+
+def test_web_managed_thread_pma_surface_uses_idle_timeout_only() -> None:
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                config=SimpleNamespace(
+                    pma=SimpleNamespace(turn_idle_timeout_seconds=345)
+                )
+            )
+        )
+    )
+
+    errors = managed_thread_runtime._pma_finalization_errors(request)
+
+    assert errors.timeout_seconds == 345.0
+    assert errors.stall_timeout_seconds == 345.0
+    assert errors.idle_timeout_only is True
+
+
+@pytest.mark.anyio
+async def test_web_pma_chat_waits_for_result_without_wall_clock_timeout() -> None:
+    result_future: asyncio.Future[dict[str, str]] = (
+        asyncio.get_running_loop().create_future()
+    )
+    result_future.set_result({"status": "ok"})
+    runtime = SimpleNamespace(lane_workers={})
+    queue = SimpleNamespace()
+
+    result = await chat_runtime._await_pma_result_future(
+        runtime,
+        queue,
+        lane_id="pma:default",
+        item_id="item-1",
+        result_future=result_future,  # type: ignore[arg-type]
+    )
+
+    assert result == {"status": "ok"}
+
+
+@pytest.mark.anyio
+async def test_web_pma_chat_returns_worker_stopped_error_when_no_result(
+    monkeypatch,
+) -> None:
+    future = SimpleNamespace(done=lambda: False)
+    runtime = SimpleNamespace(
+        lane_workers={"pma:default": SimpleNamespace(is_running=False)}
+    )
+    queue = SimpleNamespace()
+
+    async def _no_late_result(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        chat_runtime, "_resolve_terminal_queue_item_result", _no_late_result
+    )
+
+    result = await chat_runtime._await_pma_result_future(
+        runtime,
+        queue,
+        lane_id="pma:default",
+        item_id="item-1",
+        result_future=future,  # type: ignore[arg-type]
+    )
+
+    assert result["status"] == "error"
+    assert "lane worker stopped" in result["detail"]
 
 
 class TestPmaTimeoutIsolationInvariants:

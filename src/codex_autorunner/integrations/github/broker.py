@@ -14,13 +14,12 @@ from types import SimpleNamespace
 from typing import Any, Callable, Optional
 
 from ...core.sqlite_utils import open_sqlite
-from ...core.state_roots import resolve_global_state_root
+from ...core.state_roots import resolve_global_github_broker_db_path
 from ...core.text_utils import _mapping
 from ...core.time_utils import now_iso
 
 _LOGGER = logging.getLogger(__name__)
 
-_BROKER_DB_FILENAME = "github-cli.sqlite3"
 _COOLDOWN_KEY = "cooldown"
 _CACHE_KEY_PREFIX = "cache:"
 _LEASE_KEY_PREFIX = "lease:"
@@ -237,11 +236,10 @@ class GitHubCliBroker:
         self._runner = runner
         self._error_factory = error_factory
         config_ns = SimpleNamespace(root=self._config_root, raw=self._raw_config)
-        self._state_root = resolve_global_state_root(
+        self._db_path = resolve_global_github_broker_db_path(
             config=config_ns,
             repo_root=self._repo_root,
         )
-        self._db_path = self._state_root / "github" / _BROKER_DB_FILENAME
 
     def run(
         self,

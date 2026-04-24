@@ -165,6 +165,9 @@ class TestValidateAppServerConfig:
         with pytest.raises(ConfigError, match="must be a list or string"):
             _validate_app_server_config({"app_server": {"command": 42}})
 
+    def test_command_may_be_null(self) -> None:
+        _validate_app_server_config({"app_server": {"command": None}})
+
     def test_state_root_must_be_str(self) -> None:
         with pytest.raises(ConfigError, match="must be a string path"):
             _validate_app_server_config({"app_server": {"state_root": 42}})

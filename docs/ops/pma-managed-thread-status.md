@@ -78,6 +78,22 @@ shared orchestration service seam. PMA keeps its operator-facing response
 shape, but the web and CLI surfaces no longer treat direct PMA store access as
 the primary runtime-thread query/control path.
 
+## Authority Model
+
+Managed-thread ownership now has one canonical authority: `orchestration.sqlite3`.
+
+- `orch_thread_targets` and `orch_thread_executions` own managed-thread lifecycle
+  and execution state.
+- `orch_bindings` owns surface-to-thread targeting for managed-thread surfaces.
+- `orch_thread_identity_bindings` owns feature-key lookup/reset targeting that
+  used to live in `app_server_threads.json`.
+- `.codex-autorunner/app_server_threads.json` is now a compatibility cache only.
+  It is rewritten from orchestration state and may be deleted once no remaining
+  runtime or archival readers depend on it.
+- `.codex-autorunner/pma/threads.sqlite3` is no longer bootstrapped during normal
+  startup. If a legacy mirror is needed for migration validation, create it
+  explicitly and verify parity before using it as a read-only fallback.
+
 ## CLI Naming And Output Retrieval
 
 The PMA thread CLI now renders the same canonical nouns exposed by the API:

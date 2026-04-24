@@ -653,7 +653,7 @@ def _render_pma_threads_section(
             thread, max_field_chars=max_field_chars
         )
         agent = _field(thread, "agent", max_field_chars)
-        raw_status = str(thread.get("status") or "")
+        raw_status = str(thread.get("normalized_status") or thread.get("status") or "")
         precomputed = _field(thread, "operator_status", max_field_chars)
         if precomputed:
             status_display = precomputed
@@ -674,7 +674,8 @@ def _render_pma_threads_section(
             max_field_chars,
         )
         status_reason = _truncate(
-            str(thread.get("status_reason") or "-"), max_field_chars
+            str(thread.get("status_reason_code") or thread.get("status_reason") or "-"),
+            max_field_chars,
         )
         name = _field(thread, "name", max_field_chars) or "-"
         preview = _field(thread, "last_message_preview", max_field_chars) or "-"

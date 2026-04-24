@@ -241,6 +241,8 @@ def test_export_run_skips_active(temp_dir):
     result = export_run(temp_dir, store, record, dry_run=False)
     assert result.skipped is True
     assert "active" in (result.skip_reason or "")
+    assert result.lifecycle_summary["actions"] == {"keep": 1}
+    assert result.lifecycle_summary["reasons"] == {"active_run_guard": 1}
 
 
 def test_export_run_skips_empty_terminal(temp_dir):
@@ -298,6 +300,13 @@ def test_export_run_creates_archive(temp_dir):
     assert result.skipped is False
     assert result.exported_events == 2
     assert result.archive_path is not None
+    assert result.lifecycle_summary["actions"] == {"export_then_prune": 2}
+    assert result.lifecycle_summary["families"]["app_server_events"]["actions"] == {
+        "export_then_prune": 1
+    }
+    assert result.lifecycle_summary["families"]["agent_stream_deltas"]["actions"] == {
+        "export_then_prune": 1
+    }
 
     archive_path = Path(result.archive_path)
     assert archive_path.exists()

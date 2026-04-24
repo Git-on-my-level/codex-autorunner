@@ -6,6 +6,7 @@ from .context_injection import (
     maybe_inject_github_context,
 )
 from .publisher import (
+    build_github_publish_executors,
     build_post_pr_comment_executor,
     build_react_pr_review_comment_executor,
     publish_pr_comment,
@@ -15,6 +16,7 @@ from .service import GitHubError, GitHubService, find_github_links, parse_github
 from .webhooks import GitHubWebhookConfig, GitHubWebhookResult, normalize_github_webhook
 
 __all__ = [
+    "build_github_publish_executors",
     "build_post_pr_comment_executor",
     "build_react_pr_review_comment_executor",
     "GitHubError",

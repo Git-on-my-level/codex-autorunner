@@ -6,10 +6,20 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
+from .....core.chat_bindings import (
+    resolve_chat_state_path as resolve_configured_chat_state_path,
+)
 from .....core.logging_utils import log_event
 from .....core.pma_chat_delivery import deliver_pma_notification
 from .....core.ports.run_event import TokenUsage
+from .....integrations.chat.execution_event_journal import (
+    append_chat_execution_journal_notices,
+    extract_token_usage_from_journal_events,
+    journal_events_from_run_events,
+    make_chat_execution_journal_notice,
+)
 from .....integrations.chat.turn_metrics import format_turn_footer
+from ...services.pma import get_pma_request_context
 
 if TYPE_CHECKING:
     from fastapi import Request
@@ -30,18 +40,13 @@ def normalize_optional_text(value: Any) -> Optional[str]:
 def resolve_chat_state_path(
     request: Request, *, section: str, default_state_file: str
 ) -> Path:
-    hub_root = request.app.state.config.root
-    raw = getattr(request.app.state.config, "raw", {})
-    section_cfg = raw.get(section) if isinstance(raw, dict) else {}
-    if not isinstance(section_cfg, dict):
-        section_cfg = {}
-    state_file = section_cfg.get("state_file")
-    if not isinstance(state_file, str) or not state_file.strip():
-        state_file = default_state_file
-    state_path = Path(state_file)
-    if not state_path.is_absolute():
-        state_path = (hub_root / state_path).resolve()
-    return state_path
+    context = get_pma_request_context(request)
+    return resolve_configured_chat_state_path(
+        hub_root=context.hub_root,
+        raw_config=context.raw_config,
+        section=section,
+        default_state_file=default_state_file,
+    )
 
 
 def resolve_publish_repo_id(
@@ -50,8 +55,6 @@ def resolve_publish_repo_id(
     lifecycle_event: Optional[dict[str, Any]],
     wake_up: Optional[dict[str, Any]],
 ) -> Optional[str]:
-    from .....core.pma_thread_store import PmaThreadStore
-
     for candidate in (
         lifecycle_event.get("repo_id") if lifecycle_event else None,
         wake_up.get("repo_id") if wake_up else None,
@@ -68,7 +71,7 @@ def resolve_publish_repo_id(
     if not thread_id:
         return None
     try:
-        thread = PmaThreadStore(request.app.state.config.root).get_thread(thread_id)
+        thread = get_pma_request_context(request).thread_store().get_thread(thread_id)
     except (OSError, ValueError, RuntimeError):
         logger.exception(
             "Failed resolving managed thread repo for publish thread_id=%s",
@@ -86,8 +89,6 @@ def resolve_publish_workspace_root(
     lifecycle_event: Optional[dict[str, Any]],
     wake_up: Optional[dict[str, Any]],
 ) -> Optional[Path]:
-    from .....core.pma_thread_store import PmaThreadStore
-
     if isinstance(wake_up, dict):
         raw_workspace = normalize_optional_text(wake_up.get("workspace_root"))
         if raw_workspace:
@@ -104,7 +105,7 @@ def resolve_publish_workspace_root(
     if not thread_id:
         return None
     try:
-        thread = PmaThreadStore(request.app.state.config.root).get_thread(thread_id)
+        thread = get_pma_request_context(request).thread_store().get_thread(thread_id)
     except (OSError, ValueError, RuntimeError):
         logger.exception(
             "Failed resolving managed thread workspace for publish thread_id=%s",
@@ -219,6 +220,11 @@ def _extract_result_token_usage(result: dict[str, Any]) -> Optional[dict[str, An
     timeline_events = result.get("timeline_events")
     if not isinstance(timeline_events, list):
         return None
+    usage = extract_token_usage_from_journal_events(
+        [event.to_dict() for event in journal_events_from_run_events(timeline_events)]
+    )
+    if usage is not None:
+        return usage
     for event in reversed(timeline_events):
         if isinstance(event, TokenUsage) and isinstance(event.usage, dict):
             return dict(event.usage)
@@ -253,7 +259,7 @@ async def publish_automation_result(
     lifecycle_event: Any,
     wake_up: Any,
 ) -> dict[str, Any]:
-    hub_root = request.app.state.config.root
+    hub_root = get_pma_request_context(request).hub_root
     lifecycle_event_dict = (
         lifecycle_event if isinstance(lifecycle_event, dict) else None
     )
@@ -361,6 +367,39 @@ async def publish_automation_result(
         repo_id=target_repo_id,
         correlation_id=correlation_id,
     )
+    journal_execution_id = normalize_optional_text(
+        result.get("turn_id") or result.get("client_turn_id") or client_turn_id_str
+    )
+    if journal_execution_id:
+        try:
+            append_chat_execution_journal_notices(
+                hub_root,
+                execution_id=journal_execution_id,
+                target_kind="lane",
+                target_id=normalize_optional_text((wake_up_dict or {}).get("lane_id"))
+                or "pma:default",
+                repo_id=target_repo_id,
+                notices=[
+                    make_chat_execution_journal_notice(
+                        domain="delivery",
+                        name="publish",
+                        message="PMA automation result publish completed",
+                        status=delivery_status,
+                        data={
+                            "route": outcome.get("route"),
+                            "targets": targets,
+                            "published": published,
+                            "repo_id": target_repo_id,
+                            "correlation_id": correlation_id,
+                        },
+                    )
+                ],
+            )
+        except (OSError, RuntimeError, TypeError, ValueError):
+            logger.exception(
+                "Failed to append PMA publish journal event turn_id=%s",
+                journal_execution_id,
+            )
     return {
         "delivery_status": delivery_status,
         "delivery_outcome": delivery_outcome,

@@ -12,7 +12,7 @@ from .orchestration.sqlite import (
     open_orchestration_sqlite,
     prepare_orchestration_sqlite,
 )
-from .pma_thread_mirror import sync_legacy_mirror
+from .state_roots import resolve_hub_pma_threads_db_path
 from .time_utils import now_iso
 
 PMA_THREADS_DB_FILENAME = "threads.sqlite3"
@@ -20,7 +20,7 @@ _PMA_THREAD_STORE_PREPARED_KEY = "pma_thread_store_prepare_v1"
 
 
 def default_pma_threads_db_path(hub_root: Path) -> Path:
-    return hub_root / ".codex-autorunner" / "pma" / PMA_THREADS_DB_FILENAME
+    return resolve_hub_pma_threads_db_path(hub_root)
 
 
 def pma_threads_db_lock_path(db_path: Path) -> Path:
@@ -50,17 +50,6 @@ class PmaThreadStoreBootstrap:
         self._thread_row_to_record = thread_row_to_record
         self._execution_row_to_record = execution_row_to_record
         self._ensure_legacy_schema = ensure_legacy_schema
-
-    def _run_legacy_mirror(self, conn: Any) -> None:
-        sync_legacy_mirror(
-            hub_root=self._hub_root,
-            legacy_db_path=self._db_path,
-            durable=self._durable,
-            orchestration_conn=conn,
-            thread_row_to_record=self._thread_row_to_record,
-            execution_row_to_record=self._execution_row_to_record,
-            ensure_legacy_schema=self._ensure_legacy_schema,
-        )
 
     def _prepare_marker_present(self, conn: Any) -> bool:
         row = conn.execute(
@@ -99,10 +88,7 @@ class PmaThreadStoreBootstrap:
                 migrate=False,
             ) as conn:
                 if self._prepare_marker_present(conn):
-                    if not self._db_path.exists():
-                        self._run_legacy_mirror(conn)
                     return
-                self._run_legacy_mirror(conn)
                 self._mark_prepared(conn)
 
     def initialize(self) -> None:

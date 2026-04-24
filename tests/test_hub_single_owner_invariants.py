@@ -504,6 +504,7 @@ def test_cleanup_worktree_rejects_when_archive_required_but_not_requested(
         DEFAULT_HUB_CONFIG,
         load_hub_config,
     )
+    from codex_autorunner.core.hub_topology import HubTopologyRepository
     from codex_autorunner.core.hub_worktree_manager import WorktreeManager
     from tests.conftest import write_test_config
 
@@ -512,8 +513,13 @@ def test_cleanup_worktree_rejects_when_archive_required_but_not_requested(
     write_test_config(hub_root / CONFIG_FILENAME, cfg)
 
     ctx = MagicMock()
+    hub_config = load_hub_config(hub_root)
     manager = WorktreeManager(
-        hub_config=load_hub_config(hub_root),
+        hub_config=hub_config,
+        topology_repository=HubTopologyRepository(
+            hub_root=hub_config.root,
+            manifest_path=hub_config.manifest_path,
+        ),
         ctx=ctx,
     )
     with pytest.raises(ValueError, match="cleanup requires archiving"):
@@ -534,6 +540,7 @@ def test_cleanup_worktree_blocks_on_chat_binding_check_failure_without_force(
         DEFAULT_HUB_CONFIG,
         load_hub_config,
     )
+    from codex_autorunner.core.hub_topology import HubTopologyRepository
     from codex_autorunner.core.hub_worktree_manager import WorktreeManager
     from tests.conftest import write_test_config
 
@@ -545,8 +552,13 @@ def test_cleanup_worktree_blocks_on_chat_binding_check_failure_without_force(
 
     ctx = MagicMock()
     ctx.invalidate_cache.return_value = None
+    hub_config = load_hub_config(hub_root)
     manager = WorktreeManager(
-        hub_config=load_hub_config(hub_root),
+        hub_config=hub_config,
+        topology_repository=HubTopologyRepository(
+            hub_root=hub_config.root,
+            manifest_path=hub_config.manifest_path,
+        ),
         ctx=ctx,
     )
 
@@ -573,6 +585,7 @@ def test_cleanup_worktree_allows_force_to_proceed_past_chat_binding_check_failur
         DEFAULT_HUB_CONFIG,
         load_hub_config,
     )
+    from codex_autorunner.core.hub_topology import HubTopologyRepository
     from codex_autorunner.core.hub_worktree_manager import WorktreeManager
     from tests.conftest import write_test_config
 
@@ -584,8 +597,13 @@ def test_cleanup_worktree_allows_force_to_proceed_past_chat_binding_check_failur
 
     ctx = MagicMock()
     ctx.invalidate_cache.return_value = None
+    hub_config = load_hub_config(hub_root)
     manager = WorktreeManager(
-        hub_config=load_hub_config(hub_root),
+        hub_config=hub_config,
+        topology_repository=HubTopologyRepository(
+            hub_root=hub_config.root,
+            manifest_path=hub_config.manifest_path,
+        ),
         ctx=ctx,
     )
 

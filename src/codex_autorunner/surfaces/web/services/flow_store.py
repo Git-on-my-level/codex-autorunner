@@ -9,6 +9,7 @@ from fastapi import HTTPException
 
 from ....core.flows import FlowRunRecord, FlowRunStatus, FlowStore
 from ....core.flows.reconciler import reconcile_flow_run
+from ....core.state_roots import resolve_repo_flows_db_path, resolve_repo_state_root
 from ....tickets.files import safe_relpath
 
 _logger = logging.getLogger(__name__)
@@ -19,8 +20,9 @@ ActiveOrPausedSelector = Callable[[list[FlowRunRecord]], Optional[FlowRunRecord]
 
 def flow_paths(repo_root: Path) -> tuple[Path, Path]:
     repo_root = repo_root.resolve()
-    db_path = repo_root / ".codex-autorunner" / "flows.db"
-    artifacts_root = repo_root / ".codex-autorunner" / "flows"
+    state_root = resolve_repo_state_root(repo_root)
+    db_path = resolve_repo_flows_db_path(repo_root)
+    artifacts_root = state_root / "flows"
     return db_path, artifacts_root
 
 

@@ -48,6 +48,7 @@ from .polling_snapshot import (
     initial_post_open_boost_until,
     snapshot_with_polling_metadata,
 )
+from .publisher import build_github_publish_executors
 
 _thread_has_pr_open_hint = thread_has_pr_open_hint
 _ACTIVE_PR_STATES = frozenset({"open", "draft"})
@@ -273,6 +274,7 @@ class GitHubScmPollingService:
         return ScmAutomationService(
             self._hub_root,
             reaction_config=reaction_config or self._raw_config,
+            publish_executor_factory=build_github_publish_executors,
             schedule_deferred_publish_drain=True,
         )
 

@@ -4,33 +4,25 @@ import logging
 from pathlib import Path
 from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, Optional, Union
 
-from ...core.circuit_breaker import CircuitBreaker
 from ...core.logging_utils import log_event
-from ...core.orchestration.codex_item_normalizers import (
-    extract_agent_message_text,
-    extract_codex_output_delta,
-    normalize_tool_name,
-    output_delta_type_for_method,
-)
-from ...core.orchestration.codex_item_normalizers import (
-    reasoning_buffer_key as _shared_reasoning_buffer_key,
+from ...core.orchestration.runtime_thread_events import (
+    RuntimeEventDriver,
+    RuntimeThreadRunEventState,
+    _normalize_tool_name,
+    normalize_runtime_thread_message_payload,
 )
 from ...core.ports.agent_backend import AgentBackend, AgentEvent, now_iso
 from ...core.ports.run_event import (
-    RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
-    RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
     ApprovalRequested,
     Completed,
     Failed,
     OutputDelta,
     RunEvent,
-    RunNotice,
     Started,
-    TokenUsage,
     ToolCall,
+    ToolResult,
 )
 from ...integrations.app_server.client import CodexAppServerClient, CodexAppServerError
-from ...integrations.app_server.event_decoder import decode_notification
 from ...integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 
 _logger = logging.getLogger(__name__)
@@ -38,6 +30,34 @@ _logger = logging.getLogger(__name__)
 ApprovalDecision = Union[str, Dict[str, Any]]
 NotificationHandler = Callable[[Dict[str, Any]], Awaitable[None]]
 ApprovalHandler = Callable[[Dict[str, Any]], Awaitable[ApprovalDecision]]
+
+
+def _agent_event_from_run_event(run_event: RunEvent) -> Optional[AgentEvent]:
+    if isinstance(run_event, OutputDelta):
+        return AgentEvent.stream_delta(
+            content=run_event.content,
+            delta_type=run_event.delta_type,
+        )
+    if isinstance(run_event, ToolCall):
+        return AgentEvent.tool_call(
+            tool_name=run_event.tool_name,
+            tool_input=run_event.tool_input,
+        )
+    if isinstance(run_event, ToolResult):
+        return AgentEvent.tool_result(
+            tool_name=run_event.tool_name,
+            result=run_event.result,
+            error=run_event.error,
+        )
+    if isinstance(run_event, Failed):
+        return AgentEvent.error(error_message=run_event.error_message)
+    if isinstance(run_event, ApprovalRequested):
+        return AgentEvent.approval_requested(
+            request_id=run_event.request_id,
+            description=run_event.description,
+            context=run_event.context,
+        )
+    return None
 
 
 class CodexAppServerBackend(AgentBackend):
@@ -115,11 +135,9 @@ class CodexAppServerBackend(AgentBackend):
         self._thread_id: Optional[str] = None
         self._turn_id: Optional[str] = None
         self._thread_info: Optional[Dict[str, Any]] = None
-        self._reasoning_summary_buffers: dict[str, str] = {}
-
-        self._circuit_breaker = CircuitBreaker("CodexAppServer", logger=_logger)
         self._event_queue: asyncio.Queue[RunEvent] = asyncio.Queue()
-        self._latest_completed_agent_message: str = ""
+        self._active_event_driver: Optional[RuntimeEventDriver] = None
+        self._notification_parser_state = RuntimeThreadRunEventState()
 
     def reset_session_state(self) -> None:
         """Clear cached session/thread ids so the next turn starts fresh."""
@@ -127,15 +145,17 @@ class CodexAppServerBackend(AgentBackend):
         self._thread_id = None
         self._turn_id = None
         self._thread_info = None
-        self._reasoning_summary_buffers.clear()
-        self._latest_completed_agent_message = ""
+        self._active_event_driver = None
+        self._notification_parser_state = RuntimeThreadRunEventState()
 
     async def _ensure_client(self) -> CodexAppServerClient:
         if self._client is None:
             self._client = await self._supervisor.get_client(self._workspace_root)
-        self._client._approval_handler = self._handle_approval_request
-        self._client._notification_handler = self._handle_notification
-        self._client._default_approval_decision = self._default_approval_decision
+        self._client.configure_runtime_callbacks(
+            approval_handler=self._handle_approval_request,
+            notification_handler=self._handle_notification,
+            default_approval_decision=self._default_approval_decision,
+        )
         return self._client
 
     def configure(self, **options: Any) -> None:
@@ -164,13 +184,12 @@ class CodexAppServerBackend(AgentBackend):
             and default_approval_decision.strip()
         ):
             self._default_approval_decision = default_approval_decision.strip()
-            if self._client is not None:
-                self._client._default_approval_decision = (
-                    self._default_approval_decision
-                )
         if self._client is not None:
-            self._client._approval_handler = self._handle_approval_request
-            self._client._notification_handler = self._handle_notification
+            self._client.configure_runtime_callbacks(
+                approval_handler=self._handle_approval_request,
+                notification_handler=self._handle_notification,
+                default_approval_decision=self._default_approval_decision,
+            )
 
     async def start_session(self, target: dict, context: dict) -> str:
         client = await self._ensure_client()
@@ -190,7 +209,7 @@ class CodexAppServerBackend(AgentBackend):
         resume_session = context.get("session_id") or context.get("thread_id")
         # Ensure we don't reuse a stale turn id when a new session begins.
         self._turn_id = None
-        self._reasoning_summary_buffers.clear()
+        self._active_event_driver = None
         if isinstance(resume_session, str) and resume_session:
             try:
                 resume_result = await client.thread_resume(resume_session)
@@ -229,13 +248,12 @@ class CodexAppServerBackend(AgentBackend):
         input_items: Optional[list[dict[str, Any]]] = None,
     ) -> AsyncGenerator[AgentEvent, None]:
         client = await self._ensure_client()
-        self._latest_completed_agent_message = ""
 
         if session_id:
             self._thread_id = session_id
             # Reset last turn to avoid interrupting the wrong turn when reusing backends.
             self._turn_id = None
-            self._reasoning_summary_buffers.clear()
+            self._active_event_driver = None
 
         if not self._thread_id:
             await self.start_session(target={}, context={})
@@ -268,11 +286,18 @@ class CodexAppServerBackend(AgentBackend):
         yield AgentEvent.stream_delta(content=message, delta_type="user_message")
 
         result = await handle.wait(timeout=self._turn_timeout_seconds)
+        runtime_driver = RuntimeEventDriver()
+        run_events = await runtime_driver.consume_raw_events(
+            getattr(result, "raw_events", ()) or (),
+            store_raw_event=False,
+        )
 
-        for event_data in result.raw_events:
-            yield self._parse_raw_event(event_data)
+        for run_event in run_events:
+            agent_event = _agent_event_from_run_event(run_event)
+            if agent_event is not None:
+                yield agent_event
 
-        final_text = self._final_text_from_result(result)
+        final_text = self._final_text_from_result(result, driver=runtime_driver)
         yield AgentEvent.message_complete(final_message=final_text)
 
     async def run_turn_events(
@@ -283,12 +308,11 @@ class CodexAppServerBackend(AgentBackend):
         input_items: Optional[list[dict[str, Any]]] = None,
     ) -> AsyncGenerator[RunEvent, None]:
         client = await self._ensure_client()
-        self._latest_completed_agent_message = ""
 
         if session_id:
             self._thread_id = session_id
             self._turn_id = None
-            self._reasoning_summary_buffers.clear()
+            self._active_event_driver = None
 
         if not self._thread_id:
             actual_session_id = await self.start_session(target={}, context={})
@@ -318,6 +342,8 @@ class CodexAppServerBackend(AgentBackend):
         )
 
         self._event_queue = asyncio.Queue()
+        runtime_driver = RuntimeEventDriver()
+        self._active_event_driver = runtime_driver
 
         turn_kwargs: dict[str, Any] = {}
         if self._model:
@@ -356,6 +382,13 @@ class CodexAppServerBackend(AgentBackend):
                     elif get_task in pending_set:
                         get_task.cancel()
                     result = wait_task.result()
+                    if not runtime_driver.run_events and result.raw_events:
+                        replayed_events = await runtime_driver.consume_raw_events(
+                            result.raw_events,
+                            store_raw_event=False,
+                        )
+                        for replayed_event in replayed_events:
+                            yield replayed_event
                     # raw_events already contain the same notifications we streamed
                     # through _event_queue; skipping here avoids double-emitting.
                     if completion_event:
@@ -364,7 +397,10 @@ class CodexAppServerBackend(AgentBackend):
                         extra = self._event_queue.get_nowait()
                         if extra:
                             yield extra
-                    final_text = self._final_text_from_result(result)
+                    final_text = self._final_text_from_result(
+                        result,
+                        driver=runtime_driver,
+                    )
                     yield Completed(
                         timestamp=now_iso(),
                         final_message=final_text,
@@ -381,8 +417,16 @@ class CodexAppServerBackend(AgentBackend):
             if not wait_task.done():
                 wait_task.cancel()
             yield Failed(timestamp=now_iso(), error_message=str(e))
+        finally:
+            if self._active_event_driver is runtime_driver:
+                self._active_event_driver = None
 
-    def _final_text_from_result(self, result: Any) -> str:
+    def _final_text_from_result(
+        self,
+        result: Any,
+        *,
+        driver: Optional[RuntimeEventDriver] = None,
+    ) -> str:
         final_text = str(getattr(result, "final_message", "") or "")
         if final_text.strip():
             return final_text
@@ -393,8 +437,10 @@ class CodexAppServerBackend(AgentBackend):
         )
         if aggregated_messages.strip():
             return aggregated_messages
-        if self._latest_completed_agent_message.strip():
-            return self._latest_completed_agent_message
+        if driver is not None:
+            assistant_text = driver.best_assistant_text()
+            if assistant_text.strip():
+                return assistant_text
         return ""
 
     async def stream_events(self, session_id: str) -> AsyncGenerator[AgentEvent, None]:
@@ -435,6 +481,7 @@ class CodexAppServerBackend(AgentBackend):
         )
 
     async def close(self) -> None:
+        self._active_event_driver = None
         self._client = None
 
     async def _handle_approval_request(
@@ -474,212 +521,46 @@ class CodexAppServerBackend(AgentBackend):
                 await self._notification_handler(notification)
             except Exception as exc:  # intentional: external notification handler error
                 self._logger.debug("Notification handler failed: %s", exc)
-        method = notification.get("method", "")
         params = notification.get("params", {}) or {}
-        decoded = decode_notification(notification)
         thread_id = params.get("threadId") or params.get("thread_id")
-        turn_id = params.get("turnId") or params.get("turn_id")
         if self._thread_id and thread_id and thread_id != self._thread_id:
             return
-        if method == "item/completed":
-            item = params.get("item")
-            if isinstance(item, dict) and item.get("type") == "agentMessage":
-                if (
-                    isinstance(self._turn_id, str)
-                    and self._turn_id
-                    and isinstance(turn_id, str)
-                    and turn_id
-                    and turn_id != self._turn_id
-                ):
-                    pass
-                else:
-                    latest_text = extract_agent_message_text(item)
-                    if latest_text.strip():
-                        self._latest_completed_agent_message = latest_text
-        _logger.debug("Received notification: %s", method)
-        run_event = self._map_to_run_event(notification, decoded)
-        if run_event:
+        runtime_driver = self._active_event_driver
+        if runtime_driver is None:
+            return
+        _logger.debug("Received notification: %s", notification.get("method", ""))
+        for run_event in await runtime_driver.consume_raw_event(
+            notification,
+            store_raw_event=False,
+        ):
             await self._event_queue.put(run_event)
 
-    def _map_to_run_event(
-        self, event_data: Dict[str, Any], decoded: Any = None
-    ) -> Optional[RunEvent]:
-        method = event_data.get("method", "")
-        params = event_data.get("params", {}) or {}
-        method_lower = method.lower() if isinstance(method, str) else ""
-
-        if method == "item/reasoning/summaryTextDelta":
-            delta = params.get("delta")
-            if decoded is not None:
-                delta = getattr(decoded, "delta", None) or delta
-            if isinstance(delta, str):
-                message = self._accumulate_reasoning_delta(params, delta)
-                if message.strip():
-                    return RunNotice(
-                        timestamp=now_iso(),
-                        kind="thinking",
-                        message=message,
-                    )
-            return None
-
-        if method == "item/agentMessage/delta":
-            content = extract_codex_output_delta(params)
-            if decoded is not None:
-                decoded_content = getattr(decoded, "content", None)
-                if isinstance(decoded_content, str):
-                    content = decoded_content
-            if not content:
-                return None
-            return OutputDelta(
-                timestamp=now_iso(),
-                content=content,
-                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
-            )
-
-        if method == "turn/streamDelta" or "outputdelta" in method_lower:
-            content = extract_codex_output_delta(params)
-            if decoded is not None:
-                decoded_content = getattr(decoded, "content", None)
-                if isinstance(decoded_content, str):
-                    content = decoded_content
-            if not content:
-                return None
-            delta_type = output_delta_type_for_method(method)
-            return OutputDelta(
-                timestamp=now_iso(), content=content, delta_type=delta_type
-            )
-
-        if method == "item/toolCall/start":
-            tool_name, tool_input = normalize_tool_name(params)
-            if decoded is not None:
-                decoded_tool_name = getattr(decoded, "tool_name", None)
-                decoded_tool_input = getattr(decoded, "tool_input", None)
-                if decoded_tool_name:
-                    tool_name = decoded_tool_name
-                if decoded_tool_input:
-                    tool_input = decoded_tool_input
-            return ToolCall(
-                timestamp=now_iso(),
-                tool_name=tool_name or "toolCall",
-                tool_input=tool_input,
-            )
-
-        if method == "item/toolCall/end":
-            return None
-
+    def _map_to_run_event(self, event_data: Dict[str, Any]) -> Optional[RunEvent]:
+        method = str(event_data.get("method") or "").strip()
+        params = event_data.get("params")
+        if not isinstance(params, dict):
+            params = {}
         if method == "item/completed":
             item = params.get("item")
-            if isinstance(item, dict) and item.get("type") == "reasoning":
-                self._clear_reasoning_buffers_for_params(params)
-                return None
-            if isinstance(item, dict) and item.get("type") == "agentMessage":
-                text = extract_agent_message_text(item)
-                if text.strip():
-                    return OutputDelta(
+            if isinstance(item, dict) and item.get("type") not in {
+                "agentMessage",
+                "reasoning",
+            }:
+                tool_name, tool_input = _normalize_tool_name(params, item=item)
+                if tool_name:
+                    return ToolCall(
                         timestamp=now_iso(),
-                        content=text,
-                        delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
+                        tool_name=tool_name,
+                        tool_input=tool_input,
                     )
-                return None
-            tool_name, tool_input = normalize_tool_name(params)
-            if tool_name:
-                return ToolCall(
-                    timestamp=now_iso(),
-                    tool_name=tool_name,
-                    tool_input=tool_input,
-                )
+        events = normalize_runtime_thread_message_payload(
+            event_data,
+            self._notification_parser_state,
+            timestamp=now_iso(),
+        )
+        if not events:
             return None
-
-        if method in {"turn/tokenUsage", "turn/usage", "thread/tokenUsage/updated"}:
-            usage = params.get("usage")
-            if not isinstance(usage, dict):
-                usage = params.get("tokenUsage")
-            if isinstance(usage, dict):
-                return TokenUsage(timestamp=now_iso(), usage=usage)
-            return None
-
-        if method == "turn/error":
-            self._clear_reasoning_buffers_for_params(params)
-            error_message = params.get("message", "Unknown error")
-            return Failed(timestamp=now_iso(), error_message=error_message)
-
-        return None
-
-    def _parse_raw_event(self, event_data: Dict[str, Any]) -> AgentEvent:
-        method = event_data.get("method", "")
-        params = event_data.get("params", {})
-        method_lower = method.lower() if isinstance(method, str) else ""
-
-        if method == "item/agentMessage/delta":
-            content = extract_codex_output_delta(params)
-            if not content:
-                return AgentEvent.stream_delta(content="", delta_type="unknown_event")
-            return AgentEvent.stream_delta(
-                content=content, delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM
-            )
-
-        if method == "turn/streamDelta" or "outputdelta" in method_lower:
-            content = extract_codex_output_delta(params)
-            if not content:
-                return AgentEvent.stream_delta(content="", delta_type="unknown_event")
-            delta_type = output_delta_type_for_method(method)
-            return AgentEvent.stream_delta(content=content, delta_type=delta_type)
-
-        if method == "item/toolCall/start":
-            tool_name, tool_input = normalize_tool_name(params)
-            return AgentEvent.tool_call(
-                tool_name=tool_name or "toolCall",
-                tool_input=tool_input,
-            )
-
-        if method == "item/toolCall/end":
-            return AgentEvent.tool_result(
-                tool_name=params.get("name", ""),
-                result=params.get("result"),
-                error=params.get("error"),
-            )
-
-        if method == "item/completed":
-            item = params.get("item")
-            if isinstance(item, dict) and item.get("type") == "agentMessage":
-                text = extract_agent_message_text(item)
-                if text.strip():
-                    return AgentEvent.stream_delta(
-                        content=text,
-                        delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
-                    )
-                return AgentEvent.stream_delta(content="", delta_type="unknown_event")
-            tool_name, tool_input = normalize_tool_name(params)
-            if tool_name:
-                return AgentEvent.tool_call(tool_name=tool_name, tool_input=tool_input)
-            return AgentEvent.stream_delta(content="", delta_type="unknown_event")
-
-        if method == "turn/error":
-            error_message = params.get("message", "Unknown error")
-            return AgentEvent.error(error_message=error_message)
-
-        return AgentEvent.stream_delta(content="", delta_type="unknown_event")
-
-    def _reasoning_buffer_key(self, params: Dict[str, Any]) -> Optional[str]:
-        shared_key = _shared_reasoning_buffer_key(params)
-        if shared_key:
-            return shared_key
-        if isinstance(self._turn_id, str) and self._turn_id:
-            return self._turn_id
-        return None
-
-    def _accumulate_reasoning_delta(self, params: Dict[str, Any], delta: str) -> str:
-        key = self._reasoning_buffer_key(params)
-        if not key:
-            return delta
-        combined = f"{self._reasoning_summary_buffers.get(key, '')}{delta}"
-        self._reasoning_summary_buffers[key] = combined
-        return combined
-
-    def _clear_reasoning_buffers_for_params(self, params: Dict[str, Any]) -> None:
-        key = self._reasoning_buffer_key(params)
-        if key is not None:
-            self._reasoning_summary_buffers.pop(key, None)
+        return events[-1]
 
     @property
     def last_turn_id(self) -> Optional[str]:

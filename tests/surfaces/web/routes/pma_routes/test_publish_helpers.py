@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
+from codex_autorunner.core.ports.run_event import TokenUsage
 from codex_autorunner.surfaces.web.routes.pma_routes.publish import (
     build_publish_correlation_id,
     build_publish_message,
@@ -202,6 +203,33 @@ class TestBuildPublishMessage:
         )
 
         assert "done" in msg
+        assert "Token usage: total 71173 input 400 output 245" in msg
+        assert "ctx 65%" in msg
+
+    def test_ok_status_extracts_token_usage_from_typed_timeline_events(self) -> None:
+        msg = build_publish_message(
+            result={
+                "status": "ok",
+                "message": "done",
+                "timeline_events": [
+                    TokenUsage(
+                        timestamp="2026-04-24T00:00:00Z",
+                        usage={
+                            "last": {
+                                "totalTokens": 71173,
+                                "inputTokens": 400,
+                                "outputTokens": 245,
+                            },
+                            "modelContextWindow": 203352,
+                        },
+                    )
+                ],
+            },
+            lifecycle_event={"event_type": "managed_thread_completed"},
+            wake_up=None,
+            correlation_id="corr-6",
+        )
+
         assert "Token usage: total 71173 input 400 output 245" in msg
         assert "ctx 65%" in msg
 

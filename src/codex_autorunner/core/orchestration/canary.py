@@ -6,7 +6,7 @@ import logging
 import time
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Callable, cast
+from typing import Any, Awaitable, Callable, cast
 
 from fastapi.testclient import TestClient
 
@@ -380,12 +380,9 @@ async def _run_recovery_validation(
     hub_root: Path,
     *,
     workspace_root: Path,
+    recover_orphaned_executions: Callable[[Any], Awaitable[None]],
 ) -> dict[str, Any]:
     with TestClient(_CREATE_HUB_APP(hub_root)) as client:
-        from ...surfaces.web.routes.pma_routes.managed_thread_runtime import (
-            recover_orphaned_managed_thread_executions,
-        )
-
         app = cast(Any, client.app)
         store = PmaThreadStore(hub_root)
         binding_store = OrchestrationBindingStore(hub_root)
@@ -448,7 +445,7 @@ async def _run_recovery_validation(
 
         app.state.app_server_events = SimpleNamespace(has_turn=_has_turn)
         start = time.monotonic()
-        await recover_orphaned_managed_thread_executions(app)
+        await recover_orphaned_executions(app)
         duration = time.monotonic() - start
 
         pma_updated_turn = store.get_turn(pma_thread_id, pma_turn_id) or {}
@@ -485,6 +482,7 @@ def run_execution_history_canary(
     hub_root: Path,
     *,
     create_hub_app: Callable[[Path], Any],
+    recover_orphaned_executions: Callable[[Any], Awaitable[None]],
     execution_count: int = 12,
     output_chunks: int = 60,
     notice_count: int = 24,
@@ -532,6 +530,7 @@ def run_execution_history_canary(
         _run_recovery_validation(
             hub_root,
             workspace_root=Path(str(seed["repo_root"])),
+            recover_orphaned_executions=recover_orphaned_executions,
         )
     )
     recovered_sections = (

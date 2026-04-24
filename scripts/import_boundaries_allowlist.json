@@ -1,30 +1,4 @@
 {
   "rules_version": 1,
-  "violations": [
-    {
-      "importer": "src/codex_autorunner/core/pma_chat_delivery.py",
-      "imported": "codex_autorunner.integrations.discord.rendering",
-      "reason": "PMA dispatch mirroring needs Discord message chunking/formatting for transport delivery."
-    },
-    {
-      "importer": "src/codex_autorunner/core/pma_chat_delivery.py",
-      "imported": "codex_autorunner.integrations.discord.state",
-      "reason": "PMA dispatch mirroring enqueues Discord outbox records for bound-chat visibility."
-    },
-    {
-      "importer": "src/codex_autorunner/core/pma_chat_delivery.py",
-      "imported": "codex_autorunner.integrations.telegram.state",
-      "reason": "PMA dispatch mirroring enqueues Telegram outbox records when Telegram is the selected target."
-    },
-    {
-      "importer": "src/codex_autorunner/core/scm_reaction_router.py",
-      "imported": "codex_autorunner.integrations.github.reaction_prompts",
-      "reason": "SCM reaction routing is provider-neutral, but v1 prompt text is GitHub-specific and kept in the GitHub integration module."
-    },
-    {
-      "importer": "src/codex_autorunner/core/runtime.py",
-      "imported": "codex_autorunner.integrations.agents",
-      "reason": "PMA doctor checks validate default agent against registered agents via the integrations interface."
-    }
-  ]
+  "violations": []
 }

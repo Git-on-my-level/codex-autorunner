@@ -61,13 +61,11 @@ def snapshot_pma_threads(
             "resource_id": thread.get("resource_id"),
             "workspace_root": workspace_root,
             "name": thread.get("name"),
-            "status": thread.get("normalized_status") or thread.get("status"),
-            "lifecycle_status": thread.get("lifecycle_status") or thread.get("status"),
-            "status_reason": thread.get("status_reason")
-            or thread.get("status_reason_code"),
+            "status": thread.get("normalized_status"),
+            "lifecycle_status": thread.get("lifecycle_status"),
+            "status_reason": thread.get("status_reason_code"),
             "status_terminal": bool(thread.get("status_terminal")),
-            "status_changed_at": thread.get("status_changed_at")
-            or thread.get("status_updated_at"),
+            "status_changed_at": thread.get("status_updated_at"),
             "last_turn_id": thread.get("last_turn_id"),
             "last_message_preview": _truncate(
                 str(thread.get("last_message_preview") or ""),

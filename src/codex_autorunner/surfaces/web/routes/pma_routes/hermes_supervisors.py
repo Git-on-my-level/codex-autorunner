@@ -4,8 +4,8 @@ from typing import Optional
 
 from fastapi import Request
 
-from .....agents.hermes.supervisor import build_hermes_supervisor_from_config
 from .....core.text_utils import _normalize_optional_text
+from ...services.pma import get_pma_request_context
 
 
 def resolve_cached_hermes_supervisor(
@@ -13,24 +13,21 @@ def resolve_cached_hermes_supervisor(
     *,
     profile: Optional[str],
 ):
+    context = get_pma_request_context(request)
     normalized_profile = _normalize_optional_text(profile)
     if normalized_profile is None:
-        supervisor = getattr(request.app.state, "hermes_supervisor", None)
+        supervisor = context.hermes_supervisor
         if supervisor is not None:
             return supervisor
 
-    cache = getattr(request.app.state, "_hermes_supervisors_by_profile", None)
-    if not isinstance(cache, dict):
-        cache = {}
-        request.app.state._hermes_supervisors_by_profile = cache
-
+    cache = context.hermes_supervisors_by_profile
     cache_key = normalized_profile or ""
     cached = cache.get(cache_key)
     if cached is not None:
         return cached
 
-    supervisor = build_hermes_supervisor_from_config(
-        request.app.state.config,
+    supervisor = context.ports.build_hermes_supervisor(
+        context.config,
         profile=normalized_profile,
     )
     if supervisor is not None:

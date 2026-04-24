@@ -296,7 +296,11 @@ def _build_thread_queue_items(
     for entry in pma_threads:
         if not isinstance(entry, dict):
             continue
-        status = str(entry.get("status") or "").strip().lower()
+        status = (
+            str(entry.get("normalized_status") or entry.get("status") or "")
+            .strip()
+            .lower()
+        )
         if status in {"", "archived"}:
             continue
         freshness = _extract_entry_freshness(entry)

@@ -4,10 +4,10 @@ import re
 from collections.abc import Mapping
 from typing import Any, Optional
 
-from ..integrations.github.reaction_prompts import build_reaction_message
 from .pr_bindings import PrBinding
 from .scm_events import ScmEvent
 from .scm_observability import correlation_id_for_event
+from .scm_reaction_messages import build_reaction_message
 from .scm_reaction_types import (
     ReactionIntent,
     ReactionKind,

@@ -27,6 +27,7 @@ from codex_autorunner.core.state_retention import (
     aggregate_cleanup_results,
     make_cleanup_plan,
     make_cleanup_result,
+    summarize_cleanup_plan_lifecycle,
 )
 from codex_autorunner.housekeeping import HousekeepingRuleResult
 
@@ -96,6 +97,48 @@ def test_make_cleanup_plan_groups_candidates_by_action() -> None:
     assert plan.blocked_count == 1
     assert len(plan.prune_candidates) == 1
     assert len(plan.blocked_candidates) == 1
+
+
+def test_summarize_cleanup_plan_lifecycle_uses_shared_vocabulary() -> None:
+    bucket = RetentionBucket(
+        family="logs",
+        scope=RetentionScope.REPO,
+        retention_class=RetentionClass.EPHEMERAL,
+    )
+    plan = make_cleanup_plan(
+        bucket,
+        [
+            CleanupCandidate(
+                path=Path("/tmp/keep.txt"),
+                size_bytes=1,
+                bucket=bucket,
+                action=CleanupAction.KEEP,
+                reason=CleanupReason.POLICY_DISABLED,
+            ),
+            CleanupCandidate(
+                path=Path("/tmp/prune.txt"),
+                size_bytes=2,
+                bucket=bucket,
+                action=CleanupAction.PRUNE,
+                reason=CleanupReason.AGE_LIMIT,
+            ),
+            CleanupCandidate(
+                path=Path("/tmp/blocked.txt"),
+                size_bytes=3,
+                bucket=bucket,
+                action=CleanupAction.SKIP_BLOCKED,
+                reason=CleanupReason.ACTIVE_RUN_GUARD,
+            ),
+        ],
+    )
+
+    summary = summarize_cleanup_plan_lifecycle(plan)
+    assert summary["actions"] == {"blocked": 1, "keep": 1, "prune": 1}
+    assert summary["reasons"] == {
+        "active_run_guard": 1,
+        "age_limit": 1,
+        "policy_disabled": 1,
+    }
 
 
 def test_make_cleanup_plan_with_empty_candidates() -> None:

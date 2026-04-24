@@ -12,6 +12,7 @@ from ...core.locks import file_lock
 from ...core.logging_utils import log_event
 from ...core.state_roots import (
     StateRootError,
+    resolve_repo_flows_db_path,
     resolve_repo_state_root,
     validate_path_within_roots,
 )
@@ -255,7 +256,7 @@ class ChatRunMirror:
         except ConfigError:
             durable_writes = False
         store = FlowStore(
-            self._repo_root / ".codex-autorunner" / "flows.db",
+            resolve_repo_flows_db_path(self._repo_root),
             durable=durable_writes,
         )
         store.initialize()

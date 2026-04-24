@@ -24,6 +24,7 @@ from ....core.force_attestation import (
     FORCE_ATTESTATION_REQUIRED_PHRASE,
     validate_force_attestation,
 )
+from ....core.state_roots import resolve_repo_flows_db_path
 from ....manifest import load_manifest
 from ....tickets.outbox import resolve_outbox_paths
 from ..hub_path_option import hub_root_path_option
@@ -71,7 +72,7 @@ def _cleanup_stale_flow_runs(
     load_repo_config_func: Callable[[Path], object] = load_repo_config,
 ) -> int:
     """Clean up stale terminal runs for a repo, excluding the specified run."""
-    db_path = repo_root / ".codex-autorunner" / "flows.db"
+    db_path = resolve_repo_flows_db_path(repo_root)
     if not db_path.exists():
         return 0
 
@@ -292,7 +293,7 @@ def register_hub_runs_commands(
 
         for entry in manifest.repos:
             repo_root = (config.root / entry.path).resolve()
-            db_path = repo_root / ".codex-autorunner" / "flows.db"
+            db_path = resolve_repo_flows_db_path(repo_root)
             if not db_path.exists():
                 continue
             try:

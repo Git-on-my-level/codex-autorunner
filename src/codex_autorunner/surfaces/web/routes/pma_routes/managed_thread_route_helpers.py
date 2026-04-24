@@ -21,6 +21,7 @@ from .....core.orchestration.models import Binding, ThreadTarget
 from .....core.text_utils import _truncate_text
 from .....integrations.chat.approval_modes import normalize_approval_mode
 from ...schemas import PmaManagedThreadCreateRequest
+from ...services.pma import get_pma_request_context
 from ...services.pma.managed_thread_followup import (
     ManagedThreadFollowupPolicy,
     resolve_managed_thread_followup_policy,
@@ -82,7 +83,7 @@ def _normalize_workspace_root_input(workspace_root: str) -> PurePosixPath:
 
 
 def _resolve_workspace_from_repo_id(request: Request, repo_id: str) -> Path:
-    supervisor = getattr(request.app.state, "hub_supervisor", None)
+    supervisor = get_pma_request_context(request).hub_supervisor
     if supervisor is None:
         raise HTTPException(status_code=500, detail="Hub supervisor unavailable")
     for snapshot in supervisor.list_repos():
@@ -102,7 +103,7 @@ def _resolve_workspace_from_resource_owner(
     resource_kind: str,
     resource_id: str,
 ) -> tuple[Path, Optional[str], Optional[str]]:
-    supervisor = getattr(request.app.state, "hub_supervisor", None)
+    supervisor = get_pma_request_context(request).hub_supervisor
     if supervisor is None:
         raise HTTPException(status_code=500, detail="Hub supervisor unavailable")
     if resource_kind == "repo":
@@ -370,7 +371,7 @@ def _serialize_thread_target(
 def _raise_agent_workspace_runtime_not_ready(
     request: Request, resource_id: str
 ) -> None:
-    supervisor = getattr(request.app.state, "hub_supervisor", None)
+    supervisor = get_pma_request_context(request).hub_supervisor
     if supervisor is None:
         raise HTTPException(status_code=500, detail="Hub supervisor unavailable")
     snapshot = supervisor.get_agent_workspace_snapshot(resource_id)
@@ -399,7 +400,8 @@ def _resolve_requested_profile(
     agent_id: str,
     requested_profile: Optional[str],
 ) -> Optional[str]:
-    config = getattr(request.app.state, "config", None)
+    context = get_pma_request_context(request)
+    config = context.config
     profile_getter = getattr(config, "agent_profiles", None)
     default_profile_getter = getattr(config, "agent_default_profile", None)
     available_profiles: dict[str, Any] = {}
@@ -421,7 +423,8 @@ def _resolve_requested_profile(
             from .....integrations.chat.agents import chat_hermes_profile_options
 
             valid_profiles |= {
-                opt.profile for opt in chat_hermes_profile_options(request.app.state)
+                opt.profile
+                for opt in chat_hermes_profile_options(context.agent_context)
             }
         except Exception:  # intentional: optional hermes integration
             _logger.debug(
@@ -432,7 +435,7 @@ def _resolve_requested_profile(
         resolved = resolve_agent_runtime(
             agent_id,
             requested_profile,
-            context=request.app.state,
+            context=context.agent_context,
         )
         if (
             resolved.logical_agent_id != agent_id
@@ -447,16 +450,17 @@ def resolve_managed_thread_create_resolution(
     request: Request,
     payload: PmaManagedThreadCreateRequest,
 ) -> ManagedThreadCreateResolution:
-    hub_root = request.app.state.config.root
+    context = get_pma_request_context(request)
+    hub_root = context.hub_root
     raw_agent_id = normalize_optional_text(payload.agent)
     raw_profile = normalize_optional_text(payload.profile)
     if raw_agent_id is not None:
         try:
-            validate_agent_id(raw_agent_id, request.app.state)
+            validate_agent_id(raw_agent_id, context.agent_context)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
     runtime_resolution = (
-        resolve_agent_runtime(raw_agent_id, raw_profile, context=request.app.state)
+        resolve_agent_runtime(raw_agent_id, raw_profile, context=context.agent_context)
         if raw_agent_id is not None
         else None
     )

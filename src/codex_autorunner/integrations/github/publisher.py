@@ -222,7 +222,23 @@ def build_react_pr_review_comment_executor(
     return executor
 
 
+def build_github_publish_executors(
+    *,
+    repo_root: Path,
+    raw_config: Optional[dict[str, Any]] = None,
+    github_service_factory: Optional[GitHubServiceFactory] = None,
+) -> dict[str, PublishActionExecutor]:
+    return {
+        "react_pr_review_comment": build_react_pr_review_comment_executor(
+            repo_root=repo_root,
+            raw_config=raw_config,
+            github_service_factory=github_service_factory,
+        )
+    }
+
+
 __all__ = [
+    "build_github_publish_executors",
     "build_react_pr_review_comment_executor",
     "build_post_pr_comment_executor",
     "publish_pr_review_comment_reaction",

@@ -8,7 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
-from .models import FlowEventType, FlowRunRecord
+from ..state_lifecycle import DEFAULT_STATE_LIFECYCLE_CONTROLLER
+from .models import FlowRunRecord
 from .store import FlowStore
 
 _logger = logging.getLogger(__name__)
@@ -26,6 +27,7 @@ class ExportRecord:
     retained_events: int = 0
     skipped: bool = False
     skip_reason: Optional[str] = None
+    lifecycle_summary: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -55,6 +57,7 @@ class ExportResult:
                     "prunable_app_server_events": r.prunable_app_server_events,
                     "prunable_stream_deltas": r.prunable_stream_deltas,
                     "retained_events": r.retained_events,
+                    "lifecycle_summary": r.lifecycle_summary,
                 }
                 for r in self.records
             ],
@@ -76,107 +79,17 @@ def classify_events_for_run(
         delta_seqs_to_prune: agent_stream_delta seqs to prune from flow_events
         retained_seqs: seqs to keep (from both tables)
     """
-    conn = store._get_conn()
-    rows = conn.execute(
-        """
-        SELECT seq, id, run_id, event_type, timestamp, data, step_id
-        FROM flow_events
-        WHERE run_id = ? AND event_type IN (?, ?)
-        ORDER BY seq ASC
-        """,
-        (
-            run_id,
-            FlowEventType.APP_SERVER_EVENT.value,
-            FlowEventType.AGENT_STREAM_DELTA.value,
-        ),
-    ).fetchall()
-
-    telemetry_rows = conn.execute(
-        """
-        SELECT seq, id, run_id, event_type, timestamp, data
-        FROM flow_telemetry
-        WHERE run_id = ? AND event_type = ?
-        ORDER BY seq ASC
-        """,
-        (
-            run_id,
-            FlowEventType.APP_SERVER_EVENT.value,
-        ),
-    ).fetchall()
-
-    events_to_export: list[dict] = []
-    events_app_server_seqs_to_prune: list[int] = []
-    telemetry_app_server_seqs_to_prune: list[int] = []
-    delta_seqs_to_prune: list[int] = []
-    retained_seqs: list[int] = []
-
-    for row in rows:
-        seq = row["seq"]
-        event_type = row["event_type"]
-        raw_data = row["data"]
-        try:
-            data = (
-                json.loads(raw_data) if isinstance(raw_data, str) else (raw_data or {})
-            )
-        except (json.JSONDecodeError, TypeError):
-            data = {}
-
-        event_record = {
-            "seq": seq,
-            "id": row["id"],
-            "run_id": row["run_id"],
-            "event_type": event_type,
-            "timestamp": row["timestamp"],
-            "data": data,
-            "step_id": row["step_id"],
-            "source": "flow_events",
-        }
-        events_to_export.append(event_record)
-
-        if not is_terminal:
-            retained_seqs.append(seq)
-            continue
-
-        if event_type == FlowEventType.APP_SERVER_EVENT.value:
-            events_app_server_seqs_to_prune.append(seq)
-        elif event_type == FlowEventType.AGENT_STREAM_DELTA.value:
-            delta_seqs_to_prune.append(seq)
-
-    for row in telemetry_rows:
-        seq = row["seq"]
-        event_type = row["event_type"]
-        raw_data = row["data"]
-        try:
-            data = (
-                json.loads(raw_data) if isinstance(raw_data, str) else (raw_data or {})
-            )
-        except (json.JSONDecodeError, TypeError):
-            data = {}
-
-        event_record = {
-            "seq": seq,
-            "id": row["id"],
-            "run_id": row["run_id"],
-            "event_type": event_type,
-            "timestamp": row["timestamp"],
-            "data": data,
-            "step_id": None,
-            "source": "flow_telemetry",
-        }
-        events_to_export.append(event_record)
-
-        if not is_terminal:
-            retained_seqs.append(seq)
-            continue
-
-        telemetry_app_server_seqs_to_prune.append(seq)
-
+    plan = DEFAULT_STATE_LIFECYCLE_CONTROLLER.classify_run_telemetry(
+        store,
+        run_id,
+        is_terminal=is_terminal,
+    )
     return (
-        events_to_export,
-        events_app_server_seqs_to_prune,
-        telemetry_app_server_seqs_to_prune,
-        delta_seqs_to_prune,
-        retained_seqs,
+        list(plan.exported_events),
+        list(plan.flow_event_app_prune_seqs),
+        list(plan.flow_telemetry_app_prune_seqs),
+        list(plan.delta_prune_seqs),
+        list(plan.retained_seqs),
     )
 
 
@@ -230,10 +143,32 @@ def export_run(
             run_status=record.status.value,
             skipped=True,
             skip_reason=f"run is active ({record.status.value})",
+            lifecycle_summary={
+                "total": 1,
+                "actions": {"keep": 1},
+                "reasons": {"active_run_guard": 1},
+                "families": {
+                    "run_wire_telemetry": {
+                        "total": 1,
+                        "actions": {"keep": 1},
+                        "reasons": {"active_run_guard": 1},
+                    }
+                },
+            },
         )
 
-    events, ev_app_seqs, tel_app_seqs, prune_delta_seqs, retained_seqs = (
-        classify_events_for_run(store, record.id, is_terminal=is_terminal)
+    telemetry_plan = DEFAULT_STATE_LIFECYCLE_CONTROLLER.classify_run_telemetry(
+        store,
+        record.id,
+        is_terminal=is_terminal,
+    )
+    events = list(telemetry_plan.exported_events)
+    ev_app_seqs = list(telemetry_plan.flow_event_app_prune_seqs)
+    tel_app_seqs = list(telemetry_plan.flow_telemetry_app_prune_seqs)
+    prune_delta_seqs = list(telemetry_plan.delta_prune_seqs)
+    retained_seqs = list(telemetry_plan.retained_seqs)
+    lifecycle_summary = DEFAULT_STATE_LIFECYCLE_CONTROLLER.summarize_decisions(
+        telemetry_plan.lifecycle_decisions
     )
 
     if not events:
@@ -243,6 +178,7 @@ def export_run(
             skipped=True,
             skip_reason="no wire telemetry events found",
             retained_events=len(retained_seqs),
+            lifecycle_summary=lifecycle_summary,
         )
 
     archive_path = _archive_path_for_run(repo_root, record.id)
@@ -260,6 +196,7 @@ def export_run(
             prunable_app_server_events=len(ev_app_seqs) + len(tel_app_seqs),
             prunable_stream_deltas=len(prune_delta_seqs),
             retained_events=len(retained_seqs),
+            lifecycle_summary=lifecycle_summary,
         )
 
     bytes_written = _write_jsonl_gz(events, archive_path)
@@ -295,6 +232,7 @@ def export_run(
         prunable_app_server_events=len(ev_app_seqs) + len(tel_app_seqs),
         prunable_stream_deltas=len(prune_delta_seqs),
         retained_events=len(retained_seqs),
+        lifecycle_summary=lifecycle_summary,
     )
 
 

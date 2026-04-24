@@ -3,7 +3,6 @@ from __future__ import annotations
 import copy
 import hashlib
 import html
-import importlib
 import logging
 import re
 import threading
@@ -17,7 +16,7 @@ from .chat_bindings import active_chat_binding_metadata_by_thread
 from .config import load_hub_config
 from .pr_binding_resolver import resolve_binding_for_scm_event
 from .pr_bindings import PrBinding
-from .publish_executor import PublishOperationProcessor
+from .publish_executor import PublishActionExecutor, PublishOperationProcessor
 from .publish_journal import PublishJournalStore, PublishOperation
 from .publish_operation_executors import (
     build_enqueue_managed_turn_executor,
@@ -119,6 +118,15 @@ class PublishJournalWriter(Protocol):
 
 class PublishOperationDrainer(Protocol):
     def process_now(self, limit: int = 10) -> list[PublishOperation]: ...
+
+
+class PublishExecutorFactory(Protocol):
+    def __call__(
+        self,
+        *,
+        repo_root: Path,
+        raw_config: Optional[dict[str, Any]] = None,
+    ) -> Mapping[str, PublishActionExecutor]: ...
 
 
 class ScmReactionStateTracker(Protocol):
@@ -398,26 +406,26 @@ def _default_publish_processor(
     hub_root: Path,
     *,
     journal: PublishJournalStore,
+    publish_executor_factory: Optional[PublishExecutorFactory] = None,
 ) -> PublishOperationProcessor:
-    github_publisher = importlib.import_module(
-        "codex_autorunner.integrations.github.publisher"
-    )
-    build_react_pr_review_comment_executor = (
-        github_publisher.build_react_pr_review_comment_executor
-    )
     raw_config = load_hub_config(hub_root).raw
+    executors: dict[str, PublishActionExecutor] = {
+        "enqueue_managed_turn": build_enqueue_managed_turn_executor(hub_root=hub_root),
+        "notify_chat": build_notify_chat_executor(hub_root=hub_root),
+    }
+    if publish_executor_factory is not None:
+        executors.update(
+            {
+                str(operation_kind): executor
+                for operation_kind, executor in publish_executor_factory(
+                    repo_root=hub_root,
+                    raw_config=raw_config,
+                ).items()
+            }
+        )
     return PublishOperationProcessor(
         journal,
-        executors={
-            "enqueue_managed_turn": build_enqueue_managed_turn_executor(
-                hub_root=hub_root
-            ),
-            "notify_chat": build_notify_chat_executor(hub_root=hub_root),
-            "react_pr_review_comment": build_react_pr_review_comment_executor(
-                repo_root=hub_root,
-                raw_config=raw_config,
-            ),
-        },
+        executors=executors,
         mutation_policy_config=raw_config,
     )
 
@@ -442,6 +450,7 @@ class ScmAutomationService:
         reaction_state_store: Optional[ScmReactionStateTracker] = None,
         journal: Optional[PublishJournalWriter] = None,
         publish_processor: Optional[PublishOperationDrainer] = None,
+        publish_executor_factory: Optional[PublishExecutorFactory] = None,
         schedule_deferred_publish_drain: bool = False,
     ) -> None:
         self._hub_root = Path(hub_root)
@@ -463,6 +472,7 @@ class ScmAutomationService:
             self._publish_processor = _default_publish_processor(
                 self._hub_root,
                 journal=resolved_journal,
+                publish_executor_factory=publish_executor_factory,
             )
         else:
             raise TypeError(

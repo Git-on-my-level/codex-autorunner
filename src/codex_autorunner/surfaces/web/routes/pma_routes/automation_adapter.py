@@ -8,6 +8,7 @@ from typing import Any, Optional
 from fastapi import HTTPException, Request
 
 from .....core.time_utils import now_iso
+from ...services.pma import get_pma_request_context
 from ...services.pma.common import (
     normalize_optional_text as service_normalize_optional_text,
 )
@@ -142,8 +143,9 @@ async def get_automation_store(
         else None
     )
 
-    hub_root = request.app.state.config.root
-    supervisor = getattr(request.app.state, "hub_supervisor", None)
+    context = get_pma_request_context(request)
+    hub_root = context.hub_root
+    supervisor = context.hub_supervisor
     if supervisor is not None:
         for name in ("get_pma_automation_store", "get_automation_store"):
             accessor = getattr(supervisor, name, None)
@@ -223,7 +225,7 @@ async def notify_hub_automation_transition(
     if isinstance(extra, dict):
         payload.update(extra)
 
-    supervisor = getattr(request.app.state, "hub_supervisor", None)
+    supervisor = get_pma_request_context(request).hub_supervisor
     store = await get_automation_store(request, runtime_state, required=False)
     if store is None:
         return

@@ -24,6 +24,7 @@ from .core.generated_hub_config import (
     save_hub_config_data,
 )
 from .core.state import RunnerState, save_state
+from .core.state_roots import resolve_repo_runner_state_db_path
 from .core.ticket_linter_cli import ensure_ticket_linter
 from .core.ticket_manager_cli import ensure_ticket_manager
 from .core.utils import atomic_write
@@ -179,7 +180,7 @@ def seed_repo_files(
     if not gitignore_path.exists() or force:
         gitignore_path.write_text(GITIGNORE_CONTENT, encoding="utf-8")
 
-    state_path = ca_dir / "state.sqlite3"
+    state_path = resolve_repo_runner_state_db_path(repo_root)
     if not state_path.exists() or force:
         save_state(state_path, RunnerState(None, "idle", None, None, None))
 

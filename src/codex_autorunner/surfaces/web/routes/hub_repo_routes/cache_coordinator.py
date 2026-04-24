@@ -4,6 +4,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING
 
+from .....core.hub_read_model import get_hub_read_model_service
 from .....core.logging_utils import safe_log
 
 if TYPE_CHECKING:
@@ -63,6 +64,7 @@ class HubCacheCoordinator:
     def _invalidate_hub_snapshot_caches(self) -> None:
         from ...services.hub_gather import invalidate_hub_message_snapshot_cache
 
+        get_hub_read_model_service(self._context).invalidate_listing_response_cache()
         invalidate_hub_message_snapshot_cache(
             self._context,
             include_repo_capability_hints=True,

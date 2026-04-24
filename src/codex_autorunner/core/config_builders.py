@@ -40,6 +40,7 @@ from .config_parsers import (
     _parse_ticket_flow_config,
     _parse_update_backend,
     _parse_update_linux_service_names,
+    _parse_update_skip_checks,
     _parse_usage_config,
     _parse_voice_config_section,
     normalize_base_path,
@@ -55,6 +56,7 @@ from .config_validation import _validate_hub_config, _validate_repo_config
 from .destinations import resolve_effective_repo_destination
 from .generated_hub_config import normalize_generated_hub_config
 from .path_utils import ConfigPathError, resolve_config_path
+from .state_roots import resolve_repo_runner_state_db_path
 from .utils import find_repo_root
 
 ACTIVE_HUB_ROOT_ENV = "CAR_HUB_ROOT"
@@ -79,7 +81,7 @@ def _resolve_hub_config_path(start: Path) -> Path:
 def _resolve_repo_root(start: Path) -> Path:
     search_dir = start.resolve() if start.is_dir() else start.resolve().parent
     for current in [search_dir] + list(search_dir.parents):
-        if (current / ".codex-autorunner" / "state.sqlite3").exists():
+        if resolve_repo_runner_state_db_path(current).exists():
             return current
         if (current / ".git").exists():
             return current
@@ -244,7 +246,7 @@ def build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
     update_cfg = cast(
         Dict[str, Any], update_cfg if isinstance(update_cfg, dict) else {}
     )
-    update_skip_checks = bool(update_cfg.get("skip_checks", False))
+    update_skip_checks = _parse_update_skip_checks(update_cfg)
     update_backend = _parse_update_backend(update_cfg)
     update_linux_service_names = _parse_update_linux_service_names(update_cfg)
     autorunner_cfg = cfg.get("autorunner")
@@ -381,7 +383,7 @@ def build_hub_config(config_path: Path, cfg: Dict[str, Any]) -> HubConfig:
     update_cfg = cast(
         Dict[str, Any], update_cfg if isinstance(update_cfg, dict) else {}
     )
-    update_skip_checks = bool(update_cfg.get("skip_checks", False))
+    update_skip_checks = _parse_update_skip_checks(update_cfg)
     update_backend = _parse_update_backend(update_cfg)
     update_linux_service_names = _parse_update_linux_service_names(update_cfg)
     storage_cfg = cfg.get("storage")

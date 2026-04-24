@@ -29,12 +29,14 @@ from ....core.config_validation import is_loopback_host
 from ....core.git_utils import GitError, run_git
 from ....core.runtime import RuntimeContext, clear_stale_lock
 from ....core.state import RunnerState, load_state, now_iso, save_state, state_lock
+from ....core.state_roots import resolve_repo_runner_state_db_path
 from ....core.usage import (
     UsageError,
     default_codex_home,
+    format_rate_limit_lines,
+    get_hub_usage_summary_cached,
+    get_repo_usage_summary_cached,
     parse_iso_datetime,
-    summarize_hub_usage,
-    summarize_repo_usage,
 )
 from ....core.utils import RepoNotFoundError, default_editor, find_repo_root
 from ....manifest import load_manifest
@@ -520,7 +522,7 @@ def register_root_commands(app: typer.Typer) -> None:
         except RepoNotFoundError:
             repo_root = None
 
-        if repo_root and (repo_root / ".codex-autorunner" / "state.sqlite3").exists():
+        if repo_root and resolve_repo_runner_state_db_path(repo_root).exists():
             engine = _require_repo_config(repo, hub)
         else:
             try:
@@ -531,9 +533,10 @@ def register_root_commands(app: typer.Typer) -> None:
             repo_map = [
                 (entry.id, (config.root / entry.path)) for entry in manifest.repos
             ]
-            per_repo, unmatched = summarize_hub_usage(
+            per_repo, unmatched, status = get_hub_usage_summary_cached(
                 repo_map,
                 codex_root,
+                config=config,
                 since=since_dt,
                 until=until_dt,
             )
@@ -544,6 +547,7 @@ def register_root_commands(app: typer.Typer) -> None:
                     "codex_home": str(codex_root),
                     "since": since,
                     "until": until,
+                    "status": status,
                     "repos": {
                         repo_id: summary.to_dict()
                         for repo_id, summary in per_repo.items()
@@ -554,7 +558,7 @@ def register_root_commands(app: typer.Typer) -> None:
                 return
 
             typer.echo(
-                f"hub={config.root} codex_home={codex_root} repos={len(per_repo)}"
+                f"hub={config.root} codex_home={codex_root} repos={len(per_repo)} status={status}"
             )
             for repo_id, summary in per_repo.items():
                 typer.echo(
@@ -569,9 +573,10 @@ def register_root_commands(app: typer.Typer) -> None:
                 )
             return
 
-        summary = summarize_repo_usage(
+        summary, status = get_repo_usage_summary_cached(
             engine.repo_root,
             codex_root,
+            config=engine.config,
             since=since_dt,
             until=until_dt,
         )
@@ -583,37 +588,23 @@ def register_root_commands(app: typer.Typer) -> None:
                 "codex_home": str(codex_root),
                 "since": since,
                 "until": until,
+                "status": status,
                 "usage": summary.to_dict(),
             }
             typer.echo(json.dumps(payload, indent=2))
             return
 
-        typer.echo(f"repo={engine.repo_root} codex_home={codex_root}")
+        typer.echo(f"repo={engine.repo_root} codex_home={codex_root} status={status}")
         typer.echo(
             f"tokens={summary.totals.total_tokens} "
             f"(in={summary.totals.input_tokens},cached={summary.totals.cached_input_tokens},"
             f"out={summary.totals.output_tokens},reason={summary.totals.reasoning_output_tokens})"
         )
         typer.echo(f"events={summary.events}")
-        if isinstance(summary.latest_rate_limits, dict):
-            primary = summary.latest_rate_limits.get("primary")
-            secondary = summary.latest_rate_limits.get("secondary")
-            primary_used = (
-                primary.get("used_percent") if isinstance(primary, dict) else None
-            )
-            primary_window = (
-                primary.get("window_minutes") if isinstance(primary, dict) else None
-            )
-            secondary_used = (
-                secondary.get("used_percent") if isinstance(secondary, dict) else None
-            )
-            secondary_window = (
-                secondary.get("window_minutes") if isinstance(secondary, dict) else None
-            )
-            typer.echo(
-                f"rate_limits: primary={primary_used}%/{primary_window}m "
-                f"secondary={secondary_used}%/{secondary_window}m"
-            )
+        for line in format_rate_limit_lines(
+            cast(Optional[dict[str, object]], summary.latest_rate_limits)
+        ):
+            typer.echo(line)
 
     @app.command()
     def kill(

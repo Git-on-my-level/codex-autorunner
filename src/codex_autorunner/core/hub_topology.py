@@ -5,12 +5,13 @@ import enum
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Protocol, Sequence, Tuple
 
-from ..discovery import DiscoveryRecord
 from ..manifest import (
+    Manifest,
     ManifestAgentWorkspace,
     ManifestRepo,
+    load_manifest,
     normalize_manifest_destination,
 )
 from .destinations import (
@@ -21,9 +22,29 @@ from .destinations import (
 from .git_utils import git_available, git_is_clean
 from .locks import DEFAULT_RUNNER_CMD_HINTS, assess_lock, process_alive
 from .state import RunnerState, load_state, now_iso
+from .state_roots import resolve_repo_runner_state_db_path
 from .utils import atomic_write
 
 logger = logging.getLogger("codex_autorunner.hub_topology")
+
+
+class RepoTopologyRecord(Protocol):
+    repo: ManifestRepo
+    absolute_path: Path
+    added_to_manifest: bool
+    exists_on_disk: bool
+    initialized: bool
+    init_error: Optional[str]
+
+
+@dataclasses.dataclass
+class ManifestRepoRecord:
+    repo: ManifestRepo
+    absolute_path: Path
+    added_to_manifest: bool
+    exists_on_disk: bool
+    initialized: bool
+    init_error: Optional[str] = None
 
 
 class RepoStatus(str, enum.Enum):
@@ -151,6 +172,15 @@ class AgentWorkspaceSnapshot:
         }
 
 
+@dataclasses.dataclass(frozen=True)
+class WorkspaceArchiveTarget:
+    base_repo_root: Path
+    base_repo_id: str
+    workspace_repo_id: str
+    worktree_of: str
+    source_path: Path | str
+
+
 @dataclasses.dataclass
 class HubState:
     last_scan_at: Optional[str]
@@ -171,6 +201,106 @@ class HubState:
         }
 
 
+class HubTopologyRepository:
+    """Single manifest-backed authority for hub topology reads.
+
+    Hub mutations should read manifest state, build refreshed repo and agent
+    workspace snapshots, and resolve archive targets through this repository
+    instead of rebuilding topology ad hoc in callers.
+    """
+
+    def __init__(self, *, hub_root: Path, manifest_path: Path) -> None:
+        self._hub_root = hub_root
+        self._manifest_path = manifest_path
+
+    def load_manifest(self) -> Manifest:
+        return load_manifest(self._manifest_path, self._hub_root)
+
+    def manifest_records(self) -> tuple[Manifest, Sequence[RepoTopologyRecord]]:
+        manifest = self.load_manifest()
+        records = [self._record_for_repo(entry) for entry in manifest.repos]
+        return manifest, records
+
+    def build_hub_state(
+        self,
+        *,
+        existing_pinned_parent_repo_ids: list[str],
+        last_scan_at: Optional[str],
+        manifest: Optional[Manifest] = None,
+        records: Optional[Sequence[RepoTopologyRecord]] = None,
+    ) -> HubState:
+        resolved_manifest = manifest if manifest is not None else self.load_manifest()
+        resolved_records = (
+            list(records)
+            if records is not None
+            else [self._record_for_repo(entry) for entry in resolved_manifest.repos]
+        )
+        repos, agent_workspaces, pinned_parent_repo_ids = build_full_topology(
+            resolved_records,
+            resolved_manifest.agent_workspaces,
+            existing_pinned_parent_repo_ids,
+            self._hub_root,
+        )
+        return HubState(
+            last_scan_at=last_scan_at,
+            repos=repos,
+            agent_workspaces=agent_workspaces,
+            pinned_parent_repo_ids=pinned_parent_repo_ids,
+        )
+
+    def repo_snapshot(self, repo_id: str) -> RepoSnapshot:
+        manifest, records = self.manifest_records()
+        record = next((item for item in records if item.repo.id == repo_id), None)
+        if record is None:
+            raise ValueError(f"Repo {repo_id} not found in manifest")
+        repos_by_id = {entry.id: entry for entry in manifest.repos}
+        return build_repo_snapshot(record, repos_by_id)
+
+    def agent_workspace_snapshot(self, workspace_id: str) -> AgentWorkspaceSnapshot:
+        manifest = self.load_manifest()
+        workspace = manifest.get_agent_workspace(workspace_id)
+        if workspace is None:
+            raise ValueError(f"Agent workspace {workspace_id} not found in manifest")
+        return build_agent_workspace_snapshot(workspace, self._hub_root)
+
+    def resolve_workspace_archive_target(
+        self,
+        workspace_root: Path,
+    ) -> Optional[WorkspaceArchiveTarget]:
+        resolved_workspace_root = workspace_root.resolve()
+        manifest = self.load_manifest()
+        entry = manifest.get_by_path(self._hub_root, resolved_workspace_root)
+        if entry is None:
+            return None
+
+        base_repo_root = resolved_workspace_root
+        base_repo_id = entry.id
+        worktree_of = entry.worktree_of or entry.id
+        if entry.kind == "worktree" and entry.worktree_of:
+            base = manifest.get(entry.worktree_of)
+            if base is not None:
+                base_repo_root = (self._hub_root / base.path).resolve()
+                base_repo_id = base.id
+        return WorkspaceArchiveTarget(
+            base_repo_root=base_repo_root,
+            base_repo_id=base_repo_id,
+            workspace_repo_id=entry.id,
+            worktree_of=worktree_of,
+            source_path=entry.path,
+        )
+
+    def _record_for_repo(self, entry: ManifestRepo) -> ManifestRepoRecord:
+        repo_path = (self._hub_root / entry.path).resolve()
+        return ManifestRepoRecord(
+            repo=entry,
+            absolute_path=repo_path,
+            added_to_manifest=False,
+            exists_on_disk=repo_path.exists(),
+            initialized=(repo_path / ".codex-autorunner" / "tickets").exists(),
+            init_error=None,
+        )
+
+
 def read_lock_status(lock_path: Path) -> LockStatus:
     if not lock_path.exists():
         return LockStatus.UNLOCKED
@@ -184,7 +314,7 @@ def read_lock_status(lock_path: Path) -> LockStatus:
 
 
 def derive_repo_status(
-    record: DiscoveryRecord,
+    record: RepoTopologyRecord,
     lock_status: LockStatus,
     runner_state: Optional[RunnerState],
 ) -> RepoStatus:
@@ -206,7 +336,7 @@ def derive_repo_status(
 
 
 def build_repo_snapshot(
-    record: DiscoveryRecord,
+    record: RepoTopologyRecord,
     repos_by_id: Optional[Dict[str, ManifestRepo]] = None,
 ) -> RepoSnapshot:
     repo_path = record.absolute_path
@@ -215,7 +345,7 @@ def build_repo_snapshot(
 
     runner_state: Optional[RunnerState] = None
     if record.initialized:
-        runner_state = load_state(repo_path / ".codex-autorunner" / "state.sqlite3")
+        runner_state = load_state(resolve_repo_runner_state_db_path(repo_path))
 
     is_clean: Optional[bool] = None
     if record.exists_on_disk and git_available(repo_path):
@@ -276,7 +406,7 @@ def build_agent_workspace_snapshot(
     )
 
 
-def build_repo_snapshots(records: List[DiscoveryRecord]) -> List[RepoSnapshot]:
+def build_repo_snapshots(records: Sequence[RepoTopologyRecord]) -> List[RepoSnapshot]:
     repos_by_id = {record.repo.id: record.repo for record in records}
     return [build_repo_snapshot(record, repos_by_id) for record in records]
 
@@ -289,7 +419,7 @@ def build_agent_workspace_snapshots(
 
 
 def build_full_topology(
-    records: List[DiscoveryRecord],
+    records: Sequence[RepoTopologyRecord],
     agent_workspaces: List[ManifestAgentWorkspace],
     existing_pinned_ids: List[str],
     hub_root: Path,
