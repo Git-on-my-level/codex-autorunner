@@ -167,15 +167,6 @@ class ManagedThreadAutomationClient:
         return {"mode": "terminal", "subscription": created}
 
 
-def resolve_origin_followup_context(
-    runtime_state: Any,
-) -> tuple[Optional[str], Optional[str]]:
-    origin = resolve_runtime_pma_origin(runtime_state)
-    if origin is None:
-        return None, None
-    return origin.thread_id, origin.lane_id
-
-
 def apply_origin_followup_context(
     payload: dict[str, Any],
     runtime_state: Any,
