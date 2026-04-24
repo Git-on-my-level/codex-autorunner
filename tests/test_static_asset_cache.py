@@ -1,11 +1,15 @@
+import json
 import logging
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
+from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
 from codex_autorunner.core.config import load_hub_config
+from codex_autorunner.manifest import load_manifest, save_manifest
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web import static_assets
 from codex_autorunner.surfaces.web.static_assets import StaticAssetProvenance
@@ -32,8 +36,6 @@ def _write_required_assets(static_dir: Path) -> None:
         "console.log('fit');", encoding="utf-8"
     )
     (vendor_dir / "xterm.css").write_text("body { }", encoding="utf-8")
-    import json
-
     manifest = {
         "version": "test",
         "generated": [
@@ -51,6 +53,29 @@ def _write_required_assets(static_dir: Path) -> None:
         ],
     }
     (static_dir / "assets.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+
+@dataclass(frozen=True)
+class _StaticHubEnv:
+    hub_root: Path
+    repo_id: str
+    repo_root: Path
+
+
+@pytest.fixture(scope="module")
+def _static_hub_env(tmp_path_factory):
+    hub_root = tmp_path_factory.mktemp("hub")
+    seed_hub_files(hub_root, force=True)
+    repo_id = "repo"
+    repo_root = hub_root / "worktrees" / repo_id
+    repo_root.mkdir(parents=True)
+    (repo_root / ".git").mkdir()
+    seed_repo_files(repo_root, git_required=False)
+    hub_config = load_hub_config(hub_root)
+    manifest = load_manifest(hub_config.manifest_path, hub_root)
+    manifest.ensure_repo(hub_root, repo_root, repo_id=repo_id, display_name=repo_id)
+    save_manifest(hub_config.manifest_path, manifest, hub_root)
+    yield _StaticHubEnv(hub_root=hub_root, repo_id=repo_id, repo_root=repo_root)
 
 
 def test_materialize_static_assets_survives_source_removal(
@@ -142,40 +167,40 @@ def test_materialize_static_assets_prunes_old_entries(
 
 
 def test_repo_app_serves_cached_static_assets(
-    hub_env, tmp_path: Path, monkeypatch
+    _static_hub_env, tmp_path: Path, monkeypatch
 ) -> None:
     source_dir = tmp_path / "source_static"
     _write_required_assets(source_dir)
     monkeypatch.setattr(static_assets, "resolve_static_dir", lambda: (source_dir, None))
-    app = create_hub_app(hub_env.hub_root)
+    app = create_hub_app(_static_hub_env.hub_root)
     client = TestClient(app)
     shutil.rmtree(source_dir)
-    res = client.get(f"/repos/{hub_env.repo_id}/")
+    res = client.get(f"/repos/{_static_hub_env.repo_id}/")
     assert res.status_code == 200
-    static_res = client.get(f"/repos/{hub_env.repo_id}/static/generated/app.js")
+    static_res = client.get(f"/repos/{_static_hub_env.repo_id}/static/generated/app.js")
     assert static_res.status_code == 200
 
 
 def test_static_assets_cached_and_compressed(
-    hub_env, tmp_path: Path, monkeypatch
+    _static_hub_env, tmp_path: Path, monkeypatch
 ) -> None:
     source_dir = tmp_path / "source_static"
     _write_required_assets(source_dir)
     (source_dir / "generated" / "big.js").write_text("a" * 2048, encoding="utf-8")
     monkeypatch.setattr(static_assets, "resolve_static_dir", lambda: (source_dir, None))
-    app = create_hub_app(hub_env.hub_root)
+    app = create_hub_app(_static_hub_env.hub_root)
     client = TestClient(app)
-    cache_res = client.get(f"/repos/{hub_env.repo_id}/static/generated/app.js")
+    cache_res = client.get(f"/repos/{_static_hub_env.repo_id}/static/generated/app.js")
     assert cache_res.status_code == 200
     cache_control = cache_res.headers.get("Cache-Control", "")
     assert "must-revalidate" in cache_control
     assert "max-age=0" in cache_control
     assert "no-store" in cache_control
-    vendor_res = client.get(f"/repos/{hub_env.repo_id}/static/vendor/xterm.js")
+    vendor_res = client.get(f"/repos/{_static_hub_env.repo_id}/static/vendor/xterm.js")
     assert vendor_res.status_code == 200
     assert "max-age=31536000" in vendor_res.headers.get("Cache-Control", "")
     gzip_res = client.get(
-        f"/repos/{hub_env.repo_id}/static/generated/big.js",
+        f"/repos/{_static_hub_env.repo_id}/static/generated/big.js",
         headers={"Accept-Encoding": "gzip"},
     )
     assert gzip_res.status_code == 200
@@ -183,17 +208,17 @@ def test_static_assets_cached_and_compressed(
 
 
 def test_repo_app_falls_back_to_hub_static_cache(
-    hub_env, tmp_path: Path, monkeypatch
+    _static_hub_env, tmp_path: Path, monkeypatch
 ) -> None:
-    hub_config = load_hub_config(hub_env.hub_root)
+    hub_config = load_hub_config(_static_hub_env.hub_root)
     hub_cache_root = hub_config.static_assets.cache_root
     existing_cache = hub_cache_root / "existing"
     _write_required_assets(existing_cache)
     source_dir = tmp_path / "missing_source"
     monkeypatch.setattr(static_assets, "resolve_static_dir", lambda: (source_dir, None))
-    app = create_hub_app(hub_env.hub_root)
+    app = create_hub_app(_static_hub_env.hub_root)
     client = TestClient(app)
-    res = client.get(f"/repos/{hub_env.repo_id}/static/generated/app.js")
+    res = client.get(f"/repos/{_static_hub_env.repo_id}/static/generated/app.js")
     assert res.status_code == 200
 
 
