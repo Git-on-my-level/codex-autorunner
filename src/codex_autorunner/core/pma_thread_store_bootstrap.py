@@ -1,3 +1,11 @@
+"""Thread store bootstrap and legacy backfill gating.
+
+Manages the SQLite lock file and backfill-flags that gate one-time migration
+from the old ``threads.sqlite3`` layout to the orchestration store.  This is
+infrastructure, not PMA policy.  Can be simplified once all deployments have
+completed backfill.
+"""
+
 from __future__ import annotations
 
 from contextlib import contextmanager

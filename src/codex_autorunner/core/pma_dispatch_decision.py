@@ -1,90 +1,38 @@
+"""PMA dispatch decision builder (thin adapter over domain types).
+
+Canonical domain types live in ``pma_domain.models`` and
+``pma_domain.serialization``.  This module keeps the builder function and
+binding-matching helpers that require live adapter data, but delegates all
+type definitions, normalization, and serialization to the domain package.
+"""
+
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
-from .pma_domain.publish_policy import evaluate_publish_suppression
+from .pma_domain.models import (
+    PmaDispatchAttempt,
+    PmaDispatchDecision,
+)
+from .pma_domain.serialization import (
+    normalize_pma_dispatch_decision as _domain_normalize,
+)
+from .pma_domain.serialization import (
+    pma_dispatch_decision_to_dict as _domain_to_dict,
+)
 from .pma_origin import extract_pma_origin_metadata
 from .text_utils import _normalize_optional_text, _normalize_pma_delivery_target
 
-
-@dataclass(frozen=True)
-class PmaDispatchAttemptSpec:
-    route: str
-    delivery_mode: str
-    surface_kind: str
-    surface_key: Optional[str] = None
-    repo_id: Optional[str] = None
-    workspace_root: Optional[Path] = None
-
-
-@dataclass(frozen=True)
-class PmaDispatchDecision:
-    requested_delivery: str
-    suppress_publish: bool = False
-    attempts: tuple[PmaDispatchAttemptSpec, ...] = ()
+PmaDispatchAttemptSpec = PmaDispatchAttempt
 
 
 def normalize_pma_dispatch_decision(value: Any) -> Optional[PmaDispatchDecision]:
-    if not isinstance(value, Mapping):
-        return None
-    requested_delivery = _normalize_optional_text(value.get("requested_delivery"))
-    if requested_delivery is None:
-        return None
-    attempts_raw = value.get("attempts")
-    attempts: list[PmaDispatchAttemptSpec] = []
-    if isinstance(attempts_raw, (list, tuple)):
-        for entry in attempts_raw:
-            if not isinstance(entry, Mapping):
-                continue
-            route = _normalize_optional_text(entry.get("route"))
-            delivery_mode = _normalize_optional_text(entry.get("delivery_mode"))
-            surface_kind = _normalize_optional_text(entry.get("surface_kind"))
-            if route is None or delivery_mode is None or surface_kind is None:
-                continue
-            workspace_root_raw = _normalize_optional_text(entry.get("workspace_root"))
-            attempts.append(
-                PmaDispatchAttemptSpec(
-                    route=route,
-                    delivery_mode=delivery_mode,
-                    surface_kind=surface_kind,
-                    surface_key=_normalize_optional_text(entry.get("surface_key")),
-                    repo_id=_normalize_optional_text(entry.get("repo_id")),
-                    workspace_root=(
-                        Path(workspace_root_raw)
-                        if workspace_root_raw is not None
-                        else None
-                    ),
-                )
-            )
-    return PmaDispatchDecision(
-        requested_delivery=requested_delivery,
-        suppress_publish=bool(value.get("suppress_publish")),
-        attempts=tuple(attempts),
-    )
+    return _domain_normalize(value)
 
 
 def pma_dispatch_decision_to_dict(decision: PmaDispatchDecision) -> dict[str, Any]:
-    return {
-        "requested_delivery": decision.requested_delivery,
-        "suppress_publish": bool(decision.suppress_publish),
-        "attempts": [
-            {
-                "route": attempt.route,
-                "delivery_mode": attempt.delivery_mode,
-                "surface_kind": attempt.surface_kind,
-                "surface_key": attempt.surface_key,
-                "repo_id": attempt.repo_id,
-                "workspace_root": (
-                    str(attempt.workspace_root)
-                    if attempt.workspace_root is not None
-                    else None
-                ),
-            }
-            for attempt in decision.attempts
-        ],
-    }
+    return _domain_to_dict(decision)
 
 
 def _thread_binding_matches(
@@ -182,6 +130,8 @@ def build_pma_dispatch_decision(
     binding_metadata_by_thread: Mapping[str, Mapping[str, Any]],
     preferred_bound_surface_kinds: tuple[str, ...] = (),
 ) -> PmaDispatchDecision:
+    from .pma_domain.publish_policy import evaluate_publish_suppression
+
     normalized_delivery = (
         _normalize_optional_text(requested_delivery) or "auto"
     ).lower()
@@ -191,7 +141,7 @@ def build_pma_dispatch_decision(
     if normalized_delivery == "none":
         return PmaDispatchDecision(requested_delivery="none")
 
-    attempts: list[PmaDispatchAttemptSpec] = []
+    attempts: list[PmaDispatchAttempt] = []
     normalized_target = _normalize_pma_delivery_target(delivery_target)
     if normalized_target is not None:
         surface_kind, surface_key = normalized_target
@@ -224,7 +174,7 @@ def build_pma_dispatch_decision(
             )
         if target_matches_known_binding:
             attempts.append(
-                PmaDispatchAttemptSpec(
+                PmaDispatchAttempt(
                     route="explicit",
                     delivery_mode="bound",
                     surface_kind=surface_kind,
@@ -235,7 +185,7 @@ def build_pma_dispatch_decision(
 
     if normalized_delivery in {"auto", "primary_pma"} and normalized_repo_id:
         attempts.extend(
-            PmaDispatchAttemptSpec(
+            PmaDispatchAttempt(
                 route="primary_pma",
                 delivery_mode="primary_pma",
                 surface_kind=surface_kind,
@@ -246,12 +196,12 @@ def build_pma_dispatch_decision(
 
     if normalized_delivery in {"auto", "bound"} and workspace_root is not None:
         attempts.extend(
-            PmaDispatchAttemptSpec(
+            PmaDispatchAttempt(
                 route="bound",
                 delivery_mode="bound",
                 surface_kind=surface_kind,
                 repo_id=normalized_repo_id,
-                workspace_root=workspace_root,
+                workspace_root=str(workspace_root),
             )
             for surface_kind in preferred_bound_surface_kinds
         )

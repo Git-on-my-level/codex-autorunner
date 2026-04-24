@@ -1,4 +1,9 @@
-"""Adapter contract for PMA chat delivery intents."""
+"""Adapter contract for PMA chat delivery intents.
+
+Canonical delivery types live in ``pma_domain.models``.  The
+``PmaChatDelivery*`` names are re-exported from ``pma_chat_delivery`` for
+backward compatibility (they are type aliases for the domain types).
+"""
 
 from __future__ import annotations
 

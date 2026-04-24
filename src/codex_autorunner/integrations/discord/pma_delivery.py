@@ -46,14 +46,14 @@ def _notification_record(
     attempt: PmaChatDeliveryAttempt,
     surface_key: str,
     delivery_record_id: str,
-    workspace_root: Optional[Path],
+    workspace_root: Optional[str],
 ) -> PmaChatDeliveryRecord:
     return PmaChatDeliveryRecord(
         delivery_mode=attempt.delivery_mode,
         surface_kind="discord",
         surface_key=surface_key,
         delivery_record_id=delivery_record_id,
-        workspace_root=str(workspace_root) if workspace_root is not None else None,
+        workspace_root=workspace_root,
     )
 
 
@@ -278,7 +278,7 @@ class DiscordPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
             )
         repo_id_by_workspace = resolve_repo_id_by_workspace_path(hub_root, raw_config)
         created_at = now_iso()
-        candidates: list[tuple[str, str, Optional[Path]]] = []
+        candidates: list[tuple[str, str, Optional[str]]] = []
         store = DiscordStateStore(resolve_discord_state_path(hub_root, raw_config))
         try:
             for binding in await store.list_bindings():
@@ -308,7 +308,7 @@ class DiscordPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
                         (
                             updated_at,
                             channel_id,
-                            Path(workspace_path) if workspace_path else None,
+                            workspace_path,
                         )
                     )
             if not candidates:

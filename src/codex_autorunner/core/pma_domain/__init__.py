@@ -1,8 +1,9 @@
-"""PMA automation domain package.
+"""PMA automation domain package — single authoritative source for policy.
 
-This package is the canonical home for PMA automation policy types and
-domain events.  Adapters and runtime modules should import canonical types
-from here rather than redefining them locally.
+This package owns all PMA automation policy types and domain events.
+Adapters and runtime modules import canonical types from here rather than
+redefining them locally.  Legacy modules that previously held parallel
+implementations now delegate to this package.
 
 Layer boundaries
 ----------------
@@ -17,11 +18,15 @@ Layer boundaries
   records domain reasoning, not adapter error strings.
 - **Rebinding policy** (``rebinding_policy``): owns the decision about
   what to do when a binding changes after a dispatch decision is persisted.
+- **Subscription reducer** (``subscription_reducer``): owns subscription
+  matching, WakeupIntent emission, and timer reduction.
 - **Adapters**: persistence (SQLite, JSON), transport (Discord, Telegram),
   and surface modules.  They consume domain types and execute side effects.
 - **Surfaces**: CLI, web routes, chat commands.  They call adapters.
 
-Every new PMA routing or wakeup policy decision should live in this package.
+Every PMA routing, wakeup, or publish policy decision should live in this
+package.  If you are tempted to add a routing branch or suppression check
+in an adapter file, add it here instead.
 """
 
 from .constants import (
