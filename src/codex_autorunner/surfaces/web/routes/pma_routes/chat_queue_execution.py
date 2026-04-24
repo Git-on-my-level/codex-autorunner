@@ -5,6 +5,8 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from fastapi import HTTPException
+
 from .....core.orchestration import (
     SurfaceThreadMessageRequest,
     build_surface_orchestration_ingress,
@@ -54,6 +56,52 @@ def resolve_pma_session_key(
     if automation_trigger:
         return pma_automation_key(agent_id, profile)
     return pma_base_key(agent_id, profile)
+
+
+def _resolve_profile_with_stale_pma_origin_fallback(
+    request: Any,
+    agent_id: str,
+    payload_profile: Optional[str],
+    requested_origin: Optional[PmaOriginContext],
+    *,
+    default_profile: Optional[str],
+) -> Optional[str]:
+    """Resolve profile for queue execution; ignore invalid stored ``pma_origin.profile`` when drifted.
+
+    Durable wakeups may carry a persisted origin profile that was renamed or removed after the
+    subscription was created. In that case :func:`resolve_requested_agent_profile` raises
+    ``HTTPException(400)``. When the client did not specify an explicit payload profile, fall
+    back to default resolution so the automation can still run.
+    """
+
+    origin_profile = requested_origin.profile if requested_origin is not None else None
+    effective = payload_profile if payload_profile is not None else origin_profile
+    try:
+        return resolve_requested_agent_profile(
+            request,
+            agent_id,
+            effective,
+            default_profile=default_profile,
+        )
+    except HTTPException as exc:
+        if (
+            exc.status_code == 400
+            and origin_profile is not None
+            and payload_profile is None
+        ):
+            logger.warning(
+                "Ignoring stale pma_origin.profile for PMA queue item "
+                "(falling back to default profile resolution): agent=%s origin_profile=%s",
+                agent_id,
+                origin_profile,
+            )
+            return resolve_requested_agent_profile(
+                request,
+                agent_id,
+                None,
+                default_profile=default_profile,
+            )
+        raise
 
 
 def resolve_pma_execution_origin(
@@ -213,14 +261,11 @@ async def execute_queue_item(
     except ValueError:
         agent_id = _resolve_default_agent(available_ids, available_default)
 
-    profile = resolve_requested_agent_profile(
+    profile = _resolve_profile_with_stale_pma_origin_fallback(
         request,
         agent_id,
-        (
-            profile
-            if profile is not None
-            else requested_origin.profile if requested_origin is not None else None
-        ),
+        profile,
+        requested_origin,
         default_profile=_normalize_optional_text(defaults.get("profile")),
     )
     execution_origin = resolve_pma_execution_origin(
@@ -391,8 +436,6 @@ async def execute_queue_item(
         try:
             harness = build_runtime_harness(request, agent_id, profile)
         except Exception as exc:
-            from fastapi import HTTPException
-
             detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
             return {"status": "error", "detail": str(detail)}
         if not callable(getattr(harness, "supports", None)):
