@@ -72,6 +72,12 @@ from .serialization import (
     pma_timer_to_dict,
     pma_wakeup_to_dict,
 )
+from .subscription_reducer import (
+    ReduceTransitionResult,
+    TransitionEvent,
+    WakeupIntent,
+    reduce_transition,
+)
 
 __all__ = [
     "DEFAULT_PMA_LANE_ID",
@@ -123,4 +129,8 @@ __all__ = [
     "pma_subscription_to_dict",
     "pma_timer_to_dict",
     "pma_wakeup_to_dict",
+    "ReduceTransitionResult",
+    "reduce_transition",
+    "TransitionEvent",
+    "WakeupIntent",
 ]

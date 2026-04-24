@@ -33,6 +33,12 @@ from .pma_automation_types import (
     _parse_iso,
     default_pma_automation_state,
 )
+from .pma_domain.models import PmaSubscription
+from .pma_domain.subscription_reducer import (
+    ReduceTransitionResult,
+    TransitionEvent,
+    reduce_transition,
+)
 from .pma_origin import extract_pma_origin_metadata, merge_pma_origin_metadata
 from .pma_thread_store import PmaThreadStore
 from .text_utils import _normalize_pma_delivery_target, lock_path_for
@@ -1116,6 +1122,67 @@ class PmaAutomationStore:
         return merged
 
     @staticmethod
+    def _lifecycle_sub_to_domain(
+        entry: PmaLifecycleSubscription,
+    ) -> PmaSubscription:
+        return PmaSubscription(
+            subscription_id=entry.subscription_id,
+            created_at=entry.created_at,
+            updated_at=entry.updated_at,
+            state=entry.state,
+            event_types=tuple(entry.event_types),
+            repo_id=entry.repo_id,
+            run_id=entry.run_id,
+            thread_id=entry.thread_id,
+            lane_id=entry.lane_id,
+            from_state=entry.from_state,
+            to_state=entry.to_state,
+            reason=entry.reason,
+            idempotency_key=entry.idempotency_key,
+            max_matches=entry.max_matches,
+            match_count=entry.match_count,
+            metadata=dict(entry.metadata),
+        )
+
+    def _apply_reduce_result(
+        self,
+        subscriptions: list[PmaLifecycleSubscription],
+        wakeups: list[PmaAutomationWakeup],
+        result: ReduceTransitionResult,
+        timestamp: str,
+    ) -> None:
+        sub_by_id = {entry.subscription_id: entry for entry in subscriptions}
+        now = _iso_now()
+        for domain_sub in result.subscriptions:
+            existing = sub_by_id.get(domain_sub.subscription_id)
+            if existing is None:
+                continue
+            if existing.match_count != domain_sub.match_count:
+                existing.match_count = domain_sub.match_count
+                existing.updated_at = now
+            if existing.state != domain_sub.state:
+                existing.state = domain_sub.state
+                existing.updated_at = now
+        for intent in result.wakeup_intents:
+            wakeups.append(
+                PmaAutomationWakeup.create(
+                    source=intent.source,
+                    repo_id=intent.repo_id,
+                    run_id=intent.run_id,
+                    thread_id=intent.thread_id,
+                    lane_id=intent.lane_id,
+                    from_state=intent.from_state,
+                    to_state=intent.to_state,
+                    reason=intent.reason,
+                    timestamp=timestamp,
+                    idempotency_key=intent.idempotency_key,
+                    subscription_id=intent.subscription_id,
+                    event_type=intent.event_type,
+                    metadata=intent.metadata,
+                )
+            )
+
+    @staticmethod
     def _normalize_subscription_event_types(
         value: Any,
         *,
@@ -2180,82 +2247,37 @@ class PmaAutomationStore:
         }
         with file_lock(self._lock_path()):
             state, subscriptions, timers, wakeups = self._load_structured_unlocked()
-            matched = 0
-            created = 0
-            changed = False
 
-            for entry in subscriptions:
-                if entry.state != "active":
-                    continue
-                if (
-                    entry.max_matches is not None
-                    and entry.match_count >= entry.max_matches
-                ):
-                    entry.state = "cancelled"
-                    entry.updated_at = _iso_now()
-                    changed = True
-                    continue
-                if entry.event_types and event_type_norm not in entry.event_types:
-                    continue
-                if entry.repo_id is not None and entry.repo_id != repo_id:
-                    continue
-                if entry.run_id is not None and entry.run_id != run_id:
-                    continue
-                if entry.thread_id is not None and entry.thread_id != thread_id:
-                    continue
-                if entry.from_state is not None and entry.from_state != from_state:
-                    continue
-                if entry.to_state is not None and entry.to_state != to_state:
-                    continue
+            event = TransitionEvent(
+                repo_id=repo_id,
+                run_id=run_id,
+                thread_id=thread_id,
+                from_state=from_state,
+                to_state=to_state,
+                reason=reason,
+                event_type=event_type_norm,
+                transition_id=transition_id,
+                extra_metadata=metadata_payload,
+            )
 
-                matched += 1
-                subscription_id = entry.subscription_id
-                key = (
-                    transition_id
-                    or f"{event_type_norm}:{repo_id or ''}:{run_id or ''}:{thread_id or ''}:{from_state or ''}:{to_state or ''}:{timestamp}"
-                )
-                wakeup_key = f"transition:{key}:{subscription_id or 'all'}"
-                deduped = any(
-                    existing.idempotency_key == wakeup_key for existing in wakeups
-                )
-                if deduped:
-                    continue
+            domain_subs = [
+                self._lifecycle_sub_to_domain(entry) for entry in subscriptions
+            ]
+            existing_keys = frozenset(
+                existing.idempotency_key
+                for existing in wakeups
+                if existing.idempotency_key
+            )
+            result = reduce_transition(domain_subs, existing_keys, event)
 
-                wakeup_metadata = dict(entry.metadata or {})
-                wakeup_metadata.update(metadata_payload)
-                wakeups.append(
-                    PmaAutomationWakeup.create(
-                        source="transition",
-                        repo_id=repo_id,
-                        run_id=run_id,
-                        thread_id=thread_id,
-                        lane_id=entry.lane_id,
-                        from_state=from_state,
-                        to_state=to_state,
-                        reason=reason,
-                        timestamp=timestamp,
-                        idempotency_key=wakeup_key,
-                        subscription_id=subscription_id,
-                        event_type=event_type_norm,
-                        metadata=wakeup_metadata,
-                    )
-                )
-                created += 1
-                entry.match_count = max(0, int(entry.match_count)) + 1
-                entry.updated_at = _iso_now()
-                changed = True
-                if (
-                    entry.max_matches is not None
-                    and entry.match_count >= entry.max_matches
-                ):
-                    entry.state = "cancelled"
+            self._apply_reduce_result(subscriptions, wakeups, result, timestamp)
 
-            if created > 0 or changed:
+            if result.created > 0 or result.matched > 0:
                 self._save_structured_unlocked(state, subscriptions, timers, wakeups)
         return {
             "status": "ok",
-            "matched": matched,
-            "created": created,
+            "matched": result.matched,
+            "created": result.created,
             "repo_id": repo_id,
             "run_id": run_id,
             "thread_id": thread_id,
