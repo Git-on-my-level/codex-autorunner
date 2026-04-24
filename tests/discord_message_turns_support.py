@@ -14,9 +14,6 @@ import anyio
 import pytest
 
 import codex_autorunner.integrations.chat.managed_thread_turns as managed_thread_turns_module
-from codex_autorunner.integrations.chat.managed_thread_turns import (
-    ManagedThreadQueueWorkerHooks,
-)
 import codex_autorunner.integrations.discord.message_turns as discord_message_turns_module
 import codex_autorunner.integrations.discord.service as discord_service_module
 from codex_autorunner.agents.registry import AgentDescriptor
@@ -31,7 +28,6 @@ from codex_autorunner.core.filebox import (
     outbox_pending_dir,
     outbox_sent_dir,
 )
-from codex_autorunner.core.utils import canonicalize_path
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.ports.run_event import (
     RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
@@ -43,6 +39,7 @@ from codex_autorunner.core.ports.run_event import (
     TokenUsage,
 )
 from codex_autorunner.core.sse import format_sse
+from codex_autorunner.core.utils import canonicalize_path
 from codex_autorunner.integrations.app_server.client import (
     CodexAppServerDisconnected,
 )
@@ -58,15 +55,18 @@ from codex_autorunner.integrations.chat.collaboration_policy import (
 )
 from codex_autorunner.integrations.chat.compaction import build_compact_seed_prompt
 from codex_autorunner.integrations.chat.dispatcher import build_dispatch_context
+from codex_autorunner.integrations.chat.managed_thread_turns import (
+    ManagedThreadQueueWorkerHooks,
+)
+from codex_autorunner.integrations.discord.managed_thread_routing import (
+    _build_discord_runner_hooks,
+)
 from codex_autorunner.integrations.discord.service import (
     DISCORD_QUEUED_PLACEHOLDER_TEXT as QUEUED_PLACEHOLDER_TEXT,
 )
 from codex_autorunner.integrations.discord.service import (
     DiscordBotService,
     DiscordMessageTurnResult,
-)
-from codex_autorunner.integrations.discord.managed_thread_routing import (
-    _build_discord_runner_hooks,
 )
 from codex_autorunner.integrations.discord.state import DiscordStateStore
 from tests.support.discord_turn_fakes import (

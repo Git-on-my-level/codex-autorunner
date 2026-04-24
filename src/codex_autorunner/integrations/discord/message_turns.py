@@ -90,7 +90,6 @@ from ..chat.managed_thread_turns import (
     ManagedThreadCoordinatorHooks,
     ManagedThreadFinalizationResult,
     ManagedThreadQueuedExecutionStarter,
-    ManagedThreadQueueWorkerHooks,
     ManagedThreadTurnCoordinator,  # noqa: F401  re-export for test monkeypatch compat
     complete_managed_thread_execution,
     render_managed_thread_response_text,

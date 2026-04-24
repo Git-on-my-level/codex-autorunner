@@ -245,9 +245,7 @@ def _save_thread_output_cursors(hub_root: Path, payload: dict[str, Any]) -> None
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
     except OSError as exc:
-        logger.debug(
-            "Failed to persist thread output cursors to %s: %s", path, exc
-        )
+        logger.debug("Failed to persist thread output cursors to %s: %s", path, exc)
 
 
 def _clear_thread_output_cursor(
