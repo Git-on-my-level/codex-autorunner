@@ -23,6 +23,7 @@ from .opencode_backend import OpenCodeBackend
 from .opencode_supervisor_factory import build_opencode_supervisor_from_repo_config
 
 NotificationHandler = Callable[[Mapping[str, object]], Awaitable[None]]
+_RUNTIME_PROFILE_NONE = ""
 
 
 class AgentBackendFactory:
@@ -49,10 +50,16 @@ class AgentBackendFactory:
         self._destination = resolve_destination_from_config(
             getattr(config, "effective_destination", {"kind": "local"})
         )
-        self._backend_cache: dict[str, AgentBackend] = {}
+        self._backend_cache: dict[tuple[str, str], AgentBackend] = {}
         self._opencode_supervisor: Optional[Any] = shared_opencode_supervisor
+        self._opencode_supervisors: dict[tuple[str, str], Any] = {}
         self._owns_opencode_supervisor = shared_opencode_supervisor is None
         self._codex_supervisor: Optional[WorkspaceAppServerSupervisor] = None
+
+    def _runtime_cache_key(
+        self, runtime_agent_id: str, runtime_profile: Optional[str] = None
+    ) -> tuple[str, str]:
+        return (runtime_agent_id, runtime_profile or _RUNTIME_PROFILE_NONE)
 
     def __call__(
         self,
@@ -99,7 +106,9 @@ class AgentBackendFactory:
         default_approval_decision = self._config.ticket_flow.default_approval_decision
         turn_timeout_seconds = self._config.app_server.turn_timeout_seconds
 
-        cache_key = target.runtime_agent_id
+        cache_key = self._runtime_cache_key(
+            target.runtime_agent_id, target.runtime_profile
+        )
         cached = self._backend_cache.get(cache_key)
         if cached is None:
             cached = CodexAppServerBackend(
@@ -148,7 +157,10 @@ class AgentBackendFactory:
         notification_handler: Optional[NotificationHandler],
     ) -> AgentBackend:
         _ = notification_handler
-        agent_cfg = self._config.agents.get(target.runtime_agent_id)
+        agent_cfg = self._config.resolved_agent_config(
+            target.runtime_agent_id,
+            profile=target.runtime_profile,
+        )
         base_url = agent_cfg.base_url if agent_cfg else None
         username = os.environ.get("OPENCODE_SERVER_USERNAME")
         password = os.environ.get("OPENCODE_SERVER_PASSWORD")
@@ -156,7 +168,9 @@ class AgentBackendFactory:
             username = "opencode"
         auth = (username, password) if username and password else None
 
-        cache_key = target.runtime_agent_id
+        cache_key = self._runtime_cache_key(
+            target.runtime_agent_id, target.runtime_profile
+        )
         cached = self._backend_cache.get(cache_key)
         if cached is None:
             if not base_url:
@@ -206,6 +220,10 @@ class AgentBackendFactory:
     ) -> Optional[Any]:
         if self._opencode_supervisor is not None:
             return self._opencode_supervisor
+        cache_key = self._runtime_cache_key(agent_id, profile)
+        cached = self._opencode_supervisors.get(cache_key)
+        if cached is not None:
+            return cached
         opencode_command_override: Optional[list[str]] = None
         if isinstance(self._destination, DockerDestination):
             agent_cmd = self._config.agent_serve_command(agent_id, profile=profile)
@@ -230,16 +248,24 @@ class AgentBackendFactory:
             workspace_root=self._repo_root,
             logger=self._logger,
             base_env=None,
+            agent_id=agent_id,
+            profile=profile,
             command_override=opencode_command_override,
         )
-        self._opencode_supervisor = supervisor
+        self._opencode_supervisors[cache_key] = supervisor
         return supervisor
 
     def reset_session_state(self, *, agent_id: Optional[str] = None) -> None:
         """Clear cached in-memory session state for one or all backends."""
         if isinstance(agent_id, str) and agent_id:
             target = resolve_agent_execution_target(agent_id, context=self._config)
-            backends = [self._backend_cache.get(target.runtime_agent_id)]
+            backends = [
+                self._backend_cache.get(
+                    self._runtime_cache_key(
+                        target.runtime_agent_id, target.runtime_profile
+                    )
+                )
+            ]
         else:
             backends = list(self._backend_cache.values())
         for backend in backends:
@@ -268,6 +294,16 @@ class AgentBackendFactory:
                         "Failed closing opencode supervisor", exc_info=True
                     )
             self._opencode_supervisor = None
+        for supervisor in self._opencode_supervisors.values():
+            if supervisor is None:
+                continue
+            try:
+                await supervisor.close_all()
+            except Exception:  # intentional: best-effort supervisor cleanup
+                self._logger.warning(
+                    "Failed closing opencode supervisor", exc_info=True
+                )
+        self._opencode_supervisors = {}
         if self._codex_supervisor is not None:
             try:
                 await self._codex_supervisor.close_all()

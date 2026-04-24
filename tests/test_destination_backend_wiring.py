@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 from pathlib import Path
+from types import SimpleNamespace
 
+from codex_autorunner.core.agent_config import AgentProfileConfig
 from codex_autorunner.core.app_server_command import GLOBAL_APP_SERVER_COMMAND_ENV
 from codex_autorunner.core.config import (
     CONFIG_FILENAME,
@@ -383,6 +386,143 @@ def test_agent_backend_factory_uses_alias_backed_opencode_runtime_config(
 
     assert isinstance(backend, _FakeOpenCodeBackend)
     assert captured["base_url"] == "http://127.0.0.1:4455"
+
+
+def test_agent_backend_factory_uses_profile_base_url_for_opencode_runtime(
+    monkeypatch, tmp_path: Path
+) -> None:
+    hub_root, repo_root = _make_repo_config(tmp_path)
+    config = load_repo_config(repo_root, hub_path=hub_root)
+    opencode_cfg = config.agents["opencode"]
+    config.agents["opencode"] = dataclasses.replace(
+        opencode_cfg,
+        base_url=None,
+        profiles={
+            "fast": AgentProfileConfig(base_url="http://fast.example"),
+            "slow": AgentProfileConfig(base_url="http://slow.example"),
+        },
+    )
+
+    captured: list[dict[str, object]] = []
+
+    class _FakeOpenCodeBackend:
+        def __init__(self, **kwargs):  # type: ignore[no-untyped-def]
+            self.kwargs = dict(kwargs)
+            captured.append(self.kwargs)
+
+        def configure(self, **_kwargs):  # type: ignore[no-untyped-def]
+            return None
+
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.agents.wiring.OpenCodeBackend",
+        _FakeOpenCodeBackend,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.agents.wiring.AgentBackendFactory._ensure_opencode_supervisor",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("profile base_url should avoid supervisor mode")
+        ),
+    )
+
+    factory = AgentBackendFactory(repo_root, config)
+    backend = factory._build_opencode_backend(
+        SimpleNamespace(runtime_agent_id="opencode", runtime_profile="fast"),
+        RunnerState(None, "idle", None, None, None),
+        None,
+    )
+
+    assert isinstance(backend, _FakeOpenCodeBackend)
+    assert len(captured) == 1
+    assert captured[0]["base_url"] == "http://fast.example"
+    assert captured[0]["workspace_root"] == repo_root
+    assert "supervisor" not in captured[0]
+
+
+def test_agent_backend_factory_partitions_opencode_backends_by_runtime_profile(
+    monkeypatch, tmp_path: Path
+) -> None:
+    hub_root, repo_root = _make_repo_config(tmp_path)
+    config = load_repo_config(repo_root, hub_path=hub_root)
+    opencode_cfg = config.agents["opencode"]
+    config.agents["opencode"] = dataclasses.replace(
+        opencode_cfg,
+        base_url=None,
+        profiles={
+            "fast": AgentProfileConfig(base_url="http://fast.example"),
+            "slow": AgentProfileConfig(base_url="http://slow.example"),
+        },
+    )
+
+    built: list[dict[str, object]] = []
+
+    class _FakeOpenCodeBackend:
+        def __init__(self, **kwargs):  # type: ignore[no-untyped-def]
+            self.kwargs = dict(kwargs)
+            built.append(self.kwargs)
+
+        def configure(self, **_kwargs):  # type: ignore[no-untyped-def]
+            return None
+
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.agents.wiring.OpenCodeBackend",
+        _FakeOpenCodeBackend,
+    )
+
+    factory = AgentBackendFactory(repo_root, config)
+    state = RunnerState(None, "idle", None, None, None)
+    fast_backend = factory._build_opencode_backend(
+        SimpleNamespace(runtime_agent_id="opencode", runtime_profile="fast"),
+        state,
+        None,
+    )
+    slow_backend = factory._build_opencode_backend(
+        SimpleNamespace(runtime_agent_id="opencode", runtime_profile="slow"),
+        state,
+        None,
+    )
+    fast_backend_again = factory._build_opencode_backend(
+        SimpleNamespace(runtime_agent_id="opencode", runtime_profile="fast"),
+        state,
+        None,
+    )
+
+    assert fast_backend is fast_backend_again
+    assert fast_backend is not slow_backend
+    assert [kwargs["base_url"] for kwargs in built] == [
+        "http://fast.example",
+        "http://slow.example",
+    ]
+
+
+def test_agent_backend_factory_partitions_opencode_supervisors_by_runtime_profile(
+    monkeypatch, tmp_path: Path
+) -> None:
+    hub_root, repo_root = _make_repo_config(tmp_path)
+    config = load_repo_config(repo_root, hub_path=hub_root)
+
+    built: list[tuple[str, str | None]] = []
+
+    def _fake_opencode_supervisor(_config, **kwargs):  # type: ignore[no-untyped-def]
+        built.append((kwargs.get("agent_id"), kwargs.get("profile")))
+        return object()
+
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.agents.wiring.build_opencode_supervisor_from_repo_config",
+        _fake_opencode_supervisor,
+    )
+
+    factory = AgentBackendFactory(repo_root, config)
+    fast_first = factory._ensure_opencode_supervisor(
+        agent_id="opencode", profile="fast"
+    )
+    fast_second = factory._ensure_opencode_supervisor(
+        agent_id="opencode", profile="fast"
+    )
+    slow = factory._ensure_opencode_supervisor(agent_id="opencode", profile="slow")
+
+    assert fast_first is fast_second
+    assert fast_first is not slow
+    assert built == [("opencode", "fast"), ("opencode", "slow")]
 
 
 def test_derive_repo_config_sets_effective_destination_from_manifest(
