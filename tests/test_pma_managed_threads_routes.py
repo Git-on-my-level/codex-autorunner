@@ -1051,6 +1051,75 @@ def test_create_subscription_confirm_allows_duplicate_over_active_auto_subscript
     assert len(subscriptions) == 2
 
 
+def test_create_subscription_persists_max_matches_and_thread_scope(hub_env) -> None:
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", **_repo_owner(hub_env)},
+        )
+        assert create_resp.status_code == 200
+        thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+        subscription_resp = client.post(
+            "/hub/pma/subscriptions",
+            json={
+                "event_type": "managed_thread_completed",
+                "thread_id": thread_id,
+                "max_matches": 1,
+                "reason": "test",
+            },
+        )
+
+    assert subscription_resp.status_code == 200
+    payload = subscription_resp.json()
+    assert payload["deduped"] is False
+    assert payload["subscription"]["thread_id"] == thread_id
+    assert payload["subscription"]["max_matches"] == 1
+
+    automation_store = app.state.hub_supervisor.get_pma_automation_store()
+    subscriptions = automation_store.list_subscriptions(thread_id=thread_id)
+    assert len(subscriptions) == 1
+    assert subscriptions[0]["thread_id"] == thread_id
+    assert subscriptions[0]["max_matches"] == 1
+
+
+def test_create_subscription_rejects_negative_max_matches(hub_env) -> None:
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/hub/pma/subscriptions",
+            json={
+                "event_type": "managed_thread_completed",
+                "max_matches": -1,
+            },
+        )
+
+    assert resp.status_code == 422
+    assert "max_matches" in str(resp.json()["detail"])
+
+
+def test_create_subscription_unknown_key_message_lists_max_matches(hub_env) -> None:
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/hub/pma/subscriptions",
+            json={
+                "event_type": "managed_thread_completed",
+                "unexpected_key": "value",
+            },
+        )
+
+    assert resp.status_code == 400
+    detail = resp.json()["detail"]
+    assert "Unsupported subscription keys" in detail
+    assert "unexpected_key" in detail
+    assert "max_matches" in detail
+
+
 def test_create_subscription_with_unknown_thread_returns_404(hub_env) -> None:
     app = create_hub_app(hub_env.hub_root)
 
@@ -1527,7 +1596,7 @@ def test_managed_thread_crud_routes_use_orchestration_service(
         lambda request: fake_service,
     )
     monkeypatch.setattr(
-        managed_threads.PmaThreadStore,
+        PmaThreadStore,
         "append_action",
         lambda self, action_type, *, managed_thread_id=None, payload_json=None: 1,
     )

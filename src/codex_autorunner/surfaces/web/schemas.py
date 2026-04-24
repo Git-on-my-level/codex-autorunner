@@ -1061,6 +1061,7 @@ class PmaAutomationSubscriptionCreateRequest(Payload):
             "reason",
             "timestamp",
             "idempotency_key",
+            "max_matches",
             "confirm",
             "filter",
         }
@@ -1111,6 +1112,11 @@ class PmaAutomationSubscriptionCreateRequest(Payload):
         default=None,
         validation_alias=AliasChoices("idempotency_key", "idempotencyKey"),
     )
+    max_matches: Optional[int] = Field(
+        default=None,
+        ge=0,
+        validation_alias=AliasChoices("max_matches", "maxMatches"),
+    )
     confirm: bool = False
     filter: Optional[Dict[str, Any]] = None
 
@@ -1153,7 +1159,7 @@ class PmaAutomationSubscriptionCreateRequest(Payload):
         return data
 
     def normalized_payload(self) -> dict[str, Any]:
-        data = dict(self.model_dump(exclude_none=True))
+        data = dict(self.model_dump(exclude_none=True, exclude_defaults=True))
         raw_filter = data.pop("filter", None)
         _validate_supported_payload_keys(
             data,
