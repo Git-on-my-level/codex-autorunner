@@ -6,7 +6,13 @@ from typing import Any, Optional
 
 from .constants import (
     DEFAULT_PMA_LANE_ID,
+    NOTICE_KIND_ESCALATION,
+    NOTICE_KIND_NOOP,
+    NOTICE_KIND_PROGRESS,
+    NOTICE_KIND_TERMINAL_FOLLOWUP,
+    SOURCE_KIND_MANAGED_THREAD_COMPLETED,
     SUBSCRIPTION_STATE_ACTIVE,
+    SUPPRESSED_REASON_DUPLICATE_NOOP,
     TIMER_STATE_PENDING,
     TIMER_TYPE_ONE_SHOT,
     TIMER_TYPE_WATCHDOG,
@@ -288,3 +294,71 @@ class PmaDeliveryState:
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
     metadata: dict[str, Any] = field(default_factory=dict, hash=False)
+
+
+@dataclass(frozen=True)
+class PublishNoticeContext:
+    trigger: str
+    status: str
+    correlation_id: str
+    repo_id: Optional[str] = None
+    run_id: Optional[str] = None
+    thread_id: Optional[str] = None
+    output: Optional[str] = None
+    detail: Optional[str] = None
+    token_usage_footer: Optional[str] = None
+
+    def notice_kind(self) -> str:
+        if self.status == "ok" and self._is_noop_message():
+            return NOTICE_KIND_NOOP
+        if self.status == "ok":
+            return NOTICE_KIND_TERMINAL_FOLLOWUP
+        if self.status == "error":
+            return NOTICE_KIND_ESCALATION
+        return NOTICE_KIND_PROGRESS
+
+    def _is_noop_message(self) -> bool:
+        text = self.output or ""
+        normalized = " ".join(str(text).lower().split())
+        if not normalized:
+            return False
+        return "already handled" in normalized and "no action" in normalized
+
+
+@dataclass(frozen=True)
+class PublishSuppressionDecision:
+    suppressed: bool
+    reason: str = ""
+    notice_kind: str = ""
+
+    @staticmethod
+    def not_suppressed(*, notice_kind: str) -> PublishSuppressionDecision:
+        return PublishSuppressionDecision(
+            suppressed=False,
+            notice_kind=notice_kind,
+        )
+
+    @staticmethod
+    def duplicate_noop(*, notice_kind: str) -> PublishSuppressionDecision:
+        return PublishSuppressionDecision(
+            suppressed=True,
+            reason=SUPPRESSED_REASON_DUPLICATE_NOOP,
+            notice_kind=notice_kind,
+        )
+
+    @staticmethod
+    def evaluate(
+        *,
+        source_kind: str,
+        managed_thread_id: Optional[str],
+        target_matches_thread_binding: bool,
+        notice_kind: str,
+    ) -> PublishSuppressionDecision:
+        if (
+            source_kind == SOURCE_KIND_MANAGED_THREAD_COMPLETED
+            and managed_thread_id is not None
+            and target_matches_thread_binding
+            and notice_kind == NOTICE_KIND_NOOP
+        ):
+            return PublishSuppressionDecision.duplicate_noop(notice_kind=notice_kind)
+        return PublishSuppressionDecision.not_suppressed(notice_kind=notice_kind)

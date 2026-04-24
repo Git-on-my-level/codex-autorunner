@@ -17,16 +17,10 @@ from .chat_bindings import (
     preferred_non_pma_chat_notification_source_for_workspace,
 )
 from .config import load_hub_config
+from .pma_domain.publish_policy import evaluate_publish_suppression
 from .text_utils import _normalize_optional_text, _normalize_pma_delivery_target
 
 logger = logging.getLogger(__name__)
-
-
-def _looks_like_duplicate_noop_notice(message: str) -> bool:
-    normalized = " ".join(str(message or "").lower().split())
-    if not normalized:
-        return False
-    return "already handled" in normalized and "no action" in normalized
 
 
 def _notification_context_payload(
@@ -197,25 +191,27 @@ async def deliver_pma_notification(
             dispatch_decision=dispatch_decision,
             normalized_repo_id=normalized_repo_id,
         )
-        if (
-            _normalize_optional_text(managed_thread_id) is not None
-            and normalized_source_kind == "managed_thread_completed"
-            and _looks_like_duplicate_noop_notice(text)
-        ):
-            normalized_target = _normalize_pma_delivery_target(delivery_target)
-            if normalized_target is not None:
-                surface_kind, surface_key = normalized_target
-                if _delivery_target_matches_active_thread_binding(
-                    hub_root=hub_root,
-                    managed_thread_id=managed_thread_id,
-                    surface_kind=surface_kind,
-                    surface_key=surface_key,
-                ):
-                    return {
-                        "route": "suppressed_duplicate",
-                        "targets": 1,
-                        "published": 0,
-                    }
+        normalized_target = _normalize_pma_delivery_target(delivery_target)
+        if normalized_target is not None:
+            surface_kind, surface_key = normalized_target
+            target_matches_binding = _delivery_target_matches_active_thread_binding(
+                hub_root=hub_root,
+                managed_thread_id=managed_thread_id,
+                surface_kind=surface_kind,
+                surface_key=surface_key,
+            )
+            suppression = evaluate_publish_suppression(
+                source_kind=normalized_source_kind,
+                message_text=text,
+                managed_thread_id=managed_thread_id,
+                target_matches_thread_binding=target_matches_binding,
+            )
+            if suppression.suppressed:
+                return {
+                    "route": "suppressed_duplicate",
+                    "targets": 1,
+                    "published": 0,
+                }
         if not persisted_attempts:
             return {"route": normalized_delivery, "targets": 0, "published": 0}
         from ..pma_chat_delivery_runtime import dispatch_pma_chat_delivery_intent
@@ -248,12 +244,13 @@ async def deliver_pma_notification(
             surface_kind=surface_kind,
             surface_key=surface_key,
         )
-        if (
-            _normalize_optional_text(managed_thread_id) is not None
-            and target_matches_active_binding
-            and normalized_source_kind == "managed_thread_completed"
-            and _looks_like_duplicate_noop_notice(text)
-        ):
+        suppression = evaluate_publish_suppression(
+            source_kind=normalized_source_kind,
+            message_text=text,
+            managed_thread_id=managed_thread_id,
+            target_matches_thread_binding=target_matches_active_binding,
+        )
+        if suppression.suppressed:
             return {"route": "suppressed_duplicate", "targets": 1, "published": 0}
         if target_matches_active_binding:
             attempts.append(

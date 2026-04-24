@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
+from .pma_domain.publish_policy import evaluate_publish_suppression
 from .pma_origin import extract_pma_origin_metadata
 from .text_utils import _normalize_optional_text, _normalize_pma_delivery_target
 
@@ -84,13 +85,6 @@ def pma_dispatch_decision_to_dict(decision: PmaDispatchDecision) -> dict[str, An
             for attempt in decision.attempts
         ],
     }
-
-
-def _looks_like_duplicate_noop_notice(message: str) -> bool:
-    normalized = " ".join(str(message or "").lower().split())
-    if not normalized:
-        return False
-    return "already handled" in normalized and "no action" in normalized
 
 
 def _thread_binding_matches(
@@ -217,12 +211,13 @@ def build_pma_dispatch_decision(
             surface_kind=surface_kind,
             surface_key=surface_key,
         )
-        if (
-            _normalize_optional_text(managed_thread_id) is not None
-            and target_matches_managed_thread_binding
-            and normalized_source_kind == "managed_thread_completed"
-            and _looks_like_duplicate_noop_notice(message)
-        ):
+        suppression = evaluate_publish_suppression(
+            source_kind=normalized_source_kind,
+            message_text=message,
+            managed_thread_id=managed_thread_id,
+            target_matches_thread_binding=target_matches_managed_thread_binding,
+        )
+        if suppression.suppressed:
             return PmaDispatchDecision(
                 requested_delivery="suppressed_duplicate",
                 suppress_publish=True,

@@ -11,6 +11,8 @@ from .....core.chat_bindings import (
 )
 from .....core.logging_utils import log_event
 from .....core.pma_chat_delivery import deliver_pma_notification
+from .....core.pma_domain.models import PublishNoticeContext
+from .....core.pma_domain.publish_policy import build_publish_notice_message
 from .....core.ports.run_event import TokenUsage
 from .....integrations.chat.execution_event_journal import (
     append_chat_execution_journal_notices,
@@ -177,40 +179,26 @@ def build_publish_message(
         else None
     )
     status = normalize_optional_text(result.get("status")) or "error"
-    detail = normalize_optional_text(result.get("detail"))
     output = normalize_optional_text(result.get("message"))
+    detail = normalize_optional_text(result.get("detail"))
+    token_usage_footer = format_turn_footer(
+        summary_text=None,
+        token_usage=token_usage,
+        elapsed_seconds=None,
+    )
 
-    lines: list[str] = [f"PMA update ({trigger})"]
-    if repo_id:
-        lines.append(f"repo_id: {repo_id}")
-    if run_id:
-        lines.append(f"run_id: {run_id}")
-    if thread_id:
-        lines.append(f"thread_id: {thread_id}")
-    lines.append(f"correlation_id: {correlation_id}")
-    lines.append("")
-
-    if status == "ok":
-        lines.append(output or "Turn completed with no assistant output.")
-        footer = format_turn_footer(
-            summary_text=None,
-            token_usage=token_usage,
-            elapsed_seconds=None,
-        )
-        if footer:
-            lines.extend(["", footer])
-    else:
-        lines.append(f"status: {status}")
-        lines.append(f"error: {detail or 'Turn failed without detail.'}")
-        lines.append("next_action: run /pma status and inspect PMA history if needed.")
-        footer = format_turn_footer(
-            summary_text=None,
-            token_usage=token_usage,
-            elapsed_seconds=None,
-        )
-        if footer:
-            lines.extend(["", footer])
-    return "\n".join(lines).strip()
+    context = PublishNoticeContext(
+        trigger=trigger,
+        status=status,
+        correlation_id=correlation_id,
+        repo_id=repo_id,
+        run_id=run_id,
+        thread_id=thread_id,
+        output=output,
+        detail=detail,
+        token_usage_footer=token_usage_footer,
+    )
+    return build_publish_notice_message(context)
 
 
 def _extract_result_token_usage(result: dict[str, Any]) -> Optional[dict[str, Any]]:

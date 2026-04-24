@@ -53,8 +53,9 @@ Mapping the conceptual layers to the codebase:
 
 - **Engine**: `src/codex_autorunner/core/`. Handles the core loop, state, and locking.
 - **Control Plane**: `.codex-autorunner/` (files, including the ticket queue under `tickets/`). Ticket queue behavior is implemented under `src/codex_autorunner/tickets/`.
+- **Domain Policy**: `src/codex_autorunner/core/pma_domain/`. Owns publish notice classification, duplicate/noop suppression, and publish message construction. All message-dependent routing and suppression policy lives here; adapters and surfaces delegate to it rather than implementing ad hoc checks.
 - **Adapters**: `src/codex_autorunner/integrations/` (GitHub, Telegram, App Server).
-  - PMA chat delivery follows the same split: `core/pma_chat_delivery.py` emits transport-agnostic attempts, `pma_chat_delivery_runtime.py` dispatches them, and Discord/Telegram adapters own formatting, topic parsing, and outbox writes.
+  - PMA chat delivery follows the same split: `core/pma_chat_delivery.py` emits transport-agnostic attempts, `pma_chat_delivery_runtime.py` dispatches them, and Discord/Telegram adapters own formatting, topic parsing, and outbox writes. Duplicate suppression and noop detection are domain-owned via `pma_domain/publish_policy.py`.
   - SCM automation follows the same split: `core/scm_automation_service.py` owns routing, journaling, and retry semantics; provider adapters inject publish executors when wiring the service instead of core importing provider modules directly.
   - **Discord interaction runtime**: ingress (`ingress.py`) -> command runner (`command_runner.py`) -> interaction dispatch (`interaction_dispatch.py`).  Two-phase lifecycle: ingress acknowledges on the gateway hot path, then the runner executes the handler in the background with timeout enforcement.
 - **Surfaces**:

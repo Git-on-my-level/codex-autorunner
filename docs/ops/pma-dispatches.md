@@ -35,6 +35,7 @@ Please confirm the decisions update before continuing.
 - When PMA escalates a paused ticket-flow dispatch to the user, CAR sends the escalation notice to one PMA-bound chat for that repo:
   - prefer the freshest matching PMA Discord binding
   - fall back to a matching PMA Telegram binding if no Discord PMA binding matches
+- Duplicate noop suppression is a domain-owned policy: when a managed thread completes with a no-op message ("already handled, no action") and the delivery target matches the active thread binding, the notification is suppressed via `pma_domain/publish_policy.py` rather than ad hoc string checks in adapter code.
 - Ticket-flow completion still requires a clean commit after each finished ticket. If a ticket is marked done but the repo remains dirty or ownership is ambiguous, PMA should escalate instead of guessing a reply.
 
 ## Resolving
