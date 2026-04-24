@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Check import boundaries between CAR layers.
 
-Fails only on new violations compared to the allowlist.
+This enforces a zero-baseline by default. Temporary exceptions can be recorded
+in the allowlist, but every new direct or literal dynamic import violation
+fails the check.
 """
 
 from __future__ import annotations
@@ -21,12 +23,14 @@ LAYER_RULES = {
     "core": {
         "deny": (
             "codex_autorunner.integrations",
+            "codex_autorunner.surfaces",
             "codex_autorunner.cli",
             "codex_autorunner.server",
         )
     },
     "integrations": {
         "deny": (
+            "codex_autorunner.surfaces",
             "codex_autorunner.cli",
             "codex_autorunner.server",
         )
@@ -40,6 +44,7 @@ class Violation:
     imported: str
     line: int
     rule: str
+    kind: str = "imports"
 
     def key(self) -> tuple[str, str]:
         return (self.importer, self.imported)
@@ -121,6 +126,82 @@ def iter_imports(tree: ast.AST, context: ModuleContext) -> Iterable[tuple[str, i
                 yield resolved, node.lineno
 
 
+def _resolve_string_literal(node: ast.AST | None) -> str | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.JoinedStr):
+        parts: list[str] = []
+        for value in node.values:
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                parts.append(value.value)
+                continue
+            return None
+        return "".join(parts)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left = _resolve_string_literal(node.left)
+        right = _resolve_string_literal(node.right)
+        if left is not None and right is not None:
+            return left + right
+    return None
+
+
+def _collect_importlib_aliases(tree: ast.AST) -> tuple[set[str], set[str]]:
+    module_aliases: set[str] = set()
+    function_aliases: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "importlib":
+                    module_aliases.add(alias.asname or alias.name)
+        elif isinstance(node, ast.ImportFrom) and node.module == "importlib":
+            for alias in node.names:
+                if alias.name == "import_module":
+                    function_aliases.add(alias.asname or alias.name)
+    return module_aliases, function_aliases
+
+
+def iter_dynamic_imports(
+    tree: ast.AST,
+) -> Iterable[tuple[str, int]]:
+    module_aliases, function_aliases = _collect_importlib_aliases(tree)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        target: str | None = None
+        if isinstance(node.func, ast.Name):
+            if node.func.id == "__import__":
+                if node.args:
+                    target = _resolve_string_literal(node.args[0])
+                else:
+                    for keyword in node.keywords:
+                        if keyword.arg == "name":
+                            target = _resolve_string_literal(keyword.value)
+                            break
+            elif node.func.id in function_aliases:
+                if node.args:
+                    target = _resolve_string_literal(node.args[0])
+                else:
+                    for keyword in node.keywords:
+                        if keyword.arg == "name":
+                            target = _resolve_string_literal(keyword.value)
+                            break
+        elif (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr == "import_module"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id in module_aliases
+        ):
+            if node.args:
+                target = _resolve_string_literal(node.args[0])
+            else:
+                for keyword in node.keywords:
+                    if keyword.arg == "name":
+                        target = _resolve_string_literal(keyword.value)
+                        break
+        if target:
+            yield target, node.lineno
+
+
 def layer_for_path(path: Path) -> str | None:
     try:
         rel = path.relative_to(PACKAGE_ROOT)
@@ -136,6 +217,33 @@ def layer_for_path(path: Path) -> str | None:
 
 def collect_python_files(root: Path) -> Sequence[Path]:
     return sorted(p for p in root.rglob("*.py") if p.is_file())
+
+
+def _violations_for_target(
+    *,
+    imported: str,
+    line: int,
+    importer: str,
+    layer: str,
+    rules: tuple[str, ...],
+    kind: str,
+) -> list[Violation]:
+    if not imported.startswith("codex_autorunner"):
+        return []
+    violations: list[Violation] = []
+    for deny_prefix in rules:
+        if imported == deny_prefix or imported.startswith(f"{deny_prefix}."):
+            violations.append(
+                Violation(
+                    importer=importer,
+                    imported=imported,
+                    line=line,
+                    rule=f"{layer} -> {deny_prefix}",
+                    kind=kind,
+                )
+            )
+            break
+    return violations
 
 
 def check_file(path: Path) -> list[Violation]:
@@ -154,21 +262,30 @@ def check_file(path: Path) -> list[Violation]:
         tree = ast.parse(source, filename=str(path))
     except SyntaxError:
         return []
+    importer = str(path.relative_to(REPO_ROOT))
     violations: list[Violation] = []
     for imported, line in iter_imports(tree, context):
-        if not imported.startswith("codex_autorunner"):
-            continue
-        for deny_prefix in rules:
-            if imported == deny_prefix or imported.startswith(f"{deny_prefix}."):
-                violations.append(
-                    Violation(
-                        importer=str(path.relative_to(REPO_ROOT)),
-                        imported=imported,
-                        line=line,
-                        rule=f"{layer} -> {deny_prefix}",
-                    )
-                )
-                break
+        violations.extend(
+            _violations_for_target(
+                imported=imported,
+                line=line,
+                importer=importer,
+                layer=layer,
+                rules=rules,
+                kind="imports",
+            )
+        )
+    for imported, line in iter_dynamic_imports(tree):
+        violations.extend(
+            _violations_for_target(
+                imported=imported,
+                line=line,
+                importer=importer,
+                layer=layer,
+                rules=rules,
+                kind="dynamically imports",
+            )
+        )
     return violations
 
 
@@ -188,7 +305,7 @@ def main() -> int:
     for path in collect_python_files(PACKAGE_ROOT):
         violations.extend(check_file(path))
 
-    violations.sort(key=lambda v: (v.importer, v.line, v.imported))
+    violations.sort(key=lambda v: (v.importer, v.line, v.imported, v.kind))
     unallowlisted = [v for v in violations if v.key() not in allowlist.entries]
     stale = [
         key for key in allowlist.entries if key not in {v.key() for v in violations}
@@ -198,8 +315,8 @@ def main() -> int:
         print("New import boundary violations detected:")
         for violation in unallowlisted:
             print(
-                f"- {violation.importer}:{violation.line} imports {violation.imported} "
-                f"({violation.rule})"
+                f"- {violation.importer}:{violation.line} {violation.kind} "
+                f"{violation.imported} ({violation.rule})"
             )
         print("\nAdd these to the allowlist (with a reason) or fix the imports.")
     if stale:

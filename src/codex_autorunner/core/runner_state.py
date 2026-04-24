@@ -18,6 +18,7 @@ from .locks import (
     write_lock_info,
 )
 from .state import load_state, now_iso
+from .state_roots import resolve_repo_runner_state_db_path
 
 
 class LockError(Exception):
@@ -39,9 +40,7 @@ class RunnerStateManager:
     ):
         self.repo_root = repo_root
         self.lock_path = lock_path or (repo_root / ".codex-autorunner" / "lock")
-        self.state_path = state_path or (
-            repo_root / ".codex-autorunner" / "state.sqlite3"
-        )
+        self.state_path = state_path or resolve_repo_runner_state_db_path(repo_root)
         self.stop_path = repo_root / ".codex-autorunner" / "stop"
         self._lock_handle: Optional[FileLock] = None
 

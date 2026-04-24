@@ -867,6 +867,48 @@ def persist_turn_timeline(
     return count
 
 
+def append_turn_timeline(
+    hub_root,
+    *,
+    execution_id: str,
+    target_kind: Optional[str],
+    target_id: Optional[str],
+    repo_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+    resource_kind: Optional[str] = None,
+    resource_id: Optional[str] = None,
+    metadata: Optional[dict[str, Any]] = None,
+    events: Iterable[RunEvent],
+) -> int:
+    normalized_execution_id = str(execution_id or "").strip()
+    if not normalized_execution_id:
+        return 0
+    with open_orchestration_sqlite(hub_root) as conn:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS cnt
+              FROM orch_event_projections
+             WHERE event_family = ?
+               AND execution_id = ?
+            """,
+            (_EVENT_FAMILY, normalized_execution_id),
+        ).fetchone()
+    start_index = int(row["cnt"] or 0) + 1 if row is not None else 1
+    return persist_turn_timeline(
+        hub_root,
+        execution_id=normalized_execution_id,
+        target_kind=target_kind,
+        target_id=target_id,
+        repo_id=repo_id,
+        run_id=run_id,
+        resource_kind=resource_kind,
+        resource_id=resource_id,
+        metadata=metadata,
+        events=events,
+        start_index=start_index,
+    )
+
+
 def list_turn_timeline(hub_root, *, execution_id: str) -> list[dict[str, Any]]:
     normalized_execution_id = str(execution_id or "").strip()
     if not normalized_execution_id:
@@ -899,6 +941,7 @@ def list_turn_timeline(hub_root, *, execution_id: str) -> list[dict[str, Any]]:
 
 
 __all__ = [
+    "append_turn_timeline",
     "append_turn_events_to_cold_trace",
     "iso_from_epoch_millis",
     "list_turn_timeline",

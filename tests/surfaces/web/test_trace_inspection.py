@@ -360,6 +360,7 @@ class TestTurnDetailTraceMetadata:
             assert turn_resp.status_code == 200
             body = turn_resp.json()
             assert body["turn"]["managed_turn_id"] == managed_turn_id
+            assert isinstance(body["journal"], list)
             assert "trace_metadata" in body
             meta = body["trace_metadata"]
             assert isinstance(meta["hot_timeline_entries"], int)

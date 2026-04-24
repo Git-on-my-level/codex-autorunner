@@ -4,7 +4,13 @@ import os
 from pathlib import Path
 
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
-from codex_autorunner.core.pma_thread_store import PmaThreadStore
+from codex_autorunner.core.pma_thread_mirror import sync_legacy_mirror
+from codex_autorunner.core.pma_thread_store import (
+    PmaThreadStore,
+    _ensure_schema,
+    _execution_row_to_record,
+    _thread_row_to_record,
+)
 from codex_autorunner.core.pr_binding_resolver import resolve_binding_for_scm_event
 from codex_autorunner.core.scm_events import ScmEvent
 from codex_autorunner.core.sqlite_utils import open_sqlite
@@ -211,6 +217,17 @@ def test_resolve_binding_for_pr_event_ignores_stale_archived_matching_thread(
         thread_target_id = _create_terminal_repo_thread(
             hub_root, archive=True, thread_store=thread_store
         )
+
+        with open_orchestration_sqlite(hub_root, durable=False) as conn:
+            sync_legacy_mirror(
+                hub_root=hub_root,
+                legacy_db_path=thread_store.path,
+                durable=False,
+                orchestration_conn=conn,
+                thread_row_to_record=_thread_row_to_record,
+                execution_row_to_record=_execution_row_to_record,
+                ensure_legacy_schema=_ensure_schema,
+            )
 
         with open_sqlite(thread_store.path) as legacy_conn:
             with legacy_conn:

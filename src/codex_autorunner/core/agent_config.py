@@ -3,6 +3,22 @@ import shlex
 from typing import Any, Dict, List, Literal, Mapping, Optional
 
 from .config_contract import ConfigError
+from .config_field_schema import (
+    AGENT_FIELD_SCHEMAS,
+    AGENT_PROFILE_FIELD_SCHEMAS,
+    FieldSchema,
+    parse_schema_field,
+    schema_paths,
+)
+
+SHARED_AGENT_PARSER_FIELD_PATHS = frozenset(
+    path
+    for path_set in (
+        schema_paths(AGENT_FIELD_SCHEMAS),
+        schema_paths(AGENT_PROFILE_FIELD_SCHEMAS),
+    )
+    for path in path_set
+)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -212,24 +228,46 @@ def parse_agents_config(
     for agent_id, agent_cfg in raw_agents.items():
         if not isinstance(agent_cfg, dict):
             raise ConfigError(f"agents.{agent_id} must be a mapping")
-        backend = agent_cfg.get("backend")
-        if not isinstance(backend, str) or not backend.strip():
-            backend = None
-        binary = agent_cfg.get("binary")
-        if not isinstance(binary, str) or not binary.strip():
-            raise ConfigError(f"agents.{agent_id}.binary is required")
+
+        def _agent_schema(key: str, *, _agent_id: str = agent_id) -> FieldSchema:
+            raw_schema = AGENT_FIELD_SCHEMAS[key]
+            return dataclasses.replace(
+                raw_schema,
+                type_message=(
+                    raw_schema.type_message.format(agent_id=_agent_id)
+                    if raw_schema.type_message
+                    else None
+                ),
+                value_message=(
+                    raw_schema.value_message.format(agent_id=_agent_id)
+                    if raw_schema.value_message
+                    else None
+                ),
+            )
+
+        backend = parse_schema_field(
+            agent_cfg.get("backend"),
+            _agent_schema("backend"),
+        )
+        binary = parse_schema_field(
+            agent_cfg.get("binary"),
+            _agent_schema("binary"),
+        )
         serve_command = None
         if "serve_command" in agent_cfg:
             serve_command = _parse_command(agent_cfg.get("serve_command"))
-        base_url = agent_cfg.get("base_url")
-        subagent_models = agent_cfg.get("subagent_models")
-        if not isinstance(subagent_models, dict):
-            subagent_models = None
-        default_profile = agent_cfg.get("default_profile")
-        if not isinstance(default_profile, str) or not default_profile.strip():
-            default_profile = None
-        else:
-            default_profile = default_profile.strip().lower()
+        base_url = parse_schema_field(
+            agent_cfg.get("base_url"),
+            _agent_schema("base_url"),
+        )
+        subagent_models = parse_schema_field(
+            agent_cfg.get("subagent_models"),
+            _agent_schema("subagent_models"),
+        )
+        default_profile = parse_schema_field(
+            agent_cfg.get("default_profile"),
+            _agent_schema("default_profile"),
+        )
         profiles_raw = agent_cfg.get("profiles")
         profiles: Optional[Dict[str, AgentProfileConfig]] = None
         if isinstance(profiles_raw, dict):
@@ -244,26 +282,61 @@ def parse_agents_config(
                     raise ConfigError(
                         f"agents.{agent_id}.profiles.{profile_id} must be a mapping"
                     )
-                profile_backend = profile_cfg.get("backend")
-                if not isinstance(profile_backend, str) or not profile_backend.strip():
-                    profile_backend = None
+
+                def _profile_schema(
+                    key: str,
+                    *,
+                    _agent_id: str = agent_id,
+                    _profile_id: str = profile_id,
+                ) -> FieldSchema:
+                    raw_schema = AGENT_PROFILE_FIELD_SCHEMAS[key]
+                    return dataclasses.replace(
+                        raw_schema,
+                        type_message=(
+                            raw_schema.type_message.format(
+                                agent_id=_agent_id,
+                                profile_id=_profile_id,
+                            )
+                            if raw_schema.type_message
+                            else None
+                        ),
+                        value_message=(
+                            raw_schema.value_message.format(
+                                agent_id=_agent_id,
+                                profile_id=_profile_id,
+                            )
+                            if raw_schema.value_message
+                            else None
+                        ),
+                    )
+
+                profile_backend = parse_schema_field(
+                    profile_cfg.get("backend"),
+                    _profile_schema("backend"),
+                )
                 profile_serve_command = None
                 if "serve_command" in profile_cfg:
                     profile_serve_command = _parse_command(
                         profile_cfg.get("serve_command")
                     )
-                profile_base_url = profile_cfg.get("base_url")
-                profile_subagent_models = profile_cfg.get("subagent_models")
-                if not isinstance(profile_subagent_models, dict):
-                    profile_subagent_models = None
-                display_name = profile_cfg.get("display_name")
-                if not isinstance(display_name, str) or not display_name.strip():
-                    display_name = None
-                binary_override = profile_cfg.get("binary")
-                if not isinstance(binary_override, str) or not binary_override.strip():
-                    binary_override = None
+                profile_base_url = parse_schema_field(
+                    profile_cfg.get("base_url"),
+                    _profile_schema("base_url"),
+                )
+                profile_subagent_models = parse_schema_field(
+                    profile_cfg.get("subagent_models"),
+                    _profile_schema("subagent_models"),
+                )
+                display_name = parse_schema_field(
+                    profile_cfg.get("display_name"),
+                    _profile_schema("display_name"),
+                )
+                binary_override = parse_schema_field(
+                    profile_cfg.get("binary"),
+                    _profile_schema("binary"),
+                )
                 parsed_profiles[normalized_profile_id] = AgentProfileConfig(
-                    display_name=display_name.strip() if display_name else None,
+                    display_name=display_name,
                     backend=profile_backend,
                     binary=binary_override,
                     serve_command=profile_serve_command,

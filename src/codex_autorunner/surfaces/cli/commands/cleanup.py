@@ -60,6 +60,7 @@ from ....core.state_retention import (
     adapt_report_prune_summary_to_result,
     adapt_workspace_summary_to_result,
     aggregate_cleanup_results,
+    summarize_cleanup_plan_lifecycle,
 )
 from ....core.state_roots import resolve_global_state_root
 from ....housekeeping import HousekeepingConfig, HousekeepingRule, run_housekeeping_once
@@ -630,7 +631,24 @@ def register_cleanup_commands(
                     else family
                 )
                 lines.append(f"{label}:")
+                action_label = "prune"
+                matching_result = next(
+                    (
+                        result
+                        for result in results
+                        if result.bucket.family == family
+                        and result.bucket.scope.value == scope_name
+                    ),
+                    None,
+                )
+                if matching_result is not None:
+                    lifecycle = summarize_cleanup_plan_lifecycle(matching_result.plan)
+                    actions = lifecycle.get("actions", {})
+                    if actions:
+                        action_label = ",".join(sorted(actions))
                 lines.append(f"  pruned={action_count} bytes={action_bytes}")
+                if action_label != "prune":
+                    lines.append(f"  lifecycle_actions={action_label}")
                 if blocked_count > 0:
                     lines.append(f"  blocked={blocked_count}")
 

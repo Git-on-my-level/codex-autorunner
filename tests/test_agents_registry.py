@@ -452,8 +452,8 @@ class TestHermesHarness:
 
         assert str(harness.agent_id) == "hermes-m4-pma"
         assert harness.display_name == "Hermes (hermes-m4-pma)"
-        assert harness._supervisor is sentinel_supervisors[("hermes", "m4-pma")]
-        assert ("hermes", "hermes", "m4-pma") in ctx._agent_runtime_supervisors
+        assert harness._supervisor is sentinel_supervisors[("hermes-m4-pma", None)]
+        assert ("hermes", "hermes-m4-pma", "") in ctx._agent_runtime_supervisors
 
     def test_hermes_alias_without_explicit_backend_infers_hermes(self, monkeypatch):
         sentinel_supervisors: dict[tuple[str, str | None], object] = {}
@@ -511,8 +511,8 @@ class TestHermesHarness:
 
         assert str(harness.agent_id) == "hermes-m4-pma"
         assert harness.display_name == "Hermes (hermes-m4-pma)"
-        assert harness._supervisor is sentinel_supervisors[("hermes", "m4-pma")]
-        assert ("hermes", "hermes", "m4-pma") in ctx._agent_runtime_supervisors
+        assert harness._supervisor is sentinel_supervisors[("hermes-m4-pma", None)]
+        assert ("hermes", "hermes-m4-pma", "") in ctx._agent_runtime_supervisors
 
     def test_validate_agent_id_prefers_repo_config_for_path_context(self, monkeypatch):
         calls: list[str] = []

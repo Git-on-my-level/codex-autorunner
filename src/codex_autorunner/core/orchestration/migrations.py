@@ -5,10 +5,11 @@ import uuid
 from dataclasses import dataclass
 from typing import Callable
 
+from ..sqlite_utils import table_columns, table_exists
 from ..time_utils import now_iso
 from .models import OrchestrationTableDefinition
 
-ORCHESTRATION_SCHEMA_VERSION = 23
+ORCHESTRATION_SCHEMA_VERSION = 24
 
 
 @dataclass(frozen=True)
@@ -338,23 +339,11 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
 
 
 def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
-    row = conn.execute(
-        """
-        SELECT name
-          FROM sqlite_master
-         WHERE type = 'table'
-           AND name = ?
-        """,
-        (table_name,),
-    ).fetchone()
-    return row is not None
+    return table_exists(conn, table_name)
 
 
 def _table_columns(conn: sqlite3.Connection, table_name: str) -> set[str]:
-    if not _table_exists(conn, table_name):
-        return set()
-    rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
-    return {str(row["name"]) for row in rows if row["name"] is not None}
+    return table_columns(conn, table_name)
 
 
 def _column_not_null(
@@ -380,10 +369,11 @@ def _ensure_column(
     if column_name in _table_columns(conn, table_name):
         return
     try:
-        conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {ddl}")
+        statement = f"ALTER TABLE {table_name} "
+        statement += f"ADD COLUMN {ddl}"
+        conn.execute(statement)
     except sqlite3.OperationalError as exc:
-        message = str(exc).lower()
-        if f"duplicate column name: {column_name}".lower() not in message:
+        if f"duplicate column name: {column_name}".lower() not in str(exc).lower():
             raise
 
 
@@ -1312,6 +1302,25 @@ def _apply_v23(conn: sqlite3.Connection) -> None:
     )
 
 
+def _apply_v24(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS orch_thread_identity_bindings (
+            feature_key TEXT PRIMARY KEY,
+            thread_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_thread_identity_updated
+            ON orch_thread_identity_bindings(updated_at, feature_key)
+        """
+    )
+
+
 _MIGRATIONS = (
     _MigrationStep(1, "create_core_orchestration_schema", _apply_v1),
     _MigrationStep(2, "add_binding_and_flow_projection_scaffolding", _apply_v2),
@@ -1348,6 +1357,7 @@ _MIGRATIONS = (
     _MigrationStep(21, "add_chat_operation_ledger", _apply_v21),
     _MigrationStep(22, "add_managed_thread_delivery_ledger", _apply_v22),
     _MigrationStep(23, "add_execution_metadata", _apply_v23),
+    _MigrationStep(24, "add_thread_identity_bindings", _apply_v24),
 )
 
 
@@ -1446,6 +1456,11 @@ _TABLE_DEFINITIONS = (
         name="orch_managed_thread_deliveries",
         role="authoritative",
         description="Durable delivery ledger for managed-thread final delivery with claim, retry, replay, and idempotency support.",
+    ),
+    OrchestrationTableDefinition(
+        name="orch_thread_identity_bindings",
+        role="authoritative",
+        description="Canonical feature-key to runtime-thread identity bindings, replacing app_server_threads.json as the source of truth.",
     ),
     OrchestrationTableDefinition(
         name="orch_transcript_mirrors",

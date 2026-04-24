@@ -9,8 +9,16 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from ...core.sqlite_utils import connect_sqlite
+from ...core.sqlite_utils import (
+    SqliteMigrationStep,
+    apply_versioned_schema,
+    connect_sqlite,
+    ensure_columns,
+    read_schema_version,
+    write_schema_version,
+)
 from ...core.state import now_iso
+from ...core.state_roots import resolve_telegram_state_path
 from ...core.text_utils import _parse_iso_timestamp
 from .state_types import (
     APPROVAL_MODE_YOLO,
@@ -76,6 +84,10 @@ class TelegramStateStore:
     @property
     def path(self) -> Path:
         return self._path
+
+    @classmethod
+    def default_path(cls, hub_root: Path, raw_config: Optional[dict[str, Any]]) -> Path:
+        return resolve_telegram_state_path(hub_root, raw_config)
 
     async def close(self) -> None:
         if self._closed:
@@ -405,29 +417,10 @@ class TelegramStateStore:
                 )
                 """
             )
-            for col, col_type in [
-                ("next_attempt_at", "TEXT"),
-                ("operation", "TEXT"),
-                ("message_id", "INTEGER"),
-                ("outbox_key", "TEXT"),
-            ]:
-                try:
-                    conn.execute(
-                        f"ALTER TABLE telegram_outbox ADD COLUMN {col} {col_type}"
-                    )
-                except sqlite3.OperationalError:
-                    pass
             conn.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_tg_outbox_created
                     ON telegram_outbox(created_at)
-                """
-            )
-            conn.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_tg_outbox_key
-                    ON telegram_outbox(outbox_key)
-                    WHERE outbox_key IS NOT NULL
                 """
             )
             conn.execute(
@@ -449,9 +442,53 @@ class TelegramStateStore:
                     ON telegram_pending_voice(next_attempt_at)
                 """
             )
+            if read_schema_version(conn) is None:
+                legacy_version = self._legacy_schema_version(conn)
+                if legacy_version is not None:
+                    write_schema_version(conn, legacy_version)
+            apply_versioned_schema(
+                conn,
+                schema_name="telegram_state",
+                target_version=TELEGRAM_SCHEMA_VERSION,
+                steps=(
+                    SqliteMigrationStep(
+                        version=1,
+                        name="telegram_outbox_optional_columns",
+                        apply=self._migration_v1,
+                    ),
+                ),
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_tg_outbox_key
+                    ON telegram_outbox(outbox_key)
+                    WHERE outbox_key IS NOT NULL
+                """
+            )
             now = now_iso()
             self._set_meta(conn, "schema_version", str(TELEGRAM_SCHEMA_VERSION), now)
             self._set_meta(conn, "state_version", str(STATE_VERSION), now)
+
+    def _legacy_schema_version(self, conn: sqlite3.Connection) -> int | None:
+        raw = self._get_meta(conn, "schema_version")
+        if raw is None:
+            return None
+        try:
+            return max(0, int(raw))
+        except (TypeError, ValueError):
+            return None
+
+    def _migration_v1(self, conn: sqlite3.Connection) -> None:
+        ensure_columns(
+            conn,
+            "telegram_outbox",
+            (
+                ("next_attempt_at", "next_attempt_at TEXT"),
+                ("operation", "operation TEXT"),
+                ("message_id", "message_id INTEGER"),
+                ("outbox_key", "outbox_key TEXT"),
+            ),
+        )
 
     def _dedupe_topic_scopes(self, conn: sqlite3.Connection) -> None:
         conn.execute(

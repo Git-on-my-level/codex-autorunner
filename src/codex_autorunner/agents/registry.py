@@ -49,6 +49,10 @@ class AgentDescriptor:
     capabilities: frozenset[AgentCapability]
     make_harness: Callable[[Any], AgentHarness]
     healthcheck: Optional[Callable[[Any], bool]] = None
+    backend_factory: Optional[Callable[[Any, AgentExecutionTarget, Any, Any], Any]] = (
+        None
+    )
+    runtime_preflight: Optional[Callable[[Any, AgentExecutionTarget], Any]] = None
     runtime_kind: Optional[str] = None
     plugin_api_version: int = CAR_PLUGIN_API_VERSION
 
@@ -83,6 +87,17 @@ class _RequestedAgentContext:
 
 @dataclass(frozen=True)
 class AgentRuntimeResolution:
+    logical_agent_id: str
+    logical_profile: Optional[str]
+    runtime_agent_id: str
+    runtime_profile: Optional[str]
+    resolution_kind: str
+
+
+@dataclass(frozen=True)
+class AgentExecutionTarget:
+    requested_agent_id: str
+    requested_profile: Optional[str]
     logical_agent_id: str
     logical_profile: Optional[str]
     runtime_agent_id: str
@@ -206,28 +221,19 @@ def _run_hermes_preflight(
         return hermes_runtime_preflight(config)
 
 
-def _resolve_hermes_runtime_request(ctx: Any) -> tuple[str, Optional[str]]:
-    requested_agent_id = _resolve_requested_agent_id(ctx, default="hermes")
-    requested_profile = _resolve_requested_agent_profile(ctx)
-    resolved = resolve_agent_runtime(
-        requested_agent_id,
-        requested_profile,
+def _make_hermes_harness(ctx: Any) -> AgentHarness:
+    target = resolve_agent_execution_target(
+        _resolve_requested_agent_id(ctx, default="hermes"),
+        _resolve_requested_agent_profile(ctx),
         context=ctx,
     )
-    if resolved.logical_agent_id == "hermes":
-        return resolved.logical_agent_id, resolved.logical_profile
-    return requested_agent_id, requested_profile
-
-
-def _make_hermes_harness(ctx: Any) -> AgentHarness:
-    requested_agent_id, requested_profile = _resolve_hermes_runtime_request(ctx)
     cache = _runtime_supervisor_cache(ctx)
-    cache_key = ("hermes", requested_agent_id, requested_profile or "")
+    cache_key = ("hermes", target.runtime_agent_id, target.runtime_profile or "")
     supervisor = cache.get(cache_key)
     if (
         supervisor is None
-        and requested_agent_id == "hermes"
-        and requested_profile is None
+        and target.runtime_agent_id == "hermes"
+        and target.runtime_profile is None
     ):
         supervisor = getattr(ctx, "hermes_supervisor", None)
     if supervisor is None:
@@ -237,8 +243,8 @@ def _make_hermes_harness(ctx: Any) -> AgentHarness:
             raise RuntimeError("Hermes harness unavailable: config missing")
         supervisor = build_hermes_supervisor_from_config(
             config,
-            agent_id=requested_agent_id,
-            profile=requested_profile,
+            agent_id=target.runtime_agent_id,
+            profile=target.runtime_profile,
             logger=logger,
             approval_handler=_resolve_surface_approval_handler(ctx),
             default_approval_decision=_resolve_default_approval_decision(ctx),
@@ -246,7 +252,7 @@ def _make_hermes_harness(ctx: Any) -> AgentHarness:
         if supervisor is None:
             raise RuntimeError("Hermes harness unavailable: binary not configured")
         cache[cache_key] = supervisor
-        if requested_agent_id == "hermes" and requested_profile is None:
+        if target.runtime_agent_id == "hermes" and target.runtime_profile is None:
             try:
                 ctx.hermes_supervisor = supervisor
             except AttributeError:
@@ -255,13 +261,19 @@ def _make_hermes_harness(ctx: Any) -> AgentHarness:
 
 
 def _check_hermes_health(ctx: Any) -> bool:
-    requested_agent_id, requested_profile = _resolve_hermes_runtime_request(ctx)
+    target = resolve_agent_execution_target(
+        _resolve_requested_agent_id(ctx, default="hermes"),
+        _resolve_requested_agent_profile(ctx),
+        context=ctx,
+    )
     cache = _runtime_supervisor_cache(ctx)
-    supervisor = cache.get(("hermes", requested_agent_id, requested_profile or ""))
+    supervisor = cache.get(
+        ("hermes", target.runtime_agent_id, target.runtime_profile or "")
+    )
     if (
         supervisor is None
-        and requested_agent_id == "hermes"
-        and requested_profile is None
+        and target.runtime_agent_id == "hermes"
+        and target.runtime_profile is None
     ):
         supervisor = getattr(ctx, "hermes_supervisor", None)
     if supervisor is not None:
@@ -269,9 +281,7 @@ def _check_hermes_health(ctx: Any) -> bool:
     config = _resolve_runtime_agent_config(ctx)
     if config is not None:
         result = _run_hermes_preflight(
-            config,
-            agent_id=requested_agent_id,
-            profile=requested_profile,
+            config, agent_id=target.runtime_agent_id, profile=target.runtime_profile
         )
         return bool(getattr(result, "status", None) == "ready")
     binary = getattr(ctx, "hermes_binary", None)
@@ -352,7 +362,7 @@ def _resolve_context_root(ctx: Any) -> Optional[Path]:
     return None
 
 
-def _descriptor_runtime_kind(agent_id: str, descriptor: Any) -> str:
+def descriptor_runtime_kind(agent_id: str, descriptor: Any) -> str:
     runtime_kind = str(getattr(descriptor, "runtime_kind", "") or "").strip().lower()
     if runtime_kind:
         return runtime_kind
@@ -379,7 +389,7 @@ def resolve_agent_runtime(
     descriptors = get_registered_agents(context)
     runtime_alias_kinds: dict[str, str] = {}
     for descriptor_id, descriptor in descriptors.items():
-        runtime_kind = _descriptor_runtime_kind(descriptor_id, descriptor)
+        runtime_kind = descriptor_runtime_kind(descriptor_id, descriptor)
         if runtime_kind != descriptor_id:
             runtime_alias_kinds[descriptor_id] = runtime_kind
 
@@ -412,6 +422,93 @@ def resolve_agent_runtime(
         runtime_agent_id=resolved_target.runtime_agent_id,
         runtime_profile=resolved_target.runtime_profile,
         resolution_kind=resolved_target.resolution_kind,
+    )
+
+
+def resolve_agent_execution_target(
+    agent_id: str,
+    profile: Optional[str] = None,
+    *,
+    context: Any = None,
+) -> AgentExecutionTarget:
+    normalized_agent_id = str(agent_id or "").strip().lower()
+    normalized_profile = _normalize_optional_text(profile)
+    resolved = resolve_agent_runtime(
+        normalized_agent_id,
+        normalized_profile,
+        context=context,
+    )
+    return AgentExecutionTarget(
+        requested_agent_id=normalized_agent_id,
+        requested_profile=normalized_profile,
+        logical_agent_id=resolved.logical_agent_id,
+        logical_profile=resolved.logical_profile,
+        runtime_agent_id=resolved.runtime_agent_id,
+        runtime_profile=resolved.runtime_profile,
+        resolution_kind=resolved.resolution_kind,
+    )
+
+
+def configured_agent_execution_targets(
+    context: Any = None,
+) -> tuple[AgentExecutionTarget, ...]:
+    config = _resolve_runtime_agent_config(context)
+    configured_agents = getattr(config, "agents", None)
+    if not isinstance(configured_agents, dict):
+        return ()
+    targets: list[AgentExecutionTarget] = []
+    for raw_agent_id in sorted(configured_agents):
+        agent_id = str(raw_agent_id or "").strip().lower()
+        if not agent_id:
+            continue
+        try:
+            targets.append(resolve_agent_execution_target(agent_id, context=context))
+        except (ConfigError, RuntimeError, TypeError, ValueError):
+            continue
+    return tuple(targets)
+
+
+def run_agent_runtime_preflight(
+    agent_id: str,
+    profile: Optional[str] = None,
+    *,
+    context: Any = None,
+) -> Any:
+    target = resolve_agent_execution_target(agent_id, profile, context=context)
+    descriptor = get_agent_descriptor(target.runtime_agent_id, context)
+    if descriptor is None or descriptor.runtime_preflight is None:
+        return None
+    config = _resolve_runtime_agent_config(context)
+    return descriptor.runtime_preflight(config, target)
+
+
+def _build_codex_backend(
+    factory: Any,
+    target: AgentExecutionTarget,
+    state: Any,
+    notification_handler: Any,
+) -> Any:
+    return factory._build_codex_backend(target, state, notification_handler)
+
+
+def _build_opencode_backend(
+    factory: Any,
+    target: AgentExecutionTarget,
+    state: Any,
+    notification_handler: Any,
+) -> Any:
+    return factory._build_opencode_backend(target, state, notification_handler)
+
+
+def _preflight_zeroclaw_runtime(config: Any, _target: AgentExecutionTarget) -> Any:
+    return zeroclaw_runtime_preflight(config)
+
+
+def _preflight_hermes_runtime(config: Any, target: AgentExecutionTarget) -> Any:
+    return _run_hermes_preflight(
+        config,
+        agent_id=target.runtime_agent_id,
+        profile=target.runtime_profile,
     )
 
 
@@ -589,6 +686,8 @@ def _build_config_alias_agents(context: Any) -> dict[str, AgentDescriptor]:
             capabilities=resolved_backend_descriptor.capabilities,
             make_harness=_make_harness,
             healthcheck=healthcheck,
+            backend_factory=resolved_backend_descriptor.backend_factory,
+            runtime_preflight=resolved_backend_descriptor.runtime_preflight,
             runtime_kind=resolved_backend_descriptor.runtime_kind,
             plugin_api_version=resolved_backend_descriptor.plugin_api_version,
         )
@@ -613,6 +712,7 @@ _BUILTIN_AGENTS: dict[str, AgentDescriptor] = {
         ),
         make_harness=_make_codex_harness,
         healthcheck=_check_codex_health,
+        backend_factory=_build_codex_backend,
     ),
     "opencode": AgentDescriptor(
         id="opencode",
@@ -630,6 +730,7 @@ _BUILTIN_AGENTS: dict[str, AgentDescriptor] = {
         ),
         make_harness=_make_opencode_harness,
         healthcheck=_check_opencode_health,
+        backend_factory=_build_opencode_backend,
     ),
     "zeroclaw": AgentDescriptor(
         id="zeroclaw",
@@ -637,6 +738,7 @@ _BUILTIN_AGENTS: dict[str, AgentDescriptor] = {
         capabilities=ZEROCLAW_CAPABILITIES,
         make_harness=_make_zeroclaw_harness,
         healthcheck=_check_zeroclaw_health,
+        runtime_preflight=_preflight_zeroclaw_runtime,
     ),
     "hermes": AgentDescriptor(
         id="hermes",
@@ -644,6 +746,7 @@ _BUILTIN_AGENTS: dict[str, AgentDescriptor] = {
         capabilities=HERMES_CAPABILITIES,
         make_harness=_make_hermes_harness,
         healthcheck=_check_hermes_health,
+        runtime_preflight=_preflight_hermes_runtime,
         runtime_kind="hermes",
     ),
 }
@@ -841,18 +944,23 @@ def has_capability(agent_id: str, capability: str, context: Any = None) -> bool:
 
 
 __all__ = [
+    "AgentExecutionTarget",
     "AgentRuntimeResolution",
     "CAR_AGENT_ENTRYPOINT_GROUP",
     "CAR_PLUGIN_API_VERSION",
     "AgentCapability",
     "AgentDescriptor",
+    "configured_agent_execution_targets",
+    "descriptor_runtime_kind",
     "get_agent_descriptor",
     "get_available_agents",
     "get_registered_agents",
     "has_capability",
     "normalize_agent_capabilities",
     "reload_agents",
+    "resolve_agent_execution_target",
     "resolve_agent_runtime",
+    "run_agent_runtime_preflight",
     "validate_agent_id",
     "wrap_requested_agent_context",
 ]

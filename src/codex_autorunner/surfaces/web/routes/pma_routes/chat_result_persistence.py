@@ -17,6 +17,10 @@ from .....core.pma_transcripts import PmaTranscriptStore
 from .....core.ports.run_event import RunEvent
 from .....core.text_utils import _normalize_optional_text, _truncate_text
 from .....core.time_utils import now_iso
+from .....integrations.chat.execution_event_journal import (
+    make_chat_execution_journal_notice,
+)
+from ...services.pma import get_pma_request_context
 from .runtime_state import PmaRuntimeState
 
 logger = logging.getLogger(__name__)
@@ -122,7 +126,36 @@ def persist_timeline(
     metadata: dict[str, Any],
     events: list[RunEvent],
 ) -> int:
-    timeline_events = list(events)
+    timeline_events = [
+        make_chat_execution_journal_notice(
+            domain="ingress",
+            name="accepted",
+            message="PMA execution accepted",
+            status=str(metadata.get("status") or "running"),
+            data={
+                "thread_id": metadata.get("thread_id"),
+                "turn_id": metadata.get("turn_id"),
+                "lane_id": metadata.get("lane_id"),
+                "trigger": metadata.get("trigger"),
+                "agent": metadata.get("agent"),
+                "profile": metadata.get("profile"),
+                "model": metadata.get("model"),
+                "reasoning": metadata.get("reasoning"),
+            },
+        ),
+        *list(events),
+    ]
+    duration_ms = metadata.get("duration_ms")
+    if isinstance(duration_ms, (int, float)):
+        timeline_events.append(
+            make_chat_execution_journal_notice(
+                domain="latency",
+                name="turn_duration",
+                message="PMA turn duration",
+                status=str(metadata.get("status") or "error"),
+                data={"duration_ms": float(duration_ms)},
+            )
+        )
     trace_writer = ColdTraceWriter(
         hub_root=hub_root,
         execution_id=execution_id,
@@ -240,7 +273,7 @@ async def finalize_result(
         except ValueError:
             logger.debug("Failed to compute PMA turn duration", exc_info=True)
 
-    hub_root = request.app.state.config.root
+    hub_root = get_pma_request_context(request).hub_root
     transcript_pointer = await persist_transcript(
         hub_root=hub_root,
         result=result,

@@ -2,19 +2,30 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Literal, Mapping, Optional, Protocol, Sequence
+from typing import Any, Callable, Mapping, Optional, Protocol
 
 from ...tickets.files import list_ticket_paths
-from ..config import ConfigError, load_repo_config
-from ..freshness import resolve_stale_threshold_seconds
-from ..ticket_flow_projection import (
-    build_canonical_state_v1,
-    collect_ticket_flow_census,
-    select_authoritative_run_record,
+from ..ticket_flow_operator import TicketFlowRunSelection
+from ..ticket_flow_operator import (
+    build_ticket_flow_status_snapshot as _build_ticket_flow_status_snapshot,
+)
+from ..ticket_flow_operator import (
+    ensure_flow_worker as _ensure_flow_worker,
+)
+from ..ticket_flow_operator import (
+    select_default_ticket_flow_run as _select_default_ticket_flow_run,
+)
+from ..ticket_flow_operator import (
+    select_ticket_flow_run as _select_ticket_flow_run,
+)
+from ..ticket_flow_operator import (
+    select_ticket_flow_run_record as _select_ticket_flow_run_record,
+)
+from ..ticket_flow_operator import (
+    ticket_progress as _ticket_progress,
 )
 from ..ticket_flow_summary import extract_current_step
 from .models import (
-    FlowEventType,
     FlowRunRecord,
     FlowRunStatus,
     flow_run_duration_seconds,
@@ -54,9 +65,6 @@ class GitHubServiceProtocol(Protocol):
     def issue_view(self, number: int) -> dict: ...
 
 
-TicketFlowRunSelection = Literal["active", "authoritative", "non_terminal", "paused"]
-
-
 def issue_md_path(repo_root: Path) -> Path:
     return repo_root.resolve() / ".codex-autorunner" / "ISSUE.md"
 
@@ -76,8 +84,7 @@ def _ticket_dir(repo_root: Path) -> Path:
 
 
 def ticket_progress(repo_root: Path) -> dict[str, int]:
-    census = collect_ticket_flow_census(repo_root)
-    return {"done": census.done_count, "total": census.total_count}
+    return _ticket_progress(repo_root)
 
 
 def bootstrap_check(
@@ -174,58 +181,18 @@ def seed_issue_from_text(plan_text: str) -> str:
     return f"# Issue\n\n{plan_text.strip()}\n"
 
 
-def _derive_effective_current_ticket(
-    record: FlowRunRecord, store: Optional[FlowStore]
-) -> Optional[str]:
-    if store is None:
-        return None
-    try:
-        if (
-            getattr(record, "flow_type", None) != "ticket_flow"
-            or not record.status.is_active()
-        ):
-            return None
-        last_started = store.get_last_event_seq_by_types(
-            record.id, [FlowEventType.STEP_STARTED]
-        )
-        last_finished = store.get_last_event_seq_by_types(
-            record.id, [FlowEventType.STEP_COMPLETED, FlowEventType.STEP_FAILED]
-        )
-        in_progress = bool(
-            last_started is not None
-            and (last_finished is None or last_started > last_finished)
-        )
-        if not in_progress:
-            return None
-        return store.get_latest_step_progress_current_ticket(
-            record.id, after_seq=last_finished
-        )
-    except (RuntimeError, OSError, ValueError, TypeError, AttributeError, KeyError):
-        return None
-
-
 def select_default_ticket_flow_run(
     store: FlowStore,
 ) -> Optional[FlowRunRecord]:
-    return select_ticket_flow_run(store, selection="authoritative")
+    return _select_default_ticket_flow_run(store)
 
 
 def select_ticket_flow_run_record(
-    records: Sequence[FlowRunRecord],
+    records: list[FlowRunRecord],
     *,
     selection: TicketFlowRunSelection,
 ) -> Optional[FlowRunRecord]:
-    if selection == "authoritative":
-        return select_authoritative_run_record(list(records))
-    if selection == "paused":
-        return next((record for record in records if record.status.is_paused()), None)
-    if selection == "active":
-        return next((record for record in records if record.status.is_active()), None)
-    if selection == "non_terminal":
-        return next(
-            (record for record in records if not record.status.is_terminal()), None
-        )
-    raise ValueError(f"Unsupported ticket flow run selection: {selection}")
+    return _select_ticket_flow_run_record(records, selection=selection)
 
 
 def select_ticket_flow_run(
@@ -233,8 +200,7 @@ def select_ticket_flow_run(
     *,
     selection: TicketFlowRunSelection,
 ) -> Optional[FlowRunRecord]:
-    records = store.list_flow_runs(flow_type="ticket_flow")
-    return select_ticket_flow_run_record(records, selection=selection)
+    return _select_ticket_flow_run(store, selection=selection)
 
 
 def resolve_ticket_flow_archive_mode(record: FlowRunRecord) -> str:
@@ -247,49 +213,6 @@ def resolve_ticket_flow_archive_mode(record: FlowRunRecord) -> str:
 
 def ticket_flow_archive_requires_force(record: FlowRunRecord) -> bool:
     return record.status in {FlowRunStatus.PAUSED, FlowRunStatus.STOPPING}
-
-
-def _canonical_flow_status_state(
-    repo_root: Path,
-    record: FlowRunRecord,
-    store: Optional[FlowStore],
-) -> Optional[dict[str, Any]]:
-    if store is None:
-        return None
-    try:
-        repo_config = load_repo_config(repo_root)
-        pma_config = getattr(repo_config, "pma", None)
-        stale_threshold_seconds = resolve_stale_threshold_seconds(
-            getattr(pma_config, "freshness_stale_threshold_seconds", None)
-        )
-    except ConfigError:
-        stale_threshold_seconds = resolve_stale_threshold_seconds(None)
-
-    run_state = None
-    try:
-        from ..pma_ticket_flow_state import build_ticket_flow_run_state
-
-        run_state = build_ticket_flow_run_state(
-            repo_root=repo_root,
-            repo_id=repo_root.name,
-            record=record,
-            store=store,
-            has_pending_dispatch=False,
-        )
-    except (ImportError, AttributeError, TypeError, RuntimeError, ValueError):
-        run_state = None
-    run_state_payload = dict(run_state) if isinstance(run_state, dict) else None
-    try:
-        return build_canonical_state_v1(
-            repo_root=repo_root,
-            repo_id=repo_root.name,
-            run_state=run_state_payload,
-            record=record,
-            store=store,
-            stale_threshold_seconds=stale_threshold_seconds,
-        )
-    except (RuntimeError, OSError, ValueError, TypeError, KeyError, AttributeError):
-        return None
 
 
 def _format_age_compact(age_seconds: Any) -> Optional[str]:
@@ -415,90 +338,18 @@ def build_flow_status_snapshot(
     *,
     lite: bool = False,
 ) -> dict:
-    state = record.state or {}
-    current_ticket = None
-    if isinstance(state, dict):
-        ticket_engine = state.get("ticket_engine")
-        if isinstance(ticket_engine, dict):
-            current_ticket = ticket_engine.get("current_ticket")
-            if not (isinstance(current_ticket, str) and current_ticket.strip()):
-                current_ticket = None
-    effective_ticket = current_ticket
-    if not effective_ticket:
-        effective_ticket = _derive_effective_current_ticket(record, store)
-
-    updated_state: Optional[dict] = None
-    if effective_ticket and not current_ticket and isinstance(state, dict):
-        ticket_engine = state.get("ticket_engine")
-        ticket_engine = dict(ticket_engine) if isinstance(ticket_engine, dict) else {}
-        ticket_engine["current_ticket"] = effective_ticket
-        updated_state = dict(state)
-        updated_state["ticket_engine"] = ticket_engine
-
-    if lite:
-        return {
-            "last_event_seq": None,
-            "last_event_at": None,
-            "worker_health": None,
-            "effective_current_ticket": effective_ticket,
-            "ticket_progress": None,
-            "state": updated_state,
-            "canonical_state_v1": None,
-            "freshness": None,
-        }
-
-    last_event_seq = None
-    last_event_at = None
-    if store:
-        try:
-            last_event_seq, last_event_at = store.get_last_event_meta(record.id)
-        except (RuntimeError, OSError, ValueError, TypeError, AttributeError):
-            last_event_seq, last_event_at = None, None
-    health = check_worker_health(repo_root, record.id)
-
-    canonical_state = _canonical_flow_status_state(repo_root, record, store)
-    freshness = (
-        canonical_state.get("freshness") if isinstance(canonical_state, dict) else None
-    )
-
-    return {
-        "last_event_seq": last_event_seq,
-        "last_event_at": last_event_at,
-        "worker_health": health,
-        "effective_current_ticket": effective_ticket,
-        "ticket_progress": ticket_progress(repo_root),
-        "state": updated_state,
-        "canonical_state_v1": canonical_state,
-        "freshness": freshness,
-    }
+    return _build_ticket_flow_status_snapshot(repo_root, record, store, lite=lite)
 
 
 def ensure_worker(repo_root: Path, run_id: str, is_terminal: bool = False) -> dict:
-    health = check_worker_health(repo_root, run_id)
-    # Only clear metadata for dead/mismatch/invalid workers if not terminal
-    if not is_terminal and health.status in {"dead", "mismatch", "invalid"}:
-        try:
-            clear_worker_metadata(health.artifact_path.parent)
-        except OSError:
-            pass
-    if health.is_alive:
-        return {"status": "reused", "health": health}
-
-    proc, stdout_handle, stderr_handle = spawn_flow_worker(repo_root, run_id)
-    # Parent-side stream handles are only needed for process spawn wiring.
-    # Closing immediately avoids leaking file descriptors in long-lived services.
-    for stream in (stdout_handle, stderr_handle):
-        try:
-            stream.close()
-        except OSError:
-            pass
-    return {
-        "status": "spawned",
-        "health": health,
-        "proc": proc,
-        "stdout": None,
-        "stderr": None,
-    }
+    return _ensure_flow_worker(
+        repo_root,
+        run_id,
+        is_terminal=is_terminal,
+        check_worker_health_fn=check_worker_health,
+        clear_worker_metadata_fn=clear_worker_metadata,
+        spawn_flow_worker_fn=spawn_flow_worker,
+    )
 
 
 __all__ = [

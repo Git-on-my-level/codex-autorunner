@@ -667,7 +667,7 @@ class TestReactiveCanonicalInvariants:
 
 
 class TestLegacyThreadMirrorInvariant:
-    def test_legacy_mirror_written_when_enabled(self, tmp_path: Path) -> None:
+    def test_legacy_mirror_not_bootstrapped_when_enabled(self, tmp_path: Path) -> None:
         hub_root = tmp_path / "hub"
         os.environ["CAR_LEGACY_MIRROR_ENABLED"] = "true"
         try:
@@ -677,19 +677,7 @@ class TestLegacyThreadMirrorInvariant:
             store.create_turn(thread_id, prompt="hello")
 
             legacy_path = _legacy_thread_db_path(hub_root)
-            assert legacy_path.exists()
-
-            from codex_autorunner.core.sqlite_utils import open_sqlite
-
-            with open_sqlite(legacy_path, durable=False) as conn:
-                threads = conn.execute(
-                    "SELECT managed_thread_id FROM pma_managed_threads"
-                ).fetchall()
-                turns = conn.execute(
-                    "SELECT managed_turn_id FROM pma_managed_turns"
-                ).fetchall()
-            assert threads == []
-            assert turns == []
+            assert not legacy_path.exists()
         finally:
             os.environ.pop("CAR_LEGACY_MIRROR_ENABLED", None)
 

@@ -86,6 +86,7 @@ from ...core.orchestration.runtime_threads import (
     begin_runtime_thread_execution,
 )
 from ..github.managed_thread_pr_binding import self_claim_and_arm_pr_binding
+from .execution_event_journal import make_chat_execution_journal_notice
 from .managed_thread_delivery import ManagedThreadDeliveryAdapter
 from .runtime_thread_errors import resolve_runtime_thread_error_detail
 from .turn_metrics import compose_turn_response_with_footer
@@ -1890,6 +1891,23 @@ async def finalize_managed_thread_execution(
         request_kind=getattr(started.request, "kind", None),
         agent_id=getattr(started.thread, "agent_id", None),
     )
+    ingress_notice = make_chat_execution_journal_notice(
+        domain="ingress",
+        name="accepted",
+        message="Managed-thread execution accepted",
+        status=started_execution_status or "running",
+        data={
+            "managed_thread_id": managed_thread_id,
+            "managed_turn_id": managed_turn_id,
+            "backend_thread_id": current_backend_thread_id,
+            "backend_turn_id": started.execution.backend_id,
+            "surface_kind": surface.surface_kind,
+            "surface_key": surface.surface_key,
+            "request_kind": getattr(started.request, "kind", None),
+            "agent_id": getattr(started.thread, "agent_id", None),
+        },
+    )
+    timeline_events.append(ingress_notice)
 
     async def _persist_live_timeline_events(events: list[Any]) -> None:
         nonlocal live_timeline_count
@@ -2335,6 +2353,8 @@ async def finalize_managed_thread_execution(
 
         stream_task = asyncio.create_task(_pump_runtime_events())
 
+    await _enqueue_live_timeline_events([ingress_notice])
+
     try:
         if started_execution_status == "error":
             outcome = RuntimeThreadOutcome(
@@ -2529,6 +2549,24 @@ async def finalize_managed_thread_execution(
             ),
             original_error=outcome.error,
             **runtime_trace_fields(event_state),
+        )
+        timeline_events.append(
+            make_chat_execution_journal_notice(
+                domain="recovery",
+                name="outcome_recovered",
+                message="Recovered completed outcome after transport-layer failure",
+                status="ok",
+                data={
+                    "managed_thread_id": managed_thread_id,
+                    "managed_turn_id": managed_turn_id,
+                    "backend_thread_id": current_backend_thread_id,
+                    "backend_turn_id": outcome.backend_turn_id
+                    or started.execution.backend_id,
+                    "surface_kind": surface.surface_kind,
+                    "surface_key": surface.surface_key,
+                    "original_error": outcome.error,
+                },
+            )
         )
         outcome = recovered_outcome
 

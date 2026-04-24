@@ -16,12 +16,14 @@ from ...core.orchestration import build_harness_backed_orchestration_service
 from ...core.orchestration.bindings import OrchestrationBindingStore
 from ...integrations.chat.agents import resolve_chat_runtime_agent
 from ..chat.bound_live_progress import (
-    build_bound_chat_queue_execution_controller,
     resolve_bound_chat_queue_progress_context,
+)
+from ..chat.managed_thread_surface_kernel import (
+    build_managed_thread_surface_coordinator,
+    build_managed_thread_surface_queue_execution_hooks,
 )
 from ..chat.managed_thread_turns import (
     ManagedThreadCoordinatorHooks,
-    ManagedThreadErrorMessages,
     ManagedThreadExecutionHooks,
     ManagedThreadFinalizationResult,
     ManagedThreadSurfaceInfo,
@@ -333,7 +335,7 @@ def _build_discord_managed_thread_coordinator(
         if pma_enabled
         else None
     )
-    return ManagedThreadTurnCoordinator(
+    return build_managed_thread_surface_coordinator(
         orchestration_service=orchestration_service,
         state_root=service._config.root,
         hub_client=getattr(service, "_hub_client", None),
@@ -347,14 +349,12 @@ def _build_discord_managed_thread_coordinator(
             surface_kind="discord",
             surface_key=channel_id,
         ),
-        errors=ManagedThreadErrorMessages(
-            public_execution_error=public_execution_error,
-            timeout_error=timeout_error,
-            interrupted_error=interrupted_error,
-            timeout_seconds=timeout_seconds,
-            stall_timeout_seconds=stall_timeout_seconds,
-            idle_timeout_only=pma_enabled,
-        ),
+        public_execution_error=public_execution_error,
+        timeout_error=timeout_error,
+        interrupted_error=interrupted_error,
+        timeout_seconds=timeout_seconds,
+        stall_timeout_seconds=stall_timeout_seconds,
+        idle_timeout_only=pma_enabled,
         logger=getattr(service, "_logger", _logger),
         turn_preview="",
         preview_builder=lambda message_text: truncate_for_discord(
@@ -447,7 +447,7 @@ def _build_discord_runner_hooks(
         service,
         fallback_root=workspace_root,
     )
-    queue_progress = build_bound_chat_queue_execution_controller(
+    queue_execution_hooks = build_managed_thread_surface_queue_execution_hooks(
         hub_root=hub_root,
         raw_config=raw_config,
         managed_thread_id=managed_thread_id,
@@ -512,5 +512,5 @@ def _build_discord_runner_hooks(
         durable_delivery=durable_delivery,
         deliver_result=_deliver_result,
         run_with_indicator=_run_with_discord_typing_indicator,
-        queue_execution_hooks=queue_progress.hooks,
+        queue_execution_hooks=queue_execution_hooks,
     )

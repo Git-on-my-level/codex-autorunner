@@ -19,6 +19,7 @@ from fastapi.responses import (
 from ....core.config import HubConfig
 from ....core.logging_utils import safe_log
 from ....core.state import SessionRecord, now_iso, persist_session_registry
+from ....core.state_roots import resolve_repo_flows_db_path, resolve_repo_state_root
 from ..pty_session import REPLAY_END, ActiveSession, PTYSession
 from ..schemas import VersionResponse
 from ..services import terminal as terminal_service
@@ -78,12 +79,13 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                 status_code=503,
             )
 
-        flows_db = repo_root / ".codex-autorunner" / "flows.db"
+        state_root = resolve_repo_state_root(repo_root)
+        flows_db = resolve_repo_flows_db_path(repo_root)
 
-        docs_dir = repo_root / ".codex-autorunner"
+        docs_dir = state_root
         docs_status = "ok" if docs_dir.exists() else "missing"
 
-        tickets_dir = repo_root / ".codex-autorunner" / "tickets"
+        tickets_dir = state_root / "tickets"
         tickets_status = "ok" if tickets_dir.exists() else "missing"
 
         flows_status = "ok" if tickets_dir.exists() else "missing"

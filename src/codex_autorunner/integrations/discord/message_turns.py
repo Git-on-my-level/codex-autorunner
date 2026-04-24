@@ -67,6 +67,9 @@ from ...integrations.chat.chat_ux_telemetry import (
 from ...integrations.chat.collaboration_policy import CollaborationEvaluationResult
 from ...integrations.chat.compaction import match_pending_compact_seed
 from ...integrations.chat.dispatcher import DispatchContext
+from ...integrations.chat.execution_event_journal import (
+    append_chat_execution_journal_notices,
+)
 from ...integrations.chat.forwarding import (
     compose_forwarded_message_text,
     compose_inbound_message_text,
@@ -1496,7 +1499,7 @@ async def _deliver_discord_turn_result(
         and visible_terminal_delivery
     ):
         _dispatch_snapshot.record(ChatUxMilestone.TERMINAL_DELIVERY)
-        emit_chat_ux_timing(
+        journal_notice = emit_chat_ux_timing(
             dispatch.service._logger,
             logging.INFO,
             _dispatch_snapshot,
@@ -1504,6 +1507,21 @@ async def _deliver_discord_turn_result(
             session_key=dispatch.session_key,
             execution_id=execution_id,
         )
+        if execution_id:
+            try:
+                append_chat_execution_journal_notices(
+                    dispatch.service._config.root,
+                    execution_id=execution_id,
+                    target_kind="thread_target",
+                    target_id=managed_thread_id,
+                    notices=[journal_notice],
+                )
+            except (OSError, RuntimeError, TypeError, ValueError):
+                dispatch.service._logger.debug(
+                    "Discord execution journal append failed for %s",
+                    execution_id,
+                    exc_info=True,
+                )
 
 
 async def handle_message_event(

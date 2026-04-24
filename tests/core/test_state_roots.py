@@ -5,21 +5,38 @@ from pathlib import Path
 import pytest
 
 from codex_autorunner.core.state_roots import (
+    DISCORD_STATE_DB_FILENAME,
+    GITHUB_BROKER_DB_FILENAME,
     GLOBAL_STATE_ROOT_ENV,
+    HUB_MANIFEST_FILENAME,
+    LIFECYCLE_EVENTS_DB_FILENAME,
+    LIFECYCLE_EVENTS_FILENAME,
     ORCHESTRATION_DB_FILENAME,
+    PMA_THREADS_DB_FILENAME,
     REPO_STATE_DIR,
+    RUNNER_STATE_DB_FILENAME,
+    TELEGRAM_STATE_DB_FILENAME,
     StateRootError,
     get_canonical_roots,
     is_within_allowed_root,
     resolve_cache_root,
+    resolve_discord_state_path,
+    resolve_global_github_broker_db_path,
     resolve_global_state_root,
     resolve_hub_agent_workspace_root,
+    resolve_hub_lifecycle_events_db_path,
+    resolve_hub_lifecycle_events_path,
+    resolve_hub_manifest_path,
     resolve_hub_orchestration_db_path,
+    resolve_hub_pma_threads_db_path,
     resolve_hub_runtime_root,
     resolve_hub_runtimes_root,
     resolve_hub_state_root,
     resolve_hub_templates_root,
+    resolve_repo_flows_db_path,
+    resolve_repo_runner_state_db_path,
     resolve_repo_state_root,
+    resolve_telegram_state_path,
     validate_path_within_roots,
 )
 from codex_autorunner.integrations.chat.run_mirror import ChatRunMirror
@@ -33,6 +50,15 @@ class TestResolveRepoStateRoot:
     def test_does_not_create_dir(self, tmp_path):
         result = resolve_repo_state_root(Path(tmp_path))
         assert not result.exists()
+
+    def test_repo_sqlite_paths_live_under_repo_state_root(self, tmp_path):
+        repo_root = Path(tmp_path)
+        state_root = resolve_repo_state_root(repo_root)
+        assert resolve_repo_flows_db_path(repo_root) == state_root / "flows.db"
+        assert (
+            resolve_repo_runner_state_db_path(repo_root)
+            == state_root / RUNNER_STATE_DB_FILENAME
+        )
 
 
 class TestResolveGlobalStateRoot:
@@ -52,6 +78,15 @@ class TestResolveGlobalStateRoot:
         result = resolve_global_state_root(repo_root=Path(tmp_path))
         assert result == Path.home() / ".custom_car_state"
 
+    def test_global_github_broker_path_uses_global_state_root(
+        self, tmp_path, monkeypatch
+    ):
+        custom_root = tmp_path / "custom_global"
+        monkeypatch.setenv(GLOBAL_STATE_ROOT_ENV, str(custom_root))
+        assert resolve_global_github_broker_db_path(repo_root=tmp_path) == (
+            custom_root / "github" / GITHUB_BROKER_DB_FILENAME
+        )
+
 
 class TestResolveHubStateRoot:
     def test_returns_hub_codex_dir(self, tmp_path):
@@ -61,6 +96,23 @@ class TestResolveHubStateRoot:
     def test_hub_state_includes_templates(self, tmp_path):
         templates = resolve_hub_templates_root(Path(tmp_path))
         assert templates == Path(tmp_path) / REPO_STATE_DIR / "templates"
+
+    def test_hub_state_includes_manifest_and_legacy_state_paths(self, tmp_path):
+        hub_root = Path(tmp_path)
+        hub_state = resolve_hub_state_root(hub_root)
+        assert resolve_hub_manifest_path(hub_root) == hub_state / HUB_MANIFEST_FILENAME
+        assert (
+            resolve_hub_lifecycle_events_path(hub_root)
+            == hub_state / LIFECYCLE_EVENTS_FILENAME
+        )
+        assert (
+            resolve_hub_lifecycle_events_db_path(hub_root)
+            == hub_state / LIFECYCLE_EVENTS_DB_FILENAME
+        )
+        assert (
+            resolve_hub_pma_threads_db_path(hub_root)
+            == hub_state / "pma" / PMA_THREADS_DB_FILENAME
+        )
 
     def test_hub_state_includes_runtime_roots(self, tmp_path):
         runtimes = resolve_hub_runtimes_root(Path(tmp_path))
@@ -96,6 +148,33 @@ class TestResolveHubOrchestrationDbPath:
         result = resolve_hub_orchestration_db_path(Path(tmp_path))
         canonical = get_canonical_roots(hub_root=Path(tmp_path))
         assert is_within_allowed_root(result, allowed_roots=canonical)
+
+
+class TestConfiguredChatStatePaths:
+    def test_default_chat_state_paths_use_hub_state_root(self, tmp_path):
+        hub_root = Path(tmp_path)
+        hub_state = resolve_hub_state_root(hub_root)
+        assert resolve_discord_state_path(hub_root, {}) == (
+            hub_state / DISCORD_STATE_DB_FILENAME
+        )
+        assert resolve_telegram_state_path(hub_root, {}) == (
+            hub_state / TELEGRAM_STATE_DB_FILENAME
+        )
+
+    def test_chat_state_paths_honor_config_override(self, tmp_path):
+        hub_root = Path(tmp_path)
+        raw_config = {
+            "discord_bot": {"state_file": "custom/discord.db"},
+            "telegram_bot": {"state_file": "/tmp/telegram.db"},
+        }
+        assert (
+            resolve_discord_state_path(hub_root, raw_config)
+            == (hub_root / "custom" / "discord.db").resolve()
+        )
+        assert (
+            resolve_telegram_state_path(hub_root, raw_config)
+            == Path("/tmp/telegram.db").resolve()
+        )
 
 
 class TestResolveCacheRoot:

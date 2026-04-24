@@ -502,24 +502,6 @@ class HubAgentWorkspaceMutationResponse(ResponseModel):
     delete_dir: bool
 
 
-class HubDispatchPayload(ResponseModel):
-    mode: str
-    title: Optional[str] = None
-    body: str
-    extra: Dict[str, Any] = Field(default_factory=dict)
-    is_handoff: bool = False
-
-
-class HubLatestDispatchResponse(ResponseModel):
-    seq: int
-    dir: str
-    dispatch: Optional[HubDispatchPayload] = None
-    errors: List[str] = Field(default_factory=list)
-    files: List[str] = Field(default_factory=list)
-    turn_summary_seq: Optional[int] = None
-    turn_summary: Optional[HubDispatchPayload] = None
-
-
 class HubMessageSnapshotResponse(ResponseModel):
     generated_at: str
     items: Optional[List[Dict[str, Any]]] = None

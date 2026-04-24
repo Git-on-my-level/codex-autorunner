@@ -6,13 +6,12 @@ import sqlite3
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
-from ..discovery import DiscoveryRecord, discover_and_init
+from ..discovery import discover_and_init
 from ..manifest import (
     Manifest,
     ManifestAgentWorkspace,
-    load_manifest,
     normalize_manifest_destination,
     sanitize_repo_id,
     save_manifest,
@@ -29,13 +28,12 @@ from .hub_runner_orchestrator import RunnerOrchestrator
 from .hub_topology import (
     AgentWorkspaceSnapshot,
     HubState,
+    HubTopologyRepository,
     LockStatus,  # noqa: F401  re-exported for consumers
     RepoSnapshot,
     RepoStatus,  # noqa: F401  re-exported for consumers
-    build_agent_workspace_snapshot,
+    RepoTopologyRecord,
     build_agent_workspace_snapshots,
-    build_full_topology,
-    build_repo_snapshot,
     build_repo_snapshots,
     load_hub_state,
     normalize_pinned_parent_repo_ids,
@@ -296,6 +294,10 @@ class HubSupervisor:
         self._startup_phase: HubStartupPhase = HUB_STARTUP_CONSTRUCTED
         self.hub_config = hub_config
         self.state_path = hub_config.root / ".codex-autorunner" / "hub_state.json"
+        self._topology_repository = HubTopologyRepository(
+            hub_root=hub_config.root,
+            manifest_path=hub_config.manifest_path,
+        )
         self._runner_orchestrator = RunnerOrchestrator(
             hub_config,
             spawn_fn=spawn_fn,
@@ -338,6 +340,7 @@ class HubSupervisor:
         )
         self._repo_manager = RepoManager(
             hub_config,
+            topology_repository=self._topology_repository,
             on_invalidate_cache=self._invalidate_list_cache,
             on_snapshot_for_repo=self._snapshot_for_repo,
             on_stop_runner=self._stop_runner_and_wait_for_exit,
@@ -348,6 +351,7 @@ class HubSupervisor:
         self._worktree_bridge = _HubWorktreeBridge(self)
         self._worktree_manager = WorktreeManager(
             hub_config,
+            topology_repository=self._topology_repository,
             ctx=self._worktree_bridge,
         )
         self._lifecycle_orchestrator.wire_outbox_lifecycle()
@@ -381,21 +385,15 @@ class HubSupervisor:
     def scan(self) -> List[RepoSnapshot]:
         self._invalidate_list_cache()
         manifest, records = discover_and_init(self.hub_config)
-        snapshots, agent_workspaces, pinned_parent_repo_ids = build_full_topology(
-            records,
-            manifest.agent_workspaces,
-            self.state.pinned_parent_repo_ids,
-            self.hub_config.root,
-        )
-        self.state = HubState(
+        self.state = self._topology_repository.build_hub_state(
+            existing_pinned_parent_repo_ids=self.state.pinned_parent_repo_ids,
             last_scan_at=now_iso(),
-            repos=snapshots,
-            agent_workspaces=agent_workspaces,
-            pinned_parent_repo_ids=pinned_parent_repo_ids,
+            manifest=manifest,
+            records=records,
         )
         save_hub_state(self.state_path, self.state, self.hub_config.root)
         refresh_pma_threads_artifact(self.hub_config.root)
-        return snapshots
+        return list(self.state.repos)
 
     def list_repos(self, *, use_cache: bool = True) -> List[RepoSnapshot]:
         with self._list_lock:
@@ -412,26 +410,20 @@ class HubSupervisor:
                 return self._list_cache
             self._startup_repo_state_pending = False
             manifest, records = self._manifest_records(manifest_only=True)
-            snapshots, agent_workspaces, pinned_parent_repo_ids = build_full_topology(
-                records,
-                manifest.agent_workspaces,
-                self.state.pinned_parent_repo_ids,
-                self.hub_config.root,
-            )
-            self.state = HubState(
+            self.state = self._topology_repository.build_hub_state(
+                existing_pinned_parent_repo_ids=self.state.pinned_parent_repo_ids,
                 last_scan_at=self.state.last_scan_at,
-                repos=snapshots,
-                agent_workspaces=agent_workspaces,
-                pinned_parent_repo_ids=pinned_parent_repo_ids,
+                manifest=manifest,
+                records=records,
             )
             save_hub_state(
                 self.state_path,
                 self.state,
                 self.hub_config.root,
             )
-            self._list_cache = snapshots
+            self._list_cache = list(self.state.repos)
             self._list_cache_at = time.monotonic()
-            return snapshots
+            return self._list_cache
 
     def list_agent_workspaces(
         self, *, use_cache: bool = True
@@ -440,7 +432,7 @@ class HubSupervisor:
         return list(self.state.agent_workspaces)
 
     def set_parent_repo_pinned(self, repo_id: str, pinned: bool) -> List[str]:
-        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
+        manifest = self._topology_repository.load_manifest()
         repo = manifest.get(repo_id)
         if not repo:
             raise ValueError(f"Repo {repo_id} not found in manifest")
@@ -492,7 +484,7 @@ class HubSupervisor:
                 f"Supported runtimes: {supported}"
             )
 
-        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
+        manifest = self._topology_repository.load_manifest()
         existing = manifest.get_agent_workspace(normalized_workspace_id)
         target = resolve_hub_agent_workspace_root(
             self.hub_config.root,
@@ -538,7 +530,7 @@ class HubSupervisor:
         delete_dir: bool = True,
     ) -> None:
         self._invalidate_list_cache()
-        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
+        manifest = self._topology_repository.load_manifest()
         workspace = manifest.get_agent_workspace(workspace_id)
         if not workspace:
             raise ValueError(f"Agent workspace {workspace_id} not found in manifest")
@@ -559,7 +551,7 @@ class HubSupervisor:
     def get_agent_workspace_runtime_readiness(
         self, workspace_id: str
     ) -> Optional[dict[str, Any]]:
-        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
+        manifest = self._topology_repository.load_manifest()
         workspace = manifest.get_agent_workspace(workspace_id)
         if workspace is None:
             raise ValueError(f"Agent workspace {workspace_id} not found in manifest")
@@ -573,7 +565,7 @@ class HubSupervisor:
         display_name: Optional[str] = None,
     ) -> AgentWorkspaceSnapshot:
         self._invalidate_list_cache()
-        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
+        manifest = self._topology_repository.load_manifest()
         workspace = manifest.get_agent_workspace(workspace_id)
         if not workspace:
             raise ValueError(f"Agent workspace {workspace_id} not found in manifest")
@@ -607,7 +599,7 @@ class HubSupervisor:
         self, workspace_id: str, destination: Optional[Dict[str, Any]]
     ) -> AgentWorkspaceSnapshot:
         self._invalidate_list_cache()
-        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
+        manifest = self._topology_repository.load_manifest()
         workspace = manifest.get_agent_workspace(workspace_id)
         if not workspace:
             raise ValueError(f"Agent workspace {workspace_id} not found in manifest")
@@ -875,27 +867,15 @@ class HubSupervisor:
 
     def _manifest_records(
         self, manifest_only: bool = False
-    ) -> Tuple[Manifest, List[DiscoveryRecord]]:
-        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
-        records: List[DiscoveryRecord] = []
-        for entry in manifest.repos:
-            repo_path = (self.hub_config.root / entry.path).resolve()
-            initialized = (repo_path / ".codex-autorunner" / "tickets").exists()
-            records.append(
-                DiscoveryRecord(
-                    repo=entry,
-                    absolute_path=repo_path,
-                    added_to_manifest=False,
-                    exists_on_disk=repo_path.exists(),
-                    initialized=initialized,
-                    init_error=None,
-                )
-            )
+    ) -> Tuple[Manifest, Sequence[RepoTopologyRecord]]:
+        manifest, records = self._topology_repository.manifest_records()
         if manifest_only:
             return manifest, records
         return manifest, records
 
-    def _build_snapshots(self, records: List[DiscoveryRecord]) -> List[RepoSnapshot]:
+    def _build_snapshots(
+        self, records: Sequence[RepoTopologyRecord]
+    ) -> List[RepoSnapshot]:
         return build_repo_snapshots(records)
 
     def _build_agent_workspace_snapshots(
@@ -909,23 +889,23 @@ class HubSupervisor:
         )
 
     def _snapshot_for_repo(self, repo_id: str) -> RepoSnapshot:
-        _, records = self._manifest_records(manifest_only=True)
-        record = next((r for r in records if r.repo.id == repo_id), None)
-        if not record:
-            raise ValueError(f"Repo {repo_id} not found in manifest")
-        repos_by_id = {entry.repo.id: entry.repo for entry in records}
-        snapshot = build_repo_snapshot(record, repos_by_id)
         self.list_repos(use_cache=False)
+        snapshot = next((item for item in self.state.repos if item.id == repo_id), None)
+        if snapshot is None:
+            raise ValueError(f"Repo {repo_id} not found in manifest")
         return snapshot
 
     def _snapshot_for_agent_workspace(
         self, workspace_id: str
     ) -> AgentWorkspaceSnapshot:
-        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
-        workspace = manifest.get_agent_workspace(workspace_id)
-        if not workspace:
+        self.list_repos(use_cache=False)
+        snapshot = next(
+            (item for item in self.state.agent_workspaces if item.id == workspace_id),
+            None,
+        )
+        if snapshot is None:
             raise ValueError(f"Agent workspace {workspace_id} not found in manifest")
-        return build_agent_workspace_snapshot(workspace, self.hub_config.root)
+        return snapshot
 
     def register_invalidation_callback(self, callback: Callable[[], None]) -> None:
         self._invalidation_callbacks.append(callback)

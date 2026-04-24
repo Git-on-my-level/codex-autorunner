@@ -28,6 +28,7 @@ from ....core.scm_webhook_config import (
     resolve_payload_limits,
 )
 from ....integrations.github import GitHubWebhookConfig, normalize_github_webhook
+from ....integrations.github.publisher import build_github_publish_executors
 
 ScmDrainCallback = Callable[[Request, ScmEvent], object]
 _DEFAULT_INSPECT_LIMIT = 50
@@ -128,6 +129,7 @@ def _default_drain_callback_factory(
     service = ScmAutomationService(
         hub_root,
         reaction_config=github_automation_config(raw_config),
+        publish_executor_factory=build_github_publish_executors,
         schedule_deferred_publish_drain=True,
     )
 

@@ -10,6 +10,7 @@ from typing import Any, Optional
 from ...tickets.outbox import archive_dispatch, ensure_outbox_dirs, resolve_outbox_paths
 from ...tickets.replies import resolve_reply_paths
 from ..locks import FileLockBusy, file_lock
+from ..state_roots import resolve_repo_flows_db_path
 from .failure_diagnostics import ensure_failure_payload
 from .models import FlowEventType, FlowRunRecord, FlowRunStatus
 from .store import UNSET, FlowStore
@@ -490,7 +491,7 @@ def reconcile_flow_runs(
     flow_type: Optional[str] = None,
     logger: Optional[logging.Logger] = None,
 ) -> FlowReconcileResult:
-    db_path = repo_root / ".codex-autorunner" / "flows.db"
+    db_path = resolve_repo_flows_db_path(repo_root)
     if not db_path.exists():
         return FlowReconcileResult(records=[], summary=FlowReconcileSummary())
     from ..config import ConfigError, load_repo_config

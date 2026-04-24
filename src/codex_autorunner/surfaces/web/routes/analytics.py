@@ -26,6 +26,7 @@ from ....core.flows.models import (
     flow_run_duration_seconds,
 )
 from ....core.flows.store import FlowStore
+from ....core.state_roots import resolve_repo_flows_db_path
 from ....core.utils import find_repo_root
 from ....tickets.files import list_ticket_paths, read_ticket, ticket_is_done
 from ....tickets.outbox import parse_dispatch, resolve_outbox_paths
@@ -35,7 +36,7 @@ _logger = logging.getLogger(__name__)
 
 
 def _flows_db_path(repo_root: Path) -> Path:
-    return repo_root / ".codex-autorunner" / "flows.db"
+    return resolve_repo_flows_db_path(repo_root)
 
 
 def _select_primary_run(records: list[FlowRunRecord]) -> Optional[FlowRunRecord]:

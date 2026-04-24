@@ -13,6 +13,7 @@ from .ports.backend_orchestrator import (
 )
 from .runner_controller import SpawnRunnerFn
 from .state import load_state
+from .state_roots import resolve_repo_runner_state_db_path
 from .types import AppServerSupervisorFactory, BackendFactory
 
 if TYPE_CHECKING:
@@ -124,7 +125,7 @@ class RunnerOrchestrator:
         runner.stop()
         deadline = time.monotonic() + max(timeout_seconds, poll_interval_seconds)
         lock_path = repo_path / ".codex-autorunner" / "lock"
-        state_path = repo_path / ".codex-autorunner" / "state.sqlite3"
+        state_path = resolve_repo_runner_state_db_path(repo_path)
         last_error: Optional[Exception] = None
 
         while True:

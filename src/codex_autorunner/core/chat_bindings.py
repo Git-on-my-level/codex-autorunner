@@ -20,14 +20,24 @@ from .orchestration.sqlite import (
     open_orchestration_sqlite,
     resolve_orchestration_sqlite_path,
 )
+from .path_utils import resolve_config_path
 from .pma_thread_store import PmaThreadStore, default_pma_threads_db_path
 from .sqlite_utils import open_sqlite
+from .state_roots import (
+    REPO_STATE_DIR,
+    resolve_hub_manifest_path,
+)
+from .state_roots import (
+    resolve_discord_state_path as resolve_configured_discord_state_path,
+)
+from .state_roots import (
+    resolve_telegram_state_path as resolve_configured_telegram_state_path,
+)
 
 logger = logging.getLogger("codex_autorunner.core.chat_bindings")
 
-DISCORD_STATE_FILE_DEFAULT = ".codex-autorunner/discord_state.sqlite3"
-TELEGRAM_STATE_FILE_DEFAULT = ".codex-autorunner/telegram_state.sqlite3"
-MANIFEST_FILE_DEFAULT = ".codex-autorunner/manifest.yml"
+DISCORD_STATE_FILE_DEFAULT = f"{REPO_STATE_DIR}/discord_state.sqlite3"
+TELEGRAM_STATE_FILE_DEFAULT = f"{REPO_STATE_DIR}/telegram_state.sqlite3"
 
 
 def _normalize_repo_id(value: Any) -> str | None:
@@ -50,25 +60,6 @@ def _coerce_count(value: Any) -> int:
     return 0
 
 
-def _resolve_state_path(
-    *,
-    hub_root: Path,
-    raw_config: Mapping[str, Any],
-    section: str,
-    default_state_file: str,
-) -> Path:
-    section_cfg = raw_config.get(section)
-    if not isinstance(section_cfg, Mapping):
-        section_cfg = {}
-    state_file = section_cfg.get("state_file")
-    if not isinstance(state_file, str) or not state_file.strip():
-        state_file = default_state_file
-    state_path = Path(state_file)
-    if not state_path.is_absolute():
-        state_path = (hub_root / state_path).resolve()
-    return state_path
-
-
 def _chat_surface_enabled(raw_config: Mapping[str, Any], section: str) -> bool:
     section_cfg = raw_config.get(section)
     if not isinstance(section_cfg, Mapping):
@@ -77,16 +68,7 @@ def _chat_surface_enabled(raw_config: Mapping[str, Any], section: str) -> bool:
 
 
 def _resolve_manifest_path(hub_root: Path, raw_config: Mapping[str, Any]) -> Path:
-    hub_cfg = raw_config.get("hub")
-    if not isinstance(hub_cfg, Mapping):
-        hub_cfg = {}
-    manifest_file = hub_cfg.get("manifest")
-    if not isinstance(manifest_file, str) or not manifest_file.strip():
-        manifest_file = MANIFEST_FILE_DEFAULT
-    manifest_path = Path(manifest_file)
-    if not manifest_path.is_absolute():
-        manifest_path = (hub_root / manifest_path).resolve()
-    return manifest_path
+    return resolve_hub_manifest_path(hub_root, raw_config=raw_config)
 
 
 def _chat_binding_counts_fingerprint(
@@ -669,21 +651,11 @@ def _active_pma_thread_counts(
 
 
 def _resolve_discord_state_path(hub_root: Path, raw_config: Mapping[str, Any]) -> Path:
-    return _resolve_state_path(
-        hub_root=hub_root,
-        raw_config=raw_config,
-        section="discord_bot",
-        default_state_file=DISCORD_STATE_FILE_DEFAULT,
-    )
+    return resolve_configured_discord_state_path(hub_root, raw_config)
 
 
 def _resolve_telegram_state_path(hub_root: Path, raw_config: Mapping[str, Any]) -> Path:
-    return _resolve_state_path(
-        hub_root=hub_root,
-        raw_config=raw_config,
-        section="telegram_bot",
-        default_state_file=TELEGRAM_STATE_FILE_DEFAULT,
-    )
+    return resolve_configured_telegram_state_path(hub_root, raw_config)
 
 
 def active_chat_binding_counts(
@@ -895,11 +867,22 @@ def resolve_chat_state_path(
     section: str,
     default_state_file: str,
 ) -> Path:
-    return _resolve_state_path(
-        hub_root=hub_root,
-        raw_config=raw_config,
-        section=section,
-        default_state_file=default_state_file,
+    if section == "discord_bot":
+        return _resolve_discord_state_path(hub_root, raw_config)
+    if section == "telegram_bot":
+        return _resolve_telegram_state_path(hub_root, raw_config)
+    section_cfg = raw_config.get(section)
+    configured = None
+    if isinstance(section_cfg, Mapping):
+        candidate = section_cfg.get("state_file")
+        if isinstance(candidate, str) and candidate.strip():
+            configured = candidate
+    return resolve_config_path(
+        configured or default_state_file,
+        hub_root,
+        allow_absolute=True,
+        allow_home=True,
+        scope=f"{section}.state_file",
     )
 
 

@@ -18,7 +18,23 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, cast
 
 from .app_server_command import resolve_app_server_command
-from .config_contract import ConfigError
+from .config_contract import APP_SERVER_OUTPUT_POLICIES, ConfigError
+from .config_field_schema import (
+    APP_SERVER_CLIENT_FIELD_SCHEMAS,
+    APP_SERVER_FIELD_SCHEMAS,
+    APP_SERVER_OUTPUT_FIELD_SCHEMAS,
+    APP_SERVER_PROMPT_SECTION_SCHEMAS,
+    OPENCODE_FIELD_SCHEMAS,
+    TICKET_FLOW_FIELD_SCHEMAS,
+    UPDATE_FIELD_SCHEMAS,
+    UPDATE_LINUX_SERVICE_NAME_SCHEMAS,
+    USAGE_FIELD_SCHEMAS,
+    default_from_mapping,
+    parse_schema_field,
+)
+from .config_field_schema import (
+    SHARED_CONFIG_PARSER_FIELD_PATHS as _SHARED_CONFIG_PARSER_FIELD_PATHS,
+)
 from .config_layering import (
     PMA_DEFAULT_MAX_TEXT_CHARS,
     PMA_DEFAULT_TURN_IDLE_TIMEOUT_SECONDS,
@@ -48,14 +64,14 @@ from .config_types import (
     UsageConfig,
     VoiceConfigSection,
 )
-from .config_validation import _normalize_ticket_flow_approval_mode
 from .path_utils import ConfigPathError, resolve_config_path
 from .report_retention import (
     DEFAULT_REPORT_MAX_HISTORY_FILES,
     DEFAULT_REPORT_MAX_TOTAL_BYTES,
 )
 
-_APP_SERVER_OUTPUT_POLICIES = {"final_only", "all_agent_messages"}
+_APP_SERVER_OUTPUT_POLICIES = set(APP_SERVER_OUTPUT_POLICIES)
+SHARED_CONFIG_PARSER_FIELD_PATHS = _SHARED_CONFIG_PARSER_FIELD_PATHS
 
 
 def _parse_optional_int(value: Any) -> Optional[int]:
@@ -263,34 +279,59 @@ def _parse_ticket_flow_config(
 ) -> TicketFlowConfig:
     cfg = cfg if isinstance(cfg, dict) else {}
     defaults = defaults if isinstance(defaults, dict) else {}
-    approval_mode = _normalize_ticket_flow_approval_mode(
-        cfg.get("approval_mode", defaults.get("approval_mode", "yolo")),
-        scope="ticket_flow.approval_mode",
+    approval_mode = parse_schema_field(
+        cfg.get(
+            "approval_mode",
+            default_from_mapping(
+                defaults, "approval_mode", TICKET_FLOW_FIELD_SCHEMAS["approval_mode"]
+            ),
+        ),
+        TICKET_FLOW_FIELD_SCHEMAS["approval_mode"],
     )
-    default_approval_decision = cfg.get(
-        "default_approval_decision", defaults.get("default_approval_decision", "accept")
+    default_approval_decision = parse_schema_field(
+        cfg.get(
+            "default_approval_decision",
+            default_from_mapping(
+                defaults,
+                "default_approval_decision",
+                TICKET_FLOW_FIELD_SCHEMAS["default_approval_decision"],
+            ),
+        ),
+        TICKET_FLOW_FIELD_SCHEMAS["default_approval_decision"],
     )
-    if not isinstance(default_approval_decision, str):
-        raise ConfigError("ticket_flow.default_approval_decision must be a string")
-    include_previous_ticket_context = cfg.get(
-        "include_previous_ticket_context",
-        defaults.get("include_previous_ticket_context", False),
+    include_previous_ticket_context = parse_schema_field(
+        cfg.get(
+            "include_previous_ticket_context",
+            default_from_mapping(
+                defaults,
+                "include_previous_ticket_context",
+                TICKET_FLOW_FIELD_SCHEMAS["include_previous_ticket_context"],
+            ),
+        ),
+        TICKET_FLOW_FIELD_SCHEMAS["include_previous_ticket_context"],
     )
-    if not isinstance(include_previous_ticket_context, bool):
-        raise ConfigError("ticket_flow.include_previous_ticket_context must be boolean")
-    auto_resume = cfg.get("auto_resume", defaults.get("auto_resume", False))
-    if not isinstance(auto_resume, bool):
-        raise ConfigError("ticket_flow.auto_resume must be boolean")
-    max_total_turns = cfg.get("max_total_turns", defaults.get("max_total_turns"))
-    if max_total_turns is not None:
-        if (
-            isinstance(max_total_turns, bool)
-            or not isinstance(max_total_turns, int)
-            or max_total_turns < 1
-        ):
-            raise ConfigError(
-                "ticket_flow.max_total_turns must be a positive integer or null"
-            )
+    auto_resume = parse_schema_field(
+        cfg.get(
+            "auto_resume",
+            default_from_mapping(
+                defaults,
+                "auto_resume",
+                TICKET_FLOW_FIELD_SCHEMAS["auto_resume"],
+            ),
+        ),
+        TICKET_FLOW_FIELD_SCHEMAS["auto_resume"],
+    )
+    max_total_turns = parse_schema_field(
+        cfg.get(
+            "max_total_turns",
+            default_from_mapping(
+                defaults,
+                "max_total_turns",
+                TICKET_FLOW_FIELD_SCHEMAS["max_total_turns"],
+            ),
+        ),
+        TICKET_FLOW_FIELD_SCHEMAS["max_total_turns"],
+    )
     return TicketFlowConfig(
         approval_mode=approval_mode,
         default_approval_decision=default_approval_decision,
@@ -304,11 +345,33 @@ def _parse_ticket_flow_config(
 # empty, or unrecognised backend values.  The validator rejects invalid
 # authored values in the canonical path; this fallback covers direct callers.
 def _parse_update_backend(update_cfg: Dict[str, Any]) -> str:
-    raw = update_cfg.get("backend")
-    if raw is None:
-        return "auto"
-    value = str(raw).strip().lower()
-    return value or "auto"
+    raw_backend = update_cfg.get("backend")
+    if raw_backend is None:
+        raw_backend = default_from_mapping(
+            None, "backend", UPDATE_FIELD_SCHEMAS["backend"]
+        )
+    return cast(
+        str,
+        parse_schema_field(
+            raw_backend,
+            UPDATE_FIELD_SCHEMAS["backend"],
+            default_value=default_from_mapping(
+                None, "backend", UPDATE_FIELD_SCHEMAS["backend"]
+            ),
+        ),
+    )
+
+
+def _parse_update_skip_checks(update_cfg: Dict[str, Any]) -> bool:
+    return bool(
+        parse_schema_field(
+            update_cfg.get("skip_checks"),
+            UPDATE_FIELD_SCHEMAS["skip_checks"],
+            default_value=default_from_mapping(
+                None, "skip_checks", UPDATE_FIELD_SCHEMAS["skip_checks"]
+            ),
+        )
+    )
 
 
 def _parse_update_linux_service_names(update_cfg: Dict[str, Any]) -> Dict[str, str]:
@@ -316,10 +379,16 @@ def _parse_update_linux_service_names(update_cfg: Dict[str, Any]) -> Dict[str, s
     raw = update_cfg.get("linux_service_names")
     if not isinstance(raw, dict):
         return merged
-    for key in ("hub", "telegram", "discord"):
-        value = raw.get(key)
-        if isinstance(value, str) and value.strip():
-            merged[key] = value.strip()
+    for key, schema in UPDATE_LINUX_SERVICE_NAME_SCHEMAS.items():
+        if key not in raw:
+            continue
+        parsed = parse_schema_field(
+            raw.get(key),
+            schema,
+            default_value=merged[key],
+        )
+        if isinstance(parsed, str) and parsed.strip():
+            merged[key] = parsed
     return merged
 
 
@@ -345,42 +414,90 @@ def _parse_app_server_prompts_config(
     autorunner_defaults = (
         autorunner_defaults if isinstance(autorunner_defaults, dict) else {}
     )
+
+    def _prompt_value(
+        section_name: str,
+        key: str,
+        section_cfg: Dict[str, Any],
+        section_defaults: Dict[str, Any],
+    ) -> int:
+        schema = APP_SERVER_PROMPT_SECTION_SCHEMAS[section_name][key]
+        return cast(
+            int,
+            parse_schema_field(
+                section_cfg.get(
+                    key,
+                    default_from_mapping(section_defaults, key, schema),
+                ),
+                schema,
+            ),
+        )
+
     return AppServerPromptsConfig(
         doc_chat=AppServerDocChatPromptConfig(
-            max_chars=_parse_prompt_int(doc_chat_cfg, doc_chat_defaults, "max_chars"),
-            message_max_chars=_parse_prompt_int(
-                doc_chat_cfg, doc_chat_defaults, "message_max_chars"
+            max_chars=_prompt_value(
+                "doc_chat", "max_chars", doc_chat_cfg, doc_chat_defaults
             ),
-            target_excerpt_max_chars=_parse_prompt_int(
-                doc_chat_cfg, doc_chat_defaults, "target_excerpt_max_chars"
+            message_max_chars=_prompt_value(
+                "doc_chat",
+                "message_max_chars",
+                doc_chat_cfg,
+                doc_chat_defaults,
             ),
-            recent_summary_max_chars=_parse_prompt_int(
-                doc_chat_cfg, doc_chat_defaults, "recent_summary_max_chars"
+            target_excerpt_max_chars=_prompt_value(
+                "doc_chat",
+                "target_excerpt_max_chars",
+                doc_chat_cfg,
+                doc_chat_defaults,
+            ),
+            recent_summary_max_chars=_prompt_value(
+                "doc_chat",
+                "recent_summary_max_chars",
+                doc_chat_cfg,
+                doc_chat_defaults,
             ),
         ),
         spec_ingest=AppServerSpecIngestPromptConfig(
-            max_chars=_parse_prompt_int(
-                spec_ingest_cfg, spec_ingest_defaults, "max_chars"
+            max_chars=_prompt_value(
+                "spec_ingest",
+                "max_chars",
+                spec_ingest_cfg,
+                spec_ingest_defaults,
             ),
-            message_max_chars=_parse_prompt_int(
-                spec_ingest_cfg, spec_ingest_defaults, "message_max_chars"
+            message_max_chars=_prompt_value(
+                "spec_ingest",
+                "message_max_chars",
+                spec_ingest_cfg,
+                spec_ingest_defaults,
             ),
-            spec_excerpt_max_chars=_parse_prompt_int(
-                spec_ingest_cfg, spec_ingest_defaults, "spec_excerpt_max_chars"
+            spec_excerpt_max_chars=_prompt_value(
+                "spec_ingest",
+                "spec_excerpt_max_chars",
+                spec_ingest_cfg,
+                spec_ingest_defaults,
             ),
         ),
         autorunner=AppServerAutorunnerPromptConfig(
-            max_chars=_parse_prompt_int(
-                autorunner_cfg, autorunner_defaults, "max_chars"
+            max_chars=_prompt_value(
+                "autorunner", "max_chars", autorunner_cfg, autorunner_defaults
             ),
-            message_max_chars=_parse_prompt_int(
-                autorunner_cfg, autorunner_defaults, "message_max_chars"
+            message_max_chars=_prompt_value(
+                "autorunner",
+                "message_max_chars",
+                autorunner_cfg,
+                autorunner_defaults,
             ),
-            todo_excerpt_max_chars=_parse_prompt_int(
-                autorunner_cfg, autorunner_defaults, "todo_excerpt_max_chars"
+            todo_excerpt_max_chars=_prompt_value(
+                "autorunner",
+                "todo_excerpt_max_chars",
+                autorunner_cfg,
+                autorunner_defaults,
             ),
-            prev_run_max_chars=_parse_prompt_int(
-                autorunner_cfg, autorunner_defaults, "prev_run_max_chars"
+            prev_run_max_chars=_prompt_value(
+                "autorunner",
+                "prev_run_max_chars",
+                autorunner_cfg,
+                autorunner_defaults,
             ),
         ),
     )
@@ -392,8 +509,20 @@ def _parse_app_server_output_config(
 ) -> AppServerOutputConfig:
     cfg = cfg if isinstance(cfg, dict) else {}
     defaults = defaults if isinstance(defaults, dict) else {}
-    policy_raw = cfg.get("policy", defaults.get("policy", "final_only"))
-    policy = str(policy_raw).strip().lower() if policy_raw is not None else ""
+    policy = cast(
+        str,
+        parse_schema_field(
+            cfg.get(
+                "policy",
+                default_from_mapping(
+                    defaults,
+                    "policy",
+                    APP_SERVER_OUTPUT_FIELD_SCHEMAS["policy"],
+                ),
+            ),
+            APP_SERVER_OUTPUT_FIELD_SCHEMAS["policy"],
+        ),
+    )
     if policy not in _APP_SERVER_OUTPUT_POLICIES:
         allowed = ", ".join(sorted(_APP_SERVER_OUTPUT_POLICIES))
         raise ConfigError(f"app_server.output.policy must be one of: {allowed}")
@@ -406,10 +535,13 @@ def _parse_app_server_config(
     defaults: Dict[str, Any],
 ) -> AppServerConfig:
     cfg = cfg if isinstance(cfg, dict) else {}
+    defaults = defaults if isinstance(defaults, dict) else {}
     raw_command = cfg.get("command", dataclasses.MISSING)
     if raw_command is dataclasses.MISSING:
         command = resolve_app_server_command(
-            defaults.get("command"),
+            default_from_mapping(
+                defaults, "command", APP_SERVER_FIELD_SCHEMAS["command"]
+            ),
             env=os.environ,
         )
     else:
@@ -418,109 +550,158 @@ def _parse_app_server_config(
             env=os.environ,
             fallback=(),
         )
-    state_root_raw = cfg.get("state_root", defaults.get("state_root"))
-    if state_root_raw is None:
-        raise ConfigError("app_server.state_root is required")
-    try:
-        state_root = resolve_config_path(
-            state_root_raw,
-            root,
-            allow_home=True,
-            scope="app_server.state_root",
-        )
-    except ConfigPathError as exc:
-        raise ConfigError(str(exc)) from exc
-    auto_restart_raw = cfg.get("auto_restart", defaults.get("auto_restart"))
-    if auto_restart_raw is None:
-        auto_restart = None
-    else:
-        auto_restart = bool(auto_restart_raw)
-    max_handles_raw = cfg.get("max_handles", defaults.get("max_handles"))
-    max_handles = _parse_optional_int(max_handles_raw)
-    if max_handles is not None and max_handles <= 0:
-        max_handles = None
-    idle_ttl_raw = cfg.get("idle_ttl_seconds", defaults.get("idle_ttl_seconds"))
-    idle_ttl_seconds = _parse_optional_int(idle_ttl_raw)
-    if idle_ttl_seconds is not None and idle_ttl_seconds <= 0:
-        idle_ttl_seconds = None
-    turn_timeout_raw = cfg.get(
-        "turn_timeout_seconds", defaults.get("turn_timeout_seconds")
+    state_root = cast(
+        Path,
+        parse_schema_field(
+            cfg.get(
+                "state_root",
+                default_from_mapping(
+                    defaults, "state_root", APP_SERVER_FIELD_SCHEMAS["state_root"]
+                ),
+            ),
+            APP_SERVER_FIELD_SCHEMAS["state_root"],
+            root=root,
+        ),
     )
-    turn_timeout_seconds = (
-        float(turn_timeout_raw) if turn_timeout_raw is not None else None
+    auto_restart = cast(
+        Optional[bool],
+        parse_schema_field(
+            cfg.get(
+                "auto_restart",
+                default_from_mapping(
+                    defaults,
+                    "auto_restart",
+                    APP_SERVER_FIELD_SCHEMAS["auto_restart"],
+                ),
+            ),
+            APP_SERVER_FIELD_SCHEMAS["auto_restart"],
+        ),
     )
-    if turn_timeout_seconds is not None and turn_timeout_seconds <= 0:
-        turn_timeout_seconds = None
-    stall_timeout_raw = cfg.get(
-        "turn_stall_timeout_seconds", defaults.get("turn_stall_timeout_seconds")
+    max_handles = cast(
+        Optional[int],
+        parse_schema_field(
+            cfg.get(
+                "max_handles",
+                default_from_mapping(
+                    defaults,
+                    "max_handles",
+                    APP_SERVER_FIELD_SCHEMAS["max_handles"],
+                ),
+            ),
+            APP_SERVER_FIELD_SCHEMAS["max_handles"],
+        ),
     )
-    turn_stall_timeout_seconds = (
-        float(stall_timeout_raw) if stall_timeout_raw is not None else None
+    idle_ttl_seconds = cast(
+        Optional[int],
+        parse_schema_field(
+            cfg.get(
+                "idle_ttl_seconds",
+                default_from_mapping(
+                    defaults,
+                    "idle_ttl_seconds",
+                    APP_SERVER_FIELD_SCHEMAS["idle_ttl_seconds"],
+                ),
+            ),
+            APP_SERVER_FIELD_SCHEMAS["idle_ttl_seconds"],
+        ),
     )
-    if turn_stall_timeout_seconds is not None and turn_stall_timeout_seconds <= 0:
-        turn_stall_timeout_seconds = None
-    stall_poll_raw = cfg.get(
-        "turn_stall_poll_interval_seconds",
-        defaults.get("turn_stall_poll_interval_seconds"),
+    turn_timeout_seconds = cast(
+        Optional[float],
+        parse_schema_field(
+            cfg.get(
+                "turn_timeout_seconds",
+                default_from_mapping(
+                    defaults,
+                    "turn_timeout_seconds",
+                    APP_SERVER_FIELD_SCHEMAS["turn_timeout_seconds"],
+                ),
+            ),
+            APP_SERVER_FIELD_SCHEMAS["turn_timeout_seconds"],
+        ),
     )
-    turn_stall_poll_interval_seconds = (
-        float(stall_poll_raw) if stall_poll_raw is not None else None
+    turn_stall_timeout_seconds = cast(
+        Optional[float],
+        parse_schema_field(
+            cfg.get(
+                "turn_stall_timeout_seconds",
+                default_from_mapping(
+                    defaults,
+                    "turn_stall_timeout_seconds",
+                    APP_SERVER_FIELD_SCHEMAS["turn_stall_timeout_seconds"],
+                ),
+            ),
+            APP_SERVER_FIELD_SCHEMAS["turn_stall_timeout_seconds"],
+        ),
     )
-    if (
-        turn_stall_poll_interval_seconds is not None
-        and turn_stall_poll_interval_seconds <= 0
-    ):
-        turn_stall_poll_interval_seconds = defaults.get(
-            "turn_stall_poll_interval_seconds"
-        )
-    stall_recovery_raw = cfg.get(
-        "turn_stall_recovery_min_interval_seconds",
-        defaults.get("turn_stall_recovery_min_interval_seconds"),
+    turn_stall_poll_interval_seconds = cast(
+        Optional[float],
+        parse_schema_field(
+            cfg.get(
+                "turn_stall_poll_interval_seconds",
+                default_from_mapping(
+                    defaults,
+                    "turn_stall_poll_interval_seconds",
+                    APP_SERVER_FIELD_SCHEMAS["turn_stall_poll_interval_seconds"],
+                ),
+            ),
+            APP_SERVER_FIELD_SCHEMAS["turn_stall_poll_interval_seconds"],
+        ),
     )
-    turn_stall_recovery_min_interval_seconds = (
-        float(stall_recovery_raw) if stall_recovery_raw is not None else None
+    turn_stall_recovery_min_interval_seconds = cast(
+        Optional[float],
+        parse_schema_field(
+            cfg.get(
+                "turn_stall_recovery_min_interval_seconds",
+                default_from_mapping(
+                    defaults,
+                    "turn_stall_recovery_min_interval_seconds",
+                    APP_SERVER_FIELD_SCHEMAS[
+                        "turn_stall_recovery_min_interval_seconds"
+                    ],
+                ),
+            ),
+            APP_SERVER_FIELD_SCHEMAS["turn_stall_recovery_min_interval_seconds"],
+        ),
     )
-    if (
-        turn_stall_recovery_min_interval_seconds is not None
-        and turn_stall_recovery_min_interval_seconds < 0
-    ):
-        turn_stall_recovery_min_interval_seconds = defaults.get(
-            "turn_stall_recovery_min_interval_seconds"
-        )
-    stall_max_attempts_raw = cfg.get(
-        "turn_stall_max_recovery_attempts",
-        defaults.get("turn_stall_max_recovery_attempts"),
+    turn_stall_max_recovery_attempts = cast(
+        Optional[int],
+        parse_schema_field(
+            cfg.get(
+                "turn_stall_max_recovery_attempts",
+                default_from_mapping(
+                    defaults,
+                    "turn_stall_max_recovery_attempts",
+                    APP_SERVER_FIELD_SCHEMAS["turn_stall_max_recovery_attempts"],
+                ),
+            ),
+            APP_SERVER_FIELD_SCHEMAS["turn_stall_max_recovery_attempts"],
+        ),
     )
-    turn_stall_max_recovery_attempts = _parse_optional_int(stall_max_attempts_raw)
-    if (
-        turn_stall_max_recovery_attempts is not None
-        and turn_stall_max_recovery_attempts <= 0
-    ):
-        turn_stall_max_recovery_attempts = None
-    request_timeout_raw = cfg.get("request_timeout", defaults.get("request_timeout"))
-    request_timeout = (
-        float(request_timeout_raw) if request_timeout_raw is not None else None
+    request_timeout = cast(
+        Optional[float],
+        parse_schema_field(
+            cfg.get(
+                "request_timeout",
+                default_from_mapping(
+                    defaults,
+                    "request_timeout",
+                    APP_SERVER_FIELD_SCHEMAS["request_timeout"],
+                ),
+            ),
+            APP_SERVER_FIELD_SCHEMAS["request_timeout"],
+        ),
     )
-    if request_timeout is not None and request_timeout <= 0:
-        request_timeout = None
     client_defaults = defaults.get("client")
     client_defaults = client_defaults if isinstance(client_defaults, dict) else {}
     client_cfg_raw = cfg.get("client")
     client_cfg = client_cfg_raw if isinstance(client_cfg_raw, dict) else {}
 
-    def _client_int(key: str) -> int:
-        value = client_cfg.get(key, client_defaults.get(key))
-        value = int(value) if value is not None else 0
-        if value <= 0:
-            value = int(client_defaults.get(key) or 0)
-        return value
-
-    def _client_float(key: str, *, allow_zero: bool = False) -> float:
-        value = client_cfg.get(key, client_defaults.get(key))
-        value = float(value) if value is not None else 0.0
-        if value < 0 or (not allow_zero and value <= 0):
-            value = float(client_defaults.get(key) or 0.0)
-        return value
+    def _client_value(key: str) -> Any:
+        schema = APP_SERVER_CLIENT_FIELD_SCHEMAS[key]
+        return parse_schema_field(
+            client_cfg.get(key, default_from_mapping(client_defaults, key, schema)),
+            schema,
+        )
 
     output_defaults = defaults.get("output")
     output_cfg_raw = cfg.get("output")
@@ -540,15 +721,19 @@ def _parse_app_server_config(
         turn_stall_max_recovery_attempts=turn_stall_max_recovery_attempts,
         request_timeout=request_timeout,
         client=AppServerClientConfig(
-            max_message_bytes=_client_int("max_message_bytes"),
-            oversize_preview_bytes=_client_int("oversize_preview_bytes"),
-            max_oversize_drain_bytes=_client_int("max_oversize_drain_bytes"),
-            restart_backoff_initial_seconds=_client_float(
-                "restart_backoff_initial_seconds"
+            max_message_bytes=cast(int, _client_value("max_message_bytes")),
+            oversize_preview_bytes=cast(int, _client_value("oversize_preview_bytes")),
+            max_oversize_drain_bytes=cast(
+                int, _client_value("max_oversize_drain_bytes")
             ),
-            restart_backoff_max_seconds=_client_float("restart_backoff_max_seconds"),
-            restart_backoff_jitter_ratio=_client_float(
-                "restart_backoff_jitter_ratio", allow_zero=True
+            restart_backoff_initial_seconds=cast(
+                float, _client_value("restart_backoff_initial_seconds")
+            ),
+            restart_backoff_max_seconds=cast(
+                float, _client_value("restart_backoff_max_seconds")
+            ),
+            restart_backoff_jitter_ratio=cast(
+                float, _client_value("restart_backoff_jitter_ratio")
             ),
         ),
         output=output,
@@ -563,35 +748,76 @@ def _parse_opencode_config(
 ) -> OpenCodeConfig:
     cfg = cfg if isinstance(cfg, dict) else {}
     defaults = defaults if isinstance(defaults, dict) else {}
-    server_scope_raw = cfg.get(
-        "server_scope", defaults.get("server_scope", "workspace")
+    server_scope = cast(
+        str,
+        parse_schema_field(
+            cfg.get(
+                "server_scope",
+                default_from_mapping(
+                    defaults,
+                    "server_scope",
+                    OPENCODE_FIELD_SCHEMAS["server_scope"],
+                ),
+            ),
+            OPENCODE_FIELD_SCHEMAS["server_scope"],
+        ),
     )
-    server_scope = str(server_scope_raw).strip().lower() or "workspace"
-    if server_scope not in {"workspace", "global"}:
-        raise ConfigError("opencode.server_scope must be 'workspace' or 'global'")
-    stall_timeout_raw = cfg.get(
-        "session_stall_timeout_seconds",
-        defaults.get("session_stall_timeout_seconds"),
+    stall_timeout_seconds = cast(
+        Optional[float],
+        parse_schema_field(
+            cfg.get(
+                "session_stall_timeout_seconds",
+                default_from_mapping(
+                    defaults,
+                    "session_stall_timeout_seconds",
+                    OPENCODE_FIELD_SCHEMAS["session_stall_timeout_seconds"],
+                ),
+            ),
+            OPENCODE_FIELD_SCHEMAS["session_stall_timeout_seconds"],
+        ),
     )
-    stall_timeout_seconds = (
-        float(stall_timeout_raw) if stall_timeout_raw is not None else None
+    max_text_chars = cast(
+        Optional[int],
+        parse_schema_field(
+            cfg.get(
+                "max_text_chars",
+                default_from_mapping(
+                    defaults,
+                    "max_text_chars",
+                    OPENCODE_FIELD_SCHEMAS["max_text_chars"],
+                ),
+            ),
+            OPENCODE_FIELD_SCHEMAS["max_text_chars"],
+        ),
     )
-    if stall_timeout_seconds is not None and stall_timeout_seconds <= 0:
-        stall_timeout_seconds = None
-    max_text_chars_raw = cfg.get("max_text_chars", defaults.get("max_text_chars"))
-    max_text_chars = (
-        int(max_text_chars_raw)
-        if isinstance(max_text_chars_raw, int) and max_text_chars_raw > 0
-        else None
+    max_handles = cast(
+        Optional[int],
+        parse_schema_field(
+            cfg.get(
+                "max_handles",
+                default_from_mapping(
+                    defaults,
+                    "max_handles",
+                    OPENCODE_FIELD_SCHEMAS["max_handles"],
+                ),
+            ),
+            OPENCODE_FIELD_SCHEMAS["max_handles"],
+        ),
     )
-    max_handles_raw = cfg.get("max_handles", defaults.get("max_handles"))
-    max_handles = _parse_optional_int(max_handles_raw)
-    if max_handles is not None and max_handles <= 0:
-        max_handles = None
-    idle_ttl_raw = cfg.get("idle_ttl_seconds", defaults.get("idle_ttl_seconds"))
-    idle_ttl_seconds = _parse_optional_int(idle_ttl_raw)
-    if idle_ttl_seconds is not None and idle_ttl_seconds <= 0:
-        idle_ttl_seconds = None
+    idle_ttl_seconds = cast(
+        Optional[int],
+        parse_schema_field(
+            cfg.get(
+                "idle_ttl_seconds",
+                default_from_mapping(
+                    defaults,
+                    "idle_ttl_seconds",
+                    OPENCODE_FIELD_SCHEMAS["idle_ttl_seconds"],
+                ),
+            ),
+            OPENCODE_FIELD_SCHEMAS["idle_ttl_seconds"],
+        ),
+    )
     return OpenCodeConfig(
         server_scope=server_scope,
         session_stall_timeout_seconds=stall_timeout_seconds,
@@ -852,32 +1078,54 @@ def _parse_usage_config(
 ) -> UsageConfig:
     cfg = cfg if isinstance(cfg, dict) else {}
     defaults = defaults if isinstance(defaults, dict) else {}
-    cache_scope = str(cfg.get("cache_scope", defaults.get("cache_scope", "global")))
-    cache_scope = cache_scope.lower().strip() or "global"
-    global_cache_raw = cfg.get("global_cache_root", defaults.get("global_cache_root"))
+    cache_scope = cast(
+        str,
+        parse_schema_field(
+            cfg.get(
+                "cache_scope",
+                default_from_mapping(
+                    defaults, "cache_scope", USAGE_FIELD_SCHEMAS["cache_scope"]
+                ),
+            ),
+            USAGE_FIELD_SCHEMAS["cache_scope"],
+        ),
+    )
+    global_cache_default = defaults.get("global_cache_root")
+    if global_cache_default is None:
+        global_cache_default = os.environ.get("CODEX_HOME", "~/.codex")
+    global_cache_raw = cfg.get("global_cache_root", global_cache_default)
     if global_cache_raw is None:
-        global_cache_raw = os.environ.get("CODEX_HOME", "~/.codex")
-    try:
-        global_cache_root = resolve_config_path(
+        global_cache_raw = global_cache_default
+    global_cache_root = cast(
+        Path,
+        parse_schema_field(
             global_cache_raw,
-            root,
-            allow_absolute=True,
-            allow_home=True,
-            scope="usage.global_cache_root",
-        )
-    except ConfigPathError as exc:
-        raise ConfigError(str(exc)) from exc
-    repo_cache_raw = cfg.get("repo_cache_path", defaults.get("repo_cache_path"))
+            USAGE_FIELD_SCHEMAS["global_cache_root"],
+            root=root,
+        ),
+    )
+    repo_cache_raw = cfg.get(
+        "repo_cache_path",
+        default_from_mapping(
+            defaults,
+            "repo_cache_path",
+            USAGE_FIELD_SCHEMAS["repo_cache_path"],
+        ),
+    )
     if repo_cache_raw is None:
-        repo_cache_raw = ".codex-autorunner/usage/usage_series_cache.json"
-    try:
-        repo_cache_path = resolve_config_path(
-            repo_cache_raw,
-            root,
-            scope="usage.repo_cache_path",
+        repo_cache_raw = default_from_mapping(
+            defaults,
+            "repo_cache_path",
+            USAGE_FIELD_SCHEMAS["repo_cache_path"],
         )
-    except ConfigPathError as exc:
-        raise ConfigError(str(exc)) from exc
+    repo_cache_path = cast(
+        Path,
+        parse_schema_field(
+            repo_cache_raw,
+            USAGE_FIELD_SCHEMAS["repo_cache_path"],
+            root=root,
+        ),
+    )
     return UsageConfig(
         cache_scope=cache_scope,
         global_cache_root=global_cache_root,

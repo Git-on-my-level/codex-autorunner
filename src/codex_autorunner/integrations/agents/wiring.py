@@ -4,8 +4,9 @@ import inspect
 import logging
 import os
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Mapping, Optional
+from typing import Any, Awaitable, Callable, Mapping, Optional, cast
 
+from ...agents.registry import get_agent_descriptor, resolve_agent_execution_target
 from ...core.config import RepoConfig
 from ...core.destinations import DockerDestination
 from ...core.ports.agent_backend import AgentBackend
@@ -22,6 +23,7 @@ from .opencode_backend import OpenCodeBackend
 from .opencode_supervisor_factory import build_opencode_supervisor_from_repo_config
 
 NotificationHandler = Callable[[Mapping[str, object]], Awaitable[None]]
+_RUNTIME_PROFILE_NONE = ""
 
 
 class AgentBackendFactory:
@@ -48,10 +50,16 @@ class AgentBackendFactory:
         self._destination = resolve_destination_from_config(
             getattr(config, "effective_destination", {"kind": "local"})
         )
-        self._backend_cache: dict[str, AgentBackend] = {}
+        self._backend_cache: dict[tuple[str, str], AgentBackend] = {}
         self._opencode_supervisor: Optional[Any] = shared_opencode_supervisor
+        self._opencode_supervisors: dict[tuple[str, str], Any] = {}
         self._owns_opencode_supervisor = shared_opencode_supervisor is None
         self._codex_supervisor: Optional[WorkspaceAppServerSupervisor] = None
+
+    def _runtime_cache_key(
+        self, runtime_agent_id: str, runtime_profile: Optional[str] = None
+    ) -> tuple[str, str]:
+        return (runtime_agent_id, runtime_profile or _RUNTIME_PROFILE_NONE)
 
     def __call__(
         self,
@@ -59,134 +67,168 @@ class AgentBackendFactory:
         state: RunnerState,
         notification_handler: Optional[NotificationHandler],
     ) -> AgentBackend:
+        target = resolve_agent_execution_target(agent_id, context=self._config)
+        descriptor = get_agent_descriptor(target.runtime_agent_id, self._config)
+        if descriptor is None or descriptor.backend_factory is None:
+            raise ValueError(f"Unsupported agent backend: {agent_id}")
+        return cast(
+            AgentBackend,
+            descriptor.backend_factory(self, target, state, notification_handler),
+        )
+
+    def _build_codex_backend(
+        self,
+        target: Any,
+        state: RunnerState,
+        notification_handler: Optional[NotificationHandler],
+    ) -> AgentBackend:
         approval_handler = getattr(notification_handler, "approval_handler", None)
         if not callable(approval_handler):
             approval_handler = None
-        if agent_id == "codex":
-            if not self._config.app_server.command:
-                raise ValueError("app_server.command is required for codex backend")
+        if not self._config.app_server.command:
+            raise ValueError("app_server.command is required for codex backend")
 
-            approval_policy = state.autorunner_approval_policy or "never"
-            sandbox_mode = state.autorunner_sandbox_mode or "dangerFullAccess"
-            if sandbox_mode == "workspaceWrite":
-                sandbox_policy: Any = {
-                    "type": "workspaceWrite",
-                    "writableRoots": [str(self._repo_root)],
-                    "networkAccess": bool(state.autorunner_workspace_write_network),
-                }
-            else:
-                sandbox_policy = sandbox_mode
+        approval_policy = state.autorunner_approval_policy or "never"
+        sandbox_mode = state.autorunner_sandbox_mode or "dangerFullAccess"
+        if sandbox_mode == "workspaceWrite":
+            sandbox_policy: Any = {
+                "type": "workspaceWrite",
+                "writableRoots": [str(self._repo_root)],
+                "networkAccess": bool(state.autorunner_workspace_write_network),
+            }
+        else:
+            sandbox_policy = sandbox_mode
 
-            model = state.autorunner_model_override or self._config.codex_model
-            reasoning_effort = (
-                state.autorunner_effort_override or self._config.codex_reasoning
+        model = state.autorunner_model_override or self._config.codex_model
+        reasoning_effort = (
+            state.autorunner_effort_override or self._config.codex_reasoning
+        )
+        default_approval_decision = self._config.ticket_flow.default_approval_decision
+        turn_timeout_seconds = self._config.app_server.turn_timeout_seconds
+
+        cache_key = self._runtime_cache_key(
+            target.runtime_agent_id, target.runtime_profile
+        )
+        cached = self._backend_cache.get(cache_key)
+        if cached is None:
+            cached = CodexAppServerBackend(
+                supervisor=self._ensure_codex_supervisor(),
+                workspace_root=self._repo_root,
+                approval_policy=approval_policy,
+                sandbox_policy=sandbox_policy,
+                model=model,
+                reasoning_effort=reasoning_effort,
+                turn_timeout_seconds=turn_timeout_seconds,
+                auto_restart=self._config.app_server.auto_restart,
+                request_timeout=self._config.app_server.request_timeout,
+                turn_stall_timeout_seconds=self._config.app_server.turn_stall_timeout_seconds,
+                turn_stall_poll_interval_seconds=self._config.app_server.turn_stall_poll_interval_seconds,
+                turn_stall_recovery_min_interval_seconds=self._config.app_server.turn_stall_recovery_min_interval_seconds,
+                max_message_bytes=self._config.app_server.client.max_message_bytes,
+                oversize_preview_bytes=self._config.app_server.client.oversize_preview_bytes,
+                max_oversize_drain_bytes=self._config.app_server.client.max_oversize_drain_bytes,
+                restart_backoff_initial_seconds=self._config.app_server.client.restart_backoff_initial_seconds,
+                restart_backoff_max_seconds=self._config.app_server.client.restart_backoff_max_seconds,
+                restart_backoff_jitter_ratio=self._config.app_server.client.restart_backoff_jitter_ratio,
+                output_policy=self._config.app_server.output.policy,
+                notification_handler=notification_handler,
+                approval_handler=approval_handler,
+                logger=self._logger,
+                default_approval_decision=default_approval_decision,
             )
-
-            default_approval_decision = (
-                self._config.ticket_flow.default_approval_decision
+            self._backend_cache[cache_key] = cached
+        elif isinstance(cached, CodexAppServerBackend):
+            cached.configure(
+                approval_policy=approval_policy,
+                sandbox_policy=sandbox_policy,
+                model=model,
+                reasoning_effort=reasoning_effort,
+                turn_timeout_seconds=turn_timeout_seconds,
+                notification_handler=notification_handler,
+                approval_handler=approval_handler,
+                default_approval_decision=default_approval_decision,
             )
-            turn_timeout_seconds = self._config.app_server.turn_timeout_seconds
+        return cached
 
-            cached = self._backend_cache.get(agent_id)
-            if cached is None:
-                cached = CodexAppServerBackend(
-                    supervisor=self._ensure_codex_supervisor(),
-                    workspace_root=self._repo_root,
-                    approval_policy=approval_policy,
-                    sandbox_policy=sandbox_policy,
-                    model=model,
-                    reasoning_effort=reasoning_effort,
-                    turn_timeout_seconds=turn_timeout_seconds,
-                    auto_restart=self._config.app_server.auto_restart,
-                    request_timeout=self._config.app_server.request_timeout,
-                    turn_stall_timeout_seconds=self._config.app_server.turn_stall_timeout_seconds,
-                    turn_stall_poll_interval_seconds=self._config.app_server.turn_stall_poll_interval_seconds,
-                    turn_stall_recovery_min_interval_seconds=self._config.app_server.turn_stall_recovery_min_interval_seconds,
-                    max_message_bytes=self._config.app_server.client.max_message_bytes,
-                    oversize_preview_bytes=self._config.app_server.client.oversize_preview_bytes,
-                    max_oversize_drain_bytes=self._config.app_server.client.max_oversize_drain_bytes,
-                    restart_backoff_initial_seconds=self._config.app_server.client.restart_backoff_initial_seconds,
-                    restart_backoff_max_seconds=self._config.app_server.client.restart_backoff_max_seconds,
-                    restart_backoff_jitter_ratio=self._config.app_server.client.restart_backoff_jitter_ratio,
-                    output_policy=self._config.app_server.output.policy,
-                    notification_handler=notification_handler,
-                    approval_handler=approval_handler,
-                    logger=self._logger,
-                    default_approval_decision=default_approval_decision,
+    def _build_opencode_backend(
+        self,
+        target: Any,
+        state: RunnerState,
+        notification_handler: Optional[NotificationHandler],
+    ) -> AgentBackend:
+        _ = notification_handler
+        agent_cfg = self._config.resolved_agent_config(
+            target.runtime_agent_id,
+            profile=target.runtime_profile,
+        )
+        base_url = agent_cfg.base_url if agent_cfg else None
+        username = os.environ.get("OPENCODE_SERVER_USERNAME")
+        password = os.environ.get("OPENCODE_SERVER_PASSWORD")
+        if password and not username:
+            username = "opencode"
+        auth = (username, password) if username and password else None
+
+        cache_key = self._runtime_cache_key(
+            target.runtime_agent_id, target.runtime_profile
+        )
+        cached = self._backend_cache.get(cache_key)
+        if cached is None:
+            if not base_url:
+                supervisor = self._ensure_opencode_supervisor(
+                    agent_id=target.runtime_agent_id,
+                    profile=target.runtime_profile,
                 )
-                self._backend_cache[agent_id] = cached
+                if supervisor is None:
+                    raise ValueError("opencode backend is not configured")
+                cached = OpenCodeBackend(
+                    supervisor=supervisor,
+                    workspace_root=self._repo_root,
+                    auth=auth,
+                    timeout=self._config.app_server.request_timeout,
+                    model=state.autorunner_model_override,
+                    reasoning=state.autorunner_effort_override,
+                    approval_policy=state.autorunner_approval_policy,
+                    session_stall_timeout_seconds=self._config.opencode.session_stall_timeout_seconds,
+                    logger=self._logger,
+                )
             else:
-                if isinstance(cached, CodexAppServerBackend):
-                    cached.configure(
-                        approval_policy=approval_policy,
-                        sandbox_policy=sandbox_policy,
-                        model=model,
-                        reasoning_effort=reasoning_effort,
-                        turn_timeout_seconds=turn_timeout_seconds,
-                        notification_handler=notification_handler,
-                        approval_handler=approval_handler,
-                        default_approval_decision=default_approval_decision,
-                    )
-            return cached
+                cached = OpenCodeBackend(
+                    base_url=base_url,
+                    workspace_root=self._repo_root,
+                    auth=auth,
+                    timeout=self._config.app_server.request_timeout,
+                    model=state.autorunner_model_override,
+                    reasoning=state.autorunner_effort_override,
+                    approval_policy=state.autorunner_approval_policy,
+                    session_stall_timeout_seconds=self._config.opencode.session_stall_timeout_seconds,
+                    logger=self._logger,
+                )
+            self._backend_cache[cache_key] = cached
+        elif isinstance(cached, OpenCodeBackend):
+            cached.configure(
+                model=state.autorunner_model_override,
+                reasoning=state.autorunner_effort_override,
+                approval_policy=state.autorunner_approval_policy,
+            )
+        return cached
 
-        if agent_id == "opencode":
-            agent_cfg = self._config.agents.get("opencode")
-            base_url = agent_cfg.base_url if agent_cfg else None
-            username = os.environ.get("OPENCODE_SERVER_USERNAME")
-            password = os.environ.get("OPENCODE_SERVER_PASSWORD")
-            if password and not username:
-                username = "opencode"
-            auth = (username, password) if username and password else None
-
-            cached = self._backend_cache.get(agent_id)
-            if cached is None:
-                if not base_url:
-                    supervisor = self._ensure_opencode_supervisor()
-                    if supervisor is None:
-                        raise ValueError("opencode backend is not configured")
-                    cached = OpenCodeBackend(
-                        supervisor=supervisor,
-                        workspace_root=self._repo_root,
-                        auth=auth,
-                        timeout=self._config.app_server.request_timeout,
-                        model=state.autorunner_model_override,
-                        reasoning=state.autorunner_effort_override,
-                        approval_policy=state.autorunner_approval_policy,
-                        session_stall_timeout_seconds=self._config.opencode.session_stall_timeout_seconds,
-                        logger=self._logger,
-                    )
-                else:
-                    cached = OpenCodeBackend(
-                        base_url=base_url,
-                        workspace_root=self._repo_root,
-                        auth=auth,
-                        timeout=self._config.app_server.request_timeout,
-                        model=state.autorunner_model_override,
-                        reasoning=state.autorunner_effort_override,
-                        approval_policy=state.autorunner_approval_policy,
-                        session_stall_timeout_seconds=self._config.opencode.session_stall_timeout_seconds,
-                        logger=self._logger,
-                    )
-                self._backend_cache[agent_id] = cached
-            else:
-                if isinstance(cached, OpenCodeBackend):
-                    cached.configure(
-                        model=state.autorunner_model_override,
-                        reasoning=state.autorunner_effort_override,
-                        approval_policy=state.autorunner_approval_policy,
-                    )
-            return cached
-
-        raise ValueError(f"Unsupported agent backend: {agent_id}")
-
-    def _ensure_opencode_supervisor(self) -> Optional[Any]:
+    def _ensure_opencode_supervisor(
+        self,
+        *,
+        agent_id: str = "opencode",
+        profile: Optional[str] = None,
+    ) -> Optional[Any]:
         if self._opencode_supervisor is not None:
             return self._opencode_supervisor
+        cache_key = self._runtime_cache_key(agent_id, profile)
+        cached = self._opencode_supervisors.get(cache_key)
+        if cached is not None:
+            return cached
         opencode_command_override: Optional[list[str]] = None
         if isinstance(self._destination, DockerDestination):
-            agent_cmd = self._config.agent_serve_command("opencode")
+            agent_cmd = self._config.agent_serve_command(agent_id, profile=profile)
             if not agent_cmd:
-                opencode_binary = self._config.agent_binary("opencode")
+                opencode_binary = self._config.agent_binary(agent_id, profile=profile)
                 agent_cmd = [
                     opencode_binary,
                     "serve",
@@ -206,15 +248,24 @@ class AgentBackendFactory:
             workspace_root=self._repo_root,
             logger=self._logger,
             base_env=None,
+            agent_id=agent_id,
+            profile=profile,
             command_override=opencode_command_override,
         )
-        self._opencode_supervisor = supervisor
+        self._opencode_supervisors[cache_key] = supervisor
         return supervisor
 
     def reset_session_state(self, *, agent_id: Optional[str] = None) -> None:
         """Clear cached in-memory session state for one or all backends."""
         if isinstance(agent_id, str) and agent_id:
-            backends = [self._backend_cache.get(agent_id)]
+            target = resolve_agent_execution_target(agent_id, context=self._config)
+            backends = [
+                self._backend_cache.get(
+                    self._runtime_cache_key(
+                        target.runtime_agent_id, target.runtime_profile
+                    )
+                )
+            ]
         else:
             backends = list(self._backend_cache.values())
         for backend in backends:
@@ -243,6 +294,16 @@ class AgentBackendFactory:
                         "Failed closing opencode supervisor", exc_info=True
                     )
             self._opencode_supervisor = None
+        for supervisor in self._opencode_supervisors.values():
+            if supervisor is None:
+                continue
+            try:
+                await supervisor.close_all()
+            except Exception:  # intentional: best-effort supervisor cleanup
+                self._logger.warning(
+                    "Failed closing opencode supervisor", exc_info=True
+                )
+        self._opencode_supervisors = {}
         if self._codex_supervisor is not None:
             try:
                 await self._codex_supervisor.close_all()

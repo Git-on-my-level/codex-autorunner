@@ -55,6 +55,9 @@ from ....core.flows.worker_process import (
 )
 from ....core.orchestration import build_ticket_flow_orchestration_service
 from ....core.runtime import RuntimeContext
+from ....core.ticket_flow_operator import (
+    ticket_flow_preflight as shared_ticket_flow_preflight,
+)
 from ....core.utils import atomic_write, find_repo_root
 from ....flows.ticket_flow import build_ticket_flow_definition
 from ....flows.ticket_flow.runtime_helpers import (
@@ -99,7 +102,6 @@ from .flow_routes import FlowRoutesState
 from .flow_routes.dependencies import build_default_flow_route_dependencies
 from .flow_routes.runtime_service import (
     evict_cached_controller,
-    list_orchestration_flow_run_records,
     recover_flow_store_if_possible,
     resolve_flow_run_record,
 )
@@ -392,6 +394,36 @@ def _normalize_run_id(run_id: Union[str, uuid.UUID]) -> str:
 def _validate_tickets(ticket_dir: Path) -> list[str]:
     """Validate all tickets in the directory and return linting/frontmatter errors."""
     return list(evaluate_ticket_start_policy(ticket_dir).lint_errors)
+
+
+def _ticket_flow_preflight_lint_errors(repo_root: Path) -> list[str]:
+    report = shared_ticket_flow_preflight(repo_root, config=None)
+    lint_check_ids = {"ticket_filenames", "duplicate_indices", "frontmatter"}
+    errors: list[str] = []
+    for check in report.checks:
+        if check.status != "error" or check.check_id not in lint_check_ids:
+            continue
+        if check.details:
+            errors.extend(check.details)
+        else:
+            errors.append(check.message)
+    return errors
+
+
+def _ensure_ticket_flow_preflight(repo_root: Path) -> None:
+    lint_errors = _ticket_flow_preflight_lint_errors(repo_root)
+    if lint_errors:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "Ticket validation failed",
+                "errors": lint_errors,
+            },
+        )
+    report = shared_ticket_flow_preflight(repo_root, config=None)
+    for check in report.checks:
+        if check.check_id == "tickets_present" and check.status == "error":
+            raise HTTPException(status_code=400, detail=NO_TICKETS_START_ERROR)
 
 
 def _lint_after_ticket_update(ticket_dir: Path) -> list[str]:
@@ -802,46 +834,30 @@ def build_flow_routes() -> APIRouter:
 
         repo_root = find_repo_root()
 
-        if flow_type == "ticket_flow" and validate_tickets:
+        if flow_type == "ticket_flow":
             ticket_dir = repo_root / ".codex-autorunner" / "tickets"
-            ticket_policy = evaluate_ticket_start_policy(ticket_dir)
-            lint_errors = list(ticket_policy.lint_errors)
-            if lint_errors:
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "message": "Ticket validation failed",
-                        "errors": lint_errors,
-                    },
-                )
-            if not ticket_policy.has_tickets:
-                raise HTTPException(status_code=400, detail=NO_TICKETS_START_ERROR)
-
-        # Reuse an active/paused run unless force_new is requested.
-        if not force_new:
-            try:
-                active_records = list_orchestration_flow_run_records(
-                    repo_root,
-                    flow_type=flow_type,
-                    flow_target_id=flow_type,
-                    active_only=True,
-                    build_service=_build_flow_orchestration_service,
-                )
-            except (
-                sqlite3.Error,
-                OSError,
-                ValueError,
-                RuntimeError,
-            ):  # intentional: graceful degradation
-                active_records = []
-            active = active_records[0] if active_records else None
-            if active:
-                _reap_dead_worker(active.id, state)
-                _start_flow_worker(repo_root, active.id, state)
+            records = _safe_list_flow_runs(
+                repo_root,
+                flow_type="ticket_flow",
+                recover_stuck=True,
+            )
+            reuse = resolve_run_reuse_policy(
+                records,
+                force_new=force_new,
+                ticket_dir=ticket_dir,
+            )
+            if reuse.action == "reuse_active":
+                assert reuse.run is not None
+                if validate_tickets:
+                    _ensure_ticket_flow_preflight(repo_root)
+                _reap_dead_worker(reuse.run.id, state)
+                _start_flow_worker(repo_root, reuse.run.id, state)
                 store = _require_flow_store(repo_root)
                 try:
                     response = _build_flow_status_response(
-                        active, repo_root, store=store
+                        reuse.run,
+                        repo_root,
+                        store=store,
                     )
                 finally:
                     if store:
@@ -849,6 +865,22 @@ def build_flow_routes() -> APIRouter:
                 response.state = response.state or {}
                 response.state["hint"] = "active_run_reused"
                 return response
+            if reuse.action == "completed_pending" and reuse.pending_ticket_count > 0:
+                assert reuse.run is not None
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": (
+                            f"Run {reuse.run.id} completed with "
+                            f"{reuse.pending_ticket_count} pending tickets. "
+                            "Use force_new=true to create a new run."
+                        ),
+                        "run_id": reuse.run.id,
+                        "pending_ticket_count": reuse.pending_ticket_count,
+                    },
+                )
+            if validate_tickets:
+                _ensure_ticket_flow_preflight(repo_root)
 
         run_id = _normalize_run_id(uuid.uuid4())
         try:
@@ -1006,15 +1038,7 @@ def build_flow_routes() -> APIRouter:
 
         if reuse.action == "reuse_active":
             assert reuse.run is not None
-            lint_errors = _validate_tickets(ticket_dir)
-            if lint_errors:
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "message": "Ticket validation failed",
-                        "errors": lint_errors,
-                    },
-                )
+            _ensure_ticket_flow_preflight(repo_root)
             _reap_dead_worker(reuse.run.id, state)
             _start_flow_worker(repo_root, reuse.run.id, state)
             store = _require_flow_store(repo_root)

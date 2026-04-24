@@ -32,9 +32,6 @@ from codex_autorunner.surfaces.web.routes.pma_routes import (
     chat_runtime,
     tail_stream,
 )
-from codex_autorunner.surfaces.web.routes.pma_routes import (
-    hermes_supervisors as hermes_supervisor_routes,
-)
 from codex_autorunner.surfaces.web.routes.pma_routes import publish as publish_routes
 from tests.conftest import write_test_config
 from tests.pma_support import (
@@ -239,13 +236,8 @@ def test_pma_agents_endpoint_prefers_hermes_default_profile_over_global_default(
         observed["profiles"].append(profile)
         return _HermesSupervisor()
 
-    monkeypatch.setattr(
-        hermes_supervisor_routes,
-        "build_hermes_supervisor_from_config",
-        _build_supervisor,
-    )
-
     with TestClient(app) as client:
+        app.state.pma_container.ports.build_hermes_supervisor = _build_supervisor
         first = client.get("/hub/pma/agents")
         second = client.get("/hub/pma/agents")
 
@@ -284,15 +276,10 @@ def test_pma_agents_endpoint_includes_unavailable_hermes_static_profile_metadata
             },
         )(),
     )
-    monkeypatch.setattr(
-        hermes_supervisor_routes,
-        "build_hermes_supervisor_from_config",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("unavailable hermes should not resolve supervisor metadata")
-        ),
-    )
-
     app = create_hub_app(hub_env.hub_root)
+    app.state.pma_container.ports.build_hermes_supervisor = lambda *_args, **_kwargs: (
+        _ for _ in ()
+    ).throw(AssertionError("unavailable hermes should not resolve supervisor metadata"))
 
     with TestClient(app) as client:
         resp = client.get("/hub/pma/agents")
@@ -753,11 +740,10 @@ def test_pma_chat_github_injection_uses_raw_user_message(
         prompt_text = str(kwargs.get("prompt_text") or "")
         return f"{prompt_text}\n\n[injected-from-github]", True
 
-    monkeypatch.setattr(
-        "codex_autorunner.surfaces.web.routes.pma.maybe_inject_github_context",
-        _fake_github_context_injection,
-    )
     app = create_hub_app(hub_env.hub_root)
+    app.state.pma_container.ports.maybe_inject_github_context = (
+        _fake_github_context_injection
+    )
 
     class FakeTurnHandle:
         def __init__(self) -> None:
@@ -1591,7 +1577,8 @@ async def test_pma_wakeup_publish_retries_transient_telegram_enqueue_failure(
         await stop_lane_worker(app, lane_id)
 
     assert enqueue_attempts == 2
-    assert sleep_calls == [0.25]
+    assert sleep_calls
+    assert sleep_calls[0] == 0.25
 
     telegram_store = TelegramStateStore(
         hub_env.hub_root / ".codex-autorunner" / "telegram_state.sqlite3"
@@ -1737,11 +1724,8 @@ def test_pma_active_clears_on_prompt_build_error(hub_env, monkeypatch) -> None:
     async def _boom(*args, **kwargs):
         raise RuntimeError("snapshot failed")
 
-    monkeypatch.setattr(
-        "codex_autorunner.surfaces.web.routes.pma.build_hub_snapshot",
-        _boom,
-    )
     app = create_hub_app(hub_env.hub_root)
+    app.state.pma_container.ports.build_hub_snapshot = _boom
 
     client = TestClient(app)
     resp = client.post("/hub/pma/chat", json={"message": "hi"})

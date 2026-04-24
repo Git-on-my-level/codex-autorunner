@@ -8,6 +8,7 @@ from typing import Any, AsyncGenerator, Callable, Dict, Optional, Set
 from ...manifest import ManifestError, load_manifest
 from ..git_utils import GitError, run_git
 from ..lifecycle_events import LifecycleEventEmitter, LifecycleEventType
+from ..state_roots import resolve_hub_manifest_path
 from ..utils import find_repo_root
 from .definition import FlowDefinition
 from .models import FlowEvent, FlowRunRecord, FlowRunStatus
@@ -26,7 +27,7 @@ def _find_hub_root(repo_root: Optional[Path] = None) -> Optional[Path]:
         return None
     current = repo_root
     for _ in range(5):
-        manifest_path = current / ".codex-autorunner" / "manifest.yml"
+        manifest_path = resolve_hub_manifest_path(current)
         if manifest_path.exists():
             return current
         parent = current.parent
@@ -71,7 +72,7 @@ class FlowController:
         repo_root = self.db_path.parent.parent if self.db_path else None
         if repo_root is None:
             return ""
-        manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
+        manifest_path = resolve_hub_manifest_path(hub_root)
         try:
             manifest = load_manifest(manifest_path, hub_root)
         except ManifestError:

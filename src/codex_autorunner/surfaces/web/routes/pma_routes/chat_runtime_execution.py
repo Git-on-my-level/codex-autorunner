@@ -37,6 +37,7 @@ from .....core.ports.run_event import (
 )
 from .....core.time_utils import now_iso
 from .....integrations.app_server import is_missing_thread_error
+from ...services.pma import get_pma_request_context
 
 logger = logging.getLogger(__name__)
 
@@ -130,13 +131,21 @@ def raw_events_show_completion(raw_events: tuple[Any, ...]) -> bool:
 def build_runtime_harness(
     request: Request, agent_id: str, profile: Optional[str] = None
 ) -> Any:
+    context = get_pma_request_context(request)
+    from . import chat_runtime as chat_runtime_routes
+
+    registry_getter = getattr(
+        chat_runtime_routes,
+        "get_registered_agents",
+        get_registered_agents,
+    )
     try:
-        descriptors = get_registered_agents(request.app.state)
+        descriptors = registry_getter(context.agent_context)
     except TypeError as exc:
         if "positional argument" not in str(exc):
             raise
-        descriptors = get_registered_agents()
-    resolution = resolve_agent_runtime(agent_id, profile, context=request.app.state)
+        descriptors = registry_getter()
+    resolution = resolve_agent_runtime(agent_id, profile, context=context.agent_context)
     effective_agent_id = resolution.runtime_agent_id
     effective_profile = resolution.runtime_profile
     descriptor = descriptors.get(effective_agent_id)
@@ -147,7 +156,7 @@ def build_runtime_harness(
     try:
         return descriptor.make_harness(
             wrap_requested_agent_context(
-                request.app.state,
+                context.agent_context,
                 agent_id=effective_agent_id,
                 profile=effective_profile,
             )

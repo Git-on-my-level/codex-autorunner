@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from .....agents.registry import get_agent_descriptor, get_available_agents
 from .....core.orchestration.catalog import map_agent_capabilities
-from ...services.pma.common import pma_config_from_raw
+from ...services.pma import get_pma_request_context
 from ..agents import (
     _available_agents,
     _serialize_agent_profiles,
@@ -22,19 +22,21 @@ def build_pma_meta_routes(
     """Build PMA metadata, audit, and model-catalog routes."""
 
     def _hermes_is_configured(request: Request) -> bool:
-        config = getattr(request.app.state, "config", None)
+        context = get_pma_request_context(request)
+        config = context.config
         backend_getter = getattr(config, "agent_backend", None)
         if callable(backend_getter):
             try:
                 return str(backend_getter("hermes")).strip().lower() == "hermes"
             except (TypeError, ValueError, RuntimeError):
                 return False
-        return get_agent_descriptor("hermes", request.app.state) is not None
+        return get_agent_descriptor("hermes", context.agent_context) is not None
 
     def _build_registered_hermes_payload(request: Request) -> dict[str, Any] | None:
+        context = get_pma_request_context(request)
         if not _hermes_is_configured(request):
             return None
-        descriptor = get_agent_descriptor("hermes", request.app.state)
+        descriptor = get_agent_descriptor("hermes", context.agent_context)
         if descriptor is None:
             return None
         agent_payload: dict[str, Any] = {
@@ -68,10 +70,10 @@ def build_pma_meta_routes(
             if supervisor is not None:
                 try:
                     session_caps = await supervisor.session_capabilities(
-                        request.app.state.config.root
+                        get_pma_request_context(request).hub_root
                     )
                     commands = await supervisor.advertised_commands(
-                        request.app.state.config.root
+                        get_pma_request_context(request).hub_root
                     )
                 except Exception:  # intentional: optional runtime metadata
                     session_caps = None
@@ -96,13 +98,12 @@ def build_pma_meta_routes(
         return agent_payload
 
     def _get_pma_config(request: Request) -> dict[str, Any]:
-        raw = getattr(request.app.state.config, "raw", {})
-        return pma_config_from_raw(raw)
+        return get_pma_request_context(request).pma_config
 
     def _get_safety_checker(request: Request):
+        context = get_pma_request_context(request)
         runtime = get_runtime_state()
-        hub_root = request.app.state.config.root
-        return runtime.get_safety_checker(hub_root, request)
+        return runtime.get_safety_checker(context.hub_root, context)
 
     def _resolve_hermes_supervisor(
         request: Request,
@@ -113,7 +114,8 @@ def build_pma_meta_routes(
 
     @router.get("/agents")
     async def list_pma_agents(request: Request) -> dict[str, Any]:
-        if not get_available_agents(request.app.state):
+        context = get_pma_request_context(request)
+        if not get_available_agents(context.agent_context):
             raise HTTPException(status_code=404, detail="PMA unavailable")
         agents, default_agent = _available_agents(request)
         defaults = _get_pma_config(request)
@@ -195,9 +197,10 @@ def build_pma_meta_routes(
 
     @router.get("/agents/{agent}/models")
     async def list_pma_agent_models(agent: str, request: Request):
+        context = get_pma_request_context(request)
         agent_id = (agent or "").strip().lower()
-        hub_root = request.app.state.config.root
-        descriptor = get_agent_descriptor(agent_id, request.app.state)
+        hub_root = context.hub_root
+        descriptor = get_agent_descriptor(agent_id, context.agent_context)
         if descriptor is None:
             raise HTTPException(status_code=404, detail="Unknown agent")
         if "model_listing" not in descriptor.capabilities:
@@ -206,7 +209,7 @@ def build_pma_meta_routes(
                 detail=f"Agent '{agent_id}' does not support capability 'model_listing'",
             )
         try:
-            harness = descriptor.make_harness(request.app.state)
+            harness = descriptor.make_harness(context.agent_context)
             return _serialize_model_catalog(await harness.model_catalog(hub_root))
         except RuntimeError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc

@@ -462,7 +462,7 @@ def test_hub_supervisor_can_create_list_and_remove_agent_workspaces(tmp_path: Pa
     assert supervisor.list_agent_workspaces(use_cache=False) == []
 
 
-def test_get_agent_workspace_snapshot_does_not_refresh_repo_listing(
+def test_get_agent_workspace_snapshot_refreshes_repo_listing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     hub_root = tmp_path / "hub"
@@ -488,7 +488,7 @@ def test_get_agent_workspace_snapshot_does_not_refresh_repo_listing(
 
     snapshot = supervisor.get_agent_workspace_snapshot("zc-main")
     assert snapshot.id == "zc-main"
-    assert calls == []
+    assert calls == [False]
 
 
 def test_agent_workspace_mutations_refresh_startup_cached_state(
@@ -3141,6 +3141,32 @@ def test_cleanup_worktree_removes_leftover_car_state_directory(
     assert not worktree.path.exists()
 
 
+def test_cleanup_worktree_refreshes_topology_listing(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg["pma"]["cleanup_require_archive"] = False
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/topology-refresh",
+        start_point="HEAD",
+    )
+
+    supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=False)
+
+    refreshed_ids = [snapshot.id for snapshot in supervisor.list_repos(use_cache=False)]
+    assert refreshed_ids == [base.id]
+
+
 def test_cleanup_worktree_archives_pma_threads_before_manifest_removal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -3554,6 +3580,75 @@ def _make_supervisor(hub_root: Path) -> HubSupervisor:
         backend_factory_builder=build_agent_backend_factory,
         app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
         backend_orchestrator_builder=build_backend_orchestrator,
+    )
+
+
+def test_create_repo_returns_authoritative_snapshot_after_refresh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = _make_supervisor(hub_root)
+
+    original_list_repos = supervisor.list_repos
+
+    def _wrapped(*, use_cache: bool = True):  # type: ignore[no-untyped-def]
+        snapshots = original_list_repos(use_cache=use_cache)
+        authoritative = dataclasses.replace(
+            snapshots[0],
+            display_name="authoritative-demo",
+        )
+        supervisor.state = dataclasses.replace(supervisor.state, repos=[authoritative])
+        return [authoritative]
+
+    monkeypatch.setattr(supervisor, "list_repos", _wrapped)
+
+    snapshot = supervisor.create_repo("demo")
+
+    assert snapshot.display_name == "authoritative-demo"
+    assert supervisor.state.repos[0].display_name == "authoritative-demo"
+
+
+def test_update_agent_workspace_returns_authoritative_snapshot_after_refresh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = _make_supervisor(hub_root)
+    supervisor.create_agent_workspace(
+        workspace_id="zc-main",
+        runtime="zeroclaw",
+        display_name="ZeroClaw Main",
+        enabled=False,
+    )
+
+    original_list_repos = supervisor.list_repos
+
+    def _wrapped(*, use_cache: bool = True):  # type: ignore[no-untyped-def]
+        snapshots = original_list_repos(use_cache=use_cache)
+        authoritative = dataclasses.replace(
+            supervisor.state.agent_workspaces[0],
+            display_name="Authoritative Workspace",
+        )
+        supervisor.state = dataclasses.replace(
+            supervisor.state,
+            repos=list(snapshots),
+            agent_workspaces=[authoritative],
+        )
+        return snapshots
+
+    monkeypatch.setattr(supervisor, "list_repos", _wrapped)
+
+    snapshot = supervisor.update_agent_workspace(
+        "zc-main",
+        display_name="Renamed Workspace",
+    )
+
+    assert snapshot.display_name == "Authoritative Workspace"
+    assert (
+        supervisor.state.agent_workspaces[0].display_name == "Authoritative Workspace"
     )
 
 

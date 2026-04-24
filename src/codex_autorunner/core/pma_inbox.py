@@ -23,6 +23,7 @@ from .hub_inbox_resolution import (
     record_message_resolution,
 )
 from .pma_audit import PmaActionType, PmaAuditEntry, PmaAuditLog
+from .state_roots import resolve_repo_flows_db_path
 from .text_utils import _parse_iso_timestamp
 from .ticket_flow_projection import (
     build_canonical_state_v1,
@@ -551,7 +552,7 @@ def _gather_inbox(
     repos = _inbox_resolve_repos(supervisor)
     for snap in repos:
         repo_root = snap.path
-        db_path = repo_root / ".codex-autorunner" / "flows.db"
+        db_path = resolve_repo_flows_db_path(repo_root)
         if not db_path.exists():
             continue
         try:

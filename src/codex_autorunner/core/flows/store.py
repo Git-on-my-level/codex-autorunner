@@ -10,9 +10,13 @@ from typing import Any, Dict, Generator, List, Optional, cast
 
 from ..sqlite_utils import (
     DEFAULT_SQLITE_BUSY_TIMEOUT_MS,
-    SQLITE_PRAGMAS,
-    SQLITE_PRAGMAS_DURABLE,
+    SqliteMigrationStep,
+    apply_versioned_schema,
+    connect_sqlite,
+    read_schema_version,
+    table_exists,
 )
+from ..state_roots import resolve_repo_flows_db_path
 from ..time_utils import now_iso
 from .app_server_event_compaction import normalize_persisted_event_data
 from .models import (
@@ -41,12 +45,6 @@ _FLOW_EVENT_TYPE_LIVE_CAPS: dict[str, int] = {
 _FLOW_TELEMETRY_TYPE_LIVE_CAPS: dict[str, int] = {
     FlowEventType.APP_SERVER_EVENT.value: _MAX_RUN_APP_SERVER_TELEMETRY_ROWS,
 }
-_SQLITE_PRAGMAS_READONLY = (
-    "PRAGMA foreign_keys=ON;",
-    f"PRAGMA busy_timeout={DEFAULT_SQLITE_BUSY_TIMEOUT_MS};",
-    "PRAGMA temp_store=MEMORY;",
-    "PRAGMA query_only=ON;",
-)
 
 
 class FlowStore:
@@ -60,6 +58,10 @@ class FlowStore:
     def connect_readonly(cls, db_path: Path) -> FlowStore:
         return cls(db_path, readonly=True)
 
+    @classmethod
+    def default_path(cls, repo_root: Path) -> Path:
+        return resolve_repo_flows_db_path(repo_root)
+
     def __enter__(self) -> FlowStore:
         if self._readonly:
             self._get_conn()
@@ -72,32 +74,14 @@ class FlowStore:
 
     def _get_conn(self) -> sqlite3.Connection:
         if not hasattr(self._local, "conn"):
-            if self._readonly:
-                uri = f"{self.db_path.resolve().as_uri()}?mode=ro"
-                self._local.conn = sqlite3.connect(
-                    uri,
-                    uri=True,
-                    check_same_thread=False,
-                    isolation_level=None,
-                )
-            else:
-                # Ensure parent directory exists so sqlite can create/open file.
-                try:
-                    self.db_path.parent.mkdir(parents=True, exist_ok=True)
-                except OSError:
-                    # Let sqlite raise a clearer error below if directory creation failed.
-                    pass
-                self._local.conn = sqlite3.connect(
-                    self.db_path, check_same_thread=False, isolation_level=None
-                )
-            self._local.conn.row_factory = sqlite3.Row
-            pragmas = (
-                _SQLITE_PRAGMAS_READONLY
-                if self._readonly
-                else (SQLITE_PRAGMAS_DURABLE if self._durable else SQLITE_PRAGMAS)
+            self._local.conn = connect_sqlite(
+                self.db_path,
+                durable=self._durable,
+                busy_timeout_ms=DEFAULT_SQLITE_BUSY_TIMEOUT_MS,
+                readonly=self._readonly,
+                check_same_thread=False,
+                isolation_level=None,
             )
-            for pragma in pragmas:
-                self._local.conn.execute(pragma)
         return cast(sqlite3.Connection, self._local.conn)
 
     @contextmanager
@@ -122,28 +106,25 @@ class FlowStore:
             self._ensure_schema_version(conn)
 
     def _validate_readonly_schema(self, conn: sqlite3.Connection) -> None:
-        try:
-            result = conn.execute("SELECT version FROM schema_info").fetchone()
-        except sqlite3.Error as exc:
-            raise RuntimeError(
-                "FlowStore read-only schema check failed; missing schema version"
-            ) from exc
-        if result is None:
+        schema_version = read_schema_version(conn)
+        if schema_version is None:
             raise RuntimeError(
                 "FlowStore read-only schema check failed; missing schema version"
             )
-        schema_version = int(result[0])
         required_tables = set(_REQUIRED_SCHEMA_TABLES)
         if schema_version >= 3:
             required_tables.add("flow_telemetry")
-        rows = conn.execute(
-            """
-            SELECT name
-            FROM sqlite_master
-            WHERE type = 'table'
-            """
-        ).fetchall()
-        present_tables = {str(row["name"]) for row in rows}
+        present_tables = {
+            table_name
+            for table_name in (
+                "schema_info",
+                "flow_runs",
+                "flow_events",
+                "flow_artifacts",
+                "flow_telemetry",
+            )
+            if table_exists(conn, table_name)
+        }
         missing_tables = sorted(required_tables - present_tables)
         if missing_tables:
             missing_text = ", ".join(missing_tables)
@@ -242,78 +223,81 @@ class FlowStore:
         )
 
     def _ensure_schema_version(self, conn: sqlite3.Connection) -> None:
-        result = conn.execute("SELECT version FROM schema_info").fetchone()
-        if result is None:
-            conn.execute(
-                "INSERT INTO schema_info (version) VALUES (?)", (SCHEMA_VERSION,)
-            )
-        else:
-            current_version = result[0]
-            if current_version < SCHEMA_VERSION:
-                self._migrate_schema(conn, current_version, SCHEMA_VERSION)
+        apply_versioned_schema(
+            conn,
+            schema_name="flow_store",
+            target_version=SCHEMA_VERSION,
+            steps=(
+                SqliteMigrationStep(
+                    version=1, name="bootstrap", apply=lambda _conn: None
+                ),
+                SqliteMigrationStep(
+                    version=2,
+                    name="flow_events_seq_migration",
+                    apply=self._apply_v2_migration,
+                ),
+                SqliteMigrationStep(
+                    version=3,
+                    name="flow_telemetry_table",
+                    apply=self._apply_v3_migration,
+                ),
+            ),
+        )
 
-    def _migrate_schema(
-        self, conn: sqlite3.Connection, from_version: int, to_version: int
-    ) -> None:
-        _logger.info("Migrating schema from version %d to %d", from_version, to_version)
-        for version in range(from_version, to_version):
-            self._apply_migration(conn, version + 1)
-        conn.execute("UPDATE schema_info SET version = ?", (to_version,))
+    def _apply_v2_migration(self, conn: sqlite3.Connection) -> None:
+        _logger.info("Migrating FlowStore schema to version 2")
+        conn.execute("ALTER TABLE flow_events RENAME TO flow_events_old")
+        conn.execute(
+            """
+            CREATE TABLE flow_events (
+                seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT NOT NULL UNIQUE,
+                run_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                data TEXT NOT NULL,
+                step_id TEXT,
+                FOREIGN KEY (run_id) REFERENCES flow_runs(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO flow_events (id, run_id, event_type, timestamp, data, step_id)
+            SELECT id, run_id, event_type, timestamp, data, step_id
+            FROM flow_events_old
+            ORDER BY timestamp ASC
+            """
+        )
+        conn.execute("DROP TABLE flow_events_old")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_flow_events_run_id ON flow_events(run_id, seq)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_flow_events_run_type ON flow_events(run_id, event_type, seq)"
+        )
 
-    def _apply_migration(self, conn: sqlite3.Connection, version: int) -> None:
-        if version == 1:
-            pass
-        elif version == 2:
-            conn.execute("ALTER TABLE flow_events RENAME TO flow_events_old")
-            conn.execute(
-                """
-                CREATE TABLE flow_events (
-                    seq INTEGER PRIMARY KEY AUTOINCREMENT,
-                    id TEXT NOT NULL UNIQUE,
-                    run_id TEXT NOT NULL,
-                    event_type TEXT NOT NULL,
-                    timestamp TEXT NOT NULL,
-                    data TEXT NOT NULL,
-                    step_id TEXT,
-                    FOREIGN KEY (run_id) REFERENCES flow_runs(id) ON DELETE CASCADE
-                )
-                """
+    def _apply_v3_migration(self, conn: sqlite3.Connection) -> None:
+        _logger.info("Migrating FlowStore schema to version 3")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS flow_telemetry (
+                seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT NOT NULL UNIQUE,
+                run_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                data TEXT NOT NULL,
+                FOREIGN KEY (run_id) REFERENCES flow_runs(id) ON DELETE CASCADE
             )
-            conn.execute(
-                """
-                INSERT INTO flow_events (id, run_id, event_type, timestamp, data, step_id)
-                SELECT id, run_id, event_type, timestamp, data, step_id
-                FROM flow_events_old
-                ORDER BY timestamp ASC
-                """
-            )
-            conn.execute("DROP TABLE flow_events_old")
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_flow_events_run_id ON flow_events(run_id, seq)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_flow_events_run_type ON flow_events(run_id, event_type, seq)"
-            )
-        elif version == 3:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS flow_telemetry (
-                    seq INTEGER PRIMARY KEY AUTOINCREMENT,
-                    id TEXT NOT NULL UNIQUE,
-                    run_id TEXT NOT NULL,
-                    event_type TEXT NOT NULL,
-                    timestamp TEXT NOT NULL,
-                    data TEXT NOT NULL,
-                    FOREIGN KEY (run_id) REFERENCES flow_runs(id) ON DELETE CASCADE
-                )
-                """
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_flow_telemetry_run_id ON flow_telemetry(run_id, seq)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_flow_telemetry_run_type ON flow_telemetry(run_id, event_type, seq)"
-            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_flow_telemetry_run_id ON flow_telemetry(run_id, seq)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_flow_telemetry_run_type ON flow_telemetry(run_id, event_type, seq)"
+        )
 
     def _prune_rows_for_run_event_type(
         self,

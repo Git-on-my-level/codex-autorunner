@@ -6,6 +6,7 @@ from typing import Optional
 from codex_autorunner.core.usage import (
     get_hub_usage_series_cached,
     get_hub_usage_summary_cached,
+    get_repo_session_usage_ledger,
     get_repo_usage_series_cached,
     get_repo_usage_summary_cached,
     get_usage_series_cache,
@@ -709,6 +710,91 @@ def test_opencode_summary_prefers_persisted_turn_usage(tmp_path):
     opencode_meta = (summary.source_confidence or {}).get("opencode") or {}
     assert opencode_meta.get("source") == "persisted_normalized"
     assert opencode_meta.get("persisted_duplicates") == 1
+
+
+def test_repo_session_usage_ledger_prefers_persisted_turns(tmp_path):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+
+    assert persist_opencode_usage_snapshot(
+        repo_root,
+        session_id="session-1",
+        turn_id="turn-1",
+        usage={"inputTokens": 7, "outputTokens": 3, "totalTokens": 10},
+    )
+    assert persist_opencode_usage_snapshot(
+        repo_root,
+        session_id="session-1",
+        turn_id="turn-1",
+        usage={"inputTokens": 8, "outputTokens": 4, "totalTokens": 12},
+    )
+    assert persist_opencode_usage_snapshot(
+        repo_root,
+        session_id="session-1",
+        turn_id="turn-2",
+        usage={"inputTokens": 5, "outputTokens": 3, "totalTokens": 8},
+    )
+    assert persist_opencode_usage_snapshot(
+        repo_root,
+        session_id="session-2",
+        turn_id="turn-a",
+        usage={"inputTokens": 2, "outputTokens": 1, "totalTokens": 3},
+    )
+
+    ledger = get_repo_session_usage_ledger(repo_root)
+
+    assert set(ledger.keys()) == {"session-1", "session-2"}
+    session_one = ledger["session-1"]
+    assert session_one.turns == 2
+    assert session_one.session_totals.total_tokens == 20
+    assert session_one.latest_turn_totals.total_tokens == 8
+    assert session_one.latest_turn_id == "turn-2"
+    opencode_meta = (session_one.source_confidence or {}).get("opencode") or {}
+    assert opencode_meta.get("source") == "persisted_normalized"
+    assert opencode_meta.get("persisted_duplicates") == 1
+
+
+def test_repo_session_usage_ledger_falls_back_to_session_estimation(tmp_path):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    _write_opencode_session(
+        repo_root,
+        {
+            "session_id": "session-abc",
+            "messages": [
+                {
+                    "timestamp": "2025-12-01T00:01:00Z",
+                    "turn_id": "turn-1",
+                    "usage": {
+                        "inputTokens": 6,
+                        "outputTokens": 4,
+                        "totalTokens": 10,
+                    },
+                },
+                {
+                    "timestamp": "2025-12-01T00:02:00Z",
+                    "turn_id": "turn-2",
+                    "usage": {
+                        "inputTokens": 9,
+                        "outputTokens": 6,
+                        "totalTokens": 15,
+                    },
+                },
+            ],
+        },
+        name="with-session-id",
+    )
+
+    ledger = get_repo_session_usage_ledger(repo_root)
+
+    session = ledger["session-abc"]
+    assert session.turns == 2
+    assert session.session_totals.total_tokens == 15
+    assert session.latest_turn_totals.total_tokens == 5
+    assert session.latest_turn_id == "turn-2"
+    opencode_meta = (session.source_confidence or {}).get("opencode") or {}
+    assert opencode_meta.get("source") == "session_estimated"
+    assert opencode_meta.get("confidence") == "low"
 
 
 def test_repo_usage_summary_cached_reports_source_confidence(tmp_path):

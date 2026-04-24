@@ -18,6 +18,7 @@ from .....core.orchestration.runtime_thread_events import (
 )
 from .....core.orchestration.turn_timeline import list_turn_timeline
 from .....core.pma_thread_store import PmaThreadStore
+from ...services.pma import get_pma_request_context
 from ..shared import SSE_HEADERS
 from .automation_adapter import normalize_optional_text
 from .managed_thread_tail_serializers import (
@@ -130,6 +131,7 @@ def _managed_thread_harness(service: Any, agent_id: str) -> Any:
 def _load_managed_thread_tail_store_state(
     *,
     hub_root: Path,
+    thread_store: PmaThreadStore,
     service: Any,
     managed_thread_id: str,
 ) -> tuple[Any, Any, list[dict[str, Any]], Any]:
@@ -148,7 +150,7 @@ def _load_managed_thread_tail_store_state(
     )
     turn_record = None
     if managed_turn_id:
-        turn_record = PmaThreadStore(hub_root).get_turn(
+        turn_record = thread_store.get_turn(
             managed_thread_id,
             managed_turn_id,
         )
@@ -157,8 +159,8 @@ def _load_managed_thread_tail_store_state(
 
 def _load_managed_thread_status_state(
     *,
-    hub_root: Path,
     service: Any,
+    thread_store: PmaThreadStore,
     managed_thread_id: str,
     limit: int,
 ) -> tuple[Any, dict[str, Any] | None, list[dict[str, Any]], int]:
@@ -170,8 +172,7 @@ def _load_managed_thread_status_state(
         service=service,
         managed_thread_id=managed_thread_id,
     )
-    queue_store = PmaThreadStore(hub_root)
-    queued_turns = queue_store.list_pending_turn_queue_items(
+    queued_turns = thread_store.list_pending_turn_queue_items(
         managed_thread_id,
         limit=min(limit, 50),
     )
@@ -208,9 +209,11 @@ async def _build_managed_thread_tail_snapshot(
     since_ms: Optional[int],
     resume_after: Optional[int],
 ) -> dict[str, Any]:
+    context = get_pma_request_context(request)
     thread, turn, persisted_timeline_entries, turn_record = await asyncio.to_thread(
         _load_managed_thread_tail_store_state,
-        hub_root=request.app.state.config.root,
+        hub_root=context.hub_root,
+        thread_store=context.thread_store(),
         service=service,
         managed_thread_id=managed_thread_id,
     )
@@ -409,6 +412,7 @@ def build_managed_thread_tail_routes(
         if limit <= 0:
             raise HTTPException(status_code=400, detail="limit must be greater than 0")
         service = await _build_managed_thread_orchestration_service_async(request)
+        context = get_pma_request_context(request)
         snapshot = await _build_managed_thread_tail_snapshot(
             request=request,
             service=service,
@@ -420,8 +424,8 @@ def build_managed_thread_tail_routes(
         )
         thread, serialized_thread, queued_turns, queue_depth = await asyncio.to_thread(
             _load_managed_thread_status_state,
-            hub_root=request.app.state.config.root,
             service=service,
+            thread_store=context.thread_store(),
             managed_thread_id=managed_thread_id,
             limit=limit,
         )

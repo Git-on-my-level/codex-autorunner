@@ -33,14 +33,19 @@ from pathlib import Path
 from typing import Callable, Iterable, Literal, Mapping, Optional
 from uuid import uuid4
 
-from ..manifest import load_manifest
 from ..workspace import workspace_id_for_path
 from .archive_retention import (
     WorktreeArchiveRetentionPolicy,
     prune_worktree_archive_root,
 )
 from .git_utils import git_branch, git_head_sha
+from .hub_topology import HubTopologyRepository, WorkspaceArchiveTarget
 from .state import load_state, now_iso
+from .state_lifecycle import (
+    DEFAULT_STATE_LIFECYCLE_CONTROLLER,
+    LifecycleArchiveSpec,
+    LifecycleReason,
+)
 from .utils import atomic_write
 
 ArchiveStatus = Literal["complete", "partial", "failed"]
@@ -128,20 +133,13 @@ class ArchiveExecutionSummary:
 
 
 @dataclass(frozen=True)
-class WorkspaceArchiveTarget:
-    base_repo_root: Path
-    base_repo_id: str
-    workspace_repo_id: str
-    worktree_of: str
-    source_path: Path | str
-
-
-@dataclass(frozen=True)
 class CarStatePathSpec:
+    family: str
     key: str
     archive_dest: str
     dirty_check: Callable[[Path], bool]
     archive_intents: frozenset[ArchiveIntent]
+    lifecycle_reason: LifecycleReason
     payload_kind: CarStatePayloadKind
     reset_paths: tuple[str, ...]
     source_resolver: Optional[Callable[[Path], Path]] = None
@@ -384,6 +382,7 @@ def _log_file_is_dirty(path: Path) -> bool:
 
 CAR_STATE_PATH_SPECS = (
     CarStatePathSpec(
+        family="tickets",
         key="tickets",
         archive_dest="tickets",
         dirty_check=_tickets_are_dirty,
@@ -396,10 +395,12 @@ CAR_STATE_PATH_SPECS = (
                 "reset_car_state",
             }
         ),
+        lifecycle_reason=LifecycleReason.REVIEW_ARTIFACT,
         payload_kind="review_relevant",
         reset_paths=("tickets",),
     ),
     CarStatePathSpec(
+        family="contextspace",
         key="contextspace",
         archive_dest="contextspace",
         dirty_check=_contextspace_is_dirty,
@@ -412,11 +413,13 @@ CAR_STATE_PATH_SPECS = (
                 "reset_car_state",
             }
         ),
+        lifecycle_reason=LifecycleReason.REVIEW_ARTIFACT,
         payload_kind="review_relevant",
         reset_paths=("contextspace", "workspace"),
         source_resolver=lambda source_root: _contextspace_source(source_root),
     ),
     CarStatePathSpec(
+        family="review_runs",
         key="runs",
         archive_dest="runs",
         dirty_check=_directory_has_any_entries,
@@ -429,10 +432,12 @@ CAR_STATE_PATH_SPECS = (
                 "reset_car_state",
             }
         ),
+        lifecycle_reason=LifecycleReason.REVIEW_ARTIFACT,
         payload_kind="review_relevant",
         reset_paths=("runs",),
     ),
     CarStatePathSpec(
+        family="review_runs",
         key="flows",
         archive_dest="flows",
         dirty_check=_directory_has_any_entries,
@@ -445,10 +450,12 @@ CAR_STATE_PATH_SPECS = (
                 "reset_car_state",
             }
         ),
+        lifecycle_reason=LifecycleReason.REVIEW_ARTIFACT,
         payload_kind="review_relevant",
         reset_paths=("flows",),
     ),
     CarStatePathSpec(
+        family="review_runs",
         key="flows.db",
         archive_dest="flows.db",
         dirty_check=lambda path: path.exists(),
@@ -460,10 +467,12 @@ CAR_STATE_PATH_SPECS = (
                 "reset_car_state",
             }
         ),
+        lifecycle_reason=LifecycleReason.REVIEW_ARTIFACT,
         payload_kind="both",
         reset_paths=("flows.db",),
     ),
     CarStatePathSpec(
+        family="runner_state",
         key="state.sqlite3",
         archive_dest="state/state.sqlite3",
         dirty_check=_runner_state_is_dirty,
@@ -474,10 +483,12 @@ CAR_STATE_PATH_SPECS = (
                 "reset_car_state",
             }
         ),
+        lifecycle_reason=LifecycleReason.COLD_TRACE,
         payload_kind="runtime_only",
         reset_paths=("state.sqlite3",),
     ),
     CarStatePathSpec(
+        family="runner_state",
         key="app_server_threads.json",
         archive_dest="state/app_server_threads.json",
         dirty_check=_json_state_file_is_dirty,
@@ -488,19 +499,23 @@ CAR_STATE_PATH_SPECS = (
                 "reset_car_state",
             }
         ),
+        lifecycle_reason=LifecycleReason.COLD_TRACE,
         payload_kind="runtime_only",
         reset_paths=("app_server_threads.json",),
         required=False,
     ),
     CarStatePathSpec(
+        family="workspaces",
         key="app_server_workspaces",
         archive_dest="app_server_workspaces",
         dirty_check=_tree_has_payload,
         archive_intents=frozenset({"reset_car_state"}),
+        lifecycle_reason=LifecycleReason.COLD_TRACE,
         payload_kind="runtime_only",
         reset_paths=("app_server_workspaces",),
     ),
     CarStatePathSpec(
+        family="github_context",
         key="github_context",
         archive_dest="github_context",
         dirty_check=_tree_has_payload,
@@ -513,19 +528,23 @@ CAR_STATE_PATH_SPECS = (
                 "reset_car_state",
             }
         ),
+        lifecycle_reason=LifecycleReason.REVIEW_ARTIFACT,
         payload_kind="review_relevant",
         reset_paths=("github_context",),
         required=False,
     ),
     CarStatePathSpec(
+        family="filebox",
         key="filebox",
         archive_dest="filebox",
         dirty_check=_tree_has_payload,
         archive_intents=frozenset({"reset_car_state"}),
+        lifecycle_reason=LifecycleReason.COLD_TRACE,
         payload_kind="both",
         reset_paths=("filebox",),
     ),
     CarStatePathSpec(
+        family="logs",
         key="codex-autorunner.log",
         archive_dest="logs/codex-autorunner.log",
         dirty_check=_log_file_is_dirty,
@@ -536,10 +555,12 @@ CAR_STATE_PATH_SPECS = (
                 "reset_car_state",
             }
         ),
+        lifecycle_reason=LifecycleReason.COLD_TRACE,
         payload_kind="runtime_only",
         reset_paths=("codex-autorunner.log",),
     ),
     CarStatePathSpec(
+        family="logs",
         key="codex-server.log",
         archive_dest="logs/codex-server.log",
         dirty_check=_log_file_is_dirty,
@@ -550,14 +571,17 @@ CAR_STATE_PATH_SPECS = (
                 "reset_car_state",
             }
         ),
+        lifecycle_reason=LifecycleReason.COLD_TRACE,
         payload_kind="runtime_only",
         reset_paths=("codex-server.log",),
     ),
     CarStatePathSpec(
+        family="runner_state",
         key="lock",
         archive_dest="state/lock",
         dirty_check=lambda path: path.exists() or path.is_symlink(),
         archive_intents=frozenset({"reset_car_state"}),
+        lifecycle_reason=LifecycleReason.COLD_TRACE,
         payload_kind="runtime_only",
         reset_paths=("lock",),
     ),
@@ -605,21 +629,34 @@ def _build_car_state_archive_entries(
     path_filter: Optional[Iterable[str]] = None,
     include_config: bool = False,
 ) -> list[ArchiveEntrySpec]:
-    entries: list[ArchiveEntrySpec] = []
-    selected_paths = set(path_filter) if path_filter is not None else None
-    for spec in CAR_STATE_PATH_SPECS:
-        if intent not in spec.archive_intents:
-            continue
-        if selected_paths is not None and spec.key not in selected_paths:
-            continue
-        entries.append(
-            ArchiveEntrySpec(
-                label=spec.key,
-                source=_resolve_car_state_source(spec, source_root),
-                dest=snapshot_root / spec.archive_dest,
+    transitions = DEFAULT_STATE_LIFECYCLE_CONTROLLER.plan_archive_transitions(
+        specs=(
+            LifecycleArchiveSpec(
+                family=spec.family,
+                key=spec.key,
+                archive_dest=spec.archive_dest,
+                archive_intents=frozenset(spec.archive_intents),
+                reason=spec.lifecycle_reason,
                 required=spec.required,
+                source_resolver=spec.source_resolver,
             )
+            for spec in CAR_STATE_PATH_SPECS
+        ),
+        source_root=source_root,
+        dest_root=snapshot_root,
+        intent=intent,
+        path_filter=path_filter,
+    )
+    entries = [
+        ArchiveEntrySpec(
+            label=transition.key,
+            source=transition.source,
+            dest=transition.dest,
+            mode=transition.mode,
+            required=transition.required,
         )
+        for transition in transitions
+    ]
     if include_config:
         entries.append(
             ArchiveEntrySpec(
@@ -630,6 +667,34 @@ def _build_car_state_archive_entries(
             )
         )
     return entries
+
+
+def _summarize_car_state_transitions(
+    *,
+    intent: ArchiveIntent,
+    path_filter: Optional[Iterable[str]] = None,
+) -> dict[str, object]:
+    transitions = DEFAULT_STATE_LIFECYCLE_CONTROLLER.plan_archive_transitions(
+        specs=(
+            LifecycleArchiveSpec(
+                family=spec.family,
+                key=spec.key,
+                archive_dest=spec.archive_dest,
+                archive_intents=frozenset(spec.archive_intents),
+                reason=spec.lifecycle_reason,
+                required=spec.required,
+                source_resolver=spec.source_resolver,
+            )
+            for spec in CAR_STATE_PATH_SPECS
+        ),
+        source_root=Path("."),
+        dest_root=Path("."),
+        intent=intent,
+        path_filter=path_filter,
+    )
+    return DEFAULT_STATE_LIFECYCLE_CONTROLLER.summarize_decisions(
+        transition.decision for transition in transitions
+    )
 
 
 def _remove_with_sidecars(path: Path) -> None:
@@ -683,32 +748,22 @@ def resolve_workspace_archive_target(
         and resolved_hub_root is not None
         and manifest_path.exists()
     ):
+        topology_repository = HubTopologyRepository(
+            hub_root=resolved_hub_root,
+            manifest_path=manifest_path,
+        )
         try:
-            manifest = load_manifest(manifest_path, resolved_hub_root)
+            target = topology_repository.resolve_workspace_archive_target(
+                workspace_root
+            )
         except (
             OSError,
             ValueError,
             RuntimeError,
         ):  # manifest parsing may raise OSError/ValueError/ManifestError
-            manifest = None
-        if manifest is not None:
-            entry = manifest.get_by_path(resolved_hub_root, workspace_root)
-            if entry is not None:
-                base_repo_root = workspace_root
-                base_repo_id = entry.id
-                worktree_of = entry.worktree_of or entry.id
-                if entry.kind == "worktree" and entry.worktree_of:
-                    base = manifest.get(entry.worktree_of)
-                    if base is not None:
-                        base_repo_root = (resolved_hub_root / base.path).resolve()
-                        base_repo_id = base.id
-                return WorkspaceArchiveTarget(
-                    base_repo_root=base_repo_root,
-                    base_repo_id=base_repo_id,
-                    workspace_repo_id=entry.id,
-                    worktree_of=worktree_of,
-                    source_path=entry.path,
-                )
+            target = None
+        if target is not None:
+            return target
     repo_id = workspace_root.name.strip() or workspace_id_for_path(workspace_root)
     return WorkspaceArchiveTarget(
         base_repo_root=workspace_root,
@@ -1042,6 +1097,7 @@ def archive_worktree_snapshot(
             "total_bytes": execution.total_bytes,
             "flow_run_count": flow_run_count,
             "latest_flow_run_id": latest_flow_run_id,
+            "lifecycle": _summarize_car_state_transitions(intent=resolved_intent),
         }
         meta = _build_meta(
             snapshot_id=snapshot_id,
@@ -1160,6 +1216,10 @@ def archive_workspace_car_state(
             "latest_flow_run_id": latest_flow_run_id,
             "archived_paths": list(execution.copied_paths),
             "reset_paths": list(planned_reset_paths),
+            "lifecycle": _summarize_car_state_transitions(
+                intent=intent,
+                path_filter=dirty_paths,
+            ),
         }
         meta = _build_meta(
             snapshot_id=snapshot_id,

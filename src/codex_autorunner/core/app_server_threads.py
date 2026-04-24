@@ -1,50 +1,38 @@
-"""Compatibility shim for app-server thread registry helpers.
+"""Compatibility re-exports for managed-thread identity helpers."""
 
-Uses importlib to avoid a static core -> integrations import edge (see
-scripts/check_import_boundaries.py).
-
-Contract:
-- This module is a **re-export-only facade**. All behaviour lives in
-  ``integrations.app_server.threads``.
-- No new logic, helpers, or state may be added here. If a new export is
-  needed, add it to the real owner and re-export it here.
-- Known callers: ``core/pma_lifecycle.py`` (imports PMA_KEY, PMA_PREFIX,
-  AppServerThreadRegistry, pma_prefixes_for_reset). All other consumers
-  import directly from ``integrations.app_server.threads``.
-"""
-
-from importlib import import_module
-
-_threads = import_module("codex_autorunner.integrations.app_server.threads")
-
-APP_SERVER_THREADS_FILENAME = _threads.APP_SERVER_THREADS_FILENAME
-APP_SERVER_THREADS_VERSION = _threads.APP_SERVER_THREADS_VERSION
-APP_SERVER_THREADS_CORRUPT_SUFFIX = _threads.APP_SERVER_THREADS_CORRUPT_SUFFIX
-APP_SERVER_THREADS_NOTICE_SUFFIX = _threads.APP_SERVER_THREADS_NOTICE_SUFFIX
-FILE_CHAT_KEY = _threads.FILE_CHAT_KEY
-FILE_CHAT_OPENCODE_KEY = _threads.FILE_CHAT_OPENCODE_KEY
-FILE_CHAT_HERMES_KEY = _threads.FILE_CHAT_HERMES_KEY
-FILE_CHAT_PREFIX = _threads.FILE_CHAT_PREFIX
-FILE_CHAT_OPENCODE_PREFIX = _threads.FILE_CHAT_OPENCODE_PREFIX
-FILE_CHAT_HERMES_PREFIX = _threads.FILE_CHAT_HERMES_PREFIX
-PMA_KEY = _threads.PMA_KEY
-PMA_OPENCODE_KEY = _threads.PMA_OPENCODE_KEY
-PMA_HERMES_KEY = _threads.PMA_HERMES_KEY
-PMA_PREFIX = _threads.PMA_PREFIX
-PMA_OPENCODE_PREFIX = _threads.PMA_OPENCODE_PREFIX
-PMA_HERMES_PREFIX = _threads.PMA_HERMES_PREFIX
-FEATURE_KEYS = _threads.FEATURE_KEYS
-default_app_server_threads_path = _threads.default_app_server_threads_path
-normalize_feature_key = _threads.normalize_feature_key
-pma_base_key = _threads.pma_base_key
-pma_legacy_alias_key = _threads.pma_legacy_alias_key
-pma_legacy_alias_keys = _threads.pma_legacy_alias_keys
-pma_legacy_migration_fallback_keys = _threads.pma_legacy_migration_fallback_keys
-pma_prefix_for_agent = _threads.pma_prefix_for_agent
-pma_prefixes_for_reset = _threads.pma_prefixes_for_reset
-pma_topic_scoped_key = _threads.pma_topic_scoped_key
-file_chat_discord_key = _threads.file_chat_discord_key
-AppServerThreadRegistry = _threads.AppServerThreadRegistry
+from .managed_thread_identity import (
+    APP_SERVER_THREADS_CORRUPT_SUFFIX,
+    APP_SERVER_THREADS_FILENAME,
+    APP_SERVER_THREADS_NOTICE_SUFFIX,
+    APP_SERVER_THREADS_VERSION,
+    FEATURE_KEYS,
+    FILE_CHAT_HERMES_KEY,
+    FILE_CHAT_HERMES_PREFIX,
+    FILE_CHAT_KEY,
+    FILE_CHAT_OPENCODE_KEY,
+    FILE_CHAT_OPENCODE_PREFIX,
+    FILE_CHAT_PREFIX,
+    PMA_HERMES_KEY,
+    PMA_HERMES_PREFIX,
+    PMA_KEY,
+    PMA_OPENCODE_KEY,
+    PMA_OPENCODE_PREFIX,
+    PMA_PREFIX,
+    AppServerThreadRegistry,
+    ManagedThreadIdentityStore,
+    default_app_server_threads_path,
+    file_chat_discord_key,
+    file_chat_target_key,
+    normalize_feature_key,
+    pma_automation_key,
+    pma_base_key,
+    pma_legacy_alias_key,
+    pma_legacy_alias_keys,
+    pma_legacy_migration_fallback_keys,
+    pma_prefix_for_agent,
+    pma_prefixes_for_reset,
+    pma_topic_scoped_key,
+)
 
 __all__ = [
     "APP_SERVER_THREADS_CORRUPT_SUFFIX",
@@ -59,6 +47,7 @@ __all__ = [
     "FILE_CHAT_OPENCODE_KEY",
     "FILE_CHAT_OPENCODE_PREFIX",
     "FILE_CHAT_PREFIX",
+    "ManagedThreadIdentityStore",
     "PMA_HERMES_KEY",
     "PMA_HERMES_PREFIX",
     "PMA_KEY",
@@ -67,7 +56,9 @@ __all__ = [
     "PMA_PREFIX",
     "default_app_server_threads_path",
     "file_chat_discord_key",
+    "file_chat_target_key",
     "normalize_feature_key",
+    "pma_automation_key",
     "pma_base_key",
     "pma_legacy_alias_key",
     "pma_legacy_alias_keys",

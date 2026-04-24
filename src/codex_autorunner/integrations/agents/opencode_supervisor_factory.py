@@ -20,12 +20,16 @@ def build_opencode_supervisor_from_repo_config(
     workspace_root: Path,
     logger: logging.Logger,
     base_env: Optional[MutableMapping[str, str]] = None,
+    agent_id: str = "opencode",
+    profile: Optional[str] = None,
     command_override: Optional[list[str]] = None,
 ) -> Optional[OpenCodeSupervisor]:
-    opencode_command = command_override or config.agent_serve_command("opencode")
+    opencode_command = command_override or config.agent_serve_command(
+        agent_id, profile=profile
+    )
     opencode_binary = None
     try:
-        opencode_binary = config.agent_binary("opencode")
+        opencode_binary = config.agent_binary(agent_id, profile=profile)
     except (ValueError, OSError, KeyError):
         opencode_binary = None
 
@@ -52,7 +56,7 @@ def build_opencode_supervisor_from_repo_config(
                 )
                 opencode_command = wrapped.command
 
-    agent_cfg = config.agents.get("opencode")
+    agent_cfg = config.resolved_agent_config(agent_id, profile=profile)
     subagent_models = agent_cfg.subagent_models if agent_cfg else None
 
     supervisor = build_opencode_supervisor(

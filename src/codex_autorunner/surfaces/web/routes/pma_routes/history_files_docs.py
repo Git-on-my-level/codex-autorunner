@@ -11,7 +11,6 @@ from fastapi.responses import FileResponse
 from starlette.datastructures import UploadFile
 
 from .....bootstrap import (
-    ensure_pma_docs,
     pma_about_content,
     pma_active_context_content,
     pma_agents_content,
@@ -34,9 +33,8 @@ from .....core.pma_dispatches import (
     list_pma_dispatches,
     resolve_pma_dispatch,
 )
-from .....core.pma_transcripts import PmaTranscriptStore
 from .....core.time_utils import now_iso
-from .....core.utils import atomic_write
+from ...services.pma import get_pma_request_context
 from .history_helpers import serialize_dispatch_item, sorted_doc_names
 
 logger = logging.getLogger(__name__)
@@ -70,19 +68,16 @@ def build_history_files_docs_router(
     """
 
     def _get_pma_config(request: Request) -> dict[str, Any]:
-        from ...services.pma.common import pma_config_from_raw
-
-        raw = getattr(request.app.state.config, "raw", {})
-        return pma_config_from_raw(raw)
+        return get_pma_request_context(request).pma_config
 
     async def _get_pma_lock():
         runtime_state = get_runtime_state()
         return await runtime_state.get_pma_lock()
 
     def _get_safety_checker(request: Request):
+        context = get_pma_request_context(request)
         runtime_state = get_runtime_state()
-        hub_root = request.app.state.config.root
-        return runtime_state.get_safety_checker(hub_root, request)
+        return runtime_state.get_safety_checker(context.hub_root, context)
 
     async def _append_text_file(path: Path, content: str) -> None:
         def _append() -> None:
@@ -91,8 +86,9 @@ def build_history_files_docs_router(
 
         await asyncio.to_thread(_append)
 
-    async def _atomic_write_async(path: Path, content: str) -> None:
-        await asyncio.to_thread(atomic_write, path, content)
+    async def _atomic_write_async(request: Request, path: Path, content: str) -> None:
+        context = get_pma_request_context(request)
+        await asyncio.to_thread(context.ports.atomic_write, path, content)
 
     def _pma_docs_dir(hub_root: Path) -> Path:
         return pma_docs_dir(hub_root)
@@ -120,8 +116,9 @@ def build_history_files_docs_router(
         return sorted_doc_names(names)
 
     async def _write_doc_history(
-        hub_root: Path, doc_name: str, content: str
+        request: Request, hub_root: Path, doc_name: str, content: str
     ) -> Optional[Path]:
+        context = get_pma_request_context(request)
         docs_dir = _pma_docs_dir(hub_root)
         history_root = docs_dir / "_history" / doc_name
 
@@ -129,7 +126,7 @@ def build_history_files_docs_router(
             history_root.mkdir(parents=True, exist_ok=True)
             timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
             history_path = history_root / f"{timestamp}.md"
-            atomic_write(history_path, content)
+            context.ports.atomic_write(history_path, content)
             return history_path
 
         try:
@@ -140,21 +137,23 @@ def build_history_files_docs_router(
 
     @router.get("/history")
     def list_pma_history(request: Request, limit: int = 50) -> dict[str, Any]:
-        hub_root = request.app.state.config.root
+        context = get_pma_request_context(request)
         # The transcript store serves the canonical sqlite mirror and falls back to
         # legacy files only while older history is being migrated.
-        store = PmaTranscriptStore(hub_root)
+        store = context.transcript_store()
         entries = store.list_recent(limit=limit)
         return {"entries": entries}
 
     @router.get("/history/{turn_id}")
     def get_pma_history(turn_id: str, request: Request) -> dict[str, Any]:
-        hub_root = request.app.state.config.root
-        store = PmaTranscriptStore(hub_root)
+        context = get_pma_request_context(request)
+        store = context.transcript_store()
         transcript = store.read_transcript(turn_id)
         if not transcript:
             raise HTTPException(status_code=404, detail="Transcript not found")
-        transcript["timeline"] = list_turn_timeline(hub_root, execution_id=turn_id)
+        transcript["timeline"] = list_turn_timeline(
+            context.hub_root, execution_id=turn_id
+        )
         return transcript
 
     def _serialize_pma_entry(
@@ -164,7 +163,7 @@ def build_history_files_docs_router(
         generated_at: str,
         stale_threshold_seconds: int,
     ) -> dict[str, Any]:
-        base = request.scope.get("root_path", "") or ""
+        base = get_pma_request_context(request).root_path
         box = entry.box
         filename = entry.name
         download = f"{base}/hub/pma/files/{box}/{filename}"
@@ -188,12 +187,13 @@ def build_history_files_docs_router(
 
     @router.get("/files")
     async def list_pma_files(request: Request) -> dict[str, list[dict[str, Any]]]:
-        hub_root = request.app.state.config.root
+        context = get_pma_request_context(request)
+        hub_root = context.hub_root
         result: dict[str, list[dict[str, Any]]] = {box: [] for box in BOXES}
         generated_at = now_iso()
         stale_threshold_seconds = resolve_stale_threshold_seconds(
             getattr(
-                getattr(request.app.state.config, "pma", None),
+                getattr(context.config, "pma", None),
                 "freshness_stale_threshold_seconds",
                 None,
             )
@@ -217,8 +217,9 @@ def build_history_files_docs_router(
     async def upload_pma_file(box: str, request: Request):
         if box not in BOXES:
             raise HTTPException(status_code=400, detail="Invalid box")
-        hub_root = request.app.state.config.root
-        max_upload_bytes = request.app.state.config.pma.max_upload_bytes
+        context = get_pma_request_context(request)
+        hub_root = context.hub_root
+        max_upload_bytes = context.config.pma.max_upload_bytes
 
         form = await request.form()
         saved = []
@@ -273,7 +274,8 @@ def build_history_files_docs_router(
     def download_pma_file(box: str, filename: str, request: Request):
         if box not in BOXES:
             raise HTTPException(status_code=400, detail="Invalid box")
-        hub_root = request.app.state.config.root
+        context = get_pma_request_context(request)
+        hub_root = context.hub_root
         try:
             entry = filebox.resolve_file(hub_root, box, filename)
         except ValueError as exc:
@@ -296,7 +298,8 @@ def build_history_files_docs_router(
     async def delete_pma_file(box: str, filename: str, request: Request):
         if box not in BOXES:
             raise HTTPException(status_code=400, detail="Invalid box")
-        hub_root = request.app.state.config.root
+        context = get_pma_request_context(request)
+        hub_root = context.hub_root
         entry: Optional[filebox.FileBoxEntry] = None
         try:
             async with await _get_pma_lock():
@@ -331,7 +334,8 @@ def build_history_files_docs_router(
     async def delete_pma_box(box: str, request: Request):
         if box not in BOXES:
             raise HTTPException(status_code=400, detail="Invalid box")
-        hub_root = request.app.state.config.root
+        context = get_pma_request_context(request)
+        hub_root = context.hub_root
         deleted_files: list[str] = []
         async with await _get_pma_lock():
             entries = await asyncio.to_thread(filebox.list_filebox, hub_root)
@@ -355,9 +359,10 @@ def build_history_files_docs_router(
     async def snapshot_pma_context(
         request: Request, body: Optional[dict[str, Any]] = None
     ):
-        hub_root = request.app.state.config.root
+        context = get_pma_request_context(request)
+        hub_root = context.hub_root
         try:
-            await asyncio.to_thread(ensure_pma_docs, hub_root)
+            await asyncio.to_thread(context.ports.ensure_pma_docs, hub_root)
         except OSError as exc:
             raise HTTPException(
                 status_code=500, detail=f"Failed to ensure PMA docs: {exc}"
@@ -412,7 +417,7 @@ def build_history_files_docs_router(
         if reset:
             try:
                 await _atomic_write_async(
-                    active_context_path, pma_active_context_content()
+                    request, active_context_path, pma_active_context_content()
                 )
             except OSError as exc:
                 raise HTTPException(
@@ -467,9 +472,10 @@ def build_history_files_docs_router(
     @router.get("/docs")
     def list_pma_docs(request: Request) -> dict[str, Any]:
         pma_config = _get_pma_config(request)
-        hub_root = request.app.state.config.root
+        context = get_pma_request_context(request)
+        hub_root = context.hub_root
         try:
-            ensure_pma_docs(hub_root)
+            context.ports.ensure_pma_docs(hub_root)
         except OSError as exc:
             raise HTTPException(
                 status_code=500, detail=f"Failed to ensure PMA docs: {exc}"
@@ -507,7 +513,7 @@ def build_history_files_docs_router(
     @router.get("/docs/{name}")
     def get_pma_doc(name: str, request: Request) -> dict[str, str]:
         name = _normalize_doc_name(name)
-        hub_root = request.app.state.config.root
+        hub_root = get_pma_request_context(request).hub_root
         doc_path = pma_doc_path(hub_root, name)
         if not doc_path.exists():
             raise HTTPException(status_code=404, detail=f"Doc not found: {name}")
@@ -524,7 +530,7 @@ def build_history_files_docs_router(
         name: str, request: Request, body: dict[str, str]
     ) -> dict[str, str]:
         name = _normalize_doc_name(name)
-        hub_root = request.app.state.config.root
+        hub_root = get_pma_request_context(request).hub_root
         docs_dir = _pma_docs_dir(hub_root)
         if name not in PMA_DOC_SET:
             raise HTTPException(status_code=400, detail=f"Unknown doc name: {name}")
@@ -539,12 +545,12 @@ def build_history_files_docs_router(
         docs_dir.mkdir(parents=True, exist_ok=True)
         doc_path = docs_dir / name
         try:
-            await _atomic_write_async(doc_path, content)
+            await _atomic_write_async(request, doc_path, content)
         except OSError as exc:
             raise HTTPException(
                 status_code=500, detail=f"Failed to write doc: {exc}"
             ) from exc
-        await _write_doc_history(hub_root, name, content)
+        await _write_doc_history(request, hub_root, name, content)
         details = {
             "name": name,
             "size": len(content.encode("utf-8")),
@@ -563,7 +569,7 @@ def build_history_files_docs_router(
         name: str, request: Request, limit: int = 50
     ) -> dict[str, Any]:
         name = _normalize_doc_name(name)
-        hub_root = request.app.state.config.root
+        hub_root = get_pma_request_context(request).hub_root
         docs_dir = _pma_docs_dir(hub_root)
         history_dir = docs_dir / "_history" / name
         entries: list[dict[str, Any]] = []
@@ -599,7 +605,7 @@ def build_history_files_docs_router(
     ) -> dict[str, str]:
         name = _normalize_doc_name(name)
         version_id = _normalize_doc_name(version_id)
-        hub_root = request.app.state.config.root
+        hub_root = get_pma_request_context(request).hub_root
         docs_dir = _pma_docs_dir(hub_root)
         history_path = docs_dir / "_history" / name / version_id
         if not history_path.exists():
@@ -616,7 +622,7 @@ def build_history_files_docs_router(
     def list_pma_dispatches_endpoint(
         request: Request, include_resolved: bool = False, limit: int = 100
     ) -> dict[str, Any]:
-        hub_root = request.app.state.config.root
+        hub_root = get_pma_request_context(request).hub_root
         dispatches = list_pma_dispatches(
             hub_root, include_resolved=include_resolved, limit=limit
         )
@@ -624,7 +630,7 @@ def build_history_files_docs_router(
 
     @router.get("/dispatches/{dispatch_id}")
     def get_pma_dispatch(dispatch_id: str, request: Request) -> dict[str, Any]:
-        hub_root = request.app.state.config.root
+        hub_root = get_pma_request_context(request).hub_root
         path = find_pma_dispatch_path(hub_root, dispatch_id)
         if not path:
             raise HTTPException(status_code=404, detail="Dispatch not found")
@@ -638,7 +644,7 @@ def build_history_files_docs_router(
     def resolve_pma_dispatch_endpoint(
         dispatch_id: str, request: Request
     ) -> dict[str, Any]:
-        hub_root = request.app.state.config.root
+        hub_root = get_pma_request_context(request).hub_root
         path = find_pma_dispatch_path(hub_root, dispatch_id)
         if not path:
             raise HTTPException(status_code=404, detail="Dispatch not found")

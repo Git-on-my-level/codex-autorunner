@@ -15,7 +15,6 @@ from ...core.flows import FlowController, archive_flow_run_artifacts
 from ...core.flows.models import FlowRunRecord, FlowRunStatus
 from ...core.flows.reconciler import reconcile_flow_run
 from ...core.flows.store import FlowStore
-from ...core.flows.ux_helpers import ensure_worker
 from ...core.flows.worker_process import (
     check_worker_health,
     clear_worker_metadata,
@@ -26,21 +25,27 @@ from ...core.flows.workspace_root import (
 )
 from ...core.orchestration.models import FlowRunTarget
 from ...core.runtime import RuntimeContext
+from ...core.state_roots import resolve_repo_flows_db_path, resolve_repo_state_root
+from ...core.ticket_flow_operator import (
+    PreflightCheckResult as TicketFlowInboxPreflight,
+)
+from ...core.ticket_flow_operator import (
+    ensure_flow_worker,
+    resolve_run_reuse_policy,  # noqa: F401
+    select_active_or_paused_run,  # noqa: F401
+    select_resumable_run,  # noqa: F401
+)
+from ...core.ticket_flow_operator import (
+    ticket_flow_inbox_preflight as _ticket_flow_inbox_preflight,
+)
 from ...integrations.agents import build_backend_orchestrator
 from ...integrations.agents.build_agent_pool import build_agent_pool
 from ...tickets import DEFAULT_MAX_TOTAL_TURNS
-from ...tickets.files import list_ticket_paths, safe_relpath, ticket_is_done
+from ...tickets.files import list_ticket_paths
 from ...tickets.frontmatter import generate_ticket_id
 from .definition import build_ticket_flow_definition
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class TicketFlowInboxPreflight:
-    is_recoverable: bool
-    reason_code: Optional[str] = None
-    reason: Optional[str] = None
 
 
 @dataclass
@@ -51,8 +56,9 @@ class TicketFlowRuntimeResources:
 
 def build_ticket_flow_runtime_resources(repo_root: Path) -> TicketFlowRuntimeResources:
     repo_root = repo_root.resolve()
-    db_path = repo_root / ".codex-autorunner" / "flows.db"
-    artifacts_root = repo_root / ".codex-autorunner" / "flows"
+    state_root = resolve_repo_state_root(repo_root)
+    db_path = resolve_repo_flows_db_path(repo_root)
+    artifacts_root = state_root / "flows"
 
     config = load_repo_config(repo_root)
     backend_orchestrator = build_backend_orchestrator(repo_root, config)
@@ -149,7 +155,7 @@ async def stop_ticket_flow_run(repo_root: Path, run_id: str) -> FlowRunRecord:
 
 def _open_ticket_flow_store(repo_root: Path) -> FlowStore:
     repo_root = repo_root.resolve()
-    db_path = repo_root / ".codex-autorunner" / "flows.db"
+    db_path = resolve_repo_flows_db_path(repo_root)
     durable = False
     if find_nearest_hub_config_path(repo_root) is not None:
         config = load_repo_config(repo_root)
@@ -184,51 +190,7 @@ def list_active_ticket_flow_runs(repo_root: Path) -> list[FlowRunRecord]:
 
 
 def ticket_flow_inbox_preflight(repo_root: Path) -> TicketFlowInboxPreflight:
-    repo_root = repo_root.resolve()
-    if not repo_root.exists():
-        return TicketFlowInboxPreflight(
-            is_recoverable=False,
-            reason_code="invalid_state",
-            reason=f"Ticket flow workspace is missing: {repo_root}",
-        )
-
-    state_root = repo_root / ".codex-autorunner"
-    if not state_root.exists() or not state_root.is_dir():
-        return TicketFlowInboxPreflight(
-            is_recoverable=False,
-            reason_code="deleted_context",
-            reason=(
-                "Ticket flow preflight failed because runtime state is missing at "
-                f"{safe_relpath(state_root, repo_root)}"
-            ),
-        )
-
-    ticket_dir = state_root / "tickets"
-    if not ticket_dir.exists() or not ticket_dir.is_dir():
-        return TicketFlowInboxPreflight(
-            is_recoverable=False,
-            reason_code="deleted_context",
-            reason=(
-                "Ticket flow preflight failed because the ticket directory is missing at "
-                f"{safe_relpath(ticket_dir, repo_root)}"
-            ),
-        )
-
-    try:
-        if list_ticket_paths(ticket_dir):
-            return TicketFlowInboxPreflight(is_recoverable=True)
-    except (OSError, ValueError) as exc:
-        logger.warning("Could not inspect ticket dir for inbox preflight: %s", exc)
-        return TicketFlowInboxPreflight(is_recoverable=True)
-
-    return TicketFlowInboxPreflight(
-        is_recoverable=False,
-        reason_code="no_tickets",
-        reason=(
-            "Ticket flow preflight failed because no tickets remain in "
-            f"{safe_relpath(ticket_dir, repo_root)}"
-        ),
-    )
+    return _ticket_flow_inbox_preflight(repo_root)
 
 
 def spawn_ticket_flow_worker(
@@ -250,7 +212,7 @@ def spawn_ticket_flow_worker(
 def ensure_ticket_flow_worker(
     repo_root: Path, run_id: str, *, is_terminal: bool = False
 ) -> None:
-    result = ensure_worker(repo_root, run_id, is_terminal=is_terminal)
+    result = ensure_flow_worker(repo_root, run_id, is_terminal=is_terminal)
     for key in ("stdout", "stderr"):
         handle = result.get(key)
         close = getattr(handle, "close", None)
@@ -373,29 +335,6 @@ def flow_run_record_from_target(target: FlowRunTarget) -> FlowRunRecord:
     )
 
 
-def select_active_or_paused_run(
-    records: list[FlowRunRecord],
-) -> Optional[FlowRunRecord]:
-    for record in records:
-        if record.status in (FlowRunStatus.RUNNING, FlowRunStatus.PAUSED):
-            return record
-    return None
-
-
-def select_resumable_run(
-    records: list[FlowRunRecord],
-) -> tuple[Optional[FlowRunRecord], str]:
-    if not records:
-        return None, "new_run"
-    active = select_active_or_paused_run(records)
-    if active:
-        return active, "active"
-    latest = records[0]
-    if latest.status == FlowRunStatus.COMPLETED:
-        return latest, "completed_pending"
-    return None, "new_run"
-
-
 def render_bootstrap_ticket_template(ticket_id: str) -> str:
     return f"""---
 agent: codex
@@ -420,47 +359,6 @@ You are the first ticket in a new ticket_flow run.
   - Use `mode: pause` (handoff) to wait for user response. This pauses execution.
   - Use `mode: notify` (informational) to message the user but keep running.
 """
-
-
-@dataclass(frozen=True)
-class RunReuseResult:
-    action: str
-    run: Optional[FlowRunRecord] = None
-    pending_ticket_count: int = 0
-    stale_terminal_runs: tuple[FlowRunRecord, ...] = ()
-
-
-def resolve_run_reuse_policy(
-    records: list[FlowRunRecord],
-    *,
-    force_new: bool,
-    ticket_dir: Path,
-) -> RunReuseResult:
-    stale = tuple(
-        r for r in records if r.status in (FlowRunStatus.FAILED, FlowRunStatus.STOPPED)
-    )
-
-    if force_new:
-        return RunReuseResult(action="start_new", stale_terminal_runs=stale)
-
-    existing_run, reason = select_resumable_run(records)
-    if existing_run and reason == "active":
-        return RunReuseResult(
-            action="reuse_active",
-            run=existing_run,
-            stale_terminal_runs=stale,
-        )
-
-    if existing_run and reason == "completed_pending":
-        pending = sum(1 for t in list_ticket_paths(ticket_dir) if not ticket_is_done(t))
-        return RunReuseResult(
-            action="completed_pending",
-            run=existing_run,
-            pending_ticket_count=pending,
-            stale_terminal_runs=stale,
-        )
-
-    return RunReuseResult(action="start_new", stale_terminal_runs=stale)
 
 
 def seed_bootstrap_ticket_if_needed(ticket_dir: Path) -> bool:
