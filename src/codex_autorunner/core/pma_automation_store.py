@@ -33,6 +33,7 @@ from .pma_automation_types import (
     _parse_iso,
     default_pma_automation_state,
 )
+from .pma_origin import extract_pma_origin_metadata, merge_pma_origin_metadata
 from .pma_thread_store import PmaThreadStore
 from .text_utils import _normalize_pma_delivery_target, lock_path_for
 
@@ -1196,15 +1197,23 @@ class PmaAutomationStore:
         *,
         thread_id: Optional[str],
         lane_id: Optional[str],
+        metadata: Optional[dict[str, Any]] = None,
         origin_thread_id: Optional[str] = None,
         origin_lane_id: Optional[str] = None,
     ) -> str:
+        origin_metadata = extract_pma_origin_metadata(metadata)
         normalized_thread_id = _normalize_text(thread_id)
         normalized_lane_id = _normalize_text(lane_id)
-        normalized_origin_thread_id = _normalize_text(origin_thread_id)
-        normalized_origin_lane_id = _normalize_text(origin_lane_id)
+        normalized_origin_thread_id = _normalize_text(origin_thread_id) or (
+            origin_metadata.thread_id if origin_metadata else None
+        )
+        normalized_origin_lane_id = _normalize_text(origin_lane_id) or (
+            origin_metadata.lane_id if origin_metadata else None
+        )
         if normalized_lane_id is not None:
             return _normalize_lane_id(normalized_lane_id)
+        if normalized_origin_lane_id is not None:
+            return _normalize_lane_id(normalized_origin_lane_id)
 
         if normalized_origin_thread_id is not None:
             try:
@@ -1222,9 +1231,6 @@ class PmaAutomationStore:
             )
             if resolved_lane_id != DEFAULT_PMA_LANE_ID:
                 return resolved_lane_id
-
-        if normalized_origin_lane_id is not None:
-            return _normalize_lane_id(normalized_origin_lane_id)
         if normalized_thread_id is None:
             return DEFAULT_PMA_LANE_ID
         return DEFAULT_PMA_LANE_ID
@@ -1315,13 +1321,21 @@ class PmaAutomationStore:
         thread_id: Optional[str],
         metadata: Optional[dict[str, Any]],
         origin_thread_id: Optional[str] = None,
+        origin_lane_id: Optional[str] = None,
     ) -> dict[str, Any]:
-        resolved_metadata = dict(metadata or {})
+        resolved_metadata = merge_pma_origin_metadata(
+            metadata,
+            origin_thread_id=origin_thread_id,
+            origin_lane_id=origin_lane_id,
+        )
         delivery_target = _normalize_delivery_target(
             resolved_metadata.get("delivery_target")
         )
         normalized_thread_id = _normalize_text(thread_id)
-        normalized_origin_thread_id = _normalize_text(origin_thread_id)
+        origin_metadata = extract_pma_origin_metadata(resolved_metadata)
+        normalized_origin_thread_id = _normalize_text(origin_thread_id) or (
+            origin_metadata.thread_id if origin_metadata else None
+        )
         if delivery_target is None and normalized_origin_thread_id is not None:
             try:
                 delivery_target = self._resolve_thread_delivery_target(
@@ -1366,6 +1380,7 @@ class PmaAutomationStore:
         resolved_lane_id = self._resolve_subscription_lane_id(
             thread_id=normalized_thread_id,
             lane_id=lane_id,
+            metadata=metadata,
             origin_thread_id=origin_thread_id,
             origin_lane_id=origin_lane_id,
         )
@@ -1373,6 +1388,7 @@ class PmaAutomationStore:
             thread_id=normalized_thread_id,
             metadata=metadata,
             origin_thread_id=origin_thread_id,
+            origin_lane_id=origin_lane_id,
         )
         if not normalized_event_types:
             logger.warning(

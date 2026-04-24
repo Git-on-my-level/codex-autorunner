@@ -33,7 +33,7 @@ from ...services.pma import get_pma_request_context
 from ...services.pma.managed_thread_followup import (
     ManagedThreadAutomationClient,
     ManagedThreadAutomationUnavailable,
-    resolve_origin_followup_context,
+    apply_origin_followup_context,
 )
 from .automation_adapter import (
     call_store_action_with_id,
@@ -146,13 +146,10 @@ def build_automation_routes(
         try:
             normalized_payload = payload.normalized_payload()
             if not _subscription_request_has_explicit_routing(normalized_payload):
-                origin_thread_id, origin_lane_id = resolve_origin_followup_context(
-                    runtime_state
+                normalized_payload = apply_origin_followup_context(
+                    normalized_payload,
+                    runtime_state,
                 )
-                if origin_thread_id:
-                    normalized_payload.setdefault("origin_thread_id", origin_thread_id)
-                if origin_lane_id:
-                    normalized_payload.setdefault("origin_lane_id", origin_lane_id)
             created = await call_store_create_with_payload(
                 store,
                 (

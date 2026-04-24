@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import logging
 import uuid
+from dataclasses import dataclass
 from typing import Any, Optional
+
+from fastapi import HTTPException
 
 from .....core.orchestration import (
     SurfaceThreadMessageRequest,
@@ -14,6 +17,7 @@ from .....core.pma_context import (
     format_pma_prompt,
     load_pma_prompt,
 )
+from .....core.pma_origin import PmaOriginContext, extract_pma_origin_metadata
 from .....core.text_utils import _normalize_optional_text
 from .....integrations.app_server.threads import pma_automation_key, pma_base_key
 from .....integrations.github.context_injection import maybe_inject_github_context
@@ -29,6 +33,12 @@ from .runtime_state import PmaRuntimeState
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class PmaExecutionOrigin:
+    session_key: str
+    backend_thread_id: Optional[str] = None
+
+
 def _get_pma_config(request: Any) -> dict[str, Any]:
     context = get_pma_request_context(request)
     return pma_config_from_raw(context.raw_config)
@@ -39,10 +49,89 @@ def resolve_pma_session_key(
     profile: Optional[str],
     *,
     automation_trigger: bool,
+    pma_origin: Optional[PmaOriginContext] = None,
 ) -> str:
+    if automation_trigger and pma_origin and pma_origin.thread_id:
+        return pma_base_key(agent_id, profile)
     if automation_trigger:
         return pma_automation_key(agent_id, profile)
     return pma_base_key(agent_id, profile)
+
+
+def _resolve_profile_with_stale_pma_origin_fallback(
+    request: Any,
+    agent_id: str,
+    payload_profile: Optional[str],
+    requested_origin: Optional[PmaOriginContext],
+    *,
+    default_profile: Optional[str],
+) -> Optional[str]:
+    """Resolve profile for queue execution; ignore invalid stored ``pma_origin.profile`` when drifted.
+
+    Durable wakeups may carry a persisted origin profile that was renamed or removed after the
+    subscription was created. In that case :func:`resolve_requested_agent_profile` raises
+    ``HTTPException(400)``. When the client did not specify an explicit payload profile, fall
+    back to default resolution so the automation can still run.
+    """
+
+    origin_profile = requested_origin.profile if requested_origin is not None else None
+    effective = payload_profile if payload_profile is not None else origin_profile
+    try:
+        return resolve_requested_agent_profile(
+            request,
+            agent_id,
+            effective,
+            default_profile=default_profile,
+        )
+    except HTTPException as exc:
+        if (
+            exc.status_code == 400
+            and origin_profile is not None
+            and payload_profile is None
+        ):
+            logger.warning(
+                "Ignoring stale pma_origin.profile for PMA queue item "
+                "(falling back to default profile resolution): agent=%s origin_profile=%s",
+                agent_id,
+                origin_profile,
+            )
+            return resolve_requested_agent_profile(
+                request,
+                agent_id,
+                None,
+                default_profile=default_profile,
+            )
+        raise
+
+
+def resolve_pma_execution_origin(
+    agent_id: str,
+    profile: Optional[str],
+    *,
+    automation_trigger: bool,
+    wake_up: Optional[dict[str, Any]],
+) -> PmaExecutionOrigin:
+    pma_origin = extract_pma_origin_metadata(
+        wake_up.get("metadata") if isinstance(wake_up, dict) else None
+    )
+    should_resume_origin = (
+        automation_trigger
+        and pma_origin is not None
+        and pma_origin.thread_id is not None
+        and (pma_origin.agent is None or pma_origin.agent == agent_id)
+        and (pma_origin.profile is None or pma_origin.profile == profile)
+    )
+    if not should_resume_origin:
+        pma_origin = None
+    return PmaExecutionOrigin(
+        session_key=resolve_pma_session_key(
+            agent_id,
+            profile,
+            automation_trigger=automation_trigger,
+            pma_origin=pma_origin,
+        ),
+        backend_thread_id=pma_origin.thread_id if pma_origin else None,
+    )
 
 
 async def execute_queue_item(
@@ -69,6 +158,9 @@ async def execute_queue_item(
     if not isinstance(wake_up, dict):
         wake_up = None
     automation_trigger = lifecycle_event is not None or wake_up is not None
+    requested_origin = extract_pma_origin_metadata(
+        wake_up.get("metadata") if isinstance(wake_up, dict) else None
+    )
 
     store = runtime.get_state_store(hub_root)
     defaults = _get_pma_config(request)
@@ -162,15 +254,25 @@ async def execute_queue_item(
     }
 
     try:
-        agent_id = validate_agent_id(agent or "", context.agent_context)
+        requested_agent = agent
+        if requested_agent is None and requested_origin is not None:
+            requested_agent = requested_origin.agent
+        agent_id = validate_agent_id(requested_agent or "", context.agent_context)
     except ValueError:
         agent_id = _resolve_default_agent(available_ids, available_default)
 
-    profile = resolve_requested_agent_profile(
+    profile = _resolve_profile_with_stale_pma_origin_fallback(
         request,
         agent_id,
         profile,
+        requested_origin,
         default_profile=_normalize_optional_text(defaults.get("profile")),
+    )
+    execution_origin = resolve_pma_execution_origin(
+        agent_id,
+        profile,
+        automation_trigger=automation_trigger,
+        wake_up=wake_up,
     )
 
     safety_checker = runtime.get_safety_checker(hub_root, context)
@@ -220,11 +322,7 @@ async def execute_queue_item(
         )
 
         snapshot = await snapshot_builder(supervisor, hub_root=hub_root)
-        prompt_state_key = resolve_pma_session_key(
-            agent_id,
-            profile,
-            automation_trigger=automation_trigger,
-        )
+        prompt_state_key = execution_origin.session_key
 
         async def _rebuild_prompt(force_full_base_prompt: bool) -> str:
             built = format_pma_prompt(
@@ -338,8 +436,6 @@ async def execute_queue_item(
         try:
             harness = build_runtime_harness(request, agent_id, profile)
         except Exception as exc:
-            from fastapi import HTTPException
-
             detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
             return {"status": "error", "detail": str(detail)}
         if not callable(getattr(harness, "supports", None)):
@@ -359,11 +455,8 @@ async def execute_queue_item(
             model=model,
             reasoning=reasoning,
             thread_registry=registry,
-            thread_key=resolve_pma_session_key(
-                agent_id,
-                profile,
-                automation_trigger=automation_trigger,
-            ),
+            thread_key=execution_origin.session_key,
+            backend_thread_id=execution_origin.backend_thread_id,
             on_meta=_meta,
             timeout_seconds=turn_timeout_seconds,
             rebuild_prompt=_rebuild_prompt,
