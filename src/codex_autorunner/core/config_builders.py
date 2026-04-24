@@ -56,6 +56,7 @@ from .config_validation import _validate_hub_config, _validate_repo_config
 from .destinations import resolve_effective_repo_destination
 from .generated_hub_config import normalize_generated_hub_config
 from .path_utils import ConfigPathError, resolve_config_path
+from .state_roots import resolve_repo_runner_state_db_path
 from .utils import find_repo_root
 
 ACTIVE_HUB_ROOT_ENV = "CAR_HUB_ROOT"
@@ -80,7 +81,7 @@ def _resolve_hub_config_path(start: Path) -> Path:
 def _resolve_repo_root(start: Path) -> Path:
     search_dir = start.resolve() if start.is_dir() else start.resolve().parent
     for current in [search_dir] + list(search_dir.parents):
-        if (current / ".codex-autorunner" / "state.sqlite3").exists():
+        if resolve_repo_runner_state_db_path(current).exists():
             return current
         if (current / ".git").exists():
             return current

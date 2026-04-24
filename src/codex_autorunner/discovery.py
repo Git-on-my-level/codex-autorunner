@@ -5,6 +5,7 @@ from typing import List, Optional, Tuple
 from .bootstrap import seed_repo_files
 from .core.config import HubConfig
 from .core.git_utils import git_branch, git_linked_worktree_base_root
+from .core.state_roots import resolve_repo_runner_state_db_path
 from .manifest import (
     Manifest,
     ManifestRepo,
@@ -177,7 +178,7 @@ def discover_and_init(hub_config: HubConfig) -> Tuple[Manifest, List[DiscoveryRe
         if root_entry.id not in seen_ids:
             _record_repo(root_entry, added=False)
     else:
-        state_path = hub_config.root / ".codex-autorunner" / "state.sqlite3"
+        state_path = resolve_repo_runner_state_db_path(hub_config.root)
         root_is_repo = state_path.exists()
         if not root_is_repo and hub_config.repos_root.resolve() == root_resolved:
             root_is_repo = (hub_config.root / ".git").exists()

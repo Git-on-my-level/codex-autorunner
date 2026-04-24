@@ -128,15 +128,6 @@ def coerce_int(value: Any) -> int:
     return _standalone_coerce_int(value)
 
 
-def coerce_usage_int(value: Any) -> Optional[int]:
-    if isinstance(value, bool):
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
-
-
 def timestamp_rank(value: Any) -> float:
     if isinstance(value, bool):
         return float("-inf")

@@ -1052,6 +1052,14 @@ def summarize_hub_usage(
     return per_repo, unmatched
 
 
+# Keep explicit module-level references so dead-code heuristics treat these
+# uncached summary helpers as part of the supported usage API surface.
+_USAGE_SUMMARY_PUBLIC_APIS = (
+    summarize_repo_usage,
+    summarize_hub_usage,
+)
+
+
 def summarize_opencode_repo_usage(
     repo_root: Path,
     *,

@@ -12,15 +12,10 @@ RAW_STATE_PATH_PATTERN = re.compile(
 RAW_ALTER_ADD_COLUMN_PATTERN = re.compile(r"ALTER TABLE .*ADD COLUMN")
 
 ALLOWED_RAW_STATE_PATH_FILES = {
-    "src/codex_autorunner/core/config_builders.py",
     "src/codex_autorunner/core/config_layering.py",
     "src/codex_autorunner/core/flows/pause_dispatch.py",
     "src/codex_autorunner/core/hub_repo_projection.py",
-    "src/codex_autorunner/core/hub_runner_orchestrator.py",
-    "src/codex_autorunner/core/hub_topology.py",
     "src/codex_autorunner/core/pr_binding_runtime.py",
-    "src/codex_autorunner/core/runner_state.py",
-    "src/codex_autorunner/discovery.py",
     "src/codex_autorunner/flows/ticket_flow/definition.py",
     "src/codex_autorunner/integrations/agents/agent_pool_impl.py",
     "src/codex_autorunner/integrations/discord/config.py",
@@ -32,7 +27,6 @@ ALLOWED_RAW_STATE_PATH_FILES = {
     "src/codex_autorunner/integrations/telegram/doctor.py",
     "src/codex_autorunner/integrations/telegram/handlers/commands/workspace_session_commands.py",
     "src/codex_autorunner/integrations/telegram/ticket_flow_bridge.py",
-    "src/codex_autorunner/surfaces/cli/commands/root.py",
     "src/codex_autorunner/surfaces/web/routes/hub_repo_routes/channels.py",
 }
 ALLOWED_RAW_ALTER_ADD_COLUMN_FILES = {

@@ -1278,10 +1278,11 @@ def _validate_telegram_bot_config(cfg: Dict[str, Any]) -> None:
     if defaults_cfg is not None and not isinstance(defaults_cfg, dict):
         raise ConfigError("telegram_bot.defaults must be a mapping if provided")
     if isinstance(defaults_cfg, dict):
-        if "approval_mode" in defaults_cfg and not isinstance(
-            defaults_cfg.get("approval_mode"), str
-        ):
-            raise ConfigError("telegram_bot.defaults.approval_mode must be a string")
+        if "approval_mode" in defaults_cfg:
+            _normalize_ticket_flow_approval_mode(
+                defaults_cfg.get("approval_mode"),
+                scope="telegram_bot.defaults.approval_mode",
+            )
         for key in (
             "approval_policy",
             "sandbox_policy",

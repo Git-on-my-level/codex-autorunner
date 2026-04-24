@@ -22,6 +22,7 @@ from .destinations import (
 from .git_utils import git_available, git_is_clean
 from .locks import DEFAULT_RUNNER_CMD_HINTS, assess_lock, process_alive
 from .state import RunnerState, load_state, now_iso
+from .state_roots import resolve_repo_runner_state_db_path
 from .utils import atomic_write
 
 logger = logging.getLogger("codex_autorunner.hub_topology")
@@ -344,7 +345,7 @@ def build_repo_snapshot(
 
     runner_state: Optional[RunnerState] = None
     if record.initialized:
-        runner_state = load_state(repo_path / ".codex-autorunner" / "state.sqlite3")
+        runner_state = load_state(resolve_repo_runner_state_db_path(repo_path))
 
     is_clean: Optional[bool] = None
     if record.exists_on_disk and git_available(repo_path):

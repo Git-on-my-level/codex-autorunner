@@ -11,8 +11,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Protocol, cast
 
-from ..tickets.files import safe_relpath
-from ..tickets.models import Dispatch
 from .capability_hints import build_hub_capability_hints, build_repo_capability_hints
 from .chat_bindings import active_chat_binding_counts_by_source
 from .config import (
@@ -137,43 +135,6 @@ _service_registry: dict[int, "HubReadModelService"] = {}
 
 def _monotonic() -> float:
     return time.monotonic()
-
-
-def _serialize_dispatch_payload(dispatch: Dispatch) -> dict[str, Any]:
-    return {
-        "mode": dispatch.mode,
-        "title": dispatch.title,
-        "body": dispatch.body,
-        "extra": dict(dispatch.extra),
-        "is_handoff": dispatch.is_handoff,
-    }
-
-
-def _serialize_latest_dispatch_response(
-    *,
-    seq: int,
-    repo_root: Path,
-    dispatch_dir: Path,
-    dispatch: Optional[Dispatch],
-    errors: list[str],
-    files: list[str],
-    turn_summary_seq: Optional[int] = None,
-    turn_summary: Optional[Dispatch] = None,
-) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "seq": seq,
-        "dir": safe_relpath(dispatch_dir, repo_root),
-        "dispatch": (
-            _serialize_dispatch_payload(dispatch) if dispatch is not None else None
-        ),
-        "errors": list(errors),
-        "files": list(files),
-    }
-    if turn_summary_seq is not None:
-        payload["turn_summary_seq"] = turn_summary_seq
-    if turn_summary is not None:
-        payload["turn_summary"] = _serialize_dispatch_payload(turn_summary)
-    return payload
 
 
 def latest_dispatch(

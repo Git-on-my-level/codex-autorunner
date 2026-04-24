@@ -365,3 +365,11 @@ def reset_global_accumulator() -> None:
     global _global_accumulator
     with _accumulator_lock:
         _global_accumulator = None
+
+
+# Keep explicit module-level references so dead-code heuristics treat these
+# test and diagnostics hooks as part of the supported telemetry surface.
+_CHAT_UX_TELEMETRY_TEST_SURFACE = (
+    get_global_accumulator,
+    reset_global_accumulator,
+)

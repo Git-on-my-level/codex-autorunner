@@ -6,7 +6,6 @@ from .....core import hub_read_model as _core_hub_read_model
 from .....core.hub_read_model import (
     REPO_LISTING_SECTIONS,
     HubReadModelService,
-    get_hub_read_model_service,
 )
 
 if TYPE_CHECKING:
@@ -71,11 +70,7 @@ def build_hub_repo_listing_router(
     from fastapi import APIRouter, HTTPException
 
     router = APIRouter()
-    listing_service = get_hub_read_model_service(
-        context,
-        repo_projection_provider=enricher,
-        prepare_repo_snapshots=mount_manager.refresh_mounts,
-    )
+    listing_service = HubRepoListingService(context, mount_manager, enricher)
 
     @router.get("/hub/repos")
     async def list_repos(sections: Optional[str] = None):

@@ -29,6 +29,7 @@ from ....core.config_validation import is_loopback_host
 from ....core.git_utils import GitError, run_git
 from ....core.runtime import RuntimeContext, clear_stale_lock
 from ....core.state import RunnerState, load_state, now_iso, save_state, state_lock
+from ....core.state_roots import resolve_repo_runner_state_db_path
 from ....core.usage import (
     UsageError,
     default_codex_home,
@@ -521,7 +522,7 @@ def register_root_commands(app: typer.Typer) -> None:
         except RepoNotFoundError:
             repo_root = None
 
-        if repo_root and (repo_root / ".codex-autorunner" / "state.sqlite3").exists():
+        if repo_root and resolve_repo_runner_state_db_path(repo_root).exists():
             engine = _require_repo_config(repo, hub)
         else:
             try:
