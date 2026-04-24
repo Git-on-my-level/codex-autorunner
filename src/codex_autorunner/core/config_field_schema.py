@@ -303,6 +303,7 @@ APP_SERVER_FIELD_SCHEMAS: dict[str, FieldSchema] = {
         path="app_server.command",
         kind="command",
         default=("codex", "app-server"),
+        allow_none=True,
         type_message="app_server.command must be a list or string if provided",
     ),
     "state_root": FieldSchema(
@@ -832,4 +833,8 @@ SHARED_SCHEMA_FIELD_PATHS = frozenset(
         schema_paths(AGENT_PROFILE_FIELD_SCHEMAS),
     )
     for path in path_set
+)
+
+SHARED_CONFIG_PARSER_FIELD_PATHS = SHARED_SCHEMA_FIELD_PATHS - schema_paths(
+    AGENT_FIELD_SCHEMAS, AGENT_PROFILE_FIELD_SCHEMAS
 )

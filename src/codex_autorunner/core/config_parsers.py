@@ -25,13 +25,13 @@ from .config_field_schema import (
     APP_SERVER_OUTPUT_FIELD_SCHEMAS,
     APP_SERVER_PROMPT_SECTION_SCHEMAS,
     OPENCODE_FIELD_SCHEMAS,
+    SHARED_CONFIG_PARSER_FIELD_PATHS,
     TICKET_FLOW_FIELD_SCHEMAS,
     UPDATE_FIELD_SCHEMAS,
     UPDATE_LINUX_SERVICE_NAME_SCHEMAS,
     USAGE_FIELD_SCHEMAS,
     default_from_mapping,
     parse_schema_field,
-    schema_paths,
 )
 from .config_layering import (
     PMA_DEFAULT_MAX_TEXT_CHARS,
@@ -69,25 +69,6 @@ from .report_retention import (
 )
 
 _APP_SERVER_OUTPUT_POLICIES = set(APP_SERVER_OUTPUT_POLICIES)
-SHARED_CONFIG_PARSER_FIELD_PATHS = frozenset(
-    path
-    for path_set in (
-        schema_paths(TICKET_FLOW_FIELD_SCHEMAS),
-        schema_paths(APP_SERVER_FIELD_SCHEMAS),
-        schema_paths(APP_SERVER_CLIENT_FIELD_SCHEMAS),
-        schema_paths(APP_SERVER_OUTPUT_FIELD_SCHEMAS),
-        frozenset(
-            path
-            for section in APP_SERVER_PROMPT_SECTION_SCHEMAS.values()
-            for path in schema_paths(section)
-        ),
-        schema_paths(OPENCODE_FIELD_SCHEMAS),
-        schema_paths(UPDATE_FIELD_SCHEMAS),
-        schema_paths(UPDATE_LINUX_SERVICE_NAME_SCHEMAS),
-        schema_paths(USAGE_FIELD_SCHEMAS),
-    )
-    for path in path_set
-)
 
 
 def _parse_optional_int(value: Any) -> Optional[int]:
