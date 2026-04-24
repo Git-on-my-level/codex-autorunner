@@ -137,6 +137,36 @@ async def _register_pma_result_future(
     return result_future
 
 
+async def _await_pma_result_future(
+    runtime: PmaRuntimeState,
+    queue: Any,
+    *,
+    lane_id: str,
+    item_id: str,
+    result_future: asyncio.Future[dict[str, Any]],
+    poll_interval_seconds: float = 0.25,
+) -> dict[str, Any]:
+    while True:
+        if result_future.done():
+            return await result_future
+        worker = runtime.lane_workers.get(lane_id)
+        if worker is None or not worker.is_running:
+            late_result = await _resolve_terminal_queue_item_result(
+                queue,
+                lane_id=lane_id,
+                item_id=item_id,
+            )
+            if late_result is not None:
+                if not result_future.done():
+                    result_future.set_result(late_result)
+                return late_result
+            return {
+                "status": "error",
+                "detail": "PMA lane worker stopped before delivering a result",
+            }
+        await asyncio.sleep(max(0.05, float(poll_interval_seconds)))
+
+
 def _build_idempotency_key(
     *,
     lane_id: str,
@@ -405,12 +435,13 @@ def build_chat_runtime_router(
         )
 
         try:
-            result = await asyncio.wait_for(
-                result_future,
-                timeout=_pma_turn_idle_timeout_seconds(request),
+            result = await _await_pma_result_future(
+                runtime,
+                queue,
+                lane_id=lane_id,
+                item_id=item.item_id,
+                result_future=result_future,
             )
-        except asyncio.TimeoutError:
-            return {"status": "error", "detail": "PMA chat timed out"}
         except Exception:
             logger.exception("PMA chat error")
             return {
