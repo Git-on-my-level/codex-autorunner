@@ -276,10 +276,20 @@ def test_ticket_flow_archive_also_archives_ticket_flow_pma_threads(
             legacy["managed_thread_id"],
         ]
     )
-    assert store.get_thread(matching["managed_thread_id"])["status"] == "archived"
-    assert store.get_thread(legacy["managed_thread_id"])["status"] == "archived"
-    assert store.get_thread(other_run["managed_thread_id"])["status"] == "active"
-    assert store.get_thread(non_ticket_flow["managed_thread_id"])["status"] == "active"
+    assert (
+        store.get_thread(matching["managed_thread_id"])["lifecycle_status"]
+        == "archived"
+    )
+    assert (
+        store.get_thread(legacy["managed_thread_id"])["lifecycle_status"] == "archived"
+    )
+    assert (
+        store.get_thread(other_run["managed_thread_id"])["lifecycle_status"] == "active"
+    )
+    assert (
+        store.get_thread(non_ticket_flow["managed_thread_id"])["lifecycle_status"]
+        == "active"
+    )
 
 
 def test_ticket_flow_archive_skips_pma_archival_without_hub_manifest(

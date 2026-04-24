@@ -534,7 +534,12 @@ class _PmaThreadStatusSnapshot:
         thread: dict[str, Any] = raw_thread if isinstance(raw_thread, dict) else {}
         raw_turn = payload.get("turn")
         turn: dict[str, Any] = raw_turn if isinstance(raw_turn, dict) else {}
-        raw_thread_status = str(payload.get("status") or thread.get("status") or "-")
+        raw_thread_status = str(
+            payload.get("status")
+            or thread.get("normalized_status")
+            or thread.get("status")
+            or "-"
+        )
         queue_depth_raw = payload.get("queue_depth")
         recent_progress = payload.get("recent_progress")
         queued_turns = payload.get("queued_turns")
@@ -553,7 +558,11 @@ class _PmaThreadStatusSnapshot:
             ),
             is_alive=bool(payload.get("is_alive")),
             status_reason=str(
-                payload.get("status_reason") or thread.get("status_reason") or "-"
+                payload.get("status_reason")
+                or payload.get("status_reason_code")
+                or thread.get("status_reason_code")
+                or thread.get("status_reason")
+                or "-"
             ),
             managed_turn_id=str(turn.get("managed_turn_id") or "-"),
             turn_state=str(turn.get("status") or "-"),
@@ -681,8 +690,8 @@ def _thread_compact_target_line(thread: dict[str, Any]) -> str:
     parts = [
         str(thread.get("managed_thread_id") or ""),
         f"agent={thread.get('agent') or ''}",
-        f"status={thread.get('status') or ''}",
-        f"reason={thread.get('status_reason') or '-'}",
+        f"status={thread.get('normalized_status') or thread.get('status') or ''}",
+        f"reason={thread.get('status_reason_code') or thread.get('status_reason') or '-'}",
         _format_resource_owner_label(thread),
     ]
     if bool(thread.get("chat_bound")):
@@ -973,8 +982,8 @@ def pma_thread_list(
                 [
                     str(thread.get("managed_thread_id") or ""),
                     f"agent={thread.get('agent') or ''}",
-                    f"status={thread.get('status') or ''}",
-                    f"reason={thread.get('status_reason') or '-'}",
+                    f"status={thread.get('normalized_status') or thread.get('status') or ''}",
+                    f"reason={thread.get('status_reason_code') or thread.get('status_reason') or '-'}",
                     _format_resource_owner_label(thread),
                 ]
             ).strip()
@@ -1537,7 +1546,10 @@ def pma_thread_compact(
                 for thread in threads
                 if str(thread.get("lifecycle_status") or "").strip().lower()
                 != "archived"
-                and str(thread.get("status") or "").strip().lower() != "archived"
+                and str(thread.get("normalized_status") or thread.get("status") or "")
+                .strip()
+                .lower()
+                != "archived"
             ]
 
         target_ids = [

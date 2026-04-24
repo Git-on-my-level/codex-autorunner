@@ -3131,14 +3131,7 @@ class TestIssue975CharacterizationManagedThreadPayload:
     """
 
     def test_pma_thread_payload_includes_all_status_fields(self, hub_env) -> None:
-        """Document that managed thread payloads include all status fields.
-
-        Note: The 'status' field contains lifecycle_status (e.g., 'active'),
-        while 'normalized_status' contains the runtime status (e.g., 'idle').
-        This baseline documents the status model where:
-        - status == lifecycle_status (machine-level lifecycle)
-        - normalized_status == runtime status (operator-facing runtime state)
-        """
+        """Document the canonical managed-thread store payload."""
         store = PmaThreadStore(hub_env.hub_root)
         thread = store.create_thread(
             "codex",
@@ -3148,11 +3141,12 @@ class TestIssue975CharacterizationManagedThreadPayload:
         )
 
         assert "managed_thread_id" in thread
-        assert thread["status"] == "active"
         assert thread["lifecycle_status"] == "active"
         assert thread["normalized_status"] == "idle"
-        assert thread["status_reason"] == "thread_created"
+        assert thread["status_reason_code"] == "thread_created"
         assert thread["status_terminal"] is False
+        assert "status" not in thread
+        assert "status_reason" not in thread
 
     def test_completed_thread_shows_completed_normalized_status_with_active_lifecycle(
         self, hub_env
@@ -3185,7 +3179,6 @@ class TestIssue975CharacterizationManagedThreadPayload:
         )
 
         updated = store.get_thread(thread_id)
-        assert updated["status"] == "active"
         assert updated["lifecycle_status"] == "active"
         assert updated["normalized_status"] == "completed"
         assert updated["status_terminal"] is True

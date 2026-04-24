@@ -37,10 +37,10 @@ def test_create_list_get_thread(tmp_path: Path) -> None:
     )
 
     assert store.path == default_pma_threads_db_path(hub_root)
-    assert created["status"] == "active"
     assert created["lifecycle_status"] == "active"
     assert created["normalized_status"] == "idle"
-    assert created["status_reason"] == "thread_created"
+    assert created["status_reason_code"] == "thread_created"
+    assert "status" not in created
     assert created["status_terminal"] is False
     assert created["repo_id"] == "repo-123"
     assert created["name"] == "Primary"
@@ -268,7 +268,7 @@ def test_create_finish_turn_and_query(tmp_path: Path) -> None:
     thread_after = store.get_thread(thread["managed_thread_id"])
     assert thread_after is not None
     assert thread_after["normalized_status"] == "completed"
-    assert thread_after["status_reason"] == "managed_turn_completed"
+    assert thread_after["status_reason_code"] == "managed_turn_completed"
     assert thread_after["status_terminal"] is True
 
 
@@ -968,7 +968,7 @@ def test_mark_turn_finished_does_not_override_interrupted_status(
     thread_after = store.get_thread(thread["managed_thread_id"])
     assert thread_after is not None
     assert thread_after["normalized_status"] == "interrupted"
-    assert thread_after["status_reason"] == "managed_turn_interrupted"
+    assert thread_after["status_reason_code"] == "managed_turn_interrupted"
     assert thread_after["status_terminal"] is True
 
 
@@ -1015,10 +1015,9 @@ def test_archive_thread_changes_status(tmp_path: Path) -> None:
 
     archived = store.get_thread(thread["managed_thread_id"])
     assert archived is not None
-    assert archived["status"] == "archived"
     assert archived["lifecycle_status"] == "archived"
     assert archived["normalized_status"] == "archived"
-    assert archived["status_reason"] == "thread_archived"
+    assert archived["status_reason_code"] == "thread_archived"
     assert archived["status_terminal"] is True
 
 
@@ -1106,20 +1105,20 @@ def test_transient_failure_recovery_promotes_status_back_to_completed(
     failed_thread = store.get_thread(thread["managed_thread_id"])
     assert failed_thread is not None
     assert failed_thread["normalized_status"] == "failed"
-    assert failed_thread["status_reason"] == "managed_turn_failed"
+    assert failed_thread["status_reason_code"] == "managed_turn_failed"
 
     second_turn = store.create_turn(thread["managed_thread_id"], prompt="retry")
     running_thread = store.get_thread(thread["managed_thread_id"])
     assert running_thread is not None
     assert running_thread["normalized_status"] == "running"
-    assert running_thread["status_reason"] == "turn_started"
+    assert running_thread["status_reason_code"] == "turn_started"
     assert running_thread["status_terminal"] is False
 
     assert store.mark_turn_finished(second_turn["managed_turn_id"], status="ok") is True
     recovered_thread = store.get_thread(thread["managed_thread_id"])
     assert recovered_thread is not None
     assert recovered_thread["normalized_status"] == "completed"
-    assert recovered_thread["status_reason"] == "managed_turn_completed"
+    assert recovered_thread["status_reason_code"] == "managed_turn_completed"
     assert recovered_thread["status_terminal"] is True
 
 
@@ -1132,10 +1131,9 @@ def test_archive_then_activate_restores_ready_status(tmp_path: Path) -> None:
 
     resumed = store.get_thread(thread["managed_thread_id"])
     assert resumed is not None
-    assert resumed["status"] == "active"
     assert resumed["lifecycle_status"] == "active"
     assert resumed["normalized_status"] == "idle"
-    assert resumed["status_reason"] == "thread_resumed"
+    assert resumed["status_reason_code"] == "thread_resumed"
     assert resumed["status_terminal"] is False
 
 
@@ -1147,14 +1145,14 @@ def test_duplicate_completion_event_is_idempotent(tmp_path: Path) -> None:
     assert store.mark_turn_finished(turn["managed_turn_id"], status="ok") is True
     first_thread = store.get_thread(thread["managed_thread_id"])
     assert first_thread is not None
-    first_changed_at = first_thread["status_changed_at"]
+    first_changed_at = first_thread["status_updated_at"]
 
     assert store.mark_turn_finished(turn["managed_turn_id"], status="ok") is False
     second_thread = store.get_thread(thread["managed_thread_id"])
     assert second_thread is not None
     assert second_thread["normalized_status"] == "completed"
-    assert second_thread["status_reason"] == "managed_turn_completed"
-    assert second_thread["status_changed_at"] == first_changed_at
+    assert second_thread["status_reason_code"] == "managed_turn_completed"
+    assert second_thread["status_updated_at"] == first_changed_at
 
 
 def test_schema_creation_is_idempotent(tmp_path: Path) -> None:
@@ -1209,15 +1207,41 @@ def test_thread_record_normalizes_legacy_status_aliases(tmp_path: Path) -> None:
     assert row is not None
     record = PmaThreadRecord.from_orchestration_row(row).to_dict()
 
-    assert record["status"] == "active"
     assert record["lifecycle_status"] == "active"
     assert record["normalized_status"] == "idle"
     assert record["status_reason_code"] == "thread_created"
-    assert record["status_reason"] == "thread_created"
     assert record["status_updated_at"] == created["status_updated_at"]
-    assert record["status_changed_at"] == created["status_changed_at"]
+    assert "status" not in record
+    assert "status_reason" not in record
+    assert "status_changed_at" not in record
     assert record["status_terminal"] is False
     assert record["metadata"]["head_branch"] == "feature/demo"
+
+
+def test_thread_record_migrates_alias_only_status_fields_to_canonical_schema() -> None:
+    record = PmaThreadRecord.from_store_mapping(
+        {
+            "managed_thread_id": "thread-1",
+            "agent": "codex",
+            "workspace_root": "/tmp/workspace",
+            "status": "active",
+            "normalized_status": "completed",
+            "status_reason": "managed_turn_completed",
+            "status_changed_at": "2026-03-08T00:00:20Z",
+            "status_terminal": True,
+            "status_turn_id": "turn-1",
+        }
+    ).to_dict()
+
+    assert record["lifecycle_status"] == "active"
+    assert record["normalized_status"] == "completed"
+    assert record["status_reason_code"] == "managed_turn_completed"
+    assert record["status_updated_at"] == "2026-03-08T00:00:20Z"
+    assert record["status_turn_id"] == "turn-1"
+    assert record["status_terminal"] is True
+    assert "status" not in record
+    assert "status_reason" not in record
+    assert "status_changed_at" not in record
 
 
 def test_concurrentish_writes_smoke(tmp_path: Path) -> None:

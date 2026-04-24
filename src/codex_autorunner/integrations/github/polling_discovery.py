@@ -57,7 +57,7 @@ def thread_has_pr_open_hint(thread: Mapping[str, Any]) -> bool:
     for context in thread_contexts(metadata):
         if _pr_hint_present_in_context(context):
             return True
-    for key in ("status_reason", "last_message_preview"):
+    for key in ("status_reason_code", "status_reason", "last_message_preview"):
         value = _normalize_lower_text(thread.get(key))
         if value is None:
             continue
@@ -103,7 +103,11 @@ def is_recent_terminal_thread_candidate(
         return False
     if thread_has_pr_open_hint(thread):
         return True
-    status_reason = _normalize_lower_text(thread.get("status_reason")) or ""
+    status_reason = (
+        _normalize_lower_text(thread.get("status_reason_code"))
+        or _normalize_lower_text(thread.get("status_reason"))
+        or ""
+    )
     if status_reason in {"managed_turn_completed", "completed"}:
         return thread_head_branch_hint(thread) is not None
     return False

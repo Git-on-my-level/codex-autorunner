@@ -230,9 +230,7 @@ def _active_thread_record(
     thread = store.get_thread(normalized_thread_target_id)
     if thread is None:
         return None, None
-    lifecycle_status = _normalize_optional_text(
-        thread.get("lifecycle_status") or thread.get("status")
-    )
+    lifecycle_status = _normalize_optional_text(thread.get("lifecycle_status"))
     if lifecycle_status != "active":
         return None, thread
     return normalized_thread_target_id, thread

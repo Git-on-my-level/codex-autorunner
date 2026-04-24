@@ -97,7 +97,7 @@ def sync_legacy_mirror(
                         legacy["workspace_root"],
                         legacy["name"],
                         canonical_backend_thread_id,
-                        legacy["status"],
+                        legacy["lifecycle_status"],
                         legacy["normalized_status"],
                         legacy["status_reason_code"],
                         legacy["status_updated_at"],
