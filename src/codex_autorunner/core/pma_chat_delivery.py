@@ -119,6 +119,45 @@ def _ordered_surface_kinds_for_bound_delivery(
     return ("discord", "telegram")
 
 
+def _attempts_from_dispatch_decision(
+    *,
+    dispatch_decision: dict[str, Any],
+    normalized_repo_id: Optional[str],
+) -> list[PmaChatDeliveryAttempt]:
+    if dispatch_decision.get("suppress_publish"):
+        return []
+    raw_attempts = dispatch_decision.get("attempts")
+    if not isinstance(raw_attempts, (list, tuple)):
+        return []
+    attempts: list[PmaChatDeliveryAttempt] = []
+    for entry in raw_attempts:
+        if not isinstance(entry, dict):
+            continue
+        surface_kind = _normalize_optional_text(entry.get("surface_kind"))
+        if surface_kind is None:
+            continue
+        surface_key = _normalize_optional_text(entry.get("surface_key"))
+        repo_id = _normalize_optional_text(entry.get("repo_id")) or normalized_repo_id
+        workspace_root_raw = _normalize_optional_text(entry.get("workspace_root"))
+        attempts.append(
+            PmaChatDeliveryAttempt(
+                route=_normalize_optional_text(entry.get("route")) or "auto",
+                delivery_mode=(
+                    _normalize_optional_text(entry.get("delivery_mode")) or "bound"
+                ),
+                target=PmaChatDeliveryTarget(
+                    surface_kind=surface_kind,
+                    surface_key=surface_key,
+                ),
+                repo_id=repo_id,
+                workspace_root=(
+                    Path(workspace_root_raw) if workspace_root_raw else None
+                ),
+            )
+        )
+    return attempts
+
+
 async def deliver_pma_notification(
     *,
     hub_root: Path,
@@ -132,6 +171,7 @@ async def deliver_pma_notification(
     managed_thread_id: Optional[str] = None,
     delivery_target: Optional[dict[str, Any]] = None,
     context_payload: Optional[dict[str, Any]] = None,
+    dispatch_decision: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     text = str(message or "").strip()
     normalized_repo_id = _normalize_optional_text(repo_id)
@@ -151,6 +191,52 @@ async def deliver_pma_notification(
     )
     if normalized_delivery == "none":
         return {"route": "none", "targets": 0, "published": 0}
+
+    if dispatch_decision is not None:
+        persisted_attempts = _attempts_from_dispatch_decision(
+            dispatch_decision=dispatch_decision,
+            normalized_repo_id=normalized_repo_id,
+        )
+        if (
+            _normalize_optional_text(managed_thread_id) is not None
+            and normalized_source_kind == "managed_thread_completed"
+            and _looks_like_duplicate_noop_notice(text)
+        ):
+            normalized_target = _normalize_pma_delivery_target(delivery_target)
+            if normalized_target is not None:
+                surface_kind, surface_key = normalized_target
+                if _delivery_target_matches_active_thread_binding(
+                    hub_root=hub_root,
+                    managed_thread_id=managed_thread_id,
+                    surface_kind=surface_kind,
+                    surface_key=surface_key,
+                ):
+                    return {
+                        "route": "suppressed_duplicate",
+                        "targets": 1,
+                        "published": 0,
+                    }
+        if not persisted_attempts:
+            return {"route": normalized_delivery, "targets": 0, "published": 0}
+        from ..pma_chat_delivery_runtime import dispatch_pma_chat_delivery_intent
+
+        intent = PmaChatDeliveryIntent(
+            message=text,
+            correlation_id=correlation_id,
+            source_kind=normalized_source_kind,
+            requested_delivery=normalized_delivery,
+            attempts=tuple(persisted_attempts),
+            repo_id=normalized_repo_id,
+            workspace_root=workspace_root,
+            run_id=run_id,
+            managed_thread_id=managed_thread_id,
+            context_payload=payload,
+        )
+        return await dispatch_pma_chat_delivery_intent(
+            hub_root=hub_root,
+            raw_config=raw_config,
+            intent=intent,
+        )
 
     attempts: list[PmaChatDeliveryAttempt] = []
     normalized_target = _normalize_pma_delivery_target(delivery_target)

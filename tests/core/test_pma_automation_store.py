@@ -699,3 +699,122 @@ def test_timer_rejects_invalid_due_at_timestamp(tmp_path) -> None:
     store = PmaAutomationStore(tmp_path)
     with pytest.raises(ValueError):
         store.create_timer({"timer_type": "one_shot", "due_at": "not-a-timestamp"})
+
+
+def test_notify_transition_persists_dispatch_decision_in_wakeup_metadata(
+    tmp_path,
+) -> None:
+    store = PmaAutomationStore(tmp_path, durable=False)
+    thread_id = _create_managed_thread(tmp_path, surface_kind="discord")
+
+    store.create_subscription(
+        {
+            "event_type": "managed_thread_completed",
+            "thread_id": thread_id,
+        }
+    )
+
+    store.notify_transition(
+        {
+            "event_type": "managed_thread_completed",
+            "thread_id": thread_id,
+            "from_state": "running",
+            "to_state": "completed",
+            "transition_id": f"{thread_id}:completed",
+        }
+    )
+
+    pending = store.list_pending_wakeups(limit=10)
+    assert len(pending) == 1
+    wakeup = pending[0]
+    assert "dispatch_decision" in wakeup["metadata"]
+    decision = wakeup["metadata"]["dispatch_decision"]
+    assert decision["requested_delivery"] == "auto"
+    assert decision["suppress_publish"] is False
+    assert isinstance(decision["attempts"], list)
+    assert len(decision["attempts"]) > 0
+
+
+def test_enqueue_wakeup_persists_dispatch_decision(tmp_path) -> None:
+    store = PmaAutomationStore(tmp_path, durable=False)
+
+    wakeup, deduped = store.enqueue_wakeup(
+        source="automation",
+        repo_id="repo-1",
+        metadata={
+            "delivery_target": {"surface_kind": "discord", "surface_key": "ch-1"}
+        },
+    )
+    assert deduped is False
+    assert "dispatch_decision" in wakeup.metadata
+    decision = wakeup.metadata["dispatch_decision"]
+    assert decision["requested_delivery"] == "auto"
+    assert isinstance(decision["attempts"], list)
+
+
+def test_dispatch_decision_survives_round_trip(tmp_path) -> None:
+    store = PmaAutomationStore(tmp_path, durable=False)
+    thread_id = _create_managed_thread(tmp_path, surface_kind="telegram")
+
+    store.create_subscription(
+        {"event_type": "managed_thread_completed", "thread_id": thread_id}
+    )
+    store.notify_transition(
+        {
+            "event_type": "managed_thread_completed",
+            "thread_id": thread_id,
+            "from_state": "running",
+            "to_state": "completed",
+            "transition_id": f"{thread_id}:completed",
+        }
+    )
+
+    pending = store.list_pending_wakeups(limit=10)
+    assert len(pending) == 1
+    original_decision = pending[0]["metadata"]["dispatch_decision"]
+
+    store2 = PmaAutomationStore(tmp_path, durable=False)
+    reloaded = store2.list_pending_wakeups(limit=10)
+    assert len(reloaded) == 1
+    assert reloaded[0]["metadata"]["dispatch_decision"] == original_decision
+
+
+def test_post_wakeup_rebind_does_not_mutate_dispatch_decision(tmp_path) -> None:
+    store = PmaAutomationStore(tmp_path, durable=False)
+    binding_store = OrchestrationBindingStore(tmp_path)
+    thread_id = _create_managed_thread(
+        tmp_path, surface_kind="discord", binding_store=binding_store
+    )
+
+    store.create_subscription(
+        {"event_type": "managed_thread_completed", "thread_id": thread_id}
+    )
+    store.notify_transition(
+        {
+            "event_type": "managed_thread_completed",
+            "thread_id": thread_id,
+            "from_state": "running",
+            "to_state": "completed",
+            "transition_id": f"{thread_id}:completed",
+        }
+    )
+
+    pending = store.list_pending_wakeups(limit=10)
+    assert len(pending) == 1
+    original_decision = pending[0]["metadata"]["dispatch_decision"]
+    original_surface = original_decision["attempts"][0]["surface_kind"]
+    assert original_surface == "discord"
+
+    binding_store.upsert_binding(
+        surface_kind="telegram",
+        surface_key="telegram:rebound-channel",
+        thread_target_id=thread_id,
+    )
+
+    reloaded = store.list_pending_wakeups(limit=10)
+    assert len(reloaded) == 1
+    assert reloaded[0]["metadata"]["dispatch_decision"] == original_decision
+    assert (
+        reloaded[0]["metadata"]["dispatch_decision"]["attempts"][0]["surface_kind"]
+        == "discord"
+    )

@@ -9,7 +9,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional, cast
 
-from .chat_bindings import active_chat_binding_metadata_by_thread
+from .chat_bindings import (
+    active_chat_binding_metadata_by_thread,
+    preferred_non_pma_chat_notification_source_for_workspace,
+)
+from .config import load_hub_config
 from .locks import file_lock
 from .orchestration.sqlite import open_orchestration_sqlite
 from .pma_automation_persistence import PmaAutomationPersistence
@@ -32,6 +36,10 @@ from .pma_automation_types import (
     _normalize_timer_type,
     _parse_iso,
     default_pma_automation_state,
+)
+from .pma_dispatch_decision import (
+    build_pma_dispatch_decision,
+    pma_dispatch_decision_to_dict,
 )
 from .pma_domain.models import PmaSubscription
 from .pma_domain.subscription_reducer import (
@@ -1123,6 +1131,61 @@ class PmaAutomationStore:
                 merged[key] = value
         return merged
 
+    def _compute_dispatch_decision_for_wakeup(
+        self, wakeup: PmaAutomationWakeup
+    ) -> None:
+        try:
+            binding_metadata_by_thread = active_chat_binding_metadata_by_thread(
+                hub_root=self._hub_root
+            )
+        except (OSError, ValueError):
+            return
+
+        delivery_target = wakeup.metadata.get("delivery_target")
+        workspace_root: Optional[Path] = None
+        if wakeup.thread_id:
+            try:
+                thread_store = PmaThreadStore(self._hub_root)
+                thread = thread_store.get_thread(wakeup.thread_id)
+                if isinstance(thread, dict):
+                    raw_ws = _normalize_text(thread.get("workspace_root"))
+                    if raw_ws:
+                        workspace_root = Path(raw_ws)
+            except (OSError, ValueError):
+                pass
+
+        preferred_bound_surface_kinds: tuple[str, ...] = ("discord", "telegram")
+        if workspace_root is not None:
+            try:
+                raw_config = load_hub_config(self._hub_root).raw
+            except Exception:
+                raw_config = {}
+            preferred = preferred_non_pma_chat_notification_source_for_workspace(
+                hub_root=self._hub_root,
+                raw_config=raw_config,
+                workspace_root=workspace_root,
+            )
+            if preferred in {"discord", "telegram"}:
+                ordered = [preferred]
+                ordered.extend(s for s in ("discord", "telegram") if s != preferred)
+                preferred_bound_surface_kinds = tuple(ordered)
+
+        decision = build_pma_dispatch_decision(
+            message="",
+            requested_delivery="auto",
+            source_kind=wakeup.source or "automation",
+            repo_id=wakeup.repo_id,
+            workspace_root=workspace_root,
+            managed_thread_id=wakeup.thread_id,
+            delivery_target=(
+                delivery_target if isinstance(delivery_target, dict) else None
+            ),
+            context_payload={"wake_up": wakeup.to_dict()},
+            binding_metadata_by_thread=binding_metadata_by_thread,
+            preferred_bound_surface_kinds=preferred_bound_surface_kinds,
+        )
+        wakeup.metadata["dispatch_decision"] = pma_dispatch_decision_to_dict(decision)
+
     @staticmethod
     def _lifecycle_sub_to_domain(
         entry: PmaLifecycleSubscription,
@@ -1166,25 +1229,25 @@ class PmaAutomationStore:
                 existing.state = domain_sub.state
                 existing.updated_at = now
         for intent in result.wakeup_intents:
-            wakeups.append(
-                PmaAutomationWakeup.create(
-                    source=intent.source,
-                    repo_id=intent.repo_id,
-                    run_id=intent.run_id,
-                    thread_id=intent.thread_id,
-                    lane_id=intent.lane_id,
-                    from_state=intent.from_state,
-                    to_state=intent.to_state,
-                    reason=intent.reason,
-                    timestamp=timestamp,
-                    idempotency_key=intent.idempotency_key,
-                    subscription_id=intent.subscription_id,
-                    event_type=intent.event_type,
-                    event_id=intent.event_id,
-                    event_data=intent.event_data,
-                    metadata=intent.metadata,
-                )
+            wakeup = PmaAutomationWakeup.create(
+                source=intent.source,
+                repo_id=intent.repo_id,
+                run_id=intent.run_id,
+                thread_id=intent.thread_id,
+                lane_id=intent.lane_id,
+                from_state=intent.from_state,
+                to_state=intent.to_state,
+                reason=intent.reason,
+                timestamp=timestamp,
+                idempotency_key=intent.idempotency_key,
+                subscription_id=intent.subscription_id,
+                event_type=intent.event_type,
+                event_id=intent.event_id,
+                event_data=intent.event_data,
+                metadata=intent.metadata,
             )
+            self._compute_dispatch_decision_for_wakeup(wakeup)
+            wakeups.append(wakeup)
 
     @staticmethod
     def _normalize_subscription_event_types(
@@ -2181,6 +2244,7 @@ class PmaAutomationStore:
                 event_data=event_data,
                 metadata=metadata,
             )
+            self._compute_dispatch_decision_for_wakeup(created)
             wakeups.append(created)
             self._save_structured_unlocked(state, subscriptions, timers, wakeups)
             return created, False

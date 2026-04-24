@@ -297,6 +297,11 @@ async def publish_automation_result(
         if isinstance(wake_up_payload.get("delivery_target"), dict)
         else None
     )
+    wake_up_dispatch_decision = (
+        wake_up_metadata.get("dispatch_decision")
+        if isinstance(wake_up_metadata, dict)
+        else None
+    )
     outcome: dict[str, Any] = {"route": "auto", "targets": 0, "published": 0}
 
     async def _deliver() -> None:
@@ -343,6 +348,7 @@ async def publish_automation_result(
                 "lifecycle_event": dict(lifecycle_event_dict or {}),
                 "wake_up": dict(wake_up_dict or {}),
             },
+            dispatch_decision=wake_up_dispatch_decision,
         )
 
     await enqueue_with_retry(_deliver)

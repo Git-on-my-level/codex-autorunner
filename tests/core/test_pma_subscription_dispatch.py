@@ -23,9 +23,6 @@ class ManagedThreadTerminalCase:
 
 
 @pytest.mark.anyio
-@pytest.mark.xfail(
-    reason="dispatch_decision not yet written into wakeup metadata by publish flow"
-)
 @pytest.mark.parametrize(
     "case",
     [
