@@ -12,6 +12,11 @@ Layer boundaries
   decisions, notice classification, and publish message construction.
   Adapters and surfaces delegate to these functions instead of implementing
   ad hoc string checks or open-coded message rules.
+- **Delivery lifecycle** (``delivery_lifecycle``): owns delivery-attempt
+  state transitions, retry policy, and outcome classification.  The ledger
+  records domain reasoning, not adapter error strings.
+- **Rebinding policy** (``rebinding_policy``): owns the decision about
+  what to do when a binding changes after a dispatch decision is persisted.
 - **Adapters**: persistence (SQLite, JSON), transport (Discord, Telegram),
   and surface modules.  They consume domain types and execute side effects.
 - **Surfaces**: CLI, web routes, chat commands.  They call adapters.
@@ -49,6 +54,19 @@ from .constants import (
     WAKEUP_STATE_DISPATCHED,
     WAKEUP_STATE_PENDING,
 )
+from .delivery_lifecycle import (
+    DELIVERY_LIFECYCLE_TERMINAL_STATES,
+    DELIVERY_LIFECYCLE_TRANSITIONS,
+    DeliveryAttemptOutcome,
+    DeliveryLifecycleState,
+    DeliveryRetryConfig,
+    DeliveryTransition,
+    advance_to_delivering,
+    advance_to_dispatching,
+    is_terminal_delivery_state,
+    is_valid_delivery_transition,
+    resolve_delivery_transition,
+)
 from .events import (
     PmaDomainEvent,
     PmaDomainEventType,
@@ -72,6 +90,12 @@ from .publish_policy import (
     classify_notice_kind,
     evaluate_publish_suppression,
     is_noop_duplicate_message,
+)
+from .rebinding_policy import (
+    RebindingContext,
+    RebindingDecision,
+    RebindingResult,
+    evaluate_rebinding_decision,
 )
 from .serialization import (
     normalize_pma_delivery_attempt,
@@ -101,6 +125,8 @@ from .subscription_reducer import (
 )
 
 __all__ = [
+    "DELIVERY_LIFECYCLE_TERMINAL_STATES",
+    "DELIVERY_LIFECYCLE_TRANSITIONS",
     "DEFAULT_PMA_LANE_ID",
     "DEFAULT_WATCHDOG_IDLE_SECONDS",
     "DELIVERY_MODE_AUTO",
@@ -129,6 +155,9 @@ __all__ = [
     "PublishSuppressionDecision",
     "ReduceTimerResult",
     "ReduceTransitionResult",
+    "RebindingContext",
+    "RebindingDecision",
+    "RebindingResult",
     "ROUTE_BOUND",
     "ROUTE_EXPLICIT",
     "ROUTE_PRIMARY_PMA",
@@ -148,10 +177,19 @@ __all__ = [
     "TimerFiredEvent",
     "TransitionEvent",
     "WakeupIntent",
+    "DeliveryAttemptOutcome",
+    "DeliveryLifecycleState",
+    "DeliveryRetryConfig",
+    "DeliveryTransition",
+    "advance_to_delivering",
+    "advance_to_dispatching",
     "build_publish_notice_message",
     "classify_notice_kind",
     "evaluate_publish_suppression",
+    "evaluate_rebinding_decision",
     "is_noop_duplicate_message",
+    "is_terminal_delivery_state",
+    "is_valid_delivery_transition",
     "normalize_pma_delivery_attempt",
     "normalize_pma_delivery_intent",
     "normalize_pma_delivery_state",
@@ -169,4 +207,5 @@ __all__ = [
     "pma_wakeup_to_dict",
     "reduce_timer_fired",
     "reduce_transition",
+    "resolve_delivery_transition",
 ]
