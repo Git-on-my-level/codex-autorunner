@@ -107,6 +107,24 @@ def test_web_pma_turn_idle_timeout_reads_request_config() -> None:
     assert managed_thread_runtime._pma_turn_idle_timeout_seconds(request) == 345
 
 
+def test_web_managed_thread_pma_surface_uses_idle_timeout_only() -> None:
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                config=SimpleNamespace(
+                    pma=SimpleNamespace(turn_idle_timeout_seconds=345)
+                )
+            )
+        )
+    )
+
+    errors = managed_thread_runtime._pma_finalization_errors(request)
+
+    assert errors.timeout_seconds == 345.0
+    assert errors.stall_timeout_seconds == 345.0
+    assert errors.idle_timeout_only is True
+
+
 class TestPmaTimeoutIsolationInvariants:
     def test_discord_pma_surface_uses_hub_config_timeout(self, tmp_path: Path) -> None:
         _write_hub_config(tmp_path, timeout_seconds=42)

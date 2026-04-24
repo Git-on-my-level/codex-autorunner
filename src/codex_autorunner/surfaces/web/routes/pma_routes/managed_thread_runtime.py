@@ -383,11 +383,14 @@ async def _run_managed_thread_execution(
 
 
 def _pma_finalization_errors(request: Request) -> ManagedThreadErrorMessages:
+    timeout_seconds = _pma_turn_idle_timeout_seconds(request)
     return ManagedThreadErrorMessages(
         public_execution_error=MANAGED_THREAD_PUBLIC_EXECUTION_ERROR,
         timeout_error="PMA chat timed out",
         interrupted_error="PMA chat interrupted",
-        timeout_seconds=_pma_turn_idle_timeout_seconds(request),
+        timeout_seconds=timeout_seconds,
+        stall_timeout_seconds=timeout_seconds,
+        idle_timeout_only=True,
     )
 
 
