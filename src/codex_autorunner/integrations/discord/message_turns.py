@@ -348,34 +348,6 @@ def _managed_thread_surface_key_for_notification_reply(
     return None
 
 
-def _build_discord_queue_worker_hooks(
-    service: Any,
-    *,
-    channel_id: str,
-    managed_thread_id: str,
-    public_execution_error: str,
-    workspace_root: Optional[Path] = None,
-) -> Any:
-    resolved_workspace_root = workspace_root
-    if resolved_workspace_root is None:
-        resolved_workspace_root = canonicalize_path(
-            Path(getattr(getattr(service, "_config", None), "root", Path(".")))
-        )
-    runner_hooks = _build_discord_runner_hooks(
-        service,
-        channel_id=channel_id,
-        managed_thread_id=managed_thread_id,
-        workspace_root=resolved_workspace_root,
-        public_execution_error=public_execution_error,
-    ).queue_worker_hooks()
-    return ManagedThreadQueueWorkerHooks(
-        durable_delivery=None,
-        deliver_result=runner_hooks.deliver_result,
-        run_with_indicator=runner_hooks.run_with_indicator,
-        execution_hooks=runner_hooks.execution_hooks,
-    )
-
-
 def _resolve_discord_turn_policies(
     binding: Optional[dict[str, Any]],
     *,
