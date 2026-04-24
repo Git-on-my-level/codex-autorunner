@@ -94,6 +94,32 @@ class UsageSummary:
         }
 
 
+@dataclasses.dataclass
+class SessionUsageLedger:
+    session_id: str
+    agent: str
+    turns: int
+    session_totals: TokenTotals
+    latest_turn_totals: TokenTotals
+    latest_turn_id: Optional[str]
+    latest_timestamp: Optional[str]
+    latest_rate_limits: Optional[dict[str, object]] = None
+    source_confidence: Optional[dict[str, object]] = None
+
+    def to_dict(self) -> Dict[str, object]:
+        return {
+            "session_id": self.session_id,
+            "agent": self.agent,
+            "turns": self.turns,
+            "session_totals": self.session_totals.to_dict(),
+            "latest_turn_totals": self.latest_turn_totals.to_dict(),
+            "latest_turn_id": self.latest_turn_id,
+            "latest_timestamp": self.latest_timestamp,
+            "latest_rate_limits": self.latest_rate_limits,
+            "source_confidence": self.source_confidence,
+        }
+
+
 def _coerce_totals(payload: Optional[Mapping[str, object]]) -> TokenTotals:
     payload = payload or {}
     return TokenTotals(
@@ -129,6 +155,16 @@ class _OpenCodeAggregationStats:
     session_cumulative_files: int = 0
     session_delta_files: int = 0
     aggregation_ms: int = 0
+
+
+@dataclasses.dataclass(frozen=True)
+class _OpenCodePersistedTurnSnapshot:
+    index: int
+    timestamp: datetime
+    delta: TokenTotals
+    model: Optional[str]
+    session_id: Optional[str]
+    turn_id: Optional[str]
 
 
 def _build_codex_confidence(
@@ -423,6 +459,97 @@ def _format_opencode_model(
     return model or provider
 
 
+def _load_opencode_persisted_turn_snapshots(
+    repo_root: Path,
+    *,
+    stats: Optional[_OpenCodeAggregationStats] = None,
+) -> List[_OpenCodePersistedTurnSnapshot]:
+    path = _opencode_persisted_usage_path(repo_root)
+    if not path.exists():
+        return []
+    try:
+        fallback_ts = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+    except OSError:
+        fallback_ts = datetime.now(timezone.utc)
+
+    rows: List[Tuple[str, _OpenCodePersistedTurnSnapshot]] = []
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for index, line in enumerate(handle):
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                if stats is not None:
+                    stats.persisted_records += 1
+                try:
+                    payload = json.loads(stripped)
+                except json.JSONDecodeError:
+                    if stats is not None:
+                        stats.persisted_parse_errors += 1
+                    continue
+                if not isinstance(payload, dict):
+                    if stats is not None:
+                        stats.persisted_parse_errors += 1
+                    continue
+                usage_payload = payload.get("usage")
+                if not isinstance(usage_payload, dict):
+                    if stats is not None:
+                        stats.persisted_parse_errors += 1
+                    continue
+                delta = _coerce_opencode_totals(usage_payload)
+                if not _token_totals_has_values(delta):
+                    continue
+                timestamp = _parse_opencode_timestamp(
+                    payload.get("timestamp"), fallback_ts
+                )
+                model = _format_opencode_model(
+                    cast(Optional[str], payload.get("model_id")),
+                    cast(Optional[str], payload.get("provider_id")),
+                )
+                session_id_raw = payload.get("session_id")
+                session_id = (
+                    session_id_raw.strip()
+                    if isinstance(session_id_raw, str) and session_id_raw.strip()
+                    else None
+                )
+                turn_id_raw = payload.get("turn_id")
+                turn_id = (
+                    turn_id_raw.strip()
+                    if isinstance(turn_id_raw, str) and turn_id_raw.strip()
+                    else None
+                )
+                dedupe_key = (
+                    f"{session_id}:{turn_id}"
+                    if session_id is not None and turn_id is not None
+                    else f"line:{index}"
+                )
+                rows.append(
+                    (
+                        dedupe_key,
+                        _OpenCodePersistedTurnSnapshot(
+                            index=index,
+                            timestamp=timestamp,
+                            delta=delta,
+                            model=model,
+                            session_id=session_id,
+                            turn_id=turn_id,
+                        ),
+                    )
+                )
+    except OSError as exc:
+        logger.debug("Failed to read persisted OpenCode usage at %s: %s", path, exc)
+        if stats is not None:
+            stats.persisted_parse_errors += 1
+        return []
+
+    deduped: Dict[str, _OpenCodePersistedTurnSnapshot] = {}
+    for dedupe_key, snapshot in rows:
+        if stats is not None and dedupe_key in deduped:
+            stats.persisted_duplicates += 1
+        deduped[dedupe_key] = snapshot
+    return sorted(deduped.values(), key=lambda row: (row.timestamp, row.index))
+
+
 def _extract_opencode_model(
     container: Mapping[str, object],
     fallback_model: Optional[str],
@@ -595,79 +722,12 @@ def _iter_opencode_persisted_events(
     stats: Optional[_OpenCodeAggregationStats] = None,
 ) -> List[TokenEvent]:
     path = _opencode_persisted_usage_path(repo_root)
-    if not path.exists():
-        return []
-    try:
-        fallback_ts = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
-    except OSError:
-        fallback_ts = datetime.now(timezone.utc)
-
-    rows: List[Tuple[str, int, datetime, TokenTotals, Optional[str]]] = []
-    try:
-        with path.open("r", encoding="utf-8") as handle:
-            for index, line in enumerate(handle):
-                stripped = line.strip()
-                if not stripped:
-                    continue
-                if stats is not None:
-                    stats.persisted_records += 1
-                try:
-                    payload = json.loads(stripped)
-                except json.JSONDecodeError:
-                    if stats is not None:
-                        stats.persisted_parse_errors += 1
-                    continue
-                if not isinstance(payload, dict):
-                    if stats is not None:
-                        stats.persisted_parse_errors += 1
-                    continue
-                usage_payload = payload.get("usage")
-                if not isinstance(usage_payload, dict):
-                    if stats is not None:
-                        stats.persisted_parse_errors += 1
-                    continue
-                delta = _coerce_opencode_totals(usage_payload)
-                if not _token_totals_has_values(delta):
-                    continue
-                timestamp = _parse_opencode_timestamp(
-                    payload.get("timestamp"), fallback_ts
-                )
-                model = _format_opencode_model(
-                    cast(Optional[str], payload.get("model_id")),
-                    cast(Optional[str], payload.get("provider_id")),
-                )
-                session_id = payload.get("session_id")
-                turn_id = payload.get("turn_id")
-                if (
-                    isinstance(session_id, str)
-                    and session_id
-                    and isinstance(turn_id, str)
-                    and turn_id
-                ):
-                    dedupe_key = f"{session_id}:{turn_id}"
-                else:
-                    dedupe_key = f"line:{index}"
-                rows.append((dedupe_key, index, timestamp, delta, model))
-    except OSError as exc:
-        logger.debug("Failed to read persisted OpenCode usage at %s: %s", path, exc)
-        if stats is not None:
-            stats.persisted_parse_errors += 1
-        return []
-
-    deduped: Dict[str, Tuple[int, datetime, TokenTotals, Optional[str]]] = {}
-    for dedupe_key, index, timestamp, delta, model in rows:
-        if stats is not None and dedupe_key in deduped:
-            stats.persisted_duplicates += 1
-        deduped[dedupe_key] = (index, timestamp, delta, model)
-
-    ordered = sorted(
-        deduped.values(),
-        key=lambda row: (row[1], row[0]),
-    )
+    ordered = _load_opencode_persisted_turn_snapshots(repo_root, stats=stats)
     totals = TokenTotals()
     events: List[TokenEvent] = []
-    for _index, timestamp, delta, model in ordered:
-        totals.add(delta)
+    for snapshot in ordered:
+        totals.add(snapshot.delta)
+        timestamp = snapshot.timestamp
         if since and timestamp < since:
             continue
         if until and timestamp > until:
@@ -676,9 +736,9 @@ def _iter_opencode_persisted_events(
             timestamp=timestamp,
             session_path=path,
             cwd=repo_root,
-            model=model,
+            model=snapshot.model,
             totals=copy.deepcopy(totals),
-            delta=delta,
+            delta=snapshot.delta,
             rate_limits=None,
             agent=OPENCODE_AGENT_ID,
         )
@@ -1036,6 +1096,395 @@ def summarize_opencode_hub_usage(
             source_confidence={"opencode": confidence},
         )
     return per_repo
+
+
+def _iso_timestamp_utc(value: datetime) -> str:
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _extract_opencode_session_identifier(
+    payload: Mapping[str, object],
+) -> Optional[str]:
+    for key in ("session_id", "sessionId", "sessionID", "session", "id"):
+        value = payload.get(key)
+        if isinstance(value, str):
+            normalized = value.strip()
+            if normalized:
+                return normalized
+    return None
+
+
+def _build_session_usage_ledgers(
+    *,
+    rows: Iterable[
+        Tuple[str, datetime, TokenTotals, Optional[str], Optional[dict[str, object]]]
+    ],
+    agent: str,
+    confidence: Mapping[str, object],
+) -> Dict[str, SessionUsageLedger]:
+    ledgers: Dict[str, SessionUsageLedger] = {}
+    latest_keys: Dict[str, Tuple[datetime, int]] = {}
+    for index, (session_id, timestamp, delta, turn_id, rate_limits) in enumerate(rows):
+        ledger = ledgers.get(session_id)
+        if ledger is None:
+            ledger = SessionUsageLedger(
+                session_id=session_id,
+                agent=agent,
+                turns=0,
+                session_totals=TokenTotals(),
+                latest_turn_totals=TokenTotals(),
+                latest_turn_id=None,
+                latest_timestamp=None,
+                latest_rate_limits=None,
+                source_confidence=dict(confidence),
+            )
+            ledgers[session_id] = ledger
+        ledger.turns += 1
+        ledger.session_totals.add(delta)
+        candidate_key = (timestamp, index)
+        current_key = latest_keys.get(session_id)
+        if current_key is None or candidate_key >= current_key:
+            latest_keys[session_id] = candidate_key
+            ledger.latest_turn_totals = copy.deepcopy(delta)
+            ledger.latest_turn_id = turn_id
+            ledger.latest_timestamp = _iso_timestamp_utc(timestamp)
+            ledger.latest_rate_limits = copy.deepcopy(rate_limits)
+    return ledgers
+
+
+def _collect_opencode_fallback_session_ledgers(
+    repo_root: Path,
+    *,
+    since: Optional[datetime] = None,
+    until: Optional[datetime] = None,
+    stats: Optional[_OpenCodeAggregationStats] = None,
+) -> Dict[str, SessionUsageLedger]:
+    rows: List[
+        Tuple[str, datetime, TokenTotals, Optional[str], Optional[dict[str, object]]]
+    ] = []
+    for session_path in _iter_opencode_session_files(repo_root):
+        if stats is not None:
+            stats.session_files += 1
+        try:
+            payload = json.loads(session_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.debug("Failed to read session file %s: %s", session_path, exc)
+            if stats is not None:
+                stats.session_parse_errors += 1
+            continue
+        if not isinstance(payload, dict):
+            if stats is not None:
+                stats.session_parse_errors += 1
+            continue
+        session_id = _extract_opencode_session_identifier(payload)
+        if not session_id:
+            # Fallback session parsing can estimate totals, but without a canonical
+            # runtime session id we cannot safely attribute a per-session ledger row.
+            continue
+        try:
+            mtime = datetime.fromtimestamp(
+                session_path.stat().st_mtime, tz=timezone.utc
+            )
+        except OSError:
+            mtime = datetime.now(timezone.utc)
+        entries = _extract_opencode_entries(payload)
+        if not entries:
+            continue
+        normalized: List[Tuple[datetime, TokenTotals, Optional[str]]] = []
+        for container, usage in entries:
+            if stats is not None:
+                stats.session_entries += 1
+            raw_totals = _coerce_opencode_totals(usage)
+            if not _token_totals_has_values(raw_totals):
+                continue
+            timestamp = _extract_opencode_timestamp(container, mtime)
+            turn_id = None
+            for key in ("turn_id", "turnId", "turnID", "id"):
+                raw = container.get(key)
+                if isinstance(raw, str) and raw.strip():
+                    turn_id = raw.strip()
+                    break
+            normalized.append((timestamp, raw_totals, turn_id))
+        if not normalized:
+            continue
+        semantics = _infer_opencode_file_semantics(
+            [raw_totals for _, raw_totals, _ in normalized]
+        )
+        if stats is not None:
+            if semantics == "cumulative":
+                stats.session_cumulative_files += 1
+            else:
+                stats.session_delta_files += 1
+        previous_raw: Optional[TokenTotals] = None
+        for timestamp, raw_totals, turn_id in normalized:
+            if semantics == "cumulative":
+                if previous_raw is None:
+                    delta = raw_totals
+                else:
+                    delta = _clamp_non_negative_totals(raw_totals.diff(previous_raw))
+                previous_raw = raw_totals
+            else:
+                delta = raw_totals
+            if not _token_totals_has_values(delta):
+                continue
+            if since and timestamp < since:
+                continue
+            if until and timestamp > until:
+                continue
+            if stats is not None:
+                stats.session_events += 1
+            rows.append((session_id, timestamp, delta, turn_id, None))
+    if not rows:
+        return {}
+    confidence = {
+        "opencode": _build_opencode_confidence(
+            OPENCODE_USAGE_SOURCE_FALLBACK, stats or _OpenCodeAggregationStats()
+        )
+    }
+    return _build_session_usage_ledgers(
+        rows=rows,
+        agent=OPENCODE_AGENT_ID,
+        confidence=confidence,
+    )
+
+
+def get_repo_session_usage_ledger(
+    repo_root: Path,
+    *,
+    since: Optional[datetime] = None,
+    until: Optional[datetime] = None,
+) -> Dict[str, SessionUsageLedger]:
+    """Return canonical per-session usage ledgers for a repo keyed by session id."""
+
+    repo_root = repo_root.resolve()
+    stats = _OpenCodeAggregationStats()
+    started = time.monotonic()
+    persisted = _load_opencode_persisted_turn_snapshots(repo_root, stats=stats)
+    if persisted:
+        rows: List[
+            Tuple[
+                str, datetime, TokenTotals, Optional[str], Optional[dict[str, object]]
+            ]
+        ] = []
+        for snapshot in persisted:
+            if snapshot.session_id is None:
+                continue
+            if since and snapshot.timestamp < since:
+                continue
+            if until and snapshot.timestamp > until:
+                continue
+            stats.persisted_events += 1
+            rows.append(
+                (
+                    snapshot.session_id,
+                    snapshot.timestamp,
+                    snapshot.delta,
+                    snapshot.turn_id,
+                    None,
+                )
+            )
+        stats.aggregation_ms = int((time.monotonic() - started) * 1000)
+        confidence = {
+            "opencode": _build_opencode_confidence(
+                OPENCODE_USAGE_SOURCE_PERSISTED, stats
+            )
+        }
+        return _build_session_usage_ledgers(
+            rows=rows,
+            agent=OPENCODE_AGENT_ID,
+            confidence=confidence,
+        )
+
+    ledgers = _collect_opencode_fallback_session_ledgers(
+        repo_root, since=since, until=until, stats=stats
+    )
+    stats.aggregation_ms = int((time.monotonic() - started) * 1000)
+    if not ledgers:
+        return {}
+    opencode_confidence = _build_opencode_confidence(
+        OPENCODE_USAGE_SOURCE_FALLBACK, stats
+    )
+    for ledger in ledgers.values():
+        ledger.source_confidence = {"opencode": opencode_confidence}
+    return ledgers
+
+
+def extract_rate_limits(payload: Any) -> Optional[dict[str, Any]]:
+    if not isinstance(payload, dict):
+        return None
+    for key in ("rateLimits", "rate_limits", "limits"):
+        value = payload.get(key)
+        if isinstance(value, dict):
+            return value
+    if "primary" in payload or "secondary" in payload:
+        return payload
+    return None
+
+
+def _coerce_rate_limit_number(value: Any) -> Optional[float]:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _compute_rate_limit_used_percent(entry: dict[str, Any]) -> Optional[float]:
+    remaining = _coerce_rate_limit_number(entry.get("remaining"))
+    limit = _coerce_rate_limit_number(entry.get("limit"))
+    if remaining is None or limit is None or limit <= 0:
+        return None
+    used = (limit - remaining) / limit * 100
+    return max(min(used, 100.0), 0.0)
+
+
+def _format_rate_limit_percent(value: Any) -> Optional[str]:
+    number = _coerce_rate_limit_number(value)
+    if number is None:
+        return None
+    if number.is_integer():
+        return f"{int(number)}%"
+    return f"{number:.1f}%"
+
+
+def rate_limit_window_minutes(
+    entry: dict[str, Any],
+    section: Optional[str] = None,
+) -> Optional[int]:
+    for key in (
+        "window_minutes",
+        "windowMinutes",
+        "window_mins",
+        "windowMins",
+        "period_minutes",
+        "periodMinutes",
+        "duration_minutes",
+        "durationMinutes",
+    ):
+        value = entry.get(key)
+        number = _coerce_rate_limit_number(value)
+        if number is not None:
+            return max(int(round(number)), 1)
+    window_seconds = _coerce_rate_limit_number(
+        entry.get("window_seconds", entry.get("windowSeconds"))
+    )
+    if window_seconds is not None:
+        return max(int(round(window_seconds / 60)), 1)
+    if section in ("primary", "secondary"):
+        return 300 if section == "primary" else 10080
+    return None
+
+
+def format_rate_limit_window(window_minutes: Optional[int]) -> Optional[str]:
+    if not isinstance(window_minutes, int) or window_minutes <= 0:
+        return None
+    if window_minutes == 300:
+        return "5h"
+    if window_minutes % 1440 == 0:
+        return f"{window_minutes // 1440}d"
+    if window_minutes % 60 == 0:
+        return f"{window_minutes // 60}h"
+    return f"{window_minutes}m"
+
+
+def _coerce_rate_limit_datetime(value: Any) -> Optional[datetime]:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        seconds = float(value)
+        if seconds > 1e12:
+            seconds /= 1000.0
+        try:
+            return datetime.fromtimestamp(seconds, tz=timezone.utc)
+        except (ValueError, OverflowError, OSError):
+            return None
+    if isinstance(value, str):
+        try:
+            return _parse_timestamp(value)
+        except UsageError:
+            pass
+        if value.isdigit():
+            return _coerce_rate_limit_datetime(float(value))
+    return None
+
+
+def _format_friendly_time(value: datetime) -> str:
+    month = value.strftime("%b")
+    day = value.day
+    hour = value.strftime("%I").lstrip("0") or "12"
+    minute = value.strftime("%M")
+    ampm = value.strftime("%p").lower()
+    return f"{month} {day}, {hour}:{minute}{ampm}"
+
+
+def extract_rate_limit_timestamp(rate_limits: dict[str, Any]) -> Optional[datetime]:
+    candidates: list[tuple[int, datetime]] = []
+    for section in ("primary", "secondary"):
+        entry = rate_limits.get(section)
+        if not isinstance(entry, dict):
+            continue
+        window_minutes = rate_limit_window_minutes(entry, section) or 0
+        for key in (
+            "resets_at",
+            "resetsAt",
+            "reset_at",
+            "resetAt",
+            "refresh_at",
+            "refreshAt",
+            "updated_at",
+            "updatedAt",
+        ):
+            if key in entry:
+                timestamp = _coerce_rate_limit_datetime(entry.get(key))
+                if timestamp is not None:
+                    candidates.append((window_minutes, timestamp))
+    if candidates:
+        return max(candidates, key=lambda item: (item[0], item[1]))[1]
+    for key in (
+        "refreshed_at",
+        "refreshedAt",
+        "refresh_at",
+        "refreshAt",
+        "updated_at",
+        "updatedAt",
+        "timestamp",
+        "time",
+        "as_of",
+        "asOf",
+    ):
+        if key in rate_limits:
+            return _coerce_rate_limit_datetime(rate_limits.get(key))
+    return None
+
+
+def format_rate_limit_lines(rate_limits: Optional[dict[str, Any]]) -> list[str]:
+    if not isinstance(rate_limits, dict):
+        return []
+    parts: list[str] = []
+    for key in ("primary", "secondary"):
+        entry = rate_limits.get(key)
+        if not isinstance(entry, dict):
+            continue
+        used_value = entry.get("used_percent", entry.get("usedPercent"))
+        used = _coerce_rate_limit_number(used_value)
+        if used is None:
+            used = _compute_rate_limit_used_percent(entry)
+        used_text = _format_rate_limit_percent(used)
+        window_minutes = rate_limit_window_minutes(entry, key)
+        label = format_rate_limit_window(window_minutes) or key
+        if used_text:
+            parts.append(f"[{label}: {used_text}]")
+    if not parts:
+        return []
+    refresh_dt = extract_rate_limit_timestamp(rate_limits)
+    if refresh_dt is not None:
+        parts.append(f"[refresh: {_format_friendly_time(refresh_dt.astimezone())}]")
+    return [f"Limits: {' '.join(parts)}"]
 
 
 def parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:

@@ -21,6 +21,7 @@ from .....core.logging_utils import safe_log
 from .....core.orchestration.sqlite import resolve_orchestration_sqlite_path
 from .....core.pma_thread_store import PmaThreadStore
 from .....core.text_utils import _coerce_int as _standalone_coerce_int
+from .....core.usage import get_repo_session_usage_ledger
 from .....integrations.chat.agents import (
     resolve_chat_agent_and_profile,
 )
@@ -719,90 +720,20 @@ def read_usage_by_session(workspace_path: str) -> dict[str, dict[str, Any]]:
     canonical = canonical_workspace_path(workspace_path)
     if canonical is None:
         return {}
-    usage_path = (
-        Path(canonical) / ".codex-autorunner" / "usage" / "opencode_turn_usage.jsonl"
-    )
-    if not usage_path.exists():
-        return {}
-    by_session: dict[str, dict[str, Any]] = {}
-    try:
-        with usage_path.open("r", encoding="utf-8") as handle:
-            for index, line in enumerate(handle):
-                stripped = line.strip()
-                if not stripped:
-                    continue
-                try:
-                    payload = json.loads(stripped)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(payload, dict):
-                    continue
-                session_id = payload.get("session_id")
-                if not isinstance(session_id, str) or not session_id.strip():
-                    continue
-                usage_payload = payload.get("usage")
-                if not isinstance(usage_payload, dict):
-                    continue
-                input_tokens = coerce_usage_int(usage_payload.get("input_tokens"))
-                cached_input_tokens = coerce_usage_int(
-                    usage_payload.get("cached_input_tokens")
-                )
-                output_tokens = coerce_usage_int(usage_payload.get("output_tokens"))
-                reasoning_output_tokens = coerce_usage_int(
-                    usage_payload.get("reasoning_output_tokens")
-                )
-                total_tokens = coerce_usage_int(usage_payload.get("total_tokens"))
-                if total_tokens is None:
-                    total_tokens = sum(
-                        value or 0
-                        for value in (
-                            input_tokens,
-                            cached_input_tokens,
-                            output_tokens,
-                            reasoning_output_tokens,
-                        )
-                    )
-                ts = payload.get("timestamp")
-                if not isinstance(ts, str) or not ts.strip():
-                    ts = None
-                turn_id = payload.get("turn_id")
-                if not isinstance(turn_id, str) or not turn_id.strip():
-                    turn_id = None
-                rank = timestamp_rank(ts)
-                current = by_session.get(session_id)
-                current_rank = (
-                    timestamp_rank(current.get("timestamp"))
-                    if isinstance(current, dict)
-                    else float("-inf")
-                )
-                current_index = (
-                    int(current.get("__index", -1)) if isinstance(current, dict) else -1
-                )
-                if rank < current_rank or (
-                    rank == current_rank and index <= current_index
-                ):
-                    continue
-                by_session[session_id] = {
-                    "total_tokens": total_tokens if total_tokens is not None else 0,
-                    "input_tokens": input_tokens if input_tokens is not None else 0,
-                    "cached_input_tokens": (
-                        cached_input_tokens if cached_input_tokens is not None else 0
-                    ),
-                    "output_tokens": (
-                        output_tokens if output_tokens is not None else 0
-                    ),
-                    "reasoning_output_tokens": (
-                        reasoning_output_tokens
-                        if reasoning_output_tokens is not None
-                        else 0
-                    ),
-                    "turn_id": turn_id,
-                    "timestamp": ts,
-                    "__index": index,
-                }
-    except OSError:
-        return {}
-
-    for payload in by_session.values():
-        payload.pop("__index", None)
-    return by_session
+    ledgers = get_repo_session_usage_ledger(Path(canonical))
+    return {
+        session_id: {
+            "total_tokens": ledger.latest_turn_totals.total_tokens,
+            "input_tokens": ledger.latest_turn_totals.input_tokens,
+            "cached_input_tokens": ledger.latest_turn_totals.cached_input_tokens,
+            "output_tokens": ledger.latest_turn_totals.output_tokens,
+            "reasoning_output_tokens": (
+                ledger.latest_turn_totals.reasoning_output_tokens
+            ),
+            "turn_id": ledger.latest_turn_id,
+            "timestamp": ledger.latest_timestamp,
+            "session_total_tokens": ledger.session_totals.total_tokens,
+            "source_confidence": ledger.source_confidence,
+        }
+        for session_id, ledger in ledgers.items()
+    }

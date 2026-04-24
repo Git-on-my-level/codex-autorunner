@@ -6,6 +6,12 @@ from typing import Any, Optional
 
 from ...core.diagnostics import build_process_monitor_summary
 from ...core.text_utils import _parse_iso_timestamp
+from ...core.usage import (
+    extract_rate_limits as _extract_shared_rate_limits,
+)
+from ...core.usage import (
+    format_rate_limit_lines as _format_shared_rate_limit_lines,
+)
 
 
 @dataclass(frozen=True)
@@ -203,40 +209,11 @@ def _format_rate_limit_refresh(rate_limits: dict[str, Any]) -> Optional[str]:
 
 
 def format_rate_limit_lines(rate_limits: Optional[dict[str, Any]]) -> list[str]:
-    if not isinstance(rate_limits, dict):
-        return []
-    parts: list[str] = []
-    for key in ("primary", "secondary"):
-        entry = rate_limits.get(key)
-        if not isinstance(entry, dict):
-            continue
-        used_value = entry.get("used_percent", entry.get("usedPercent"))
-        used = _coerce_number(used_value)
-        if used is None:
-            used = _compute_used_percent(entry)
-        used_text = _format_percent(used)
-        window_minutes = _rate_limit_window_minutes(entry, key)
-        label = _format_rate_limit_window(window_minutes) or key
-        if used_text:
-            parts.append(f"[{label}: {used_text}]")
-    if not parts:
-        return []
-    refresh_label = _format_rate_limit_refresh(rate_limits)
-    if refresh_label:
-        parts.append(f"[refresh: {refresh_label}]")
-    return [f"Limits: {' '.join(parts)}"]
+    return _format_shared_rate_limit_lines(rate_limits)
 
 
 def extract_rate_limits(payload: Any) -> Optional[dict[str, Any]]:
-    if not isinstance(payload, dict):
-        return None
-    for key in ("rateLimits", "rate_limits", "limits"):
-        value = payload.get(key)
-        if isinstance(value, dict):
-            return value
-    if "primary" in payload or "secondary" in payload:
-        return payload
-    return None
+    return _extract_shared_rate_limits(payload)
 
 
 def build_status_block_lines(context: StatusBlockContext) -> list[str]:
