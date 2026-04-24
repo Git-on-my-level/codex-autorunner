@@ -1,5 +1,5 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { getUiMockScenarioOrDefault, getUiMockScenarioList } from "./uiMockScenarios.js";
+import { getUiMockScenarioOrDefault, getUiMockScenarioList } from "./uiMockScenarios.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
 const PARAM = "uiMock";
 const STRIP_PARAM = "uiMockStrip";
 let initialized = false;

@@ -1,16 +1,17 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { api, confirmModal, flash, getUrlParams, statusPill, getAuthToken, openModal, inputModal, setButtonLoading, } from "./utils.js";
-import { registerAutoRefresh } from "./autoRefresh.js";
-import { CONSTANTS } from "./constants.js";
-import { subscribe } from "./bus.js";
-import { isRepoHealthy } from "./health.js";
-import { closeTicketEditor, initTicketEditor, openTicketEditor } from "./ticketEditor.js";
-import { preserveScroll } from "./preserve.js";
-import { createSmartRefresh } from "./smartRefresh.js";
-import { refreshBell } from "./messagesBell.js";
-import { EVENT_STREAM_RETRY_DELAYS_MS, STALE_THRESHOLD_MS, isFlowActiveStatus, getLastSeenSeq, setLastSeenSeq, parseEventSeq, formatElapsedSeconds, diffStatsSignature, } from "./ticketFlowState.js";
-import { clearLiveOutput, setLiveOutputStatus, renderLiveOutputView, initLiveOutputPanel, initReasonModal, stopElapsedTimer, initElapsedFromStart, stopLastActivityTimer, updateLastActivityFromTimestamp, updateActivityFromEvent, processStreamDelta, processAppServerEvent, processStepStarted, summarizeReason, resetAllStreamState, setFlowStartedAt, getLastKnownEventAt, setLastActivityTime, getCurrentReasonFull, } from "./ticketFlowStream.js";
-import { renderTickets, renderDispatchHistory, updateSelectedTicket, updateScrollFade, initDispatchPanelToggle, } from "./ticketFlowView.js";
+import { api, confirmModal, flash, getUrlParams, statusPill, getAuthToken, openModal, inputModal, setButtonLoading, } from "./utils.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
+import { importVersionedModule } from "./assetLoader.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
+import { registerAutoRefresh } from "./autoRefresh.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
+import { CONSTANTS } from "./constants.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
+import { subscribe } from "./bus.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
+import { isRepoHealthy } from "./health.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
+import { closeTicketEditor, initTicketEditor, openTicketEditor } from "./ticketEditor.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
+import { preserveScroll } from "./preserve.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
+import { createSmartRefresh } from "./smartRefresh.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
+import { refreshBell } from "./messagesBell.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
+import { EVENT_STREAM_RETRY_DELAYS_MS, STALE_THRESHOLD_MS, isFlowActiveStatus, getLastSeenSeq, setLastSeenSeq, parseEventSeq, formatElapsedSeconds, diffStatsSignature, } from "./ticketFlowState.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
+import { clearLiveOutput, setLiveOutputStatus, renderLiveOutputView, initLiveOutputPanel, initReasonModal, stopElapsedTimer, initElapsedFromStart, stopLastActivityTimer, updateLastActivityFromTimestamp, updateActivityFromEvent, processStreamDelta, processAppServerEvent, processStepStarted, summarizeReason, resetAllStreamState, setFlowStartedAt, getLastKnownEventAt, setLastActivityTime, getCurrentReasonFull, } from "./ticketFlowStream.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
+import { renderTickets, renderDispatchHistory, updateSelectedTicket, updateScrollFade, initDispatchPanelToggle, } from "./ticketFlowView.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
 let currentRunId = null;
 let ticketsExist = false; // eslint-disable-line prefer-const -- reassigned in loadTicketFlow
 let currentActiveTicket = null;
@@ -1112,7 +1113,7 @@ export function initTicketFlow() {
     const newThreadBtn = document.getElementById("ticket-chat-new-thread");
     if (newThreadBtn) {
         newThreadBtn.addEventListener("click", async () => {
-            const { startNewTicketChatThread } = await import("./ticketChatActions.js");
+            const { startNewTicketChatThread } = await importVersionedModule("./ticketChatActions.js");
             await startNewTicketChatThread();
         });
     }

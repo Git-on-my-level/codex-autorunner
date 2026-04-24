@@ -1,7 +1,7 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { publish } from "./bus.js";
-import { setAutoRefreshEnabled } from "./autoRefresh.js";
-import { getAuthToken, resolvePath } from "./utils.js";
+import { publish } from "./bus.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
+import { setAutoRefreshEnabled } from "./autoRefresh.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
+import { getAuthToken, resolvePath } from "./utils.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
 let initialized = false;
 let healthState = "unknown";
 let lastDetail = null;

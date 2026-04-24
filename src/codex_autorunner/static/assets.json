@@ -17,6 +17,9 @@
       "path": "generated/archiveApi.js"
     },
     {
+      "path": "generated/assetLoader.js"
+    },
+    {
       "path": "generated/autoRefresh.js"
     },
     {

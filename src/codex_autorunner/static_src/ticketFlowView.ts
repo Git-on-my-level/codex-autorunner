@@ -1,4 +1,5 @@
 import { api, flash } from "./utils.js";
+import { importVersionedModule } from "./assetLoader.js";
 import { renderMarkdown } from "./markdown.js";
 import { resolvePath } from "./utils.js";
 import { publish } from "./bus.js";
@@ -256,7 +257,9 @@ export function renderTickets(
           return;
         }
         const data = (await api(`/api/flows/ticket_flow/tickets/${ticket.index}`)) as TicketFile;
-        const { openTicketEditor } = await import("./ticketEditor.js");
+        const { openTicketEditor } = await importVersionedModule<
+          typeof import("./ticketEditor.js")
+        >("./ticketEditor.js");
         openTicketEditor(data as TicketData);
       } catch (err) {
         flash(`Failed to load ticket: ${(err as Error).message}`, "error");

@@ -1,6 +1,6 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { deleteContextspaceFile, deleteContextspaceFolder, downloadContextspaceFile, downloadContextspaceZip } from "./contextspaceApi.js";
-import { confirmModal, flash } from "./utils.js";
+import { deleteContextspaceFile, deleteContextspaceFolder, downloadContextspaceFile, downloadContextspaceZip } from "./contextspaceApi.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
+import { confirmModal, flash } from "./utils.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
 export class ContextspaceFileBrowser {
     constructor(options) {
         this.tree = [];

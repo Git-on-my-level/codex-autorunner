@@ -617,12 +617,11 @@ class DiscordSurfaceHarness:
                         execution_id = str(
                             getattr(execution, "execution_id", "") or ""
                         ).strip()
-                        if (
-                            status == "running"
-                            and execution_id
-                            and self._has_discord_preview_anchor()
-                        ):
+                        if status == "running" and execution_id:
                             return thread_target_id, execution_id
+            logged_execution = self._running_execution_from_log_capture()
+            if logged_execution is not None:
+                return logged_execution
             if asyncio.get_running_loop().time() >= deadline:
                 raise TimeoutError(
                     "DiscordSurfaceHarness did not expose a running turn"
@@ -671,14 +670,7 @@ class DiscordSurfaceHarness:
                         execution_id = str(
                             getattr(execution, "execution_id", "") or ""
                         ).strip()
-                        if (
-                            status == expected_status
-                            and execution_id
-                            and (
-                                expected_status != "running"
-                                or self._has_discord_preview_anchor()
-                            )
-                        ):
+                        if status == expected_status and execution_id:
                             return thread_target_id, execution_id
             if asyncio.get_running_loop().time() >= deadline:
                 raise TimeoutError(
@@ -697,6 +689,50 @@ class DiscordSurfaceHarness:
             op.get("op") == "send"
             for op in rest.message_ops[self._message_op_start_index :]
         )
+
+    def _running_execution_from_log_capture(self) -> tuple[str, str] | None:
+        if self._log_capture is None:
+            return None
+        for record in reversed(self._log_capture.records):
+            if record.get("event") != "chat.managed_thread.turn_finalize_started":
+                continue
+            status = str(record.get("execution_status") or "").strip().lower()
+            if status != "running":
+                continue
+            thread_target_id = str(record.get("managed_thread_id") or "").strip()
+            execution_id = str(record.get("managed_turn_id") or "").strip()
+            if thread_target_id and execution_id:
+                return thread_target_id, execution_id
+        return None
+
+    async def _wait_for_discord_preview_message_id(
+        self,
+        *,
+        timeout_seconds: float,
+    ) -> str:
+        deadline = asyncio.get_running_loop().time() + max(timeout_seconds, 0.0)
+        while True:
+            rest = self.rest
+            if rest is not None:
+                preview_message_id = str(rest.preview_message_id or "").strip()
+                if preview_message_id:
+                    return preview_message_id
+                first_send = next(
+                    (
+                        op
+                        for op in rest.message_ops[self._message_op_start_index :]
+                        if op.get("op") == "send"
+                    ),
+                    None,
+                )
+                if first_send is not None:
+                    message_id = str(first_send.get("message_id") or "").strip()
+                    if message_id:
+                        return message_id
+            if asyncio.get_running_loop().time() >= deadline:
+                break
+            await asyncio.sleep(0.01)
+        raise RuntimeError("DiscordSurfaceHarness has no active preview message")
 
     def _service_processing_started(self) -> bool:
         service = self.service
@@ -763,23 +799,9 @@ class DiscordSurfaceHarness:
     ) -> None:
         if self.service is None:
             raise RuntimeError("DiscordSurfaceHarness has no active service")
-        if self.rest is None:
-            raise RuntimeError("DiscordSurfaceHarness has no active preview message")
-        preview_message_id = self.rest.preview_message_id
-        if preview_message_id is None:
-            first_send = next(
-                (
-                    op
-                    for op in self.rest.message_ops[self._message_op_start_index :]
-                    if op["op"] == "send"
-                ),
-                None,
-            )
-            preview_message_id = (
-                str(first_send.get("message_id") or "").strip() if first_send else ""
-            ) or None
-        if preview_message_id is None:
-            raise RuntimeError("DiscordSurfaceHarness has no active preview message")
+        preview_message_id = await self._wait_for_discord_preview_message_id(
+            timeout_seconds=self.timeout_seconds
+        )
         await self.service._handle_cancel_turn_button(
             interaction_id,
             interaction_token,

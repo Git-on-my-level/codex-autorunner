@@ -1,16 +1,16 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { flash, isMobileViewport } from "./utils.js";
-import { getSelectedAgent, getSelectedProfile, getSelectedModel, getSelectedReasoning, initAgentControls, } from "./agentControls.js";
-import { getSavedSessionId as getSessionId, setSavedSessionId as setSessionId, clearSavedSessionId as clearSessionId, markSessionActive as sessionMarkActive, buildConnectQuery, createTerminalSocket, teardownSocket as sessionTeardownSocket, SocketHeartbeat, ReconnectScheduler, } from "./terminalSession.js";
-import { createReplayState, resetReplayState, initReplayForConnect, bufferReplayChunk, handleReplayEnd, consumeLiveReset, } from "./terminalReplay.js";
-import { createTranscriptState, resetTranscript, restoreTranscript, hydrateTerminalFromTranscript, appendTranscriptChunk, isAltBufferActive, } from "./terminalTranscript.js";
-import { TEXT_INPUT_STORAGE_KEYS, createTextInputState, readBoolFromStorage, safeFocus, captureTextInputSelection, updateTextInputSendUi, persistTextInputDraft, restoreTextInputDraft, loadPendingTextInput, sendPendingTextInputChunk, handleTextInputAck, sendFromTextarea, setTextInputEnabled, updateComposerSticky, registerTextInputHook, hasTextInputHookFired, markTextInputHookFired, migrateTextInputHookSession, handleImageFiles, } from "./terminalTextInput.js";
-import { createMobileState, updateViewportInsets, captureTerminalScrollState, restoreTerminalScrollState, scrollToBottomIfNearBottom, setMobileViewActive, scheduleMobileViewRender, initMobileControls, installWheelScroll, installTouchScroll, } from "./terminalMobile.js";
-import { createVoiceState, initTerminalVoice, handleVoiceHotkeyDown, handleVoiceHotkeyUp, } from "./terminalVoice.js";
+import { flash, isMobileViewport } from "./utils.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
+import { getSelectedAgent, getSelectedProfile, getSelectedModel, getSelectedReasoning, initAgentControls, } from "./agentControls.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
+import { getSavedSessionId as getSessionId, setSavedSessionId as setSessionId, clearSavedSessionId as clearSessionId, markSessionActive as sessionMarkActive, buildConnectQuery, createTerminalSocket, teardownSocket as sessionTeardownSocket, SocketHeartbeat, ReconnectScheduler, } from "./terminalSession.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
+import { createReplayState, resetReplayState, initReplayForConnect, bufferReplayChunk, handleReplayEnd, consumeLiveReset, } from "./terminalReplay.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
+import { createTranscriptState, resetTranscript, restoreTranscript, hydrateTerminalFromTranscript, appendTranscriptChunk, isAltBufferActive, } from "./terminalTranscript.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
+import { TEXT_INPUT_STORAGE_KEYS, createTextInputState, readBoolFromStorage, safeFocus, captureTextInputSelection, updateTextInputSendUi, persistTextInputDraft, restoreTextInputDraft, loadPendingTextInput, sendPendingTextInputChunk, handleTextInputAck, sendFromTextarea, setTextInputEnabled, updateComposerSticky, registerTextInputHook, hasTextInputHookFired, markTextInputHookFired, migrateTextInputHookSession, handleImageFiles, } from "./terminalTextInput.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
+import { createMobileState, updateViewportInsets, captureTerminalScrollState, restoreTerminalScrollState, scrollToBottomIfNearBottom, setMobileViewActive, scheduleMobileViewRender, initMobileControls, installWheelScroll, installTouchScroll, } from "./terminalMobile.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
+import { createVoiceState, initTerminalVoice, handleVoiceHotkeyDown, handleVoiceHotkeyUp, } from "./terminalVoice.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
 const textEncoder = new TextEncoder();
-import { CONSTANTS } from "./constants.js";
-import { subscribe } from "./bus.js";
-import { REPO_ID, BASE_PATH } from "./env.js";
+import { CONSTANTS } from "./constants.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
+import { subscribe } from "./bus.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
+import { REPO_ID, BASE_PATH } from "./env.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
 const TOUCH_OVERRIDE = (() => {
     try {
         const params = new URLSearchParams(window.location.search);

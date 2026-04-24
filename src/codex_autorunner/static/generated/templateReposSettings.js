@@ -1,6 +1,6 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { api, confirmModal, flash } from "./utils.js";
-import { checkTemplatesEnabled } from "./ticketTemplates.js";
+import { api, confirmModal, flash } from "./utils.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
+import { checkTemplatesEnabled } from "./ticketTemplates.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
 function els() {
     return {
         list: document.getElementById("template-repos-list"),

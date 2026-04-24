@@ -1,6 +1,6 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { buildWsUrl, getAuthToken } from "./utils.js";
-import { CONSTANTS } from "./constants.js";
+import { buildWsUrl, getAuthToken } from "./utils.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
+import { CONSTANTS } from "./constants.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
 const SESSION_STORAGE_PREFIX = "codex_terminal_session_id:";
 const SESSION_STORAGE_TS_PREFIX = "codex_terminal_session_ts:";
 const RECONNECT_MAX_ATTEMPTS = 3;

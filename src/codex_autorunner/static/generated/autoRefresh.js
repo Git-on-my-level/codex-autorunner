@@ -9,8 +9,8 @@
  * - Immediate refresh on tab activation
  * - Debounces rapid activations
  */
-import { subscribe } from "./bus.js";
-import { CONSTANTS } from "./constants.js";
+import { subscribe } from "./bus.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
+import { CONSTANTS } from "./constants.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
 // Track registered refreshers: { id: { callback, interval, tabId, timerId, lastRefresh } }
 const refreshers = new Map();
 // Track current active tab

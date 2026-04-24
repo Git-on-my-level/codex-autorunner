@@ -1,9 +1,9 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { api, flash, confirmModal, inputModal, openModal, } from "./utils.js";
-import { setCleanupAllInFlight, renderSummary } from "./hubRepoCards.js";
-import { getHubData, startHubJob, } from "./hubActions.js";
-import { refreshHub } from "./hubRefresh.js";
-import { loadUpdateTargetOptions, handleSystemUpdate } from "./hubRefresh.js";
+import { api, flash, confirmModal, inputModal, openModal, } from "./utils.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
+import { setCleanupAllInFlight, renderSummary } from "./hubRepoCards.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
+import { getHubData, startHubJob, } from "./hubActions.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
+import { refreshHub } from "./hubRefresh.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
+import { loadUpdateTargetOptions, handleSystemUpdate } from "./hubRefresh.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
 function splitCommaSeparated(value) {
     return value
         .split(",")

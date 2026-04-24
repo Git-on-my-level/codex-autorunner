@@ -9,6 +9,7 @@ import {
   inputModal,
   setButtonLoading,
 } from "./utils.js";
+import { importVersionedModule } from "./assetLoader.js";
 import { registerAutoRefresh, type RefreshContext } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
 import { subscribe } from "./bus.js";
@@ -1269,7 +1270,9 @@ export function initTicketFlow(): void {
   const newThreadBtn = document.getElementById("ticket-chat-new-thread");
   if (newThreadBtn) {
     newThreadBtn.addEventListener("click", async () => {
-      const { startNewTicketChatThread } = await import("./ticketChatActions.js");
+      const { startNewTicketChatThread } = await importVersionedModule<
+        typeof import("./ticketChatActions.js")
+      >("./ticketChatActions.js");
       await startNewTicketChatThread();
     });
   }

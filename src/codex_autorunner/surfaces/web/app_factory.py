@@ -29,6 +29,21 @@ def resolve_allowed_hosts(host: str, allowed_hosts: list[str]) -> list[str]:
 
 
 _STATIC_CACHE_CONTROL = "public, max-age=31536000, immutable"
+# ES module entrypoints load with ?v= (asset version), but relative imports (./foo.js) resolve
+# to URLs without that query (URL spec strips search for relative resolution). Those stable URLs
+# must not be cached across navigations or browsers can combine stale and fresh chunks after deploy,
+# which surfaces as missing named exports between generated modules.
+_GENERATED_JS_CACHE_CONTROL = "no-store, no-cache, must-revalidate, max-age=0"
+
+
+def _is_generated_javascript(path: str) -> bool:
+    normalized = path.replace("\\", "/")
+    return bool(
+        normalized.endswith(".js")
+        and (
+            normalized.startswith("generated/") or normalized.startswith("/generated/")
+        )
+    )
 
 
 class CacheStaticFiles(StaticFiles):
@@ -39,5 +54,8 @@ class CacheStaticFiles(StaticFiles):
     async def get_response(self, path: str, scope):
         response = await super().get_response(path, scope)
         if response.status_code in (200, 206, 304):
-            response.headers.setdefault("Cache-Control", self._cache_control)
+            if _is_generated_javascript(path):
+                response.headers["Cache-Control"] = _GENERATED_JS_CACHE_CONTROL
+            else:
+                response.headers.setdefault("Cache-Control", self._cache_control)
         return response

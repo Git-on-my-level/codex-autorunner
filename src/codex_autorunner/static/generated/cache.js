@@ -1,5 +1,5 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { BASE_PATH, REPO_ID } from "./env.js";
+import { BASE_PATH, REPO_ID } from "./env.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
 function cachePrefix() {
     const scope = REPO_ID ? `repo:${REPO_ID}` : `base:${BASE_PATH || ""}`;
     return `car:${encodeURIComponent(scope)}:`;

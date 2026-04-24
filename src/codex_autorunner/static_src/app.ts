@@ -1,5 +1,10 @@
 import { REPO_ID, HUB_BASE } from "./env.js";
+import { importVersionedModule } from "./assetLoader.js";
 import { initUiMockFromUrl } from "./uiMock.js";
+import {
+  consumeOnboardingUrlReset,
+  scheduleOnboardingPromptIfFirstRun,
+} from "./walkthrough.js";
 import {
   api,
   flash,
@@ -9,9 +14,6 @@ import {
 
 let pmaInitialized = false;
 let emptyRouteHandled = false;
-const PMA_EMPTY_HERO_TEXT =
-  "Get started — ask the PM Agent to add your first repo";
-const PMA_DEFAULT_HERO_TEXT = "Project Manager";
 let hubModulePromise: Promise<typeof import("./hub.js")> | null = null;
 let pmaModulePromise: Promise<typeof import("./pma.js")> | null = null;
 let notificationsModulePromise: Promise<typeof import("./notifications.js")> | null =
@@ -32,34 +34,46 @@ let repoShellModulesPromise: Promise<{
 }> | null = null;
 
 function loadHubModule(): Promise<typeof import("./hub.js")> {
-  hubModulePromise ??= import("./hub.js");
+  hubModulePromise ??= importVersionedModule<typeof import("./hub.js")>(
+    "./hub.js"
+  );
   return hubModulePromise;
 }
 
 function loadPMAModule(): Promise<typeof import("./pma.js")> {
-  pmaModulePromise ??= import("./pma.js");
+  pmaModulePromise ??= importVersionedModule<typeof import("./pma.js")>(
+    "./pma.js"
+  );
   return pmaModulePromise;
 }
 
 function loadNotificationsModule(): Promise<typeof import("./notifications.js")> {
-  notificationsModulePromise ??= import("./notifications.js");
+  notificationsModulePromise ??= importVersionedModule<
+    typeof import("./notifications.js")
+  >("./notifications.js");
   return notificationsModulePromise;
 }
 
 function loadRepoShellModules() {
   repoShellModulesPromise ??= Promise.all([
-    import("./archive.js"),
-    import("./bus.js"),
-    import("./contextspace.js"),
-    import("./dashboard.js"),
-    import("./health.js"),
-    import("./liveUpdates.js"),
-    import("./messages.js"),
-    import("./mobileCompact.js"),
-    import("./settings.js"),
-    import("./tabs.js"),
-    import("./terminal.js"),
-    import("./tickets.js"),
+    importVersionedModule<typeof import("./archive.js")>("./archive.js"),
+    importVersionedModule<typeof import("./bus.js")>("./bus.js"),
+    importVersionedModule<typeof import("./contextspace.js")>(
+      "./contextspace.js"
+    ),
+    importVersionedModule<typeof import("./dashboard.js")>("./dashboard.js"),
+    importVersionedModule<typeof import("./health.js")>("./health.js"),
+    importVersionedModule<typeof import("./liveUpdates.js")>(
+      "./liveUpdates.js"
+    ),
+    importVersionedModule<typeof import("./messages.js")>("./messages.js"),
+    importVersionedModule<typeof import("./mobileCompact.js")>(
+      "./mobileCompact.js"
+    ),
+    importVersionedModule<typeof import("./settings.js")>("./settings.js"),
+    importVersionedModule<typeof import("./tabs.js")>("./tabs.js"),
+    importVersionedModule<typeof import("./terminal.js")>("./terminal.js"),
+    importVersionedModule<typeof import("./tickets.js")>("./tickets.js"),
   ]).then(
     ([
       archive,
@@ -125,11 +139,21 @@ function showPMAView(): void {
   updateModeToggle("pma");
   void initPMAView().then(() => {
     setPMARefreshActiveIfLoaded(true);
-    void loadPMAModule().then(({ drainPendingPrompt }) => {
-      drainPendingPrompt();
+    void loadPMAModule().then((mod) => {
+      if (typeof mod.drainPendingPrompt === "function") {
+        mod.drainPendingPrompt();
+      }
     });
   });
   updateUrlParams({ view: "pma" });
+}
+
+function applyScheduledOnboardingPrompt(): void {
+  void loadPMAModule().then((mod) => {
+    if (typeof mod.drainPendingPrompt === "function") {
+      mod.drainPendingPrompt();
+    }
+  });
 }
 
 function updateModeToggle(mode: "manual" | "pma"): void {
@@ -151,16 +175,24 @@ function updateModeToggle(mode: "manual" | "pma"): void {
   });
 }
 
-async function probePMAEnabled(): Promise<boolean> {
+interface PMAStatus {
+  enabled: boolean;
+  hasAgents: boolean;
+}
+
+async function probePMAEnabled(): Promise<PMAStatus> {
   try {
-    await api("/hub/pma/agents", { method: "GET" });
-    return true;
+    const data = await api("/hub/pma/agents", { method: "GET" });
+    const agents = (data as { agents?: unknown })?.agents;
+    const hasAgents = Array.isArray(agents) && agents.length > 0;
+    return { enabled: true, hasAgents };
   } catch {
-    return false;
+    return { enabled: false, hasAgents: false };
   }
 }
 
 async function initHubShell(): Promise<void> {
+  consumeOnboardingUrlReset();
   const hubShell = document.getElementById("hub-shell");
   const repoShell = document.getElementById("repo-shell");
   const manualBtns = Array.from(
@@ -169,6 +201,42 @@ async function initHubShell(): Promise<void> {
   const pmaBtns = Array.from(
     document.querySelectorAll<HTMLButtonElement>('[data-hub-mode="pma"]')
   );
+  let latestRepoCount: number | null = null;
+  let pmaStatusResolved = false;
+  let requestedPMA = false;
+  let requestedManual = false;
+  let hasAgents = false;
+
+  const handleRepoCount = (count: number): void => {
+    latestRepoCount = count;
+    if (!pmaStatusResolved) return;
+
+    const isEmptyHub = count === 0;
+    const onboardingEligible = isEmptyHub && !requestedManual && hasAgents;
+    if (onboardingEligible) {
+      const scheduled = scheduleOnboardingPromptIfFirstRun();
+      if (scheduled && requestedPMA) {
+        applyScheduledOnboardingPrompt();
+      }
+    }
+    if (
+      !emptyRouteHandled &&
+      isEmptyHub &&
+      !requestedManual &&
+      !requestedPMA
+    ) {
+      emptyRouteHandled = true;
+      showPMAView();
+    } else if (count > 0 || (requestedPMA && isEmptyHub)) {
+      emptyRouteHandled = true;
+    }
+  };
+
+  document.addEventListener("hub:repo-count", (evt) => {
+    const detail = (evt as CustomEvent<{ count?: number }>).detail;
+    const count = typeof detail?.count === "number" ? detail.count : 0;
+    handleRepoCount(count);
+  });
 
   if (hubShell) hubShell.classList.remove("hidden");
   if (repoShell) repoShell.classList.add("hidden");
@@ -192,8 +260,12 @@ async function initHubShell(): Promise<void> {
   });
 
   const urlParams = new URLSearchParams(window.location.search);
-  const requestedPMA = urlParams.get("view") === "pma";
-  const pmaEnabled = await probePMAEnabled();
+  requestedPMA = urlParams.get("view") === "pma";
+  requestedManual = urlParams.get("view") === "manual";
+  const { enabled: pmaEnabled, hasAgents: resolvedHasAgents } =
+    await probePMAEnabled();
+  hasAgents = resolvedHasAgents;
+  pmaStatusResolved = true;
 
   if (!pmaEnabled) {
     pmaBtns.forEach((btn) => {
@@ -210,40 +282,26 @@ async function initHubShell(): Promise<void> {
     return;
   }
 
+  setNoAgentsNoticeVisible(!hasAgents);
+
   if (requestedPMA) {
     showPMAView();
   }
 
-  const requestedManual = urlParams.get("view") === "manual";
-  document.addEventListener("hub:repo-count", (evt) => {
-    const detail = (evt as CustomEvent<{ count?: number }>).detail;
-    const count = typeof detail?.count === "number" ? detail.count : 0;
-    updatePMAHeroForEmptyState(count === 0);
-    if (
-      !emptyRouteHandled &&
-      count === 0 &&
-      !requestedManual &&
-      !requestedPMA
-    ) {
-      emptyRouteHandled = true;
-      showPMAView();
-    } else if (count > 0) {
-      emptyRouteHandled = true;
-    }
-  });
-
-  const { initWalkthrough } = await import("./walkthrough.js");
-  initWalkthrough();
+  if (!hasAgents && !requestedPMA) {
+    // No supported agent installed — PMA chat can't run, just route so the user
+    // sees the install notice instead of an empty hub.
+    emptyRouteHandled = true;
+    showPMAView();
+  }
+  if (latestRepoCount !== null) {
+    handleRepoCount(latestRepoCount);
+  }
 }
 
-function updatePMAHeroForEmptyState(empty: boolean): void {
-  const heroText = document.querySelector<HTMLElement>(
-    "#pma-shell .hub-hero-text"
-  );
-  const h1 = heroText?.querySelector("h1");
-  if (!heroText || !h1) return;
-  heroText.classList.toggle("hub-hero-text--empty", empty);
-  h1.textContent = empty ? PMA_EMPTY_HERO_TEXT : PMA_DEFAULT_HERO_TEXT;
+function setNoAgentsNoticeVisible(visible: boolean): void {
+  const notice = document.getElementById("pma-no-agents-notice");
+  if (notice) notice.classList.toggle("hidden", !visible);
 }
 
 async function initRepoShell(): Promise<void> {

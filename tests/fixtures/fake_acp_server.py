@@ -9,6 +9,9 @@ import time
 from pathlib import Path
 from typing import Any
 
+_OFFICIAL_STREAM_UPDATE_DELAY_SECONDS = 0.01
+_OFFICIAL_HANG_POLL_INTERVAL_SECONDS = 0.01
+
 
 def _write_line(lock: threading.Lock, payload: dict[str, Any]) -> None:
     line = json.dumps(payload, separators=(",", ":"))
@@ -431,7 +434,10 @@ class FakeACPServer:
                 {"stopReason": "cancelled", "userMessageId": turn_id},
             )
             return
-        time.sleep(0.05)
+        # Keep official fixture pacing short so queue-visible / interrupt lab
+        # scenarios exercise orchestration behavior instead of burning most of
+        # the latency budget inside fixture sleeps under xdist load.
+        time.sleep(_OFFICIAL_STREAM_UPDATE_DELAY_SECONDS)
         self.send(
             {
                 "method": "session/update",
@@ -466,7 +472,7 @@ class FakeACPServer:
             )
         if self._scenario == "official_progress_hang_ignore_cancel":
             while True:
-                time.sleep(0.05)
+                time.sleep(_OFFICIAL_HANG_POLL_INTERVAL_SECONDS)
         if self._scenario == "official_prompt_hang":
             return
         if self._scenario == "official_second_prompt_hang_with_persisted_completion":

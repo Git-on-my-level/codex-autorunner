@@ -1,6 +1,6 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { publish } from "./bus.js";
-import { escapeHtml, getUrlParams, updateUrlParams } from "./utils.js";
+import { publish } from "./bus.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
+import { escapeHtml, getUrlParams, updateUrlParams } from "./utils.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
 const tabs = [];
 const hamburgerActions = [];
 let hamburgerMenuOpen = false;

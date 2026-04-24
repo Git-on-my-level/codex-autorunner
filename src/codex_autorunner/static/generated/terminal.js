@@ -1,8 +1,8 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { TerminalManager } from "./terminalManager.js";
-import { refreshAgentControls } from "./agentControls.js";
-import { subscribe } from "./bus.js";
-import { isRepoHealthy } from "./health.js";
+import { TerminalManager } from "./terminalManager.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
+import { refreshAgentControls } from "./agentControls.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
+import { subscribe } from "./bus.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
+import { isRepoHealthy } from "./health.js?v=ac0c75a9b48302989280b9278c713a406824bfb9e317de690d6949a4bd54d2e3";
 let terminalManager = null;
 let terminalHealthRefreshInitialized = false;
 export function getTerminalManager() {
