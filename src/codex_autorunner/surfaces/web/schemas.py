@@ -1114,7 +1114,7 @@ class PmaAutomationSubscriptionCreateRequest(Payload):
     )
     max_matches: Optional[int] = Field(
         default=None,
-        ge=0,
+        ge=1,
         validation_alias=AliasChoices("max_matches", "maxMatches"),
     )
     confirm: bool = False
