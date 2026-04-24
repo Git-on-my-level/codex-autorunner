@@ -748,7 +748,7 @@ def build_managed_thread_runtime_routes(
             service=service,
         )
 
-        if (thread.get("status") or "") == "archived":
+        if str(thread.get("lifecycle_status") or "").strip().lower() == "archived":
             return JSONResponse(
                 status_code=409,
                 content=build_archived_thread_payload(

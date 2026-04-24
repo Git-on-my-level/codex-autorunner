@@ -573,6 +573,33 @@ def test_load_migrates_legacy_notify_once_json_to_canonical_max_matches(
     assert persisted["subscriptions"][0]["metadata"] == {"source": "legacy"}
 
 
+def test_load_migrates_notify_once_from_metadata_only_to_max_matches(
+    tmp_path,
+) -> None:
+    """Regression: metadata.notify_once must migrate even without a top-level key."""
+    persistence = PmaAutomationPersistence(tmp_path)
+    legacy_state = default_pma_automation_state()
+    legacy_state["subscriptions"] = [
+        {
+            "subscription_id": "sub-1",
+            "created_at": "2026-03-13T00:00:00Z",
+            "updated_at": "2026-03-13T00:00:00Z",
+            "state": "active",
+            "event_types": ["managed_thread_completed"],
+            "thread_id": "thread-1",
+            "lane_id": "pma:lane-next",
+            "metadata": {"notify_once": True, "source": "legacy"},
+        }
+    ]
+    persistence.save(legacy_state)
+
+    state = PmaAutomationStore(tmp_path).load()
+
+    assert state["subscriptions"][0]["max_matches"] == 1
+    assert "notify_once" not in state["subscriptions"][0]
+    assert state["subscriptions"][0]["metadata"] == {"source": "legacy"}
+
+
 def test_timer_rejects_invalid_due_at_timestamp(tmp_path) -> None:
     store = PmaAutomationStore(tmp_path)
     with pytest.raises(ValueError):

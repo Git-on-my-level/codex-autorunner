@@ -72,8 +72,14 @@ def classify_thread_followup(
     is_chat_bound: bool,
     is_self_thread: bool = False,
 ) -> dict[str, Any]:
-    status = str(entry.get("status") or "").strip().lower()
-    status_reason = str(entry.get("status_reason") or "").strip().lower()
+    status = (
+        str(entry.get("normalized_status") or entry.get("status") or "").strip().lower()
+    )
+    status_reason = (
+        str(entry.get("status_reason_code") or entry.get("status_reason") or "")
+        .strip()
+        .lower()
+    )
     last_turn_id = str(entry.get("last_turn_id") or "").strip()
 
     if status == "running":
