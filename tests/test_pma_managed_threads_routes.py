@@ -910,6 +910,47 @@ def test_create_subscription_defaults_to_current_runtime_chat_thread(hub_env) ->
         "surface_kind": "discord",
         "surface_key": "discord:subscription-default-thread",
     }
+    assert subscription["metadata"]["pma_origin"] == {
+        "thread_id": origin_thread_id,
+        "lane_id": "discord",
+    }
+
+
+def test_create_subscription_preserves_runtime_pma_origin_metadata_without_thread_binding(
+    hub_env,
+) -> None:
+    runtime_state = SimpleNamespace(
+        pma_current={
+            "thread_id": "backend-thread-123",
+            "lane_id": "pma:lane-origin",
+            "agent": "hermes",
+            "profile": "m4-pma",
+        }
+    )
+
+    with _build_automation_route_client(
+        hub_env.hub_root,
+        runtime_state=runtime_state,
+    ) as client:
+        subscription_resp = client.post(
+            "/subscriptions",
+            json={
+                "event_type": "flow_completed",
+                "repo_id": hub_env.repo_id,
+                "run_id": "run-subscription-origin",
+            },
+        )
+
+    assert subscription_resp.status_code == 200
+    subscription = subscription_resp.json()["subscription"]
+    assert subscription["lane_id"] == "pma:lane-origin"
+    assert "delivery_target" not in subscription["metadata"]
+    assert subscription["metadata"]["pma_origin"] == {
+        "thread_id": "backend-thread-123",
+        "lane_id": "pma:lane-origin",
+        "agent": "hermes",
+        "profile": "m4-pma",
+    }
 
 
 def test_create_subscription_keeps_explicit_thread_target(hub_env) -> None:

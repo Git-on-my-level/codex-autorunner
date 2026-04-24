@@ -6,6 +6,11 @@ from typing import Any, Literal, Optional
 from fastapi import HTTPException, Request
 
 from .....core.pma_automation_store import PmaAutomationThreadNotFoundError
+from .....core.pma_origin import (
+    PmaOriginContext,
+    merge_pma_origin_metadata,
+    resolve_runtime_pma_origin,
+)
 from ...routes.pma_routes.automation_adapter import (
     call_store_create_with_payload,
     get_automation_store,
@@ -33,8 +38,7 @@ def build_managed_thread_terminal_notify_payload(
     lane_id: Optional[str],
     notify_once: bool,
     idempotency_key: Optional[str],
-    origin_thread_id: Optional[str],
-    origin_lane_id: Optional[str],
+    origin: Optional[PmaOriginContext],
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "event_types": [
@@ -45,14 +49,17 @@ def build_managed_thread_terminal_notify_payload(
         "thread_id": managed_thread_id,
         "lane_id": lane_id,
         "notify_once": notify_once,
-        "metadata": {"notify_once": notify_once},
+        "metadata": merge_pma_origin_metadata(
+            {"notify_once": notify_once},
+            origin=origin,
+        ),
     }
     if idempotency_key:
         payload["idempotency_key"] = idempotency_key
-    if origin_thread_id:
-        payload["origin_thread_id"] = origin_thread_id
-    if origin_lane_id:
-        payload["origin_lane_id"] = origin_lane_id
+    if origin and origin.thread_id:
+        payload["origin_thread_id"] = origin.thread_id
+    if origin and origin.lane_id:
+        payload["origin_lane_id"] = origin.lane_id
     return payload
 
 
@@ -113,9 +120,7 @@ class ManagedThreadAutomationClient:
         required: bool,
     ) -> Optional[dict[str, Any]]:
         runtime_state = self._get_runtime_state() if self._get_runtime_state else None
-        origin_thread_id, origin_lane_id = resolve_origin_followup_context(
-            runtime_state
-        )
+        origin = resolve_runtime_pma_origin(runtime_state)
         try:
             store = await get_automation_store(
                 self._request,
@@ -135,8 +140,7 @@ class ManagedThreadAutomationClient:
                     lane_id=lane_id,
                     notify_once=notify_once,
                     idempotency_key=idempotency_key,
-                    origin_thread_id=origin_thread_id,
-                    origin_lane_id=origin_lane_id,
+                    origin=origin,
                 ),
             )
         except HTTPException as exc:
@@ -166,15 +170,30 @@ class ManagedThreadAutomationClient:
 def resolve_origin_followup_context(
     runtime_state: Any,
 ) -> tuple[Optional[str], Optional[str]]:
-    if runtime_state is None:
+    origin = resolve_runtime_pma_origin(runtime_state)
+    if origin is None:
         return None, None
+    return origin.thread_id, origin.lane_id
 
-    current = getattr(runtime_state, "pma_current", None)
-    if not isinstance(current, dict):
-        return None, None
 
-    origin_thread_id = normalize_optional_text(current.get("thread_id"))
-    origin_lane_id = normalize_optional_text(current.get("lane_id"))
-    if origin_thread_id or origin_lane_id:
-        return origin_thread_id, origin_lane_id
-    return None, None
+def apply_origin_followup_context(
+    payload: dict[str, Any],
+    runtime_state: Any,
+) -> dict[str, Any]:
+    resolved_payload = dict(payload)
+    origin = resolve_runtime_pma_origin(runtime_state)
+    if origin is None:
+        return resolved_payload
+    if origin.thread_id:
+        resolved_payload.setdefault("origin_thread_id", origin.thread_id)
+    if origin.lane_id:
+        resolved_payload.setdefault("origin_lane_id", origin.lane_id)
+    resolved_payload["metadata"] = merge_pma_origin_metadata(
+        (
+            resolved_payload.get("metadata")
+            if isinstance(resolved_payload.get("metadata"), dict)
+            else None
+        ),
+        origin=origin,
+    )
+    return resolved_payload

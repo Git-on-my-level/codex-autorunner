@@ -429,6 +429,39 @@ def test_create_subscription_prefers_origin_thread_binding_for_defaults(
     }
 
 
+def test_create_subscription_prefers_explicit_origin_lane_and_persists_pma_origin(
+    tmp_path,
+) -> None:
+    store = PmaAutomationStore(tmp_path, durable=False)
+    origin_thread_id = _create_managed_thread(tmp_path, surface_kind="discord")
+
+    subscription = store.create_subscription(
+        {
+            "event_type": "managed_thread_completed",
+            "origin_thread_id": origin_thread_id,
+            "origin_lane_id": "pma:lane-origin",
+            "metadata": {
+                "pma_origin": {
+                    "agent": "hermes",
+                    "profile": "m4-pma",
+                }
+            },
+        }
+    )["subscription"]
+
+    assert subscription["lane_id"] == "pma:lane-origin"
+    assert subscription["metadata"]["delivery_target"] == {
+        "surface_kind": "discord",
+        "surface_key": "discord:binding-1",
+    }
+    assert subscription["metadata"]["pma_origin"] == {
+        "thread_id": origin_thread_id,
+        "lane_id": "pma:lane-origin",
+        "agent": "hermes",
+        "profile": "m4-pma",
+    }
+
+
 def test_create_subscription_reuses_covering_auto_subscription_for_auto_keys(
     tmp_path,
 ) -> None:
@@ -502,6 +535,45 @@ def test_notify_transition_copies_subscription_delivery_target_into_wakeup(
     assert pending[0]["metadata"]["delivery_target"] == {
         "surface_kind": "telegram",
         "surface_key": "telegram:binding-1",
+    }
+
+
+def test_notify_transition_copies_pma_origin_metadata_into_wakeup(tmp_path) -> None:
+    store = PmaAutomationStore(tmp_path, durable=False)
+    thread_id = _create_managed_thread(tmp_path)
+
+    store.create_subscription(
+        {
+            "event_type": "managed_thread_completed",
+            "thread_id": thread_id,
+            "metadata": {
+                "pma_origin": {
+                    "thread_id": "backend-thread-123",
+                    "lane_id": "pma:lane-origin",
+                    "agent": "hermes",
+                    "profile": "m4-pma",
+                }
+            },
+        }
+    )
+
+    store.notify_transition(
+        {
+            "event_type": "managed_thread_completed",
+            "thread_id": thread_id,
+            "from_state": "running",
+            "to_state": "completed",
+            "transition_id": f"{thread_id}:completed",
+        }
+    )
+
+    pending = store.list_pending_wakeups(limit=10)
+    assert len(pending) == 1
+    assert pending[0]["metadata"]["pma_origin"] == {
+        "thread_id": "backend-thread-123",
+        "lane_id": "pma:lane-origin",
+        "agent": "hermes",
+        "profile": "m4-pma",
     }
 
 

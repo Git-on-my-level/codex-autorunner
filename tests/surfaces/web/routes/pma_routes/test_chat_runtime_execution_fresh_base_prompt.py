@@ -9,7 +9,9 @@ from types import SimpleNamespace
 import pytest
 
 from codex_autorunner.core.orchestration import FreshConversationRequiredError
+from codex_autorunner.core.pma_origin import PmaOriginContext
 from codex_autorunner.surfaces.web.routes.pma_routes.chat_queue_execution import (
+    resolve_pma_execution_origin,
     resolve_pma_session_key,
 )
 from codex_autorunner.surfaces.web.routes.pma_routes.chat_runtime_execution import (
@@ -118,3 +120,56 @@ def test_resolve_pma_session_key_isolates_automation_from_interactive_pma() -> N
     assert interactive == "pma.hermes.profile.m4-pma"
     assert automation == "pma.hermes.profile.m4-pma.automation"
     assert automation != interactive
+
+
+def test_resolve_pma_session_key_reuses_interactive_session_for_origin_wakeups() -> (
+    None
+):
+    session_key = resolve_pma_session_key(
+        "hermes",
+        "m4-pma",
+        automation_trigger=True,
+        pma_origin=PmaOriginContext(thread_id="backend-thread-123"),
+    )
+
+    assert session_key == "pma.hermes.profile.m4-pma"
+
+
+def test_resolve_pma_execution_origin_resumes_matching_origin_session() -> None:
+    execution_origin = resolve_pma_execution_origin(
+        "hermes",
+        "m4-pma",
+        automation_trigger=True,
+        wake_up={
+            "metadata": {
+                "pma_origin": {
+                    "thread_id": "backend-thread-123",
+                    "agent": "hermes",
+                    "profile": "m4-pma",
+                }
+            }
+        },
+    )
+
+    assert execution_origin.session_key == "pma.hermes.profile.m4-pma"
+    assert execution_origin.backend_thread_id == "backend-thread-123"
+
+
+def test_resolve_pma_execution_origin_ignores_mismatched_origin_session() -> None:
+    execution_origin = resolve_pma_execution_origin(
+        "codex",
+        "m4-pma",
+        automation_trigger=True,
+        wake_up={
+            "metadata": {
+                "pma_origin": {
+                    "thread_id": "backend-thread-123",
+                    "agent": "hermes",
+                    "profile": "m4-pma",
+                }
+            }
+        },
+    )
+
+    assert execution_origin.session_key == "pma.profile.m4-pma.automation"
+    assert execution_origin.backend_thread_id is None

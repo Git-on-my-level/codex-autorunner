@@ -304,6 +304,8 @@ async def test_managed_thread_automation_client_forwards_origin_thread_context(
         pma_current={
             "thread_id": "pma-thread-1",
             "lane_id": "discord",
+            "agent": "hermes",
+            "profile": "m4-pma",
         }
     )
     client = ManagedThreadAutomationClient(request, lambda: runtime_state)
@@ -341,6 +343,12 @@ async def test_managed_thread_automation_client_forwards_origin_thread_context(
     }
     assert captured["origin_thread_id"] == "pma-thread-1"
     assert captured["origin_lane_id"] == "discord"
+    assert captured["metadata"]["pma_origin"] == {
+        "thread_id": "pma-thread-1",
+        "lane_id": "discord",
+        "agent": "hermes",
+        "profile": "m4-pma",
+    }
 
 
 @pytest.mark.asyncio
@@ -385,3 +393,4 @@ async def test_managed_thread_automation_client_ignores_stale_last_result_origin
 
     assert "origin_thread_id" not in captured
     assert "origin_lane_id" not in captured
+    assert "pma_origin" not in captured["metadata"]
