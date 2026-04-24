@@ -104,6 +104,7 @@ test("Hermes uses manual model override mode without fetching a catalog", async 
 
   assert.equal(getSelectedAgent(), "codex");
   assert.equal(modelSelect.disabled, false);
+  assert.equal(modelSelect.classList.contains("hidden"), false);
 
   agentSelect.value = "hermes";
   agentSelect.dispatchEvent(new Event("change", { bubbles: true }));
@@ -111,10 +112,10 @@ test("Hermes uses manual model override mode without fetching a catalog", async 
   await waitForUi();
 
   assert.equal(getSelectedAgent(), "hermes");
-  assert.equal(modelSelect.disabled, true);
+  assert.equal(modelSelect.classList.contains("hidden"), true);
   assert.equal(modelInput.classList.contains("hidden"), false);
   assert.match(modelInput.placeholder, /Hermes/);
-  assert.equal(reasoningSelect.disabled, true);
+  assert.equal(reasoningSelect.classList.contains("hidden"), true);
   assert.equal(
     calls.some((href) => href.endsWith("/hub/pma/agents/hermes/models")),
     false
@@ -191,6 +192,7 @@ test("profile picker only shows for agents that expose profiles", async () => {
 
   assert.equal(profileSelect.classList.contains("hidden"), true);
   assert.equal(profileSelect.disabled, true);
+  assert.equal(profileSelect.options.length, 0);
 
   agentSelect.value = "hermes";
   agentSelect.dispatchEvent(new Event("change", { bubbles: true }));
@@ -217,6 +219,7 @@ test("profile picker only shows for agents that expose profiles", async () => {
 
   assert.equal(profileSelect.classList.contains("hidden"), true);
   assert.equal(profileSelect.disabled, true);
+  assert.equal(profileSelect.options.length, 0);
 });
 
 test("shows error state when agents API returns malformed response", async () => {
@@ -243,7 +246,7 @@ test("shows error state when agents API returns malformed response", async () =>
     agentSelect.options[0].textContent,
     "Failed to load agents \u2014 refresh to retry"
   );
-  assert.equal(modelSelect.disabled, true);
+  assert.equal(modelSelect.classList.contains("hidden"), true);
 });
 
 test("shows no-agents state when agents API returns empty list", async () => {
@@ -270,7 +273,7 @@ test("shows no-agents state when agents API returns empty list", async () => {
     agentSelect.options[0].textContent,
     "No agents available"
   );
-  assert.equal(modelSelect.disabled, true);
+  assert.equal(modelSelect.classList.contains("hidden"), true);
 });
 
 test("shows error state when agents API throws", async () => {
@@ -295,7 +298,7 @@ test("shows error state when agents API throws", async () => {
   );
 });
 
-test("does not silently pick first model when catalog has no default", async () => {
+test("falls back to first catalog model when catalog has no default", async () => {
   __agentControlsTest.reset();
   localStorage.clear();
 
@@ -333,13 +336,14 @@ test("does not silently pick first model when catalog has no default", async () 
 
   assert.equal(agentSelect.value, "codex");
   assert.equal(modelSelect.disabled, false);
-  assert.equal(modelSelect.value, "");
+  assert.equal(modelSelect.value, "model-a");
   assert.equal(modelSelect.options.length, 3);
   assert.equal(modelSelect.options[0].textContent, "Select a model\u2026");
   assert.equal(modelSelect.options[0].disabled, true);
+  assert.equal(modelSelect.options[1].value, "model-a");
 });
 
-test("does not silently pick first profile when agent has no default_profile", async () => {
+test("falls back to first profile when agent has no default_profile", async () => {
   __agentControlsTest.reset();
   localStorage.clear();
 
@@ -391,7 +395,8 @@ test("does not silently pick first profile when agent has no default_profile", a
 
   assert.equal(profileSelect.classList.contains("hidden"), false);
   assert.equal(profileSelect.disabled, false);
-  assert.equal(profileSelect.value, "");
+  assert.equal(profileSelect.value, "alpha");
   assert.equal(profileSelect.options[0].textContent, "Select a profile\u2026");
   assert.equal(profileSelect.options[0].disabled, true);
+  assert.equal(profileSelect.options[1].value, "alpha");
 });

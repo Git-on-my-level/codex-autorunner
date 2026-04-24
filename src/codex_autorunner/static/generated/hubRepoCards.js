@@ -1,8 +1,8 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { escapeHtml, statusPill, resolvePath } from "./utils.js";
-import { preserveScroll } from "./preserve.js";
-import { formatTokensCompact, getRepoUsage, getHubUsageUnmatched } from "./hubCache.js";
-import { buildRepoGroups, compareReposForSort, hubViewPrefs, isCleanupBlockedByChatBinding, normalizedHubSearch, repoFlowStatus, repoMatchesFlowFilter, repoMatchesSearch, channelMatchesSearch, unboundManagedThreadCount, } from "./hubFilters.js";
+import { escapeHtml, statusPill, resolvePath } from "./utils.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { preserveScroll } from "./preserve.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { formatTokensCompact, getRepoUsage, getHubUsageUnmatched } from "./hubCache.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { buildRepoGroups, compareReposForSort, hubViewPrefs, isCleanupBlockedByChatBinding, normalizedHubSearch, repoFlowStatus, repoMatchesFlowFilter, repoMatchesSearch, channelMatchesSearch, unboundManagedThreadCount, } from "./hubFilters.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
 let cleanupAllInFlight = false;
 export function setCleanupAllInFlight(value) {
     cleanupAllInFlight = value;
@@ -611,6 +611,7 @@ export function renderSummary(repos, hubData) {
     if (pmaLastScanEl) {
         pmaLastScanEl.textContent = formatTimeCompact(hubData.last_scan_at);
     }
+    document.dispatchEvent(new CustomEvent("hub:repo-count", { detail: { count: repos.length } }));
 }
 export function renderRepos(repos, hubChannelEntries, pinnedParentRepoIds) {
     if (!repoListEl)

@@ -314,6 +314,8 @@ export async function refreshFmModelOptions(
     fmModel.disabled = true;
   }
 
+  fmModel.classList.toggle("hidden", !catalog?.models?.length);
+
   refreshFmReasoningOptions(els, catalog, fmModel.value, currentReasoning);
 }
 
@@ -326,26 +328,32 @@ export function refreshFmReasoningOptions(
   const { fmReasoning } = els();
   if (!fmReasoning) return;
 
+  const model = catalog?.models?.find((m) => m.id === modelId);
+  const show = Boolean(
+    model?.supports_reasoning && model.reasoning_options?.length
+  );
+  fmReasoning.classList.toggle("hidden", !show);
   fmReasoning.innerHTML = "";
+
+  if (!show) {
+    fmReasoning.disabled = true;
+    return;
+  }
+
+  fmReasoning.disabled = false;
   const defaultOption = document.createElement("option");
   defaultOption.value = "";
   defaultOption.textContent = "(default)";
   fmReasoning.appendChild(defaultOption);
 
-  const model = catalog?.models?.find((m) => m.id === modelId);
-  if (model?.supports_reasoning && model.reasoning_options?.length) {
-    fmReasoning.disabled = false;
-    for (const r of model.reasoning_options) {
-      const opt = document.createElement("option");
-      opt.value = r;
-      opt.textContent = r;
-      fmReasoning.appendChild(opt);
-    }
-    if (currentReasoning && model.reasoning_options.includes(currentReasoning)) {
-      fmReasoning.value = currentReasoning;
-    }
-  } else {
-    fmReasoning.disabled = true;
+  for (const r of model.reasoning_options) {
+    const opt = document.createElement("option");
+    opt.value = r;
+    opt.textContent = r;
+    fmReasoning.appendChild(opt);
+  }
+  if (currentReasoning && model.reasoning_options.includes(currentReasoning)) {
+    fmReasoning.value = currentReasoning;
   }
 }
 

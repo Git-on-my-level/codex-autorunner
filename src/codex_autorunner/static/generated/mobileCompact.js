@@ -1,7 +1,7 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { isMobileViewport, setMobileChromeHidden, setMobileComposeFixed, } from "./utils.js";
-import { subscribe } from "./bus.js";
-import { getTerminalManager } from "./terminal.js";
+import { isMobileViewport, setMobileChromeHidden, setMobileComposeFixed, } from "./utils.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { subscribe } from "./bus.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { getTerminalManager } from "./terminal.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
 const COMPOSE_INPUT_SELECTOR = "#doc-chat-input, #terminal-textarea";
 const SEND_BUTTON_SELECTOR = "#doc-chat-send, #terminal-text-send";
 let baseViewportHeight = window.innerHeight;

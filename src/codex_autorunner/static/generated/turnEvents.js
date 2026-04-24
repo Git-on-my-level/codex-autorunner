@@ -1,5 +1,5 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { fetchActiveFileChat, streamTurnEvents } from "./fileChat.js";
+import { fetchActiveFileChat, streamTurnEvents } from "./fileChat.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
 export async function resumeFileChatTurn(clientTurnId, opts = {}) {
     const active = await fetchActiveFileChat(clientTurnId, opts.basePath || "/api/file-chat/active");
     const current = (active.current || {});

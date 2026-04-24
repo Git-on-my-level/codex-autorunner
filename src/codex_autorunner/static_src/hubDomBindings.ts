@@ -10,6 +10,7 @@ import {
   loadHubOpenPanel,
 } from "./hubFilters.js";
 import { initNotificationBell } from "./notificationBell.js";
+import { importVersionedModule } from "./assetLoader.js";
 import { renderReposWithScroll } from "./hubRepoCards.js";
 import {
   getHubData,
@@ -102,7 +103,9 @@ async function handleRepoAction(repoId: string, action: string): Promise<void> {
         confirmText: "Create",
       });
       if (!branch) return;
-      const { startHubJob } = await import("./hubActions.js");
+      const { startHubJob } = await importVersionedModule<
+        typeof import("./hubActions.js")
+      >("./hubActions.js");
       const job = await startHubJob("/hub/jobs/worktrees/create", {
         body: { base_repo_id: repoId, branch },
         startedMessage: "Worktree creation queued",
@@ -153,7 +156,9 @@ async function handleRepoAction(repoId: string, action: string): Promise<void> {
         { confirmText: "Archive & remove" }
       );
       if (!ok) return;
-      const { startHubJob } = await import("./hubActions.js");
+      const { startHubJob } = await importVersionedModule<
+        typeof import("./hubActions.js")
+      >("./hubActions.js");
       await startHubJob("/hub/jobs/worktrees/cleanup", {
         body: {
           worktree_repo_id: repoId,
@@ -212,7 +217,9 @@ async function handleRepoAction(repoId: string, action: string): Promise<void> {
       return;
     }
     if (action === "remove_repo") {
-      const { removeRepoWithChecks } = await import("./hubModals.js");
+      const { removeRepoWithChecks } = await importVersionedModule<
+        typeof import("./hubModals.js")
+      >("./hubModals.js");
       await removeRepoWithChecks(repoId);
       return;
     }
@@ -269,7 +276,9 @@ async function handleAgentWorkspaceAction(
         { confirmText: "Remove" }
       );
       if (!ok) return;
-      const { startHubJob } = await import("./hubActions.js");
+      const { startHubJob } = await importVersionedModule<
+        typeof import("./hubActions.js")
+      >("./hubActions.js");
       await startHubJob(`/hub/jobs/agent-workspaces/${encodeURIComponent(workspaceId)}/remove`, {
         body: { delete_dir: false },
         startedMessage: "Agent workspace removal queued",
@@ -285,7 +294,9 @@ async function handleAgentWorkspaceAction(
         { confirmText: "Delete", danger: true }
       );
       if (!ok) return;
-      const { startHubJob } = await import("./hubActions.js");
+      const { startHubJob } = await importVersionedModule<
+        typeof import("./hubActions.js")
+      >("./hubActions.js");
       await startHubJob(`/hub/jobs/agent-workspaces/${encodeURIComponent(workspaceId)}/delete`, {
         body: { delete_dir: true },
         startedMessage: "Agent workspace delete queued",

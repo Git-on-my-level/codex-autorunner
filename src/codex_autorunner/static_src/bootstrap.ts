@@ -12,6 +12,7 @@
   const AUTH_TOKEN_KEY = "car_auth_token";
   const url = new URL(window.location.href);
   const params = url.searchParams;
+  const skipVersionProbe = params.has("uiMock");
   let token: string | null = params.get("token");
   if (token) {
     windowExt.__CAR_AUTH_TOKEN = token;
@@ -123,13 +124,16 @@
       .catch(() => {});
   };
 
-  checkVersion();
+  if (!skipVersionProbe) {
+    checkVersion();
+  }
 
   // In development (localhost), poll for version changes to support hot reload of static assets.
   if (
-    window.location.hostname === "localhost" ||
-    window.location.hostname === "127.0.0.1" ||
-    window.location.hostname.endsWith(".local")
+    !skipVersionProbe &&
+    (window.location.hostname === "localhost" ||
+      window.location.hostname === "127.0.0.1" ||
+      window.location.hostname.endsWith(".local"))
   ) {
     setInterval(checkVersion, 2000);
   }

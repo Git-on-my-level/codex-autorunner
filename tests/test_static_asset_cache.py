@@ -193,7 +193,12 @@ def test_static_assets_cached_and_compressed(
     cache_res = client.get(f"/repos/{_static_hub_env.repo_id}/static/generated/app.js")
     assert cache_res.status_code == 200
     cache_control = cache_res.headers.get("Cache-Control", "")
-    assert "max-age=31536000" in cache_control
+    assert "must-revalidate" in cache_control
+    assert "max-age=0" in cache_control
+    assert "no-store" in cache_control
+    vendor_res = client.get(f"/repos/{_static_hub_env.repo_id}/static/vendor/xterm.js")
+    assert vendor_res.status_code == 200
+    assert "max-age=31536000" in vendor_res.headers.get("Cache-Control", "")
     gzip_res = client.get(
         f"/repos/{_static_hub_env.repo_id}/static/generated/big.js",
         headers={"Accept-Encoding": "gzip"},

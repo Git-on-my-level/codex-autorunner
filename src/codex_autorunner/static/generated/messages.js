@@ -1,14 +1,14 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { api, escapeHtml, flash, getUrlParams, resolvePath, updateUrlParams, } from "./utils.js";
-import { subscribe } from "./bus.js";
-import { isRepoHealthy } from "./health.js";
-import { preserveScroll } from "./preserve.js";
-import { createSmartRefresh } from "./smartRefresh.js";
-import { createFileBoxWidget } from "./fileboxUi.js";
-import { renderMarkdown } from "./markdown.js";
-import { formatTimestamp, formatBytes } from "./formatUtils.js";
-import { getActiveMessageRunId, refreshBell } from "./messagesBell.js";
-export { initMessageBell, refreshBell } from "./messagesBell.js";
+import { api, escapeHtml, flash, getUrlParams, resolvePath, updateUrlParams, } from "./utils.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { subscribe } from "./bus.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { isRepoHealthy } from "./health.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { preserveScroll } from "./preserve.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { createSmartRefresh } from "./smartRefresh.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { createFileBoxWidget } from "./fileboxUi.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { renderMarkdown } from "./markdown.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { formatTimestamp, formatBytes } from "./formatUtils.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { getActiveMessageRunId, refreshBell } from "./messagesBell.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+export { initMessageBell, refreshBell } from "./messagesBell.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
 let messagesInitialized = false;
 let selectedRunId = null;
 const MESSAGE_REFRESH_REASONS = ["initial", "background", "manual"];

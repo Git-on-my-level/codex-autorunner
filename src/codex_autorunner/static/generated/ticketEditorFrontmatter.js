@@ -1,6 +1,6 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { api } from "./utils.js";
-import { ensureAgentCatalog, getRegisteredAgents, getRegisteredAgentProfiles, } from "./agentControls.js";
+import { api } from "./utils.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { ensureAgentCatalog, getRegisteredAgents, getRegisteredAgentProfiles, } from "./agentControls.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
 export const DEFAULT_FRONTMATTER = {
     agent: "codex",
     done: false,
@@ -212,32 +212,34 @@ export async function refreshFmModelOptions(els, agent, preserveSelection = fals
     else {
         fmModel.disabled = true;
     }
+    fmModel.classList.toggle("hidden", !catalog?.models?.length);
     refreshFmReasoningOptions(els, catalog, fmModel.value, currentReasoning);
 }
 export function refreshFmReasoningOptions(els, catalog, modelId, currentReasoning = "") {
     const { fmReasoning } = els();
     if (!fmReasoning)
         return;
+    const model = catalog?.models?.find((m) => m.id === modelId);
+    const show = Boolean(model?.supports_reasoning && model.reasoning_options?.length);
+    fmReasoning.classList.toggle("hidden", !show);
     fmReasoning.innerHTML = "";
+    if (!show) {
+        fmReasoning.disabled = true;
+        return;
+    }
+    fmReasoning.disabled = false;
     const defaultOption = document.createElement("option");
     defaultOption.value = "";
     defaultOption.textContent = "(default)";
     fmReasoning.appendChild(defaultOption);
-    const model = catalog?.models?.find((m) => m.id === modelId);
-    if (model?.supports_reasoning && model.reasoning_options?.length) {
-        fmReasoning.disabled = false;
-        for (const r of model.reasoning_options) {
-            const opt = document.createElement("option");
-            opt.value = r;
-            opt.textContent = r;
-            fmReasoning.appendChild(opt);
-        }
-        if (currentReasoning && model.reasoning_options.includes(currentReasoning)) {
-            fmReasoning.value = currentReasoning;
-        }
+    for (const r of model.reasoning_options) {
+        const opt = document.createElement("option");
+        opt.value = r;
+        opt.textContent = r;
+        fmReasoning.appendChild(opt);
     }
-    else {
-        fmReasoning.disabled = true;
+    if (currentReasoning && model.reasoning_options.includes(currentReasoning)) {
+        fmReasoning.value = currentReasoning;
     }
 }
 export function getCatalogForAgent(agent) {

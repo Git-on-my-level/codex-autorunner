@@ -223,6 +223,7 @@
   --text: #e5ecff;
   --accent: #6cf5d8;
   --accent-2: #6ca8ff;
+  --accent-glow: rgba(108, 245, 216, 0.08);
   --border: #1a2033;
   --border-subtle: rgba(26, 32, 51, 0.6);
   --error: #ff5566;
@@ -240,6 +241,8 @@
   --sp-5: 12px;
   --sp-6: 16px;
   --sp-7: 24px;
+  --sp-8: 32px;
+  --sp-9: 48px;
 }
 
 * {
@@ -14722,4 +14725,44 @@ button.filebox-delete:hover {
 .pill-caution.pill-small {
   font-size: 9px;
   padding: 2px 6px;
+}
+
+/* ── No-agents notice (PMA) ─────────────────────────────────────── */
+.pma-no-agents-notice {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-4) var(--sp-6);
+  background: var(--panel);
+  border-bottom: 1px solid var(--warning);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.pma-no-agents-notice strong {
+  color: var(--warning);
+  font-weight: 700;
+}
+
+.pma-no-agents-notice code {
+  font-family: inherit;
+  color: var(--accent);
+  background: var(--accent-glow);
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius);
+}
+
+/* ── Empty-state PMA hero ───────────────────────────────────────── */
+.hub-hero-text--empty h1 {
+  font-size: 20px;
+  font-weight: 700;
+}
+
+/* ── Tabular nums on stat values ────────────────────────────────── */
+.hub-stat-value,
+.hub-stat-inline .hub-stat-value,
+#hub-count-total,
+#hub-count-running,
+#hub-count-missing {
+  font-variant-numeric: tabular-nums;
 }

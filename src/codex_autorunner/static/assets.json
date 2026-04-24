@@ -17,6 +17,9 @@
       "path": "generated/archiveApi.js"
     },
     {
+      "path": "generated/assetLoader.js"
+    },
+    {
       "path": "generated/autoRefresh.js"
     },
     {
@@ -230,6 +233,12 @@
       "path": "generated/turnResume.js"
     },
     {
+      "path": "generated/uiMock.js"
+    },
+    {
+      "path": "generated/uiMockScenarios.js"
+    },
+    {
       "path": "generated/updateTargets.js"
     },
     {
@@ -240,6 +249,9 @@
     },
     {
       "path": "generated/voice.js"
+    },
+    {
+      "path": "generated/walkthrough.js"
     }
   ],
   "manual": [

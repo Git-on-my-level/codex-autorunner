@@ -1,5 +1,5 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { escapeHtml } from "./utils.js";
+import { escapeHtml } from "./utils.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
 function isSafeHref(url) {
     const trimmed = (url || "").trim();
     if (!trimmed)

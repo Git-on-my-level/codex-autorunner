@@ -1,12 +1,72 @@
-import {
-  loadPendingTurn,
-  clearPendingTurn,
-  type PendingTurn,
-  type TurnRecoveryTracker,
-  createTurnRecoveryTracker,
-  DEFAULT_RECOVERY_MAX_ATTEMPTS,
-} from "./turnResume.js";
+import type { PendingTurn, TurnRecoveryTracker } from "./turnResume.js";
+import * as turnResumeModule from "./turnResume.js";
 import { streamTurnEvents } from "./fileChat.js";
+
+// Browsers can briefly combine a fresh module graph with one stale generated chunk
+// after a deploy or local rebuild. Namespace-import the recovery helpers so a stale
+// `turnResume.js` cannot crash PMA during ESM linking with a missing named export.
+const DEFAULT_RECOVERY_MAX_ATTEMPTS =
+  typeof turnResumeModule.DEFAULT_RECOVERY_MAX_ATTEMPTS === "number"
+    ? turnResumeModule.DEFAULT_RECOVERY_MAX_ATTEMPTS
+    : 30;
+export type { PendingTurn, TurnRecoveryTracker };
+export { DEFAULT_RECOVERY_MAX_ATTEMPTS };
+
+function createFallbackTurnRecoveryTracker(
+  maxAttempts?: number
+): TurnRecoveryTracker {
+  let phase: "recovering" | "stale" = "recovering";
+  let attempts = 0;
+  const max = maxAttempts ?? DEFAULT_RECOVERY_MAX_ATTEMPTS;
+  return {
+    get phase() {
+      return phase;
+    },
+    get attempts() {
+      return attempts;
+    },
+    get maxAttempts() {
+      return max;
+    },
+    tick() {
+      if (phase !== "recovering") return false;
+      attempts += 1;
+      if (attempts >= max) {
+        phase = "stale";
+        return false;
+      }
+      return true;
+    },
+  };
+}
+
+export function loadPendingTurn(key: string): PendingTurn | null {
+  if (typeof turnResumeModule.loadPendingTurn === "function") {
+    return turnResumeModule.loadPendingTurn(key);
+  }
+  return null;
+}
+
+export function savePendingTurn(key: string, turn: PendingTurn): void {
+  if (typeof turnResumeModule.savePendingTurn === "function") {
+    turnResumeModule.savePendingTurn(key, turn);
+  }
+}
+
+export function clearPendingTurn(key: string): void {
+  if (typeof turnResumeModule.clearPendingTurn === "function") {
+    turnResumeModule.clearPendingTurn(key);
+  }
+}
+
+export function createTurnRecoveryTracker(
+  maxAttempts?: number
+): TurnRecoveryTracker {
+  if (typeof turnResumeModule.createTurnRecoveryTracker === "function") {
+    return turnResumeModule.createTurnRecoveryTracker(maxAttempts);
+  }
+  return createFallbackTurnRecoveryTracker(maxAttempts);
+}
 
 export interface ManagedTurnEventsOptions {
   onEvent?(payload: unknown): void;
@@ -72,14 +132,6 @@ export function loadManagedPendingTurn(
 ): PendingTurn | null {
   return loadPendingTurn(key);
 }
-
-export { loadPendingTurn, savePendingTurn, clearPendingTurn, type PendingTurn } from "./turnResume.js";
-
-export {
-  type TurnRecoveryTracker,
-  createTurnRecoveryTracker,
-  DEFAULT_RECOVERY_MAX_ATTEMPTS,
-} from "./turnResume.js";
 
 /**
  * Unified Active-Turn Surface Policy

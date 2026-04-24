@@ -1,8 +1,8 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { parseAppServerEvent, resetOpenCodeEventState } from "./agentEvents.js";
-import { summarizeEvents, renderCompactSummary, COMPACT_MAX_ACTIONS, COMPACT_MAX_TEXT_LENGTH } from "./eventSummarizer.js";
-import { saveChatHistory, loadChatHistory } from "./docChatStorage.js";
-import { renderMarkdown } from "./markdown.js";
+import { parseAppServerEvent, resetOpenCodeEventState } from "./agentEvents.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { summarizeEvents, renderCompactSummary, COMPACT_MAX_ACTIONS, COMPACT_MAX_TEXT_LENGTH } from "./eventSummarizer.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { saveChatHistory, loadChatHistory } from "./docChatStorage.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { renderMarkdown } from "./markdown.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
 function getElements(prefix) {
     return {
         input: document.getElementById(`${prefix}-input`),

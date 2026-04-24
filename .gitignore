@@ -8,6 +8,8 @@ src/codex_autorunner.egg-info/
 codex-autorunner.override.yml
 .codex-autorunner/*
 !.codex-autorunner/.gitignore
+# make ui-qa-screens (Playwright PNGs; typically also covered by .codex-autorunner/*)
+.codex-autorunner/render/ui_qa/
 
 # Python cache
 __pycache__/

@@ -2,10 +2,10 @@
 /**
  * Ticket Chat Stream - handles SSE streaming for ticket chat
  */
-import { resolvePath, getAuthToken } from "./utils.js";
-import { ticketChatState, renderTicketChat, clearTicketEvents, addUserMessage, addAssistantMessage, applyTicketChatResult, } from "./ticketChatActions.js";
-import { applyTicketEvent, renderTicketEvents, renderTicketMessages } from "./ticketChatEvents.js";
-import { readEventStream, handleStreamEvent } from "./streamUtils.js";
+import { resolvePath, getAuthToken } from "./utils.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { ticketChatState, renderTicketChat, clearTicketEvents, addUserMessage, addAssistantMessage, applyTicketChatResult, } from "./ticketChatActions.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { applyTicketEvent, renderTicketEvents, renderTicketMessages } from "./ticketChatEvents.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { readEventStream, handleStreamEvent } from "./streamUtils.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
 export async function performTicketChatRequest(ticketIndex, message, signal, options = {}) {
     // Clear events from previous request and add user message to history
     clearTicketEvents();

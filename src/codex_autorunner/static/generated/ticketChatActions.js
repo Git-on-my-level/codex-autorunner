@@ -2,18 +2,18 @@
 /**
  * Ticket Chat Actions - handles sending messages, applying/discarding patches
  */
-import { api, confirmModal, flash, splitMarkdownFrontmatter } from "./utils.js";
-import { performTicketChatRequest } from "./ticketChatStream.js";
-import { renderTicketMessages, renderTicketEvents } from "./ticketChatEvents.js";
-import { publish } from "./bus.js";
-import { createDocChat } from "./docChatCore.js";
-import { saveTicketChatHistory } from "./ticketChatStorage.js";
-import { renderDiff } from "./diffRenderer.js";
-import { newClientTurnId } from "./fileChat.js";
-import { loadPendingTurn, savePendingTurn } from "./turnResume.js";
-import { resumeFileChatTurn } from "./turnEvents.js";
-import { createTurnEventsController, startTurnEventsStream as sharedStartTurnEventsStream, clearManagedTurn, cancelActiveTurnSync, scheduleRecoveryRetry, createTurnRecoveryTracker, ACTIVE_TURN_RECOVERY_STALE_MESSAGE, } from "./sharedTurnLifecycle.js";
-import { getSelectedAgent, getSelectedProfile, getSelectedModel, getSelectedReasoning, setSelectedAgentProfile, } from "./agentControls.js";
+import { api, confirmModal, flash, splitMarkdownFrontmatter } from "./utils.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { performTicketChatRequest } from "./ticketChatStream.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { renderTicketMessages, renderTicketEvents } from "./ticketChatEvents.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { publish } from "./bus.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { createDocChat } from "./docChatCore.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { saveTicketChatHistory } from "./ticketChatStorage.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { renderDiff } from "./diffRenderer.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { newClientTurnId } from "./fileChat.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { loadPendingTurn, savePendingTurn } from "./turnResume.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { resumeFileChatTurn } from "./turnEvents.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { createTurnEventsController, startTurnEventsStream as sharedStartTurnEventsStream, clearManagedTurn, cancelActiveTurnSync, scheduleRecoveryRetry, createTurnRecoveryTracker, ACTIVE_TURN_RECOVERY_STALE_MESSAGE, } from "./sharedTurnLifecycle.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { getSelectedAgent, getSelectedProfile, getSelectedModel, getSelectedReasoning, setSelectedAgentProfile, } from "./agentControls.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
 // Limits for events display
 export const TICKET_CHAT_EVENT_LIMIT = 8;
 export const TICKET_CHAT_EVENT_MAX = 50;

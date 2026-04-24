@@ -18,8 +18,13 @@ from tests.chat_surface_lab.latency_budget_runner import (
 )
 from tests.chat_surface_lab.scenario_runner import ScenarioDefinition
 
+# These assertions intentionally exercise the full latency-budget campaign suite.
+# Healthy runs already take tens of seconds, so they belong on the explicit slow
+# lane instead of the repo's default fast pre-commit path.
+
 
 @pytest.mark.anyio
+@pytest.mark.slow
 async def test_latency_budget_suite_writes_artifacts_and_covers_required_budgets(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -56,6 +61,7 @@ async def test_latency_budget_suite_writes_artifacts_and_covers_required_budgets
 
 
 @pytest.mark.anyio
+@pytest.mark.slow
 async def test_latency_budget_suite_failure_includes_scenario_and_budget_for_triage(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -95,6 +101,7 @@ async def test_latency_budget_suite_failure_includes_scenario_and_budget_for_tri
 
 
 @pytest.mark.anyio
+@pytest.mark.slow
 async def test_suite_report_includes_campaign_north_star_status(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

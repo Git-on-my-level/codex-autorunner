@@ -69,13 +69,26 @@ test("bootstrap.ts polls for version changes in development", () => {
   assert.match(content, /window\.location\.replace/, "should reload on version change");
 });
 
+test("bootstrap.ts skips version checks when uiMock is present (screenshot / QA mode)", () => {
+  const content = fs.readFileSync(
+    path.join(ROOT, "src", "codex_autorunner", "static_src", "bootstrap.ts"),
+    "utf8"
+  );
+  assert.match(content, /skipVersionProbe.*uiMock/s, "should detect uiMock query param");
+  assert.match(content, /!skipVersionProbe/, "should gate checkVersion and dev polling on uiMock");
+});
+
 test("app.ts uses dynamic import() for hub module", () => {
   const content = fs.readFileSync(
     path.join(ROOT, "src", "codex_autorunner", "static_src", "app.ts"),
     "utf8"
   );
 
-  assert.match(content, /import\("\.\/hub\.js"\)/, "should lazy-import hub.js");
+  assert.match(
+    content,
+    /importVersionedModule<typeof import\("\.\/hub\.js"\)>\(\s*"\.\/hub\.js"/,
+    "should lazy-import hub.js with asset versioning"
+  );
 });
 
 test("app.ts uses dynamic import() for PMA module", () => {
@@ -84,7 +97,11 @@ test("app.ts uses dynamic import() for PMA module", () => {
     "utf8"
   );
 
-  assert.match(content, /import\("\.\/pma\.js"\)/, "should lazy-import pma.js");
+  assert.match(
+    content,
+    /importVersionedModule<typeof import\("\.\/pma\.js"\)>\(\s*"\.\/pma\.js"/,
+    "should lazy-import pma.js with asset versioning"
+  );
 });
 
 test("app.ts uses dynamic import() for repo shell modules", () => {
@@ -93,11 +110,11 @@ test("app.ts uses dynamic import() for repo shell modules", () => {
     "utf8"
   );
 
-  assert.match(content, /import\("\.\/archive\.js"\)/, "should lazy-import archive.js");
-  assert.match(content, /import\("\.\/tickets\.js"\)/, "should lazy-import tickets.js");
-  assert.match(content, /import\("\.\/terminal\.js"\)/, "should lazy-import terminal.js");
-  assert.match(content, /import\("\.\/messages\.js"\)/, "should lazy-import messages.js");
-  assert.match(content, /import\("\.\/liveUpdates\.js"\)/, "should lazy-import liveUpdates.js");
+  assert.match(content, /importVersionedModule<typeof import\("\.\/archive\.js"\)>/, "should lazy-import archive.js with asset versioning");
+  assert.match(content, /importVersionedModule<typeof import\("\.\/tickets\.js"\)>/, "should lazy-import tickets.js with asset versioning");
+  assert.match(content, /importVersionedModule<typeof import\("\.\/terminal\.js"\)>/, "should lazy-import terminal.js with asset versioning");
+  assert.match(content, /importVersionedModule<typeof import\("\.\/messages\.js"\)>/, "should lazy-import messages.js with asset versioning");
+  assert.match(content, /importVersionedModule<typeof import\("\.\/liveUpdates\.js"\)>/, "should lazy-import liveUpdates.js with asset versioning");
 });
 
 test("app.ts deduplicates module loading with promise caching", () => {
@@ -106,8 +123,22 @@ test("app.ts deduplicates module loading with promise caching", () => {
     "utf8"
   );
 
-  assert.match(content, /\?\?\s*=\s*import\("\.\/hub\.js"\)/, "hub module should use nullish coalescing for dedup");
-  assert.match(content, /\?\?\s*=\s*import\("\.\/pma\.js"\)/, "pma module should use nullish coalescing for dedup");
+  assert.match(content, /\?\?\s*=\s*importVersionedModule<typeof import\("\.\/hub\.js"\)>/, "hub module should use nullish coalescing for dedup");
+  assert.match(content, /\?\?\s*=\s*importVersionedModule<typeof import\("\.\/pma\.js"\)>/, "pma module should use nullish coalescing for dedup");
+});
+
+test("assetLoader.ts appends bootstrap asset suffix to dynamic imports", () => {
+  const content = fs.readFileSync(
+    path.join(ROOT, "src", "codex_autorunner", "static_src", "assetLoader.ts"),
+    "utf8"
+  );
+
+  assert.match(content, /__assetSuffix/, "should read bootstrap asset suffix");
+  assert.match(
+    content,
+    /import\(`\$\{path\}\$\{getAssetSuffix\(\)\}`\)/,
+    "should append suffix to dynamic imports"
+  );
 });
 
 test("app.ts probes PMA availability before showing PMA mode", () => {
@@ -136,8 +167,17 @@ test("app.ts selects hub vs repo shell based on REPO_ID", () => {
     "utf8"
   );
 
+  const hubShell = content.indexOf("async function initHubShell");
+  assert.ok(hubShell !== -1, "should have initHubShell");
+  assert.match(content, /consumeOnboardingUrlReset\(\)/, "should run onboarding reset before PMA init");
+  const firstLineAfterInit = content.indexOf("async function initHubShell");
+  const afterBrace = content.indexOf("{", firstLineAfterInit);
+  const window = content.slice(afterBrace, afterBrace + 200);
+  assert.match(window, /consumeOnboardingUrlReset\(\)/, "consumeOnboarding should be first in initHubShell body");
+
   const bootstrapIndex = content.indexOf("function bootstrap()");
   assert.ok(bootstrapIndex !== -1, "should have bootstrap function");
+  assert.match(content, /initUiMockFromUrl/, "should init ui mock from URL for hub screenshot scenarios");
 
   const repoCheck = content.indexOf("if (!REPO_ID)", bootstrapIndex);
   assert.ok(repoCheck !== -1, "should check REPO_ID to select shell");

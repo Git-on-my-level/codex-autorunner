@@ -1,6 +1,6 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { api, flash, resolvePath } from "./utils.js";
-import { DEFAULT_FILEBOX_BOX } from "./fileboxCatalog.js";
+import { api, flash, resolvePath } from "./utils.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { DEFAULT_FILEBOX_BOX } from "./fileboxCatalog.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
 const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "gif", "webp", "heic", "heif"];
 const IMAGE_MIME_EXT = {
     "image/png": "png",

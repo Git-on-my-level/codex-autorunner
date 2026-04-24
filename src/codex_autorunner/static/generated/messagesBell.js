@@ -1,9 +1,9 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { api } from "./utils.js";
-import { registerAutoRefresh } from "./autoRefresh.js";
-import { CONSTANTS } from "./constants.js";
-import { subscribe } from "./bus.js";
-import { isRepoHealthy } from "./health.js";
+import { api } from "./utils.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { registerAutoRefresh } from "./autoRefresh.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { CONSTANTS } from "./constants.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { subscribe } from "./bus.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { isRepoHealthy } from "./health.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
 let bellInitialized = false;
 let activeRunId = null;
 let messageBellCleanup = null;

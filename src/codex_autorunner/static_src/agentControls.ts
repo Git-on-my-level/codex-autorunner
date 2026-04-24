@@ -381,13 +381,10 @@ function ensureProfileOptions(
 ): void {
   if (!select) return;
   const profiles = agentProfiles(agentId);
-  select.classList.toggle("hidden", profiles.length === 0);
+  const hide = profiles.length === 0;
+  select.classList.toggle("hidden", hide);
   select.innerHTML = "";
-  if (!profiles.length) {
-    const option = document.createElement("option");
-    option.value = "";
-    option.textContent = "No profiles";
-    select.appendChild(option);
+  if (hide) {
     select.disabled = true;
     return;
   }
@@ -414,17 +411,14 @@ function ensureModelOptions(
   mode: ModelControlMode
 ): void {
   if (!select) return;
+  const showCatalog =
+    mode === "catalog" &&
+    Boolean(catalog) &&
+    Array.isArray(catalog?.models) &&
+    (catalog?.models?.length ?? 0) > 0;
+  select.classList.toggle("hidden", !showCatalog);
   select.innerHTML = "";
-  if (
-    mode !== "catalog" ||
-    !catalog ||
-    !Array.isArray(catalog.models) ||
-    !catalog.models.length
-  ) {
-    const option = document.createElement("option");
-    option.value = "";
-    option.textContent = mode === "manual" ? "Manual override" : "No models";
-    select.appendChild(option);
+  if (!showCatalog) {
     select.disabled = true;
     return;
   }
@@ -450,12 +444,12 @@ function ensureReasoningOptions(
   model: ModelCatalogModel | null
 ): void {
   if (!select) return;
+  const show = Boolean(
+    model?.supports_reasoning && model.reasoning_options?.length
+  );
+  select.classList.toggle("hidden", !show);
   select.innerHTML = "";
-  if (!model || !model.supports_reasoning || !model.reasoning_options?.length) {
-    const option = document.createElement("option");
-    option.value = "";
-    option.textContent = "None";
-    select.appendChild(option);
+  if (!show) {
     select.disabled = true;
     return;
   }
@@ -505,7 +499,7 @@ function resolveSelectedModel(agent: string, catalog: ModelCatalog | null): stri
   ) {
     return catalog.default_model;
   }
-  return "";
+  return catalog.models[0]?.id || "";
 }
 
 function resolveSelectedProfile(agent: string): string {
@@ -521,19 +515,19 @@ function resolveSelectedProfile(agent: string): string {
   if (defaultProfile && profiles.some((profile) => profile.id === defaultProfile)) {
     return defaultProfile;
   }
-  return "";
+  return profiles[0]?.id || "";
 }
 
 function resolveSelectedReasoning(
   agent: string,
   model: ModelCatalogModel | null
 ): string {
-  if (!model || !model.reasoning_options?.length) return "";
+  if (!model?.supports_reasoning || !model.reasoning_options?.length) return "";
   const stored = getSelectedReasoning(agent);
   if (stored && model.reasoning_options.includes(stored)) {
     return stored;
   }
-  return "";
+  return model.reasoning_options[0] || "";
 }
 
 async function loadAgentControlsPayload(): Promise<AgentControlsPayload> {

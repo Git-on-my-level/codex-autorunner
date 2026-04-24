@@ -4,10 +4,22 @@ VENV_PIP := $(VENV)/bin/pip
 
 # Prefer venv python if it exists
 PYTHON := $(shell if [ -x $(VENV_PYTHON) ]; then echo $(VENV_PYTHON); else echo python3; fi)
+PYTHON_ABS := $(abspath $(PYTHON))
 
 export PATH := $(CURDIR)/$(VENV)/bin:$(PATH)
 HOST ?= 127.0.0.1
 PORT ?= 4173
+# `make serve-onboarding`: temp hub; default port avoids clashing with `make serve`.
+ONBOARDING_HOST ?= $(HOST)
+ONBOARDING_PORT ?= 4174
+# Web UI screenshot pack (`make ui-qa-screens`): one full-page shot per `uiMock` scenario
+# in `static_src/uiMockScenarios.ts` (plus optional repo tab strip if a repo is in the manifest);
+# see scripts/ui_qa/generate_manifest.py. Set `UI_QA_UI_MOCKS=0` for a single unmocked hub shot only.
+UI_QA_HOST ?= $(HOST)
+UI_QA_PORT ?= $(PORT)
+UI_QA_OUT ?= .codex-autorunner/render/ui_qa
+UI_QA_VIEWPORT ?= 1400x900
+UI_QA_READY_TIMEOUT ?= 120
 HUB_HOST ?= 127.0.0.1
 HUB_PORT ?= 4517
 HUB_BASE_PATH ?= /car
@@ -21,7 +33,7 @@ PIPX_ROOT ?= $(HOME)/.local/pipx
 PIPX_VENV ?= $(PIPX_ROOT)/venvs/codex-autorunner
 PIPX_PYTHON ?= $(PIPX_VENV)/bin/python
 
-.PHONY: install dev hooks build test test-fast test-full test-chat-platform-contract test-chat-surface-lab test-managed-thread-cutover check check-full check-extended preflight-hub-startup format serve serve-dev launchd-hub deadcode-baseline venv venv-dev setup npm-install car-artifacts lint-html dom-check frontend-check _inject-static-banners agent-compatibility-check agent-compatibility-refresh protocol-schemas-check protocol-schemas-refresh typecheck-strict perf-idle-cpu perf-chat-latency-budgets perf-chat-seeded-exploration
+.PHONY: install dev hooks build test test-fast test-full test-chat-platform-contract test-chat-surface-lab test-managed-thread-cutover check check-full check-extended preflight-hub-startup format serve serve-dev serve-onboarding ui-qa-screens launchd-hub deadcode-baseline venv venv-dev setup npm-install car-artifacts lint-html dom-check frontend-check _inject-static-banners agent-compatibility-check agent-compatibility-refresh protocol-schemas-check protocol-schemas-refresh typecheck-strict perf-idle-cpu perf-chat-latency-budgets perf-chat-seeded-exploration
 
 _inject-static-banners:
 	pnpm run postbuild
@@ -174,10 +186,57 @@ deadcode-baseline:
 	$(PYTHON) scripts/deadcode.py --update-baseline
 
 serve: build
+	@PORT_PID=$$(lsof -t -nP -iTCP:$(PORT) -sTCP:LISTEN 2>/dev/null | head -n 1); \
+	if [ -n "$$PORT_PID" ]; then \
+		echo "Port $(PORT) is already in use by PID $$PORT_PID. Stop the existing server before running \`make serve\`." >&2; \
+		lsof -nP -iTCP:$(PORT) -sTCP:LISTEN >&2 || true; \
+		exit 1; \
+	fi
 	$(PYTHON) -m codex_autorunner.cli serve --host $(HOST) --port $(PORT)
 
 serve-dev: venv-dev
 	CAR_DEV_INCLUDE_ROOT_REPO=1 $(VENV_PYTHON) -m uvicorn codex_autorunner.server:create_hub_app --factory --reload --host $(HOST) --port $(PORT) --reload-dir src --reload-include '*.py' --reload-include '*.js' --reload-include '*.css' --reload-include '*.html' --reload-include '*.json' --reload-exclude '**/worktrees/**' --reload-exclude '**/.codex-autorunner/**' --reload-exclude '.codex-autorunner/**' --timeout-graceful-shutdown 1
+
+# Hub initialized with `car init --mode hub` in a new temp directory (no repos, clean manifest).
+# Prints URLs for real-server onboarding and optional client-mocked PMA (see `static_src/walkthrough.ts` `?carOnboarding=1`).
+serve-onboarding: build
+	@set -e; \
+	PORT_PID=$$(lsof -t -nP -iTCP:$(ONBOARDING_PORT) -sTCP:LISTEN 2>/dev/null | head -n 1); \
+	if [ -n "$$PORT_PID" ]; then \
+		echo "Port $(ONBOARDING_PORT) is already in use by PID $$PORT_PID. Stop the existing server before running \`make serve-onboarding\`." >&2; \
+		lsof -nP -iTCP:$(ONBOARDING_PORT) -sTCP:LISTEN >&2 || true; \
+		exit 1; \
+	fi; \
+	ROOT=$$(mktemp -d); \
+	echo "==> Fresh hub root: $$ROOT"; \
+	"$(PYTHON_ABS)" -m codex_autorunner.cli init --mode hub "$$ROOT"; \
+	BASE="http://$(ONBOARDING_HOST):$(ONBOARDING_PORT)"; \
+	echo ""; \
+	echo "==> A) Real APIs (use after stopping any other server on this port): Open"; \
+	echo "      $$BASE/?carOnboarding=1&uiMockStrip=1"; \
+	echo "   (re-shows the setup walkthrough strip; add &view=pma if you want PMA open when PMA is enabled in config.)"; \
+	echo ""; \
+	echo "==> B) Client mocks: empty hub + PMA without server PMA config: Open"; \
+	echo "      $$BASE/?uiMock=onboarding&view=pma&carOnboarding=1&uiMockStrip=1"; \
+	echo ""; \
+	cd "$$ROOT" && exec "$(PYTHON_ABS)" -m codex_autorunner.cli serve --host $(ONBOARDING_HOST) --port $(ONBOARDING_PORT)
+
+# Playwright full-page: all hub ui-mock states (see generate_manifest) plus each repo tab under /repos/{id}/?tab=... when a repo is available.
+# Requires: pip install '.[browser]' and `python -m playwright install chromium` (and `pnpm build` for uiMock order from generated JS).
+# If no repo is in .codex-autorunner/manifest.yml, set UI_QA_REPO_ID. Output directory: $(UI_QA_OUT) (see .gitignore).
+ui-qa-screens: build
+	@mkdir -p $(UI_QA_OUT)
+	@set -e; \
+	UI_QA_HUB_ROOT='$(CURDIR)'; export UI_QA_HUB_ROOT; \
+	GEN="$$($(PYTHON) scripts/ui_qa/generate_manifest.py)"; \
+	$(PYTHON) -m codex_autorunner.cli render demo \
+		--serve-cmd '$(PYTHON) -m codex_autorunner.cli serve --host $(UI_QA_HOST) --port $(UI_QA_PORT)' \
+		--ready-url 'http://$(UI_QA_HOST):$(UI_QA_PORT)/health' \
+		--ready-timeout-seconds $(UI_QA_READY_TIMEOUT) \
+		--path / \
+		--script "$$GEN" \
+		--out-dir '$(UI_QA_OUT)' \
+		--viewport '$(UI_QA_VIEWPORT)'
 
 launchd-hub:
 	@LABEL="$(LAUNCH_LABEL)" \

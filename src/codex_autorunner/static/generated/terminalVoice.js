@@ -1,7 +1,7 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { flash } from "./utils.js";
-import { initVoiceInput } from "./voice.js";
-import { safeFocus, persistTextInputDraft, setTextInputEnabled, } from "./terminalTextInput.js";
+import { flash } from "./utils.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { initVoiceInput } from "./voice.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { safeFocus, persistTextInputDraft, setTextInputEnabled, } from "./terminalTextInput.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
 const textEncoder = new TextEncoder();
 const VOICE_TRANSCRIPT_DISCLAIMER_TEXT = (typeof CONSTANTS !== "undefined" && CONSTANTS.PROMPTS?.VOICE_TRANSCRIPT_DISCLAIMER) ||
     "Note: transcribed from user voice. If confusing or possibly inaccurate and you cannot infer the intention please clarify before proceeding.";
@@ -14,7 +14,7 @@ function wrapInjectedContextIfNeeded(text) {
         return text;
     return INJECTED_CONTEXT_TAG_RE.test(text) ? text : wrapInjectedContext(text);
 }
-import { CONSTANTS } from "./constants.js";
+import { CONSTANTS } from "./constants.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
 export function createVoiceState() {
     return {
         textVoiceBtn: null,

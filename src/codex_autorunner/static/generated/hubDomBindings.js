@@ -1,11 +1,12 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { api, flash, inputModal, confirmModal } from "./utils.js";
-import { normalizePinnedParentRepoIds, isCleanupBlockedByChatBinding, unboundManagedThreadCount, saveHubOpenPanel, saveHubViewPrefs, hubViewPrefs, loadHubViewPrefs, loadHubOpenPanel, } from "./hubFilters.js";
-import { initNotificationBell } from "./notificationBell.js";
-import { renderReposWithScroll } from "./hubRepoCards.js";
-import { getHubData, getHubChannelEntries, getPinnedParentRepoIds, setPinnedParentRepoIds, } from "./hubActions.js";
-import { refreshHub, triggerHubScan, loadHubUsage } from "./hubRefresh.js";
-import { openRepoSettingsModal, promptAndSetRepoDestination, promptAndSetAgentWorkspaceDestination, handleCleanupAll, showCreateRepoModal, showCreateAgentWorkspaceModal, hideCreateRepoModal, hideCreateAgentWorkspaceModal, handleCreateRepoSubmit, handleCreateAgentWorkspaceSubmit, initHubSettings, } from "./hubModals.js";
+import { api, flash, inputModal, confirmModal } from "./utils.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { normalizePinnedParentRepoIds, isCleanupBlockedByChatBinding, unboundManagedThreadCount, saveHubOpenPanel, saveHubViewPrefs, hubViewPrefs, loadHubViewPrefs, loadHubOpenPanel, } from "./hubFilters.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { initNotificationBell } from "./notificationBell.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { importVersionedModule } from "./assetLoader.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { renderReposWithScroll } from "./hubRepoCards.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { getHubData, getHubChannelEntries, getPinnedParentRepoIds, setPinnedParentRepoIds, } from "./hubActions.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { refreshHub, triggerHubScan, loadHubUsage } from "./hubRefresh.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { openRepoSettingsModal, promptAndSetRepoDestination, promptAndSetAgentWorkspaceDestination, handleCleanupAll, showCreateRepoModal, showCreateAgentWorkspaceModal, hideCreateRepoModal, hideCreateAgentWorkspaceModal, handleCreateRepoSubmit, handleCreateAgentWorkspaceSubmit, initHubSettings, } from "./hubModals.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
 const hubRepoSearchInput = document.getElementById("hub-repo-search");
 const hubFlowFilterEl = document.getElementById("hub-flow-filter");
 const hubSortOrderEl = document.getElementById("hub-sort-order");
@@ -59,7 +60,7 @@ async function handleRepoAction(repoId, action) {
             });
             if (!branch)
                 return;
-            const { startHubJob } = await import("./hubActions.js");
+            const { startHubJob } = await importVersionedModule("./hubActions.js");
             const job = await startHubJob("/hub/jobs/worktrees/create", {
                 body: { base_repo_id: repoId, branch },
                 startedMessage: "Worktree creation queued",
@@ -105,7 +106,7 @@ async function handleRepoAction(repoId, action) {
             const ok = await confirmModal(`Clean up worktree "${displayName}"?\n\nCAR will archive a review snapshot for the Archive tab, then remove the worktree directory and branch. The default snapshot keeps tickets, contextspace, runs, flow artifacts, and lightweight metadata.`, { confirmText: "Archive & remove" });
             if (!ok)
                 return;
-            const { startHubJob } = await import("./hubActions.js");
+            const { startHubJob } = await importVersionedModule("./hubActions.js");
             await startHubJob("/hub/jobs/worktrees/cleanup", {
                 body: {
                     worktree_repo_id: repoId,
@@ -153,7 +154,7 @@ async function handleRepoAction(repoId, action) {
             return;
         }
         if (action === "remove_repo") {
-            const { removeRepoWithChecks } = await import("./hubModals.js");
+            const { removeRepoWithChecks } = await importVersionedModule("./hubModals.js");
             await removeRepoWithChecks(repoId);
             return;
         }
@@ -201,7 +202,7 @@ async function handleAgentWorkspaceAction(workspaceId, action) {
             const ok = await confirmModal(`Remove agent workspace "${workspace.display_name || workspace.id}" from CAR?\n\nManaged files will stay on disk at:\n${workspace.path}`, { confirmText: "Remove" });
             if (!ok)
                 return;
-            const { startHubJob } = await import("./hubActions.js");
+            const { startHubJob } = await importVersionedModule("./hubActions.js");
             await startHubJob(`/hub/jobs/agent-workspaces/${encodeURIComponent(workspaceId)}/remove`, {
                 body: { delete_dir: false },
                 startedMessage: "Agent workspace removal queued",
@@ -214,7 +215,7 @@ async function handleAgentWorkspaceAction(workspaceId, action) {
             const ok = await confirmModal(`Delete agent workspace "${workspace.display_name || workspace.id}"?\n\nCAR will unregister it and delete its managed directory:\n${workspace.path}`, { confirmText: "Delete", danger: true });
             if (!ok)
                 return;
-            const { startHubJob } = await import("./hubActions.js");
+            const { startHubJob } = await importVersionedModule("./hubActions.js");
             await startHubJob(`/hub/jobs/agent-workspaces/${encodeURIComponent(workspaceId)}/delete`, {
                 body: { delete_dir: true },
                 startedMessage: "Agent workspace delete queued",

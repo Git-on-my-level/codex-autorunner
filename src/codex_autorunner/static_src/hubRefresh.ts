@@ -8,7 +8,8 @@ import {
   saveHubBootstrapCache,
   indexHubUsage,
 } from "./hubCache.js";
-import { registerAutoRefresh } from "./autoRefresh.js";
+import { registerAutoRefresh, setAutoRefreshEnabled } from "./autoRefresh.js";
+import { isUiMockActive } from "./uiMock.js";
 import {
   renderReposWithScroll,
   renderAgentWorkspaces,
@@ -259,6 +260,9 @@ async function checkUpdateStatus(): Promise<void> {
 export { loadUpdateTargetOptions, handleSystemUpdate };
 
 export function bootstrapHubData(): void {
+  if (isUiMockActive()) {
+    setAutoRefreshEnabled(false, "ui mock");
+  }
   const hubData = getHubData();
   const cachedHub = loadHubBootstrapCache();
   if (cachedHub) {

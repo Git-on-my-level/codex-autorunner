@@ -1,9 +1,10 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { api, flash } from "./utils.js";
-import { renderMarkdown } from "./markdown.js";
-import { resolvePath } from "./utils.js";
-import { publish } from "./bus.js";
-import { DISPATCH_PANEL_COLLAPSED_KEY, formatDispatchTime, formatNumber, formatElapsedSeconds, truncate, isFlowActiveStatus, } from "./ticketFlowState.js";
+import { api, flash } from "./utils.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { importVersionedModule } from "./assetLoader.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { renderMarkdown } from "./markdown.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { resolvePath } from "./utils.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { publish } from "./bus.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { DISPATCH_PANEL_COLLAPSED_KEY, formatDispatchTime, formatNumber, formatElapsedSeconds, truncate, isFlowActiveStatus, } from "./ticketFlowState.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
 let dragSourceIndex = null;
 let dragTargetIndex = null;
 let dragPlaceAfter = false;
@@ -215,7 +216,7 @@ export function renderTickets(data, options) {
                     return;
                 }
                 const data = (await api(`/api/flows/ticket_flow/tickets/${ticket.index}`));
-                const { openTicketEditor } = await import("./ticketEditor.js");
+                const { openTicketEditor } = await importVersionedModule("./ticketEditor.js");
                 openTicketEditor(data);
             }
             catch (err) {

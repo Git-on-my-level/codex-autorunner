@@ -1,5 +1,5 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { HUB_BASE } from "./env.js";
+import { HUB_BASE } from "./env.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
 export const HUB_CACHE_TTL_MS = 30000;
 export const HUB_PERSISTENT_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 export const HUB_CACHE_KEY = `car:hub:v2:${HUB_BASE || "/"}`;

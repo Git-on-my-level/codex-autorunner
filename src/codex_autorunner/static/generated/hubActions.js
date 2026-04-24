@@ -1,6 +1,6 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { api, flash } from "./utils.js";
-import { normalizePinnedParentRepoIds } from "./hubFilters.js";
+import { api, flash } from "./utils.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { normalizePinnedParentRepoIds } from "./hubFilters.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
 export const HUB_JOB_POLL_INTERVAL_MS = 1200;
 export const HUB_JOB_TIMEOUT_MS = 180000;
 export let hubData = {
@@ -64,6 +64,6 @@ export async function startHubJob(path, { body, startedMessage } = {}) {
     }
     return pollHubJob(job.job_id);
 }
-export { applyHubPanelState, toggleHubPanel, initInteractionHarness, attachHandlersAndControls } from "./hubDomBindings.js";
-export { bootstrapHubData, refreshHub, triggerHubScan, loadHubUsage, handleSystemUpdate } from "./hubRefresh.js";
-export { handleCleanupAll, showCreateRepoModal, showCreateAgentWorkspaceModal, hideCreateRepoModal, hideCreateAgentWorkspaceModal, handleCreateRepoSubmit, handleCreateAgentWorkspaceSubmit, initHubSettings, } from "./hubModals.js";
+export { applyHubPanelState, toggleHubPanel, initInteractionHarness, attachHandlersAndControls } from "./hubDomBindings.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+export { bootstrapHubData, refreshHub, triggerHubScan, loadHubUsage, handleSystemUpdate } from "./hubRefresh.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+export { handleCleanupAll, showCreateRepoModal, showCreateAgentWorkspaceModal, hideCreateRepoModal, hideCreateAgentWorkspaceModal, handleCreateRepoSubmit, handleCreateAgentWorkspaceSubmit, initHubSettings, } from "./hubModals.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";

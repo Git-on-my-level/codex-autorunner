@@ -14,14 +14,7 @@ import {
   FILEBOX_BOXES,
   type FileBoxBox,
 } from "./fileboxCatalog.js";
-import {
-  getSelectedAgent,
-  getSelectedProfile,
-  getSelectedModel,
-  getSelectedReasoning,
-  initAgentControls,
-  refreshAgentControls,
-} from "./agentControls.js";
+import * as agentControlsModule from "./agentControls.js";
 import { createFileBoxWidget, type FileBoxListing } from "./fileboxUi.js";
 import {
   readEventStream,
@@ -46,6 +39,56 @@ import {
   savePendingTurn,
   clearPendingTurn,
 } from "./turnResume.js";
+import type { OnboardingPreset } from "./walkthrough.js";
+
+// PMA is often the first lazily loaded surface users open after a rebuild. Use a
+// namespace import so a stale cached `agentControls.js` cannot fail module linking
+// before PMA gets a chance to render recovery/onboarding UI.
+function getSelectedAgent(): string {
+  if (typeof agentControlsModule.getSelectedAgent === "function") {
+    return agentControlsModule.getSelectedAgent();
+  }
+  return "";
+}
+
+function getSelectedProfile(agent = getSelectedAgent()): string {
+  if (typeof agentControlsModule.getSelectedProfile === "function") {
+    return agentControlsModule.getSelectedProfile(agent);
+  }
+  return "";
+}
+
+function getSelectedModel(agent = getSelectedAgent()): string {
+  if (typeof agentControlsModule.getSelectedModel === "function") {
+    return agentControlsModule.getSelectedModel(agent);
+  }
+  return "";
+}
+
+function getSelectedReasoning(agent = getSelectedAgent()): string {
+  if (typeof agentControlsModule.getSelectedReasoning === "function") {
+    return agentControlsModule.getSelectedReasoning(agent);
+  }
+  return "";
+}
+
+function initAgentControls(
+  config: Parameters<NonNullable<typeof agentControlsModule.initAgentControls>>[0]
+): void {
+  if (typeof agentControlsModule.initAgentControls === "function") {
+    agentControlsModule.initAgentControls(config);
+  }
+}
+
+async function refreshAgentControls(
+  request?: Parameters<
+    NonNullable<typeof agentControlsModule.refreshAgentControls>
+  >[0]
+): Promise<void> {
+  if (typeof agentControlsModule.refreshAgentControls === "function") {
+    await agentControlsModule.refreshAgentControls(request);
+  }
+}
 
 const pmaStyling: ChatStyling = {
   eventClass: "chat-event",
@@ -129,6 +172,10 @@ let latestGuidance: string | null = null;
 let latestElapsed: number | null = null;
 let currentPMATurnToken = 0;
 type PMAView = "chat" | "memory";
+type PendingPromptPreset = {
+  assistantIntro: string;
+  prompt: string;
+};
 
 function advancePMATurnToken(): number {
   currentPMATurnToken += 1;
@@ -698,6 +745,64 @@ async function finalizePMAResponse(
   })();
 }
 
+/**
+ * Applies a walkthrough preset from sessionStorage (set before navigating to PMA).
+ * We accept the legacy plain-string format for backward compatibility, but prefer
+ * the structured preset so onboarding can seed both the PMA intro bubble and the
+ * composer prefill without auto-sending.
+ * Exported so the hub shell can run this after `showPMAView` when PMA was already initialized.
+ */
+function parsePendingPromptPreset(raw: string): PendingPromptPreset | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (!trimmed.startsWith("{")) {
+    return { assistantIntro: "", prompt: trimmed };
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as Partial<OnboardingPreset>;
+    const assistantIntro =
+      typeof parsed?.assistantIntro === "string" ? parsed.assistantIntro.trim() : "";
+    const prompt = typeof parsed?.prompt === "string" ? parsed.prompt.trim() : "";
+    if (!assistantIntro && !prompt) return null;
+    return { assistantIntro, prompt };
+  } catch {
+    return { assistantIntro: "", prompt: trimmed };
+  }
+}
+
+function drainPendingPrompt(): void {
+  const raw = (() => {
+    try {
+      const stored = sessionStorage.getItem("car-pma-pending-prompt") || "";
+      if (stored) sessionStorage.removeItem("car-pma-pending-prompt");
+      return stored;
+    } catch {
+      return "";
+    }
+  })();
+  const pending = parsePendingPromptPreset(raw);
+  if (!pending) return;
+
+  if (
+    pending.assistantIntro &&
+    pmaChat &&
+    pmaChat.state.messages.length === 0
+  ) {
+    pmaChat.addAssistantMessage(pending.assistantIntro, true, {
+      tag: "onboarding:intro",
+    });
+    pmaChat.render();
+    pmaChat.renderMessages();
+  }
+
+  const elements = getElements();
+  if (!elements.input) return;
+  if (!pending.prompt) return;
+  elements.input.value = pending.prompt;
+  elements.input.dispatchEvent(new Event("input", { bubbles: true }));
+  elements.input.focus();
+}
+
 async function initPMA(): Promise<void> {
   const elements = getElements();
   if (!elements.shell) return;
@@ -731,6 +836,7 @@ async function initPMA(): Promise<void> {
   attachHandlers();
   setPMAView(loadPMAView(), { persist: false });
   initNotificationBell();
+  drainPendingPrompt();
 
   // If we refreshed mid-turn, recover the final output from the server.
   await resumePendingTurn();
@@ -1479,6 +1585,20 @@ function attachHandlers(): void {
     });
   }
 
+  document.addEventListener("pma:inject-prompt", (evt) => {
+    const detail = (evt as CustomEvent<{ prompt?: string }>).detail;
+    const prompt = typeof detail?.prompt === "string" ? detail.prompt : "";
+    if (!prompt || !elements.input) return;
+    try {
+      sessionStorage.removeItem("car-pma-pending-prompt");
+    } catch {
+      // ignore
+    }
+    elements.input.value = prompt;
+    elements.input.dispatchEvent(new Event("input", { bubbles: true }));
+    elements.input.focus();
+  });
+
   if (elements.cancelBtn) {
     elements.cancelBtn.addEventListener("click", () => {
       void cancelRequest({ clearPending: true, interruptServer: true });
@@ -1629,7 +1749,8 @@ function attachHandlers(): void {
 
 const __pmaTest = {
   buildOutboxAttachmentSummary,
+  parsePendingPromptPreset,
   shouldAppendAsyncOutboxSummary,
 };
 
-export { __pmaTest, initPMA };
+export { __pmaTest, drainPendingPrompt, initPMA };

@@ -2,19 +2,56 @@
 /**
  * PMA (Project Management Agent) - Hub-level chat interface
  */
-import { api, resolvePath, getAuthToken, flash, escapeHtml } from "./utils.js";
-import { createDocChat, } from "./docChatCore.js";
-import { initChatPasteUpload } from "./chatUploads.js";
-import { DEFAULT_FILEBOX_BOX, FILEBOX_BOXES, } from "./fileboxCatalog.js";
-import { getSelectedAgent, getSelectedProfile, getSelectedModel, getSelectedReasoning, initAgentControls, refreshAgentControls, } from "./agentControls.js";
-import { createFileBoxWidget } from "./fileboxUi.js";
-import { readEventStream, handleStreamEvent, } from "./streamUtils.js";
-import { newClientTurnId as newFileChatTurnId } from "./fileChat.js";
-import { initNotificationBell } from "./notificationBell.js";
-import { registerAutoRefresh } from "./autoRefresh.js";
-import { CONSTANTS } from "./constants.js";
-import { createTurnEventsController, cancelActiveTurnAndWait, scheduleRecoveryRetry, createTurnRecoveryTracker, ACTIVE_TURN_RECOVERY_STALE_MESSAGE, } from "./sharedTurnLifecycle.js";
-import { loadPendingTurn, savePendingTurn, clearPendingTurn, } from "./turnResume.js";
+import { api, resolvePath, getAuthToken, flash, escapeHtml } from "./utils.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { createDocChat, } from "./docChatCore.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { initChatPasteUpload } from "./chatUploads.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { DEFAULT_FILEBOX_BOX, FILEBOX_BOXES, } from "./fileboxCatalog.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import * as agentControlsModule from "./agentControls.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { createFileBoxWidget } from "./fileboxUi.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { readEventStream, handleStreamEvent, } from "./streamUtils.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { newClientTurnId as newFileChatTurnId } from "./fileChat.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { initNotificationBell } from "./notificationBell.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { registerAutoRefresh } from "./autoRefresh.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { CONSTANTS } from "./constants.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { createTurnEventsController, cancelActiveTurnAndWait, scheduleRecoveryRetry, createTurnRecoveryTracker, ACTIVE_TURN_RECOVERY_STALE_MESSAGE, } from "./sharedTurnLifecycle.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { loadPendingTurn, savePendingTurn, clearPendingTurn, } from "./turnResume.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+// PMA is often the first lazily loaded surface users open after a rebuild. Use a
+// namespace import so a stale cached `agentControls.js` cannot fail module linking
+// before PMA gets a chance to render recovery/onboarding UI.
+function getSelectedAgent() {
+    if (typeof agentControlsModule.getSelectedAgent === "function") {
+        return agentControlsModule.getSelectedAgent();
+    }
+    return "";
+}
+function getSelectedProfile(agent = getSelectedAgent()) {
+    if (typeof agentControlsModule.getSelectedProfile === "function") {
+        return agentControlsModule.getSelectedProfile(agent);
+    }
+    return "";
+}
+function getSelectedModel(agent = getSelectedAgent()) {
+    if (typeof agentControlsModule.getSelectedModel === "function") {
+        return agentControlsModule.getSelectedModel(agent);
+    }
+    return "";
+}
+function getSelectedReasoning(agent = getSelectedAgent()) {
+    if (typeof agentControlsModule.getSelectedReasoning === "function") {
+        return agentControlsModule.getSelectedReasoning(agent);
+    }
+    return "";
+}
+function initAgentControls(config) {
+    if (typeof agentControlsModule.initAgentControls === "function") {
+        agentControlsModule.initAgentControls(config);
+    }
+}
+async function refreshAgentControls(request) {
+    if (typeof agentControlsModule.refreshAgentControls === "function") {
+        await agentControlsModule.refreshAgentControls(request);
+    }
+}
 const pmaStyling = {
     eventClass: "chat-event",
     eventTitleClass: "chat-event-title",
@@ -574,6 +611,65 @@ async function finalizePMAResponse(responseText, options = {}) {
         void fileBoxCtrl?.refresh();
     })();
 }
+/**
+ * Applies a walkthrough preset from sessionStorage (set before navigating to PMA).
+ * We accept the legacy plain-string format for backward compatibility, but prefer
+ * the structured preset so onboarding can seed both the PMA intro bubble and the
+ * composer prefill without auto-sending.
+ * Exported so the hub shell can run this after `showPMAView` when PMA was already initialized.
+ */
+function parsePendingPromptPreset(raw) {
+    const trimmed = raw.trim();
+    if (!trimmed)
+        return null;
+    if (!trimmed.startsWith("{")) {
+        return { assistantIntro: "", prompt: trimmed };
+    }
+    try {
+        const parsed = JSON.parse(trimmed);
+        const assistantIntro = typeof parsed?.assistantIntro === "string" ? parsed.assistantIntro.trim() : "";
+        const prompt = typeof parsed?.prompt === "string" ? parsed.prompt.trim() : "";
+        if (!assistantIntro && !prompt)
+            return null;
+        return { assistantIntro, prompt };
+    }
+    catch {
+        return { assistantIntro: "", prompt: trimmed };
+    }
+}
+function drainPendingPrompt() {
+    const raw = (() => {
+        try {
+            const stored = sessionStorage.getItem("car-pma-pending-prompt") || "";
+            if (stored)
+                sessionStorage.removeItem("car-pma-pending-prompt");
+            return stored;
+        }
+        catch {
+            return "";
+        }
+    })();
+    const pending = parsePendingPromptPreset(raw);
+    if (!pending)
+        return;
+    if (pending.assistantIntro &&
+        pmaChat &&
+        pmaChat.state.messages.length === 0) {
+        pmaChat.addAssistantMessage(pending.assistantIntro, true, {
+            tag: "onboarding:intro",
+        });
+        pmaChat.render();
+        pmaChat.renderMessages();
+    }
+    const elements = getElements();
+    if (!elements.input)
+        return;
+    if (!pending.prompt)
+        return;
+    elements.input.value = pending.prompt;
+    elements.input.dispatchEvent(new Event("input", { bubbles: true }));
+    elements.input.focus();
+}
 async function initPMA() {
     const elements = getElements();
     if (!elements.shell)
@@ -607,6 +703,7 @@ async function initPMA() {
     attachHandlers();
     setPMAView(loadPMAView(), { persist: false });
     initNotificationBell();
+    drainPendingPrompt();
     // If we refreshed mid-turn, recover the final output from the server.
     await resumePendingTurn();
     // If the page refreshes/navigates while a turn is running, avoid showing a noisy
@@ -1272,6 +1369,21 @@ function attachHandlers() {
             void sendMessage();
         });
     }
+    document.addEventListener("pma:inject-prompt", (evt) => {
+        const detail = evt.detail;
+        const prompt = typeof detail?.prompt === "string" ? detail.prompt : "";
+        if (!prompt || !elements.input)
+            return;
+        try {
+            sessionStorage.removeItem("car-pma-pending-prompt");
+        }
+        catch {
+            // ignore
+        }
+        elements.input.value = prompt;
+        elements.input.dispatchEvent(new Event("input", { bubbles: true }));
+        elements.input.focus();
+    });
     if (elements.cancelBtn) {
         elements.cancelBtn.addEventListener("click", () => {
             void cancelRequest({ clearPending: true, interruptServer: true });
@@ -1410,6 +1522,7 @@ function attachHandlers() {
 }
 const __pmaTest = {
     buildOutboxAttachmentSummary,
+    parsePendingPromptPreset,
     shouldAppendAsyncOutboxSummary,
 };
-export { __pmaTest, initPMA };
+export { __pmaTest, drainPendingPrompt, initPMA };

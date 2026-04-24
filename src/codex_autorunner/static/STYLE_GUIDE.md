@@ -3,6 +3,16 @@
 This document captures the design principles, patterns, and conventions used in the
 Codex Autorunner web UI. Read this before making visual changes.
 
+## Product Context
+
+The web UI is a **power-user hub** — not the daily driver. Users interact with CAR day-to-day via Discord/Telegram. The web UI serves three jobs:
+
+1. **Initial setup** — add repos, configure agents, set up chat integrations
+2. **Debugging** — inspect run logs, contextspace, terminal sessions
+3. **Deep-dives** — tickets, run histories, usage stats, workspace docs
+
+Design decisions should serve these use cases. Do not add surface area for things users do in their chat client.
+
 ## Design Philosophy
 
 The UI is a **developer tool dashboard** — not a consumer app. Prioritize:
@@ -10,6 +20,7 @@ The UI is a **developer tool dashboard** — not a consumer app. Prioritize:
 - **Density over whitespace.** Screen real estate is precious, especially on mobile. Every pixel of vertical space should earn its keep.
 - **Subtlety over decoration.** Borders, backgrounds, and shadows should be minimal. Let content breathe through spacing, not chrome.
 - **Progressive disclosure.** Show the minimum needed; reveal detail on hover or expand.
+- **One design system.** Do not fork the UI into "onboarding mode" and "power mode." Behavioral routing (empty hub → PMA) and empty-state copy do the contextual work. The component library stays unified.
 
 ## Design Tokens
 
@@ -21,16 +32,19 @@ All values live in `:root` in `styles.css`. Never use magic numbers — always r
 |---|---|---|
 | `--bg` | `#0a0c12` | Page background |
 | `--panel` | `#10131c` | Card/panel background |
-| `--panel-elevated` | `#141825` | Modals, elevated surfaces |
+| `--panel-elevated` | `#141825` | Modals, elevated surfaces, PMA chat area |
 | `--text` | `#e5ecff` | Primary text |
 | `--muted` | `#7a8ba8` | Secondary/label text |
-| `--accent` | `#6cf5d8` | Primary accent (teal) |
-| `--accent-2` | `#6ca8ff` | Secondary accent (blue) |
+| `--accent` | `#6cf5d8` | Primary accent (teal) — actions, highlights, cursor |
+| `--accent-2` | `#6ca8ff` | Secondary accent (blue) — secondary actions, info states |
+| `--accent-glow` | `rgba(108,245,216,0.08)` | Subtle ambient glow for focus rings and hover states |
 | `--border` | `#1a2033` | Default border |
 | `--border-subtle` | `rgba(26,32,51,0.6)` | Lightweight separators |
 | `--error` | `#ff5566` | Error states |
 | `--success` | `#58d68d` | Success states |
 | `--warning` | `#ffd166` | Warning states |
+
+Do not introduce new accent colors. If a new semantic meaning needs color, use opacity/weight variants of existing tokens first.
 
 ### Spacing Scale (`--sp-*`)
 
@@ -43,6 +57,8 @@ All values live in `:root` in `styles.css`. Never use magic numbers — always r
 | `--sp-5` | 12px | Generous section padding |
 | `--sp-6` | 16px | Large section margins |
 | `--sp-7` | 24px | Page-level spacing |
+| `--sp-8` | 32px | Empty-state / PMA landing layouts |
+| `--sp-9` | 48px | Hero sections in empty state |
 
 ### Radii
 
@@ -52,15 +68,68 @@ All values live in `:root` in `styles.css`. Never use magic numbers — always r
 
 ## Typography
 
-- **Font:** JetBrains Mono (monospace) throughout — this is a dev tool.
+- **Font:** JetBrains Mono (monospace) throughout — this is a dev tool. No exceptions. `system-ui` and `-apple-system` are not acceptable as primary or body fonts. (The `launchFinishPageTemplate` Go template is exempt — it cannot import CSS tokens; use system font stack there only.)
 - **Base size:** 13px body.
 - **Hierarchy:**
-  - Section titles / hero: 13–14px, `font-weight: 700`
-  - Card titles: 12px, `font-weight: 600`
-  - Labels (`.label`): 10–11px, uppercase, `letter-spacing: 0.04–0.06em`, `--muted` color
-  - Body/metadata: 10px
-  - Small/compact: 9px
+
+  | Role | Size | Weight | Notes |
+  |---|---|---|---|
+  | Hero heading (empty/PMA state) | 20–22px | 700 | Anchors the PMA landing when hub has no repos |
+  | Section titles / hub hero | 13–14px | 700 | |
+  | Card titles | 12px | 600 | |
+  | Body / metadata | 13px | 400 | Standard text |
+  | Labels (`.label`) | 10–11px | 400–600 | Uppercase, `letter-spacing: 0.04–0.06em`, `--muted` color |
+  | Small / compact | 9–10px | 400 | Stats, badges, secondary metadata |
+
 - Never go below 8px for any readable text.
+- Always use `font-variant-numeric: tabular-nums` for counters, token counts, timestamps, and stat values.
+
+## Hub Information Architecture
+
+### Empty State Routing
+
+When the hub has zero repos, route directly to the **PMA tab** instead of the empty dashboard. The PMA is the first-run experience. The hub hero heading should read:
+
+> "No repos yet — ask the PM Agent to get you started."
+
+This is a behavioral/routing decision, not a layout redesign. The PMA tab UI itself requires no changes.
+
+### Walkthrough Strip
+
+A dismissible top-of-page progress strip that appears on first run (before the user has seen or dismissed it). It sits above the hub hero and collapses after all steps complete or the user closes it.
+
+**Structure:**
+- Step counter on left (e.g., "Step 2 of 4")
+- Step title in center
+- Prompt chip buttons on right (see component spec below)
+- Close (×) at far right
+
+**Persistence:** Dismissed state stored in `localStorage`. The walkthrough never reappears after explicit close.
+
+**Prompt chip buttons** (`.walkthrough-chip`):
+```
+border-radius: 999px
+border: 1px solid var(--accent)
+color: var(--accent)
+background: transparent
+padding: var(--sp-2) var(--sp-4)
+font-size: 11px
+font-family: var(--font-mono)
+cursor: pointer
+```
+Hover: `background: var(--accent-glow)`. Click navigates to the PMA tab and injects a preset prompt string into the PMA input. The prompt text is defined in code, not in the UI string.
+
+Example chips: "Set up Discord →", "Set up Telegram →", "Add your first repo →", "Run my first ticket →".
+
+### Hub Leaderboard Removal
+
+The horizontal scrolling usage leaderboard (the list of dozens of repo names with token counts) is **removed from the hub landing**. It creates visual noise and is not useful as a landing element.
+
+Move token/usage statistics to:
+- Per-repo detail view (usage tab or stats section)
+- A dedicated global Stats section accessible from the hub nav
+
+The compact `.hub-stats-inline` (repos / running / missing counters) stays.
 
 ## Layout Patterns
 
@@ -68,6 +137,7 @@ All values live in `:root` in `styles.css`. Never use magic numbers — always r
 
 ```
 .hub-shell
+  .walkthrough-strip       → first-run only, dismissible (see above)
   header.hub-hero          → title + actions + mode toggle
   .hub-stats-inline        → compact stat counters
   section.hub-repo-panel   → collapsible repo list
@@ -157,6 +227,33 @@ pattern displays stats as `<value> label` spans with `--muted` color and bold va
 - Body: form groups separated by spacing, not borders
 - Actions: right-aligned, ghost cancel + primary confirm
 
+## Motion
+
+Every animation has a semantic job. Nothing decorative.
+
+| Name | Duration | Easing | Use |
+|---|---|---|---|
+| micro | 50–100ms | ease | Button active, pill toggle, badge state |
+| short | 150ms | ease-out | Walkthrough step slide |
+| medium | 200ms | ease-out | Hub empty→loaded fade, modal open |
+| counter | 250ms | ease-out | Stat counter roll on page load |
+
+- PMA typing indicator: 3-dot pulse, `--muted` color. Standard chat convention.
+- Do not add motion longer than 300ms anywhere in the data-view path. Power users find it in the way.
+- Avoid motion that repeats without user interaction.
+
+## Anti-Patterns
+
+Never introduce:
+- Purple/violet gradients as accent or decoration
+- 3-column feature grids with icons in colored circles
+- Gradient buttons as primary CTA
+- `system-ui` or `-apple-system` as font (except the `launchFinishPageTemplate` exemption above)
+- Horizontal scrolling lists at hub level
+- Decorative blobs or background shapes
+- Centered-everything layouts in data views (data views must be left-aligned)
+- Uniform bubbly `border-radius` on all elements (keep 3px/6px/999px hierarchy)
+
 ## CSS Architecture
 
 - **Single file:** All styles live in `styles.css`. No CSS modules or preprocessors.
@@ -164,6 +261,19 @@ pattern displays stats as `<value> label` spans with `--muted` color and bold va
 - **No `!important`:** Solve specificity with source order and selector structure.
 - **Transitions:** Keep under 150ms. Use `ease` timing. Only transition properties that change.
 - **Mobile overrides:** Place in the appropriate `@media` block. Don't duplicate — override only what changes.
+
+## Decisions Log
+
+| Date | Decision | Rationale |
+|------|----------|-----------|
+| 2026-04-23 | One design system, no visual fork for onboarding | Behavioral routing (empty hub → PMA) does the contextual work. Forking the component library adds maintenance cost with no UX gain. |
+| 2026-04-23 | Empty hub → PMA tab routing | PMA is the right first-run surface. Better onboarding than an empty dashboard skeleton. |
+| 2026-04-23 | First-run walkthrough with prompt chips | Guided setup without leaving the product. Chips fire preset PMA prompts for Discord/Telegram/repo setup using existing CAR guides. |
+| 2026-04-23 | Remove horizontal usage leaderboard from hub | Visual noise on a page where users are trying to debug or set up repos. Stats moved to per-repo or a dedicated Stats section. |
+| 2026-04-23 | Added --accent-glow token | Hover and focus states needed a non-destructive background treatment. rgba(108,245,216,0.08) uses the existing accent hue without adding a new color. |
+| 2026-04-23 | Added --sp-8 (32px) and --sp-9 (48px) | PMA/empty-state layouts need more vertical breathing room than compact data views. |
+| 2026-04-23 | Sharpened typography hierarchy | The existing 13px-dominant scale blurred section hierarchy. Added 20–22px/700 for empty-state hero; reinforced weight contrast at card and label levels. |
+| 2026-04-23 | launchFinishPageTemplate font exemption | Go HTML template cannot import CSS tokens. Must use system font stack there; dark theme colors still apply. |
 
 ## Common Pitfalls
 

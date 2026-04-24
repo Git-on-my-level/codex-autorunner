@@ -1,6 +1,6 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { api, confirmModal, flash } from "./utils.js";
-import { describeUpdateTarget, getUpdateTarget, includesWebUpdateTarget, normalizeUpdateTarget, updateRestartNotice, updateTargetOptionsFromResponse, } from "./updateTargets.js";
+import { api, confirmModal, flash } from "./utils.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
+import { describeUpdateTarget, getUpdateTarget, includesWebUpdateTarget, normalizeUpdateTarget, updateRestartNotice, updateTargetOptionsFromResponse, } from "./updateTargets.js?v=d636841caa7dd973f2c785ff2cd6199585023d519a2eb5a61d2f799a9872679f";
 export async function loadUpdateTargetOptions(selectId) {
     const select = selectId
         ? document.getElementById(selectId)
