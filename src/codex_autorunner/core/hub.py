@@ -1084,66 +1084,7 @@ class HubSupervisor:
 
         created = 0
         for timer in due_timers:
-            timer_id = str(timer.get("timer_id") or "").strip()
-            timestamp = (
-                str(timer.get("fired_at")).strip()
-                if isinstance(timer.get("fired_at"), str)
-                and str(timer.get("fired_at")).strip()
-                else now_iso()
-            )
-            _, deduped = store.enqueue_wakeup(
-                source="timer",
-                repo_id=(
-                    str(timer.get("repo_id")).strip()
-                    if isinstance(timer.get("repo_id"), str)
-                    and str(timer.get("repo_id")).strip()
-                    else None
-                ),
-                run_id=(
-                    str(timer.get("run_id")).strip()
-                    if isinstance(timer.get("run_id"), str)
-                    and str(timer.get("run_id")).strip()
-                    else None
-                ),
-                thread_id=(
-                    str(timer.get("thread_id")).strip()
-                    if isinstance(timer.get("thread_id"), str)
-                    and str(timer.get("thread_id")).strip()
-                    else None
-                ),
-                lane_id=(
-                    str(timer.get("lane_id")).strip()
-                    if isinstance(timer.get("lane_id"), str)
-                    and str(timer.get("lane_id")).strip()
-                    else "pma:default"
-                ),
-                from_state=(
-                    str(timer.get("from_state")).strip()
-                    if isinstance(timer.get("from_state"), str)
-                    and str(timer.get("from_state")).strip()
-                    else None
-                ),
-                to_state=(
-                    str(timer.get("to_state")).strip()
-                    if isinstance(timer.get("to_state"), str)
-                    and str(timer.get("to_state")).strip()
-                    else None
-                ),
-                reason=(
-                    str(timer.get("reason")).strip()
-                    if isinstance(timer.get("reason"), str)
-                    and str(timer.get("reason")).strip()
-                    else "timer_due"
-                ),
-                timestamp=timestamp,
-                idempotency_key=f"timer:{timer_id}:{timestamp}",
-                timer_id=timer_id or None,
-                metadata=(
-                    dict(timer.get("metadata"))
-                    if isinstance(timer.get("metadata"), dict)
-                    else {}
-                ),
-            )
+            _, deduped = store.notify_timer_fired(timer)
             if not deduped:
                 created += 1
         return created

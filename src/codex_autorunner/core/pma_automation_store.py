@@ -36,7 +36,9 @@ from .pma_automation_types import (
 from .pma_domain.models import PmaSubscription
 from .pma_domain.subscription_reducer import (
     ReduceTransitionResult,
+    TimerFiredEvent,
     TransitionEvent,
+    reduce_timer_fired,
     reduce_transition,
 )
 from .pma_origin import extract_pma_origin_metadata, merge_pma_origin_metadata
@@ -1178,6 +1180,8 @@ class PmaAutomationStore:
                     idempotency_key=intent.idempotency_key,
                     subscription_id=intent.subscription_id,
                     event_type=intent.event_type,
+                    event_id=intent.event_id,
+                    event_data=intent.event_data,
                     metadata=intent.metadata,
                 )
             )
@@ -2286,6 +2290,54 @@ class PmaAutomationStore:
             "reason": reason,
             "timestamp": timestamp,
         }
+
+    def notify_timer_fired(
+        self, timer: dict[str, Any]
+    ) -> tuple[Optional[PmaAutomationWakeup], bool]:
+        timer_id = _normalize_text(timer.get("timer_id"))
+        if timer_id is None:
+            return None, True
+
+        fired_at = _normalize_text(timer.get("fired_at")) or _iso_now()
+
+        timer_event = TimerFiredEvent(
+            timer_id=timer_id,
+            timer_type=_normalize_timer_type(timer.get("timer_type")),
+            fired_at=fired_at,
+            repo_id=_normalize_text(timer.get("repo_id")),
+            run_id=_normalize_text(timer.get("run_id")),
+            thread_id=_normalize_text(timer.get("thread_id")),
+            lane_id=_normalize_lane_id(timer.get("lane_id")),
+            from_state=_normalize_text(timer.get("from_state")),
+            to_state=_normalize_text(timer.get("to_state")),
+            reason=_normalize_text(timer.get("reason")),
+            subscription_id=_normalize_text(timer.get("subscription_id")),
+            metadata=(
+                dict(timer["metadata"])
+                if isinstance(timer.get("metadata"), dict)
+                else {}
+            ),
+        )
+
+        result = reduce_timer_fired(timer_event)
+        intent = result.wakeup_intent
+
+        return self.enqueue_wakeup(
+            source=intent.source,
+            repo_id=intent.repo_id,
+            run_id=intent.run_id,
+            thread_id=intent.thread_id,
+            lane_id=intent.lane_id,
+            from_state=intent.from_state,
+            to_state=intent.to_state,
+            reason=intent.reason,
+            timestamp=intent.timestamp or fired_at,
+            idempotency_key=intent.idempotency_key,
+            subscription_id=intent.subscription_id,
+            timer_id=timer_id,
+            event_type=intent.event_type,
+            metadata=intent.metadata,
+        )
 
     def mark_wakeup_dispatched(
         self, wakeup_id: str, *, dispatched_at: Optional[str] = None

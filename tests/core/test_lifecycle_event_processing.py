@@ -402,10 +402,10 @@ def test_lifecycle_subscription_enqueues_wakeup_payload(tmp_path: Path) -> None:
         assert wake_up.get("to_state") == "failed"
         assert wake_up.get("reason") == "flow_error"
         assert isinstance(wake_up.get("timestamp"), str)
-        assert wake_up.get("source") == "lifecycle_subscription"
+        assert wake_up.get("source") == "transition"
         assert wake_up.get("event_type") == "flow_failed"
         message = str(payload.get("message") or "")
-        assert "source: lifecycle_subscription" in message
+        assert "source: transition" in message
         assert "event_type: flow_failed" in message
         assert "suggested_next_action:" in message
     finally:

@@ -73,9 +73,12 @@ from .serialization import (
     pma_wakeup_to_dict,
 )
 from .subscription_reducer import (
+    ReduceTimerResult,
     ReduceTransitionResult,
+    TimerFiredEvent,
     TransitionEvent,
     WakeupIntent,
+    reduce_timer_fired,
     reduce_transition,
 )
 
@@ -100,6 +103,8 @@ __all__ = [
     "PmaSubscription",
     "PmaTimer",
     "PmaWakeup",
+    "ReduceTimerResult",
+    "reduce_timer_fired",
     "ROUTE_BOUND",
     "ROUTE_EXPLICIT",
     "ROUTE_PRIMARY_PMA",
@@ -131,6 +136,7 @@ __all__ = [
     "pma_wakeup_to_dict",
     "ReduceTransitionResult",
     "reduce_transition",
+    "TimerFiredEvent",
     "TransitionEvent",
     "WakeupIntent",
 ]

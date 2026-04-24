@@ -15,6 +15,7 @@ class PmaDomainEventType(str, Enum):
     PUBLISH_ATTEMPT_FAILED = "publish_attempt_failed"
     DELIVERY_SUPPRESSED = "delivery_suppressed"
     TIMER_FIRED = "timer_fired"
+    LIFECYCLE_TRANSITION_OCCURRED = "lifecycle_transition_occurred"
     WAKEUP_CREATED = "wakeup_created"
     WAKEUP_DISPATCHED = "wakeup_dispatched"
 

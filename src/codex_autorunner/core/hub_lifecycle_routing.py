@@ -278,69 +278,27 @@ class LifecycleEventRouter:
         transition = self._build_transition_payload(event)
         try:
             store = self._ensure_pma_automation_store_fn()
-            matches = store.match_lifecycle_subscriptions(
+            result = store.notify_transition(
                 event_type=event.event_type.value,
                 repo_id=transition.get("repo_id"),
                 run_id=transition.get("run_id"),
                 thread_id=transition.get("thread_id"),
                 from_state=transition.get("from_state"),
                 to_state=transition.get("to_state"),
+                reason=transition.get("reason"),
+                timestamp=transition.get("timestamp"),
+                transition_id=event.event_id,
+                event_id=event.event_id,
+                origin=event.origin,
+                event_data=event.data if isinstance(event.data, dict) else {},
             )
-        except (sqlite3.Error, OSError, ValueError, TypeError):
+            return int(result.get("created", 0) or 0)
+        except (sqlite3.Error, OSError, ValueError, TypeError, RuntimeError):
             self._logger.exception(
-                "Failed to match lifecycle subscriptions for event %s",
+                "Failed to enqueue lifecycle automation wake-ups for event %s",
                 event.event_id,
             )
             return 0
-
-        if not matches:
-            return 0
-
-        created = 0
-        for subscription in matches:
-            subscription_id = str(subscription.get("subscription_id") or "").strip()
-            idempotency_key = (
-                f"lifecycle:{event.event_id}:subscription:"
-                f"{subscription_id or 'unknown'}"
-            )
-            subscription_metadata = subscription.get("metadata")
-            metadata = (
-                dict(subscription_metadata)
-                if isinstance(subscription_metadata, dict)
-                else {}
-            )
-            metadata["origin"] = event.origin
-            reason = (
-                str(subscription.get("reason")).strip()
-                if isinstance(subscription.get("reason"), str)
-                and str(subscription.get("reason")).strip()
-                else transition.get("reason")
-            )
-            _, deduped = store.enqueue_wakeup(
-                source="lifecycle_subscription",
-                repo_id=transition.get("repo_id"),
-                run_id=transition.get("run_id"),
-                thread_id=transition.get("thread_id"),
-                lane_id=(
-                    str(subscription.get("lane_id")).strip()
-                    if isinstance(subscription.get("lane_id"), str)
-                    and str(subscription.get("lane_id")).strip()
-                    else "pma:default"
-                ),
-                from_state=transition.get("from_state"),
-                to_state=transition.get("to_state"),
-                reason=reason,
-                timestamp=transition.get("timestamp"),
-                idempotency_key=idempotency_key,
-                subscription_id=subscription_id or None,
-                event_id=event.event_id,
-                event_type=event.event_type.value,
-                event_data=event.data if isinstance(event.data, dict) else {},
-                metadata=metadata,
-            )
-            if not deduped:
-                created += 1
-        return created
 
     def _enqueue_pma_for_event(self, event: LifecycleEvent, *, reason: str) -> bool:
         if not self._hub_config.pma.enabled:

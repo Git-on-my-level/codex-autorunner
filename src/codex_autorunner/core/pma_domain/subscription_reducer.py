@@ -7,6 +7,7 @@ from .constants import (
     DEFAULT_PMA_LANE_ID,
     SUBSCRIPTION_STATE_ACTIVE,
     SUBSCRIPTION_STATE_CANCELLED,
+    TIMER_TYPE_ONE_SHOT,
 )
 from .models import PmaSubscription
 
@@ -38,6 +39,8 @@ class WakeupIntent:
     idempotency_key: Optional[str] = None
     subscription_id: Optional[str] = None
     event_type: Optional[str] = None
+    event_id: Optional[str] = None
+    event_data: dict[str, Any] = field(default_factory=dict, hash=False)
     metadata: dict[str, Any] = field(default_factory=dict, hash=False)
 
 
@@ -107,6 +110,11 @@ def reduce_transition(
         wakeup_metadata = dict(sub.metadata)
         wakeup_metadata.update(event.extra_metadata)
 
+        event_id = event.extra_metadata.get("event_id")
+        event_data = event.extra_metadata.get("event_data")
+        if not isinstance(event_data, dict):
+            event_data = {}
+
         new_intents.append(
             WakeupIntent(
                 source="transition",
@@ -121,6 +129,8 @@ def reduce_transition(
                 idempotency_key=wakeup_key,
                 subscription_id=sub.subscription_id,
                 event_type=event.event_type,
+                event_id=event_id if isinstance(event_id, str) else None,
+                event_data=event_data,
                 metadata=wakeup_metadata,
             )
         )
@@ -139,4 +149,55 @@ def reduce_transition(
         wakeup_intents=tuple(new_intents),
         matched=matched,
         created=created,
+    )
+
+
+@dataclass(frozen=True)
+class TimerFiredEvent:
+    timer_id: str
+    timer_type: str = TIMER_TYPE_ONE_SHOT
+    fired_at: Optional[str] = None
+    repo_id: Optional[str] = None
+    run_id: Optional[str] = None
+    thread_id: Optional[str] = None
+    lane_id: str = DEFAULT_PMA_LANE_ID
+    from_state: Optional[str] = None
+    to_state: Optional[str] = None
+    reason: Optional[str] = None
+    subscription_id: Optional[str] = None
+    metadata: dict[str, Any] = field(default_factory=dict, hash=False)
+
+
+@dataclass(frozen=True)
+class ReduceTimerResult:
+    wakeup_intent: WakeupIntent
+    timer_id: str
+    source: str = "timer"
+
+
+def reduce_timer_fired(event: TimerFiredEvent) -> ReduceTimerResult:
+    fired_ts = event.fired_at or ""
+    timer_key = f"timer:{event.timer_id}:{fired_ts}"
+
+    wakeup_metadata = dict(event.metadata)
+    wakeup_metadata["timer_type"] = event.timer_type
+    wakeup_metadata["domain_source"] = "timer_reducer"
+
+    return ReduceTimerResult(
+        wakeup_intent=WakeupIntent(
+            source="timer",
+            repo_id=event.repo_id,
+            run_id=event.run_id,
+            thread_id=event.thread_id,
+            lane_id=event.lane_id,
+            from_state=event.from_state,
+            to_state=event.to_state,
+            reason=event.reason or "timer_due",
+            timestamp=fired_ts,
+            idempotency_key=timer_key,
+            subscription_id=event.subscription_id,
+            event_type="timer_fired",
+            metadata=wakeup_metadata,
+        ),
+        timer_id=event.timer_id,
     )
