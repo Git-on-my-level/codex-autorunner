@@ -526,6 +526,30 @@ async def test_send_message_chunks_long_text() -> None:
 
 
 @pytest.mark.anyio
+async def test_get_chat_uses_get_chat_method() -> None:
+    calls: list[tuple[str, dict[str, object]]] = []
+    transport = httpx.MockTransport(
+        lambda _request: httpx.Response(200, json={"ok": True, "result": {}})
+    )
+    http_client = httpx.AsyncClient(transport=transport)
+    client = TelegramBotClient("test-token", client=http_client)
+
+    async def fake_request(self, method: str, payload: dict[str, object]) -> object:
+        calls.append((method, payload))
+        return {"id": -1001, "type": "supergroup", "title": "Team Room"}
+
+    client._request = types.MethodType(fake_request, client)
+    try:
+        result = await client.get_chat(chat_id=-1001)
+    finally:
+        await client.close()
+
+    assert result["id"] == -1001
+    assert result["title"] == "Team Room"
+    assert calls == [("getChat", {"chat_id": -1001})]
+
+
+@pytest.mark.anyio
 async def test_send_message_collapses_local_file_links() -> None:
     transport = httpx.MockTransport(
         lambda _request: httpx.Response(200, json={"ok": True, "result": {}})

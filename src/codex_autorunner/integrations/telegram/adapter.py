@@ -1340,6 +1340,17 @@ class TelegramBotClient:
         result = await self._request("getMe", {})
         return result if isinstance(result, dict) else {}
 
+    async def get_chat(self, *, chat_id: Union[int, str]) -> dict[str, Any]:
+        log_event(
+            self._logger,
+            logging.DEBUG,
+            "telegram.request",
+            method="getChat",
+            chat_id=chat_id,
+        )
+        result = await self._request("getChat", {"chat_id": chat_id})
+        return result if isinstance(result, dict) else {}
+
     async def get_file(self, file_id: str) -> dict[str, Any]:
         log_event(self._logger, logging.DEBUG, "telegram.request", method="getFile")
         result = await self._request("getFile", {"file_id": file_id})
