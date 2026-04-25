@@ -1140,7 +1140,7 @@ class PmaAutomationStore:
                 hub_root=self._hub_root
             )
         except (OSError, RuntimeError, ValueError):
-            return
+            binding_metadata_by_thread = {}
 
         delivery_target = wakeup.metadata.get("delivery_target")
         workspace_root: Optional[Path] = None
@@ -2395,11 +2395,7 @@ class PmaAutomationStore:
                 compute_dispatch=False,
             )
 
-            if (
-                result.created > 0
-                or result.matched > 0
-                or result.subscriptions_changed > 0
-            ):
+            if result.created > 0 or result.subscriptions_changed > 0:
                 self._save_structured_unlocked(state, subscriptions, timers, wakeups)
         for w in new_wakeups:
             self._compute_dispatch_decision_for_wakeup(w)

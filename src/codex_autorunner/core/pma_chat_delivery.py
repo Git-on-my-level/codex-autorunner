@@ -26,10 +26,7 @@ from .pma_domain.models import (
     PmaDeliveryAttempt,
     PmaDeliveryTarget,
 )
-from .pma_domain.publish_policy import (
-    evaluate_publish_suppression,
-    is_noop_duplicate_message,
-)
+from .pma_domain.publish_policy import evaluate_publish_suppression
 from .text_utils import _normalize_optional_text, _normalize_pma_delivery_target
 
 logger = logging.getLogger(__name__)
@@ -206,16 +203,6 @@ async def deliver_pma_notification(
                     "targets": 1,
                     "published": 0,
                 }
-        elif (
-            normalized_source_kind == "managed_thread_completed"
-            and managed_thread_id is not None
-            and is_noop_duplicate_message(text)
-        ):
-            return {
-                "route": "suppressed_duplicate",
-                "targets": 1,
-                "published": 0,
-            }
         if dispatch_decision.get("suppress_publish"):
             return {
                 "route": "suppressed_duplicate",

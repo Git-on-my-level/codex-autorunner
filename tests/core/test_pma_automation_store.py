@@ -774,7 +774,7 @@ def test_enqueue_wakeup_tolerates_runtime_error_while_loading_binding_metadata(
     assert deduped is False
     assert wakeup.wakeup_id
     assert store.list_pending_wakeups(limit=10)[0]["wakeup_id"] == wakeup.wakeup_id
-    assert "dispatch_decision" not in wakeup.metadata
+    assert isinstance(wakeup.metadata.get("dispatch_decision"), dict)
 
 
 def test_notify_transition_tolerates_runtime_error_while_loading_workspace_preference(
