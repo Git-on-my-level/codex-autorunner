@@ -157,7 +157,11 @@ class FlowRuntime:
                     error_message=effect.error_message,
                     store=self.store,
                     note=effect.note,
-                    failed_at=result.finished_at or now_iso(),
+                    failed_at=(
+                        result.finished_at
+                        if result.finished_at is not NO_CHANGE
+                        else now_iso()
+                    ),
                 )
 
         kwargs: Dict[str, Any] = {"run_id": run_id, "status": result.status}
@@ -245,7 +249,7 @@ class FlowRuntime:
             if record.status == FlowRunStatus.PENDING:
                 trigger = FlowTrigger(
                     kind=TriggerKind.FLOW_START,
-                    state_output=initial_state if initial_state is not None else {},
+                    state_output=initial_state,
                 )
                 result = reduce_flow_lifecycle(
                     record.status,
@@ -261,7 +265,7 @@ class FlowRuntime:
             else:
                 trigger = FlowTrigger(
                     kind=TriggerKind.FLOW_RESUME,
-                    state_output=initial_state if initial_state is not None else {},
+                    state_output=initial_state,
                 )
                 result = reduce_flow_lifecycle(
                     record.status,

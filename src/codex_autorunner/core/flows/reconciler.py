@@ -433,7 +433,11 @@ def reconcile_flow_run(
                         error_message=effect.error_message,
                         store=store,
                         note=effect.note,
-                        failed_at=result.finished_at or now,
+                        failed_at=(
+                            result.finished_at
+                            if result.finished_at is not NO_CHANGE
+                            else now
+                        ),
                         reconcile_context=reconcile_ctx,
                     )
 

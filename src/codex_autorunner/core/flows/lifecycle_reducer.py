@@ -75,7 +75,7 @@ class FlowTrigger:
     step_id: Optional[str] = None
     next_steps: frozenset[str] = frozenset()
     error_message: Optional[str] = None
-    state_output: Dict[str, Any] = field(default_factory=dict)
+    state_output: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -184,11 +184,11 @@ def _require_status(
 
 def _merge_state(current_state: Dict[str, Any], trigger: FlowTrigger) -> Dict[str, Any]:
     if trigger.kind in (TriggerKind.FLOW_START, TriggerKind.FLOW_RESUME):
-        if trigger.state_output:
+        if trigger.state_output is not None:
             return dict(trigger.state_output)
         return dict(current_state)
     state = dict(current_state)
-    if trigger.state_output:
+    if trigger.state_output is not None:
         state.update(trigger.state_output)
     return state
 
@@ -621,7 +621,7 @@ def _reduce_reconcile_stale_pause_resume(
         engine["status"] = "running"
         state["ticket_engine"] = engine
     state.pop("reason_summary", None)
-    if trigger.state_output:
+    if trigger.state_output is not None:
         state.update(trigger.state_output)
     return TransitionResult(
         status=FlowRunStatus.RUNNING,
