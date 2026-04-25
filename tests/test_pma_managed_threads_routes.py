@@ -102,6 +102,61 @@ def test_create_managed_thread_with_repo_owner(hub_env) -> None:
     assert subscriptions == []
 
 
+def test_create_managed_thread_with_repo_owner_prefers_fresh_worktree(
+    hub_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = create_hub_app(hub_env.hub_root)
+    fresh_worktree_root = hub_env.hub_root / "worktrees" / "repo--pma-fresh"
+    fresh_worktree_root.mkdir(parents=True, exist_ok=True)
+    observed: dict[str, object] = {}
+
+    def _fake_create_worktree(
+        *, base_repo_id: str, branch: str, force: bool = False, start_point=None
+    ):
+        observed["base_repo_id"] = base_repo_id
+        observed["branch"] = branch
+        observed["force"] = force
+        observed["start_point"] = start_point
+        return SimpleNamespace(
+            id="repo--pma-fresh",
+            path=fresh_worktree_root,
+            branch=branch,
+            kind="worktree",
+        )
+
+    monkeypatch.setattr(
+        app.state.hub_supervisor,
+        "create_worktree",
+        _fake_create_worktree,
+    )
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "codex",
+                **_repo_owner(hub_env),
+                "name": "Primary thread",
+            },
+        )
+
+    assert resp.status_code == 200
+    thread = resp.json()["thread"]
+    assert observed["base_repo_id"] == hub_env.repo_id
+    assert observed["force"] is False
+    assert observed["start_point"] is None
+    assert str(observed["branch"]).startswith(f"pma/{hub_env.repo_id}/")
+    assert thread["workspace_root"] == str(fresh_worktree_root.resolve())
+    assert thread["repo_id"] == hub_env.repo_id
+    assert thread["resource_kind"] == "repo"
+    assert thread["resource_id"] == hub_env.repo_id
+
+    store = PmaThreadStore(hub_env.hub_root)
+    stored = store.get_thread(thread["managed_thread_id"])
+    assert stored is not None
+    assert stored["workspace_root"] == str(fresh_worktree_root.resolve())
+
+
 def test_create_managed_thread_with_workspace_root(hub_env) -> None:
     app = create_hub_app(hub_env.hub_root)
     rel_workspace = str(Path("worktrees") / hub_env.repo_id)
