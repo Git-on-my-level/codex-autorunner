@@ -3,11 +3,15 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping, Optional, cast
 
 from ..time_utils import now_iso
+from .chat_operation_recovery import (
+    ChatOperationRecoveryAction,
+    ChatOperationRecoveryDecision,
+    plan_chat_operation_recovery,
+)
 from .chat_operation_state import (
     CHAT_OPERATION_TERMINAL_STATES,
     ChatOperationSnapshot,
@@ -18,29 +22,12 @@ from .chat_operation_state import (
 from .sqlite import open_orchestration_sqlite
 
 _UNSET = object()
-_DEFAULT_UNACKED_EXPIRY = timedelta(minutes=5)
-_DEFAULT_DELIVERY_STALE_WINDOW = timedelta(minutes=15)
-_DEFAULT_MAX_DELIVERY_ATTEMPTS = 3
 
 
 @dataclass(frozen=True)
 class ChatOperationRegistration:
     snapshot: ChatOperationSnapshot
     inserted: bool
-
-
-class ChatOperationRecoveryAction(str):
-    NOOP = "noop"
-    RESUME_EXECUTION = "resume_execution"
-    REPLAY_DELIVERY = "replay_delivery"
-    MARK_ABANDONED = "mark_abandoned"
-    MARK_EXPIRED = "mark_expired"
-
-
-@dataclass(frozen=True)
-class ChatOperationRecoveryDecision:
-    action: str
-    reason: str
 
 
 class SQLiteChatOperationLedger(ChatOperationStore):
@@ -341,67 +328,6 @@ class SQLiteChatOperationLedger(ChatOperationStore):
                 )
 
 
-def plan_chat_operation_recovery(
-    snapshot: ChatOperationSnapshot,
-    *,
-    now: Optional[datetime] = None,
-    max_delivery_attempts: int = _DEFAULT_MAX_DELIVERY_ATTEMPTS,
-    unacked_expiry: timedelta = _DEFAULT_UNACKED_EXPIRY,
-    delivery_stale_window: timedelta = _DEFAULT_DELIVERY_STALE_WINDOW,
-) -> ChatOperationRecoveryDecision:
-    current_at = now or datetime.now(timezone.utc)
-    if snapshot.terminal_outcome:
-        return ChatOperationRecoveryDecision(
-            action=ChatOperationRecoveryAction.NOOP,
-            reason="terminal_outcome_already_recorded",
-        )
-    if snapshot.state in CHAT_OPERATION_TERMINAL_STATES:
-        return ChatOperationRecoveryDecision(
-            action=ChatOperationRecoveryAction.NOOP,
-            reason="terminal_state",
-        )
-    if snapshot.delivery_state in {"pending", "failed"}:
-        if int(snapshot.delivery_attempt_count or 0) >= max_delivery_attempts:
-            return ChatOperationRecoveryDecision(
-                action=ChatOperationRecoveryAction.MARK_ABANDONED,
-                reason="delivery_attempt_budget_exhausted",
-            )
-        updated_at = _parse_iso_timestamp(snapshot.updated_at)
-        if updated_at is None or current_at - updated_at >= delivery_stale_window:
-            return ChatOperationRecoveryDecision(
-                action=ChatOperationRecoveryAction.REPLAY_DELIVERY,
-                reason="delivery_replay_required",
-            )
-        return ChatOperationRecoveryDecision(
-            action=ChatOperationRecoveryAction.NOOP,
-            reason="delivery_backoff_active",
-        )
-    if snapshot.state in {
-        ChatOperationState.ACKNOWLEDGED,
-        ChatOperationState.VISIBLE,
-        ChatOperationState.QUEUED,
-        ChatOperationState.RUNNING,
-        ChatOperationState.INTERRUPTING,
-        ChatOperationState.ROUTING,
-        ChatOperationState.BLOCKED,
-    }:
-        return ChatOperationRecoveryDecision(
-            action=ChatOperationRecoveryAction.RESUME_EXECUTION,
-            reason="execution_resume_required",
-        )
-    if snapshot.state == ChatOperationState.RECEIVED:
-        created_at = _parse_iso_timestamp(snapshot.created_at or snapshot.updated_at)
-        if created_at is None or current_at - created_at >= unacked_expiry:
-            return ChatOperationRecoveryDecision(
-                action=ChatOperationRecoveryAction.MARK_EXPIRED,
-                reason="accepted_operation_never_acknowledged",
-            )
-    return ChatOperationRecoveryDecision(
-        action=ChatOperationRecoveryAction.NOOP,
-        reason="no_recovery_action",
-    )
-
-
 def _normalize_snapshot(snapshot: ChatOperationSnapshot) -> ChatOperationSnapshot:
     operation_id = str(snapshot.operation_id or "").strip()
     surface_kind = str(snapshot.surface_kind or "").strip()
@@ -527,21 +453,6 @@ def _normalized_optional_text(value: Any) -> Optional[str]:
         return None
     normalized = str(value).strip()
     return normalized or None
-
-
-def _parse_iso_timestamp(value: Optional[str]) -> Optional[datetime]:
-    normalized = _normalized_optional_text(value)
-    if normalized is None:
-        return None
-    try:
-        if normalized.endswith("Z"):
-            return datetime.fromisoformat(normalized.replace("Z", "+00:00"))
-        parsed = datetime.fromisoformat(normalized)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
 
 
 __all__ = [
