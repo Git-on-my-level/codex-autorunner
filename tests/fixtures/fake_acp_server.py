@@ -495,6 +495,14 @@ class FakeACPServer:
                 {"stopReason": "end_turn", "userMessageId": turn_id},
             )
             return
+        if self._scenario == "official_prompt_return_after_idle_gap":
+            time.sleep(0.06)
+            cancel_event.clear()
+            self._send_result(
+                request_id,
+                {"stopReason": "end_turn", "userMessageId": turn_id},
+            )
+            return
         if self._scenario == "official_cancelled_before_return":
             self.send(
                 {

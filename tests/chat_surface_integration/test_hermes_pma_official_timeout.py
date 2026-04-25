@@ -85,6 +85,49 @@ async def test_discord_hermes_pma_stall_timeout_surfaces_timeout_for_silent_hang
 
 
 @pytest.mark.anyio
+async def test_discord_hermes_pma_accepts_prompt_return_arriving_just_after_idle_gap(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = HermesFixtureRuntime("official_prompt_return_after_idle_gap")
+    patch_hermes_runtime(monkeypatch, runtime)
+    monkeypatch.setattr(
+        runtime_threads_module,
+        "_STALL_COMPLETION_GRACE_SECONDS",
+        0.08,
+    )
+    monkeypatch.setattr(discord_message_turns, "DISCORD_PMA_TIMEOUT_SECONDS", 30.0)
+    monkeypatch.setattr(
+        discord_message_turns,
+        "DISCORD_PMA_STALL_TIMEOUT_SECONDS",
+        0.05,
+    )
+    harness = DiscordSurfaceHarness(tmp_path / "discord-late-return")
+    await harness.setup(agent="hermes")
+    try:
+        rest = await harness.run_message("echo hello world")
+
+        assert rest.execution_status == "ok"
+        assert rest.preview_deleted is True
+        assert not any(
+            op["op"] == "send"
+            and "discord pma turn timed out"
+            in str(op["payload"].get("content", "")).lower()
+            for op in rest.message_ops
+        )
+        finalized = next(
+            record
+            for record in reversed(rest.log_records)
+            if record.get("event") == "chat.managed_thread.turn_finalized"
+        )
+        assert finalized["status"] == "ok"
+        assert finalized["completion_source"] == "prompt_return"
+    finally:
+        await harness.close()
+        await runtime.close()
+
+
+@pytest.mark.anyio
 async def test_discord_hermes_pma_does_not_replay_second_turn_from_persisted_session_store(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,

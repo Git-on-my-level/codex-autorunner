@@ -17,6 +17,7 @@ from .service import HarnessBackedOrchestrationService
 _INTERRUPT_POLL_INTERVAL_SECONDS = 0.05
 _STALL_POLL_INTERVAL_SECONDS = 0.25
 _STALL_RECOVERY_PROBE_INTERVAL_SECONDS = 15.0
+_STALL_COMPLETION_GRACE_SECONDS = 2.0
 RUNTIME_THREAD_TIMEOUT_ERROR = "Runtime thread timed out"
 RUNTIME_THREAD_INTERRUPTED_ERROR = "Runtime thread interrupted"
 RUNTIME_THREAD_MISSING_BACKEND_IDS_ERROR = (
@@ -72,6 +73,24 @@ def _looks_like_terminal_turn_result(result: Any) -> bool:
 
 def _harness_supports_stall_recovery(harness: Any) -> bool:
     return callable(getattr(harness, "recover_stalled_turn", None))
+
+
+async def _wait_for_late_collector_result(
+    collector_task: asyncio.Task[Any],
+    grace_seconds: float,
+) -> Optional[Any]:
+    if collector_task.done():
+        return await collector_task
+    timeout_seconds = max(float(grace_seconds), 0.0)
+    if timeout_seconds <= 0.0:
+        return None
+    try:
+        return await asyncio.wait_for(
+            asyncio.shield(collector_task),
+            timeout=timeout_seconds,
+        )
+    except asyncio.TimeoutError:
+        return None
 
 
 @dataclass(frozen=True)
@@ -315,6 +334,13 @@ async def await_runtime_thread_outcome(
                 recovered = await _recover_stalled_turn(execution)
                 if recovered is not None:
                     state.note_transport_result(recovered)
+                    return state.build_outcome(execution_error_message)
+                late_result = await _wait_for_late_collector_result(
+                    collector_task,
+                    _STALL_COMPLETION_GRACE_SECONDS,
+                )
+                if late_result is not None:
+                    state.note_transport_result(late_result)
                     return state.build_outcome(execution_error_message)
                 await execution.harness.interrupt(
                     execution.workspace_root,
