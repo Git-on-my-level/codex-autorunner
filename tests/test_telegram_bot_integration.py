@@ -1502,6 +1502,32 @@ async def test_update_with_all_target_prompts_for_confirmation_when_turn_active(
 
 
 @pytest.mark.anyio
+async def test_update_with_all_target_prompts_for_confirmation_when_managed_thread_active(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path, fixture_command("basic"))
+    service = TelegramBotService(config, hub_root=tmp_path)
+    message = build_message("/update all", message_id=30)
+    captured: dict[str, object] = {}
+
+    async def _fake_prompt_update_confirmation(
+        msg: TelegramMessage, *, update_target: Optional[str] = None
+    ) -> None:
+        captured["message_id"] = msg.message_id
+        captured["update_target"] = update_target
+
+    service._active_managed_update_session_count = lambda: 1  # type: ignore[method-assign]
+    service._prompt_update_confirmation = _fake_prompt_update_confirmation  # type: ignore[assignment]
+
+    try:
+        await service._handle_update(message, "all", None)
+    finally:
+        await service._app_server_supervisor.close_all()
+
+    assert captured == {"message_id": 30, "update_target": "all"}
+
+
+@pytest.mark.anyio
 async def test_update_web_target_skips_confirmation_when_turn_active(
     tmp_path: Path,
 ) -> None:
@@ -1544,6 +1570,60 @@ async def test_update_web_target_skips_confirmation_when_turn_active(
         "update_target": "web",
         "reply_to": 21,
     }
+
+
+@pytest.mark.anyio
+async def test_update_callback_prompts_for_confirmation_when_managed_thread_active(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path, fixture_command("basic"))
+    service = TelegramBotService(config, hub_root=tmp_path)
+    callback = TelegramCallbackQuery(
+        update_id=1,
+        callback_id="cb-managed",
+        from_user_id=456,
+        data="update:all",
+        message_id=31,
+        chat_id=123,
+        thread_id=None,
+    )
+    events: list[tuple[str, object]] = []
+
+    async def _fake_answer_callback(
+        cb: Optional[TelegramCallbackQuery], text: str
+    ) -> None:
+        assert cb == callback
+        events.append(("answer", text))
+
+    async def _fake_prompt_update_confirmation(
+        msg: TelegramMessage, *, update_target: Optional[str] = None
+    ) -> None:
+        events.append(("prompt_message_id", msg.message_id))
+        events.append(("prompt_target", update_target))
+
+    topic_key = "123:"
+    service._update_options[topic_key] = SelectionState(
+        items=[("all", "All")],
+        requester_user_id="456",
+    )
+    service._active_managed_update_session_count = lambda: 1  # type: ignore[method-assign]
+    service._answer_callback = _fake_answer_callback  # type: ignore[assignment]
+    service._prompt_update_confirmation = _fake_prompt_update_confirmation  # type: ignore[assignment]
+
+    try:
+        await service._handle_update_callback(
+            topic_key,
+            callback,
+            type("ParsedUpdate", (), {"target": "all"})(),
+        )
+    finally:
+        await service._app_server_supervisor.close_all()
+
+    assert events == [
+        ("answer", "Confirm update"),
+        ("prompt_message_id", 31),
+        ("prompt_target", "all"),
+    ]
 
 
 @pytest.mark.anyio

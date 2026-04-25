@@ -1847,21 +1847,22 @@ async def _run_discord_orchestrated_turn_for_message(
     progress_lease_id = uuid.uuid4().hex
     active_progress_labels = {"working", "queued", "running", "review"}
     reusable_progress_message_id: Optional[str] = None
-    claim_queued_notice_progress_message = getattr(
-        service, "_claim_queued_notice_progress_message", None
-    )
-    if callable(claim_queued_notice_progress_message):
-        with contextlib.suppress(TypeError):
-            reusable_progress_message_id = claim_queued_notice_progress_message(
-                channel_id=channel_id,
+    if not pma_enabled:
+        claim_queued_notice_progress_message = getattr(
+            service, "_claim_queued_notice_progress_message", None
+        )
+        if callable(claim_queued_notice_progress_message):
+            with contextlib.suppress(TypeError):
+                reusable_progress_message_id = claim_queued_notice_progress_message(
+                    channel_id=channel_id,
+                    source_message_id=source_message_id,
+                )
+        if not reusable_progress_message_id:
+            reusable_progress_message_id = _claim_discord_reusable_progress_message(
+                service,
+                thread_target_id=managed_thread_id,
                 source_message_id=source_message_id,
             )
-    if not reusable_progress_message_id:
-        reusable_progress_message_id = _claim_discord_reusable_progress_message(
-            service,
-            thread_target_id=managed_thread_id,
-            source_message_id=source_message_id,
-        )
 
     async def _load_progress_lease() -> Any:
         return await _get_discord_progress_lease(service, lease_id=progress_lease_id)

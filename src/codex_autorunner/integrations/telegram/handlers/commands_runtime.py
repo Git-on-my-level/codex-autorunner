@@ -54,6 +54,7 @@ from ...chat.session_messages import (
 )
 from ...chat.status_diagnostics import build_process_monitor_lines_for_root
 from ...chat.turn_metrics import compose_turn_response_with_footer
+from ...chat.update_guards import active_managed_update_session_count
 from ...chat.update_notifier import mark_update_status_notified
 from ..adapter import (
     CompactCallback,
@@ -2988,10 +2989,18 @@ Summary applied.""",
         return UPDATE_TARGET_OPTIONS
 
     def _has_active_turns(self) -> bool:
-        return bool(self._turn_contexts)
+        return self._active_update_session_count() > 0
+
+    def _active_managed_update_session_count(self) -> int:
+        from .commands.execution import _build_telegram_thread_orchestration_service
+
+        orchestration_service = _build_telegram_thread_orchestration_service(self)
+        if orchestration_service is None:
+            return 0
+        return active_managed_update_session_count(orchestration_service)
 
     def _active_update_session_count(self) -> int:
-        return len(self._turn_contexts)
+        return len(self._turn_contexts) + self._active_managed_update_session_count()
 
     async def _prompt_update_confirmation(
         self,

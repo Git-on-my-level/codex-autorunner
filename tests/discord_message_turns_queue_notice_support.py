@@ -13,7 +13,7 @@ from tests.support.discord_turn_fakes import _config, _FakeRest
 
 
 @pytest.mark.asyncio
-async def test_orchestrated_turn_queued_reuses_claimed_queue_notice(
+async def test_orchestrated_turn_pma_queued_sends_fresh_progress_placeholder(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -132,9 +132,9 @@ async def test_orchestrated_turn_queued_reuses_claimed_queue_notice(
 
     assert result.send_final_message is False
     assert "Queued" in (result.final_message or "")
-    assert service.claim_calls == [("channel-1", "m-2")]
-    assert rest.channel_messages == []
+    assert service.claim_calls == []
+    assert len(rest.channel_messages) == 1
+    assert "working" in rest.channel_messages[0]["payload"]["content"].lower()
     assert rest.edited_channel_messages
-    assert rest.edited_channel_messages[0]["message_id"] == "notice-1"
-    assert "working" in rest.edited_channel_messages[0]["payload"]["content"].lower()
+    assert rest.edited_channel_messages[0]["message_id"] != "notice-1"
     assert "queued" in rest.edited_channel_messages[-1]["payload"]["content"].lower()
