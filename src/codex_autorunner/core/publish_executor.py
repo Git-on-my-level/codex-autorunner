@@ -262,23 +262,30 @@ def drain_pending_publish_operations(
                 "Publish side effects completed but journal completion failed: "
                 f"{_resolve_error_text(exc)}"
             )
+            _LOGGER.warning(
+                "Publish side effects completed for %s but journal mark_succeeded failed; "
+                "recording effect_applied state",
+                current_operation.operation_id,
+                exc_info=True,
+            )
             try:
-                failed = journal.mark_failed(
+                effect_applied = journal.mark_effect_applied(
                     current_operation.operation_id,
+                    response=response,
                     error_text=error_text,
-                    next_attempt_at=None,
                 )
             except (
                 Exception
             ):  # intentional: defensive fallback when journal bookkeeping fails
                 _LOGGER.warning(
-                    "Publish bookkeeping failed for %s after side effects completed",
+                    "Publish bookkeeping failed for %s after side effects completed; "
+                    "unable to record effect_applied state",
                     current_operation.operation_id,
                     exc_info=True,
                 )
                 continue
-            if failed is not None:
-                processed.append(failed)
+            if effect_applied is not None:
+                processed.append(effect_applied)
             continue
         if succeeded is not None:
             processed.append(succeeded)
