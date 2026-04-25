@@ -56,6 +56,7 @@ from codex_autorunner.integrations.chat.collaboration_policy import (
 from codex_autorunner.integrations.chat.compaction import build_compact_seed_prompt
 from codex_autorunner.integrations.chat.dispatcher import build_dispatch_context
 from codex_autorunner.integrations.chat.managed_thread_turns import (
+    ManagedThreadExecutionHooks,
     ManagedThreadQueueWorkerHooks,
 )
 from codex_autorunner.integrations.discord.managed_thread_routing import (
@@ -250,7 +251,12 @@ async def test_queue_worker_start_clears_stale_queued_progress_placeholder(
 
     monkeypatch.setattr(
         "codex_autorunner.integrations.discord.managed_thread_routing.build_managed_thread_surface_queue_execution_hooks",
-        lambda **kwargs: kwargs["base_hooks"],
+        lambda **kwargs: ManagedThreadExecutionHooks(
+            on_execution_started=lambda started_execution: _run_queue_execution_start(
+                kwargs, started_execution
+            ),
+            on_execution_finished=kwargs["base_hooks"].on_execution_finished,
+        ),
     )
 
     await store.upsert_turn_progress_lease(
@@ -292,6 +298,23 @@ async def test_queue_worker_start_clears_stale_queued_progress_placeholder(
         )
     finally:
         await store.close()
+
+
+async def _run_queue_execution_start(
+    kwargs: dict[str, Any],
+    started_execution: Any,
+) -> None:
+    base_hooks = kwargs["base_hooks"]
+    on_execution_started = getattr(base_hooks, "on_execution_started", None)
+    if on_execution_started is not None:
+        result = on_execution_started(started_execution)
+        if asyncio.iscoroutine(result):
+            await result
+    on_progress_session_started = kwargs.get("on_progress_session_started")
+    if on_progress_session_started is not None:
+        result = on_progress_session_started(started_execution)
+        if asyncio.iscoroutine(result):
+            await result
 
 
 @pytest.mark.asyncio

@@ -60,9 +60,9 @@ class BoundChatLiveProgressSession:
             (adapter.surface_kind, adapter.surface_key) for adapter in self.adapters
         )
 
-    async def start(self) -> None:
+    async def start(self) -> bool:
         if not self.adapters:
-            return
+            return False
         self.projector.mark_working(force=True)
         rendered = self.projector.render(
             max_length=self.max_length,
@@ -81,6 +81,7 @@ class BoundChatLiveProgressSession:
                 )
         if published:
             self.projector.note_rendered(rendered, now=time.monotonic())
+        return published
 
     async def apply_run_events(self, events: list[RunEvent]) -> None:
         if not self.adapters:
@@ -1063,6 +1064,7 @@ def build_bound_chat_queue_execution_controller(
         Callable[[Any], tuple[tuple[str, str], ...]]
     ] = None,
     base_hooks: Optional[ManagedThreadExecutionHooks] = None,
+    on_progress_session_started: Optional[Callable[[Any], object]] = None,
     retain_completed_surface_targets: bool = False,
 ) -> BoundChatQueueExecutionController:
     current_session: Optional[BoundChatLiveProgressSession] = None
@@ -1097,7 +1099,11 @@ def build_bound_chat_queue_execution_controller(
                     else surface_targets
                 ),
             )
-            await current_session.start()
+            published = await current_session.start()
+            if published and on_progress_session_started is not None:
+                result = on_progress_session_started(started)
+                if inspect.isawaitable(result):
+                    await result
         except Exception:
             logger.exception(
                 "Failed to start bound chat live progress session (managed_thread_id=%s, managed_turn_id=%s)",

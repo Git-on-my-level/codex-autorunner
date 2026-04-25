@@ -431,14 +431,6 @@ def _build_discord_runner_hooks(
             channel_id=channel_id,
         )
 
-    async def _on_queue_execution_started(started_execution: Any) -> None:
-        await _on_execution_started(started_execution)
-        await _cleanup_stale_queued_progress_placeholder(
-            service,
-            managed_thread_id=managed_thread_id,
-            started_execution=started_execution,
-        )
-
     def _on_execution_finished(started_execution: Any) -> None:
         service._clear_discord_turn_approval_context(
             started_execution=started_execution
@@ -461,8 +453,15 @@ def _build_discord_runner_hooks(
         managed_thread_id=managed_thread_id,
         surface_targets=(("discord", channel_id),),
         base_hooks=ManagedThreadExecutionHooks(
-            on_execution_started=_on_queue_execution_started,
+            on_execution_started=_on_execution_started,
             on_execution_finished=_on_execution_finished,
+        ),
+        on_progress_session_started=lambda started_execution: (
+            _cleanup_stale_queued_progress_placeholder(
+                service,
+                managed_thread_id=managed_thread_id,
+                started_execution=started_execution,
+            )
         ),
     )
 

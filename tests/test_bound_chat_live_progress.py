@@ -51,8 +51,9 @@ async def test_bound_chat_queue_execution_controller_records_completed_targets_o
     class FakeSession:
         surface_targets = (("discord", "channel-1"),)
 
-        async def start(self) -> None:
+        async def start(self) -> bool:
             calls.append("start")
+            return True
 
         async def apply_run_events(self, events: list[object]) -> None:
             _ = events
@@ -125,8 +126,8 @@ async def test_bound_chat_queue_execution_controller_does_not_retain_targets_by_
     class FakeSession:
         surface_targets = (("discord", "channel-1"),)
 
-        async def start(self) -> None:
-            return None
+        async def start(self) -> bool:
+            return True
 
         async def apply_run_events(self, events: list[object]) -> None:
             _ = events
@@ -187,8 +188,9 @@ async def test_bound_chat_queue_execution_controller_finalizes_error_session(
     class FakeSession:
         surface_targets = (("telegram", "123:55"),)
 
-        async def start(self) -> None:
+        async def start(self) -> bool:
             calls.append("start")
+            return True
 
         async def apply_run_events(self, events: list[object]) -> None:
             _ = events
@@ -336,7 +338,7 @@ async def test_bound_chat_queue_execution_controller_ignores_startup_failures(
     class FakeSession:
         surface_targets = (("discord", "channel-1"),)
 
-        async def start(self) -> None:
+        async def start(self) -> bool:
             calls.append("start")
             raise RuntimeError("boom")
 
@@ -374,6 +376,60 @@ async def test_bound_chat_queue_execution_controller_ignores_startup_failures(
     await controller.hooks.on_execution_started(started)
 
     assert controller.surface_targets_for("turn-3") == ()
+    assert calls == ["start", "close"]
+
+
+@pytest.mark.anyio
+async def test_bound_chat_queue_execution_controller_only_runs_post_start_hook_after_visible_start(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    class FakeSession:
+        surface_targets = (("discord", "channel-1"),)
+
+        async def start(self) -> bool:
+            calls.append("start")
+            return False
+
+        async def apply_run_events(self, events: list[object]) -> None:
+            _ = events
+
+        async def finalize(
+            self,
+            *,
+            status: str,
+            failure_message: str | None = None,
+        ) -> None:
+            _ = status, failure_message
+
+        async def close(self) -> None:
+            calls.append("close")
+
+    monkeypatch.setattr(
+        progress_module,
+        "build_bound_chat_live_progress_session",
+        lambda **_: FakeSession(),
+    )
+    controller = build_bound_chat_queue_execution_controller(
+        hub_root=tmp_path,
+        raw_config={},
+        managed_thread_id="thread-1",
+        on_progress_session_started=lambda _started: calls.append("post-start"),
+    )
+    started = SimpleNamespace(
+        execution=SimpleNamespace(execution_id="turn-4"),
+        thread=SimpleNamespace(agent_id="codex"),
+        request=SimpleNamespace(model="gpt-5"),
+    )
+
+    assert controller.hooks.on_execution_started is not None
+    assert controller.hooks.on_execution_finished is not None
+
+    await controller.hooks.on_execution_started(started)
+    await controller.hooks.on_execution_finished(started)
+
     assert calls == ["start", "close"]
 
 

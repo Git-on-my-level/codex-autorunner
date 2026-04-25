@@ -83,6 +83,7 @@ def build_managed_thread_surface_queue_execution_hooks(
     managed_thread_id: str,
     surface_targets: tuple[tuple[str, str], ...],
     base_hooks: Optional[ManagedThreadExecutionHooks] = None,
+    on_progress_session_started: Optional[Callable[[Any], object]] = None,
 ) -> ManagedThreadExecutionHooks:
     return build_bound_chat_queue_execution_controller(
         hub_root=hub_root,
@@ -90,6 +91,7 @@ def build_managed_thread_surface_queue_execution_hooks(
         managed_thread_id=managed_thread_id,
         surface_targets=surface_targets,
         base_hooks=base_hooks or ManagedThreadExecutionHooks(),
+        on_progress_session_started=on_progress_session_started,
     ).hooks
 
 
