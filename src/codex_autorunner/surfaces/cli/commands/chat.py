@@ -314,13 +314,6 @@ def _recent_notification_targets(hub_root: Path, *, limit: int) -> list[str]:
     return targets
 
 
-def _discord_directory_metadata(entry: Optional[Mapping[str, Any]]) -> dict[str, Any]:
-    if not isinstance(entry, Mapping):
-        return {}
-    meta = entry.get("meta")
-    return meta if isinstance(meta, dict) else {}
-
-
 def _telegram_directory_metadata(entry: Optional[Mapping[str, Any]]) -> dict[str, Any]:
     if not isinstance(entry, Mapping):
         return {}
