@@ -7,8 +7,15 @@ from typing import Any, Callable, Dict, Optional, Set, cast
 from ..lifecycle_events import LifecycleEventType
 from .definition import STEP_WANTS_EMIT_ATTR, FlowDefinition, StepFn, StepFn2, StepFn3
 from .failure_diagnostics import ensure_failure_payload
+from .lifecycle_reducer import (
+    NO_CHANGE,
+    EffectKind,
+    FlowTrigger,
+    TransitionResult,
+    TriggerKind,
+    reduce_flow_lifecycle,
+)
 from .models import FlowEvent, FlowEventType, FlowRunRecord, FlowRunStatus
-from .reasons import ensure_reason_summary
 from .store import FlowStore, now_iso
 
 _logger = logging.getLogger(__name__)
@@ -77,7 +84,7 @@ class FlowRuntime:
                 TypeError,
                 AttributeError,
                 sqlite3.Error,
-            ) as exc:  # lifecycle callback boundary - must not crash runtime
+            ) as exc:
                 _logger.exception("Error emitting lifecycle event: %s", exc)
 
     def _emit(
@@ -111,8 +118,62 @@ class FlowRuntime:
                 ValueError,
                 TypeError,
                 sqlite3.Error,
-            ) as e:  # event callback boundary
+            ) as e:
                 _logger.exception("Error emitting event: %s", e)
+
+    def _apply_transition(
+        self,
+        record: FlowRunRecord,
+        result: TransitionResult,
+        run_id: str,
+    ) -> FlowRunRecord:
+        for effect in result.effects:
+            if effect.kind == EffectKind.EMIT_FLOW_EVENT:
+                event_type = FlowEventType(effect.event_type_name)
+                self._emit(event_type, run_id, data=effect.data, step_id=effect.step_id)
+
+        state = (
+            result.state if result.state is not NO_CHANGE else dict(record.state or {})
+        )
+        for effect in result.effects:
+            if effect.kind == EffectKind.ENRICH_FAILURE_PAYLOAD:
+                state = ensure_failure_payload(
+                    state,
+                    record=record,
+                    step_id=effect.step_id,
+                    error_message=effect.error_message,
+                    store=self.store,
+                    note=effect.note,
+                    failed_at=result.finished_at or now_iso(),
+                )
+
+        kwargs: Dict[str, Any] = {"run_id": run_id, "status": result.status}
+        if result.state is not NO_CHANGE:
+            kwargs["state"] = state
+        if result.current_step is not NO_CHANGE:
+            kwargs["current_step"] = result.current_step
+        if result.started_at is not NO_CHANGE:
+            kwargs["started_at"] = result.started_at
+        if result.finished_at is not NO_CHANGE:
+            kwargs["finished_at"] = result.finished_at
+        if result.error_message is not NO_CHANGE:
+            kwargs["error_message"] = result.error_message
+        updated = self.store.update_flow_run_status(**kwargs)
+        if not updated:
+            raise RuntimeError(f"Failed to update flow run {run_id}")
+        record = updated
+
+        for effect in result.effects:
+            if effect.kind == EffectKind.EMIT_LIFECYCLE_EVENT:
+                lifecycle_type = LifecycleEventType(effect.event_type_name)
+                self._emit_lifecycle(
+                    lifecycle_type,
+                    "",
+                    run_id,
+                    self._with_transition_metadata(lifecycle_type, record, effect.data),
+                )
+
+        return record
 
     async def run_flow(
         self,
@@ -131,45 +192,36 @@ class FlowRuntime:
 
         try:
             self.store.set_stop_requested(run_id, False)
+            now = now_iso()
 
             if record.status == FlowRunStatus.PENDING:
-                self._emit(FlowEventType.FLOW_STARTED, run_id)
-                now = now_iso()
-                updated = self.store.update_flow_run_status(
-                    run_id=run_id,
-                    status=FlowRunStatus.RUNNING,
-                    started_at=now,
-                    state=initial_state if initial_state is not None else record.state,
-                    current_step=record.current_step or self.definition.initial_step,
+                trigger = FlowTrigger(
+                    kind=TriggerKind.FLOW_START,
+                    state_output=initial_state if initial_state is not None else {},
                 )
-                if not updated:
-                    raise RuntimeError(f"Failed to start flow run {run_id}")
-                record = updated
-                self._emit_lifecycle(
-                    LifecycleEventType.FLOW_STARTED,
-                    "",
-                    run_id,
-                    self._with_transition_metadata(
-                        LifecycleEventType.FLOW_STARTED, record
-                    ),
+                result = reduce_flow_lifecycle(
+                    record.status,
+                    record.state,
+                    trigger,
+                    now=now,
+                    current_step=record.current_step,
+                    initial_step=self.definition.initial_step,
                 )
+                record = self._apply_transition(record, result, run_id)
             else:
-                self._emit(FlowEventType.FLOW_RESUMED, run_id)
-                updated = self.store.update_flow_run_status(
-                    run_id=run_id,
-                    status=FlowRunStatus.RUNNING,
-                    state=initial_state if initial_state is not None else record.state,
+                trigger = FlowTrigger(
+                    kind=TriggerKind.FLOW_RESUME,
+                    state_output=initial_state if initial_state is not None else {},
                 )
-                if updated:
-                    record = updated
-                self._emit_lifecycle(
-                    LifecycleEventType.FLOW_RESUMED,
-                    "",
-                    run_id,
-                    self._with_transition_metadata(
-                        LifecycleEventType.FLOW_RESUMED, record
-                    ),
+                result = reduce_flow_lifecycle(
+                    record.status,
+                    record.state,
+                    trigger,
+                    now=now,
+                    current_step=record.current_step,
+                    initial_step=self.definition.initial_step,
                 )
+                record = self._apply_transition(record, result, run_id)
 
             next_steps: Set[str] = set()
             if record.current_step:
@@ -183,30 +235,15 @@ class FlowRuntime:
                     record = latest
 
                 if record.stop_requested:
-                    self._emit(FlowEventType.FLOW_STOPPED, run_id)
                     now = now_iso()
-                    state = ensure_reason_summary(
-                        dict(record.state or {}),
-                        status=FlowRunStatus.STOPPED,
-                        default="Stopped by user",
+                    trigger = FlowTrigger(kind=TriggerKind.STOP_REQUESTED)
+                    result = reduce_flow_lifecycle(
+                        record.status,
+                        record.state,
+                        trigger,
+                        now=now,
                     )
-                    updated = self.store.update_flow_run_status(
-                        run_id=run_id,
-                        status=FlowRunStatus.STOPPED,
-                        finished_at=now,
-                        state=state,
-                    )
-                    if not updated:
-                        raise RuntimeError(f"Failed to stop flow run {run_id}")
-                    record = updated
-                    self._emit_lifecycle(
-                        LifecycleEventType.FLOW_STOPPED,
-                        "",
-                        run_id,
-                        self._with_transition_metadata(
-                            LifecycleEventType.FLOW_STOPPED, record
-                        ),
-                    )
+                    record = self._apply_transition(record, result, run_id)
                     break
 
                 step_id = next_steps.pop()
@@ -230,50 +267,22 @@ class FlowRuntime:
             sqlite3.Error,
             AttributeError,
             KeyError,
-        ) as e:  # top-level flow boundary
+        ) as e:
             _logger.exception("Flow run %s failed with exception", run_id)
-            self._emit(
-                FlowEventType.FLOW_FAILED,
-                run_id,
-                data={"error": str(e)},
-            )
             now = now_iso()
-            state = ensure_reason_summary(
-                dict(record.state or {}),
-                status=FlowRunStatus.FAILED,
-                error_message=str(e),
-            )
-            state = ensure_failure_payload(
-                state,
-                record=record,
+            trigger = FlowTrigger(
+                kind=TriggerKind.FLOW_EXCEPTION,
                 step_id=record.current_step,
                 error_message=str(e),
-                store=self.store,
-                note="flow_exception",
-                failed_at=now,
             )
-            updated = self.store.update_flow_run_status(
-                run_id=run_id,
-                status=FlowRunStatus.FAILED,
-                finished_at=now,
-                error_message=str(e),
-                state=state,
+            result = reduce_flow_lifecycle(
+                record.status,
+                record.state,
+                trigger,
+                now=now,
+                current_step=record.current_step,
             )
-            if not updated:
-                raise RuntimeError(
-                    f"Failed to update flow run {run_id} to failed state"
-                ) from e
-            record = updated
-            self._emit_lifecycle(
-                LifecycleEventType.FLOW_FAILED,
-                "",
-                run_id,
-                self._with_transition_metadata(
-                    LifecycleEventType.FLOW_FAILED,
-                    record,
-                    {"error": str(e)},
-                ),
-            )
+            record = self._apply_transition(record, result, run_id)
             return record
 
     async def _execute_step(
@@ -342,211 +351,80 @@ class FlowRuntime:
                     record, record.input_data, _bound_emit
                 )
             else:
-                # Backwards-compatible call for older StepFn implementations.
                 outcome = await cast(StepFn2, step_fn)(record, record.input_data)
 
-            if outcome.output:
-                record.state.update(outcome.output)
+            now = now_iso()
+            state_output = dict(outcome.output) if outcome.output else {}
 
             if outcome.status == FlowRunStatus.RUNNING:
-                self._emit(
-                    FlowEventType.STEP_COMPLETED,
-                    record.id,
-                    data={"step_id": step_id, "next_steps": list(outcome.next_steps)},
+                trigger = FlowTrigger(
+                    kind=TriggerKind.STEP_CONTINUE,
                     step_id=step_id,
+                    next_steps=frozenset(outcome.next_steps),
+                    state_output=state_output,
                 )
-
-                if outcome.next_steps:
-                    next_step = min(outcome.next_steps)
-                else:
-                    next_step = None
-
-                updated = self.store.update_flow_run_status(
-                    run_id=record.id,
-                    status=FlowRunStatus.RUNNING,
-                    state=record.state,
-                    current_step=next_step,
+                result = reduce_flow_lifecycle(
+                    record.status, record.state, trigger, now=now, current_step=step_id
                 )
-                if not updated:
-                    raise RuntimeError(
-                        f"Failed to update flow run after step {step_id}"
-                    )
-                record = updated
+                record = self._apply_transition(record, result, record.id)
 
             elif outcome.status == FlowRunStatus.COMPLETED:
-                self._emit(
-                    FlowEventType.STEP_COMPLETED,
-                    record.id,
-                    data={"step_id": step_id, "status": "completed"},
+                trigger = FlowTrigger(
+                    kind=TriggerKind.STEP_COMPLETE,
                     step_id=step_id,
+                    state_output=state_output,
                 )
-                self._emit(FlowEventType.FLOW_COMPLETED, record.id)
-
-                now = now_iso()
-                updated = self.store.update_flow_run_status(
-                    run_id=record.id,
-                    status=FlowRunStatus.COMPLETED,
-                    finished_at=now,
-                    state=record.state,
-                    current_step=None,
+                result = reduce_flow_lifecycle(
+                    record.status, record.state, trigger, now=now, current_step=step_id
                 )
-                if not updated:
-                    raise RuntimeError(
-                        f"Failed to update flow run after step {step_id}"
-                    )
-                record = updated
-                self._emit_lifecycle(
-                    LifecycleEventType.FLOW_COMPLETED,
-                    "",
-                    record.id,
-                    self._with_transition_metadata(
-                        LifecycleEventType.FLOW_COMPLETED, record
-                    ),
-                )
+                record = self._apply_transition(record, result, record.id)
 
             elif outcome.status == FlowRunStatus.FAILED:
-                self._emit(
-                    FlowEventType.STEP_FAILED,
-                    record.id,
-                    data={"step_id": step_id, "error": outcome.error},
-                    step_id=step_id,
-                )
-
-                now = now_iso()
-                state = ensure_reason_summary(
-                    dict(record.state or {}),
-                    status=FlowRunStatus.FAILED,
-                    error_message=outcome.error,
-                )
-                state = ensure_failure_payload(
-                    state,
-                    record=record,
+                trigger = FlowTrigger(
+                    kind=TriggerKind.STEP_FAIL,
                     step_id=step_id,
                     error_message=outcome.error,
-                    store=self.store,
-                    note="step_failed",
-                    failed_at=now,
+                    state_output=state_output,
                 )
-                updated = self.store.update_flow_run_status(
-                    run_id=record.id,
-                    status=FlowRunStatus.FAILED,
-                    finished_at=now,
-                    error_message=outcome.error,
-                    state=state,
-                    current_step=None,
+                result = reduce_flow_lifecycle(
+                    record.status, record.state, trigger, now=now, current_step=step_id
                 )
-                if not updated:
-                    raise RuntimeError(
-                        f"Failed to update flow run after step {step_id}"
-                    )
-                record = updated
-                self._emit_lifecycle(
-                    LifecycleEventType.FLOW_FAILED,
-                    "",
-                    record.id,
-                    self._with_transition_metadata(
-                        LifecycleEventType.FLOW_FAILED,
-                        record,
-                        {"error": outcome.error or ""},
-                    ),
-                )
+                record = self._apply_transition(record, result, record.id)
 
             elif outcome.status == FlowRunStatus.STOPPED:
-                self._emit(
-                    FlowEventType.STEP_COMPLETED,
-                    record.id,
-                    data={"step_id": step_id, "status": "stopped"},
+                trigger = FlowTrigger(
+                    kind=TriggerKind.STEP_STOP,
                     step_id=step_id,
+                    state_output=state_output,
                 )
-
-                now = now_iso()
-                state = ensure_reason_summary(
-                    dict(record.state or {}),
-                    status=FlowRunStatus.STOPPED,
+                result = reduce_flow_lifecycle(
+                    record.status, record.state, trigger, now=now, current_step=step_id
                 )
-                updated = self.store.update_flow_run_status(
-                    run_id=record.id,
-                    status=FlowRunStatus.STOPPED,
-                    finished_at=now,
-                    state=state,
-                    current_step=None,
-                )
-                if not updated:
-                    raise RuntimeError(
-                        f"Failed to update flow run after step {step_id}"
-                    )
-                record = updated
-                self._emit_lifecycle(
-                    LifecycleEventType.FLOW_STOPPED,
-                    "",
-                    record.id,
-                    self._with_transition_metadata(
-                        LifecycleEventType.FLOW_STOPPED, record
-                    ),
-                )
+                record = self._apply_transition(record, result, record.id)
 
             elif outcome.status == FlowRunStatus.PAUSED:
-                self._emit(
-                    FlowEventType.STEP_COMPLETED,
-                    record.id,
-                    data={"step_id": step_id, "status": "paused"},
+                trigger = FlowTrigger(
+                    kind=TriggerKind.STEP_PAUSE,
                     step_id=step_id,
+                    state_output=state_output,
                 )
-
-                state = ensure_reason_summary(
-                    dict(record.state or {}),
-                    status=FlowRunStatus.PAUSED,
+                result = reduce_flow_lifecycle(
+                    record.status, record.state, trigger, now=now, current_step=step_id
                 )
-                updated = self.store.update_flow_run_status(
-                    run_id=record.id,
-                    status=FlowRunStatus.PAUSED,
-                    state=state,
-                    current_step=step_id,
-                )
-                if not updated:
-                    raise RuntimeError(
-                        f"Failed to update flow run after step {step_id}"
-                    )
-                record = updated
-                self._emit_lifecycle(LifecycleEventType.FLOW_PAUSED, "", record.id, {})
+                record = self._apply_transition(record, result, record.id)
 
             return record
 
-        except Exception as e:  # intentional: user-defined step function
+        except Exception as e:
             _logger.exception("Step %s failed with exception", step_id)
-            self._emit(
-                FlowEventType.STEP_FAILED,
-                record.id,
-                data={"step_id": step_id, "error": str(e)},
-                step_id=step_id,
-            )
-
             now = now_iso()
-            state = ensure_reason_summary(
-                dict(record.state or {}),
-                status=FlowRunStatus.FAILED,
-                error_message=str(e),
-            )
-            state = ensure_failure_payload(
-                state,
-                record=record,
+            trigger = FlowTrigger(
+                kind=TriggerKind.STEP_EXCEPTION,
                 step_id=step_id,
                 error_message=str(e),
-                store=self.store,
-                note="step_exception",
-                failed_at=now,
             )
-            updated = self.store.update_flow_run_status(
-                run_id=record.id,
-                status=FlowRunStatus.FAILED,
-                finished_at=now,
-                error_message=str(e),
-                state=state,
-                current_step=None,
+            result = reduce_flow_lifecycle(
+                record.status, record.state, trigger, now=now, current_step=step_id
             )
-            if not updated:
-                raise RuntimeError(
-                    f"Failed to update flow run after step {step_id}"
-                ) from e
-            record = updated
+            record = self._apply_transition(record, result, record.id)
             return record
