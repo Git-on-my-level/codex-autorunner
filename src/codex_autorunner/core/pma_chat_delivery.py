@@ -22,6 +22,7 @@ from .chat_bindings import (
     preferred_non_pma_chat_notification_source_for_workspace,
 )
 from .config import load_hub_config
+from .pma_dispatch_decision import _lane_delivery_target_from_context
 from .pma_domain.models import (
     PmaDeliveryAttempt,
     PmaDeliveryTarget,
@@ -106,6 +107,38 @@ def _ordered_surface_kinds_for_bound_delivery(
     return ("discord", "telegram")
 
 
+def _suppression_target_for_dispatch_decision_path(
+    *,
+    delivery_target: Optional[dict[str, Any]],
+    context_payload: Optional[Mapping[str, Any]],
+    dispatch_decision: dict[str, Any],
+) -> Optional[tuple[str, str]]:
+    """Surface kind/key used for duplicate/no-op suppression when using a persisted decision.
+
+    Prefer ``delivery_target``, then lane ids in ``context_payload`` / ``wake_up``, then the
+    first explicit attempt in ``dispatch_decision`` (lane-derived routes persist there).
+    """
+    normalized = _normalize_pma_delivery_target(delivery_target)
+    if normalized is not None:
+        return normalized
+    lane_from_context = _lane_delivery_target_from_context(context_payload)
+    if lane_from_context is not None:
+        return lane_from_context
+    raw_attempts = dispatch_decision.get("attempts")
+    if not isinstance(raw_attempts, (list, tuple)):
+        return None
+    for entry in raw_attempts:
+        if not isinstance(entry, dict):
+            continue
+        if _normalize_optional_text(entry.get("route")) != "explicit":
+            continue
+        surface_kind = _normalize_optional_text(entry.get("surface_kind"))
+        surface_key = _normalize_optional_text(entry.get("surface_key"))
+        if surface_kind in {"discord", "telegram"} and surface_key is not None:
+            return surface_kind, surface_key
+    return None
+
+
 def _attempts_from_dispatch_decision(
     *,
     dispatch_decision: dict[str, Any],
@@ -182,9 +215,13 @@ async def deliver_pma_notification(
             dispatch_decision=dispatch_decision,
             normalized_repo_id=normalized_repo_id,
         )
-        normalized_target = _normalize_pma_delivery_target(delivery_target)
-        if normalized_target is not None:
-            surface_kind, surface_key = normalized_target
+        suppression_target = _suppression_target_for_dispatch_decision_path(
+            delivery_target=delivery_target,
+            context_payload=context_payload,
+            dispatch_decision=dispatch_decision,
+        )
+        if suppression_target is not None:
+            surface_kind, surface_key = suppression_target
             target_matches_binding = _delivery_target_matches_active_thread_binding(
                 hub_root=hub_root,
                 managed_thread_id=managed_thread_id,

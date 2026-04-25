@@ -117,13 +117,13 @@ def _delivery_target_matches_any_thread_binding(
     )
 
 
-def _delivery_target_from_lane_id(lane_id: Any) -> Optional[tuple[str, str]]:
+def _surface_binding_from_lane_id(
+    lane_id: Optional[str],
+) -> Optional[tuple[str, str]]:
     normalized_lane_id = _normalize_optional_text(lane_id)
-    if normalized_lane_id is None:
+    if normalized_lane_id is None or ":" not in normalized_lane_id:
         return None
-    surface_kind_raw, separator, surface_key_raw = normalized_lane_id.partition(":")
-    if not separator:
-        return None
+    surface_kind_raw, surface_key_raw = normalized_lane_id.split(":", 1)
     surface_kind = _normalize_optional_text(surface_kind_raw)
     surface_key = _normalize_optional_text(surface_key_raw)
     if surface_kind not in {"discord", "telegram"} or surface_key is None:
@@ -138,10 +138,14 @@ def _lane_delivery_target_from_context(
         return None
     wake_up = context_payload.get("wake_up")
     if isinstance(wake_up, Mapping):
-        target = _delivery_target_from_lane_id(wake_up.get("lane_id"))
+        target = _surface_binding_from_lane_id(
+            _normalize_optional_text(wake_up.get("lane_id"))
+        )
         if target is not None:
             return target
-    return _delivery_target_from_lane_id(context_payload.get("lane_id"))
+    return _surface_binding_from_lane_id(
+        _normalize_optional_text(context_payload.get("lane_id"))
+    )
 
 
 def build_pma_dispatch_decision(
@@ -156,6 +160,7 @@ def build_pma_dispatch_decision(
     context_payload: Optional[Mapping[str, Any]],
     binding_metadata_by_thread: Mapping[str, Mapping[str, Any]],
     preferred_bound_surface_kinds: tuple[str, ...] = (),
+    lane_id: Optional[str] = None,
 ) -> PmaDispatchDecision:
     from .pma_domain.publish_policy import evaluate_publish_suppression
 
@@ -164,13 +169,16 @@ def build_pma_dispatch_decision(
     ).lower()
     normalized_source_kind = _normalize_optional_text(source_kind) or "automation"
     normalized_repo_id = _normalize_optional_text(repo_id)
+    lane_surface_binding = _surface_binding_from_lane_id(lane_id)
 
     if normalized_delivery == "none":
         return PmaDispatchDecision(requested_delivery="none")
 
     attempts: list[PmaDispatchAttempt] = []
     normalized_target = _normalize_pma_delivery_target(delivery_target)
-    lane_target = _lane_delivery_target_from_context(context_payload)
+    lane_target = _surface_binding_from_lane_id(lane_id) or _lane_delivery_target_from_context(
+        context_payload
+    )
     explicit_target = normalized_target or lane_target
     if explicit_target is not None:
         target_requires_known_binding = normalized_target is not None
@@ -221,6 +229,12 @@ def build_pma_dispatch_decision(
                 route="primary_pma",
                 delivery_mode="primary_pma",
                 surface_kind=surface_kind,
+                surface_key=(
+                    lane_surface_binding[1]
+                    if lane_surface_binding is not None
+                    and lane_surface_binding[0] == surface_kind
+                    else None
+                ),
                 repo_id=normalized_repo_id,
             )
             for surface_kind in ("discord", "telegram")
@@ -232,6 +246,12 @@ def build_pma_dispatch_decision(
                 route="bound",
                 delivery_mode="bound",
                 surface_kind=surface_kind,
+                surface_key=(
+                    lane_surface_binding[1]
+                    if lane_surface_binding is not None
+                    and lane_surface_binding[0] == surface_kind
+                    else None
+                ),
                 repo_id=normalized_repo_id,
                 workspace_root=str(workspace_root),
             )

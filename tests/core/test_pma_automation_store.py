@@ -12,6 +12,7 @@ from codex_autorunner.core.pma_automation_store import (
     PmaAutomationThreadNotFoundError,
 )
 from codex_autorunner.core.pma_automation_types import default_pma_automation_state
+from codex_autorunner.core.pma_domain.models import PmaDispatchDecision
 from codex_autorunner.core.pma_thread_store import (
     PmaThreadStore,
     prepare_pma_thread_store,
@@ -782,6 +783,54 @@ def test_notify_transition_uses_lane_delivery_target_in_dispatch_decision(
     assert decision["attempts"][0]["route"] == "explicit"
     assert decision["attempts"][0]["surface_kind"] == "discord"
     assert decision["attempts"][0]["surface_key"] == "1497177978256232530"
+
+
+def test_compute_dispatch_decision_for_wakeup_passes_lane_id(
+    tmp_path, monkeypatch
+) -> None:
+    store = PmaAutomationStore(tmp_path, durable=False)
+    captured: dict[str, object] = {}
+
+    def _fake_build_pma_dispatch_decision(**kwargs):
+        captured.update(kwargs)
+        return PmaDispatchDecision(requested_delivery="auto")
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.pma_automation_store.build_pma_dispatch_decision",
+        _fake_build_pma_dispatch_decision,
+    )
+
+    wakeup, deduped = store.enqueue_wakeup(
+        source="automation",
+        repo_id="repo-1",
+        lane_id="discord:12345",
+    )
+
+    assert deduped is False
+    assert captured["lane_id"] == "discord:12345"
+    assert captured["managed_thread_id"] == wakeup.thread_id
+
+
+def test_enqueue_wakeup_dispatch_decision_uses_wakeup_lane_id_surface_key(
+    tmp_path,
+) -> None:
+    store = PmaAutomationStore(tmp_path, durable=False)
+
+    wakeup, deduped = store.enqueue_wakeup(
+        source="automation",
+        repo_id="repo-1",
+        lane_id="discord:12345",
+    )
+
+    assert deduped is False
+    decision = wakeup.metadata["dispatch_decision"]
+    attempts_by_surface = {
+        (attempt["route"], attempt["surface_kind"]): attempt.get("surface_key")
+        for attempt in decision["attempts"]
+    }
+    assert attempts_by_surface[("explicit", "discord")] == "12345"
+    assert attempts_by_surface[("primary_pma", "discord")] == "12345"
+    assert attempts_by_surface[("primary_pma", "telegram")] is None
 
 
 def test_enqueue_wakeup_tolerates_runtime_error_while_loading_binding_metadata(

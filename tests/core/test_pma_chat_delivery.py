@@ -373,6 +373,69 @@ async def test_deliver_pma_notification_suppresses_duplicate_notice_for_same_thr
 
 
 @pytest.mark.anyio
+async def test_deliver_pma_notification_suppresses_duplicate_when_lane_explicit_matches_binding(
+    tmp_path: Path,
+) -> None:
+    """Lane-derived explicit attempts must still run duplicate/no-op suppression (Codex review)."""
+    hub_root = _hub(tmp_path)
+    workspace = (hub_root / "worktrees" / "repo-g-lane").resolve()
+    workspace.mkdir(parents=True, exist_ok=True)
+    _write_manifest(hub_root, "repo-g-lane", workspace)
+
+    discord_store = DiscordStateStore(
+        hub_root / ".codex-autorunner" / "discord_state.sqlite3"
+    )
+    try:
+        await discord_store.upsert_binding(
+            channel_id="repo-g-lane-discord",
+            guild_id="guild-1",
+            workspace_path=str(workspace),
+            repo_id="repo-g-lane",
+        )
+        thread_id = _create_bound_thread(
+            hub_root,
+            workspace,
+            surface_kind="discord",
+            surface_key="repo-g-lane-discord",
+        )
+
+        dispatch_decision = {
+            "suppress_publish": False,
+            "attempts": [
+                {
+                    "route": "explicit",
+                    "delivery_mode": "bound",
+                    "surface_kind": "discord",
+                    "surface_key": "repo-g-lane-discord",
+                    "repo_id": "repo-g-lane",
+                }
+            ],
+        }
+
+        outcome = await deliver_pma_notification(
+            hub_root=hub_root,
+            repo_id="repo-g-lane",
+            message="Duplicate — repo-g-lane thread already handled. No action.",
+            correlation_id="corr-lane-explicit-duplicate",
+            delivery="auto",
+            source_kind="managed_thread_completed",
+            managed_thread_id=thread_id,
+            delivery_target=None,
+            context_payload=None,
+            dispatch_decision=dispatch_decision,
+        )
+
+        assert outcome == {
+            "route": "suppressed_duplicate",
+            "targets": 1,
+            "published": 0,
+        }
+        assert await discord_store.list_outbox() == []
+    finally:
+        await discord_store.close()
+
+
+@pytest.mark.anyio
 async def test_deliver_pma_notification_does_not_suppress_duplicate_notice_without_thread_id(
     tmp_path: Path,
 ) -> None:
