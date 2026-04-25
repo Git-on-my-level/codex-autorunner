@@ -42,7 +42,12 @@ from .pma_dispatch_decision import (
     build_pma_dispatch_decision,
     pma_dispatch_decision_to_dict,
 )
-from .pma_domain.models import PmaSubscription
+from .pma_domain.automation_reducer import (
+    reduce_dequeue_due_timers,
+    reduce_timer_touch,
+    reduce_wakeup_dispatch,
+)
+from .pma_domain.models import PmaSubscription, PmaTimer, PmaWakeup
 from .pma_domain.subscription_reducer import (
     ReduceTransitionResult,
     TimerFiredEvent,
@@ -1214,6 +1219,76 @@ class PmaAutomationStore:
             metadata=dict(entry.metadata),
         )
 
+    @staticmethod
+    def _store_timer_to_domain(entry: PmaAutomationTimer) -> PmaTimer:
+        return PmaTimer(
+            timer_id=entry.timer_id,
+            due_at=entry.due_at,
+            created_at=entry.created_at,
+            updated_at=entry.updated_at,
+            state=entry.state,
+            fired_at=entry.fired_at,
+            timer_type=entry.timer_type,
+            idle_seconds=entry.idle_seconds,
+            subscription_id=entry.subscription_id,
+            repo_id=entry.repo_id,
+            run_id=entry.run_id,
+            thread_id=entry.thread_id,
+            lane_id=entry.lane_id,
+            from_state=entry.from_state,
+            to_state=entry.to_state,
+            reason=entry.reason,
+            idempotency_key=entry.idempotency_key,
+            metadata=dict(entry.metadata or {}),
+        )
+
+    @staticmethod
+    def _store_wakeup_to_domain(entry: PmaAutomationWakeup) -> PmaWakeup:
+        return PmaWakeup(
+            wakeup_id=entry.wakeup_id,
+            created_at=entry.created_at,
+            updated_at=entry.updated_at,
+            state=entry.state,
+            dispatched_at=entry.dispatched_at,
+            source=entry.source,
+            repo_id=entry.repo_id,
+            run_id=entry.run_id,
+            thread_id=entry.thread_id,
+            lane_id=entry.lane_id,
+            from_state=entry.from_state,
+            to_state=entry.to_state,
+            reason=entry.reason,
+            timestamp=entry.timestamp,
+            idempotency_key=entry.idempotency_key,
+            subscription_id=entry.subscription_id,
+            timer_id=entry.timer_id,
+            event_id=entry.event_id,
+            event_type=entry.event_type,
+            event_data=dict(entry.event_data or {}),
+            metadata=dict(entry.metadata or {}),
+        )
+
+    @staticmethod
+    def _apply_domain_timer_to_store(
+        store_timer: PmaAutomationTimer, domain_timer: PmaTimer
+    ) -> None:
+        store_timer.due_at = domain_timer.due_at
+        store_timer.updated_at = domain_timer.updated_at
+        store_timer.state = domain_timer.state
+        store_timer.fired_at = domain_timer.fired_at
+        store_timer.idle_seconds = domain_timer.idle_seconds
+        store_timer.reason = domain_timer.reason
+        store_timer.metadata = dict(domain_timer.metadata or {})
+
+    @staticmethod
+    def _apply_domain_wakeup_to_store(
+        store_wakeup: PmaAutomationWakeup, domain_wakeup: PmaWakeup
+    ) -> None:
+        store_wakeup.state = domain_wakeup.state
+        store_wakeup.dispatched_at = domain_wakeup.dispatched_at
+        store_wakeup.updated_at = domain_wakeup.updated_at
+        store_wakeup.metadata = dict(domain_wakeup.metadata or {})
+
     def _apply_reduce_result(
         self,
         subscriptions: list[PmaLifecycleSubscription],
@@ -2135,24 +2210,21 @@ class PmaAutomationStore:
             for entry in timers:
                 if entry.timer_id != target_id:
                     continue
-                if due_at is None:
-                    if delay_seconds is not None:
-                        entry.due_at = _iso_after_seconds(delay_seconds)
-                    elif entry.timer_type == TIMER_TYPE_WATCHDOG:
-                        entry.due_at = _iso_after_seconds(
-                            entry.idle_seconds or DEFAULT_WATCHDOG_IDLE_SECONDS
-                        )
-                    else:
-                        entry.due_at = _iso_after_seconds(delay_seconds or 0)
-                else:
-                    entry.due_at = due_at
-                entry.state = "pending"
-                entry.fired_at = None
-                if reason is not None:
-                    entry.reason = reason
-                entry.updated_at = _iso_now()
-                self._save_structured_unlocked(state, subscriptions, timers, wakeups)
-                return {"status": "ok", "timer": entry.to_dict(), "touched": True}
+                domain_timer = self._store_timer_to_domain(entry)
+                now_dt = datetime.now(timezone.utc)
+                result = reduce_timer_touch(
+                    domain_timer,
+                    due_at=due_at,
+                    delay_seconds=delay_seconds,
+                    reason=reason,
+                    now=now_dt,
+                )
+                if result.touched and result.updated_timer is not None:
+                    self._apply_domain_timer_to_store(entry, result.updated_timer)
+                    self._save_structured_unlocked(
+                        state, subscriptions, timers, wakeups
+                    )
+                    return {"status": "ok", "timer": entry.to_dict(), "touched": True}
         return {"status": "ok", "timer_id": target_id, "touched": False}
 
     def refresh_timer(
@@ -2187,55 +2259,14 @@ class PmaAutomationStore:
 
         with file_lock(self._lock_path()):
             state, subscriptions, timers, wakeups = self._load_structured_unlocked()
-            due: list[PmaAutomationTimer] = []
-            now_stamp = _iso_now()
-            for entry in timers:
-                if entry.state != "pending":
-                    continue
-                due_at_dt = _parse_iso(entry.due_at)
-                if due_at_dt is None:
-                    continue
-                if due_at_dt > now_dt:
-                    continue
-                if entry.timer_type == TIMER_TYPE_WATCHDOG:
-                    entry.fired_at = now_stamp
-                    entry.updated_at = now_stamp
-                    due.append(
-                        PmaAutomationTimer(
-                            timer_id=entry.timer_id,
-                            due_at=entry.due_at,
-                            created_at=entry.created_at,
-                            updated_at=entry.updated_at,
-                            state="fired",
-                            fired_at=now_stamp,
-                            timer_type=entry.timer_type,
-                            idle_seconds=entry.idle_seconds,
-                            subscription_id=entry.subscription_id,
-                            repo_id=entry.repo_id,
-                            run_id=entry.run_id,
-                            thread_id=entry.thread_id,
-                            lane_id=entry.lane_id,
-                            from_state=entry.from_state,
-                            to_state=entry.to_state,
-                            reason=entry.reason,
-                            idempotency_key=entry.idempotency_key,
-                            metadata=dict(entry.metadata or {}),
-                        )
-                    )
-                    if entry.idle_seconds is None or entry.idle_seconds <= 0:
-                        entry.idle_seconds = DEFAULT_WATCHDOG_IDLE_SECONDS
-                    entry.due_at = _iso_after_seconds(entry.idle_seconds)
-                    entry.state = "pending"
-                else:
-                    entry.state = "fired"
-                    entry.fired_at = now_stamp
-                    entry.updated_at = now_stamp
-                    due.append(entry)
-                if len(due) >= due_limit:
-                    break
-            if due:
+            domain_timers = [self._store_timer_to_domain(t) for t in timers]
+            result = reduce_dequeue_due_timers(domain_timers, now_dt, limit=due_limit)
+            for i, domain_timer in enumerate(result.updated_timers):
+                if i < len(timers):
+                    self._apply_domain_timer_to_store(timers[i], domain_timer)
+            if result.fired_count > 0:
                 self._save_structured_unlocked(state, subscriptions, timers, wakeups)
-            return [entry.to_dict() for entry in due]
+            return [asdict(output.fired_timer) for output in result.due]
 
     def enqueue_wakeup(
         self,
@@ -2478,12 +2509,11 @@ class PmaAutomationStore:
             for entry in wakeups:
                 if entry.wakeup_id != target_id:
                     continue
-                if entry.state == "dispatched":
-                    return False
-                entry.state = "dispatched"
-                entry.dispatched_at = stamp
-                entry.updated_at = stamp
-                changed = True
+                domain_wakeup = self._store_wakeup_to_domain(entry)
+                result = reduce_wakeup_dispatch(domain_wakeup, stamp)
+                if result.dispatched and result.updated_wakeup is not None:
+                    self._apply_domain_wakeup_to_store(entry, result.updated_wakeup)
+                    changed = True
                 break
             if changed:
                 self._save_structured_unlocked(state, subscriptions, timers, wakeups)
