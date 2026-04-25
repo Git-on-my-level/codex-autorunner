@@ -1139,7 +1139,7 @@ class PmaAutomationStore:
             binding_metadata_by_thread = active_chat_binding_metadata_by_thread(
                 hub_root=self._hub_root
             )
-        except (OSError, ValueError):
+        except (OSError, RuntimeError, ValueError):
             return
 
         delivery_target = wakeup.metadata.get("delivery_target")
@@ -1152,7 +1152,7 @@ class PmaAutomationStore:
                     raw_ws = _normalize_text(thread.get("workspace_root"))
                     if raw_ws:
                         workspace_root = Path(raw_ws)
-            except (OSError, ValueError):
+            except (OSError, RuntimeError, ValueError):
                 pass
 
         preferred_bound_surface_kinds: tuple[str, ...] = ("discord", "telegram")
@@ -1167,7 +1167,7 @@ class PmaAutomationStore:
                     raw_config=raw_config,
                     workspace_root=workspace_root,
                 )
-            except (OSError, ValueError, TypeError, KeyError):
+            except (OSError, RuntimeError, ValueError, TypeError, KeyError):
                 preferred = None
             if preferred in {"discord", "telegram"}:
                 ordered = [preferred]

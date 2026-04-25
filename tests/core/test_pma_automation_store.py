@@ -752,6 +752,69 @@ def test_enqueue_wakeup_persists_dispatch_decision(tmp_path) -> None:
     assert isinstance(decision["attempts"], list)
 
 
+def test_enqueue_wakeup_tolerates_runtime_error_while_loading_binding_metadata(
+    tmp_path, monkeypatch
+) -> None:
+    store = PmaAutomationStore(tmp_path, durable=False)
+
+    def _raise_runtime_error(*args, **kwargs):
+        _ = args, kwargs
+        raise RuntimeError("bindings unavailable")
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.pma_automation_store.active_chat_binding_metadata_by_thread",
+        _raise_runtime_error,
+    )
+
+    wakeup, deduped = store.enqueue_wakeup(
+        source="automation",
+        repo_id="repo-1",
+    )
+
+    assert deduped is False
+    assert wakeup.wakeup_id
+    assert store.list_pending_wakeups(limit=10)[0]["wakeup_id"] == wakeup.wakeup_id
+    assert "dispatch_decision" not in wakeup.metadata
+
+
+def test_notify_transition_tolerates_runtime_error_while_loading_workspace_preference(
+    tmp_path, monkeypatch
+) -> None:
+    store = PmaAutomationStore(tmp_path, durable=False)
+    thread_id = _create_managed_thread(tmp_path)
+
+    store.create_subscription(
+        {
+            "event_type": "managed_thread_completed",
+            "thread_id": thread_id,
+        }
+    )
+
+    def _raise_runtime_error(*args, **kwargs):
+        _ = args, kwargs
+        raise RuntimeError("workspace preference unavailable")
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.pma_automation_store.preferred_non_pma_chat_notification_source_for_workspace",
+        _raise_runtime_error,
+    )
+
+    result = store.notify_transition(
+        {
+            "event_type": "managed_thread_completed",
+            "thread_id": thread_id,
+            "from_state": "running",
+            "to_state": "completed",
+            "transition_id": f"{thread_id}:completed",
+        }
+    )
+
+    assert result["created"] == 1
+    pending = store.list_pending_wakeups(limit=10)
+    assert len(pending) == 1
+    assert pending[0]["thread_id"] == thread_id
+
+
 def test_dispatch_decision_survives_round_trip(tmp_path) -> None:
     store = PmaAutomationStore(tmp_path, durable=False)
     thread_id = _create_managed_thread(tmp_path, surface_kind="telegram")
