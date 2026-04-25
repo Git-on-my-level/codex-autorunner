@@ -101,7 +101,7 @@ async def _cleanup_failed_provisioned_worktree(
             archive=False,
             force=True,
         )
-    except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as exc:
+    except Exception as exc:  # intentional: cleanup must not mask caller's original error
         _logger.warning(
             "Failed to clean up provisioned PMA worktree %s after thread creation failed: %s",
             normalized_repo_id,
