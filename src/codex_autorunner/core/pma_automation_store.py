@@ -1180,6 +1180,7 @@ class PmaAutomationStore:
             source_kind=wakeup.source or "automation",
             repo_id=wakeup.repo_id,
             workspace_root=workspace_root,
+            lane_id=wakeup.lane_id,
             managed_thread_id=wakeup.thread_id,
             delivery_target=(
                 delivery_target if isinstance(delivery_target, dict) else None
