@@ -13,6 +13,9 @@ from codex_autorunner.core.orchestration import (
     initialize_orchestration_sqlite,
     plan_chat_operation_recovery,
 )
+from codex_autorunner.core.orchestration.chat_operation_state import (
+    is_valid_chat_operation_transition,
+)
 
 
 def _ledger(tmp_path: Path) -> SQLiteChatOperationLedger:
@@ -201,3 +204,149 @@ def test_patch_operation_preserves_first_visible_feedback_timestamp(
 
     assert updated is not None
     assert updated.first_visible_feedback_at == "2026-04-15T01:00:00Z"
+
+
+@pytest.mark.parametrize(
+    ("from_state", "to_state"),
+    (
+        (ChatOperationState.RECEIVED, ChatOperationState.DELIVERING),
+        (ChatOperationState.RECEIVED, ChatOperationState.COMPLETED),
+        (ChatOperationState.RUNNING, ChatOperationState.CANCELLED),
+        (ChatOperationState.RECEIVED, ChatOperationState.RUNNING),
+        (ChatOperationState.RECEIVED, ChatOperationState.QUEUED),
+        (ChatOperationState.QUEUED, ChatOperationState.RUNNING),
+        (ChatOperationState.RUNNING, ChatOperationState.DELIVERING),
+        (ChatOperationState.RUNNING, ChatOperationState.COMPLETED),
+        (ChatOperationState.RUNNING, ChatOperationState.FAILED),
+        (ChatOperationState.DELIVERING, ChatOperationState.COMPLETED),
+    ),
+)
+def test_valid_transitions_accepted_by_ledger(
+    tmp_path: Path,
+    from_state: ChatOperationState,
+    to_state: ChatOperationState,
+) -> None:
+    ledger = _ledger(tmp_path)
+    ledger.upsert_operation(
+        ChatOperationSnapshot(
+            operation_id="transition-op",
+            surface_kind="discord",
+            surface_operation_key="interaction-trans",
+            state=from_state,
+            created_at="2026-04-15T01:00:00Z",
+            updated_at="2026-04-15T01:00:00Z",
+        )
+    )
+    assert is_valid_chat_operation_transition(from_state, to_state)
+    updated = ledger.patch_operation(
+        "transition-op",
+        state=to_state,
+        validate_transition=True,
+    )
+    assert updated is not None
+    assert updated.state is to_state
+
+
+@pytest.mark.parametrize(
+    ("from_state", "to_state"),
+    (
+        (ChatOperationState.COMPLETED, ChatOperationState.RUNNING),
+        (ChatOperationState.FAILED, ChatOperationState.RUNNING),
+        (ChatOperationState.CANCELLED, ChatOperationState.RUNNING),
+        (ChatOperationState.INTERRUPTED, ChatOperationState.RUNNING),
+        (ChatOperationState.COMPLETED, ChatOperationState.FAILED),
+    ),
+)
+def test_invalid_transitions_rejected_by_ledger(
+    tmp_path: Path,
+    from_state: ChatOperationState,
+    to_state: ChatOperationState,
+) -> None:
+    ledger = _ledger(tmp_path)
+    ledger.upsert_operation(
+        ChatOperationSnapshot(
+            operation_id="invalid-op",
+            surface_kind="discord",
+            surface_operation_key="interaction-invalid",
+            state=from_state,
+            created_at="2026-04-15T01:00:00Z",
+            updated_at="2026-04-15T01:00:00Z",
+        )
+    )
+    assert not is_valid_chat_operation_transition(from_state, to_state)
+    with pytest.raises(ValueError, match="invalid chat operation transition"):
+        ledger.patch_operation(
+            "invalid-op",
+            state=to_state,
+            validate_transition=True,
+        )
+
+
+def test_invalid_transition_bypass_with_validate_false(tmp_path: Path) -> None:
+    ledger = _ledger(tmp_path)
+    ledger.upsert_operation(
+        ChatOperationSnapshot(
+            operation_id="bypass-op",
+            surface_kind="discord",
+            surface_operation_key="interaction-bypass",
+            state=ChatOperationState.COMPLETED,
+            created_at="2026-04-15T01:00:00Z",
+            updated_at="2026-04-15T01:00:00Z",
+        )
+    )
+    updated = ledger.patch_operation(
+        "bypass-op",
+        state=ChatOperationState.RUNNING,
+        validate_transition=False,
+    )
+    assert updated is not None
+    assert updated.state is ChatOperationState.RUNNING
+
+
+def test_same_state_patch_is_allowed(tmp_path: Path) -> None:
+    ledger = _ledger(tmp_path)
+    ledger.upsert_operation(
+        ChatOperationSnapshot(
+            operation_id="same-op",
+            surface_kind="discord",
+            surface_operation_key="interaction-same",
+            state=ChatOperationState.RUNNING,
+            created_at="2026-04-15T01:00:00Z",
+            updated_at="2026-04-15T01:00:00Z",
+        )
+    )
+    updated = ledger.patch_operation(
+        "same-op",
+        state=ChatOperationState.RUNNING,
+        validate_transition=True,
+        status_message="progress update",
+    )
+    assert updated is not None
+    assert updated.state is ChatOperationState.RUNNING
+    assert updated.status_message == "progress update"
+
+
+def test_scheduler_state_mappings_cover_valid_transitions() -> None:
+    scheduler_to_shared = {
+        "received": ChatOperationState.RECEIVED,
+        "dispatch_ready": ChatOperationState.RECEIVED,
+        "dispatch_ack_pending": ChatOperationState.RECEIVED,
+        "queue_wait_ack_pending": ChatOperationState.RECEIVED,
+        "acknowledged": ChatOperationState.ACKNOWLEDGED,
+        "scheduled": ChatOperationState.QUEUED,
+        "waiting_on_resources": ChatOperationState.QUEUED,
+        "recovery_scheduled": ChatOperationState.QUEUED,
+        "executing": ChatOperationState.RUNNING,
+        "delivery_pending": ChatOperationState.DELIVERING,
+        "delivery_replaying": ChatOperationState.DELIVERING,
+        "completed": ChatOperationState.COMPLETED,
+        "abandoned": ChatOperationState.FAILED,
+        "delivery_expired": ChatOperationState.CANCELLED,
+    }
+    from_state = ChatOperationState.RECEIVED
+    for _scheduler, shared in scheduler_to_shared.items():
+        if shared == from_state:
+            continue
+        assert is_valid_chat_operation_transition(
+            from_state, shared
+        ), f"{from_state.value} -> {shared.value} should be valid for scheduler mapping"

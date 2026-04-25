@@ -8301,7 +8301,6 @@ async def test_car_interrupt_reports_still_stopping_from_shared_ledger(
     chat_operation_store.patch_operation(
         "existing-op",
         state=ChatOperationState.INTERRUPTING,
-        validate_transition=False,
         thread_target_id="thread-1",
         execution_id="turn-1",
         metadata_updates={

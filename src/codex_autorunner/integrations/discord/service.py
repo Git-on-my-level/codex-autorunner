@@ -1943,7 +1943,6 @@ class DiscordBotService:
             envelope.context.interaction_id,
             state=self._discord_chat_operation_state_for_scheduler(scheduler_state),
             conversation_id=envelope.conversation_id,
-            validate_transition=False,
             metadata_updates={
                 "route_key": self._interaction_route_key(envelope.context),
                 "handler_id": self._interaction_handler_id(envelope.context),
@@ -5190,80 +5189,41 @@ class DiscordBotService:
                     metadata_updates=metadata_updates,
                     **changes_local,
                 )
-            except ValueError:
+            except ValueError as exc:
                 current = store.get_operation(interaction_id)
-                if current is None:
-                    return None
-                if current.first_visible_feedback_at is not None:
-                    changes_local["first_visible_feedback_at"] = (
-                        current.first_visible_feedback_at
-                    )
-                fallback_state = state or current.state
-                merged_metadata = dict(current.metadata)
-                if metadata_updates:
-                    merged_metadata.update(dict(metadata_updates))
-                return store.upsert_operation(
-                    replace(
-                        current,
-                        state=fallback_state,
-                        execution_id=changes_local.get(
-                            "execution_id", current.execution_id
-                        ),
-                        backend_turn_id=changes_local.get(
-                            "backend_turn_id", current.backend_turn_id
-                        ),
-                        status_message=changes_local.get(
-                            "status_message", current.status_message
-                        ),
-                        blocking_reason=changes_local.get(
-                            "blocking_reason", current.blocking_reason
-                        ),
-                        conversation_id=changes_local.get(
-                            "conversation_id", current.conversation_id
-                        ),
-                        ack_requested_at=changes_local.get(
-                            "ack_requested_at", current.ack_requested_at
-                        ),
-                        ack_completed_at=changes_local.get(
-                            "ack_completed_at", current.ack_completed_at
-                        ),
-                        first_visible_feedback_at=changes_local.get(
-                            "first_visible_feedback_at",
-                            current.first_visible_feedback_at,
-                        ),
-                        anchor_ref=changes_local.get("anchor_ref", current.anchor_ref),
-                        interrupt_ref=changes_local.get(
-                            "interrupt_ref", current.interrupt_ref
-                        ),
-                        delivery_state=changes_local.get(
-                            "delivery_state", current.delivery_state
-                        ),
-                        delivery_cursor=changes_local.get(
-                            "delivery_cursor", current.delivery_cursor
-                        ),
-                        delivery_attempt_count=int(
-                            changes_local.get(
-                                "delivery_attempt_count",
-                                current.delivery_attempt_count,
-                            )
-                            or 0
-                        ),
-                        delivery_claimed_at=changes_local.get(
-                            "delivery_claimed_at", current.delivery_claimed_at
-                        ),
-                        terminal_outcome=changes_local.get(
-                            "terminal_outcome", current.terminal_outcome
-                        ),
-                        terminal_detail=changes_local.get(
-                            "terminal_detail", current.terminal_detail
-                        ),
-                        updated_at=changes_local.get("updated_at", now_iso()),
-                        metadata=merged_metadata,
-                    )
+                log_event(
+                    self._logger,
+                    logging.ERROR,
+                    "discord.chat_operation.invalid_transition_rejected",
+                    interaction_id=interaction_id,
+                    current_state=(
+                        current.state.value if current is not None else None
+                    ),
+                    requested_state=(
+                        state.value if isinstance(state, ChatOperationState) else None
+                    ),
+                    error=str(exc),
                 )
+                return None
 
         async with self._chat_operation_write_guard(interaction_id):
             return await asyncio.to_thread(_patch_sync)
+
+    async def _patch_chat_operation_recovery(
+        self,
+        interaction_id: str,
+        *,
+        state: Optional[ChatOperationState] = None,
+        metadata_updates: Optional[Mapping[str, Any]] = None,
+        **changes: Any,
+    ) -> Optional[ChatOperationSnapshot]:
+        return await self._patch_chat_operation(
+            interaction_id,
+            state=state,
+            validate_transition=False,
+            metadata_updates=metadata_updates,
+            **changes,
+        )
 
     async def _record_interaction_ack(
         self,
@@ -5392,7 +5352,6 @@ class DiscordBotService:
             delivery_state=delivery_state,
             delivery_cursor=cursor,
             delivery_attempt_count=delivery_attempt_count,
-            validate_transition=False,
         )
 
     async def _mark_interaction_scheduler_state(
@@ -5401,6 +5360,7 @@ class DiscordBotService:
         *,
         scheduler_state: str,
         increment_attempt_count: bool = False,
+        _for_recovery: bool = False,
     ) -> None:
         await self._store.mark_interaction_scheduler_state(
             ctx.interaction_id,
@@ -5413,14 +5373,18 @@ class DiscordBotService:
             terminal_outcome = "abandoned"
         elif scheduler_state == "delivery_expired":
             terminal_outcome = "expired"
-        await self._patch_chat_operation(
+        patch_fn = (
+            self._patch_chat_operation_recovery
+            if _for_recovery
+            else self._patch_chat_operation
+        )
+        await patch_fn(
             ctx.interaction_id,
             state=self._discord_chat_operation_state_for_scheduler(scheduler_state),
             delivery_attempt_count=(
                 int(record.attempt_count or 0) if record is not None else None
             ),
             terminal_outcome=terminal_outcome,
-            validate_transition=False,
         )
 
     async def mark_interaction_scheduler_state(
@@ -5566,7 +5530,7 @@ class DiscordBotService:
             record.interaction_id,
             scheduler_state=scheduler_state,
         )
-        await self._patch_chat_operation(
+        await self._patch_chat_operation_recovery(
             record.interaction_id,
             state=self._discord_chat_operation_state_for_scheduler(scheduler_state),
             terminal_outcome=(
@@ -5575,7 +5539,6 @@ class DiscordBotService:
                 else ("expired" if scheduler_state == "delivery_expired" else None)
             ),
             terminal_detail=reason,
-            validate_transition=False,
         )
         log_event(
             self._logger,
@@ -5720,7 +5683,7 @@ class DiscordBotService:
                 updated_record = await self._store.get_interaction(
                     record.interaction_id
                 )
-                await self._patch_chat_operation(
+                await self._patch_chat_operation_recovery(
                     record.interaction_id,
                     state=ChatOperationState.DELIVERING,
                     delivery_state="pending",
@@ -5734,7 +5697,6 @@ class DiscordBotService:
                             else 0
                         )
                     ),
-                    validate_transition=False,
                 )
                 self._command_runner.submit_recovery(
                     envelope.context,
@@ -5755,6 +5717,7 @@ class DiscordBotService:
                     envelope.context,
                     scheduler_state="recovery_scheduled",
                     increment_attempt_count=True,
+                    _for_recovery=True,
                 )
                 self._command_runner.submit_recovery(
                     envelope.context,
@@ -5769,10 +5732,9 @@ class DiscordBotService:
             ctx.interaction_id,
             scheduler_state="executing",
         )
-        await self._patch_chat_operation(
+        await self._patch_chat_operation_recovery(
             ctx.interaction_id,
             state=ChatOperationState.RUNNING,
-            validate_transition=False,
         )
         return True
 
@@ -5988,7 +5950,6 @@ class DiscordBotService:
             await self._patch_chat_operation(
                 ctx.interaction_id,
                 state=ChatOperationState.RUNNING,
-                validate_transition=False,
             )
         return claimed
 
@@ -6038,7 +5999,6 @@ class DiscordBotService:
             state=shared_state,
             terminal_outcome=terminal_outcome,
             terminal_detail=execution_error,
-            validate_transition=False,
         )
 
     async def finish_interaction_execution(
