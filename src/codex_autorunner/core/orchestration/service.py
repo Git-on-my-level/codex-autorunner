@@ -300,6 +300,9 @@ class PmaThreadExecutionStore(ThreadExecutionStore):
             return None
         return _execution_record_from_store_row(record)
 
+    def get_running_turn(self, thread_target_id: str) -> Optional[dict[str, Any]]:
+        return self._store.get_running_turn(thread_target_id)
+
     def get_latest_execution(self, thread_target_id: str) -> Optional[ExecutionRecord]:
         record = self._store.get_running_turn(thread_target_id)
         if record is None:
