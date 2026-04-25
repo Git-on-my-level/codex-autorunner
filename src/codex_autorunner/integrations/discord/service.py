@@ -5584,82 +5584,112 @@ class DiscordBotService:
                     reason="max_recovery_attempts_exceeded",
                 )
                 continue
-            cursor = record.delivery_cursor_json or {}
-            cursor_state = (
-                str(cursor.get("state") or "").strip()
-                if isinstance(cursor, dict)
-                else ""
+
+            if snapshot is None:
+                await self._mark_interaction_recovery_terminal(
+                    record,
+                    scheduler_state="abandoned",
+                    reason="missing_shared_ledger_snapshot",
+                    log_level=logging.WARNING,
+                )
+                continue
+
+            decision = plan_chat_operation_recovery(
+                snapshot,
+                now=now,
+                max_delivery_attempts=_INTERACTION_RECOVERY_MAX_ATTEMPTS,
             )
-            cursor_operation = (
-                str(cursor.get("operation") or "").strip()
-                if isinstance(cursor, dict)
-                else ""
+            log_event(
+                self._logger,
+                logging.DEBUG,
+                "discord.interaction.recovery.decision",
+                interaction_id=record.interaction_id,
+                action=decision.action.value,
+                reason=decision.reason,
+                previous_state=decision.previous_state.value,
+                delivery_pending=decision.delivery_pending,
+                execution_replayable=decision.execution_replayable,
+                attempt_count=decision.attempt_count,
             )
-            has_pending_delivery = cursor_state in {"pending", "failed"}
-            ack_mode_hint = (
-                cursor.get("ack_mode_hint")
-                if isinstance(cursor.get("ack_mode_hint"), str)
-                else None
-            )
-            if (
-                record.execution_status == "received"
-                and cursor_state == "pending"
-                and cursor_operation
-                in {"defer_ephemeral", "defer_public", "defer_component_update"}
-                and ack_mode_hint
-                in {"defer_ephemeral", "defer_public", "defer_component_update"}
-            ):
-                has_pending_delivery = False
-            if (
-                has_pending_delivery
-                and ack_mode_hint
-                and record.execution_status != "completed"
-            ):
-                has_pending_delivery = False
-            durable_ack_mode = record.ack_mode or ack_mode_hint
-            if not durable_ack_mode and not has_pending_delivery:
+
+            if decision.action == ChatOperationRecoveryAction.NOOP:
+                continue
+
+            if decision.action == ChatOperationRecoveryAction.MARK_EXPIRED:
                 await self._mark_interaction_recovery_terminal(
                     record,
                     scheduler_state="delivery_expired",
-                    reason="initial_ack_not_durable",
+                    reason=decision.reason,
                 )
                 continue
-            should_replay_execution = record.execution_status in {
-                "acknowledged",
-                "running",
-            } or (
-                record.execution_status == "received"
-                and cursor_state == "pending"
-                and ack_mode_hint
-                in {"defer_ephemeral", "defer_public", "defer_component_update"}
-            )
-            if snapshot is not None:
-                decision = plan_chat_operation_recovery(
-                    snapshot,
-                    now=now,
-                    max_delivery_attempts=_INTERACTION_RECOVERY_MAX_ATTEMPTS,
+
+            if decision.action == ChatOperationRecoveryAction.MARK_ABANDONED:
+                await self._mark_interaction_recovery_terminal(
+                    record,
+                    scheduler_state="abandoned",
+                    reason=decision.reason,
                 )
-                if decision.action == ChatOperationRecoveryAction.MARK_EXPIRED:
-                    await self._mark_interaction_recovery_terminal(
-                        record,
-                        scheduler_state="delivery_expired",
-                        reason=decision.reason,
+                continue
+
+            if decision.action == ChatOperationRecoveryAction.DEFER_BACKOFF:
+                log_event(
+                    self._logger,
+                    logging.DEBUG,
+                    "discord.interaction.recovery.deferred",
+                    interaction_id=record.interaction_id,
+                    reason=decision.reason,
+                    attempt_count=decision.attempt_count,
+                )
+                continue
+
+            if decision.action == ChatOperationRecoveryAction.REPLAY_DELIVERY:
+                cursor = record.delivery_cursor_json or {}
+                cursor_operation = (
+                    str(cursor.get("operation") or "").strip()
+                    if isinstance(cursor, dict)
+                    else ""
+                )
+                if cursor_operation in {
+                    "defer_ephemeral",
+                    "defer_public",
+                    "defer_component_update",
+                }:
+                    if _interaction_recovery_backoff_active(
+                        updated_at=record.updated_at,
+                        attempt_count=int(record.attempt_count or 0),
+                        now=now,
+                    ):
+                        log_event(
+                            self._logger,
+                            logging.DEBUG,
+                            "discord.interaction.recovery.execution_backoff",
+                            interaction_id=record.interaction_id,
+                            attempt_count=int(record.attempt_count or 0),
+                        )
+                        continue
+                    await self._mark_interaction_scheduler_state(
+                        envelope.context,
+                        scheduler_state="recovery_scheduled",
+                        increment_attempt_count=True,
+                        _for_recovery=True,
+                    )
+                    log_event(
+                        self._logger,
+                        logging.INFO,
+                        "discord.interaction.recovery.execution_replay_submitted",
+                        interaction_id=record.interaction_id,
+                        attempt_count=int(record.attempt_count or 0),
+                        previous_state=decision.previous_state.value,
+                        reason="defer_delivery_projected_to_execution_replay",
+                    )
+                    self._command_runner.submit_recovery(
+                        envelope.context,
+                        record.payload_json,
+                        resource_keys=envelope.resource_keys,
+                        conversation_id=envelope.conversation_id,
+                        replay_mode="execution_replay",
                     )
                     continue
-                if decision.action == ChatOperationRecoveryAction.MARK_ABANDONED:
-                    await self._mark_interaction_recovery_terminal(
-                        record,
-                        scheduler_state="abandoned",
-                        reason=decision.reason,
-                    )
-                    continue
-                if (
-                    decision.action == ChatOperationRecoveryAction.NOOP
-                    and not has_pending_delivery
-                    and not should_replay_execution
-                ):
-                    continue
-            if has_pending_delivery:
                 updated_cursor, terminal_reason = _plan_delivery_recovery_cursor(
                     cursor=cursor if isinstance(cursor, dict) else {},
                     attempt_count=int(record.attempt_count or 0),
@@ -5673,6 +5703,13 @@ class DiscordBotService:
                     )
                     continue
                 if updated_cursor is None:
+                    log_event(
+                        self._logger,
+                        logging.DEBUG,
+                        "discord.interaction.recovery.delivery_cursor_backoff",
+                        interaction_id=record.interaction_id,
+                        attempt_count=int(record.attempt_count or 0),
+                    )
                     continue
                 await self._store.update_interaction_delivery_cursor(
                     record.interaction_id,
@@ -5691,12 +5728,17 @@ class DiscordBotService:
                     delivery_attempt_count=(
                         int(updated_record.attempt_count or 0)
                         if updated_record is not None
-                        else (
-                            snapshot.delivery_attempt_count
-                            if snapshot is not None
-                            else 0
-                        )
+                        else decision.attempt_count
                     ),
+                )
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "discord.interaction.recovery.delivery_replay_submitted",
+                    interaction_id=record.interaction_id,
+                    attempt_count=decision.attempt_count,
+                    previous_state=decision.previous_state.value,
+                    reason=decision.reason,
                 )
                 self._command_runner.submit_recovery(
                     envelope.context,
@@ -5706,18 +5748,35 @@ class DiscordBotService:
                     replay_mode="delivery_replay",
                 )
                 continue
-            if should_replay_execution:
+
+            if decision.action == ChatOperationRecoveryAction.RESUME_EXECUTION:
                 if _interaction_recovery_backoff_active(
                     updated_at=record.updated_at,
                     attempt_count=int(record.attempt_count or 0),
                     now=now,
                 ):
+                    log_event(
+                        self._logger,
+                        logging.DEBUG,
+                        "discord.interaction.recovery.execution_backoff",
+                        interaction_id=record.interaction_id,
+                        attempt_count=int(record.attempt_count or 0),
+                    )
                     continue
                 await self._mark_interaction_scheduler_state(
                     envelope.context,
                     scheduler_state="recovery_scheduled",
                     increment_attempt_count=True,
                     _for_recovery=True,
+                )
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "discord.interaction.recovery.execution_replay_submitted",
+                    interaction_id=record.interaction_id,
+                    attempt_count=int(record.attempt_count or 0),
+                    previous_state=decision.previous_state.value,
+                    reason=decision.reason,
                 )
                 self._command_runner.submit_recovery(
                     envelope.context,
