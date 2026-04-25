@@ -11,7 +11,11 @@ from ...tickets.outbox import archive_dispatch, ensure_outbox_dirs, resolve_outb
 from ...tickets.replies import resolve_reply_paths
 from ..locks import FileLockBusy, file_lock
 from ..state_roots import resolve_repo_flows_db_path
-from .failure_diagnostics import ensure_failure_payload
+from .failure_diagnostics import (
+    ReconcileContext,
+    build_failure_event_data,
+    ensure_failure_payload,
+)
 from .models import FlowEventType, FlowRunRecord, FlowRunStatus
 from .store import UNSET, FlowStore
 from .transition import resolve_flow_transition
@@ -376,6 +380,11 @@ def reconcile_flow_run(
 
             state = decision.state
             if decision.status == FlowRunStatus.FAILED:
+                reconcile_ctx = ReconcileContext(
+                    worker_exit_code=getattr(health, "exit_code", None),
+                    worker_stderr_tail=getattr(health, "stderr_tail", None),
+                    crash_info=crash_info,
+                )
                 state = ensure_failure_payload(
                     state,
                     record=record,
@@ -384,37 +393,8 @@ def reconcile_flow_run(
                     store=store,
                     note=decision.note,
                     failed_at=decision.finished_at,
+                    reconcile_context=reconcile_ctx,
                 )
-                failure = state.get("failure") if isinstance(state, dict) else None
-                if isinstance(failure, dict):
-                    patched = False
-                    updated_failure = dict(failure)
-                    exit_code = getattr(health, "exit_code", None)
-                    if (
-                        exit_code is not None
-                        and updated_failure.get("exit_code") is None
-                    ):
-                        updated_failure["exit_code"] = exit_code
-                        patched = True
-                    stderr_tail = getattr(health, "stderr_tail", None)
-                    if (
-                        isinstance(stderr_tail, str)
-                        and stderr_tail.strip()
-                        and not updated_failure.get("stderr_tail")
-                    ):
-                        updated_failure["stderr_tail"] = stderr_tail.strip()
-                        patched = True
-                    if patched:
-                        state = dict(state)
-                        state["failure"] = updated_failure
-                if isinstance(crash_info, dict):
-                    failure = state.get("failure") if isinstance(state, dict) else None
-                    if isinstance(failure, dict):
-                        updated_failure = dict(failure)
-                        if not updated_failure.get("crash"):
-                            updated_failure["crash"] = crash_info
-                            state = dict(state)
-                            state["failure"] = updated_failure
             updated = store.update_flow_run_status(
                 run_id=record.id,
                 status=decision.status,
@@ -424,25 +404,23 @@ def reconcile_flow_run(
             )
 
             if decision.status == FlowRunStatus.FAILED and decision.error_message:
+                reconcile_ctx_for_event = ReconcileContext(
+                    crash_info=crash_info,
+                    last_app_event_method=None,
+                    last_turn_id=None,
+                )
                 last_method, last_turn_id = _latest_app_server_event_details(
                     store, record.id
                 )
-                event_data: dict[str, Any] = {
-                    "error": decision.error_message,
-                    "reason": decision.note or "reconcile",
-                }
-                if last_method:
-                    event_data["last_app_event_method"] = last_method
-                if last_turn_id:
-                    event_data["last_turn_id"] = last_turn_id
-                if isinstance(crash_info, dict):
-                    event_data["worker_crash"] = {
-                        "timestamp": crash_info.get("timestamp"),
-                        "last_event": crash_info.get("last_event"),
-                        "exception": crash_info.get("exception"),
-                        "exit_code": crash_info.get("exit_code"),
-                        "signal": crash_info.get("signal"),
-                    }
+                reconcile_ctx_for_event.last_app_event_method = last_method
+                reconcile_ctx_for_event.last_turn_id = last_turn_id
+                failure = state.get("failure") if isinstance(state, dict) else None
+                event_data = build_failure_event_data(
+                    failure if isinstance(failure, dict) else {},
+                    error_message=decision.error_message,
+                    note=decision.note,
+                    reconcile_context=reconcile_ctx_for_event,
+                )
                 try:
                     store.create_event(
                         event_id=str(uuid.uuid4()),
