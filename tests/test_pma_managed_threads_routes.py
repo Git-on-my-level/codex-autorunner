@@ -157,6 +157,62 @@ def test_create_managed_thread_with_repo_owner_prefers_fresh_worktree(
     assert stored["workspace_root"] == str(fresh_worktree_root.resolve())
 
 
+def test_create_managed_thread_failure_cleanup_worktree_uses_archive(
+    hub_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Rollback cleanup must satisfy PMA cleanup policy (archive) and must not use force without attestation."""
+    app = create_hub_app(hub_env.hub_root)
+    fresh_worktree_root = hub_env.hub_root / "worktrees" / "repo--pma-fresh"
+    fresh_worktree_root.mkdir(parents=True, exist_ok=True)
+    cleanup_calls: list[dict[str, object]] = []
+
+    def _fake_create_worktree(
+        *, base_repo_id: str, branch: str, force: bool = False, start_point=None
+    ):
+        return SimpleNamespace(
+            id="repo--pma-fresh",
+            path=fresh_worktree_root,
+            branch=branch,
+            kind="worktree",
+        )
+
+    def _fake_cleanup_worktree(
+        worktree_repo_id: str, **kwargs: object
+    ) -> dict[str, object]:
+        cleanup_calls.append({"worktree_repo_id": worktree_repo_id, **kwargs})
+        return {"status": "ok"}
+
+    class _BrokenOrchestration:
+        def create_thread_target(self, *_a: object, **_k: object) -> None:
+            raise ValueError("simulated thread creation failure")
+
+    monkeypatch.setattr(
+        app.state.hub_supervisor, "create_worktree", _fake_create_worktree
+    )
+    monkeypatch.setattr(
+        app.state.hub_supervisor, "cleanup_worktree", _fake_cleanup_worktree
+    )
+    monkeypatch.setattr(
+        managed_threads,
+        "build_managed_thread_orchestration_service",
+        lambda _request: _BrokenOrchestration(),
+    )
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", **_repo_owner(hub_env), "name": "rollback"},
+        )
+
+    assert resp.status_code == 400
+    assert len(cleanup_calls) == 1
+    call = cleanup_calls[0]
+    assert call["worktree_repo_id"] == "repo--pma-fresh"
+    assert call.get("delete_branch") is True
+    assert call.get("archive") is True
+    assert call.get("force") is not True
+
+
 def test_create_managed_thread_with_workspace_root(hub_env) -> None:
     app = create_hub_app(hub_env.hub_root)
     rel_workspace = str(Path("worktrees") / hub_env.repo_id)

@@ -98,10 +98,11 @@ async def _cleanup_failed_provisioned_worktree(
             supervisor.cleanup_worktree,
             worktree_repo_id=normalized_repo_id,
             delete_branch=True,
-            archive=False,
-            force=True,
+            archive=True,
         )
-    except Exception as exc:  # intentional: cleanup must not mask caller's original error
+    except (
+        Exception
+    ) as exc:  # intentional: cleanup must not mask caller's original error
         _logger.warning(
             "Failed to clean up provisioned PMA worktree %s after thread creation failed: %s",
             normalized_repo_id,
