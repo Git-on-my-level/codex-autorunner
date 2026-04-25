@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
 
 from ..acp_lifecycle import analyze_acp_lifecycle_message
+from ..logging_utils import log_event
 from ..ports.run_event import (
     RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
     RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
@@ -51,6 +53,15 @@ from .runtime_thread_decoders import (
 )
 from .runtime_threads import RUNTIME_THREAD_TIMEOUT_ERROR, RuntimeThreadOutcome
 from .stream_text_merge import merge_assistant_stream_text
+
+_logger = logging.getLogger(__name__)
+
+DECODE_FAILURE_REASON_MALFORMED_JSON = "malformed_json"
+DECODE_FAILURE_REASON_REGISTRY_MISS = "registry_miss"
+DECODE_FAILURE_REASON_EMPTY_METHOD = "empty_method"
+DECODE_FAILURE_REASON_UNSUPPORTED_SHAPE = "unsupported_shape"
+DECODE_FAILURE_REASON_UNSUPPORTED_TYPE = "unsupported_type"
+DECODE_FAILURE_REASON_MALFORMED_SSE_JSON = "malformed_sse_json"
 
 DIRECT_RUN_EVENT_TYPES = (
     OutputDelta,
@@ -154,8 +165,17 @@ async def decode_runtime_raw_messages(raw_event: Any) -> list[dict[str, Any]]:
             return [dict(raw_event["message"])]
         if isinstance(raw_event.get("method"), str):
             return [dict(raw_event)]
+        _log_decode_failure(
+            DECODE_FAILURE_REASON_UNSUPPORTED_SHAPE,
+            payload_type="dict",
+            payload_keys=tuple(raw_event.keys()),
+        )
         return []
     if not isinstance(raw_event, str):
+        _log_decode_failure(
+            DECODE_FAILURE_REASON_UNSUPPORTED_TYPE,
+            payload_type=type(raw_event).__name__,
+        )
         return []
     text = raw_event.strip()
     if not text:
@@ -164,6 +184,10 @@ async def decode_runtime_raw_messages(raw_event: Any) -> list[dict[str, Any]]:
         try:
             parsed = json.loads(text)
         except json.JSONDecodeError:
+            _log_decode_failure(
+                DECODE_FAILURE_REASON_MALFORMED_JSON,
+                raw_length=len(text),
+            )
             return []
         return await decode_runtime_raw_messages(parsed)
 
@@ -484,7 +508,27 @@ def normalize_runtime_thread_message_payload(
             timestamp=timestamp,
             raw_message=payload,
         )
-    return []
+    event_timestamp = timestamp or now_iso()
+    _log_decode_failure(
+        DECODE_FAILURE_REASON_UNSUPPORTED_SHAPE,
+        payload_type="dict",
+        payload_keys=tuple(payload.keys()),
+        has_message=isinstance(payload.get("message"), dict),
+        has_method=isinstance(payload.get("method"), str),
+        has_params=isinstance(payload.get("params"), dict),
+    )
+    return [
+        RunNotice(
+            timestamp=event_timestamp,
+            kind="decode_failure",
+            message="Unsupported runtime thread message shape",
+            data={
+                "reason": DECODE_FAILURE_REASON_UNSUPPORTED_SHAPE,
+                "payload_type": "dict",
+                "payload_keys": tuple(payload.keys()),
+            },
+        )
+    ]
 
 
 def terminal_run_event_from_outcome(
@@ -582,6 +626,19 @@ def _normalize_sse_event(
 _DEFAULT_REGISTRY = build_default_decoder_registry()
 
 
+def _log_decode_failure(
+    reason: str,
+    **fields: Any,
+) -> None:
+    log_event(
+        _logger,
+        logging.DEBUG,
+        "orchestration.event_decode.failure",
+        reason=reason,
+        **fields,
+    )
+
+
 def normalize_runtime_thread_message(
     method: str,
     params: dict[str, Any],
@@ -592,7 +649,23 @@ def normalize_runtime_thread_message(
 ) -> list[RunEvent]:
     event_timestamp = timestamp or now_iso()
     if not method:
-        return []
+        _log_decode_failure(
+            DECODE_FAILURE_REASON_EMPTY_METHOD,
+            payload_keys=tuple(params.keys()) if isinstance(params, dict) else None,
+        )
+        return [
+            RunNotice(
+                timestamp=event_timestamp,
+                kind="decode_failure",
+                message="Empty method in runtime thread message",
+                data={
+                    "reason": DECODE_FAILURE_REASON_EMPTY_METHOD,
+                    "payload_keys": (
+                        tuple(params.keys()) if isinstance(params, dict) else None
+                    ),
+                },
+            )
+        ]
     state.note_runtime_progress(method, timestamp=event_timestamp)
     acp_lifecycle = analyze_acp_lifecycle_message(
         raw_message or {"method": method, "params": params}
@@ -602,6 +675,23 @@ def normalize_runtime_thread_message(
         raw_message=raw_message or {"method": method, "params": params},
         acp_lifecycle=acp_lifecycle,
     )
+    if not _DEFAULT_REGISTRY.has_decoder(method):
+        _log_decode_failure(
+            DECODE_FAILURE_REASON_REGISTRY_MISS,
+            method=method,
+            payload_keys=tuple(params.keys()) if isinstance(params, dict) else None,
+        )
+        return [
+            RunNotice(
+                timestamp=event_timestamp,
+                kind="decode_failure",
+                message=f"No decoder for method: {method}",
+                data={
+                    "reason": DECODE_FAILURE_REASON_REGISTRY_MISS,
+                    "method": method,
+                },
+            )
+        ]
     return _DEFAULT_REGISTRY.decode(method, params, state, ctx)
 
 
@@ -611,6 +701,10 @@ def _load_json_object(raw: str) -> dict[str, Any]:
     try:
         loaded = json.loads(raw)
     except json.JSONDecodeError:
+        _log_decode_failure(
+            DECODE_FAILURE_REASON_MALFORMED_SSE_JSON,
+            raw_length=len(raw),
+        )
         return {}
     return _coerce_dict(loaded)
 
@@ -641,4 +735,10 @@ __all__ = [
     "_coerce_dict",
     "_reasoning_buffer_key",
     "_is_commentary_agent_message",
+    "DECODE_FAILURE_REASON_MALFORMED_JSON",
+    "DECODE_FAILURE_REASON_REGISTRY_MISS",
+    "DECODE_FAILURE_REASON_EMPTY_METHOD",
+    "DECODE_FAILURE_REASON_UNSUPPORTED_SHAPE",
+    "DECODE_FAILURE_REASON_UNSUPPORTED_TYPE",
+    "DECODE_FAILURE_REASON_MALFORMED_SSE_JSON",
 ]

@@ -3,8 +3,12 @@ from __future__ import annotations
 from tests.acp_lifecycle_corpus import load_acp_lifecycle_corpus
 
 from codex_autorunner.core.orchestration.runtime_thread_events import (
+    DECODE_FAILURE_REASON_EMPTY_METHOD,
+    DECODE_FAILURE_REASON_REGISTRY_MISS,
+    DECODE_FAILURE_REASON_UNSUPPORTED_SHAPE,
     RuntimeThreadRunEventState,
     completion_source_from_outcome,
+    decode_runtime_raw_messages,
     normalize_runtime_progress_event,
     normalize_runtime_thread_raw_event,
     note_run_event_state,
@@ -2575,3 +2579,113 @@ class TestCompletionSourceFromOutcome:
             completion_source_from_outcome(outcome, recovered_after_completion=True)
             == "idle_completion"
         )
+
+
+class TestDecodeFailureObservability:
+    """Malformed and unknown payloads must emit explicit RunNotice events instead of silent []."""
+
+    async def test_unknown_method_emits_decode_failure_notice(self) -> None:
+        state = RuntimeThreadRunEventState()
+
+        events = await normalize_runtime_thread_raw_event(
+            {"method": "future/unknownMethod", "params": {"data": 42}},
+            state,
+        )
+
+        assert len(events) == 1
+        assert isinstance(events[0], RunNotice)
+        assert events[0].kind == "decode_failure"
+        assert events[0].data["reason"] == DECODE_FAILURE_REASON_REGISTRY_MISS
+        assert events[0].data["method"] == "future/unknownMethod"
+        assert "future/unknownMethod" in events[0].message
+
+    async def test_empty_method_emits_decode_failure_notice(self) -> None:
+        state = RuntimeThreadRunEventState()
+
+        events = await normalize_runtime_thread_raw_event(
+            {"method": "", "params": {}},
+            state,
+        )
+
+        assert len(events) == 1
+        assert isinstance(events[0], RunNotice)
+        assert events[0].kind == "decode_failure"
+        assert events[0].data["reason"] == DECODE_FAILURE_REASON_EMPTY_METHOD
+
+    async def test_unsupported_shape_dict_without_method_or_message(self) -> None:
+        state = RuntimeThreadRunEventState()
+
+        events = await normalize_runtime_thread_raw_event(
+            {"unknown_key": "value", "other": 123},
+            state,
+        )
+
+        assert len(events) == 1
+        assert isinstance(events[0], RunNotice)
+        assert events[0].kind == "decode_failure"
+        assert events[0].data["reason"] == DECODE_FAILURE_REASON_UNSUPPORTED_SHAPE
+
+    async def test_dict_with_method_but_non_dict_params(self) -> None:
+        state = RuntimeThreadRunEventState()
+
+        events = await normalize_runtime_thread_raw_event(
+            {"method": "session.update", "params": "not a dict"},
+            state,
+        )
+
+        assert len(events) == 1
+        assert isinstance(events[0], RunNotice)
+        assert events[0].kind == "decode_failure"
+        assert events[0].data["reason"] == DECODE_FAILURE_REASON_UNSUPPORTED_SHAPE
+
+    async def test_malformed_json_string_emits_empty_messages(self) -> None:
+        messages = await decode_runtime_raw_messages("{bad json")
+
+        assert messages == []
+
+    async def test_non_string_non_dict_emits_empty_messages(self) -> None:
+        messages = await decode_runtime_raw_messages(42)
+
+        assert messages == []
+
+    async def test_dict_without_method_or_message_emits_empty_messages(self) -> None:
+        messages = await decode_runtime_raw_messages({"key": "value"})
+
+        assert messages == []
+
+    async def test_sse_with_malformed_json_data_still_produces_events(self) -> None:
+        state = RuntimeThreadRunEventState()
+
+        raw_sse = "event: app-server\ndata: {bad json\n\n"
+        events = await normalize_runtime_thread_raw_event(raw_sse, state)
+
+        assert len(events) == 1
+        assert isinstance(events[0], RunNotice)
+        assert events[0].kind == "decode_failure"
+
+    async def test_known_method_does_not_emit_decode_failure(self) -> None:
+        state = RuntimeThreadRunEventState()
+
+        events = await normalize_runtime_thread_raw_event(
+            {"method": "token/usage", "params": {"usage": {"totalTokens": 10}}},
+            state,
+        )
+
+        assert len(events) == 1
+        assert isinstance(events[0], TokenUsage)
+
+    async def test_session_status_idle_does_not_emit_decode_failure(self) -> None:
+        state = RuntimeThreadRunEventState()
+
+        events = await normalize_runtime_thread_raw_event(
+            {"method": "session.status", "params": {"status": {"type": "idle"}}},
+            state,
+        )
+
+        assert events == []
+        assert state.completed_seen is True
+
+    async def test_empty_string_raw_event_returns_empty(self) -> None:
+        messages = await decode_runtime_raw_messages("")
+
+        assert messages == []

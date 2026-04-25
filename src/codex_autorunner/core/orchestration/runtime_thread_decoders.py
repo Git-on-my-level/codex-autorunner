@@ -118,6 +118,11 @@ class DecoderRegistry:
             self._exact[method] = decoder
         self._decoders.append(decoder)
 
+    def has_decoder(self, method: str) -> bool:
+        if method in self._exact:
+            return True
+        return any(d.can_decode(method) for d in self._decoders)
+
     def decode(
         self,
         method: str,
