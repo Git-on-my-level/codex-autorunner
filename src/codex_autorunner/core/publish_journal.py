@@ -84,7 +84,19 @@ def _coerce_row(value: Any) -> Optional[sqlite3.Row]:
 
 
 class PublishJournalStore:
-    """SQLite-backed publish journal for idempotent automation operations."""
+    """SQLite-backed publish journal for idempotent automation operations.
+
+    State model:
+      pending -> running -> succeeded
+                          -> effect_applied -> succeeded  (via reconcile)
+                          -> pending  (retryable failure)
+                          -> failed   (terminal failure)
+
+    The ``effect_applied`` state captures the partial-success condition where
+    external side effects completed but journal bookkeeping (``mark_succeeded``)
+    failed.  It is reconciled to ``succeeded`` by ``reconcile_effect_applied``,
+    which the drain loop calls on each cycle.
+    """
 
     def __init__(self, hub_root: Path) -> None:
         self._hub_root = Path(hub_root)
@@ -513,6 +525,13 @@ class PublishJournalStore:
         response: Optional[dict[str, Any]] = None,
         error_text: Optional[str] = None,
     ) -> Optional[PublishOperation]:
+        """Record that external side effects succeeded but journal completion failed.
+
+        Transitions the operation from ``running`` to ``effect_applied``,
+        preserving the side-effect response and the bookkeeping error text.
+        The operation is later reconciled to ``succeeded`` by
+        ``reconcile_effect_applied``.
+        """
         normalized_operation_id = _normalize_text(operation_id)
         if normalized_operation_id is None:
             return None
@@ -581,6 +600,12 @@ class PublishJournalStore:
         return _operation_from_row(refreshed) if refreshed is not None else None
 
     def reconcile_effect_applied(self, operation_id: str) -> Optional[PublishOperation]:
+        """Promote an ``effect_applied`` operation to ``succeeded``.
+
+        Called by the drain loop on each cycle to finalize operations whose
+        side effects completed but whose journal bookkeeping initially failed.
+        Clears ``last_error_text`` as part of the promotion.
+        """
         normalized_operation_id = _normalize_text(operation_id)
         if normalized_operation_id is None:
             return None

@@ -1,16 +1,25 @@
-"""Shared publish-operation executor: claim, dispatch, retry scheduling, and
-mutation-policy enforcement.
+"""Shared publish-operation executor: claim, dispatch, retry scheduling,
+partial-success recovery, and mutation-policy enforcement.
 
 Ownership boundaries:
 - ``PublishJournalStore`` (``publish_journal.py``) is the **sole** durable
   owner of publish retry state, dedupe keys, and attempt history.
-- This module owns the runtime dispatch loop and retry-delay resolution.
+- This module owns the runtime dispatch loop, retry-delay resolution, and
+  reconciliation of partial-success (``effect_applied``) operations.
 - Provider-specific adapters (e.g. ``integrations/github/publisher.py``)
   implement ``PublishActionExecutor`` and must **not** carry their own retry
   counters or deduplication state.
 - Mutation-policy evaluation is delegated to ``mutation_policy.py``; this
   module merely checks the decision and raises ``PolicyDeniedPublishError``
   when denied.
+
+Partial-success model:
+  When external side effects complete successfully but the journal
+  ``mark_succeeded`` call fails, the operation transitions to
+  ``effect_applied`` instead of ``failed``.  This prevents blind replay of
+  operations whose side effects have already been applied.  The drain loop
+  reconciles ``effect_applied`` operations back to ``succeeded`` on each
+  cycle, ensuring eventual consistency without re-executing side effects.
 """
 
 from __future__ import annotations
@@ -223,11 +232,19 @@ def drain_pending_publish_operations(
         return []
     resolved_retry_delays = _normalize_retry_delays(retry_delays_seconds)
     current_time = _coerce_now(now_fn)
+    processed: list[PublishOperation] = []
+    for effect_applied_op in journal.list_operations(state="effect_applied"):
+        reconciled = journal.reconcile_effect_applied(effect_applied_op.operation_id)
+        if reconciled is not None:
+            _LOGGER.info(
+                "Reconciled effect_applied publish operation %s to succeeded",
+                reconciled.operation_id,
+            )
+            processed.append(reconciled)
     claimed = journal.claim_pending_operations(
         limit=resolved_limit,
         now_timestamp=_format_timestamp(current_time),
     )
-    processed: list[PublishOperation] = []
     for operation in claimed:
         current_operation = journal.mark_running(operation.operation_id)
         if current_operation is None:
@@ -257,7 +274,7 @@ def drain_pending_publish_operations(
             )
         except (
             Exception
-        ) as exc:  # intentional: preserve publish side-effect result even if journal update fails
+        ) as exc:  # intentional: record partial success rather than collapsing to failed
             error_text = (
                 "Publish side effects completed but journal completion failed: "
                 f"{_resolve_error_text(exc)}"
@@ -277,10 +294,12 @@ def drain_pending_publish_operations(
             except (
                 Exception
             ):  # intentional: defensive fallback when journal bookkeeping fails
-                _LOGGER.warning(
+                _LOGGER.error(
                     "Publish bookkeeping failed for %s after side effects completed; "
-                    "unable to record effect_applied state",
+                    "operation left in running state and must be manually reconciled. "
+                    "Side-effect response was recorded: %s",
                     current_operation.operation_id,
+                    response,
                     exc_info=True,
                 )
                 continue
