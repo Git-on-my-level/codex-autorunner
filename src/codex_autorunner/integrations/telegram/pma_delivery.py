@@ -45,14 +45,14 @@ def _notification_record(
     attempt: PmaChatDeliveryAttempt,
     surface_key: str,
     delivery_record_id: str,
-    workspace_root: Optional[Path],
+    workspace_root: Optional[str],
 ) -> PmaChatDeliveryRecord:
     return PmaChatDeliveryRecord(
         delivery_mode=attempt.delivery_mode,
         surface_kind="telegram",
         surface_key=surface_key,
         delivery_record_id=delivery_record_id,
-        workspace_root=str(workspace_root) if workspace_root is not None else None,
+        workspace_root=workspace_root,
     )
 
 
@@ -328,9 +328,7 @@ class TelegramPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
                     attempt=attempt,
                     surface_key=surface_key,
                     delivery_record_id=record_id,
-                    workspace_root=(
-                        Path(workspace_path_raw) if workspace_path_raw else None
-                    ),
+                    workspace_root=workspace_path_raw,
                 )
                 if await store.get_outbox(record_id) is not None:
                     return PmaChatDeliveryAdapterResult(

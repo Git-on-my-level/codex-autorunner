@@ -1,3 +1,14 @@
+"""Legacy state migration: one-time backfill from old file-per-concern layout.
+
+This module defines path constants (``LEGACY_PMA_*``) and backfill functions
+for migrating pre-orchestration data (per-concern JSON/JSONL files and the old
+``threads.sqlite3`` database) into the unified orchestration SQLite store.
+
+It is **not** a parallel implementation of PMA policy.  All PMA routing,
+wakeup emission, and publish policy decisions live in ``pma_domain/``.
+This file can be removed once all deployments have completed backfill.
+"""
+
 from __future__ import annotations
 
 import json

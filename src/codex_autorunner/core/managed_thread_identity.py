@@ -88,6 +88,12 @@ def pma_automation_key(agent: str, profile: Optional[str] = None) -> str:
 
 
 def pma_legacy_alias_keys(agent: str, profile: Optional[str]) -> tuple[str, ...]:
+    """Backward-compat key variants for pre-migration thread lookups.
+
+    These exist so adapters can find threads created under old key naming
+    conventions.  They are **not** policy implementations and can be removed
+    once all thread keys have been canonicalised.
+    """
     if not isinstance(agent, str) or not isinstance(profile, str):
         return ()
     agent_norm = agent.strip().lower()

@@ -1,3 +1,15 @@
+"""Legacy mirror: one-way sync from orchestration SQLite to the old ``threads.sqlite3`` schema.
+
+This module exists solely for backward compatibility during the migration from
+per-concern SQLite databases to the unified orchestration store.  It is gated
+by the ``CAR_LEGACY_MIRROR_ENABLED`` environment variable and has **no
+production importers** outside of test fixtures.
+
+Do not add new policy or routing logic here.  All PMA automation policy lives
+in ``pma_domain/``.  This file can be removed once all deployments have
+migrated to the orchestration SQLite backend.
+"""
+
 from __future__ import annotations
 
 import os
