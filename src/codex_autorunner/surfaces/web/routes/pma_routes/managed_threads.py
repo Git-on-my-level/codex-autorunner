@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -48,6 +49,7 @@ from .managed_thread_route_helpers import (
     _attach_latest_execution_fields,
     _serialize_managed_thread,
     _serialize_thread_target,
+    provision_managed_thread_workspace,
     resolve_managed_thread_create_resolution,
     resolve_managed_thread_list_query,
     resolve_owner_scoped_query,
@@ -78,6 +80,34 @@ def _subscription_request_has_explicit_routing(payload: dict[str, Any]) -> bool:
         normalize_optional_text(payload.get(field)) is not None
         for field in ("thread_id", "lane_id")
     )
+
+
+async def _cleanup_failed_provisioned_worktree(
+    request: Request,
+    *,
+    worktree_repo_id: Optional[str],
+) -> None:
+    normalized_repo_id = normalize_optional_text(worktree_repo_id)
+    if normalized_repo_id is None:
+        return
+    supervisor = get_pma_request_context(request).hub_supervisor
+    if supervisor is None:
+        return
+    try:
+        await asyncio.to_thread(
+            supervisor.cleanup_worktree,
+            worktree_repo_id=normalized_repo_id,
+            delete_branch=True,
+            archive=True,
+        )
+    except (
+        Exception
+    ) as exc:  # intentional: cleanup must not mask caller's original error
+        _logger.warning(
+            "Failed to clean up provisioned PMA worktree %s after thread creation failed: %s",
+            normalized_repo_id,
+            exc,
+        )
 
 
 def build_managed_thread_orchestration_service(request: Request):
@@ -354,18 +384,31 @@ def build_managed_thread_crud_routes(
         context = get_pma_request_context(request)
         hub_root = context.hub_root
         resolved = resolve_managed_thread_create_resolution(request, payload)
+        provisioned_workspace = await asyncio.to_thread(
+            provision_managed_thread_workspace,
+            request,
+            resolution=resolved,
+            display_name=normalize_optional_text(payload.name),
+        )
 
         service = build_managed_thread_orchestration_service(request)
         try:
-            thread = service.create_thread_target(
-                resolved.agent_id,
-                resolved.workspace_root,
-                repo_id=resolved.repo_id,
-                resource_kind=resolved.resource_kind,
-                resource_id=resolved.resource_id,
-                display_name=normalize_optional_text(payload.name),
-                metadata=resolved.metadata,
-            )
+            try:
+                thread = service.create_thread_target(
+                    resolved.agent_id,
+                    provisioned_workspace.workspace_root,
+                    repo_id=resolved.repo_id,
+                    resource_kind=resolved.resource_kind,
+                    resource_id=resolved.resource_id,
+                    display_name=normalize_optional_text(payload.name),
+                    metadata=resolved.metadata,
+                )
+            except Exception:
+                await _cleanup_failed_provisioned_worktree(
+                    request,
+                    worktree_repo_id=provisioned_workspace.worktree_repo_id,
+                )
+                raise
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         notification: Optional[dict[str, Any]] = None

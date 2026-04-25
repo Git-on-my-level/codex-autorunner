@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+import uuid
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Optional
@@ -45,6 +46,12 @@ class ManagedThreadCreateResolution:
 
 
 @dataclass(frozen=True)
+class ManagedThreadWorkspaceProvision:
+    workspace_root: Path
+    worktree_repo_id: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class ManagedThreadListQuery:
     agent_id: Optional[str]
     lifecycle_status: Optional[str]
@@ -83,18 +90,43 @@ def _normalize_workspace_root_input(workspace_root: str) -> PurePosixPath:
 
 
 def _resolve_workspace_from_repo_id(request: Request, repo_id: str) -> Path:
+    snapshot = _resolve_repo_snapshot(request, repo_id)
+    repo_path = getattr(snapshot, "path", None)
+    if isinstance(repo_path, str):
+        repo_path = Path(repo_path)
+    if isinstance(repo_path, Path):
+        return repo_path.absolute()
+    raise HTTPException(status_code=404, detail=f"Repo not found: {repo_id}")
+
+
+def _resolve_repo_snapshot(request: Request, repo_id: str) -> Any:
     supervisor = get_pma_request_context(request).hub_supervisor
     if supervisor is None:
         raise HTTPException(status_code=500, detail="Hub supervisor unavailable")
     for snapshot in supervisor.list_repos():
         if getattr(snapshot, "id", None) != repo_id:
             continue
-        repo_path = getattr(snapshot, "path", None)
-        if isinstance(repo_path, str):
-            repo_path = Path(repo_path)
-        if isinstance(repo_path, Path):
-            return repo_path.absolute()
+        return snapshot
     raise HTTPException(status_code=404, detail=f"Repo not found: {repo_id}")
+
+
+def _slugify_worktree_branch_component(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    cleaned = re.sub(r"[^a-z0-9._-]+", "-", text).strip("-")
+    return cleaned or "thread"
+
+
+def _build_managed_thread_worktree_branch_name(
+    *,
+    repo_id: str,
+    agent_id: str,
+    display_name: Optional[str],
+) -> str:
+    label = _slugify_worktree_branch_component(display_name or agent_id or repo_id)
+    return (
+        f"pma/{_slugify_worktree_branch_component(repo_id)}/"
+        f"{label}-{uuid.uuid4().hex[:10]}"
+    )
 
 
 def _resolve_workspace_from_resource_owner(
@@ -572,6 +604,52 @@ def resolve_managed_thread_create_resolution(
     )
 
 
+def provision_managed_thread_workspace(
+    request: Request,
+    *,
+    resolution: ManagedThreadCreateResolution,
+    display_name: Optional[str] = None,
+) -> ManagedThreadWorkspaceProvision:
+    fallback = ManagedThreadWorkspaceProvision(workspace_root=resolution.workspace_root)
+    if resolution.resource_kind != "repo" or resolution.repo_id is None:
+        return fallback
+
+    context = get_pma_request_context(request)
+    supervisor = context.hub_supervisor
+    if supervisor is None:
+        return fallback
+
+    try:
+        snapshot = _resolve_repo_snapshot(request, resolution.repo_id)
+    except HTTPException:
+        return fallback
+    if normalize_optional_text(getattr(snapshot, "kind", None)) != "base":
+        return fallback
+
+    branch_name = _build_managed_thread_worktree_branch_name(
+        repo_id=resolution.repo_id,
+        agent_id=resolution.agent_id,
+        display_name=display_name,
+    )
+    try:
+        created = supervisor.create_worktree(
+            base_repo_id=resolution.repo_id,
+            branch=branch_name,
+        )
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
+        return fallback
+
+    worktree_path = getattr(created, "path", None)
+    if isinstance(worktree_path, str):
+        worktree_path = Path(worktree_path)
+    if not isinstance(worktree_path, Path):
+        return fallback
+    return ManagedThreadWorkspaceProvision(
+        workspace_root=worktree_path.absolute(),
+        worktree_repo_id=normalize_optional_text(getattr(created, "id", None)),
+    )
+
+
 def resolve_managed_thread_list_query(
     *,
     agent: Optional[str],
@@ -686,11 +764,13 @@ __all__ = [
     "ManagedThreadCreateResolution",
     "ManagedThreadListQuery",
     "ManagedThreadOwnerScopedQuery",
+    "ManagedThreadWorkspaceProvision",
     "_attach_latest_execution_fields",
     "_load_chat_binding_metadata_by_thread",
     "_normalize_resource_owner",
     "_serialize_managed_thread",
     "_serialize_thread_target",
+    "provision_managed_thread_workspace",
     "resolve_managed_thread_create_resolution",
     "resolve_managed_thread_list_query",
     "resolve_owner_scoped_query",
