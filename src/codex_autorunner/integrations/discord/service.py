@@ -3752,22 +3752,6 @@ class DiscordBotService:
                 log_event_fn=log_event,
                 chat_ux_snapshot=chat_ux_snapshot,
             )
-            return await run_agent_turn_for_message(
-                self,
-                workspace_root=workspace_root,
-                prompt_text=prompt_text,
-                input_items=input_items,
-                source_message_id=source_message_id,
-                agent=agent,
-                model_override=model_override,
-                reasoning_effort=reasoning_effort,
-                session_key=session_key,
-                orchestrator_channel_key=orchestrator_channel_key,
-                max_actions=DISCORD_TURN_PROGRESS_MAX_ACTIONS,
-                min_edit_interval_seconds=DISCORD_TURN_PROGRESS_MIN_EDIT_INTERVAL_SECONDS,
-                heartbeat_interval_seconds=DISCORD_TURN_PROGRESS_HEARTBEAT_INTERVAL_SECONDS,
-                log_event_fn=log_event,
-            )
 
         turn_result: Optional[DiscordMessageTurnResult] = None
 
@@ -5052,7 +5036,6 @@ class DiscordBotService:
         return None
 
     def _ensure_chat_operation_write_lock_state(self) -> None:
-        """Tests may construct partial ``DiscordBotService`` fixtures without ``__init__``."""
         if getattr(self, "_chat_operation_write_lock_guard", None) is None:
             self._chat_operation_write_lock_guard = asyncio.Lock()
         if getattr(self, "_chat_operation_write_locks", None) is None:

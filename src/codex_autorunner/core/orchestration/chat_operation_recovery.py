@@ -36,15 +36,15 @@ rather than bypassed with adapter-local action strings.
 The recovery planner takes a ``ChatOperationSnapshot`` and produces a
 ``ChatOperationRecoveryDecision``.  The decision carries:
 
-- **action** – what recovery step to take.
-- **reason** – human-readable rationale for observability.
-- **previous_state** – the durable state that triggered this decision.
-- **delivery_pending** – whether the snapshot has a pending or failed
+- **action** -- what recovery step to take.
+- **reason** -- human-readable rationale for observability.
+- **previous_state** -- the durable state that triggered this decision.
+- **delivery_pending** -- whether the snapshot has a pending or failed
   delivery.
-- **execution_replayable** – whether the snapshot state suggests
+- **execution_replayable** -- whether the snapshot state suggests
   execution can be resumed.
-- **attempt_count** – how many delivery recovery attempts have been made.
-- **rationale** – structured key-value pairs for debugging and metrics.
+- **attempt_count** -- how many delivery recovery attempts have been made.
+- **rationale** -- structured key-value pairs for debugging and metrics.
 
 Adapters may supplement the domain decision with adapter-specific checks
 (e.g., backoff timing, cursor hash comparison) but must not override a

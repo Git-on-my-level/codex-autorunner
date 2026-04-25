@@ -3,8 +3,10 @@
 Owns: message-turn dispatch, turn execution, turn delivery, flow reply
 handling, managed thread coordination, and the main message event entry point.
 
-Imports and re-exports progress-lease functions from .progress_leases for
-backward compatibility.
+Chat operation lifecycle and recovery are governed by the shared
+``core.orchestration.chat_operation_state`` and
+``core.orchestration.chat_operation_recovery`` contracts. This module
+projects those domain decisions into Discord-specific transport behavior.
 """
 
 from __future__ import annotations
