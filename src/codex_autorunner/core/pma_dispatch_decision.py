@@ -176,9 +176,9 @@ def build_pma_dispatch_decision(
 
     attempts: list[PmaDispatchAttempt] = []
     normalized_target = _normalize_pma_delivery_target(delivery_target)
-    lane_target = _surface_binding_from_lane_id(lane_id) or _lane_delivery_target_from_context(
-        context_payload
-    )
+    lane_target = _surface_binding_from_lane_id(
+        lane_id
+    ) or _lane_delivery_target_from_context(context_payload)
     explicit_target = normalized_target or lane_target
     if explicit_target is not None:
         target_requires_known_binding = normalized_target is not None
