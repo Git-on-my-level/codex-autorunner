@@ -291,6 +291,7 @@ class LifecycleEventRouter:
                 event_id=event.event_id,
                 origin=event.origin,
                 event_data=event.data if isinstance(event.data, dict) else {},
+                prefer_subscription_reason=True,
             )
             return int(result.get("created", 0) or 0)
         except (sqlite3.Error, OSError, ValueError, TypeError, RuntimeError):

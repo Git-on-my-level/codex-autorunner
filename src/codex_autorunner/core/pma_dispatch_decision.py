@@ -172,7 +172,7 @@ def build_pma_dispatch_decision(
                 requested_delivery="suppressed_duplicate",
                 suppress_publish=True,
             )
-        if target_matches_known_binding:
+        if explicit_target_thread_ids and target_matches_known_binding:
             attempts.append(
                 PmaDispatchAttempt(
                     route="explicit",

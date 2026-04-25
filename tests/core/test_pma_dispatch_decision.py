@@ -222,3 +222,32 @@ def test_build_pma_dispatch_decision_does_not_suppress_without_managed_thread() 
     )
 
     assert decision.suppress_publish is False
+
+
+def test_build_pma_dispatch_decision_skips_explicit_without_binding_thread_ids() -> (
+    None
+):
+    """No managed thread or origin thread ids: do not persist an explicit attempt."""
+    decision = build_pma_dispatch_decision(
+        message="Hello",
+        requested_delivery="auto",
+        source_kind="automation",
+        repo_id="repo-a",
+        workspace_root=Path("/tmp/repo-a"),
+        managed_thread_id=None,
+        delivery_target={
+            "surface_kind": "discord",
+            "surface_key": "orphan-discord",
+        },
+        context_payload=None,
+        binding_metadata_by_thread={
+            "some-thread": {
+                "binding_kind": "discord",
+                "binding_id": "orphan-discord",
+            }
+        },
+        preferred_bound_surface_kinds=("discord", "telegram"),
+    )
+
+    assert not any(a.route == "explicit" for a in decision.attempts)
+    assert any(a.route == "primary_pma" for a in decision.attempts)

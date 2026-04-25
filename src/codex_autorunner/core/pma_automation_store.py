@@ -2335,6 +2335,9 @@ class PmaAutomationStore:
         from_state = _normalize_text(data.get("from_state"))
         to_state = _normalize_text(data.get("to_state"))
         reason = _normalize_text(data.get("reason")) or "transition"
+        prefer_subscription_reason = _normalize_bool(
+            data.get("prefer_subscription_reason"), fallback=False
+        )
         timestamp = _normalize_text(data.get("timestamp")) or _iso_now()
         event_type = (
             _normalize_text(data.get("event_type"))
@@ -2357,6 +2360,7 @@ class PmaAutomationStore:
                 "to_state",
                 "reason",
                 "timestamp",
+                "prefer_subscription_reason",
             }
         }
         new_wakeups: list[PmaAutomationWakeup] = []
@@ -2384,7 +2388,11 @@ class PmaAutomationStore:
                 if existing.idempotency_key
             )
             result = reduce_transition(
-                domain_subs, existing_keys, event, event_timestamp=timestamp
+                domain_subs,
+                existing_keys,
+                event,
+                event_timestamp=timestamp,
+                prefer_subscription_reason=prefer_subscription_reason,
             )
 
             new_wakeups = self._apply_reduce_result(

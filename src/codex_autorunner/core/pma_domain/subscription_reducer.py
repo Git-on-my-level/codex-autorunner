@@ -95,6 +95,7 @@ def reduce_transition(
     event: TransitionEvent,
     *,
     event_timestamp: Optional[str] = None,
+    prefer_subscription_reason: bool = False,
 ) -> ReduceTransitionResult:
     updated_subs: list[PmaSubscription] = []
     new_intents: list[WakeupIntent] = []
@@ -142,7 +143,10 @@ def reduce_transition(
             event_data = {}
 
         sub_reason = (sub.reason or "").strip()
-        wakeup_reason = sub_reason if sub_reason else event.reason
+        if prefer_subscription_reason and sub_reason:
+            wakeup_reason = sub_reason
+        else:
+            wakeup_reason = event.reason
 
         new_intents.append(
             WakeupIntent(

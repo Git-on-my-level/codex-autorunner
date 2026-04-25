@@ -422,6 +422,23 @@ class TestWakeupEmission:
         assert intent.subscription_id == "sub-1"
         assert intent.idempotency_key == "transition:trans-1:sub-1"
 
+    def test_prefer_subscription_reason_overrides_event_reason(self):
+        result = reduce_transition(
+            [_sub(reason="from-subscription")],
+            frozenset(),
+            _event(reason="from-event"),
+            prefer_subscription_reason=True,
+        )
+        assert result.wakeup_intents[0].reason == "from-subscription"
+
+    def test_subscription_reason_does_not_override_event_reason_by_default(self):
+        result = reduce_transition(
+            [_sub(reason="from-subscription")],
+            frozenset(),
+            _event(reason="from-event"),
+        )
+        assert result.wakeup_intents[0].reason == "from-event"
+
     def test_multiple_matching_subscriptions_produce_multiple_wakeups(self):
         result = reduce_transition(
             [
