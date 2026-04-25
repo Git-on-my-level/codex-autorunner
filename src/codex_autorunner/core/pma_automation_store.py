@@ -7,7 +7,7 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional, Sequence, cast
+from typing import Any, Optional, cast
 
 from .chat_bindings import (
     active_chat_binding_metadata_by_thread,
@@ -1335,33 +1335,6 @@ class PmaAutomationStore:
             appended.append(wakeup)
         return appended
 
-    def _persist_wakeup_dispatch_decisions(
-        self, wakeups_with_decisions: Sequence[PmaAutomationWakeup]
-    ) -> None:
-        if not wakeups_with_decisions:
-            return
-        by_id: dict[str, dict[str, Any]] = {}
-        for w in wakeups_with_decisions:
-            raw_dd = w.metadata.get("dispatch_decision")
-            if isinstance(raw_dd, dict):
-                by_id[w.wakeup_id] = dict(raw_dd)
-        if not by_id:
-            return
-        with file_lock(self._lock_path()):
-            state, subscriptions, timers, wakeups = self._load_structured_unlocked()
-            changed = False
-            now = _iso_now()
-            for entry in wakeups:
-                new_dd = by_id.get(entry.wakeup_id)
-                if new_dd is None:
-                    continue
-                entry.metadata = dict(entry.metadata)
-                entry.metadata["dispatch_decision"] = new_dd
-                entry.updated_at = now
-                changed = True
-            if changed:
-                self._save_structured_unlocked(state, subscriptions, timers, wakeups)
-
     @staticmethod
     def _normalize_subscription_event_types(
         value: Any,
@@ -2313,10 +2286,9 @@ class PmaAutomationStore:
                 event_data=event_data,
                 metadata=metadata,
             )
+            self._compute_dispatch_decision_for_wakeup(created)
             wakeups.append(created)
             self._save_structured_unlocked(state, subscriptions, timers, wakeups)
-        self._compute_dispatch_decision_for_wakeup(created)
-        self._persist_wakeup_dispatch_decisions((created,))
         return created, False
 
     def enqueue_event(self, **kwargs: Any) -> tuple[PmaAutomationWakeup, bool]:
@@ -2391,7 +2363,6 @@ class PmaAutomationStore:
                 "timestamp",
             }
         }
-        new_wakeups: list[PmaAutomationWakeup] = []
         with file_lock(self._lock_path()):
             state, subscriptions, timers, wakeups = self._load_structured_unlocked()
 
@@ -2422,19 +2393,16 @@ class PmaAutomationStore:
                 event_timestamp=timestamp,
             )
 
-            new_wakeups = self._apply_reduce_result(
+            self._apply_reduce_result(
                 subscriptions,
                 wakeups,
                 result,
                 timestamp,
-                compute_dispatch=False,
+                compute_dispatch=True,
             )
 
             if result.created > 0 or result.subscriptions_changed > 0:
                 self._save_structured_unlocked(state, subscriptions, timers, wakeups)
-        for w in new_wakeups:
-            self._compute_dispatch_decision_for_wakeup(w)
-        self._persist_wakeup_dispatch_decisions(new_wakeups)
         return {
             "status": "ok",
             "matched": result.matched,
