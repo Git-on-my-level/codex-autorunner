@@ -117,6 +117,33 @@ def _delivery_target_matches_any_thread_binding(
     )
 
 
+def _delivery_target_from_lane_id(lane_id: Any) -> Optional[tuple[str, str]]:
+    normalized_lane_id = _normalize_optional_text(lane_id)
+    if normalized_lane_id is None:
+        return None
+    surface_kind_raw, separator, surface_key_raw = normalized_lane_id.partition(":")
+    if not separator:
+        return None
+    surface_kind = _normalize_optional_text(surface_kind_raw)
+    surface_key = _normalize_optional_text(surface_key_raw)
+    if surface_kind not in {"discord", "telegram"} or surface_key is None:
+        return None
+    return surface_kind, surface_key
+
+
+def _lane_delivery_target_from_context(
+    context_payload: Optional[Mapping[str, Any]],
+) -> Optional[tuple[str, str]]:
+    if not isinstance(context_payload, Mapping):
+        return None
+    wake_up = context_payload.get("wake_up")
+    if isinstance(wake_up, Mapping):
+        target = _delivery_target_from_lane_id(wake_up.get("lane_id"))
+        if target is not None:
+            return target
+    return _delivery_target_from_lane_id(context_payload.get("lane_id"))
+
+
 def build_pma_dispatch_decision(
     *,
     message: str,
@@ -143,8 +170,11 @@ def build_pma_dispatch_decision(
 
     attempts: list[PmaDispatchAttempt] = []
     normalized_target = _normalize_pma_delivery_target(delivery_target)
-    if normalized_target is not None:
-        surface_kind, surface_key = normalized_target
+    lane_target = _lane_delivery_target_from_context(context_payload)
+    explicit_target = normalized_target or lane_target
+    if explicit_target is not None:
+        target_requires_known_binding = normalized_target is not None
+        surface_kind, surface_key = explicit_target
         explicit_target_thread_ids = _explicit_delivery_target_thread_ids(
             managed_thread_id=managed_thread_id,
             context_payload=context_payload,
@@ -172,7 +202,9 @@ def build_pma_dispatch_decision(
                 requested_delivery="suppressed_duplicate",
                 suppress_publish=True,
             )
-        if explicit_target_thread_ids and target_matches_known_binding:
+        if not target_requires_known_binding or (
+            explicit_target_thread_ids and target_matches_known_binding
+        ):
             attempts.append(
                 PmaDispatchAttempt(
                     route="explicit",
