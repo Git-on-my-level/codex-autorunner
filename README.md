@@ -1,123 +1,116 @@
 # CAR (codex-autorunner)
 [![PyPI](https://img.shields.io/pypi/v/codex-autorunner.svg)](https://pypi.org/project/codex-autorunner/)
 
-CAR provides a set of low-opinion agent coordination tools for you to run long complex implementations using the agents you already love. CAR is not a coding agent, it's a meta-harness for coding agents.
+**Plan once, then let your favorite coding agents grind through tickets while you sleep — and ping you on Telegram or Discord when they're stuck.**
 
-What this looks like in practice:
-- You write a plan, or generate a plan by chatting with your favorite AI
-- You convert the plan (or ask an AI to convert it for you) into CAR compatible tickets (markdown with some frontmatter). Use the [CAR Ticket Skill](docs/car-ticket-skill.md) with ChatGPT, Claude, Codex, or your preferred assistant.
-- Go off and do something else, no need to babysit the agents, they will notify you if they need your input on one of the supported chat platforms (Telegram, Discord, etc...)
+CAR is a meta-harness for coding agents (Codex, Hermes, OpenCode, anything ACP). It is _not_ a coding agent itself. You bring the plan and the agents; CAR coordinates the long-running execution.
 
-![CAR Hub Multiple Projects Screenshot](docs/screenshots/ticket-3-column.png)
+> 🧪 Built for developers comfortable running long-horizon agent workflows on their own machine. If you babysit every agent turn, this isn't the tool for you.
 
-## How it works
-CAR is very simple. At its core, CAR is a state machine which checks to see if there are any incomplete tickets. If yes, pick the next one and run it against an agent. Tickets can be pre-populated by the user, but agents can also write tickets. _Tickets are the control plane for CAR_.
+![CAR Hub](docs/screenshots/ticket-3-column.png)
 
-When each agent wakes up, it gets knowledge about CAR and how to operate within CAR, a pre-defined set of context (internally referred to as `contextspace`), the current ticket, and optionally the final output of the previous agent. This simple loop ensures that agents know enough to use CAR while also focusing them on the task at hand.
+**What you actually do with CAR:**
+- ✍️ Write a plan, or chat with an AI to generate one
+- 🎫 Convert it into CAR tickets (markdown + frontmatter) — use the [CAR Ticket Skill](docs/car-ticket-skill.md) with any assistant
+- 🚶 Walk away. Agents work the queue and notify you (Telegram, Discord, inbox) only when they need input
 
-## Philosophy
-The philosophy behind CAR is to let the agents do what they do best, and get out of their way. CAR is _very bitter-lesson-pilled_. As models and agents get more powerful, CAR should serve as a form of leverage, and avoid constraining models and their harnesses. This is why we treat the filesystem as the first class data plane and utilize tools and languages the models are already very familiar with (git, python).
+---
 
-CAR treats tickets as the control plane and models as the execution layer. This means that we rely on agents to follow the instructions written in the tickets. If you use a sufficiently weak model, CAR may not work well for you. CAR is an amplifier for agent capabilities. Agents who like to scope creep (create too many new tickets) or reward hack (mark a ticket as done despite it being incomplete) are not a good fit for CAR.
+## 🚀 Quickstart
 
-## Tickets as code
-Since tickets are the control plane, you should write and treat tickets as a new "software layer" that operates within CAR. For example you can write at ticket which scopes a feature and generates other tickets, a ticket which spawns subagents (if the agent supports them) to do a code review, a ticket which repays tech debt, etc... The tickets can be repo-agnostic or specific to your own repository. I maintain a ["blessed" set of ticket templates that can be accessed from any CAR deployment on github](https://github.com/Git-on-my-level/car-ticket-templates) but you can write and configure your own for your own workflows and projects. If you have a ticket that's well generalized and works well across agents and models feel free to contribute it to the blessed template set.
+### Option 1 — Let your agent install it (recommended)
 
-## Interaction patterns
-CAR's core is a set of python functions surfaced as a CLI, operating on a file system and sqlite database. There are currently 3 ways to interact with this core.
+Paste this to Codex, Cursor, Hermes, OpenClaw, or whichever assistant you trust on your machine:
 
-### Web UI
-The web UI is the main control plane for CAR. From here you can set up new repositories or clone existing ones, chat with agents using their TUI, and run the ticket autorunner. There are many quality-of-life features like Whisper integration, editing documents by chatting with AI (useful for mobile), viewing usage analytics, and much more. The Web UI is the most full-featured user-facing interface and a good starting point for trying out CAR. See the [web UI security posture](docs/web/security.md) for guidance on safe exposure.
+> Please walk me through setting up CAR (codex-autorunner) using this guide:
+> https://github.com/Git-on-my-level/codex-autorunner/blob/main/docs/AGENT_SETUP_GUIDE.md
 
-### CLI
-The CLI is the most agent-friendly way to interact with CAR. You can build your own UI on top of the CLI and web server, or you can delegate your agent to use the CLI directly (this is what CAR does in all it's UIs). 
+The agent will check prerequisites, install CAR, initialize a hub, and configure your first repo interactively.
 
-### Chat Apps (Telegram & Discord)
-If you want a persistent chat experience on multiple devices without a shared network or needing to make your CAR service exposed on the public internet, chat apps are a great UX.
+### Option 2 — Install it yourself
 
-You can interact with your configured agents just like you would in the TUI, or you can manage a project management agent (PMA) to use the CAR CLI on your behalf to set up and run tickets.
+```bash
+pipx install codex-autorunner   # or: pip install codex-autorunner
+car --version
+mkdir ~/car-hub && cd ~/car-hub
+car init --mode hub
+```
 
-Today we support Telegram and Discord as first-class platforms, if you want to add another platform please open an issue or pull request to discuss.
+Then open the web UI and add a repo. Full walkthrough: [AGENT_SETUP_GUIDE.md](docs/AGENT_SETUP_GUIDE.md).
 
-### Project Manager Agent
-The project manager agent (PMA) can be invoked in both the web UI and chat apps. It allows you to use CAR using a conversational interface instead of using the CLI yourself. The PMA is just an agent with access to special context about how to manage CAR, best practices for using the CAR CLI, and a set of helpers for things like file management, agent notification management, and more. The PMA has a basic memory system to learn from how you like to work and persist best practices and learnings over time.
+### Recommended add-ons
 
-**Hermes makes an excellent PMA** because it maintains global memory across sessions via its shared `HERMES_HOME`, extending beyond CAR's basic context layer. This means Hermes can remember patterns, preferences, and learnings across all your CAR projects. See [the Hermes ACP runbook](docs/ops/hermes-acp.md) for setup and operational caveats.
+- 💬 [Telegram setup](docs/AGENT_SETUP_TELEGRAM_GUIDE.md) · [Discord setup](docs/AGENT_SETUP_DISCORD_GUIDE.md) - Pick one
+- 🤖 [Hermes setup](docs/ops/hermes-acp.md) - Recommended PMA, keeps memory across all your CAR projects
+- 🐳 [Docker runtime per repo/worktree](docs/configuration/destinations.md) - For running agents in a containerized environment
 
-Example use-cases:
-- Create/edit CAR tickets
-- Set up new repos and manage worktrees
-- Manage a ticket flow
-- Respond to dispatches from ticket flow agents
-- Go from 0 to 1 on a new project and iterate on it with large feature builds
+---
 
-You can also use the PMA to manage your CAR service, or to help you set up and run tickets.
+## 🧠 How it works
 
-## Quickstart
+At its core, CAR is a state machine: while there are incomplete tickets, pick the next one and run it against an agent. Tickets can be pre-written by you, by agents, or on the fly.
 
-The fastest way to get started is to pass [this setup guide](docs/AGENT_SETUP_GUIDE.md) to your favorite AI agent. The agent will walk you through installation and configuration interactively based on your environment.
+> _Tickets are the control plane. Agents are the execution layer._
 
-Want to set up chat apps? Read or ask your agent to read:
-- [Telegram setup guide](docs/AGENT_SETUP_TELEGRAM_GUIDE.md)
-- [Discord setup guide](docs/AGENT_SETUP_DISCORD_GUIDE.md)
+When an agent wakes up it gets: knowledge of CAR, a pre-defined `contextspace`, the current ticket, and optionally the previous agent's output. That's it.
 
-Need docker runtime execution (including custom images per repo/worktree)?
-- [Destination runtime guide](docs/configuration/destinations.md)
+📸 [See it in action — full screenshot gallery](docs/screenshots/GALLERY.md)
 
-### From source (repo checkout)
+---
 
-If you're working from a fresh clone of this repo, you can run the repo-local CLI shim:
+## 🎛️ Ways to interact
+
+| Surface | When to use it |
+|---|---|
+| **Web UI** | Main control plane. Set up repos, chat with agents, run the autorunner, view usage. Start here. ([security notes](docs/web/security.md)) |
+| **CLI** | The agent-friendly surface. Not really made for human use. |
+| **Telegram / Discord** | Persistent multi-device chat without exposing your hub to the internet. |
+| **Project Manager Agent (PMA)** | Conversational interface to CAR itself. Available in the web UI and chat apps. Hermes makes [an excellent PMA](docs/ops/hermes-acp.md) thanks to its global memory. |
+
+---
+
+## 🤖 Supported agents
+
+- **Codex**
+- **Hermes**
+- **OpenCode**
+
+CAR integrates any reasonable [ACP](https://github.com/zed-industries/agent-client-protocol) agent. Want yours added? Open an issue or PR.
+
+---
+
+## 🧭 Philosophy
+
+CAR is _very bitter-lesson-pilled_. As models and agents get stronger, CAR should serve as leverage and stay out of their way. We treat the filesystem as the first-class data plane and lean on tools agents already know cold (git, python, markdown).
+
+Because tickets are the control plane and agents are the execution layer, **CAR is an amplifier**. With a strong model it sings; with a model that scope-creeps or reward-hacks (marks tickets done that aren't), it will not.
+
+### Tickets as code
+
+Tickets aren't just task descriptions — they're a software layer that operates inside CAR. You can write tickets that scope a feature and generate child tickets, spawn subagent code reviews, repay tech debt, etc. Tickets can be repo-agnostic or project-specific.
+
+I maintain a ["blessed" set of templates](https://github.com/Git-on-my-level/car-ticket-templates) accessible from any CAR deployment. Got a generalizable ticket that works well across agents? Contribute it.
+
+---
+
+## 📚 Learn more
+
+- 🗺️ [Interactive architecture explorer (Principal Forks)](https://app.principal-ade.com/Principal-Forks/codex-autorunner)
+- 📜 [Codebase constitution](docs/car_constitution/10_CODEBASE_CONSTITUTION.md)
+- 🏛️ [Architecture map](docs/car_constitution/20_ARCHITECTURE_MAP.md)
+- 📐 [Engineering standards](docs/car_constitution/30_ENGINEERING_STANDARDS.md)
+- 📝 [Run history contract](docs/RUN_HISTORY.md) · [State roots contract](docs/STATE_ROOTS.md)
+
+### From source
 
 ```bash
 ./car --help
 ```
 
-The shim will try `PYTHONPATH=src` first and, if dependencies are missing, will bootstrap a local `.venv` and install CAR.
+The shim tries `PYTHONPATH=src` first and bootstraps a local `.venv` if dependencies are missing.
 
-## Architecture docs
-- [Interactively explore the architecture on Principal Forks](https://app.principal-ade.com/Principal-Forks/codex-autorunner)
-- [Codebase constitution](docs/car_constitution/10_CODEBASE_CONSTITUTION.md)
-- [Architecture map](docs/car_constitution/20_ARCHITECTURE_MAP.md)
-- [Engineering standards](docs/car_constitution/30_ENGINEERING_STANDARDS.md)
-- [Run history contract](docs/RUN_HISTORY.md)
-- [State roots contract](docs/STATE_ROOTS.md)
+---
 
-## Supported agents
-CAR currently supports:
-- Codex
-- OpenCode
-- Hermes (ACP-backed runtime with durable threads)
+## ⭐ Star history
 
-CAR is built to easily integrate any reasonable agent built for Agent Client Protocol (ACP). If you would like to see your agent supported, please reach out or open a PR.
-If you want to use Hermes, start with the [Hermes ACP runbook](docs/ops/hermes-acp.md).
-
-## Examples
-Build out complex features and products by providing a series of tickets assigned to various agents.
-![CAR Tickets in Progress Screenshot](docs/screenshots/tickets-in-progress.png)
-
-Tickets are just markdown files that both you and the agent can edit.
-![CAR Ticket Markdown Screenshot](docs/screenshots/ticket-markdown.png)
-
-You don't have to babysit the agents, they inbox you or ping you on Telegram.
-![CAR Inbox Screenshot](docs/screenshots/inbox.png)
-
-You can collaborate with the agents in the shared **contextspace** (context documents under `.codex-autorunner/contextspace/`), independent of the codebase. Drop context there, extract artifacts, it's like a shared scratchpad.
-![CAR contextspace screenshot](docs/screenshots/workspace.png)
-
-All core contextspace documents are also just markdown files, so you and the agent can easily edit them.
-![CAR contextspace new markdown screenshot](docs/screenshots/workspace-new-md.png)
-
-If you need to do something more custom or granular, you can use your favorite agent TUIs in the built-in terminal.
-![CAR Terminal Codex Screenshot](docs/screenshots/terminal-codex.png)
-![CAR Terminal OpenCode screenshot](docs/screenshots/terminal-opencode.png)
-
-On the go or want to use your favorite chat apps? CAR supports Telegram and Discord.
-![CAR Discord Media Image Screenshot](docs/screenshots/discord-media-image.png)
-![CAR Telegram Media Voice Screenshot](docs/screenshots/telegram-media-voice.png)
-![CAR Telegram Media Image Screenshot](docs/screenshots/telegram-media-image.png)
-
-Don't want to use the product directly? Delegate work to the PMA.
-![CAR Telegram PMA Screenshot](docs/screenshots/telegram-pma.png)
-
-## Star history
 [![Star History Chart](https://api.star-history.com/svg?repos=Git-on-my-level/codex-autorunner&type=Date)](https://star-history.com/#Git-on-my-level/codex-autorunner&Date)
