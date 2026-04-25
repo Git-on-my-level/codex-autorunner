@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from codex_autorunner.core.flows.lifecycle_reducer import (
@@ -10,8 +12,9 @@ from codex_autorunner.core.flows.lifecycle_reducer import (
     TransitionResult,
     TriggerKind,
     reduce_flow_lifecycle,
+    resolve_reconcile_trigger,
 )
-from codex_autorunner.core.flows.models import FlowRunStatus
+from codex_autorunner.core.flows.models import FlowRunRecord, FlowRunStatus
 
 _NOW = "2024-01-15T12:00:00Z"
 
@@ -465,3 +468,305 @@ class TestEffectOrdering:
         assert flow_event_idxs
         assert lifecycle_idxs
         assert max(flow_event_idxs) < min(lifecycle_idxs)
+
+
+class TestReconcileEngineCompleted:
+    def test_running_to_completed(self):
+        result = _reduce(
+            FlowRunStatus.RUNNING,
+            FlowTrigger(kind=TriggerKind.RECONCILE_ENGINE_COMPLETED),
+        )
+        assert result.status == FlowRunStatus.COMPLETED
+        assert result.finished_at == _NOW
+        assert result.current_step is None
+        assert result.note == "engine-completed"
+
+    def test_paused_to_completed(self):
+        result = _reduce(
+            FlowRunStatus.PAUSED,
+            FlowTrigger(kind=TriggerKind.RECONCILE_ENGINE_COMPLETED),
+        )
+        assert result.status == FlowRunStatus.COMPLETED
+        assert result.finished_at == _NOW
+
+    def test_rejects_non_running_paused(self):
+        for status in (
+            FlowRunStatus.PENDING,
+            FlowRunStatus.FAILED,
+            FlowRunStatus.STOPPED,
+        ):
+            with pytest.raises(InvalidTransition):
+                _reduce(
+                    status, FlowTrigger(kind=TriggerKind.RECONCILE_ENGINE_COMPLETED)
+                )
+
+
+class TestReconcileWorkerDead:
+    def test_running_to_failed(self):
+        result = _reduce(
+            FlowRunStatus.RUNNING,
+            FlowTrigger(
+                kind=TriggerKind.RECONCILE_WORKER_DEAD,
+                error_message="Worker died (status=dead, pid=12345)",
+            ),
+        )
+        assert result.status == FlowRunStatus.FAILED
+        assert result.finished_at == _NOW
+        assert result.error_message == "Worker died (status=dead, pid=12345)"
+        assert result.current_step is None
+        assert result.note == "worker-dead"
+        assert (
+            result.state.get("reason_summary") == "Worker died (status=dead, pid=12345)"
+        )
+
+    def test_includes_failure_enrichment_effect(self):
+        result = _reduce(
+            FlowRunStatus.RUNNING,
+            FlowTrigger(
+                kind=TriggerKind.RECONCILE_WORKER_DEAD,
+                error_message="worker crashed",
+            ),
+        )
+        enrich = [
+            e for e in result.effects if e.kind == EffectKind.ENRICH_FAILURE_PAYLOAD
+        ]
+        assert len(enrich) == 1
+        assert enrich[0].note == "worker_dead"
+
+    def test_rejects_non_running(self):
+        with pytest.raises(InvalidTransition):
+            _reduce(
+                FlowRunStatus.PAUSED,
+                FlowTrigger(kind=TriggerKind.RECONCILE_WORKER_DEAD, error_message="x"),
+            )
+
+
+class TestReconcileWorkerShutdown:
+    def test_running_to_stopped(self):
+        result = _reduce(
+            FlowRunStatus.RUNNING,
+            FlowTrigger(kind=TriggerKind.RECONCILE_WORKER_SHUTDOWN),
+        )
+        assert result.status == FlowRunStatus.STOPPED
+        assert result.finished_at == _NOW
+        assert result.current_step is None
+        assert result.note == "worker-shutdown-intent"
+        assert result.state.get("reason_summary") == "Worker stopped"
+
+    def test_rejects_non_running(self):
+        with pytest.raises(InvalidTransition):
+            _reduce(
+                FlowRunStatus.PAUSED,
+                FlowTrigger(kind=TriggerKind.RECONCILE_WORKER_SHUTDOWN),
+            )
+
+
+class TestReconcileEnginePaused:
+    def test_running_to_paused(self):
+        result = _reduce(
+            FlowRunStatus.RUNNING,
+            FlowTrigger(kind=TriggerKind.RECONCILE_ENGINE_PAUSED),
+        )
+        assert result.status == FlowRunStatus.PAUSED
+        assert result.finished_at is NO_CHANGE
+        assert result.note == "engine-paused"
+
+    def test_rejects_non_running(self):
+        with pytest.raises(InvalidTransition):
+            _reduce(
+                FlowRunStatus.COMPLETED,
+                FlowTrigger(kind=TriggerKind.RECONCILE_ENGINE_PAUSED),
+            )
+
+
+class TestReconcileStalePauseResume:
+    def test_paused_to_running_clears_pause_metadata(self):
+        result = _reduce(
+            FlowRunStatus.PAUSED,
+            FlowTrigger(kind=TriggerKind.RECONCILE_STALE_PAUSE_RESUME),
+            state={
+                "ticket_engine": {
+                    "status": "paused",
+                    "reason": "old reason",
+                    "reason_details": "details",
+                    "reason_code": "stale",
+                    "pause_context": {"waiting": True},
+                },
+                "reason_summary": "Paused",
+            },
+        )
+        assert result.status == FlowRunStatus.RUNNING
+        assert result.note == "stale-pause-resumed"
+        engine = result.state.get("ticket_engine", {})
+        assert engine.get("status") == "running"
+        assert "reason" not in engine
+        assert "reason_details" not in engine
+        assert "reason_code" not in engine
+        assert "pause_context" not in engine
+        assert "reason_summary" not in result.state
+
+    def test_rejects_non_paused(self):
+        with pytest.raises(InvalidTransition):
+            _reduce(
+                FlowRunStatus.RUNNING,
+                FlowTrigger(kind=TriggerKind.RECONCILE_STALE_PAUSE_RESUME),
+            )
+
+
+class TestReconcileStoppingFinalize:
+    def test_stopping_to_stopped(self):
+        result = _reduce(
+            FlowRunStatus.STOPPING,
+            FlowTrigger(kind=TriggerKind.RECONCILE_STOPPING_FINALIZE),
+        )
+        assert result.status == FlowRunStatus.STOPPED
+        assert result.finished_at == _NOW
+        assert result.current_step is None
+        assert result.note == "worker-dead"
+        assert result.state.get("reason_summary") == "Worker stopped"
+
+    def test_rejects_non_stopping(self):
+        with pytest.raises(InvalidTransition):
+            _reduce(
+                FlowRunStatus.RUNNING,
+                FlowTrigger(kind=TriggerKind.RECONCILE_STOPPING_FINALIZE),
+            )
+
+
+class TestReconcileClearStaleError:
+    def test_clears_error_message(self):
+        result = _reduce(
+            FlowRunStatus.RUNNING,
+            FlowTrigger(kind=TriggerKind.RECONCILE_CLEAR_STALE_ERROR),
+        )
+        assert result.status == FlowRunStatus.RUNNING
+        assert result.error_message is None
+        assert result.finished_at is NO_CHANGE
+        assert result.note == "clear-stale-error"
+
+    def test_rejects_non_running(self):
+        with pytest.raises(InvalidTransition):
+            _reduce(
+                FlowRunStatus.PAUSED,
+                FlowTrigger(kind=TriggerKind.RECONCILE_CLEAR_STALE_ERROR),
+            )
+
+
+def _rec(
+    status: FlowRunStatus,
+    state: dict | None = None,
+    error_message: str | None = None,
+) -> FlowRunRecord:
+    return FlowRunRecord(
+        id="run-1",
+        flow_type="ticket_flow",
+        status=status,
+        input_data={},
+        state=state or {},
+        created_at="2024-01-01T00:00:00Z",
+        error_message=error_message,
+    )
+
+
+def _health(alive: bool, **kwargs) -> SimpleNamespace:
+    defaults = {
+        "is_alive": alive,
+        "status": "alive" if alive else "dead",
+        "artifact_path": None,
+        "pid": 12345 if not alive else None,
+        "message": "worker PID not running" if not alive else None,
+    }
+    defaults.update(kwargs)
+    return SimpleNamespace(**defaults)
+
+
+class TestResolveReconcileTrigger:
+    def test_running_engine_completed(self):
+        rec = _rec(FlowRunStatus.RUNNING, {"ticket_engine": {"status": "completed"}})
+        trigger = resolve_reconcile_trigger(rec, _health(True))
+        assert trigger is not None
+        assert trigger.kind == TriggerKind.RECONCILE_ENGINE_COMPLETED
+
+    def test_running_dead_worker(self):
+        rec = _rec(FlowRunStatus.RUNNING, {"ticket_engine": {"status": "running"}})
+        trigger = resolve_reconcile_trigger(rec, _health(False))
+        assert trigger is not None
+        assert trigger.kind == TriggerKind.RECONCILE_WORKER_DEAD
+        assert "Worker died" in (trigger.error_message or "")
+
+    def test_running_dead_shutdown_intent(self):
+        rec = _rec(FlowRunStatus.RUNNING, {"ticket_engine": {"status": "running"}})
+        trigger = resolve_reconcile_trigger(rec, _health(False, shutdown_intent=True))
+        assert trigger is not None
+        assert trigger.kind == TriggerKind.RECONCILE_WORKER_SHUTDOWN
+
+    def test_running_engine_paused(self):
+        rec = _rec(FlowRunStatus.RUNNING, {"ticket_engine": {"status": "paused"}})
+        trigger = resolve_reconcile_trigger(rec, _health(True))
+        assert trigger is not None
+        assert trigger.kind == TriggerKind.RECONCILE_ENGINE_PAUSED
+
+    def test_running_alive_noop(self):
+        rec = _rec(FlowRunStatus.RUNNING, {"ticket_engine": {"status": "running"}})
+        trigger = resolve_reconcile_trigger(rec, _health(True))
+        assert trigger is None
+
+    def test_running_alive_stale_error(self):
+        rec = _rec(
+            FlowRunStatus.RUNNING,
+            {"ticket_engine": {"status": "running"}},
+            error_message="old error",
+        )
+        trigger = resolve_reconcile_trigger(rec, _health(True))
+        assert trigger is not None
+        assert trigger.kind == TriggerKind.RECONCILE_CLEAR_STALE_ERROR
+
+    def test_stopping_dead_worker(self):
+        rec = _rec(FlowRunStatus.STOPPING, {"ticket_engine": {"status": "running"}})
+        trigger = resolve_reconcile_trigger(rec, _health(False))
+        assert trigger is not None
+        assert trigger.kind == TriggerKind.RECONCILE_STOPPING_FINALIZE
+
+    def test_paused_engine_completed(self):
+        rec = _rec(FlowRunStatus.PAUSED, {"ticket_engine": {"status": "completed"}})
+        trigger = resolve_reconcile_trigger(rec, _health(True))
+        assert trigger is not None
+        assert trigger.kind == TriggerKind.RECONCILE_ENGINE_COMPLETED
+
+    def test_paused_stale_resume(self):
+        rec = _rec(FlowRunStatus.PAUSED, {"ticket_engine": {"status": "running"}})
+        trigger = resolve_reconcile_trigger(rec, _health(True))
+        assert trigger is not None
+        assert trigger.kind == TriggerKind.RECONCILE_STALE_PAUSE_RESUME
+
+    def test_paused_stale_resume_none_engine(self):
+        rec = _rec(FlowRunStatus.PAUSED, {"ticket_engine": {}})
+        trigger = resolve_reconcile_trigger(rec, _health(True))
+        assert trigger is not None
+        assert trigger.kind == TriggerKind.RECONCILE_STALE_PAUSE_RESUME
+
+    def test_paused_user_pause_sticky(self):
+        rec = _rec(
+            FlowRunStatus.PAUSED,
+            {"ticket_engine": {"status": "running", "reason_code": "user_pause"}},
+        )
+        trigger = resolve_reconcile_trigger(rec, _health(True))
+        assert trigger is None
+
+    def test_paused_dead_worker_noop(self):
+        rec = _rec(
+            FlowRunStatus.PAUSED,
+            {"ticket_engine": {"status": "paused", "reason_code": "user_pause"}},
+        )
+        trigger = resolve_reconcile_trigger(rec, _health(False))
+        assert trigger is None
+
+    def test_terminal_returns_none(self):
+        for status in (
+            FlowRunStatus.COMPLETED,
+            FlowRunStatus.FAILED,
+            FlowRunStatus.STOPPED,
+        ):
+            rec = _rec(status, {"ticket_engine": {"status": "running"}})
+            trigger = resolve_reconcile_trigger(rec, _health(True))
+            assert trigger is None

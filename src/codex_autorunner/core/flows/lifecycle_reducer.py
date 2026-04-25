@@ -1,10 +1,30 @@
+"""Flow lifecycle reducer — the single authority for flow state transitions.
+
+Both the runtime (live execution) and the reconciler (recovery / housekeeping)
+feed typed triggers into :func:`reduce_flow_lifecycle` and receive a
+:dataclass:`TransitionResult` with the next status, derived state, and explicit
+effect intents.  Callers apply the effects; the reducer stays pure.
+
+Architecture
+------------
+Runtime path
+    ``FlowRuntime.run_flow`` → ``FlowTrigger`` → ``reduce_flow_lifecycle``
+    → ``_apply_transition`` (persists + emits).
+
+Reconciler path
+    ``resolve_reconcile_trigger`` → ``FlowTrigger`` → ``reduce_flow_lifecycle``
+    → reconciler applies the ``TransitionResult`` (persist + emit telemetry).
+
+There is no other code path that may mutate flow lifecycle state.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from .models import FlowRunStatus
+from .models import FlowRunRecord, FlowRunStatus
 from .reasons import ensure_reason_summary
 
 
@@ -34,6 +54,13 @@ class TriggerKind(str, Enum):
     STEP_PAUSE = "step_pause"
     STEP_EXCEPTION = "step_exception"
     FLOW_EXCEPTION = "flow_exception"
+    RECONCILE_ENGINE_COMPLETED = "reconcile_engine_completed"
+    RECONCILE_WORKER_DEAD = "reconcile_worker_dead"
+    RECONCILE_WORKER_SHUTDOWN = "reconcile_worker_shutdown"
+    RECONCILE_ENGINE_PAUSED = "reconcile_engine_paused"
+    RECONCILE_STALE_PAUSE_RESUME = "reconcile_stale_pause_resume"
+    RECONCILE_STOPPING_FINALIZE = "reconcile_stopping_finalize"
+    RECONCILE_CLEAR_STALE_ERROR = "reconcile_clear_stale_error"
 
 
 class EffectKind(str, Enum):
@@ -113,6 +140,34 @@ def reduce_flow_lifecycle(
         return _reduce_step_pause(current_status, current_state, trigger, now=now)
     if trigger.kind == TriggerKind.FLOW_EXCEPTION:
         return _reduce_flow_exception(current_status, current_state, trigger, now=now)
+    if trigger.kind == TriggerKind.RECONCILE_ENGINE_COMPLETED:
+        return _reduce_reconcile_engine_completed(
+            current_status, current_state, trigger, now=now
+        )
+    if trigger.kind == TriggerKind.RECONCILE_WORKER_DEAD:
+        return _reduce_reconcile_worker_dead(
+            current_status, current_state, trigger, now=now
+        )
+    if trigger.kind == TriggerKind.RECONCILE_WORKER_SHUTDOWN:
+        return _reduce_reconcile_worker_shutdown(
+            current_status, current_state, trigger, now=now
+        )
+    if trigger.kind == TriggerKind.RECONCILE_ENGINE_PAUSED:
+        return _reduce_reconcile_engine_paused(
+            current_status, current_state, trigger, now=now
+        )
+    if trigger.kind == TriggerKind.RECONCILE_STALE_PAUSE_RESUME:
+        return _reduce_reconcile_stale_pause_resume(
+            current_status, current_state, trigger, now=now
+        )
+    if trigger.kind == TriggerKind.RECONCILE_STOPPING_FINALIZE:
+        return _reduce_reconcile_stopping_finalize(
+            current_status, current_state, trigger, now=now
+        )
+    if trigger.kind == TriggerKind.RECONCILE_CLEAR_STALE_ERROR:
+        return _reduce_reconcile_clear_stale_error(
+            current_status, current_state, trigger, now=now
+        )
     raise InvalidTransition(f"Unknown trigger kind: {trigger.kind}")
 
 
@@ -455,3 +510,231 @@ def _reduce_flow_exception(
         ],
         note="flow-exception",
     )
+
+
+def _reduce_reconcile_engine_completed(
+    current_status: FlowRunStatus,
+    current_state: Dict[str, Any],
+    trigger: FlowTrigger,
+    *,
+    now: str,
+) -> TransitionResult:
+    _require_status(
+        current_status,
+        FlowRunStatus.RUNNING,
+        FlowRunStatus.PAUSED,
+        trigger=trigger.kind,
+    )
+    state = _merge_state(current_state, trigger)
+    return TransitionResult(
+        status=FlowRunStatus.COMPLETED,
+        state=state,
+        finished_at=now,
+        current_step=None,
+        note="engine-completed",
+    )
+
+
+def _reduce_reconcile_worker_dead(
+    current_status: FlowRunStatus,
+    current_state: Dict[str, Any],
+    trigger: FlowTrigger,
+    *,
+    now: str,
+) -> TransitionResult:
+    _require_status(current_status, FlowRunStatus.RUNNING, trigger=trigger.kind)
+    state = _merge_state(current_state, trigger)
+    state = ensure_reason_summary(
+        state, status=FlowRunStatus.FAILED, error_message=trigger.error_message
+    )
+    return TransitionResult(
+        status=FlowRunStatus.FAILED,
+        state=state,
+        finished_at=now,
+        error_message=trigger.error_message,
+        current_step=None,
+        effects=[
+            EffectIntent(
+                kind=EffectKind.ENRICH_FAILURE_PAYLOAD,
+                error_message=trigger.error_message,
+                note="worker_dead",
+            ),
+        ],
+        note="worker-dead",
+    )
+
+
+def _reduce_reconcile_worker_shutdown(
+    current_status: FlowRunStatus,
+    current_state: Dict[str, Any],
+    trigger: FlowTrigger,
+    *,
+    now: str,
+) -> TransitionResult:
+    _require_status(current_status, FlowRunStatus.RUNNING, trigger=trigger.kind)
+    state = _merge_state(current_state, trigger)
+    state = ensure_reason_summary(
+        state, status=FlowRunStatus.STOPPED, default="Worker stopped"
+    )
+    return TransitionResult(
+        status=FlowRunStatus.STOPPED,
+        state=state,
+        finished_at=now,
+        current_step=None,
+        note="worker-shutdown-intent",
+    )
+
+
+def _reduce_reconcile_engine_paused(
+    current_status: FlowRunStatus,
+    current_state: Dict[str, Any],
+    trigger: FlowTrigger,
+    *,
+    now: str,
+) -> TransitionResult:
+    _require_status(current_status, FlowRunStatus.RUNNING, trigger=trigger.kind)
+    state = _merge_state(current_state, trigger)
+    state = ensure_reason_summary(state, status=FlowRunStatus.PAUSED)
+    return TransitionResult(
+        status=FlowRunStatus.PAUSED,
+        state=state,
+        note="engine-paused",
+    )
+
+
+def _reduce_reconcile_stale_pause_resume(
+    current_status: FlowRunStatus,
+    current_state: Dict[str, Any],
+    trigger: FlowTrigger,
+    *,
+    now: str,
+) -> TransitionResult:
+    _require_status(current_status, FlowRunStatus.PAUSED, trigger=trigger.kind)
+    state = dict(current_state)
+    engine = state.get("ticket_engine")
+    if isinstance(engine, dict):
+        engine = dict(engine)
+        engine.pop("reason", None)
+        engine.pop("reason_details", None)
+        engine.pop("reason_code", None)
+        engine.pop("pause_context", None)
+        engine["status"] = "running"
+        state["ticket_engine"] = engine
+    state.pop("reason_summary", None)
+    if trigger.state_output:
+        state.update(trigger.state_output)
+    return TransitionResult(
+        status=FlowRunStatus.RUNNING,
+        state=state,
+        note="stale-pause-resumed",
+    )
+
+
+def _reduce_reconcile_stopping_finalize(
+    current_status: FlowRunStatus,
+    current_state: Dict[str, Any],
+    trigger: FlowTrigger,
+    *,
+    now: str,
+) -> TransitionResult:
+    _require_status(current_status, FlowRunStatus.STOPPING, trigger=trigger.kind)
+    state = _merge_state(current_state, trigger)
+    state = ensure_reason_summary(
+        state, status=FlowRunStatus.STOPPED, default="Worker stopped"
+    )
+    return TransitionResult(
+        status=FlowRunStatus.STOPPED,
+        state=state,
+        finished_at=now,
+        current_step=None,
+        note="worker-dead",
+    )
+
+
+def _reduce_reconcile_clear_stale_error(
+    current_status: FlowRunStatus,
+    current_state: Dict[str, Any],
+    trigger: FlowTrigger,
+    *,
+    now: str,
+) -> TransitionResult:
+    _require_status(current_status, FlowRunStatus.RUNNING, trigger=trigger.kind)
+    return TransitionResult(
+        status=FlowRunStatus.RUNNING,
+        state=dict(current_state),
+        error_message=None,
+        note="clear-stale-error",
+    )
+
+
+def resolve_reconcile_trigger(
+    record: FlowRunRecord,
+    health: Any,
+) -> Optional[FlowTrigger]:
+    """Map reconciliation context to a lifecycle trigger.
+
+    Returns ``None`` when no state transition is warranted (true no-ops).
+    Callers (the reconciler) feed the returned trigger into
+    :func:`reduce_flow_lifecycle` to obtain the authoritative
+    :class:`TransitionResult`.
+    """
+    status = record.status
+    state: dict[str, Any] = record.state if isinstance(record.state, dict) else {}
+    engine_raw = state.get("ticket_engine") if isinstance(state, dict) else {}
+    engine: dict[str, Any] = engine_raw if isinstance(engine_raw, dict) else {}
+    inner_status = engine.get("status")
+    reason_code = engine.get("reason_code")
+    is_alive = getattr(health, "is_alive", False)
+
+    if status == FlowRunStatus.RUNNING:
+        if inner_status == "completed":
+            return FlowTrigger(kind=TriggerKind.RECONCILE_ENGINE_COMPLETED)
+
+        if not is_alive:
+            shutdown_intent = getattr(health, "shutdown_intent", False)
+            if shutdown_intent:
+                return FlowTrigger(kind=TriggerKind.RECONCILE_WORKER_SHUTDOWN)
+
+            error_msg = f"Worker died (status={getattr(health, 'status', 'unknown')}"
+            pid = getattr(health, "pid", None)
+            if pid:
+                error_msg += f", pid={pid}"
+            message = getattr(health, "message", None)
+            if message:
+                error_msg += f", reason: {message}"
+            exit_code = getattr(health, "exit_code", None)
+            if isinstance(exit_code, int):
+                error_msg += f", exit_code={exit_code}"
+            error_msg += ")"
+            return FlowTrigger(
+                kind=TriggerKind.RECONCILE_WORKER_DEAD,
+                error_message=error_msg,
+            )
+
+        if inner_status == "paused":
+            return FlowTrigger(kind=TriggerKind.RECONCILE_ENGINE_PAUSED)
+
+        if record.error_message:
+            return FlowTrigger(kind=TriggerKind.RECONCILE_CLEAR_STALE_ERROR)
+
+        return None
+
+    if status == FlowRunStatus.STOPPING:
+        if not is_alive:
+            return FlowTrigger(kind=TriggerKind.RECONCILE_STOPPING_FINALIZE)
+        return None
+
+    if status == FlowRunStatus.PAUSED:
+        if inner_status == "completed":
+            return FlowTrigger(kind=TriggerKind.RECONCILE_ENGINE_COMPLETED)
+
+        if (
+            inner_status in (None, "running")
+            and reason_code != "user_pause"
+            and is_alive
+        ):
+            return FlowTrigger(kind=TriggerKind.RECONCILE_STALE_PAUSE_RESUME)
+
+        return None
+
+    return None

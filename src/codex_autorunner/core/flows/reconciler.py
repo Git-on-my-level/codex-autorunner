@@ -23,9 +23,14 @@ from .flow_transition_telemetry import (
     emit_reconcile_transition,
     emit_recovery_takeover,
 )
+from .lifecycle_reducer import (
+    NO_CHANGE,
+    EffectKind,
+    reduce_flow_lifecycle,
+    resolve_reconcile_trigger,
+)
 from .models import FlowEventType, FlowRunRecord, FlowRunStatus
-from .store import UNSET, FlowStore
-from .transition import resolve_flow_transition
+from .store import UNSET, FlowStore, now_iso
 from .worker_process import (
     FlowWorkerHealth,
     check_worker_health,
@@ -354,14 +359,11 @@ def reconcile_flow_run(
             crash_info = None
             if health.status in {"dead", "invalid", "mismatch"}:
                 crash_info = _ensure_crash_payload(repo_root, record, store, health)
-            decision = resolve_flow_transition(record, health)
 
-            if (
-                decision.status == record.status
-                and decision.finished_at == record.finished_at
-                and decision.state == (record.state or {})
-                and decision.error_message == record.error_message
-            ):
+            now = now_iso()
+            trigger = resolve_reconcile_trigger(record, health)
+
+            if trigger is None:
                 if record.status == FlowRunStatus.PAUSED and health.status in {
                     "dead",
                     "invalid",
@@ -389,10 +391,18 @@ def reconcile_flow_run(
                         store=store,
                         run_id=record.id,
                         status=record.status,
-                        note=decision.note or "reconcile-noop",
+                        note="reconcile-noop",
                         worker_status=health.status,
                     )
                 return record, False, False
+
+            result = reduce_flow_lifecycle(
+                record.status,
+                record.state or {},
+                trigger,
+                now=now,
+                current_step=record.current_step,
+            )
 
             is_recovery = health.status in {"dead", "invalid", "mismatch"}
 
@@ -400,58 +410,77 @@ def reconcile_flow_run(
                 "Reconciling flow %s: %s -> %s (%s)",
                 record.id,
                 record.status.value,
-                decision.status.value,
-                decision.note or "reconcile",
+                result.status.value,
+                result.note or "reconcile",
             )
 
-            state = decision.state
-            if decision.status == FlowRunStatus.FAILED:
-                reconcile_ctx = ReconcileContext(
-                    worker_exit_code=getattr(health, "exit_code", None),
-                    worker_stderr_tail=getattr(health, "stderr_tail", None),
-                    crash_info=crash_info,
-                )
-                state = ensure_failure_payload(
-                    state,
-                    record=record,
-                    step_id=record.current_step,
-                    error_message=decision.error_message,
-                    store=store,
-                    note=decision.note,
-                    failed_at=decision.finished_at,
-                    reconcile_context=reconcile_ctx,
-                )
-            updated = store.update_flow_run_status(
-                run_id=record.id,
-                status=decision.status,
-                state=state,
-                finished_at=decision.finished_at if decision.finished_at else UNSET,
-                error_message=decision.error_message,
+            state = (
+                result.state
+                if result.state is not NO_CHANGE
+                else dict(record.state or {})
             )
+            for effect in result.effects:
+                if effect.kind == EffectKind.ENRICH_FAILURE_PAYLOAD:
+                    reconcile_ctx = ReconcileContext(
+                        worker_exit_code=getattr(health, "exit_code", None),
+                        worker_stderr_tail=getattr(health, "stderr_tail", None),
+                        crash_info=crash_info,
+                    )
+                    state = ensure_failure_payload(
+                        state,
+                        record=record,
+                        step_id=effect.step_id,
+                        error_message=effect.error_message,
+                        store=store,
+                        note=effect.note,
+                        failed_at=result.finished_at or now,
+                        reconcile_context=reconcile_ctx,
+                    )
+
+            update_kwargs: dict[str, Any] = {
+                "run_id": record.id,
+                "status": result.status,
+                "state": state,
+            }
+            if result.error_message is not NO_CHANGE:
+                update_kwargs["error_message"] = result.error_message
+            if result.finished_at is not NO_CHANGE:
+                update_kwargs["finished_at"] = result.finished_at
+            else:
+                update_kwargs["finished_at"] = UNSET
+            updated = store.update_flow_run_status(**update_kwargs)
 
             if is_recovery:
                 emit_recovery_takeover(
                     store=store,
                     run_id=record.id,
                     previous_status=record.status,
-                    resulting_status=decision.status,
-                    note=decision.note or "reconcile-recovery",
+                    resulting_status=result.status,
+                    note=result.note or "reconcile-recovery",
                     worker_status=health.status,
                     crash_info=crash_info,
-                    error_message=decision.error_message,
+                    error_message=(
+                        result.error_message
+                        if result.error_message is not NO_CHANGE
+                        else None
+                    ),
                 )
             else:
                 emit_reconcile_transition(
                     store=store,
                     run_id=record.id,
                     previous_status=record.status,
-                    resulting_status=decision.status,
-                    note=decision.note or "reconcile",
+                    resulting_status=result.status,
+                    note=result.note or "reconcile",
                     worker_status=health.status,
-                    error_message=decision.error_message,
+                    error_message=(
+                        result.error_message
+                        if result.error_message is not NO_CHANGE
+                        else None
+                    ),
                 )
 
-            if decision.status == FlowRunStatus.FAILED and isinstance(state, dict):
+            if result.status == FlowRunStatus.FAILED and isinstance(state, dict):
                 failure = state.get("failure")
                 reason_code = (
                     failure.get(CANONICAL_FAILURE_REASON_CODE_FIELD)
@@ -461,14 +490,20 @@ def reconcile_flow_run(
                 emit_failure_projection(
                     store=store,
                     run_id=record.id,
-                    status=decision.status,
+                    status=result.status,
                     failure_reason_code=reason_code,
                     step_id=record.current_step,
-                    error_message=decision.error_message,
+                    error_message=(
+                        result.error_message
+                        if result.error_message is not NO_CHANGE
+                        else None
+                    ),
                     origin="reconciler",
                 )
 
-            if decision.status == FlowRunStatus.FAILED and decision.error_message:
+            if result.status == FlowRunStatus.FAILED and (
+                result.error_message is not NO_CHANGE and result.error_message
+            ):
                 reconcile_ctx_for_event = ReconcileContext(
                     crash_info=crash_info,
                     last_app_event_method=None,
@@ -482,8 +517,12 @@ def reconcile_flow_run(
                 failure = state.get("failure") if isinstance(state, dict) else None
                 event_data = build_failure_event_data(
                     failure if isinstance(failure, dict) else {},
-                    error_message=decision.error_message,
-                    note=decision.note,
+                    error_message=(
+                        result.error_message
+                        if result.error_message is not NO_CHANGE
+                        else None
+                    ),
+                    note=result.note,
                     reconcile_context=reconcile_ctx_for_event,
                 )
                 try:
