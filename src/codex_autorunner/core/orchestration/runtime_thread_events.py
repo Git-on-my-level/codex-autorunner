@@ -24,28 +24,10 @@ from ..ports.run_event import (
 from ..sse import SSEEvent, parse_sse_lines
 from ..time_utils import now_iso
 from .codex_item_normalizers import (
-    extract_agent_message_text as _extract_agent_message_text,
-)
-from .codex_item_normalizers import (
-    is_commentary_agent_message as _is_commentary_agent_message,
-)
-from .codex_item_normalizers import (
     merge_runtime_raw_events,
-)
-from .codex_item_normalizers import (
-    normalize_tool_name as _normalize_tool_name,
-)
-from .codex_item_normalizers import (
-    output_delta_type_for_method as _output_delta_type_for_method,
-)
-from .codex_item_normalizers import (
-    reasoning_buffer_key as _reasoning_buffer_key,
 )
 from .opencode_event_fields import (
     coerce_dict as _coerce_dict,
-)
-from .opencode_event_fields import (
-    extract_output_delta as _extract_output_delta,
 )
 from .runtime_thread_decoders import (
     DecoderContext,
@@ -624,6 +606,9 @@ def _normalize_sse_event(
 
 
 _DEFAULT_REGISTRY = build_default_decoder_registry()
+assert (
+    _DEFAULT_REGISTRY is not None
+), "Decoder registry must be initialized at module load"
 
 
 def _log_decode_failure(
@@ -728,13 +713,6 @@ __all__ = [
     "normalize_runtime_progress_event",
     "runtime_trace_fields",
     "completion_source_from_outcome",
-    "_extract_output_delta",
-    "_output_delta_type_for_method",
-    "_normalize_tool_name",
-    "_extract_agent_message_text",
-    "_coerce_dict",
-    "_reasoning_buffer_key",
-    "_is_commentary_agent_message",
     "DECODE_FAILURE_REASON_MALFORMED_JSON",
     "DECODE_FAILURE_REASON_REGISTRY_MISS",
     "DECODE_FAILURE_REASON_EMPTY_METHOD",

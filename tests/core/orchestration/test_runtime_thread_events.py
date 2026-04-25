@@ -2689,3 +2689,184 @@ class TestDecodeFailureObservability:
         messages = await decode_runtime_raw_messages("")
 
         assert messages == []
+
+
+class TestRegistryIsSoleDispatchPath:
+    """The decoder registry must be the only path for method-based normalization.
+
+    Every supported method must have a registered decoder. Unknown methods
+    must produce observable decode_failure notices rather than silent empty lists.
+    """
+
+    EXPECTED_REGISTRY_METHODS: list[str] = [
+        "item/reasoning/summaryTextDelta",
+        "item/completed",
+        "item/agentMessage/delta",
+        "item/toolCall/start",
+        "item/toolCall/end",
+        "item/commandExecution/requestApproval",
+        "item/fileChange/requestApproval",
+        "prompt/output",
+        "prompt/delta",
+        "prompt/progress",
+        "turn/progress",
+        "prompt/message",
+        "turn/message",
+        "prompt/failed",
+        "turn/failed",
+        "prompt/completed",
+        "turn/completed",
+        "prompt/cancelled",
+        "turn/cancelled",
+        "permission/requested",
+        "session/request_permission",
+        "permission/decision",
+        "permission",
+        "question",
+        "token/usage",
+        "usage",
+        "turn/tokenUsage",
+        "turn/usage",
+        "thread/tokenUsage/updated",
+        "session/update",
+        "session.idle",
+        "session.status",
+        "session/status",
+        "message.part.updated",
+        "message.part.delta",
+        "message.updated",
+        "message.completed",
+        "message.delta",
+        "turn/streamDelta",
+        "turn/error",
+        "error",
+    ]
+
+    def test_registry_covers_all_expected_methods(self) -> None:
+        from codex_autorunner.core.orchestration.runtime_thread_decoders import (
+            build_default_decoder_registry,
+        )
+
+        registry = build_default_decoder_registry()
+        missing = [
+            m for m in self.EXPECTED_REGISTRY_METHODS if not registry.has_decoder(m)
+        ]
+        assert missing == [], f"Registry missing decoders for: {missing}"
+
+    async def test_all_supported_methods_produce_events_or_empty(self) -> None:
+        minimal_payloads: dict[str, dict[str, object]] = {
+            "item/reasoning/summaryTextDelta": {"delta": "thinking"},
+            "item/completed": {"item": {"type": "agentMessage", "text": "hi"}},
+            "item/agentMessage/delta": {"delta": "msg"},
+            "item/toolCall/start": {"item": {"toolCall": {"name": "t", "input": {}}}},
+            "item/toolCall/end": {"name": "t", "result": {}},
+            "item/commandExecution/requestApproval": {"command": ["ls"]},
+            "item/fileChange/requestApproval": {"files": ["a.py"]},
+            "prompt/output": {"delta": "out"},
+            "prompt/delta": {"delta": "d"},
+            "prompt/progress": {"delta": "prog"},
+            "turn/progress": {"delta": "p"},
+            "prompt/message": {"text": "msg"},
+            "turn/message": {"text": "msg"},
+            "prompt/failed": {"message": "err"},
+            "turn/failed": {"message": "err"},
+            "prompt/completed": {"status": "completed"},
+            "turn/completed": {"status": "completed"},
+            "prompt/cancelled": {"status": "cancelled"},
+            "turn/cancelled": {"status": "cancelled"},
+            "permission/requested": {"requestId": "r1"},
+            "session/request_permission": {"requestId": "r2"},
+            "permission/decision": {"decision": "accept"},
+            "permission": {"reason": "ok"},
+            "question": {"question": "q"},
+            "token/usage": {"usage": {"totalTokens": 1}},
+            "usage": {"usage": {"totalTokens": 1}},
+            "turn/tokenUsage": {"usage": {"totalTokens": 1}},
+            "turn/usage": {"usage": {"totalTokens": 1}},
+            "thread/tokenUsage/updated": {"tokenUsage": {"totalTokens": 1}},
+            "session/update": {
+                "update": {
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {"type": "text", "text": "hi"},
+                }
+            },
+            "session.idle": {},
+            "session.status": {"status": {"type": "running"}},
+            "session/status": {"status": {"type": "running"}},
+            "message.part.updated": {
+                "properties": {"part": {"id": "p1", "type": "text", "text": "hi"}}
+            },
+            "message.part.delta": {
+                "properties": {
+                    "partID": "p1",
+                    "delta": {"text": "hi"},
+                }
+            },
+            "message.updated": {
+                "properties": {"info": {"id": "m1", "role": "assistant"}}
+            },
+            "message.completed": {
+                "properties": {"info": {"id": "m1", "role": "assistant"}}
+            },
+            "message.delta": {"properties": {"delta": {"text": "hi"}}},
+            "turn/streamDelta": {"delta": "stream"},
+            "turn/error": {"message": "err"},
+            "error": {"error": {"message": "err"}},
+        }
+
+        for method in self.EXPECTED_REGISTRY_METHODS:
+            state = RuntimeThreadRunEventState()
+            params = minimal_payloads.get(method, {})
+            events = await normalize_runtime_thread_raw_event(
+                {"method": method, "params": params},
+                state,
+            )
+            assert not any(
+                isinstance(e, RunNotice) and e.kind == "decode_failure" for e in events
+            ), f"Supported method {method!r} produced a decode_failure notice"
+
+    async def test_every_unregistered_method_produces_decode_failure(self) -> None:
+        unknown_methods = [
+            "future/unknownMethod",
+            "custom/event",
+            "agent/heartbeat",
+        ]
+        for method in unknown_methods:
+            state = RuntimeThreadRunEventState()
+            events = await normalize_runtime_thread_raw_event(
+                {"method": method, "params": {}},
+                state,
+            )
+            assert len(events) >= 1, f"Unknown method {method!r} returned no events"
+            assert any(
+                isinstance(e, RunNotice) and e.kind == "decode_failure" for e in events
+            ), f"Unknown method {method!r} did not produce a decode_failure notice"
+
+    async def test_supported_method_does_not_emit_registry_miss(self) -> None:
+        state = RuntimeThreadRunEventState()
+        events = await normalize_runtime_thread_raw_event(
+            {"method": "token/usage", "params": {"usage": {"totalTokens": 10}}},
+            state,
+        )
+        assert len(events) == 1
+        assert isinstance(events[0], TokenUsage)
+        assert not any(
+            isinstance(e, RunNotice) and e.kind == "decode_failure" for e in events
+        )
+
+    def test_no_legacy_re_exports_of_decoder_internals(self) -> None:
+        import codex_autorunner.core.orchestration.runtime_thread_events as mod
+
+        removed = [
+            "_extract_output_delta",
+            "_output_delta_type_for_method",
+            "_normalize_tool_name",
+            "_extract_agent_message_text",
+            "_coerce_dict",
+            "_reasoning_buffer_key",
+            "_is_commentary_agent_message",
+        ]
+        for name in removed:
+            assert (
+                name not in mod.__all__
+            ), f"Legacy re-export {name!r} still in __all__"
