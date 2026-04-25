@@ -95,7 +95,6 @@ def reduce_transition(
     event: TransitionEvent,
     *,
     event_timestamp: Optional[str] = None,
-    prefer_subscription_reason: bool = False,
 ) -> ReduceTransitionResult:
     updated_subs: list[PmaSubscription] = []
     new_intents: list[WakeupIntent] = []
@@ -125,14 +124,6 @@ def reduce_transition(
         if wakeup_key in existing_wakeup_keys:
             updated_subs.append(sub)
             continue
-        if event.transition_id:
-            legacy_key = (
-                f"lifecycle:{event.transition_id}:subscription:"
-                f"{sub.subscription_id or 'unknown'}"
-            )
-            if legacy_key in existing_wakeup_keys:
-                updated_subs.append(sub)
-                continue
 
         wakeup_metadata = dict(sub.metadata)
         wakeup_metadata.update(event.extra_metadata)
@@ -143,10 +134,7 @@ def reduce_transition(
             event_data = {}
 
         sub_reason = (sub.reason or "").strip()
-        if prefer_subscription_reason and sub_reason:
-            wakeup_reason = sub_reason
-        else:
-            wakeup_reason = event.reason
+        wakeup_reason = sub_reason if sub_reason else event.reason
 
         new_intents.append(
             WakeupIntent(

@@ -5,8 +5,10 @@ from pathlib import Path
 from codex_autorunner.core.pma_dispatch_decision import build_pma_dispatch_decision
 
 
-def test_build_pma_dispatch_decision_accepts_origin_thread_delivery_target() -> None:
-    workspace = Path("/tmp/repo-a")
+def test_build_pma_dispatch_decision_accepts_origin_thread_delivery_target(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "repo-a"
 
     decision = build_pma_dispatch_decision(
         message="Terminal follow-up",
@@ -77,10 +79,10 @@ def test_build_pma_dispatch_decision_suppresses_duplicate_only_for_managed_threa
     assert decision.attempts == ()
 
 
-def test_build_pma_dispatch_decision_rejects_unknown_explicit_target_and_falls_back() -> (
-    None
-):
-    workspace = Path("/tmp/repo-a")
+def test_build_pma_dispatch_decision_rejects_unknown_explicit_target_and_falls_back(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "repo-a"
 
     decision = build_pma_dispatch_decision(
         message="Fallback",
@@ -224,16 +226,16 @@ def test_build_pma_dispatch_decision_does_not_suppress_without_managed_thread() 
     assert decision.suppress_publish is False
 
 
-def test_build_pma_dispatch_decision_skips_explicit_without_binding_thread_ids() -> (
-    None
-):
+def test_build_pma_dispatch_decision_skips_explicit_without_binding_thread_ids(
+    tmp_path: Path,
+) -> None:
     """No managed thread or origin thread ids: do not persist an explicit attempt."""
     decision = build_pma_dispatch_decision(
         message="Hello",
         requested_delivery="auto",
         source_kind="automation",
         repo_id="repo-a",
-        workspace_root=Path("/tmp/repo-a"),
+        workspace_root=tmp_path / "repo-a",
         managed_thread_id=None,
         delivery_target={
             "surface_kind": "discord",

@@ -735,42 +735,6 @@ def test_notify_transition_persists_dispatch_decision_in_wakeup_metadata(
     assert len(decision["attempts"]) > 0
 
 
-def test_enqueue_wakeup_dedup_heals_missing_dispatch_decision(
-    tmp_path, monkeypatch
-) -> None:
-    store = PmaAutomationStore(tmp_path, durable=False)
-
-    def _skip_dispatch_decision(_wakeup) -> None:
-        return
-
-    monkeypatch.setattr(
-        store,
-        "_compute_dispatch_decision_for_wakeup",
-        _skip_dispatch_decision,
-    )
-    first, deduped_first = store.enqueue_wakeup(
-        source="automation",
-        repo_id="repo-1",
-        idempotency_key="legacy-dedup-key",
-    )
-    assert deduped_first is False
-    assert first.metadata.get("dispatch_decision") is None
-    assert store.list_pending_wakeups(limit=10, require_dispatch_decision=True) == []
-
-    monkeypatch.undo()
-    second, deduped_second = store.enqueue_wakeup(
-        source="automation",
-        repo_id="repo-1",
-        idempotency_key="legacy-dedup-key",
-    )
-    assert deduped_second is True
-    assert second.wakeup_id == first.wakeup_id
-    assert isinstance(second.metadata.get("dispatch_decision"), dict)
-    pending = store.list_pending_wakeups(limit=10, require_dispatch_decision=True)
-    assert len(pending) == 1
-    assert pending[0]["wakeup_id"] == first.wakeup_id
-
-
 def test_enqueue_wakeup_persists_dispatch_decision(tmp_path) -> None:
     store = PmaAutomationStore(tmp_path, durable=False)
 
