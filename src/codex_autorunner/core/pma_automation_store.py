@@ -2262,6 +2262,13 @@ class PmaAutomationStore:
             if key is not None:
                 for existing in wakeups:
                     if existing.idempotency_key == key:
+                        if not isinstance(
+                            existing.metadata.get("dispatch_decision"), dict
+                        ):
+                            self._compute_dispatch_decision_for_wakeup(existing)
+                            self._save_structured_unlocked(
+                                state, subscriptions, timers, wakeups
+                            )
                         return existing, True
             created = PmaAutomationWakeup.create(
                 source=source,
