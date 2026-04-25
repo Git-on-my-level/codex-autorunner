@@ -222,6 +222,25 @@ class TurnProgressTracker:
                 return action.text
         return ""
 
+    def transient_matches(
+        self,
+        label: str,
+        text: str,
+        *,
+        subagent_label: Optional[str] = None,
+    ) -> bool:
+        normalized = _normalize_inline_text(text)
+        if not normalized:
+            return False
+        action = self.transient_action
+        if action is None:
+            return False
+        return (
+            action.label == label
+            and action.text == normalized
+            and action.subagent_label == subagent_label
+        )
+
     def drop_terminal_output_if_duplicate(self, final_text: str) -> bool:
         if not isinstance(final_text, str) or not final_text.strip():
             return False
@@ -247,11 +266,14 @@ class TurnProgressTracker:
             return True
         return False
 
-    def note_thinking(self, text: str) -> None:
+    def note_thinking(self, text: str) -> bool:
         normalized = _normalize_inline_text(text)
         if not normalized:
-            return
+            return False
+        if self.transient_matches("thinking", normalized):
+            return False
         self.add_action("thinking", normalized, "update")
+        return True
 
     def note_output(
         self,

@@ -85,6 +85,39 @@ def test_apply_run_event_to_progress_tracker_forces_first_thinking_notice() -> N
     assert second.force is False
 
 
+def test_apply_run_event_to_progress_tracker_ignores_exact_duplicate_thinking_notice() -> (
+    None
+):
+    tracker = _tracker()
+    runtime_state = ProgressRuntimeState()
+
+    first = apply_run_event_to_progress_tracker(
+        tracker,
+        RunNotice(
+            timestamp="2026-03-15T00:00:00Z",
+            kind="thinking",
+            message="checking Discord progress updates",
+        ),
+        runtime_state=runtime_state,
+    )
+    second = apply_run_event_to_progress_tracker(
+        tracker,
+        RunNotice(
+            timestamp="2026-03-15T00:00:01Z",
+            kind="thinking",
+            message="checking Discord progress updates",
+        ),
+        runtime_state=runtime_state,
+    )
+
+    assert first.changed is True
+    assert second.changed is False
+    assert tracker.transient_action is not None
+    assert tracker.transient_action.label == "thinking"
+    assert tracker.transient_action.text == "checking Discord progress updates"
+    assert tracker.step == 1
+
+
 def test_apply_run_event_to_progress_tracker_updates_log_line_output() -> None:
     tracker = _tracker()
 

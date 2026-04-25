@@ -114,7 +114,9 @@ def apply_run_event_to_progress_tracker(
             notice = run_event.kind.strip() if run_event.kind else "notice"
         if run_event.kind in {"thinking", "reasoning"}:
             prior_transient = tracker.transient_action
-            tracker.note_thinking(notice)
+            changed = tracker.note_thinking(notice)
+            if not changed:
+                return ProgressTrackerEventOutcome(changed=False)
             return ProgressTrackerEventOutcome(
                 changed=True,
                 force=prior_transient is None or prior_transient.label != "thinking",

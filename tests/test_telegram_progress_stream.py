@@ -104,6 +104,27 @@ def test_note_thinking_is_transient_and_cleared_by_output() -> None:
     assert "Final response text" in rendered_after_output
 
 
+def test_note_thinking_ignores_exact_duplicate_transient_update() -> None:
+    tracker = TurnProgressTracker(
+        started_at=0.0,
+        agent="codex",
+        model="mock-model",
+        label="working",
+        max_actions=10,
+        max_output_chars=200,
+    )
+
+    first = tracker.note_thinking("Checking out-of-order completion handling")
+    second = tracker.note_thinking("Checking out-of-order completion handling")
+
+    assert first is True
+    assert second is False
+    assert tracker.transient_action is not None
+    assert tracker.transient_action.label == "thinking"
+    assert tracker.transient_action.text == "Checking out-of-order completion handling"
+    assert tracker.step == 1
+
+
 def test_note_tool_streams_without_persisting_history() -> None:
     tracker = TurnProgressTracker(
         started_at=0.0,
