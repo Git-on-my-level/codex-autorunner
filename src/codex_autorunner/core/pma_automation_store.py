@@ -17,7 +17,6 @@ from .config import load_hub_config
 from .config_contract import ConfigError
 from .locks import file_lock
 from .orchestration.sqlite import open_orchestration_sqlite
-from .pma_automation_persistence import PmaAutomationPersistence
 from .pma_automation_types import (
     DEFAULT_PMA_LANE_ID,
     DEFAULT_WATCHDOG_IDLE_SECONDS,
@@ -145,26 +144,6 @@ def _canonicalize_subscription_entry(data: dict[str, Any]) -> dict[str, Any]:
         "metadata": metadata,
         "max_matches": resolved_max,
     }
-
-
-def _canonicalize_automation_state(state: dict[str, Any]) -> dict[str, Any]:
-    canonical = default_pma_automation_state()
-    canonical["version"] = int(state.get("version", PMA_AUTOMATION_VERSION) or 1)
-    canonical["updated_at"] = (
-        _normalize_text(state.get("updated_at")) or canonical["updated_at"]
-    )
-    canonical["subscriptions"] = [
-        _canonicalize_subscription_entry(entry)
-        for entry in (state.get("subscriptions") or [])
-        if isinstance(entry, dict)
-    ]
-    canonical["timers"] = [
-        dict(entry) for entry in (state.get("timers") or []) if isinstance(entry, dict)
-    ]
-    canonical["wakeups"] = [
-        dict(entry) for entry in (state.get("wakeups") or []) if isinstance(entry, dict)
-    ]
-    return canonical
 
 
 @dataclass
@@ -480,29 +459,23 @@ class PmaAutomationStore:
     def __init__(self, hub_root: Path, *, durable: bool = True) -> None:
         self._hub_root = hub_root
         self._durable = durable
-        self._persistence = PmaAutomationPersistence(hub_root)
-        self._path = self._persistence.path
+        self._path = (
+            hub_root / ".codex-autorunner" / "pma" / PMA_AUTOMATION_STORE_FILENAME
+        )
 
     @property
     def path(self) -> Path:
         return self._path
 
     def _lock_path(self) -> Path:
-        return lock_path_for(self._persistence.path)
+        return lock_path_for(self._path)
 
     def load(self) -> dict[str, Any]:
         with file_lock(self._lock_path()):
             state = self._load_unlocked()
             if state is not None:
                 return state
-            state = self._persistence._load_unlocked()
-            if state is not None:
-                canonical_state = _canonicalize_automation_state(state)
-                if canonical_state != state:
-                    self._persistence._save_unlocked(canonical_state)
-                return canonical_state
             state = default_pma_automation_state()
-            self._persistence._save_unlocked(state)
             return state
 
     def _load_unlocked(self) -> Optional[dict[str, Any]]:
@@ -531,12 +504,6 @@ class PmaAutomationStore:
         state["wakeups"] = [entry.to_dict() for entry in wakeups]
         return state
 
-    def _save_unlocked(self, state: dict[str, Any]) -> None:
-        subscriptions = self._normalize_subscriptions(state.get("subscriptions"))
-        timers = self._normalize_timers(state.get("timers"))
-        wakeups = self._normalize_wakeups(state.get("wakeups"))
-        self._save_structured_unlocked(state, subscriptions, timers, wakeups)
-
     def _load_structured_unlocked(
         self,
     ) -> tuple[
@@ -546,8 +513,6 @@ class PmaAutomationStore:
         list[PmaAutomationWakeup],
     ]:
         state = self._load_unlocked()
-        if state is None:
-            state = self._persistence._load_unlocked()
         if state is None:
             state = default_pma_automation_state()
         return (
@@ -754,7 +719,6 @@ class PmaAutomationStore:
                             wakeup.event_type,
                         ),
                     )
-        self._persistence._save_unlocked(state)
 
     @staticmethod
     def _json_load(raw: str | None) -> dict[str, Any]:
@@ -1068,14 +1032,6 @@ class PmaAutomationStore:
             (sub_id,),
         ).fetchone()
         return row is not None
-
-    def _rewrite_json_mirror_unlocked(self) -> None:
-        state = self._load_unlocked()
-        if state is None:
-            state = self._persistence._load_unlocked()
-        if state is None:
-            state = default_pma_automation_state()
-        self._persistence._save_unlocked(state)
 
     def _normalize_subscriptions(self, value: Any) -> list[PmaLifecycleSubscription]:
         out: list[PmaLifecycleSubscription] = []
@@ -1641,7 +1597,6 @@ class PmaAutomationStore:
                         metadata=resolved_metadata,
                     )
                     self._insert_subscription_row(conn, created)
-            self._rewrite_json_mirror_unlocked()
             return created, False
 
     def create_subscription(
@@ -1755,8 +1710,6 @@ class PmaAutomationStore:
                         (stamp, stamp, target_id),
                     )
                     changed = cursor.rowcount > 0
-            if changed:
-                self._rewrite_json_mirror_unlocked()
             return changed
 
     def purge_subscription(
@@ -1804,7 +1757,6 @@ class PmaAutomationStore:
                         "DELETE FROM orch_automation_subscriptions WHERE subscription_id = ?",
                         (target_id,),
                     )
-            self._rewrite_json_mirror_unlocked()
             return True
 
     def purge_subscriptions(
@@ -1860,8 +1812,6 @@ class PmaAutomationStore:
                             total_orphaned_timers,
                             total_orphaned_wakeups,
                         )
-            if removed and not dry_run:
-                self._rewrite_json_mirror_unlocked()
             return [entry.to_dict() for entry in removed]
 
     def list_subscriptions(
@@ -1994,7 +1944,6 @@ class PmaAutomationStore:
                         metadata=metadata,
                     )
                     self._insert_timer_row(conn, created)
-            self._rewrite_json_mirror_unlocked()
             return created, False
 
     def create_timer(
@@ -2083,8 +2032,6 @@ class PmaAutomationStore:
                             (cancelled_at, target_id),
                         )
                     changed = cursor.rowcount > 0
-            if changed:
-                self._rewrite_json_mirror_unlocked()
             return changed
 
     def purge_timer(self, timer_id: str, *, require_inactive: bool = True) -> bool:
@@ -2108,7 +2055,6 @@ class PmaAutomationStore:
                         "DELETE FROM orch_automation_timers WHERE timer_id = ?",
                         (target_id,),
                     )
-            self._rewrite_json_mirror_unlocked()
             return True
 
     def list_timers(
