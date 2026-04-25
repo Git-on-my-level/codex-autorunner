@@ -12,9 +12,16 @@ from ...tickets.replies import resolve_reply_paths
 from ..locks import FileLockBusy, file_lock
 from ..state_roots import resolve_repo_flows_db_path
 from .failure_diagnostics import (
+    CANONICAL_FAILURE_REASON_CODE_FIELD,
     ReconcileContext,
     build_failure_event_data,
     ensure_failure_payload,
+)
+from .flow_transition_telemetry import (
+    emit_failure_projection,
+    emit_reconcile_noop,
+    emit_reconcile_transition,
+    emit_recovery_takeover,
 )
 from .models import FlowEventType, FlowRunRecord, FlowRunStatus
 from .store import UNSET, FlowStore
@@ -368,7 +375,26 @@ def reconcile_flow_run(
                             record.id,
                             exc,
                         )
+                    emit_recovery_takeover(
+                        store=store,
+                        run_id=record.id,
+                        previous_status=record.status,
+                        resulting_status=record.status,
+                        note="paused-worker-dead-noop",
+                        worker_status=health.status,
+                        crash_info=crash_info,
+                    )
+                else:
+                    emit_reconcile_noop(
+                        store=store,
+                        run_id=record.id,
+                        status=record.status,
+                        note=decision.note or "reconcile-noop",
+                        worker_status=health.status,
+                    )
                 return record, False, False
+
+            is_recovery = health.status in {"dead", "invalid", "mismatch"}
 
             (logger or _logger).info(
                 "Reconciling flow %s: %s -> %s (%s)",
@@ -402,6 +428,45 @@ def reconcile_flow_run(
                 finished_at=decision.finished_at if decision.finished_at else UNSET,
                 error_message=decision.error_message,
             )
+
+            if is_recovery:
+                emit_recovery_takeover(
+                    store=store,
+                    run_id=record.id,
+                    previous_status=record.status,
+                    resulting_status=decision.status,
+                    note=decision.note or "reconcile-recovery",
+                    worker_status=health.status,
+                    crash_info=crash_info,
+                    error_message=decision.error_message,
+                )
+            else:
+                emit_reconcile_transition(
+                    store=store,
+                    run_id=record.id,
+                    previous_status=record.status,
+                    resulting_status=decision.status,
+                    note=decision.note or "reconcile",
+                    worker_status=health.status,
+                    error_message=decision.error_message,
+                )
+
+            if decision.status == FlowRunStatus.FAILED and isinstance(state, dict):
+                failure = state.get("failure")
+                reason_code = (
+                    failure.get(CANONICAL_FAILURE_REASON_CODE_FIELD)
+                    if isinstance(failure, dict)
+                    else None
+                )
+                emit_failure_projection(
+                    store=store,
+                    run_id=record.id,
+                    status=decision.status,
+                    failure_reason_code=reason_code,
+                    step_id=record.current_step,
+                    error_message=decision.error_message,
+                    origin="reconciler",
+                )
 
             if decision.status == FlowRunStatus.FAILED and decision.error_message:
                 reconcile_ctx_for_event = ReconcileContext(
@@ -458,7 +523,7 @@ def reconcile_flow_run(
             return (updated or record), bool(updated), False
     except FileLockBusy:
         return record, False, True
-    except Exception as exc:  # intentional: top-level reconcile handler must not raise
+    except Exception as exc:
         (logger or _logger).warning("Failed to reconcile flow %s: %s", record.id, exc)
         return record, False, False
 

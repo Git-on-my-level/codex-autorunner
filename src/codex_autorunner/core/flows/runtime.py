@@ -6,7 +6,14 @@ from typing import Any, Callable, Dict, Optional, Set, cast
 
 from ..lifecycle_events import LifecycleEventType
 from .definition import STEP_WANTS_EMIT_ATTR, FlowDefinition, StepFn, StepFn2, StepFn3
-from .failure_diagnostics import ensure_failure_payload
+from .failure_diagnostics import (
+    CANONICAL_FAILURE_REASON_CODE_FIELD,
+    ensure_failure_payload,
+)
+from .flow_transition_telemetry import (
+    emit_failure_projection,
+    emit_runtime_transition,
+)
 from .lifecycle_reducer import (
     NO_CHANGE,
     EffectKind,
@@ -126,7 +133,12 @@ class FlowRuntime:
         record: FlowRunRecord,
         result: TransitionResult,
         run_id: str,
+        *,
+        trigger_kind: Optional[str] = None,
     ) -> FlowRunRecord:
+        previous_status = record.status
+        has_failure_enrichment = False
+
         for effect in result.effects:
             if effect.kind == EffectKind.EMIT_FLOW_EVENT:
                 event_type = FlowEventType(effect.event_type_name)
@@ -137,6 +149,7 @@ class FlowRuntime:
         )
         for effect in result.effects:
             if effect.kind == EffectKind.ENRICH_FAILURE_PAYLOAD:
+                has_failure_enrichment = True
                 state = ensure_failure_payload(
                     state,
                     record=record,
@@ -162,6 +175,41 @@ class FlowRuntime:
         if not updated:
             raise RuntimeError(f"Failed to update flow run {run_id}")
         record = updated
+
+        emit_runtime_transition(
+            store=self.store,
+            run_id=run_id,
+            previous_status=previous_status,
+            resulting_status=result.status,
+            trigger=trigger_kind or result.note or "unknown",
+            note=result.note or "",
+            step_id=(
+                result.current_step if result.current_step is not NO_CHANGE else None
+            ),
+            error_message=(
+                result.error_message if result.error_message is not NO_CHANGE else None
+            ),
+        )
+
+        if has_failure_enrichment and isinstance(state, dict):
+            failure = state.get("failure")
+            reason_code = (
+                failure.get(CANONICAL_FAILURE_REASON_CODE_FIELD)
+                if isinstance(failure, dict)
+                else None
+            )
+            emit_failure_projection(
+                store=self.store,
+                run_id=run_id,
+                status=result.status,
+                failure_reason_code=reason_code,
+                error_message=(
+                    result.error_message
+                    if result.error_message is not NO_CHANGE
+                    else None
+                ),
+                origin="runtime",
+            )
 
         for effect in result.effects:
             if effect.kind == EffectKind.EMIT_LIFECYCLE_EVENT:
@@ -207,7 +255,9 @@ class FlowRuntime:
                     current_step=record.current_step,
                     initial_step=self.definition.initial_step,
                 )
-                record = self._apply_transition(record, result, run_id)
+                record = self._apply_transition(
+                    record, result, run_id, trigger_kind="flow_start"
+                )
             else:
                 trigger = FlowTrigger(
                     kind=TriggerKind.FLOW_RESUME,
@@ -221,7 +271,9 @@ class FlowRuntime:
                     current_step=record.current_step,
                     initial_step=self.definition.initial_step,
                 )
-                record = self._apply_transition(record, result, run_id)
+                record = self._apply_transition(
+                    record, result, run_id, trigger_kind="flow_resume"
+                )
 
             next_steps: Set[str] = set()
             if record.current_step:
@@ -243,7 +295,9 @@ class FlowRuntime:
                         trigger,
                         now=now,
                     )
-                    record = self._apply_transition(record, result, run_id)
+                    record = self._apply_transition(
+                        record, result, run_id, trigger_kind="stop_requested"
+                    )
                     break
 
                 step_id = next_steps.pop()
@@ -282,7 +336,9 @@ class FlowRuntime:
                 now=now,
                 current_step=record.current_step,
             )
-            record = self._apply_transition(record, result, run_id)
+            record = self._apply_transition(
+                record, result, run_id, trigger_kind="flow_exception"
+            )
             return record
 
     async def _execute_step(
@@ -366,7 +422,9 @@ class FlowRuntime:
                 result = reduce_flow_lifecycle(
                     record.status, record.state, trigger, now=now, current_step=step_id
                 )
-                record = self._apply_transition(record, result, record.id)
+                record = self._apply_transition(
+                    record, result, record.id, trigger_kind="step_continue"
+                )
 
             elif outcome.status == FlowRunStatus.COMPLETED:
                 trigger = FlowTrigger(
@@ -377,7 +435,9 @@ class FlowRuntime:
                 result = reduce_flow_lifecycle(
                     record.status, record.state, trigger, now=now, current_step=step_id
                 )
-                record = self._apply_transition(record, result, record.id)
+                record = self._apply_transition(
+                    record, result, record.id, trigger_kind="step_complete"
+                )
 
             elif outcome.status == FlowRunStatus.FAILED:
                 trigger = FlowTrigger(
@@ -389,7 +449,9 @@ class FlowRuntime:
                 result = reduce_flow_lifecycle(
                     record.status, record.state, trigger, now=now, current_step=step_id
                 )
-                record = self._apply_transition(record, result, record.id)
+                record = self._apply_transition(
+                    record, result, record.id, trigger_kind="step_fail"
+                )
 
             elif outcome.status == FlowRunStatus.STOPPED:
                 trigger = FlowTrigger(
@@ -400,7 +462,9 @@ class FlowRuntime:
                 result = reduce_flow_lifecycle(
                     record.status, record.state, trigger, now=now, current_step=step_id
                 )
-                record = self._apply_transition(record, result, record.id)
+                record = self._apply_transition(
+                    record, result, record.id, trigger_kind="step_stop"
+                )
 
             elif outcome.status == FlowRunStatus.PAUSED:
                 trigger = FlowTrigger(
@@ -411,7 +475,9 @@ class FlowRuntime:
                 result = reduce_flow_lifecycle(
                     record.status, record.state, trigger, now=now, current_step=step_id
                 )
-                record = self._apply_transition(record, result, record.id)
+                record = self._apply_transition(
+                    record, result, record.id, trigger_kind="step_pause"
+                )
 
             return record
 
@@ -426,5 +492,7 @@ class FlowRuntime:
             result = reduce_flow_lifecycle(
                 record.status, record.state, trigger, now=now, current_step=step_id
             )
-            record = self._apply_transition(record, result, record.id)
+            record = self._apply_transition(
+                record, result, record.id, trigger_kind="step_exception"
+            )
             return record
