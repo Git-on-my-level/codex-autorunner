@@ -69,12 +69,23 @@ def _subscription_matches_event(sub: PmaSubscription, event: TransitionEvent) ->
     return True
 
 
-def _build_wakeup_key(event: TransitionEvent, subscription_id: Optional[str]) -> str:
-    key = event.transition_id or (
-        f"{event.event_type}:{event.repo_id or ''}:"
-        f"{event.run_id or ''}:{event.thread_id or ''}:"
-        f"{event.from_state or ''}:{event.to_state or ''}"
-    )
+def _build_wakeup_key(
+    event: TransitionEvent,
+    subscription_id: Optional[str],
+    *,
+    event_timestamp: Optional[str] = None,
+) -> str:
+    if event.transition_id:
+        key = event.transition_id
+    else:
+        key = (
+            f"{event.event_type}:{event.repo_id or ''}:"
+            f"{event.run_id or ''}:{event.thread_id or ''}:"
+            f"{event.from_state or ''}:{event.to_state or ''}"
+        )
+        ts = (event_timestamp or "").strip()
+        if ts:
+            key = f"{key}:{ts}"
     return f"transition:{key}:{subscription_id or 'all'}"
 
 
@@ -82,6 +93,8 @@ def reduce_transition(
     subscriptions: Sequence[PmaSubscription],
     existing_wakeup_keys: frozenset[str],
     event: TransitionEvent,
+    *,
+    event_timestamp: Optional[str] = None,
 ) -> ReduceTransitionResult:
     updated_subs: list[PmaSubscription] = []
     new_intents: list[WakeupIntent] = []
@@ -104,11 +117,21 @@ def reduce_transition(
             continue
 
         matched += 1
-        wakeup_key = _build_wakeup_key(event, sub.subscription_id)
+        wakeup_key = _build_wakeup_key(
+            event, sub.subscription_id, event_timestamp=event_timestamp
+        )
 
         if wakeup_key in existing_wakeup_keys:
             updated_subs.append(sub)
             continue
+        if event.transition_id:
+            legacy_key = (
+                f"lifecycle:{event.transition_id}:subscription:"
+                f"{sub.subscription_id or 'unknown'}"
+            )
+            if legacy_key in existing_wakeup_keys:
+                updated_subs.append(sub)
+                continue
 
         wakeup_metadata = dict(sub.metadata)
         wakeup_metadata.update(event.extra_metadata)

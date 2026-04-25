@@ -14,6 +14,7 @@ from .chat_bindings import (
     preferred_non_pma_chat_notification_source_for_workspace,
 )
 from .config import load_hub_config
+from .config_contract import ConfigError
 from .locks import file_lock
 from .orchestration.sqlite import open_orchestration_sqlite
 from .pma_automation_persistence import PmaAutomationPersistence
@@ -1158,7 +1159,7 @@ class PmaAutomationStore:
         if workspace_root is not None:
             try:
                 raw_config = load_hub_config(self._hub_root).raw
-            except Exception:
+            except (OSError, ValueError, ConfigError):
                 raw_config = {}
             try:
                 preferred = preferred_non_pma_chat_notification_source_for_workspace(
@@ -1166,7 +1167,7 @@ class PmaAutomationStore:
                     raw_config=raw_config,
                     workspace_root=workspace_root,
                 )
-            except Exception:
+            except (OSError, ValueError, TypeError, KeyError):
                 preferred = None
             if preferred in {"discord", "telegram"}:
                 ordered = [preferred]
@@ -2304,13 +2305,21 @@ class PmaAutomationStore:
             wakeups = wakeups[:limit]
         return [entry.to_dict() for entry in wakeups]
 
-    def list_pending_wakeups(self, *, limit: int = 100) -> list[dict[str, Any]]:
+    def list_pending_wakeups(
+        self, *, limit: int = 100, require_dispatch_decision: bool = False
+    ) -> list[dict[str, Any]]:
         take = max(0, int(limit))
         if take <= 0:
             return []
         state = self.load()
         wakeups = self._normalize_wakeups(state.get("wakeups"))
         pending = [entry.to_dict() for entry in wakeups if entry.state == "pending"]
+        if require_dispatch_decision:
+            pending = [
+                d
+                for d in pending
+                if isinstance((d.get("metadata") or {}).get("dispatch_decision"), dict)
+            ]
         return pending[:take]
 
     def list_pending_events(self, *, limit: int = 100) -> list[dict[str, Any]]:
@@ -2374,7 +2383,9 @@ class PmaAutomationStore:
                 for existing in wakeups
                 if existing.idempotency_key
             )
-            result = reduce_transition(domain_subs, existing_keys, event)
+            result = reduce_transition(
+                domain_subs, existing_keys, event, event_timestamp=timestamp
+            )
 
             new_wakeups = self._apply_reduce_result(
                 subscriptions,

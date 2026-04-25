@@ -72,6 +72,7 @@ DELIVERY_LIFECYCLE_TRANSITIONS: dict[
         {
             DeliveryLifecycleState.DISPATCHED,
             DeliveryLifecycleState.DELIVERING,
+            DeliveryLifecycleState.FAILED,
             DeliveryLifecycleState.SUPPRESSED,
             DeliveryLifecycleState.ABANDONED,
         }
@@ -144,8 +145,16 @@ def resolve_delivery_transition(
     metadata = dict(domain_metadata or {})
 
     if outcome == DeliveryAttemptOutcome.SUCCEEDED:
+        if current_state == DeliveryLifecycleState.DELIVERING:
+            return DeliveryTransition(
+                next_state=DeliveryLifecycleState.SUCCEEDED,
+                outcome=outcome,
+                domain_reason=domain_reason or "delivery_succeeded",
+                attempt_number=attempt_number,
+                domain_metadata=metadata,
+            )
         return DeliveryTransition(
-            next_state=DeliveryLifecycleState.SUCCEEDED,
+            next_state=DeliveryLifecycleState.DELIVERING,
             outcome=outcome,
             domain_reason=domain_reason or "delivery_succeeded",
             attempt_number=attempt_number,

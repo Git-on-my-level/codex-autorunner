@@ -95,7 +95,7 @@ def _normalize_lane_id(value: Any) -> str:
         return DEFAULT_PMA_LANE_ID
     if text in VALID_SURFACE_KINDS:
         return text
-    return DEFAULT_PMA_LANE_ID
+    return text
 
 
 def _normalize_timer_type(value: Any) -> str:
@@ -309,20 +309,15 @@ class PublishNoticeContext:
     token_usage_footer: Optional[str] = None
 
     def notice_kind(self) -> str:
-        if self.status == "ok" and self._is_noop_message():
+        from .publish_policy import is_noop_duplicate_message
+
+        if self.status == "ok" and is_noop_duplicate_message(self.output or ""):
             return NOTICE_KIND_NOOP
         if self.status == "ok":
             return NOTICE_KIND_TERMINAL_FOLLOWUP
         if self.status == "error":
             return NOTICE_KIND_ESCALATION
         return NOTICE_KIND_PROGRESS
-
-    def _is_noop_message(self) -> bool:
-        text = self.output or ""
-        normalized = " ".join(str(text).lower().split())
-        if not normalized:
-            return False
-        return "already handled" in normalized and "no action" in normalized
 
 
 @dataclass(frozen=True)

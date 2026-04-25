@@ -1145,7 +1145,7 @@ class HubSupervisor:
         mark_wakeup_dispatched = getattr(store, "mark_wakeup_dispatched", None)
         if not callable(list_pending_wakeups) or not callable(mark_wakeup_dispatched):
             return 0
-        wakeups = list_pending_wakeups(limit=take)
+        wakeups = list_pending_wakeups(limit=take, require_dispatch_decision=True)
         if not wakeups:
             return 0
 
