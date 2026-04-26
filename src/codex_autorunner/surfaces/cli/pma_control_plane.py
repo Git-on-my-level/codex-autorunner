@@ -19,7 +19,7 @@ import typer
 from ...agents.registry import get_registered_agents
 from ...core.config import load_hub_config
 from ...core.config_contract import ConfigError
-from ...core.text_utils import _truncate_text
+from ...core.text_utils import _redacted_prompt_preview_for_match
 
 logger = logging.getLogger(__name__)
 
@@ -499,9 +499,9 @@ def recover_managed_thread_send_timeout(
     if baseline is None:
         return None
 
-    expected_preview = _truncate_text(
-        message_body, MANAGED_THREAD_SEND_PREVIEW_LIMIT
-    ).strip()
+    expected_preview = _redacted_prompt_preview_for_match(
+        message_body, max_length=MANAGED_THREAD_SEND_PREVIEW_LIMIT
+    )
     if not expected_preview:
         return None
 
@@ -523,9 +523,12 @@ def recover_managed_thread_send_timeout(
 
         recovered_turn_id = ""
         queued = False
+        baseline_preview_signal = bool(baseline.active_prompt_preview) and (
+            baseline.active_prompt_preview != expected_preview
+        )
         active_prompt_matches = current.active_prompt_preview == expected_preview and (
             current.active_managed_turn_id != baseline.active_managed_turn_id
-            or baseline.active_prompt_preview != expected_preview
+            or baseline_preview_signal
         )
         if current.last_turn_id != baseline.last_turn_id and current.last_turn_id:
             recovered_turn_id = current.last_turn_id
