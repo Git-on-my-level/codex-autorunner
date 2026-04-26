@@ -1,8 +1,9 @@
 """PMA thread command implementations.
 
-Managed-thread CLI commands (spawn, list, info, status, send, turns, output,
-tail, compact, resume, fork, archive, interrupt) and supporting helpers and
-dataclasses.  Registered on the ``thread_app`` typer via
+Managed-thread CLI commands (spawn, list, info, status, send, turns, queue,
+cancel-queued, clear-queue, output, tail, compact, resume, fork, archive,
+interrupt) and supporting helpers and dataclasses.  Registered on the
+``thread_app`` typer via
 :func:`register_thread_commands`.
 """
 
@@ -234,6 +235,41 @@ def _echo_delivered_message(message: str) -> None:
     typer.echo(message, nl=False)
     if not message.endswith("\n"):
         typer.echo()
+
+
+def _quoted_prompt_preview(value: Any, *, max_chars: int = 72) -> str:
+    text = str(value or "")
+    if len(text) > max_chars:
+        text = text[: max_chars - 3] + "..."
+    return json.dumps(text)
+
+
+def _queued_turn_table_lines(queued_turns: list[dict[str, Any]]) -> list[str]:
+    rows: list[tuple[str, str, str, str]] = []
+    for item in queued_turns:
+        rows.append(
+            (
+                str(item.get("managed_turn_id") or "").strip() or "-",
+                _quoted_prompt_preview(
+                    item.get("prompt") or item.get("prompt_preview")
+                ),
+                str(item.get("enqueued_at") or "-"),
+                str(item.get("position") or "-"),
+            )
+        )
+    headers = ("queued_turn_id", "prompt", "enqueued_at", "position")
+    widths = [
+        max(len(headers[index]), *(len(row[index]) for row in rows))
+        for index in range(len(headers))
+    ]
+    table_lines = [
+        "  ".join(headers[index].ljust(widths[index]) for index in range(len(headers)))
+    ]
+    table_lines.extend(
+        "  ".join(row[index].ljust(widths[index]) for index in range(len(headers)))
+        for row in rows
+    )
+    return table_lines
 
 
 def _thread_output_cursor_path(hub_root: Path) -> Path:
@@ -1736,6 +1772,11 @@ def pma_thread_send(
         "--watch",
         help="Opt into synchronous foreground tailing until terminal state",
     ),
+    no_wait: bool = typer.Option(
+        False,
+        "--no-wait",
+        help="Return after durable enqueue instead of waiting for send confirmation",
+    ),
     notify_on: Optional[str] = typer.Option(
         None,
         "--notify-on",
@@ -1769,6 +1810,11 @@ def pma_thread_send(
     normalized_if_busy = (if_busy or "").strip().lower() or "queue"
     if normalized_if_busy not in {"queue", "interrupt", "reject"}:
         raise typer.BadParameter("if-busy must be queue, interrupt, or reject")
+    if watch and no_wait:
+        raise typer.BadParameter(
+            "--watch cannot be combined with --no-wait",
+            param_hint="--watch / --no-wait",
+        )
     hub_root = _resolve_hub_path(path)
     config = None
     timeout_probe: Optional[_ManagedThreadSendTimeoutProbe] = None
@@ -1783,6 +1829,7 @@ def pma_thread_send(
             message=message_body,
             busy_policy=normalized_if_busy,
             defer_execution=should_defer,
+            wait_for_confirmation=(not no_wait),
             model=model,
             reasoning=reasoning,
             notify_on=normalized_notify_on,
@@ -1807,6 +1854,25 @@ def pma_thread_send(
             baseline=timeout_probe,
         )
         if recovered_response is not None:
+            if no_wait:
+                recovered_payload = {
+                    "status": recovered_response.status,
+                    "send_state": "enqueued",
+                    "execution_state": recovered_response.execution_state or "running",
+                    "managed_turn_id": recovered_response.managed_turn_id,
+                    "active_managed_turn_id": recovered_response.active_managed_turn_id,
+                    "queue_depth": recovered_response.queue_depth,
+                    "delivered_message": recovered_response.delivered_message,
+                    "assistant_text": recovered_response.assistant_text,
+                    "detail": recovered_response.detail,
+                    "error": recovered_response.error,
+                    "next_step": recovered_response.next_step,
+                }
+                recovered_response = _ManagedThreadSendResponse.from_http(
+                    200,
+                    recovered_payload,
+                    default_message=message_body,
+                )
             response = recovered_response
             data = {
                 "status": response.status,
@@ -1822,13 +1888,39 @@ def pma_thread_send(
                 "next_step": response.next_step,
             }
         else:
-            detail = (
-                "Timed out waiting for send confirmation. The message may still "
-                "have been delivered. Check `car pma thread status --id "
-                f"{managed_thread_id} --path {hub_root}` before retrying."
-            )
-            typer.echo(f"Error: {detail}", err=True)
-            raise typer.Exit(code=1) from exc
+            if no_wait:
+                data = {
+                    "status": "ok",
+                    "send_state": "enqueued",
+                    "execution_state": "unknown",
+                    "managed_turn_id": "",
+                    "active_managed_turn_id": "",
+                    "queue_depth": None,
+                    "delivered_message": message_body,
+                    "assistant_text": "",
+                    "detail": (
+                        "Timed out waiting for enqueue confirmation. The message may "
+                        "still have been delivered; check thread status before retrying."
+                    ),
+                    "error": "",
+                    "next_step": (
+                        "Use `car pma thread status` to confirm whether the turn was "
+                        "accepted."
+                    ),
+                }
+                response = _ManagedThreadSendResponse.from_http(
+                    200,
+                    data,
+                    default_message=message_body,
+                )
+            else:
+                detail = (
+                    "Timed out waiting for send confirmation. The message may still "
+                    "have been delivered. Check `car pma thread status --id "
+                    f"{managed_thread_id} --path {hub_root}` before retrying."
+                )
+                typer.echo(f"Error: {detail}", err=True)
+                raise typer.Exit(code=1) from exc
     except (httpx.HTTPError, ValueError, OSError, TypeError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from None
@@ -1901,6 +1993,8 @@ def pma_thread_send(
 
     typer.echo(response.completion_line())
     _echo_delivered_message(response.delivered_message)
+    if response.detail:
+        typer.echo(f"note: {response.detail}")
     if response.assistant_text:
         typer.echo("\nassistant:")
         typer.echo(response.assistant_text)
@@ -1952,6 +2046,120 @@ def pma_thread_turns(
                 ]
             ).strip()
         )
+
+
+def pma_thread_queue(
+    managed_thread_id: str = typer.Option(
+        ..., "--id", help="Managed PMA thread id", show_default=False
+    ),
+    limit: int = typer.Option(200, "--limit", min=1, help="Maximum rows to return"),
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    path: Optional[Path] = hub_root_path_option(),
+):
+    """List queued managed-thread turns waiting to execute."""
+    hub_root = _resolve_hub_path(path)
+    try:
+        config = load_hub_config(hub_root)
+        data = _request_json(
+            "GET",
+            _build_pma_url(config, f"/threads/{managed_thread_id}/queue"),
+            token_env=config.server_auth_token_env,
+            params={"limit": limit},
+        )
+    except httpx.HTTPError as exc:
+        typer.echo(f"HTTP error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    except (ValueError, OSError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+
+    if output_json:
+        typer.echo(json.dumps(data, indent=2))
+        return
+
+    queued_turns = data.get("queued_turns", []) if isinstance(data, dict) else []
+    if not isinstance(queued_turns, list) or not queued_turns:
+        typer.echo("No queued turns")
+        return
+    for line in _queued_turn_table_lines(
+        [item for item in queued_turns if isinstance(item, dict)]
+    ):
+        typer.echo(line)
+
+
+def pma_thread_cancel_queued(
+    managed_thread_id: str = typer.Option(
+        ..., "--id", help="Managed PMA thread id", show_default=False
+    ),
+    managed_turn_id: str = typer.Option(
+        ..., "--turn", help="Queued managed turn id", show_default=False
+    ),
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    path: Optional[Path] = hub_root_path_option(),
+):
+    """Cancel one queued managed-thread turn."""
+    hub_root = _resolve_hub_path(path)
+    try:
+        config = load_hub_config(hub_root)
+        status_code, data = _request_json_with_status(
+            "POST",
+            _build_pma_url(
+                config, f"/threads/{managed_thread_id}/queue/{managed_turn_id}/cancel"
+            ),
+            token_env=config.server_auth_token_env,
+        )
+    except (httpx.HTTPError, ValueError, OSError, TypeError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+
+    if status_code >= 400:
+        detail = str(
+            data.get("detail") or data.get("error") or "Failed to cancel queued turn"
+        )
+        if output_json:
+            typer.echo(json.dumps(data, indent=2))
+        else:
+            typer.echo(detail, err=True)
+        raise typer.Exit(code=1) from None
+
+    if output_json:
+        typer.echo(json.dumps(data, indent=2))
+        return
+
+    typer.echo(
+        f"Cancelled queued turn {managed_turn_id} "
+        f"(was position {data.get('position') or '?'})"
+    )
+
+
+def pma_thread_clear_queue(
+    managed_thread_id: str = typer.Option(
+        ..., "--id", help="Managed PMA thread id", show_default=False
+    ),
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    path: Optional[Path] = hub_root_path_option(),
+):
+    """Clear all queued managed-thread turns."""
+    hub_root = _resolve_hub_path(path)
+    try:
+        config = load_hub_config(hub_root)
+        data = _request_json(
+            "POST",
+            _build_pma_url(config, f"/threads/{managed_thread_id}/queue/clear"),
+            token_env=config.server_auth_token_env,
+        )
+    except httpx.HTTPError as exc:
+        typer.echo(f"HTTP error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    except (ValueError, OSError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+
+    if output_json:
+        typer.echo(json.dumps(data, indent=2))
+        return
+
+    typer.echo(f"Cleared {data.get('cleared_count') or 0} queued turns")
 
 
 def pma_thread_output(
@@ -2764,6 +2972,9 @@ def register_thread_commands(app: typer.Typer) -> None:
     app.command("status")(pma_thread_status)
     app.command("send")(pma_thread_send)
     app.command("turns")(pma_thread_turns)
+    app.command("queue")(pma_thread_queue)
+    app.command("cancel-queued")(pma_thread_cancel_queued)
+    app.command("clear-queue")(pma_thread_clear_queue)
     app.command("output")(pma_thread_output)
     app.command("subscribe")(pma_thread_subscribe)
     app.command("tail")(pma_thread_tail)

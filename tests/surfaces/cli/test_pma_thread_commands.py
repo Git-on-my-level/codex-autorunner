@@ -24,6 +24,9 @@ def test_pma_cli_thread_group_has_required_commands():
     assert "status" in output, "PMA thread should have 'status' command"
     assert "send" in output, "PMA thread should have 'send' command"
     assert "turns" in output, "PMA thread should have 'turns' command"
+    assert "queue" in output, "PMA thread should have 'queue' command"
+    assert "cancel-queued" in output, "PMA thread should have 'cancel-queued' command"
+    assert "clear-queue" in output, "PMA thread should have 'clear-queue' command"
     assert "output" in output, "PMA thread should have 'output' command"
     assert "subscribe" in output, "PMA thread should have 'subscribe' command"
     assert "tail" in output, "PMA thread should have 'tail' command"
@@ -59,6 +62,7 @@ def test_pma_cli_thread_send_help_shows_json_option():
     output = result.stdout
     assert "--json" in output, "PMA thread send should support --json"
     assert "--watch" in output, "PMA thread send should support --watch"
+    assert "--no-wait" in output, "PMA thread send should support --no-wait"
     assert "--if-busy" in output, "PMA thread send should support busy-thread policy"
     assert "--notify-on" in output, "PMA thread send should support --notify-on"
     assert "--message-file" in output, "PMA thread send should support file input"
@@ -87,6 +91,15 @@ def test_pma_cli_thread_output_help_shows_pagination_options() -> None:
     assert "--lines" in output
     assert "--continue" in output
     assert "--output-file" in output
+
+
+def test_pma_cli_thread_queue_help_shows_json_option() -> None:
+    runner = CliRunner()
+    result = runner.invoke(pma_app, ["thread", "queue", "--help"])
+    assert result.exit_code == 0
+    output = result.stdout
+    assert "--json" in output
+    assert "--limit" in output
 
 
 def test_pma_cli_thread_subscribe_help_mentions_thread_scope() -> None:
@@ -348,6 +361,7 @@ def test_pma_thread_send_request_and_response_helpers() -> None:
         message="follow up",
         busy_policy="interrupt",
         defer_execution=True,
+        wait_for_confirmation=True,
         model="gpt-5",
         reasoning="high",
         notify_on="terminal",
@@ -359,6 +373,7 @@ def test_pma_thread_send_request_and_response_helpers() -> None:
         "message": "follow up",
         "busy_policy": "interrupt",
         "defer_execution": True,
+        "wait_for_confirmation": True,
         "model": "gpt-5",
         "reasoning": "high",
         "notify_on": "terminal",
@@ -613,12 +628,10 @@ def test_pma_cli_thread_query_commands_use_orchestration_routes(
         ),
     ]
 
-
 def test_pma_cli_thread_status_info_applies_post_filter_limit(
     monkeypatch, tmp_path: Path
 ) -> None:
     seen_params: list[dict[str, object] | None] = []
-
     monkeypatch.setattr(
         pma_thread_commands,
         "load_hub_config",
@@ -722,6 +735,143 @@ def test_pma_cli_thread_status_info_applies_post_filter_limit(
     assert "[10:11:12] #27-#28 tool_started: tool: bash (x2)" in result.stdout
     assert "[10:11:14] #30 tool_completed: tool: bash" in result.stdout
     assert "No decoder for method: session.diff" not in result.stdout
+
+
+def test_pma_cli_thread_queue_renders_table(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        pma_thread_commands,
+        "load_hub_config",
+        lambda hub_root: SimpleNamespace(
+            server_base_path="",
+            server_host="127.0.0.1",
+            server_port=4321,
+            server_auth_token_env=None,
+        ),
+    )
+
+    def _fake_request_json(
+        method: str,
+        url: str,
+        payload=None,
+        token_env=None,
+        params=None,
+    ):
+        _ = method, payload, token_env, params
+        assert url.endswith("/hub/pma/threads/thread-1/queue")
+        return {
+            "managed_thread_id": "thread-1",
+            "queue_depth": 2,
+            "queued_turns": [
+                {
+                    "managed_turn_id": "turn-2",
+                    "prompt": "Reply: queue-B-r3",
+                    "enqueued_at": "2026-04-26T14:44:06Z",
+                    "position": 1,
+                },
+                {
+                    "managed_turn_id": "turn-3",
+                    "prompt": "Reply: stress-C",
+                    "enqueued_at": "2026-04-26T14:46:04Z",
+                    "position": 2,
+                },
+            ],
+        }
+
+    monkeypatch.setattr(pma_thread_commands, "_request_json", _fake_request_json)
+
+    result = CliRunner().invoke(
+        pma_app,
+        ["thread", "queue", "--id", "thread-1", "--path", str(tmp_path)],
+    )
+
+    assert result.exit_code == 0
+    assert "queued_turn_id" in result.stdout
+    assert '"Reply: queue-B-r3"' in result.stdout
+    assert "2026-04-26T14:44:06Z" in result.stdout
+    assert "turn-3" in result.stdout
+
+
+def test_pma_cli_thread_cancel_and_clear_queue_commands(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        pma_thread_commands,
+        "load_hub_config",
+        lambda hub_root: SimpleNamespace(
+            server_base_path="",
+            server_host="127.0.0.1",
+            server_port=4321,
+            server_auth_token_env=None,
+        ),
+    )
+    calls: list[tuple[str, str]] = []
+
+    def _fake_request_json_with_status(
+        method: str,
+        url: str,
+        payload=None,
+        token_env=None,
+        params=None,
+        timeout=30.0,
+    ):
+        _ = payload, token_env, params, timeout
+        calls.append((method, url))
+        return (
+            200,
+            {
+                "status": "ok",
+                "managed_turn_id": "turn-2",
+                "position": 1,
+            },
+        )
+
+    def _fake_request_json(
+        method: str,
+        url: str,
+        payload=None,
+        token_env=None,
+        params=None,
+    ):
+        _ = payload, token_env, params
+        calls.append((method, url))
+        return {
+            "status": "ok",
+            "managed_thread_id": "thread-1",
+            "cleared_count": 2,
+        }
+
+    monkeypatch.setattr(
+        pma_thread_commands, "_request_json_with_status", _fake_request_json_with_status
+    )
+    monkeypatch.setattr(pma_thread_commands, "_request_json", _fake_request_json)
+
+    runner = CliRunner()
+    cancel_result = runner.invoke(
+        pma_app,
+        [
+            "thread",
+            "cancel-queued",
+            "--id",
+            "thread-1",
+            "--turn",
+            "turn-2",
+            "--path",
+            str(tmp_path),
+        ],
+    )
+    clear_result = runner.invoke(
+        pma_app,
+        ["thread", "clear-queue", "--id", "thread-1", "--path", str(tmp_path)],
+    )
+
+    assert cancel_result.exit_code == 0
+    assert "Cancelled queued turn turn-2 (was position 1)" in cancel_result.stdout
+    assert clear_result.exit_code == 0
+    assert "Cleared 2 queued turns" in clear_result.stdout
+    assert calls == [
+        ("POST", "http://127.0.0.1:4321/hub/pma/threads/thread-1/queue/turn-2/cancel"),
+        ("POST", "http://127.0.0.1:4321/hub/pma/threads/thread-1/queue/clear"),
+    ]
 
 
 def test_pma_cli_thread_status_output_renders_paginated_assistant_text(
@@ -1353,6 +1503,7 @@ def test_pma_cli_thread_send_reports_queued_busy_thread(
         "message": "follow up",
         "busy_policy": "queue",
         "defer_execution": True,
+        "wait_for_confirmation": True,
     }
 
 
@@ -1418,6 +1569,7 @@ def test_pma_cli_thread_send_reads_message_from_file(
         "message": "literal `glm-5-turbo`\nsecond line\n",
         "busy_policy": "queue",
         "defer_execution": True,
+        "wait_for_confirmation": True,
     }
     assert "delivered message:\nliteral `glm-5-turbo`\nsecond line\n" in result.stdout
     assert "\nassistant:\n" not in result.stdout
@@ -1483,11 +1635,76 @@ def test_pma_cli_thread_send_reads_message_from_stdin(
         "message": "stdin payload with backticks `glm-5-turbo`\n",
         "busy_policy": "queue",
         "defer_execution": True,
+        "wait_for_confirmation": True,
     }
     assert (
         "delivered message:\nstdin payload with backticks `glm-5-turbo`\n"
         in result.stdout
     )
+
+
+def test_pma_cli_thread_send_no_wait_sets_enqueue_mode(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        pma_thread_commands,
+        "load_hub_config",
+        lambda hub_root: SimpleNamespace(
+            server_base_path="",
+            server_host="127.0.0.1",
+            server_port=4321,
+            server_auth_token_env=None,
+        ),
+    )
+    captured: dict[str, object] = {}
+
+    def _fake_request_json_with_status(
+        method: str,
+        url: str,
+        payload=None,
+        token_env=None,
+        timeout=None,
+    ):
+        _ = method, url, token_env, timeout
+        captured["payload"] = payload
+        return (
+            200,
+            {
+                "status": "ok",
+                "send_state": "enqueued",
+                "execution_state": "running",
+                "managed_turn_id": "turn-5",
+                "delivered_message": "follow up",
+            },
+        )
+
+    monkeypatch.setattr(
+        pma_thread_commands, "_request_json_with_status", _fake_request_json_with_status
+    )
+
+    result = CliRunner().invoke(
+        pma_app,
+        [
+            "thread",
+            "send",
+            "--id",
+            "thread-1",
+            "--message",
+            "follow up",
+            "--no-wait",
+            "--path",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "send_state=enqueued managed_turn_id=turn-5" in result.stdout
+    assert captured["payload"] == {
+        "message": "follow up",
+        "busy_policy": "queue",
+        "defer_execution": True,
+        "wait_for_confirmation": False,
+    }
 
 
 def test_pma_cli_thread_send_uses_extended_post_timeout(
@@ -1550,6 +1767,86 @@ def test_pma_cli_thread_send_uses_extended_post_timeout(
         captured["timeout"]
         == pma_control_plane.MANAGED_THREAD_SEND_REQUEST_TIMEOUT_SECONDS
     )
+
+
+def test_pma_cli_thread_send_no_wait_does_not_error_when_timeout_recovery_fails(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        pma_thread_commands,
+        "load_hub_config",
+        lambda hub_root: SimpleNamespace(
+            server_base_path="",
+            server_host="127.0.0.1",
+            server_port=4321,
+            server_auth_token_env=None,
+        ),
+    )
+
+    def _fake_request_json_with_status(
+        method: str,
+        url: str,
+        payload=None,
+        token_env=None,
+        timeout=None,
+    ):
+        _ = method, url, payload, token_env, timeout
+        raise httpx.TimeoutException("timed out")
+
+    status_payloads = itertools.cycle(
+        [
+            {
+                "thread": {
+                    "last_turn_id": "turn-1",
+                    "latest_turn_id": "turn-1",
+                    "last_message_preview": "previous prompt",
+                },
+                "turn": {"managed_turn_id": "turn-1", "status": "running"},
+                "queue_depth": 0,
+                "queued_turns": [],
+            }
+        ]
+    )
+
+    def _fake_request_json(
+        method: str,
+        url: str,
+        payload=None,
+        token_env=None,
+        params=None,
+    ):
+        _ = method, url, payload, token_env, params
+        return next(status_payloads)
+
+    monkeypatch.setattr(
+        pma_thread_commands, "_request_json_with_status", _fake_request_json_with_status
+    )
+    monkeypatch.setattr(pma_thread_commands, "_request_json", _fake_request_json)
+    monkeypatch.setattr(pma_control_plane, "request_json", _fake_request_json)
+    monotonic_values = iter([100.0, 116.0])
+    monkeypatch.setattr(
+        pma_control_plane.time, "monotonic", lambda: next(monotonic_values, 116.0)
+    )
+    monkeypatch.setattr(pma_control_plane.time, "sleep", lambda seconds: None)
+
+    result = CliRunner().invoke(
+        pma_app,
+        [
+            "thread",
+            "send",
+            "--id",
+            "thread-1",
+            "--message",
+            "follow up",
+            "--no-wait",
+            "--path",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "send_state=enqueued managed_turn_id=" in result.stdout
+    assert "Timed out waiting for enqueue confirmation" in result.stdout
 
 
 def test_pma_cli_thread_send_recovers_timeout_from_status_probe(

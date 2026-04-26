@@ -715,6 +715,115 @@ def test_managed_thread_message_route_uses_orchestration_service_seam(
     assert fake_service.record_calls[0]["execution_id"] == "managed-turn-1"
 
 
+def test_managed_thread_message_route_no_wait_returns_after_enqueue(
+    hub_env,
+    monkeypatch,
+) -> None:
+    app = build_pma_hub_app(hub_env.hub_root)
+    store = PmaThreadStore(hub_env.hub_root)
+    created = store.create_thread(
+        "codex", hub_env.repo_root.resolve(), repo_id=hub_env.repo_id
+    )
+    managed_thread_id = str(created["managed_thread_id"])
+    observed: dict[str, Any] = {}
+
+    thread_obj = SimpleNamespace(
+        thread_target_id=managed_thread_id,
+        backend_thread_id="backend-thread-1",
+        workspace_root=str(hub_env.repo_root.resolve()),
+    )
+    execution_obj = SimpleNamespace(
+        execution_id="managed-turn-1",
+        status="running",
+        error=None,
+    )
+
+    class FakeService:
+        async def prepare_thread_execution(
+            self,
+            request: Any,
+            *,
+            client_request_id: Optional[str] = None,
+            sandbox_policy: Optional[Any] = None,
+            harness: Optional[Any] = None,
+        ) -> Any:
+            _ = client_request_id, harness
+            observed["prepare_request"] = request
+            observed["sandbox_policy"] = sandbox_policy
+            return SimpleNamespace(
+                thread=thread_obj,
+                request=request,
+                execution=execution_obj,
+                workspace_root=hub_env.repo_root.resolve(),
+                harness="fake-harness",
+            )
+
+        async def start_prepared_thread_execution(
+            self, prepared: Any
+        ) -> tuple[Any, Any]:
+            observed["prepared"] = prepared
+            return execution_obj, "fake-harness"
+
+        def get_thread_target(self, thread_target_id: str) -> Any:
+            _ = thread_target_id
+            return thread_obj
+
+        def get_running_execution(self, thread_target_id: str) -> None:
+            _ = thread_target_id
+            return None
+
+        def get_queue_depth(self, thread_target_id: str) -> int:
+            _ = thread_target_id
+            return 0
+
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "_build_managed_thread_orchestration_service",
+        lambda request, *, thread_store=None: FakeService(),
+    )
+
+    async def _unexpected_begin(*args: Any, **kwargs: Any) -> Any:
+        _ = args, kwargs
+        raise AssertionError("wait-for-confirmation path should not be used")
+
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "begin_runtime_thread_execution",
+        _unexpected_begin,
+    )
+
+    async def _fake_run_execution(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        _ = args, kwargs
+        observed["background_started"] = True
+        return {"status": "ok"}
+
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "_run_managed_thread_execution",
+        _fake_run_execution,
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/messages",
+            json={
+                "message": "hello from route",
+                "wait_for_confirmation": False,
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert payload["send_state"] == "enqueued"
+    assert payload["execution_state"] == "running"
+    assert payload["managed_turn_id"] == "managed-turn-1"
+    assert payload["delivered_message"] == "hello from route"
+    assert observed["prepare_request"].message_text == "hello from route"
+    assert observed["sandbox_policy"] == "dangerFullAccess"
+    assert observed["background_started"] is True
+
+
 def test_managed_thread_message_route_uses_bound_progress_controller_for_direct_execution(
     hub_env,
     monkeypatch,

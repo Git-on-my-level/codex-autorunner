@@ -55,6 +55,28 @@ logger = logging.getLogger(__name__)
 HarnessFactory = Callable[..., RuntimeThreadHarness]
 
 
+@dataclass(frozen=True)
+class PreparedThreadExecution:
+    """Execution row plus enough context to start the runtime turn later."""
+
+    thread: ThreadTarget
+    request: MessageRequest
+    execution: ExecutionRecord
+    workspace_root: Path
+    sandbox_policy: Optional[Any]
+    harness: Optional[RuntimeThreadHarness] = None
+
+    def to_claimed_request(self) -> _ClaimedThreadExecutionRequest:
+        return _ClaimedThreadExecutionRequest(
+            thread=self.thread,
+            execution=self.execution,
+            queued_request=QueuedExecutionRequest(
+                request=self.request,
+                sandbox_policy=self.sandbox_policy,
+            ),
+        )
+
+
 def _thread_target_from_store_row(record: Mapping[str, Any]) -> ThreadTarget:
     return ThreadTarget.from_mapping(record)
 
@@ -988,6 +1010,25 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         sandbox_policy: Optional[Any] = None,
         harness: Optional[RuntimeThreadHarness] = None,
     ) -> tuple[ExecutionRecord, Optional[RuntimeThreadHarness]]:
+        prepared = await self.prepare_thread_execution(
+            request,
+            client_request_id=client_request_id,
+            sandbox_policy=sandbox_policy,
+            harness=harness,
+        )
+        if prepared.execution.status != "running":
+            return prepared.execution, None
+        started, resolved_harness = await self.start_prepared_thread_execution(prepared)
+        return started, resolved_harness
+
+    async def prepare_thread_execution(
+        self,
+        request: MessageRequest,
+        *,
+        client_request_id: Optional[str] = None,
+        sandbox_policy: Optional[Any] = None,
+        harness: Optional[RuntimeThreadHarness] = None,
+    ) -> PreparedThreadExecution:
         if request.target_kind != "thread":
             raise ValueError("Thread orchestration service only handles thread targets")
 
@@ -1061,21 +1102,32 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
             execution_id=execution.execution_id,
             message_preview=_truncate_text(request.message_text, MessagePreviewLimit),
         )
-        if execution.status != "running":
-            return execution, None
-        resolved_harness = harness or self._harness_for_agent(
-            definition.agent_id,
-            request.agent_profile,
-        )
-        started = await self._start_execution(
-            thread,
-            request,
-            execution,
-            harness=resolved_harness,
+        resolved_harness = harness if execution.status == "running" else None
+        if resolved_harness is None and execution.status == "running":
+            resolved_harness = self._harness_for_agent(
+                definition.agent_id,
+                request.agent_profile,
+            )
+        return PreparedThreadExecution(
+            thread=thread,
+            request=request,
+            execution=execution,
             workspace_root=workspace_root,
             sandbox_policy=sandbox_policy,
+            harness=resolved_harness,
         )
-        return started, resolved_harness
+
+    async def start_prepared_thread_execution(
+        self,
+        prepared: PreparedThreadExecution,
+    ) -> tuple[ExecutionRecord, RuntimeThreadHarness]:
+        if prepared.execution.status != "running":
+            raise ValueError("Only running executions can be started")
+        return await self._execution_lifecycle.start_claimed_execution_request(
+            prepared.to_claimed_request(),
+            harness=prepared.harness,
+            workspace_root=prepared.workspace_root,
+        )
 
     def claim_next_queued_execution_context(
         self, thread_target_id: str

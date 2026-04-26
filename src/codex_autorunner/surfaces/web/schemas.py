@@ -911,6 +911,13 @@ class PmaManagedThreadMessageRequest(Payload):
         default=False,
         validation_alias=AliasChoices("defer_execution", "deferExecution"),
     )
+    wait_for_confirmation: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "wait_for_confirmation",
+            "waitForConfirmation",
+        ),
+    )
     notify_on: Optional[Literal["terminal"]] = Field(
         default=None, validation_alias=AliasChoices("notify_on", "notifyOn")
     )

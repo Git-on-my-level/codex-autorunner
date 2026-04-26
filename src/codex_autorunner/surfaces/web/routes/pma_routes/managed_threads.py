@@ -18,6 +18,7 @@ from .....core.orchestration import build_harness_backed_orchestration_service
 from .....core.orchestration.catalog import RuntimeAgentDescriptor
 from .....core.orchestration.turn_timeline import list_turn_timeline
 from .....core.pma_automation_store import PmaAutomationThreadNotFoundError
+from .....core.text_utils import _truncate_text
 from .....integrations.chat.execution_event_journal import list_chat_execution_journal
 from ...schemas import (
     PmaAutomationSubscriptionCreateRequest,
@@ -80,6 +81,25 @@ def _subscription_request_has_explicit_routing(payload: dict[str, Any]) -> bool:
         normalize_optional_text(payload.get(field)) is not None
         for field in ("thread_id", "lane_id")
     )
+
+
+def _serialize_managed_thread_queue_item(
+    item: dict[str, Any], *, position: int
+) -> dict[str, Any]:
+    return {
+        "managed_turn_id": item.get("managed_turn_id"),
+        "request_kind": item.get("request_kind"),
+        "state": item.get("state"),
+        "position": position,
+        "enqueued_at": item.get("enqueued_at"),
+        "visible_at": item.get("visible_at"),
+        "prompt": item.get("prompt") or "",
+        "prompt_preview": _truncate_text(item.get("prompt") or "", 120),
+        "model": item.get("model"),
+        "reasoning": item.get("reasoning"),
+        "client_turn_id": item.get("client_turn_id"),
+        "queue_item_id": item.get("queue_item_id"),
+    }
 
 
 async def _cleanup_failed_provisioned_worktree(
@@ -801,6 +821,99 @@ def build_managed_thread_crud_routes(
         turns = store.list_turns(managed_thread_id, limit=limit)
         return {
             "turns": [serialize_managed_thread_turn_summary(turn) for turn in turns]
+        }
+
+    @router.get("/threads/{managed_thread_id}/queue")
+    def list_managed_thread_queue(
+        managed_thread_id: str,
+        request: Request,
+        limit: int = 200,
+    ) -> dict[str, Any]:
+        if limit <= 0:
+            raise HTTPException(status_code=400, detail="limit must be greater than 0")
+        limit = min(limit, 500)
+
+        store = get_pma_request_context(request).thread_store()
+        thread = store.get_thread(managed_thread_id)
+        if thread is None:
+            raise HTTPException(status_code=404, detail="Managed thread not found")
+
+        queued_items = store.list_pending_turn_queue_items(
+            managed_thread_id, limit=limit
+        )
+        return {
+            "managed_thread_id": managed_thread_id,
+            "queue_depth": store.get_queue_depth(managed_thread_id),
+            "queued_turns": [
+                _serialize_managed_thread_queue_item(item, position=index)
+                for index, item in enumerate(queued_items, start=1)
+            ],
+        }
+
+    @router.post("/threads/{managed_thread_id}/queue/{managed_turn_id}/cancel")
+    def cancel_managed_thread_queued_turn(
+        managed_thread_id: str,
+        managed_turn_id: str,
+        request: Request,
+    ) -> dict[str, Any]:
+        store = get_pma_request_context(request).thread_store()
+        thread = store.get_thread(managed_thread_id)
+        if thread is None:
+            raise HTTPException(status_code=404, detail="Managed thread not found")
+
+        queued_items = store.list_pending_turn_queue_items(managed_thread_id, limit=500)
+        queued_lookup = {
+            str(item.get("managed_turn_id") or "").strip(): index
+            for index, item in enumerate(queued_items, start=1)
+        }
+        position = queued_lookup.get(managed_turn_id)
+        if position is None:
+            turn = store.get_turn(managed_thread_id, managed_turn_id)
+            if turn is None:
+                raise HTTPException(status_code=404, detail="Managed turn not found")
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Managed turn {managed_turn_id} is not queued "
+                    f"(status: {turn.get('status') or 'unknown'})"
+                ),
+            )
+        if not store.cancel_queued_turn(managed_thread_id, managed_turn_id):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Managed turn {managed_turn_id} is no longer queued",
+            )
+        return {
+            "status": "ok",
+            "managed_thread_id": managed_thread_id,
+            "managed_turn_id": managed_turn_id,
+            "cancelled": True,
+            "position": position,
+            "queue_depth": store.get_queue_depth(managed_thread_id),
+        }
+
+    @router.post("/threads/{managed_thread_id}/queue/clear")
+    def clear_managed_thread_queue(
+        managed_thread_id: str,
+        request: Request,
+    ) -> dict[str, Any]:
+        store = get_pma_request_context(request).thread_store()
+        thread = store.get_thread(managed_thread_id)
+        if thread is None:
+            raise HTTPException(status_code=404, detail="Managed thread not found")
+
+        queued_items = store.list_pending_turn_queue_items(managed_thread_id, limit=500)
+        cleared_count = store.cancel_queued_turns(managed_thread_id)
+        return {
+            "status": "ok",
+            "managed_thread_id": managed_thread_id,
+            "cleared_count": cleared_count,
+            "cleared_turn_ids": [
+                str(item.get("managed_turn_id") or "").strip()
+                for item in queued_items[:cleared_count]
+                if str(item.get("managed_turn_id") or "").strip()
+            ],
+            "queue_depth": store.get_queue_depth(managed_thread_id),
         }
 
     @router.get("/threads/{managed_thread_id}/turns/{managed_turn_id}")

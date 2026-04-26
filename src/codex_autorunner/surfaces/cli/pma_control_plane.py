@@ -295,6 +295,7 @@ class ManagedThreadSendRequest:
     message: str
     busy_policy: str
     defer_execution: bool
+    wait_for_confirmation: bool = True
     model: Optional[str] = None
     reasoning: Optional[str] = None
     notify_on: Optional[str] = None
@@ -306,6 +307,7 @@ class ManagedThreadSendRequest:
             "message": self.message,
             "busy_policy": self.busy_policy,
             "defer_execution": self.defer_execution,
+            "wait_for_confirmation": self.wait_for_confirmation,
         }
         if self.model:
             payload["model"] = self.model

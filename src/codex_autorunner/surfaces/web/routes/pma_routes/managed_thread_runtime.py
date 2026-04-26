@@ -62,6 +62,7 @@ from .managed_thread_runtime_payloads import (
     MANAGED_THREAD_PUBLIC_EXECUTION_ERROR,
     build_accepted_send_payload,
     build_archived_thread_payload,
+    build_enqueued_send_payload,
     build_execution_result_payload,
     build_execution_setup_error_payload,
     build_interrupt_failure_payload,
@@ -138,6 +139,28 @@ def _track_managed_thread_task(app: Any, task: asyncio.Task[Any]) -> None:
     task_pool = _managed_thread_task_pool(app)
     task_pool.add(task)
     task.add_done_callback(lambda done: task_pool.discard(done))
+
+
+def _runtime_thread_execution_from_started_pair(
+    *,
+    service: Any,
+    prepared: Any,
+    started_pair: tuple[Any, Any],
+) -> RuntimeThreadExecution:
+    started_execution, started_harness = started_pair
+    refreshed_thread = service.get_thread_target(prepared.thread.thread_target_id)
+    if refreshed_thread is None:
+        raise KeyError(
+            f"Unknown thread target '{prepared.thread.thread_target_id}' after start"
+        )
+    return RuntimeThreadExecution(
+        service=service,
+        harness=started_harness,
+        thread=refreshed_thread,
+        execution=started_execution,
+        workspace_root=prepared.workspace_root,
+        request=prepared.request,
+    )
 
 
 async def _recover_pma_bound_chat_execution(
@@ -763,35 +786,44 @@ def build_managed_thread_runtime_routes(
                 ),
             )
         sync_zeroclaw_context_if_needed(thread=thread, options=options)
+        prepared_execution = None
         try:
             progress_targets = _resolve_pma_chat_bound_surface_targets(
                 service=service,
                 managed_thread_id=managed_thread_id,
                 allow_running_turn_fallback=False,
             )
-            started_execution = await begin_runtime_thread_execution(
-                service,
-                MessageRequest(
-                    target_id=managed_thread_id,
-                    target_kind="thread",
-                    message_text=options.message,
-                    busy_policy=options.busy_policy,
-                    agent_profile=options.agent_profile,
-                    model=options.model,
-                    reasoning=options.reasoning,
-                    approval_mode=options.approval_policy,
-                    context_profile=options.context_profile,
-                    metadata=merge_bound_chat_execution_metadata(
-                        {
-                            "runtime_prompt": options.execution_prompt,
-                            "execution_error_message": MANAGED_THREAD_PUBLIC_EXECUTION_ERROR,
-                        },
-                        origin_kind="pma_web",
-                        progress_targets=progress_targets,
-                    ),
+            message_request = MessageRequest(
+                target_id=managed_thread_id,
+                target_kind="thread",
+                message_text=options.message,
+                busy_policy=options.busy_policy,
+                agent_profile=options.agent_profile,
+                model=options.model,
+                reasoning=options.reasoning,
+                approval_mode=options.approval_policy,
+                context_profile=options.context_profile,
+                metadata=merge_bound_chat_execution_metadata(
+                    {
+                        "runtime_prompt": options.execution_prompt,
+                        "execution_error_message": MANAGED_THREAD_PUBLIC_EXECUTION_ERROR,
+                    },
+                    origin_kind="pma_web",
+                    progress_targets=progress_targets,
                 ),
-                sandbox_policy=options.sandbox_policy,
             )
+            if payload.wait_for_confirmation:
+                started_execution = await begin_runtime_thread_execution(
+                    service,
+                    message_request,
+                    sandbox_policy=options.sandbox_policy,
+                )
+            else:
+                prepared_execution = await service.prepare_thread_execution(
+                    message_request,
+                    sandbox_policy=options.sandbox_policy,
+                )
+                started_execution = None
         except ManagedThreadNotActiveError as exc:
             return JSONResponse(
                 status_code=409,
@@ -834,21 +866,26 @@ def build_managed_thread_runtime_routes(
                 backend_thread_id=options.live_backend_thread_id,
                 delivery_payload=options.delivery_payload,
             )
-        managed_turn_id = started_execution.execution.execution_id
+        if prepared_execution is not None:
+            execution = prepared_execution.execution
+            thread_after_send = prepared_execution.thread
+        else:
+            assert started_execution is not None
+            execution = started_execution.execution
+            thread_after_send = started_execution.thread
+        managed_turn_id = execution.execution_id
         if not managed_turn_id:
             raise HTTPException(status_code=500, detail="Failed to create managed turn")
         backend_thread_id = (
-            normalize_optional_text(started_execution.thread.backend_thread_id)
+            normalize_optional_text(thread_after_send.backend_thread_id)
             or options.live_backend_thread_id
             or ""
         )
         execution_status = str(
-            getattr(started_execution.execution, "status", "running") or "running"
+            getattr(execution, "status", "running") or "running"
         ).strip()
         if execution_status not in {"running", "queued"}:
-            detail = sanitize_managed_thread_result_error(
-                started_execution.execution.error
-            )
+            detail = sanitize_managed_thread_result_error(execution.error)
             await notify_managed_thread_terminal_transition(
                 request,
                 thread=thread,
@@ -905,6 +942,74 @@ def build_managed_thread_runtime_routes(
                 return 0
             return int(resolver(managed_thread_id))
 
+        if not payload.wait_for_confirmation:
+            running_execution = service.get_running_execution(managed_thread_id)
+            if execution_status == "queued":
+                queued_payload = build_enqueued_send_payload(
+                    managed_thread_id=managed_thread_id,
+                    managed_turn_id=managed_turn_id,
+                    backend_thread_id=backend_thread_id or "",
+                    delivery_payload=options.delivery_payload,
+                    execution_state="queued",
+                    queue_depth=_queue_depth(),
+                    active_managed_turn_id=(
+                        running_execution.execution_id
+                        if running_execution is not None
+                        else None
+                    ),
+                    notification=notification,
+                )
+                ensure_managed_thread_queue_worker(request.app, managed_thread_id)
+                return queued_payload
+
+            enqueued_payload = build_enqueued_send_payload(
+                managed_thread_id=managed_thread_id,
+                managed_turn_id=managed_turn_id,
+                backend_thread_id=backend_thread_id or "",
+                delivery_payload=options.delivery_payload,
+                execution_state="running",
+                notification=notification,
+            )
+
+            async def _background_enqueue_only_run() -> None:
+                try:
+                    started_pair = await service.start_prepared_thread_execution(
+                        prepared_execution
+                    )
+                    runtime_execution = _runtime_thread_execution_from_started_pair(
+                        service=service,
+                        prepared=prepared_execution,
+                        started_pair=started_pair,
+                    )
+                    await _run_execution(runtime_execution)
+                    if _queue_depth() > 0:
+                        ensure_managed_thread_queue_worker(
+                            request.app,
+                            managed_thread_id,
+                        )
+                except BaseException:
+                    logger.exception(
+                        "Managed-thread enqueue-only background execution failed (managed_thread_id=%s, managed_turn_id=%s)",
+                        managed_thread_id,
+                        managed_turn_id,
+                    )
+                    await notify_managed_thread_terminal_transition(
+                        request,
+                        thread=thread,
+                        managed_thread_id=managed_thread_id,
+                        managed_turn_id=managed_turn_id,
+                        to_state="failed",
+                        reason=MANAGED_THREAD_PUBLIC_EXECUTION_ERROR,
+                    )
+                    raise
+
+            _track_managed_thread_task(
+                request.app,
+                asyncio.create_task(_background_enqueue_only_run()),
+            )
+            return enqueued_payload
+
+        assert started_execution is not None
         if getattr(started_execution.execution, "status", "running") == "queued":
             running_execution = service.get_running_execution(managed_thread_id)
             queued_payload = build_queued_send_payload(

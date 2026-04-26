@@ -22,6 +22,7 @@ from codex_autorunner.surfaces.web.routes.pma_routes import (
 )
 from codex_autorunner.surfaces.web.routes.pma_routes.managed_threads import (
     build_automation_routes,
+    build_managed_thread_crud_routes,
 )
 from tests.conftest import write_test_config
 
@@ -55,6 +56,13 @@ def _build_automation_route_client(
     app.state.config = SimpleNamespace(root=hub_root, raw={"pma": {"enabled": True}})
     router = app.router
     build_automation_routes(router, lambda: runtime_state)
+    return TestClient(app)
+
+
+def _build_managed_thread_crud_client(hub_root: Path) -> TestClient:
+    app = FastAPI()
+    app.state.config = SimpleNamespace(root=hub_root, raw={"pma": {"enabled": True}})
+    build_managed_thread_crud_routes(app.router, lambda: None)
     return TestClient(app)
 
 
@@ -1614,6 +1622,109 @@ def test_archive_managed_threads_bulk_route_archives_multiple_threads(
     store = PmaThreadStore(hub_env.hub_root)
     assert store.get_thread(first_id)["lifecycle_status"] == "archived"
     assert store.get_thread(second_id)["lifecycle_status"] == "archived"
+
+
+def test_managed_thread_queue_routes_list_cancel_and_clear(hub_env) -> None:
+    store = PmaThreadStore(hub_env.hub_root)
+    created = store.create_thread(
+        "codex", hub_env.repo_root.resolve(), repo_id=hub_env.repo_id
+    )
+    managed_thread_id = str(created["managed_thread_id"])
+
+    running = store.create_turn(
+        managed_thread_id,
+        prompt="turn A",
+        busy_policy="queue",
+    )
+    queued_payload_b = {
+        "request": {
+            "target_id": managed_thread_id,
+            "target_kind": "thread",
+            "message_text": "Reply: queue-B-r3",
+            "kind": "message",
+            "busy_policy": "queue",
+        }
+    }
+    queued_b = store.create_turn(
+        managed_thread_id,
+        prompt="Reply: queue-B-r3",
+        busy_policy="queue",
+        queue_payload=queued_payload_b,
+    )
+    queued_payload_c = {
+        "request": {
+            "target_id": managed_thread_id,
+            "target_kind": "thread",
+            "message_text": "Reply: stress-C",
+            "kind": "message",
+            "busy_policy": "queue",
+        }
+    }
+    queued_c = store.create_turn(
+        managed_thread_id,
+        prompt="Reply: stress-C",
+        busy_policy="queue",
+        queue_payload=queued_payload_c,
+    )
+    assert running["status"] == "running"
+    assert queued_b["status"] == "queued"
+    assert queued_c["status"] == "queued"
+
+    with _build_managed_thread_crud_client(hub_env.hub_root) as client:
+        queue_resp = client.get(f"/threads/{managed_thread_id}/queue")
+        assert queue_resp.status_code == 200
+        queue_payload = queue_resp.json()
+        assert queue_payload["queue_depth"] == 2
+        assert [item["managed_turn_id"] for item in queue_payload["queued_turns"]] == [
+            queued_b["managed_turn_id"],
+            queued_c["managed_turn_id"],
+        ]
+        assert [item["position"] for item in queue_payload["queued_turns"]] == [1, 2]
+        assert queue_payload["queued_turns"][0]["prompt"] == "Reply: queue-B-r3"
+
+        cancel_resp = client.post(
+            f"/threads/{managed_thread_id}/queue/{queued_b['managed_turn_id']}/cancel"
+        )
+        assert cancel_resp.status_code == 200
+        assert cancel_resp.json()["position"] == 1
+
+        queue_after_cancel = client.get(f"/threads/{managed_thread_id}/queue").json()
+        assert queue_after_cancel["queue_depth"] == 1
+        assert (
+            queue_after_cancel["queued_turns"][0]["managed_turn_id"]
+            == queued_c["managed_turn_id"]
+        )
+        assert queue_after_cancel["queued_turns"][0]["position"] == 1
+
+        clear_resp = client.post(f"/threads/{managed_thread_id}/queue/clear")
+        assert clear_resp.status_code == 200
+        assert clear_resp.json()["cleared_count"] == 1
+
+        empty_queue_resp = client.get(f"/threads/{managed_thread_id}/queue")
+        assert empty_queue_resp.status_code == 200
+        assert empty_queue_resp.json()["queue_depth"] == 0
+        assert empty_queue_resp.json()["queued_turns"] == []
+
+
+def test_managed_thread_cancel_queue_route_rejects_nonqueued_turn(hub_env) -> None:
+    store = PmaThreadStore(hub_env.hub_root)
+    created = store.create_thread(
+        "codex", hub_env.repo_root.resolve(), repo_id=hub_env.repo_id
+    )
+    managed_thread_id = str(created["managed_thread_id"])
+    running = store.create_turn(
+        managed_thread_id,
+        prompt="turn A",
+        busy_policy="queue",
+    )
+
+    with _build_managed_thread_crud_client(hub_env.hub_root) as client:
+        response = client.post(
+            f"/threads/{managed_thread_id}/queue/{running['managed_turn_id']}/cancel"
+        )
+
+    assert response.status_code == 409
+    assert "is not queued" in response.json()["detail"]
 
 
 def test_managed_thread_crud_routes_use_orchestration_service(
