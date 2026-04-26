@@ -1555,6 +1555,19 @@ async def _dispatch_finalized_delivery(
         await deliver_result(finalized)
 
 
+def _queue_worker_task_cancellation_requested() -> bool:
+    current = asyncio.current_task()
+    if current is None:
+        return False
+    cancelling = getattr(current, "cancelling", None)
+    if not callable(cancelling):
+        return False
+    try:
+        return bool(cancelling())
+    except TypeError:
+        return False
+
+
 async def _process_queued_execution(
     started_execution: RuntimeThreadExecution,
     *,
@@ -1611,6 +1624,16 @@ async def _process_queued_execution(
                     durable_delivery=durable_delivery,
                     deliver_result=deliver_result,
                 )
+            except asyncio.CancelledError:
+                if _queue_worker_task_cancellation_requested():
+                    raise
+                log_event(
+                    logger,
+                    logging.WARNING,
+                    "chat.managed_thread.queue_worker_failure_delivery_cancelled",
+                    **_queue_worker_trace_fields(started_execution),
+                    finalized_status=finalized.status,
+                )
             except Exception as delivery_exc:
                 log_event(
                     logger,
@@ -1631,6 +1654,16 @@ async def _process_queued_execution(
             finalized,
             durable_delivery=durable_delivery,
             deliver_result=deliver_result,
+        )
+    except asyncio.CancelledError:
+        if _queue_worker_task_cancellation_requested():
+            raise
+        log_event(
+            logger,
+            logging.WARNING,
+            "chat.managed_thread.queue_worker_delivery_cancelled_post_finalization",
+            **_queue_worker_trace_fields(started_execution),
+            finalized_status=finalized.status,
         )
     except Exception as delivery_exc:
         log_event(
