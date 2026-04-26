@@ -87,13 +87,27 @@ class TestFlowStart:
         )
         assert result.state == {"k": "v"}
 
-    def test_empty_state_output_preserves_current(self):
+    def test_missing_state_output_preserves_current(self):
         result = _reduce(
             FlowRunStatus.PENDING,
             FlowTrigger(kind=TriggerKind.FLOW_START),
             state={"existing": True},
         )
         assert result.state == {"existing": True}
+
+    def test_explicit_empty_state_output_clears_state(self):
+        result = _reduce(
+            FlowRunStatus.PENDING,
+            FlowTrigger(kind=TriggerKind.FLOW_START, state_output={}),
+            state={"existing": True},
+        )
+        assert result.state == {}
+
+
+class TestNoChangeSentinel:
+    def test_no_change_is_falsy(self):
+        assert not NO_CHANGE
+        assert bool(NO_CHANGE) is False
 
 
 class TestFlowResume:

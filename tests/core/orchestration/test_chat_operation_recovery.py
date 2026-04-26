@@ -413,6 +413,19 @@ class TestPlanChatOperationRecoveryEdgeCases:
         assert decision.action == ChatOperationRecoveryAction.NOOP
         assert decision.reason == "terminal_outcome_already_recorded"
 
+    def test_delivery_failed_outcome_does_not_block_delivery_recovery(self) -> None:
+        """Discord records delivery_failed while still DELIVERING + failed cursor."""
+        snap = _snap(
+            state=ChatOperationState.DELIVERING,
+            delivery_state="failed",
+            delivery_attempt_count=1,
+            terminal_outcome="delivery_failed",
+            updated_at="2026-04-15T11:00:00Z",
+        )
+        decision = plan_chat_operation_recovery(snap, now=_NOW)
+        assert decision.action == ChatOperationRecoveryAction.REPLAY_DELIVERY
+        assert decision.reason == "delivery_replay_required"
+
     def test_snapshot_with_zero_attempt_count(self) -> None:
         snap = _snap(
             state=ChatOperationState.DELIVERING,

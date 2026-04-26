@@ -36,6 +36,11 @@ class _NoChange:
             cls._instance = super().__new__(cls)
         return cls._instance
 
+    def __bool__(self) -> bool:
+        # Sentinel must be falsy so ``if result.finished_at`` cannot treat it as a
+        # real timestamp (truthy) and leak into serialized payloads.
+        return False
+
     def __repr__(self) -> str:
         return "NO_CHANGE"
 
@@ -184,6 +189,7 @@ def _require_status(
 
 def _merge_state(current_state: Dict[str, Any], trigger: FlowTrigger) -> Dict[str, Any]:
     if trigger.kind in (TriggerKind.FLOW_START, TriggerKind.FLOW_RESUME):
+        # Distinguish None (preserve existing state) from {} (explicit clear).
         if trigger.state_output is not None:
             return dict(trigger.state_output)
         return dict(current_state)

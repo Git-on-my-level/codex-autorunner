@@ -152,7 +152,15 @@ def plan_chat_operation_recovery(
     execution_replayable = _execution_is_resumeable(snapshot)
     attempt_count = int(snapshot.delivery_attempt_count or 0)
 
-    if snapshot.terminal_outcome:
+    # ``terminal_outcome`` records adapter-visible outcomes; it is not always a
+    # durable terminal for recovery. For example Discord records
+    # ``delivery_failed`` while the operation remains ``DELIVERING`` with a
+    # failed delivery cursor so replay/abandon logic can still run.
+    if snapshot.terminal_outcome and not (
+        snapshot.terminal_outcome == "delivery_failed"
+        and snapshot.state not in CHAT_OPERATION_TERMINAL_STATES
+        and _delivery_is_pending(snapshot)
+    ):
         return ChatOperationRecoveryDecision(
             action=ChatOperationRecoveryAction.NOOP,
             reason="terminal_outcome_already_recorded",
