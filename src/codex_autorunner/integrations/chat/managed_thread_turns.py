@@ -1560,12 +1560,14 @@ def _queue_worker_task_cancellation_requested() -> bool:
     if current is None:
         return False
     cancelling = getattr(current, "cancelling", None)
-    if not callable(cancelling):
-        return False
-    try:
-        return bool(cancelling())
-    except TypeError:
-        return False
+    if callable(cancelling):
+        try:
+            return bool(cancelling())
+        except TypeError:
+            return False
+    # Python 3.9–3.10: Task.cancelling() is absent; CPython's _must_cancel tracks
+    # a pending cancel() on this task (same gap noted near stream_task handling).
+    return bool(getattr(current, "_must_cancel", False))
 
 
 async def _process_queued_execution(
