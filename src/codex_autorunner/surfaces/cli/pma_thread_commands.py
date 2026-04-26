@@ -10,6 +10,7 @@ import json
 import logging
 import shutil
 import sys
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
@@ -94,6 +95,17 @@ _DEFAULT_OUTPUT_PAGE_LINES = 20
 class _PmaVerbosityLevel(str, Enum):
     INFO = "info"
     DEBUG = "debug"
+
+
+_MAX_TAIL_DISPLAY_FETCH_LIMIT = 200
+_NOISY_DECODER_METHODS = frozenset(
+    {
+        "server.heartbeat",
+        "server.connected",
+        "session.updated",
+        "session.diff",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -563,10 +575,15 @@ def _format_tail_event_line(event: dict[str, Any]) -> str:
     parsed_event = _PmaTailEvent.from_dict(event)
     if parsed_event is None:
         return ""
-    event_type = parsed_event.event_type
-    event_id = parsed_event.event_id
-    summary = parsed_event.summary
-    timestamp = parsed_event.received_at
+    return _format_rendered_tail_event_line(
+        _PmaRenderedTailEvent.from_tail_event(parsed_event)
+    )
+
+
+def _format_rendered_tail_event_line(event: "_PmaRenderedTailEvent") -> str:
+    event_type = event.event_type
+    summary = event.summary
+    timestamp = event.received_at
     ts_out = timestamp
     if timestamp:
         try:
@@ -575,8 +592,19 @@ def _format_tail_event_line(event: dict[str, Any]) -> str:
         except ValueError:
             ts_out = timestamp
     prefix = f"[{ts_out}] " if ts_out else ""
-    id_part = f"#{event_id} " if isinstance(event_id, int) and event_id > 0 else ""
-    return f"{prefix}{id_part}{event_type}: {summary}".rstrip()
+    id_part = ""
+    if isinstance(event.start_event_id, int) and event.start_event_id > 0:
+        if (
+            isinstance(event.end_event_id, int)
+            and event.end_event_id > event.start_event_id
+        ):
+            id_part = f"#{event.start_event_id}-#{event.end_event_id} "
+        else:
+            id_part = f"#{event.start_event_id} "
+    line = f"{prefix}{id_part}{event_type}: {summary}".rstrip()
+    if event.count > 1 and event.event_type != "assistant_update":
+        line = f"{line} (x{event.count})"
+    return line.rstrip()
 
 
 def _format_received_at_label(value: Any) -> str:
@@ -609,6 +637,165 @@ class _PmaTailEvent:
             received_at=str(data.get("received_at") or ""),
             event_id=normalized_event_id,
         )
+
+
+@dataclass(frozen=True)
+class _PmaRenderedTailEvent:
+    event_type: str
+    summary: str
+    received_at: str
+    start_event_id: Optional[int] = None
+    end_event_id: Optional[int] = None
+    count: int = 1
+
+    @classmethod
+    def from_tail_event(cls, event: _PmaTailEvent) -> "_PmaRenderedTailEvent":
+        return cls(
+            event_type=event.event_type,
+            summary=event.summary,
+            received_at=event.received_at,
+            start_event_id=event.event_id,
+            end_event_id=event.event_id,
+        )
+
+    @property
+    def dedupe_key(self) -> tuple[str, str]:
+        return (self.event_type, self.summary)
+
+    def merged_with(
+        self,
+        event: _PmaTailEvent,
+        *,
+        summary: Optional[str] = None,
+    ) -> "_PmaRenderedTailEvent":
+        return _PmaRenderedTailEvent(
+            event_type=self.event_type,
+            summary=self.summary if summary is None else summary,
+            received_at=self.received_at or event.received_at,
+            start_event_id=self.start_event_id,
+            end_event_id=event.event_id or self.end_event_id,
+            count=self.count + 1,
+        )
+
+
+def _noisy_decoder_method(summary: str) -> Optional[str]:
+    prefix = "No decoder for method:"
+    if not summary.startswith(prefix):
+        return None
+    method = summary[len(prefix) :].strip().lower()
+    return method or None
+
+
+def _should_suppress_info_tail_event(event: _PmaTailEvent) -> bool:
+    method = _noisy_decoder_method(event.summary)
+    return method in _NOISY_DECODER_METHODS
+
+
+def _display_tail_fetch_limit(
+    *,
+    limit: int,
+    level: _PmaVerbosityLevel,
+    output_json: bool,
+) -> int:
+    if output_json or level == _PmaVerbosityLevel.DEBUG:
+        return limit
+    return _MAX_TAIL_DISPLAY_FETCH_LIMIT
+
+
+def _display_tail_events(
+    events: tuple[_PmaTailEvent, ...],
+    *,
+    level: _PmaVerbosityLevel,
+    limit: Optional[int] = None,
+) -> tuple[_PmaRenderedTailEvent, ...]:
+    if level == _PmaVerbosityLevel.DEBUG:
+        rendered = tuple(
+            _PmaRenderedTailEvent.from_tail_event(event) for event in events
+        )
+    else:
+        collapsed: list[_PmaRenderedTailEvent] = []
+        for event in events:
+            if _should_suppress_info_tail_event(event):
+                continue
+            if not collapsed:
+                collapsed.append(_PmaRenderedTailEvent.from_tail_event(event))
+                continue
+            previous = collapsed[-1]
+            if (
+                previous.event_type == "assistant_update"
+                and event.event_type == "assistant_update"
+            ):
+                collapsed[-1] = previous.merged_with(event, summary=event.summary)
+                continue
+            if previous.dedupe_key == (event.event_type, event.summary):
+                collapsed[-1] = previous.merged_with(event)
+                continue
+            collapsed.append(_PmaRenderedTailEvent.from_tail_event(event))
+        rendered = tuple(collapsed)
+    if limit is None or limit <= 0:
+        return rendered
+    return rendered[-limit:]
+
+
+class _PmaInfoTailStreamRenderer:
+    def __init__(self) -> None:
+        self._pending_assistant: Optional[_PmaRenderedTailEvent] = None
+        self._initial_replay_keys: deque[tuple[str, str]] = deque()
+        self._last_visible_key: Optional[tuple[str, str]] = None
+
+    def note_snapshot_events(self, events: tuple[_PmaRenderedTailEvent, ...]) -> None:
+        self._initial_replay_keys = deque(event.dedupe_key for event in events)
+        if events:
+            self._last_visible_key = events[-1].dedupe_key
+
+    def consume(self, event: _PmaTailEvent) -> list[str]:
+        lines: list[str] = []
+        if (
+            self._pending_assistant is not None
+            and event.event_type != "assistant_update"
+        ):
+            flushed = self._emit_rendered(self._pending_assistant)
+            if flushed is not None:
+                lines.append(flushed)
+            self._pending_assistant = None
+        if _should_suppress_info_tail_event(event):
+            return lines
+        if event.event_type == "assistant_update":
+            rendered = _PmaRenderedTailEvent.from_tail_event(event)
+            if self._pending_assistant is None:
+                self._pending_assistant = rendered
+            else:
+                self._pending_assistant = self._pending_assistant.merged_with(
+                    event,
+                    summary=event.summary,
+                )
+            return lines
+        rendered = _PmaRenderedTailEvent.from_tail_event(event)
+        emitted = self._emit_rendered(rendered)
+        if emitted is not None:
+            lines.append(emitted)
+        return lines
+
+    def flush(self) -> list[str]:
+        if self._pending_assistant is None:
+            return []
+        emitted = self._emit_rendered(self._pending_assistant)
+        self._pending_assistant = None
+        return [emitted] if emitted is not None else []
+
+    def _emit_rendered(self, event: _PmaRenderedTailEvent) -> Optional[str]:
+        key = event.dedupe_key
+        if self._initial_replay_keys:
+            expected = self._initial_replay_keys[0]
+            if key == expected:
+                self._initial_replay_keys.popleft()
+                self._last_visible_key = key
+                return None
+            self._initial_replay_keys.clear()
+        if key == self._last_visible_key:
+            return None
+        self._last_visible_key = key
+        return _format_rendered_tail_event_line(event)
 
 
 @dataclass(frozen=True)
@@ -744,7 +931,20 @@ class _PmaTailSnapshot:
             ),
         )
 
-    def render_lines(self) -> list[str]:
+    def display_events(
+        self,
+        *,
+        level: _PmaVerbosityLevel,
+        limit: Optional[int] = None,
+    ) -> tuple[_PmaRenderedTailEvent, ...]:
+        return _display_tail_events(self.events, level=level, limit=limit)
+
+    def render_lines(
+        self,
+        *,
+        level: _PmaVerbosityLevel = _PmaVerbosityLevel.INFO,
+        limit: Optional[int] = None,
+    ) -> list[str]:
         lines = [
             "managed_turn_id="
             + self.managed_turn_id
@@ -767,14 +967,17 @@ class _PmaTailSnapshot:
             lines.append(self.last_tool.render_line())
         if self.lifecycle_events:
             lines.append("lifecycle: " + ", ".join(self.lifecycle_events))
-        if not self.events:
+        visible_events = self.display_events(level=level, limit=limit)
+        if not visible_events:
             lines.append("No tail events.")
             if self.turn_status == "running" and self.idle_seconds is not None:
                 idle_seconds = int(self.idle_seconds or 0)
                 if idle_seconds >= 30:
                     lines.append(f"No events for {idle_seconds}s (possibly stalled).")
             return lines
-        lines.extend(_format_tail_event_line(event.__dict__) for event in self.events)
+        lines.extend(
+            _format_rendered_tail_event_line(event) for event in visible_events
+        )
         return [line for line in lines if line]
 
 
@@ -899,7 +1102,20 @@ class _PmaThreadStatusSnapshot:
             ),
         )
 
-    def render_lines(self) -> list[str]:
+    def display_recent_progress(
+        self,
+        *,
+        level: _PmaVerbosityLevel,
+        limit: Optional[int] = None,
+    ) -> tuple[_PmaRenderedTailEvent, ...]:
+        return _display_tail_events(self.recent_progress, level=level, limit=limit)
+
+    def render_lines(
+        self,
+        *,
+        level: _PmaVerbosityLevel = _PmaVerbosityLevel.INFO,
+        limit: Optional[int] = None,
+    ) -> list[str]:
         lines = [
             " ".join(
                 [
@@ -932,11 +1148,11 @@ class _PmaThreadStatusSnapshot:
             lines.extend(self.diagnostics.render_lines())
         if self.last_tool is not None:
             lines.append(self.last_tool.render_line())
-        if self.recent_progress:
+        visible_progress = self.display_recent_progress(level=level, limit=limit)
+        if visible_progress:
             lines.append("recent progress:")
             lines.extend(
-                _format_tail_event_line(event.__dict__)
-                for event in self.recent_progress
+                _format_rendered_tail_event_line(event) for event in visible_progress
             )
         else:
             lines.append("No recent progress events.")
@@ -957,15 +1173,25 @@ def _render_active_turn_diagnostics(data: dict[str, Any]) -> None:
         typer.echo(line)
 
 
-def _render_tail_snapshot(snapshot: dict[str, Any]) -> None:
+def _render_tail_snapshot(
+    snapshot: dict[str, Any],
+    *,
+    level: _PmaVerbosityLevel = _PmaVerbosityLevel.INFO,
+    limit: Optional[int] = None,
+) -> None:
     parsed_snapshot = _PmaTailSnapshot.from_dict(snapshot)
-    for line in parsed_snapshot.render_lines():
+    for line in parsed_snapshot.render_lines(level=level, limit=limit):
         typer.echo(line)
 
 
-def _render_thread_status_snapshot(data: dict[str, Any]) -> None:
+def _render_thread_status_snapshot(
+    data: dict[str, Any],
+    *,
+    level: _PmaVerbosityLevel = _PmaVerbosityLevel.INFO,
+    limit: Optional[int] = None,
+) -> None:
     snapshot = _PmaThreadStatusSnapshot.from_dict(data)
-    for line in snapshot.render_lines():
+    for line in snapshot.render_lines(level=level, limit=limit):
         typer.echo(line)
 
 
@@ -1435,7 +1661,12 @@ def pma_thread_status(
     `status_reason`, and `assistant_text`.
     """
     hub_root = _resolve_hub_path(path)
-    params: dict[str, Any] = {"limit": limit, "level": level.value}
+    request_limit = _display_tail_fetch_limit(
+        limit=limit,
+        level=level,
+        output_json=output_json,
+    )
+    params: dict[str, Any] = {"limit": request_limit, "level": level.value}
     if since:
         params["since"] = since
     try:
@@ -1456,7 +1687,7 @@ def pma_thread_status(
     if output_json:
         typer.echo(json.dumps(data, indent=2))
         return
-    _render_thread_status_snapshot(data)
+    _render_thread_status_snapshot(data, level=level, limit=limit)
     if not include_output:
         return
 
@@ -1906,7 +2137,12 @@ def pma_thread_tail(
 ):
     """Show managed-thread tail/progress events."""
     hub_root = _resolve_hub_path(path)
-    params: dict[str, Any] = {"limit": limit, "level": level.value}
+    request_limit = _display_tail_fetch_limit(
+        limit=limit,
+        level=level,
+        output_json=output_json,
+    )
+    params: dict[str, Any] = {"limit": request_limit, "level": level.value}
     if since:
         params["since"] = since
     try:
@@ -1921,7 +2157,7 @@ def pma_thread_tail(
             if output_json:
                 typer.echo(json.dumps(data, indent=2))
             else:
-                _render_tail_snapshot(data)
+                _render_tail_snapshot(data, level=level, limit=limit)
             return
 
         headers = _auth_headers_from_env(config.server_auth_token_env)
@@ -1934,6 +2170,11 @@ def pma_thread_tail(
             timeout=httpx.Timeout(connect=10.0, read=300.0, write=10.0, pool=10.0),
         ) as response:
             response.raise_for_status()
+            info_stream_renderer = (
+                _PmaInfoTailStreamRenderer()
+                if not output_json and level == _PmaVerbosityLevel.INFO
+                else None
+            )
             for event_name, data_str, event_id in _iter_sse_events(
                 response.iter_lines()
             ):
@@ -1949,13 +2190,27 @@ def pma_thread_tail(
                     continue
                 if event_name == "state":
                     if isinstance(data, dict):
-                        _render_tail_snapshot(data)
+                        _render_tail_snapshot(data, level=level, limit=limit)
+                        if info_stream_renderer is not None:
+                            snapshot = _PmaTailSnapshot.from_dict(data)
+                            info_stream_renderer.note_snapshot_events(
+                                snapshot.display_events(level=level, limit=None)
+                            )
                     continue
                 if event_name == "tail":
                     if isinstance(data, dict):
-                        typer.echo(_format_tail_event_line(data))
+                        if info_stream_renderer is not None:
+                            parsed_event = _PmaTailEvent.from_dict(data)
+                            if parsed_event is not None:
+                                for line in info_stream_renderer.consume(parsed_event):
+                                    typer.echo(line)
+                        else:
+                            typer.echo(_format_tail_event_line(data))
                     continue
                 if event_name == "progress" and isinstance(data, dict):
+                    if info_stream_renderer is not None:
+                        for line in info_stream_renderer.flush():
+                            typer.echo(line)
                     status = data.get("turn_status") or "running"
                     elapsed = _format_seconds(data.get("elapsed_seconds"))
                     idle = _format_seconds(data.get("idle_seconds"))
@@ -1979,7 +2234,13 @@ def pma_thread_tail(
                     if isinstance(diagnostics, dict):
                         _render_active_turn_diagnostics(diagnostics)
                     if status != "running":
+                        if info_stream_renderer is not None:
+                            for line in info_stream_renderer.flush():
+                                typer.echo(line)
                         return
+            if info_stream_renderer is not None:
+                for line in info_stream_renderer.flush():
+                    typer.echo(line)
     except httpx.HTTPError as exc:
         typer.echo(f"HTTP error: {exc}", err=True)
         raise typer.Exit(code=1) from None
