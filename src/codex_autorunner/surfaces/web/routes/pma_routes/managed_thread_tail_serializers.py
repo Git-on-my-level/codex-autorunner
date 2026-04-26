@@ -764,16 +764,7 @@ def build_managed_thread_status_response(
             "lifecycle_events": snapshot.get("lifecycle_events"),
         },
         "queue_depth": queue_depth,
-        "queued_turns": [
-            {
-                "managed_turn_id": item.get("managed_turn_id"),
-                "request_kind": item.get("request_kind"),
-                "state": item.get("state"),
-                "enqueued_at": item.get("enqueued_at"),
-                "prompt_preview": truncate_text(item.get("prompt") or "", 120),
-            }
-            for item in queued_turns
-        ],
+        "queued_turns": serialize_queued_turns(queued_turns),
         "recent_progress": snapshot.get("events") or [],
         "latest_turn_id": serialized_thread.get("latest_turn_id"),
         "latest_turn_status": serialized_thread.get("latest_turn_status"),
@@ -784,10 +775,28 @@ def build_managed_thread_status_response(
     }
 
 
+def serialize_queued_turns(queued_turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "managed_turn_id": item.get("managed_turn_id"),
+            "request_kind": item.get("request_kind"),
+            "state": item.get("state"),
+            "position": index,
+            "enqueued_at": item.get("enqueued_at"),
+            "prompt_preview": truncate_text(item.get("prompt") or "", 120),
+            "model": item.get("model"),
+            "reasoning": item.get("reasoning"),
+            "client_turn_id": item.get("client_turn_id"),
+        }
+        for index, item in enumerate(queued_turns, start=1)
+    ]
+
+
 __all__ = [
     "build_managed_thread_status_response",
     "coerce_dict",
     "iso_from_event_ms",
+    "serialize_queued_turns",
     "parse_iso_datetime",
     "truncate_text",
     "_derive_active_turn_diagnostics",

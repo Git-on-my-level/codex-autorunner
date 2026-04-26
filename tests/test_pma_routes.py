@@ -44,6 +44,8 @@ from tests.pma_support.core import (
     test_pma_second_lane_item_does_not_clobber_active_turn,
     test_pma_stop_creates_artifact,
     test_pma_target_endpoints_are_removed,
+    test_pma_thread_queue_cancel_route_cancels_specific_turn,
+    test_pma_thread_queue_route_lists_pending_turns,
     test_pma_thread_reset_clears_registry,
     test_pma_thread_status_includes_queued_turns,
     test_pma_turn_events_stream_codex_respects_resume_cursor,

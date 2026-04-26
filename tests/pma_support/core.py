@@ -445,7 +445,130 @@ def test_pma_thread_status_includes_queued_turns(hub_env) -> None:
     )
     assert payload["queued_turns"][0]["request_kind"] == "message"
     assert payload["queued_turns"][0]["state"] == "queued"
+    assert payload["queued_turns"][0]["position"] == 1
     assert payload["queued_turns"][0]["prompt_preview"] == "second"
+
+
+def test_pma_thread_queue_route_lists_pending_turns(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "codex",
+                "resource_kind": "repo",
+                "resource_id": hub_env.repo_id,
+            },
+        )
+        assert create_resp.status_code == 200
+        managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+    store = PmaThreadStore(hub_env.hub_root)
+    store.create_turn(managed_thread_id, prompt="first")
+    first_queued_turn = store.create_turn(
+        managed_thread_id,
+        prompt="second",
+        busy_policy="queue",
+        queue_payload={"request": {"message_text": "second"}},
+    )
+    second_queued_turn = store.create_turn(
+        managed_thread_id,
+        prompt="third",
+        request_kind="review",
+        busy_policy="queue",
+        queue_payload={"request": {"message_text": "third", "kind": "review"}},
+    )
+    queued_items = store.list_pending_turn_queue_items(managed_thread_id)
+
+    client = TestClient(app)
+    resp = client.get(f"/hub/pma/threads/{managed_thread_id}/queue")
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["managed_thread_id"] == managed_thread_id
+    assert payload["queue_depth"] == 2
+    assert payload["queued_turns"] == [
+        {
+            "managed_turn_id": first_queued_turn["managed_turn_id"],
+            "request_kind": "message",
+            "state": "queued",
+            "position": 1,
+            "enqueued_at": queued_items[0]["enqueued_at"],
+            "prompt_preview": "second",
+            "model": None,
+            "reasoning": None,
+            "client_turn_id": None,
+        },
+        {
+            "managed_turn_id": second_queued_turn["managed_turn_id"],
+            "request_kind": "review",
+            "state": "queued",
+            "position": 2,
+            "enqueued_at": queued_items[1]["enqueued_at"],
+            "prompt_preview": "third",
+            "model": None,
+            "reasoning": None,
+            "client_turn_id": None,
+        },
+    ]
+
+
+def test_pma_thread_queue_cancel_route_cancels_specific_turn(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "codex",
+                "resource_kind": "repo",
+                "resource_id": hub_env.repo_id,
+            },
+        )
+        assert create_resp.status_code == 200
+        managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+    store = PmaThreadStore(hub_env.hub_root)
+    store.create_turn(managed_thread_id, prompt="first")
+    queued_turn = store.create_turn(
+        managed_thread_id,
+        prompt="second",
+        busy_policy="queue",
+        queue_payload={"request": {"message_text": "second"}},
+    )
+    trailing_turn = store.create_turn(
+        managed_thread_id,
+        prompt="third",
+        busy_policy="queue",
+        queue_payload={"request": {"message_text": "third"}},
+    )
+
+    client = TestClient(app)
+    resp = client.post(
+        f"/hub/pma/threads/{managed_thread_id}/queue/{queued_turn['managed_turn_id']}/cancel"
+    )
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload == {
+        "status": "ok",
+        "managed_thread_id": managed_thread_id,
+        "managed_turn_id": queued_turn["managed_turn_id"],
+        "cancelled": True,
+        "position": 1,
+        "queue_depth": 1,
+    }
+
+    cancelled_turn = store.get_turn(managed_thread_id, queued_turn["managed_turn_id"])
+    assert cancelled_turn is not None
+    assert cancelled_turn["status"] == "interrupted"
+    remaining = store.list_pending_turn_queue_items(managed_thread_id)
+    assert [item["managed_turn_id"] for item in remaining] == [
+        trailing_turn["managed_turn_id"]
+    ]
 
 
 def test_pma_chat_rejects_oversize_message(hub_env) -> None:
