@@ -99,6 +99,7 @@ class TestCodexItemDecoder:
 
     def test_methods_covers_item_family(self) -> None:
         methods = self.decoder.methods()
+        assert "item/started" in methods
         assert "item/reasoning/summaryTextDelta" in methods
         assert "item/completed" in methods
         assert "item/agentMessage/delta" in methods
@@ -106,6 +107,51 @@ class TestCodexItemDecoder:
         assert "item/toolCall/end" in methods
         assert "item/commandExecution/requestApproval" in methods
         assert "item/fileChange/requestApproval" in methods
+
+    def test_item_started_structural_event_returns_empty(self) -> None:
+        state, ctx = _ctx(
+            "item/started",
+            {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "item": {"type": "reasoning"},
+            },
+        )
+        events = self.decoder.decode(
+            "item/started",
+            {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "item": {"type": "reasoning"},
+            },
+            state,
+            ctx,
+        )
+        assert events == []
+
+    def test_item_started_review_mode_returns_progress_notice(self) -> None:
+        state, ctx = _ctx(
+            "item/started",
+            {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "item": {"enteredReviewMode": True},
+            },
+        )
+        events = self.decoder.decode(
+            "item/started",
+            {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "item": {"enteredReviewMode": True},
+            },
+            state,
+            ctx,
+        )
+        assert len(events) == 1
+        assert isinstance(events[0], RunNotice)
+        assert events[0].kind == "progress"
+        assert events[0].message == "entered review mode"
 
     def test_reasoning_delta(self) -> None:
         state, ctx = _ctx(

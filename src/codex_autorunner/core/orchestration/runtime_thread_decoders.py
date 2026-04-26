@@ -604,6 +604,7 @@ class CodexItemDecoder(MessageDecoder):
         return (
             frozenset(
                 {
+                    "item/started",
                     "item/reasoning/summaryTextDelta",
                     "item/completed",
                     "item/agentMessage/delta",
@@ -616,6 +617,18 @@ class CodexItemDecoder(MessageDecoder):
 
     def decode(self, method, params, state, ctx):
         ts = ctx.timestamp
+
+        if method == "item/started":
+            item = _coerce_dict(params.get("item"))
+            if item.get("enteredReviewMode"):
+                return [
+                    RunNotice(
+                        timestamp=ts,
+                        kind="progress",
+                        message="entered review mode",
+                    )
+                ]
+            return []
 
         if method == "item/reasoning/summaryTextDelta":
             delta = params.get("delta")
