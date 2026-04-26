@@ -191,10 +191,18 @@ def _github_review_author_login(event: ScmEvent) -> Optional[str]:
     )
 
 
+def _github_login_explicitly_whitelisted(
+    config: ScmReactionConfig,
+    login: Optional[str],
+) -> bool:
+    return login is not None and login in config.github_login_whitelist
+
+
 def _match_reaction_kind(
     event: ScmEvent,
     *,
     binding: Optional[PrBinding],
+    config: ScmReactionConfig,
 ) -> Optional[ReactionKind]:
     payload = _event_payload(event)
 
@@ -221,7 +229,7 @@ def _match_reaction_kind(
 
     if event.event_type in {"issue_comment", "pull_request_review_comment"}:
         action = _normalize_lower_text(payload.get("action"))
-        author_login = _normalize_lower_text(payload.get("author_login"))
+        author_login = _github_review_author_login(event)
         issue_author_login = _normalize_lower_text(payload.get("issue_author_login"))
         author_type = _normalize_lower_text(payload.get("author_type"))
         if action != "created":
@@ -232,9 +240,10 @@ def _match_reaction_kind(
             and author_login == issue_author_login
         ):
             return None
-        if author_type == "bot" or (
-            author_login is not None and author_login.endswith("[bot]")
-        ):
+        if (
+            author_type == "bot"
+            or (author_login is not None and author_login.endswith("[bot]"))
+        ) and not _github_login_explicitly_whitelisted(config, author_login):
             return None
         return "review_comment"
 
@@ -261,7 +270,11 @@ def route_scm_reactions(
     config: ScmReactionConfig | Mapping[str, Any] | None = None,
 ) -> list[ReactionIntent]:
     resolved_config = ScmReactionConfig.from_mapping(config)
-    reaction_kind = _match_reaction_kind(event, binding=binding)
+    reaction_kind = _match_reaction_kind(
+        event,
+        binding=binding,
+        config=resolved_config,
+    )
     if reaction_kind is None or not resolved_config.is_enabled(reaction_kind):
         return []
     if (

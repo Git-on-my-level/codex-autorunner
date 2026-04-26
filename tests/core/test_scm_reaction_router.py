@@ -431,7 +431,9 @@ def test_route_scm_reactions_parses_review_comment_id_from_api_url() -> None:
     assert intents[1].payload["comment_id"] == "77123"
 
 
-def test_route_scm_reactions_routes_bot_pull_request_review_comment() -> None:
+def test_route_scm_reactions_skips_non_whitelisted_bot_pull_request_review_comment() -> (
+    None
+):
     event = _event(
         "pull_request_review_comment",
         event_id="github:event-inline-bot-comment",
@@ -452,6 +454,38 @@ def test_route_scm_reactions_routes_bot_pull_request_review_comment() -> None:
     )
 
     assert len(intents) == 0
+
+
+def test_route_scm_reactions_routes_whitelisted_bot_pull_request_review_comment() -> (
+    None
+):
+    event = _event(
+        "pull_request_review_comment",
+        event_id="github:event-inline-whitelisted-bot-comment",
+        payload={
+            "action": "created",
+            "comment_id": "2846",
+            "author_login": "chatgpt-codex-connector",
+            "author_type": "Bot",
+            "issue_author_login": "pr-author",
+            "body": "Please cover the whitelist override path.",
+            "path": "src/codex_autorunner/core/scm_reaction_router.py",
+            "line": 239,
+        },
+    )
+
+    intents = route_scm_reactions(
+        event,
+        binding=_binding(thread_target_id="thread-inline-bot"),
+        config=ScmReactionConfig(github_login_whitelist=("chatgpt-codex-connector",)),
+    )
+
+    assert len(intents) == 2
+    assert intents[0].reaction_kind == "review_comment"
+    assert intents[0].operation_kind == "enqueue_managed_turn"
+    assert intents[1].reaction_kind == "review_comment"
+    assert intents[1].operation_kind == "react_pr_review_comment"
+    assert intents[1].payload["comment_id"] == "2846"
 
 
 def test_route_scm_reactions_still_reacts_to_review_comment_without_chat_target() -> (
