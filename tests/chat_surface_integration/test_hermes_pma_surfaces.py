@@ -46,6 +46,20 @@ async def test_discord_hermes_pma_uses_official_placeholder_lifecycle(
         )
 
         progress_message_id = str(rest.message_ops[0]["message_id"])
+        finalized_record = next(
+            record
+            for record in rest.log_records
+            if record.get("event") == "discord.turn.managed_thread_finalized"
+        )
+        assert finalized_record.get("preview_message_id") == progress_message_id
+
+        delivery_started = next(
+            record
+            for record in rest.log_records
+            if record.get("event") == "discord.turn.delivery_started"
+        )
+        assert delivery_started.get("preview_message_id") == progress_message_id
+
         working_edits = [
             op
             for op in rest.message_ops

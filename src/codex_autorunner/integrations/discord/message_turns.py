@@ -1859,12 +1859,16 @@ async def _run_discord_orchestrated_turn_for_message(
                     channel_id=channel_id,
                     source_message_id=source_message_id,
                 )
-        if not reusable_progress_message_id:
-            reusable_progress_message_id = _claim_discord_reusable_progress_message(
-                service,
-                thread_target_id=managed_thread_id,
-                source_message_id=source_message_id,
-            )
+    if not reusable_progress_message_id:
+        # PMA message ingress posts an immediate "Received. Preparing turn..."
+        # placeholder before the managed-turn runner starts. Claim it here so the
+        # runner edits/deletes that original message instead of creating a second,
+        # untracked progress anchor that leaves the first placeholder behind.
+        reusable_progress_message_id = _claim_discord_reusable_progress_message(
+            service,
+            thread_target_id=managed_thread_id,
+            source_message_id=source_message_id,
+        )
 
     async def _load_progress_lease() -> Any:
         return await _get_discord_progress_lease(service, lease_id=progress_lease_id)

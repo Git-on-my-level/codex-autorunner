@@ -8,6 +8,9 @@ from types import SimpleNamespace
 import pytest
 
 from codex_autorunner.integrations.app_server.event_buffer import AppServerEventBuffer
+from codex_autorunner.integrations.discord import (
+    managed_thread_startup_recovery as discord_startup_recovery_module,
+)
 from codex_autorunner.integrations.discord import service as discord_service_module
 from codex_autorunner.integrations.discord.config import (
     DiscordBotConfig,
@@ -170,6 +173,91 @@ async def test_service_startup_runs_managed_thread_recovery_hook(
         assert called == ["DiscordBotService"]
     finally:
         await store.close()
+
+
+@pytest.mark.anyio
+async def test_startup_recovery_cleans_interrupted_progress_leases(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+    cleanup_calls: list[dict[str, object]] = []
+
+    async def _fake_recover_surface_managed_thread_executions_on_startup(
+        service: object,
+        **kwargs: object,
+    ) -> None:
+        _ = service
+        captured.update(kwargs)
+
+    async def _fake_cleanup_discord_terminal_progress_leases(
+        owner: object,
+        *,
+        managed_thread_id: str,
+        execution_id: str | None,
+        channel_id: str,
+        note: str,
+        record_prefix: str,
+    ) -> int:
+        cleanup_calls.append(
+            {
+                "owner": owner,
+                "managed_thread_id": managed_thread_id,
+                "execution_id": execution_id,
+                "channel_id": channel_id,
+                "note": note,
+                "record_prefix": record_prefix,
+            }
+        )
+        return 1
+
+    monkeypatch.setattr(
+        discord_startup_recovery_module,
+        "recover_surface_managed_thread_executions_on_startup",
+        _fake_recover_surface_managed_thread_executions_on_startup,
+    )
+    monkeypatch.setattr(
+        discord_startup_recovery_module,
+        "cleanup_discord_terminal_progress_leases",
+        _fake_cleanup_discord_terminal_progress_leases,
+    )
+
+    service = SimpleNamespace(
+        _config=SimpleNamespace(root=tmp_path),
+        _logger=logging.getLogger("test.discord.startup.interrupted_cleanup"),
+    )
+
+    await discord_startup_recovery_module.recover_managed_thread_executions_on_startup(
+        service
+    )
+
+    build_execution_hooks = captured["build_execution_hooks"]
+    hooks = build_execution_hooks(
+        service,
+        "channel-1",
+        "thread-1",
+        SimpleNamespace(workspace_root=tmp_path),
+    )
+    assert hooks.on_execution_finalized is not None
+
+    await hooks.on_execution_finalized(
+        SimpleNamespace(execution=SimpleNamespace(execution_id="turn-1")),
+        SimpleNamespace(status="interrupted", managed_turn_id="turn-1"),
+    )
+
+    assert cleanup_calls == [
+        {
+            "owner": service,
+            "managed_thread_id": "thread-1",
+            "execution_id": "turn-1",
+            "channel_id": "channel-1",
+            "note": "Status: this turn was interrupted.",
+            "record_prefix": (
+                "discord:startup-recovery-interrupted-progress-cleanup:"
+                "thread-1:turn-1"
+            ),
+        }
+    ]
 
 
 @pytest.mark.anyio

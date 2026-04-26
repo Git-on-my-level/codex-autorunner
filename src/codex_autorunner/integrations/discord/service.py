@@ -5313,6 +5313,7 @@ class DiscordBotService:
         shared_state = None
         delivery_state = None
         delivery_attempt_count = None
+        clear_delivery_failure_marker = False
         if isinstance(cursor, dict):
             delivery_state = str(cursor.get("state") or "").strip() or None
             if delivery_state in {"pending", "failed"}:
@@ -5321,6 +5322,8 @@ class DiscordBotService:
                 record = await self._store.get_interaction(interaction_id)
                 if record is not None and record.execution_status == "completed":
                     shared_state = ChatOperationState.COMPLETED
+            if delivery_state in {"pending", "completed"}:
+                clear_delivery_failure_marker = True
             record = await self._store.get_interaction(interaction_id)
             if record is not None:
                 delivery_attempt_count = int(record.attempt_count or 0)
@@ -5329,12 +5332,19 @@ class DiscordBotService:
             if record is not None and record.execution_status == "completed":
                 shared_state = ChatOperationState.COMPLETED
             delivery_state = "delivered"
+            clear_delivery_failure_marker = True
+        patch_kwargs: dict[str, Any] = {
+            "state": shared_state,
+            "delivery_state": delivery_state,
+            "delivery_cursor": cursor,
+            "delivery_attempt_count": delivery_attempt_count,
+        }
+        if clear_delivery_failure_marker:
+            patch_kwargs["terminal_outcome"] = None
+            patch_kwargs["terminal_detail"] = None
         await self._patch_chat_operation(
             interaction_id,
-            state=shared_state,
-            delivery_state=delivery_state,
-            delivery_cursor=cursor,
-            delivery_attempt_count=delivery_attempt_count,
+            **patch_kwargs,
         )
 
     async def _mark_interaction_scheduler_state(

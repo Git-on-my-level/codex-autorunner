@@ -293,7 +293,7 @@ class SQLiteChatOperationLedger(ChatOperationStore):
         limit: int = 200,
     ) -> list[ChatOperationSnapshot]:
         params: list[Any] = []
-        clauses = ["terminal_outcome IS NULL"]
+        clauses = ["(terminal_outcome IS NULL OR terminal_outcome = 'delivery_failed')"]
         placeholders = ", ".join("?" for _ in CHAT_OPERATION_TERMINAL_STATES)
         clauses.append(f"state NOT IN ({placeholders})")
         params.extend(state.value for state in CHAT_OPERATION_TERMINAL_STATES)

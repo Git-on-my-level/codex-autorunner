@@ -32,6 +32,8 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from codex_autorunner.core.orchestration import (
+    ChatOperationSnapshot,
+    ChatOperationState,
     SQLiteChatOperationLedger,
     initialize_orchestration_sqlite,
 )
@@ -419,6 +421,59 @@ async def test_on_dispatch_rejected_normalization_sends_error_and_skips_schedule
         error_text = service._respond_ephemeral.call_args[0][2]
         assert "parse" in error_text.lower() or "retry" in error_text.lower()
         service._command_runner.submit.assert_not_called()
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_delivery_cursor_clears_stale_delivery_failed_marker(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    operation_store = SQLiteChatOperationLedger(tmp_path, durable=False)
+    try:
+        service = _build_recovery_service(
+            store=store,
+            rest=_ChaosRest(),
+            operation_store=operation_store,
+        )
+        await store.register_interaction(
+            interaction_id="inter-delivery-1",
+            interaction_token="token-1",
+            interaction_kind=InteractionKind.SLASH_COMMAND.value,
+            channel_id="chan-1",
+            guild_id="guild-1",
+            user_id="user-1",
+            metadata_json={},
+        )
+        operation_store.upsert_operation(
+            ChatOperationSnapshot(
+                operation_id="inter-delivery-1",
+                surface_kind="discord",
+                surface_operation_key="interaction:inter-delivery-1",
+                state=ChatOperationState.DELIVERING,
+                delivery_state="failed",
+                delivery_cursor={"operation": "send_followup", "state": "failed"},
+                delivery_attempt_count=1,
+                terminal_outcome="delivery_failed",
+                terminal_detail="discord_send_deferred",
+                created_at="2026-04-15T01:00:00Z",
+                updated_at="2026-04-15T01:00:00Z",
+            )
+        )
+
+        await service._record_interaction_delivery_cursor(
+            "inter-delivery-1",
+            {"operation": "send_followup", "state": "pending"},
+        )
+
+        snapshot = operation_store.get_operation("inter-delivery-1")
+        assert snapshot is not None
+        assert snapshot.state is ChatOperationState.DELIVERING
+        assert snapshot.delivery_state == "pending"
+        assert snapshot.terminal_outcome is None
+        assert snapshot.terminal_detail is None
     finally:
         await store.close()
 
