@@ -2450,7 +2450,7 @@ def pma_thread_interrupt(
             _build_pma_url(config, f"/threads/{managed_thread_id}/interrupt"),
             token_env=config.server_auth_token_env,
         )
-    except (ValueError, OSError) as exc:
+    except (httpx.HTTPError, ValueError, OSError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
