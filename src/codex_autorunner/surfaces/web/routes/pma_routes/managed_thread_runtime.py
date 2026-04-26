@@ -899,14 +899,20 @@ def build_managed_thread_runtime_routes(
                 delivery_payload=options.delivery_payload,
             )
 
+        def _queue_depth() -> int:
+            resolver = getattr(service, "get_queue_depth", None)
+            if not callable(resolver):
+                return 0
+            return int(resolver(managed_thread_id))
+
         if getattr(started_execution.execution, "status", "running") == "queued":
             running_execution = service.get_running_execution(managed_thread_id)
-            return build_queued_send_payload(
+            queued_payload = build_queued_send_payload(
                 managed_thread_id=managed_thread_id,
                 managed_turn_id=managed_turn_id,
                 backend_thread_id=backend_thread_id or "",
                 delivery_payload=options.delivery_payload,
-                queue_depth=service.get_queue_depth(managed_thread_id),
+                queue_depth=_queue_depth(),
                 active_managed_turn_id=(
                     running_execution.execution_id
                     if running_execution is not None
@@ -914,6 +920,8 @@ def build_managed_thread_runtime_routes(
                 ),
                 notification=notification,
             )
+            ensure_managed_thread_queue_worker(request.app, managed_thread_id)
+            return queued_payload
 
         accepted_payload = build_accepted_send_payload(
             managed_thread_id=managed_thread_id,
@@ -928,7 +936,7 @@ def build_managed_thread_runtime_routes(
             async def _background_run() -> None:
                 try:
                     await _run_execution(started_execution)
-                    if service.get_queue_depth(managed_thread_id) > 0:
+                    if _queue_depth() > 0:
                         ensure_managed_thread_queue_worker(
                             request.app,
                             managed_thread_id,
@@ -983,6 +991,11 @@ def build_managed_thread_runtime_routes(
             return accepted_payload
 
         response = await _run_execution(started_execution)
+        if _queue_depth() > 0:
+            ensure_managed_thread_queue_worker(
+                request.app,
+                managed_thread_id,
+            )
         response["send_state"] = "accepted"
         response["execution_state"] = "completed"
         if notification is not None:

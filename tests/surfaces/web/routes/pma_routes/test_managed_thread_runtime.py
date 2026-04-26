@@ -2072,6 +2072,162 @@ def test_managed_thread_message_route_uses_live_runtime_binding_for_compact_seed
     assert runtime_prompt.endswith("hello from route\n</user_message>\n")
 
 
+def test_managed_thread_message_route_queued_send_starts_queue_worker(
+    hub_env,
+    monkeypatch,
+) -> None:
+    app = build_pma_hub_app(hub_env.hub_root)
+    store = PmaThreadStore(hub_env.hub_root)
+    created = store.create_thread(
+        "codex", hub_env.repo_root.resolve(), repo_id=hub_env.repo_id
+    )
+    managed_thread_id = str(created["managed_thread_id"])
+    ensure_calls: list[tuple[Any, str]] = []
+
+    class FakeService:
+        def get_running_execution(self, thread_target_id: str):
+            assert thread_target_id == managed_thread_id
+            return SimpleNamespace(execution_id="managed-turn-active")
+
+        def get_queue_depth(self, thread_target_id: str) -> int:
+            assert thread_target_id == managed_thread_id
+            return 1
+
+    async def _fake_begin(
+        service, request, *, client_request_id=None, sandbox_policy=None
+    ):
+        _ = service, request, client_request_id, sandbox_policy
+        return SimpleNamespace(
+            execution=SimpleNamespace(
+                execution_id="managed-turn-queued",
+                backend_id=None,
+                status="queued",
+            ),
+            thread=SimpleNamespace(backend_thread_id="backend-thread-1"),
+            workspace_root=hub_env.repo_root.resolve(),
+            request=request,
+        )
+
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "_build_managed_thread_orchestration_service",
+        lambda request, *, thread_store=None: FakeService(),
+    )
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "begin_runtime_thread_execution",
+        _fake_begin,
+    )
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "ensure_managed_thread_queue_worker",
+        lambda app_obj, thread_target_id: ensure_calls.append(
+            (app_obj, thread_target_id)
+        ),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/messages",
+            json={"message": "queued follow-up"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["send_state"] == "queued"
+    assert len(ensure_calls) == 1
+    assert ensure_calls[0][1] == managed_thread_id
+
+
+def test_managed_thread_message_route_direct_execution_starts_queue_worker_for_followups(
+    hub_env,
+    monkeypatch,
+) -> None:
+    app = build_pma_hub_app(hub_env.hub_root)
+    store = PmaThreadStore(hub_env.hub_root)
+    created = store.create_thread(
+        "codex", hub_env.repo_root.resolve(), repo_id=hub_env.repo_id
+    )
+    managed_thread_id = str(created["managed_thread_id"])
+    ensure_calls: list[tuple[Any, str]] = []
+
+    class FakeService:
+        def get_thread_target(self, thread_target_id: str):
+            return SimpleNamespace(
+                thread_target_id=thread_target_id,
+                backend_thread_id="backend-thread-1",
+            )
+
+        def record_execution_result(self, *args, **kwargs):
+            _ = args, kwargs
+            return SimpleNamespace(status="ok", error=None)
+
+        def get_execution(self, thread_target_id: str, execution_id: str):
+            _ = thread_target_id, execution_id
+            return None
+
+        def get_queue_depth(self, thread_target_id: str) -> int:
+            assert thread_target_id == managed_thread_id
+            return 1
+
+    async def _fake_begin(
+        service, request, *, client_request_id=None, sandbox_policy=None
+    ):
+        _ = service, client_request_id, sandbox_policy
+        return SimpleNamespace(
+            execution=SimpleNamespace(
+                execution_id="managed-turn-1",
+                backend_id="backend-turn-1",
+                status="running",
+            ),
+            thread=SimpleNamespace(backend_thread_id="backend-thread-1"),
+            workspace_root=hub_env.repo_root.resolve(),
+            request=request,
+        )
+
+    async def _fake_await(*args, **kwargs):
+        _ = args, kwargs
+        return RuntimeThreadOutcome(
+            status="ok",
+            assistant_text="assistant-output",
+            error=None,
+            backend_thread_id="backend-thread-1",
+            backend_turn_id="backend-turn-1",
+        )
+
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "_build_managed_thread_orchestration_service",
+        lambda request, *, thread_store=None: FakeService(),
+    )
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "begin_runtime_thread_execution",
+        _fake_begin,
+    )
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "ensure_managed_thread_queue_worker",
+        lambda app_obj, thread_target_id: ensure_calls.append(
+            (app_obj, thread_target_id)
+        ),
+    )
+    _patch_outcome_driven_finalization(
+        monkeypatch,
+        outcome_builder=_fake_await,
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/messages",
+            json={"message": "hello from route"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["execution_state"] == "completed"
+    assert len(ensure_calls) == 1
+    assert ensure_calls[0][1] == managed_thread_id
+
+
 def test_managed_thread_message_route_preserves_literal_message_whitespace(
     hub_env,
     monkeypatch,
