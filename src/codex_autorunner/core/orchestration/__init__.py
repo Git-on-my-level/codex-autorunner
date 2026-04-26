@@ -15,10 +15,12 @@ from .catalog import (
     merge_agent_capabilities,
 )
 from .chat_operation_ledger import (
-    ChatOperationRecoveryAction,
-    ChatOperationRecoveryDecision,
     ChatOperationRegistration,
     SQLiteChatOperationLedger,
+)
+from .chat_operation_recovery import (
+    ChatOperationRecoveryAction,
+    ChatOperationRecoveryDecision,
     plan_chat_operation_recovery,
 )
 from .chat_operation_state import (

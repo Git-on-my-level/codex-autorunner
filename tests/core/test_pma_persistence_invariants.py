@@ -1,13 +1,9 @@
-"""Characterization tests that lock PMA canonical-versus-mirror ownership.
+"""Characterization tests that lock PMA canonical ownership.
 
 These tests verify that:
 - Orchestration SQLite tables remain the canonical state owners.
-- JSON/JSONL/legacy-SQLite mirrors are convenience artifacts that can be
-  deleted without affecting reload or correctness.
 - Thread-store and PmaQueue share `orch_queue_items` with compatible row shapes.
 - The automation store's full-table rewrite behavior is characterized.
-
-These tests are behavior-preserving guards for the block-030 refactoring.
 """
 
 from __future__ import annotations
@@ -72,7 +68,7 @@ class TestAutomationCanonicalInvariants:
         assert len(rows) == 1
         assert rows[0]["state"] == "active"
 
-    def test_subscription_survives_json_mirror_deletion(self, tmp_path: Path) -> None:
+    def test_subscription_survives_store_reopen(self, tmp_path: Path) -> None:
         hub_root = tmp_path / "hub"
         store = PmaAutomationStore(hub_root)
         thread_id = _create_thread(hub_root)
@@ -83,9 +79,6 @@ class TestAutomationCanonicalInvariants:
             to_state="completed",
             lane_id="pma:default",
         )
-        mirror_path = _automation_json_mirror_path(hub_root)
-        assert mirror_path.exists(), "expected JSON mirror to be written"
-        mirror_path.unlink()
         reloaded = PmaAutomationStore(hub_root)
         subs = reloaded.list_subscriptions(state="active")
         assert len(subs) == 1
@@ -115,7 +108,7 @@ class TestAutomationCanonicalInvariants:
         assert len(rows) == 1
         assert rows[0]["state"] == "pending"
 
-    def test_timer_survives_json_mirror_deletion(self, tmp_path: Path) -> None:
+    def test_timer_survives_store_reopen(self, tmp_path: Path) -> None:
         hub_root = tmp_path / "hub"
         store = PmaAutomationStore(hub_root)
         thread_id = _create_thread(hub_root)
@@ -133,7 +126,6 @@ class TestAutomationCanonicalInvariants:
             due_at_seconds=3600,
             lane_id="pma:default",
         )
-        _automation_json_mirror_path(hub_root).unlink()
         reloaded = PmaAutomationStore(hub_root)
         timers = reloaded.list_timers(state="pending")
         assert len(timers) == 1
@@ -162,7 +154,7 @@ class TestAutomationCanonicalInvariants:
         assert len(rows) == 1
         assert rows[0]["state"] == "pending"
 
-    def test_wakeup_survives_json_mirror_deletion(self, tmp_path: Path) -> None:
+    def test_wakeup_survives_store_reopen(self, tmp_path: Path) -> None:
         hub_root = tmp_path / "hub"
         store = PmaAutomationStore(hub_root)
         thread_id = _create_thread(hub_root)
@@ -179,7 +171,6 @@ class TestAutomationCanonicalInvariants:
             lane_id="pma:default",
             source="timer",
         )
-        _automation_json_mirror_path(hub_root).unlink()
         reloaded = PmaAutomationStore(hub_root)
         wakeups = reloaded.list_pending_wakeups()
         assert len(wakeups) == 1
@@ -231,28 +222,6 @@ class TestAutomationCanonicalInvariants:
         matched = [s for s in all_subs if s["subscription_id"] == sub_id]
         assert len(matched) == 1
         assert matched[0]["state"] == "cancelled"
-
-    def test_json_mirror_is_written_after_each_mutation(self, tmp_path: Path) -> None:
-        hub_root = tmp_path / "hub"
-        store = PmaAutomationStore(hub_root)
-        thread_id = _create_thread(hub_root)
-        mirror_path = _automation_json_mirror_path(hub_root)
-
-        store.create_subscription(
-            thread_id=thread_id,
-            event_types=["lifecycle"],
-            from_state="running",
-            to_state="completed",
-            lane_id="pma:default",
-        )
-        assert mirror_path.exists()
-        raw = json.loads(mirror_path.read_text())
-        assert len(raw["subscriptions"]) == 1
-
-        sub_id = store.list_subscriptions(state="active")[0]["subscription_id"]
-        store.cancel_subscription(sub_id)
-        raw2 = json.loads(mirror_path.read_text())
-        assert raw2["subscriptions"][0]["state"] == "cancelled"
 
     def test_cancel_then_purge_subscription_removes_rows(self, tmp_path: Path) -> None:
         hub_root = tmp_path / "hub"
@@ -735,25 +704,6 @@ class TestLegacyThreadMirrorInvariant:
 
 
 class TestMirrorFileSyncInvariants:
-    def test_automation_mirror_created_on_first_subscription(
-        self, tmp_path: Path
-    ) -> None:
-        hub_root = tmp_path / "hub"
-        store = PmaAutomationStore(hub_root)
-        thread_id = _create_thread(hub_root)
-        store.create_subscription(
-            thread_id=thread_id,
-            event_types=["lifecycle"],
-            from_state="running",
-            to_state="completed",
-            lane_id="pma:default",
-        )
-        mirror = _automation_json_mirror_path(hub_root)
-        assert mirror.exists()
-        data = json.loads(mirror.read_text())
-        assert "subscriptions" in data
-        assert len(data["subscriptions"]) == 1
-
     def test_queue_mirror_created_on_enqueue(self, tmp_path: Path) -> None:
         hub_root = tmp_path / "hub"
         queue = PmaQueue(hub_root)
@@ -841,33 +791,6 @@ class TestAutomationLoadFallbackBehavior:
         assert isinstance(state["subscriptions"], list)
         assert isinstance(state["timers"], list)
         assert isinstance(state["wakeups"], list)
-
-    def test_load_falls_back_to_json_mirror_when_sqlite_tables_absent(
-        self, tmp_path: Path
-    ) -> None:
-        hub_root = tmp_path / "hub"
-        store = PmaAutomationStore(hub_root)
-        thread_id = _create_thread(hub_root)
-        store.create_subscription(
-            thread_id=thread_id,
-            event_types=["lifecycle"],
-            from_state="running",
-            to_state="completed",
-            lane_id="pma:default",
-        )
-
-        mirror_path = _automation_json_mirror_path(hub_root)
-        assert mirror_path.exists()
-
-        with open_orchestration_sqlite(hub_root, durable=False) as conn:
-            conn.execute("DROP TABLE IF EXISTS orch_automation_subscriptions")
-            conn.execute("DROP TABLE IF EXISTS orch_automation_timers")
-            conn.execute("DROP TABLE IF EXISTS orch_automation_wakeups")
-            conn.commit()
-
-        reloaded = PmaAutomationStore(hub_root)
-        state = reloaded.load()
-        assert len(state["subscriptions"]) == 1
 
 
 class TestAutomationSaveFullTableRewriteCharacterization:

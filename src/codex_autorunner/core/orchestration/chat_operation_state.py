@@ -1,16 +1,17 @@
 """Control-plane contract for shared chat-surface operation state.
 
-This module is intentionally placed in `core/orchestration` because the shared
-chat operation state machine and durable snapshot shape are control-plane
-authority. Adapter-layer code may render or mirror these states, but it must
-not redefine them or become the long-term source of truth for recovery.
+This module is the sole authority for chat operation lifecycle state and
+transition validation. All adapters project from these states; none may
+redefine them or own independent lifecycle or recovery policy.
 
-Two distinctions matter for future tickets:
+Architectural invariants:
 
-- `ACKNOWLEDGED` and `VISIBLE` are separate because an adapter can accept a
-  transport interaction before it has produced a visible placeholder or anchor.
-- `DELIVERING` is still control-plane state because delivery retry and recovery
+- ``ACKNOWLEDGED`` and ``VISIBLE`` are separate because an adapter can accept
+  a transport interaction before it has produced a visible placeholder.
+- ``DELIVERING`` is control-plane state because delivery retry and recovery
   must be driven by durable truth rather than transport-local message objects.
+- New states must extend the transition table here rather than creating
+  transport-specific enums.
 """
 
 from __future__ import annotations
@@ -23,9 +24,9 @@ from typing import Any, Mapping, Optional, Protocol, runtime_checkable
 class ChatOperationState(str, Enum):
     """Authoritative lifecycle states for one surface-visible chat operation.
 
-    Future tickets may add finer-grained state, but they must preserve the
-    separation of concerns encoded here: control plane owns lifecycle truth,
-    adapters own presentation semantics derived from it.
+    The shared chat operation state machine is the only supported authority
+    for lifecycle and recovery decisions. Adapters project presentation
+    semantics from these states but must not reinterpret them.
     """
 
     RECEIVED = "received"
@@ -52,10 +53,6 @@ CHAT_OPERATION_TERMINAL_STATES = frozenset(
     }
 )
 
-# Future tickets may fill in finer-grained implementation details, but they
-# must preserve the broad lifecycle envelope encoded here so Telegram and
-# Discord converge on one shared operation model. When new states are added,
-# they should extend this table rather than creating transport-specific enums.
 CHAT_OPERATION_ALLOWED_TRANSITIONS: dict[
     ChatOperationState, frozenset[ChatOperationState]
 ] = {
@@ -67,6 +64,8 @@ CHAT_OPERATION_ALLOWED_TRANSITIONS: dict[
             ChatOperationState.QUEUED,
             ChatOperationState.RUNNING,
             ChatOperationState.INTERRUPTING,
+            ChatOperationState.DELIVERING,
+            ChatOperationState.COMPLETED,
             ChatOperationState.CANCELLED,
             ChatOperationState.FAILED,
         }
@@ -135,6 +134,7 @@ CHAT_OPERATION_ALLOWED_TRANSITIONS: dict[
             ChatOperationState.COMPLETED,
             ChatOperationState.INTERRUPTED,
             ChatOperationState.FAILED,
+            ChatOperationState.CANCELLED,
         }
     ),
     ChatOperationState.INTERRUPTING: frozenset(

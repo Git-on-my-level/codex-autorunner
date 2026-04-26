@@ -1,17 +1,14 @@
 from __future__ import annotations
 
-import json
 import logging
 
 import pytest
 
 from codex_autorunner.core.orchestration import OrchestrationBindingStore
-from codex_autorunner.core.pma_automation_persistence import PmaAutomationPersistence
 from codex_autorunner.core.pma_automation_store import (
     PmaAutomationStore,
     PmaAutomationThreadNotFoundError,
 )
-from codex_autorunner.core.pma_automation_types import default_pma_automation_state
 from codex_autorunner.core.pma_domain.models import PmaDispatchDecision
 from codex_autorunner.core.pma_thread_store import (
     PmaThreadStore,
@@ -637,65 +634,6 @@ def test_notify_once_subscription_cancels_after_first_match(tmp_path) -> None:
     assert second["created"] == 0
 
 
-def test_load_migrates_legacy_notify_once_json_to_canonical_max_matches(
-    tmp_path,
-) -> None:
-    persistence = PmaAutomationPersistence(tmp_path)
-    legacy_state = default_pma_automation_state()
-    legacy_state["subscriptions"] = [
-        {
-            "subscription_id": "sub-1",
-            "created_at": "2026-03-13T00:00:00Z",
-            "updated_at": "2026-03-13T00:00:00Z",
-            "state": "active",
-            "event_types": ["managed_thread_completed"],
-            "thread_id": "thread-1",
-            "lane_id": "pma:lane-next",
-            "notify_once": True,
-            "metadata": {"notify_once": True, "source": "legacy"},
-        }
-    ]
-    persistence.save(legacy_state)
-
-    state = PmaAutomationStore(tmp_path).load()
-
-    assert state["subscriptions"][0]["max_matches"] == 1
-    assert "notify_once" not in state["subscriptions"][0]
-    assert state["subscriptions"][0]["metadata"] == {"source": "legacy"}
-
-    persisted = json.loads(persistence.path.read_text(encoding="utf-8"))
-    assert persisted["subscriptions"][0]["max_matches"] == 1
-    assert "notify_once" not in persisted["subscriptions"][0]
-    assert persisted["subscriptions"][0]["metadata"] == {"source": "legacy"}
-
-
-def test_load_migrates_notify_once_from_metadata_only_to_max_matches(
-    tmp_path,
-) -> None:
-    """Regression: metadata.notify_once must migrate even without a top-level key."""
-    persistence = PmaAutomationPersistence(tmp_path)
-    legacy_state = default_pma_automation_state()
-    legacy_state["subscriptions"] = [
-        {
-            "subscription_id": "sub-1",
-            "created_at": "2026-03-13T00:00:00Z",
-            "updated_at": "2026-03-13T00:00:00Z",
-            "state": "active",
-            "event_types": ["managed_thread_completed"],
-            "thread_id": "thread-1",
-            "lane_id": "pma:lane-next",
-            "metadata": {"notify_once": True, "source": "legacy"},
-        }
-    ]
-    persistence.save(legacy_state)
-
-    state = PmaAutomationStore(tmp_path).load()
-
-    assert state["subscriptions"][0]["max_matches"] == 1
-    assert "notify_once" not in state["subscriptions"][0]
-    assert state["subscriptions"][0]["metadata"] == {"source": "legacy"}
-
-
 def test_timer_rejects_invalid_due_at_timestamp(tmp_path) -> None:
     store = PmaAutomationStore(tmp_path)
     with pytest.raises(ValueError):
@@ -962,3 +900,230 @@ def test_post_wakeup_rebind_does_not_mutate_dispatch_decision(tmp_path) -> None:
         reloaded[0]["metadata"]["dispatch_decision"]["attempts"][0]["surface_kind"]
         == "discord"
     )
+
+
+def test_enqueue_wakeup_persists_dispatch_decision_atomically(tmp_path) -> None:
+    store = PmaAutomationStore(tmp_path, durable=False)
+
+    wakeup, deduped = store.enqueue_wakeup(
+        source="automation",
+        repo_id="repo-1",
+        metadata={
+            "delivery_target": {"surface_kind": "discord", "surface_key": "ch-1"}
+        },
+    )
+
+    assert deduped is False
+    assert "dispatch_decision" in wakeup.metadata
+    assert isinstance(wakeup.metadata["dispatch_decision"], dict)
+
+    reloaded = PmaAutomationStore(tmp_path, durable=False)
+    pending = reloaded.list_pending_wakeups(limit=10)
+    assert len(pending) == 1
+    assert pending[0]["wakeup_id"] == wakeup.wakeup_id
+    assert "dispatch_decision" in pending[0]["metadata"]
+    assert (
+        pending[0]["metadata"]["dispatch_decision"]
+        == wakeup.metadata["dispatch_decision"]
+    )
+
+
+def test_notify_transition_persists_dispatch_decision_atomically(tmp_path) -> None:
+    store = PmaAutomationStore(tmp_path, durable=False)
+    thread_id = _create_managed_thread(tmp_path, surface_kind="discord")
+
+    store.create_subscription(
+        {"event_type": "managed_thread_completed", "thread_id": thread_id}
+    )
+
+    store.notify_transition(
+        {
+            "event_type": "managed_thread_completed",
+            "thread_id": thread_id,
+            "from_state": "running",
+            "to_state": "completed",
+            "transition_id": f"{thread_id}:completed",
+        }
+    )
+
+    reloaded = PmaAutomationStore(tmp_path, durable=False)
+    pending = reloaded.list_pending_wakeups(limit=10)
+    assert len(pending) == 1
+    assert "dispatch_decision" in pending[0]["metadata"]
+    decision = pending[0]["metadata"]["dispatch_decision"]
+    assert isinstance(decision["attempts"], list)
+    assert len(decision["attempts"]) > 0
+
+
+def test_enqueue_wakeup_recovery_sees_coherent_state_after_reopen(tmp_path) -> None:
+    store = PmaAutomationStore(tmp_path, durable=False)
+
+    store.enqueue_wakeup(
+        source="automation",
+        repo_id="repo-1",
+        idempotency_key="recovery-key-1",
+        metadata={
+            "delivery_target": {"surface_kind": "discord", "surface_key": "ch-1"}
+        },
+    )
+
+    reopened = PmaAutomationStore(tmp_path, durable=False)
+    pending = reopened.list_pending_wakeups(limit=10)
+    assert len(pending) == 1
+    wakeup = pending[0]
+    assert wakeup["idempotency_key"] == "recovery-key-1"
+    assert wakeup["state"] == "pending"
+    assert "dispatch_decision" in wakeup["metadata"]
+    decision = wakeup["metadata"]["dispatch_decision"]
+    assert decision["requested_delivery"] == "auto"
+    assert isinstance(decision["attempts"], list)
+    assert len(decision["attempts"]) > 0
+
+
+def test_notify_transition_recovery_sees_coherent_state_after_reopen(tmp_path) -> None:
+    store = PmaAutomationStore(tmp_path, durable=False)
+    thread_id = _create_managed_thread(tmp_path, surface_kind="telegram")
+
+    store.create_subscription(
+        {"event_type": "managed_thread_completed", "thread_id": thread_id}
+    )
+    store.notify_transition(
+        {
+            "event_type": "managed_thread_completed",
+            "thread_id": thread_id,
+            "from_state": "running",
+            "to_state": "completed",
+            "transition_id": f"{thread_id}:completed",
+        }
+    )
+
+    reopened = PmaAutomationStore(tmp_path, durable=False)
+    pending = reopened.list_pending_wakeups(limit=10)
+    assert len(pending) == 1
+    wakeup = pending[0]
+    assert wakeup["state"] == "pending"
+    assert "dispatch_decision" in wakeup["metadata"]
+    decision = wakeup["metadata"]["dispatch_decision"]
+    assert decision["requested_delivery"] == "auto"
+    assert isinstance(decision["attempts"], list)
+    assert len(decision["attempts"]) > 0
+
+
+def test_durable_enqueue_wakeup_coherent_after_crash_simulation(tmp_path) -> None:
+    store = PmaAutomationStore(tmp_path, durable=True)
+
+    wakeup, deduped = store.enqueue_wakeup(
+        source="automation",
+        repo_id="repo-1",
+        idempotency_key="crash-key-1",
+        metadata={
+            "delivery_target": {"surface_kind": "discord", "surface_key": "ch-1"}
+        },
+    )
+    assert deduped is False
+
+    reopened = PmaAutomationStore(tmp_path, durable=True)
+    pending = reopened.list_pending_wakeups(limit=10)
+    assert len(pending) == 1
+    recovered = pending[0]
+    assert recovered["wakeup_id"] == wakeup.wakeup_id
+    assert recovered["state"] == "pending"
+    assert "dispatch_decision" in recovered["metadata"]
+    assert (
+        recovered["metadata"]["dispatch_decision"]
+        == wakeup.metadata["dispatch_decision"]
+    )
+
+
+def test_durable_notify_transition_coherent_after_crash_simulation(tmp_path) -> None:
+    store = PmaAutomationStore(tmp_path, durable=True)
+    thread_id = _create_managed_thread(tmp_path, surface_kind="discord")
+
+    store.create_subscription(
+        {"event_type": "managed_thread_completed", "thread_id": thread_id}
+    )
+    store.notify_transition(
+        {
+            "event_type": "managed_thread_completed",
+            "thread_id": thread_id,
+            "from_state": "running",
+            "to_state": "completed",
+            "transition_id": f"{thread_id}:completed",
+        }
+    )
+
+    reopened = PmaAutomationStore(tmp_path, durable=True)
+    pending = reopened.list_pending_wakeups(limit=10)
+    assert len(pending) == 1
+    recovered = pending[0]
+    assert recovered["state"] == "pending"
+    assert "dispatch_decision" in recovered["metadata"]
+    decision = recovered["metadata"]["dispatch_decision"]
+    assert decision["requested_delivery"] == "auto"
+    assert isinstance(decision["attempts"], list)
+    assert len(decision["attempts"]) > 0
+
+
+def test_multiple_wakeups_all_have_dispatch_decisions_atomically(tmp_path) -> None:
+    store = PmaAutomationStore(tmp_path, durable=False)
+    thread_id = _create_managed_thread(tmp_path, surface_kind="telegram")
+
+    store.create_subscription(
+        {
+            "event_types": ["flow_completed", "flow_failed"],
+            "thread_id": thread_id,
+            "lane_id": "telegram",
+        }
+    )
+
+    store.notify_transition(
+        {
+            "event_type": "flow_completed",
+            "thread_id": thread_id,
+            "from_state": "running",
+            "to_state": "completed",
+            "transition_id": "t-1",
+        }
+    )
+    store.notify_transition(
+        {
+            "event_type": "flow_failed",
+            "thread_id": thread_id,
+            "from_state": "running",
+            "to_state": "failed",
+            "transition_id": "t-2",
+        }
+    )
+
+    reopened = PmaAutomationStore(tmp_path, durable=False)
+    pending = reopened.list_pending_wakeups(limit=10)
+    assert len(pending) == 2
+    for wakeup in pending:
+        assert "dispatch_decision" in wakeup["metadata"]
+        decision = wakeup["metadata"]["dispatch_decision"]
+        assert isinstance(decision["attempts"], list)
+        assert len(decision["attempts"]) > 0
+
+
+def test_no_split_persistence_between_wakeup_and_dispatch_decision(tmp_path) -> None:
+    store = PmaAutomationStore(tmp_path, durable=False)
+
+    wakeup, _ = store.enqueue_wakeup(
+        source="automation",
+        repo_id="repo-1",
+        idempotency_key="atomic-verify-key",
+        metadata={
+            "delivery_target": {"surface_kind": "discord", "surface_key": "ch-1"}
+        },
+    )
+
+    reopened = PmaAutomationStore(tmp_path, durable=False)
+    state = reopened.load()
+    raw_wakeups = state.get("wakeups", [])
+    matching = [
+        w for w in raw_wakeups if w.get("idempotency_key") == "atomic-verify-key"
+    ]
+    assert len(matching) == 1
+    raw_metadata = matching[0].get("metadata", {})
+    assert "dispatch_decision" in raw_metadata
+    assert raw_metadata["dispatch_decision"] == wakeup.metadata["dispatch_decision"]

@@ -547,6 +547,11 @@ async def test_recovery_marks_delivery_expired_when_no_durable_ack_exists(
             payload,
             scheduler_state="received",
         )
+        operation_store.patch_operation(
+            ctx.interaction_id,
+            created_at="2020-01-01T00:00:00Z",
+            updated_at="2020-01-01T00:00:00Z",
+        )
 
         await service._resume_interaction_recovery()
         await service._command_runner.shutdown(grace_seconds=2.0)

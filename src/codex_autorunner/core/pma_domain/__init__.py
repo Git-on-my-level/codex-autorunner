@@ -20,6 +20,9 @@ Layer boundaries
   what to do when a binding changes after a dispatch decision is persisted.
 - **Subscription reducer** (``subscription_reducer``): owns subscription
   matching, WakeupIntent emission, and timer reduction.
+- **Automation reducer** (``automation_reducer``): owns timer dequeue,
+  timer touch, and wakeup dispatch transitions.  Store methods delegate
+  domain decisions here instead of inline mutation.
 - **Adapters**: persistence (SQLite, JSON), transport (Discord, Telegram),
   and surface modules.  They consume domain types and execute side effects.
 - **Surfaces**: CLI, web routes, chat commands.  They call adapters.
@@ -29,6 +32,15 @@ package.  If you are tempted to add a routing branch or suppression check
 in an adapter file, add it here instead.
 """
 
+from .automation_reducer import (
+    ReduceDequeueResult,
+    TimerDequeueOutput,
+    TimerTouchResult,
+    WakeupDispatchResult,
+    reduce_dequeue_due_timers,
+    reduce_timer_touch,
+    reduce_wakeup_dispatch,
+)
 from .constants import (
     DEFAULT_PMA_LANE_ID,
     DEFAULT_WATCHDOG_IDLE_SECONDS,
@@ -158,11 +170,14 @@ __all__ = [
     "PmaWakeup",
     "PublishNoticeContext",
     "PublishSuppressionDecision",
+    "ReduceDequeueResult",
     "ReduceTimerResult",
     "ReduceTransitionResult",
     "RebindingContext",
     "RebindingDecision",
     "RebindingResult",
+    "TimerDequeueOutput",
+    "TimerTouchResult",
     "ROUTE_BOUND",
     "ROUTE_EXPLICIT",
     "ROUTE_PRIMARY_PMA",
@@ -181,6 +196,7 @@ __all__ = [
     "WAKEUP_STATE_PENDING",
     "TimerFiredEvent",
     "TransitionEvent",
+    "WakeupDispatchResult",
     "WakeupIntent",
     "DeliveryAttemptOutcome",
     "DeliveryLifecycleState",
@@ -210,7 +226,10 @@ __all__ = [
     "pma_subscription_to_dict",
     "pma_timer_to_dict",
     "pma_wakeup_to_dict",
+    "reduce_dequeue_due_timers",
     "reduce_timer_fired",
+    "reduce_timer_touch",
     "reduce_transition",
+    "reduce_wakeup_dispatch",
     "resolve_delivery_transition",
 ]

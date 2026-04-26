@@ -7,7 +7,7 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional, Sequence, cast
+from typing import Any, Optional, cast
 
 from .chat_bindings import (
     active_chat_binding_metadata_by_thread,
@@ -17,7 +17,6 @@ from .config import load_hub_config
 from .config_contract import ConfigError
 from .locks import file_lock
 from .orchestration.sqlite import open_orchestration_sqlite
-from .pma_automation_persistence import PmaAutomationPersistence
 from .pma_automation_types import (
     DEFAULT_PMA_LANE_ID,
     DEFAULT_WATCHDOG_IDLE_SECONDS,
@@ -42,7 +41,12 @@ from .pma_dispatch_decision import (
     build_pma_dispatch_decision,
     pma_dispatch_decision_to_dict,
 )
-from .pma_domain.models import PmaSubscription
+from .pma_domain.automation_reducer import (
+    reduce_dequeue_due_timers,
+    reduce_timer_touch,
+    reduce_wakeup_dispatch,
+)
+from .pma_domain.models import PmaSubscription, PmaTimer, PmaWakeup
 from .pma_domain.subscription_reducer import (
     ReduceTransitionResult,
     TimerFiredEvent,
@@ -140,26 +144,6 @@ def _canonicalize_subscription_entry(data: dict[str, Any]) -> dict[str, Any]:
         "metadata": metadata,
         "max_matches": resolved_max,
     }
-
-
-def _canonicalize_automation_state(state: dict[str, Any]) -> dict[str, Any]:
-    canonical = default_pma_automation_state()
-    canonical["version"] = int(state.get("version", PMA_AUTOMATION_VERSION) or 1)
-    canonical["updated_at"] = (
-        _normalize_text(state.get("updated_at")) or canonical["updated_at"]
-    )
-    canonical["subscriptions"] = [
-        _canonicalize_subscription_entry(entry)
-        for entry in (state.get("subscriptions") or [])
-        if isinstance(entry, dict)
-    ]
-    canonical["timers"] = [
-        dict(entry) for entry in (state.get("timers") or []) if isinstance(entry, dict)
-    ]
-    canonical["wakeups"] = [
-        dict(entry) for entry in (state.get("wakeups") or []) if isinstance(entry, dict)
-    ]
-    return canonical
 
 
 @dataclass
@@ -475,29 +459,23 @@ class PmaAutomationStore:
     def __init__(self, hub_root: Path, *, durable: bool = True) -> None:
         self._hub_root = hub_root
         self._durable = durable
-        self._persistence = PmaAutomationPersistence(hub_root)
-        self._path = self._persistence.path
+        self._path = (
+            hub_root / ".codex-autorunner" / "pma" / PMA_AUTOMATION_STORE_FILENAME
+        )
 
     @property
     def path(self) -> Path:
         return self._path
 
     def _lock_path(self) -> Path:
-        return lock_path_for(self._persistence.path)
+        return lock_path_for(self._path)
 
     def load(self) -> dict[str, Any]:
         with file_lock(self._lock_path()):
             state = self._load_unlocked()
             if state is not None:
                 return state
-            state = self._persistence._load_unlocked()
-            if state is not None:
-                canonical_state = _canonicalize_automation_state(state)
-                if canonical_state != state:
-                    self._persistence._save_unlocked(canonical_state)
-                return canonical_state
             state = default_pma_automation_state()
-            self._persistence._save_unlocked(state)
             return state
 
     def _load_unlocked(self) -> Optional[dict[str, Any]]:
@@ -526,12 +504,6 @@ class PmaAutomationStore:
         state["wakeups"] = [entry.to_dict() for entry in wakeups]
         return state
 
-    def _save_unlocked(self, state: dict[str, Any]) -> None:
-        subscriptions = self._normalize_subscriptions(state.get("subscriptions"))
-        timers = self._normalize_timers(state.get("timers"))
-        wakeups = self._normalize_wakeups(state.get("wakeups"))
-        self._save_structured_unlocked(state, subscriptions, timers, wakeups)
-
     def _load_structured_unlocked(
         self,
     ) -> tuple[
@@ -541,8 +513,6 @@ class PmaAutomationStore:
         list[PmaAutomationWakeup],
     ]:
         state = self._load_unlocked()
-        if state is None:
-            state = self._persistence._load_unlocked()
         if state is None:
             state = default_pma_automation_state()
         return (
@@ -749,7 +719,6 @@ class PmaAutomationStore:
                             wakeup.event_type,
                         ),
                     )
-        self._persistence._save_unlocked(state)
 
     @staticmethod
     def _json_load(raw: str | None) -> dict[str, Any]:
@@ -1064,14 +1033,6 @@ class PmaAutomationStore:
         ).fetchone()
         return row is not None
 
-    def _rewrite_json_mirror_unlocked(self) -> None:
-        state = self._load_unlocked()
-        if state is None:
-            state = self._persistence._load_unlocked()
-        if state is None:
-            state = default_pma_automation_state()
-        self._persistence._save_unlocked(state)
-
     def _normalize_subscriptions(self, value: Any) -> list[PmaLifecycleSubscription]:
         out: list[PmaLifecycleSubscription] = []
         if not isinstance(value, list):
@@ -1214,6 +1175,76 @@ class PmaAutomationStore:
             metadata=dict(entry.metadata),
         )
 
+    @staticmethod
+    def _store_timer_to_domain(entry: PmaAutomationTimer) -> PmaTimer:
+        return PmaTimer(
+            timer_id=entry.timer_id,
+            due_at=entry.due_at,
+            created_at=entry.created_at,
+            updated_at=entry.updated_at,
+            state=entry.state,
+            fired_at=entry.fired_at,
+            timer_type=entry.timer_type,
+            idle_seconds=entry.idle_seconds,
+            subscription_id=entry.subscription_id,
+            repo_id=entry.repo_id,
+            run_id=entry.run_id,
+            thread_id=entry.thread_id,
+            lane_id=entry.lane_id,
+            from_state=entry.from_state,
+            to_state=entry.to_state,
+            reason=entry.reason,
+            idempotency_key=entry.idempotency_key,
+            metadata=dict(entry.metadata or {}),
+        )
+
+    @staticmethod
+    def _store_wakeup_to_domain(entry: PmaAutomationWakeup) -> PmaWakeup:
+        return PmaWakeup(
+            wakeup_id=entry.wakeup_id,
+            created_at=entry.created_at,
+            updated_at=entry.updated_at,
+            state=entry.state,
+            dispatched_at=entry.dispatched_at,
+            source=entry.source,
+            repo_id=entry.repo_id,
+            run_id=entry.run_id,
+            thread_id=entry.thread_id,
+            lane_id=entry.lane_id,
+            from_state=entry.from_state,
+            to_state=entry.to_state,
+            reason=entry.reason,
+            timestamp=entry.timestamp,
+            idempotency_key=entry.idempotency_key,
+            subscription_id=entry.subscription_id,
+            timer_id=entry.timer_id,
+            event_id=entry.event_id,
+            event_type=entry.event_type,
+            event_data=dict(entry.event_data or {}),
+            metadata=dict(entry.metadata or {}),
+        )
+
+    @staticmethod
+    def _apply_domain_timer_to_store(
+        store_timer: PmaAutomationTimer, domain_timer: PmaTimer
+    ) -> None:
+        store_timer.due_at = domain_timer.due_at
+        store_timer.updated_at = domain_timer.updated_at
+        store_timer.state = domain_timer.state
+        store_timer.fired_at = domain_timer.fired_at
+        store_timer.idle_seconds = domain_timer.idle_seconds
+        store_timer.reason = domain_timer.reason
+        store_timer.metadata = dict(domain_timer.metadata or {})
+
+    @staticmethod
+    def _apply_domain_wakeup_to_store(
+        store_wakeup: PmaAutomationWakeup, domain_wakeup: PmaWakeup
+    ) -> None:
+        store_wakeup.state = domain_wakeup.state
+        store_wakeup.dispatched_at = domain_wakeup.dispatched_at
+        store_wakeup.updated_at = domain_wakeup.updated_at
+        store_wakeup.metadata = dict(domain_wakeup.metadata or {})
+
     def _apply_reduce_result(
         self,
         subscriptions: list[PmaLifecycleSubscription],
@@ -1259,33 +1290,6 @@ class PmaAutomationStore:
             wakeups.append(wakeup)
             appended.append(wakeup)
         return appended
-
-    def _persist_wakeup_dispatch_decisions(
-        self, wakeups_with_decisions: Sequence[PmaAutomationWakeup]
-    ) -> None:
-        if not wakeups_with_decisions:
-            return
-        by_id: dict[str, dict[str, Any]] = {}
-        for w in wakeups_with_decisions:
-            raw_dd = w.metadata.get("dispatch_decision")
-            if isinstance(raw_dd, dict):
-                by_id[w.wakeup_id] = dict(raw_dd)
-        if not by_id:
-            return
-        with file_lock(self._lock_path()):
-            state, subscriptions, timers, wakeups = self._load_structured_unlocked()
-            changed = False
-            now = _iso_now()
-            for entry in wakeups:
-                new_dd = by_id.get(entry.wakeup_id)
-                if new_dd is None:
-                    continue
-                entry.metadata = dict(entry.metadata)
-                entry.metadata["dispatch_decision"] = new_dd
-                entry.updated_at = now
-                changed = True
-            if changed:
-                self._save_structured_unlocked(state, subscriptions, timers, wakeups)
 
     @staticmethod
     def _normalize_subscription_event_types(
@@ -1593,7 +1597,6 @@ class PmaAutomationStore:
                         metadata=resolved_metadata,
                     )
                     self._insert_subscription_row(conn, created)
-            self._rewrite_json_mirror_unlocked()
             return created, False
 
     def create_subscription(
@@ -1707,8 +1710,6 @@ class PmaAutomationStore:
                         (stamp, stamp, target_id),
                     )
                     changed = cursor.rowcount > 0
-            if changed:
-                self._rewrite_json_mirror_unlocked()
             return changed
 
     def purge_subscription(
@@ -1756,7 +1757,6 @@ class PmaAutomationStore:
                         "DELETE FROM orch_automation_subscriptions WHERE subscription_id = ?",
                         (target_id,),
                     )
-            self._rewrite_json_mirror_unlocked()
             return True
 
     def purge_subscriptions(
@@ -1812,8 +1812,6 @@ class PmaAutomationStore:
                             total_orphaned_timers,
                             total_orphaned_wakeups,
                         )
-            if removed and not dry_run:
-                self._rewrite_json_mirror_unlocked()
             return [entry.to_dict() for entry in removed]
 
     def list_subscriptions(
@@ -1946,7 +1944,6 @@ class PmaAutomationStore:
                         metadata=metadata,
                     )
                     self._insert_timer_row(conn, created)
-            self._rewrite_json_mirror_unlocked()
             return created, False
 
     def create_timer(
@@ -2035,8 +2032,6 @@ class PmaAutomationStore:
                             (cancelled_at, target_id),
                         )
                     changed = cursor.rowcount > 0
-            if changed:
-                self._rewrite_json_mirror_unlocked()
             return changed
 
     def purge_timer(self, timer_id: str, *, require_inactive: bool = True) -> bool:
@@ -2060,7 +2055,6 @@ class PmaAutomationStore:
                         "DELETE FROM orch_automation_timers WHERE timer_id = ?",
                         (target_id,),
                     )
-            self._rewrite_json_mirror_unlocked()
             return True
 
     def list_timers(
@@ -2135,24 +2129,21 @@ class PmaAutomationStore:
             for entry in timers:
                 if entry.timer_id != target_id:
                     continue
-                if due_at is None:
-                    if delay_seconds is not None:
-                        entry.due_at = _iso_after_seconds(delay_seconds)
-                    elif entry.timer_type == TIMER_TYPE_WATCHDOG:
-                        entry.due_at = _iso_after_seconds(
-                            entry.idle_seconds or DEFAULT_WATCHDOG_IDLE_SECONDS
-                        )
-                    else:
-                        entry.due_at = _iso_after_seconds(delay_seconds or 0)
-                else:
-                    entry.due_at = due_at
-                entry.state = "pending"
-                entry.fired_at = None
-                if reason is not None:
-                    entry.reason = reason
-                entry.updated_at = _iso_now()
-                self._save_structured_unlocked(state, subscriptions, timers, wakeups)
-                return {"status": "ok", "timer": entry.to_dict(), "touched": True}
+                domain_timer = self._store_timer_to_domain(entry)
+                now_dt = datetime.now(timezone.utc)
+                result = reduce_timer_touch(
+                    domain_timer,
+                    due_at=due_at,
+                    delay_seconds=delay_seconds,
+                    reason=reason,
+                    now=now_dt,
+                )
+                if result.touched and result.updated_timer is not None:
+                    self._apply_domain_timer_to_store(entry, result.updated_timer)
+                    self._save_structured_unlocked(
+                        state, subscriptions, timers, wakeups
+                    )
+                    return {"status": "ok", "timer": entry.to_dict(), "touched": True}
         return {"status": "ok", "timer_id": target_id, "touched": False}
 
     def refresh_timer(
@@ -2187,55 +2178,14 @@ class PmaAutomationStore:
 
         with file_lock(self._lock_path()):
             state, subscriptions, timers, wakeups = self._load_structured_unlocked()
-            due: list[PmaAutomationTimer] = []
-            now_stamp = _iso_now()
-            for entry in timers:
-                if entry.state != "pending":
-                    continue
-                due_at_dt = _parse_iso(entry.due_at)
-                if due_at_dt is None:
-                    continue
-                if due_at_dt > now_dt:
-                    continue
-                if entry.timer_type == TIMER_TYPE_WATCHDOG:
-                    entry.fired_at = now_stamp
-                    entry.updated_at = now_stamp
-                    due.append(
-                        PmaAutomationTimer(
-                            timer_id=entry.timer_id,
-                            due_at=entry.due_at,
-                            created_at=entry.created_at,
-                            updated_at=entry.updated_at,
-                            state="fired",
-                            fired_at=now_stamp,
-                            timer_type=entry.timer_type,
-                            idle_seconds=entry.idle_seconds,
-                            subscription_id=entry.subscription_id,
-                            repo_id=entry.repo_id,
-                            run_id=entry.run_id,
-                            thread_id=entry.thread_id,
-                            lane_id=entry.lane_id,
-                            from_state=entry.from_state,
-                            to_state=entry.to_state,
-                            reason=entry.reason,
-                            idempotency_key=entry.idempotency_key,
-                            metadata=dict(entry.metadata or {}),
-                        )
-                    )
-                    if entry.idle_seconds is None or entry.idle_seconds <= 0:
-                        entry.idle_seconds = DEFAULT_WATCHDOG_IDLE_SECONDS
-                    entry.due_at = _iso_after_seconds(entry.idle_seconds)
-                    entry.state = "pending"
-                else:
-                    entry.state = "fired"
-                    entry.fired_at = now_stamp
-                    entry.updated_at = now_stamp
-                    due.append(entry)
-                if len(due) >= due_limit:
-                    break
-            if due:
+            domain_timers = [self._store_timer_to_domain(t) for t in timers]
+            result = reduce_dequeue_due_timers(domain_timers, now_dt, limit=due_limit)
+            for i, domain_timer in enumerate(result.updated_timers):
+                if i < len(timers):
+                    self._apply_domain_timer_to_store(timers[i], domain_timer)
+            if result.fired_count > 0:
                 self._save_structured_unlocked(state, subscriptions, timers, wakeups)
-            return [entry.to_dict() for entry in due]
+            return [asdict(output.fired_timer) for output in result.due]
 
     def enqueue_wakeup(
         self,
@@ -2282,10 +2232,9 @@ class PmaAutomationStore:
                 event_data=event_data,
                 metadata=metadata,
             )
+            self._compute_dispatch_decision_for_wakeup(created)
             wakeups.append(created)
             self._save_structured_unlocked(state, subscriptions, timers, wakeups)
-        self._compute_dispatch_decision_for_wakeup(created)
-        self._persist_wakeup_dispatch_decisions((created,))
         return created, False
 
     def enqueue_event(self, **kwargs: Any) -> tuple[PmaAutomationWakeup, bool]:
@@ -2360,7 +2309,6 @@ class PmaAutomationStore:
                 "timestamp",
             }
         }
-        new_wakeups: list[PmaAutomationWakeup] = []
         with file_lock(self._lock_path()):
             state, subscriptions, timers, wakeups = self._load_structured_unlocked()
 
@@ -2391,19 +2339,16 @@ class PmaAutomationStore:
                 event_timestamp=timestamp,
             )
 
-            new_wakeups = self._apply_reduce_result(
+            self._apply_reduce_result(
                 subscriptions,
                 wakeups,
                 result,
                 timestamp,
-                compute_dispatch=False,
+                compute_dispatch=True,
             )
 
             if result.created > 0 or result.subscriptions_changed > 0:
                 self._save_structured_unlocked(state, subscriptions, timers, wakeups)
-        for w in new_wakeups:
-            self._compute_dispatch_decision_for_wakeup(w)
-        self._persist_wakeup_dispatch_decisions(new_wakeups)
         return {
             "status": "ok",
             "matched": result.matched,
@@ -2478,12 +2423,11 @@ class PmaAutomationStore:
             for entry in wakeups:
                 if entry.wakeup_id != target_id:
                     continue
-                if entry.state == "dispatched":
-                    return False
-                entry.state = "dispatched"
-                entry.dispatched_at = stamp
-                entry.updated_at = stamp
-                changed = True
+                domain_wakeup = self._store_wakeup_to_domain(entry)
+                result = reduce_wakeup_dispatch(domain_wakeup, stamp)
+                if result.dispatched and result.updated_wakeup is not None:
+                    self._apply_domain_wakeup_to_store(entry, result.updated_wakeup)
+                    changed = True
                 break
             if changed:
                 self._save_structured_unlocked(state, subscriptions, timers, wakeups)

@@ -5,10 +5,10 @@ from pathlib import Path
 from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, Optional, Union
 
 from ...core.logging_utils import log_event
+from ...core.orchestration.codex_item_normalizers import normalize_tool_name
 from ...core.orchestration.runtime_thread_events import (
     RuntimeEventDriver,
     RuntimeThreadRunEventState,
-    _normalize_tool_name,
     normalize_runtime_thread_message_payload,
 )
 from ...core.ports.agent_backend import AgentBackend, AgentEvent, now_iso
@@ -546,7 +546,7 @@ class CodexAppServerBackend(AgentBackend):
                 "agentMessage",
                 "reasoning",
             }:
-                tool_name, tool_input = _normalize_tool_name(params, item=item)
+                tool_name, tool_input = normalize_tool_name(params, item=item)
                 if tool_name:
                     return ToolCall(
                         timestamp=now_iso(),

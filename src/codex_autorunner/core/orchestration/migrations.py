@@ -9,7 +9,7 @@ from ..sqlite_utils import table_columns, table_exists
 from ..time_utils import now_iso
 from .models import OrchestrationTableDefinition
 
-ORCHESTRATION_SCHEMA_VERSION = 24
+ORCHESTRATION_SCHEMA_VERSION = 25
 
 
 @dataclass(frozen=True)
@@ -1321,6 +1321,21 @@ def _apply_v24(conn: sqlite3.Connection) -> None:
     )
 
 
+def _apply_v25(conn: sqlite3.Connection) -> None:
+    has_table = conn.execute(
+        "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='orch_publish_operations'"
+    ).fetchone()[0]
+    if has_table:
+        conn.execute("DROP INDEX IF EXISTS idx_orch_publish_operations_active_key")
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_orch_publish_operations_active_key
+                ON orch_publish_operations(operation_key)
+             WHERE state IN ('pending', 'running', 'succeeded', 'effect_applied')
+            """
+        )
+
+
 _MIGRATIONS = (
     _MigrationStep(1, "create_core_orchestration_schema", _apply_v1),
     _MigrationStep(2, "add_binding_and_flow_projection_scaffolding", _apply_v2),
@@ -1358,6 +1373,7 @@ _MIGRATIONS = (
     _MigrationStep(22, "add_managed_thread_delivery_ledger", _apply_v22),
     _MigrationStep(23, "add_execution_metadata", _apply_v23),
     _MigrationStep(24, "add_thread_identity_bindings", _apply_v24),
+    _MigrationStep(25, "extend_publish_dedupe_index_for_effect_applied", _apply_v25),
 )
 
 

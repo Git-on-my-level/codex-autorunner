@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Any, Optional
 
 from ..coercion import coerce_int
@@ -28,6 +29,23 @@ _LEGACY_FAILURE_CLASS_REASON_CODES: dict[str, FailureReasonCode] = {
 _LEGACY_ENGINE_REASON_CODES: dict[str, FailureReasonCode] = {
     "network": FailureReasonCode.NETWORK_ERROR,
 }
+
+
+@dataclass
+class ReconcileContext:
+    """Reconciliation-specific evidence that enriches the failure projection.
+
+    Runtime failure paths leave this as ``None``.  Reconciler callers
+    populate it from worker health metadata and crash artifacts so the
+    projector can produce a single, complete failure record in one call.
+    """
+
+    worker_exit_code: Optional[int] = None
+    worker_stderr_tail: Optional[str] = None
+    crash_info: Optional[dict[str, Any]] = None
+    last_app_event_method: Optional[str] = None
+    last_turn_id: Optional[str] = None
+    reconcile_note: Optional[str] = None
 
 
 def _coerce_str(value: Any) -> Optional[str]:
@@ -351,6 +369,7 @@ def build_failure_payload(
     store: Optional[FlowStore] = None,
     note: Optional[str] = None,
     failed_at: Optional[str] = None,
+    reconcile_context: Optional[ReconcileContext] = None,
 ) -> dict[str, Any]:
     state = record.state if isinstance(record.state, dict) else {}
     ticket_id = _extract_ticket_id(state)
@@ -397,7 +416,14 @@ def build_failure_payload(
                 candidates,
                 key=lambda x: (x[2], x[0] if x[0] is not None else -1),
             )
-    payload = {
+    if reconcile_context is not None:
+        if exit_code is None and reconcile_context.worker_exit_code is not None:
+            exit_code = reconcile_context.worker_exit_code
+        if not (isinstance(stderr_tail, str) and stderr_tail.strip()):
+            worker_tail = reconcile_context.worker_stderr_tail
+            if isinstance(worker_tail, str) and worker_tail.strip():
+                stderr_tail = worker_tail.strip()
+    payload: dict[str, Any] = {
         "failed_at": failed_at or now_iso(),
         "ticket_id": ticket_id,
         "step": step,
@@ -407,12 +433,12 @@ def build_failure_payload(
         "stderr_tail": stderr_tail,
         "retryable": retryable,
         "failure_class": failure_class,
-        # Downstream consumers should rely on this field as the authoritative
-        # terminal failure classification contract.
         CANONICAL_FAILURE_REASON_CODE_FIELD: failure_reason_code.value,
         "last_event_seq": last_event_seq,
         "last_event_at": last_event_at,
     }
+    if reconcile_context is not None and isinstance(reconcile_context.crash_info, dict):
+        payload["crash"] = reconcile_context.crash_info
     return payload
 
 
@@ -498,6 +524,7 @@ def ensure_failure_payload(
     store: Optional[FlowStore],
     note: Optional[str] = None,
     failed_at: Optional[str] = None,
+    reconcile_context: Optional[ReconcileContext] = None,
 ) -> dict[str, Any]:
     existing = state.get("failure") if isinstance(state, dict) else None
     if isinstance(existing, dict) and existing.get("failed_at"):
@@ -509,10 +536,41 @@ def ensure_failure_payload(
         store=store,
         note=note,
         failed_at=failed_at,
+        reconcile_context=reconcile_context,
     )
     updated = dict(state)
     updated["failure"] = payload
     return updated
+
+
+def build_failure_event_data(
+    failure_payload: dict[str, Any],
+    *,
+    error_message: Optional[str] = None,
+    note: Optional[str] = None,
+    reconcile_context: Optional[ReconcileContext] = None,
+) -> dict[str, Any]:
+    event_data: dict[str, Any] = {
+        "error": error_message or "",
+        "reason": note or "reconcile",
+    }
+    if reconcile_context is not None:
+        if reconcile_context.last_app_event_method:
+            event_data["last_app_event_method"] = (
+                reconcile_context.last_app_event_method
+            )
+        if reconcile_context.last_turn_id:
+            event_data["last_turn_id"] = reconcile_context.last_turn_id
+        if isinstance(reconcile_context.crash_info, dict):
+            ci = reconcile_context.crash_info
+            event_data["worker_crash"] = {
+                "timestamp": ci.get("timestamp"),
+                "last_event": ci.get("last_event"),
+                "exception": ci.get("exception"),
+                "exit_code": ci.get("exit_code"),
+                "signal": ci.get("signal"),
+            }
+    return event_data
 
 
 def format_failure_summary(

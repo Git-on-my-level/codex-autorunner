@@ -16,7 +16,7 @@ from .text_utils import (
 )
 from .time_utils import now_iso
 
-_ACTIVE_DEDUPE_STATES = ("pending", "running", "succeeded")
+_ACTIVE_DEDUPE_STATES = ("pending", "running", "succeeded", "effect_applied")
 _ACTIVE_ATTEMPT_STATES = ("claimed", "running")
 
 
@@ -84,7 +84,19 @@ def _coerce_row(value: Any) -> Optional[sqlite3.Row]:
 
 
 class PublishJournalStore:
-    """SQLite-backed publish journal for idempotent automation operations."""
+    """SQLite-backed publish journal for idempotent automation operations.
+
+    State model:
+      pending -> running -> succeeded
+                          -> effect_applied -> succeeded  (via reconcile)
+                          -> pending  (retryable failure)
+                          -> failed   (terminal failure)
+
+    The ``effect_applied`` state captures the partial-success condition where
+    external side effects completed but journal bookkeeping (``mark_succeeded``)
+    failed.  It is reconciled to ``succeeded`` by ``reconcile_effect_applied``,
+    which the drain loop calls on each cycle.
+    """
 
     def __init__(self, hub_root: Path) -> None:
         self._hub_root = Path(hub_root)
@@ -500,6 +512,122 @@ class PublishJournalStore:
                         finished_at,
                         retry_at,
                         normalized_error,
+                        normalized_operation_id,
+                    ),
+                )
+                refreshed = self._load_operation_row(conn, normalized_operation_id)
+        return _operation_from_row(refreshed) if refreshed is not None else None
+
+    def mark_effect_applied(
+        self,
+        operation_id: str,
+        *,
+        response: Optional[dict[str, Any]] = None,
+        error_text: Optional[str] = None,
+    ) -> Optional[PublishOperation]:
+        """Record that external side effects succeeded but journal completion failed.
+
+        Transitions the operation from ``running`` to ``effect_applied``,
+        preserving the side-effect response and the bookkeeping error text.
+        The operation is later reconciled to ``succeeded`` by
+        ``reconcile_effect_applied``.
+        """
+        normalized_operation_id = _normalize_text(operation_id)
+        if normalized_operation_id is None:
+            return None
+        response_object = _normalize_json_object(response, field_name="response")
+        response_json = _json_dumps(response_object)
+        normalized_error = _normalize_text(error_text)
+        finished_at = now_iso()
+        with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            operation_row = self._load_operation_row(conn, normalized_operation_id)
+            if operation_row is None:
+                return None
+            latest_attempt = self._load_latest_attempt_row(
+                conn, normalized_operation_id
+            )
+            if latest_attempt is None:
+                return None
+            attempt_state = str(latest_attempt["state"])
+            if operation_row["state"] == "effect_applied":
+                return _operation_from_row(operation_row)
+            if attempt_state not in _ACTIVE_ATTEMPT_STATES:
+                return None
+            with conn:
+                cursor = conn.execute(
+                    """
+                    UPDATE orch_publish_attempts
+                       SET state = 'succeeded',
+                           response_json = ?,
+                           error_text = NULL,
+                           started_at = COALESCE(started_at, claimed_at),
+                           finished_at = ?,
+                           updated_at = ?
+                     WHERE attempt_id = ?
+                       AND state IN ('claimed', 'running')
+                    """,
+                    (
+                        response_json,
+                        finished_at,
+                        finished_at,
+                        str(latest_attempt["attempt_id"]),
+                    ),
+                )
+                if cursor.rowcount == 0:
+                    return None
+                conn.execute(
+                    """
+                    UPDATE orch_publish_operations
+                       SET state = 'effect_applied',
+                           response_json = ?,
+                           updated_at = ?,
+                           started_at = COALESCE(started_at, claimed_at),
+                           finished_at = ?,
+                           next_attempt_at = NULL,
+                           last_error_text = ?
+                     WHERE operation_id = ?
+                       AND state = 'running'
+                    """,
+                    (
+                        response_json,
+                        finished_at,
+                        finished_at,
+                        normalized_error,
+                        normalized_operation_id,
+                    ),
+                )
+                refreshed = self._load_operation_row(conn, normalized_operation_id)
+        return _operation_from_row(refreshed) if refreshed is not None else None
+
+    def reconcile_effect_applied(self, operation_id: str) -> Optional[PublishOperation]:
+        """Promote an ``effect_applied`` operation to ``succeeded``.
+
+        Called by the drain loop on each cycle to finalize operations whose
+        side effects completed but whose journal bookkeeping initially failed.
+        Clears ``last_error_text`` as part of the promotion.
+        """
+        normalized_operation_id = _normalize_text(operation_id)
+        if normalized_operation_id is None:
+            return None
+        updated_at = now_iso()
+        with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            operation_row = self._load_operation_row(conn, normalized_operation_id)
+            if operation_row is None:
+                return None
+            if str(operation_row["state"]) != "effect_applied":
+                return None
+            with conn:
+                conn.execute(
+                    """
+                    UPDATE orch_publish_operations
+                       SET state = 'succeeded',
+                           updated_at = ?,
+                           last_error_text = NULL
+                     WHERE operation_id = ?
+                       AND state = 'effect_applied'
+                    """,
+                    (
+                        updated_at,
                         normalized_operation_id,
                     ),
                 )

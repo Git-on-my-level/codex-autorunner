@@ -300,7 +300,7 @@ def test_process_now_marks_terminal_failure_without_retry(
     assert call_count == 1
 
 
-def test_drain_pending_publish_operations_marks_terminal_failure_when_journal_completion_fails(
+def test_drain_pending_publish_operations_records_effect_applied_when_journal_completion_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     store = PublishJournalStore(tmp_path)
@@ -330,7 +330,8 @@ def test_drain_pending_publish_operations_marks_terminal_failure_when_journal_co
     )
 
     assert [operation.operation_id for operation in processed] == [created.operation_id]
-    assert processed[0].state == "failed"
+    assert processed[0].state == "effect_applied"
+    assert processed[0].response == {"delivered": True}
     assert processed[0].next_attempt_at is None
     assert processed[0].last_error_text is not None
     assert "journal completion failed" in processed[0].last_error_text
@@ -339,15 +340,101 @@ def test_drain_pending_publish_operations_marks_terminal_failure_when_journal_co
     stored = store.list_operations(limit=10)
     assert len(stored) == 1
     assert stored[0].operation_id == created.operation_id
-    assert stored[0].state == "failed"
+    assert stored[0].state == "effect_applied"
+    assert stored[0].response == {"delivered": True}
     assert stored[0].next_attempt_at is None
     assert stored[0].last_error_text is not None
     assert "journal completion failed" in stored[0].last_error_text
 
 
-def test_drain_pending_publish_operations_skips_operation_when_mark_running_fails() -> (
-    None
-):
+def test_effect_applied_operation_is_reconciled_by_subsequent_drain(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = PublishJournalStore(tmp_path)
+    created, _ = store.create_operation(
+        operation_key="notify:effect-applied-reconcile",
+        operation_kind="notify_chat",
+        payload={"body": "ready"},
+        next_attempt_at="2026-03-25T00:00:00Z",
+    )
+
+    original_mark_succeeded = store.mark_succeeded
+
+    def _fail_mark_succeeded(
+        operation_id: str, *, response: dict[str, object]
+    ) -> PublishOperation | None:
+        _ = operation_id, response
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(store, "mark_succeeded", _fail_mark_succeeded)
+
+    executor_calls: list[str] = []
+
+    def executor(_operation):
+        executor_calls.append("called")
+        return {"delivered": True}
+
+    first = drain_pending_publish_operations(
+        store,
+        executor_registry=PublishExecutorRegistry({"notify_chat": executor}),
+        limit=10,
+        now_fn=_QueuedClock("2026-03-25T00:00:00Z"),
+    )
+    assert len(first) == 1
+    assert first[0].state == "effect_applied"
+    assert executor_calls == ["called"]
+
+    monkeypatch.setattr(store, "mark_succeeded", original_mark_succeeded)
+
+    second = drain_pending_publish_operations(
+        store,
+        executor_registry=PublishExecutorRegistry({"notify_chat": executor}),
+        limit=10,
+        now_fn=_QueuedClock("2026-03-25T00:01:00Z"),
+    )
+    assert len(second) == 1
+    assert second[0].state == "succeeded"
+    assert second[0].response == {"delivered": True}
+    assert executor_calls == ["called"]
+
+    assert store.list_operations(state="effect_applied") == []
+    succeeded = store.list_operations(state="succeeded")
+    assert len(succeeded) == 1
+    assert succeeded[0].operation_id == created.operation_id
+
+
+def test_reconcile_effect_applied_completes_partial_success(tmp_path: Path) -> None:
+    store = PublishJournalStore(tmp_path)
+    created, _ = store.create_operation(
+        operation_key="notify:reconcile-test",
+        operation_kind="notify_chat",
+        payload={"body": "ready"},
+        next_attempt_at="2026-03-25T00:00:00Z",
+    )
+
+    store.claim_pending_operations(limit=10, now_timestamp="2026-03-25T00:30:00Z")
+    store.mark_running(created.operation_id)
+    store.mark_effect_applied(
+        created.operation_id,
+        response={"delivered": True, "remote_id": "msg-999"},
+        error_text="journal completion failed",
+    )
+
+    effect_applied_ops = store.list_operations(state="effect_applied")
+    assert len(effect_applied_ops) == 1
+
+    reconciled = store.reconcile_effect_applied(created.operation_id)
+    assert reconciled is not None
+    assert reconciled.state == "succeeded"
+    assert reconciled.response == {"delivered": True, "remote_id": "msg-999"}
+    assert reconciled.last_error_text is None
+
+    assert store.list_operations(state="effect_applied") == []
+    succeeded_ops = store.list_operations(state="succeeded")
+    assert len(succeeded_ops) == 1
+
+
+def test_drain_skips_operation_when_mark_running_returns_none() -> None:
     operation = PublishOperation(
         operation_id="op-1",
         operation_key="notify:op-1",
@@ -362,6 +449,12 @@ def test_drain_pending_publish_operations_skips_operation_when_mark_running_fail
     )
 
     class _FakeJournal:
+        def list_operations(self, *, state, **_kwargs):
+            return []
+
+        def reconcile_effect_applied(self, _operation_id):
+            return None
+
         def claim_pending_operations(self, *, limit: int, now_timestamp: str):
             assert limit == 10
             assert now_timestamp == "2026-03-25T00:00:00Z"
@@ -386,6 +479,84 @@ def test_drain_pending_publish_operations_skips_operation_when_mark_running_fail
 
     assert processed == []
     assert executor_calls == []
+
+
+def test_drain_does_not_collapse_partial_success_to_failed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = PublishJournalStore(tmp_path)
+    created, _ = store.create_operation(
+        operation_key="notify:no-collapse-to-failed",
+        operation_kind="notify_chat",
+        payload={"body": "ready"},
+        next_attempt_at="2026-03-25T00:00:00Z",
+    )
+
+    def _fail_mark_succeeded(
+        operation_id: str, *, response: dict[str, object]
+    ) -> PublishOperation | None:
+        _ = operation_id, response
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(store, "mark_succeeded", _fail_mark_succeeded)
+
+    processed = drain_pending_publish_operations(
+        store,
+        executor_registry=PublishExecutorRegistry(
+            {"notify_chat": lambda _op: {"delivered": True}}
+        ),
+        limit=10,
+        now_fn=_QueuedClock("2026-03-25T00:00:00Z"),
+    )
+
+    assert len(processed) == 1
+    assert processed[0].state == "effect_applied"
+    assert processed[0].state != "failed"
+    assert processed[0].response == {"delivered": True}
+
+    monkeypatch.undo()
+    stored = store.list_operations(state="failed")
+    assert stored == []
+    effect_applied = store.list_operations(state="effect_applied")
+    assert len(effect_applied) == 1
+    assert effect_applied[0].operation_id == created.operation_id
+
+
+def test_drain_reconciles_multiple_effect_applied_operations(tmp_path: Path) -> None:
+    store = PublishJournalStore(tmp_path)
+    ops = []
+    for i in range(3):
+        created, _ = store.create_operation(
+            operation_key=f"notify:reconcile-multi-{i}",
+            operation_kind="notify_chat",
+            payload={"body": f"ready-{i}"},
+            next_attempt_at="2026-03-25T00:00:00Z",
+        )
+        store.claim_pending_operations(limit=10, now_timestamp="2026-03-25T00:00:00Z")
+        store.mark_running(created.operation_id)
+        store.mark_effect_applied(
+            created.operation_id,
+            response={"delivered": True, "idx": i},
+            error_text=f"journal completion failed for op {i}",
+        )
+        ops.append(created)
+
+    processed = drain_pending_publish_operations(
+        store,
+        executor_registry=PublishExecutorRegistry(
+            {"notify_chat": lambda _op: {"delivered": True}}
+        ),
+        limit=10,
+        now_fn=_QueuedClock("2026-03-25T00:01:00Z"),
+    )
+
+    assert len(processed) == 3
+    assert all(op.state == "succeeded" for op in processed)
+    assert {op.operation_id for op in processed} == {op.operation_id for op in ops}
+
+    assert store.list_operations(state="effect_applied") == []
+    succeeded = store.list_operations(state="succeeded")
+    assert len(succeeded) == 3
 
 
 def test_process_now_denies_post_pr_comment_without_github_side_effect(
