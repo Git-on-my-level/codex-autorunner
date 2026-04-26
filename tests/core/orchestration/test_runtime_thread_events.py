@@ -2699,6 +2699,7 @@ class TestRegistryIsSoleDispatchPath:
     """
 
     EXPECTED_REGISTRY_METHODS: list[str] = [
+        "item/started",
         "item/reasoning/summaryTextDelta",
         "item/completed",
         "item/agentMessage/delta",
@@ -2755,6 +2756,7 @@ class TestRegistryIsSoleDispatchPath:
 
     async def test_all_supported_methods_produce_events_or_empty(self) -> None:
         minimal_payloads: dict[str, dict[str, object]] = {
+            "item/started": {"item": {"type": "reasoning"}},
             "item/reasoning/summaryTextDelta": {"delta": "thinking"},
             "item/completed": {"item": {"type": "agentMessage", "text": "hi"}},
             "item/agentMessage/delta": {"delta": "msg"},
