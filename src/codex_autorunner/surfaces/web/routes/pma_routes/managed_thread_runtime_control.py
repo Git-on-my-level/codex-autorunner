@@ -283,7 +283,12 @@ def ensure_queue_worker(
     if hooks is None:
         resolved_hooks = None
     elif isinstance(hooks, ManagedThreadCoordinatorHooks):
-        resolved_hooks = hooks.queue_worker_hooks()
+        resolved_hooks = ManagedThreadQueueWorkerHooks(
+            durable_delivery=hooks.durable_delivery,
+            deliver_result=hooks.deliver_result,
+            run_with_indicator=hooks.run_with_indicator,
+            execution_hooks=hooks.queue_execution_hooks or hooks.execution_hooks(),
+        )
     else:
         resolved_hooks = hooks
 
