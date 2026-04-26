@@ -699,7 +699,7 @@ def _display_tail_fetch_limit(
 ) -> int:
     if output_json or level == _PmaVerbosityLevel.DEBUG:
         return limit
-    return _MAX_TAIL_DISPLAY_FETCH_LIMIT
+    return max(limit, _MAX_TAIL_DISPLAY_FETCH_LIMIT)
 
 
 def _display_tail_events(
@@ -750,6 +750,8 @@ class _PmaInfoTailStreamRenderer:
 
     def consume(self, event: _PmaTailEvent) -> list[str]:
         lines: list[str] = []
+        if _should_suppress_info_tail_event(event):
+            return lines
         if (
             self._pending_assistant is not None
             and event.event_type != "assistant_update"
@@ -758,8 +760,6 @@ class _PmaInfoTailStreamRenderer:
             if flushed is not None:
                 lines.append(flushed)
             self._pending_assistant = None
-        if _should_suppress_info_tail_event(event):
-            return lines
         if event.event_type == "assistant_update":
             rendered = _PmaRenderedTailEvent.from_tail_event(event)
             if self._pending_assistant is None:
