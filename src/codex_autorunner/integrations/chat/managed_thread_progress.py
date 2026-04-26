@@ -112,6 +112,8 @@ def apply_run_event_to_progress_tracker(
         notice = run_event.message.strip() if run_event.message else ""
         if not notice:
             notice = run_event.kind.strip() if run_event.kind else "notice"
+        if run_event.kind == "decode_failure":
+            return ProgressTrackerEventOutcome(changed=False)
         if run_event.kind in {"thinking", "reasoning"}:
             prior_transient = tracker.transient_action
             changed = tracker.note_thinking(notice)

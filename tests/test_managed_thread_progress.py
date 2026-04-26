@@ -429,6 +429,24 @@ def test_progress_notice_shows_when_no_transient_action() -> None:
     assert len(tracker.actions) == 0
 
 
+def test_decode_failure_notice_is_ignored() -> None:
+    tracker = _tracker()
+
+    outcome = apply_run_event_to_progress_tracker(
+        tracker,
+        RunNotice(
+            timestamp="2026-03-15T00:00:00Z",
+            kind="decode_failure",
+            message="No decoder for method: future/unknownMethod",
+        ),
+        runtime_state=ProgressRuntimeState(),
+    )
+
+    assert outcome.changed is False
+    assert tracker.transient_action is None
+    assert len(tracker.actions) == 0
+
+
 def test_progress_notice_does_not_overwrite_tool_trace() -> None:
     tracker = _tracker()
 

@@ -2674,6 +2674,16 @@ class TestDecodeFailureObservability:
         assert len(events) == 1
         assert isinstance(events[0], TokenUsage)
 
+    async def test_lifecycle_boundary_method_is_silently_consumed(self) -> None:
+        state = RuntimeThreadRunEventState()
+
+        events = await normalize_runtime_thread_raw_event(
+            {"method": "turn/started", "params": {"turnId": "turn-1"}},
+            state,
+        )
+
+        assert events == []
+
     async def test_session_status_idle_does_not_emit_decode_failure(self) -> None:
         state = RuntimeThreadRunEventState()
 
@@ -2707,6 +2717,10 @@ class TestRegistryIsSoleDispatchPath:
         "item/toolCall/end",
         "item/commandExecution/requestApproval",
         "item/fileChange/requestApproval",
+        "session/created",
+        "session/loaded",
+        "prompt/started",
+        "turn/started",
         "prompt/output",
         "prompt/delta",
         "prompt/progress",
@@ -2764,6 +2778,10 @@ class TestRegistryIsSoleDispatchPath:
             "item/toolCall/end": {"name": "t", "result": {}},
             "item/commandExecution/requestApproval": {"command": ["ls"]},
             "item/fileChange/requestApproval": {"files": ["a.py"]},
+            "session/created": {"sessionId": "s1"},
+            "session/loaded": {"sessionId": "s1"},
+            "prompt/started": {"sessionId": "s1"},
+            "turn/started": {"turnId": "t1", "promptId": "p1"},
             "prompt/output": {"delta": "out"},
             "prompt/delta": {"delta": "d"},
             "prompt/progress": {"delta": "prog"},

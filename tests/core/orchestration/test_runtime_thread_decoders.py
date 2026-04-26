@@ -8,6 +8,7 @@ from codex_autorunner.core.orchestration.runtime_thread_decoders import (
     CodexItemDecoder,
     DecoderContext,
     ErrorDecoder,
+    LifecycleBoundaryDecoder,
     MessageDecoder,
     OpenCodeMessageDecoder,
     PermissionDecoder,
@@ -54,6 +55,8 @@ class TestDecoderRegistry:
         assert registry._exact.get("token/usage") is not None
         assert registry._exact.get("item/completed") is not None
         assert registry._exact.get("session/update") is not None
+        assert registry._exact.get("turn/started") is not None
+        assert registry._exact.get("session/created") is not None
 
     def test_unknown_method_returns_empty(self) -> None:
         registry = build_default_decoder_registry()
@@ -90,7 +93,32 @@ class TestDecoderRegistry:
 
     def test_all_decoders_registered(self) -> None:
         registry = build_default_decoder_registry()
-        assert len(registry._decoders) == 8
+        assert len(registry._decoders) == 9
+
+
+class TestLifecycleBoundaryDecoder:
+    def setup_method(self) -> None:
+        self.decoder = LifecycleBoundaryDecoder()
+
+    def test_methods_cover_acp_lifecycle_boundaries(self) -> None:
+        assert self.decoder.methods() == frozenset(
+            {
+                "turn/started",
+                "prompt/started",
+                "session/created",
+                "session/loaded",
+            }
+        )
+
+    def test_decode_silently_consumes_lifecycle_boundary_events(self) -> None:
+        state, ctx = _ctx("turn/started", {"turnId": "turn-1", "promptId": "prompt-1"})
+        events = self.decoder.decode(
+            "turn/started",
+            {"turnId": "turn-1", "promptId": "prompt-1"},
+            state,
+            ctx,
+        )
+        assert events == []
 
 
 class TestCodexItemDecoder:

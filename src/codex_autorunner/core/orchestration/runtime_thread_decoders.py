@@ -742,6 +742,22 @@ class CodexItemDecoder(MessageDecoder):
         return []
 
 
+class LifecycleBoundaryDecoder(MessageDecoder):
+
+    def methods(self) -> frozenset[str]:
+        return frozenset(
+            {
+                "turn/started",
+                "prompt/started",
+                "session/created",
+                "session/loaded",
+            }
+        )
+
+    def decode(self, method, params, state, ctx):
+        return []
+
+
 class ACPPromptTurnDecoder(MessageDecoder):
     _PROMPT_OUTPUT_METHODS = frozenset(
         {
@@ -1155,6 +1171,7 @@ class ErrorDecoder(MessageDecoder):
 def build_default_decoder_registry() -> DecoderRegistry:
     registry = DecoderRegistry()
     registry.register(CodexItemDecoder())
+    registry.register(LifecycleBoundaryDecoder())
     registry.register(ACPPromptTurnDecoder())
     registry.register(PermissionDecoder())
     registry.register(UsageDecoder())
@@ -1170,6 +1187,7 @@ __all__ = [
     "DecoderRegistry",
     "MessageDecoder",
     "CodexItemDecoder",
+    "LifecycleBoundaryDecoder",
     "ACPPromptTurnDecoder",
     "PermissionDecoder",
     "UsageDecoder",
