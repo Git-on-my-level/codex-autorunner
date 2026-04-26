@@ -10,6 +10,7 @@ from ...integrations.chat.bound_live_progress import (
 from ...integrations.chat.managed_thread_startup_recovery import (
     recover_managed_thread_executions_on_startup as recover_surface_managed_thread_executions_on_startup,
 )
+from ...integrations.chat.managed_thread_turns import ManagedThreadExecutionHooks
 from .managed_thread_delivery import build_discord_managed_thread_durable_delivery_hooks
 from .managed_thread_routing import (
     _build_discord_managed_thread_coordinator,
@@ -19,6 +20,7 @@ from .message_turns import build_discord_thread_orchestration_service
 from .progress_leases import (
     _get_discord_thread_queue_task_map,
     _spawn_discord_progress_background_task,
+    cleanup_discord_terminal_progress_leases,
 )
 
 
@@ -35,11 +37,37 @@ async def recover_managed_thread_executions_on_startup(service: Any) -> None:
             owner,
             fallback_root=Path(owner._config.root),
         )
+
+        async def _cleanup_interrupted_progress(
+            _started: Any,
+            finalized: Any,
+        ) -> None:
+            status = str(getattr(finalized, "status", "") or "").strip().lower()
+            managed_turn_id = str(
+                getattr(finalized, "managed_turn_id", "") or ""
+            ).strip()
+            if status != "interrupted" or not managed_turn_id:
+                return
+            await cleanup_discord_terminal_progress_leases(
+                owner,
+                managed_thread_id=managed_thread_id,
+                execution_id=managed_turn_id,
+                channel_id=surface_key,
+                note="Status: this turn was interrupted.",
+                record_prefix=(
+                    "discord:startup-recovery-interrupted-progress-cleanup:"
+                    f"{managed_thread_id}:{managed_turn_id}"
+                ),
+            )
+
         return build_bound_chat_queue_execution_controller(
             hub_root=hub_root,
             raw_config=raw_config,
             managed_thread_id=managed_thread_id,
             surface_targets=(("discord", surface_key),),
+            base_hooks=ManagedThreadExecutionHooks(
+                on_execution_finalized=_cleanup_interrupted_progress
+            ),
         ).hooks
 
     def _recover_pending_queue(

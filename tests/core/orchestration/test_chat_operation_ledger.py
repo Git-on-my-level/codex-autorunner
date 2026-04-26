@@ -159,6 +159,30 @@ def test_recovery_plan_replays_pending_delivery(tmp_path: Path) -> None:
     assert decision.action == ChatOperationRecoveryAction.REPLAY_DELIVERY
 
 
+def test_list_recoverable_operations_includes_delivery_failed_replay_state(
+    tmp_path: Path,
+) -> None:
+    ledger = _ledger(tmp_path)
+    ledger.upsert_operation(
+        ChatOperationSnapshot(
+            operation_id="recover-delivery-failed",
+            surface_kind="discord",
+            surface_operation_key="interaction-delivery-failed",
+            state=ChatOperationState.DELIVERING,
+            delivery_state="failed",
+            delivery_cursor={"operation": "send_followup", "state": "failed"},
+            delivery_attempt_count=1,
+            terminal_outcome="delivery_failed",
+            created_at="2026-04-15T01:00:00Z",
+            updated_at="2026-04-15T01:00:00Z",
+        )
+    )
+
+    recoverable = ledger.list_recoverable_operations(surface_kind="discord")
+
+    assert [item.operation_id for item in recoverable] == ["recover-delivery-failed"]
+
+
 def test_recovery_plan_expires_unacknowledged_operations(tmp_path: Path) -> None:
     ledger = _ledger(tmp_path)
     snapshot = ledger.upsert_operation(
