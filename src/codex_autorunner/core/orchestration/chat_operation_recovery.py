@@ -99,7 +99,6 @@ class ChatOperationRecoveryAction(str, Enum):
     REPLAY_DELIVERY = "replay_delivery"
     MARK_ABANDONED = "mark_abandoned"
     MARK_EXPIRED = "mark_expired"
-    DEFER_BACKOFF = "defer_backoff"
 
 
 def _delivery_is_pending(snapshot: ChatOperationSnapshot) -> bool:
@@ -210,7 +209,7 @@ def plan_chat_operation_recovery(
                 },
             )
         return ChatOperationRecoveryDecision(
-            action=ChatOperationRecoveryAction.DEFER_BACKOFF,
+            action=ChatOperationRecoveryAction.NOOP,
             reason="delivery_backoff_active",
             previous_state=snapshot.state,
             delivery_pending=True,

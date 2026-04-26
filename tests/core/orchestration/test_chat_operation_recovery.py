@@ -54,7 +54,6 @@ class TestChatOperationRecoveryActionEnum:
         assert ChatOperationRecoveryAction.REPLAY_DELIVERY == "replay_delivery"
         assert ChatOperationRecoveryAction.MARK_ABANDONED == "mark_abandoned"
         assert ChatOperationRecoveryAction.MARK_EXPIRED == "mark_expired"
-        assert ChatOperationRecoveryAction.DEFER_BACKOFF == "defer_backoff"
 
     def test_all_actions_present(self) -> None:
         expected = {
@@ -63,7 +62,6 @@ class TestChatOperationRecoveryActionEnum:
             "replay_delivery",
             "mark_abandoned",
             "mark_expired",
-            "defer_backoff",
         }
         actual = {member.value for member in ChatOperationRecoveryAction}
         assert actual == expected
@@ -224,7 +222,7 @@ class TestPlanChatOperationRecoveryDeliveryPending:
         assert decision.action == ChatOperationRecoveryAction.REPLAY_DELIVERY
         assert decision.rationale["stale"] is True
 
-    def test_delivery_backoff_active_is_defer(self) -> None:
+    def test_delivery_backoff_active_is_noop(self) -> None:
         snap = _snap(
             state=ChatOperationState.DELIVERING,
             delivery_state="pending",
@@ -236,7 +234,7 @@ class TestPlanChatOperationRecoveryDeliveryPending:
             now=datetime(2026, 4, 15, 11, 56, 0, tzinfo=timezone.utc),
             delivery_stale_window=timedelta(minutes=15),
         )
-        assert decision.action == ChatOperationRecoveryAction.DEFER_BACKOFF
+        assert decision.action == ChatOperationRecoveryAction.NOOP
         assert decision.reason == "delivery_backoff_active"
         assert decision.delivery_pending is True
 

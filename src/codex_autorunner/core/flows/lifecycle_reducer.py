@@ -192,8 +192,8 @@ def _merge_state(current_state: Dict[str, Any], trigger: FlowTrigger) -> Dict[st
         # Distinguish None (preserve existing state) from {} (explicit clear).
         if trigger.state_output is not None:
             return dict(trigger.state_output)
-        return dict(current_state)
-    state = dict(current_state)
+        return dict(current_state or {})
+    state = dict(current_state or {})
     if trigger.state_output is not None:
         state.update(trigger.state_output)
     return state

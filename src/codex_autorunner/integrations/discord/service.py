@@ -5614,17 +5614,6 @@ class DiscordBotService:
                 )
                 continue
 
-            if decision.action == ChatOperationRecoveryAction.DEFER_BACKOFF:
-                log_event(
-                    self._logger,
-                    logging.DEBUG,
-                    "discord.interaction.recovery.deferred",
-                    interaction_id=record.interaction_id,
-                    reason=decision.reason,
-                    attempt_count=decision.attempt_count,
-                )
-                continue
-
             if decision.action == ChatOperationRecoveryAction.REPLAY_DELIVERY:
                 cursor = record.delivery_cursor_json or {}
                 cursor_operation = (
