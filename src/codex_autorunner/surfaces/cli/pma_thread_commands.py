@@ -321,6 +321,28 @@ def _assistant_text_lines(text: str) -> list[str]:
     return text.splitlines()
 
 
+def _thread_payload(data: Any) -> dict[str, Any]:
+    if not isinstance(data, dict):
+        return {}
+    thread = data.get("thread")
+    return thread if isinstance(thread, dict) else {}
+
+
+def _normalized_thread_runtime_status(data: Any) -> str:
+    thread = _thread_payload(data)
+    return str(
+        thread.get("normalized_status")
+        or thread.get("status")
+        or data.get("status")
+        or ""
+    ).strip()
+
+
+def _normalized_thread_lifecycle_status(data: Any) -> str:
+    thread = _thread_payload(data)
+    return str(thread.get("lifecycle_status") or thread.get("status") or "").strip()
+
+
 def _resolve_assistant_text_window(
     *,
     assistant_text: str,
@@ -455,7 +477,12 @@ def _render_assistant_text_window(
             typer.echo(f"Wrote empty {label} to {output_file}")
         return
 
-    typer.echo(f"{label}:")
+    if window.total_lines > 0:
+        typer.echo(
+            f"{label} lines {window.start_line}:{window.end_line} of {window.total_lines}:"
+        )
+    else:
+        typer.echo(f"{label}:")
     if window.text:
         typer.echo(window.text, nl=False)
         if not window.text.endswith("\n"):
@@ -942,6 +969,26 @@ def _render_thread_status_snapshot(data: dict[str, Any]) -> None:
         typer.echo(line)
 
 
+def _resume_noop_message(managed_thread_id: str, thread_data: Any) -> str:
+    status = _normalized_thread_runtime_status(thread_data)
+    if status and status.lower() != "active":
+        return f"Thread {managed_thread_id} is already active (status: {status})"
+    return f"Thread {managed_thread_id} is already active"
+
+
+def _interrupt_conflict_message(managed_thread_id: str, thread_data: Any) -> str:
+    status = _normalized_thread_runtime_status(thread_data)
+    if status:
+        return f"Cannot interrupt: thread is not running (status: {status})"
+    lifecycle_status = _normalized_thread_lifecycle_status(thread_data)
+    if lifecycle_status:
+        return (
+            "Cannot interrupt: thread is not running "
+            f"(lifecycle: {lifecycle_status})"
+        )
+    return f"Cannot interrupt: thread {managed_thread_id} is not running"
+
+
 def _resolve_latest_managed_turn_id(config, *, managed_thread_id: str) -> str:
     turns_data = _request_json(
         "GET",
@@ -1366,7 +1413,7 @@ def pma_thread_status(
     output_lines: Optional[str] = typer.Option(
         None,
         "--lines",
-        help="assistant_text line range (1-based), for example 1:80 or 100:",
+        help="assistant_text-only line range (1-based), for example 1:80 or 100:",
     ),
     continue_output: bool = typer.Option(
         False,
@@ -2178,8 +2225,32 @@ def pma_thread_resume(
 ):
     """Set a managed thread active."""
     hub_root = _resolve_hub_path(path)
+    thread_data: dict[str, Any] = {}
     try:
         config = load_hub_config(hub_root)
+        thread_data = _request_json(
+            "GET",
+            _build_pma_url(config, f"/threads/{managed_thread_id}"),
+            token_env=config.server_auth_token_env,
+        )
+        if _normalized_thread_lifecycle_status(thread_data).lower() == "active":
+            if output_json:
+                typer.echo(
+                    json.dumps(
+                        {
+                            "status": "ok",
+                            "resumed": False,
+                            "detail": _resume_noop_message(
+                                managed_thread_id, thread_data
+                            ),
+                            "thread": _thread_payload(thread_data),
+                        },
+                        indent=2,
+                    )
+                )
+            else:
+                typer.echo(_resume_noop_message(managed_thread_id, thread_data))
+            return
         data = _request_json(
             "POST",
             _build_pma_url(config, f"/threads/{managed_thread_id}/resume"),
@@ -2344,6 +2415,7 @@ def pma_thread_interrupt(
 ):
     """Interrupt a running managed PMA thread turn."""
     hub_root = _resolve_hub_path(path)
+    thread_data: dict[str, Any] = {}
     try:
         config = load_hub_config(hub_root)
     except (OSError, ValueError) as exc:
@@ -2373,16 +2445,30 @@ def pma_thread_interrupt(
                 raise typer.Exit(code=1) from None
 
     try:
-        data = _request_json(
+        status_code, data = _request_json_with_status(
             "POST",
             _build_pma_url(config, f"/threads/{managed_thread_id}/interrupt"),
             token_env=config.server_auth_token_env,
         )
-    except httpx.HTTPError as exc:
-        typer.echo(f"HTTP error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
     except (ValueError, OSError) as exc:
         typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+
+    if status_code >= 400:
+        if output_json:
+            typer.echo(json.dumps(data, indent=2))
+        else:
+            detail = str(data.get("detail") or "").strip()
+            if status_code == 409 and detail == "Managed thread has no running turn":
+                typer.echo(
+                    _interrupt_conflict_message(managed_thread_id, thread_data),
+                    err=True,
+                )
+            else:
+                typer.echo(
+                    detail or f"Managed thread interrupt failed (HTTP {status_code})",
+                    err=True,
+                )
         raise typer.Exit(code=1) from None
 
     if output_json:

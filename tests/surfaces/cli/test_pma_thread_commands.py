@@ -73,6 +73,7 @@ def test_pma_cli_thread_status_help_shows_json_option():
     assert "--json" in output, "PMA thread status should support --json"
     assert "--output" in output
     assert "--lines" in output
+    assert "assistant_text-only" in output
     assert "--continue" in output
     assert "--output-file" in output
 
@@ -583,11 +584,83 @@ def test_pma_cli_thread_status_output_renders_paginated_assistant_text(
     )
 
     assert result.exit_code == 0, result.output
-    assert "assistant_text:" in result.stdout
+    assert "assistant_text lines 1:20 of 25:" in result.stdout
     assert "line 1" in result.stdout
     assert "line 20" in result.stdout
     assert "line 21" not in result.stdout
     assert "--continue or --lines 21:25" in result.stdout
+
+
+def test_pma_cli_thread_status_lines_header_clarifies_slice(
+    monkeypatch, tmp_path: Path
+) -> None:
+    assistant_text = "\n".join(f"line {index}" for index in range(1, 6))
+
+    monkeypatch.setattr(
+        pma_thread_commands,
+        "load_hub_config",
+        lambda hub_root: SimpleNamespace(
+            server_base_path="",
+            server_host="127.0.0.1",
+            server_port=4321,
+            server_auth_token_env=None,
+        ),
+    )
+
+    def _fake_request_json(
+        method: str,
+        url: str,
+        payload=None,
+        token_env=None,
+        params=None,
+    ):
+        _ = method, payload, token_env, params
+        if url.endswith("/threads/thread-1/status"):
+            return {
+                "managed_thread_id": "thread-1",
+                "status": "completed",
+                "operator_status": "reusable",
+                "status_reason": "managed_turn_completed",
+                "thread": {
+                    "agent": "codex",
+                    "repo_id": "repo-1",
+                    "status": "completed",
+                    "lifecycle_status": "active",
+                },
+                "turn": {
+                    "managed_turn_id": "turn-1",
+                    "status": "ok",
+                    "activity": "completed",
+                    "phase": "finalize",
+                },
+                "latest_turn_id": "turn-1",
+                "latest_assistant_text": assistant_text,
+                "latest_output_excerpt": "line 1",
+            }
+        raise AssertionError(f"unexpected url: {url}")
+
+    monkeypatch.setattr(pma_thread_commands, "_request_json", _fake_request_json)
+
+    result = CliRunner().invoke(
+        pma_app,
+        [
+            "thread",
+            "status",
+            "--id",
+            "thread-1",
+            "--output",
+            "--lines",
+            "2:3",
+            "--path",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "assistant_text lines 2:3 of 5:" in result.stdout
+    assert "line 2" in result.stdout
+    assert "line 3" in result.stdout
+    assert "line 1\nline 2\nline 3" not in result.stdout
 
 
 def test_pma_cli_thread_output_supports_continue_and_output_file(
@@ -2027,6 +2100,14 @@ def test_pma_cli_thread_control_commands_use_orchestration_routes(
         calls.append((method, url, payload))
         if url.endswith("/hub/pma/threads"):
             return {"thread": {"managed_thread_id": "thread-1"}}
+        if url.endswith("/hub/pma/threads/thread-1"):
+            return {
+                "thread": {
+                    "managed_thread_id": "thread-1",
+                    "lifecycle_status": "archived",
+                    "status": "archived",
+                }
+            }
         if url.endswith("/resume"):
             return {
                 "thread": {
@@ -2107,6 +2188,11 @@ def test_pma_cli_thread_control_commands_use_orchestration_routes(
             },
         ),
         (
+            "GET",
+            "http://127.0.0.1:4321/hub/pma/threads/thread-1",
+            None,
+        ),
+        (
             "POST",
             "http://127.0.0.1:4321/hub/pma/threads/thread-1/resume",
             {},
@@ -2117,6 +2203,119 @@ def test_pma_cli_thread_control_commands_use_orchestration_routes(
             None,
         ),
     ]
+
+
+def test_pma_cli_thread_resume_reports_already_active_noop(
+    monkeypatch, tmp_path: Path
+) -> None:
+    calls: list[tuple[str, str, dict[str, object] | None]] = []
+
+    monkeypatch.setattr(
+        pma_thread_commands,
+        "load_hub_config",
+        lambda hub_root: SimpleNamespace(
+            server_base_path="",
+            server_host="127.0.0.1",
+            server_port=4321,
+            server_auth_token_env=None,
+        ),
+    )
+
+    def _fake_request_json(
+        method: str,
+        url: str,
+        payload=None,
+        token_env=None,
+        params=None,
+    ):
+        _ = token_env, params
+        calls.append((method, url, payload))
+        if url.endswith("/hub/pma/threads/thread-1"):
+            return {
+                "thread": {
+                    "managed_thread_id": "thread-1",
+                    "lifecycle_status": "active",
+                    "status": "completed",
+                }
+            }
+        raise AssertionError(f"unexpected url: {url}")
+
+    monkeypatch.setattr(pma_thread_commands, "_request_json", _fake_request_json)
+
+    result = CliRunner().invoke(
+        pma_app,
+        ["thread", "resume", "--id", "thread-1", "--path", str(tmp_path)],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Thread thread-1 is already active (status: completed)" in result.stdout
+    assert calls == [
+        (
+            "GET",
+            "http://127.0.0.1:4321/hub/pma/threads/thread-1",
+            None,
+        )
+    ]
+
+
+def test_pma_cli_thread_interrupt_reports_running_conflict_cleanly(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        pma_thread_commands,
+        "load_hub_config",
+        lambda hub_root: SimpleNamespace(
+            server_base_path="",
+            server_host="127.0.0.1",
+            server_port=4321,
+            server_auth_token_env=None,
+        ),
+    )
+    monkeypatch.setattr(
+        pma_thread_commands,
+        "_fetch_agent_capabilities",
+        lambda config, path: {"codex": {"interrupt"}},
+    )
+
+    def _fake_request_json(
+        method: str,
+        url: str,
+        payload=None,
+        token_env=None,
+        params=None,
+    ):
+        _ = method, payload, token_env, params
+        if url.endswith("/threads/thread-1"):
+            return {
+                "thread": {
+                    "managed_thread_id": "thread-1",
+                    "agent": "codex",
+                    "status": "completed",
+                    "lifecycle_status": "active",
+                }
+            }
+        raise AssertionError(f"unexpected url: {url}")
+
+    monkeypatch.setattr(pma_thread_commands, "_request_json", _fake_request_json)
+    monkeypatch.setattr(
+        pma_thread_commands,
+        "_request_json_with_status",
+        lambda method, url, payload=None, token_env=None, params=None, timeout=30.0: (
+            409,
+            {"detail": "Managed thread has no running turn"},
+        ),
+    )
+
+    result = CliRunner().invoke(
+        pma_app,
+        ["thread", "interrupt", "--id", "thread-1", "--path", str(tmp_path)],
+    )
+
+    assert result.exit_code == 1
+    assert (
+        "Cannot interrupt: thread is not running (status: completed)" in result.output
+    )
+    assert "409 Conflict" not in result.output
 
 
 def test_pma_cli_thread_archive_bulk_uses_bulk_route(
