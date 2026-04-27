@@ -244,6 +244,105 @@ def test_pma_thread_status_snapshot_render_lines_include_queue_and_excerpt() -> 
     assert lines[-2:] == ["assistant_text_excerpt:", "assistant conclusion"]
 
 
+def test_pma_thread_status_snapshot_info_level_filters_progress_noise() -> None:
+    snapshot = pma_thread_commands._PmaThreadStatusSnapshot.from_dict(
+        {
+            "managed_thread_id": "thread-1",
+            "thread": {
+                "agent": "codex",
+                "repo_id": "repo-1",
+                "status": "running",
+                "lifecycle_status": "active",
+            },
+            "status": "running",
+            "turn": {
+                "managed_turn_id": "turn-1",
+                "status": "running",
+                "activity": "working",
+                "phase": "streaming",
+            },
+            "recent_progress": [
+                {
+                    "event_type": "progress",
+                    "summary": "No decoder for method: server.heartbeat",
+                    "received_at": "2026-03-17T10:11:10Z",
+                    "event_id": 19,
+                },
+                {
+                    "event_type": "assistant_update",
+                    "summary": "The",
+                    "received_at": "2026-03-17T10:11:11Z",
+                    "event_id": 20,
+                },
+                {
+                    "event_type": "assistant_update",
+                    "summary": "The user wants me to sleep 15 seconds",
+                    "received_at": "2026-03-17T10:11:11Z",
+                    "event_id": 26,
+                },
+                {
+                    "event_type": "tool_started",
+                    "summary": "tool: bash",
+                    "received_at": "2026-03-17T10:11:12Z",
+                    "event_id": 27,
+                },
+                {
+                    "event_type": "tool_started",
+                    "summary": "tool: bash",
+                    "received_at": "2026-03-17T10:11:12Z",
+                    "event_id": 28,
+                },
+            ],
+        }
+    )
+
+    lines = snapshot.render_lines(level=pma_thread_commands._PmaVerbosityLevel.INFO)
+
+    assert "recent progress:" in lines
+    assert (
+        "[10:11:11] #20-#26 assistant_update: The user wants me to sleep 15 seconds"
+        in lines
+    )
+    assert "[10:11:12] #27-#28 tool_started: tool: bash (x2)" in lines
+    assert "No decoder for method: server.heartbeat" not in "\n".join(lines)
+
+
+def test_pma_tail_snapshot_debug_level_keeps_raw_progress_noise() -> None:
+    snapshot = pma_thread_commands._PmaTailSnapshot.from_dict(
+        {
+            "managed_turn_id": "turn-1",
+            "turn_status": "running",
+            "activity": "working",
+            "events": [
+                {
+                    "event_type": "progress",
+                    "summary": "No decoder for method: server.connected",
+                    "received_at": "2026-03-17T10:11:10Z",
+                    "event_id": 2,
+                },
+                {
+                    "event_type": "assistant_update",
+                    "summary": "The",
+                    "received_at": "2026-03-17T10:11:11Z",
+                    "event_id": 20,
+                },
+                {
+                    "event_type": "assistant_update",
+                    "summary": "The user",
+                    "received_at": "2026-03-17T10:11:11Z",
+                    "event_id": 21,
+                },
+            ],
+        }
+    )
+
+    lines = snapshot.render_lines(level=pma_thread_commands._PmaVerbosityLevel.DEBUG)
+
+    assert "[10:11:10] #2 progress: No decoder for method: server.connected" in lines
+    assert "[10:11:11] #20 assistant_update: The" in lines
+    assert "[10:11:11] #21 assistant_update: The user" in lines
+
+
 def test_pma_thread_send_request_and_response_helpers() -> None:
     request = pma_thread_commands._ManagedThreadSendRequest(
         message="follow up",
@@ -505,14 +604,124 @@ def test_pma_cli_thread_query_commands_use_orchestration_routes(
         (
             "GET",
             "http://127.0.0.1:4321/hub/pma/threads/thread-1/status",
-            {"limit": 20, "level": "info"},
+            {"limit": 200, "level": "info"},
         ),
         (
             "GET",
             "http://127.0.0.1:4321/hub/pma/threads/thread-1/tail",
-            {"limit": 50, "level": "info"},
+            {"limit": 200, "level": "info"},
         ),
     ]
+
+
+def test_pma_cli_thread_status_info_applies_post_filter_limit(
+    monkeypatch, tmp_path: Path
+) -> None:
+    seen_params: list[dict[str, object] | None] = []
+
+    monkeypatch.setattr(
+        pma_thread_commands,
+        "load_hub_config",
+        lambda hub_root: SimpleNamespace(
+            server_base_path="",
+            server_host="127.0.0.1",
+            server_port=4321,
+            server_auth_token_env=None,
+        ),
+    )
+
+    def _fake_request_json(
+        method: str,
+        url: str,
+        payload=None,
+        token_env=None,
+        params=None,
+    ):
+        _ = method, payload, token_env
+        seen_params.append(params)
+        if url.endswith("/threads/thread-1/status"):
+            return {
+                "managed_thread_id": "thread-1",
+                "thread": {
+                    "managed_thread_id": "thread-1",
+                    "agent": "codex",
+                    "repo_id": "repo-1",
+                    "status": "running",
+                    "lifecycle_status": "active",
+                },
+                "status": "running",
+                "turn": {
+                    "managed_turn_id": "turn-1",
+                    "status": "running",
+                    "activity": "working",
+                    "phase": "streaming",
+                },
+                "recent_progress": [
+                    {
+                        "event_type": "assistant_update",
+                        "summary": "The",
+                        "received_at": "2026-03-17T10:11:11Z",
+                        "event_id": 20,
+                    },
+                    {
+                        "event_type": "assistant_update",
+                        "summary": "The user wants me to sleep 15 seconds",
+                        "received_at": "2026-03-17T10:11:11Z",
+                        "event_id": 26,
+                    },
+                    {
+                        "event_type": "tool_started",
+                        "summary": "tool: bash",
+                        "received_at": "2026-03-17T10:11:12Z",
+                        "event_id": 27,
+                    },
+                    {
+                        "event_type": "tool_started",
+                        "summary": "tool: bash",
+                        "received_at": "2026-03-17T10:11:12Z",
+                        "event_id": 28,
+                    },
+                    {
+                        "event_type": "progress",
+                        "summary": "No decoder for method: session.diff",
+                        "received_at": "2026-03-17T10:11:13Z",
+                        "event_id": 29,
+                    },
+                    {
+                        "event_type": "tool_completed",
+                        "summary": "tool: bash",
+                        "received_at": "2026-03-17T10:11:14Z",
+                        "event_id": 30,
+                    },
+                ],
+            }
+        raise AssertionError(f"unexpected url: {url}")
+
+    monkeypatch.setattr(pma_thread_commands, "_request_json", _fake_request_json)
+
+    result = CliRunner().invoke(
+        pma_app,
+        [
+            "thread",
+            "status",
+            "--id",
+            "thread-1",
+            "--limit",
+            "2",
+            "--path",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert seen_params == [{"limit": 200, "level": "info"}]
+    assert (
+        "[10:11:11] #20-#26 assistant_update: The user wants me to sleep 15 seconds"
+        not in result.stdout
+    )
+    assert "[10:11:12] #27-#28 tool_started: tool: bash (x2)" in result.stdout
+    assert "[10:11:14] #30 tool_completed: tool: bash" in result.stdout
+    assert "No decoder for method: session.diff" not in result.stdout
 
 
 def test_pma_cli_thread_status_output_renders_paginated_assistant_text(
