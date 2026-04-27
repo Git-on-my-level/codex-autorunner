@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from ...core.logging_utils import log_event
+from ...tickets.snapshot import list_ticket_snapshots
 from .interaction_runtime import (
     ensure_component_response_deferred,
     update_runtime_component_message,
@@ -45,29 +46,12 @@ def _list_ticket_choices(
     search_query: str = "",
 ) -> list[tuple[str, str, str]]:
     from ...integrations.chat.picker_filter import filter_picker_items
-    from ...tickets.files import (
-        list_ticket_paths,
-        read_ticket_frontmatter,
-        safe_relpath,
-    )
 
-    ticket_dir_path = _ticket_dir(workspace_root)
-    choices: list[tuple[str, str, str]] = []
-    normalized_filter = status_filter.strip().lower()
-    if normalized_filter not in {"all", "open", "done"}:
-        normalized_filter = "all"
-    for path in list_ticket_paths(ticket_dir_path):
-        frontmatter, errors = read_ticket_frontmatter(path)
-        is_done = bool(frontmatter and frontmatter.done and not errors)
-        if normalized_filter == "open" and is_done:
-            continue
-        if normalized_filter == "done" and not is_done:
-            continue
-        title = frontmatter.title if frontmatter and frontmatter.title else ""
-        label = f"{path.name}{' - ' + title if title else ''}"
-        description = "done" if is_done else "open"
-        rel_path = safe_relpath(path, workspace_root)
-        choices.append((rel_path, label, description))
+    snapshots = list_ticket_snapshots(workspace_root, status_filter=status_filter)
+    choices: list[tuple[str, str, str]] = [
+        (snap.rel_path, snap.label, "done" if snap.is_done else "open")
+        for snap in snapshots
+    ]
     normalized_query = search_query.strip()
     if not normalized_query or not choices:
         return choices
