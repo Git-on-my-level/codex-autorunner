@@ -37,6 +37,7 @@ from .text_utils import _coerce_int, _normalize_optional_text
 _LOGGER = logging.getLogger(__name__)
 _MANAGED_TURN_START_CONFIRMATION_TIMEOUT_SECONDS = 300
 _MANAGED_TURN_START_CONFIRMATION_RETRY_SECONDS = 5
+_RUNTIME_STARTED_AT_KEY = "runtime_started_at"
 
 
 def _require_text(value: Any, *, field_name: str) -> str:
@@ -275,7 +276,9 @@ def _resolve_notify_message(
             retry_after_seconds=_MANAGED_TURN_START_CONFIRMATION_RETRY_SECONDS,
         )
     turn_status = _normalize_optional_text(turn.get("status")) or "unknown"
-    if _normalize_optional_text(turn.get("backend_turn_id")) is not None:
+    metadata = _normalize_mapping(turn.get("metadata"))
+    runtime_started_at = _normalize_optional_text(metadata.get(_RUNTIME_STARTED_AT_KEY))
+    if runtime_started_at is not None:
         return _require_text(
             payload.get("message") or payload.get("body") or payload.get("text"),
             field_name="notify_chat message",
@@ -701,7 +704,9 @@ def _repair_scm_thread_binding(
 
 
 def build_enqueue_managed_turn_executor(
-    *, hub_root: Path, thread_store: Optional[PmaThreadStore] = None
+    *,
+    hub_root: Path,
+    thread_store: Optional[PmaThreadStore] = None,
 ) -> PublishActionExecutor:
     store = thread_store or PmaThreadStore(hub_root)
 

@@ -65,6 +65,7 @@ from .text_utils import _json_dumps, _json_loads_object
 from .time_utils import now_iso
 
 _BACKEND_RUNTIME_INSTANCE_ID_KEY = "backend_runtime_instance_id"
+_RUNTIME_STARTED_AT_KEY = "runtime_started_at"
 
 
 class ManagedThreadAlreadyHasRunningTurnError(RuntimeError):
@@ -1125,18 +1126,56 @@ class PmaThreadStore:
         return True
 
     def set_turn_backend_turn_id(
-        self, managed_turn_id: str, backend_turn_id: Optional[str]
+        self,
+        managed_turn_id: str,
+        backend_turn_id: Optional[str],
+        *,
+        confirmed_start: bool = True,
     ) -> None:
+        normalized_backend_turn_id = _coerce_text(backend_turn_id)
+        runtime_started_at = now_iso()
         with self._write_conn() as conn:
+            row = conn.execute(
+                """
+                SELECT metadata_json
+                  FROM orch_thread_executions
+                 WHERE execution_id = ?
+                """,
+                (managed_turn_id,),
+            ).fetchone()
+            metadata = (
+                _json_loads_object(row["metadata_json"]) if row is not None else {}
+            )
+            if (
+                confirmed_start
+                and normalized_backend_turn_id is not None
+                and _coerce_text(metadata.get(_RUNTIME_STARTED_AT_KEY)) is None
+            ):
+                metadata[_RUNTIME_STARTED_AT_KEY] = runtime_started_at
             with conn:
-                conn.execute(
-                    """
-                    UPDATE orch_thread_executions
-                       SET backend_turn_id = ?
-                     WHERE execution_id = ?
-                    """,
-                    (backend_turn_id, managed_turn_id),
-                )
+                if metadata:
+                    conn.execute(
+                        """
+                        UPDATE orch_thread_executions
+                           SET backend_turn_id = ?,
+                               metadata_json = ?
+                         WHERE execution_id = ?
+                        """,
+                        (
+                            normalized_backend_turn_id,
+                            _json_dumps(metadata),
+                            managed_turn_id,
+                        ),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        UPDATE orch_thread_executions
+                           SET backend_turn_id = ?
+                         WHERE execution_id = ?
+                        """,
+                        (normalized_backend_turn_id, managed_turn_id),
+                    )
 
     def mark_turn_interrupted(self, managed_turn_id: str) -> bool:
         finished_at = now_iso()

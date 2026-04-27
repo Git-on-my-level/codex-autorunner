@@ -7,6 +7,7 @@ from ..orchestration.models import BusyThreadPolicy, ExecutionRecord, MessageReq
 from ._normalizers import (
     coerce_int,
     copy_mapping,
+    normalize_bool,
     normalize_busy_thread_policy,
     normalize_message_request_kind,
     normalize_optional_text,
@@ -337,6 +338,7 @@ class ExecutionCancelAllRequest:
 class ExecutionBackendIdUpdateRequest:
     execution_id: str
     backend_turn_id: Optional[str] = None
+    confirmed_start: bool = True
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any]) -> "ExecutionBackendIdUpdateRequest":
@@ -348,12 +350,17 @@ class ExecutionBackendIdUpdateRequest:
             backend_turn_id=normalize_optional_text(
                 data.get("backend_turn_id") or data.get("backend_id")
             ),
+            confirmed_start=normalize_bool(
+                data.get("confirmed_start"),
+                fallback=True,
+            ),
         )
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "execution_id": self.execution_id,
             "backend_turn_id": self.backend_turn_id,
+            "confirmed_start": self.confirmed_start,
         }
 
 

@@ -1057,6 +1057,34 @@ def test_mark_turn_finished_does_not_override_interrupted_status(
     assert thread_after["status_terminal"] is True
 
 
+def test_set_turn_backend_turn_id_tracks_confirmed_runtime_start(
+    tmp_path: Path,
+) -> None:
+    store = PmaThreadStore(tmp_path / "hub")
+    thread = store.create_thread("codex", tmp_path / "workspace")
+    turn = store.create_turn(thread["managed_thread_id"], prompt="hello")
+
+    store.set_turn_backend_turn_id(
+        turn["managed_turn_id"],
+        "backend-thread-1:1234567890",
+        confirmed_start=False,
+    )
+    provisional = store.get_turn(thread["managed_thread_id"], turn["managed_turn_id"])
+    assert provisional is not None
+    assert provisional["backend_turn_id"] == "backend-thread-1:1234567890"
+    assert provisional["metadata"].get("runtime_started_at") is None
+
+    store.set_turn_backend_turn_id(
+        turn["managed_turn_id"],
+        "backend-turn-1",
+        confirmed_start=True,
+    )
+    confirmed = store.get_turn(thread["managed_thread_id"], turn["managed_turn_id"])
+    assert confirmed is not None
+    assert confirmed["backend_turn_id"] == "backend-turn-1"
+    assert confirmed["metadata"].get("runtime_started_at")
+
+
 def test_concurrent_create_turn_admission_is_atomic(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     store_a = PmaThreadStore(hub_root)

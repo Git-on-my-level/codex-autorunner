@@ -1654,6 +1654,7 @@ def test_notify_chat_waits_for_managed_turn_start_confirmation(
         now_fn=_QueuedClock(
             "2026-03-25T00:00:00Z",
             "2026-03-25T00:00:05Z",
+            "2026-03-25T00:00:10Z",
         ),
     )
 
@@ -1666,14 +1667,28 @@ def test_notify_chat_waits_for_managed_turn_start_confirmation(
     enqueue_result = processed_by_id[enqueue_operation.operation_id].response
     thread_store.set_turn_backend_turn_id(
         enqueue_result["managed_turn_id"],
-        "backend-turn-1",
+        "backend-thread-1:1234567890",
+        confirmed_start=False,
     )
 
     second = processor.process_now(limit=10)
     assert [operation.operation_id for operation in second] == [
         notify_operation.operation_id
     ]
-    assert second[0].state == "succeeded"
+    assert second[0].state == "pending"
+    assert calls == []
+
+    thread_store.set_turn_backend_turn_id(
+        enqueue_result["managed_turn_id"],
+        "backend-turn-1",
+        confirmed_start=True,
+    )
+
+    third = processor.process_now(limit=10)
+    assert [operation.operation_id for operation in third] == [
+        notify_operation.operation_id
+    ]
+    assert third[0].state == "succeeded"
     assert calls == ["Started the latest PR review batch for acme/widgets#42."]
 
 
@@ -1768,7 +1783,11 @@ def test_notify_chat_uses_enqueue_thread_target_id_for_bound_delivery(
     assert replaced is not None
 
     managed_turn_id = replaced.response["managed_turn_id"]
-    thread_store.set_turn_backend_turn_id(managed_turn_id, "backend-turn-rebound")
+    thread_store.set_turn_backend_turn_id(
+        managed_turn_id,
+        "backend-turn-rebound",
+        confirmed_start=True,
+    )
 
     second = processor.process_now(limit=10)
     assert [operation.operation_id for operation in second] == [
@@ -1828,7 +1847,6 @@ def test_notify_chat_reports_failure_when_managed_turn_is_interrupted_before_sta
         "codex_autorunner.core.publish_operation_executors.notify_primary_pma_chat_for_repo",
         _fake_notify_primary_pma_chat_for_repo,
     )
-
     processor = PublishOperationProcessor(
         journal,
         executors=PublishExecutorRegistry(
