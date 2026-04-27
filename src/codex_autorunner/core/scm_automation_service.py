@@ -329,20 +329,21 @@ def _trimmed_summary(value: Any, *, limit: int = 120) -> Optional[str]:
     return f"{text[: limit - 3].rstrip()}..."
 
 
-def _review_comment_notice_message(
-    tracking: Mapping[str, Any],
-    *,
-    enqueue_status: str,
-) -> str:
+def _review_comment_notice_message(tracking: Mapping[str, Any]) -> str:
     subject = _reaction_subject(tracking)
-    if enqueue_status == "queued":
-        return (
-            f"Queued the latest PR review batch for {subject}.\n"
-            "The bound agent thread has the work item and will pick it up next."
-        )
     return (
         f"Started the latest PR review batch for {subject}.\n"
         "The bound agent thread is working on the latest review feedback now."
+    )
+
+
+def _review_comment_notice_failure_message(
+    tracking: Mapping[str, Any],
+) -> str:
+    subject = _reaction_subject(tracking)
+    return (
+        f"Failed to wake the bound agent thread for {subject}.\n"
+        "The SCM-triggered turn never reached a confirmed running state."
     )
 
 
@@ -755,12 +756,10 @@ class ScmAutomationService:
         tracking: Mapping[str, Any],
         enqueue_operation: PublishOperation,
         seen_operation_keys: set[str],
+        next_attempt_at: Optional[str] = None,
     ) -> Optional[PublishOperation]:
-        thread_target_id = _normalize_text(
-            enqueue_operation.response.get("thread_target_id")
-        ) or _normalize_text(tracking.get("thread_target_id"))
-        enqueue_status = _normalize_text(enqueue_operation.response.get("status"))
-        if thread_target_id is None or enqueue_status not in {"queued", "running"}:
+        thread_target_id = _normalize_text(tracking.get("thread_target_id"))
+        if thread_target_id is None:
             return None
         operation_key = self._review_comment_notice_key(
             enqueue_operation_key=enqueue_operation.operation_key
@@ -778,21 +777,35 @@ class ScmAutomationService:
             operation_key=operation_key,
         )
         payload = with_correlation_id(
-            _publish_notice_payload(
-                hub_root=self._hub_root,
-                thread_target_id=thread_target_id,
-                message=_review_comment_notice_message(
-                    tracking,
-                    enqueue_status=enqueue_status,
+            {
+                **_publish_notice_payload(
+                    hub_root=self._hub_root,
+                    thread_target_id=thread_target_id,
+                    message=_review_comment_notice_message(tracking),
                 ),
-            ),
+                "managed_turn_dependency": {
+                    "dependency_kind": "enqueue_managed_turn_started",
+                    "operation_id": enqueue_operation.operation_id,
+                    "thread_target_id": thread_target_id,
+                    "failure_message": _review_comment_notice_failure_message(tracking),
+                },
+            },
             correlation_id=notice_correlation_id,
         )
         operation, deduped = self._journal.create_operation(
             operation_key=operation_key,
             operation_kind="notify_chat",
             payload=payload,
+            next_attempt_at=next_attempt_at,
         )
+        if deduped and operation.state == "pending":
+            updated = self._journal.update_pending_operation(
+                operation.operation_id,
+                payload=payload,
+                next_attempt_at=next_attempt_at,
+            )
+            if updated is not None:
+                operation = updated
         self._audit_recorder.record(
             action_type=SCM_AUDIT_PUBLISH_CREATED,
             correlation_id=correlation_id,
@@ -802,7 +815,7 @@ class ScmAutomationService:
                 "auxiliary": True,
                 "enqueue_notice": True,
                 "source_operation_key": enqueue_operation.operation_key,
-                "enqueue_status": enqueue_status,
+                "dependency_operation_id": enqueue_operation.operation_id,
             },
         )
         return operation
@@ -1060,6 +1073,19 @@ class ScmAutomationService:
                     metadata=tracking,
                 )
             publish_operations.append(operation)
+            if (
+                binding is not None
+                and intent.reaction_kind == "review_comment"
+                and intent.operation_kind == "enqueue_managed_turn"
+            ):
+                notice_operation = self._create_review_comment_notice_operation(
+                    tracking=tracking,
+                    enqueue_operation=operation,
+                    seen_operation_keys=seen_operation_keys,
+                    next_attempt_at=operation.next_attempt_at,
+                )
+                if notice_operation is not None:
+                    publish_operations.append(notice_operation)
 
         return ScmAutomationIngestResult(
             event=event,
@@ -1097,18 +1123,6 @@ class ScmAutomationService:
             event_id = _normalize_text(tracking.get("event_id"))
             try:
                 if operation.state == "succeeded":
-                    if (
-                        operation.operation_kind == "enqueue_managed_turn"
-                        and _normalize_text(tracking.get("reaction_kind"))
-                        == "review_comment"
-                    ):
-                        notice_operation = self._create_review_comment_notice_operation(
-                            tracking=tracking,
-                            enqueue_operation=operation,
-                            seen_operation_keys=seen_operation_keys,
-                        )
-                        if notice_operation is not None:
-                            escalations.append(notice_operation)
                     self._reaction_state_store.mark_reaction_delivery_succeeded(
                         binding_id=binding_id,
                         reaction_kind=rsk,

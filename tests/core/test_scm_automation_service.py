@@ -947,6 +947,7 @@ def test_ingest_event_tracks_review_comment_operations_in_separate_state_namespa
     assert [operation.operation_kind for operation in result.publish_operations] == [
         "react_pr_review_comment",
         "enqueue_managed_turn",
+        "notify_chat",
     ]
     assert state_store.should_calls == [
         (
@@ -1021,7 +1022,13 @@ def test_ingest_event_batches_review_comment_enqueue_for_15_seconds(
         for operation in result.publish_operations
         if operation.operation_kind == "enqueue_managed_turn"
     )
+    notify_op = next(
+        operation
+        for operation in result.publish_operations
+        if operation.operation_kind == "notify_chat"
+    )
     assert enqueue_op.next_attempt_at == "2026-03-26T00:00:15Z"
+    assert notify_op.next_attempt_at == "2026-03-26T00:00:15Z"
     assert journal.next_attempts_by_key[enqueue_op.operation_key] == (
         "2026-03-26T00:00:15Z"
     )
@@ -1216,63 +1223,62 @@ def test_ingest_event_ci_failure_batch_refresh_honors_max_window(
     assert second_result.publish_operations[0].next_attempt_at == "2026-03-26T00:03:01Z"
 
 
-def test_handle_processed_operations_creates_truthful_review_comment_notice_on_success(
+def test_ingest_event_creates_review_comment_notice_dependency(
     tmp_path: Path,
 ) -> None:
-    state_store = ScmReactionStateStore(tmp_path)
-    state_store.mark_reaction_emitted(
-        binding_id="binding-1",
-        reaction_kind="review_comment:enqueue_managed_turn",
-        fingerprint="fp-inline",
-        event_id="github:event-inline-comment",
-        operation_key="scm:key-inline",
-    )
     journal = _JournalFake()
     service = ScmAutomationService(
         tmp_path,
-        event_store=_EventStoreFake(),
-        binding_resolver=_BindingResolverFake(None),
-        reaction_router=_ReactionRouterFake([]),
-        reaction_state_store=state_store,
+        event_store=_EventStoreFake(
+            ScmEvent(
+                event_id="github:event-inline-comment",
+                provider="github",
+                event_type="pull_request_review_comment",
+                occurred_at="2026-03-26T00:00:00Z",
+                received_at="2026-03-26T00:00:01Z",
+                created_at="2026-03-26T00:00:02Z",
+                repo_slug="acme/widgets",
+                repo_id="repo-1",
+                pr_number=42,
+                delivery_id="delivery-1",
+                payload={
+                    "action": "created",
+                    "comment_id": "2844",
+                    "author_login": "reviewer",
+                    "author_type": "User",
+                    "issue_author_login": "pr-author",
+                    "body": "Please cover the inline review-comment webhook path too.",
+                },
+                raw_payload=None,
+            )
+        ),
+        binding_resolver=_BindingResolverFake(_binding()),
+        reaction_router=route_scm_reactions,
+        reaction_state_store=_PermissiveReactionStateFake(),
         journal=journal,
         publish_processor=_ProcessorFake(processed=[]),
     )
-    succeeded = PublishOperation(
-        **{
-            **_operation(
-                operation_id="op-inline",
-                operation_key="scm:key-inline",
-                operation_kind="enqueue_managed_turn",
-                state="succeeded",
-            ).to_dict(),
-            "payload": {
-                "scm_reaction": {
-                    "binding_id": "binding-1",
-                    "reaction_kind": "review_comment",
-                    "reaction_state_kind": "review_comment:enqueue_managed_turn",
-                    "fingerprint": "fp-inline",
-                    "event_id": "github:event-inline-comment",
-                    "operation_kind": "enqueue_managed_turn",
-                    "repo_slug": "acme/widgets",
-                    "pr_number": 42,
-                    "thread_target_id": "thread-1",
-                }
-            },
-            "response": {
-                "status": "queued",
-                "thread_target_id": "thread-2",
-            },
-        }
+
+    result = service.ingest_event("github:event-inline-comment")
+
+    enqueue_op = next(
+        operation
+        for operation in result.publish_operations
+        if operation.operation_kind == "enqueue_managed_turn"
+    )
+    notify_op = next(
+        operation
+        for operation in result.publish_operations
+        if operation.operation_kind == "notify_chat"
     )
 
-    follow_ups = service._handle_processed_operations([succeeded])
-
-    assert len(follow_ups) == 1
-    assert follow_ups[0].operation_kind == "notify_chat"
-    assert follow_ups[0].payload["thread_target_id"] == "thread-2"
+    assert notify_op.payload["thread_target_id"] == "thread-123"
+    dependency = notify_op.payload["managed_turn_dependency"]
+    assert dependency["dependency_kind"] == "enqueue_managed_turn_started"
+    assert dependency["operation_id"] == enqueue_op.operation_id
     assert (
-        "Queued the latest PR review batch for acme/widgets#42."
-        in follow_ups[0].payload["message"]
+        "Started the latest PR review batch for acme/widgets#42."
+        in notify_op.payload["message"]
     )
 
 

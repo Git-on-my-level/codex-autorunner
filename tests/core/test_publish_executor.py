@@ -1585,6 +1585,185 @@ def test_process_now_runs_first_publish_operation_types(
     assert comment_attempts[0]["state"] == "succeeded"
 
 
+def test_notify_chat_waits_for_managed_turn_start_confirmation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root, workspace_root, repo_id = _publish_hub(tmp_path)
+    thread_store = PmaThreadStore(hub_root)
+    thread = thread_store.create_thread("codex", workspace_root, repo_id=repo_id)
+    journal = PublishJournalStore(hub_root)
+    enqueue_operation, _ = journal.create_operation(
+        operation_key="enqueue:dep:start",
+        operation_kind="enqueue_managed_turn",
+        payload={
+            "thread_target_id": thread["managed_thread_id"],
+            "message_text": "Handle the latest SCM review.",
+        },
+        next_attempt_at="2026-03-25T00:00:00Z",
+    )
+    notify_operation, _ = journal.create_operation(
+        operation_key="notify:dep:start",
+        operation_kind="notify_chat",
+        payload={
+            "delivery": "primary_pma",
+            "repo_id": repo_id,
+            "message": "Started the latest PR review batch for acme/widgets#42.",
+            "managed_turn_dependency": {
+                "dependency_kind": "enqueue_managed_turn_started",
+                "operation_id": enqueue_operation.operation_id,
+                "thread_target_id": thread["managed_thread_id"],
+                "failure_message": "Failed to wake the bound agent thread for acme/widgets#42.",
+            },
+        },
+        next_attempt_at="2026-03-25T00:00:00Z",
+    )
+
+    calls: list[str] = []
+
+    async def _fake_notify_primary_pma_chat_for_repo(
+        *,
+        hub_root: Path,
+        repo_id: str | None,
+        message: str,
+        correlation_id: str,
+    ) -> dict[str, int]:
+        _ = (hub_root, repo_id, correlation_id)
+        calls.append(message)
+        return {"targets": 1, "published": 1}
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.publish_operation_executors.notify_primary_pma_chat_for_repo",
+        _fake_notify_primary_pma_chat_for_repo,
+    )
+
+    processor = PublishOperationProcessor(
+        journal,
+        executors=PublishExecutorRegistry(
+            {
+                "enqueue_managed_turn": build_enqueue_managed_turn_executor(
+                    hub_root=hub_root,
+                    thread_store=thread_store,
+                ),
+                "notify_chat": build_notify_chat_executor(
+                    hub_root=hub_root,
+                    thread_store=thread_store,
+                    journal_store=journal,
+                ),
+            }
+        ),
+        now_fn=_QueuedClock(
+            "2026-03-25T00:00:00Z",
+            "2026-03-25T00:00:05Z",
+        ),
+    )
+
+    first = processor.process_now(limit=10)
+    processed_by_id = {operation.operation_id: operation for operation in first}
+    assert processed_by_id[enqueue_operation.operation_id].state == "succeeded"
+    assert processed_by_id[notify_operation.operation_id].state == "pending"
+    assert calls == []
+
+    enqueue_result = processed_by_id[enqueue_operation.operation_id].response
+    thread_store.set_turn_backend_turn_id(
+        enqueue_result["managed_turn_id"],
+        "backend-turn-1",
+    )
+
+    second = processor.process_now(limit=10)
+    assert [operation.operation_id for operation in second] == [
+        notify_operation.operation_id
+    ]
+    assert second[0].state == "succeeded"
+    assert calls == ["Started the latest PR review batch for acme/widgets#42."]
+
+
+def test_notify_chat_reports_failure_when_managed_turn_is_interrupted_before_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root, workspace_root, repo_id = _publish_hub(tmp_path)
+    thread_store = PmaThreadStore(hub_root)
+    thread = thread_store.create_thread("codex", workspace_root, repo_id=repo_id)
+    journal = PublishJournalStore(hub_root)
+    enqueue_operation, _ = journal.create_operation(
+        operation_key="enqueue:dep:failure",
+        operation_kind="enqueue_managed_turn",
+        payload={
+            "thread_target_id": thread["managed_thread_id"],
+            "message_text": "Handle the latest SCM review.",
+        },
+        next_attempt_at="2026-03-25T00:00:00Z",
+    )
+    notify_operation, _ = journal.create_operation(
+        operation_key="notify:dep:failure",
+        operation_kind="notify_chat",
+        payload={
+            "delivery": "primary_pma",
+            "repo_id": repo_id,
+            "message": "Started the latest PR review batch for acme/widgets#42.",
+            "managed_turn_dependency": {
+                "dependency_kind": "enqueue_managed_turn_started",
+                "operation_id": enqueue_operation.operation_id,
+                "thread_target_id": thread["managed_thread_id"],
+                "failure_message": "Failed to wake the bound agent thread for acme/widgets#42.",
+            },
+        },
+        next_attempt_at="2026-03-25T00:00:00Z",
+    )
+
+    calls: list[str] = []
+
+    async def _fake_notify_primary_pma_chat_for_repo(
+        *,
+        hub_root: Path,
+        repo_id: str | None,
+        message: str,
+        correlation_id: str,
+    ) -> dict[str, int]:
+        _ = (hub_root, repo_id, correlation_id)
+        calls.append(message)
+        return {"targets": 1, "published": 1}
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.publish_operation_executors.notify_primary_pma_chat_for_repo",
+        _fake_notify_primary_pma_chat_for_repo,
+    )
+
+    processor = PublishOperationProcessor(
+        journal,
+        executors=PublishExecutorRegistry(
+            {
+                "enqueue_managed_turn": build_enqueue_managed_turn_executor(
+                    hub_root=hub_root,
+                    thread_store=thread_store,
+                ),
+                "notify_chat": build_notify_chat_executor(
+                    hub_root=hub_root,
+                    thread_store=thread_store,
+                    journal_store=journal,
+                ),
+            }
+        ),
+        now_fn=_QueuedClock(
+            "2026-03-25T00:00:00Z",
+            "2026-03-25T00:00:05Z",
+        ),
+    )
+
+    first = processor.process_now(limit=10)
+    processed_by_id = {operation.operation_id: operation for operation in first}
+    assert processed_by_id[notify_operation.operation_id].state == "pending"
+
+    enqueue_result = processed_by_id[enqueue_operation.operation_id].response
+    assert thread_store.mark_turn_interrupted(enqueue_result["managed_turn_id"])
+
+    second = processor.process_now(limit=10)
+    assert [operation.operation_id for operation in second] == [
+        notify_operation.operation_id
+    ]
+    assert second[0].state == "succeeded"
+    assert calls == ["Failed to wake the bound agent thread for acme/widgets#42."]
+
+
 @pytest.mark.asyncio
 async def test_notify_chat_executor_runs_while_event_loop_is_active(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
