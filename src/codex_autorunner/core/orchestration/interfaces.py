@@ -241,7 +241,11 @@ class ThreadExecutionStore(Protocol):
     ) -> Optional[tuple[ExecutionRecord, dict[str, Any]]]: ...
 
     def set_execution_backend_id(
-        self, execution_id: str, backend_turn_id: Optional[str]
+        self,
+        execution_id: str,
+        backend_turn_id: Optional[str],
+        *,
+        confirmed_start: bool = True,
     ) -> None: ...
 
     def record_execution_result(

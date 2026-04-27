@@ -8,13 +8,12 @@ from typing import Any
 
 import pytest
 
+import codex_autorunner.integrations.discord.managed_thread_routing as discord_managed_thread_routing_module
 import codex_autorunner.integrations.discord.message_turns as discord_message_turns_module
+import codex_autorunner.integrations.discord.progress_leases as discord_progress_leases_module
 import codex_autorunner.integrations.discord.service as discord_service_module
 import codex_autorunner.integrations.discord.service_lifecycle as discord_service_lifecycle_module
 from codex_autorunner.integrations.chat.dispatcher import build_dispatch_context
-from codex_autorunner.integrations.discord.message_turns import (
-    bind_discord_progress_task_context,
-)
 from codex_autorunner.integrations.discord.service import (
     DiscordBotService,
     DiscordMessageTurnResult,
@@ -446,7 +445,7 @@ async def test_background_task_done_reconciles_progress_lease(
         progress_label="working",
     )
     monkeypatch.setattr(
-        discord_message_turns_module,
+        discord_managed_thread_routing_module,
         "build_discord_thread_orchestration_service",
         lambda _service: _FakeThreadService(execution_status="running"),
     )
@@ -456,7 +455,7 @@ async def test_background_task_done_reconciles_progress_lease(
 
     try:
         task = service._spawn_task(_boom())
-        bind_discord_progress_task_context(
+        discord_progress_leases_module.bind_discord_progress_task_context(
             task,
             managed_thread_id="thread-1",
             lease_id="lease-1",
@@ -512,7 +511,7 @@ async def test_background_task_done_ignores_expected_progress_task_cancellation(
         progress_label="working",
     )
     monkeypatch.setattr(
-        discord_message_turns_module,
+        discord_managed_thread_routing_module,
         "build_discord_thread_orchestration_service",
         lambda _service: _FakeThreadService(execution_status="running"),
     )
@@ -524,7 +523,7 @@ async def test_background_task_done_ignores_expected_progress_task_cancellation(
 
     try:
         task = service._spawn_task(_hang_forever())
-        bind_discord_progress_task_context(
+        discord_progress_leases_module.bind_discord_progress_task_context(
             task,
             managed_thread_id="thread-1",
             execution_id="exec-1",
@@ -578,7 +577,7 @@ async def test_background_task_done_reconciles_cancel_sensitive_progress_task(
         progress_label="working",
     )
     monkeypatch.setattr(
-        discord_message_turns_module,
+        discord_managed_thread_routing_module,
         "build_discord_thread_orchestration_service",
         lambda _service: _FakeThreadService(execution_status="running"),
     )
@@ -590,7 +589,7 @@ async def test_background_task_done_reconciles_cancel_sensitive_progress_task(
 
     try:
         task = service._spawn_task(_hang_forever())
-        bind_discord_progress_task_context(
+        discord_progress_leases_module.bind_discord_progress_task_context(
             task,
             managed_thread_id="thread-1",
             execution_id="exec-1",
@@ -800,7 +799,7 @@ async def test_shutdown_timeout_reconciles_supervised_progress_leases(
         progress_label="working",
     )
     monkeypatch.setattr(
-        discord_message_turns_module,
+        discord_managed_thread_routing_module,
         "build_discord_thread_orchestration_service",
         lambda _service: _FakeThreadService(execution_status="running"),
     )
@@ -817,7 +816,7 @@ async def test_shutdown_timeout_reconciles_supervised_progress_leases(
 
     try:
         task = service._spawn_task(_hang_forever(), await_on_shutdown=True)
-        bind_discord_progress_task_context(
+        discord_progress_leases_module.bind_discord_progress_task_context(
             task,
             managed_thread_id="thread-1",
             execution_id="exec-1",
@@ -875,7 +874,7 @@ async def test_startup_reconciles_orphaned_progress_leases(
         progress_label="working",
     )
     monkeypatch.setattr(
-        discord_message_turns_module,
+        discord_managed_thread_routing_module,
         "build_discord_thread_orchestration_service",
         lambda _service: _FakeThreadService(execution_status="running"),
     )
@@ -917,7 +916,7 @@ async def test_startup_reconciles_progress_leases_stuck_in_retiring_state(
         progress_label="working",
     )
     monkeypatch.setattr(
-        discord_message_turns_module,
+        discord_managed_thread_routing_module,
         "build_discord_thread_orchestration_service",
         lambda _service: _FakeThreadService(execution_status="running"),
     )

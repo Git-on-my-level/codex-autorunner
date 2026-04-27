@@ -85,8 +85,6 @@ async def test_service_startup_reaps_managed_processes(
         called_roots.append(root)
         return SimpleNamespace(killed=0, signaled=0, removed=0, skipped=0)
 
-    monkeypatch.setattr(discord_service_module, "reap_managed_processes", _fake_reap)
-
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
     await store.initialize()
     service = DiscordBotService(
@@ -96,6 +94,14 @@ async def test_service_startup_reaps_managed_processes(
         gateway_client=_FakeGateway(),
         state_store=store,
         outbox_manager=_FakeOutboxManager(),
+    )
+    service._dependencies = discord_service_module.DiscordServiceDependencies(
+        load_repo_config=service._dependencies.load_repo_config,
+        resolve_filebox_retention_policy=(
+            service._dependencies.resolve_filebox_retention_policy
+        ),
+        prune_filebox_root=service._dependencies.prune_filebox_root,
+        reap_managed_processes=_fake_reap,
     )
 
     try:

@@ -7,6 +7,7 @@ from typing import Any, Optional
 import pytest
 from tests import discord_message_turns_support as support
 
+import codex_autorunner.integrations.discord.managed_thread_routing as discord_managed_thread_routing_module
 from codex_autorunner.core.orchestration import SQLiteManagedThreadDeliveryEngine
 from codex_autorunner.core.orchestration.managed_thread_delivery import (
     ManagedThreadDeliveryState,
@@ -294,7 +295,7 @@ async def test_reconcile_progress_lease_retries_when_retire_edit_fails(
         ),
     )
     monkeypatch.setattr(
-        support.discord_message_turns_module,
+        discord_managed_thread_routing_module,
         "build_discord_thread_orchestration_service",
         lambda _service: fake_orchestration_service,
     )
@@ -307,7 +308,7 @@ async def test_reconcile_progress_lease_retries_when_retire_edit_fails(
     )
 
     try:
-        reconciled = await support.discord_message_turns_module.reconcile_discord_turn_progress_leases(
+        reconciled = await support.discord_progress_leases_module.reconcile_discord_turn_progress_leases(
             service,
             lease_id="lease-1",
         )
@@ -318,7 +319,7 @@ async def test_reconcile_progress_lease_retries_when_retire_edit_fails(
         assert retained.state == "retiring"
 
         service._rest = support._FakeRest()
-        reconciled = await support.discord_message_turns_module.reconcile_discord_turn_progress_leases(
+        reconciled = await support.discord_progress_leases_module.reconcile_discord_turn_progress_leases(
             service,
             lease_id="lease-1",
         )
@@ -369,7 +370,7 @@ async def test_deliver_result_reconciles_stale_sibling_progress_leases(
     )
 
     monkeypatch.setattr(
-        support.discord_message_turns_module,
+        discord_managed_thread_routing_module,
         "build_discord_thread_orchestration_service",
         lambda _service: SimpleNamespace(
             get_thread_target=lambda _thread_id: SimpleNamespace(
@@ -468,7 +469,7 @@ async def test_deliver_result_reconciles_stale_siblings_without_final_message(
     )
 
     monkeypatch.setattr(
-        support.discord_message_turns_module,
+        discord_managed_thread_routing_module,
         "build_discord_thread_orchestration_service",
         lambda _service: SimpleNamespace(
             get_thread_target=lambda _thread_id: SimpleNamespace(
@@ -639,7 +640,7 @@ async def test_deliver_result_keeps_newer_pending_sibling_progress_lease(
     )
 
     monkeypatch.setattr(
-        support.discord_message_turns_module,
+        discord_managed_thread_routing_module,
         "build_discord_thread_orchestration_service",
         lambda _service: SimpleNamespace(
             get_thread_target=lambda _thread_id: SimpleNamespace(
@@ -738,7 +739,7 @@ async def test_deliver_result_keeps_newer_queued_sibling_progress_lease_with_exe
         )
 
     monkeypatch.setattr(
-        support.discord_message_turns_module,
+        discord_managed_thread_routing_module,
         "build_discord_thread_orchestration_service",
         lambda _service: SimpleNamespace(
             get_thread_target=lambda _thread_id: SimpleNamespace(
@@ -836,7 +837,7 @@ async def test_deliver_result_keeps_newer_reused_progress_message_lease(
         )
 
     monkeypatch.setattr(
-        support.discord_message_turns_module,
+        discord_managed_thread_routing_module,
         "build_discord_thread_orchestration_service",
         lambda _service: SimpleNamespace(
             get_thread_target=lambda _thread_id: SimpleNamespace(
@@ -979,7 +980,7 @@ async def test_orchestrated_turn_interrupt_send_falls_back_when_progress_ack_edi
     )
 
     service = _Service()
-    support.discord_message_turns_module.request_discord_turn_progress_reuse(
+    support.discord_progress_leases_module.request_discord_turn_progress_reuse(
         service,
         thread_target_id="thread-1",
         source_message_id="m-2",

@@ -90,9 +90,27 @@ def normalize_run_event_payloads(value: Any) -> tuple[dict[str, Any], ...]:
     return tuple(events)
 
 
+def normalize_bool(value: Any, *, fallback: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        if value == 1:
+            return True
+        if value == 0:
+            return False
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return fallback
+
+
 __all__ = [
     "coerce_int",
     "copy_mapping",
+    "normalize_bool",
     "normalize_busy_thread_policy",
     "normalize_message_request_kind",
     "normalize_optional_identifier",

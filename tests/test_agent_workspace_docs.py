@@ -1,10 +1,28 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
+
+from codex_autorunner.core.orchestration.catalog import KNOWN_CAPABILITIES
 
 
 def _read(rel_path: str) -> str:
     return Path(rel_path).read_text(encoding="utf-8")
+
+
+def _markdown_section(text: str, heading: str) -> str:
+    pattern = re.compile(
+        rf"^{re.escape(heading)}\n(?P<body>.*?)(?=^## |^### |\Z)",
+        re.MULTILINE | re.DOTALL,
+    )
+    match = pattern.search(text)
+    assert match is not None, f"Missing section: {heading}"
+    return match.group("body")
+
+
+def _capability_bullets(text: str, heading: str) -> set[str]:
+    body = _markdown_section(text, heading)
+    return set(re.findall(r"^- `([^`]+)`:", body, re.MULTILINE))
 
 
 def test_hub_manifest_docs_describe_typed_resource_model() -> None:
@@ -37,6 +55,37 @@ def test_runtime_docs_explain_agent_workspace_contract() -> None:
     assert "volatile wrapper-only launches" in zeroclaw_text
     assert "resource_kind: agent_workspace" in pma_text
     assert "consistent durable CAR thread under the workspace" in pma_text
+
+
+def test_plugin_api_stays_consistent_with_runtime_capability_contract() -> None:
+    plugin_text = _read("docs/plugin-api.md")
+
+    required = _capability_bullets(plugin_text, "### Required Capabilities")
+    optional = _capability_bullets(plugin_text, "### Optional Capabilities")
+    canonical = set(KNOWN_CAPABILITIES)
+
+    assert required == {"durable_threads", "message_turns"}
+    assert optional == canonical - required
+    assert required | optional == canonical
+
+    descriptor_match = re.search(
+        r"AGENT_BACKEND = AgentDescriptor\(\n(?P<body>.*?)\n\)\n```",
+        plugin_text,
+        re.DOTALL,
+    )
+    assert descriptor_match is not None
+    fields = set(re.findall(r"^\s*([a-z_]+)=", descriptor_match.group("body"), re.M))
+    assert fields >= {
+        "id",
+        "name",
+        "capabilities",
+        "make_harness",
+        "healthcheck",
+        "backend_factory",
+        "runtime_preflight",
+        "runtime_kind",
+        "plugin_api_version",
+    }
 
 
 def test_telegram_docs_describe_authoritative_binding_storage() -> None:

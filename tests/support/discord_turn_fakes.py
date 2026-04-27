@@ -7,7 +7,7 @@ from typing import Any, Optional
 
 import pytest
 
-import codex_autorunner.integrations.discord.message_turns as _discord_message_turns_module
+import codex_autorunner.agents.registry as agent_registry_module
 from codex_autorunner.agents.registry import AgentDescriptor
 from codex_autorunner.integrations.chat.collaboration_policy import CollaborationPolicy
 from codex_autorunner.integrations.discord.config import (
@@ -409,7 +409,14 @@ class _StreamingFakeHarness:
         self._errors = list(errors or [])
         self._wait_for_stream = wait_for_stream
         self._stream_exception = stream_exception
-        self._allow_parallel_event_stream = allow_parallel_event_stream
+        if allow_parallel_event_stream:
+            self.capabilities = type(self).capabilities
+        else:
+            self.capabilities = frozenset(
+                capability
+                for capability in type(self).capabilities
+                if capability != "event_streaming"
+            )
         self._stream_done = asyncio.Event()
 
     async def ensure_ready(self, workspace_root: Path) -> None:
@@ -417,9 +424,6 @@ class _StreamingFakeHarness:
 
     def supports(self, capability: str) -> bool:
         return capability in self.capabilities
-
-    def allows_parallel_event_stream(self) -> bool:
-        return self._allow_parallel_event_stream
 
     async def new_conversation(
         self, workspace_root: Path, title: Optional[str] = None
@@ -529,7 +533,7 @@ def _patch_streaming_harness(
         allow_parallel_event_stream=allow_parallel_event_stream,
     )
     monkeypatch.setattr(
-        _discord_message_turns_module,
+        agent_registry_module,
         "get_registered_agents",
         lambda context=None: {
             agent_id: AgentDescriptor(

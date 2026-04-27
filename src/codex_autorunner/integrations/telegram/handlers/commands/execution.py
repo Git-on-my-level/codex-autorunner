@@ -44,6 +44,11 @@ from .....core.hub_control_plane import (
 )
 from .....core.injected_context import wrap_injected_context
 from .....core.logging_utils import log_event
+from .....core.managed_thread_identity import (
+    AppServerThreadRegistry,
+    pma_base_key,
+    pma_topic_scoped_key,
+)
 from .....core.orchestration import (
     MessageRequest,
     build_harness_backed_orchestration_service,
@@ -64,12 +69,6 @@ from .....core.pma_context import (
 )
 from .....core.state import now_iso
 from .....core.utils import canonicalize_path
-from .....integrations.app_server.threads import (
-    AppServerThreadRegistry,
-    pma_base_key,
-    pma_legacy_migration_fallback_keys,
-    pma_topic_scoped_key,
-)
 from .....integrations.chat.bound_chat_execution_metadata import (
     merge_bound_chat_execution_metadata,
 )
@@ -391,14 +390,7 @@ def _resolve_telegram_turn_thread_context(
     )
     thread_id = None if pma_enabled else record.active_thread_id
     if pma_enabled and pma_thread_registry and pma_thread_key:
-        agent, profile = handlers._effective_agent_state(record)
-        legacy_keys = pma_legacy_migration_fallback_keys(pma_thread_key, agent, profile)
-        if legacy_keys:
-            thread_id = pma_thread_registry.get_thread_id_with_fallback(
-                pma_thread_key, *legacy_keys
-            )
-        else:
-            thread_id = pma_thread_registry.get_thread_id(pma_thread_key)
+        thread_id = pma_thread_registry.get_thread_id(pma_thread_key)
     return _TelegramTurnThreadContext(
         thread_id=thread_id,
         pma_thread_registry=pma_thread_registry,
@@ -1030,38 +1022,8 @@ def _build_telegram_runner_hooks(
                         exc=exc,
                     )
 
-    async def _deliver_queued_result(
-        finalized: ManagedThreadFinalizationResult,
-    ) -> None:
-        if finalized.status == "ok":
-            message_text = render_managed_thread_response_text(finalized)
-            await handlers._send_message(
-                chat_id,
-                message_text,
-                thread_id=thread_id,
-                reply_to=None,
-            )
-            await handlers._flush_outbox_files(
-                SimpleNamespace(
-                    workspace_path=workspace_path,
-                    pma_enabled=pma_enabled,
-                ),
-                chat_id=chat_id,
-                thread_id=thread_id,
-                reply_to=None,
-                topic_key=topic_key,
-            )
-            return
-        await handlers._send_message(
-            chat_id,
-            (f"Turn failed: {finalized.error or public_execution_error}"),
-            thread_id=thread_id,
-            reply_to=None,
-        )
-
     return ManagedThreadCoordinatorHooks(
         durable_delivery=durable_delivery,
-        deliver_result=_deliver_queued_result,
         run_with_indicator=_run_with_telegram_typing_indicator,
         queue_execution_hooks=queue_execution_hooks,
     )
@@ -1666,7 +1628,6 @@ async def _run_telegram_managed_thread_turn(
             hooks=ManagedThreadCoordinatorHooks(
                 on_progress_event=_handle_progress_event,
                 durable_delivery=runner_hooks.durable_delivery,
-                deliver_result=runner_hooks.deliver_result,
                 run_with_indicator=runner_hooks.run_with_indicator,
             ),
             queue=ManagedSurfaceQueueConfig(

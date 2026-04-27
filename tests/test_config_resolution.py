@@ -13,13 +13,16 @@ from codex_autorunner.core.config import (
     DEFAULT_REPO_CONFIG,
     REPO_OVERRIDE_FILENAME,
     ConfigError,
-    default_housekeeping_rule_named,
     load_hub_config,
     load_repo_config,
-    resolve_env_for_root,
+)
+from codex_autorunner.core.config_env import resolve_env_for_root
+from codex_autorunner.housekeeping import (
+    HousekeepingConfig,
+    HousekeepingRule,
+    default_housekeeping_rule_named,
     resolve_housekeeping_rule,
 )
-from codex_autorunner.housekeeping import HousekeepingConfig, HousekeepingRule
 from tests.conftest import write_test_config
 
 

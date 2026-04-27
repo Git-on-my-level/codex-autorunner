@@ -25,7 +25,7 @@ from codex_autorunner.integrations.discord.config import (
     DiscordBotShellConfig,
     DiscordCommandRegistration,
 )
-from codex_autorunner.integrations.discord.message_turns import (
+from codex_autorunner.integrations.discord.managed_thread_routing import (
     build_discord_thread_orchestration_service,
 )
 from codex_autorunner.integrations.discord.outbox import DiscordOutboxManager
@@ -84,13 +84,16 @@ def patch_hermes_runtime(monkeypatch: Any, runtime: HermesFixtureRuntime) -> Non
     def _registered(_context: Any = None) -> dict[str, AgentDescriptor]:
         return runtime.registered_agents()
 
+    def _build_supervisor_from_config(*_args: Any, **_kwargs: Any) -> Any:
+        return runtime.supervisor
+
     monkeypatch.setattr(
         "codex_autorunner.agents.registry.get_registered_agents",
         _registered,
     )
     monkeypatch.setattr(
-        "codex_autorunner.integrations.discord.message_turns.get_registered_agents",
-        _registered,
+        "codex_autorunner.agents.registry.build_hermes_supervisor_from_config",
+        _build_supervisor_from_config,
     )
     monkeypatch.setattr(
         "codex_autorunner.integrations.telegram.handlers.commands.execution.get_registered_agents",

@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional
 
 import httpx
 
-from .config import Config
+from .config_types import RepoConfig
 
 _TELEGRAM_API_BASE_URL = "https://api.telegram.org"
 
@@ -17,7 +17,7 @@ DEFAULT_TIMEOUT_SECONDS = 5.0
 
 
 class NotificationManager:
-    def __init__(self, config: Config, *, logger: Optional[logging.Logger] = None):
+    def __init__(self, config: RepoConfig, *, logger: Optional[logging.Logger] = None):
         self.config = config
         self.logger = logger or logging.getLogger(__name__)
         raw = config.raw.get("notifications")

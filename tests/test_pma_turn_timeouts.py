@@ -8,6 +8,9 @@ from types import SimpleNamespace
 import pytest
 
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
+from codex_autorunner.integrations.discord import (
+    managed_thread_routing as discord_managed_thread_routing,
+)
 from codex_autorunner.integrations.discord import message_turns as discord_message_turns
 from codex_autorunner.integrations.telegram.handlers.commands import (
     execution as telegram_execution,
@@ -32,7 +35,9 @@ def test_discord_pma_turn_idle_timeout_reads_hub_config(tmp_path: Path) -> None:
     service = SimpleNamespace(_config=SimpleNamespace(root=tmp_path))
 
     assert (
-        discord_message_turns._load_discord_pma_turn_idle_timeout_seconds(service)
+        discord_managed_thread_routing._load_discord_pma_turn_idle_timeout_seconds(
+            service
+        )
         == 123
     )
 

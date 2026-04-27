@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import sqlite3
 from pathlib import Path
@@ -9,8 +10,14 @@ from ...core.flows import FlowRunStatus
 from ...core.utils import canonicalize_path
 from ...integrations.chat.picker_filter import filter_picker_items
 from .components import DISCORD_SELECT_OPTION_MAX_OPTIONS
+from .rest import DISCORD_INTERACTION_CALLBACK_TIMEOUT_SECONDS
 
 MODEL_SEARCH_FETCH_LIMIT = 200
+# Ticket scans run in a thread pool; cap below interaction callback deadline so empty
+# fallback choices still reach Discord before the ~3s interaction response window.
+_TICKET_AUTOCOMPLETE_WORKER_TIMEOUT = max(
+    0.5, DISCORD_INTERACTION_CALLBACK_TIMEOUT_SECONDS - 0.25
+)
 REPO_AUTOCOMPLETE_TOKEN_PREFIX = "repo@"
 WORKSPACE_AUTOCOMPLETE_TOKEN_PREFIX = "workspace@"
 AGENT_WORKSPACE_AUTOCOMPLETE_TOKEN_PREFIX = "agent_workspace@"
@@ -196,11 +203,18 @@ async def build_ticket_autocomplete_choices(
     if workspace_root is None:
         return []
     status_filter = service._pending_ticket_filters.get(channel_id, "all")
-    filtered_choices = service._list_ticket_choices(
-        workspace_root,
-        status_filter=status_filter,
-        search_query=query,
-    )
+    try:
+        filtered_choices = await asyncio.wait_for(
+            asyncio.to_thread(
+                service._list_ticket_choices,
+                workspace_root,
+                status_filter=status_filter,
+                search_query=query,
+            ),
+            timeout=_TICKET_AUTOCOMPLETE_WORKER_TIMEOUT,
+        )
+    except (asyncio.TimeoutError, Exception):
+        return []
     items = [(value, label) for value, label, _description in filtered_choices]
     return picker_items_to_autocomplete_choices(items)
 

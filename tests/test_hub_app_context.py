@@ -13,7 +13,6 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from codex_autorunner.bootstrap import seed_hub_files
-from codex_autorunner.core.app_server_command import GLOBAL_APP_SERVER_COMMAND_ENV
 from codex_autorunner.core.config import CONFIG_FILENAME
 from codex_autorunner.core.hub import HubSupervisor
 from codex_autorunner.core.hub_diagnostics import (
@@ -22,11 +21,11 @@ from codex_autorunner.core.hub_diagnostics import (
     hub_pid_path,
 )
 from codex_autorunner.core.hub_lifecycle import HubLifecycleWorker
-from codex_autorunner.integrations.app_server.event_buffer import AppServerEventBuffer
-from codex_autorunner.integrations.app_server.threads import (
+from codex_autorunner.core.managed_thread_identity import (
     AppServerThreadRegistry,
     default_app_server_threads_path,
 )
+from codex_autorunner.integrations.app_server.event_buffer import AppServerEventBuffer
 from codex_autorunner.manifest import load_manifest
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web import app as web_app_module
@@ -313,13 +312,19 @@ def test_hub_repo_apps_build_lazily(hub_env, monkeypatch) -> None:
     assert build_calls == [hub_env.repo_root]
 
 
-def test_build_app_server_supervisor_prefers_global_env_override(
+def test_build_app_server_supervisor_uses_configured_command(
     tmp_path: Path, monkeypatch
 ) -> None:
     hub_root = tmp_path / "hub"
     hub_root.mkdir()
     seed_hub_files(hub_root, force=True)
-    monkeypatch.setenv(GLOBAL_APP_SERVER_COMMAND_ENV, "/env/codex app-server --web")
+    write_test_config(
+        hub_root / CONFIG_FILENAME,
+        {
+            "mode": "hub",
+            "app_server": {"command": ["/cfg/codex", "app-server", "--web"]},
+        },
+    )
     config = web_app_state_module.load_hub_config(hub_root)
 
     captured: dict[str, object] = {}
@@ -339,4 +344,4 @@ def test_build_app_server_supervisor_prefers_global_env_override(
     )
 
     assert supervisor is not None
-    assert captured["command"] == ["/env/codex", "app-server", "--web"]
+    assert captured["command"] == ["/cfg/codex", "app-server", "--web"]

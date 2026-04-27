@@ -290,7 +290,7 @@ def _make_descriptor(
     return AgentDescriptor(
         id=agent_id,
         name=name,
-        capabilities=frozenset(["threads", "turns", "review"]),
+        capabilities=frozenset(["durable_threads", "message_turns", "review"]),
         make_harness=lambda _ctx: None,  # type: ignore[return-value]
     )
 
@@ -384,6 +384,7 @@ class _SerializedHubClient:
         self._store.set_execution_backend_id(
             request.execution_id,
             request.backend_turn_id,
+            confirmed_start=getattr(request, "confirmed_start", True),
         )
 
     async def record_thread_activity(self, request: Any) -> None:

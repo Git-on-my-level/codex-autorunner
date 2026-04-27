@@ -198,7 +198,9 @@ def _parse_car_suffix(fragment: str) -> tuple[str, ...] | None:
         if not m:
             break
         raw = m.group(1)
-        token = raw.rstrip(r".,;:!?)}\]'\"")
+        token = raw
+        while token and token[-1] in ".,;:!?)}]'\"":
+            token = token[:-1]
         if not token:
             break
         if token.startswith("-") and not token.startswith("--"):

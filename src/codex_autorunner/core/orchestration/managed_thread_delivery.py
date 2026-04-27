@@ -11,9 +11,8 @@ Placement matters:
 
 - `core/orchestration/*` owns the durable ledger model and engine entrypoints.
 - `integrations/chat/*` owns the adapter contract that consumes these records.
-- `integrations/chat/managed_thread_turns.py` remains a compatibility bridge
-  until future tickets replace the legacy `deliver_result` callback seam with
-  durable intent creation plus engine-driven replay.
+- `integrations/chat/managed_thread_turns.py` owns the coordinator handoff from
+  finalization into durable delivery intent creation plus engine-driven replay.
 """
 
 from __future__ import annotations

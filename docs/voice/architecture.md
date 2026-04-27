@@ -6,13 +6,13 @@ This document outlines the shared speech input architecture for Codex Autorunner
 - Single shared module for capture + transcription that both web and TUI call into (no bespoke per-surface logic).
 - Push-to-talk first: explicit activation, clear start/stop cues, auto-stop on silence or max duration.
 - Opt-in and privacy-safe: remote API warning, no raw audio persistence, redact logs by default.
-- Provider pluggable via config/env with latency/quality controls tuned for mobile networks.
+- Provider pluggable via config with latency/quality controls tuned for mobile networks.
 - Resilient UX: actionable errors (permissions, network), retry paths, and reconnect after transient failures.
 
-## Config Surface (YAML + env overrides)
-- `voice.enabled` (bool, default `false`; env `CODEX_AUTORUNNER_VOICE_ENABLED`).
-- `voice.provider` (string, default `local_whisper`; env `CODEX_AUTORUNNER_VOICE_PROVIDER`).
-- `voice.latency_mode` (enum `realtime|balanced|quality`; env `CODEX_AUTORUNNER_VOICE_LATENCY`).
+## Config Surface
+- `voice.enabled` (bool, default `false`).
+- `voice.provider` (string, default `local_whisper`).
+- `voice.latency_mode` (enum `realtime|balanced|quality`).
 - `voice.push_to_talk`: `{ max_ms: 15000, silence_auto_stop_ms: 1200, min_hold_ms: 150 }`.
 - `voice.chunk_ms` (default `600`) and `voice.sample_rate` (default `16000`) guide capture chunking.
 - `voice.warn_on_remote_api` (bool, default `true`) toggles user-facing warnings when sending audio.
@@ -20,7 +20,7 @@ This document outlines the shared speech input architecture for Codex Autorunner
   - `voice.providers.openai_whisper`: `{ remote_api: true, api_key_env: "OPENAI_API_KEY", model: "whisper-1", base_url: null, temperature: 0, language: null, redact_request: true }`.
   - `voice.providers.local_whisper`: `{ remote_api: false, model: "small", device: "auto", compute_type: "default", cpu_threads: 0, num_workers: 1, local_files_only: false, beam_size: 1, vad_filter: true, language: null }`.
   - `voice.providers.mlx_whisper`: `{ remote_api: false, model: "small", language: null, beam_size: null, temperature: 0.0, condition_on_previous_text: false, word_timestamps: false, initial_prompt: null }`.
-- Defaults live in config; env vars override for runtime toggles/keys without editing files.
+- Defaults live in config. Secrets such as `OPENAI_API_KEY` stay in env.
 
 ## Shared Modules and Interfaces
 - **VoiceConfig**: normalized config built from YAML + env overrides. Holds provider choice, chunking, push-to-talk thresholds, and privacy flags.

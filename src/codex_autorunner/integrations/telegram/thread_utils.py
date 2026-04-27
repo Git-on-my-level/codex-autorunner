@@ -14,7 +14,8 @@ from .constants import (
     DEFAULT_PAGE_SIZE,
     THREAD_LIST_PAGE_LIMIT,
 )
-from .state import TelegramState, TelegramTopicRecord, ThreadSummary, topic_key
+from .state import TelegramState, TelegramTopicRecord, topic_key
+from .state_types import ThreadSummary
 
 
 def _extract_thread_id(payload: Any) -> Optional[str]:

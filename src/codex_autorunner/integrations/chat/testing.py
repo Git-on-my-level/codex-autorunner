@@ -236,9 +236,12 @@ class FakeChatAdapter(ChatAdapter):
         return message
 
 
-# Keep an explicit module-level reference so dead-code heuristics treat the
-# in-memory contract test adapter as part of the intended test support surface.
-_CHAT_TESTING_SURFACE = (FakeChatAdapter,)
+__all__ = [
+    "FakeChatAdapter",
+    "FakeTextRenderer",
+    "deserialize_chat_event",
+    "serialize_chat_event",
+]
 
 
 def _validate_text_limit(text: str, limit: Optional[int]) -> None:

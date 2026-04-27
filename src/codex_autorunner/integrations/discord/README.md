@@ -2,6 +2,8 @@
 
 Discord bot surface and adapters.
 
+The Discord interaction runtime (ingress, command runner, interaction dispatch) lives in `integrations/discord/`. This surface package re-exports the Discord-facing surface for layering purposes.
+
 ## Interaction Lifecycle
 
 All Discord interactions follow a two-phase lifecycle:

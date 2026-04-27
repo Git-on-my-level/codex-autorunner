@@ -10,7 +10,7 @@ from typer.testing import CliRunner
 
 from codex_autorunner.cli import app
 from codex_autorunner.core.runtime import DoctorCheck, DoctorReport
-from codex_autorunner.surfaces.cli.cli import _find_hub_server_process
+from codex_autorunner.surfaces.cli.commands.doctor import _find_hub_server_process
 
 runner = CliRunner()
 

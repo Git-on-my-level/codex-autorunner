@@ -33,8 +33,8 @@ def _make_descriptor(
 def test_map_agent_capabilities_uses_orchestration_vocabulary() -> None:
     capabilities = map_agent_capabilities(
         [
-            "threads",
-            "turns",
+            "durable_threads",
+            "message_turns",
             "interrupt",
             "active_thread_discovery",
             "review",
@@ -60,7 +60,7 @@ def test_build_agent_definition_preserves_registry_boundary() -> None:
     descriptor = _make_descriptor(
         "codex",
         "Codex",
-        frozenset(["threads", "turns", "review"]),
+        frozenset(["durable_threads", "message_turns", "review"]),
     )
 
     definition = build_agent_definition(
@@ -84,7 +84,7 @@ def test_build_agent_definition_preserves_registry_boundary() -> None:
 def test_merge_agent_capabilities_keeps_optional_runtime_features_visible() -> None:
     merged = merge_agent_capabilities(
         ["durable_threads", "message_turns", "event_streaming"],
-        ["interrupt", "structured_event_streaming", "transcript_history"],
+        ["interrupt", "transcript_history"],
     )
 
     assert merged == frozenset(
@@ -93,7 +93,6 @@ def test_merge_agent_capabilities_keeps_optional_runtime_features_visible() -> N
             "message_turns",
             "event_streaming",
             "interrupt",
-            "structured_event_streaming",
             "transcript_history",
         ]
     )

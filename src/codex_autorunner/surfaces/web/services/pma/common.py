@@ -4,7 +4,7 @@ import hashlib
 import json
 from typing import Any, Optional
 
-from .....core.config import PMA_DEFAULT_MAX_TEXT_CHARS
+from .....core.config_layering import PMA_DEFAULT_MAX_TEXT_CHARS
 
 
 def normalize_optional_text(value: Any) -> Optional[str]:

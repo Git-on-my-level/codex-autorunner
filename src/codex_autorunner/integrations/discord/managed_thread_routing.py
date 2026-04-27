@@ -6,12 +6,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, cast
 
+from ...agents import registry as agent_registry
 from ...core.config import load_hub_config
 from ...core.config_contract import ConfigError
 from ...core.hub_control_plane import (
     RemoteSurfaceBindingStore,
     RemoteThreadExecutionStore,
 )
+from ...core.logging_utils import log_event
 from ...core.orchestration import build_harness_backed_orchestration_service
 from ...core.orchestration.bindings import OrchestrationBindingStore
 from ...integrations.chat.agents import resolve_chat_runtime_agent
@@ -25,11 +27,9 @@ from ..chat.managed_thread_surface_kernel import (
 from ..chat.managed_thread_turns import (
     ManagedThreadCoordinatorHooks,
     ManagedThreadExecutionHooks,
-    ManagedThreadFinalizationResult,
     ManagedThreadSurfaceInfo,
     ManagedThreadTargetRequest,
     ManagedThreadTurnCoordinator,
-    render_managed_thread_response_text,
 )
 from ..chat.managed_thread_turns import (
     build_managed_thread_input_items as _shared_build_managed_thread_input_items,
@@ -37,12 +37,11 @@ from ..chat.managed_thread_turns import (
 from ..chat.managed_thread_turns import (
     resolve_managed_thread_target as _shared_resolve_managed_thread_target,
 )
-from ..chat.turn_metrics import compose_turn_response_with_footer
 from .managed_thread_delivery import build_discord_managed_thread_durable_delivery_hooks
+from .orchestration_profile_fallback import (
+    create_thread_target_with_profile_fallback,
+)
 from .rendering import (
-    DISCORD_MAX_MESSAGE_LENGTH,
-    chunk_discord_message,
-    format_discord_message,
     truncate_for_discord,
 )
 
@@ -77,13 +76,13 @@ async def _evict_cached_runtime_supervisors(
     profile: Optional[str],
     workspace_root: Path,
 ) -> int:
-    from .message_turns import resolve_agent_runtime
-
     cache = getattr(service, "_agent_runtime_supervisors", None)
     if not isinstance(cache, dict) or not cache:
         return 0
     try:
-        resolution = resolve_agent_runtime(agent_id, profile, context=service)
+        resolution = agent_registry.resolve_agent_runtime(
+            agent_id, profile, context=service
+        )
     except (KeyError, ValueError, TypeError, RuntimeError):
         return 0
     runtime_agent_id = str(getattr(resolution, "runtime_agent_id", "") or "").strip()
@@ -131,28 +130,23 @@ async def _evict_cached_runtime_supervisors(
 
 
 def build_discord_thread_orchestration_service(service: Any) -> Any:
-    from .message_turns import (
-        get_registered_agents,
-        log_event,
-        resolve_agent_runtime,
-        wrap_requested_agent_context,
-    )
-
     cached = getattr(service, "_discord_thread_orchestration_service", None)
     if cached is None:
         cached = getattr(service, "_discord_managed_thread_orchestration_service", None)
     if cached is not None:
         return cached
 
-    descriptors = get_registered_agents(service)
+    descriptors = agent_registry.get_registered_agents(service)
 
     def _make_harness(agent_id: str, profile: Optional[str] = None) -> Any:
-        resolution = resolve_agent_runtime(agent_id, profile, context=service)
+        resolution = agent_registry.resolve_agent_runtime(
+            agent_id, profile, context=service
+        )
         descriptor = descriptors.get(resolution.runtime_agent_id)
         if descriptor is None:
             raise KeyError(f"Unknown agent definition '{resolution.runtime_agent_id}'")
         harness = descriptor.make_harness(
-            wrap_requested_agent_context(
+            agent_registry.wrap_requested_agent_context(
                 service,
                 agent_id=resolution.runtime_agent_id,
                 profile=resolution.runtime_profile,
@@ -200,6 +194,17 @@ def build_discord_thread_orchestration_service(service: Any) -> Any:
         thread_store=thread_store,
         binding_store=binding_store,
     )
+    base_create_thread_target = created.create_thread_target
+
+    def _create_thread_target(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return base_create_thread_target(*args, **kwargs)
+        except KeyError as exc:
+            return create_thread_target_with_profile_fallback(
+                created, *args, **kwargs, key_error=exc
+            )
+
+    cast(Any, created).create_thread_target = _create_thread_target
     service._discord_thread_orchestration_service = created
     service._discord_managed_thread_orchestration_service = created
     return created
@@ -465,59 +470,18 @@ def _build_discord_runner_hooks(
         ),
     )
 
-    async def _deliver_result(finalized: ManagedThreadFinalizationResult) -> None:
-        if finalized.status == "ok":
-            assistant_text = compose_turn_response_with_footer(
-                render_managed_thread_response_text(finalized),
-                summary_text=None,
-                token_usage=(
-                    dict(finalized.token_usage) if finalized.token_usage else None
-                ),
-                elapsed_seconds=None,
-                empty_response_text="(No response text returned.)",
-            )
-            formatted = (
-                format_discord_message(assistant_text)
-                if assistant_text
-                else "(No response text returned.)"
-            )
-            chunks = chunk_discord_message(
-                formatted,
-                max_len=DISCORD_MAX_MESSAGE_LENGTH,
-                with_numbering=False,
-            )
-            if not chunks:
-                chunks = [formatted]
-            base_record_id = (
-                f"discord-queued:{managed_thread_id}:{finalized.managed_turn_id}"
-            )
-            for chunk_index, chunk in enumerate(chunks, start=1):
-                record_id = (
-                    f"{base_record_id}:chunk:{chunk_index}"
-                    if len(chunks) > 1
-                    else base_record_id
-                )
-                await service._send_channel_message_safe(
-                    channel_id,
-                    {"content": chunk},
-                    record_id=record_id,
-                )
-            return
-        if finalized.status == "interrupted":
-            return
-        await service._send_channel_message_safe(
-            channel_id,
-            {"content": (f"Turn failed: {finalized.error or public_execution_error}")},
-            record_id=(
-                f"discord-queued-error:{managed_thread_id}:{finalized.managed_turn_id}"
-            ),
-        )
+    durable_delivery = build_discord_managed_thread_durable_delivery_hooks(
+        service,
+        channel_id=channel_id,
+        managed_thread_id=managed_thread_id,
+        workspace_root=workspace_root,
+        public_execution_error=public_execution_error,
+    )
 
     return ManagedThreadCoordinatorHooks(
         on_execution_started=_on_execution_started,
         on_execution_finished=_on_execution_finished,
         durable_delivery=durable_delivery,
-        deliver_result=_deliver_result,
         run_with_indicator=_run_with_discord_typing_indicator,
         queue_execution_hooks=queue_execution_hooks,
     )

@@ -1,17 +1,17 @@
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, Optional, cast
+from typing import Any, Dict, List, Optional, cast
 
 import yaml
 
-from .app_server_command import GLOBAL_APP_SERVER_COMMAND_ENV
 from .config_contract import CONFIG_VERSION, ConfigError
 from .constants import DEFAULT_UPDATE_REPO_REF, DEFAULT_UPDATE_REPO_URL
 from .report_retention import (
     DEFAULT_REPORT_MAX_HISTORY_FILES,
     DEFAULT_REPORT_MAX_TOTAL_BYTES,
 )
+from .utils import atomic_write
 
 logger = logging.getLogger("codex_autorunner.core.config_layering")
 
@@ -170,7 +170,6 @@ def _default_telegram_bot_section(
         },
         "opencode_command": None,
         "state_file": ".codex-autorunner/telegram_state.sqlite3",
-        "app_server_command_env": GLOBAL_APP_SERVER_COMMAND_ENV,
         "app_server_command": ["codex", "app-server"],
         "app_server": {
             "max_handles": 20,
@@ -900,3 +899,15 @@ def find_nearest_hub_config_path(start: Path) -> Optional[Path]:
         if data.get("mode") in (None, "hub"):
             return candidate
     return None
+
+
+def update_override_templates(repo_root: Path, repos: List[Dict[str, Any]]) -> None:
+    override_path = repo_root / ROOT_OVERRIDE_FILENAME
+    data = _load_yaml_dict(override_path)
+    templates = data.get("templates")
+    if templates is None or not isinstance(templates, dict):
+        templates = {}
+        data["templates"] = templates
+    templates["repos"] = list(repos or [])
+    rendered = yaml.safe_dump(data, sort_keys=False).rstrip() + "\n"
+    atomic_write(override_path, rendered)

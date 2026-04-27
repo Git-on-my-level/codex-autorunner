@@ -25,6 +25,144 @@ def portable_ticket_validation_source() -> str:
         _TICKET_ID_RE = re.compile(r"{PORTABLE_TICKET_ID_PATTERN}")
         _KNOWN_AGENT_IDS = {known_agents!r}
         _IGNORED_NON_TICKET_FILENAMES = {{"AGENTS.md", "ingest_state.json"}}
+        __all__ = ["run_ticket_lint"]
+
+
+        def _unescape_double_quoted_yaml_scalar(inner: str) -> str:
+            out: list[str] = []
+            i = 0
+            while i < len(inner):
+                ch = inner[i]
+                if ch != \"\\\\\":
+                    out.append(ch)
+                    i += 1
+                    continue
+                if i + 1 >= len(inner):
+                    out.append(\"\\\\\")
+                    break
+                nxt = inner[i + 1]
+                if nxt == \"n\":
+                    out.append(\"\\n\")
+                    i += 2
+                elif nxt == '\"':
+                    out.append('\"')
+                    i += 2
+                elif nxt == \"\\\\\":
+                    out.append(\"\\\\\")
+                    i += 2
+                else:
+                    out.append(\"\\\\\")
+                    out.append(nxt)
+                    i += 2
+            return \"\".join(out)
+
+
+        def _parse_scalar(raw: str) -> object:
+            value = raw.strip()
+            if not value:
+                return ""
+            if value.startswith('"') and value.endswith('"') and len(value) >= 2:
+                return _unescape_double_quoted_yaml_scalar(value[1:-1])
+            lowered = value.lower()
+            if lowered == "true":
+                return True
+            if lowered == "false":
+                return False
+            if value.isdigit():
+                return int(value)
+            if ": " in value or value.endswith(":"):
+                raise ValueError("unsupported unquoted ':' in scalar")
+            return value
+
+
+        def _parse_simple_yaml_mapping(text: str) -> dict[str, object]:
+            data: dict[str, object] = {{}}
+            lines = text.splitlines()
+            idx = 0
+            while idx < len(lines):
+                line = lines[idx]
+                if not line.strip():
+                    idx += 1
+                    continue
+                if line[:1].isspace():
+                    raise ValueError("unexpected indentation")
+                if ":" not in line:
+                    raise ValueError("expected 'key: value'")
+                key, raw_value = line.split(":", 1)
+                key = key.strip()
+                if not key:
+                    raise ValueError("missing mapping key")
+
+                value = raw_value.strip()
+                if value:
+                    data[key] = _parse_scalar(value)
+                    idx += 1
+                    continue
+
+                idx += 1
+                block: list[str] = []
+                while idx < len(lines):
+                    child = lines[idx]
+                    if not child.strip():
+                        idx += 1
+                        continue
+                    if not child.startswith("  "):
+                        break
+                    block.append(child[2:])
+                    idx += 1
+
+                if not block:
+                    data[key] = None
+                    continue
+
+                if block[0].lstrip().startswith("- "):
+                    data[key] = _parse_simple_yaml_list(block)
+                    continue
+
+                data[key] = _parse_simple_yaml_mapping("\\n".join(block))
+
+            return data
+
+
+        def _parse_simple_yaml_list(lines: list[str]) -> list[object]:
+            values: list[object] = []
+            idx = 0
+            while idx < len(lines):
+                line = lines[idx]
+                if not line.strip():
+                    idx += 1
+                    continue
+
+                stripped = line.lstrip()
+                if stripped != line or not stripped.startswith("- "):
+                    raise ValueError("mixed list indentation")
+
+                item_value = stripped[2:].strip()
+                idx += 1
+
+                child_lines: list[str] = []
+                while idx < len(lines):
+                    child = lines[idx]
+                    if not child.strip():
+                        idx += 1
+                        continue
+                    if not child.startswith("  "):
+                        break
+                    child_lines.append(child[2:])
+                    idx += 1
+
+                if ":" in item_value:
+                    mapping_lines = [item_value, *child_lines] if child_lines else [item_value]
+                    values.append(_parse_simple_yaml_mapping("\\n".join(mapping_lines)))
+                    continue
+
+                if not child_lines:
+                    values.append(_parse_scalar(item_value))
+                    continue
+
+                raise ValueError("list item with nested block must start with 'key: value'")
+
+            return values
 
 
         def _sanitize_ticket_id(raw: object) -> Optional[str]:

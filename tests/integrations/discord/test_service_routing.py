@@ -15,12 +15,14 @@ import pytest
 
 pytestmark = pytest.mark.integration
 
+import codex_autorunner.integrations.chat.managed_thread_turns as managed_thread_turns_module
 from codex_autorunner.core.filebox import (
     inbox_dir,
     outbox_dir,
     outbox_pending_dir,
     outbox_sent_dir,
 )
+from codex_autorunner.core.git_utils import GitError
 from codex_autorunner.core.hub_control_plane import (
     RunningThreadTargetIdsResponse,
     WorkspaceSetupCommandRequest,
@@ -30,6 +32,9 @@ from codex_autorunner.core.orchestration.chat_operation_state import (
 )
 from codex_autorunner.core.update import UpdateInProgressError
 from codex_autorunner.integrations.app_server.client import CodexAppServerResponseError
+from codex_autorunner.integrations.chat import (
+    model_selection as chat_model_selection_module,
+)
 from codex_autorunner.integrations.chat.collaboration_policy import (
     CollaborationPolicy,
     build_discord_collaboration_policy,
@@ -43,8 +48,20 @@ from codex_autorunner.integrations.chat.models import (
     ChatReplyInfo,
     ChatThreadRef,
 )
+from codex_autorunner.integrations.discord import (
+    document_browser as discord_document_browser_module,
+)
 from codex_autorunner.integrations.discord import message_turns as discord_message_turns
+from codex_autorunner.integrations.discord import (
+    picker_helpers as discord_picker_helpers_module,
+)
+from codex_autorunner.integrations.discord import (
+    rendering as discord_rendering_module,
+)
 from codex_autorunner.integrations.discord import service as discord_service_module
+from codex_autorunner.integrations.discord import (
+    update_service as discord_update_service_module,
+)
 from codex_autorunner.integrations.discord import (
     workspace_commands as discord_workspace_commands_module,
 )
@@ -574,19 +591,21 @@ async def test_discord_message_turns_delete_immediate_placeholder_when_backgroun
 
 
 @pytest.mark.anyio
-async def test_discord_managed_thread_delivery_uses_unique_record_ids_per_chunk() -> (
-    None
-):
+async def test_discord_managed_thread_delivery_uses_unique_record_ids_per_chunk(
+    tmp_path: Path,
+) -> None:
     sent_messages: list[dict[str, object]] = []
 
     class _ServiceStub:
+        _config = SimpleNamespace(root=tmp_path, raw={})
+
         async def _send_channel_message_safe(
             self,
             channel_id: str,
             payload: dict[str, object],
             *,
             record_id: str,
-        ) -> None:
+        ) -> bool:
             sent_messages.append(
                 {
                     "channel_id": channel_id,
@@ -594,6 +613,7 @@ async def test_discord_managed_thread_delivery_uses_unique_record_ids_per_chunk(
                     "record_id": record_id,
                 }
             )
+            return True
 
         async def _run_with_typing_indicator(
             self, *, channel_id: str, work: Any
@@ -611,18 +631,18 @@ async def test_discord_managed_thread_delivery_uses_unique_record_ids_per_chunk(
         _ServiceStub(),
         channel_id="channel-1",
         managed_thread_id="thread-1",
-        workspace_root=Path.cwd(),
+        workspace_root=tmp_path,
         public_execution_error="Discord turn failed",
     )
     content = ("a" * 1500) + "\n" + ("b" * 1500)
     expected_chunks = discord_message_turns.chunk_discord_message(
         content,
-        max_len=discord_message_turns.DISCORD_MAX_MESSAGE_LENGTH,
+        max_len=discord_rendering_module.DISCORD_MAX_MESSAGE_LENGTH,
         with_numbering=False,
     )
     assert len(expected_chunks) == 2
 
-    await hooks.deliver_result(
+    await managed_thread_turns_module.handoff_managed_thread_final_delivery(
         discord_message_turns.ManagedThreadFinalizationResult(
             status="ok",
             assistant_text=content,
@@ -630,7 +650,9 @@ async def test_discord_managed_thread_delivery_uses_unique_record_ids_per_chunk(
             managed_thread_id="thread-1",
             managed_turn_id="turn-1",
             backend_thread_id=None,
-        )
+        ),
+        delivery=hooks.durable_delivery,
+        logger=logging.getLogger("test"),
     )
 
     assert [message["record_id"] for message in sent_messages] == [
@@ -644,17 +666,21 @@ async def test_discord_managed_thread_delivery_uses_unique_record_ids_per_chunk(
 
 
 @pytest.mark.anyio
-async def test_discord_managed_thread_delivery_includes_token_usage_footer() -> None:
+async def test_discord_managed_thread_delivery_includes_token_usage_footer(
+    tmp_path: Path,
+) -> None:
     sent_messages: list[dict[str, object]] = []
 
     class _ServiceStub:
+        _config = SimpleNamespace(root=tmp_path, raw={})
+
         async def _send_channel_message_safe(
             self,
             channel_id: str,
             payload: dict[str, object],
             *,
             record_id: str,
-        ) -> None:
+        ) -> bool:
             sent_messages.append(
                 {
                     "channel_id": channel_id,
@@ -662,6 +688,7 @@ async def test_discord_managed_thread_delivery_includes_token_usage_footer() -> 
                     "record_id": record_id,
                 }
             )
+            return True
 
         async def _run_with_typing_indicator(
             self, *, channel_id: str, work: Any
@@ -679,11 +706,11 @@ async def test_discord_managed_thread_delivery_includes_token_usage_footer() -> 
         _ServiceStub(),
         channel_id="channel-1",
         managed_thread_id="thread-1",
-        workspace_root=Path.cwd(),
+        workspace_root=tmp_path,
         public_execution_error="Discord turn failed",
     )
 
-    await hooks.deliver_result(
+    await managed_thread_turns_module.handoff_managed_thread_final_delivery(
         discord_message_turns.ManagedThreadFinalizationResult(
             status="ok",
             assistant_text="message reply",
@@ -699,7 +726,9 @@ async def test_discord_managed_thread_delivery_includes_token_usage_footer() -> 
                 },
                 "modelContextWindow": 203352,
             },
-        )
+        ),
+        delivery=hooks.durable_delivery,
+        logger=logging.getLogger("test"),
     )
 
     assert len(sent_messages) == 1
@@ -820,8 +849,10 @@ async def test_discord_message_turns_show_busy_placeholder_for_attachment_prep(
         "build_surface_orchestration_ingress",
         lambda **_: _IngressStub(),
     )
+    import codex_autorunner.integrations.discord.managed_thread_routing as _managed_thread_routing
+
     monkeypatch.setattr(
-        discord_message_turns,
+        _managed_thread_routing,
         "build_discord_thread_orchestration_service",
         lambda *_args, **_kwargs: _BusyOrchestrationService(),
     )
@@ -1037,13 +1068,10 @@ async def test_discord_notification_reply_routes_to_pma_thread_with_context(
         lambda **_: _IngressStub(),
     )
     monkeypatch.setattr(discord_message_turns, "load_pma_prompt", lambda _root: "base")
+    import codex_autorunner.integrations.discord.managed_thread_routing as _managed_thread_routing
+
     monkeypatch.setattr(
-        discord_message_turns,
-        "format_pma_prompt",
-        lambda _base, _snapshot, prompt_text, **_kwargs: prompt_text,
-    )
-    monkeypatch.setattr(
-        discord_message_turns,
+        _managed_thread_routing,
         "build_discord_thread_orchestration_service",
         lambda _service: SimpleNamespace(
             get_binding=lambda **_kwargs: SimpleNamespace(
@@ -1785,7 +1813,7 @@ def test_model_picker_items_are_deduplicated_and_labeled() -> None:
             {"model": "openai/gpt-4o", "displayName": "GPT-4o"},
         ]
     }
-    items = discord_service_module._coerce_model_picker_items(payload)
+    items = discord_picker_helpers_module._coerce_model_picker_items(payload)
     assert items == [
         ("gpt-5.3-codex", "gpt-5.3-codex"),
         ("openai/gpt-4o", "openai/gpt-4o (GPT-4o)"),
@@ -1793,7 +1821,7 @@ def test_model_picker_items_are_deduplicated_and_labeled() -> None:
 
 
 def test_session_thread_picker_label_prefers_preview_and_marks_current() -> None:
-    label = discord_service_module._format_session_thread_picker_label(
+    label = discord_picker_helpers_module._format_session_thread_picker_label(
         "019cc7c1-ec10-7981-8e8b-ec5db4619efb",
         {
             "id": "019cc7c1-ec10-7981-8e8b-ec5db4619efb",
@@ -1809,7 +1837,7 @@ def test_session_thread_picker_label_prefers_preview_and_marks_current() -> None
 
 def test_session_thread_picker_label_falls_back_to_thread_id() -> None:
     thread_id = "019cc738-5168-7ca1-9d80-ab180b4b31dd"
-    label = discord_service_module._format_session_thread_picker_label(
+    label = discord_picker_helpers_module._format_session_thread_picker_label(
         thread_id,
         {"id": thread_id},
         is_current=False,
@@ -1819,7 +1847,7 @@ def test_session_thread_picker_label_falls_back_to_thread_id() -> None:
 
 def test_session_thread_picker_label_strips_injected_context_from_preview() -> None:
     thread_id = "019cc77b-ec10-7981-8e8b-ec5db4619efb"
-    label = discord_service_module._format_session_thread_picker_label(
+    label = discord_picker_helpers_module._format_session_thread_picker_label(
         thread_id,
         {
             "id": thread_id,
@@ -1840,7 +1868,7 @@ def test_session_thread_picker_label_prioritizes_datetime_and_first_user_message
     None
 ):
     thread_id = "019cc77b-ec10-7981-8e8b-ec5db4619efb"
-    label = discord_service_module._format_session_thread_picker_label(
+    label = discord_picker_helpers_module._format_session_thread_picker_label(
         thread_id,
         {
             "id": thread_id,
@@ -1904,7 +1932,7 @@ async def test_model_list_with_agent_compat_retries_without_agent() -> None:
             return {"data": [{"model": "gpt-5.3-codex"}]}
 
     client = _FakeClient()
-    result = await discord_service_module._model_list_with_agent_compat(
+    result = await chat_model_selection_module._model_list_with_agent_compat(
         client,
         params={"agent": "codex", "limit": 25},
     )
@@ -3618,8 +3646,10 @@ async def test_component_interaction_cancel_queued_turn_cancels_selected_executi
             SimpleNamespace(thread_target_id="thread-1"),
         )
 
-        original_clear = discord_message_turns.clear_discord_turn_progress_leases
-        discord_message_turns.clear_discord_turn_progress_leases = (
+        import codex_autorunner.integrations.discord.progress_leases as _progress_leases
+
+        original_clear = _progress_leases.clear_discord_turn_progress_leases
+        _progress_leases.clear_discord_turn_progress_leases = (
             _clear_progress_leases  # type: ignore[assignment]
         )
         try:
@@ -3634,7 +3664,7 @@ async def test_component_interaction_cancel_queued_turn_cancels_selected_executi
                 message_id="progress-2",
             )
         finally:
-            discord_message_turns.clear_discord_turn_progress_leases = original_clear  # type: ignore[assignment]
+            _progress_leases.clear_discord_turn_progress_leases = original_clear  # type: ignore[assignment]
 
         assert len(rest.edited_original_interaction_responses) == 2
         assert (
@@ -5494,7 +5524,7 @@ async def test_car_update_status_uses_prepared_interaction_state(
 
     service._defer_ephemeral = _unexpected_defer  # type: ignore[assignment]
     monkeypatch.setattr(
-        discord_service_module,
+        discord_update_service_module,
         "_read_update_status",
         lambda: {"status": "running", "repo_ref": "main"},
     )
@@ -5648,7 +5678,7 @@ async def test_car_update_without_target_uses_fallback_picker_on_definition_fail
         raise RuntimeError("failed to resolve update target definitions")
 
     monkeypatch.setattr(
-        discord_service_module,
+        discord_update_service_module,
         "_available_update_target_definitions",
         _raise_available_update_target_definitions,
     )
@@ -5751,6 +5781,168 @@ async def test_car_tickets_returns_ticket_browser_components(tmp_path: Path) -> 
         options = components[0]["components"][0]["options"]
         assert [option["value"] for option in options] == ["1"]
     finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_tickets_defers_before_slow_browser_followup_delivery(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    ticket_dir = workspace / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True)
+    (ticket_dir / "TICKET-001.md").write_text(
+        '---\nticket_id: "tkt_discord_slow_browser"\nagent: codex\ntitle: Slow browser\ndone: false\n---\n\nBody\n',
+        encoding="utf-8",
+    )
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([_interaction(name="tickets", options=[])])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    browser_started = asyncio.Event()
+    release_browser = asyncio.Event()
+    original_handle_tickets = service._handle_tickets
+
+    async def _slow_handle_tickets(*args: Any, **kwargs: Any) -> None:
+        browser_started.set()
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert rest.followup_messages == []
+        await release_browser.wait()
+        await original_handle_tickets(*args, **kwargs)
+
+    service._handle_tickets = _slow_handle_tickets  # type: ignore[assignment]
+    dispatch_task = asyncio.create_task(
+        service._on_dispatch(
+            "INTERACTION_CREATE",
+            _interaction(name="tickets", options=[]),
+        )
+    )
+
+    try:
+        await asyncio.wait_for(dispatch_task, timeout=3.0)
+        await asyncio.wait_for(browser_started.wait(), timeout=3.0)
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert rest.followup_messages == []
+
+        release_browser.set()
+        await asyncio.wait_for(service._command_runner.shutdown(), timeout=3.0)
+
+        assert len(rest.followup_messages) == 1
+        data = rest.followup_messages[0]["payload"]
+        assert data["content"].startswith("Browse tickets")
+        assert "TICKET-001.md - Slow browser" in data["content"]
+        assert data["components"][0]["components"][0]["custom_id"] == "tickets_select"
+    finally:
+        if not dispatch_task.done():
+            dispatch_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await dispatch_task
+        await service._shutdown()
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_tickets_offloads_initial_ticket_enumeration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    ticket_dir = workspace / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True)
+    (ticket_dir / "TICKET-001.md").write_text(
+        '---\nticket_id: "tkt_discord_offload_initial"\nagent: codex\ntitle: Slow enumerate\ndone: false\n---\n\nBody\n',
+        encoding="utf-8",
+    )
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    loop = asyncio.get_running_loop()
+    browser_started = asyncio.Event()
+    release_browser = asyncio.Event()
+    original_list_document_browser_items = (
+        discord_document_browser_module.list_document_browser_items
+    )
+
+    def _slow_list_document_browser_items(
+        repo_root: Path,
+        source: str,
+        *,
+        query: str = "",
+    ) -> Any:
+        if source == "tickets":
+            loop.call_soon_threadsafe(browser_started.set)
+            asyncio.run_coroutine_threadsafe(release_browser.wait(), loop).result(
+                timeout=1.0
+            )
+        return original_list_document_browser_items(repo_root, source, query=query)
+
+    monkeypatch.setattr(
+        discord_document_browser_module,
+        "list_document_browser_items",
+        _slow_list_document_browser_items,
+    )
+
+    dispatch_task = asyncio.create_task(
+        service._on_dispatch(
+            "INTERACTION_CREATE",
+            _interaction(name="tickets", options=[]),
+        )
+    )
+
+    try:
+        await asyncio.wait_for(dispatch_task, timeout=3.0)
+        await asyncio.wait_for(browser_started.wait(), timeout=3.0)
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert rest.followup_messages == []
+
+        release_browser.set()
+        await asyncio.wait_for(service._command_runner.shutdown(), timeout=3.0)
+
+        assert len(rest.followup_messages) == 1
+        payload = rest.followup_messages[0]["payload"]
+        assert payload["content"].startswith("Browse tickets")
+        assert "TICKET-001.md - Slow enumerate" in payload["content"]
+        assert payload["components"][0]["components"][0]["custom_id"] == (
+            "tickets_select"
+        )
+    finally:
+        if not dispatch_task.done():
+            dispatch_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await dispatch_task
+        await service._shutdown()
         await store.close()
 
 
@@ -5877,6 +6069,106 @@ async def test_car_tickets_search_filters_browser_list_and_selects_document(
         assert "Part 1/1" in selected_data["content"]
         assert "Body" in selected_data["content"]
     finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_ticket_browser_page_component_offloads_ticket_enumeration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    ticket_dir = workspace / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True)
+    for index in range(1, 12):
+        (ticket_dir / f"TICKET-{index:03d}.md").write_text(
+            "---\n"
+            f'ticket_id: "tkt_discord_page_{index}"\n'
+            "agent: codex\n"
+            f"title: Ticket {index}\n"
+            "done: false\n"
+            "---\n\n"
+            f"Body {index}\n",
+            encoding="utf-8",
+        )
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([_interaction(name="tickets", options=[])])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.followup_messages) == 1
+        assert "Page 1/2" in rest.followup_messages[0]["payload"]["content"]
+
+        rest.interaction_responses.clear()
+        rest.edited_original_interaction_responses.clear()
+
+        loop = asyncio.get_running_loop()
+        browser_started = asyncio.Event()
+        release_browser = asyncio.Event()
+        original_list_document_browser_items = (
+            discord_document_browser_module.list_document_browser_items
+        )
+
+        def _slow_list_document_browser_items(
+            repo_root: Path,
+            source: str,
+            *,
+            query: str = "",
+        ) -> Any:
+            if source == "tickets":
+                loop.call_soon_threadsafe(browser_started.set)
+                asyncio.run_coroutine_threadsafe(release_browser.wait(), loop).result(
+                    timeout=1.0
+                )
+            return original_list_document_browser_items(repo_root, source, query=query)
+
+        monkeypatch.setattr(
+            discord_document_browser_module,
+            "list_document_browser_items",
+            _slow_list_document_browser_items,
+        )
+
+        dispatch_task = asyncio.create_task(
+            service._on_dispatch(
+                "INTERACTION_CREATE",
+                _component_interaction(custom_id="tickets_page:1"),
+            )
+        )
+
+        await asyncio.wait_for(dispatch_task, timeout=3.0)
+        await asyncio.wait_for(browser_started.wait(), timeout=3.0)
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 6
+        assert rest.edited_original_interaction_responses == []
+
+        release_browser.set()
+        await asyncio.wait_for(service._command_runner.shutdown(), timeout=3.0)
+
+        assert len(rest.edited_original_interaction_responses) == 1
+        payload = rest.edited_original_interaction_responses[0]["payload"]
+        assert "Page 2/2" in payload["content"]
+        assert "TICKET-011.md - Ticket 11" in payload["content"]
+        assert payload["components"][0]["components"][0]["custom_id"] == (
+            "tickets_select"
+        )
+    finally:
+        await service._shutdown()
         await store.close()
 
 
@@ -7048,7 +7340,7 @@ async def test_car_newt_reports_branch_reset_errors(
         hub_client: Any = None,
     ) -> None:
         _ = repo_id_hint, hub_client
-        raise discord_service_module.GitError("simulated failure")
+        raise GitError("simulated failure")
 
     monkeypatch.setattr(
         discord_session_commands_module, "run_newt_branch_reset", _fail_reset_branch
@@ -7100,7 +7392,7 @@ async def test_car_newt_dirty_worktree_shows_hard_reset_prompt(
         hub_client: Any = None,
     ) -> None:
         _ = repo_id_hint, hub_client
-        raise discord_service_module.GitError(
+        raise GitError(
             "working tree has uncommitted changes; commit or stash before /newt"
         )
 
@@ -7198,7 +7490,7 @@ async def test_car_newt_hard_reset_button_discards_changes_and_retries(
         _ = repo_id_hint, hub_client
         branch_calls.append({"repo_root": repo_root, "branch_name": branch_name})
         if len(branch_calls) == 1:
-            raise discord_service_module.GitError(
+            raise GitError(
                 "working tree has uncommitted changes; commit or stash before /newt"
             )
         return SimpleNamespace(
@@ -7307,7 +7599,7 @@ async def test_car_newt_cancel_button_keeps_local_changes(
     ) -> None:
         _ = repo_id_hint, hub_client
         branch_calls.append({"repo_root": repo_root, "branch_name": branch_name})
-        raise discord_service_module.GitError(
+        raise GitError(
             "working tree has uncommitted changes; commit or stash before /newt"
         )
 
@@ -7390,10 +7682,10 @@ async def test_car_newt_hard_reset_reports_discard_when_retry_reset_fails(
         _ = repo_id_hint, hub_client
         branch_calls.append({"repo_root": repo_root, "branch_name": branch_name})
         if len(branch_calls) == 1:
-            raise discord_service_module.GitError(
+            raise GitError(
                 "working tree has uncommitted changes; commit or stash before /newt"
             )
-        raise discord_service_module.GitError("git fetch failed: simulated failure")
+        raise GitError("git fetch failed: simulated failure")
 
     monkeypatch.setattr(
         discord_session_commands_module, "run_newt_branch_reset", _reset_branch
@@ -7483,7 +7775,7 @@ async def test_car_newt_hard_reset_reports_when_tracked_discard_step_fails(
     ) -> None:
         _ = repo_id_hint, hub_client
         _ = repo_root, branch_name
-        raise discord_service_module.GitError(
+        raise GitError(
             "working tree has uncommitted changes; commit or stash before /newt"
         )
 
@@ -7500,7 +7792,7 @@ async def test_car_newt_hard_reset_reports_when_tracked_discard_step_fails(
     )
 
     def _fail_reset_worktree(_repo_root: Path) -> None:
-        raise discord_service_module.GitError("git reset failed: simulated failure")
+        raise GitError("git reset failed: simulated failure")
 
     monkeypatch.setattr(
         discord_session_commands_module, "reset_worktree_to_head", _fail_reset_worktree
@@ -7571,7 +7863,7 @@ async def test_car_newt_hard_reset_reports_when_untracked_cleanup_fails(
     ) -> None:
         _ = repo_id_hint, hub_client
         _ = repo_root, branch_name
-        raise discord_service_module.GitError(
+        raise GitError(
             "working tree has uncommitted changes; commit or stash before /newt"
         )
 
@@ -7593,7 +7885,7 @@ async def test_car_newt_hard_reset_reports_when_untracked_cleanup_fails(
     )
 
     def _fail_clean(_repo_root: Path) -> None:
-        raise discord_service_module.GitError("git clean failed: simulated failure")
+        raise GitError("git clean failed: simulated failure")
 
     monkeypatch.setattr(
         discord_session_commands_module, "clean_untracked_worktree", _fail_clean
@@ -8129,7 +8421,9 @@ async def test_car_interrupt_recovers_missing_backend_thread(tmp_path: Path) -> 
             )
 
     service._discord_thread_service = lambda: _FakeThreadService()  # type: ignore[assignment]
-    discord_message_turns.request_discord_turn_progress_reuse(
+    import codex_autorunner.integrations.discord.progress_leases as _progress_leases
+
+    _progress_leases.request_discord_turn_progress_reuse(
         service,
         thread_target_id="thread-1",
         source_message_id="m-2",
@@ -8684,7 +8978,9 @@ async def test_reset_discord_thread_binding_archives_after_lost_backend_recovery
     )
 
     calls: list[tuple[str, str]] = []
-    discord_message_turns.request_discord_turn_progress_reuse(
+    import codex_autorunner.integrations.discord.progress_leases as _progress_leases
+
+    _progress_leases.request_discord_turn_progress_reuse(
         service,
         thread_target_id="thread-1",
         source_message_id="m-2",
@@ -8757,7 +9053,9 @@ async def test_reset_discord_thread_binding_archives_after_lost_backend_recovery
 async def test_car_update_status_reports_absent_status(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(discord_service_module, "_read_update_status", lambda: None)
+    monkeypatch.setattr(
+        discord_update_service_module, "_read_update_status", lambda: None
+    )
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
     await store.initialize()
     rest = _FakeRest()
@@ -8824,7 +9122,7 @@ async def test_car_update_status_defers_before_reading_status(
         return None
 
     monkeypatch.setattr(
-        discord_service_module,
+        discord_update_service_module,
         "_read_update_status",
         _fake_read_update_status,
     )
@@ -9026,7 +9324,7 @@ async def test_car_update_starts_worker_with_explicit_target(
         observed.update(kwargs)
 
     monkeypatch.setattr(
-        discord_service_module,
+        discord_update_service_module,
         "_spawn_update_process",
         _fake_spawn_update_process,
     )
@@ -9136,7 +9434,7 @@ async def test_car_update_accepts_legacy_both_target_alias(
         observed.update(kwargs)
 
     monkeypatch.setattr(
-        discord_service_module,
+        discord_update_service_module,
         "_spawn_update_process",
         _fake_spawn_update_process,
     )
@@ -9195,7 +9493,7 @@ async def test_car_update_prompts_for_confirmation_when_sessions_active(
         spawned = True
 
     monkeypatch.setattr(
-        discord_service_module,
+        discord_update_service_module,
         "_spawn_update_process",
         _fake_spawn_update_process,
     )
@@ -9255,7 +9553,7 @@ async def test_component_update_prompts_for_confirmation_after_defer(
         spawned = True
 
     monkeypatch.setattr(
-        discord_service_module,
+        discord_update_service_module,
         "_spawn_update_process",
         _fake_spawn_update_process,
     )
@@ -9381,7 +9679,9 @@ async def test_component_interaction_update_cancel_reports_cancelled(
 async def test_component_interaction_update_status_updates_original_message(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(discord_service_module, "_read_update_status", lambda: None)
+    monkeypatch.setattr(
+        discord_update_service_module, "_read_update_status", lambda: None
+    )
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
     await store.initialize()
     rest = _FakeRest()
@@ -9433,7 +9733,7 @@ async def test_component_interaction_update_target_uses_component_defer(
         observed.update(kwargs)
 
     monkeypatch.setattr(
-        discord_service_module,
+        discord_update_service_module,
         "_spawn_update_process",
         _fake_spawn_update_process,
     )
@@ -9475,7 +9775,7 @@ async def test_component_interaction_update_confirm_clears_confirmation_buttons(
         observed.update(kwargs)
 
     monkeypatch.setattr(
-        discord_service_module,
+        discord_update_service_module,
         "_spawn_update_process",
         _fake_spawn_update_process,
     )
@@ -9526,7 +9826,7 @@ async def test_car_update_acknowledges_before_spawning_restart_target(
         assert "preparing update (discord)" in content
 
     monkeypatch.setattr(
-        discord_service_module,
+        discord_update_service_module,
         "_spawn_update_process",
         _fake_spawn_update_process,
     )
@@ -9568,7 +9868,7 @@ async def test_component_update_acknowledges_before_spawning_restart_target(
         assert "preparing update (discord)" in content
 
     monkeypatch.setattr(
-        discord_service_module,
+        discord_update_service_module,
         "_spawn_update_process",
         _fake_spawn_update_process,
     )
@@ -9612,7 +9912,7 @@ async def test_car_update_web_target_skips_confirmation_when_sessions_active(
         observed.update(kwargs)
 
     monkeypatch.setattr(
-        discord_service_module,
+        discord_update_service_module,
         "_spawn_update_process",
         _fake_spawn_update_process,
     )
@@ -9658,7 +9958,7 @@ async def test_car_update_restart_target_reports_lock_error_after_neutral_prep_t
         raise UpdateInProgressError("Update already in progress.")
 
     monkeypatch.setattr(
-        discord_service_module,
+        discord_update_service_module,
         "_spawn_update_process",
         _fake_spawn_update_process,
     )
@@ -9680,7 +9980,7 @@ async def test_run_forever_sends_pending_update_notice(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        discord_service_module,
+        discord_update_service_module,
         "_read_update_status",
         lambda: {
             "status": "ok",
@@ -9696,7 +9996,7 @@ async def test_run_forever_sends_pending_update_notice(
         marked.append(kwargs)
 
     monkeypatch.setattr(
-        discord_service_module,
+        discord_update_service_module,
         "mark_update_status_notified",
         _fake_mark_update_status_notified,
     )
@@ -10241,11 +10541,11 @@ async def test_reconcile_background_task_failure_does_not_fabricate_channel_fall
     def _fake_log_event(logger, level, event_name, **kwargs):  # type: ignore[no-untyped-def]
         log_events.append({"level": level, "event_name": event_name, **kwargs})
 
-    import codex_autorunner.integrations.discord.message_turns as _msg_turns
+    import codex_autorunner.integrations.discord.progress_leases as _progress_leases
     import codex_autorunner.integrations.discord.service_lifecycle as _lifecycle_mod
 
     monkeypatch.setattr(
-        _msg_turns, "reconcile_discord_turn_progress_leases", _fake_reconcile
+        _progress_leases, "reconcile_discord_turn_progress_leases", _fake_reconcile
     )
     monkeypatch.setattr(_lifecycle_mod, "log_event", _fake_log_event)
 
@@ -10298,11 +10598,11 @@ async def test_reconcile_background_task_failure_sends_channel_message_when_expl
     def _fake_log_event(logger, level, event_name, **kwargs):  # type: ignore[no-untyped-def]
         pass
 
-    import codex_autorunner.integrations.discord.message_turns as _msg_turns
+    import codex_autorunner.integrations.discord.progress_leases as _progress_leases
     import codex_autorunner.integrations.discord.service_lifecycle as _lifecycle_mod
 
     monkeypatch.setattr(
-        _msg_turns, "reconcile_discord_turn_progress_leases", _fake_reconcile
+        _progress_leases, "reconcile_discord_turn_progress_leases", _fake_reconcile
     )
     monkeypatch.setattr(_lifecycle_mod, "log_event", _fake_log_event)
 
@@ -10346,11 +10646,11 @@ async def test_reconcile_background_task_failure_returns_count_on_successful_rec
     def _fake_log_event(logger, level, event_name, **kwargs):  # type: ignore[no-untyped-def]
         pass
 
-    import codex_autorunner.integrations.discord.message_turns as _msg_turns
+    import codex_autorunner.integrations.discord.progress_leases as _progress_leases
     import codex_autorunner.integrations.discord.service_lifecycle as _lifecycle_mod
 
     monkeypatch.setattr(
-        _msg_turns, "reconcile_discord_turn_progress_leases", _fake_reconcile
+        _progress_leases, "reconcile_discord_turn_progress_leases", _fake_reconcile
     )
     monkeypatch.setattr(_lifecycle_mod, "log_event", _fake_log_event)
 

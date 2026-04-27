@@ -1,7 +1,7 @@
 from pathlib import Path
 
-from codex_autorunner.cli import _resolve_repo_api_path
 from codex_autorunner.core.config import CONFIG_FILENAME
+from codex_autorunner.surfaces.cli.commands.root import _resolve_repo_api_path
 from tests.conftest import write_test_config
 
 

@@ -16,16 +16,11 @@ import contextlib
 import logging
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import partial
 from pathlib import Path
 from typing import Any, Optional, cast
 
-from ...agents.registry import (  # noqa: F401  re-export for test monkeypatch compat
-    get_registered_agents,
-    resolve_agent_runtime,
-    wrap_requested_agent_context,
-)
 from ...core.context_awareness import (
     maybe_inject_car_awareness,
     maybe_inject_filebox_hint,
@@ -50,7 +45,6 @@ from ...core.orchestration.runtime_threads import (
 from ...core.pma_context import (
     build_hub_unavailable_snapshot,
     format_pma_discoverability_preamble,
-    format_pma_prompt,  # noqa: F401  re-export for test monkeypatch compat
     format_pma_prompt_variants,
     load_pma_prompt,
 )
@@ -90,9 +84,9 @@ from ..chat.managed_thread_progress_projector import (
 )
 from ..chat.managed_thread_turns import (
     ManagedThreadCoordinatorHooks,
+    ManagedThreadDurableDeliveryHooks,
     ManagedThreadFinalizationResult,
     ManagedThreadQueuedExecutionStarter,
-    ManagedThreadTurnCoordinator,  # noqa: F401  re-export for test monkeypatch compat
     complete_managed_thread_execution,
     render_managed_thread_response_text,
 )
@@ -105,6 +99,8 @@ from ..chat.progress_primitives import TurnProgressTracker
 from ..chat.turn_metrics import (
     compose_turn_response_with_footer,
 )
+from . import constants as discord_constants
+from . import managed_thread_routing as discord_managed_thread_routing
 from .components import (
     build_cancel_turn_button,
     build_cancel_turn_custom_id,
@@ -121,45 +117,31 @@ from .managed_thread_routing import (
     _build_managed_thread_input_items,
     _DiscordManagedThreadStatus,
     _evict_cached_runtime_supervisors,
-    _load_discord_pma_turn_idle_timeout_seconds,  # noqa: F401  re-export for test monkeypatch compat
-    build_discord_thread_orchestration_service,
     resolve_discord_thread_target,
 )
-from .progress_leases import (  # noqa: F401  re-export for backward compat
+from .progress_leases import (
     _DISCORD_PROGRESS_LIVE_STATES,
     DiscordTurnStartupFailure,
     _acknowledge_discord_progress_reuse,
     _apply_discord_progress_run_event,
     _claim_discord_reusable_progress_message,
     _delete_discord_progress_lease,
-    _DiscordOrchestrationState,
-    _DiscordProgressReuseRequest,
-    _DiscordReusableProgressMessage,
     _DiscordTurnExecutionSupervision,
     _execution_field,
     _get_discord_progress_lease,
     _get_discord_thread_queue_task_map,
-    _list_discord_progress_leases,
-    _orphaned_progress_note,
     _peek_discord_progress_reuse_request,
-    _progress_task_context,
     _reconcile_other_discord_turn_progress_leases,
-    _retire_discord_progress_message,
     _shutdown_progress_note,
     _spawn_discord_background_task,
     _spawn_discord_progress_background_task,
     _stash_discord_reusable_progress_message,
     _update_discord_progress_lease,
     _upsert_discord_progress_lease,
-    bind_discord_progress_task_context,
     cleanup_discord_terminal_progress_leases,
-    clear_discord_turn_progress_leases,
     clear_discord_turn_progress_reuse,
-    reconcile_discord_turn_progress_leases,
-    request_discord_turn_progress_reuse,
 )
-from .rendering import (  # noqa: F401  re-export for test monkeypatch compat
-    DISCORD_MAX_MESSAGE_LENGTH,
+from .rendering import (
     chunk_discord_message,
     format_discord_message,
     sanitize_discord_outbound_text,
@@ -168,6 +150,8 @@ from .rendering import (  # noqa: F401  re-export for test monkeypatch compat
 from .state import ChannelBinding
 
 _logger = logging.getLogger(__name__)
+
+DISCORD_MAX_MESSAGE_LENGTH = discord_constants.DISCORD_MAX_MESSAGE_LENGTH
 
 DISCORD_PMA_PUBLIC_EXECUTION_ERROR = "Discord PMA turn failed"
 DISCORD_REPO_PUBLIC_EXECUTION_ERROR = "Discord turn failed"
@@ -573,7 +557,11 @@ def _resolve_discord_managed_thread_status(
     pma_enabled: bool,
     channel_id: str,
 ) -> _DiscordManagedThreadStatus:
-    orchestration_service = build_discord_thread_orchestration_service(service)
+    orchestration_service = (
+        discord_managed_thread_routing.build_discord_thread_orchestration_service(
+            service
+        )
+    )
     surface_key = managed_thread_surface_key or channel_id
     get_binding = getattr(orchestration_service, "get_binding", None)
     get_thread_target = getattr(orchestration_service, "get_thread_target", None)
@@ -1195,7 +1183,11 @@ async def _handle_discord_notification_turn(
         dispatch=dispatch,
     )
     surface_key = notification_surface_key(dispatch.notification_reply.notification_id)
-    orch_service = build_discord_thread_orchestration_service(dispatch.service)
+    orch_service = (
+        discord_managed_thread_routing.build_discord_thread_orchestration_service(
+            dispatch.service
+        )
+    )
     orch_binding = (
         orch_service.get_binding(
             surface_kind="discord",
@@ -2133,6 +2125,20 @@ async def _run_discord_orchestrated_turn_for_message(
         workspace_root=workspace_root,
         public_execution_error=public_execution_error,
     )
+    if suppress_managed_thread_delivery:
+        base_durable_delivery = runner_hooks.durable_delivery
+        if base_durable_delivery is None:
+            raise ValueError(
+                "suppress_managed_thread_delivery requires durable_delivery hooks"
+            )
+        runner_hooks = replace(
+            runner_hooks,
+            durable_delivery=ManagedThreadDurableDeliveryHooks(
+                engine=base_durable_delivery.engine,
+                adapter=base_durable_delivery.adapter,
+                build_delivery_intent=lambda _finalized: None,
+            ),
+        )
     queue_worker_hooks = runner_hooks.queue_worker_hooks()
     _first_progress_recorded = False
 
@@ -2147,27 +2153,11 @@ async def _run_discord_orchestrated_turn_for_message(
             _first_progress_recorded = True
             chat_ux_snapshot.record(ChatUxMilestone.FIRST_SEMANTIC_PROGRESS)
 
-    async def _suppress_managed_thread_delivery(
-        _finalized: ManagedThreadFinalizationResult,
-    ) -> None:
-        # Compaction uses the PMA execution path to generate the summary, but the
-        # compact command itself owns the single visible summary post.
-        return None
-
     runner_hooks = ManagedThreadCoordinatorHooks(
         on_execution_started=runner_hooks.on_execution_started,
         on_execution_finished=runner_hooks.on_execution_finished,
         on_progress_event=_handle_progress_event,
-        durable_delivery=(
-            None
-            if suppress_managed_thread_delivery
-            else queue_worker_hooks.durable_delivery
-        ),
-        deliver_result=(
-            _suppress_managed_thread_delivery
-            if suppress_managed_thread_delivery
-            else queue_worker_hooks.deliver_result
-        ),
+        durable_delivery=queue_worker_hooks.durable_delivery,
         run_with_indicator=queue_worker_hooks.run_with_indicator,
         queue_execution_hooks=queue_worker_hooks.execution_hooks,
     )
@@ -2187,6 +2177,8 @@ async def _run_discord_orchestrated_turn_for_message(
         )
         if supervision is not None:
             supervision.set_execution_id(progress_execution_id)
+        if bool(getattr(submission, "queued", False)):
+            return
         await _set_progress_lease_state(
             execution_id=progress_execution_id,
             state="active",
@@ -2297,6 +2289,10 @@ async def _run_discord_orchestrated_turn_for_message(
             queued=True,
             progress_message_id=progress_message_id,
             agent=logical_agent,
+        )
+        await _set_progress_lease_state(
+            execution_id=progress_execution_id,
+            state="active",
         )
         projector.mark_queued(force=True)
         try:

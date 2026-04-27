@@ -41,12 +41,6 @@ class ResponseModel(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
 
-# Backward-compat aliases so existing imports keep working.
-_validate_supported_payload_keys = validate_supported_payload_keys
-_normalize_filter_payload = normalize_filter_payload
-_merge_normalized_filter = merge_normalized_filter
-
-
 class ContextspaceWriteRequest(Payload):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
@@ -406,13 +400,111 @@ class GithubPrSyncRequest(Payload):
     mode: Optional[str] = None
 
 
-# Keep an explicit module-level reference so dead-code heuristics treat these
-# request schemas as part of the public route contract surface.
-_GITHUB_REQUEST_MODELS = (
-    GithubIssueRequest,
-    GithubContextRequest,
-    GithubPrSyncRequest,
-)
+__all__ = [
+    "ArchiveSnapshotDetailResponse",
+    "ArchiveSnapshotSummary",
+    "ArchiveSnapshotsResponse",
+    "ArchiveTreeResponse",
+    "ArchiveTreeNode",
+    "AppServerThreadArchiveRequest",
+    "AppServerThreadArchiveResponse",
+    "AppServerThreadResetAllResponse",
+    "AppServerThreadResetRequest",
+    "AppServerThreadResetResponse",
+    "AppServerThreadsResponse",
+    "ContextspaceDocKindInfo",
+    "ContextspaceResponse",
+    "ContextspaceWriteRequest",
+    "GithubContextRequest",
+    "GithubIssueRequest",
+    "GithubPrSyncRequest",
+    "HubAgentWorkspaceListResponse",
+    "HubAgentWorkspaceMutationResponse",
+    "HubAgentWorkspaceResponse",
+    "HubAgentWorkspaceSummaryResponse",
+    "HubArchiveRepoStateRequest",
+    "HubArchiveRepoStateResponse",
+    "HubArchiveWorktreeRequest",
+    "HubArchiveWorktreeResponse",
+    "HubArchiveWorktreeStateResponse",
+    "HubCleanupWorktreeRequest",
+    "HubCreateAgentWorkspaceRequest",
+    "HubCreateRepoRequest",
+    "HubCreateWorktreeRequest",
+    "HubDeleteAgentWorkspaceRequest",
+    "HubDestinationMountRequest",
+    "HubDestinationSetRequest",
+    "HubJobResponse",
+    "HubMessageSnapshotResponse",
+    "HubMessagesFreshnessResponse",
+    "HubMessagesResponse",
+    "HubPinRepoRequest",
+    "HubRemoveAgentWorkspaceRequest",
+    "HubRemoveRepoRequest",
+    "HubUpdateAgentWorkspaceRequest",
+    "LocalRunArchiveSummary",
+    "LocalRunArchivesResponse",
+    "Payload",
+    "PmaAutomationSubscriptionCreateRequest",
+    "PmaAutomationTimerCancelRequest",
+    "PmaAutomationTimerCreateRequest",
+    "PmaAutomationTimerTouchRequest",
+    "PmaChatRequest",
+    "PmaHistoryCompactRequest",
+    "PmaManagedThreadBulkArchiveRequest",
+    "PmaManagedThreadCompactRequest",
+    "PmaManagedThreadCreateRequest",
+    "PmaManagedThreadForkRequest",
+    "PmaManagedThreadMessageRequest",
+    "PmaManagedThreadResumeRequest",
+    "PmaNewSessionRequest",
+    "PmaSessionResetRequest",
+    "PmaStopRequest",
+    "PmaThreadResetRequest",
+    "RepoUsageResponse",
+    "ResponseModel",
+    "ReviewControlResponse",
+    "ReviewStartRequest",
+    "ReviewStatusResponse",
+    "RunControlRequest",
+    "RunControlResponse",
+    "RunResetResponse",
+    "RunStatusResponse",
+    "SessionItemResponse",
+    "SessionSettingsRequest",
+    "SessionSettingsResponse",
+    "SessionStopRequest",
+    "SessionStopResponse",
+    "SessionsResponse",
+    "SpecIngestTicketsResponse",
+    "SystemHealthResponse",
+    "SystemUpdateCheckResponse",
+    "SystemUpdateRequest",
+    "SystemUpdateResponse",
+    "SystemUpdateStatusResponse",
+    "SystemUpdateTargetOption",
+    "SystemUpdateTargetsResponse",
+    "TemplateApplyRequest",
+    "TemplateApplyResponse",
+    "TemplateFetchResponse",
+    "TemplateFetchRequest",
+    "TemplateRepoCreateRequest",
+    "TemplateRepoSummary",
+    "TemplateRepoUpdateRequest",
+    "TemplateReposResponse",
+    "TicketBulkClearModelRequest",
+    "TicketBulkSetAgentRequest",
+    "TicketBulkUpdateResponse",
+    "TicketCreateRequest",
+    "TicketDeleteResponse",
+    "TicketReorderRequest",
+    "TicketReorderResponse",
+    "TicketResponse",
+    "TicketUpdateRequest",
+    "TokenTotalsResponse",
+    "UsageSeriesEntryResponse",
+    "UsageSeriesResponse",
+]
 
 
 class HubPinRepoRequest(Payload):
@@ -455,21 +547,6 @@ class HubDestinationSetRequest(Payload):
         validation_alias=AliasChoices("env", "explicit_env", "explicitEnv"),
     )
     mounts: Optional[List[HubDestinationMountRequest]] = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def _normalize_legacy_env_alias(cls, data: Any) -> Any:
-        if not isinstance(data, dict):
-            return data
-        raw_env = data.get("env")
-        if raw_env is None or not isinstance(raw_env, list):
-            return data
-        if "env_passthrough" in data or "envPassthrough" in data:
-            return data
-        normalized = dict(data)
-        normalized["env_passthrough"] = raw_env
-        normalized.pop("env", None)
-        return normalized
 
     def normalized_payload(self) -> dict[str, Any]:
         return self.model_dump(exclude_none=True)
@@ -1168,20 +1245,20 @@ class PmaAutomationSubscriptionCreateRequest(Payload):
     def normalized_payload(self) -> dict[str, Any]:
         data = dict(self.model_dump(exclude_none=True, exclude_defaults=True))
         raw_filter = data.pop("filter", None)
-        _validate_supported_payload_keys(
+        validate_supported_payload_keys(
             data,
             supported_keys=self._SUPPORTED_PAYLOAD_KEYS,
             label="subscription",
         )
         if raw_filter is None:
             return data
-        normalized_filter = _normalize_filter_payload(
+        normalized_filter = normalize_filter_payload(
             raw_filter=raw_filter,
             supported_keys=self._SUPPORTED_FILTER_KEYS,
             key_aliases=self._FILTER_KEY_ALIASES,
             label="subscription filter",
         )
-        return _merge_normalized_filter(data, normalized_filter, label="filter")
+        return merge_normalized_filter(data, normalized_filter, label="filter")
 
 
 class PmaAutomationTimerCreateRequest(Payload):
@@ -1304,7 +1381,7 @@ class PmaAutomationTimerCreateRequest(Payload):
     def normalized_payload(self) -> dict[str, Any]:
         data = dict(self.model_dump(exclude_none=True))
         raw_filter = data.pop("filter", None)
-        _validate_supported_payload_keys(
+        validate_supported_payload_keys(
             data,
             supported_keys=self._SUPPORTED_PAYLOAD_KEYS,
             label="timer",
@@ -1313,13 +1390,13 @@ class PmaAutomationTimerCreateRequest(Payload):
             raise ValueError("metadata must be an object")
         if raw_filter is None:
             return data
-        normalized_filter = _normalize_filter_payload(
+        normalized_filter = normalize_filter_payload(
             raw_filter=raw_filter,
             supported_keys=self._SUPPORTED_FILTER_KEYS,
             key_aliases=self._FILTER_KEY_ALIASES,
             label="timer filter",
         )
-        return _merge_normalized_filter(data, normalized_filter, label="filter")
+        return merge_normalized_filter(data, normalized_filter, label="filter")
 
 
 class PmaAutomationTimerTouchRequest(Payload):
@@ -1351,7 +1428,7 @@ class PmaAutomationTimerTouchRequest(Payload):
 
     def normalized_payload(self) -> dict[str, Any]:
         data = dict(self.model_dump(exclude_none=True))
-        _validate_supported_payload_keys(
+        validate_supported_payload_keys(
             data,
             supported_keys=self._SUPPORTED_PAYLOAD_KEYS,
             label="timer touch",
@@ -1369,7 +1446,7 @@ class PmaAutomationTimerCancelRequest(Payload):
 
     def normalized_payload(self) -> dict[str, Any]:
         data = dict(self.model_dump(exclude_none=True))
-        _validate_supported_payload_keys(
+        validate_supported_payload_keys(
             data,
             supported_keys=self._SUPPORTED_PAYLOAD_KEYS,
             label="timer cancel",

@@ -7,9 +7,7 @@ from typing import Any, Optional, cast
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from .....agents.base import (
-    harness_allows_parallel_event_stream,
-)
+from .....agents.base import harness_supports_event_streaming
 from .....agents.codex.harness import CodexHarness
 from .....agents.registry import get_registered_agents as _get_registered_agents
 from .....core.orchestration import (
@@ -646,7 +644,7 @@ def build_chat_runtime_router(
                 media_type="text/event-stream",
                 headers=SSE_HEADERS,
             )
-        if not harness_allows_parallel_event_stream(harness):
+        if not harness_supports_event_streaming(harness):
             raise HTTPException(
                 status_code=409,
                 detail="Live turn events unavailable for this agent",

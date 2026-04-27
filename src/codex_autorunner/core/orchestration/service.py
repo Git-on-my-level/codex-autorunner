@@ -362,9 +362,17 @@ class PmaThreadExecutionStore(ThreadExecutionStore):
         return _execution_record_from_store_row(execution), payload
 
     def set_execution_backend_id(
-        self, execution_id: str, backend_turn_id: Optional[str]
+        self,
+        execution_id: str,
+        backend_turn_id: Optional[str],
+        *,
+        confirmed_start: bool = True,
     ) -> None:
-        self._store.set_turn_backend_turn_id(execution_id, backend_turn_id)
+        self._store.set_turn_backend_turn_id(
+            execution_id,
+            backend_turn_id,
+            confirmed_start=confirmed_start,
+        )
 
     def _notify_terminal_transition(
         self,

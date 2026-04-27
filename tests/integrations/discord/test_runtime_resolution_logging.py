@@ -13,7 +13,8 @@ from tests.discord_message_turns_support import (
     _FakeRest,
 )
 
-import codex_autorunner.integrations.discord.message_turns as discord_message_turns_module
+import codex_autorunner.agents.registry as agent_registry_module
+import codex_autorunner.integrations.discord.managed_thread_routing as discord_managed_thread_routing_module
 from codex_autorunner.agents.registry import AgentDescriptor
 from codex_autorunner.integrations.discord.service import DiscordBotService
 from codex_autorunner.integrations.discord.state import DiscordStateStore
@@ -56,12 +57,12 @@ def test_discord_harness_factory_logs_canonical_hermes_runtime_resolution(
         runtime_kind="hermes",
     )
     monkeypatch.setattr(
-        discord_message_turns_module,
+        agent_registry_module,
         "get_registered_agents",
         lambda context=None: {"hermes": descriptor},
     )
     monkeypatch.setattr(
-        discord_message_turns_module,
+        agent_registry_module,
         "resolve_agent_runtime",
         lambda *args, **kwargs: SimpleNamespace(
             logical_agent_id="hermes",
@@ -72,14 +73,14 @@ def test_discord_harness_factory_logs_canonical_hermes_runtime_resolution(
         ),
     )
     monkeypatch.setattr(
-        discord_message_turns_module,
+        discord_managed_thread_routing_module,
         "log_event",
         lambda _logger, _level, event, **fields: captured_logs.append(
             {"event": event, **fields}
         ),
     )
 
-    orch = discord_message_turns_module.build_discord_thread_orchestration_service(
+    orch = discord_managed_thread_routing_module.build_discord_thread_orchestration_service(
         _build_service(tmp_path)
     )
     orch._harness_for_agent("hermes", "m4-pma")
@@ -124,12 +125,12 @@ def test_discord_harness_factory_logs_alias_hermes_runtime_resolution(
         runtime_kind="hermes",
     )
     monkeypatch.setattr(
-        discord_message_turns_module,
+        agent_registry_module,
         "get_registered_agents",
         lambda context=None: {"hermes-m4-pma": descriptor},
     )
     monkeypatch.setattr(
-        discord_message_turns_module,
+        agent_registry_module,
         "resolve_agent_runtime",
         lambda *args, **kwargs: SimpleNamespace(
             logical_agent_id="hermes",
@@ -140,14 +141,14 @@ def test_discord_harness_factory_logs_alias_hermes_runtime_resolution(
         ),
     )
     monkeypatch.setattr(
-        discord_message_turns_module,
+        discord_managed_thread_routing_module,
         "log_event",
         lambda _logger, _level, event, **fields: captured_logs.append(
             {"event": event, **fields}
         ),
     )
 
-    orch = discord_message_turns_module.build_discord_thread_orchestration_service(
+    orch = discord_managed_thread_routing_module.build_discord_thread_orchestration_service(
         _build_service(tmp_path)
     )
     orch._harness_for_agent("hermes", "m4-pma")

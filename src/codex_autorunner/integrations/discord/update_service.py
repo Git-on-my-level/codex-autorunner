@@ -128,12 +128,7 @@ async def send_update_status_notice(
 
 
 def mark_notified(service: Any, status: dict[str, Any]) -> None:
-    from . import service as service_module
-
-    mark_fn = getattr(service_module, "mark_update_status_notified", None)
-    if not callable(mark_fn):
-        return
-    mark_fn(
+    mark_update_status_notified(
         path=update_status_path(service),
         status=status,
         logger=service._logger,

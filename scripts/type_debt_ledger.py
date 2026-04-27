@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# ruff: noqa: E402
 from __future__ import annotations
 
 import argparse
@@ -15,7 +16,7 @@ from codex_autorunner.core.type_debt_ledger import (
     build_type_debt_ledger,
     ledger_to_dict,
     render_markdown_report,
-)
+)  # noqa: E402
 
 
 def _parse_args() -> argparse.Namespace:

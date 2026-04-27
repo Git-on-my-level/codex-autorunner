@@ -9,7 +9,7 @@ from ..sqlite_utils import table_columns, table_exists
 from ..time_utils import now_iso
 from .models import OrchestrationTableDefinition
 
-ORCHESTRATION_SCHEMA_VERSION = 25
+ORCHESTRATION_SCHEMA_VERSION = 26
 
 
 @dataclass(frozen=True)
@@ -1059,14 +1059,7 @@ def _apply_v16(conn: sqlite3.Connection) -> None:
 
 
 def _apply_v17(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS orch_legacy_backfill_flags (
-            backfill_key TEXT PRIMARY KEY,
-            completed_at TEXT NOT NULL
-        )
-        """
-    )
+    _ = conn
 
 
 def _apply_v18(conn: sqlite3.Connection) -> None:
@@ -1336,6 +1329,35 @@ def _apply_v25(conn: sqlite3.Connection) -> None:
         )
 
 
+def _apply_v26(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS orch_operation_flags (
+            flag_key TEXT PRIMARY KEY,
+            completed_at TEXT NOT NULL
+        )
+        """
+    )
+    has_legacy_flags = conn.execute(
+        """
+        SELECT 1
+          FROM sqlite_master
+         WHERE type = 'table'
+           AND name = 'orch_legacy_backfill_flags'
+         LIMIT 1
+        """
+    ).fetchone()
+    if has_legacy_flags is None:
+        return
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO orch_operation_flags (flag_key, completed_at)
+        SELECT backfill_key, completed_at
+          FROM orch_legacy_backfill_flags
+        """
+    )
+
+
 _MIGRATIONS = (
     _MigrationStep(1, "create_core_orchestration_schema", _apply_v1),
     _MigrationStep(2, "add_binding_and_flow_projection_scaffolding", _apply_v2),
@@ -1374,6 +1396,7 @@ _MIGRATIONS = (
     _MigrationStep(23, "add_execution_metadata", _apply_v23),
     _MigrationStep(24, "add_thread_identity_bindings", _apply_v24),
     _MigrationStep(25, "extend_publish_dedupe_index_for_effect_applied", _apply_v25),
+    _MigrationStep(26, "add_operation_flags", _apply_v26),
 )
 
 
@@ -1499,9 +1522,9 @@ _TABLE_DEFINITIONS = (
         description="Operator-facing audit projection records.",
     ),
     OrchestrationTableDefinition(
-        name="orch_legacy_backfill_flags",
+        name="orch_operation_flags",
         role="ops",
-        description="One-shot completion markers for legacy orchestration state backfill.",
+        description="One-shot completion markers for migration and bootstrap operations.",
     ),
     OrchestrationTableDefinition(
         name="orch_cold_trace_manifests",

@@ -29,8 +29,8 @@ def legacy_orchestration_backfill_complete(conn: Any) -> bool:
     row = conn.execute(
         """
         SELECT 1 AS ok
-          FROM orch_legacy_backfill_flags
-         WHERE backfill_key = ?
+          FROM orch_operation_flags
+         WHERE flag_key = ?
          LIMIT 1
         """,
         (LEGACY_ORCHESTRATION_BACKFILL_KEY,),
@@ -76,7 +76,7 @@ def ensure_legacy_orchestration_backfill(
     """
     Run legacy JSON/SQLite → orchestration backfills at most once per hub DB (across processes).
 
-    Uses a row in orch_legacy_backfill_flags plus an inter-process file lock so concurrent
+    Uses a row in orch_operation_flags plus an inter-process file lock so concurrent
     starters race once, then skip cheaply on subsequent opens.
     """
     with open_orchestration_sqlite(hub_root, durable=durable) as conn:
@@ -108,8 +108,8 @@ def ensure_legacy_orchestration_backfill(
             with conn:
                 conn.execute(
                     """
-                    INSERT OR REPLACE INTO orch_legacy_backfill_flags (
-                        backfill_key,
+                    INSERT OR REPLACE INTO orch_operation_flags (
+                        flag_key,
                         completed_at
                     ) VALUES (?, ?)
                     """,

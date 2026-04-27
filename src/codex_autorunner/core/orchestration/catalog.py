@@ -3,24 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable, Mapping, Optional, Protocol
 
+from ...runtime_capabilities import RuntimeCapability, normalize_runtime_capabilities
 from .models import (
     AgentDefinition,
     NativeTargetDefinition,
     NativeTargetKind,
     TargetCapability,
 )
-
-RuntimeCapability = str
-
-_RUNTIME_CAPABILITY_ALIASES = {
-    "threads": "durable_threads",
-    "turns": "message_turns",
-    "session_resume": "durable_threads",
-    "pma_thread_reset": "durable_threads",
-    "conversation_compaction": "message_turns",
-    "code_review": "review",
-    "turn_control": "interrupt",
-}
 
 
 class RuntimeAgentDescriptor(Protocol):
@@ -30,30 +19,19 @@ class RuntimeAgentDescriptor(Protocol):
     capabilities: frozenset[RuntimeCapability]
 
 
-_CAPABILITY_MAP: dict[RuntimeCapability, TargetCapability] = {
-    "durable_threads": "durable_threads",
-    "message_turns": "message_turns",
-    "interrupt": "interrupt",
-    "active_thread_discovery": "active_thread_discovery",
-    "transcript_history": "transcript_history",
-    "review": "review",
-    "model_listing": "model_listing",
-    "event_streaming": "event_streaming",
-    "structured_event_streaming": "structured_event_streaming",
-    "approvals": "approvals",
-}
-
-
-def normalize_runtime_capabilities(
-    capabilities: Iterable[str],
-) -> frozenset[RuntimeCapability]:
-    normalized: set[RuntimeCapability] = set()
-    for capability in capabilities:
-        text = str(capability or "").strip().lower()
-        if not text:
-            continue
-        normalized.add(_RUNTIME_CAPABILITY_ALIASES.get(text, text))
-    return frozenset(normalized)
+KNOWN_CAPABILITIES: frozenset[TargetCapability] = frozenset(
+    {
+        "durable_threads",
+        "message_turns",
+        "interrupt",
+        "active_thread_discovery",
+        "transcript_history",
+        "review",
+        "model_listing",
+        "event_streaming",
+        "approvals",
+    }
+)
 
 
 def map_agent_capabilities(
@@ -61,9 +39,7 @@ def map_agent_capabilities(
 ) -> frozenset[TargetCapability]:
     normalized = normalize_runtime_capabilities(capabilities)
     return frozenset(
-        _CAPABILITY_MAP[capability]
-        for capability in normalized
-        if capability in _CAPABILITY_MAP
+        capability for capability in KNOWN_CAPABILITIES if capability in normalized
     )
 
 

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 from codex_autorunner.core.orchestration.migrate_legacy_state import (
@@ -11,14 +10,125 @@ from codex_autorunner.core.orchestration.migrate_legacy_state import (
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.core.pma_automation_persistence import PmaAutomationPersistence
 from codex_autorunner.core.pma_automation_types import default_pma_automation_state
-from codex_autorunner.core.pma_thread_mirror import sync_legacy_mirror
 from codex_autorunner.core.pma_thread_store import (
-    PmaThreadStore,
     _ensure_schema,
-    _execution_row_to_record,
-    _thread_row_to_record,
     default_pma_threads_db_path,
 )
+from codex_autorunner.core.sqlite_utils import open_sqlite
+
+
+def _seed_legacy_thread_store(
+    hub_root: Path, workspace_root: Path
+) -> tuple[str, str, int]:
+    thread_id = "thread-1"
+    turn_id = "turn-1"
+    action_id = 1
+    legacy_path = default_pma_threads_db_path(hub_root)
+    legacy_path.parent.mkdir(parents=True, exist_ok=True)
+    with open_sqlite(legacy_path) as conn:
+        _ensure_schema(conn)
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO pma_managed_threads (
+                    managed_thread_id,
+                    agent,
+                    repo_id,
+                    resource_kind,
+                    resource_id,
+                    workspace_root,
+                    name,
+                    backend_thread_id,
+                    status,
+                    normalized_status,
+                    status_reason_code,
+                    status_updated_at,
+                    status_terminal,
+                    status_turn_id,
+                    last_turn_id,
+                    last_message_preview,
+                    compact_seed,
+                    metadata_json,
+                    created_at,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    thread_id,
+                    "codex",
+                    "repo-1",
+                    "repo",
+                    "repo-1",
+                    str(workspace_root),
+                    "Primary",
+                    "backend-thread-1",
+                    "completed",
+                    "completed",
+                    None,
+                    "2026-03-13T00:00:02Z",
+                    1,
+                    turn_id,
+                    turn_id,
+                    "world",
+                    None,
+                    "{}",
+                    "2026-03-13T00:00:00Z",
+                    "2026-03-13T00:00:02Z",
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO pma_managed_turns (
+                    managed_turn_id,
+                    managed_thread_id,
+                    client_turn_id,
+                    backend_turn_id,
+                    prompt,
+                    status,
+                    assistant_text,
+                    transcript_turn_id,
+                    model,
+                    reasoning,
+                    error,
+                    started_at,
+                    finished_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    turn_id,
+                    thread_id,
+                    "client-turn-1",
+                    "backend-turn-1",
+                    "hello",
+                    "ok",
+                    "world",
+                    "transcript-turn-1",
+                    "gpt-test",
+                    "high",
+                    None,
+                    "2026-03-13T00:00:01Z",
+                    "2026-03-13T00:00:02Z",
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO pma_managed_actions (
+                    action_id,
+                    managed_thread_id,
+                    action_type,
+                    payload_json,
+                    created_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    action_id,
+                    thread_id,
+                    "chat_completed",
+                    '{"ok":true}',
+                    "2026-03-13T00:00:03Z",
+                ),
+            )
+    return thread_id, turn_id, action_id
 
 
 def test_backfill_legacy_thread_state_imports_threads_turns_and_actions(
@@ -27,99 +137,49 @@ def test_backfill_legacy_thread_state_imports_threads_turns_and_actions(
     hub_root = tmp_path / "hub"
     workspace_root = tmp_path / "workspace"
     workspace_root.mkdir(parents=True)
+    thread_id, turn_id, action_id = _seed_legacy_thread_store(hub_root, workspace_root)
 
-    os.environ["CAR_LEGACY_MIRROR_ENABLED"] = "true"
-    try:
-        store = PmaThreadStore(hub_root)
-        thread = store.create_thread(
-            "codex",
-            workspace_root,
-            repo_id="repo-1",
-            name="Primary",
-            backend_thread_id="backend-thread-1",
-        )
-        turn = store.create_turn(
-            thread["managed_thread_id"],
-            prompt="hello",
-            client_turn_id="client-turn-1",
-            model="gpt-test",
-            reasoning="high",
-        )
-        assert store.mark_turn_finished(
-            turn["managed_turn_id"],
-            status="ok",
-            assistant_text="world",
-            backend_turn_id="backend-turn-1",
-            transcript_turn_id="transcript-turn-1",
-        )
-        action_id = store.append_action(
-            "chat_completed",
-            managed_thread_id=thread["managed_thread_id"],
-            payload_json='{"ok":true}',
-        )
+    with open_orchestration_sqlite(hub_root, durable=False) as conn:
+        counts = backfill_legacy_thread_state(hub_root, conn)
+        thread_row = conn.execute(
+            """
+            SELECT *
+              FROM orch_thread_targets
+             WHERE thread_target_id = ?
+            """,
+            (thread_id,),
+        ).fetchone()
+        turn_row = conn.execute(
+            """
+            SELECT *
+              FROM orch_thread_executions
+             WHERE execution_id = ?
+            """,
+            (turn_id,),
+        ).fetchone()
+        action_row = conn.execute(
+            """
+            SELECT *
+              FROM orch_thread_actions
+             WHERE action_id = ?
+            """,
+            (str(action_id),),
+        ).fetchone()
 
-        with open_orchestration_sqlite(hub_root, durable=False) as conn:
-            sync_legacy_mirror(
-                hub_root=hub_root,
-                legacy_db_path=default_pma_threads_db_path(hub_root),
-                durable=False,
-                orchestration_conn=conn,
-                thread_row_to_record=_thread_row_to_record,
-                execution_row_to_record=_execution_row_to_record,
-                ensure_legacy_schema=_ensure_schema,
-            )
-            with conn:
-                conn.execute("DELETE FROM orch_thread_actions")
-                conn.execute("DELETE FROM orch_thread_executions")
-                conn.execute("DELETE FROM orch_thread_targets")
-            counts = backfill_legacy_thread_state(hub_root, conn)
-            thread_row = conn.execute(
-                """
-                SELECT *
-                  FROM orch_thread_targets
-                 WHERE thread_target_id = ?
-                """,
-                (thread["managed_thread_id"],),
-            ).fetchone()
-            turn_row = conn.execute(
-                """
-                SELECT *
-                  FROM orch_thread_executions
-                 WHERE execution_id = ?
-                """,
-                (turn["managed_turn_id"],),
-            ).fetchone()
-            action_row = conn.execute(
-                """
-                SELECT *
-                  FROM orch_thread_actions
-                 WHERE action_id = ?
-                """,
-                (str(action_id),),
-            ).fetchone()
-
-        assert counts == {"threads": 1, "turns": 1, "actions": 1}
-        assert thread_row is not None
-        assert thread_row["agent_id"] == "codex"
-        assert thread_row["repo_id"] == "repo-1"
-        assert thread_row["backend_thread_id"] == "backend-thread-1"
-        assert thread_row["runtime_status"] == "completed"
-        assert turn_row is not None
-        assert turn_row["thread_target_id"] == thread["managed_thread_id"]
-        assert turn_row["request_kind"] == "managed_turn"
-        assert turn_row["backend_turn_id"] == "backend-turn-1"
-        assert turn_row["assistant_text"] == "world"
-        assert action_row is not None
-        assert action_row["thread_target_id"] == thread["managed_thread_id"]
-        assert action_row["action_type"] == "chat_completed"
-
-        normalized_turn = PmaThreadStore(hub_root).get_turn(
-            thread["managed_thread_id"], turn["managed_turn_id"]
-        )
-        assert normalized_turn is not None
-        assert normalized_turn["request_kind"] == "message"
-    finally:
-        os.environ.pop("CAR_LEGACY_MIRROR_ENABLED", None)
+    assert counts == {"threads": 1, "turns": 1, "actions": 1}
+    assert thread_row is not None
+    assert thread_row["agent_id"] == "codex"
+    assert thread_row["repo_id"] == "repo-1"
+    assert thread_row["backend_thread_id"] == "backend-thread-1"
+    assert thread_row["runtime_status"] == "completed"
+    assert turn_row is not None
+    assert turn_row["thread_target_id"] == thread_id
+    assert turn_row["request_kind"] == "managed_turn"
+    assert turn_row["backend_turn_id"] == "backend-turn-1"
+    assert turn_row["assistant_text"] == "world"
+    assert action_row is not None
+    assert action_row["thread_target_id"] == thread_id
+    assert action_row["action_type"] == "chat_completed"
 
 
 def test_backfill_legacy_automation_state_imports_json_store(tmp_path: Path) -> None:

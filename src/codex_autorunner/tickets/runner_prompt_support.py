@@ -263,14 +263,8 @@ def build_workspace_block(workspace_root: Path) -> str:
 
 
 def build_previous_ticket_block(previous_ticket_content: str | None) -> str:
-    if not previous_ticket_content:
-        return ""
-    capped = truncate_text_by_bytes(previous_ticket_content, PREVIOUS_TICKET_MAX_BYTES)
-    return (
-        "PREVIOUS TICKET CONTEXT (DEPRECATED legacy compatibility; capped at 16KB; for reference only; do not edit):\n"
-        "Cross-ticket context should flow through contextspace docs (active_context.md, decisions.md, spec.md) "
-        "rather than implicit previous ticket content.\n" + capped
-    )
+    _ = previous_ticket_content
+    return ""
 
 
 def build_ticket_block(ticket_path: Path, rel_ticket: str) -> str:
@@ -326,7 +320,7 @@ def render_full_prompt(
         "- Dispatch with `mode: pause` rather than guessing.\n\n"
         "Creating follow-up tickets (optional):\n"
         "- New tickets live under `.codex-autorunner/tickets/` and follow the `TICKET-###*.md` naming pattern.\n"
-        "- If present, `.codex-autorunner/bin/ticket_tool.py` can create/insert/move tickets; `.codex-autorunner/bin/lint_tickets.py` lints ticket frontmatter (see `.codex-autorunner/ABOUT_CAR.md`).\n"
+        "- If present, `.codex-autorunner/bin/ticket_tool.py` can create/insert/move tickets; `.codex-autorunner/bin/lint_tickets.py` is the canonical ticket linter and `ticket_tool.py lint` is only a compatibility wrapper (see `.codex-autorunner/ABOUT_CAR.md`).\n"
         "Using ticket templates (optional):\n"
         "- If you need a standard ticket pattern, prefer: `car templates fetch <repo_id>:<path>[@<ref>]`\n"
         "  - Trusted repos skip scanning; untrusted repos are scanned (cached by blob SHA).\n\n"

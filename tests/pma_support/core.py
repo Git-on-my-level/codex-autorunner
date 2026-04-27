@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from codex_autorunner.agents.opencode.runtime import OpenCodeTurnOutput
 from codex_autorunner.agents.registry import AgentDescriptor
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
+from codex_autorunner.core.managed_thread_identity import PMA_KEY, PMA_OPENCODE_KEY
 from codex_autorunner.core.orchestration import (
     ColdTraceStore,
     ExecutionRecord,
@@ -23,7 +24,6 @@ from codex_autorunner.core.pma_transcripts import PmaTranscriptStore
 from codex_autorunner.integrations.app_server.client import (
     CodexAppServerResponseError,
 )
-from codex_autorunner.integrations.app_server.threads import PMA_KEY, PMA_OPENCODE_KEY
 from codex_autorunner.integrations.discord.state import DiscordStateStore
 from codex_autorunner.integrations.telegram.state import TelegramStateStore, topic_key
 from codex_autorunner.server import create_hub_app

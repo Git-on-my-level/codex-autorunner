@@ -17,7 +17,7 @@ from codex_autorunner.agents.registry import (
     validate_agent_id,
     wrap_requested_agent_context,
 )
-from codex_autorunner.core.config import AgentConfig, ResolvedAgentTarget
+from codex_autorunner.core.agent_config import AgentConfig, ResolvedAgentTarget
 from codex_autorunner.core.config_contract import ConfigError
 
 
@@ -157,9 +157,13 @@ class TestHasCapability:
         assert has_capability("hermes", "model_listing") is False
         assert has_capability("hermes", "transcript_history") is False
 
-    def test_legacy_capability_aliases_still_normalize(self):
-        assert has_capability("codex", "threads") is True
-        assert has_capability("codex", "turns") is True
+    def test_capability_checks_use_canonical_names(self):
+        assert has_capability("codex", "durable_threads") is True
+        assert has_capability("codex", "message_turns") is True
+
+    def test_capability_checks_do_not_treat_legacy_aliases_as_canonical(self):
+        assert has_capability("codex", "threads") is False
+        assert has_capability("codex", "turns") is False
 
 
 class _StubEntryPoint:
@@ -226,7 +230,7 @@ class TestGetRegisteredAgents:
 
 
 class TestPluginApiCompatibility:
-    def test_accepts_older_api_version(self, monkeypatch):
+    def test_rejects_older_api_version(self, monkeypatch):
         older = AgentDescriptor(
             id="older",
             name="Older",
@@ -236,7 +240,7 @@ class TestPluginApiCompatibility:
         )
         registry = _run_with_entrypoints(monkeypatch, [_StubEntryPoint(older)])
         agents = registry.get_registered_agents()
-        assert "older" in agents
+        assert "older" not in agents
 
     def test_rejects_newer_api_version(self, monkeypatch):
         newer = AgentDescriptor(

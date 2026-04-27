@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -24,7 +23,6 @@ from .migrations import (
 )
 
 # Hub/chat orchestration DB: higher busy_timeout than generic SQLite defaults (#1266).
-# Override via CAR_ORCHESTRATION_SQLITE_BUSY_TIMEOUT_MS (milliseconds, non-negative int).
 _DEFAULT_ORCH_BUSY_TIMEOUT_MS = 30_000
 
 
@@ -60,12 +58,6 @@ class OrchestrationCompatibilityMetadata:
 
 
 def orchestration_sqlite_busy_timeout_ms() -> int:
-    raw = os.environ.get("CAR_ORCHESTRATION_SQLITE_BUSY_TIMEOUT_MS", "").strip()
-    if raw:
-        try:
-            return max(0, int(raw))
-        except ValueError:
-            pass
     return _DEFAULT_ORCH_BUSY_TIMEOUT_MS
 
 

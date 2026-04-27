@@ -1,29 +1,41 @@
 # Environment variables and defaults
 
-This document is the single source of truth for all environment variables
-consumed by Codex Autorunner (CAR).  The companion `.env.example` file at the
-repo root contains a quick-reference template with the same variable names and
-defaults.
+This document is the single source of truth for environment variables consumed by Codex Autorunner (CAR). The companion `.env.example` at the repo root lists the same names for quick reference.
+
+User-authored env vars are primarily for secrets and private identifiers. Ordinary runtime behavior belongs in YAML config (`codex-autorunner.yml`, overrides, `.codex-autorunner/config.yml`) unless no config path exists.
 
 ## Precedence
 
 1. Built-in defaults
 2. `codex-autorunner.yml`
 3. `codex-autorunner.override.yml`
-4. `.codex-autorunner/config.yml` (generated)
+4. `.codex-autorunner/config.yml`
 5. Environment variables
 
-Generated `.codex-autorunner/config.yml` is intentionally sparse. CAR keeps
-code-level defaults, `codex-autorunner.yml`, and `codex-autorunner.override.yml`
-as the inherited baseline, then writes only explicit hub-local state or pinned
-overrides into generated config. Existing CAR-generated hub configs are
-normalized toward that sparse form on load, so future default changes do not
-stay pinned just because an older generated file materialized them once.
+Generated `.codex-autorunner/config.yml` stays intentionally sparse. CAR keeps defaults in code and YAML, then writes only explicit local state and pinned overrides.
 
-Repo-local env files are loaded (when present) in this order:
+Repo-local env files are loaded, when present, in this order:
 
 - `<repo>/.env`
 - `<repo>/.codex-autorunner/.env`
+
+## Policy
+
+User-authored env vars are reserved for secrets and private identifiers. Ordinary runtime behavior belongs in config.
+
+Use config instead of env vars for these values:
+
+- `app_server.command`
+- `telegram_bot.app_server_command`
+- `telegram_bot.opencode_command`
+- `voice.*`
+- `update.skip_checks`
+- `app_server.auto_restart`
+- `pma.inbox_auto_dismiss_grace_seconds`
+- `usage.global_cache_root`
+- `state_roots.global`
+
+Deprecated or legacy `.env` knobs for those settings are no longer part of the supported contract.
 
 ## Editor selection
 
@@ -40,10 +52,12 @@ If none are set, `vi` is used.
 | Env var | Purpose | Default / config key |
 | --- | --- | --- |
 | `CAR_HUB_ROOT` | Explicit path to the hub root directory. Set by CLI `--hub` flag. | `null` |
-| `CAR_GLOBAL_STATE_ROOT` | Override the global CAR state root for shared caches/locks. | Overrides `state_roots.global` (default `~/.codex-autorunner`). |
-| `CODEX_HOME` | **Deprecated.** Use `CAR_GLOBAL_STATE_ROOT`. Legacy base directory for Codex global cache. | Used when `usage.global_cache_root` is `null` (default `~/.codex`). |
+| `CAR_GLOBAL_STATE_ROOT` | Overrides `state_roots.global`: global CAR state for caches, locks, and durable CAR metadata (not the Codex CLI data directory). | Default `~/.codex-autorunner` when unset. |
+| `CODEX_HOME` | Codex CLI data directory (`auth.json`, session logs, etc.). **Not interchangeable** with `CAR_GLOBAL_STATE_ROOT`. | Default `~/.codex` when unset. Used by usage session discovery and app-server credential seeding. |
 | `CAR_DEV_INCLUDE_ROOT_REPO` | Dev-only: include the source repo in the hub manifest when the hub root is the source tree. | Not set (falsy). |
 | `CODEX_AUTORUNNER_SKIP_UPDATE_CHECKS=1` | Skip `./scripts/check.sh` during system updates. | Overrides `update.skip_checks` (default `false`). |
+
+When `usage.global_cache_root` is omitted from config, CAR defaults it to `CAR_GLOBAL_STATE_ROOT` if set, otherwise `~/.codex-autorunner` (aligned with global CAR state). It does **not** read Codex CLI sessions from `CODEX_HOME`; that variable only affects where CAR looks for the Codex CLI’s own files.
 
 ## Agent binaries
 
@@ -173,25 +187,23 @@ Local provider:
 | `CODEX_FAST_TEST_VERIFY_NODEIDS` | Verify collected test node IDs match the JUnit report. | `0` |
 | `CODEX_LOCAL_CHECK_INCLUDE_DEADCODE` | Enable dead-code checks during local development (normally only in CI). | `0` |
 
-## Behavior overrides (legacy)
-
-| Env var | Purpose | Default / config key |
-| --- | --- | --- |
-| `CODEX_AUTORUNNER_SKIP_UPDATE_CHECKS=1` | Skip `./scripts/check.sh` during system updates. | Overrides `update.skip_checks` (default `false`). |
-| `CODEX_DISABLE_APP_SERVER_AUTORESTART_FOR_TESTS` | Disables app-server auto-restart (test-only escape hatch). | Overrides `app_server.auto_restart` (default `true`). |
-| `CAR_GLOBAL_STATE_ROOT` | Override the global CAR state root for shared caches/locks. | Overrides `state_roots.global` (default `~/.codex-autorunner`). |
-| `CODEX_HOME` | **Deprecated.** Default base directory for Codex global cache if not set in config. | Used when `usage.global_cache_root` is `null` (default `~/.codex`). |
-
 ## Workspace PATH bootstrap
 
-For app-server-backed agent runtimes (web terminal/PMA and Telegram) and Discord
-`!<shell command>` passthrough, CAR prepends workspace-local paths to `PATH`:
+For app-server-backed agent runtimes (web terminal/PMA and Telegram) and Discord `!<shell command>` passthrough, CAR prepends workspace-local paths to `PATH`:
 
 - `<workspace>/.codex-autorunner/bin`
 - `<workspace>` (only when `<workspace>/car` exists)
 
-This makes `car` resolve to the workspace shim/runtime for that workspace without
-requiring a global shell install.
+This makes `car` resolve to the workspace shim/runtime for that workspace without requiring a global shell install.
 
-CAR also augments PATH with common non-interactive install locations (for example,
-`~/.local/bin`) so pipx-installed `car` remains discoverable in daemon contexts.
+CAR also augments PATH with common non-interactive install locations (for example, `~/.local/bin`) so pipx-installed `car` remains discoverable in daemon contexts.
+
+## Runtime-managed env vars
+
+These may exist at runtime but are often set by tooling rather than hand-edited `.env` files:
+
+- `CAR_HUB_ROOT` from CLI `--hub`
+- `CAR_DEV_INCLUDE_ROOT_REPO` for repo-development flows
+- `ZEROCLAW_WORKSPACE` and `ZEROCLAW_CONFIG_DIR` for ZeroClaw launches
+- `VISUAL` and `EDITOR` for `car edit`
+- `CODEX_BIN` and `OPENCODE_BIN` for protocol/schema tooling

@@ -1,10 +1,11 @@
-"""Portable ticket management CLI (self-contained, no repo imports)."""
+"""Portable ticket management CLI generator."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 from ..ticket_helper_script_common import portable_ticket_validation_source
+from .ticket_linter_cli import ensure_ticket_lint_impl
 
 MANAGER_BASENAME = "ticket_tool.py"
 MANAGER_REL_PATH = Path(".codex-autorunner/bin") / MANAGER_BASENAME
@@ -33,7 +34,9 @@ Examples:
 
 Notes:
 - Filenames must match TICKET-<number>[suffix].md.
-- PyYAML is required (pip install pyyaml) for linting/title extraction.
+- `python3 .codex-autorunner/bin/lint_tickets.py` is the canonical lint entrypoint.
+- `ticket_tool.py lint` is a compatibility wrapper around the same shared implementation.
+- PyYAML is preferred for linting/title extraction, but the shipped tool keeps a fallback parser for common ticket frontmatter.
 - The tool is intentionally dependency-light and safe to run from any
   virtualenv (or none).
 \"\"\"
@@ -41,6 +44,7 @@ Notes:
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import re
 import sys
 import uuid
@@ -67,13 +71,37 @@ class TicketFile:
     ticket_id: Optional[str]
 
 
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
 def _ticket_dir(repo_root: Path) -> Path:
     return repo_root / ".codex-autorunner" / "tickets"
+
+
+def _load_shared_linter():
+    module_path = Path(__file__).resolve().with_name("_ticket_lint_impl.py")
+    spec = importlib.util.spec_from_file_location("_ticket_lint_impl", module_path)
+    if spec is None or spec.loader is None:
+        sys.stderr.write(
+            f"Unable to load shared ticket lint implementation from {module_path}\\n"
+        )
+        return None
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    except Exception as exc:  # noqa: BLE001 - wrapper should surface import failures directly
+        sys.stderr.write(
+            f"Unable to import shared ticket lint implementation from {module_path}: {exc}\\n"
+        )
+        return None
+    return getattr(module, "run_ticket_lint", None)
 
 
 def _ticket_paths(ticket_dir: Path) -> Tuple[List[Path], List[str]]:
     tickets: List[tuple[int, Path, str]] = []
     errors: List[str] = []
+    index_to_paths: dict[int, List[Path]] = {}
     for path in sorted(ticket_dir.iterdir()):
         if not path.is_file():
             continue
@@ -91,14 +119,28 @@ def _ticket_paths(ticket_dir: Path) -> Tuple[List[Path], List[str]]:
             errors.append(f"{path}: Invalid ticket filename; number must be digits")
             continue
         tickets.append((idx, path, m.group(2)))
+        if idx not in index_to_paths:
+            index_to_paths[idx] = []
+        index_to_paths[idx].append(path)
     tickets.sort(key=lambda t: t[0])
+
+    for idx, paths in index_to_paths.items():
+        if len(paths) > 1:
+            paths_str = ", ".join([str(p) for p in paths])
+            errors.append(
+                f"Duplicate ticket index {idx:03d}: multiple files share the same index ({paths_str}). "
+                "Rename or remove duplicates to ensure deterministic ordering."
+            )
+
     return [p for _, p, _ in tickets], errors
 
 
 def _split_frontmatter(text: str):
-    if not text or not text.lstrip().startswith("---"):
-        return None, ["Missing YAML frontmatter (expected leading '---')."]
+    if not text:
+        return None, ["Empty file; missing YAML frontmatter."]
     lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return None, ["Missing YAML frontmatter (expected leading '---')."]
     end_idx = None
     for idx in range(1, len(lines)):
         if lines[idx].strip() in ("---", "..."):
@@ -114,9 +156,11 @@ def _parse_yaml(fm_yaml: Optional[str]):
     if fm_yaml is None:
         return {}, ["Missing or invalid YAML frontmatter (expected a mapping)."]
     if yaml is None:
-        return {}, [
-            "PyYAML is required to lint tickets. Install with: python3 -m pip install --user pyyaml"
-        ]
+        try:
+            loaded = _parse_simple_yaml_mapping(fm_yaml)
+        except ValueError as exc:
+            return {}, [f"YAML parse error: {exc}"]
+        return loaded, []
     try:
         loaded = yaml.safe_load(fm_yaml)
     except Exception as exc:  # intentional: portable CLI script must be resilient to any YAML parsing failure  # noqa: BLE001
@@ -177,6 +221,20 @@ def _ticket_files(ticket_dir: Path) -> Tuple[List[TicketFile], List[str]]:
     return tickets, errors
 
 
+def _read_ticket_id(path: Path) -> Optional[str]:
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    fm_yaml, fm_errors = _split_frontmatter(raw)
+    if fm_errors:
+        return None
+    data, parse_errors = _parse_yaml(fm_yaml)
+    if parse_errors:
+        return None
+    return _sanitize_ticket_id(data.get("ticket_id"))
+
+
 def _pad_width(indices: Sequence[int]) -> int:
     if not indices:
         return 3
@@ -220,28 +278,11 @@ def cmd_list(ticket_dir: Path) -> int:
     return 0
 
 
-def cmd_lint(ticket_dir: Path) -> int:
-    tickets, errors = _ticket_files(ticket_dir)
-    ticket_id_to_paths: dict[str, list[str]] = {}
-    for ticket in tickets:
-        if not ticket.ticket_id:
-            continue
-        ticket_id_to_paths.setdefault(ticket.ticket_id, []).append(ticket.path.name)
-
-    for ticket_id, filenames in ticket_id_to_paths.items():
-        if len(filenames) > 1:
-            filenames_str = ", ".join(filenames)
-            errors.append(
-                f"Duplicate ticket_id {ticket_id!r}: multiple files share the same logical ticket identity ({filenames_str}). "
-                "Backfill or rewrite one of the ticket_ids so ticket-owned state remains unambiguous."
-            )
-
-    if errors:
-        for msg in errors:
-            sys.stderr.write(msg + "\\n")
-        return 1
-    sys.stdout.write(f"OK: {len(tickets)} ticket(s) linted.\\n")
-    return 0
+def cmd_lint(ticket_dir: Path, *, fix_ticket_ids: bool) -> int:
+    run_ticket_lint = _load_shared_linter()
+    if run_ticket_lint is None:
+        return 2
+    return run_ticket_lint(ticket_dir, fix_ticket_ids=fix_ticket_ids)
 
 
 def _shift(ticket_dir: Path, start_idx: int, delta: int) -> None:
@@ -439,7 +480,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("list", help="List tickets in order")
-    sub.add_parser("lint", help="Validate ticket filenames and frontmatter")
+    lint_p = sub.add_parser(
+        "lint",
+        help="Validate ticket filenames and frontmatter (compatibility wrapper)",
+    )
+    lint_p.add_argument(
+        "--fix-ticket-ids",
+        action="store_true",
+        help="Backfill missing or invalid ticket_id values before linting.",
+    )
 
     insert_p = sub.add_parser("insert", help="Insert gap by shifting tickets")
     insert_group = insert_p.add_mutually_exclusive_group(required=True)
@@ -471,7 +520,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     move_p.add_argument("--to", type=int, required=True, help="Destination position (1-indexed)")
 
     args = parser.parse_args(argv)
-    repo_root = Path.cwd()
+    repo_root = _repo_root()
     ticket_dir = _ticket_dir(repo_root)
     if not ticket_dir.exists():
         sys.stderr.write(f"Tickets directory not found: {ticket_dir}\\n")
@@ -480,7 +529,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.cmd == "list":
         return cmd_list(ticket_dir)
     if args.cmd == "lint":
-        return cmd_lint(ticket_dir)
+        return cmd_lint(ticket_dir, fix_ticket_ids=args.fix_ticket_ids)
     if args.cmd == "insert":
         return cmd_insert(
             ticket_dir,
@@ -506,6 +555,8 @@ _SCRIPT = _SCRIPT.replace("__COMMON_VALIDATION__", _COMMON_VALIDATION)
 
 def ensure_ticket_manager(repo_root: Path, *, force: bool = False) -> Path:
     """Ensure the ticket management CLI exists under .codex-autorunner/bin."""
+
+    ensure_ticket_lint_impl(repo_root, force=force)
 
     path = repo_root / MANAGER_REL_PATH
     path.parent.mkdir(parents=True, exist_ok=True)

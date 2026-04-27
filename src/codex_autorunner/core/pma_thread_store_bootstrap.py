@@ -63,8 +63,8 @@ class PmaThreadStoreBootstrap:
         row = conn.execute(
             """
             SELECT 1 AS ok
-              FROM orch_legacy_backfill_flags
-             WHERE backfill_key = ?
+              FROM orch_operation_flags
+             WHERE flag_key = ?
              LIMIT 1
             """,
             (_PMA_THREAD_STORE_PREPARED_KEY,),
@@ -75,8 +75,8 @@ class PmaThreadStoreBootstrap:
         with conn:
             conn.execute(
                 """
-                INSERT OR REPLACE INTO orch_legacy_backfill_flags (
-                    backfill_key,
+                INSERT OR REPLACE INTO orch_operation_flags (
+                    flag_key,
                     completed_at
                 ) VALUES (?, ?)
                 """,

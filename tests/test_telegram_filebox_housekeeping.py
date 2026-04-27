@@ -27,12 +27,10 @@ def _config(root: Path) -> TelegramBotConfig:
 async def test_housekeeping_cycle_prunes_fileboxes_using_per_root_repo_config(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    service = TelegramBotService(_config(tmp_path), hub_root=tmp_path)
     repo_root = tmp_path / "repo"
     workspace_root = tmp_path / "workspace"
     repo_root.mkdir()
     workspace_root.mkdir()
-    service._hub_config_path = tmp_path / "codex-autorunner.yml"
 
     async def _fake_housekeeping_roots() -> list[Path]:
         return [repo_root, workspace_root]
@@ -72,19 +70,18 @@ async def test_housekeeping_cycle_prunes_fileboxes_using_per_root_repo_config(
         nonlocal opencode_pruned
         opencode_pruned += 1
 
+    service = TelegramBotService(
+        _config(tmp_path),
+        hub_root=tmp_path,
+        dependencies=telegram_service_module.TelegramServiceDependencies(
+            load_repo_config=_fake_load_repo_config,
+            resolve_filebox_retention_policy=_fake_resolve_policy,
+            prune_filebox_root=_fake_prune,
+            run_housekeeping_for_roots=_fake_housekeeping,
+        ),
+    )
+    service._hub_config_path = tmp_path / "codex-autorunner.yml"
     monkeypatch.setattr(service, "_housekeeping_roots", _fake_housekeeping_roots)
-    monkeypatch.setattr(
-        telegram_service_module, "load_repo_config", _fake_load_repo_config
-    )
-    monkeypatch.setattr(
-        telegram_service_module,
-        "resolve_filebox_retention_policy",
-        _fake_resolve_policy,
-    )
-    monkeypatch.setattr(telegram_service_module, "prune_filebox_root", _fake_prune)
-    monkeypatch.setattr(
-        telegram_service_module, "run_housekeeping_for_roots", _fake_housekeeping
-    )
     service._app_server_supervisor = SimpleNamespace(prune_idle=_fake_app_prune_idle)
     service._opencode_supervisor = SimpleNamespace(prune_idle=_fake_opencode_prune_idle)
 

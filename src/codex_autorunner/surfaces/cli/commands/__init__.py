@@ -8,16 +8,9 @@ from .inbox import register_inbox_commands
 from .repos import register_repos_commands
 from .telegram import register_telegram_commands
 from .templates import register_templates_commands
-from .utils import (
-    apply_agent_override,  # noqa: F401
-    normalize_ticket_suffix,  # noqa: F401
-    ticket_filename,  # noqa: F401
-)
 from .worktree import register_worktree_commands
 
 __all__ = [
-    "apply_agent_override",
-    "normalize_ticket_suffix",
     "register_chat_commands",
     "register_cleanup_commands",
     "register_discord_commands",
@@ -29,5 +22,4 @@ __all__ = [
     "register_telegram_commands",
     "register_templates_commands",
     "register_worktree_commands",
-    "ticket_filename",
 ]

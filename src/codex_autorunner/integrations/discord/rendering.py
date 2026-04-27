@@ -145,11 +145,16 @@ def chunk_discord_message(
     )
 
 
-# Keep explicit module-level references so dead-code heuristics treat these
-# helpers as part of the Discord rendering surface.
-_DISCORD_RENDERING_HELPERS = (
-    format_code_block,
-    format_inline_code,
-    format_bold,
-    format_italic,
-)
+__all__ = [
+    "DISCORD_MAX_MESSAGE_LENGTH",
+    "chunk_discord_message",
+    "escape_discord_code",
+    "escape_discord_markdown",
+    "format_bold",
+    "format_code_block",
+    "format_discord_message",
+    "format_inline_code",
+    "format_italic",
+    "sanitize_discord_outbound_text",
+    "truncate_for_discord",
+]

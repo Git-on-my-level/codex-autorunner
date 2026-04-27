@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# ruff: noqa: E402
 """Idle CPU soak harness for CAR service commands.
 
 Reads profiles from scripts/idle_cpu_profiles.yml, starts the target
@@ -10,6 +11,7 @@ Usage:
     python scripts/idle_cpu_soak.py --profile hub_only
     python scripts/idle_cpu_soak.py --profile hub_only --output /tmp/result.json
 """
+# ruff: noqa: E402
 
 from __future__ import annotations
 
@@ -37,17 +39,19 @@ _PROFILES_PATH = _SCRIPT_DIR / "idle_cpu_profiles.yml"
 
 sys.path.insert(0, str(_REPO_ROOT / "src"))
 
-from codex_autorunner.bootstrap import seed_hub_files
-from codex_autorunner.core.config import REPO_OVERRIDE_FILENAME
+from codex_autorunner.bootstrap import seed_hub_files  # noqa: E402
+from codex_autorunner.core.config import REPO_OVERRIDE_FILENAME  # noqa: E402
 from codex_autorunner.core.diagnostics.cpu_sampler import (
     CpuSample,
     aggregate_samples,
     collect_cpu_sample,
     compute_per_process_aggregates,
     evaluate_signoff,
+)  # noqa: E402
+from codex_autorunner.core.diagnostics.process_snapshot import (  # noqa: E402
+    ProcessCategory,
 )
-from codex_autorunner.core.diagnostics.process_snapshot import ProcessCategory
-from codex_autorunner.core.utils import atomic_write
+from codex_autorunner.core.utils import atomic_write  # noqa: E402
 
 
 def _car_bin() -> list[str]:

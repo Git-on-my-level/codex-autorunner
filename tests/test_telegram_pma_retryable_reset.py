@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from codex_autorunner.core.hub_control_plane import HubControlPlaneError
-from codex_autorunner.integrations.app_server.threads import AppServerThreadRegistry
+from codex_autorunner.core.managed_thread_identity import AppServerThreadRegistry
 from codex_autorunner.integrations.telegram.adapter import TelegramMessage
 from codex_autorunner.integrations.telegram.handlers.commands import (
     execution as execution_commands_module,

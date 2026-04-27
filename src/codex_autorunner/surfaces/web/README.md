@@ -22,7 +22,7 @@ FastAPI web UI, API routes, and web-specific workflows.
 - `routes/`: API route handlers
 - `middleware.py`: HTTP middleware (auth, base path, security headers)
 - `schemas.py`: Request/response schemas
-- `review.py`: Review workflow orchestration (moved from core/)
+- `routes/review.py`: Review workflow orchestration (moved from core/)
 - `runner_manager.py`: Runner process lifecycle management
 - `terminal_sessions.py`: PTY session management for TUI
 - `static_assets.py`: Static asset management and caching

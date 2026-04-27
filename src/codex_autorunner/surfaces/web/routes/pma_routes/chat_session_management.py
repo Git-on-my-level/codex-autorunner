@@ -7,9 +7,9 @@ from typing import Any, Optional
 from fastapi import HTTPException, Request
 
 from .....agents.registry import resolve_agent_runtime
+from .....core.managed_thread_identity import pma_base_key
 from .....core.pma_lifecycle import PmaLifecycleRouter
 from .....core.text_utils import _normalize_optional_text
-from .....integrations.app_server.threads import pma_base_key
 from ...services.pma import get_pma_request_context
 from .hermes_supervisors import resolve_cached_hermes_supervisor
 

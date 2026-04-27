@@ -4,14 +4,14 @@
 
 - **Engine**: protocol-agnostic runtime semantics (runs, scheduling, state transitions).
 - **Control plane**: filesystem-backed intent + artifacts; canonical state under `.codex-autorunner/`.
-- **Adapter**: protocol translation layer (Telegram/Web/Codex/OpenCode/Hermes) into engine commands.
-- **Surface**: user-facing UX (Telegram chat, web UI, terminal views).
+- **Adapter**: protocol translation layer into engine commands. See `10_CODEBASE_CONSTITUTION.md` Identity section for the canonical list of adapters (Telegram, Discord, GitHub, App Server, Docker, Chat, Templates, Agents).
+- **Surface**: user-facing UX (Discord, Telegram, Web UI, CLI). See `10_CODEBASE_CONSTITUTION.md` for the canonical list.
 - **Run**: a single execution with a unique identity and durable artifacts.
 - **Run event**: structured record of a significant state transition/decision.
 - **Artifact**: any durable file that explains intent, action, or output.
 - **Ticket**: a numbered markdown work item under `.codex-autorunner/tickets/` (for example `TICKET-001.md`); the primary human–agent execution surface.
 - **Contextspace**: durable agent context docs under `.codex-autorunner/contextspace/` (`active_context.md`, `decisions.md`, `spec.md`). Not the same as a disposable process working directory.
-- **Workspace**: isolated filesystem scope for a task or runtime (often disposable), or the deprecated `.codex-autorunner/workspace/` directory replaced by contextspace (see migration doc).
+- **Workspace**: legacy term for isolated filesystem scope; the `.codex-autorunner/workspace/` directory was replaced by contextspace (see migration doc). Use "contextspace" for new work.
 - **YOLO mode**: default permissive execution posture; safety is opt-in.
 
 ## Agent-Human Communication

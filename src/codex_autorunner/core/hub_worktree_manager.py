@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 import logging
 import re
-import shutil
 import sqlite3
 import subprocess
+import sys
+import tempfile
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -75,6 +77,24 @@ _DOCKER_INSPECT_TIMEOUT_SECONDS = 15
 _DOCKER_STOP_TIMEOUT_SECONDS = 15
 _DOCKER_RM_TIMEOUT_SECONDS = 30
 _WORKTREE_SETUP_COMMAND_TIMEOUT_SECONDS = 600
+
+_WORKTREE_CAR_METADATA_DIR_NAMES = frozenset({".codex-autorunner", ".git"})
+
+
+def worktree_non_metadata_child_names(worktree_path: Path) -> list[str]:
+    """Return sorted child names under a worktree path excluding CAR metadata dirs.
+
+    Used for consistent eligibility checks between hygiene classification and
+    orphaned worktree cleanup. Returns an empty list when the path is missing
+    or not a directory.
+    """
+    if not worktree_path.exists() or not worktree_path.is_dir():
+        return []
+    return [
+        child.name
+        for child in sorted(worktree_path.iterdir(), key=lambda item: item.name)
+        if child.name not in _WORKTREE_CAR_METADATA_DIR_NAMES
+    ]
 
 
 class WorktreeManager:
@@ -697,11 +717,7 @@ class WorktreeManager:
                 "message": "worktree path is not a directory",
             }
 
-        unexpected_entries: list[str] = []
-        for child in sorted(worktree_path.iterdir(), key=lambda item: item.name):
-            if child.name in {".codex-autorunner", ".git"}:
-                continue
-            unexpected_entries.append(child.name)
+        unexpected_entries = worktree_non_metadata_child_names(worktree_path)
 
         if unexpected_entries:
             rendered = ", ".join(unexpected_entries[:5])
@@ -723,15 +739,126 @@ class WorktreeManager:
         inspection = self._inspect_orphaned_worktree_dir(worktree_path)
         if inspection["status"] != "safe_to_remove":
             return inspection
-        if worktree_path.exists():
-            if worktree_path.is_dir():
-                shutil.rmtree(worktree_path)
-            else:
-                worktree_path.unlink()
-        return {
-            "status": "removed",
-            "message": "removed orphaned worktree directory",
+        return self._remove_path_cwd_safe(worktree_path)
+
+    def _remove_path_cwd_safe(self, target_path: Path) -> dict[str, object]:
+        resolved_target = target_path.expanduser().resolve()
+        script = """
+import json
+import shutil
+import sys
+from pathlib import Path
+
+
+def _path_size_bytes(path: Path) -> int:
+    if not path.exists():
+        return 0
+    if path.is_symlink() or path.is_file():
+        return path.lstat().st_size
+    total = 0
+    for child in path.rglob("*"):
+        try:
+            total += child.lstat().st_size
+        except FileNotFoundError:
+            continue
+    return total
+
+
+target = Path(sys.argv[1]).expanduser()
+bytes_before = _path_size_bytes(target)
+if not target.exists():
+    print(
+        json.dumps(
+            {
+                "status": "missing",
+                "message": "worktree directory already missing",
+                "bytes_before": bytes_before,
+            }
+        )
+    )
+    raise SystemExit(0)
+
+errors = []
+
+
+def _onerror(func, path, exc_info):
+    err = exc_info[1]
+    errors.append(f"{func.__name__}:{path}:{err}")
+
+
+if target.is_dir() and not target.is_symlink():
+    shutil.rmtree(target, onerror=_onerror)
+else:
+    target.unlink()
+
+if target.exists():
+    print(
+        json.dumps(
+            {
+                "status": "verification_failed",
+                "message": f"post-delete verification failed for {target}",
+                "bytes_before": bytes_before,
+                "errors": errors,
+            }
+        )
+    )
+    raise SystemExit(0)
+
+status = "removed" if not errors else "error"
+message = (
+    "removed orphaned worktree directory"
+    if not errors
+    else "; ".join(errors)
+)
+print(
+    json.dumps(
+        {
+            "status": status,
+            "message": message,
+            "bytes_before": bytes_before,
+            "errors": errors,
         }
+    )
+)
+"""
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-c", script, str(resolved_target)],
+                capture_output=True,
+                text=True,
+                check=False,
+                cwd=tempfile.gettempdir(),
+                env=subprocess_env(),
+                timeout=_GIT_WORKTREE_TIMEOUT_SECONDS,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            return {
+                "status": "error",
+                "message": f"cwd-safe worktree removal failed: {exc}",
+            }
+        stdout = (proc.stdout or "").strip()
+        if proc.returncode != 0:
+            detail = (proc.stderr or stdout or "unknown error").strip()
+            return {
+                "status": "error",
+                "message": f"cwd-safe worktree removal failed: {detail}",
+            }
+        try:
+            payload = json.loads(stdout) if stdout else {}
+        except ValueError:
+            return {
+                "status": "error",
+                "message": (
+                    "cwd-safe worktree removal returned non-JSON output: "
+                    f"{stdout or '<empty>'}"
+                ),
+            }
+        if not isinstance(payload, dict):
+            return {
+                "status": "error",
+                "message": "cwd-safe worktree removal returned invalid payload",
+            }
+        return payload
 
     def _cleanup_orphaned_worktree_entry(
         self,
@@ -761,7 +888,15 @@ class WorktreeManager:
             worktree_repo_id=entry.id,
             worktree_path=worktree_path,
         )
-        self._remove_orphaned_worktree_dir(worktree_path)
+        orphan = self._remove_orphaned_worktree_dir(worktree_path)
+        orphan_status = str(orphan.get("status", "unknown"))
+        if orphan_status not in {"removed", "missing"}:
+            detail = str(orphan.get("message") or "").strip()
+            if detail:
+                raise ValueError(f"{orphan_status}: {detail}")
+            raise ValueError(
+                f"{orphan_status}: orphaned worktree directory cleanup did not complete"
+            )
 
         manifest = self._topology_repository.load_manifest()
         manifest.repos = [repo for repo in manifest.repos if repo.id != entry.id]
@@ -833,20 +968,33 @@ class WorktreeManager:
         force_archive: bool,
         force_attestation: Optional[Mapping[str, object]],
     ) -> ResolvedWorktreeEntry:
+        self._ctx.invalidate_cache()
+        resolved: Optional[ResolvedWorktreeEntry] = None
         if self._hub_config.pma.cleanup_require_archive and not archive:
-            raise ValueError(
-                "Worktree cleanup requires archiving per PMA policy "
-                "(pma.cleanup_require_archive is enabled). "
-                "Use archive=True or omit the --no-archive flag."
-            )
+            try:
+                resolved = self._resolve_worktree_entry(worktree_repo_id)
+            except ValueError as exc:
+                raise ValueError(
+                    "Worktree cleanup requires archiving per PMA policy "
+                    "(pma.cleanup_require_archive is enabled). "
+                    "Use archive=True or omit the --no-archive flag."
+                ) from exc
+            worktree_path = resolved.worktree_path
+            archive_possible = worktree_path.exists() and git_available(worktree_path)
+            if archive_possible:
+                raise ValueError(
+                    "Worktree cleanup requires archiving per PMA policy "
+                    "(pma.cleanup_require_archive is enabled). "
+                    "Use archive=True or omit the --no-archive flag."
+                )
+        if resolved is None:
+            resolved = self._resolve_worktree_entry(worktree_repo_id)
         enforce_force_attestation(
             force=force or force_archive,
             force_attestation=force_attestation,
             logger=logger,
             action="hub.cleanup_worktree",
         )
-        self._ctx.invalidate_cache()
-        resolved = self._resolve_worktree_entry(worktree_repo_id)
         branch_name = resolved.entry.branch or "unknown"
         try:
             has_active_chat_binding = self._has_active_chat_binding(worktree_repo_id)
@@ -977,6 +1125,13 @@ class WorktreeManager:
                 else str(orphan_dir_cleanup.get("message") or "")
             ),
         )
+        if orphan_dir_status not in {"removed", "missing"}:
+            detail = str(orphan_dir_cleanup.get("message") or "").strip()
+            if detail:
+                raise ValueError(f"{orphan_dir_status}: {detail}")
+            raise ValueError(
+                f"worktree directory cleanup did not complete (status={orphan_dir_status})"
+            )
 
         resolved.manifest.repos = [
             r for r in resolved.manifest.repos if r.id != worktree_repo_id

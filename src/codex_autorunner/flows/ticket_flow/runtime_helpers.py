@@ -29,12 +29,7 @@ from ...core.state_roots import resolve_repo_flows_db_path, resolve_repo_state_r
 from ...core.ticket_flow_operator import (
     PreflightCheckResult as TicketFlowInboxPreflight,
 )
-from ...core.ticket_flow_operator import (
-    ensure_flow_worker,
-    resolve_run_reuse_policy,  # noqa: F401
-    select_active_or_paused_run,  # noqa: F401
-    select_resumable_run,  # noqa: F401
-)
+from ...core.ticket_flow_operator import ensure_flow_worker
 from ...core.ticket_flow_operator import (
     ticket_flow_inbox_preflight as _ticket_flow_inbox_preflight,
 )
@@ -125,7 +120,7 @@ async def start_ticket_flow_run(
             run_id=run_id,
             metadata=metadata,
         )
-    ensure_ticket_flow_worker(repo_root, record.id, is_terminal=False)
+    ensure_worker(repo_root, record.id, is_terminal=False)
     return record
 
 
@@ -143,7 +138,7 @@ async def resume_ticket_flow_run(
 ) -> FlowRunRecord:
     async with ticket_flow_runtime_session(repo_root) as resources:
         record = await resources.controller.resume_flow(run_id, force=force)
-    ensure_ticket_flow_worker(repo_root, record.id, is_terminal=False)
+    ensure_worker(repo_root, record.id, is_terminal=False)
     return record
 
 
@@ -221,6 +216,11 @@ def ensure_ticket_flow_worker(
                 close()
             except OSError:
                 logger.debug("Failed to close %s handle", key, exc_info=True)
+
+
+def ensure_worker(repo_root: Path, run_id: str, *, is_terminal: bool = False) -> None:
+    """Backward-compatible alias for orchestration wrappers/tests."""
+    ensure_ticket_flow_worker(repo_root, run_id, is_terminal=is_terminal)
 
 
 def stop_ticket_flow_worker(repo_root: Path, run_id: str) -> None:

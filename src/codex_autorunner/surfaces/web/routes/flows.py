@@ -56,15 +56,17 @@ from ....core.flows.worker_process import (
 from ....core.orchestration import build_ticket_flow_orchestration_service
 from ....core.runtime import RuntimeContext
 from ....core.ticket_flow_operator import (
+    resolve_run_reuse_policy,
+    select_active_or_paused_run,
+)
+from ....core.ticket_flow_operator import (
     ticket_flow_preflight as shared_ticket_flow_preflight,
 )
 from ....core.utils import atomic_write, find_repo_root
 from ....flows.ticket_flow import build_ticket_flow_definition
 from ....flows.ticket_flow.runtime_helpers import (
     normalize_ticket_flow_input_data,
-    resolve_run_reuse_policy,
     seed_bootstrap_ticket_if_needed,
-    select_active_or_paused_run,
 )
 from ....integrations.agents.build_agent_pool import build_agent_pool
 from ....integrations.github.service import GitHubError, GitHubService

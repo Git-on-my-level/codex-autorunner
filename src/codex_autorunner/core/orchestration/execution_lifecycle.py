@@ -393,7 +393,9 @@ class _ThreadExecutionLifecycle:
                         )
                     provisional_turn_id = f"{conversation_id}:{int(time.time() * 1000)}"
                     self.thread_store.set_execution_backend_id(
-                        execution.execution_id, provisional_turn_id
+                        execution.execution_id,
+                        provisional_turn_id,
+                        confirmed_start=False,
                     )
                     log_event(
                         self._log,
@@ -586,7 +588,9 @@ class _ThreadExecutionLifecycle:
                 backend_runtime_instance_id=runtime_instance_id,
             )
         self.thread_store.set_execution_backend_id(
-            execution.execution_id, resolved_turn_id
+            execution.execution_id,
+            resolved_turn_id,
+            confirmed_start=True,
         )
         log_event(
             self._log,

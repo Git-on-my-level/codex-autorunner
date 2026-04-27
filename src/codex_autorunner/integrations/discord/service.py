@@ -21,16 +21,12 @@ from typing import (
     cast,
 )
 
+from ...agents import registry as agent_registry
 from ...agents.opencode.supervisor import OpenCodeSupervisor
 from ...agents.opencode.supervisor_protocol import (
     OpenCodeHarnessSupervisorProtocol,
 )
-from ...agents.registry import (
-    AgentDescriptor,
-    get_agent_descriptor,
-    get_registered_agents,
-    normalize_agent_capabilities,
-)
+from ...agents.registry import AgentDescriptor
 from ...bootstrap import seed_repo_files
 from ...core.config import (
     ConfigError,
@@ -38,8 +34,8 @@ from ...core.config import (
     find_nearest_hub_config_path,
     load_hub_config,
     load_repo_config,
-    resolve_env_for_root,
 )
+from ...core.config_env import resolve_env_for_root
 from ...core.filebox import (
     inbox_dir,
     list_regular_files,
@@ -47,7 +43,7 @@ from ...core.filebox import (
     outbox_pending_dir,
     outbox_sent_dir,
 )
-from ...core.filebox_retention import (  # noqa: F401 - re-exported for test monkeypatching
+from ...core.filebox_retention import (
     prune_filebox_root,
     resolve_filebox_retention_policy,
 )
@@ -66,10 +62,6 @@ from ...core.flows.ux_helpers import (
     select_ticket_flow_run_record,
     ticket_progress,
 )
-from ...core.git_utils import (  # noqa: F401 - kept for test monkeypatching
-    GitError,
-    reset_branch_from_origin_main,
-)
 from ...core.hub_control_plane import (
     HandshakeCompatibility,
     HttpHubControlPlaneClient,
@@ -80,8 +72,12 @@ from ...core.hub_control_plane.service import (
 )
 from ...core.logging_utils import log_event
 from ...core.managed_processes import (
-    reap_managed_processes,
-)  # noqa: F401 - re-exported for test monkeypatching
+    reap_managed_processes as _reap_managed_processes_core,
+)
+from ...core.managed_thread_identity import (
+    file_chat_discord_key,
+    pma_base_key,
+)
 from ...core.orchestration import (
     ORCHESTRATION_SCHEMA_VERSION,
     ChatOperationRecoveryAction,
@@ -96,9 +92,6 @@ from ...core.orchestration.managed_thread_delivery_ledger import (
 )
 from ...core.state import now_iso
 from ...core.state_roots import resolve_global_state_root
-from ...core.update import (
-    UpdateInProgressError,  # noqa: F401 - re-exported for test monkeypatching
-)
 from ...core.update_paths import resolve_update_paths  # noqa: F401
 from ...core.update_targets import (  # noqa: F401
     all_update_target_definitions,
@@ -116,10 +109,6 @@ from ...integrations.app_server.client import ApprovalDecision, CodexAppServerCl
 from ...integrations.app_server.env import build_app_server_env
 from ...integrations.app_server.event_buffer import AppServerEventBuffer
 from ...integrations.app_server.supervisor import WorkspaceAppServerSupervisor
-from ...integrations.app_server.threads import (
-    file_chat_discord_key,
-    pma_base_key,
-)
 from ...integrations.chat.agents import (
     DEFAULT_CHAT_AGENT,
     chat_agent_supports_effort,
@@ -168,10 +157,7 @@ from ...integrations.chat.managed_thread_lifecycle import (
 from ...integrations.chat.media import (
     audio_content_type_for_input,
 )
-from ...integrations.chat.model_selection import (
-    REASONING_EFFORT_VALUES,
-    _model_list_with_agent_compat,  # noqa: F401 - re-exported for test compatibility
-)
+from ...integrations.chat.model_selection import REASONING_EFFORT_VALUES
 from ...integrations.chat.models import (
     ChatEvent,
     ChatInteractionEvent,
@@ -197,13 +183,16 @@ from ...manifest import load_manifest
 from ...tickets.files import (
     list_ticket_paths,
     read_ticket,
-    read_ticket_frontmatter,
     safe_relpath,
 )
 from ...tickets.frontmatter import parse_markdown_frontmatter
+from ...tickets.snapshot import (
+    list_ticket_snapshots,
+)
 from ...voice import VoiceConfig, VoiceService, VoiceServiceError
 from ...voice.provider_catalog import normalize_voice_provider
 from ...voice.service import VoiceTransientError
+from . import update_service as discord_update_service
 from .adapter import DiscordChatAdapter
 from .car_command_dispatch import handle_car_command as dispatch_car_command
 from .channel_messaging import (
@@ -328,12 +317,12 @@ from .interaction_session import (
 )
 from .interactions import extract_interaction_id, extract_interaction_token
 from .managed_thread_delivery import deliver_discord_managed_thread_record
+from .managed_thread_routing import build_discord_thread_orchestration_service
 from .managed_thread_startup_recovery import (
     recover_managed_thread_executions_on_startup as _recover_managed_thread_executions_on_startup_impl,
 )
 from .message_turns import (
     DiscordMessageTurnResult,
-    build_discord_thread_orchestration_service,
     resolve_bound_workspace_root,
     run_agent_turn_for_message,
     run_managed_thread_turn_for_message,
@@ -342,18 +331,15 @@ from .message_turns import (
     handle_message_event as handle_discord_message_event,
 )
 from .outbox import DiscordOutboxManager
-from .picker_helpers import (  # noqa: F401 - re-exported for test compatibility
-    _coerce_model_picker_items,
-    _format_session_thread_picker_label,
-    _truncate_picker_text,
+from .picker_helpers import (
+    format_discord_thread_picker_label as _format_discord_thread_picker_label_impl,
+)
+from .picker_helpers import (
     list_model_items_for_binding,
     list_opencode_models_for_picker,
     list_recent_commits_for_picker,
     list_session_threads_for_picker,
     list_threads_paginated,
-)
-from .picker_helpers import (
-    format_discord_thread_picker_label as _format_discord_thread_picker_label_impl,
 )
 from .pma_commands import (
     handle_pma_off,
@@ -414,17 +400,6 @@ from .service_normalization import (
     format_hub_flow_overview_line,
 )
 from .state import DiscordStateStore, InteractionLedgerRecord, OutboxRecord
-from .update_service import (  # noqa: F401 - re-exported for test monkeypatching
-    ChatUpdateStatusNotifier,
-    _available_update_target_definitions,
-    _format_update_confirmation_warning,
-    _normalize_update_ref,
-    _normalize_update_target,
-    _read_update_status,
-    _spawn_update_process,
-    _update_target_restarts_surface,
-    mark_update_status_notified,
-)
 from .workspace_commands import (
     handle_bind,
     handle_bind_page_component,
@@ -568,9 +543,6 @@ DISCORD_TURN_PROGRESS_HEARTBEAT_INTERVAL_SECONDS = 2.0
 DISCORD_TURN_PROGRESS_MAX_ACTIONS = 12
 DISCORD_TYPING_HEARTBEAT_INTERVAL_SECONDS = 5.0
 DISCORD_INTERACTION_COLD_START_WINDOW_SECONDS = 120.0
-DISCORD_BACKGROUND_TASK_SHUTDOWN_GRACE_SECONDS = (
-    10.0  # noqa: F401 - re-exported for test monkeypatching
-)
 DISCORD_HUB_HANDSHAKE_RETRY_WINDOW_SECONDS = 45.0
 DISCORD_HUB_HANDSHAKE_RETRY_DELAY_SECONDS = 1.0
 DISCORD_HUB_HANDSHAKE_RETRY_MAX_DELAY_SECONDS = 5.0
@@ -633,6 +605,16 @@ class _DiscordPendingApproval:
     message_id: Optional[str]
     prompt: str
     future: asyncio.Future[ApprovalDecision]
+
+
+@dataclass(frozen=True)
+class DiscordServiceDependencies:
+    load_repo_config: Callable[..., Any] = load_repo_config
+    resolve_filebox_retention_policy: Callable[..., Any] = (
+        resolve_filebox_retention_policy
+    )
+    prune_filebox_root: Callable[..., Any] = prune_filebox_root
+    reap_managed_processes: Callable[[Path], Any] = _reap_managed_processes_core
 
 
 class _DiscordAppServerSupervisorAdapter:
@@ -744,9 +726,11 @@ class DiscordBotService:
         update_linux_service_names: Optional[dict[str, str]] = None,
         voice_config: Optional[VoiceConfig] = None,
         voice_service: Optional[VoiceService] = None,
+        dependencies: Optional[DiscordServiceDependencies] = None,
     ) -> None:
         self._config = config
         self._logger = logger
+        self._dependencies = dependencies or DiscordServiceDependencies()
         self._manifest_path = manifest_path
         self._update_repo_url = update_repo_url
         self._update_repo_ref = update_repo_ref
@@ -884,6 +868,7 @@ class DiscordBotService:
         self._pending_ticket_filters: dict[str, str] = {}
         self._pending_ticket_search_queries: dict[str, str] = {}
         self._document_browser_sessions: dict[str, Any] = {}
+        self._document_browser_session_locks: dict[str, asyncio.Lock] = {}
         self._responder = DiscordResponder(
             rest=self._rest,
             config=self._config,
@@ -907,10 +892,10 @@ class DiscordBotService:
             {}
         )
         self._discord_pending_approvals: dict[str, _DiscordPendingApproval] = {}
-        self._update_status_notifier = ChatUpdateStatusNotifier(
+        self._update_status_notifier = discord_update_service.ChatUpdateStatusNotifier(
             platform="discord",
             logger=self._logger,
-            read_status=_read_update_status,
+            read_status=discord_update_service._read_update_status,
             send_notice=self._send_update_status_notice,
             spawn_task=self._spawn_task,
             mark_notified=self._mark_update_notified,
@@ -3373,7 +3358,7 @@ class DiscordBotService:
 
     def _reap_managed_processes(self, *, stage: str) -> None:
         try:
-            cleanup = reap_managed_processes(self._config.root)
+            cleanup = self._dependencies.reap_managed_processes(self._config.root)
             if cleanup.killed or cleanup.signaled or cleanup.removed:
                 log_event(
                     self._logger,
@@ -3396,7 +3381,7 @@ class DiscordBotService:
 
     def _filebox_housekeeping_enabled(self) -> bool:
         try:
-            repo_config = load_repo_config(
+            repo_config = self._dependencies.load_repo_config(
                 self._config.root,
                 hub_path=self._hub_config_path,
             )
@@ -3452,7 +3437,7 @@ class DiscordBotService:
         roots = await self._filebox_prune_roots()
         for root in roots:
             try:
-                repo_config = load_repo_config(
+                repo_config = self._dependencies.load_repo_config(
                     root,
                     hub_path=self._hub_config_path,
                 )
@@ -3471,9 +3456,11 @@ class DiscordBotService:
             )
             try:
                 summary = await asyncio.to_thread(
-                    prune_filebox_root,
+                    self._dependencies.prune_filebox_root,
                     root,
-                    policy=resolve_filebox_retention_policy(repo_config.pma),
+                    policy=self._dependencies.resolve_filebox_retention_policy(
+                        repo_config.pma
+                    ),
                 )
             except (OSError, ValueError, RuntimeError) as exc:
                 log_event(
@@ -4342,23 +4329,11 @@ class DiscordBotService:
         status_filter: str,
         search_query: str = "",
     ) -> list[tuple[str, str, str]]:
-        ticket_dir = self._ticket_dir(workspace_root)
-        choices: list[tuple[str, str, str]] = []
-        normalized_filter = status_filter.strip().lower()
-        if normalized_filter not in {"all", "open", "done"}:
-            normalized_filter = "all"
-        for path in list_ticket_paths(ticket_dir):
-            frontmatter, errors = read_ticket_frontmatter(path)
-            is_done = bool(frontmatter and frontmatter.done and not errors)
-            if normalized_filter == "open" and is_done:
-                continue
-            if normalized_filter == "done" and not is_done:
-                continue
-            title = frontmatter.title if frontmatter and frontmatter.title else ""
-            label = f"{path.name}{' - ' + title if title else ''}"
-            description = "done" if is_done else "open"
-            rel_path = safe_relpath(path, workspace_root)
-            choices.append((rel_path, label, description))
+        snapshots = list_ticket_snapshots(workspace_root, status_filter=status_filter)
+        choices: list[tuple[str, str, str]] = [
+            (snap.rel_path, snap.label, "done" if snap.is_done else "open")
+            for snap in snapshots
+        ]
         normalized_query = search_query.strip()
         if not normalized_query or not choices:
             return choices
@@ -6555,7 +6530,7 @@ class DiscordBotService:
 
     def _agent_descriptor(self, agent: object) -> AgentDescriptor | None:
         normalized = self._normalize_agent(agent)
-        return get_agent_descriptor(normalized, self)
+        return agent_registry.get_agent_descriptor(normalized, self)
 
     def _agent_display_name(self, agent: object) -> str:
         descriptor = self._agent_descriptor(agent)
@@ -6570,19 +6545,19 @@ class DiscordBotService:
         descriptor = self._agent_descriptor(agent)
         if descriptor is None:
             return False
-        normalized = normalize_agent_capabilities([capability])
+        normalized = agent_registry.normalize_agent_capabilities([capability])
         if not normalized:
             return False
         return next(iter(normalized)) in descriptor.capabilities
 
     def _agents_supporting_capability(self, capability: str) -> list[str]:
-        normalized = normalize_agent_capabilities([capability])
+        normalized = agent_registry.normalize_agent_capabilities([capability])
         if not normalized:
             return []
         resolved = next(iter(normalized))
         return sorted(
             descriptor.id
-            for descriptor in get_registered_agents(self).values()
+            for descriptor in agent_registry.get_registered_agents(self).values()
             if resolved in descriptor.capabilities
         )
 

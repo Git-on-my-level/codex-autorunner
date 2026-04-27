@@ -212,7 +212,6 @@ Local Whisper (on-device, faster-whisper):
    - macOS launchd path (`scripts/install-local-mac-hub.sh` / `scripts/safe-refresh-local-mac-hub.sh`) now installs this automatically when voice provider resolves to `local_whisper` or `mlx_whisper`.
 2. Set provider:
    - `voice.provider: local_whisper`
-   - or env override: `CODEX_AUTORUNNER_VOICE_PROVIDER=local_whisper`
 
 MLX Whisper (on-device, Apple Silicon):
 
@@ -222,12 +221,10 @@ MLX Whisper (on-device, Apple Silicon):
    - macOS launchd setup auto-selects this for new Apple Silicon installs.
 2. Set provider:
    - `voice.provider: mlx_whisper`
-   - or env override: `CODEX_AUTORUNNER_VOICE_PROVIDER=mlx_whisper`
 
 Provider selection and precedence:
 
 - Only one provider is active at runtime.
-- `CODEX_AUTORUNNER_VOICE_PROVIDER` overrides `voice.provider` in config.
 - It is normal to keep multiple provider blocks (for example `openai_whisper`, `local_whisper`, `mlx_whisper`) in config; only the selected provider is used.
 - There is no automatic provider fallback. If the selected provider fails, transcription fails for that request.
 
@@ -534,5 +531,5 @@ conversation id, and highlights likely error lines with nearby context.
 
 ## Related Docs
 
-- `src/codex_autorunner/surfaces/discord/README.md`
+- `src/codex_autorunner/integrations/discord/README.md`
 - `docs/ops/env-and-defaults.md`

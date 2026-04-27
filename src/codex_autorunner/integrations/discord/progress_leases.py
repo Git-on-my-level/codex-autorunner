@@ -363,7 +363,7 @@ async def reconcile_discord_turn_progress_leases(
     orphaned: bool = False,
     startup: bool = False,
 ) -> int:
-    from .message_turns import build_discord_thread_orchestration_service
+    from .managed_thread_routing import build_discord_thread_orchestration_service
 
     leases: list[Any]
     if isinstance(lease_id, str) and lease_id.strip():

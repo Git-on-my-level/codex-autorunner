@@ -291,10 +291,15 @@ async def state_stream(
             return
 
 
-# Keep explicit module-level references so dead-code heuristics treat these
-# shared stream helpers as part of the intended route support surface.
-_STREAM_HELPER_SURFACE = (
-    log_stream,
-    jsonl_event_stream,
-    state_stream,
-)
+__all__ = [
+    "BYPASS_FLAGS",
+    "SSE_HEADERS",
+    "build_codex_terminal_cmd",
+    "build_hermes_terminal_cmd",
+    "build_opencode_terminal_cmd",
+    "jsonl_event_stream",
+    "log_stream",
+    "resolve_lock_payload",
+    "resolve_runner_status",
+    "state_stream",
+]

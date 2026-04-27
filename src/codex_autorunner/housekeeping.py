@@ -109,6 +109,38 @@ def parse_housekeeping_config(raw: Optional[dict]) -> HousekeepingConfig:
     )
 
 
+def resolve_housekeeping_rule(
+    config: object,
+    name: str,
+) -> Optional[HousekeepingRule]:
+    if not isinstance(config, HousekeepingConfig):
+        return None
+    wanted = name.strip().lower()
+    if not wanted:
+        return None
+    for rule in config.rules:
+        if rule.name.strip().lower() == wanted:
+            return rule
+    return None
+
+
+def default_housekeeping_rule_named(
+    name: str,
+    *,
+    include_repo_review_runs: bool = False,
+    include_hub_update_rules: bool = False,
+) -> Optional[HousekeepingRule]:
+    from .core.config_layering import _default_housekeeping_section
+
+    default_config = parse_housekeeping_config(
+        _default_housekeeping_section(
+            include_repo_review_runs=include_repo_review_runs,
+            include_hub_update_rules=include_hub_update_rules,
+        )
+    )
+    return resolve_housekeeping_rule(default_config, name)
+
+
 def run_housekeeping_for_roots(
     config: HousekeepingConfig,
     roots: Iterable[Path],

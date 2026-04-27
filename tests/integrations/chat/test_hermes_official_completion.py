@@ -15,7 +15,6 @@ from tests.chat_surface_harness.telegram import (
     telegram_message,
 )
 
-import codex_autorunner.integrations.discord.message_turns as discord_message_turns_module
 from codex_autorunner.integrations.chat.dispatcher import build_dispatch_context
 from codex_autorunner.integrations.telegram.handlers.commands import (
     execution as telegram_execution_module,
@@ -33,7 +32,7 @@ async def test_discord_pma_turn_completes_for_official_hermes_prompt(
     runtime = patch_hermes_registry(
         monkeypatch,
         scenario="official",
-        targets=[discord_message_turns_module],
+        targets=[],
     )
     env = await build_discord_pma_environment(
         tmp_path,

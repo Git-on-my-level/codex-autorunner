@@ -11,11 +11,7 @@ from typing import Any, Iterable, Optional
 from ...core.app_server_command import (
     DEFAULT_APP_SERVER_COMMAND as CORE_DEFAULT_APP_SERVER_COMMAND,
 )
-from ...core.app_server_command import (
-    GLOBAL_APP_SERVER_COMMAND_ENV,
-    LEGACY_TELEGRAM_APP_SERVER_COMMAND_ENV,
-    resolve_app_server_command,
-)
+from ...core.app_server_command import resolve_app_server_command
 from ..chat.approval_modes import resolve_approval_mode_policies
 from ..chat.collaboration_policy import (
     CollaborationPolicy,
@@ -226,7 +222,6 @@ class TelegramBotConfig:
     command_registration: TelegramBotCommandRegistration
     opencode_command: list[str]
     state_file: Path
-    app_server_command_env: str
     app_server_command: list[str]
     app_server_max_handles: Optional[int]
     app_server_idle_ttl_seconds: Optional[int]
@@ -590,12 +585,7 @@ class TelegramBotConfig:
             enabled=command_reg_enabled, scopes=scopes
         )
 
-        opencode_command = []
-        opencode_env_command = env.get("CAR_OPENCODE_COMMAND")
-        if opencode_env_command:
-            opencode_command = _parse_command(opencode_env_command)
-        if not opencode_command:
-            opencode_command = _parse_command(cfg.get("opencode_command"))
+        opencode_command = _parse_command(cfg.get("opencode_command"))
 
         state_file = Path(cfg.get("state_file", DEFAULT_STATE_FILE))
         if not state_file.is_absolute():
@@ -606,33 +596,10 @@ class TelegramBotConfig:
                 "(.sqlite3). Update your config to .codex-autorunner/telegram_state.sqlite3"
             )
 
-        app_server_command_env = str(
-            cfg.get("app_server_command_env", GLOBAL_APP_SERVER_COMMAND_ENV)
-        )
-        extra_env_vars = list(
-            dict.fromkeys(
-                (
-                    app_server_command_env,
-                    LEGACY_TELEGRAM_APP_SERVER_COMMAND_ENV,
-                )
-            )
-        )
         app_server_command = resolve_app_server_command(
             cfg.get("app_server_command"),
-            env=env,
-            extra_env_vars=extra_env_vars,
             fallback=DEFAULT_APP_SERVER_COMMAND,
         )
-
-        _legacy_telegram_env_value = env.get(LEGACY_TELEGRAM_APP_SERVER_COMMAND_ENV)
-        if _legacy_telegram_env_value and _legacy_telegram_env_value.strip():
-            if not env.get(GLOBAL_APP_SERVER_COMMAND_ENV, "").strip():
-                _TELEGRAM_CONFIG_LOGGER.warning(
-                    "The %s env var is deprecated and will be removed in a "
-                    "future release. Use %s instead.",
-                    LEGACY_TELEGRAM_APP_SERVER_COMMAND_ENV,
-                    GLOBAL_APP_SERVER_COMMAND_ENV,
-                )
 
         app_server_raw_value = cfg.get("app_server")
         app_server_raw: dict[str, Any] = (
@@ -778,7 +745,6 @@ class TelegramBotConfig:
             command_registration=command_registration,
             opencode_command=opencode_command,
             state_file=state_file,
-            app_server_command_env=app_server_command_env,
             app_server_command=app_server_command,
             app_server_max_handles=app_server_max_handles,
             app_server_idle_ttl_seconds=app_server_idle_ttl_seconds,
