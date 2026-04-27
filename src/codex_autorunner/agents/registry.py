@@ -31,6 +31,7 @@ from .zeroclaw.supervisor import (
 )
 
 _logger = logging.getLogger(__name__)
+AgentCapability = RuntimeCapability
 
 
 @dataclass(frozen=True)
@@ -943,6 +944,7 @@ def has_capability(agent_id: str, capability: str, context: Any = None) -> bool:
 
 
 __all__ = [
+    "AgentCapability",
     "AgentExecutionTarget",
     "AgentRuntimeResolution",
     "CAR_AGENT_ENTRYPOINT_GROUP",

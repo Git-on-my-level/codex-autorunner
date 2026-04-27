@@ -161,6 +161,10 @@ class TestHasCapability:
         assert has_capability("codex", "durable_threads") is True
         assert has_capability("codex", "message_turns") is True
 
+    def test_capability_checks_preserve_v1_alias_compatibility(self):
+        assert has_capability("codex", "threads") is True
+        assert has_capability("codex", "turns") is True
+
 
 class _StubEntryPoint:
     def __init__(self, obj):

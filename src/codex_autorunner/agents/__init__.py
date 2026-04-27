@@ -6,6 +6,7 @@ from .hermes_identity import (
     is_hermes_alias_agent,
 )
 from .registry import (
+    AgentCapability,
     AgentDescriptor,
     get_agent_descriptor,
     get_available_agents,
@@ -16,6 +17,7 @@ from .registry import (
 from .types import RuntimeCapability
 
 __all__ = [
+    "AgentCapability",
     "CanonicalHermesIdentity",
     "AgentDescriptor",
     "RuntimeCapability",

@@ -33,8 +33,8 @@ def _make_descriptor(
 def test_map_agent_capabilities_uses_orchestration_vocabulary() -> None:
     capabilities = map_agent_capabilities(
         [
-            "durable_threads",
-            "message_turns",
+            "threads",
+            "turns",
             "interrupt",
             "active_thread_discovery",
             "review",
