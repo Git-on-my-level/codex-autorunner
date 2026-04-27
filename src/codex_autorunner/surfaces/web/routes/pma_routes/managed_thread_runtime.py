@@ -993,14 +993,19 @@ def build_managed_thread_runtime_routes(
                         managed_thread_id,
                         managed_turn_id,
                     )
-                    await notify_managed_thread_terminal_transition(
-                        request,
-                        thread=thread,
-                        managed_thread_id=managed_thread_id,
-                        managed_turn_id=managed_turn_id,
-                        to_state="failed",
-                        reason=MANAGED_THREAD_PUBLIC_EXECUTION_ERROR,
-                    )
+                    turn = thread_store.get_turn(managed_thread_id, managed_turn_id)
+                    if (
+                        str((turn or {}).get("status") or "").strip().lower()
+                        == "running"
+                    ):
+                        await notify_managed_thread_terminal_transition(
+                            request,
+                            thread=thread,
+                            managed_thread_id=managed_thread_id,
+                            managed_turn_id=managed_turn_id,
+                            to_state="failed",
+                            reason=MANAGED_THREAD_PUBLIC_EXECUTION_ERROR,
+                        )
                     raise
 
             _track_managed_thread_task(

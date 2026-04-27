@@ -536,7 +536,7 @@ def test_cancel_queued_turns_marks_only_pending_queue_items_interrupted(
     )
 
     cancelled = store.cancel_queued_turns(thread["managed_thread_id"])
-    assert cancelled == 1
+    assert cancelled == [queued_turn["managed_turn_id"]]
 
     running_after = store.get_turn(
         thread["managed_thread_id"], running_turn["managed_turn_id"]

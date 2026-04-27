@@ -257,6 +257,8 @@ def _queued_turn_table_lines(queued_turns: list[dict[str, Any]]) -> list[str]:
                 str(item.get("position") or "-"),
             )
         )
+    if not rows:
+        return []
     headers = ("queued_turn_id", "prompt", "enqueued_at", "position")
     widths = [
         max(len(headers[index]), *(len(row[index]) for row in rows))
@@ -1020,6 +1022,9 @@ class _PmaTailSnapshot:
 @dataclass(frozen=True)
 class _PmaQueuedTurnSnapshot:
     managed_turn_id: str
+    request_kind: str
+    state: str
+    position: Optional[int]
     enqueued_at: str
     prompt_preview: str
 
@@ -1029,14 +1034,24 @@ class _PmaQueuedTurnSnapshot:
             return None
         return cls(
             managed_turn_id=str(data.get("managed_turn_id") or "-"),
+            request_kind=str(data.get("request_kind") or "-"),
+            state=str(data.get("state") or "-"),
+            position=_coerce_optional_int(data.get("position")),
             enqueued_at=str(data.get("enqueued_at") or "-"),
             prompt_preview=str(data.get("prompt_preview") or "")[:80],
         )
 
     def render_line(self) -> str:
+        position = self.position if self.position is not None else "-"
         return (
             "queued_turn_id="
             + self.managed_turn_id
+            + " position="
+            + str(position)
+            + " state="
+            + self.state
+            + " kind="
+            + self.request_kind
             + " enqueued="
             + self.enqueued_at
             + " prompt="
@@ -2081,9 +2096,13 @@ def pma_thread_queue(
     if not isinstance(queued_turns, list) or not queued_turns:
         typer.echo("No queued turns")
         return
-    for line in _queued_turn_table_lines(
+    rendered_lines = _queued_turn_table_lines(
         [item for item in queued_turns if isinstance(item, dict)]
-    ):
+    )
+    if not rendered_lines:
+        typer.echo("No queued turns")
+        return
+    for line in rendered_lines:
         typer.echo(line)
 
 

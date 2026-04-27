@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from .redaction import redact_text
+
 
 def _normalize_text(value: Any) -> Optional[str]:
     if not isinstance(value, str):
@@ -50,6 +52,13 @@ def _truncate_text(text: str, limit: int, *, suffix: str = "...") -> str:
     if not suffix or limit <= len(suffix):
         return text[:limit]
     return text[: limit - len(suffix)] + suffix
+
+
+def _redacted_prompt_preview_for_match(value: Any, *, max_length: int = 120) -> str:
+    text = str(value or "")
+    if not text:
+        return ""
+    return _truncate_text(redact_text(text), max_length).strip()
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:

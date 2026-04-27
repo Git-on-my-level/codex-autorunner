@@ -861,7 +861,10 @@ def build_managed_thread_crud_routes(
         if thread is None:
             raise HTTPException(status_code=404, detail="Managed thread not found")
 
-        queued_items = store.list_pending_turn_queue_items(managed_thread_id, limit=500)
+        queued_items = store.list_pending_turn_queue_items(
+            managed_thread_id,
+            limit=max(store.get_queue_depth(managed_thread_id), 1),
+        )
         queued_lookup = {
             str(item.get("managed_turn_id") or "").strip(): index
             for index, item in enumerate(queued_items, start=1)
@@ -902,17 +905,12 @@ def build_managed_thread_crud_routes(
         if thread is None:
             raise HTTPException(status_code=404, detail="Managed thread not found")
 
-        queued_items = store.list_pending_turn_queue_items(managed_thread_id, limit=500)
-        cleared_count = store.cancel_queued_turns(managed_thread_id)
+        cleared_turn_ids = store.cancel_queued_turns(managed_thread_id)
         return {
             "status": "ok",
             "managed_thread_id": managed_thread_id,
-            "cleared_count": cleared_count,
-            "cleared_turn_ids": [
-                str(item.get("managed_turn_id") or "").strip()
-                for item in queued_items[:cleared_count]
-                if str(item.get("managed_turn_id") or "").strip()
-            ],
+            "cleared_count": len(cleared_turn_ids),
+            "cleared_turn_ids": cleared_turn_ids,
             "queue_depth": store.get_queue_depth(managed_thread_id),
         }
 

@@ -1699,11 +1699,45 @@ def test_managed_thread_queue_routes_list_cancel_and_clear(hub_env) -> None:
         clear_resp = client.post(f"/threads/{managed_thread_id}/queue/clear")
         assert clear_resp.status_code == 200
         assert clear_resp.json()["cleared_count"] == 1
+        assert clear_resp.json()["cleared_turn_ids"] == [queued_c["managed_turn_id"]]
 
         empty_queue_resp = client.get(f"/threads/{managed_thread_id}/queue")
         assert empty_queue_resp.status_code == 200
         assert empty_queue_resp.json()["queue_depth"] == 0
         assert empty_queue_resp.json()["queued_turns"] == []
+
+
+def test_managed_thread_cancel_queue_route_supports_positions_beyond_500(
+    hub_env,
+) -> None:
+    store = PmaThreadStore(hub_env.hub_root)
+    created = store.create_thread(
+        "codex", hub_env.repo_root.resolve(), repo_id=hub_env.repo_id
+    )
+    managed_thread_id = str(created["managed_thread_id"])
+    store.create_turn(
+        managed_thread_id,
+        prompt="turn A",
+        busy_policy="queue",
+    )
+    queued_turns = [
+        store.create_turn(
+            managed_thread_id,
+            prompt=f"queued turn {index}",
+            busy_policy="queue",
+        )
+        for index in range(1, 502)
+    ]
+    target = queued_turns[-1]
+
+    with _build_managed_thread_crud_client(hub_env.hub_root) as client:
+        response = client.post(
+            f"/threads/{managed_thread_id}/queue/{target['managed_turn_id']}/cancel"
+        )
+
+    assert response.status_code == 200
+    assert response.json()["managed_turn_id"] == target["managed_turn_id"]
+    assert response.json()["position"] == 501
 
 
 def test_managed_thread_cancel_queue_route_rejects_nonqueued_turn(hub_env) -> None:

@@ -489,7 +489,7 @@ class PmaThreadExecutionStore(ThreadExecutionStore):
         return execution
 
     def cancel_queued_executions(self, thread_target_id: str) -> int:
-        return self._store.cancel_queued_turns(thread_target_id)
+        return len(self._store.cancel_queued_turns(thread_target_id))
 
     def record_thread_activity(
         self,
