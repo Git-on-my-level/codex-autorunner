@@ -8,7 +8,10 @@ from typing import Any
 import httpx
 import pytest
 
-from codex_autorunner.agents.base import harness_progress_event_stream
+from codex_autorunner.agents.base import (
+    harness_progress_event_stream,
+    harness_supports_event_streaming,
+)
 from codex_autorunner.agents.opencode import harness as harness_module
 from codex_autorunner.agents.opencode import (
     progress_synthesis as progress_synthesis_module,
@@ -179,7 +182,7 @@ async def test_opencode_harness_reports_capabilities_from_contract() -> None:
     assert harness.supports("interrupt") is True
     assert harness.supports("review") is True
     assert harness.supports("event_streaming") is True
-    assert harness.allows_parallel_event_stream() is True
+    assert harness_supports_event_streaming(harness) is True
     assert harness.supports("approvals") is False
     assert report.capabilities == harness.capabilities
 

@@ -11,7 +11,7 @@ from fastapi.responses import StreamingResponse
 
 from .....agents.base import (
     harness_progress_event_stream,
-    harness_supports_progress_event_stream,
+    harness_supports_event_streaming,
 )
 from .....core.orchestration.runtime_thread_events import (
     RuntimeThreadRunEventState,
@@ -263,7 +263,7 @@ async def _build_managed_thread_tail_snapshot(
     stream_available = bool(
         harness is not None
         and has_backend_binding
-        and harness_supports_progress_event_stream(harness)
+        and harness_supports_event_streaming(harness)
     )
     tail_events: list[dict[str, Any]] = []
     raw_last_activity_at: Optional[str] = None

@@ -43,7 +43,7 @@ from typing import Any, Awaitable, Callable, Literal, Mapping, Optional, Protoco
 
 from ...agents.base import (
     harness_progress_event_stream,
-    harness_supports_progress_event_stream,
+    harness_supports_event_streaming,
 )
 from ...core.config import ConfigError, load_repo_config
 from ...core.hub_control_plane import (
@@ -2271,7 +2271,7 @@ async def finalize_managed_thread_execution(
         )
 
     if (
-        harness_supports_progress_event_stream(started.harness)
+        harness_supports_event_streaming(started.harness)
         and stream_backend_thread_id
         and stream_backend_turn_id
     ):
