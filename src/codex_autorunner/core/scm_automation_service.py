@@ -19,6 +19,7 @@ from .pr_bindings import PrBinding
 from .publish_executor import PublishActionExecutor, PublishOperationProcessor
 from .publish_journal import PublishJournalStore, PublishOperation
 from .publish_operation_executors import (
+    _normalize_mapping,
     build_enqueue_managed_turn_executor,
     build_notify_chat_executor,
 )
@@ -366,10 +367,6 @@ def _tracking_from_payload(payload: Mapping[str, Any] | None) -> dict[str, Any]:
         return {}
     tracking = payload.get("scm_reaction")
     return dict(tracking) if isinstance(tracking, Mapping) else {}
-
-
-def _normalize_mapping(payload: object) -> dict[str, Any]:
-    return dict(payload) if isinstance(payload, Mapping) else {}
 
 
 def _operation_waiting_for_managed_turn_start(operation: PublishOperation) -> bool:

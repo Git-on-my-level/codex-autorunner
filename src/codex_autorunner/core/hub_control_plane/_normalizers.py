@@ -93,6 +93,11 @@ def normalize_run_event_payloads(value: Any) -> tuple[dict[str, Any], ...]:
 def normalize_bool(value: Any, *, fallback: bool) -> bool:
     if isinstance(value, bool):
         return value
+    if isinstance(value, int):
+        if value == 1:
+            return True
+        if value == 0:
+            return False
     if isinstance(value, str):
         normalized = value.strip().lower()
         if normalized in {"1", "true", "yes", "on"}:
