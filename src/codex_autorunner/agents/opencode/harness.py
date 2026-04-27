@@ -380,9 +380,6 @@ class OpenCodeHarness(AgentHarness):
         ]
     )
 
-    def allows_parallel_event_stream(self) -> bool:
-        return True
-
     async def list_progress_events(
         self, conversation_id: str, turn_id: str, **kwargs: Any
     ) -> list[dict[str, Any]]:

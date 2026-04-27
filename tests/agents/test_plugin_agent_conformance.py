@@ -316,25 +316,22 @@ async def test_minimal_harness_nominal_thread_lifecycle() -> None:
 
 
 def test_capability_normalization_aliases() -> None:
-    """Test that legacy capability aliases are normalized."""
+    """Test that canonical capabilities are reported directly."""
     harness = _MinimalConformingHarness()
-
-    assert harness.supports("threads") is True
-    assert harness.supports("turns") is True
 
     assert harness.supports("durable_threads") is True
     assert harness.supports("message_turns") is True
 
 
 def test_descriptor_capability_normalization() -> None:
-    """Test that AgentDescriptor normalizes capabilities on construction."""
+    """Test that AgentDescriptor preserves canonical capabilities."""
     descriptor = AgentDescriptor(
         id="test-norm",
         name="Test Normalized",
         capabilities=frozenset(
             [
-                RuntimeCapability("threads"),
-                RuntimeCapability("turns"),
+                RuntimeCapability("durable_threads"),
+                RuntimeCapability("message_turns"),
                 RuntimeCapability("interrupt"),
             ]
         ),
@@ -344,8 +341,6 @@ def test_descriptor_capability_normalization() -> None:
     assert RuntimeCapability("durable_threads") in descriptor.capabilities
     assert RuntimeCapability("message_turns") in descriptor.capabilities
     assert RuntimeCapability("interrupt") in descriptor.capabilities
-    assert RuntimeCapability("threads") not in descriptor.capabilities
-    assert RuntimeCapability("turns") not in descriptor.capabilities
 
 
 def test_zeroclaw_descriptor_conforms_to_contract() -> None:

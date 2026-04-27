@@ -31,7 +31,6 @@ from .zeroclaw.supervisor import (
 )
 
 _logger = logging.getLogger(__name__)
-AgentCapability = RuntimeCapability
 
 
 @dataclass(frozen=True)
@@ -46,7 +45,7 @@ class AgentDescriptor:
 
     id: str
     name: str
-    capabilities: frozenset[AgentCapability]
+    capabilities: frozenset[RuntimeCapability]
     make_harness: Callable[[Any], AgentHarness]
     healthcheck: Optional[Callable[[Any], bool]] = None
     backend_factory: Optional[Callable[[Any, AgentExecutionTarget, Any, Any], Any]] = (
@@ -107,7 +106,7 @@ class AgentExecutionTarget:
 
 def normalize_agent_capabilities(
     capabilities: Iterable[str],
-) -> frozenset[AgentCapability]:
+) -> frozenset[RuntimeCapability]:
     return normalize_runtime_capabilities(capabilities)
 
 
@@ -948,7 +947,6 @@ __all__ = [
     "AgentRuntimeResolution",
     "CAR_AGENT_ENTRYPOINT_GROUP",
     "CAR_PLUGIN_API_VERSION",
-    "AgentCapability",
     "AgentDescriptor",
     "configured_agent_execution_targets",
     "descriptor_runtime_kind",

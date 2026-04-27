@@ -27,24 +27,8 @@ Before writing code, decide what CAR is actually managing:
 - Use `agent_workspace` semantics when the durable thing is runtime state rather
   than project code.
 
-Hermes is the reference example of a repo/worktree-backed runtime that exposes
-its own durable session/thread API through ACP. ZeroClaw is the reference
-example of the narrower `agent_workspace` path.
-
-`agent_workspace` resources are first-class hub resources stored under
-`<hub_root>/.codex-autorunner/runtimes/<runtime>/<workspace_id>/`. CAR threads
-live under that workspace, and chat surfaces bind to those durable CAR threads,
-not directly to shared workspace memory.
-
-If an external runtime does not expose a documented public thread/session API,
-do not claim that it satisfies CAR's durable-thread contract unless CAR can
-prove equivalent semantics with a first-class CAR-managed `agent_workspace`.
-The current ZeroClaw adapter is the reference example for this narrower path:
-CAR-managed workspaces can only honestly advertise durable threads when the
-installed ZeroClaw build advertises CAR's required launch contract. Current
-`zeroclaw 0.2.0` does not advertise `zeroclaw agent --session-state-file`, so
-CAR now fails fast instead of inferring durability from workspace selection
-alone.
+For the full resource-model contract, including first-class CAR-managed `agent_workspace`
+semantics and the ZeroClaw durability caveat, see `docs/plugin-api.md`.
 
 ## Prerequisites
 
@@ -60,7 +44,10 @@ surface CAR depends on before wiring it in. For Hermes that means
 `hermes acp --help` works, while durable session persistence remains Hermes'
 native responsibility under shared `HERMES_HOME`.
 
-**Important**: CAR detects configured runtimes; it does not install them. Single-session or volatile wrapper-only runtimes are out of scope for CAR v1 orchestration. See "Single-Session Runtimes (Out of Scope for v1)" below.
+**Important**: CAR detects configured runtimes; it does not install them.
+Single-session or volatile wrapper-only runtimes are out of scope for CAR v1
+orchestration. See `docs/plugin-api.md` for the durable-thread contract and the
+single-session non-goals.
 
 ## Step 1: Create the Harness
 
@@ -303,35 +290,9 @@ _BUILTIN_AGENTS["myagent"] = AgentDescriptor(
 ### Option B: Out-of-tree plugin (recommended)
 
 This mirrors Takopi’s entrypoint-based plugin approach: publish a Python package
-that exposes an `AgentDescriptor` via a standard entry point group.
-
-1) In your plugin package, define an exported descriptor:
-
-```python
-# my_package/my_agent_plugin.py
-from __future__ import annotations
-
-from codex_autorunner.api import AgentDescriptor, AgentHarness, CAR_PLUGIN_API_VERSION
-
-def _make(ctx: object) -> AgentHarness:
-    # construct your harness from ctx (supervisors, settings, etc)
-    raise NotImplementedError
-
-AGENT_BACKEND = AgentDescriptor(
-    id="myagent",
-    name="My Agent",
-    capabilities=frozenset(["threads", "turns"]),
-    make_harness=_make,
-    plugin_api_version=CAR_PLUGIN_API_VERSION,
-)
-```
-
-2) Declare an entry point in your plugin’s `pyproject.toml`:
-
-```toml
-[project.entry-points."codex_autorunner.agent_backends"]
-myagent = "my_package.my_agent_plugin:AGENT_BACKEND"
-```
+that exposes an `AgentDescriptor` via a standard entry point group. The
+canonical out-of-tree contract, including the full `AgentDescriptor` surface,
+versioning rules, and entry-point example, lives in `docs/plugin-api.md`.
 
 At runtime, CAR will discover and load the plugin backend automatically.
 Conflicting ids are rejected (plugin ids may not override built-ins).
@@ -384,82 +345,19 @@ async def test_myagent_smoke():
         await supervisor.close_all()
 ```
 
-## Required Capabilities
+## Plugin Contract Reference
 
-All agents should support these core capabilities:
+The plugin contract lives in `docs/plugin-api.md`. Read that spec for:
 
-- **`durable_threads`**: List, create, and resume conversations that persist across CAR restarts
-- **`message_turns`**: Start and execute turns within durable threads
+- the canonical capability set and which two capabilities are required
+- the durable-thread contract and the must-support methods
+- the single-session runtime non-goals
+- capability-gated behavior and runtime capability discovery
 
-Optional capabilities:
-- **`model_listing`**: Return available models
-- **`review`**: Run code review operations
-- **`event_streaming`**: Stream turn events in real-time
-- **`approvals`**: Support approval/workflow mechanisms
-- **`interrupt`**: Interrupt a running turn
-- **`active_thread_discovery`**: List existing conversations
-- **`transcript_history`**: Retrieve conversation transcript history
-
-Hermes is a useful example of a deliberately partial capability surface:
-
-- supports `active_thread_discovery`, `interrupt`, `event_streaming`, and `approvals`
-- does not support `review`, `model_listing`, or `transcript_history`
-
-## Durable-Thread Contract (Must-Support)
-
-CAR v1 orchestration requires agents to implement a **durable thread/session model**. This means:
-
-1. **Threads persist beyond a single interaction**: Creating a conversation produces a session ID that remains valid across CAR restarts
-2. **Threads support resume**: Given a thread/session ID, the agent can resume from where it left off
-3. **Turns are atomic**: Each turn has a clear start and terminal state
-
-For repo-backed agents, `workspace_root` points at the repo/worktree CAR is
-operating on. For non-repo runtimes, `workspace_root` should be the managed
-`agent_workspace` root. In that case the durable identity remains:
-
-- `runtime binary -> agent workspace -> CAR thread -> live process`
-
-The must-support core interface is:
-
-```python
-async def new_conversation(workspace_root: Path, title: Optional[str]) -> ConversationRef
-async def resume_conversation(workspace_root: Path, conversation_id: str) -> ConversationRef
-async def start_turn(...) -> TurnRef
-async def wait_for_turn(...) -> TerminalTurnResult
-```
-
-**Capability gating**: Optional features like `interrupt`, `review`, `transcript_history`, and `event_streaming` raise `UnsupportedAgentCapabilityError` when called on agents that don't advertise them.
-
-Hermes is the in-tree reference for this style of capability-gated behavior:
-selectors can show Hermes, while unsupported actions still fail explicitly
-instead of being silently remapped.
-
-## Single-Session Runtimes (Out of Scope for v1)
-
-**Single-session runtimes are explicitly out of scope for CAR v1 orchestration.** These are runtimes that:
-
-- Do not persist conversation state beyond a single request/response cycle
-- Cannot resume a previous conversation
-- Do not expose a session/conversation ID that can be stored and reused
-
-Examples of out-of-scope runtimes:
-- Stateless CLI tools that process one prompt and exit
-- Web APIs that don't expose session tokens
-- Agents without persistent conversation storage
-
-## Capability-Gated Behavior
-
-CAR uses capability discovery to determine what operations an agent supports:
-
-1. **Static capabilities**: Declared in `AgentDescriptor.capabilities` at registration
-2. **Runtime capabilities**: Reported via `harness.runtime_capability_report()` after initialization
-
-The harness automatically gates optional helper methods:
-- Calling `model_catalog()` on an agent without `model_listing` raises `UnsupportedAgentCapabilityError`
-- Calling `interrupt()` on an agent without `interrupt` raises `UnsupportedAgentCapabilityError`
-- Calling `transcript_history()` on an agent without `transcript_history` raises `UnsupportedAgentCapabilityError`
-
-This ensures graceful degradation: CAR services can attempt operations and handle missing capabilities gracefully.
+Hermes remains the best in-tree example of a deliberately partial capability
+surface: it supports `active_thread_discovery`, `interrupt`,
+`event_streaming`, and `approvals`, while leaving `review`, `model_listing`,
+and `transcript_history` unsupported.
 
 ## Protocol Snapshot Gate (Optional)
 

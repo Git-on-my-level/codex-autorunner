@@ -9,7 +9,7 @@ from codex_autorunner.agents.base import (
     AgentHarness,
     UnsupportedAgentCapabilityError,
     harness_progress_event_stream,
-    harness_supports_progress_event_stream,
+    harness_supports_event_streaming,
 )
 from codex_autorunner.agents.types import (
     AgentId,
@@ -99,7 +99,7 @@ async def test_agent_harness_required_contract_and_capability_report() -> None:
     terminal = await harness.wait_for_turn(Path("."), resumed.id, turn.turn_id)
 
     assert harness.supports("durable_threads") is True
-    assert harness.supports("turns") is True
+    assert harness.supports("message_turns") is True
     assert harness.supports("interrupt") is False
     assert report.capabilities == harness.capabilities
     assert resumed.id == "conv-1"
@@ -136,10 +136,10 @@ async def test_agent_harness_optional_helpers_are_capability_gated() -> None:
 
 
 @pytest.mark.asyncio
-async def test_progress_event_stream_support_stays_disabled_for_base_helper() -> None:
+async def test_event_stream_support_stays_disabled_for_base_helper() -> None:
     harness = _MinimalHarness()
 
-    assert harness_supports_progress_event_stream(harness) is False
+    assert harness_supports_event_streaming(harness) is False
     with pytest.raises(UnsupportedAgentCapabilityError, match="event_streaming"):
         async for _event in harness_progress_event_stream(
             harness, Path("."), "conv-1", "turn-1"
