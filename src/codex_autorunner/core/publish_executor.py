@@ -151,6 +151,9 @@ def _resolve_retry_at(
 ) -> Optional[str]:
     if isinstance(exc, TerminalPublishError):
         return None
+    if isinstance(exc, PublishExecutionError) and exc.retry_after_seconds is not None:
+        retry_at = current_time + timedelta(seconds=max(exc.retry_after_seconds, 0.0))
+        return _format_timestamp(retry_at)
     attempt_index = max(operation.attempt_count - 1, 0)
     if attempt_index >= len(retry_delays_seconds):
         return None

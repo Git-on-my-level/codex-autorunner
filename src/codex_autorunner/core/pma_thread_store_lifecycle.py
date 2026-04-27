@@ -27,10 +27,16 @@ class PmaThreadStoreLifecycle:
         stale_running_threshold_seconds: int,
         execution_row_to_record: Callable[[Any], dict[str, Any]],
         transition_thread_status: Callable[..., Optional[dict[str, Any]]],
+        transition_thread_status_in_transaction: Optional[
+            Callable[..., Optional[dict[str, Any]]]
+        ] = None,
     ) -> None:
         self._stale_running_threshold_seconds = stale_running_threshold_seconds
         self._execution_row_to_record = execution_row_to_record
         self._transition_thread_status = transition_thread_status
+        self._transition_thread_status_in_transaction = (
+            transition_thread_status_in_transaction
+        )
 
     def find_stale_running_turn_ids(
         self,
@@ -363,43 +369,43 @@ class PmaThreadStoreLifecycle:
     ) -> Optional[tuple[dict[str, Any], dict[str, Any]]]:
         claimed_at = now_iso()
         self.recover_stale_running_turns(conn, managed_thread_id)
-        running = conn.execute(
-            """
-            SELECT 1
-              FROM orch_thread_executions
-             WHERE thread_target_id = ?
-               AND status = 'running'
-             LIMIT 1
-            """,
-            (managed_thread_id,),
-        ).fetchone()
-        if running is not None:
-            return None
-        row = conn.execute(
-            """
-            SELECT
-                q.queue_item_id,
-                q.payload_json,
-                e.execution_id
-              FROM orch_queue_items AS q
-              JOIN orch_thread_executions AS e
-                ON e.execution_id = q.source_key
-             WHERE q.source_kind = 'thread_execution'
-               AND q.lane_id = ?
-               AND e.thread_target_id = ?
-               AND e.status = 'queued'
-               AND q.state IN ('pending', 'queued', 'waiting')
-             ORDER BY COALESCE(q.visible_at, q.created_at) ASC, q.rowid ASC
-             LIMIT 1
-            """,
-            (
-                thread_queue_lane_id(managed_thread_id),
-                managed_thread_id,
-            ),
-        ).fetchone()
-        if row is None:
-            return None
         with conn:
+            running = conn.execute(
+                """
+                SELECT 1
+                  FROM orch_thread_executions
+                 WHERE thread_target_id = ?
+                   AND status = 'running'
+                 LIMIT 1
+                """,
+                (managed_thread_id,),
+            ).fetchone()
+            if running is not None:
+                return None
+            row = conn.execute(
+                """
+                SELECT
+                    q.queue_item_id,
+                    q.payload_json,
+                    e.execution_id
+                  FROM orch_queue_items AS q
+                  JOIN orch_thread_executions AS e
+                    ON e.execution_id = q.source_key
+                 WHERE q.source_kind = 'thread_execution'
+                   AND q.lane_id = ?
+                   AND e.thread_target_id = ?
+                   AND e.status = 'queued'
+                   AND q.state IN ('pending', 'queued', 'waiting')
+                 ORDER BY COALESCE(q.visible_at, q.created_at) ASC, q.rowid ASC
+                 LIMIT 1
+                """,
+                (
+                    thread_queue_lane_id(managed_thread_id),
+                    managed_thread_id,
+                ),
+            ).fetchone()
+            if row is None:
+                return None
             cursor = conn.execute(
                 """
                 UPDATE orch_queue_items
@@ -428,25 +434,29 @@ class PmaThreadStoreLifecycle:
                 UPDATE orch_thread_targets
                    SET last_execution_id = ?,
                        updated_at = ?
-                 WHERE thread_target_id = ?
+                WHERE thread_target_id = ?
                 """,
                 (str(row["execution_id"]), claimed_at, managed_thread_id),
             )
-        self._transition_thread_status(
-            conn,
-            managed_thread_id,
-            reason=ManagedThreadStatusReason.TURN_STARTED,
-            changed_at=claimed_at,
-            turn_id=str(row["execution_id"]),
-        )
-        execution_row = conn.execute(
-            """
-            SELECT *
-              FROM orch_thread_executions
-             WHERE execution_id = ?
-            """,
-            (str(row["execution_id"]),),
-        ).fetchone()
+            transition = (
+                self._transition_thread_status_in_transaction
+                or self._transition_thread_status
+            )
+            transition(
+                conn,
+                managed_thread_id,
+                reason=ManagedThreadStatusReason.TURN_STARTED,
+                changed_at=claimed_at,
+                turn_id=str(row["execution_id"]),
+            )
+            execution_row = conn.execute(
+                """
+                SELECT *
+                  FROM orch_thread_executions
+                 WHERE execution_id = ?
+                """,
+                (str(row["execution_id"]),),
+            ).fetchone()
         if execution_row is None:
             return None
         return (

@@ -28,7 +28,7 @@ LAUNCH_AGENT ?= $(HOME)/Library/LaunchAgents/com.codex.autorunner.plist
 LAUNCH_LABEL ?= com.codex.autorunner
 NVM_BIN ?= $(HOME)/.nvm/versions/node/v22.12.0/bin
 LOCAL_BIN ?= $(HOME)/.local/bin
-PY39_BIN ?= $(HOME)/Library/Python/3.9/bin
+PY39_BIN ?= $(HOME)/Library/Python/$(shell python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')/bin
 PIPX_ROOT ?= $(HOME)/.local/pipx
 PIPX_VENV ?= $(PIPX_ROOT)/venvs/codex-autorunner
 PIPX_PYTHON ?= $(PIPX_VENV)/bin/python
@@ -80,7 +80,7 @@ node_modules/.installed: package.json pnpm-lock.yaml
 	@touch node_modules/.installed
 
 hooks:
-	git config core.hooksPath .githooks
+	git config --local core.hooksPath .githooks
 
 test: test-fast
 

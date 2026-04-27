@@ -13,6 +13,7 @@ from ..contextspace.paths import (
 )
 from ..tickets.files import list_ticket_paths, read_ticket_frontmatter, safe_relpath
 from ..tickets.lint import parse_ticket_index
+from ..tickets.snapshot import list_ticket_snapshots
 
 DocumentBrowserSource = Literal["tickets", "contextspace"]
 
@@ -99,17 +100,16 @@ def _list_ticket_items(repo_root: Path, *, query: str) -> list[DocumentBrowserIt
     ticket_dir = repo_root / ".codex-autorunner" / "tickets"
     paths = list_ticket_paths(ticket_dir)
     index_counts = _ticket_index_counts(paths)
-    for path in paths:
-        frontmatter, errors = read_ticket_frontmatter(path)
-        title = frontmatter.title.strip() if frontmatter and frontmatter.title else ""
-        is_done = bool(frontmatter and not errors and frontmatter.done)
-        rel_path = safe_relpath(path, repo_root)
-        label = f"{path.name}{' - ' + title if title else ''}"
-        description = f"{'done' if is_done else 'open'} - {rel_path}"
+    path_by_name = {path.name: path for path in paths}
+    for snap in list_ticket_snapshots(repo_root, paths=paths):
+        path = path_by_name.get(snap.filename)
+        if path is None:
+            continue
+        description = f"{'done' if snap.is_done else 'open'} - {snap.rel_path}"
         item = DocumentBrowserItem(
             source="tickets",
             document_id=_ticket_document_id(path, repo_root, index_counts=index_counts),
-            label=label,
+            label=snap.label,
             description=description,
         )
         if _matches_query(
@@ -118,8 +118,8 @@ def _list_ticket_items(repo_root: Path, *, query: str) -> list[DocumentBrowserIt
                 item.document_id,
                 item.label,
                 item.description,
-                rel_path,
-                title,
+                snap.rel_path,
+                snap.title,
             ),
         ):
             items.append(item)

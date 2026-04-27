@@ -183,10 +183,12 @@ from ...manifest import load_manifest
 from ...tickets.files import (
     list_ticket_paths,
     read_ticket,
-    read_ticket_frontmatter,
     safe_relpath,
 )
 from ...tickets.frontmatter import parse_markdown_frontmatter
+from ...tickets.snapshot import (
+    list_ticket_snapshots,
+)
 from ...voice import VoiceConfig, VoiceService, VoiceServiceError
 from ...voice.provider_catalog import normalize_voice_provider
 from ...voice.service import VoiceTransientError
@@ -866,6 +868,7 @@ class DiscordBotService:
         self._pending_ticket_filters: dict[str, str] = {}
         self._pending_ticket_search_queries: dict[str, str] = {}
         self._document_browser_sessions: dict[str, Any] = {}
+        self._document_browser_session_locks: dict[str, asyncio.Lock] = {}
         self._responder = DiscordResponder(
             rest=self._rest,
             config=self._config,
@@ -4326,23 +4329,11 @@ class DiscordBotService:
         status_filter: str,
         search_query: str = "",
     ) -> list[tuple[str, str, str]]:
-        ticket_dir = self._ticket_dir(workspace_root)
-        choices: list[tuple[str, str, str]] = []
-        normalized_filter = status_filter.strip().lower()
-        if normalized_filter not in {"all", "open", "done"}:
-            normalized_filter = "all"
-        for path in list_ticket_paths(ticket_dir):
-            frontmatter, errors = read_ticket_frontmatter(path)
-            is_done = bool(frontmatter and frontmatter.done and not errors)
-            if normalized_filter == "open" and is_done:
-                continue
-            if normalized_filter == "done" and not is_done:
-                continue
-            title = frontmatter.title if frontmatter and frontmatter.title else ""
-            label = f"{path.name}{' - ' + title if title else ''}"
-            description = "done" if is_done else "open"
-            rel_path = safe_relpath(path, workspace_root)
-            choices.append((rel_path, label, description))
+        snapshots = list_ticket_snapshots(workspace_root, status_filter=status_filter)
+        choices: list[tuple[str, str, str]] = [
+            (snap.rel_path, snap.label, "done" if snap.is_done else "open")
+            for snap in snapshots
+        ]
         normalized_query = search_query.strip()
         if not normalized_query or not choices:
             return choices

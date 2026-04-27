@@ -199,8 +199,10 @@ def build_discord_thread_orchestration_service(service: Any) -> Any:
     def _create_thread_target(*args: Any, **kwargs: Any) -> Any:
         try:
             return base_create_thread_target(*args, **kwargs)
-        except KeyError:
-            return create_thread_target_with_profile_fallback(created, *args, **kwargs)
+        except KeyError as exc:
+            return create_thread_target_with_profile_fallback(
+                created, *args, **kwargs, key_error=exc
+            )
 
     cast(Any, created).create_thread_target = _create_thread_target
     service._discord_thread_orchestration_service = created

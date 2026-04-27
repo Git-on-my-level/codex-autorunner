@@ -77,9 +77,9 @@ else
 fi
 
 work_docs=()
-add_if_exists work_docs "$ROOT/workspace/active_context.md"
-add_if_exists work_docs "$ROOT/workspace/decisions.md"
-add_if_exists work_docs "$ROOT/workspace/spec.md"
+add_if_exists work_docs "$ROOT/contextspace/active_context.md"
+add_if_exists work_docs "$ROOT/contextspace/decisions.md"
+add_if_exists work_docs "$ROOT/contextspace/spec.md"
 add_if_exists work_docs "$ROOT/ABOUT_CAR.md"
 add_if_exists work_docs "$ROOT/config.yml"
 add_if_exists work_docs "$ROOT/state.sqlite3"

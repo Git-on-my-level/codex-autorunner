@@ -22,8 +22,6 @@ CAR_AUTH_TOKEN=replace_me
 OPENAI_API_KEY=replace_me
 CAR_TELEGRAM_BOT_TOKEN=replace_me
 CAR_TELEGRAM_CHAT_ID=replace_me
-# Optional: custom app-server command for Telegram.
-# CAR_TELEGRAM_APP_SERVER_COMMAND=/home/you/.local/bin/codex app-server
 EOF
 chmod 600 ~/.config/codex-autorunner/codex-autorunner.env
 ```

@@ -127,8 +127,6 @@ Set environment variables:
 
 ```bash
 export CAR_TELEGRAM_BOT_TOKEN="<bot-token>"
-# Optional override if codex is not on PATH for the bot process:
-# export CAR_TELEGRAM_APP_SERVER_COMMAND="/absolute/path/to/codex app-server"
 ```
 
 ID discovery notes:
@@ -230,7 +228,7 @@ support a shared supergroup safely:
 
 If turns fail or hang:
 - Check `telegram.turn.failed`, `telegram.turn.timeout`, and `telegram.app_server.start_failed`.
-- Verify `codex app-server` is available or set `CAR_TELEGRAM_APP_SERVER_COMMAND`.
+- Verify `codex app-server` is available or configure `telegram_bot.app_server_command`.
 
 ---
 

@@ -541,13 +541,11 @@ def _parse_app_server_config(
         command = resolve_app_server_command(
             default_from_mapping(
                 defaults, "command", APP_SERVER_FIELD_SCHEMAS["command"]
-            ),
-            env=os.environ,
+            )
         )
     else:
         command = resolve_app_server_command(
             raw_command,
-            env=os.environ,
             fallback=(),
         )
     state_root = cast(
@@ -1092,7 +1090,8 @@ def _parse_usage_config(
     )
     global_cache_default = defaults.get("global_cache_root")
     if global_cache_default is None:
-        global_cache_default = os.environ.get("CODEX_HOME", "~/.codex")
+        # Align with Codex CLI data dir (same default as _default_codex_home); not CAR state.
+        global_cache_default = os.environ.get("CODEX_HOME") or "~/.codex"
     global_cache_raw = cfg.get("global_cache_root", global_cache_default)
     if global_cache_raw is None:
         global_cache_raw = global_cache_default
@@ -1213,3 +1212,6 @@ def _parse_static_assets_config(
         max_cache_entries=max_cache_entries,
         max_cache_age_days=max_cache_age_days,
     )
+
+
+_parse_prompt_int_HELPERS = (_parse_prompt_int,)

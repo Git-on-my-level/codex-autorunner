@@ -29,7 +29,6 @@ _TIMEOUT_SLOW_SECONDS = 120
 _OPENCODE_PROCESS_KIND = "opencode"
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _HERMETIC_ROOTS: HermeticTestRoots | None = None
-os.environ.setdefault("CODEX_DISABLE_APP_SERVER_AUTORESTART_FOR_TESTS", "1")
 
 
 def _get_hermetic_roots() -> HermeticTestRoots:

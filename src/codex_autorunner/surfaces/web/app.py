@@ -35,6 +35,8 @@ from ...core.orchestration.execution_history_maintenance import (
     resolve_execution_history_maintenance_policy,
     run_execution_history_housekeeping_once,
 )
+from ...core.pma_domain.constants import DEFAULT_PMA_LANE_ID
+from ...core.pma_queue import PmaQueue, QueueItemState
 from ...housekeeping import reap_managed_docker_containers, run_housekeeping_once
 from .app_builders import create_app, create_repo_app
 from .app_factory import CacheStaticFiles, resolve_allowed_hosts, resolve_auth_token
@@ -75,6 +77,34 @@ _DEFAULT_HUB_FLOW_SWEEP_INTERVAL_SECONDS = float(
 
 class _IdlePrunable(Protocol):
     async def prune_idle(self) -> None: ...
+
+
+async def _start_replayable_pma_lane_workers(
+    app: FastAPI,
+    starter: object,
+) -> list[str]:
+    if not callable(starter):
+        return []
+
+    queue = PmaQueue(Path(app.state.config.root))
+    lanes = [DEFAULT_PMA_LANE_ID]
+    seen = {DEFAULT_PMA_LANE_ID}
+    for lane_id in await queue.get_all_lanes():
+        if lane_id in seen:
+            continue
+        items = await queue.list_items(lane_id)
+        if any(
+            item.state in {QueueItemState.PENDING, QueueItemState.RUNNING}
+            for item in items
+        ):
+            lanes.append(lane_id)
+            seen.add(lane_id)
+
+    started: list[str] = []
+    for lane_id in lanes:
+        await starter(app, lane_id)
+        started.append(lane_id)
+    return started
 
 
 def _resolve_hub_flow_sweep_interval_seconds(
@@ -317,12 +347,16 @@ def create_hub_app(
                     if starter is not None:
                         t_phase = time.monotonic()
                         try:
-                            await starter(app, "pma:default")
+                            started_lanes = await _start_replayable_pma_lane_workers(
+                                app,
+                                starter,
+                            )
                         except (
                             RuntimeError,
                             TypeError,
                             AttributeError,
                             OSError,
+                            sqlite3.Error,
                         ) as exc:  # intentional: best-effort startup
                             safe_log(
                                 log,
@@ -332,7 +366,8 @@ def create_hub_app(
                             )
                         else:
                             log.info(
-                                "hub.deferred_startup.phase done=pma_lane_worker elapsed_ms=%.2f",
+                                "hub.deferred_startup.phase done=pma_lane_worker lanes=%s elapsed_ms=%.2f",
+                                ",".join(started_lanes) if started_lanes else "-",
                                 (time.monotonic() - t_phase) * 1000,
                             )
                 log.info(

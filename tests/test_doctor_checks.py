@@ -32,6 +32,7 @@ from codex_autorunner.integrations.telegram import doctor as telegram_doctor
 from codex_autorunner.integrations.telegram.doctor import (
     telegram_doctor_checks,
 )
+from tests.conftest import write_test_config
 
 
 def test_telegram_doctor_checks_disabled():
@@ -172,15 +173,11 @@ def test_telegram_doctor_checks_local_voice_dependency_missing(monkeypatch):
     monkeypatch.setattr(
         telegram_doctor, "missing_optional_dependencies", _missing_optional
     )
-    cfg = {"telegram_bot": {"enabled": True}}
-    with patch.dict(
-        os.environ,
-        {
-            "CODEX_AUTORUNNER_VOICE_ENABLED": "1",
-            "CODEX_AUTORUNNER_VOICE_PROVIDER": "local_whisper",
-        },
-        clear=True,
-    ):
+    cfg = {
+        "telegram_bot": {"enabled": True},
+        "voice": {"enabled": True, "provider": "local_whisper"},
+    }
+    with patch.dict(os.environ, {}, clear=True):
         checks = telegram_doctor_checks(cfg)
 
     by_id = {check.check_id: check for check in checks}
@@ -204,15 +201,11 @@ def test_telegram_doctor_checks_mlx_voice_dependency_missing(monkeypatch):
     monkeypatch.setattr(
         telegram_doctor, "missing_optional_dependencies", _missing_optional
     )
-    cfg = {"telegram_bot": {"enabled": True}}
-    with patch.dict(
-        os.environ,
-        {
-            "CODEX_AUTORUNNER_VOICE_ENABLED": "1",
-            "CODEX_AUTORUNNER_VOICE_PROVIDER": "mlx_whisper",
-        },
-        clear=True,
-    ):
+    cfg = {
+        "telegram_bot": {"enabled": True},
+        "voice": {"enabled": True, "provider": "mlx_whisper"},
+    }
+    with patch.dict(os.environ, {}, clear=True):
         checks = telegram_doctor_checks(cfg)
 
     by_id = {check.check_id: check for check in checks}
@@ -241,15 +234,11 @@ def test_telegram_doctor_checks_voice_missing_ffmpeg(monkeypatch):
         "missing_local_voice_runtime_commands",
         lambda provider: ["ffmpeg"],
     )
-    cfg = {"telegram_bot": {"enabled": True}}
-    with patch.dict(
-        os.environ,
-        {
-            "CODEX_AUTORUNNER_VOICE_ENABLED": "1",
-            "CODEX_AUTORUNNER_VOICE_PROVIDER": "mlx_whisper",
-        },
-        clear=True,
-    ):
+    cfg = {
+        "telegram_bot": {"enabled": True},
+        "voice": {"enabled": True, "provider": "mlx_whisper"},
+    }
+    with patch.dict(os.environ, {}, clear=True):
         checks = telegram_doctor_checks(cfg)
 
     by_id = {check.check_id: check for check in checks}
@@ -272,15 +261,11 @@ def test_telegram_doctor_checks_openai_voice_skips_local_dependency_check(monkey
     monkeypatch.setattr(
         telegram_doctor, "missing_optional_dependencies", _missing_optional
     )
-    cfg = {"telegram_bot": {"enabled": True}}
-    with patch.dict(
-        os.environ,
-        {
-            "CODEX_AUTORUNNER_VOICE_ENABLED": "1",
-            "CODEX_AUTORUNNER_VOICE_PROVIDER": "openai_whisper",
-        },
-        clear=True,
-    ):
+    cfg = {
+        "telegram_bot": {"enabled": True},
+        "voice": {"enabled": True, "provider": "openai_whisper"},
+    }
+    with patch.dict(os.environ, {}, clear=True):
         checks = telegram_doctor_checks(cfg)
 
     by_id = {check.check_id: check for check in checks}
@@ -317,14 +302,14 @@ def test_doctor_reports_missing_local_voice_dependency(
         _missing_optional,
     )
 
-    with patch.dict(
-        os.environ,
+    write_test_config(
+        hub_root / ".codex-autorunner" / "config.yml",
         {
-            "CODEX_AUTORUNNER_VOICE_ENABLED": "1",
-            "CODEX_AUTORUNNER_VOICE_PROVIDER": "local_whisper",
+            "mode": "hub",
+            "repo_defaults": {"voice": {"enabled": True, "provider": "local_whisper"}},
         },
-        clear=True,
-    ):
+    )
+    with patch.dict(os.environ, {}, clear=True):
         report = doctor(hub_root)
 
     by_id = {check.check_id: check for check in report.checks if check.check_id}
@@ -358,14 +343,14 @@ def test_doctor_reports_missing_mlx_voice_dependency(
         _missing_optional,
     )
 
-    with patch.dict(
-        os.environ,
+    write_test_config(
+        hub_root / ".codex-autorunner" / "config.yml",
         {
-            "CODEX_AUTORUNNER_VOICE_ENABLED": "1",
-            "CODEX_AUTORUNNER_VOICE_PROVIDER": "mlx_whisper",
+            "mode": "hub",
+            "repo_defaults": {"voice": {"enabled": True, "provider": "mlx_whisper"}},
         },
-        clear=True,
-    ):
+    )
+    with patch.dict(os.environ, {}, clear=True):
         report = doctor(hub_root)
 
     by_id = {check.check_id: check for check in report.checks if check.check_id}
@@ -403,14 +388,14 @@ def test_doctor_reports_missing_mlx_voice_runtime_dependency(
         lambda provider: ["ffmpeg"],
     )
 
-    with patch.dict(
-        os.environ,
+    write_test_config(
+        hub_root / ".codex-autorunner" / "config.yml",
         {
-            "CODEX_AUTORUNNER_VOICE_ENABLED": "1",
-            "CODEX_AUTORUNNER_VOICE_PROVIDER": "mlx_whisper",
+            "mode": "hub",
+            "repo_defaults": {"voice": {"enabled": True, "provider": "mlx_whisper"}},
         },
-        clear=True,
-    ):
+    )
+    with patch.dict(os.environ, {}, clear=True):
         report = doctor(hub_root)
 
     by_id = {check.check_id: check for check in report.checks if check.check_id}

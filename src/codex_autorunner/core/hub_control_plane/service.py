@@ -623,6 +623,7 @@ class HubSharedStateService:
         self._execution_store.set_execution_backend_id(
             request.execution_id,
             request.backend_turn_id,
+            confirmed_start=request.confirmed_start,
         )
 
     def claim_next_queued_execution(

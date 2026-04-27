@@ -3,10 +3,6 @@ from os import PathLike
 from pathlib import Path
 from typing import IO, Dict, Mapping, Optional, Union
 
-from .app_server_command import (
-    GLOBAL_APP_SERVER_COMMAND_ENV,
-)
-
 DOTENV_AVAILABLE = True
 try:
     from dotenv import dotenv_values, load_dotenv
@@ -108,25 +104,18 @@ def resolve_env_for_root(
     return env
 
 
-VOICE_ENV_OVERRIDES = (
-    "CODEX_AUTORUNNER_VOICE_ENABLED",
-    "CODEX_AUTORUNNER_VOICE_PROVIDER",
-    "CODEX_AUTORUNNER_VOICE_LATENCY",
-    "CODEX_AUTORUNNER_VOICE_CHUNK_MS",
-    "CODEX_AUTORUNNER_VOICE_SAMPLE_RATE",
-    "CODEX_AUTORUNNER_VOICE_WARN_REMOTE",
-    "CODEX_AUTORUNNER_VOICE_MAX_MS",
-    "CODEX_AUTORUNNER_VOICE_SILENCE_MS",
-    "CODEX_AUTORUNNER_VOICE_MIN_HOLD_MS",
+COMMON_ENV_OVERRIDES = ("CAR_GLOBAL_STATE_ROOT",)
+
+TELEGRAM_ENV_OVERRIDES = (
+    "CAR_TELEGRAM_BOT_TOKEN",
+    "CAR_TELEGRAM_CHAT_ID",
+    "CAR_TELEGRAM_THREAD_ID",
 )
-
-COMMON_ENV_OVERRIDES = (GLOBAL_APP_SERVER_COMMAND_ENV,)
-
-TELEGRAM_ENV_OVERRIDES = ("CAR_OPENCODE_COMMAND",)
 
 DISCORD_ENV_OVERRIDES = (
     "CAR_DISCORD_BOT_TOKEN",
     "CAR_DISCORD_APP_ID",
+    "CAR_DISCORD_WEBHOOK_URL",
 )
 
 
@@ -145,15 +134,6 @@ def collect_env_overrides(
             return False
         return str(value).strip() != ""
 
-    if source.get("CODEX_AUTORUNNER_SKIP_UPDATE_CHECKS") == "1":
-        overrides.append("CODEX_AUTORUNNER_SKIP_UPDATE_CHECKS")
-    if _has_value("CODEX_DISABLE_APP_SERVER_AUTORESTART_FOR_TESTS"):
-        overrides.append("CODEX_DISABLE_APP_SERVER_AUTORESTART_FOR_TESTS")
-    if _has_value("CAR_GLOBAL_STATE_ROOT"):
-        overrides.append("CAR_GLOBAL_STATE_ROOT")
-    for key in VOICE_ENV_OVERRIDES:
-        if _has_value(key):
-            overrides.append(key)
     for key in COMMON_ENV_OVERRIDES:
         if _has_value(key):
             overrides.append(key)

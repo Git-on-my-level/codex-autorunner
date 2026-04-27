@@ -597,6 +597,43 @@ def test_create_turn_recovers_stale_running_execution_before_admission(
     assert stale_after["finished_at"]
 
 
+def test_create_turn_hides_new_running_execution_until_status_transition_commits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = PmaThreadStore(tmp_path / "hub")
+    thread = store.create_thread("codex", tmp_path / "workspace")
+    first_turn = store.create_turn(thread["managed_thread_id"], prompt="first")
+    assert store.mark_turn_finished(first_turn["managed_turn_id"], status="ok")
+
+    observed_running_counts: list[int] = []
+    original = store._transition_thread_status_in_transaction
+
+    def _observing_transition(*args, **kwargs):  # type: ignore[no-untyped-def]
+        with open_orchestration_sqlite(store.hub_root) as conn:
+            count = conn.execute(
+                """
+                SELECT COUNT(*) AS c
+                  FROM orch_thread_executions
+                 WHERE thread_target_id = ?
+                   AND status = 'running'
+                """,
+                (thread["managed_thread_id"],),
+            ).fetchone()
+        observed_running_counts.append(int((count or {})["c"] or 0))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(
+        store,
+        "_transition_thread_status_in_transaction",
+        _observing_transition,
+    )
+
+    created = store.create_turn(thread["managed_thread_id"], prompt="second")
+
+    assert created["status"] == "running"
+    assert observed_running_counts == [0]
+
+
 def test_claim_next_queued_turn_recovers_stale_running_execution(
     tmp_path: Path,
 ) -> None:
@@ -646,6 +683,54 @@ def test_claim_next_queued_turn_recovers_stale_running_execution(
     assert stale_after["status"] == "interrupted"
     assert stale_after["error"] == "stale_running_execution_recovered"
     assert stale_after["finished_at"]
+
+
+def test_claim_next_queued_turn_hides_promoted_execution_until_status_transition_commits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = PmaThreadStore(tmp_path / "hub")
+    thread = store.create_thread("codex", tmp_path / "workspace")
+    first_turn = store.create_turn(thread["managed_thread_id"], prompt="first")
+    queued_turn = store.create_turn(
+        thread["managed_thread_id"],
+        prompt="queued",
+        busy_policy="queue",
+        queue_payload={"request": {"message_text": "queued"}},
+    )
+    assert queued_turn["status"] == "queued"
+    assert store.mark_turn_finished(first_turn["managed_turn_id"], status="ok")
+
+    observed_running_counts: list[int] = []
+    original = store._lifecycle._transition_thread_status_in_transaction
+    assert original is not None
+
+    def _observing_transition(*args, **kwargs):  # type: ignore[no-untyped-def]
+        with open_orchestration_sqlite(store.hub_root) as conn:
+            count = conn.execute(
+                """
+                SELECT COUNT(*) AS c
+                  FROM orch_thread_executions
+                 WHERE thread_target_id = ?
+                   AND status = 'running'
+                """,
+                (thread["managed_thread_id"],),
+            ).fetchone()
+        observed_running_counts.append(int((count or {})["c"] or 0))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(
+        store._lifecycle,
+        "_transition_thread_status_in_transaction",
+        _observing_transition,
+    )
+
+    claimed = store.claim_next_queued_turn(thread["managed_thread_id"])
+
+    assert claimed is not None
+    execution, _payload = claimed
+    assert execution["managed_turn_id"] == queued_turn["managed_turn_id"]
+    assert execution["status"] == "running"
+    assert observed_running_counts == [0]
 
 
 def test_create_turn_recovers_old_running_execution_when_status_turn_matches(
@@ -970,6 +1055,34 @@ def test_mark_turn_finished_does_not_override_interrupted_status(
     assert thread_after["normalized_status"] == "interrupted"
     assert thread_after["status_reason_code"] == "managed_turn_interrupted"
     assert thread_after["status_terminal"] is True
+
+
+def test_set_turn_backend_turn_id_tracks_confirmed_runtime_start(
+    tmp_path: Path,
+) -> None:
+    store = PmaThreadStore(tmp_path / "hub")
+    thread = store.create_thread("codex", tmp_path / "workspace")
+    turn = store.create_turn(thread["managed_thread_id"], prompt="hello")
+
+    store.set_turn_backend_turn_id(
+        turn["managed_turn_id"],
+        "backend-thread-1:1234567890",
+        confirmed_start=False,
+    )
+    provisional = store.get_turn(thread["managed_thread_id"], turn["managed_turn_id"])
+    assert provisional is not None
+    assert provisional["backend_turn_id"] == "backend-thread-1:1234567890"
+    assert provisional["metadata"].get("runtime_started_at") is None
+
+    store.set_turn_backend_turn_id(
+        turn["managed_turn_id"],
+        "backend-turn-1",
+        confirmed_start=True,
+    )
+    confirmed = store.get_turn(thread["managed_thread_id"], turn["managed_turn_id"])
+    assert confirmed is not None
+    assert confirmed["backend_turn_id"] == "backend-turn-1"
+    assert confirmed["metadata"].get("runtime_started_at")
 
 
 def test_concurrent_create_turn_admission_is_atomic(tmp_path: Path) -> None:

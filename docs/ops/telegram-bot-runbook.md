@@ -11,8 +11,7 @@ through CAR's orchestration-managed chat runtime.
   - `CAR_TELEGRAM_BOT_TOKEN`
   - `CAR_TELEGRAM_CHAT_ID`
   - `OPENAI_API_KEY` (or the Codex-required key)
-  - `CAR_TELEGRAM_APP_SERVER_COMMAND` (optional full command, e.g. `/opt/homebrew/bin/codex app-server`)
-- If the app-server command is a script (ex: Node-based `codex`), prefer an absolute path so the bot can prepend its directory to `PATH` under launchd.
+- If the app-server command is a script (ex: Node-based `codex`), prefer an absolute path in `telegram_bot.app_server_command` so the bot can prepend its directory to `PATH` under launchd.
 - Configure `telegram_bot` in `codex-autorunner.yml` or `.codex-autorunner/config.yml`.
 - Ensure `telegram_bot.allowed_user_ids` includes your Telegram user id.
 - `telegram_bot.shell.enabled` is off by default; set it to `true` to enable `!<cmd>` support.
@@ -93,7 +92,7 @@ through CAR's orchestration-managed chat runtime.
   - Check `telegram.allowlist.denied` events for chat/user ids.
 - Turns failing:
   - Check `telegram.turn.failed` and runtime logs for the selected backend.
-  - Verify the configured backend runtime is installed and healthy. For Codex specifically, confirm the app-server is available via `telegram_bot.app_server_command` or `CAR_TELEGRAM_APP_SERVER_COMMAND`. For Hermes, also verify `hermes acp --help` and review `docs/ops/hermes-acp.md`.
+  - Verify the configured backend runtime is installed and healthy. For Codex specifically, confirm the app-server is available via `telegram_bot.app_server_command`. For Hermes, also verify `hermes acp --help` and review `docs/ops/hermes-acp.md`.
   - If routing looks wrong, inspect orchestration bindings first; ordinary turns
     should not depend on Telegram-local thread identity as the authority.
 - Turns hanging:

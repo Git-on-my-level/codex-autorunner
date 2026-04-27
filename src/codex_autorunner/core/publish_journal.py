@@ -224,6 +224,14 @@ class PublishJournalStore:
                 refreshed = self._load_operation_row(conn, normalized_operation_id)
         return _operation_from_row(refreshed) if refreshed is not None else None
 
+    def get_operation(self, operation_id: str) -> Optional[PublishOperation]:
+        normalized_operation_id = _normalize_text(operation_id)
+        if normalized_operation_id is None:
+            return None
+        with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            row = self._load_operation_row(conn, normalized_operation_id)
+        return _operation_from_row(row) if row is not None else None
+
     def claim_pending_operations(
         self,
         *,

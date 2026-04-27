@@ -48,6 +48,9 @@ from codex_autorunner.integrations.chat.models import (
     ChatReplyInfo,
     ChatThreadRef,
 )
+from codex_autorunner.integrations.discord import (
+    document_browser as discord_document_browser_module,
+)
 from codex_autorunner.integrations.discord import message_turns as discord_message_turns
 from codex_autorunner.integrations.discord import (
     picker_helpers as discord_picker_helpers_module,
@@ -5782,6 +5785,168 @@ async def test_car_tickets_returns_ticket_browser_components(tmp_path: Path) -> 
 
 
 @pytest.mark.anyio
+async def test_car_tickets_defers_before_slow_browser_followup_delivery(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    ticket_dir = workspace / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True)
+    (ticket_dir / "TICKET-001.md").write_text(
+        '---\nticket_id: "tkt_discord_slow_browser"\nagent: codex\ntitle: Slow browser\ndone: false\n---\n\nBody\n',
+        encoding="utf-8",
+    )
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([_interaction(name="tickets", options=[])])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    browser_started = asyncio.Event()
+    release_browser = asyncio.Event()
+    original_handle_tickets = service._handle_tickets
+
+    async def _slow_handle_tickets(*args: Any, **kwargs: Any) -> None:
+        browser_started.set()
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert rest.followup_messages == []
+        await release_browser.wait()
+        await original_handle_tickets(*args, **kwargs)
+
+    service._handle_tickets = _slow_handle_tickets  # type: ignore[assignment]
+    dispatch_task = asyncio.create_task(
+        service._on_dispatch(
+            "INTERACTION_CREATE",
+            _interaction(name="tickets", options=[]),
+        )
+    )
+
+    try:
+        await asyncio.wait_for(dispatch_task, timeout=3.0)
+        await asyncio.wait_for(browser_started.wait(), timeout=3.0)
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert rest.followup_messages == []
+
+        release_browser.set()
+        await asyncio.wait_for(service._command_runner.shutdown(), timeout=3.0)
+
+        assert len(rest.followup_messages) == 1
+        data = rest.followup_messages[0]["payload"]
+        assert data["content"].startswith("Browse tickets")
+        assert "TICKET-001.md - Slow browser" in data["content"]
+        assert data["components"][0]["components"][0]["custom_id"] == "tickets_select"
+    finally:
+        if not dispatch_task.done():
+            dispatch_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await dispatch_task
+        await service._shutdown()
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_tickets_offloads_initial_ticket_enumeration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    ticket_dir = workspace / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True)
+    (ticket_dir / "TICKET-001.md").write_text(
+        '---\nticket_id: "tkt_discord_offload_initial"\nagent: codex\ntitle: Slow enumerate\ndone: false\n---\n\nBody\n',
+        encoding="utf-8",
+    )
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    loop = asyncio.get_running_loop()
+    browser_started = asyncio.Event()
+    release_browser = asyncio.Event()
+    original_list_document_browser_items = (
+        discord_document_browser_module.list_document_browser_items
+    )
+
+    def _slow_list_document_browser_items(
+        repo_root: Path,
+        source: str,
+        *,
+        query: str = "",
+    ) -> Any:
+        if source == "tickets":
+            loop.call_soon_threadsafe(browser_started.set)
+            asyncio.run_coroutine_threadsafe(release_browser.wait(), loop).result(
+                timeout=1.0
+            )
+        return original_list_document_browser_items(repo_root, source, query=query)
+
+    monkeypatch.setattr(
+        discord_document_browser_module,
+        "list_document_browser_items",
+        _slow_list_document_browser_items,
+    )
+
+    dispatch_task = asyncio.create_task(
+        service._on_dispatch(
+            "INTERACTION_CREATE",
+            _interaction(name="tickets", options=[]),
+        )
+    )
+
+    try:
+        await asyncio.wait_for(dispatch_task, timeout=3.0)
+        await asyncio.wait_for(browser_started.wait(), timeout=3.0)
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert rest.followup_messages == []
+
+        release_browser.set()
+        await asyncio.wait_for(service._command_runner.shutdown(), timeout=3.0)
+
+        assert len(rest.followup_messages) == 1
+        payload = rest.followup_messages[0]["payload"]
+        assert payload["content"].startswith("Browse tickets")
+        assert "TICKET-001.md - Slow enumerate" in payload["content"]
+        assert payload["components"][0]["components"][0]["custom_id"] == (
+            "tickets_select"
+        )
+    finally:
+        if not dispatch_task.done():
+            dispatch_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await dispatch_task
+        await service._shutdown()
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_car_tickets_uses_short_document_ids_for_long_paths(
     tmp_path: Path,
 ) -> None:
@@ -5904,6 +6069,106 @@ async def test_car_tickets_search_filters_browser_list_and_selects_document(
         assert "Part 1/1" in selected_data["content"]
         assert "Body" in selected_data["content"]
     finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_ticket_browser_page_component_offloads_ticket_enumeration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    ticket_dir = workspace / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True)
+    for index in range(1, 12):
+        (ticket_dir / f"TICKET-{index:03d}.md").write_text(
+            "---\n"
+            f'ticket_id: "tkt_discord_page_{index}"\n'
+            "agent: codex\n"
+            f"title: Ticket {index}\n"
+            "done: false\n"
+            "---\n\n"
+            f"Body {index}\n",
+            encoding="utf-8",
+        )
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([_interaction(name="tickets", options=[])])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.followup_messages) == 1
+        assert "Page 1/2" in rest.followup_messages[0]["payload"]["content"]
+
+        rest.interaction_responses.clear()
+        rest.edited_original_interaction_responses.clear()
+
+        loop = asyncio.get_running_loop()
+        browser_started = asyncio.Event()
+        release_browser = asyncio.Event()
+        original_list_document_browser_items = (
+            discord_document_browser_module.list_document_browser_items
+        )
+
+        def _slow_list_document_browser_items(
+            repo_root: Path,
+            source: str,
+            *,
+            query: str = "",
+        ) -> Any:
+            if source == "tickets":
+                loop.call_soon_threadsafe(browser_started.set)
+                asyncio.run_coroutine_threadsafe(release_browser.wait(), loop).result(
+                    timeout=1.0
+                )
+            return original_list_document_browser_items(repo_root, source, query=query)
+
+        monkeypatch.setattr(
+            discord_document_browser_module,
+            "list_document_browser_items",
+            _slow_list_document_browser_items,
+        )
+
+        dispatch_task = asyncio.create_task(
+            service._on_dispatch(
+                "INTERACTION_CREATE",
+                _component_interaction(custom_id="tickets_page:1"),
+            )
+        )
+
+        await asyncio.wait_for(dispatch_task, timeout=3.0)
+        await asyncio.wait_for(browser_started.wait(), timeout=3.0)
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 6
+        assert rest.edited_original_interaction_responses == []
+
+        release_browser.set()
+        await asyncio.wait_for(service._command_runner.shutdown(), timeout=3.0)
+
+        assert len(rest.edited_original_interaction_responses) == 1
+        payload = rest.edited_original_interaction_responses[0]["payload"]
+        assert "Page 2/2" in payload["content"]
+        assert "TICKET-011.md - Ticket 11" in payload["content"]
+        assert payload["components"][0]["components"][0]["custom_id"] == (
+            "tickets_select"
+        )
+    finally:
+        await service._shutdown()
         await store.close()
 
 

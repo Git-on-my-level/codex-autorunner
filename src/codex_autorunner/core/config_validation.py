@@ -1264,7 +1264,7 @@ def _validate_telegram_bot_config(cfg: Dict[str, Any]) -> None:
             debug_cfg.get("prefix_context"), bool
         ):
             raise ConfigError("telegram_bot.debug.prefix_context must be boolean")
-    for key in ("bot_token_env", "chat_id_env", "app_server_command_env"):
+    for key in ("bot_token_env", "chat_id_env"):
         if key in telegram_cfg and not isinstance(telegram_cfg.get(key), str):
             raise ConfigError(f"telegram_bot.{key} must be a string")
     for key in ("allowed_chat_ids", "allowed_user_ids"):

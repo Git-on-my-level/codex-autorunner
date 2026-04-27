@@ -27,10 +27,12 @@ from codex_autorunner.core.orchestration import (
     legacy_backfill_gate as legacy_backfill_gate_module,
 )
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
+from codex_autorunner.core.pma_queue import PmaQueue
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web import app as web_app_module
 from codex_autorunner.surfaces.web import app_state as web_app_state_module
 from tests.conftest import write_test_config
+from tests.pma_support import _enable_pma
 from tests.test_hub_app_context import _stub_opencode_supervisor
 
 _APP_PY = Path(web_app_module.__file__).resolve()
@@ -392,6 +394,37 @@ def test_health_reports_deferred_startup_complete_after_lifespan(
         body = response.json()
         assert body["hub_startup_phase"] == HUB_STARTUP_STARTED
         assert body["hub_deferred_startup_complete"] is True
+
+
+def test_deferred_startup_recovers_non_default_pma_lanes(
+    hub_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_opencode_supervisor(monkeypatch)
+    _enable_pma(hub_env.hub_root)
+
+    queue = PmaQueue(hub_env.hub_root)
+    queue.enqueue_sync(
+        "discord:channel-1",
+        "wake-up-1646",
+        {"message": "resume wake-up delivery"},
+    )
+
+    app = create_hub_app(hub_env.hub_root)
+    started_lanes: list[str] = []
+    started = threading.Event()
+
+    async def _record_start(_app: object, lane_id: str) -> None:
+        started_lanes.append(lane_id)
+        if lane_id == "discord:channel-1":
+            started.set()
+
+    app.state.pma_lane_worker_start = _record_start
+
+    with TestClient(app):
+        assert started.wait(timeout=10.0), "startup should recover queued PMA lanes"
+
+    assert "pma:default" in started_lanes
+    assert "discord:channel-1" in started_lanes
 
 
 def test_control_plane_error_codes_map_to_distinct_http_statuses() -> None:

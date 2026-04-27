@@ -85,14 +85,6 @@ jobs:
       - name: Install Python deps
         run: pip install -e .[dev]
 
-      - name: Run Discord interaction stress coverage
-        run: >
-          python -m pytest
-          tests/integrations/discord/test_reliability.py
-          tests/integrations/discord/test_interaction_runtime_chaos.py
-          tests/integrations/discord/test_interaction_runtime_contracts.py
-          -q
-
       - name: Run core lane checks
         run: ./scripts/check.sh --lane core
 
@@ -138,14 +130,6 @@ jobs:
           done
           echo "pnpm install failed after 3 attempts" >&2
           exit 1
-
-      - name: Run Discord interaction stress coverage
-        run: >
-          python -m pytest
-          tests/integrations/discord/test_reliability.py
-          tests/integrations/discord/test_interaction_runtime_chaos.py
-          tests/integrations/discord/test_interaction_runtime_contracts.py
-          -q
 
       - name: Run web-ui lane checks
         run: ./scripts/check.sh --lane web-ui
@@ -228,14 +212,6 @@ jobs:
           done
           echo "pnpm install failed after 3 attempts" >&2
           exit 1
-
-      - name: Run Discord interaction stress coverage
-        run: >
-          python -m pytest
-          tests/integrations/discord/test_reliability.py
-          tests/integrations/discord/test_interaction_runtime_chaos.py
-          tests/integrations/discord/test_interaction_runtime_contracts.py
-          -q
 
       - name: Run aggregate full checks
         run: ./scripts/check.sh --full
