@@ -998,13 +998,31 @@ def build_managed_thread_runtime_routes(
                         str((turn or {}).get("status") or "").strip().lower()
                         == "running"
                     ):
+                        detail = MANAGED_THREAD_PUBLIC_EXECUTION_ERROR
+                        try:
+                            service.record_execution_result(
+                                managed_thread_id,
+                                managed_turn_id,
+                                status="error",
+                                assistant_text="",
+                                error=detail,
+                                backend_turn_id=None,
+                                transcript_turn_id=None,
+                            )
+                        except KeyError:
+                            logger.warning(
+                                "Failed to record error for cancelled managed thread turn "
+                                "(managed_thread_id=%s, managed_turn_id=%s)",
+                                managed_thread_id,
+                                managed_turn_id,
+                            )
                         await notify_managed_thread_terminal_transition(
                             request,
                             thread=thread,
                             managed_thread_id=managed_thread_id,
                             managed_turn_id=managed_turn_id,
                             to_state="failed",
-                            reason=MANAGED_THREAD_PUBLIC_EXECUTION_ERROR,
+                            reason=detail,
                         )
                     raise
 
