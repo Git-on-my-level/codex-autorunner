@@ -507,18 +507,24 @@ async def test_managed_thread_queue_worker_persists_delivery_before_adapter_io(
 
 
 @pytest.mark.anyio
-async def test_managed_thread_queue_worker_cancellation_after_finalization_records_retry(
+async def test_managed_thread_queue_worker_cancellation_after_finalization_records_retry_and_continues(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    started = _build_started_execution(tmp_path)
+    first = _build_started_execution(tmp_path)
+    second = _replace_started_execution(
+        first,
+        execution_id="exec-2",
+        message_text="second queued message",
+    )
     begin_calls = 0
     recorded_outcomes: list[Any] = []
 
     async def _fake_finalize(
         **kwargs: Any,
     ) -> managed_thread_turns_module.ManagedThreadFinalizationResult:
-        _ = kwargs
+        started = kwargs["started"]
         return managed_thread_turns_module.ManagedThreadFinalizationResult(
             status="ok",
             assistant_text="Final answer",
@@ -534,29 +540,32 @@ async def test_managed_thread_queue_worker_cancellation_after_finalization_recor
     ) -> Optional[RuntimeThreadExecution]:
         nonlocal begin_calls
         _ = orchestration_service, managed_thread_id
-        if begin_calls == 0:
-            begin_calls += 1
-            return started
+        begin_calls += 1
+        if begin_calls == 1:
+            return first
+        if begin_calls == 2:
+            return second
         return None
 
     class _Engine:
         def __init__(self) -> None:
-            self._record: Any = None
+            self._records: dict[str, Any] = {}
 
         def create_intent(self, intent: Any) -> Any:
-            self._record = SimpleNamespace(
+            record = SimpleNamespace(
                 delivery_id=intent.delivery_id,
                 managed_thread_id=intent.managed_thread_id,
                 managed_turn_id=intent.managed_turn_id,
                 target=intent.target,
                 envelope=intent.envelope,
             )
-            return SimpleNamespace(record=self._record, inserted=True)
+            self._records[record.delivery_id] = record
+            return SimpleNamespace(record=record, inserted=True)
 
         def claim_delivery(self, delivery_id: str, *, now: Any = None) -> Any:
             _ = delivery_id, now
             return SimpleNamespace(
-                record=self._record,
+                record=self._records[delivery_id],
                 claim_token="claim-1",
             )
 
@@ -568,18 +577,26 @@ async def test_managed_thread_queue_worker_cancellation_after_finalization_recor
             result: Any,
         ) -> Any:
             recorded_outcomes.append((delivery_id, claim_token, result.outcome))
-            return self._record
+            return self._records[delivery_id]
 
     class _Adapter:
         @property
         def adapter_key(self) -> str:
             return "test"
 
+        def __init__(self) -> None:
+            self.calls = 0
+
         async def deliver_managed_thread_record(
             self, record: Any, *, claim: Any
         ) -> Any:
             _ = record, claim
-            raise asyncio.CancelledError()
+            self.calls += 1
+            if self.calls == 1:
+                raise asyncio.CancelledError()
+            return managed_thread_turns_module.ManagedThreadDeliveryAttemptResult(
+                outcome=managed_thread_turns_module.ManagedThreadDeliveryOutcome.DELIVERED
+            )
 
     monkeypatch.setattr(
         managed_thread_turns_module,
@@ -610,6 +627,7 @@ async def test_managed_thread_queue_worker_cancellation_after_finalization_recor
         turn_preview="preview",
     )
 
+    caplog.set_level(logging.INFO)
     coordinator.ensure_queue_worker(
         task_map=task_map,
         managed_thread_id="thread-1",
@@ -628,18 +646,25 @@ async def test_managed_thread_queue_worker_cancellation_after_finalization_recor
                     ),
                     transport_target={"chat_id": -1001, "thread_id": 101},
                 ),
-            )
+            ),
         ),
         begin_next_execution=_fake_begin_next,
     )
 
-    with pytest.raises(asyncio.CancelledError):
-        await asyncio.gather(*spawned_tasks)
+    await asyncio.gather(*spawned_tasks)
 
-    assert len(recorded_outcomes) == 1
+    assert len(recorded_outcomes) == 2
     assert recorded_outcomes[0][1] == "claim-1"
     assert recorded_outcomes[0][2] is (
         managed_thread_turns_module.ManagedThreadDeliveryOutcome.RETRY
+    )
+    assert recorded_outcomes[1][1] == "claim-1"
+    assert recorded_outcomes[1][2] is (
+        managed_thread_turns_module.ManagedThreadDeliveryOutcome.DELIVERED
+    )
+    assert (
+        "chat.managed_thread.queue_worker_delivery_cancelled_post_finalization"
+        in caplog.text
     )
     assert task_map == {}
 

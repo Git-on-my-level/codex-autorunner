@@ -1528,6 +1528,146 @@ def test_send_message_defaults_to_terminal_followup_subscription(hub_env) -> Non
 
 
 @pytest.mark.anyio
+async def test_send_message_defer_execution_drains_five_rapid_messages_in_order(
+    hub_env,
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    blockers = [asyncio.Event() for _ in range(5)]
+    prompts = [f"rapid message {index}" for index in range(1, 6)]
+
+    class FakeTurnHandle:
+        def __init__(self, turn_id: str, blocker: asyncio.Event, text: str) -> None:
+            self.turn_id = turn_id
+            self._blocker = blocker
+            self._text = text
+
+        async def wait(self, timeout=None):
+            _ = timeout
+            await self._blocker.wait()
+            return type(
+                "Result",
+                (),
+                {
+                    "agent_messages": [self._text],
+                    "raw_events": [],
+                    "errors": [],
+                },
+            )()
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.turn_start_calls: list[str] = []
+            self._turn_index = 0
+
+        async def thread_resume(self, thread_id: str) -> None:
+            _ = thread_id
+
+        async def thread_start(self, root: str) -> dict[str, str]:
+            _ = root
+            return {"id": "backend-thread-1"}
+
+        async def turn_start(
+            self,
+            thread_id: str,
+            prompt: str,
+            approval_policy: str,
+            sandbox_policy: str,
+            **turn_kwargs,
+        ):
+            _ = thread_id, approval_policy, sandbox_policy, turn_kwargs
+            turn_index = self._turn_index
+            self._turn_index += 1
+            self.turn_start_calls.append(prompt)
+            return FakeTurnHandle(
+                f"backend-turn-{turn_index + 1}",
+                blockers[turn_index],
+                f"assistant-output-{turn_index + 1}",
+            )
+
+        async def turn_interrupt(
+            self, turn_id: str, *, thread_id: str | None = None
+        ) -> None:
+            _ = turn_id, thread_id
+            raise RuntimeError("backend interrupt exploded")
+
+    fake_supervisor = FakeSupervisor(FakeClient())
+    app.state.app_server_supervisor = fake_supervisor
+    app.state.app_server_events = object()
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
+        create_resp = await client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", **_repo_owner(hub_env)},
+        )
+        assert create_resp.status_code == 200
+        managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+        payloads: list[dict[str, object]] = []
+        active_turn_id: object | None = None
+        for index, prompt in enumerate(prompts):
+            response = await client.post(
+                f"/hub/pma/threads/{managed_thread_id}/messages",
+                json={"message": prompt, "defer_execution": True},
+            )
+            assert response.status_code == 200
+            payload = response.json()
+            payloads.append(payload)
+            if index == 0:
+                active_turn_id = payload["managed_turn_id"]
+                assert payload["send_state"] == "accepted"
+                assert payload["execution_state"] == "running"
+            else:
+                assert payload["send_state"] == "queued"
+                assert payload["execution_state"] == "queued"
+                assert payload["queue_depth"] == index
+                assert payload["active_managed_turn_id"] == active_turn_id
+
+        store = PmaThreadStore(hub_env.hub_root)
+        for index, payload in enumerate(payloads):
+            turn = store.get_turn(managed_thread_id, str(payload["managed_turn_id"]))
+            assert turn is not None
+            assert turn["status"] == ("running" if index == 0 else "queued")
+
+        for index, payload in enumerate(payloads):
+            blockers[index].set()
+            managed_turn_id = str(payload["managed_turn_id"])
+            with anyio.fail_after(2):
+                while True:
+                    turn = store.get_turn(managed_thread_id, managed_turn_id)
+                    if turn is not None and turn.get("status") == "ok":
+                        break
+                    await anyio.sleep(0.05)
+            if index < len(payloads) - 1:
+                next_turn_id = str(payloads[index + 1]["managed_turn_id"])
+                with anyio.fail_after(2):
+                    while True:
+                        next_turn = store.get_turn(managed_thread_id, next_turn_id)
+                        if (
+                            next_turn is not None
+                            and next_turn.get("status") == "running"
+                        ):
+                            break
+                        await anyio.sleep(0.05)
+
+    store = PmaThreadStore(hub_env.hub_root)
+    for index, payload in enumerate(payloads, start=1):
+        turn = store.get_turn(managed_thread_id, str(payload["managed_turn_id"]))
+        assert turn is not None
+        assert turn["status"] == "ok"
+        assert turn["assistant_text"] == f"assistant-output-{index}"
+        assert turn["backend_turn_id"] == f"backend-turn-{index}"
+    assert store.get_running_turn(managed_thread_id) is None
+    assert store.get_queue_depth(managed_thread_id) == 0
+    assert len(fake_supervisor.client.turn_start_calls) == 5
+    for prompt, runtime_prompt in zip(prompts, fake_supervisor.client.turn_start_calls):
+        assert prompt in runtime_prompt
+
+
+@pytest.mark.anyio
 async def test_send_message_defer_execution_completes_in_background(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
