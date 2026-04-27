@@ -16,6 +16,7 @@ def create_thread_target_with_profile_fallback(
     backend_thread_id: Optional[str] = None,
     context_profile: Optional[Any] = None,
     metadata: Optional[dict[str, Any]] = None,
+    key_error: Optional[KeyError] = None,
 ) -> Any:
     agent_profile = (
         str((metadata or {}).get("agent_profile") or "").strip().lower()
@@ -23,7 +24,9 @@ def create_thread_target_with_profile_fallback(
         else ""
     )
     if not agent_profile:
-        raise
+        if key_error is not None:
+            raise key_error
+        raise KeyError("agent_profile")
     return service.thread_store.create_thread_target(
         agent_id,
         workspace_root,

@@ -61,16 +61,7 @@ async def handle_car_update(
     from ..service import log_event
 
     def _build_update_target_components() -> list[dict[str, Any]]:
-        try:
-            target_definitions = _dynamic_update_target_definitions(service)
-        except Exception as exc:
-            log_event(
-                service._logger,
-                logging.WARNING,
-                "discord.update.target_definitions_failed",
-                exc=exc,
-            )
-            target_definitions = None
+        target_definitions = _dynamic_update_target_definitions(service)
         return [
             build_update_target_picker(
                 custom_id=UPDATE_TARGET_SELECT_ID,
