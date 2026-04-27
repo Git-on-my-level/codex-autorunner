@@ -20,9 +20,9 @@ class UsageError(Exception):
 
 def _default_codex_home() -> Path:
     # CODEX_HOME is deprecated; prefer CAR_GLOBAL_STATE_ROOT.
-    val = os.environ.get("CODEX_HOME")
+    val = os.environ.get("CAR_GLOBAL_STATE_ROOT")
     if not val:
-        val = os.environ.get("CAR_GLOBAL_STATE_ROOT", "~/.codex-autorunner")
+        val = os.environ.get("CODEX_HOME", "~/.codex-autorunner")
     return Path(val).expanduser()
 
 

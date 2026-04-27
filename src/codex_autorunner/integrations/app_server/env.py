@@ -62,8 +62,8 @@ def seed_codex_home(
 ) -> None:
     logger = logger or __import__("logging").getLogger(__name__)
     source_root = Path(
-        os.environ.get("CODEX_HOME")
-        or os.environ.get("CAR_GLOBAL_STATE_ROOT", "~/.codex")
+        os.environ.get("CAR_GLOBAL_STATE_ROOT")
+        or os.environ.get("CODEX_HOME", "~/.codex")
     ).expanduser()
     if source_root.resolve() == codex_home.resolve():
         return
