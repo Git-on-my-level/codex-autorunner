@@ -1,13 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Mapping, Optional, Protocol, cast
+from typing import Iterable, Mapping, Optional, Protocol
 
-from ...runtime_capabilities import (
-    RUNTIME_CAPABILITIES,
-    RuntimeCapability,
-    normalize_runtime_capabilities,
-)
+from ...runtime_capabilities import RuntimeCapability, normalize_runtime_capabilities
 from .models import (
     AgentDefinition,
     NativeTargetDefinition,
@@ -24,7 +20,17 @@ class RuntimeAgentDescriptor(Protocol):
 
 
 KNOWN_CAPABILITIES: frozenset[TargetCapability] = frozenset(
-    cast(TargetCapability, capability) for capability in RUNTIME_CAPABILITIES
+    {
+        "durable_threads",
+        "message_turns",
+        "interrupt",
+        "active_thread_discovery",
+        "transcript_history",
+        "review",
+        "model_listing",
+        "event_streaming",
+        "approvals",
+    }
 )
 
 
@@ -33,9 +39,7 @@ def map_agent_capabilities(
 ) -> frozenset[TargetCapability]:
     normalized = normalize_runtime_capabilities(capabilities)
     return frozenset(
-        cast(TargetCapability, capability)
-        for capability in normalized
-        if capability in KNOWN_CAPABILITIES
+        capability for capability in KNOWN_CAPABILITIES if capability in normalized
     )
 
 

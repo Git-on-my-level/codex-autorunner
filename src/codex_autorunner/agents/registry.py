@@ -10,6 +10,7 @@ from typing import Any, Callable, Iterable, Optional, cast
 from ..core.agent_config import AgentConfig, resolve_agent_target_from_agents
 from ..core.config import load_hub_config, load_repo_config
 from ..core.config_contract import ConfigError
+from ..core.orchestration.catalog import KNOWN_CAPABILITIES
 from ..plugin_api import CAR_AGENT_ENTRYPOINT_GROUP, CAR_PLUGIN_API_VERSION
 from .aliased_harness import AliasedAgentHarness
 from .base import AgentHarness
@@ -56,10 +57,21 @@ class AgentDescriptor:
     plugin_api_version: int = CAR_PLUGIN_API_VERSION
 
     def __post_init__(self) -> None:
+        normalized_capabilities = normalize_agent_capabilities(self.capabilities)
+        unknown_capabilities = {
+            capability
+            for capability in normalized_capabilities
+            if capability not in KNOWN_CAPABILITIES
+        }
+        if unknown_capabilities:
+            raise ValueError(
+                "Unknown runtime capabilities: "
+                + ", ".join(sorted(unknown_capabilities))
+            )
         object.__setattr__(
             self,
             "capabilities",
-            normalize_runtime_capabilities(self.capabilities),
+            normalized_capabilities,
         )
         runtime_kind = str(self.runtime_kind or self.id or "").strip().lower()
         object.__setattr__(
@@ -102,6 +114,12 @@ class AgentExecutionTarget:
     runtime_agent_id: str
     runtime_profile: Optional[str]
     resolution_kind: str
+
+
+def normalize_agent_capabilities(
+    capabilities: Iterable[str],
+) -> frozenset[RuntimeCapability]:
+    return normalize_runtime_capabilities(capabilities)
 
 
 def _normalize_optional_text(value: object) -> Optional[str]:
@@ -837,21 +855,14 @@ def _load_agent_plugins() -> dict[str, AgentDescriptor]:
                 api_version_raw,
             )
             continue
-        if api_version > CAR_PLUGIN_API_VERSION:
+        if api_version != CAR_PLUGIN_API_VERSION:
             _logger.warning(
-                "Ignoring agent plugin %s (api_version=%s) requires newer core (%s)",
+                "Ignoring agent plugin %s: api_version=%s does not match current core (%s)",
                 agent_id,
                 api_version,
                 CAR_PLUGIN_API_VERSION,
             )
             continue
-        if api_version < CAR_PLUGIN_API_VERSION:
-            _logger.info(
-                "Loaded agent plugin %s with older api_version=%s (current=%s)",
-                agent_id,
-                api_version,
-                CAR_PLUGIN_API_VERSION,
-            )
 
         if agent_id in _BUILTIN_AGENTS:
             _logger.warning(
@@ -930,7 +941,7 @@ def has_capability(agent_id: str, capability: str, context: Any = None) -> bool:
     descriptor = get_agent_descriptor(agent_id, context)
     if descriptor is None:
         return False
-    normalized = normalize_runtime_capabilities([capability])
+    normalized = normalize_agent_capabilities([capability])
     if not normalized:
         return False
     return next(iter(normalized)) in descriptor.capabilities
@@ -948,6 +959,7 @@ __all__ = [
     "get_available_agents",
     "get_registered_agents",
     "has_capability",
+    "normalize_agent_capabilities",
     "reload_agents",
     "resolve_agent_execution_target",
     "resolve_agent_runtime",

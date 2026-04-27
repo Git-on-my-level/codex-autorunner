@@ -4,7 +4,6 @@ from dataclasses import dataclass, field
 from typing import Any, NewType, Optional
 
 from ..runtime_capabilities import (
-    RUNTIME_CAPABILITIES,
     RuntimeCapability,
     normalize_runtime_capabilities,
 )
@@ -77,7 +76,6 @@ __all__ = [
     "ConversationRef",
     "ModelCatalog",
     "ModelSpec",
-    "RUNTIME_CAPABILITIES",
     "RuntimeCapability",
     "RuntimeCapabilityReport",
     "TerminalTurnResult",

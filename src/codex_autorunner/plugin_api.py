@@ -10,7 +10,7 @@ Notes:
   `CAR_PLUGIN_API_VERSION`.
 """
 
-CAR_PLUGIN_API_VERSION = 1
+CAR_PLUGIN_API_VERSION = 2
 
 # Entry point groups (Python packaging entry points).
 #

@@ -1,51 +1,53 @@
 # Adding a New Agent to Codex Autorunner
 
-This guide explains how to implement and wire a new agent backend in CAR.
-`docs/plugin-api.md` is the canonical spec for the public plugin contract.
+This guide explains how to add a new AI agent to Codex Autorunner (CAR).
 
 ## Overview
 
-CAR supports multiple AI agents through a registry and capability model. Each
-agent integration typically includes:
-
-- **Harness**: low-level client wrapper for the agent protocol.
-- **Supervisor**: process or client lifecycle manager when the runtime is not
-  purely in-process.
-- **Registry/config wiring**: in-tree registration and config defaults when you
-  are modifying CAR itself.
+CAR supports multiple AI agents through a registry and capability model. Each agent is integrated via:
+- **Harness**: Low-level client wrapper for agent's protocol
+- **Supervisor**: Manages agent process lifecycle (for agents that run as subprocesses)
+- **Registry**: Central registration with capabilities
 
 Reference points in-tree today:
 
-- **Codex**: full-featured repo/worktree runtime.
-- **OpenCode**: full-featured repo/worktree runtime without approvals.
-- **Hermes**: ACP-backed repo/worktree runtime with durable threads,
-  approvals, and event streaming.
+- **Codex**: full-featured repo/worktree runtime
+- **OpenCode**: full-featured repo/worktree runtime without approvals
+- **Hermes**: ACP-backed repo/worktree runtime with durable threads, approvals,
+  and event streaming, but without active-thread discovery,
+  review/model-listing/transcript-history
 - **ZeroClaw**: narrower `agent_workspace` runtime with detect-only durability
-  requirements.
+  requirements
 
 ## Choose The Right Resource Model
 
-Decide what CAR is managing before you start coding. For the contract and
-resource-model rules, see [plugin-api.md](./plugin-api.md#choose-the-right-car-resource)
-and [plugin-api.md](./plugin-api.md#durable-thread-contract).
+Before writing code, decide what CAR is actually managing:
 
-Hermes is the reference example of a repo/worktree-backed runtime that exposes
-its own durable thread API. ZeroClaw is the reference example of the narrower
-`agent_workspace` path.
+- Use repo semantics when the agent works against project code in a repo/worktree.
+- Use `agent_workspace` semantics when the durable thing is runtime state rather
+  than project code.
+
+For the full resource-model contract, including first-class CAR-managed `agent_workspace`
+semantics and the ZeroClaw durability caveat, see `docs/plugin-api.md`.
 
 ## Prerequisites
 
-Before adding a new agent, make sure:
+Before adding a new agent, ensure:
+1. The agent binary/CLI is available and callable
+2. The agent has either a documented protocol/API or a CAR-proven
+   `agent_workspace` contract for durable state
+3. The agent supports durable thread/session operations: create, resume, and execute turns
+4. You have tested the agent works independently of CAR
 
-1. The agent binary or API is available and callable.
-2. The agent satisfies CAR's durable-thread contract, or CAR can prove the
-   narrower first-class CAR-managed `agent_workspace` contract.
-3. You have validated the runtime outside CAR first.
+For ACP-backed runtimes like Hermes, verify the runtime exposes the ACP command
+surface CAR depends on before wiring it in. For Hermes that means
+`hermes acp --help` works, while durable session persistence remains Hermes'
+native responsibility under shared `HERMES_HOME`.
 
-For the contract details and capability vocabulary, use
-[plugin-api.md](./plugin-api.md#durable-thread-contract),
-[plugin-api.md](./plugin-api.md#single-session-runtimes-out-of-scope), and
-[plugin-api.md](./plugin-api.md#capability-model).
+**Important**: CAR detects configured runtimes; it does not install them.
+Single-session or volatile wrapper-only runtimes are out of scope for CAR v1
+orchestration. See `docs/plugin-api.md` for the durable-thread contract and the
+single-session non-goals.
 
 ## Step 1: Create the Harness
 
@@ -58,8 +60,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
 from ..base import AgentHarness
-from ..types import AgentId, ConversationRef, ModelCatalog, ModelSpec, TurnRef
-
+from ..types import AgentId, ConversationRef, ModelCatalog, TurnRef
 
 class MyAgentHarness(AgentHarness):
     agent_id: AgentId = AgentId("myagent")
@@ -69,9 +70,11 @@ class MyAgentHarness(AgentHarness):
         self._supervisor = supervisor
 
     async def ensure_ready(self, workspace_root: Path) -> None:
+        """Ensure agent is ready to use."""
         await self._supervisor.get_client(workspace_root)
 
     async def model_catalog(self, workspace_root: Path) -> ModelCatalog:
+        """Get available models from the agent."""
         client = await self._supervisor.get_client(workspace_root)
         result = await client.get_models()
         models = [ModelSpec(...) for model in result["models"]]
@@ -80,18 +83,21 @@ class MyAgentHarness(AgentHarness):
     async def new_conversation(
         self, workspace_root: Path, title: Optional[str] = None
     ) -> ConversationRef:
+        """Create a new conversation/thread."""
         client = await self._supervisor.get_client(workspace_root)
         result = await client.create_conversation(title=title)
         return ConversationRef(agent=self.agent_id, id=result["id"])
 
     async def list_conversations(self, workspace_root: Path) -> list[ConversationRef]:
+        """List existing conversations."""
         client = await self._supervisor.get_client(workspace_root)
         result = await client.list_conversations()
-        return [ConversationRef(agent=self.agent_id, id=item["id"]) for item in result]
+        return [ConversationRef(agent=self.agent_id, id=c["id"]) for c in result]
 
     async def resume_conversation(
         self, workspace_root: Path, conversation_id: str
     ) -> ConversationRef:
+        """Resume an existing conversation."""
         client = await self._supervisor.get_client(workspace_root)
         result = await client.get_conversation(conversation_id)
         return ConversationRef(agent=self.agent_id, id=result["id"])
@@ -106,8 +112,8 @@ class MyAgentHarness(AgentHarness):
         *,
         approval_mode: Optional[str],
         sandbox_policy: Optional[Any],
-        input_items: Optional[list[dict[str, Any]]] = None,
     ) -> TurnRef:
+        """Start a new turn."""
         client = await self._supervisor.get_client(workspace_root)
         result = await client.start_turn(
             conversation_id,
@@ -128,6 +134,7 @@ class MyAgentHarness(AgentHarness):
         approval_mode: Optional[str],
         sandbox_policy: Optional[Any],
     ) -> TurnRef:
+        """Start a review (if supported)."""
         client = await self._supervisor.get_client(workspace_root)
         result = await client.start_review(conversation_id, prompt)
         return TurnRef(conversation_id=conversation_id, turn_id=result["turn_id"])
@@ -135,25 +142,25 @@ class MyAgentHarness(AgentHarness):
     async def interrupt(
         self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
     ) -> None:
+        """Interrupt a running turn."""
         client = await self._supervisor.get_client(workspace_root)
         await client.interrupt_turn(turn_id, conversation_id=conversation_id)
 
     def stream_events(
         self, workspace_root: Path, conversation_id: str, turn_id: str
     ) -> AsyncIterator[str]:
+        """Stream turn events as SSE-formatted strings."""
         client = self._supervisor.get_client(workspace_root)
         async for event in client.stream_events(conversation_id, turn_id):
-            yield event
+            # Format event as SSE: "event: event_type\ndata: {...}\n\n"
+            yield format_sse("app-server", event)
 ```
 
-For the required contract surface and capability names, use
-[plugin-api.md](./plugin-api.md#durable-thread-contract) and
-[plugin-api.md](./plugin-api.md#capability-model).
+**Important**: The `AgentHarness` protocol requires all these methods to be implemented.
 
-## Step 2: Create the Supervisor
+## Step 2: Create the Supervisor (if subprocess-based)
 
-If your agent runs as a subprocess, create a supervisor in
-`src/codex_autorunner/agents/<agent_name>/supervisor.py`:
+If your agent runs as a subprocess, create a supervisor in `src/codex_autorunner/agents/<agent_name>/supervisor.py`:
 
 ```python
 from __future__ import annotations
@@ -165,7 +172,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
-
 @dataclass
 class MyAgentHandle:
     workspace_id: str
@@ -176,7 +182,6 @@ class MyAgentHandle:
     started: bool = False
     last_used_at: float = 0.0
     active_turns: int = 0
-
 
 class MyAgentSupervisor:
     def __init__(
@@ -197,37 +202,65 @@ class MyAgentSupervisor:
         self._lock = asyncio.Lock()
 
     async def get_client(self, workspace_root: Path) -> Any:
-        canonical_root = workspace_root.resolve()
-        workspace_id = canonical_root.name
+        """Get or create a client for the workspace."""
+        canonical_root = canonical_workspace_root(workspace_root)
+        workspace_id = workspace_id_for_path(canonical_root)
         handle = await self._ensure_handle(workspace_id, canonical_root)
         await self._ensure_started(handle)
         handle.last_used_at = time.monotonic()
         return handle.client
 
     async def close_all(self) -> None:
+        """Close all handles."""
         async with self._lock:
             handles = list(self._handles.values())
             self._handles = {}
         for handle in handles:
             await self._close_handle(handle, reason="close_all")
+
+    # Implement other supervisor methods as needed...
 ```
 
 Reference existing implementations:
-
-- `src/codex_autorunner/agents/codex/` for JSON-RPC agents.
-- `src/codex_autorunner/agents/opencode/` for HTTP/SSE agents.
-- `src/codex_autorunner/agents/hermes/` for ACP-backed runtime wiring.
+- `src/codex_autorunner/agents/codex/` for JSON-RPC agents
+- `src/codex_autorunner/agents/opencode/` for HTTP REST agents
 
 ## Step 3: Register the Agent
 
+There are two supported registration paths:
+
 ### Option A: In-tree (modify CAR)
 
-Register the harness in `src/codex_autorunner/agents/registry.py` and add any
-needed imports and health checks:
+## Subagent model configuration (review workloads)
+
+CAR can run review coordinators on one model while spawning cheaper/faster subagents. Configure this in `codex-autorunner.yml`:
+
+```yaml
+agents:
+  opencode:
+    subagent_models:
+      subagent: zai-coding-plan/glm-4.7-flashx
+
+repo_defaults:
+  review:
+    subagent_agent: subagent
+    subagent_model: zai-coding-plan/glm-4.7-flashx
+```
+
+How it works:
+1. CAR ensures `.opencode/agent/subagent.md` exists with the FlashX model before starting review.
+2. The review coordinator runs on the full GLM-4.7 model.
+3. The coordinator spawns subagents via the `task` tool with `agent="subagent"`, inheriting the configured model.
+
+If you are adding an agent directly to the CAR codebase, register it in:
+
+- `src/codex_autorunner/agents/registry.py` (add to `_BUILTIN_AGENTS`)
+
+Example (in-tree):
 
 ```python
+# Add import
 from .myagent.harness import MyAgentHarness
-
 
 def _make_myagent_harness(ctx: Any) -> AgentHarness:
     supervisor = ctx.myagent_supervisor
@@ -235,46 +268,49 @@ def _make_myagent_harness(ctx: Any) -> AgentHarness:
         raise RuntimeError("MyAgent harness unavailable: supervisor missing")
     return MyAgentHarness(supervisor)
 
-
 def _check_myagent_health(ctx: Any) -> bool:
     return ctx.myagent_supervisor is not None
 
-
+# Add to _BUILTIN_AGENTS
 _BUILTIN_AGENTS["myagent"] = AgentDescriptor(
     id="myagent",
     name="My Agent",
-    capabilities=frozenset(
-        [
-            "durable_threads",
-            "message_turns",
-            "model_listing",
-            "event_streaming",
-        ]
-    ),
+    capabilities=frozenset([
+        "durable_threads",
+        "message_turns",
+        "model_listing",
+        "event_streaming",
+        # Add other capabilities as needed
+    ]),
     make_harness=_make_myagent_harness,
     healthcheck=_check_myagent_health,
 )
 ```
 
-### Option B: Out-of-tree plugin
+### Option B: Out-of-tree plugin (recommended)
 
-For the canonical entry-point contract, required `AgentDescriptor` fields, and
-versioning rules, use [plugin-api.md](./plugin-api.md#agent-backend-entry-point)
-and [plugin-api.md](./plugin-api.md#versioning).
+This mirrors Takopi’s entrypoint-based plugin approach: publish a Python package
+that exposes an `AgentDescriptor` via a standard entry point group. The
+canonical out-of-tree contract, including the full `AgentDescriptor` surface,
+versioning rules, and entry-point example, lives in `docs/plugin-api.md`.
+
+At runtime, CAR will discover and load the plugin backend automatically.
+Conflicting ids are rejected (plugin ids may not override built-ins).
+
 
 ## Step 4: Add Configuration
 
-If you are changing CAR itself, update
-`src/codex_autorunner/core/config.py` so the agent has a default binary entry:
+Update `src/codex_autorunner/core/config.py` to include your agent in defaults:
 
 ```python
 DEFAULT_REPO_CONFIG: Dict[str, Any] = {
+    # ... existing config ...
     "agents": {
         "codex": {"binary": "codex"},
         "opencode": {"binary": "opencode"},
         "zeroclaw": {"binary": "zeroclaw"},
         "hermes": {"binary": "hermes"},
-        "myagent": {"binary": "myagent"},
+        "myagent": {"binary": "myagent"},  # ADD THIS
     },
 }
 ```
@@ -284,15 +320,15 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
 Create minimal smoke tests in `tests/test_myagent_integration.py`:
 
 ```python
-import shutil
-from pathlib import Path
-
 import pytest
 
-
 @pytest.mark.integration
-@pytest.mark.skipif(not shutil.which("myagent"), reason="myagent binary not found")
-async def test_myagent_smoke() -> None:
+@pytest.mark.skipif(
+    not shutil.which("myagent"),
+    reason="myagent binary not found"
+)
+async def test_myagent_smoke():
+    """Test basic agent connectivity without credentials."""
     from codex_autorunner.agents.myagent.harness import MyAgentHarness
     from codex_autorunner.agents.myagent.supervisor import MyAgentSupervisor
 
@@ -304,48 +340,91 @@ async def test_myagent_smoke() -> None:
         assert await harness.new_conversation(Path("/tmp"))
         if harness.supports("model_listing"):
             catalog = await harness.model_catalog(Path("/tmp"))
-            assert len(catalog.models) > 0
+            assert len(catalog.models) > 0, "Should have at least one model"
     finally:
         await supervisor.close_all()
 ```
+
+## Plugin Contract Reference
+
+The plugin contract lives in `docs/plugin-api.md`. Read that spec for:
+
+- the canonical capability set and which two capabilities are required
+- the durable-thread contract and the must-support methods
+- the single-session runtime non-goals
+- capability-gated behavior and runtime capability discovery
+
+Hermes remains the best in-tree example of a deliberately partial capability
+surface: it supports `active_thread_discovery`, `interrupt`,
+`event_streaming`, and `approvals`, while leaving `review`, `model_listing`,
+and `transcript_history` unsupported.
 
 ## Protocol Snapshot Gate (Optional)
 
 If your agent exposes a machine-readable protocol spec:
 
-1. Create a refresh script such as `scripts/update_<agent_name>_protocol.py`.
-2. Add CI coverage for protocol drift.
-3. Document the refresh command and the check command together.
+1. Create a script in `scripts/update_<agent_name>_protocol.py`:
+   ```python
+   async def main():
+       spec = await fetch_agent_protocol()
+       path = Path("vendor/protocols/<agent_name>.json")
+       path.write_text(json.dumps(spec, indent=2))
 
-The current `agent-compatibility` flow is the reference pattern:
+   if __name__ == "__main__":
+       asyncio.run(main())
+   ```
+
+2. Update CI workflow to include your agent in drift checks
+
+3. Document how to update the spec when agent protocol changes
+
+If CI installs external agent tooling to perform compatibility checks, pin those
+tool versions in a repo-tracked lock file and refresh that lock together with
+the vendor protocol snapshots. Prefer one human-facing refresh command and one
+CI-facing check command instead of a loose collection of ad hoc scripts. The
+current `agent-compatibility` flow is the reference pattern:
 
 - `make agent-compatibility-refresh`
 - `make agent-compatibility-check`
 
+That keeps local refreshes, documentation, and CI aligned.
+
 ## ACP Integration Documentation Checklist
 
-For ACP-backed runtimes, do not stop at harness and supervisor wiring.
+For ACP-backed runtimes, do not stop at harness/supervisor wiring. Hermes
+showed that most late churn comes from missing operator docs and stale
+surface-specific assumptions.
 
-- **Architecture contract**: capture capability boundaries and non-goals before
-  implementation if the runtime introduces a new resource model or partial
-  capability surface.
-- **Operator runbook**: add `docs/ops/<agent>-acp.md` covering prerequisites,
-  launch contract, config, shared-state model, supported and unsupported
-  capabilities, PMA/chat/ticket-flow usage, and troubleshooting.
-- **README**: update supported-agent lists and any PMA/workflow guidance that
-  should call out the new runtime.
-- **Base setup guide**: update `docs/AGENT_SETUP_GUIDE.md` so the runtime is
-  discoverable from the default onboarding path.
-- **Surface setup guides**: update `docs/AGENT_SETUP_TELEGRAM_GUIDE.md` and
-  `docs/AGENT_SETUP_DISCORD_GUIDE.md` when those surfaces can route to the new
-  agent.
-- **Capability/reference docs**: update broader reference docs only when the
-  new agent becomes a canonical example there.
+Before calling an ACP integration done, update or verify all of the following:
+
+- **Architecture contract**: freeze capability boundaries and non-goals in an
+  architecture note before implementation if the runtime introduces a new
+  resource model or partial capability surface.
+- **Operator runbook**: add `docs/ops/<agent>-acp.md` covering binary
+  prerequisites, launch contract, config, shared-state or memory model,
+  supported and unsupported capabilities, PMA/chat/ticket-flow usage, and
+  troubleshooting.
+- **README**: update any supported-agent lists and any PMA or workflow guidance
+  that should call out why this agent is a good fit.
+- **Base setup guide**: update `docs/AGENT_SETUP_GUIDE.md` prerequisites,
+  supported-agent lists, and troubleshooting so the new runtime is discoverable
+  from the default onboarding path.
+- **Surface setup guides**: if Telegram or Discord can route to the new agent,
+  update `docs/AGENT_SETUP_TELEGRAM_GUIDE.md` and
+  `docs/AGENT_SETUP_DISCORD_GUIDE.md` with any runtime-specific prerequisites
+  and capability caveats.
+- **Capability/reference docs**: update broader reference docs only when the new
+  agent becomes a canonical example there, for example `docs/plugin-api.md` or
+  this guide.
 
 ## ACP Integration Search Sweep
 
 After wiring the runtime, run a targeted doc sweep for stale hardcoded
-assumptions:
+assumptions. Hermes integration surfaced that these usually hide in setup docs,
+runbooks, and troubleshooting sections rather than in the main implementation
+guide.
+
+Suggested search passes:
 
 ```bash
 rg -n "CAR currently supports|supported agents|Agent not found|PMA|Telegram|Discord" README.md docs -g '!vendor/**'
@@ -353,56 +432,95 @@ rg -n "Codex|OpenCode|opencode|codex" README.md docs -g '!vendor/**'
 rg -n "review|model listing|transcript|approvals|interrupt" README.md docs -g '!vendor/**'
 ```
 
-Then classify each hit as:
+Then manually classify each hit:
 
-- intentionally backend-specific documentation,
-- user-facing docs that should mention the new runtime, or
+- intentionally backend-specific docs, such as `docs/codex/**`
+- user-facing docs that should mention the new runtime
 - surface docs that should mention capability-gated unsupported actions instead
-  of implying universal support.
+  of silently implying Codex/OpenCode behavior
+
+The goal is not to replace every mention of older runtimes. The goal is to find
+places where CAR is still implicitly documented as a two-agent system or where
+unsupported operations are described as if they were universally available.
 
 ## Testing Checklist
 
 Before submitting, verify:
 
-- [ ] Harness implements the required `AgentHarness` contract.
-- [ ] Agent registration uses the correct canonical capability names.
-- [ ] Configuration defaults include the agent binary path when changing CAR.
-- [ ] Smoke tests pass when the binary is present.
-- [ ] Full turn tests pass when credentials or runtime dependencies are present.
+- [ ] Harness implements all `AgentHarness` protocol methods
+- [ ] Agent is registered in registry with correct capabilities
+- [ ] Configuration defaults include agent binary path
+- [ ] Smoke tests pass (binary present, no credentials required)
+- [ ] Full turn tests pass (if credentials available)
 - [ ] If `model_listing` is advertised, `/api/agents/<agent_id>/models` returns
-  a valid model catalog; otherwise it returns a capability error.
+  a valid model catalog; otherwise it returns a capability error
 - [ ] If `active_thread_discovery` is advertised, conversation listing works
-  through the relevant CAR surface.
+  through the relevant CAR surface
+- [ ] Version info is accessible (if agent supports it)
 - [ ] Unsupported actions fail with capability-driven errors rather than
-  pretending to work.
-- [ ] README, setup docs, and runtime runbooks are updated where relevant.
-- [ ] A doc/search sweep was run for stale backend assumptions.
-- [ ] Protocol drift refresh/check commands stay aligned if you maintain them.
+  pretending to work
+- [ ] README/setup/runbook docs are updated for the new runtime where relevant
+- [ ] A doc/search sweep was run for stale Codex/OpenCode-only assumptions
+- [ ] If protocol drift CI exists, the canonical refresh/check commands and any
+  pinned compatibility lock files were updated together
 
 ## Troubleshooting
 
-**"Agent not available"**
+**"Agent not available" error**:
+- Check agent is registered in `registry.py`
+- Verify healthcheck returns `True`
+- Check config has correct binary path
 
-- Check that the agent is registered.
-- Verify the health check returns `True`.
-- Check config and binary paths.
+**"Module not found" error**:
+- Add `__init__.py` to agent directory: `src/codex_autorunner/agents/<agent_name>/__init__.py`
+- Ensure imports are correct in factory/registry
 
-**"Module not found"**
-
-- Add `__init__.py` to `src/codex_autorunner/agents/<agent_name>/`.
-- Verify imports in the harness factory and registry wiring.
-
-**Smoke tests fail**
-
-- Verify the binary is accessible with `which myagent`.
-- Check the binary help output.
-- Review supervisor startup logs.
+**Smoke tests fail**:
+- Verify binary is accessible (`which myagent`)
+- Check binary `--help` or equivalent works
+- Review supervisor startup logs
 
 ## References
 
-- Existing implementations: `src/codex_autorunner/agents/codex/`,
-  `src/codex_autorunner/agents/opencode/`,
-  `src/codex_autorunner/agents/hermes/`,
-  `src/codex_autorunner/agents/zeroclaw/`
+- Existing implementations: `src/codex_autorunner/agents/codex/`, `src/codex_autorunner/agents/opencode/`, `src/codex_autorunner/agents/hermes/`, `src/codex_autorunner/agents/zeroclaw/`
 - Agent harness protocol: `src/codex_autorunner/agents/base.py`
 - Registry: `src/codex_autorunner/agents/registry.py`
+
+## CAR-Native Targets vs Helper Subsystems
+
+CAR distinguishes between **orchestration-visible native targets** and **helper subsystems**:
+
+### Native Targets (Durable, Addressable)
+
+Native targets are CAR-native services that participate in orchestration routing. They are:
+- Durable: persist across CAR restarts
+- Addressable: can be targeted by surfaces for work distribution
+- First-class: visible in orchestration catalog for discovery
+
+**Examples:**
+- `ticket_flow`: CAR-native flow execution engine for deterministic multi-step delivery work
+- `pma`: CAR-native thread management and orchestration client for durable conversation threads
+
+### Helper Subsystems (Internal Plumbing)
+
+Helper subsystems are internal components that should NOT be exposed as standalone orchestration targets:
+- Dispatch interception handlers
+- Reactive debounce logic
+- Event projection services
+- Transcript mirroring services
+
+These remain internal plumbing rather than user-addressable target identities.
+
+### How Native Targets Are Registered
+
+Native targets are registered in the orchestration catalog:
+
+```python
+from codex_autorunner.core.orchestration import (
+    list_native_target_definitions,
+    get_native_target_definition,
+    NativeTargetCatalog,
+)
+```
+
+See `src/codex_autorunner/core/orchestration/catalog.py` for the registry of native targets.

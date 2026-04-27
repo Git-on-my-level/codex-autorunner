@@ -2187,6 +2187,8 @@ async def _run_discord_orchestrated_turn_for_message(
         )
         if supervision is not None:
             supervision.set_execution_id(progress_execution_id)
+        if bool(getattr(submission, "queued", False)):
+            return
         await _set_progress_lease_state(
             execution_id=progress_execution_id,
             state="active",
@@ -2297,6 +2299,10 @@ async def _run_discord_orchestrated_turn_for_message(
             queued=True,
             progress_message_id=progress_message_id,
             agent=logical_agent,
+        )
+        await _set_progress_lease_state(
+            execution_id=progress_execution_id,
+            state="active",
         )
         projector.mark_queued(force=True)
         try:

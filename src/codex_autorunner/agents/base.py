@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional, cast
 
+from ..harness_capabilities import harness_supports_event_streaming
 from .types import (
     AgentId,
     ConversationRef,
@@ -179,11 +180,6 @@ class AgentHarness(ABC):
     ) -> list[dict[str, Any]]:
         _ = conversation_id, turn_id, kwargs
         return []
-
-
-def harness_supports_event_streaming(harness: Any) -> bool:
-    supports = getattr(harness, "supports", None)
-    return bool(callable(supports) and supports("event_streaming"))
 
 
 def harness_progress_event_stream(

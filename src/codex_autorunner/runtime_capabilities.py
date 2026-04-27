@@ -4,20 +4,6 @@ from typing import Iterable, NewType
 
 RuntimeCapability = NewType("RuntimeCapability", str)
 
-RUNTIME_CAPABILITIES = frozenset(
-    [
-        RuntimeCapability("durable_threads"),
-        RuntimeCapability("message_turns"),
-        RuntimeCapability("interrupt"),
-        RuntimeCapability("active_thread_discovery"),
-        RuntimeCapability("transcript_history"),
-        RuntimeCapability("review"),
-        RuntimeCapability("model_listing"),
-        RuntimeCapability("event_streaming"),
-        RuntimeCapability("approvals"),
-    ]
-)
-
 
 def normalize_runtime_capabilities(
     capabilities: Iterable[str],
@@ -31,8 +17,4 @@ def normalize_runtime_capabilities(
     return frozenset(normalized)
 
 
-__all__ = [
-    "RUNTIME_CAPABILITIES",
-    "RuntimeCapability",
-    "normalize_runtime_capabilities",
-]
+__all__ = ["RuntimeCapability", "normalize_runtime_capabilities"]

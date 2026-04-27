@@ -7,9 +7,7 @@ from typing import Any, Optional, cast
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from .....agents.base import (
-    harness_supports_event_streaming,
-)
+from .....agents.base import harness_supports_event_streaming
 from .....agents.codex.harness import CodexHarness
 from .....agents.registry import get_registered_agents as _get_registered_agents
 from .....core.orchestration import (

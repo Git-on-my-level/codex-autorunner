@@ -1,7 +1,11 @@
 from __future__ import annotations
 
-from codex_autorunner.agents.registry import AgentDescriptor
-from codex_autorunner.agents.types import normalize_runtime_capabilities
+import pytest
+
+from codex_autorunner.agents.registry import (
+    AgentDescriptor,
+    normalize_agent_capabilities,
+)
 from codex_autorunner.core.orchestration.catalog import (
     build_agent_definition,
     merge_agent_capabilities,
@@ -17,11 +21,12 @@ def _make_descriptor(capabilities: frozenset[str]) -> AgentDescriptor:
     )
 
 
-def test_normalize_runtime_capabilities_normalizes_case_and_whitespace() -> None:
-    capabilities = normalize_runtime_capabilities(
+def test_normalize_agent_capabilities_keeps_canonical_values() -> None:
+    capabilities = normalize_agent_capabilities(
         [
-            " durable_threads ",
-            "MESSAGE_TURNS",
+            "durable_threads",
+            "message_turns",
+            "interrupt",
             "review",
             "active_thread_discovery",
         ]
@@ -31,6 +36,7 @@ def test_normalize_runtime_capabilities_normalizes_case_and_whitespace() -> None
         [
             "durable_threads",
             "message_turns",
+            "interrupt",
             "review",
             "active_thread_discovery",
         ]
@@ -50,6 +56,11 @@ def test_agent_descriptor_normalizes_static_capabilities() -> None:
             "model_listing",
         ]
     )
+
+
+def test_agent_descriptor_rejects_unknown_static_capabilities() -> None:
+    with pytest.raises(ValueError, match="Unknown runtime capabilities: threads"):
+        _make_descriptor(frozenset(["threads"]))
 
 
 def test_merge_agent_capabilities_adds_runtime_reported_features() -> None:
