@@ -4,6 +4,8 @@ import json
 import shutil
 import sqlite3
 import subprocess
+import sys
+import tempfile
 import types
 from pathlib import Path
 from typing import Optional
@@ -3139,6 +3141,60 @@ def test_cleanup_worktree_removes_leftover_car_state_directory(
     supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=False)
 
     assert not worktree.path.exists()
+
+
+def test_cleanup_worktree_removes_leftover_car_state_via_cwd_safe_subprocess(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg["pma"]["cleanup_require_archive"] = False
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/leftover-car-state-subprocess",
+        start_point="HEAD",
+    )
+
+    def _leave_only_car_state(**kwargs) -> None:
+        worktree_path = kwargs["worktree_path"]
+        for child in worktree_path.iterdir():
+            if child.name == ".codex-autorunner":
+                continue
+            if child.is_dir():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+
+    subprocess_cwds: list[str | None] = []
+    original_subprocess_run = wtm_module.subprocess.run
+
+    def _record_subprocess_run(*args, **kwargs):
+        cmd = args[0] if args else kwargs.get("args")
+        if isinstance(cmd, list) and cmd[:2] == [sys.executable, "-c"]:
+            subprocess_cwds.append(kwargs.get("cwd"))
+        return original_subprocess_run(*args, **kwargs)
+
+    monkeypatch.setattr(
+        supervisor._worktree_manager,
+        "_remove_worktree_git_refs",
+        _leave_only_car_state,
+    )
+    monkeypatch.setattr(wtm_module.subprocess, "run", _record_subprocess_run)
+
+    supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=False)
+
+    assert not worktree.path.exists()
+    assert subprocess_cwds == [tempfile.gettempdir()]
 
 
 def test_cleanup_worktree_refreshes_topology_listing(tmp_path: Path) -> None:
