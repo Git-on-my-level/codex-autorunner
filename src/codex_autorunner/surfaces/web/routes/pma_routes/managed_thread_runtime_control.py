@@ -242,11 +242,8 @@ def ensure_queue_worker(
     managed_thread_request_for_app: Any,
     build_service_for_app: Any,
     finalize_managed_thread_execution: Any,
-    deliver_managed_thread_execution_result: Any,
     track_managed_thread_task: Any,
-    hooks: Optional[
-        ManagedThreadQueueWorkerHooks | ManagedThreadCoordinatorHooks
-    ] = None,
+    hooks: ManagedThreadQueueWorkerHooks | ManagedThreadCoordinatorHooks,
 ) -> None:
     task_map = getattr(app.state, "pma_managed_thread_queue_tasks", None)
     if not isinstance(task_map, dict):
@@ -269,28 +266,11 @@ def ensure_queue_worker(
             started=started,
         )
 
-    async def _deliver_result(finalized: Any) -> None:
-        current_thread_row = thread_store.get_thread(managed_thread_id) or {}
-        await deliver_managed_thread_execution_result(
-            request,
-            thread_store=thread_store,
-            thread=current_thread_row,
-            finalized=finalized,
-            response_payload={},
-        )
-
-    resolved_hooks: Optional[ManagedThreadQueueWorkerHooks]
-    if hooks is None:
-        resolved_hooks = None
-    elif isinstance(hooks, ManagedThreadCoordinatorHooks):
-        resolved_hooks = ManagedThreadQueueWorkerHooks(
-            durable_delivery=hooks.durable_delivery,
-            deliver_result=hooks.deliver_result,
-            run_with_indicator=hooks.run_with_indicator,
-            execution_hooks=hooks.queue_execution_hooks or hooks.execution_hooks(),
-        )
-    else:
-        resolved_hooks = hooks
+    resolved_hooks = (
+        hooks.queue_worker_hooks()
+        if isinstance(hooks, ManagedThreadCoordinatorHooks)
+        else hooks
+    )
 
     shared_kwargs = dict(
         task_map=task_map,
@@ -306,20 +286,9 @@ def ensure_queue_worker(
     )
     ensure_shared_managed_thread_queue_worker(
         **shared_kwargs,
-        durable_delivery=(
-            None if resolved_hooks is None else resolved_hooks.durable_delivery
-        ),
-        deliver_result=(
-            _deliver_result
-            if resolved_hooks is None
-            else (resolved_hooks.deliver_result or _deliver_result)
-        ),
-        run_with_indicator=(
-            None if resolved_hooks is None else resolved_hooks.run_with_indicator
-        ),
-        execution_hooks=(
-            None if resolved_hooks is None else resolved_hooks.execution_hooks
-        ),
+        durable_delivery=resolved_hooks.durable_delivery,
+        run_with_indicator=resolved_hooks.run_with_indicator,
+        execution_hooks=resolved_hooks.execution_hooks,
     )
 
 

@@ -90,7 +90,10 @@ def main() -> int:
     if not violations:
         return 0
 
-    print("shutil.which usage is restricted; use resolve_executable instead.", file=sys.stderr)
+    print(
+        "shutil.which usage is restricted; use resolve_executable instead.",
+        file=sys.stderr,
+    )
     for usage in violations:
         rel_path = usage.path.relative_to(REPO_ROOT)
         print(f"- {rel_path}:{usage.line}:{usage.column}", file=sys.stderr)

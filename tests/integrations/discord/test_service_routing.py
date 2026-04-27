@@ -15,6 +15,7 @@ import pytest
 
 pytestmark = pytest.mark.integration
 
+import codex_autorunner.integrations.chat.managed_thread_turns as managed_thread_turns_module
 from codex_autorunner.core.filebox import (
     inbox_dir,
     outbox_dir,
@@ -574,19 +575,21 @@ async def test_discord_message_turns_delete_immediate_placeholder_when_backgroun
 
 
 @pytest.mark.anyio
-async def test_discord_managed_thread_delivery_uses_unique_record_ids_per_chunk() -> (
-    None
-):
+async def test_discord_managed_thread_delivery_uses_unique_record_ids_per_chunk(
+    tmp_path: Path,
+) -> None:
     sent_messages: list[dict[str, object]] = []
 
     class _ServiceStub:
+        _config = SimpleNamespace(root=tmp_path, raw={})
+
         async def _send_channel_message_safe(
             self,
             channel_id: str,
             payload: dict[str, object],
             *,
             record_id: str,
-        ) -> None:
+        ) -> bool:
             sent_messages.append(
                 {
                     "channel_id": channel_id,
@@ -594,6 +597,7 @@ async def test_discord_managed_thread_delivery_uses_unique_record_ids_per_chunk(
                     "record_id": record_id,
                 }
             )
+            return True
 
         async def _run_with_typing_indicator(
             self, *, channel_id: str, work: Any
@@ -611,7 +615,7 @@ async def test_discord_managed_thread_delivery_uses_unique_record_ids_per_chunk(
         _ServiceStub(),
         channel_id="channel-1",
         managed_thread_id="thread-1",
-        workspace_root=Path.cwd(),
+        workspace_root=tmp_path,
         public_execution_error="Discord turn failed",
     )
     content = ("a" * 1500) + "\n" + ("b" * 1500)
@@ -622,7 +626,7 @@ async def test_discord_managed_thread_delivery_uses_unique_record_ids_per_chunk(
     )
     assert len(expected_chunks) == 2
 
-    await hooks.deliver_result(
+    await managed_thread_turns_module.handoff_managed_thread_final_delivery(
         discord_message_turns.ManagedThreadFinalizationResult(
             status="ok",
             assistant_text=content,
@@ -630,7 +634,9 @@ async def test_discord_managed_thread_delivery_uses_unique_record_ids_per_chunk(
             managed_thread_id="thread-1",
             managed_turn_id="turn-1",
             backend_thread_id=None,
-        )
+        ),
+        delivery=hooks.durable_delivery,
+        logger=logging.getLogger("test"),
     )
 
     assert [message["record_id"] for message in sent_messages] == [
@@ -644,17 +650,21 @@ async def test_discord_managed_thread_delivery_uses_unique_record_ids_per_chunk(
 
 
 @pytest.mark.anyio
-async def test_discord_managed_thread_delivery_includes_token_usage_footer() -> None:
+async def test_discord_managed_thread_delivery_includes_token_usage_footer(
+    tmp_path: Path,
+) -> None:
     sent_messages: list[dict[str, object]] = []
 
     class _ServiceStub:
+        _config = SimpleNamespace(root=tmp_path, raw={})
+
         async def _send_channel_message_safe(
             self,
             channel_id: str,
             payload: dict[str, object],
             *,
             record_id: str,
-        ) -> None:
+        ) -> bool:
             sent_messages.append(
                 {
                     "channel_id": channel_id,
@@ -662,6 +672,7 @@ async def test_discord_managed_thread_delivery_includes_token_usage_footer() -> 
                     "record_id": record_id,
                 }
             )
+            return True
 
         async def _run_with_typing_indicator(
             self, *, channel_id: str, work: Any
@@ -679,11 +690,11 @@ async def test_discord_managed_thread_delivery_includes_token_usage_footer() -> 
         _ServiceStub(),
         channel_id="channel-1",
         managed_thread_id="thread-1",
-        workspace_root=Path.cwd(),
+        workspace_root=tmp_path,
         public_execution_error="Discord turn failed",
     )
 
-    await hooks.deliver_result(
+    await managed_thread_turns_module.handoff_managed_thread_final_delivery(
         discord_message_turns.ManagedThreadFinalizationResult(
             status="ok",
             assistant_text="message reply",
@@ -699,7 +710,9 @@ async def test_discord_managed_thread_delivery_includes_token_usage_footer() -> 
                 },
                 "modelContextWindow": 203352,
             },
-        )
+        ),
+        delivery=hooks.durable_delivery,
+        logger=logging.getLogger("test"),
     )
 
     assert len(sent_messages) == 1

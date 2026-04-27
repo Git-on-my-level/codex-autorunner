@@ -23,9 +23,12 @@ from .config import (
     DEFAULT_BOT_TOKEN_ENV,
     DEFAULT_INTENTS,
     DEFAULT_STATE_FILE,
-    LEGACY_DEFAULT_INTENTS,
 )
-from .constants import DISCORD_INTENT_MESSAGE_CONTENT
+from .constants import (
+    DISCORD_INTENT_GUILD_MESSAGES,
+    DISCORD_INTENT_GUILDS,
+    DISCORD_INTENT_MESSAGE_CONTENT,
+)
 
 RECOMMENDED_BOT_PERMISSIONS_INTEGER = "2322563695115328"
 
@@ -244,7 +247,9 @@ def discord_doctor_checks(config: HubConfig) -> list[DoctorCheck]:
     allowed_user_ids = _parse_string_ids(discord_cfg.get("allowed_user_ids"))
     intents_value = discord_cfg.get("intents", DEFAULT_INTENTS)
 
-    if isinstance(intents_value, int) and intents_value == LEGACY_DEFAULT_INTENTS:
+    if isinstance(intents_value, int) and intents_value == (
+        DISCORD_INTENT_GUILDS | DISCORD_INTENT_GUILD_MESSAGES
+    ):
         checks.append(
             DoctorCheck(
                 name="Discord intents",

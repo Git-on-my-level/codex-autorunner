@@ -55,6 +55,9 @@ from codex_autorunner.integrations.chat.collaboration_policy import (
 )
 from codex_autorunner.integrations.chat.compaction import build_compact_seed_prompt
 from codex_autorunner.integrations.chat.dispatcher import build_dispatch_context
+from codex_autorunner.integrations.chat.managed_thread_surface_kernel import (
+    build_managed_thread_terminal_delivery_hooks,
+)
 from codex_autorunner.integrations.chat.managed_thread_turns import (
     ManagedThreadExecutionHooks,
     ManagedThreadQueueWorkerHooks,
@@ -97,7 +100,7 @@ def _discord_test_queue_worker_hooks(
     managed_thread_id: str,
     public_execution_error: str,
 ) -> ManagedThreadQueueWorkerHooks:
-    """Match production queue-worker hooks except durable_delivery (tests only)."""
+    """Match production queue-worker hooks for Discord queue-worker tests."""
     workspace_root = canonicalize_path(
         Path(getattr(getattr(service, "_config", None), "root", Path(".")))
     )
@@ -109,9 +112,71 @@ def _discord_test_queue_worker_hooks(
         public_execution_error=public_execution_error,
     )
     queue_hooks = runner_hooks.queue_worker_hooks()
+
+    async def _send_success(record: Any, _context: Any) -> None:
+        assistant_text = (
+            managed_thread_turns_module.render_managed_thread_delivery_record_text(
+                record
+            )
+        )
+        formatted = (
+            discord_message_turns_module.format_discord_message(assistant_text)
+            if assistant_text
+            else "(No response text returned.)"
+        )
+        chunks = discord_message_turns_module.chunk_discord_message(
+            formatted,
+            max_len=discord_message_turns_module.DISCORD_MAX_MESSAGE_LENGTH,
+            with_numbering=False,
+        )
+        if not chunks:
+            chunks = [formatted]
+        base_record_id = (
+            f"discord-queued:{record.managed_thread_id}:{record.managed_turn_id}"
+        )
+        for chunk_index, chunk in enumerate(chunks, start=1):
+            record_id = (
+                f"{base_record_id}:chunk:{chunk_index}"
+                if len(chunks) > 1
+                else base_record_id
+            )
+            await service._send_channel_message_safe(
+                channel_id,
+                {"content": chunk},
+                record_id=record_id,
+            )
+
+    async def _send_failure(record: Any, _context: Any) -> None:
+        await service._send_channel_message_safe(
+            channel_id,
+            {
+                "content": (
+                    f"Turn failed: {record.envelope.error_text or public_execution_error}"
+                )
+            },
+            record_id=(
+                f"discord-queued-error:{record.managed_thread_id}:{record.managed_turn_id}"
+            ),
+        )
+
     return ManagedThreadQueueWorkerHooks(
-        durable_delivery=None,
-        deliver_result=queue_hooks.deliver_result,
+        durable_delivery=build_managed_thread_terminal_delivery_hooks(
+            state_root=workspace_root,
+            surface=managed_thread_turns_module.ManagedThreadSurfaceInfo(
+                log_label="Discord",
+                surface_kind="discord",
+                surface_key=channel_id,
+            ),
+            adapter_key="discord",
+            transport_target={"channel_id": channel_id},
+            metadata={
+                "managed_thread_id": managed_thread_id,
+                "workspace_root": str(workspace_root),
+            },
+            send_success=_send_success,
+            send_failure=_send_failure,
+            cleanup=lambda record, context: asyncio.sleep(0),
+        ),
         run_with_indicator=queue_hooks.run_with_indicator,
         execution_hooks=queue_hooks.execution_hooks,
     )
@@ -8270,6 +8335,7 @@ async def test_message_create_enqueues_outbox_when_channel_send_fails(
 @pytest.mark.anyio
 async def test_discord_managed_thread_queue_worker_sends_placeholder_for_empty_reply(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     queued_started = SimpleNamespace()
     events: list[Any] = []
@@ -8278,7 +8344,7 @@ async def test_discord_managed_thread_queue_worker_sends_placeholder_for_empty_r
     class _Service:
         def __init__(self) -> None:
             self._spawned_tasks: list[asyncio.Task[Any]] = []
-            self._config = SimpleNamespace(root=Path("."))
+            self._config = SimpleNamespace(root=tmp_path)
 
         def _spawn_task(self, coro: Any) -> asyncio.Task[Any]:
             task = asyncio.create_task(coro)
@@ -8328,7 +8394,9 @@ async def test_discord_managed_thread_queue_worker_sends_placeholder_for_empty_r
         return {
             "status": "ok",
             "assistant_text": "",
+            "managed_thread_id": "managed-thread-1",
             "managed_turn_id": "turn-1",
+            "backend_thread_id": "backend-thread-1",
         }
 
     monkeypatch.setattr(
@@ -8384,6 +8452,7 @@ async def test_discord_managed_thread_queue_worker_sends_placeholder_for_empty_r
 @pytest.mark.anyio
 async def test_discord_managed_thread_queue_worker_formats_local_file_links(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     queued_started = SimpleNamespace()
     events: list[Any] = []
@@ -8392,7 +8461,7 @@ async def test_discord_managed_thread_queue_worker_formats_local_file_links(
     class _Service:
         def __init__(self) -> None:
             self._spawned_tasks: list[asyncio.Task[Any]] = []
-            self._config = SimpleNamespace(root=Path("."))
+            self._config = SimpleNamespace(root=tmp_path)
 
         def _spawn_task(self, coro: Any) -> asyncio.Task[Any]:
             task = asyncio.create_task(coro)
@@ -8445,7 +8514,9 @@ async def test_discord_managed_thread_queue_worker_formats_local_file_links(
                 "Updated [archive_helpers.py](/Users/dazheng/worktree/src/archive_helpers.py) "
                 "and kept [docs](https://example.com/docs)."
             ),
+            "managed_thread_id": "managed-thread-1",
             "managed_turn_id": "turn-2",
+            "backend_thread_id": "backend-thread-1",
         }
 
     monkeypatch.setattr(

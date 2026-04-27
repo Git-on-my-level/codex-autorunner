@@ -14,7 +14,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.protocol_utils import validate_binary_path
 
-
 VERSION_RE = re.compile(r"(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)")
 
 
@@ -31,7 +30,9 @@ def _read_version(binary_name: str, env_var: str) -> str:
         result.stderr.strip()
     )
     if not match:
-        raise RuntimeError(f"Could not parse {binary_name} version from {result.stdout}")
+        raise RuntimeError(
+            f"Could not parse {binary_name} version from {result.stdout}"
+        )
     return match.group(1)
 
 

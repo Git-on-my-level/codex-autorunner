@@ -647,7 +647,11 @@ def register_root_commands(app: typer.Typer) -> None:
     def log(
         repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
         hub: Optional[Path] = hub_root_path_option(),
-        run_id: Optional[int] = typer.Option(None, "--run", help="Show a specific run"),
+        run_id: Optional[int] = typer.Option(
+            None,
+            "--run",
+            help="Tail the shared autorunner log for a run-era investigation.",
+        ),
         tail: Optional[int] = typer.Option(None, "--tail", help="Tail last N lines"),
     ):
         """Show autorunner log output."""
@@ -656,10 +660,7 @@ def register_root_commands(app: typer.Typer) -> None:
             _raise_exit("Log file not found; run init")
 
         if run_id is not None:
-            block = engine.read_run_block(run_id)
-            if not block:
-                _raise_exit("run not found")
-            typer.echo(block)
+            typer.echo(engine.tail_log(tail or 200))
             return
 
         if tail is not None:
@@ -670,11 +671,7 @@ def register_root_commands(app: typer.Typer) -> None:
             if last_id is None:
                 typer.echo("no runs")
                 return
-            block = engine.read_run_block(last_id)
-            if not block:
-                typer.echo("no run block (log rotated?)")
-                return
-            typer.echo(block)
+            typer.echo(engine.tail_log(200))
 
     @app.command()
     def edit(

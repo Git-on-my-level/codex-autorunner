@@ -176,7 +176,7 @@ def test_hub_destination_set_route_supports_extended_docker_fields(
     }
 
 
-def test_hub_destination_set_route_accepts_legacy_env_list_alias(
+def test_hub_destination_set_route_rejects_legacy_env_list_alias(
     tmp_path: Path,
 ) -> None:
     hub_root = tmp_path / "hub"
@@ -192,13 +192,7 @@ def test_hub_destination_set_route_accepts_legacy_env_list_alias(
             "env": ["CAR_*", "PATH"],
         },
     )
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["configured_destination"] == {
-        "kind": "docker",
-        "image": "busybox:latest",
-        "env_passthrough": ["CAR_*", "PATH"],
-    }
+    assert response.status_code == 422
 
 
 def test_hub_destination_set_route_rejects_invalid_input(tmp_path: Path) -> None:

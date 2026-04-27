@@ -21,6 +21,22 @@ from .utils import atomic_write
 
 logger = logging.getLogger("codex_autorunner.core.generated_hub_config")
 
+_LEGACY_DISCORD_DEFAULT_INTENTS = 513
+_CANONICAL_DISCORD_DEFAULT_INTENTS = 33281
+
+
+def _normalize_legacy_discord_intents(data: Dict[str, Any]) -> Dict[str, Any]:
+    discord_cfg = data.get("discord_bot")
+    if not isinstance(discord_cfg, dict):
+        return data
+    if discord_cfg.get("intents") != _LEGACY_DISCORD_DEFAULT_INTENTS:
+        return data
+    normalized = dict(data)
+    normalized_discord = dict(discord_cfg)
+    normalized_discord["intents"] = _CANONICAL_DISCORD_DEFAULT_INTENTS
+    normalized["discord_bot"] = normalized_discord
+    return normalized
+
 
 def _sparsify_generated_config_mapping(
     explicit: Mapping[str, Any],
@@ -52,7 +68,7 @@ def build_generated_hub_config(
 ) -> Dict[str, Any]:
     """Render generated hub config as sparse local state over inherited defaults."""
     inherited_defaults = resolve_hub_config_data(root)
-    explicit = overrides or {}
+    explicit = _normalize_legacy_discord_intents(dict(overrides or {}))
     sparse = _sparsify_generated_config_mapping(
         explicit,
         inherited_defaults,
@@ -78,10 +94,11 @@ def render_hub_config_yaml(
     *,
     generated: bool,
 ) -> str:
+    normalized_data = _normalize_legacy_discord_intents(dict(data))
     payload = (
-        build_generated_hub_config(config_path.parent.parent.resolve(), data)
+        build_generated_hub_config(config_path.parent.parent.resolve(), normalized_data)
         if generated
-        else data
+        else normalized_data
     )
     rendered = yaml.safe_dump(payload, sort_keys=False)
     if generated:
@@ -110,7 +127,7 @@ def normalize_generated_hub_config(config_path: Path) -> Dict[str, Any]:
     if not raw_text.startswith(GENERATED_CONFIG_HEADER):
         return _load_yaml_dict(config_path)
 
-    data = _load_yaml_dict(config_path)
+    data = _normalize_legacy_discord_intents(_load_yaml_dict(config_path))
     root = config_path.parent.parent.resolve()
     pma = data.get("pma")
     if (

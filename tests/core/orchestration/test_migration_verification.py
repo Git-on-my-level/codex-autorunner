@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 from codex_autorunner.core.orchestration.migrate_legacy_state import (
@@ -24,7 +23,104 @@ from codex_autorunner.core.orchestration.verification import (
 )
 from codex_autorunner.core.pma_automation_persistence import PmaAutomationPersistence
 from codex_autorunner.core.pma_automation_types import default_pma_automation_state
-from codex_autorunner.core.pma_thread_store import PmaThreadStore
+from codex_autorunner.core.pma_thread_store import (
+    _ensure_schema,
+    default_pma_threads_db_path,
+)
+from codex_autorunner.core.sqlite_utils import open_sqlite
+
+
+def _seed_legacy_thread_store(hub_root: Path, workspace_root: Path) -> str:
+    thread_id = "thread-1"
+    turn_id = "turn-1"
+    legacy_path = default_pma_threads_db_path(hub_root)
+    legacy_path.parent.mkdir(parents=True, exist_ok=True)
+    with open_sqlite(legacy_path) as conn:
+        _ensure_schema(conn)
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO pma_managed_threads (
+                    managed_thread_id,
+                    agent,
+                    repo_id,
+                    resource_kind,
+                    resource_id,
+                    workspace_root,
+                    name,
+                    backend_thread_id,
+                    status,
+                    normalized_status,
+                    status_reason_code,
+                    status_updated_at,
+                    status_terminal,
+                    status_turn_id,
+                    last_turn_id,
+                    last_message_preview,
+                    compact_seed,
+                    metadata_json,
+                    created_at,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    thread_id,
+                    "codex",
+                    "repo-1",
+                    "repo",
+                    "repo-1",
+                    str(workspace_root),
+                    "TestThread",
+                    None,
+                    "active",
+                    "active",
+                    None,
+                    "2026-03-13T00:00:00Z",
+                    0,
+                    None,
+                    turn_id,
+                    None,
+                    None,
+                    "{}",
+                    "2026-03-13T00:00:00Z",
+                    "2026-03-13T00:00:00Z",
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO pma_managed_turns (
+                    managed_turn_id,
+                    managed_thread_id,
+                    client_turn_id,
+                    backend_turn_id,
+                    prompt,
+                    status,
+                    assistant_text,
+                    transcript_turn_id,
+                    model,
+                    reasoning,
+                    error,
+                    started_at,
+                    finished_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    turn_id,
+                    thread_id,
+                    "client-turn-1",
+                    "backend-turn-1",
+                    "test",
+                    "ok",
+                    "done",
+                    "trans-1",
+                    "gpt-4",
+                    "high",
+                    None,
+                    "2026-03-13T00:00:00Z",
+                    "2026-03-13T00:00:01Z",
+                ),
+            )
+    return thread_id
 
 
 def test_verify_thread_parity_empty_legacy(tmp_path: Path) -> None:
@@ -39,26 +135,14 @@ def test_verify_thread_parity_with_data(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     workspace_root = tmp_path / "workspace"
     workspace_root.mkdir(parents=True)
-    os.environ["CAR_LEGACY_MIRROR_ENABLED"] = "true"
-    try:
-        store = PmaThreadStore(hub_root)
-        _thread = store.create_thread(
-            "codex",
-            workspace_root,
-            repo_id="repo-1",
-            name="TestThread",
-        )
-        with open_orchestration_sqlite(hub_root, durable=False) as conn:
-            backfill_legacy_thread_state(hub_root, conn)
-            results = verify_thread_parity(hub_root, conn)
-        assert any(r.check_name == "thread_targets_count" for r in results)
-        thread_result = next(
-            r for r in results if r.check_name == "thread_targets_count"
-        )
-        assert thread_result.status == "passed"
-        assert thread_result.legacy_count == thread_result.new_count
-    finally:
-        os.environ.pop("CAR_LEGACY_MIRROR_ENABLED", None)
+    _seed_legacy_thread_store(hub_root, workspace_root)
+    with open_orchestration_sqlite(hub_root, durable=False) as conn:
+        backfill_legacy_thread_state(hub_root, conn)
+        results = verify_thread_parity(hub_root, conn)
+    assert any(r.check_name == "thread_targets_count" for r in results)
+    thread_result = next(r for r in results if r.check_name == "thread_targets_count")
+    assert thread_result.status == "passed"
+    assert thread_result.legacy_count == thread_result.new_count
 
 
 def test_verify_automation_parity_empty_legacy(tmp_path: Path) -> None:
@@ -201,107 +285,90 @@ def test_verify_migration_summary(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     workspace_root = tmp_path / "workspace"
     workspace_root.mkdir(parents=True)
-    os.environ["CAR_LEGACY_MIRROR_ENABLED"] = "true"
-    try:
-        store = PmaThreadStore(hub_root)
-        store.create_thread("codex", workspace_root, repo_id="repo-1", name="Test")
-        persistence = PmaAutomationPersistence(hub_root)
-        persistence.save(default_pma_automation_state())
-        with open_orchestration_sqlite(hub_root, durable=False) as conn:
-            backfill_legacy_thread_state(hub_root, conn)
-            backfill_legacy_automation_state(hub_root, conn)
-            summary = verify_migration(hub_root, conn)
-        assert summary.run_id
-        assert summary.started_at
-        assert summary.finished_at
-        assert summary.status in ("passed", "failed")
-        assert "recommendations" in summary.to_dict()
-        assert summary.rollback_available
-    finally:
-        os.environ.pop("CAR_LEGACY_MIRROR_ENABLED", None)
+    _seed_legacy_thread_store(hub_root, workspace_root)
+    persistence = PmaAutomationPersistence(hub_root)
+    persistence.save(default_pma_automation_state())
+    with open_orchestration_sqlite(hub_root, durable=False) as conn:
+        backfill_legacy_thread_state(hub_root, conn)
+        backfill_legacy_automation_state(hub_root, conn)
+        summary = verify_migration(hub_root, conn)
+    assert summary.run_id
+    assert summary.started_at
+    assert summary.finished_at
+    assert summary.status in ("passed", "failed")
+    assert "recommendations" in summary.to_dict()
+    assert summary.rollback_available
 
 
 def test_verify_migration_with_all_data(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     workspace_root = tmp_path / "workspace"
     workspace_root.mkdir(parents=True)
-    os.environ["CAR_LEGACY_MIRROR_ENABLED"] = "true"
-    try:
-        store = PmaThreadStore(hub_root)
-        thread = store.create_thread(
-            "codex", workspace_root, repo_id="repo-1", name="FullTest"
-        )
-        _turn = store.create_turn(
-            thread["managed_thread_id"], prompt="test", model="gpt-4"
-        )
-        persistence = PmaAutomationPersistence(hub_root)
-        state = default_pma_automation_state()
-        state["subscriptions"].append(
-            {
-                "subscription_id": "sub-full-1",
-                "created_at": "2026-03-13T00:00:00Z",
-                "updated_at": "2026-03-13T00:00:00Z",
-                "state": "active",
-                "event_types": ["test"],
-            }
-        )
-        persistence.save(state)
-        queue_dir = hub_root / ".codex-autorunner" / "pma" / "queue"
-        queue_dir.mkdir(parents=True, exist_ok=True)
-        (queue_dir / "test.jsonl").write_text(
-            '{"item_id": "item-1", "lane_id": "lane-1", "state": "pending", "idempotency_key": "item-key-1"}\n'
-        )
-        audit_log = hub_root / ".codex-autorunner" / "pma" / "audit_log.jsonl"
-        audit_log.parent.mkdir(parents=True, exist_ok=True)
-        audit_log.write_text(
-            '{"entry_id": "audit-1", "action_type": "test", "timestamp": "2026-03-13T00:00:00Z"}\n'
-        )
-        lifecycle_log = (
-            hub_root / ".codex-autorunner" / "pma" / "lifecycle_events.jsonl"
-        )
-        lifecycle_log.write_text(
-            '{"event_id": "event-1", "event_type": "test", "timestamp": "2026-03-13T00:00:00Z"}\n'
-        )
-        transcripts_dir = hub_root / ".codex-autorunner" / "pma" / "transcripts"
-        transcripts_dir.mkdir(parents=True, exist_ok=True)
-        transcript_meta = {
-            "turn_id": "trans-1",
-            "managed_thread_id": thread["managed_thread_id"],
+    thread_id = _seed_legacy_thread_store(hub_root, workspace_root)
+    persistence = PmaAutomationPersistence(hub_root)
+    state = default_pma_automation_state()
+    state["subscriptions"].append(
+        {
+            "subscription_id": "sub-full-1",
             "created_at": "2026-03-13T00:00:00Z",
+            "updated_at": "2026-03-13T00:00:00Z",
+            "state": "active",
+            "event_types": ["test"],
         }
-        (transcripts_dir / "trans-1.json").write_text(json.dumps(transcript_meta))
-        transcript_content = transcripts_dir / "trans-1.txt"
-        transcript_content.write_text("test transcript content")
-        with open_orchestration_sqlite(hub_root, durable=False) as conn:
-            backfill_legacy_thread_state(hub_root, conn)
-            backfill_legacy_automation_state(hub_root, conn)
-            backfill_legacy_queue_state(hub_root, conn)
-            backfill_legacy_audit_entries(hub_root, conn)
-            backfill_legacy_pma_lifecycle_events(hub_root, conn)
-            backfill_legacy_transcript_mirrors(hub_root, conn)
-            summary = verify_migration(hub_root, conn)
-        thread_result = next(
-            r for r in summary.thread_parity if r.check_name == "thread_targets_count"
-        )
-        assert thread_result.status == "passed"
-        sub_result = next(
-            r
-            for r in summary.automation_parity
-            if r.check_name == "automation_subscriptions_count"
-        )
-        assert sub_result.status == "passed"
-        queue_result = next(
-            r for r in summary.queue_parity if r.check_name == "queue_items_count"
-        )
-        assert queue_result.status == "passed"
-        assert summary.transcript_parity is not None
-        assert summary.transcript_parity.status in ("passed", "failed")
-        event_result = next(
-            r for r in summary.event_parity if r.check_name == "event_projections_count"
-        )
-        assert event_result.status == "passed"
-        assert summary.audit_parity.status == "passed"
-        assert summary.overall_passed
-        assert "recommendations" in summary.to_dict()
-    finally:
-        os.environ.pop("CAR_LEGACY_MIRROR_ENABLED", None)
+    )
+    persistence.save(state)
+    queue_dir = hub_root / ".codex-autorunner" / "pma" / "queue"
+    queue_dir.mkdir(parents=True, exist_ok=True)
+    (queue_dir / "test.jsonl").write_text(
+        '{"item_id": "item-1", "lane_id": "lane-1", "state": "pending", "idempotency_key": "item-key-1"}\n'
+    )
+    audit_log = hub_root / ".codex-autorunner" / "pma" / "audit_log.jsonl"
+    audit_log.parent.mkdir(parents=True, exist_ok=True)
+    audit_log.write_text(
+        '{"entry_id": "audit-1", "action_type": "test", "timestamp": "2026-03-13T00:00:00Z"}\n'
+    )
+    lifecycle_log = hub_root / ".codex-autorunner" / "pma" / "lifecycle_events.jsonl"
+    lifecycle_log.write_text(
+        '{"event_id": "event-1", "event_type": "test", "timestamp": "2026-03-13T00:00:00Z"}\n'
+    )
+    transcripts_dir = hub_root / ".codex-autorunner" / "pma" / "transcripts"
+    transcripts_dir.mkdir(parents=True, exist_ok=True)
+    transcript_meta = {
+        "turn_id": "trans-1",
+        "managed_thread_id": thread_id,
+        "created_at": "2026-03-13T00:00:00Z",
+    }
+    (transcripts_dir / "trans-1.json").write_text(json.dumps(transcript_meta))
+    transcript_content = transcripts_dir / "trans-1.txt"
+    transcript_content.write_text("test transcript content")
+    with open_orchestration_sqlite(hub_root, durable=False) as conn:
+        backfill_legacy_thread_state(hub_root, conn)
+        backfill_legacy_automation_state(hub_root, conn)
+        backfill_legacy_queue_state(hub_root, conn)
+        backfill_legacy_audit_entries(hub_root, conn)
+        backfill_legacy_pma_lifecycle_events(hub_root, conn)
+        backfill_legacy_transcript_mirrors(hub_root, conn)
+        summary = verify_migration(hub_root, conn)
+    thread_result = next(
+        r for r in summary.thread_parity if r.check_name == "thread_targets_count"
+    )
+    assert thread_result.status == "passed"
+    sub_result = next(
+        r
+        for r in summary.automation_parity
+        if r.check_name == "automation_subscriptions_count"
+    )
+    assert sub_result.status == "passed"
+    queue_result = next(
+        r for r in summary.queue_parity if r.check_name == "queue_items_count"
+    )
+    assert queue_result.status == "passed"
+    assert summary.transcript_parity is not None
+    assert summary.transcript_parity.status in ("passed", "failed")
+    event_result = next(
+        r for r in summary.event_parity if r.check_name == "event_projections_count"
+    )
+    assert event_result.status == "passed"
+    assert summary.audit_parity.status == "passed"
+    assert summary.overall_passed
+    assert "recommendations" in summary.to_dict()

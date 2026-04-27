@@ -87,60 +87,6 @@ def pma_automation_key(agent: str, profile: Optional[str] = None) -> str:
     return f"{pma_base_key(agent, profile)}.{PMA_AUTOMATION_SEGMENT}"
 
 
-def pma_legacy_alias_keys(agent: str, profile: Optional[str]) -> tuple[str, ...]:
-    """Backward-compat key variants for pre-migration thread lookups.
-
-    These exist so adapters can find threads created under old key naming
-    conventions.  They are **not** policy implementations and can be removed
-    once all thread keys have been canonicalised.
-    """
-    if not isinstance(agent, str) or not isinstance(profile, str):
-        return ()
-    agent_norm = agent.strip().lower()
-    prof_norm = profile.strip().lower()
-    if not agent_norm or not prof_norm:
-        return ()
-    new_key = pma_base_key(agent_norm, prof_norm)
-    raw_aliases: set[str] = {
-        f"{agent_norm}-{prof_norm}",
-        f"{agent_norm}_{prof_norm}",
-    }
-    unders = prof_norm.replace("-", "_")
-    if unders != prof_norm:
-        raw_aliases.add(f"{agent_norm}_{unders}")
-    seen: set[str] = set()
-    ordered: list[str] = []
-    for raw in sorted(raw_aliases):
-        candidate = pma_base_key(raw)
-        if candidate != new_key and candidate not in seen:
-            seen.add(candidate)
-            ordered.append(candidate)
-    return tuple(ordered)
-
-
-def pma_legacy_alias_key(agent: str, profile: Optional[str]) -> Optional[str]:
-    keys = pma_legacy_alias_keys(agent, profile)
-    return keys[0] if keys else None
-
-
-def pma_legacy_migration_fallback_keys(
-    canonical_key: str,
-    agent: str,
-    profile: Optional[str],
-) -> tuple[str, ...]:
-    logical_base = pma_base_key(agent, profile)
-    legacy_bases = pma_legacy_alias_keys(agent, profile)
-    if not legacy_bases:
-        return ()
-    if canonical_key == logical_base:
-        return legacy_bases
-    topic_prefix = logical_base + "."
-    if canonical_key.startswith(topic_prefix):
-        suffix = canonical_key[len(topic_prefix) :]
-        return tuple(f"{base}.{suffix}" for base in legacy_bases)
-    return ()
-
-
 def pma_prefix_for_agent(agent: Optional[str], profile: Optional[str] = None) -> str:
     normalized = _normalize_pma_agent_family(agent)
     base_key = PMA_KEY if normalized is None else f"{PMA_KEY}.{normalized}"
@@ -277,8 +223,8 @@ class ManagedThreadIdentityStore:
         row = conn.execute(
             """
             SELECT 1 AS ok
-              FROM orch_legacy_backfill_flags
-             WHERE backfill_key = ?
+              FROM orch_operation_flags
+             WHERE flag_key = ?
              LIMIT 1
             """,
             (_APP_SERVER_THREADS_IMPORT_FLAG,),
@@ -289,8 +235,8 @@ class ManagedThreadIdentityStore:
         with conn:
             conn.execute(
                 """
-                INSERT OR REPLACE INTO orch_legacy_backfill_flags (
-                    backfill_key,
+                INSERT OR REPLACE INTO orch_operation_flags (
+                    flag_key,
                     completed_at
                 ) VALUES (?, ?)
                 """,
@@ -670,9 +616,6 @@ __all__ = [
     "normalize_feature_key",
     "pma_automation_key",
     "pma_base_key",
-    "pma_legacy_alias_key",
-    "pma_legacy_alias_keys",
-    "pma_legacy_migration_fallback_keys",
     "pma_prefix_for_agent",
     "pma_prefixes_for_reset",
     "pma_topic_scoped_key",
