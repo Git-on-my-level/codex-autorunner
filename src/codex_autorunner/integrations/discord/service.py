@@ -5941,42 +5941,16 @@ class DiscordBotService:
                 or record.scheduler_state in {"delivery_pending", "delivery_replaying"}
             )
         )
-        duplicate_rejected = await self._maybe_reject_duplicate_interaction(
+        await self._maybe_reject_duplicate_interaction(
             interaction_id=ctx.interaction_id,
             snapshot=snapshot,
-            operation_already_registered=(snapshot is not None or record is not None),
+            operation_already_registered=True,
             has_pending_delivery=has_pending_delivery,
             scheduler_state=(record.scheduler_state if record is not None else None),
             execution_status=(record.execution_status if record is not None else None),
             release_reservation=True,
         )
-        if duplicate_rejected is not None:
-            return duplicate_rejected
-        if record is not None and record.scheduler_state in {
-            "completed",
-            "delivery_expired",
-            "abandoned",
-        }:
-            await self._release_interaction_ingress(ctx.interaction_id)
-            return True
-        if (
-            record is not None
-            and record.execution_status
-            in {"completed", "failed", "timeout", "cancelled"}
-            and not has_pending_delivery
-        ):
-            await self._release_interaction_ingress(ctx.interaction_id)
-            return True
-        log_event(
-            self._logger,
-            logging.INFO,
-            "discord.interaction.duplicate_resuming",
-            interaction_id=ctx.interaction_id,
-            scheduler_state=(record.scheduler_state if record is not None else None),
-            execution_status=(record.execution_status if record is not None else None),
-            shared_state=snapshot.state.value if snapshot is not None else None,
-        )
-        return False
+        return True
 
     async def _release_interaction_ingress(self, interaction_id: str) -> None:
         reservations = getattr(self, "_ingress_pre_ack_reservations", None)
@@ -6011,7 +5985,7 @@ class DiscordBotService:
             )
             or record.scheduler_state in {"delivery_pending", "delivery_replaying"}
         )
-        duplicate_rejected = await self._maybe_reject_duplicate_interaction(
+        await self._maybe_reject_duplicate_interaction(
             interaction_id=ctx.interaction_id,
             snapshot=snapshot,
             operation_already_registered=True,
@@ -6020,25 +5994,7 @@ class DiscordBotService:
             execution_status=record.execution_status,
             release_reservation=False,
         )
-        if duplicate_rejected is not None:
-            return duplicate_rejected
-        if record.scheduler_state in {"completed", "delivery_expired", "abandoned"}:
-            return True
-        if (
-            record.execution_status in {"completed", "failed", "timeout", "cancelled"}
-            and not has_pending_delivery
-        ):
-            return True
-        log_event(
-            self._logger,
-            logging.INFO,
-            "discord.interaction.duplicate_resuming",
-            interaction_id=ctx.interaction_id,
-            scheduler_state=record.scheduler_state,
-            execution_status=record.execution_status,
-            shared_state=snapshot.state.value if snapshot is not None else None,
-        )
-        return False
+        return True
 
     async def _begin_interaction_execution(self, ctx: IngressContext) -> bool:
         claimed = await self._store.claim_interaction_execution(ctx.interaction_id)
