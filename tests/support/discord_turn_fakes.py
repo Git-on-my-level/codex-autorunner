@@ -409,7 +409,14 @@ class _StreamingFakeHarness:
         self._errors = list(errors or [])
         self._wait_for_stream = wait_for_stream
         self._stream_exception = stream_exception
-        self._allow_parallel_event_stream = allow_parallel_event_stream
+        if allow_parallel_event_stream:
+            self.capabilities = type(self).capabilities
+        else:
+            self.capabilities = frozenset(
+                capability
+                for capability in type(self).capabilities
+                if capability != "event_streaming"
+            )
         self._stream_done = asyncio.Event()
 
     async def ensure_ready(self, workspace_root: Path) -> None:
@@ -417,9 +424,6 @@ class _StreamingFakeHarness:
 
     def supports(self, capability: str) -> bool:
         return capability in self.capabilities
-
-    def allows_parallel_event_stream(self) -> bool:
-        return self._allow_parallel_event_stream
 
     async def new_conversation(
         self, workspace_root: Path, title: Optional[str] = None

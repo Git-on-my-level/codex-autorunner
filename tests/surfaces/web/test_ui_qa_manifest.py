@@ -8,8 +8,8 @@ import subprocess
 from pathlib import Path
 
 import pytest
-import yaml
 
+import yaml
 from codex_autorunner.browser.actions import SUPPORTED_V1_ACTIONS, load_demo_manifest
 
 

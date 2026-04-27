@@ -60,9 +60,6 @@ class AgentHarness(ABC):
             return False
         return next(iter(normalized)) in self.capabilities
 
-    def allows_parallel_event_stream(self) -> bool:
-        return self.supports("event_streaming")
-
     async def model_catalog(self, workspace_root: Path) -> ModelCatalog:
         _ = workspace_root
         raise UnsupportedAgentCapabilityError(
@@ -184,18 +181,9 @@ class AgentHarness(ABC):
         return []
 
 
-def harness_allows_parallel_event_stream(harness: Any) -> bool:
+def harness_supports_event_streaming(harness: Any) -> bool:
     supports = getattr(harness, "supports", None)
-    if not callable(supports) or not supports("event_streaming"):
-        return False
-    allows_parallel = getattr(harness, "allows_parallel_event_stream", None)
-    if callable(allows_parallel):
-        return bool(allows_parallel())
-    return True
-
-
-def harness_supports_progress_event_stream(harness: Any) -> bool:
-    return harness_allows_parallel_event_stream(harness)
+    return bool(callable(supports) and supports("event_streaming"))
 
 
 def harness_progress_event_stream(
@@ -205,7 +193,7 @@ def harness_progress_event_stream(
     turn_id: str,
 ) -> AsyncIterator[Any]:
     stream_events = getattr(harness, "stream_events", None)
-    if callable(stream_events) and harness_allows_parallel_event_stream(harness):
+    if callable(stream_events) and harness_supports_event_streaming(harness):
         return cast(
             AsyncIterator[Any],
             stream_events(workspace_root, conversation_id, turn_id),
@@ -225,7 +213,6 @@ def harness_progress_event_stream(
 __all__ = [
     "AgentHarness",
     "UnsupportedAgentCapabilityError",
-    "harness_allows_parallel_event_stream",
     "harness_progress_event_stream",
-    "harness_supports_progress_event_stream",
+    "harness_supports_event_streaming",
 ]

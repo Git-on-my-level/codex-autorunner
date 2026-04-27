@@ -157,9 +157,11 @@ class TestHasCapability:
         assert has_capability("hermes", "model_listing") is False
         assert has_capability("hermes", "transcript_history") is False
 
-    def test_legacy_capability_aliases_still_normalize(self):
-        assert has_capability("codex", "threads") is True
-        assert has_capability("codex", "turns") is True
+    def test_capability_checks_use_canonical_names(self):
+        assert has_capability("codex", "durable_threads") is True
+        assert has_capability("codex", "message_turns") is True
+        assert has_capability("codex", "threads") is False
+        assert has_capability("codex", "turns") is False
 
 
 class _StubEntryPoint:

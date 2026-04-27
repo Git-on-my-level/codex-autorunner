@@ -315,15 +315,14 @@ async def test_minimal_harness_nominal_thread_lifecycle() -> None:
     assert result.assistant_text == "response"
 
 
-def test_capability_normalization_aliases() -> None:
-    """Test that legacy capability aliases are normalized."""
+def test_capability_support_uses_canonical_names() -> None:
+    """Test that harness capability checks use canonical names only."""
     harness = _MinimalConformingHarness()
-
-    assert harness.supports("threads") is True
-    assert harness.supports("turns") is True
 
     assert harness.supports("durable_threads") is True
     assert harness.supports("message_turns") is True
+    assert harness.supports("threads") is False
+    assert harness.supports("turns") is False
 
 
 def test_descriptor_capability_normalization() -> None:
@@ -333,8 +332,8 @@ def test_descriptor_capability_normalization() -> None:
         name="Test Normalized",
         capabilities=frozenset(
             [
-                RuntimeCapability("threads"),
-                RuntimeCapability("turns"),
+                RuntimeCapability("durable_threads"),
+                RuntimeCapability("message_turns"),
                 RuntimeCapability("interrupt"),
             ]
         ),

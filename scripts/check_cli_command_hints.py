@@ -197,8 +197,9 @@ def _parse_car_suffix(fragment: str) -> tuple[str, ...] | None:
         )
         if not m:
             break
-        raw = m.group(1)
-        token = raw.rstrip(r".,;:!?)}\]'\"")
+        token = m.group(1)
+        while token and token[-1] in ".,;:!?)}]'\\\"":
+            token = token[:-1]
         if not token:
             break
         if token.startswith("-") and not token.startswith("--"):
@@ -312,7 +313,9 @@ def _scan_markdown_files(
             if key in seen:
                 continue
             seen.add(key)
-            violations.append((path, line_no, f"unknown CLI path {' '.join(pth)!r}", pth))
+            violations.append(
+                (path, line_no, f"unknown CLI path {' '.join(pth)!r}", pth)
+            )
     return violations
 
 

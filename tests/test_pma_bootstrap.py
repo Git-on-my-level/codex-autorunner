@@ -1,8 +1,8 @@
 from pathlib import Path
 
 import pytest
-import yaml
 
+import yaml
 from codex_autorunner.bootstrap import GENERATED_CONFIG_HEADER, seed_hub_files
 from codex_autorunner.core.config import CONFIG_VERSION, load_hub_config
 from codex_autorunner.core.config_contract import ConfigError

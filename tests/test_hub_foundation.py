@@ -2,7 +2,6 @@ import copy
 from pathlib import Path
 
 import yaml
-
 from codex_autorunner.bootstrap import GITIGNORE_CONTENT, seed_repo_files
 from codex_autorunner.core.config import (
     CONFIG_FILENAME,

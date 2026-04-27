@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-from codex_autorunner.agents.registry import (
-    AgentDescriptor,
-    normalize_agent_capabilities,
-)
+from codex_autorunner.agents.registry import AgentDescriptor
+from codex_autorunner.agents.types import normalize_runtime_capabilities
 from codex_autorunner.core.orchestration.catalog import (
     build_agent_definition,
     merge_agent_capabilities,
@@ -19,15 +17,12 @@ def _make_descriptor(capabilities: frozenset[str]) -> AgentDescriptor:
     )
 
 
-def test_normalize_agent_capabilities_canonicalizes_legacy_aliases() -> None:
-    capabilities = normalize_agent_capabilities(
+def test_normalize_runtime_capabilities_normalizes_case_and_whitespace() -> None:
+    capabilities = normalize_runtime_capabilities(
         [
-            "threads",
-            "turns",
-            "session_resume",
-            "conversation_compaction",
-            "code_review",
-            "turn_control",
+            " durable_threads ",
+            "MESSAGE_TURNS",
+            "review",
             "active_thread_discovery",
         ]
     )
@@ -36,7 +31,6 @@ def test_normalize_agent_capabilities_canonicalizes_legacy_aliases() -> None:
         [
             "durable_threads",
             "message_turns",
-            "interrupt",
             "review",
             "active_thread_discovery",
         ]
@@ -45,7 +39,7 @@ def test_normalize_agent_capabilities_canonicalizes_legacy_aliases() -> None:
 
 def test_agent_descriptor_normalizes_static_capabilities() -> None:
     descriptor = _make_descriptor(
-        frozenset(["threads", "turns", "review", "model_listing"])
+        frozenset(["durable_threads", "message_turns", "review", "model_listing"])
     )
 
     assert descriptor.capabilities == frozenset(
@@ -61,7 +55,7 @@ def test_agent_descriptor_normalizes_static_capabilities() -> None:
 def test_merge_agent_capabilities_adds_runtime_reported_features() -> None:
     merged = merge_agent_capabilities(
         ["durable_threads", "message_turns", "event_streaming"],
-        ["interrupt", "active_thread_discovery", "structured_event_streaming"],
+        ["interrupt", "active_thread_discovery"],
     )
 
     assert merged == frozenset(
@@ -71,7 +65,6 @@ def test_merge_agent_capabilities_adds_runtime_reported_features() -> None:
             "event_streaming",
             "interrupt",
             "active_thread_discovery",
-            "structured_event_streaming",
         ]
     )
 

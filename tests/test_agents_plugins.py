@@ -32,7 +32,7 @@ def test_load_agent_plugin(monkeypatch):
     plugin = AgentDescriptor(
         id="myagent",
         name="My Agent",
-        capabilities=frozenset(["threads"]),
+        capabilities=frozenset(["durable_threads"]),
         make_harness=lambda ctx: None,  # type: ignore[return-value]
         plugin_api_version=CAR_PLUGIN_API_VERSION,
     )
@@ -52,7 +52,7 @@ def test_skip_agent_plugin_version_mismatch(monkeypatch):
     plugin = AgentDescriptor(
         id="badagent",
         name="Bad Agent",
-        capabilities=frozenset(["threads"]),
+        capabilities=frozenset(["durable_threads"]),
         make_harness=lambda ctx: None,  # type: ignore[return-value]
         plugin_api_version=CAR_PLUGIN_API_VERSION + 1,
     )
@@ -65,3 +65,22 @@ def test_skip_agent_plugin_version_mismatch(monkeypatch):
 
     agents = get_registered_agents()
     assert "badagent" not in agents
+
+
+def test_load_agent_plugin_with_older_api_version(monkeypatch):
+    plugin = AgentDescriptor(
+        id="legacyagent",
+        name="Legacy Agent",
+        capabilities=frozenset(["durable_threads"]),
+        make_harness=lambda ctx: None,  # type: ignore[return-value]
+        plugin_api_version=CAR_PLUGIN_API_VERSION - 1,
+    )
+
+    def fake_entry_points():
+        return _FakeEntryPoints([_FakeEntryPoint("legacyagent", plugin)])
+
+    monkeypatch.setattr(importlib.metadata, "entry_points", fake_entry_points)
+    reload_agents()
+
+    agents = get_registered_agents()
+    assert "legacyagent" in agents

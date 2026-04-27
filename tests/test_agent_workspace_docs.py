@@ -1,10 +1,26 @@
 from __future__ import annotations
 
+import re
+from dataclasses import fields
 from pathlib import Path
+
+from codex_autorunner.agents.registry import AgentDescriptor
+from codex_autorunner.agents.types import RUNTIME_CAPABILITIES
 
 
 def _read(rel_path: str) -> str:
     return Path(rel_path).read_text(encoding="utf-8")
+
+
+def _section(text: str, heading: str) -> str:
+    pattern = rf"^### {re.escape(heading)}\n(.*?)(?=^### |^## |\Z)"
+    match = re.search(pattern, text, flags=re.MULTILINE | re.DOTALL)
+    assert match is not None, f"missing section: {heading}"
+    return match.group(1)
+
+
+def _listed_capabilities(section_text: str) -> set[str]:
+    return set(re.findall(r"- `([a-z_]+)`:", section_text))
 
 
 def test_hub_manifest_docs_describe_typed_resource_model() -> None:
@@ -50,3 +66,24 @@ def test_telegram_docs_describe_authoritative_binding_storage() -> None:
     assert "Authoritative binding and durable-thread metadata live in hub" in (
         security_text
     )
+
+
+def test_plugin_api_doc_stays_consistent_with_capability_and_descriptor_surface() -> (
+    None
+):
+    plugin_text = _read("docs/plugin-api.md")
+
+    required_capabilities = _listed_capabilities(
+        _section(plugin_text, "Required Capabilities")
+    )
+    optional_capabilities = _listed_capabilities(
+        _section(plugin_text, "Optional Capabilities")
+    )
+    documented_capabilities = required_capabilities | optional_capabilities
+    canonical_capabilities = {str(capability) for capability in RUNTIME_CAPABILITIES}
+
+    assert optional_capabilities <= canonical_capabilities
+    assert documented_capabilities == canonical_capabilities
+
+    for field in fields(AgentDescriptor):
+        assert f"{field.name}=" in plugin_text

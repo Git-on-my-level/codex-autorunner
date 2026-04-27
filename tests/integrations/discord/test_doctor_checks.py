@@ -3,8 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-import yaml
 
+import yaml
 from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.core.config import load_hub_config
 from codex_autorunner.integrations.discord import doctor as discord_doctor

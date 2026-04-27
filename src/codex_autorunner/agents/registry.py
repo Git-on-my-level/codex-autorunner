@@ -31,7 +31,6 @@ from .zeroclaw.supervisor import (
 )
 
 _logger = logging.getLogger(__name__)
-AgentCapability = RuntimeCapability
 
 
 @dataclass(frozen=True)
@@ -46,7 +45,7 @@ class AgentDescriptor:
 
     id: str
     name: str
-    capabilities: frozenset[AgentCapability]
+    capabilities: frozenset[RuntimeCapability]
     make_harness: Callable[[Any], AgentHarness]
     healthcheck: Optional[Callable[[Any], bool]] = None
     backend_factory: Optional[Callable[[Any, AgentExecutionTarget, Any, Any], Any]] = (
@@ -60,7 +59,7 @@ class AgentDescriptor:
         object.__setattr__(
             self,
             "capabilities",
-            normalize_agent_capabilities(self.capabilities),
+            normalize_runtime_capabilities(self.capabilities),
         )
         runtime_kind = str(self.runtime_kind or self.id or "").strip().lower()
         object.__setattr__(
@@ -103,12 +102,6 @@ class AgentExecutionTarget:
     runtime_agent_id: str
     runtime_profile: Optional[str]
     resolution_kind: str
-
-
-def normalize_agent_capabilities(
-    capabilities: Iterable[str],
-) -> frozenset[AgentCapability]:
-    return normalize_runtime_capabilities(capabilities)
 
 
 def _normalize_optional_text(value: object) -> Optional[str]:
@@ -937,7 +930,7 @@ def has_capability(agent_id: str, capability: str, context: Any = None) -> bool:
     descriptor = get_agent_descriptor(agent_id, context)
     if descriptor is None:
         return False
-    normalized = normalize_agent_capabilities([capability])
+    normalized = normalize_runtime_capabilities([capability])
     if not normalized:
         return False
     return next(iter(normalized)) in descriptor.capabilities
@@ -948,7 +941,6 @@ __all__ = [
     "AgentRuntimeResolution",
     "CAR_AGENT_ENTRYPOINT_GROUP",
     "CAR_PLUGIN_API_VERSION",
-    "AgentCapability",
     "AgentDescriptor",
     "configured_agent_execution_targets",
     "descriptor_runtime_kind",
@@ -956,7 +948,6 @@ __all__ = [
     "get_available_agents",
     "get_registered_agents",
     "has_capability",
-    "normalize_agent_capabilities",
     "reload_agents",
     "resolve_agent_execution_target",
     "resolve_agent_runtime",

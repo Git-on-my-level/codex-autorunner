@@ -3,9 +3,9 @@ from pathlib import Path
 from typing import Optional
 
 import pytest
-import yaml
 from typer.testing import CliRunner
 
+import yaml
 from codex_autorunner.cli import app
 from codex_autorunner.core.config import CONFIG_FILENAME
 from codex_autorunner.core.git_utils import run_git

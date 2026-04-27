@@ -1,21 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Iterable, NewType, Optional
+from typing import Any, NewType, Optional
+
+from ..runtime_capabilities import (
+    RUNTIME_CAPABILITIES,
+    RuntimeCapability,
+    normalize_runtime_capabilities,
+)
 
 # When adding agents, update core/config.py agents defaults + validation (config-driven).
 AgentId = NewType("AgentId", str)
-RuntimeCapability = NewType("RuntimeCapability", str)
-
-_RUNTIME_CAPABILITY_ALIASES = {
-    "threads": "durable_threads",
-    "turns": "message_turns",
-    "session_resume": "durable_threads",
-    "pma_thread_reset": "durable_threads",
-    "conversation_compaction": "message_turns",
-    "code_review": "review",
-    "turn_control": "interrupt",
-}
 
 
 @dataclass(frozen=True)
@@ -77,24 +72,12 @@ class RuntimeCapabilityReport:
     capabilities: frozenset[RuntimeCapability] = field(default_factory=frozenset)
 
 
-def normalize_runtime_capabilities(
-    capabilities: Iterable[str],
-) -> frozenset[RuntimeCapability]:
-    normalized: set[RuntimeCapability] = set()
-    for capability in capabilities:
-        text = str(capability or "").strip().lower()
-        if not text:
-            continue
-        text = _RUNTIME_CAPABILITY_ALIASES.get(text, text)
-        normalized.add(RuntimeCapability(text))
-    return frozenset(normalized)
-
-
 __all__ = [
     "AgentId",
     "ConversationRef",
     "ModelCatalog",
     "ModelSpec",
+    "RUNTIME_CAPABILITIES",
     "RuntimeCapability",
     "RuntimeCapabilityReport",
     "TerminalTurnResult",

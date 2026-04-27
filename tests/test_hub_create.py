@@ -2,9 +2,9 @@ import json
 from pathlib import Path
 
 import pytest
-import yaml
 from typer.testing import CliRunner
 
+import yaml
 from codex_autorunner.cli import app
 from codex_autorunner.core.config import (
     CONFIG_FILENAME,

@@ -1,5 +1,4 @@
 import yaml
-
 from codex_autorunner.core.templates import FetchedTemplate, inject_provenance
 from codex_autorunner.core.templates.scan_cache import TemplateScanRecord
 

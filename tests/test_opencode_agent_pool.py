@@ -75,7 +75,14 @@ class _FakeHarness:
         self.resume_calls: list[str] = []
         self._session_counter = 0
         self._turn_counter = 0
-        self._allow_parallel_event_stream = allow_parallel_event_stream
+        if allow_parallel_event_stream:
+            self.capabilities = type(self).capabilities
+        else:
+            self.capabilities = frozenset(
+                capability
+                for capability in type(self).capabilities
+                if capability != RuntimeCapability("event_streaming")
+            )
         self.stream_event_calls = 0
 
     async def ensure_ready(self, workspace_root: Path) -> None:
@@ -83,9 +90,6 @@ class _FakeHarness:
 
     def supports(self, capability: str) -> bool:
         return RuntimeCapability(capability) in self.capabilities
-
-    def allows_parallel_event_stream(self) -> bool:
-        return self._allow_parallel_event_stream
 
     async def new_conversation(
         self, workspace_root: Path, title: Optional[str] = None

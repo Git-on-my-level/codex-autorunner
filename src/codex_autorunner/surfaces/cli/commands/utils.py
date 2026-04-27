@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 
 import httpx
 import typer
+
 import yaml
 
 from ....core.config import (

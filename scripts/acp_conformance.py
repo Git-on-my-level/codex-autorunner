@@ -77,8 +77,12 @@ def main() -> int:
             print(f"{target.id}\t{target.label}\t{' '.join(target.command)}")
         return 0
 
-    target_ids = {str(value).strip() for value in (args.target_ids or []) if str(value).strip()}
-    selected = [target for target in discovered if not target_ids or target.id in target_ids]
+    target_ids = {
+        str(value).strip() for value in (args.target_ids or []) if str(value).strip()
+    }
+    selected = [
+        target for target in discovered if not target_ids or target.id in target_ids
+    ]
     if target_ids and not selected:
         parser.error("No discovered targets matched --target filters.")
 

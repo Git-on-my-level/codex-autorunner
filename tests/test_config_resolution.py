@@ -3,9 +3,9 @@ import os
 from pathlib import Path
 
 import pytest
-import yaml
 
 import codex_autorunner.core.config_builders as config_builders
+import yaml
 from codex_autorunner.bootstrap import GENERATED_CONFIG_HEADER
 from codex_autorunner.core.config import (
     ACTIVE_HUB_ROOT_ENV,

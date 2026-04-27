@@ -25,16 +25,6 @@ RUNTIME_THREAD_MISSING_BACKEND_IDS_ERROR = (
 )
 
 
-def _harness_supports_progress_event_stream(harness: Any) -> bool:
-    supports = getattr(harness, "supports", None)
-    if not callable(supports) or not supports("event_streaming"):
-        return False
-    allows_parallel = getattr(harness, "allows_parallel_event_stream", None)
-    if callable(allows_parallel):
-        return bool(allows_parallel())
-    return True
-
-
 async def _recover_stalled_turn(
     execution: RuntimeThreadExecution,
 ) -> Optional[Any]:
@@ -81,7 +71,11 @@ async def _wait_for_late_collector_result(
 ) -> Optional[Any]:
     if collector_task.done():
         return await collector_task
-    timeout_seconds = max(float(grace_seconds), 0.0)
+    # Under heavy test or runtime load, an extremely small grace window can
+    # expire before the loop gets a fair chance to schedule the completed
+    # collector result. Use at least one stall poll interval as the final
+    # prompt-return grace period.
+    timeout_seconds = max(float(grace_seconds), _STALL_POLL_INTERVAL_SECONDS, 0.0)
     if timeout_seconds <= 0.0:
         return None
     try:
@@ -276,9 +270,8 @@ async def await_runtime_thread_outcome(
             _wait_for_progress_recovery_probe(state, recovery_probe_interval)
         )
     stream_task = None
-    if observe_progress_events and _harness_supports_progress_event_stream(
-        execution.harness
-    ):
+    supports = getattr(execution.harness, "supports", None)
+    if observe_progress_events and callable(supports) and supports("event_streaming"):
         stream_task = asyncio.create_task(
             _observe_runtime_terminal_state(execution, state)
         )

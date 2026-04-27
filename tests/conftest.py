@@ -19,8 +19,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-import yaml
 
+import yaml
 from tests.support.hermetic_roots import HermeticTestRoots
 
 _TIMEOUT_FAST_SECONDS = 30

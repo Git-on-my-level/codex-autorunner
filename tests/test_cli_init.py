@@ -1,10 +1,10 @@
 from pathlib import Path
 
 import pytest
-import yaml
 from typer.testing import CliRunner
 
 import codex_autorunner.core.config_builders as config_builders
+import yaml
 from codex_autorunner.cli import app
 from codex_autorunner.core.config import CONFIG_FILENAME
 from codex_autorunner.surfaces.cli.commands import root as root_commands

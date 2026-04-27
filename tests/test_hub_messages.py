@@ -7,9 +7,9 @@ from types import SimpleNamespace
 import pytest
 
 pytestmark = pytest.mark.slow
-import yaml
 from fastapi.testclient import TestClient
 
+import yaml
 from codex_autorunner.core.config import (
     CONFIG_FILENAME,
     REPO_OVERRIDE_FILENAME,

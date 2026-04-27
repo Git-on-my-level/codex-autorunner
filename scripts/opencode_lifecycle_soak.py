@@ -15,7 +15,6 @@ from pathlib import Path
 from typing import Any, Optional
 
 import yaml
-
 from codex_autorunner.agents.opencode.run_prompt import (
     OpenCodeRunConfig,
     run_opencode_prompt,

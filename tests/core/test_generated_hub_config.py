@@ -1,7 +1,6 @@
 from pathlib import Path
 
 import yaml
-
 from codex_autorunner.core.config_layering import (
     GENERATED_CONFIG_HEADER,
     PMA_DEFAULT_MAX_TEXT_CHARS,
