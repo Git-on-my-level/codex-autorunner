@@ -18,6 +18,7 @@ from ...core.pma_hygiene import (
     hygiene_lock_path,
     render_pma_hygiene_report,
 )
+from .commands.utils import build_hub_supervisor
 from .hub_path_option import hub_root_path_option
 from .pma_binding_commands import register_binding_commands
 from .pma_context_commands import register_context_commands
@@ -432,7 +433,7 @@ def pma_hygiene(
         "--include-needs-confirmation",
         "--force-non-safe",
         help=(
-            "Also apply reviewed needs-confirmation managed-thread cleanup candidates."
+            "Also apply reviewed needs-confirmation managed-thread/worktree cleanup candidates."
         ),
     ),
     summary: bool = typer.Option(
@@ -452,6 +453,17 @@ def pma_hygiene(
     """Review PMA hygiene candidates and optionally clean only the safe ones."""
     hub_root = resolve_hub_path(path)
     apply_result: Optional[dict[str, Any]] = None
+    supervisor = None
+
+    def _cleanup_worktree(worktree_repo_id: str, archive: bool) -> dict[str, Any]:
+        nonlocal supervisor
+        if supervisor is None:
+            supervisor = build_hub_supervisor(load_hub_config(hub_root))
+        return supervisor.cleanup_worktree(
+            worktree_repo_id=worktree_repo_id,
+            archive=archive,
+        )
+
     try:
         lock_ctx = file_lock(hygiene_lock_path(hub_root)) if apply else nullcontext()
         with lock_ctx:
@@ -465,6 +477,7 @@ def pma_hygiene(
                     hub_root,
                     report,
                     include_needs_confirmation=include_needs_confirmation,
+                    cleanup_worktree=_cleanup_worktree,
                 )
     except ValueError as exc:
         typer.echo(str(exc), err=True)

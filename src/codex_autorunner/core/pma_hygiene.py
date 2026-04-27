@@ -13,11 +13,14 @@ from __future__ import annotations
 
 from collections import Counter
 from pathlib import Path
-from typing import Any, Iterable, Optional, Sequence
+from typing import Any, Callable, Iterable, Optional, Sequence
 
+from ..manifest import load_manifest
+from .chat_bindings import repo_has_active_non_pma_chat_binding
 from .config import load_hub_config
 from .filebox import delete_file, list_filebox
 from .freshness import build_freshness_payload, iso_now, resolve_stale_threshold_seconds
+from .git_utils import git_available, git_is_clean
 from .orchestration.bindings import OrchestrationBindingStore
 from .pma_automation_store import PmaAutomationStore
 from .pma_dispatches import list_pma_dispatches
@@ -183,6 +186,8 @@ def _build_thread_candidates(
     stale_threshold_seconds: int,
 ) -> list[dict[str, Any]]:
     try:
+        config = load_hub_config(hub_root)
+        manifest = load_manifest(config.manifest_path, hub_root)
         store = PmaThreadStore(hub_root)
         threads = store.list_threads(limit=500)
         busy_ids = set(store.list_thread_ids_with_running_executions(limit=None))
@@ -194,6 +199,7 @@ def _build_thread_candidates(
         return []
 
     candidates: list[dict[str, Any]] = []
+    worktree_candidates: dict[str, dict[str, Any]] = {}
     for thread in threads:
         managed_thread_id = str(thread.get("managed_thread_id") or "").strip()
         if not managed_thread_id:
@@ -229,6 +235,48 @@ def _build_thread_candidates(
         )
         has_binding = bool(bindings)
         has_busy_work = managed_thread_id in busy_ids
+        workspace_text = str(thread.get("workspace_root") or "").strip()
+        worktree_repo_id = str(thread.get("repo_id") or "").strip()
+        worktree_entry = manifest.get(worktree_repo_id) if worktree_repo_id else None
+        if (
+            worktree_entry is not None
+            and getattr(worktree_entry, "kind", None) == "worktree"
+        ):
+            worktree_path = (hub_root / worktree_entry.path).resolve()
+            repo_chat_bound = repo_has_active_non_pma_chat_binding(
+                hub_root=hub_root,
+                raw_config=config.raw,
+                repo_id=worktree_repo_id,
+            )
+            state = worktree_candidates.setdefault(
+                worktree_repo_id,
+                {
+                    "repo_id": worktree_repo_id,
+                    "branch": worktree_entry.branch,
+                    "path": str(worktree_path),
+                    "thread_ids": [],
+                    "thread_count": 0,
+                    "all_idle_archive_candidates": True,
+                    "has_active_thread_binding": False,
+                    "has_busy_work": False,
+                    "chat_bound": repo_chat_bound,
+                },
+            )
+            state["thread_ids"].append(managed_thread_id)
+            state["thread_count"] += 1
+            state["has_active_thread_binding"] = (
+                bool(state["has_active_thread_binding"]) or has_binding
+            )
+            state["has_busy_work"] = bool(state["has_busy_work"]) or has_busy_work
+            followup = classify_thread_followup(
+                {**thread, "status": normalized_status or lifecycle_status},
+                is_stale=freshness.get("is_stale") is True,
+                is_chat_bound=repo_chat_bound,
+            )
+            if str(followup.get("followup_state") or "") != "idle_archive_candidate":
+                state["all_idle_archive_candidates"] = False
+            continue
+
         is_protected = is_thread_cleanup_protected(
             has_binding=has_binding,
             has_busy_work=has_busy_work,
@@ -265,8 +313,72 @@ def _build_thread_candidates(
                     "repo_id": thread.get("repo_id"),
                     "resource_kind": thread.get("resource_kind"),
                     "resource_id": thread.get("resource_id"),
+                    "workspace_root": workspace_text or None,
                 },
                 target={"managed_thread_id": managed_thread_id},
+            )
+        )
+    for worktree_repo_id, state in worktree_candidates.items():
+        if not bool(state["all_idle_archive_candidates"]):
+            continue
+        path = Path(str(state["path"]))
+        group = "safe"
+        reason = "Dormant worktree has only stale managed threads and is safe to purge."
+        archive_requested = False
+        if bool(state["chat_bound"]):
+            group = "protected"
+            reason = (
+                "Chat-bound worktree is protected from cleanup without explicit force."
+            )
+        elif bool(state["has_active_thread_binding"]) or bool(state["has_busy_work"]):
+            group = "protected"
+            reason = "Managed thread still has an active binding or work in flight."
+        elif path.exists() and git_available(path):
+            archive_requested = True
+            try:
+                if not git_is_clean(path):
+                    group = "needs-confirmation"
+                    reason = "Dormant worktree still has uncommitted changes; review before purge."
+            except OSError:
+                group = "needs-confirmation"
+                reason = "Unable to verify worktree cleanliness; review before purge."
+        elif path.exists() and path.is_dir():
+            unexpected_entries = [
+                child.name
+                for child in sorted(path.iterdir(), key=lambda item: item.name)
+                if child.name not in {".codex-autorunner", ".git"}
+            ]
+            if unexpected_entries:
+                rendered = ", ".join(unexpected_entries[:5])
+                if len(unexpected_entries) > 5:
+                    rendered = f"{rendered}, ..."
+                group = "needs-confirmation"
+                reason = (
+                    "Worktree is no longer a git checkout but still has non-CAR files: "
+                    f"{rendered}"
+                )
+        candidates.append(
+            _build_candidate(
+                group=group,
+                category="threads",
+                candidate_id=f"threads:worktree:{worktree_repo_id}",
+                label=worktree_repo_id,
+                action="purge_worktree",
+                reason=reason,
+                path=str(path),
+                evidence={
+                    "branch": state.get("branch"),
+                    "thread_count": state.get("thread_count"),
+                    "managed_thread_ids": list(state.get("thread_ids") or []),
+                    "has_active_thread_binding": state.get("has_active_thread_binding"),
+                    "has_busy_work": state.get("has_busy_work"),
+                    "chat_bound": state.get("chat_bound"),
+                    "archive_requested": archive_requested,
+                },
+                target={
+                    "worktree_repo_id": worktree_repo_id,
+                    "archive_requested": archive_requested,
+                },
             )
         )
     return candidates
@@ -517,7 +629,8 @@ def _is_reviewed_thread_cleanup_candidate(item: dict[str, Any]) -> bool:
     return (
         str(item.get("group") or "") == "needs-confirmation"
         and str(item.get("category") or "") == "threads"
-        and str(item.get("action") or "") == "archive_managed_thread"
+        and str(item.get("action") or "")
+        in {"archive_managed_thread", "purge_worktree"}
     )
 
 
@@ -607,6 +720,7 @@ def apply_pma_hygiene_report(
     report: dict[str, Any],
     *,
     include_needs_confirmation: bool = False,
+    cleanup_worktree: Optional[Callable[[str, bool], dict[str, Any]]] = None,
 ) -> dict[str, Any]:
     selected_items = _collect_hygiene_apply_items(
         report, include_needs_confirmation=include_needs_confirmation
@@ -676,6 +790,14 @@ def apply_pma_hygiene_report(
                         f"Managed thread cleanup no longer safe: {blocked_reason}"
                     )
                 thread_store.archive_thread(managed_thread_id)
+                ok = True
+            elif action == "purge_worktree":
+                if cleanup_worktree is None:
+                    raise RuntimeError("Worktree cleanup callback not configured")
+                cleanup_worktree(
+                    str(target.get("worktree_repo_id") or ""),
+                    bool(target.get("archive_requested")),
+                )
                 ok = True
         except (
             Exception
