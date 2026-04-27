@@ -50,14 +50,23 @@ if [[ "$FULL_MODE" == true ]]; then
 fi
 
 # --- Hooks guard (local only) ------------------------------------------------
+# Prefer the repo's .githooks/ so pre-commit runs scripts/check.sh.  Cloud/IDE
+# runtimes (e.g. Cursor agents) may set core.hooksPath to an external path;
+# still allow the validation script to run in those worktrees.
 if [ -z "${CI:-}" ] && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   HOOKS_PATH="$(git config --get core.hooksPath || true)"
   case "$HOOKS_PATH" in
     .githooks|*/.githooks)
       ;;
+    "")
+      echo "Note: git core.hooksPath is not set. Run 'make hooks' to enable the repo's pre-commit hook (scripts/check.sh)." >&2
+      ;;
+    *agent-hooks* | *cursor* | */.cursor/*)
+      echo "Note: using external/IDE core.hooksPath ($HOOKS_PATH). The repo's pre-commit may be bypassed; for parity run ./scripts/check.sh or make check before push." >&2
+      ;;
     *)
-      echo "Git hooks are not installed for this repo/worktree." >&2
-      echo "Run 'make hooks' (or 'make setup') to enable pre-commit checks." >&2
+      echo "Git hooks are not installed for this repo/worktree (expected core.hooksPath ending in .githooks, got: ${HOOKS_PATH:-<unset>})." >&2
+      echo "Run 'make hooks' (or 'make setup') to point git at the repo's .githooks/ (pre-commit -> scripts/check.sh)." >&2
       exit 1
       ;;
   esac

@@ -7,7 +7,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from codex_autorunner.integrations.chat import service as chat_service_module
 from codex_autorunner.integrations.chat.service import ChatBotServiceCore
 
 
@@ -143,13 +142,12 @@ async def test_telegram_service_startup_reaps_managed_processes(
         called_roots.append(root)
         return SimpleNamespace(killed=0, signaled=0, removed=0, skipped=0)
 
-    monkeypatch.setattr(chat_service_module, "reap_managed_processes", _fake_reap)
-
     owner = _OwnerStub(tmp_path)
     core = ChatBotServiceCore(
         owner=owner,
         runtime_services=_RuntimeServicesStub(),
         state_store=_StateStoreStub(),
+        reap_managed_processes_fn=_fake_reap,
     )
 
     with pytest.raises(KeyboardInterrupt, match="stop after startup"):

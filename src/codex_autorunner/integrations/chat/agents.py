@@ -175,9 +175,31 @@ def validate_hermes_profile(profile: str, context: Any = None) -> bool:
     return normalized in merged_hermes_profile_ids(context)
 
 
-# Keep an explicit module-level reference so dead-code heuristics treat this
-# membership helper as part of the intended Hermes profile API surface.
-_HERMES_PROFILE_VALIDATION_SURFACE = (validate_hermes_profile,)
+__all__ = [
+    "CHAT_AGENT_DEFINITIONS",
+    "CHAT_EFFORT_CAPABILITY",
+    "ChatAgentDefinition",
+    "ChatAgentProfileOption",
+    "ChatAgentSwitchState",
+    "DEFAULT_CHAT_AGENT",
+    "DEFAULT_CHAT_AGENT_MODELS",
+    "VALID_CHAT_AGENT_VALUES",
+    "build_agent_switch_state",
+    "chat_agent_command_choices",
+    "chat_agent_definitions",
+    "chat_agent_description",
+    "chat_agent_supports_effort",
+    "chat_hermes_profile_options",
+    "default_chat_model_for_agent",
+    "format_chat_agent_selection",
+    "merged_hermes_profile_ids",
+    "normalize_chat_agent",
+    "normalize_hermes_profile",
+    "resolve_chat_agent_and_profile",
+    "resolve_chat_runtime_agent",
+    "valid_chat_agent_values",
+    "validate_hermes_profile",
+]
 
 
 def chat_hermes_profile_options(

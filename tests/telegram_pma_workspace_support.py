@@ -7,13 +7,13 @@ from typing import Any, Optional
 import httpx
 import pytest
 
+from codex_autorunner.core.managed_thread_identity import (
+    PMA_OPENCODE_KEY,
+    AppServerThreadRegistry,
+)
 from codex_autorunner.core.pma_context import default_pma_prompt_state_path
 from codex_autorunner.integrations.app_server.client import (
     CodexAppServerResponseError,
-)
-from codex_autorunner.integrations.app_server.threads import (
-    PMA_OPENCODE_KEY,
-    AppServerThreadRegistry,
 )
 from codex_autorunner.integrations.telegram.adapter import TelegramMessage
 from codex_autorunner.integrations.telegram.handlers.commands import (
@@ -33,8 +33,8 @@ from codex_autorunner.integrations.telegram.handlers.selections import Selection
 from codex_autorunner.integrations.telegram.helpers import _format_help_text
 from codex_autorunner.integrations.telegram.state import (
     TelegramTopicRecord,
-    ThreadSummary,
 )
+from codex_autorunner.integrations.telegram.state_types import ThreadSummary
 from tests.telegram_pma_managed_thread_support import (
     _InProcessHubControlPlaneClient,
     _PMAClientStub,
@@ -100,7 +100,7 @@ class _PMAWorkspaceHandler(WorkspaceCommands):
     def _pma_registry_key(
         self, record: "TelegramTopicRecord", message: Optional[TelegramMessage] = None
     ) -> str:
-        from codex_autorunner.integrations.app_server.threads import pma_base_key
+        from codex_autorunner.core.managed_thread_identity import pma_base_key
 
         agent = self._effective_agent(record)
         base_key = pma_base_key(agent)
@@ -1734,7 +1734,7 @@ async def test_pma_new_resets_managed_binding_when_runtime_threads_enabled(
 async def test_pma_new_resets_scoped_key_when_require_topics_enabled(
     tmp_path: Path,
 ) -> None:
-    from codex_autorunner.integrations.app_server.threads import pma_topic_scoped_key
+    from codex_autorunner.core.managed_thread_identity import pma_topic_scoped_key
 
     registry = AppServerThreadRegistry(tmp_path / "threads.json")
     registry.reset_all()
@@ -1780,7 +1780,7 @@ async def test_pma_new_resets_scoped_key_when_require_topics_enabled(
 async def test_pma_reset_resets_scoped_key_when_require_topics_enabled(
     tmp_path: Path,
 ) -> None:
-    from codex_autorunner.integrations.app_server.threads import pma_topic_scoped_key
+    from codex_autorunner.core.managed_thread_identity import pma_topic_scoped_key
 
     registry = AppServerThreadRegistry(tmp_path / "threads.json")
     registry.reset_all()
@@ -1853,7 +1853,7 @@ class _PMAWorkspaceHandlerWithScopedKey(WorkspaceCommands):
     def _pma_registry_key(
         self, record: "TelegramTopicRecord", message: Optional[TelegramMessage] = None
     ) -> str:
-        from codex_autorunner.integrations.app_server.threads import pma_base_key
+        from codex_autorunner.core.managed_thread_identity import pma_base_key
 
         agent = (
             self._effective_agent(record)
@@ -2328,7 +2328,7 @@ async def test_pma_targets_subcommand_uses_usage_text(tmp_path: Path) -> None:
 async def test_require_topics_uses_scoped_pma_registry_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from codex_autorunner.integrations.app_server.threads import pma_topic_scoped_key
+    from codex_autorunner.core.managed_thread_identity import pma_topic_scoped_key
 
     record = TelegramTopicRecord(
         pma_enabled=True,
@@ -2380,7 +2380,7 @@ def test_pma_registry_key_matches_logical_hermes_profile(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from codex_autorunner.integrations.app_server.threads import pma_base_key
+    from codex_autorunner.core.managed_thread_identity import pma_base_key
 
     monkeypatch.setattr(
         "codex_autorunner.agents.registry.get_registered_agents",

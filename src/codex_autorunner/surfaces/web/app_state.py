@@ -19,8 +19,8 @@ from ...core.config import (
     derive_repo_config,
     load_hub_config,
     load_repo_config,
-    resolve_env_for_root,
 )
+from ...core.config_env import resolve_env_for_root
 from ...core.config_parsers import normalize_base_path
 from ...core.flows.workspace_root import resolve_ticket_flow_workspace_root
 from ...core.hub_control_plane.service import HubSharedStateService

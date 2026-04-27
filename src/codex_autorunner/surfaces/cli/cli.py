@@ -3,7 +3,6 @@ import logging
 import typer
 
 from ...core.config import load_repo_config
-from ...core.hub import HubSupervisor as _HubSupervisor
 from ...flows.ticket_flow import build_ticket_flow_definition
 from ...integrations.agents.build_agent_pool import build_agent_pool
 from .commands.chat import register_chat_commands
@@ -12,12 +11,9 @@ from .commands.describe import register_describe_commands
 from .commands.discord import register_discord_commands
 from .commands.dispatch import register_dispatch_commands
 from .commands.doctor import (
-    _find_hub_server_process,  # noqa: F401
     register_doctor_commands,
 )
-from .commands.flow import (  # noqa: F401
-    register_flow_commands,
-)
+from .commands.flow import register_flow_commands
 from .commands.hub import register_hub_commands
 from .commands.hub_runs import (
     _archive_flow_run_artifacts,
@@ -29,7 +25,7 @@ from .commands.inbox import register_inbox_commands
 from .commands.protocol import register_protocol_commands
 from .commands.render import register_render_commands
 from .commands.repos import register_repos_commands
-from .commands.root import _resolve_repo_api_path, register_root_commands  # noqa: F401
+from .commands.root import register_root_commands
 from .commands.telegram import register_telegram_commands
 from .commands.templates import (
     register_template_index_commands,
@@ -85,9 +81,6 @@ from .commands.utils import (
 from .commands.worktree import register_worktree_commands
 from .pma_cli import pma_app as pma_cli_app
 from .pma_control_plane import resolve_hub_path as _resolve_pma_hub_path
-
-HubSupervisor = _HubSupervisor
-
 
 logger = logging.getLogger("codex_autorunner.cli")
 

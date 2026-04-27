@@ -39,6 +39,8 @@ class ChatBotServiceCore:
         transport: Optional[ChatTransport] = None,
         dispatcher: Optional[ChatDispatcher] = None,
         platform: str = "telegram",
+        log_event_fn: Callable[..., None] = log_event,
+        reap_managed_processes_fn: Callable[..., Any] = reap_managed_processes,
     ) -> None:
         self._owner = owner
         self._runtime_services = runtime_services
@@ -47,6 +49,8 @@ class ChatBotServiceCore:
         self._transport = transport
         self._dispatcher = dispatcher or ChatDispatcher(logger=owner._logger)
         self._platform = platform
+        self._log_event_fn = log_event_fn
+        self._reap_managed_processes_fn = reap_managed_processes_fn
 
     async def run(self) -> None:
         """Run transitional orchestration for Telegram polling mode."""
@@ -56,9 +60,9 @@ class ChatBotServiceCore:
             raise RuntimeError(f"Unsupported telegram_bot.mode '{owner._config.mode}'")
         owner._config.validate()
         try:
-            cleanup = reap_managed_processes(owner._config.root)
+            cleanup = self._reap_managed_processes_fn(owner._config.root)
             if cleanup.killed or cleanup.signaled or cleanup.removed:
-                log_event(
+                self._log_event_fn(
                     owner._logger,
                     logging.INFO,
                     f"{self._platform}.process_reaper.cleaned",
@@ -68,7 +72,7 @@ class ChatBotServiceCore:
                     skipped=cleanup.skipped,
                 )
         except (OSError, ValueError) as exc:
-            log_event(
+            self._log_event_fn(
                 owner._logger,
                 logging.WARNING,
                 f"{self._platform}.process_reaper.failed",

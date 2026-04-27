@@ -8,6 +8,9 @@ from types import SimpleNamespace
 
 import pytest
 
+import codex_autorunner.agents.registry as agent_registry_module
+import codex_autorunner.integrations.chat.managed_thread_turns as managed_thread_turns_module
+import codex_autorunner.integrations.discord.managed_thread_routing as discord_managed_thread_routing_module
 from codex_autorunner.agents.registry import AgentDescriptor
 from codex_autorunner.integrations.chat.dispatcher import build_dispatch_context
 from codex_autorunner.integrations.discord import (
@@ -68,7 +71,7 @@ async def test_message_create_startup_failure_keeps_generic_error_without_raw_de
         0.01,
     )
     monkeypatch.setattr(
-        discord_message_turns_module.ManagedThreadTurnCoordinator,
+        managed_thread_turns_module.ManagedThreadTurnCoordinator,
         "submit_execution",
         _hanging_submit,
     )
@@ -158,12 +161,12 @@ async def test_message_create_reconciles_cancelled_background_startup_after_exec
         lambda context=None: {"hermes": descriptor},
     )
     monkeypatch.setattr(
-        discord_message_turns_module,
+        agent_registry_module,
         "get_registered_agents",
         lambda context=None: {"hermes": descriptor},
     )
     monkeypatch.setattr(
-        discord_message_turns_module,
+        agent_registry_module,
         "resolve_agent_runtime",
         lambda *args, **kwargs: SimpleNamespace(
             logical_agent_id="hermes",
@@ -203,7 +206,7 @@ async def test_message_create_reconciles_cancelled_background_startup_after_exec
             assert asyncio.get_running_loop().time() < deadline
             await asyncio.sleep(0.01)
 
-        orch = discord_message_turns_module.build_discord_thread_orchestration_service(
+        orch = discord_managed_thread_routing_module.build_discord_thread_orchestration_service(
             service
         )
         binding = orch.get_binding(surface_kind="discord", surface_key="channel-1")

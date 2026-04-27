@@ -48,7 +48,16 @@ async def test_spawned_task_failure_is_logged(tmp_path: Path, monkeypatch) -> No
     def _capture_log_event(_logger, level, event_name: str, **kwargs: object) -> None:
         events.append((level, event_name, kwargs))
 
-    monkeypatch.setattr(service_module, "log_event", _capture_log_event)
+    service._dependencies = service_module.TelegramServiceDependencies(
+        load_repo_config=service._dependencies.load_repo_config,
+        resolve_filebox_retention_policy=(
+            service._dependencies.resolve_filebox_retention_policy
+        ),
+        prune_filebox_root=service._dependencies.prune_filebox_root,
+        run_housekeeping_for_roots=service._dependencies.run_housekeeping_for_roots,
+        reap_managed_processes=service._dependencies.reap_managed_processes,
+        log_event=_capture_log_event,
+    )
     try:
 
         async def _boom() -> None:

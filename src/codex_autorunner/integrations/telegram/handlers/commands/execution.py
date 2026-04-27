@@ -44,6 +44,11 @@ from .....core.hub_control_plane import (
 )
 from .....core.injected_context import wrap_injected_context
 from .....core.logging_utils import log_event
+from .....core.managed_thread_identity import (
+    AppServerThreadRegistry,
+    pma_base_key,
+    pma_topic_scoped_key,
+)
 from .....core.orchestration import (
     MessageRequest,
     build_harness_backed_orchestration_service,
@@ -64,11 +69,6 @@ from .....core.pma_context import (
 )
 from .....core.state import now_iso
 from .....core.utils import canonicalize_path
-from .....integrations.app_server.threads import (
-    AppServerThreadRegistry,
-    pma_base_key,
-    pma_topic_scoped_key,
-)
 from .....integrations.chat.bound_chat_execution_metadata import (
     merge_bound_chat_execution_metadata,
 )

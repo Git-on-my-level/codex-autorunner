@@ -13,9 +13,9 @@ from .config import (
     ConfigError,
     HubConfig,
     load_repo_config,
-    load_root_defaults,
-    resolve_env_for_root,
 )
+from .config_env import resolve_env_for_root
+from .config_layering import load_root_defaults
 from .generated_hub_config import normalize_generated_hub_config
 from .text_utils import _mapping
 

@@ -15,8 +15,8 @@ from .managed_thread_delivery import build_discord_managed_thread_durable_delive
 from .managed_thread_routing import (
     _build_discord_managed_thread_coordinator,
     _build_discord_runner_hooks,
+    build_discord_thread_orchestration_service,
 )
-from .message_turns import build_discord_thread_orchestration_service
 from .progress_leases import (
     _get_discord_thread_queue_task_map,
     _spawn_discord_progress_background_task,

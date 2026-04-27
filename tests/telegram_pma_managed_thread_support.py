@@ -12,6 +12,10 @@ import pytest
 
 from codex_autorunner.agents.registry import AgentDescriptor
 from codex_autorunner.core.hub_control_plane import HubSharedStateService
+from codex_autorunner.core.managed_thread_identity import (
+    PMA_KEY,
+    AppServerThreadRegistry,
+)
 from codex_autorunner.core.orchestration import SQLiteManagedThreadDeliveryEngine
 from codex_autorunner.core.orchestration.managed_thread_delivery import (
     ManagedThreadDeliveryState,
@@ -28,10 +32,6 @@ from codex_autorunner.core.sse import format_sse
 from codex_autorunner.integrations.app_server.client import (
     CodexAppServerDisconnected,
     CodexAppServerResponseError,
-)
-from codex_autorunner.integrations.app_server.threads import (
-    PMA_KEY,
-    AppServerThreadRegistry,
 )
 from codex_autorunner.integrations.chat.managed_thread_turns import (
     build_managed_thread_delivery_intent,

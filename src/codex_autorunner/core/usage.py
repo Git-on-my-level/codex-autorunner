@@ -1056,12 +1056,39 @@ def summarize_hub_usage(
     return per_repo, unmatched
 
 
-# Keep explicit module-level references so dead-code heuristics treat these
-# uncached summary helpers as part of the supported usage API surface.
-_USAGE_SUMMARY_PUBLIC_APIS = (
-    summarize_repo_usage,
-    summarize_hub_usage,
-)
+__all__ = [
+    "CODEX_AGENT_ID",
+    "OPENCODE_AGENT_ID",
+    "OPENCODE_USAGE_SOURCE_FALLBACK",
+    "OPENCODE_USAGE_SOURCE_NONE",
+    "OPENCODE_USAGE_SOURCE_PERSISTED",
+    "SessionUsageLedger",
+    "TokenEvent",
+    "TokenTotals",
+    "UsageError",
+    "UsageSeriesCache",
+    "UsageSummary",
+    "default_codex_home",
+    "extract_rate_limit_timestamp",
+    "extract_rate_limits",
+    "format_rate_limit_lines",
+    "format_rate_limit_window",
+    "get_hub_usage_series_cached",
+    "get_hub_usage_summary_cached",
+    "get_repo_session_usage_ledger",
+    "get_repo_usage_series_cached",
+    "get_repo_usage_summary_cached",
+    "get_usage_series_cache",
+    "iter_opencode_events",
+    "iter_token_events",
+    "parse_iso_datetime",
+    "persist_opencode_usage_snapshot",
+    "rate_limit_window_minutes",
+    "summarize_hub_usage",
+    "summarize_opencode_hub_usage",
+    "summarize_opencode_repo_usage",
+    "summarize_repo_usage",
+]
 
 
 def summarize_opencode_repo_usage(

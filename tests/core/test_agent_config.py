@@ -305,9 +305,9 @@ class TestParseAgentsConfig:
         assert result["x"].profiles["p1"].subagent_models is None
 
 
-class TestBackwardCompatImports:
-    def test_agent_config_reexported_from_config(self) -> None:
-        from codex_autorunner.core.config import (
+class TestAgentConfigDirectImports:
+    def test_agent_config_importable_from_owner(self) -> None:
+        from codex_autorunner.core.agent_config import (
             AgentConfig,
             AgentProfileConfig,
             ResolvedAgentTarget,
@@ -318,19 +318,19 @@ class TestBackwardCompatImports:
         assert ResolvedAgentTarget is not None
 
     def test_same_class_identity(self) -> None:
-        from codex_autorunner.core.config import (
-            AgentConfig as ConfigAgentConfig,
+        from codex_autorunner.core.agent_config import (
+            AgentConfig as DirectAgentConfig,
         )
-        from codex_autorunner.core.config import (
-            AgentProfileConfig as ConfigAgentProfileConfig,
+        from codex_autorunner.core.agent_config import (
+            AgentProfileConfig as DirectAgentProfileConfig,
         )
-        from codex_autorunner.core.config import (
-            ResolvedAgentTarget as ConfigResolvedAgentTarget,
+        from codex_autorunner.core.agent_config import (
+            ResolvedAgentTarget as DirectResolvedAgentTarget,
         )
 
-        assert ConfigAgentConfig is AgentConfig
-        assert ConfigAgentProfileConfig is AgentProfileConfig
-        assert ConfigResolvedAgentTarget is ResolvedAgentTarget
+        assert DirectAgentConfig is AgentConfig
+        assert DirectAgentProfileConfig is AgentProfileConfig
+        assert DirectResolvedAgentTarget is ResolvedAgentTarget
 
 
 class TestResolveAgentTargetFromAgents:

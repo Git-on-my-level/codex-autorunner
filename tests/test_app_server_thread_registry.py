@@ -3,11 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
-from codex_autorunner.core.orchestration.verification import (
-    verify_thread_identity_parity,
-)
-from codex_autorunner.integrations.app_server.threads import (
+from codex_autorunner.core.managed_thread_identity import (
     FILE_CHAT_HERMES_PREFIX,
     FILE_CHAT_OPENCODE_PREFIX,
     FILE_CHAT_PREFIX,
@@ -24,6 +20,10 @@ from codex_autorunner.integrations.app_server.threads import (
     pma_prefix_for_agent,
     pma_prefixes_for_reset,
     pma_topic_scoped_key,
+)
+from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
+from codex_autorunner.core.orchestration.verification import (
+    verify_thread_identity_parity,
 )
 
 
@@ -583,15 +583,6 @@ class TestPmaPrefixesForReset:
     def test_profile_none_falls_back_to_agent_prefix(self) -> None:
         assert pma_prefixes_for_reset("hermes", None) == ["pma.hermes."]
         assert pma_prefixes_for_reset("opencode", None) == [PMA_OPENCODE_PREFIX]
-
-
-class TestCoreImportFacadeContract:
-    def test_core_app_server_threads_re_exports_registry(self) -> None:
-        from codex_autorunner.core.app_server_threads import (
-            AppServerThreadRegistry as CoreRegistry,
-        )
-
-        assert CoreRegistry is AppServerThreadRegistry
 
 
 class TestProfileScopedRegistryRoundTrip:

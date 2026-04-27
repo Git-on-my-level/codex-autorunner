@@ -6,12 +6,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, cast
 
+from ...agents import registry as agent_registry
 from ...core.config import load_hub_config
 from ...core.config_contract import ConfigError
 from ...core.hub_control_plane import (
     RemoteSurfaceBindingStore,
     RemoteThreadExecutionStore,
 )
+from ...core.logging_utils import log_event
 from ...core.orchestration import build_harness_backed_orchestration_service
 from ...core.orchestration.bindings import OrchestrationBindingStore
 from ...integrations.chat.agents import resolve_chat_runtime_agent
@@ -36,6 +38,9 @@ from ..chat.managed_thread_turns import (
     resolve_managed_thread_target as _shared_resolve_managed_thread_target,
 )
 from .managed_thread_delivery import build_discord_managed_thread_durable_delivery_hooks
+from .orchestration_profile_fallback import (
+    create_thread_target_with_profile_fallback,
+)
 from .rendering import (
     truncate_for_discord,
 )
@@ -71,13 +76,13 @@ async def _evict_cached_runtime_supervisors(
     profile: Optional[str],
     workspace_root: Path,
 ) -> int:
-    from .message_turns import resolve_agent_runtime
-
     cache = getattr(service, "_agent_runtime_supervisors", None)
     if not isinstance(cache, dict) or not cache:
         return 0
     try:
-        resolution = resolve_agent_runtime(agent_id, profile, context=service)
+        resolution = agent_registry.resolve_agent_runtime(
+            agent_id, profile, context=service
+        )
     except (KeyError, ValueError, TypeError, RuntimeError):
         return 0
     runtime_agent_id = str(getattr(resolution, "runtime_agent_id", "") or "").strip()
@@ -125,28 +130,23 @@ async def _evict_cached_runtime_supervisors(
 
 
 def build_discord_thread_orchestration_service(service: Any) -> Any:
-    from .message_turns import (
-        get_registered_agents,
-        log_event,
-        resolve_agent_runtime,
-        wrap_requested_agent_context,
-    )
-
     cached = getattr(service, "_discord_thread_orchestration_service", None)
     if cached is None:
         cached = getattr(service, "_discord_managed_thread_orchestration_service", None)
     if cached is not None:
         return cached
 
-    descriptors = get_registered_agents(service)
+    descriptors = agent_registry.get_registered_agents(service)
 
     def _make_harness(agent_id: str, profile: Optional[str] = None) -> Any:
-        resolution = resolve_agent_runtime(agent_id, profile, context=service)
+        resolution = agent_registry.resolve_agent_runtime(
+            agent_id, profile, context=service
+        )
         descriptor = descriptors.get(resolution.runtime_agent_id)
         if descriptor is None:
             raise KeyError(f"Unknown agent definition '{resolution.runtime_agent_id}'")
         harness = descriptor.make_harness(
-            wrap_requested_agent_context(
+            agent_registry.wrap_requested_agent_context(
                 service,
                 agent_id=resolution.runtime_agent_id,
                 profile=resolution.runtime_profile,
@@ -194,6 +194,17 @@ def build_discord_thread_orchestration_service(service: Any) -> Any:
         thread_store=thread_store,
         binding_store=binding_store,
     )
+    base_create_thread_target = created.create_thread_target
+
+    def _create_thread_target(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return base_create_thread_target(*args, **kwargs)
+        except KeyError as exc:
+            return create_thread_target_with_profile_fallback(
+                created, *args, **kwargs, key_error=exc
+            )
+
+    cast(Any, created).create_thread_target = _create_thread_target
     service._discord_thread_orchestration_service = created
     service._discord_managed_thread_orchestration_service = created
     return created

@@ -21,11 +21,11 @@ from codex_autorunner.core.hub_diagnostics import (
     hub_pid_path,
 )
 from codex_autorunner.core.hub_lifecycle import HubLifecycleWorker
-from codex_autorunner.integrations.app_server.event_buffer import AppServerEventBuffer
-from codex_autorunner.integrations.app_server.threads import (
+from codex_autorunner.core.managed_thread_identity import (
     AppServerThreadRegistry,
     default_app_server_threads_path,
 )
+from codex_autorunner.integrations.app_server.event_buffer import AppServerEventBuffer
 from codex_autorunner.manifest import load_manifest
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web import app as web_app_module

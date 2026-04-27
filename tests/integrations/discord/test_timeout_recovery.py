@@ -86,14 +86,6 @@ async def test_discord_pma_turn_uses_pma_submission_timeout(
     )
     monkeypatch.setattr(
         discord_message_turns_module,
-        "resolve_agent_runtime",
-        lambda *args, **kwargs: SimpleNamespace(
-            runtime_agent_id="hermes",
-            runtime_profile="m4-pma",
-        ),
-    )
-    monkeypatch.setattr(
-        discord_message_turns_module,
         "run_managed_surface_turn",
         _fake_run_managed_surface_turn,
     )

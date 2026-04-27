@@ -80,7 +80,7 @@ node_modules/.installed: package.json pnpm-lock.yaml
 	@touch node_modules/.installed
 
 hooks:
-	git config core.hooksPath .githooks
+	git config --local core.hooksPath .githooks
 
 test: test-fast
 

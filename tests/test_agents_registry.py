@@ -17,7 +17,7 @@ from codex_autorunner.agents.registry import (
     validate_agent_id,
     wrap_requested_agent_context,
 )
-from codex_autorunner.core.config import AgentConfig, ResolvedAgentTarget
+from codex_autorunner.core.agent_config import AgentConfig, ResolvedAgentTarget
 from codex_autorunner.core.config_contract import ConfigError
 
 

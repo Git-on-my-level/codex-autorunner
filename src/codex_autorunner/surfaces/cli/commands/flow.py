@@ -49,6 +49,8 @@ from ....core.state_roots import resolve_repo_flows_db_path, resolve_repo_state_
 from ....core.ticket_flow_operator import (
     PreflightCheck,
     PreflightReport,
+    resolve_run_reuse_policy,
+    select_resumable_run,
 )
 from ....core.ticket_flow_operator import (
     ticket_flow_preflight as shared_ticket_flow_preflight,
@@ -57,9 +59,7 @@ from ....core.utils import resolve_executable  # noqa: F401
 from ....flows.ticket_flow.runtime_helpers import (
     ensure_ticket_flow_worker,
     flow_run_record_from_target,
-    resolve_run_reuse_policy,
     seed_bootstrap_ticket_if_needed,
-    select_resumable_run,
     stop_ticket_flow_worker,
 )
 from ....tickets import DEFAULT_MAX_TOTAL_TURNS, AgentPool

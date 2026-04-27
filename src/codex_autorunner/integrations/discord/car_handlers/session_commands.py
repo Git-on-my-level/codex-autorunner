@@ -45,7 +45,7 @@ from ..interaction_runtime import (
     ensure_public_response_deferred,
     send_runtime_components_ephemeral,
 )
-from ..message_turns import (
+from ..progress_leases import (
     clear_discord_turn_progress_leases,
     clear_discord_turn_progress_reuse,
     request_discord_turn_progress_reuse,
@@ -1769,14 +1769,13 @@ async def handle_car_interrupt(
         await _send_interrupt_response(text)
 
 
-# Keep explicit module-level references so dead-code heuristics treat the
-# Discord session command handlers as part of the intended surface.
-_DISCORD_SESSION_COMMAND_HANDLERS = (
-    handle_car_new,
-    handle_car_newt,
-    handle_car_newt_hard_reset,
-    handle_car_newt_cancel,
-    handle_car_resume,
-    handle_car_reset,
-    handle_car_archive,
-)
+__all__ = [
+    "handle_car_archive",
+    "handle_car_interrupt",
+    "handle_car_new",
+    "handle_car_newt",
+    "handle_car_newt_cancel",
+    "handle_car_newt_hard_reset",
+    "handle_car_reset",
+    "handle_car_resume",
+]

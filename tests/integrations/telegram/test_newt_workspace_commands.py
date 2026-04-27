@@ -12,8 +12,8 @@ from codex_autorunner.core.git_utils import GitError
 from codex_autorunner.integrations.telegram.adapter import TelegramMessage
 from codex_autorunner.integrations.telegram.state import (
     TelegramTopicRecord,
-    ThreadSummary,
 )
+from codex_autorunner.integrations.telegram.state_types import ThreadSummary
 
 
 def _patch_newt_branch_reset(

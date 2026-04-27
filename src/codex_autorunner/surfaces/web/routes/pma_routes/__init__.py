@@ -10,17 +10,6 @@ from .publish import publish_automation_result
 from .runtime_state import PmaRuntimeState
 from .tail_stream import build_managed_thread_tail_routes
 
-# Keep explicit module-level references so dead-code heuristics treat the staged
-# PMA route decomposition helpers as part of the intended public route surface.
-_PMA_ROUTE_DECOMPOSITION_SURFACE = (
-    build_chat_runtime_router,
-    build_history_files_docs_router,
-    notify_managed_thread_terminal_transition,
-    publish_automation_result,
-    build_managed_thread_runtime_routes,
-    build_pma_meta_routes,
-)
-
 __all__ = [
     "PmaRuntimeState",
     "build_automation_routes",

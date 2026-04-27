@@ -214,6 +214,7 @@ def build_spec_progress_review_context(
     return "".join(parts)
 
 
-# Keep a source-level reference so dead-code heuristics do not misclassify this
-# public helper that is primarily exercised via tests and external workflows.
-_BUILD_SPEC_PROGRESS_REVIEW_CONTEXT = build_spec_progress_review_context
+__all__ = [
+    "TRUNCATION_SUFFIX",
+    "build_spec_progress_review_context",
+]

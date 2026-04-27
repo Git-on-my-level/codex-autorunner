@@ -13,8 +13,11 @@ from typing import Any, Optional
 import anyio
 import pytest
 
+import codex_autorunner.agents.registry as agent_registry_module
 import codex_autorunner.integrations.chat.managed_thread_turns as managed_thread_turns_module
+import codex_autorunner.integrations.discord.managed_thread_routing as discord_managed_thread_routing_module
 import codex_autorunner.integrations.discord.message_turns as discord_message_turns_module
+import codex_autorunner.integrations.discord.progress_leases as discord_progress_leases_module
 import codex_autorunner.integrations.discord.service as discord_service_module
 from codex_autorunner.agents.registry import AgentDescriptor
 from codex_autorunner.bootstrap import seed_hub_files
@@ -27,6 +30,13 @@ from codex_autorunner.core.filebox import (
     outbox_dir,
     outbox_pending_dir,
     outbox_sent_dir,
+)
+from codex_autorunner.core.managed_thread_identity import (
+    FILE_CHAT_OPENCODE_PREFIX,
+    FILE_CHAT_PREFIX,
+    PMA_KEY,
+    normalize_feature_key,
+    pma_base_key,
 )
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.ports.run_event import (
@@ -42,13 +52,6 @@ from codex_autorunner.core.sse import format_sse
 from codex_autorunner.core.utils import canonicalize_path
 from codex_autorunner.integrations.app_server.client import (
     CodexAppServerDisconnected,
-)
-from codex_autorunner.integrations.app_server.threads import (
-    FILE_CHAT_OPENCODE_PREFIX,
-    FILE_CHAT_PREFIX,
-    PMA_KEY,
-    normalize_feature_key,
-    pma_base_key,
 )
 from codex_autorunner.integrations.chat.collaboration_policy import (
     build_discord_collaboration_policy,
@@ -516,7 +519,7 @@ async def test_orchestrated_turn_interrupt_send_hands_off_progress_message(
     )
 
     service = _Service()
-    discord_message_turns_module.request_discord_turn_progress_reuse(
+    discord_progress_leases_module.request_discord_turn_progress_reuse(
         service,
         thread_target_id="thread-1",
         source_message_id="m-2",
@@ -647,7 +650,7 @@ async def test_orchestrated_turn_interrupt_send_reuses_existing_progress_message
     )
 
     service = _Service()
-    discord_message_turns_module.request_discord_turn_progress_reuse(
+    discord_progress_leases_module.request_discord_turn_progress_reuse(
         service,
         thread_target_id="thread-1",
         source_message_id="m-2",
@@ -766,7 +769,7 @@ async def test_orchestrated_turn_interrupt_send_acknowledges_when_progress_messa
     )
 
     service = _Service()
-    discord_message_turns_module.request_discord_turn_progress_reuse(
+    discord_progress_leases_module.request_discord_turn_progress_reuse(
         service,
         thread_target_id="thread-1",
         source_message_id="m-2",
@@ -888,7 +891,7 @@ async def test_orchestrated_turn_interrupt_send_falls_back_when_progress_ack_edi
     )
 
     service = _Service()
-    discord_message_turns_module.request_discord_turn_progress_reuse(
+    discord_progress_leases_module.request_discord_turn_progress_reuse(
         service,
         thread_target_id="thread-1",
         source_message_id="m-2",
@@ -1221,7 +1224,7 @@ async def test_orchestrated_turn_submission_timeout_deletes_progress_placeholder
         0.01,
     )
     monkeypatch.setattr(
-        discord_message_turns_module.ManagedThreadTurnCoordinator,
+        managed_thread_turns_module.ManagedThreadTurnCoordinator,
         "submit_execution",
         _hanging_submit,
     )
@@ -1362,7 +1365,7 @@ async def test_orchestrated_turn_queued_updates_placeholder_skips_finalize(
         _fake_finalize,
     )
     monkeypatch.setattr(
-        discord_message_turns_module.ManagedThreadTurnCoordinator,
+        managed_thread_turns_module.ManagedThreadTurnCoordinator,
         "ensure_queue_worker",
         lambda *args, **kwargs: _fake_ensure_queue(),
     )
@@ -7464,7 +7467,7 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
 
     harness = _FakeHarness()
     monkeypatch.setattr(
-        discord_message_turns_module,
+        agent_registry_module,
         "get_registered_agents",
         lambda context=None: {
             "codex": AgentDescriptor(
@@ -7684,7 +7687,7 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
         lambda ctx: hub_config,
     )
     monkeypatch.setattr(
-        discord_message_turns_module,
+        agent_registry_module,
         "get_registered_agents",
         lambda context=None: {
             "hermes": AgentDescriptor(
@@ -7899,7 +7902,7 @@ async def test_pma_message_create_streams_progress_before_terminal_reply(
 
     harness = _FakeHarness()
     monkeypatch.setattr(
-        discord_message_turns_module,
+        agent_registry_module,
         "get_registered_agents",
         lambda context=None: {
             "codex": AgentDescriptor(
@@ -8072,7 +8075,7 @@ async def test_pma_message_create_routes_repeated_messages_through_managed_threa
 
     harness = _FakeHarness()
     monkeypatch.setattr(
-        discord_message_turns_module,
+        agent_registry_module,
         "get_registered_agents",
         lambda context=None: {
             "codex": AgentDescriptor(
@@ -8261,7 +8264,7 @@ async def test_pma_message_create_image_attachment_routes_through_managed_thread
 
     harness = _FakeHarness()
     monkeypatch.setattr(
-        discord_message_turns_module,
+        agent_registry_module,
         "get_registered_agents",
         lambda context=None: {
             "codex": AgentDescriptor(
@@ -8421,7 +8424,7 @@ async def test_discord_managed_thread_queue_worker_sends_placeholder_for_empty_r
         _fake_begin_next,
     )
     monkeypatch.setattr(
-        discord_message_turns_module.ManagedThreadTurnCoordinator,
+        managed_thread_turns_module.ManagedThreadTurnCoordinator,
         "run_started_execution",
         _fake_run_started_execution,
     )
@@ -8541,7 +8544,7 @@ async def test_discord_managed_thread_queue_worker_formats_local_file_links(
         _fake_begin_next,
     )
     monkeypatch.setattr(
-        discord_message_turns_module.ManagedThreadTurnCoordinator,
+        managed_thread_turns_module.ManagedThreadTurnCoordinator,
         "run_started_execution",
         _fake_run_started_execution,
     )
@@ -9180,7 +9183,7 @@ def test_discord_harness_factory_accepts_profile(
         runtime_kind="hermes",
     )
     monkeypatch.setattr(
-        discord_message_turns_module,
+        agent_registry_module,
         "get_registered_agents",
         lambda context=None: {"hermes": descriptor},
     )
@@ -9197,7 +9200,7 @@ def test_discord_harness_factory_accepts_profile(
     service._discord_thread_orchestration_service = None
     service._discord_managed_thread_orchestration_service = None
 
-    orch = discord_message_turns_module.build_discord_thread_orchestration_service(
+    orch = discord_managed_thread_routing_module.build_discord_thread_orchestration_service(
         service
     )
     orch._harness_for_agent("hermes", "m4-pma")
@@ -9267,7 +9270,7 @@ async def test_resolve_discord_thread_target_reuses_legacy_hermes_runtime_alias_
         },
     )
     monkeypatch.setattr(
-        discord_message_turns_module,
+        agent_registry_module,
         "get_registered_agents",
         lambda context=None: {
             "hermes-m4-pma": descriptor,
