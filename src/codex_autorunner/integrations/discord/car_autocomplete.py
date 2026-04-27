@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import sqlite3
 from pathlib import Path
@@ -196,11 +197,18 @@ async def build_ticket_autocomplete_choices(
     if workspace_root is None:
         return []
     status_filter = service._pending_ticket_filters.get(channel_id, "all")
-    filtered_choices = service._list_ticket_choices(
-        workspace_root,
-        status_filter=status_filter,
-        search_query=query,
-    )
+    try:
+        filtered_choices = await asyncio.wait_for(
+            asyncio.to_thread(
+                service._list_ticket_choices,
+                workspace_root,
+                status_filter=status_filter,
+                search_query=query,
+            ),
+            timeout=3.0,
+        )
+    except (asyncio.TimeoutError, Exception):
+        return []
     items = [(value, label) for value, label, _description in filtered_choices]
     return picker_items_to_autocomplete_choices(items)
 

@@ -74,6 +74,7 @@ def _ticket_dir(repo_root: Path) -> Path:
 def _ticket_paths(ticket_dir: Path) -> Tuple[List[Path], List[str]]:
     tickets: List[tuple[int, Path, str]] = []
     errors: List[str] = []
+    index_to_paths: dict[int, List[Path]] = {}
     for path in sorted(ticket_dir.iterdir()):
         if not path.is_file():
             continue
@@ -91,14 +92,28 @@ def _ticket_paths(ticket_dir: Path) -> Tuple[List[Path], List[str]]:
             errors.append(f"{path}: Invalid ticket filename; number must be digits")
             continue
         tickets.append((idx, path, m.group(2)))
+        if idx not in index_to_paths:
+            index_to_paths[idx] = []
+        index_to_paths[idx].append(path)
     tickets.sort(key=lambda t: t[0])
+
+    for idx, paths in index_to_paths.items():
+        if len(paths) > 1:
+            paths_str = ", ".join([str(p) for p in paths])
+            errors.append(
+                f"Duplicate ticket index {idx:03d}: multiple files share the same index ({paths_str}). "
+                "Rename or remove duplicates to ensure deterministic ordering."
+            )
+
     return [p for _, p, _ in tickets], errors
 
 
 def _split_frontmatter(text: str):
-    if not text or not text.lstrip().startswith("---"):
-        return None, ["Missing YAML frontmatter (expected leading '---')."]
+    if not text:
+        return None, ["Empty file; missing YAML frontmatter."]
     lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return None, ["Missing YAML frontmatter (expected leading '---')."]
     end_idx = None
     for idx in range(1, len(lines)):
         if lines[idx].strip() in ("---", "..."):
@@ -177,6 +192,20 @@ def _ticket_files(ticket_dir: Path) -> Tuple[List[TicketFile], List[str]]:
     return tickets, errors
 
 
+def _read_ticket_id(path: Path) -> Optional[str]:
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    fm_yaml, fm_errors = _split_frontmatter(raw)
+    if fm_errors:
+        return None
+    data, parse_errors = _parse_yaml(fm_yaml)
+    if parse_errors:
+        return None
+    return _sanitize_ticket_id(data.get("ticket_id"))
+
+
 def _pad_width(indices: Sequence[int]) -> int:
     if not indices:
         return 3
@@ -222,11 +251,14 @@ def cmd_list(ticket_dir: Path) -> int:
 
 def cmd_lint(ticket_dir: Path) -> int:
     tickets, errors = _ticket_files(ticket_dir)
+
+    raw_paths, _ = _ticket_paths(ticket_dir)
     ticket_id_to_paths: dict[str, list[str]] = {}
-    for ticket in tickets:
-        if not ticket.ticket_id:
+    for path in raw_paths:
+        ticket_id = _read_ticket_id(path)
+        if not ticket_id:
             continue
-        ticket_id_to_paths.setdefault(ticket.ticket_id, []).append(ticket.path.name)
+        ticket_id_to_paths.setdefault(ticket_id, []).append(path.name)
 
     for ticket_id, filenames in ticket_id_to_paths.items():
         if len(filenames) > 1:
