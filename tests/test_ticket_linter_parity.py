@@ -6,6 +6,8 @@ from pathlib import Path
 
 from codex_autorunner.core.ticket_manager_cli import (
     _SCRIPT as MANAGER_SCRIPT,
+)
+from codex_autorunner.core.ticket_manager_cli import (
     ensure_ticket_manager,
 )
 from codex_autorunner.tickets import portable_lint as _portable_lint_module

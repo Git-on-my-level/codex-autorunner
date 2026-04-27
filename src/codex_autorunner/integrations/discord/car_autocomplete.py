@@ -10,8 +10,14 @@ from ...core.flows import FlowRunStatus
 from ...core.utils import canonicalize_path
 from ...integrations.chat.picker_filter import filter_picker_items
 from .components import DISCORD_SELECT_OPTION_MAX_OPTIONS
+from .rest import DISCORD_INTERACTION_CALLBACK_TIMEOUT_SECONDS
 
 MODEL_SEARCH_FETCH_LIMIT = 200
+# Ticket scans run in a thread pool; cap below interaction callback deadline so empty
+# fallback choices still reach Discord before the ~3s interaction response window.
+_TICKET_AUTOCOMPLETE_WORKER_TIMEOUT = max(
+    0.5, DISCORD_INTERACTION_CALLBACK_TIMEOUT_SECONDS - 0.25
+)
 REPO_AUTOCOMPLETE_TOKEN_PREFIX = "repo@"
 WORKSPACE_AUTOCOMPLETE_TOKEN_PREFIX = "workspace@"
 AGENT_WORKSPACE_AUTOCOMPLETE_TOKEN_PREFIX = "agent_workspace@"
@@ -205,7 +211,7 @@ async def build_ticket_autocomplete_choices(
                 status_filter=status_filter,
                 search_query=query,
             ),
-            timeout=3.0,
+            timeout=_TICKET_AUTOCOMPLETE_WORKER_TIMEOUT,
         )
     except (asyncio.TimeoutError, Exception):
         return []
