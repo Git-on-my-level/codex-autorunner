@@ -27,6 +27,84 @@ def portable_ticket_validation_source() -> str:
         _IGNORED_NON_TICKET_FILENAMES = {{"AGENTS.md", "ingest_state.json"}}
 
 
+        def _parse_scalar(raw: str) -> object:
+            value = raw.strip()
+            if not value:
+                return ""
+            if value.startswith('"') and value.endswith('"') and len(value) >= 2:
+                return (
+                    value[1:-1]
+                    .replace("\\\\n", "\\n")
+                    .replace('\\\\\\"', '"')
+                    .replace("\\\\\\\\", "\\\\")
+                )
+            lowered = value.lower()
+            if lowered == "true":
+                return True
+            if lowered == "false":
+                return False
+            if value.isdigit():
+                return int(value)
+            if ": " in value or value.endswith(":"):
+                raise ValueError("unsupported unquoted ':' in scalar")
+            return value
+
+
+        def _parse_simple_yaml_mapping(text: str) -> dict[str, object]:
+            data: dict[str, object] = {{}}
+            lines = text.splitlines()
+            idx = 0
+            while idx < len(lines):
+                line = lines[idx]
+                if not line.strip():
+                    idx += 1
+                    continue
+                if line[:1].isspace():
+                    raise ValueError("unexpected indentation")
+                if ":" not in line:
+                    raise ValueError("expected 'key: value'")
+                key, raw_value = line.split(":", 1)
+                key = key.strip()
+                if not key:
+                    raise ValueError("missing mapping key")
+
+                value = raw_value.strip()
+                if value:
+                    data[key] = _parse_scalar(value)
+                    idx += 1
+                    continue
+
+                idx += 1
+                block: list[str] = []
+                while idx < len(lines):
+                    child = lines[idx]
+                    if not child.strip():
+                        idx += 1
+                        continue
+                    if not child.startswith("  "):
+                        break
+                    block.append(child[2:])
+                    idx += 1
+
+                if not block:
+                    data[key] = None
+                    continue
+
+                if all(item.lstrip().startswith("- ") for item in block):
+                    values: list[object] = []
+                    for item in block:
+                        stripped = item.lstrip()
+                        if not stripped.startswith("- "):
+                            raise ValueError("mixed list indentation")
+                        values.append(_parse_scalar(stripped[2:].strip()))
+                    data[key] = values
+                    continue
+
+                data[key] = _parse_simple_yaml_mapping("\\n".join(block))
+
+            return data
+
+
         def _sanitize_ticket_id(raw: object) -> Optional[str]:
             if not isinstance(raw, str):
                 return None
