@@ -55,7 +55,7 @@ Mapping the conceptual layers to the codebase:
 - **Control Plane**: `.codex-autorunner/` (files, including the ticket queue under `tickets/`). Ticket queue behavior is implemented under `src/codex_autorunner/tickets/`.
 - **Domain Policy**: `src/codex_autorunner/core/pma_domain/`. Owns publish notice classification, duplicate/noop suppression, and publish message construction. All message-dependent routing and suppression policy lives here; adapters and surfaces delegate to it rather than implementing ad hoc checks.
 - **Adapters**: `src/codex_autorunner/integrations/` (GitHub, Telegram, App Server).
-  - PMA chat delivery follows the same split: `core/pma_chat_delivery.py` emits transport-agnostic attempts, `pma_chat_delivery_runtime.py` dispatches them, and Discord/Telegram adapters own formatting, topic parsing, and outbox writes. Duplicate suppression and noop detection are domain-owned via `pma_domain/publish_policy.py`.
+  - PMA chat delivery follows the same split: `core/pma_chat_delivery.py` emits transport-agnostic attempts, `pma_chat_delivery_runtime.py` (at the package root `src/codex_autorunner/`) dispatches them, and Discord/Telegram adapters own formatting, topic parsing, and outbox writes. Duplicate suppression and noop detection are domain-owned via `pma_domain/publish_policy.py`.
   - SCM automation follows the same split: `core/scm_automation_service.py` owns routing, journaling, and retry semantics; provider adapters inject publish executors when wiring the service instead of core importing provider modules directly.
   - **Discord interaction runtime**: ingress (`ingress.py`) -> command runner (`command_runner.py`) -> interaction dispatch (`interaction_dispatch.py`).  Two-phase lifecycle: ingress acknowledges on the gateway hot path, then the runner executes the handler in the background with timeout enforcement.
 - **Surfaces**:
@@ -92,7 +92,7 @@ Mapping the conceptual layers to the codebase:
 4. **Update State**: Handle stop rules (exit code, stop_after_runs, limits).
 
 ### Ticket-flow runner seam structure
-The ticket-flow orchestration hot path is split across focused submodules:
+The ticket-flow orchestration hot path is split across focused submodules under `src/codex_autorunner/tickets/`:
 - **`runner.py`** (`TicketRunner.step`): Step controller that sequences pre-turn planning, execution, and post-turn processing without reimplementing helper contracts inline.
 - **`runner_selection.py`**: Ticket selection (`select_ticket`), validation (`validate_ticket_for_execution`), pre-turn planning (`plan_pre_turn`), reply-context loading (`build_reply_context`), and requested-context resolution (`load_ticket_context_block`).
 - **`runner_prompt.py`**: Prompt assembly (`build_prompt`), budgeting (`_shrink_prompt`), and ticket-frontmatter preservation (`_preserve_ticket_structure`).

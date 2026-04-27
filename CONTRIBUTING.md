@@ -17,7 +17,7 @@ Thanks for helping improve codex-autorunner.
 - Run tests: `.venv/bin/python -m pytest` after `make setup` (or `make test`)
 - Lane-aware validation: `./scripts/check.sh` (auto-detects scope from staged files)
 - Force full validation: `./scripts/check.sh --full` (or `make check-full`)
-- JS lint (UI): `npm run lint:js`
+- JS lint (UI): `pnpm run lint:js`
 - Format: `python -m black src tests`
 - Build static assets: `pnpm run build` (source is `src/codex_autorunner/static_src/`, output is `src/codex_autorunner/static/`)
 

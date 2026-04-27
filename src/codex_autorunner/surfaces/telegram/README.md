@@ -18,7 +18,7 @@ Telegram bot and adapters.
 ## Key Components
 
 - Telegram bot entry points and handlers are in `integrations/telegram/`
-- This surface package may contain Telegram-specific UI/rendering code if needed in the future
+- Telegram-specific rendering code lives in `integrations/telegram/rendering.py`
 
 ## Ticket Flow Commands
 

@@ -212,16 +212,9 @@ Run `car hub scan` to discover existing git repositories, or use `car hub clone`
 ### Configuration Issues
 Check `.codex-autorunner/config.yml` or run `car doctor` for diagnostics.
 
-### Migrating existing Telegram or Discord chat setups
+### Upgrading Telegram or Discord to collaboration mode
 
-Existing simple installs do not need forced migration:
-
-- Telegram DM or dedicated-topic setups can keep the legacy `telegram_bot`
-  allowlists and trigger settings.
-- Discord dedicated-channel setups can keep the legacy `discord_bot` allowlists
-  and normal `/car bind` or `/pma on` workflow.
-
-Operators should migrate only when they need intentional shared-chat behavior:
+Personal setups (DM, dedicated topic, or dedicated channel) work out of the box with basic allowlists — no changes needed. Upgrade to collaboration mode only when multiple humans share a Telegram supergroup or Discord guild and CAR should respond in specific places only:
 
 - Add `collaboration_policy.telegram.destinations` for Telegram supergroups when
   some topics should be `active`, `command_only`, or `silent`.
