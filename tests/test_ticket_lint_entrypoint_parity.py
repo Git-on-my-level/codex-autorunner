@@ -76,6 +76,29 @@ def test_lint_entrypoints_match_for_duplicate_ticket_id(repo: Path) -> None:
     assert "Duplicate ticket_id 'tkt_duplicate001'" in stderr
 
 
+def test_lint_entrypoints_match_for_context_list_of_mappings(repo: Path) -> None:
+    tickets_dir = repo / ".codex-autorunner" / "tickets"
+    tickets_dir.mkdir(parents=True, exist_ok=True)
+    (tickets_dir / "TICKET-001.md").write_text(
+        "---\n"
+        'ticket_id: "tkt_paritycontext001"\n'
+        "agent: codex\n"
+        "done: false\n"
+        "context:\n"
+        "  - path: docs/one.md\n"
+        "    max_bytes: 512\n"
+        "    required: true\n"
+        "  - path: notes/two.txt\n"
+        "---\n"
+        "Body\n",
+        encoding="utf-8",
+    )
+
+    stdout, stderr = _assert_same_lint_result(repo)
+    assert stdout == "OK: 1 ticket(s) linted.\n"
+    assert stderr == ""
+
+
 def test_lint_entrypoints_match_for_empty_ticket_directory(repo: Path) -> None:
     tickets_dir = repo / ".codex-autorunner" / "tickets"
     tickets_dir.mkdir(parents=True, exist_ok=True)

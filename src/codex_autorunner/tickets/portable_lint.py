@@ -14,6 +14,8 @@ except ImportError:  # pragma: no cover
 
 yaml = yaml_module
 
+__all__ = ["run_ticket_lint"]
+
 _TICKET_NAME_RE = re.compile(r"^TICKET-(\d{3,})(?:[^/]*)\.md$", re.IGNORECASE)
 _TICKET_ID_RE = re.compile(r"^[A-Za-z0-9._-]{6,128}$")
 _KNOWN_AGENT_IDS = ("codex", "hermes", "opencode", "user", "zeroclaw")
@@ -108,19 +110,54 @@ def _parse_simple_yaml_mapping(text: str) -> dict[str, Any]:
             data[key] = None
             continue
 
-        if all(item.lstrip().startswith("- ") for item in block):
-            values: list[Any] = []
-            for item in block:
-                stripped = item.lstrip()
-                if not stripped.startswith("- "):
-                    raise ValueError("mixed list indentation")
-                values.append(_parse_scalar(stripped[2:].strip()))
-            data[key] = values
+        if block[0].lstrip().startswith("- "):
+            data[key] = _parse_simple_yaml_list(block)
             continue
 
         data[key] = _parse_simple_yaml_mapping("\n".join(block))
 
     return data
+
+
+def _parse_simple_yaml_list(lines: list[str]) -> list[Any]:
+    values: list[Any] = []
+    idx = 0
+    while idx < len(lines):
+        line = lines[idx]
+        if not line.strip():
+            idx += 1
+            continue
+
+        stripped = line.lstrip()
+        if stripped != line or not stripped.startswith("- "):
+            raise ValueError("mixed list indentation")
+
+        item_value = stripped[2:].strip()
+        idx += 1
+
+        child_lines: list[str] = []
+        while idx < len(lines):
+            child = lines[idx]
+            if not child.strip():
+                idx += 1
+                continue
+            if not child.startswith("  "):
+                break
+            child_lines.append(child[2:])
+            idx += 1
+
+        if ":" in item_value:
+            mapping_lines = [item_value, *child_lines] if child_lines else [item_value]
+            values.append(_parse_simple_yaml_mapping("\n".join(mapping_lines)))
+            continue
+
+        if not child_lines:
+            values.append(_parse_scalar(item_value))
+            continue
+
+        raise ValueError("list item with nested block must start with 'key: value'")
+
+    return values
 
 
 def _dump_scalar(value: Any) -> str:
