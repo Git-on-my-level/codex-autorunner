@@ -886,6 +886,7 @@ class DiscordBotService:
         self._pending_ticket_filters: dict[str, str] = {}
         self._pending_ticket_search_queries: dict[str, str] = {}
         self._document_browser_sessions: dict[str, Any] = {}
+        self._document_browser_session_locks: dict[str, asyncio.Lock] = {}
         self._responder = DiscordResponder(
             rest=self._rest,
             config=self._config,
