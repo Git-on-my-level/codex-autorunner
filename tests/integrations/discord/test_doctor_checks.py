@@ -11,7 +11,12 @@ from codex_autorunner.integrations.discord import doctor as discord_doctor
 from codex_autorunner.integrations.discord.doctor import discord_doctor_checks
 
 
-def _load_hub_with_discord(tmp_path: Path, discord_bot_cfg: dict[str, object]):
+def _load_hub_with_discord(
+    tmp_path: Path,
+    discord_bot_cfg: dict[str, object],
+    *,
+    voice_cfg: dict[str, object] | None = None,
+):
     hub_root = tmp_path / "hub"
     hub_root.mkdir()
     seed_hub_files(hub_root, force=True)
@@ -20,6 +25,12 @@ def _load_hub_with_discord(tmp_path: Path, discord_bot_cfg: dict[str, object]):
     data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     assert isinstance(data, dict)
     data["discord_bot"] = discord_bot_cfg
+    if voice_cfg is not None:
+        repo_defaults = data.get("repo_defaults")
+        if not isinstance(repo_defaults, dict):
+            repo_defaults = {}
+            data["repo_defaults"] = repo_defaults
+        repo_defaults["voice"] = voice_cfg
     config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
 
     return load_hub_config(hub_root)
@@ -241,7 +252,6 @@ def test_discord_doctor_checks_local_voice_missing_dependency_is_failure(
 ) -> None:
     monkeypatch.setenv("TEST_DISCORD_TOKEN", "token")
     monkeypatch.setenv("TEST_DISCORD_APP_ID", "123456")
-    monkeypatch.setenv("CODEX_AUTORUNNER_VOICE_PROVIDER", "local_whisper")
 
     original_missing = discord_doctor.missing_optional_dependencies
 
@@ -260,6 +270,7 @@ def test_discord_doctor_checks_local_voice_missing_dependency_is_failure(
             "app_id_env": "TEST_DISCORD_APP_ID",
             "allowed_guild_ids": ["123"],
         },
+        voice_cfg={"enabled": True, "provider": "local_whisper"},
     )
 
     checks = discord_doctor_checks(hub_config)
@@ -276,7 +287,6 @@ def test_discord_doctor_checks_openai_voice_skips_local_dependency_check(
 ) -> None:
     monkeypatch.setenv("TEST_DISCORD_TOKEN", "token")
     monkeypatch.setenv("TEST_DISCORD_APP_ID", "123456")
-    monkeypatch.setenv("CODEX_AUTORUNNER_VOICE_PROVIDER", "openai_whisper")
 
     hub_config = _load_hub_with_discord(
         tmp_path,
@@ -286,6 +296,7 @@ def test_discord_doctor_checks_openai_voice_skips_local_dependency_check(
             "app_id_env": "TEST_DISCORD_APP_ID",
             "allowed_guild_ids": ["123"],
         },
+        voice_cfg={"enabled": True, "provider": "openai_whisper"},
     )
 
     checks = discord_doctor_checks(hub_config)
@@ -298,7 +309,6 @@ def test_discord_doctor_checks_mlx_voice_missing_dependency_is_failure(
 ) -> None:
     monkeypatch.setenv("TEST_DISCORD_TOKEN", "token")
     monkeypatch.setenv("TEST_DISCORD_APP_ID", "123456")
-    monkeypatch.setenv("CODEX_AUTORUNNER_VOICE_PROVIDER", "mlx_whisper")
 
     original_missing = discord_doctor.missing_optional_dependencies
 
@@ -317,6 +327,7 @@ def test_discord_doctor_checks_mlx_voice_missing_dependency_is_failure(
             "app_id_env": "TEST_DISCORD_APP_ID",
             "allowed_guild_ids": ["123"],
         },
+        voice_cfg={"enabled": True, "provider": "mlx_whisper"},
     )
 
     checks = discord_doctor_checks(hub_config)
@@ -333,7 +344,6 @@ def test_discord_doctor_checks_voice_missing_ffmpeg_is_failure(
 ) -> None:
     monkeypatch.setenv("TEST_DISCORD_TOKEN", "token")
     monkeypatch.setenv("TEST_DISCORD_APP_ID", "123456")
-    monkeypatch.setenv("CODEX_AUTORUNNER_VOICE_PROVIDER", "mlx_whisper")
 
     original_missing = discord_doctor.missing_optional_dependencies
 
@@ -357,6 +367,7 @@ def test_discord_doctor_checks_voice_missing_ffmpeg_is_failure(
             "app_id_env": "TEST_DISCORD_APP_ID",
             "allowed_guild_ids": ["123"],
         },
+        voice_cfg={"enabled": True, "provider": "mlx_whisper"},
     )
 
     checks = discord_doctor_checks(hub_config)
@@ -374,8 +385,6 @@ def test_discord_doctor_checks_voice_disabled_skips_local_dependency_check(
 ) -> None:
     monkeypatch.setenv("TEST_DISCORD_TOKEN", "token")
     monkeypatch.setenv("TEST_DISCORD_APP_ID", "123456")
-    monkeypatch.setenv("CODEX_AUTORUNNER_VOICE_PROVIDER", "local_whisper")
-    monkeypatch.setenv("CODEX_AUTORUNNER_VOICE_ENABLED", "0")
 
     original_missing = discord_doctor.missing_optional_dependencies
 
@@ -394,6 +403,7 @@ def test_discord_doctor_checks_voice_disabled_skips_local_dependency_check(
             "app_id_env": "TEST_DISCORD_APP_ID",
             "allowed_guild_ids": ["123"],
         },
+        voice_cfg={"enabled": False, "provider": "local_whisper"},
     )
 
     checks = discord_doctor_checks(hub_config)

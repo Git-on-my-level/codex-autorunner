@@ -13,7 +13,6 @@ Ownership contract (TICKET-1040):
 """
 
 import dataclasses
-import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, cast
 
@@ -541,13 +540,11 @@ def _parse_app_server_config(
         command = resolve_app_server_command(
             default_from_mapping(
                 defaults, "command", APP_SERVER_FIELD_SCHEMAS["command"]
-            ),
-            env=os.environ,
+            )
         )
     else:
         command = resolve_app_server_command(
             raw_command,
-            env=os.environ,
             fallback=(),
         )
     state_root = cast(
@@ -1092,10 +1089,7 @@ def _parse_usage_config(
     )
     global_cache_default = defaults.get("global_cache_root")
     if global_cache_default is None:
-        # CODEX_HOME is deprecated; prefer CAR_GLOBAL_STATE_ROOT.
-        global_cache_default = os.environ.get(
-            "CAR_GLOBAL_STATE_ROOT"
-        ) or os.environ.get("CODEX_HOME", "~/.codex-autorunner")
+        global_cache_default = "~/.codex-autorunner"
     global_cache_raw = cfg.get("global_cache_root", global_cache_default)
     if global_cache_raw is None:
         global_cache_raw = global_cache_default

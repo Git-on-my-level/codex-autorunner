@@ -510,7 +510,6 @@
       "codex",
       "app-server"
     ],
-    "app_server_command_env": "CAR_APP_SERVER_COMMAND",
     "bot_token_env": "CAR_TELEGRAM_BOT_TOKEN",
     "cache": {
       "cleanup_interval_seconds": 300,

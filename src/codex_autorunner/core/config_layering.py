@@ -5,7 +5,6 @@ from typing import Any, Dict, Optional, cast
 
 import yaml
 
-from .app_server_command import GLOBAL_APP_SERVER_COMMAND_ENV
 from .config_contract import CONFIG_VERSION, ConfigError
 from .constants import DEFAULT_UPDATE_REPO_REF, DEFAULT_UPDATE_REPO_URL
 from .report_retention import (
@@ -170,7 +169,6 @@ def _default_telegram_bot_section(
         },
         "opencode_command": None,
         "state_file": ".codex-autorunner/telegram_state.sqlite3",
-        "app_server_command_env": GLOBAL_APP_SERVER_COMMAND_ENV,
         "app_server_command": ["codex", "app-server"],
         "app_server": {
             "max_handles": 20,

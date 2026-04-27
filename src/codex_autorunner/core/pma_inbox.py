@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional, cast
@@ -34,12 +33,6 @@ _logger = logging.getLogger(__name__)
 
 
 def _resolve_inbox_auto_dismiss_grace_seconds(supervisor: HubSupervisor) -> int:
-    raw = os.getenv("CAR_PMA_INBOX_AUTO_DISMISS_GRACE_SECONDS")
-    if raw is not None:
-        try:
-            return max(0, int(raw))
-        except (TypeError, ValueError):
-            pass
     return max(
         0,
         int(
