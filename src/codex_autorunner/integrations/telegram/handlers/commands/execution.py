@@ -47,7 +47,6 @@ from .....core.logging_utils import log_event
 from .....core.managed_thread_identity import (
     AppServerThreadRegistry,
     pma_base_key,
-    pma_legacy_migration_fallback_keys,
     pma_topic_scoped_key,
 )
 from .....core.orchestration import (

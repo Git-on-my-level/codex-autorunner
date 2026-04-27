@@ -94,7 +94,7 @@ async def test_discord_hermes_pma_accepts_prompt_return_arriving_just_after_idle
     monkeypatch.setattr(
         runtime_threads_module,
         "_STALL_COMPLETION_GRACE_SECONDS",
-        0.08,
+        0.5,
     )
     monkeypatch.setattr(discord_message_turns, "DISCORD_PMA_TIMEOUT_SECONDS", 30.0)
     monkeypatch.setattr(

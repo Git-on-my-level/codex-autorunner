@@ -38,6 +38,9 @@ from ..chat.managed_thread_turns import (
     resolve_managed_thread_target as _shared_resolve_managed_thread_target,
 )
 from .managed_thread_delivery import build_discord_managed_thread_durable_delivery_hooks
+from .orchestration_profile_fallback import (
+    create_thread_target_with_profile_fallback,
+)
 from .rendering import (
     truncate_for_discord,
 )
@@ -191,6 +194,15 @@ def build_discord_thread_orchestration_service(service: Any) -> Any:
         thread_store=thread_store,
         binding_store=binding_store,
     )
+    base_create_thread_target = created.create_thread_target
+
+    def _create_thread_target(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return base_create_thread_target(*args, **kwargs)
+        except KeyError:
+            return create_thread_target_with_profile_fallback(created, *args, **kwargs)
+
+    cast(Any, created).create_thread_target = _create_thread_target
     service._discord_thread_orchestration_service = created
     service._discord_managed_thread_orchestration_service = created
     return created

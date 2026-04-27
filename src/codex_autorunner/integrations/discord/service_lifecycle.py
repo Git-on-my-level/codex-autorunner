@@ -437,6 +437,26 @@ async def close_all_opencode_supervisors(service: Any) -> None:
             await supervisor.close_all()
 
 
+async def close_all_agent_runtime_supervisors(service: Any) -> None:
+    cache = getattr(service, "_agent_runtime_supervisors", None)
+    supervisors: list[Any] = []
+    if isinstance(cache, dict):
+        for supervisor in cache.values():
+            if supervisor is not None and supervisor not in supervisors:
+                supervisors.append(supervisor)
+        cache.clear()
+    direct_supervisor = getattr(service, "hermes_supervisor", None)
+    if direct_supervisor is not None and direct_supervisor not in supervisors:
+        supervisors.append(direct_supervisor)
+    with contextlib.suppress(AttributeError):
+        service.hermes_supervisor = None
+    for supervisor in supervisors:
+        close_all = getattr(supervisor, "close_all", None)
+        if callable(close_all):
+            with contextlib.suppress(Exception):
+                await close_all()
+
+
 async def shutdown_service(service: Any) -> None:
     service._background_shutdown_in_progress = True
 
@@ -512,6 +532,7 @@ async def shutdown_service(service: Any) -> None:
             await service._store.close()
     await close_all_app_server_supervisors(service)
     await close_all_opencode_supervisors(service)
+    await close_all_agent_runtime_supervisors(service)
     if service._hub_client is not None:
         with contextlib.suppress(Exception):
             await service._hub_client.aclose()

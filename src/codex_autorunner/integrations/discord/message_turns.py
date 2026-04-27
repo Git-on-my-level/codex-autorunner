@@ -99,6 +99,7 @@ from ..chat.progress_primitives import TurnProgressTracker
 from ..chat.turn_metrics import (
     compose_turn_response_with_footer,
 )
+from . import constants as discord_constants
 from . import managed_thread_routing as discord_managed_thread_routing
 from .components import (
     build_cancel_turn_button,
@@ -149,6 +150,8 @@ from .rendering import (
 from .state import ChannelBinding
 
 _logger = logging.getLogger(__name__)
+
+DISCORD_MAX_MESSAGE_LENGTH = discord_constants.DISCORD_MAX_MESSAGE_LENGTH
 
 DISCORD_PMA_PUBLIC_EXECUTION_ERROR = "Discord PMA turn failed"
 DISCORD_REPO_PUBLIC_EXECUTION_ERROR = "Discord turn failed"
