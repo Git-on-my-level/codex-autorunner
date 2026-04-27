@@ -17,6 +17,7 @@ from ....core.update_paths import resolve_update_paths
 from ....core.update_targets import get_update_target_label
 from ....core.utils import canonicalize_path
 from ...chat.constants import TOPIC_NOT_BOUND_DISCORD_MESSAGE
+from .. import update_service as discord_update_service
 from ..components import build_update_target_picker
 from ..interaction_registry import UPDATE_TARGET_SELECT_ID
 from ..interaction_runtime import (
@@ -57,19 +58,31 @@ async def handle_car_update(
     options: dict[str, Any],
     response_mode: str = "command",
 ) -> None:
-    from ..service import _spawn_update_process as _spawn_update_process
     from ..service import log_event
+
+    def _build_update_target_components() -> list[dict[str, Any]]:
+        try:
+            target_definitions = _dynamic_update_target_definitions(service)
+        except Exception as exc:
+            log_event(
+                service._logger,
+                logging.WARNING,
+                "discord.update.target_definitions_failed",
+                exc=exc,
+            )
+            target_definitions = None
+        return [
+            build_update_target_picker(
+                custom_id=UPDATE_TARGET_SELECT_ID,
+                target_definitions=target_definitions,
+            )
+        ]
 
     component_response = response_mode == "component"
     raw_target = options.get("target")
     confirmed = bool(options.get("confirmed"))
     if not isinstance(raw_target, str) or not raw_target.strip():
-        components = [
-            build_update_target_picker(
-                custom_id=UPDATE_TARGET_SELECT_ID,
-                target_definitions=_dynamic_update_target_definitions(service),
-            )
-        ]
+        components = _build_update_target_components()
         if component_response:
             await update_runtime_component_message(
                 service,
@@ -101,12 +114,7 @@ async def handle_car_update(
             raw_target if isinstance(raw_target, str) else None
         )
     except ValueError as exc:
-        components = [
-            build_update_target_picker(
-                custom_id=UPDATE_TARGET_SELECT_ID,
-                target_definitions=_dynamic_update_target_definitions(service),
-            )
-        ]
+        components = _build_update_target_components()
         text = f"{exc} Select update target:"
         if component_response:
             await update_runtime_component_message(
@@ -219,7 +227,7 @@ async def handle_car_update(
 
     try:
         await asyncio.to_thread(
-            _spawn_update_process,
+            discord_update_service._spawn_update_process,
             repo_url=repo_url,
             repo_ref=repo_ref,
             update_dir=update_dir,
@@ -312,10 +320,8 @@ async def handle_car_update_status(
     interaction_token: str,
     component_response: bool = False,
 ) -> None:
-    from ..service import _read_update_status as read_status
-
     if component_response:
-        status = await asyncio.to_thread(read_status)
+        status = await asyncio.to_thread(discord_update_service._read_update_status)
         if not isinstance(status, dict):
             status = None
         text = _format_update_status_message(service, status)
@@ -332,7 +338,7 @@ async def handle_car_update_status(
         interaction_id,
         interaction_token,
     )
-    status = await asyncio.to_thread(read_status)
+    status = await asyncio.to_thread(discord_update_service._read_update_status)
     if not isinstance(status, dict):
         status = None
     text = _format_update_status_message(service, status)

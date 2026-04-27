@@ -62,10 +62,6 @@ from ...core.flows.ux_helpers import (
     select_ticket_flow_run_record,
     ticket_progress,
 )
-from ...core.git_utils import (  # noqa: F401 - kept for test monkeypatching
-    GitError,
-    reset_branch_from_origin_main,
-)
 from ...core.hub_control_plane import (
     HandshakeCompatibility,
     HttpHubControlPlaneClient,
@@ -96,9 +92,6 @@ from ...core.orchestration.managed_thread_delivery_ledger import (
 )
 from ...core.state import now_iso
 from ...core.state_roots import resolve_global_state_root
-from ...core.update import (
-    UpdateInProgressError,  # noqa: F401 - re-exported for test monkeypatching
-)
 from ...core.update_paths import resolve_update_paths  # noqa: F401
 from ...core.update_targets import (  # noqa: F401
     all_update_target_definitions,
@@ -164,10 +157,7 @@ from ...integrations.chat.managed_thread_lifecycle import (
 from ...integrations.chat.media import (
     audio_content_type_for_input,
 )
-from ...integrations.chat.model_selection import (
-    REASONING_EFFORT_VALUES,
-    _model_list_with_agent_compat,  # noqa: F401 - re-exported for test compatibility
-)
+from ...integrations.chat.model_selection import REASONING_EFFORT_VALUES
 from ...integrations.chat.models import (
     ChatEvent,
     ChatInteractionEvent,
@@ -200,6 +190,7 @@ from ...tickets.frontmatter import parse_markdown_frontmatter
 from ...voice import VoiceConfig, VoiceService, VoiceServiceError
 from ...voice.provider_catalog import normalize_voice_provider
 from ...voice.service import VoiceTransientError
+from . import update_service as discord_update_service
 from .adapter import DiscordChatAdapter
 from .car_command_dispatch import handle_car_command as dispatch_car_command
 from .channel_messaging import (
@@ -338,18 +329,15 @@ from .message_turns import (
     handle_message_event as handle_discord_message_event,
 )
 from .outbox import DiscordOutboxManager
-from .picker_helpers import (  # noqa: F401 - re-exported for test compatibility
-    _coerce_model_picker_items,
-    _format_session_thread_picker_label,
-    _truncate_picker_text,
+from .picker_helpers import (
+    format_discord_thread_picker_label as _format_discord_thread_picker_label_impl,
+)
+from .picker_helpers import (
     list_model_items_for_binding,
     list_opencode_models_for_picker,
     list_recent_commits_for_picker,
     list_session_threads_for_picker,
     list_threads_paginated,
-)
-from .picker_helpers import (
-    format_discord_thread_picker_label as _format_discord_thread_picker_label_impl,
 )
 from .pma_commands import (
     handle_pma_off,
@@ -410,17 +398,6 @@ from .service_normalization import (
     format_hub_flow_overview_line,
 )
 from .state import DiscordStateStore, InteractionLedgerRecord, OutboxRecord
-from .update_service import (  # noqa: F401 - re-exported for test monkeypatching
-    ChatUpdateStatusNotifier,
-    _available_update_target_definitions,
-    _format_update_confirmation_warning,
-    _normalize_update_ref,
-    _normalize_update_target,
-    _read_update_status,
-    _spawn_update_process,
-    _update_target_restarts_surface,
-    mark_update_status_notified,
-)
 from .workspace_commands import (
     handle_bind,
     handle_bind_page_component,
@@ -564,9 +541,6 @@ DISCORD_TURN_PROGRESS_HEARTBEAT_INTERVAL_SECONDS = 2.0
 DISCORD_TURN_PROGRESS_MAX_ACTIONS = 12
 DISCORD_TYPING_HEARTBEAT_INTERVAL_SECONDS = 5.0
 DISCORD_INTERACTION_COLD_START_WINDOW_SECONDS = 120.0
-DISCORD_BACKGROUND_TASK_SHUTDOWN_GRACE_SECONDS = (
-    10.0  # noqa: F401 - re-exported for test monkeypatching
-)
 DISCORD_HUB_HANDSHAKE_RETRY_WINDOW_SECONDS = 45.0
 DISCORD_HUB_HANDSHAKE_RETRY_DELAY_SECONDS = 1.0
 DISCORD_HUB_HANDSHAKE_RETRY_MAX_DELAY_SECONDS = 5.0
@@ -915,10 +889,10 @@ class DiscordBotService:
             {}
         )
         self._discord_pending_approvals: dict[str, _DiscordPendingApproval] = {}
-        self._update_status_notifier = ChatUpdateStatusNotifier(
+        self._update_status_notifier = discord_update_service.ChatUpdateStatusNotifier(
             platform="discord",
             logger=self._logger,
-            read_status=_read_update_status,
+            read_status=discord_update_service._read_update_status,
             send_notice=self._send_update_status_notice,
             spawn_task=self._spawn_task,
             mark_notified=self._mark_update_notified,
