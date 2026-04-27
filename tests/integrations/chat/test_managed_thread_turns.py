@@ -30,6 +30,9 @@ from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.ports.run_event import RunNotice
 from codex_autorunner.core.pr_bindings import PrBindingStore
 from codex_autorunner.core.scm_polling_watches import ScmPollingWatchStore
+from codex_autorunner.integrations.chat.managed_thread_surface_kernel import (
+    build_managed_thread_terminal_delivery_hooks,
+)
 
 
 def _build_started_execution(tmp_path: Path) -> RuntimeThreadExecution:
@@ -79,6 +82,37 @@ def _replace_started_execution(
             target_kind=started.request.target_kind,
             message_text=message_text,
         ),
+    )
+
+
+def _build_queue_delivery_hooks(
+    tmp_path: Path,
+    *,
+    delivered: list[Any],
+    surface_kind: str = "test",
+    surface_key: str = "surface-1",
+) -> managed_thread_turns_module.ManagedThreadDurableDeliveryHooks:
+    async def _send_success(record: Any, _context: Any) -> None:
+        delivered.append((record.managed_turn_id, record.envelope.final_status))
+
+    async def _send_failure(record: Any, _context: Any) -> None:
+        delivered.append((record.managed_turn_id, record.envelope.final_status))
+
+    async def _cleanup(record: Any, _context: Any) -> None:
+        _ = record
+
+    return build_managed_thread_terminal_delivery_hooks(
+        state_root=tmp_path,
+        surface=managed_thread_turns_module.ManagedThreadSurfaceInfo(
+            log_label="Test",
+            surface_kind=surface_kind,
+            surface_key=surface_key,
+        ),
+        adapter_key=surface_kind,
+        transport_target={},
+        send_success=_send_success,
+        send_failure=_send_failure,
+        cleanup=_cleanup,
     )
 
 
@@ -272,6 +306,7 @@ async def test_managed_thread_turn_coordinator_queue_worker_uses_hooks(
 ) -> None:
     started = _build_started_execution(tmp_path)
     events: list[Any] = []
+    delivered: list[Any] = []
     begin_calls = 0
 
     async def _fake_finalize(
@@ -298,11 +333,6 @@ async def test_managed_thread_turn_coordinator_queue_worker_uses_hooks(
             begin_calls += 1
             return started
         return None
-
-    async def _deliver_result(
-        finalized: managed_thread_turns_module.ManagedThreadFinalizationResult,
-    ) -> None:
-        events.append(("deliver", finalized.managed_turn_id))
 
     async def _run_with_indicator(work: Any) -> None:
         events.append("indicator:start")
@@ -345,7 +375,10 @@ async def test_managed_thread_turn_coordinator_queue_worker_uses_hooks(
             spawned_tasks.append(asyncio.create_task(coro)) or spawned_tasks[-1]
         ),
         hooks=managed_thread_turns_module.ManagedThreadQueueWorkerHooks(
-            deliver_result=_deliver_result,
+            durable_delivery=_build_queue_delivery_hooks(
+                tmp_path,
+                delivered=delivered,
+            ),
             run_with_indicator=_run_with_indicator,
             execution_hooks=managed_thread_turns_module.ManagedThreadExecutionHooks(
                 on_execution_started=lambda started_execution: events.append("started"),
@@ -365,8 +398,8 @@ async def test_managed_thread_turn_coordinator_queue_worker_uses_hooks(
         "finalize",
         "finished",
         "indicator:end",
-        ("deliver", "exec-1"),
     ]
+    assert delivered == [("exec-1", "ok")]
     assert task_map == {}
 
 
@@ -677,7 +710,7 @@ async def test_managed_thread_queue_worker_indicator_cancellation_after_finaliza
 ) -> None:
     started = _build_started_execution(tmp_path)
     begin_calls = 0
-    delivered: list[str] = []
+    delivered: list[Any] = []
 
     async def _fake_finalize(
         **kwargs: Any,
@@ -702,11 +735,6 @@ async def test_managed_thread_queue_worker_indicator_cancellation_after_finaliza
             begin_calls += 1
             return started
         return None
-
-    async def _deliver_result(
-        finalized: managed_thread_turns_module.ManagedThreadFinalizationResult,
-    ) -> None:
-        delivered.append(finalized.managed_turn_id)
 
     async def _run_with_indicator(work: Any) -> None:
         await work()
@@ -747,7 +775,12 @@ async def test_managed_thread_queue_worker_indicator_cancellation_after_finaliza
         spawn_task=lambda coro: spawned_tasks.append(asyncio.create_task(coro))
         or spawned_tasks[-1],
         hooks=managed_thread_turns_module.ManagedThreadQueueWorkerHooks(
-            deliver_result=_deliver_result,
+            durable_delivery=_build_queue_delivery_hooks(
+                tmp_path,
+                delivered=delivered,
+                surface_kind="telegram",
+                surface_key="telegram:-1001:101",
+            ),
             run_with_indicator=_run_with_indicator,
         ),
         begin_next_execution=_fake_begin_next,
@@ -755,7 +788,7 @@ async def test_managed_thread_queue_worker_indicator_cancellation_after_finaliza
 
     await asyncio.gather(*spawned_tasks)
 
-    assert delivered == ["exec-1"]
+    assert delivered == [("exec-1", "ok")]
     assert (
         "chat.managed_thread.queue_worker_indicator_failed_post_finalization"
         in caplog.text
@@ -806,16 +839,6 @@ async def test_managed_thread_turn_coordinator_queue_worker_recovers_and_continu
             return second
         return None
 
-    async def _deliver_result(
-        finalized: managed_thread_turns_module.ManagedThreadFinalizationResult,
-    ) -> None:
-        delivered.append(
-            (
-                finalized.managed_turn_id,
-                finalized.status,
-            )
-        )
-
     monkeypatch.setattr(
         managed_thread_turns_module,
         "finalize_managed_thread_execution",
@@ -857,7 +880,10 @@ async def test_managed_thread_turn_coordinator_queue_worker_recovers_and_continu
             spawned_tasks.append(asyncio.create_task(coro)) or spawned_tasks[-1]
         ),
         hooks=managed_thread_turns_module.ManagedThreadQueueWorkerHooks(
-            deliver_result=_deliver_result,
+            durable_delivery=_build_queue_delivery_hooks(
+                tmp_path,
+                delivered=delivered,
+            ),
         ),
         begin_next_execution=_fake_begin_next,
     )

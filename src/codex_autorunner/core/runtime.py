@@ -31,7 +31,6 @@ from .managed_processes import ProcessRecord, list_process_records
 from .notifications import NotificationManager
 from .optional_dependencies import missing_optional_dependencies
 from .runner_state import LockError, RunnerStateManager
-from .state import now_iso
 from .state_roots import (
     REPO_STATE_DIR,
     resolve_global_state_root,
@@ -1775,30 +1774,6 @@ class RuntimeContext:
         except OSError as e:
             _logger.warning("Failed to tail log %s: %s", self.log_path, e)
             return ""
-
-    def log_line(self, run_id: int, message: str) -> None:
-        """Append a line to the legacy per-run log file (deprecated)."""
-        run_log_path = self._run_log_path(run_id)
-        run_log_path.parent.mkdir(parents=True, exist_ok=True)
-        timestamp = now_iso()
-        with open(run_log_path, "a", encoding="utf-8") as f:
-            f.write(f"[{timestamp}] {message}\n")
-
-    def _run_log_path(self, run_id: int) -> Path:
-        """Get path to legacy run log file (deprecated)."""
-        return self.state_root / "runs" / str(run_id) / "run.log"
-
-    def read_run_block(self, run_id: int) -> Optional[str]:
-        """Read a legacy run log block for a given run ID (deprecated)."""
-        run_log_path = self._run_log_path(run_id)
-        if not run_log_path.exists():
-            return None
-        try:
-            with open(run_log_path, "r", encoding="utf-8", errors="replace") as f:
-                return f.read()
-        except OSError as e:
-            _logger.warning("Failed to read run log block for run %s: %s", run_id, e)
-            return None
 
 
 __all__ = [

@@ -20,8 +20,8 @@ def test_ensure_legacy_orchestration_backfill_skips_work_when_marker_present(
         with conn:
             conn.execute(
                 """
-                INSERT OR REPLACE INTO orch_legacy_backfill_flags (
-                    backfill_key,
+                INSERT OR REPLACE INTO orch_operation_flags (
+                    flag_key,
                     completed_at
                 ) VALUES (?, '2026-04-06T00:00:00Z')
                 """,

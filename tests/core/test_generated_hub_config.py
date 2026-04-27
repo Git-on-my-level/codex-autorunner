@@ -130,6 +130,23 @@ class TestSaveHubConfigData:
         data = yaml.safe_load(content)
         assert data["mode"] == "hub"
 
+    def test_normalizes_legacy_discord_intents_before_writing(
+        self, tmp_path: Path
+    ) -> None:
+        hub_root = tmp_path / "hub"
+        hub_root.mkdir()
+        config_path = hub_root / ".codex-autorunner" / "config.yml"
+        write_test_config(config_path, {"mode": "hub"})
+
+        save_hub_config_data(
+            config_path,
+            {"mode": "hub", "discord_bot": {"intents": 513}},
+            generated=False,
+        )
+
+        persisted = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        assert persisted["discord_bot"]["intents"] == 33281
+
 
 class TestNormalizeGeneratedHubConfig:
     def test_upgrades_stale_pma_800(self, tmp_path: Path) -> None:

@@ -125,7 +125,7 @@ async def start_ticket_flow_run(
             run_id=run_id,
             metadata=metadata,
         )
-    ensure_ticket_flow_worker(repo_root, record.id, is_terminal=False)
+    ensure_worker(repo_root, record.id, is_terminal=False)
     return record
 
 
@@ -143,7 +143,7 @@ async def resume_ticket_flow_run(
 ) -> FlowRunRecord:
     async with ticket_flow_runtime_session(repo_root) as resources:
         record = await resources.controller.resume_flow(run_id, force=force)
-    ensure_ticket_flow_worker(repo_root, record.id, is_terminal=False)
+    ensure_worker(repo_root, record.id, is_terminal=False)
     return record
 
 
@@ -224,7 +224,7 @@ def ensure_ticket_flow_worker(
 
 
 def ensure_worker(repo_root: Path, run_id: str, *, is_terminal: bool = False) -> None:
-    """Compatibility shim for older call sites and tests."""
+    """Backward-compatible alias for orchestration wrappers/tests."""
     ensure_ticket_flow_worker(repo_root, run_id, is_terminal=is_terminal)
 
 

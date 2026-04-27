@@ -5,7 +5,6 @@ import shlex
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
 GLOBAL_APP_SERVER_COMMAND_ENV = "CAR_APP_SERVER_COMMAND"
-LEGACY_TELEGRAM_APP_SERVER_COMMAND_ENV = "CAR_TELEGRAM_APP_SERVER_COMMAND"
 DEFAULT_APP_SERVER_COMMAND: tuple[str, str] = ("codex", "app-server")
 
 
@@ -59,7 +58,6 @@ def resolve_app_server_command(
 __all__ = [
     "DEFAULT_APP_SERVER_COMMAND",
     "GLOBAL_APP_SERVER_COMMAND_ENV",
-    "LEGACY_TELEGRAM_APP_SERVER_COMMAND_ENV",
     "iter_app_server_command_env_names",
     "parse_command",
     "resolve_app_server_command",

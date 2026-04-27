@@ -1,21 +1,22 @@
 from codex_autorunner.core.app_server_command import (
     DEFAULT_APP_SERVER_COMMAND,
     GLOBAL_APP_SERVER_COMMAND_ENV,
-    LEGACY_TELEGRAM_APP_SERVER_COMMAND_ENV,
     iter_app_server_command_env_names,
     parse_command,
     resolve_app_server_command,
 )
 
 
-def test_resolve_app_server_command_prefers_global_env_over_legacy_and_config() -> None:
+def test_resolve_app_server_command_prefers_global_env_over_extra_env_and_config() -> (
+    None
+):
     command = resolve_app_server_command(
         ["config-codex", "app-server"],
         env={
             GLOBAL_APP_SERVER_COMMAND_ENV: "/opt/global/codex app-server --fast",
-            LEGACY_TELEGRAM_APP_SERVER_COMMAND_ENV: "/opt/legacy/codex app-server",
+            "CAR_CUSTOM_APP_SERVER_COMMAND": "/opt/custom/codex app-server",
         },
-        extra_env_vars=[LEGACY_TELEGRAM_APP_SERVER_COMMAND_ENV],
+        extra_env_vars=["CAR_CUSTOM_APP_SERVER_COMMAND"],
     )
 
     assert command == ["/opt/global/codex", "app-server", "--fast"]
@@ -33,24 +34,24 @@ def test_resolve_app_server_command_falls_back_to_config_then_default() -> None:
 
 
 class TestCommandPrecedenceChain:
-    def test_global_env_wins_over_legacy_env(self) -> None:
+    def test_global_env_wins_over_extra_env(self) -> None:
         result = resolve_app_server_command(
             None,
             env={
                 GLOBAL_APP_SERVER_COMMAND_ENV: "global-cmd",
-                LEGACY_TELEGRAM_APP_SERVER_COMMAND_ENV: "legacy-cmd",
+                "CAR_CUSTOM_APP_SERVER_COMMAND": "custom-cmd",
             },
-            extra_env_vars=[LEGACY_TELEGRAM_APP_SERVER_COMMAND_ENV],
+            extra_env_vars=["CAR_CUSTOM_APP_SERVER_COMMAND"],
         )
         assert result == ["global-cmd"]
 
-    def test_legacy_env_wins_over_config_when_no_global(self) -> None:
+    def test_extra_env_wins_over_config_when_no_global(self) -> None:
         result = resolve_app_server_command(
             ["config-cmd", "arg"],
-            env={LEGACY_TELEGRAM_APP_SERVER_COMMAND_ENV: "legacy-cmd"},
-            extra_env_vars=[LEGACY_TELEGRAM_APP_SERVER_COMMAND_ENV],
+            env={"CAR_CUSTOM_APP_SERVER_COMMAND": "custom-cmd"},
+            extra_env_vars=["CAR_CUSTOM_APP_SERVER_COMMAND"],
         )
-        assert result == ["legacy-cmd"]
+        assert result == ["custom-cmd"]
 
     def test_config_wins_when_no_env_set(self) -> None:
         result = resolve_app_server_command(
@@ -73,10 +74,10 @@ class TestCommandPrecedenceChain:
         )
         assert result == ["config-cmd"]
 
-    def test_legacy_env_only_used_when_explicitly_passed(self) -> None:
+    def test_extra_env_only_used_when_explicitly_passed(self) -> None:
         result = resolve_app_server_command(
             ["config-cmd"],
-            env={LEGACY_TELEGRAM_APP_SERVER_COMMAND_ENV: "legacy-cmd"},
+            env={"CAR_CUSTOM_APP_SERVER_COMMAND": "custom-cmd"},
         )
         assert result == ["config-cmd"]
 

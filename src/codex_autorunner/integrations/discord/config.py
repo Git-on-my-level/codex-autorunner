@@ -34,9 +34,6 @@ DEFAULT_INTENTS = (
     | DISCORD_INTENT_GUILD_MESSAGES
     | DISCORD_INTENT_MESSAGE_CONTENT
 )
-# Legacy value from early Discord rollout before message content was required for
-# plain-text turns in bound channels.
-LEGACY_DEFAULT_INTENTS = DISCORD_INTENT_GUILDS | DISCORD_INTENT_GUILD_MESSAGES
 _MISSING = object()
 
 
@@ -144,7 +141,7 @@ class DiscordBotConfig:
             raise DiscordBotConfigError("discord_bot.intents must be an integer")
         if intents_value < 0:
             raise DiscordBotConfigError("discord_bot.intents must be >= 0")
-        if intents_value == LEGACY_DEFAULT_INTENTS:
+        if intents_value == (DISCORD_INTENT_GUILDS | DISCORD_INTENT_GUILD_MESSAGES):
             intents_value = DEFAULT_INTENTS
 
         max_message_length_value = cfg.get(

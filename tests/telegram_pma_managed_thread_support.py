@@ -33,6 +33,9 @@ from codex_autorunner.integrations.app_server.threads import (
     PMA_KEY,
     AppServerThreadRegistry,
 )
+from codex_autorunner.integrations.chat.managed_thread_turns import (
+    build_managed_thread_delivery_intent,
+)
 from codex_autorunner.integrations.telegram.adapter import (
     TelegramMessage,
 )
@@ -134,7 +137,6 @@ def patch_sqlite_connection_cache(
         "codex_autorunner.core.orchestration.verification",
         "codex_autorunner.core.orchestration.migrate_legacy_state",
         "codex_autorunner.core.chat_bindings",
-        "codex_autorunner.core.pma_thread_mirror",
         "codex_autorunner.core.hub_projection_store",
         "codex_autorunner.core.state",
     ]
@@ -922,6 +924,7 @@ async def test_managed_thread_queue_worker_wraps_execution_with_typing_indicator
         def __init__(self) -> None:
             self._logger = logging.getLogger("test")
             self._spawned_tasks: set[asyncio.Task[object]] = set()
+            self._config = SimpleNamespace(root=tmp_path, raw={})
 
         def _spawn_task(self, coro):  # type: ignore[no-untyped-def]
             task = asyncio.create_task(coro)
@@ -957,8 +960,9 @@ async def test_managed_thread_queue_worker_wraps_execution_with_typing_indicator
             chat_id: int,
             thread_id: Optional[int],
             reply_to: Optional[int],
+            topic_key: Optional[str] = None,
         ) -> None:
-            _ = record, reply_to
+            _ = record, reply_to, topic_key
             events.append(("flush", chat_id, thread_id))
 
     class _OrchestrationServiceStub:
@@ -987,7 +991,13 @@ async def test_managed_thread_queue_worker_wraps_execution_with_typing_indicator
         _ = self, hooks, runtime_event_state
         assert started is queued_started
         events.append("finalize")
-        return {"status": "ok", "assistant_text": "queued telegram reply"}
+        return {
+            "status": "ok",
+            "assistant_text": "queued telegram reply",
+            "managed_thread_id": "managed-thread-1",
+            "managed_turn_id": "turn-1",
+            "backend_thread_id": "backend-thread-1",
+        }
 
     monkeypatch.setattr(
         execution_commands_module.ManagedThreadTurnCoordinator,
@@ -999,7 +1009,7 @@ async def test_managed_thread_queue_worker_wraps_execution_with_typing_indicator
     coordinator = execution_commands_module._build_telegram_managed_thread_coordinator(
         handler,
         orchestration_service=_OrchestrationServiceStub(),
-        surface_key="telegram:-1001:101",
+        surface_key="-1001:101",
         chat_id=-1001,
         thread_id=101,
         public_execution_error=(
@@ -1010,29 +1020,6 @@ async def test_managed_thread_queue_worker_wraps_execution_with_typing_indicator
         pma_enabled=True,
     )
 
-    async def _run_with_telegram_typing_indicator(work: Any) -> None:
-        await handler._begin_typing_indicator(-1001, 101)
-        try:
-            await work()
-        finally:
-            await handler._end_typing_indicator(-1001, 101)
-
-    async def _deliver_result(
-        finalized: execution_commands_module.ManagedThreadFinalizationResult,
-    ) -> None:
-        await handler._send_message(
-            -1001,
-            finalized.assistant_text,
-            thread_id=101,
-            reply_to=None,
-        )
-        await handler._flush_outbox_files(
-            TelegramTopicRecord(workspace_path=str(tmp_path), pma_enabled=True),
-            chat_id=-1001,
-            thread_id=101,
-            reply_to=None,
-        )
-
     coordinator.ensure_queue_worker(
         task_map={},
         managed_thread_id="managed-thread-1",
@@ -1042,9 +1029,17 @@ async def test_managed_thread_queue_worker_wraps_execution_with_typing_indicator
                 coro,
             )
         ),
-        hooks=execution_commands_module.ManagedThreadCoordinatorHooks(
-            deliver_result=_deliver_result,
-            run_with_indicator=_run_with_telegram_typing_indicator,
+        hooks=execution_commands_module._build_telegram_runner_hooks(
+            handler,
+            managed_thread_id="managed-thread-1",
+            chat_id=-1001,
+            thread_id=101,
+            topic_key="-1001:101",
+            public_execution_error=(
+                execution_commands_module.TELEGRAM_PMA_PUBLIC_EXECUTION_ERROR
+            ),
+            workspace_path=str(tmp_path),
+            pma_enabled=True,
         ),
         begin_next_execution=_fake_begin_next,
     )
@@ -1606,7 +1601,7 @@ async def test_handle_normal_message_marks_pending_durable_delivery_direct_surfa
         managed_turn_id="exec-1",
         backend_thread_id="backend-1",
     )
-    intent = execution_commands_module.build_managed_thread_delivery_intent(
+    intent = build_managed_thread_delivery_intent(
         finalized,
         surface=execution_commands_module.ManagedThreadSurfaceInfo(
             log_label="Telegram",

@@ -1,7 +1,7 @@
 """Regression tests for hub startup / health ordering and legacy backfill guards (GitHub #1266).
 
 Hub heavy startup is deferred via `_deferred_hub_startup`; legacy JSON->SQLite backfill is gated by
-`ensure_legacy_orchestration_backfill` / `orch_legacy_backfill_flags`.
+`ensure_legacy_orchestration_backfill` / `orch_operation_flags`.
 """
 
 from __future__ import annotations
@@ -232,7 +232,7 @@ def test_hub_root_health_serves_before_deferred_startup_work_finishes(
 def test_pma_automation_legacy_automation_backfill_runs_once_across_store_instances(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`orch_legacy_backfill_flags` must skip re-invoking per-source backfills (GitHub #1266)."""
+    """`orch_operation_flags` must skip re-invoking per-source backfills (GitHub #1266)."""
     from codex_autorunner.bootstrap import seed_hub_files
     from codex_autorunner.core.config import CONFIG_FILENAME
     from codex_autorunner.core.pma_automation_store import PmaAutomationStore
