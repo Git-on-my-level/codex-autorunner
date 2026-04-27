@@ -68,8 +68,8 @@ class TestIntegrationSync:
 
 class TestSurfaceSync:
     def test_surface_dirs_exist_on_disk(self):
-        # Chat platforms are under integrations/; surfaces/ is web + cli (+ telegram stubs if present).
-        expected = {"web", "cli", "telegram"}
+        # Chat platforms live under integrations/; surfaces/ is web + CLI only (see surfaces/README.md).
+        expected = {"web", "cli"}
         actual = _actual_dirs(SURFACES_DIR)
         for name in expected:
             assert name in actual, f"Surface dir missing from disk: {name}"
