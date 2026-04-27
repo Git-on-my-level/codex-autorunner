@@ -7,7 +7,7 @@ from typing import Any, Optional
 
 import pytest
 
-import codex_autorunner.integrations.discord.message_turns as _discord_message_turns_module
+import codex_autorunner.agents.registry as agent_registry_module
 from codex_autorunner.agents.registry import AgentDescriptor
 from codex_autorunner.integrations.chat.collaboration_policy import CollaborationPolicy
 from codex_autorunner.integrations.discord.config import (
@@ -533,7 +533,7 @@ def _patch_streaming_harness(
         allow_parallel_event_stream=allow_parallel_event_stream,
     )
     monkeypatch.setattr(
-        _discord_message_turns_module,
+        agent_registry_module,
         "get_registered_agents",
         lambda context=None: {
             agent_id: AgentDescriptor(

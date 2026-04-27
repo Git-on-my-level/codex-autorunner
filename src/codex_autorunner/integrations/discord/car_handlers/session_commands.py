@@ -45,7 +45,7 @@ from ..interaction_runtime import (
     ensure_public_response_deferred,
     send_runtime_components_ephemeral,
 )
-from ..message_turns import (
+from ..progress_leases import (
     clear_discord_turn_progress_leases,
     clear_discord_turn_progress_reuse,
     request_discord_turn_progress_reuse,

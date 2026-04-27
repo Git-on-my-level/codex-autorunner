@@ -123,7 +123,7 @@ async def handle_cancel_queued_turn_button(
     message_id: Optional[str] = None,
 ) -> None:
     from ..components import parse_cancel_queued_turn_custom_id
-    from ..message_turns import clear_discord_turn_progress_leases
+    from ..progress_leases import clear_discord_turn_progress_leases
 
     execution_id = parse_cancel_queued_turn_custom_id(custom_id)
     if not execution_id:

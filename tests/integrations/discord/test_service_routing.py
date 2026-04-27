@@ -833,8 +833,10 @@ async def test_discord_message_turns_show_busy_placeholder_for_attachment_prep(
         "build_surface_orchestration_ingress",
         lambda **_: _IngressStub(),
     )
+    import codex_autorunner.integrations.discord.managed_thread_routing as _managed_thread_routing
+
     monkeypatch.setattr(
-        discord_message_turns,
+        _managed_thread_routing,
         "build_discord_thread_orchestration_service",
         lambda *_args, **_kwargs: _BusyOrchestrationService(),
     )
@@ -1050,13 +1052,10 @@ async def test_discord_notification_reply_routes_to_pma_thread_with_context(
         lambda **_: _IngressStub(),
     )
     monkeypatch.setattr(discord_message_turns, "load_pma_prompt", lambda _root: "base")
+    import codex_autorunner.integrations.discord.managed_thread_routing as _managed_thread_routing
+
     monkeypatch.setattr(
-        discord_message_turns,
-        "format_pma_prompt",
-        lambda _base, _snapshot, prompt_text, **_kwargs: prompt_text,
-    )
-    monkeypatch.setattr(
-        discord_message_turns,
+        _managed_thread_routing,
         "build_discord_thread_orchestration_service",
         lambda _service: SimpleNamespace(
             get_binding=lambda **_kwargs: SimpleNamespace(
@@ -3631,8 +3630,10 @@ async def test_component_interaction_cancel_queued_turn_cancels_selected_executi
             SimpleNamespace(thread_target_id="thread-1"),
         )
 
-        original_clear = discord_message_turns.clear_discord_turn_progress_leases
-        discord_message_turns.clear_discord_turn_progress_leases = (
+        import codex_autorunner.integrations.discord.progress_leases as _progress_leases
+
+        original_clear = _progress_leases.clear_discord_turn_progress_leases
+        _progress_leases.clear_discord_turn_progress_leases = (
             _clear_progress_leases  # type: ignore[assignment]
         )
         try:
@@ -3647,7 +3648,7 @@ async def test_component_interaction_cancel_queued_turn_cancels_selected_executi
                 message_id="progress-2",
             )
         finally:
-            discord_message_turns.clear_discord_turn_progress_leases = original_clear  # type: ignore[assignment]
+            _progress_leases.clear_discord_turn_progress_leases = original_clear  # type: ignore[assignment]
 
         assert len(rest.edited_original_interaction_responses) == 2
         assert (
@@ -8142,7 +8143,9 @@ async def test_car_interrupt_recovers_missing_backend_thread(tmp_path: Path) -> 
             )
 
     service._discord_thread_service = lambda: _FakeThreadService()  # type: ignore[assignment]
-    discord_message_turns.request_discord_turn_progress_reuse(
+    import codex_autorunner.integrations.discord.progress_leases as _progress_leases
+
+    _progress_leases.request_discord_turn_progress_reuse(
         service,
         thread_target_id="thread-1",
         source_message_id="m-2",
@@ -8697,7 +8700,9 @@ async def test_reset_discord_thread_binding_archives_after_lost_backend_recovery
     )
 
     calls: list[tuple[str, str]] = []
-    discord_message_turns.request_discord_turn_progress_reuse(
+    import codex_autorunner.integrations.discord.progress_leases as _progress_leases
+
+    _progress_leases.request_discord_turn_progress_reuse(
         service,
         thread_target_id="thread-1",
         source_message_id="m-2",
@@ -10254,11 +10259,11 @@ async def test_reconcile_background_task_failure_does_not_fabricate_channel_fall
     def _fake_log_event(logger, level, event_name, **kwargs):  # type: ignore[no-untyped-def]
         log_events.append({"level": level, "event_name": event_name, **kwargs})
 
-    import codex_autorunner.integrations.discord.message_turns as _msg_turns
+    import codex_autorunner.integrations.discord.progress_leases as _progress_leases
     import codex_autorunner.integrations.discord.service_lifecycle as _lifecycle_mod
 
     monkeypatch.setattr(
-        _msg_turns, "reconcile_discord_turn_progress_leases", _fake_reconcile
+        _progress_leases, "reconcile_discord_turn_progress_leases", _fake_reconcile
     )
     monkeypatch.setattr(_lifecycle_mod, "log_event", _fake_log_event)
 
@@ -10311,11 +10316,11 @@ async def test_reconcile_background_task_failure_sends_channel_message_when_expl
     def _fake_log_event(logger, level, event_name, **kwargs):  # type: ignore[no-untyped-def]
         pass
 
-    import codex_autorunner.integrations.discord.message_turns as _msg_turns
+    import codex_autorunner.integrations.discord.progress_leases as _progress_leases
     import codex_autorunner.integrations.discord.service_lifecycle as _lifecycle_mod
 
     monkeypatch.setattr(
-        _msg_turns, "reconcile_discord_turn_progress_leases", _fake_reconcile
+        _progress_leases, "reconcile_discord_turn_progress_leases", _fake_reconcile
     )
     monkeypatch.setattr(_lifecycle_mod, "log_event", _fake_log_event)
 
@@ -10359,11 +10364,11 @@ async def test_reconcile_background_task_failure_returns_count_on_successful_rec
     def _fake_log_event(logger, level, event_name, **kwargs):  # type: ignore[no-untyped-def]
         pass
 
-    import codex_autorunner.integrations.discord.message_turns as _msg_turns
+    import codex_autorunner.integrations.discord.progress_leases as _progress_leases
     import codex_autorunner.integrations.discord.service_lifecycle as _lifecycle_mod
 
     monkeypatch.setattr(
-        _msg_turns, "reconcile_discord_turn_progress_leases", _fake_reconcile
+        _progress_leases, "reconcile_discord_turn_progress_leases", _fake_reconcile
     )
     monkeypatch.setattr(_lifecycle_mod, "log_event", _fake_log_event)
 

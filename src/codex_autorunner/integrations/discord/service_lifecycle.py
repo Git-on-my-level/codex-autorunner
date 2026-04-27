@@ -119,7 +119,7 @@ async def sync_application_commands_on_startup(service: Any) -> None:
 
 
 async def reconcile_progress_leases_on_startup(service: Any) -> None:
-    from .message_turns import reconcile_discord_turn_progress_leases
+    from .progress_leases import reconcile_discord_turn_progress_leases
 
     try:
         reconciled = await reconcile_discord_turn_progress_leases(
@@ -309,9 +309,7 @@ async def reconcile_background_task_failure(
     *,
     allow_channel_fallback: bool = False,
 ) -> int:
-    from .message_turns import (
-        reconcile_discord_turn_progress_leases,
-    )
+    from .progress_leases import reconcile_discord_turn_progress_leases
 
     failure_note = task_context.get("failure_note")
     if not isinstance(failure_note, str) or not failure_note.strip():
@@ -374,7 +372,7 @@ async def reconcile_background_task_failure(
 
 
 def on_background_task_done(service: Any, task: asyncio.Task[Any]) -> None:
-    from .message_turns import bind_discord_progress_task_context
+    from .progress_leases import bind_discord_progress_task_context
 
     service._background_tasks.discard(task)
     service._background_shutdown_wait_tasks.discard(task)

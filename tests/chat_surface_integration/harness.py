@@ -25,7 +25,7 @@ from codex_autorunner.integrations.discord.config import (
     DiscordBotShellConfig,
     DiscordCommandRegistration,
 )
-from codex_autorunner.integrations.discord.message_turns import (
+from codex_autorunner.integrations.discord.managed_thread_routing import (
     build_discord_thread_orchestration_service,
 )
 from codex_autorunner.integrations.discord.outbox import DiscordOutboxManager
@@ -86,10 +86,6 @@ def patch_hermes_runtime(monkeypatch: Any, runtime: HermesFixtureRuntime) -> Non
 
     monkeypatch.setattr(
         "codex_autorunner.agents.registry.get_registered_agents",
-        _registered,
-    )
-    monkeypatch.setattr(
-        "codex_autorunner.integrations.discord.message_turns.get_registered_agents",
         _registered,
     )
     monkeypatch.setattr(

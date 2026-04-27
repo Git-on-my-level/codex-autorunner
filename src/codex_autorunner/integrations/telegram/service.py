@@ -8,6 +8,7 @@ import logging
 import os
 import socket
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -37,6 +38,9 @@ from ...core.hub_control_plane.service import (
 )
 from ...core.locks import FileLock, FileLockBusy
 from ...core.logging_utils import log_event
+from ...core.managed_processes import (
+    reap_managed_processes as _reap_managed_processes_core,
+)
 from ...core.managed_thread_identity import ManagedThreadIdentityStore
 from ...core.orchestration import (
     ORCHESTRATION_SCHEMA_VERSION,
@@ -231,6 +235,18 @@ def _next_reply_seq_sync(reply_history_dir: Any) -> int:
     return (max(existing) + 1) if existing else 1
 
 
+@dataclass(frozen=True)
+class TelegramServiceDependencies:
+    load_repo_config: Callable[..., Any] = load_repo_config
+    resolve_filebox_retention_policy: Callable[..., Any] = (
+        resolve_filebox_retention_policy
+    )
+    prune_filebox_root: Callable[..., Any] = prune_filebox_root
+    run_housekeeping_for_roots: Callable[..., Any] = run_housekeeping_for_roots
+    reap_managed_processes: Callable[[Path], Any] = _reap_managed_processes_core
+    log_event: Callable[..., None] = log_event
+
+
 class TelegramBotService(
     TelegramWorkspaceAndTurnMixin,
     TelegramMessageTransport,
@@ -258,9 +274,11 @@ class TelegramBotService(
         update_backend: str = "auto",
         update_linux_service_names: Optional[dict[str, str]] = None,
         app_server_auto_restart: Optional[bool] = None,
+        dependencies: Optional[TelegramServiceDependencies] = None,
     ) -> None:
         self._config = config
         self._logger = logger or logging.getLogger(__name__)
+        self._dependencies = dependencies or TelegramServiceDependencies()
         self._hub_root = hub_root
         self._manifest_path = manifest_path
         self._hub_supervisor = None
@@ -378,6 +396,8 @@ class TelegramBotService(
             state_store=self._chat_state_store,
             adapter=self._chat_adapter,
             transport=self._chat_transport,
+            log_event_fn=self._dependencies.log_event,
+            reap_managed_processes_fn=self._dependencies.reap_managed_processes,
         )
         self._ui_state = TelegramUiState()
         self._model_options = self._ui_state.model_options
@@ -980,11 +1000,15 @@ class TelegramBotService(
         if roots:
             for root in roots:
                 try:
-                    repo_config = load_repo_config(root, hub_path=self._hub_config_path)
+                    repo_config = self._dependencies.load_repo_config(
+                        root, hub_path=self._hub_config_path
+                    )
                     summary = await asyncio.to_thread(
-                        prune_filebox_root,
+                        self._dependencies.prune_filebox_root,
                         root,
-                        policy=resolve_filebox_retention_policy(repo_config.pma),
+                        policy=self._dependencies.resolve_filebox_retention_policy(
+                            repo_config.pma
+                        ),
                     )
                     if summary.inbox_pruned or summary.outbox_pruned:
                         log_event(
@@ -1006,7 +1030,7 @@ class TelegramBotService(
                         exc=exc,
                     )
             await asyncio.to_thread(
-                run_housekeeping_for_roots,
+                self._dependencies.run_housekeeping_for_roots,
                 config,
                 roots,
                 self._logger,
@@ -1350,7 +1374,12 @@ class TelegramBotService(
         except asyncio.CancelledError:
             return
         except Exception as exc:  # intentional: top-level error handler
-            log_event(self._logger, logging.WARNING, "telegram.task.failed", exc=exc)
+            self._dependencies.log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.task.failed",
+                exc=exc,
+            )
 
     def _touch_cache_timestamp(self, cache_name: str, key: object) -> None:
         self._cache_manager.touch(cache_name, key)

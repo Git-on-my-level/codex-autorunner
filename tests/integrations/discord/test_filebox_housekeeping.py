@@ -127,15 +127,12 @@ async def test_filebox_prune_cycle_includes_bound_workspace_roots(
             bytes_after=0,
         )
 
-    monkeypatch.setattr(
-        discord_service_module, "load_repo_config", _fake_load_repo_config
+    service._dependencies = discord_service_module.DiscordServiceDependencies(
+        load_repo_config=_fake_load_repo_config,
+        resolve_filebox_retention_policy=_fake_resolve_policy,
+        prune_filebox_root=_fake_prune,
+        reap_managed_processes=service._dependencies.reap_managed_processes,
     )
-    monkeypatch.setattr(
-        discord_service_module,
-        "resolve_filebox_retention_policy",
-        _fake_resolve_policy,
-    )
-    monkeypatch.setattr(discord_service_module, "prune_filebox_root", _fake_prune)
 
     try:
         interval_seconds = await service._run_filebox_prune_cycle()

@@ -8,6 +8,7 @@ from typing import Any, Optional
 
 import pytest
 
+import codex_autorunner.integrations.chat.managed_thread_turns as managed_thread_turns_module
 import codex_autorunner.integrations.discord.message_turns as discord_message_turns_module
 from tests.support.discord_turn_fakes import _config, _FakeRest
 
@@ -97,7 +98,7 @@ async def test_orchestrated_turn_pma_queued_sends_fresh_progress_placeholder(
         _fake_begin,
     )
     monkeypatch.setattr(
-        discord_message_turns_module.ManagedThreadTurnCoordinator,
+        managed_thread_turns_module.ManagedThreadTurnCoordinator,
         "ensure_queue_worker",
         lambda *args, **kwargs: None,
     )

@@ -21,16 +21,12 @@ from typing import (
     cast,
 )
 
+from ...agents import registry as agent_registry
 from ...agents.opencode.supervisor import OpenCodeSupervisor
 from ...agents.opencode.supervisor_protocol import (
     OpenCodeHarnessSupervisorProtocol,
 )
-from ...agents.registry import (
-    AgentDescriptor,
-    get_agent_descriptor,
-    get_registered_agents,
-)
-from ...agents.types import normalize_runtime_capabilities
+from ...agents.registry import AgentDescriptor
 from ...bootstrap import seed_repo_files
 from ...core.config import (
     ConfigError,
@@ -47,7 +43,7 @@ from ...core.filebox import (
     outbox_pending_dir,
     outbox_sent_dir,
 )
-from ...core.filebox_retention import (  # noqa: F401 - re-exported for test monkeypatching
+from ...core.filebox_retention import (
     prune_filebox_root,
     resolve_filebox_retention_policy,
 )
@@ -80,8 +76,8 @@ from ...core.hub_control_plane.service import (
 )
 from ...core.logging_utils import log_event
 from ...core.managed_processes import (
-    reap_managed_processes,
-)  # noqa: F401 - re-exported for test monkeypatching
+    reap_managed_processes as _reap_managed_processes_core,
+)
 from ...core.managed_thread_identity import (
     file_chat_discord_key,
     pma_base_key,
@@ -328,12 +324,12 @@ from .interaction_session import (
 )
 from .interactions import extract_interaction_id, extract_interaction_token
 from .managed_thread_delivery import deliver_discord_managed_thread_record
+from .managed_thread_routing import build_discord_thread_orchestration_service
 from .managed_thread_startup_recovery import (
     recover_managed_thread_executions_on_startup as _recover_managed_thread_executions_on_startup_impl,
 )
 from .message_turns import (
     DiscordMessageTurnResult,
-    build_discord_thread_orchestration_service,
     resolve_bound_workspace_root,
     run_agent_turn_for_message,
     run_managed_thread_turn_for_message,
@@ -635,6 +631,16 @@ class _DiscordPendingApproval:
     future: asyncio.Future[ApprovalDecision]
 
 
+@dataclass(frozen=True)
+class DiscordServiceDependencies:
+    load_repo_config: Callable[..., Any] = load_repo_config
+    resolve_filebox_retention_policy: Callable[..., Any] = (
+        resolve_filebox_retention_policy
+    )
+    prune_filebox_root: Callable[..., Any] = prune_filebox_root
+    reap_managed_processes: Callable[[Path], Any] = _reap_managed_processes_core
+
+
 class _DiscordAppServerSupervisorAdapter:
     def __init__(self, service: "DiscordBotService") -> None:
         self._service = service
@@ -744,9 +750,11 @@ class DiscordBotService:
         update_linux_service_names: Optional[dict[str, str]] = None,
         voice_config: Optional[VoiceConfig] = None,
         voice_service: Optional[VoiceService] = None,
+        dependencies: Optional[DiscordServiceDependencies] = None,
     ) -> None:
         self._config = config
         self._logger = logger
+        self._dependencies = dependencies or DiscordServiceDependencies()
         self._manifest_path = manifest_path
         self._update_repo_url = update_repo_url
         self._update_repo_ref = update_repo_ref
@@ -3373,7 +3381,7 @@ class DiscordBotService:
 
     def _reap_managed_processes(self, *, stage: str) -> None:
         try:
-            cleanup = reap_managed_processes(self._config.root)
+            cleanup = self._dependencies.reap_managed_processes(self._config.root)
             if cleanup.killed or cleanup.signaled or cleanup.removed:
                 log_event(
                     self._logger,
@@ -3396,7 +3404,7 @@ class DiscordBotService:
 
     def _filebox_housekeeping_enabled(self) -> bool:
         try:
-            repo_config = load_repo_config(
+            repo_config = self._dependencies.load_repo_config(
                 self._config.root,
                 hub_path=self._hub_config_path,
             )
@@ -3452,7 +3460,7 @@ class DiscordBotService:
         roots = await self._filebox_prune_roots()
         for root in roots:
             try:
-                repo_config = load_repo_config(
+                repo_config = self._dependencies.load_repo_config(
                     root,
                     hub_path=self._hub_config_path,
                 )
@@ -3471,9 +3479,11 @@ class DiscordBotService:
             )
             try:
                 summary = await asyncio.to_thread(
-                    prune_filebox_root,
+                    self._dependencies.prune_filebox_root,
                     root,
-                    policy=resolve_filebox_retention_policy(repo_config.pma),
+                    policy=self._dependencies.resolve_filebox_retention_policy(
+                        repo_config.pma
+                    ),
                 )
             except (OSError, ValueError, RuntimeError) as exc:
                 log_event(
@@ -6555,7 +6565,7 @@ class DiscordBotService:
 
     def _agent_descriptor(self, agent: object) -> AgentDescriptor | None:
         normalized = self._normalize_agent(agent)
-        return get_agent_descriptor(normalized, self)
+        return agent_registry.get_agent_descriptor(normalized, self)
 
     def _agent_display_name(self, agent: object) -> str:
         descriptor = self._agent_descriptor(agent)
@@ -6570,19 +6580,19 @@ class DiscordBotService:
         descriptor = self._agent_descriptor(agent)
         if descriptor is None:
             return False
-        normalized = normalize_runtime_capabilities([capability])
+        normalized = agent_registry.normalize_agent_capabilities([capability])
         if not normalized:
             return False
         return next(iter(normalized)) in descriptor.capabilities
 
     def _agents_supporting_capability(self, capability: str) -> list[str]:
-        normalized = normalize_runtime_capabilities([capability])
+        normalized = agent_registry.normalize_agent_capabilities([capability])
         if not normalized:
             return []
         resolved = next(iter(normalized))
         return sorted(
             descriptor.id
-            for descriptor in get_registered_agents(self).values()
+            for descriptor in agent_registry.get_registered_agents(self).values()
             if resolved in descriptor.capabilities
         )
 
