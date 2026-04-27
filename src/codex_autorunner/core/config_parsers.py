@@ -1213,3 +1213,6 @@ def _parse_static_assets_config(
         max_cache_entries=max_cache_entries,
         max_cache_age_days=max_cache_age_days,
     )
+
+
+_parse_prompt_int_HELPERS = (_parse_prompt_int,)

@@ -679,3 +679,10 @@ def parse_duration(value: str):
     if total_seconds <= 0:
         raise_exit("Duration must be greater than zero.")
     return timedelta(seconds=total_seconds)
+
+
+_TICKET_CLI_HELPERS = (
+    ticket_filename,
+    normalize_ticket_suffix,
+    apply_agent_override,
+)
