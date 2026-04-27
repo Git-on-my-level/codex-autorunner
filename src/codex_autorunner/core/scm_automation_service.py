@@ -63,6 +63,7 @@ _REVIEW_BADGE_RE = re.compile(r"!\s*(P\d+)\s+Badge\b", re.IGNORECASE)
 _REVIEW_HTML_TAG_RE = re.compile(
     r"</?(?:sub|sup|strong|b|em|i|code|br)\b[^>\n]*>", re.IGNORECASE
 )
+_SCM_PUBLISH_RETRY_DELAYS_SECONDS = (0.0, 10.0, 30.0, 60.0, 300.0)
 
 
 class ScmEventLookup(Protocol):
@@ -367,6 +368,35 @@ def _tracking_from_payload(payload: Mapping[str, Any] | None) -> dict[str, Any]:
     return dict(tracking) if isinstance(tracking, Mapping) else {}
 
 
+def _normalize_mapping(payload: object) -> dict[str, Any]:
+    return dict(payload) if isinstance(payload, Mapping) else {}
+
+
+def _operation_waiting_for_managed_turn_start(operation: PublishOperation) -> bool:
+    if operation.state != "pending" or operation.operation_kind != "notify_chat":
+        return False
+    payload = _normalize_mapping(operation.payload)
+    dependency = _normalize_mapping(payload.get("managed_turn_dependency"))
+    if (
+        _normalize_text(dependency.get("dependency_kind"))
+        != "enqueue_managed_turn_started"
+        and _normalize_text(payload.get("managed_turn_id")) is None
+    ):
+        return False
+    error_text = _normalize_text(operation.last_error_text)
+    if error_text is None or not error_text.startswith("RetryablePublishError: "):
+        return False
+    return any(
+        phrase in error_text
+        for phrase in (
+            "Waiting for enqueue_managed_turn to finish",
+            "Waiting for managed turn record to become visible",
+            "Waiting for managed turn start confirmation",
+            "Managed turn has not confirmed runtime start",
+        )
+    )
+
+
 def _ci_failed_head_sha_from_payload(
     payload: Mapping[str, Any] | None,
 ) -> Optional[str]:
@@ -427,6 +457,7 @@ def _default_publish_processor(
     return PublishOperationProcessor(
         journal,
         executors=executors,
+        retry_delays_seconds=_SCM_PUBLISH_RETRY_DELAYS_SECONDS,
         mutation_policy_config=raw_config,
     )
 
@@ -515,24 +546,21 @@ class ScmAutomationService:
         if not isinstance(self._journal, PublishJournalStore):
             return
         now = datetime.now(timezone.utc)
-        pending_kinds = ("enqueue_managed_turn", "notify_chat")
+        pending = self._journal.list_operations(
+            state="pending",
+            limit=500,
+        )
         earliest_future: Optional[datetime] = None
-        for operation_kind in pending_kinds:
-            pending = self._journal.list_operations(
-                state="pending",
-                operation_kind=operation_kind,
-                limit=500,
-            )
-            for op in pending:
-                if not op.next_attempt_at:
-                    continue
-                parsed = _parse_iso_datetime(op.next_attempt_at)
-                if parsed is None:
-                    continue
-                if parsed <= now:
-                    continue
-                if earliest_future is None or parsed < earliest_future:
-                    earliest_future = parsed
+        for op in pending:
+            if not op.next_attempt_at:
+                continue
+            parsed = _parse_iso_datetime(op.next_attempt_at)
+            if parsed is None:
+                continue
+            if parsed <= now:
+                continue
+            if earliest_future is None or parsed < earliest_future:
+                earliest_future = parsed
         if earliest_future is None:
             self._cancel_deferred_publish_drain()
             return
@@ -1133,6 +1161,11 @@ class ScmAutomationService:
                         operation_key=operation.operation_key,
                         metadata=tracking,
                     )
+                    continue
+                if (
+                    operation.state == "pending"
+                    and _operation_waiting_for_managed_turn_start(operation)
+                ):
                     continue
                 if operation.state not in {"failed", "pending"}:
                     continue

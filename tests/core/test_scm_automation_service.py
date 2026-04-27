@@ -1282,6 +1282,78 @@ def test_ingest_event_creates_review_comment_notice_dependency(
     )
 
 
+def test_handle_processed_operations_skips_pending_notify_start_retries(
+    tmp_path: Path,
+) -> None:
+    class _TrackingReactionStateFake(_PermissiveReactionStateFake):
+        def __init__(self) -> None:
+            super().__init__()
+            self.failed_calls: list[tuple[str, str, str, Optional[str]]] = []
+
+        def mark_reaction_delivery_failed(
+            self,
+            *,
+            binding_id: str,
+            reaction_kind: str,
+            fingerprint: str,
+            event_id: Optional[str] = None,
+            error_text: Optional[str] = None,
+            metadata: Optional[dict] = None,
+        ) -> object:
+            _ = metadata
+            self.failed_calls.append(
+                (binding_id, reaction_kind, fingerprint, error_text)
+            )
+            return SimpleNamespace(escalated_at=None, delivery_failure_count=1)
+
+    reaction_state = _TrackingReactionStateFake()
+    service = ScmAutomationService(
+        tmp_path,
+        event_store=_EventStoreFake(),
+        binding_resolver=_BindingResolverFake(None),
+        reaction_router=_ReactionRouterFake([]),
+        reaction_state_store=reaction_state,
+        journal=_JournalFake(),
+        publish_processor=_ProcessorFake(processed=[]),
+    )
+    pending_notify = PublishOperation(
+        **{
+            **_operation(
+                operation_id="op-notify-pending",
+                operation_key="scm:notify-pending",
+                operation_kind="notify_chat",
+                state="pending",
+            ).to_dict(),
+            "payload": {
+                "scm_reaction": {
+                    "binding_id": "binding-1",
+                    "reaction_kind": "review_comment",
+                    "reaction_state_kind": "review_comment:notify_chat",
+                    "fingerprint": "fp-inline",
+                    "event_id": "github:event-inline-comment",
+                    "operation_kind": "notify_chat",
+                    "repo_slug": "acme/widgets",
+                    "pr_number": 42,
+                    "thread_target_id": "thread-123",
+                },
+                "managed_turn_dependency": {
+                    "dependency_kind": "enqueue_managed_turn_started",
+                    "operation_id": "op-enqueue-1",
+                    "thread_target_id": "thread-123",
+                },
+            },
+            "last_error_text": (
+                "RetryablePublishError: Waiting for managed turn start confirmation"
+            ),
+        }
+    )
+
+    follow_ups = service._handle_processed_operations([pending_notify])
+
+    assert follow_ups == []
+    assert reaction_state.failed_calls == []
+
+
 def test_handle_processed_operations_uses_reaction_state_kind_tracking_key(
     tmp_path: Path,
 ) -> None:

@@ -341,6 +341,7 @@ def test_execution_models_round_trip_with_existing_execution_record() -> None:
     assert backend_update.to_dict() == {
         "execution_id": "exec-2",
         "backend_turn_id": "backend-2",
+        "confirmed_start": True,
     }
 
 
@@ -515,6 +516,7 @@ async def test_http_client_uses_extended_timeout_for_backend_id_updates() -> Non
             "json": {
                 "execution_id": "exec-1",
                 "backend_turn_id": "turn-2",
+                "confirmed_start": True,
             },
             "params": None,
             "timeout": 30.0,

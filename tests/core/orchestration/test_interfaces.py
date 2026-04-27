@@ -144,8 +144,13 @@ class _FakeStore:
         return None
 
     def set_execution_backend_id(
-        self, execution_id: str, backend_turn_id: Optional[str]
+        self,
+        execution_id: str,
+        backend_turn_id: Optional[str],
+        *,
+        confirmed_start: bool = True,
     ) -> None:
+        _ = execution_id, backend_turn_id, confirmed_start
         return None
 
     def record_execution_result(
