@@ -454,19 +454,11 @@ async def test_car_flow_resume_with_partial_run_id_prompts_filtered_picker(
         repo_id="repo-1",
     )
     rest = _FakeRest()
-    gateway = _FakeGateway(
-        [
-            _interaction_path(
-                command_path=("car", "flow", "resume"),
-                options=[{"name": "run_id", "value": "run"}],
-            )
-        ]
-    )
     service = DiscordBotService(
         _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
         logger=logging.getLogger("test"),
         rest_client=rest,
-        gateway_client=gateway,
+        gateway_client=_FakeGateway([]),
         state_store=store,
         outbox_manager=_FakeOutboxManager(),
     )
@@ -490,7 +482,13 @@ async def test_car_flow_resume_with_partial_run_id_prompts_filtered_picker(
     service._open_flow_store = lambda _workspace_root: _Store()  # type: ignore[assignment]
 
     try:
-        await service.run_forever()
+        await _dispatch_gateway_interaction(
+            service,
+            _interaction_path(
+                command_path=("car", "flow", "resume"),
+                options=[{"name": "run_id", "value": "run"}],
+            ),
+        )
         assert rest.interaction_responses[0]["payload"]["type"] == 5
         assert len(rest.followup_messages) == 1
         payload = rest.followup_messages[0]["payload"]
@@ -500,6 +498,7 @@ async def test_car_flow_resume_with_partial_run_id_prompts_filtered_picker(
         values = [option["value"] for option in select["options"]]
         assert values == ["run-alpha", "run-beta"]
     finally:
+        await service._shutdown()
         await store.close()
 
 
