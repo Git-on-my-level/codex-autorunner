@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, cast
@@ -64,7 +65,17 @@ async def handle_ticket_browser(
     query = service._normalize_search_query(options.get("search"))
     state = DiscordDocumentBrowserState(source="tickets", query=query)
     _store_browser_state(service, channel_id=channel_id, user_id=user_id, state=state)
-    content, components = _render_browser_view(service, workspace_root, state)
+    async with _browser_session_lock(
+        service,
+        channel_id=channel_id,
+        user_id=user_id,
+        source=state.source,
+    ):
+        content, components = await _render_browser_view_async(
+            service,
+            workspace_root,
+            state,
+        )
     await service.respond_ephemeral_with_components(
         interaction_id,
         interaction_token,
@@ -84,7 +95,17 @@ async def handle_contextspace_browser(
 ) -> None:
     state = DiscordDocumentBrowserState(source="contextspace")
     _store_browser_state(service, channel_id=channel_id, user_id=user_id, state=state)
-    content, components = _render_browser_view(service, workspace_root, state)
+    async with _browser_session_lock(
+        service,
+        channel_id=channel_id,
+        user_id=user_id,
+        source=state.source,
+    ):
+        content, components = await _render_browser_view_async(
+            service,
+            workspace_root,
+            state,
+        )
     await service.respond_ephemeral_with_components(
         interaction_id,
         interaction_token,
@@ -263,16 +284,6 @@ async def _handle_select_component(
     source: DocumentBrowserSource,
     values: Optional[list[str]],
 ) -> None:
-    state = _get_browser_state(
-        service, channel_id=channel_id, user_id=user_id, source=source
-    )
-    if state is None or not values:
-        await service.respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            "Document selection expired. Re-run the command and try again.",
-        )
-        return
     workspace_root = await service._require_bound_workspace(
         interaction_id,
         interaction_token,
@@ -280,15 +291,31 @@ async def _handle_select_component(
     )
     if workspace_root is None:
         return
-    state.document_id = values[0]
-    state.chunk_index = 0
-    await _update_browser_message(
+    async with _browser_session_lock(
         service,
-        interaction_id,
-        interaction_token,
-        workspace_root=workspace_root,
-        state=state,
-    )
+        channel_id=channel_id,
+        user_id=user_id,
+        source=source,
+    ):
+        state = _get_browser_state(
+            service, channel_id=channel_id, user_id=user_id, source=source
+        )
+        if state is None or not values:
+            await service.respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Document selection expired. Re-run the command and try again.",
+            )
+            return
+        state.document_id = values[0]
+        state.chunk_index = 0
+        await _update_browser_message(
+            service,
+            interaction_id,
+            interaction_token,
+            workspace_root=workspace_root,
+            state=state,
+        )
 
 
 async def _handle_list_page_component(
@@ -302,16 +329,6 @@ async def _handle_list_page_component(
     custom_id: str,
     prefix: str,
 ) -> None:
-    state = _get_browser_state(
-        service, channel_id=channel_id, user_id=user_id, source=source
-    )
-    if state is None:
-        await service.respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            "Browser state expired. Re-run the command and try again.",
-        )
-        return
     page = _parse_custom_id_index(custom_id, prefix)
     if page is None:
         await service.respond_ephemeral(
@@ -327,16 +344,32 @@ async def _handle_list_page_component(
     )
     if workspace_root is None:
         return
-    state.document_id = None
-    state.chunk_index = 0
-    state.list_page = page
-    await _update_browser_message(
+    async with _browser_session_lock(
         service,
-        interaction_id,
-        interaction_token,
-        workspace_root=workspace_root,
-        state=state,
-    )
+        channel_id=channel_id,
+        user_id=user_id,
+        source=source,
+    ):
+        state = _get_browser_state(
+            service, channel_id=channel_id, user_id=user_id, source=source
+        )
+        if state is None:
+            await service.respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Browser state expired. Re-run the command and try again.",
+            )
+            return
+        state.document_id = None
+        state.chunk_index = 0
+        state.list_page = page
+        await _update_browser_message(
+            service,
+            interaction_id,
+            interaction_token,
+            workspace_root=workspace_root,
+            state=state,
+        )
 
 
 async def _handle_back_component(
@@ -348,16 +381,6 @@ async def _handle_back_component(
     user_id: Optional[str],
     source: DocumentBrowserSource,
 ) -> None:
-    state = _get_browser_state(
-        service, channel_id=channel_id, user_id=user_id, source=source
-    )
-    if state is None:
-        await service.respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            "Browser state expired. Re-run the command and try again.",
-        )
-        return
     workspace_root = await service._require_bound_workspace(
         interaction_id,
         interaction_token,
@@ -365,15 +388,31 @@ async def _handle_back_component(
     )
     if workspace_root is None:
         return
-    state.document_id = None
-    state.chunk_index = 0
-    await _update_browser_message(
+    async with _browser_session_lock(
         service,
-        interaction_id,
-        interaction_token,
-        workspace_root=workspace_root,
-        state=state,
-    )
+        channel_id=channel_id,
+        user_id=user_id,
+        source=source,
+    ):
+        state = _get_browser_state(
+            service, channel_id=channel_id, user_id=user_id, source=source
+        )
+        if state is None:
+            await service.respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Browser state expired. Re-run the command and try again.",
+            )
+            return
+        state.document_id = None
+        state.chunk_index = 0
+        await _update_browser_message(
+            service,
+            interaction_id,
+            interaction_token,
+            workspace_root=workspace_root,
+            state=state,
+        )
 
 
 async def _handle_chunk_component(
@@ -387,16 +426,6 @@ async def _handle_chunk_component(
     custom_id: str,
     prefix: str,
 ) -> None:
-    state = _get_browser_state(
-        service, channel_id=channel_id, user_id=user_id, source=source
-    )
-    if state is None or not state.document_id:
-        await service.respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            "Browser state expired. Re-run the command and try again.",
-        )
-        return
     chunk_index = _parse_custom_id_index(custom_id, prefix)
     if chunk_index is None:
         await service.respond_ephemeral(
@@ -412,14 +441,30 @@ async def _handle_chunk_component(
     )
     if workspace_root is None:
         return
-    state.chunk_index = chunk_index
-    await _update_browser_message(
+    async with _browser_session_lock(
         service,
-        interaction_id,
-        interaction_token,
-        workspace_root=workspace_root,
-        state=state,
-    )
+        channel_id=channel_id,
+        user_id=user_id,
+        source=source,
+    ):
+        state = _get_browser_state(
+            service, channel_id=channel_id, user_id=user_id, source=source
+        )
+        if state is None or not state.document_id:
+            await service.respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Browser state expired. Re-run the command and try again.",
+            )
+            return
+        state.chunk_index = chunk_index
+        await _update_browser_message(
+            service,
+            interaction_id,
+            interaction_token,
+            workspace_root=workspace_root,
+            state=state,
+        )
 
 
 async def _update_browser_message(
@@ -442,7 +487,11 @@ async def _update_browser_message(
             "Discord interaction acknowledgement failed. Please retry.",
         )
         return
-    content, components = _render_browser_view(service, workspace_root, state)
+    content, components = await _render_browser_view_async(
+        service,
+        workspace_root,
+        state,
+    )
     await update_runtime_component_message(
         service,
         interaction_id,
@@ -450,6 +499,35 @@ async def _update_browser_message(
         content,
         components=components,
     )
+
+
+async def _render_browser_view_async(
+    service: Any,
+    workspace_root: Path,
+    state: DiscordDocumentBrowserState,
+) -> tuple[str, list[dict[str, Any]]]:
+    render_state = DiscordDocumentBrowserState(
+        source=state.source,
+        query=state.query,
+        list_page=state.list_page,
+        document_id=state.document_id,
+        chunk_index=state.chunk_index,
+    )
+    if render_state.source == "tickets":
+        content, components = await asyncio.to_thread(
+            _render_browser_view,
+            service,
+            workspace_root,
+            render_state,
+        )
+    else:
+        content, components = _render_browser_view(
+            service, workspace_root, render_state
+        )
+    state.list_page = render_state.list_page
+    state.document_id = render_state.document_id
+    state.chunk_index = render_state.chunk_index
+    return content, components
 
 
 def _render_browser_view(
@@ -606,3 +684,27 @@ def _get_browser_state(
             _browser_state_key(channel_id, user_id, source)
         ),
     )
+
+
+def _browser_session_locks(service: Any) -> dict[str, asyncio.Lock]:
+    locks = getattr(service, "_document_browser_session_locks", None)
+    if not isinstance(locks, dict):
+        locks = {}
+        service._document_browser_session_locks = locks
+    return cast(dict[str, asyncio.Lock], locks)
+
+
+def _browser_session_lock(
+    service: Any,
+    *,
+    channel_id: str,
+    user_id: Optional[str],
+    source: DocumentBrowserSource,
+) -> asyncio.Lock:
+    key = _browser_state_key(channel_id, user_id, source)
+    locks = _browser_session_locks(service)
+    lock = locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        locks[key] = lock
+    return lock

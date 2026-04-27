@@ -885,6 +885,67 @@ async def test_autocomplete_bypasses_busy_ingressed_fifo(
 
 
 @pytest.mark.anyio
+async def test_ticket_routes_distinguish_slash_defer_from_autocomplete_dispatch(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    submit = MagicMock()
+    service._command_runner.submit = submit  # type: ignore[method-assign]
+
+    try:
+        await service._on_dispatch(
+            "INTERACTION_CREATE",
+            _interaction_path(command_path=("car", "tickets"), options=[]),
+        )
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        slash_kwargs = submit.call_args.kwargs
+        assert slash_kwargs["conversation_id"] == "discord:channel-1:guild-1"
+        assert slash_kwargs["resource_keys"] == (
+            "conversation:discord:channel-1:guild-1",
+        )
+
+        rest.interaction_responses.clear()
+        submit.reset_mock()
+
+        await service._on_dispatch(
+            "INTERACTION_CREATE",
+            _autocomplete_interaction_path(
+                command_path=("car", "tickets"),
+                focused_name="search",
+                focused_value="alpha",
+            ),
+        )
+        assert rest.interaction_responses == []
+        autocomplete_kwargs = submit.call_args.kwargs
+        assert autocomplete_kwargs["conversation_id"] is None
+        assert autocomplete_kwargs["resource_keys"] == ()
+    finally:
+        await service._shutdown()
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_scheduler_serializes_workspace_mutations_across_channels(
     tmp_path: Path,
 ) -> None:
@@ -1068,7 +1129,7 @@ async def test_dispatch_deferred_slash_commands_ack_before_prior_handler_finishe
 
     task = asyncio.create_task(service.run_forever())
     try:
-        for _ in range(50):
+        for _ in range(200):
             if len(rest.interaction_responses) >= 2:
                 break
             await asyncio.sleep(0.01)

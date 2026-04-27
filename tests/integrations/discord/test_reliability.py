@@ -14,6 +14,7 @@ refactor:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 from pathlib import Path
@@ -30,6 +31,11 @@ from codex_autorunner.integrations.discord.car_autocomplete import (
 from codex_autorunner.integrations.discord.command_runner import (
     CommandRunner,
     RunnerConfig,
+)
+from codex_autorunner.integrations.discord.config import (
+    DiscordBotConfig,
+    DiscordBotDispatchConfig,
+    DiscordCommandRegistration,
 )
 from codex_autorunner.integrations.discord.effects import (
     DiscordEffectDeliveryError,
@@ -442,6 +448,31 @@ class _FakeRest:
             }
         )
         return {"id": "@original"}
+
+
+def _discord_config(root: Path) -> DiscordBotConfig:
+    return DiscordBotConfig(
+        root=root,
+        enabled=True,
+        bot_token_env="TOKEN_ENV",
+        app_id_env="APP_ENV",
+        bot_token="token",
+        application_id="app-1",
+        allowed_guild_ids=frozenset({"guild-1"}),
+        allowed_channel_ids=frozenset({"channel-1"}),
+        allowed_user_ids=frozenset({"user-1"}),
+        command_registration=DiscordCommandRegistration(
+            enabled=False,
+            scope="guild",
+            guild_ids=("guild-1",),
+        ),
+        state_file=root / ".codex-autorunner" / "discord_state.sqlite3",
+        intents=1,
+        max_message_length=2000,
+        message_overflow="split",
+        pma_enabled=True,
+        dispatch=DiscordBotDispatchConfig(ack_budget_ms=10_000),
+    )
 
 
 def _make_ctx_with_timing(
@@ -1281,6 +1312,101 @@ async def test_ack_succeeds_within_budget_and_records_latency() -> None:
     assert (
         ctx.timing.ack_finished_at - ingress_started_at
     ) * 1000 < service._config.dispatch.ack_budget_ms
+
+
+@pytest.mark.anyio
+async def test_tickets_autocomplete_waits_for_slow_lookup_without_defer(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    ticket_dir = workspace / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True)
+    (ticket_dir / "TICKET-001.md").write_text(
+        '---\nticket_id: "tkt_discord_slow_autocomplete"\nagent: codex\ntitle: Alpha task\ndone: false\n---\n\nBody\n',
+        encoding="utf-8",
+    )
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _discord_config(tmp_path),
+        logger=logging.getLogger("test.reliability.ticket_autocomplete"),
+        rest_client=rest,
+        gateway_client=SimpleNamespace(),
+        state_store=store,
+        outbox_manager=SimpleNamespace(),
+    )
+    autocomplete_started = asyncio.Event()
+    release_autocomplete = asyncio.Event()
+    original_handle_command_autocomplete = service._handle_command_autocomplete
+
+    async def _slow_handle_command_autocomplete(*args: Any, **kwargs: Any) -> None:
+        autocomplete_started.set()
+        await release_autocomplete.wait()
+        await original_handle_command_autocomplete(*args, **kwargs)
+
+    service._handle_command_autocomplete = (  # type: ignore[assignment]
+        _slow_handle_command_autocomplete
+    )
+    payload = {
+        "id": "inter-autocomplete-1",
+        "token": "token-autocomplete-1",
+        "channel_id": "channel-1",
+        "guild_id": "guild-1",
+        "member": {"user": {"id": "user-1"}},
+        "type": 4,
+        "data": {
+            "name": "car",
+            "options": [
+                {
+                    "type": 1,
+                    "name": "tickets",
+                    "options": [
+                        {
+                            "type": 3,
+                            "name": "search",
+                            "value": "alpha",
+                            "focused": True,
+                        }
+                    ],
+                }
+            ],
+        },
+    }
+    dispatch_task = asyncio.create_task(
+        service._on_dispatch("INTERACTION_CREATE", payload)
+    )
+
+    try:
+        await asyncio.wait_for(autocomplete_started.wait(), timeout=1.0)
+        assert rest.interaction_responses == []
+        assert rest.followup_messages == []
+
+        release_autocomplete.set()
+        await asyncio.wait_for(dispatch_task, timeout=1.0)
+        await _wait_for_runner_idle(service._command_runner)
+
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 8
+        choices = rest.interaction_responses[0]["payload"]["data"]["choices"]
+        assert [choice["value"] for choice in choices] == [
+            ".codex-autorunner/tickets/TICKET-001.md"
+        ]
+        assert rest.followup_messages == []
+    finally:
+        if not dispatch_task.done():
+            dispatch_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await dispatch_task
+        await store.close()
 
 
 @pytest.mark.anyio
