@@ -16,17 +16,17 @@ from tests.surfaces.web._hub_test_support import (
 
 from codex_autorunner.core.config import DEFAULT_HUB_CONFIG
 from codex_autorunner.core.flows import FlowRunStatus
-from codex_autorunner.core.orchestration.bindings import OrchestrationBindingStore
-from codex_autorunner.core.orchestration.sqlite import (
-    resolve_orchestration_sqlite_path,
-)
-from codex_autorunner.core.pma_thread_store import PmaThreadStore
-from codex_autorunner.integrations.app_server.threads import (
+from codex_autorunner.core.managed_thread_identity import (
     FILE_CHAT_PREFIX,
     PMA_KEY,
     PMA_OPENCODE_KEY,
     pma_base_key,
 )
+from codex_autorunner.core.orchestration.bindings import OrchestrationBindingStore
+from codex_autorunner.core.orchestration.sqlite import (
+    resolve_orchestration_sqlite_path,
+)
+from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.integrations.chat.channel_directory import ChannelDirectoryStore
 from codex_autorunner.integrations.telegram.state import topic_key as telegram_topic_key
 from codex_autorunner.server import create_hub_app

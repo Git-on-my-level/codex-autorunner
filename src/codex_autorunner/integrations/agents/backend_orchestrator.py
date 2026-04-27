@@ -36,6 +36,13 @@ from pathlib import Path
 from typing import Any, AsyncGenerator, Optional
 
 from ...core.config import RepoConfig
+from ...core.managed_thread_identity import (
+    FILE_CHAT_OPENCODE_KEY,
+    FILE_CHAT_OPENCODE_PREFIX,
+    PMA_OPENCODE_KEY,
+    AppServerThreadRegistry,
+    default_app_server_threads_path,
+)
 from ...core.ports.agent_backend import AgentBackend
 from ...core.ports.backend_orchestrator import (
     BackendOrchestrator as BackendOrchestratorProtocol,
@@ -43,13 +50,6 @@ from ...core.ports.backend_orchestrator import (
 from ...core.ports.run_event import RunEvent
 from ...core.state import RunnerState
 from ...core.types import NotificationHandler
-from ...integrations.app_server.threads import (
-    FILE_CHAT_OPENCODE_KEY,
-    FILE_CHAT_OPENCODE_PREFIX,
-    PMA_OPENCODE_KEY,
-    AppServerThreadRegistry,
-    default_app_server_threads_path,
-)
 from .wiring import AgentBackendFactory, BackendFactory
 
 

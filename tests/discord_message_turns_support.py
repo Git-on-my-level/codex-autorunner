@@ -28,6 +28,13 @@ from codex_autorunner.core.filebox import (
     outbox_pending_dir,
     outbox_sent_dir,
 )
+from codex_autorunner.core.managed_thread_identity import (
+    FILE_CHAT_OPENCODE_PREFIX,
+    FILE_CHAT_PREFIX,
+    PMA_KEY,
+    normalize_feature_key,
+    pma_base_key,
+)
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.ports.run_event import (
     RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
@@ -42,13 +49,6 @@ from codex_autorunner.core.sse import format_sse
 from codex_autorunner.core.utils import canonicalize_path
 from codex_autorunner.integrations.app_server.client import (
     CodexAppServerDisconnected,
-)
-from codex_autorunner.integrations.app_server.threads import (
-    FILE_CHAT_OPENCODE_PREFIX,
-    FILE_CHAT_PREFIX,
-    PMA_KEY,
-    normalize_feature_key,
-    pma_base_key,
 )
 from codex_autorunner.integrations.chat.collaboration_policy import (
     build_discord_collaboration_policy,

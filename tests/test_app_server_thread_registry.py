@@ -3,11 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
-from codex_autorunner.core.orchestration.verification import (
-    verify_thread_identity_parity,
-)
-from codex_autorunner.integrations.app_server.threads import (
+from codex_autorunner.core.managed_thread_identity import (
     FILE_CHAT_HERMES_PREFIX,
     FILE_CHAT_OPENCODE_PREFIX,
     FILE_CHAT_PREFIX,
@@ -20,10 +16,16 @@ from codex_autorunner.integrations.app_server.threads import (
     file_chat_target_key,
     normalize_feature_key,
     pma_automation_key,
+    pma_legacy_alias_keys,
+    pma_legacy_migration_fallback_keys,
     pma_base_key,
     pma_prefix_for_agent,
     pma_prefixes_for_reset,
     pma_topic_scoped_key,
+)
+from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
+from codex_autorunner.core.orchestration.verification import (
+    verify_thread_identity_parity,
 )
 
 
@@ -584,14 +586,115 @@ class TestPmaPrefixesForReset:
         assert pma_prefixes_for_reset("hermes", None) == ["pma.hermes."]
         assert pma_prefixes_for_reset("opencode", None) == [PMA_OPENCODE_PREFIX]
 
+class TestPmaLegacyAliasMigration:
+    def test_legacy_keys_include_hyphen_and_underscore_alias_shapes(self) -> None:
+        keys = pma_legacy_alias_keys("hermes", "m4-pma")
+        new_key = pma_base_key("hermes", "m4-pma")
+        assert pma_base_key("hermes-m4-pma") in keys
+        assert pma_base_key("hermes_m4_pma") in keys
+        assert new_key not in keys
+        assert len(keys) >= 2
 
-class TestCoreImportFacadeContract:
-    def test_core_app_server_threads_re_exports_registry(self) -> None:
-        from codex_autorunner.core.app_server_threads import (
-            AppServerThreadRegistry as CoreRegistry,
-        )
+    def test_migration_fallback_appends_topic_suffix_to_each_legacy_base(self) -> None:
+        agent, profile = "hermes", "m4-pma"
+        logical_base = pma_base_key(agent, profile)
+        canonical = f"{logical_base}.123:root"
+        fallbacks = pma_legacy_migration_fallback_keys(canonical, agent, profile)
+        assert fallbacks
+        for fb in fallbacks:
+            assert fb.startswith("pma.")
+            assert fb.endswith(".123:root")
+        assert pma_base_key("hermes-m4-pma") + ".123:root" in fallbacks
 
-        assert CoreRegistry is AppServerThreadRegistry
+    def test_get_thread_id_with_fallback_migrates_topic_scoped_legacy_key(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "app_server_threads.json"
+        registry = AppServerThreadRegistry(path)
+        agent, profile = "hermes", "m4-pma"
+        logical_base = pma_base_key(agent, profile)
+        topic = "99:7"
+        canonical = f"{logical_base}.{topic}"
+        legacy = pma_base_key("hermes-m4-pma") + f".{topic}"
+        registry.set_thread_id(legacy, "thread-migrated")
+        fallbacks = pma_legacy_migration_fallback_keys(canonical, agent, profile)
+        assert legacy in fallbacks
+        resolved = registry.get_thread_id_with_fallback(canonical, *fallbacks)
+        assert resolved == "thread-migrated"
+        assert registry.get_thread_id(canonical) == "thread-migrated"
+        assert registry.get_thread_id(legacy) is None
+
+
+class TestPmaLegacyMigrationProvenance:
+    def test_migration_moves_value_from_legacy_to_canonical(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "app_server_threads.json"
+        registry = AppServerThreadRegistry(path)
+        agent, profile = "hermes", "m4-pma"
+        logical_base = pma_base_key(agent, profile)
+        canonical = f"{logical_base}.42:root"
+        legacy_key = pma_base_key("hermes_m4_pma") + ".42:root"
+        registry.set_thread_id(legacy_key, "thread-from-legacy")
+
+        fallbacks = pma_legacy_migration_fallback_keys(canonical, agent, profile)
+        assert legacy_key in fallbacks
+
+        resolved = registry.get_thread_id_with_fallback(canonical, *fallbacks)
+        assert resolved == "thread-from-legacy"
+        assert registry.get_thread_id(canonical) == "thread-from-legacy"
+        assert registry.get_thread_id(legacy_key) is None
+
+    def test_no_migration_when_canonical_exists(self, tmp_path: Path) -> None:
+        path = tmp_path / "app_server_threads.json"
+        registry = AppServerThreadRegistry(path)
+        agent, profile = "hermes", "m4-pma"
+        logical_base = pma_base_key(agent, profile)
+        canonical = f"{logical_base}.55:root"
+        registry.set_thread_id(canonical, "thread-canonical")
+        legacy_key = pma_base_key("hermes-m4-pma") + ".55:root"
+        registry.set_thread_id(legacy_key, "thread-legacy")
+
+        resolved = registry.get_thread_id_with_fallback(canonical, legacy_key)
+        assert resolved == "thread-canonical"
+
+    def test_legacy_keys_do_not_include_current_profile_key(self) -> None:
+        keys = pma_legacy_alias_keys("hermes", "m4-pma")
+        current_key = pma_base_key("hermes", "m4-pma")
+        assert current_key not in keys
+
+    def test_fallback_keys_preserve_topic_suffix(self) -> None:
+        canonical = "pma.hermes.profile-x.99:7"
+        fallbacks = pma_legacy_migration_fallback_keys(canonical, "hermes", "profile-x")
+        for fb in fallbacks:
+            assert fb.endswith(".99:7")
+
+    def test_get_thread_id_returns_none_when_no_legacy_or_canonical(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "app_server_threads.json"
+        registry = AppServerThreadRegistry(path)
+        canonical = "pma.hermes.m4-pma.11:root"
+        fallbacks = pma_legacy_migration_fallback_keys(canonical, "hermes", "m4-pma")
+
+        resolved = registry.get_thread_id_with_fallback(canonical, *fallbacks)
+        assert resolved is None
+
+    def test_migration_is_idempotent(self, tmp_path: Path) -> None:
+        path = tmp_path / "app_server_threads.json"
+        registry = AppServerThreadRegistry(path)
+        agent, profile = "hermes", "m4-pma"
+        logical_base = pma_base_key(agent, profile)
+        canonical = f"{logical_base}.33:root"
+        legacy_key = pma_base_key("hermes-m4-pma") + ".33:root"
+        registry.set_thread_id(legacy_key, "thread-migrated")
+
+        fallbacks = pma_legacy_migration_fallback_keys(canonical, agent, profile)
+        first = registry.get_thread_id_with_fallback(canonical, *fallbacks)
+        second = registry.get_thread_id_with_fallback(canonical, *fallbacks)
+
+        assert first == "thread-migrated"
+        assert second == "thread-migrated"
 
 
 class TestProfileScopedRegistryRoundTrip:

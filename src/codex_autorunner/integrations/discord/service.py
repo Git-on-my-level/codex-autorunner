@@ -82,6 +82,10 @@ from ...core.logging_utils import log_event
 from ...core.managed_processes import (
     reap_managed_processes,
 )  # noqa: F401 - re-exported for test monkeypatching
+from ...core.managed_thread_identity import (
+    file_chat_discord_key,
+    pma_base_key,
+)
 from ...core.orchestration import (
     ORCHESTRATION_SCHEMA_VERSION,
     ChatOperationRecoveryAction,
@@ -116,10 +120,6 @@ from ...integrations.app_server.client import ApprovalDecision, CodexAppServerCl
 from ...integrations.app_server.env import build_app_server_env
 from ...integrations.app_server.event_buffer import AppServerEventBuffer
 from ...integrations.app_server.supervisor import WorkspaceAppServerSupervisor
-from ...integrations.app_server.threads import (
-    file_chat_discord_key,
-    pma_base_key,
-)
 from ...integrations.chat.agents import (
     DEFAULT_CHAT_AGENT,
     chat_agent_supports_effort,
