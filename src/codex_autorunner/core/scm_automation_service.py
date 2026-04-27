@@ -515,22 +515,24 @@ class ScmAutomationService:
         if not isinstance(self._journal, PublishJournalStore):
             return
         now = datetime.now(timezone.utc)
-        pending = self._journal.list_operations(
-            state="pending",
-            operation_kind="enqueue_managed_turn",
-            limit=500,
-        )
+        pending_kinds = ("enqueue_managed_turn", "notify_chat")
         earliest_future: Optional[datetime] = None
-        for op in pending:
-            if not op.next_attempt_at:
-                continue
-            parsed = _parse_iso_datetime(op.next_attempt_at)
-            if parsed is None:
-                continue
-            if parsed <= now:
-                continue
-            if earliest_future is None or parsed < earliest_future:
-                earliest_future = parsed
+        for operation_kind in pending_kinds:
+            pending = self._journal.list_operations(
+                state="pending",
+                operation_kind=operation_kind,
+                limit=500,
+            )
+            for op in pending:
+                if not op.next_attempt_at:
+                    continue
+                parsed = _parse_iso_datetime(op.next_attempt_at)
+                if parsed is None:
+                    continue
+                if parsed <= now:
+                    continue
+                if earliest_future is None or parsed < earliest_future:
+                    earliest_future = parsed
         if earliest_future is None:
             self._cancel_deferred_publish_drain()
             return

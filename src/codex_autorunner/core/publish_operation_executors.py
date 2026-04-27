@@ -194,6 +194,7 @@ def _managed_turn_dependency_deadline(
     if base is None:
         base = datetime.now(timezone.utc)
     timeout_seconds = _coerce_int(dependency.get("timeout_seconds"))
+    # Missing or non-positive values use the default; explicit positive values are not clamped.
     if timeout_seconds <= 0:
         timeout_seconds = _MANAGED_TURN_START_CONFIRMATION_TIMEOUT_SECONDS
     return base + timedelta(seconds=timeout_seconds)
@@ -903,7 +904,26 @@ def build_notify_chat_executor(
     coroutine_runner = run_coroutine or _run_coroutine_sync
 
     def executor(operation: PublishOperation) -> dict[str, Any]:
-        payload = _normalize_mapping(operation.payload)
+        payload = dict(_normalize_mapping(operation.payload))
+        dependency_for_delivery = _normalize_mapping(
+            payload.get("managed_turn_dependency")
+        )
+        if (
+            _normalize_optional_text(dependency_for_delivery.get("dependency_kind"))
+            == "enqueue_managed_turn_started"
+        ):
+            dep_operation_id = _normalize_optional_text(
+                dependency_for_delivery.get("operation_id")
+            )
+            if dep_operation_id:
+                enqueue_operation = journal.get_operation(dep_operation_id)
+                if enqueue_operation is not None:
+                    enqueue_response = _normalize_mapping(enqueue_operation.response)
+                    resolved_thread_id = _normalize_optional_text(
+                        enqueue_response.get("thread_target_id")
+                    )
+                    if resolved_thread_id is not None:
+                        payload["thread_target_id"] = resolved_thread_id
         message = _normalize_optional_text(
             _resolve_notify_message(
                 operation=operation,
