@@ -491,7 +491,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     move_p.add_argument("--to", type=int, required=True, help="Destination position (1-indexed)")
 
     args = parser.parse_args(argv)
-    repo_root = Path.cwd()
+    repo_root = _repo_root()
     ticket_dir = _ticket_dir(repo_root)
     if not ticket_dir.exists():
         sys.stderr.write(f"Tickets directory not found: {ticket_dir}\\n")

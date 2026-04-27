@@ -27,17 +27,41 @@ def portable_ticket_validation_source() -> str:
         _IGNORED_NON_TICKET_FILENAMES = {{"AGENTS.md", "ingest_state.json"}}
 
 
+        def _unescape_double_quoted_yaml_scalar(inner: str) -> str:
+            out: list[str] = []
+            i = 0
+            while i < len(inner):
+                ch = inner[i]
+                if ch != \"\\\\\":
+                    out.append(ch)
+                    i += 1
+                    continue
+                if i + 1 >= len(inner):
+                    out.append(\"\\\\\")
+                    break
+                nxt = inner[i + 1]
+                if nxt == \"n\":
+                    out.append(\"\\n\")
+                    i += 2
+                elif nxt == '\"':
+                    out.append('\"')
+                    i += 2
+                elif nxt == \"\\\\\":
+                    out.append(\"\\\\\")
+                    i += 2
+                else:
+                    out.append(\"\\\\\")
+                    out.append(nxt)
+                    i += 2
+            return \"\".join(out)
+
+
         def _parse_scalar(raw: str) -> object:
             value = raw.strip()
             if not value:
                 return ""
             if value.startswith('"') and value.endswith('"') and len(value) >= 2:
-                return (
-                    value[1:-1]
-                    .replace("\\\\n", "\\n")
-                    .replace('\\\\\\"', '"')
-                    .replace("\\\\\\\\", "\\\\")
-                )
+                return _unescape_double_quoted_yaml_scalar(value[1:-1])
             lowered = value.lower()
             if lowered == "true":
                 return True
