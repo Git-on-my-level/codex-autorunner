@@ -5,6 +5,7 @@ import hashlib
 import logging
 import threading
 from collections.abc import Mapping
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Coroutine, Optional
 
@@ -18,8 +19,12 @@ from .pma_chat_delivery import (
 )
 from .pma_thread_store import ManagedThreadNotActiveError, PmaThreadStore
 from .pr_bindings import PrBinding, PrBindingStore
-from .publish_executor import PublishActionExecutor, TerminalPublishError
-from .publish_journal import PublishOperation
+from .publish_executor import (
+    PublishActionExecutor,
+    RetryablePublishError,
+    TerminalPublishError,
+)
+from .publish_journal import PublishJournalStore, PublishOperation
 from .scm_events import ScmEvent, ScmEventStore
 from .scm_feedback_bundle import (
     apply_feedback_bundle_to_publish_payload,
@@ -30,6 +35,8 @@ from .scm_observability import correlation_id_for_operation, correlation_id_from
 from .text_utils import _coerce_int, _normalize_optional_text
 
 _LOGGER = logging.getLogger(__name__)
+_MANAGED_TURN_START_CONFIRMATION_TIMEOUT_SECONDS = 300
+_MANAGED_TURN_START_CONFIRMATION_RETRY_SECONDS = 5
 
 
 def _require_text(value: Any, *, field_name: str) -> str:
@@ -146,6 +153,155 @@ def _managed_turn_result(
     if correlation_id is not None:
         result["correlation_id"] = correlation_id
     return result
+
+
+def _parse_iso_datetime(value: Any) -> Optional[datetime]:
+    normalized = _normalize_optional_text(value)
+    if normalized is None:
+        return None
+    try:
+        parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _managed_turn_dependency_deadline(
+    dependency: Mapping[str, Any],
+    *,
+    enqueue_operation: Optional[PublishOperation],
+    turn: Optional[Mapping[str, Any]],
+) -> datetime:
+    explicit_deadline = _parse_iso_datetime(dependency.get("deadline_at"))
+    if explicit_deadline is not None:
+        return explicit_deadline
+    bases = [
+        _parse_iso_datetime(dependency.get("created_at")),
+        _parse_iso_datetime((turn or {}).get("started_at")),
+        _parse_iso_datetime(
+            enqueue_operation.finished_at if enqueue_operation is not None else None
+        ),
+        _parse_iso_datetime(
+            enqueue_operation.started_at if enqueue_operation is not None else None
+        ),
+        _parse_iso_datetime(
+            enqueue_operation.created_at if enqueue_operation is not None else None
+        ),
+    ]
+    base = next((value for value in bases if value is not None), None)
+    if base is None:
+        base = datetime.now(timezone.utc)
+    timeout_seconds = _coerce_int(dependency.get("timeout_seconds"))
+    # Missing or non-positive values use the default; explicit positive values are not clamped.
+    if timeout_seconds <= 0:
+        timeout_seconds = _MANAGED_TURN_START_CONFIRMATION_TIMEOUT_SECONDS
+    return base + timedelta(seconds=timeout_seconds)
+
+
+def _resolve_notify_message(
+    *,
+    operation: PublishOperation,
+    payload: dict[str, Any],
+    journal: PublishJournalStore,
+    thread_store: PmaThreadStore,
+) -> str:
+    dependency = _normalize_mapping(payload.get("managed_turn_dependency"))
+    if not dependency:
+        return _require_text(
+            payload.get("message") or payload.get("body") or payload.get("text"),
+            field_name="notify_chat message",
+        )
+
+    if (
+        _normalize_optional_text(dependency.get("dependency_kind"))
+        != "enqueue_managed_turn_started"
+    ):
+        raise TerminalPublishError(
+            "notify_chat has unsupported managed_turn_dependency"
+        )
+
+    dependency_operation_id = _require_text(
+        dependency.get("operation_id"),
+        field_name="managed_turn_dependency.operation_id",
+    )
+    enqueue_operation = journal.get_operation(dependency_operation_id)
+    if enqueue_operation is None:
+        raise TerminalPublishError(
+            f"notify_chat dependency operation '{dependency_operation_id}' was not found"
+        )
+    if enqueue_operation.state in {"pending", "running"}:
+        raise RetryablePublishError(
+            "Waiting for enqueue_managed_turn to finish",
+            retry_after_seconds=_MANAGED_TURN_START_CONFIRMATION_RETRY_SECONDS,
+        )
+
+    failure_message = _normalize_optional_text(dependency.get("failure_message"))
+    if enqueue_operation.state != "succeeded":
+        if failure_message is not None:
+            return failure_message
+        raise TerminalPublishError(
+            "notify_chat dependency enqueue_managed_turn did not succeed"
+        )
+
+    enqueue_response = _normalize_mapping(enqueue_operation.response)
+    thread_target_id = _normalize_optional_text(
+        enqueue_response.get("thread_target_id")
+    ) or _normalize_optional_text(dependency.get("thread_target_id"))
+    managed_turn_id = _normalize_optional_text(enqueue_response.get("managed_turn_id"))
+    if thread_target_id is None or managed_turn_id is None:
+        if failure_message is not None:
+            return failure_message
+        raise TerminalPublishError(
+            "notify_chat dependency is missing managed-turn identifiers"
+        )
+
+    turn = thread_store.get_turn(thread_target_id, managed_turn_id)
+    if turn is None:
+        deadline = _managed_turn_dependency_deadline(
+            dependency,
+            enqueue_operation=enqueue_operation,
+            turn=None,
+        )
+        if datetime.now(timezone.utc) >= deadline:
+            if failure_message is not None:
+                return failure_message
+            raise TerminalPublishError(
+                "Managed turn record never became visible before timeout"
+            )
+        raise RetryablePublishError(
+            "Waiting for managed turn record to become visible",
+            retry_after_seconds=_MANAGED_TURN_START_CONFIRMATION_RETRY_SECONDS,
+        )
+    turn_status = _normalize_optional_text(turn.get("status")) or "unknown"
+    if _normalize_optional_text(turn.get("backend_turn_id")) is not None:
+        return _require_text(
+            payload.get("message") or payload.get("body") or payload.get("text"),
+            field_name="notify_chat message",
+        )
+    if turn_status in {"error", "interrupted", "ok"}:
+        if failure_message is not None:
+            return failure_message
+        raise TerminalPublishError(
+            f"Managed turn reached terminal status '{turn_status}' before start confirmation"
+        )
+
+    deadline = _managed_turn_dependency_deadline(
+        dependency,
+        enqueue_operation=enqueue_operation,
+        turn=turn,
+    )
+    if datetime.now(timezone.utc) >= deadline:
+        if failure_message is not None:
+            return failure_message
+        raise TerminalPublishError(
+            "Managed turn did not reach a confirmed running state before timeout"
+        )
+    raise RetryablePublishError(
+        "Waiting for managed turn start confirmation",
+        retry_after_seconds=_MANAGED_TURN_START_CONFIRMATION_RETRY_SECONDS,
+    )
 
 
 def _merge_into_existing_queued_scm_turn(
@@ -741,14 +897,40 @@ def build_notify_chat_executor(
     hub_root: Path,
     run_coroutine: Optional[Callable[[Coroutine[Any, Any, Any]], Any]] = None,
     thread_store: Optional[PmaThreadStore] = None,
+    journal_store: Optional[PublishJournalStore] = None,
 ) -> PublishActionExecutor:
     store = thread_store or PmaThreadStore(hub_root)
+    journal = journal_store or PublishJournalStore(hub_root)
     coroutine_runner = run_coroutine or _run_coroutine_sync
 
     def executor(operation: PublishOperation) -> dict[str, Any]:
-        payload = _normalize_mapping(operation.payload)
+        payload = dict(_normalize_mapping(operation.payload))
+        dependency_for_delivery = _normalize_mapping(
+            payload.get("managed_turn_dependency")
+        )
+        if (
+            _normalize_optional_text(dependency_for_delivery.get("dependency_kind"))
+            == "enqueue_managed_turn_started"
+        ):
+            dep_operation_id = _normalize_optional_text(
+                dependency_for_delivery.get("operation_id")
+            )
+            if dep_operation_id:
+                enqueue_operation = journal.get_operation(dep_operation_id)
+                if enqueue_operation is not None:
+                    enqueue_response = _normalize_mapping(enqueue_operation.response)
+                    resolved_thread_id = _normalize_optional_text(
+                        enqueue_response.get("thread_target_id")
+                    )
+                    if resolved_thread_id is not None:
+                        payload["thread_target_id"] = resolved_thread_id
         message = _normalize_optional_text(
-            payload.get("message") or payload.get("body") or payload.get("text")
+            _resolve_notify_message(
+                operation=operation,
+                payload=payload,
+                journal=journal,
+                thread_store=store,
+            )
         )
         if message is None:
             raise TerminalPublishError("Publish payload is missing notify_chat message")

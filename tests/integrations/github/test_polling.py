@@ -1680,13 +1680,26 @@ def test_process_due_watches_reacts_then_wakes_thread_and_notifies_bound_chat(
         "enqueue_managed_turn",
         "notify_chat",
     ]
+    enqueue_result = processed_operations[1]
     notify_result = processed_operations[2]
-    assert notify_result.state == "succeeded"
-    assert notify_result.response["delivery"] == "bound"
-    assert notify_result.response["repo_id"] == "repo-1"
-    assert notify_result.response["route"] == "bound"
-    assert notify_result.response["targets"] == 1
-    assert notify_result.response["published"] == 1
+    assert enqueue_result.state == "succeeded"
+    assert notify_result.state == "pending"
+
+    managed_turn_id = enqueue_result.response["managed_turn_id"]
+    _thread_store.set_turn_backend_turn_id(managed_turn_id, "backend-turn-1")
+    refreshed_notify = journal.update_pending_operation(
+        notify_result.operation_id,
+        next_attempt_at="2000-01-01T00:00:00Z",
+    )
+    assert refreshed_notify is not None
+    confirmed = automation.process_now(limit=10)
+    assert [operation.operation_kind for operation in confirmed] == ["notify_chat"]
+    assert confirmed[0].state == "succeeded"
+    assert confirmed[0].response["delivery"] == "bound"
+    assert confirmed[0].response["repo_id"] == "repo-1"
+    assert confirmed[0].response["route"] == "bound"
+    assert confirmed[0].response["targets"] == 1
+    assert confirmed[0].response["published"] == 1
     assert reaction_calls == [("acme", "widgets", str(hub_root), 2844, "eyes")]
 
     turns = _thread_store.list_turns(thread["managed_thread_id"], limit=10)
@@ -1890,10 +1903,37 @@ def test_process_due_watches_keeps_distinct_bound_notices_for_multiple_review_co
         if operation.operation_kind == "notify_chat"
     ]
     assert len(notify_results) == 2
-    assert all(operation.state == "succeeded" for operation in notify_results)
+    assert all(operation.state == "pending" for operation in notify_results)
     assert (
         len({operation.payload["correlation_id"] for operation in notify_results}) == 2
     )
+
+    enqueue_results = [
+        operation
+        for operation in processed_operations
+        if operation.operation_kind == "enqueue_managed_turn"
+    ]
+    assert len(enqueue_results) == 2
+    first_turn_id = enqueue_results[0].response["managed_turn_id"]
+    second_turn_id = enqueue_results[1].response["managed_turn_id"]
+    _thread_store.set_turn_backend_turn_id(first_turn_id, "backend-turn-1")
+    assert _thread_store.mark_turn_finished(first_turn_id, status="ok")
+    claimed = _thread_store.claim_next_queued_turn(thread["managed_thread_id"])
+    assert claimed is not None
+    claimed_execution, _payload = claimed
+    assert claimed_execution["managed_turn_id"] == second_turn_id
+    _thread_store.set_turn_backend_turn_id(second_turn_id, "backend-turn-2")
+    for operation in notify_results:
+        refreshed = journal.update_pending_operation(
+            operation.operation_id,
+            next_attempt_at="2000-01-01T00:00:00Z",
+        )
+        assert refreshed is not None
+
+    confirmed = automation.process_now(limit=10)
+    assert len(confirmed) == 2
+    assert all(operation.operation_kind == "notify_chat" for operation in confirmed)
+    assert all(operation.state == "succeeded" for operation in confirmed)
 
     outbox = _read_outbox_records(
         hub_root / ".codex-autorunner" / "discord_state.sqlite3"
@@ -1905,12 +1945,15 @@ def test_process_due_watches_keeps_distinct_bound_notices_for_multiple_review_co
     ]
     assert len(contents) == 2
     normalized_contents = [content.lower() for content in contents]
-    assert all("latest pr review batch" in content for content in normalized_contents)
+    assert len(set(contents)) == 2
+    assert any(
+        "started the latest pr review batch" in content
+        for content in normalized_contents
+    )
     assert any(
         "working on the latest review feedback now" in content
         for content in normalized_contents
     )
-    assert any("will pick it up next" in content for content in normalized_contents)
 
 
 def test_process_due_watches_does_not_reemit_when_thread_is_reopened_without_new_comments(

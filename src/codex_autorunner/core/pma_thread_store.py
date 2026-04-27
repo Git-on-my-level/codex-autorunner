@@ -352,6 +352,9 @@ class PmaThreadStore:
             stale_running_threshold_seconds=self._stale_running_threshold_seconds,
             execution_row_to_record=_execution_row_to_record,
             transition_thread_status=self._transition_thread_status,
+            transition_thread_status_in_transaction=(
+                self._transition_thread_status_in_transaction
+            ),
         )
         self._initialize()
 
@@ -422,6 +425,24 @@ class PmaThreadStore:
         changed_at: Optional[str] = None,
         turn_id: Optional[str] = None,
     ) -> Optional[dict[str, Any]]:
+        with conn:
+            return self._transition_thread_status_in_transaction(
+                conn,
+                managed_thread_id,
+                reason=reason,
+                changed_at=changed_at,
+                turn_id=turn_id,
+            )
+
+    def _transition_thread_status_in_transaction(
+        self,
+        conn: Any,
+        managed_thread_id: str,
+        *,
+        reason: str | ManagedThreadStatusReason,
+        changed_at: Optional[str] = None,
+        turn_id: Optional[str] = None,
+    ) -> Optional[dict[str, Any]]:
         thread = self._fetch_thread(conn, managed_thread_id)
         if thread is None:
             return None
@@ -435,28 +456,27 @@ class PmaThreadStore:
         )
         if snapshot == current:
             return thread
-        with conn:
-            conn.execute(
-                """
-                UPDATE orch_thread_targets
-                   SET runtime_status = ?,
-                       status_reason = ?,
-                       status_updated_at = ?,
-                       status_terminal = ?,
-                       status_turn_id = ?,
-                       updated_at = ?
-                 WHERE thread_target_id = ?
-                """,
-                (
-                    snapshot.status,
-                    snapshot.reason_code,
-                    snapshot.changed_at,
-                    1 if snapshot.terminal else 0,
-                    snapshot.turn_id,
-                    resolved_changed_at,
-                    managed_thread_id,
-                ),
-            )
+        conn.execute(
+            """
+            UPDATE orch_thread_targets
+               SET runtime_status = ?,
+                   status_reason = ?,
+                   status_updated_at = ?,
+                   status_terminal = ?,
+                   status_turn_id = ?,
+                   updated_at = ?
+             WHERE thread_target_id = ?
+            """,
+            (
+                snapshot.status,
+                snapshot.reason_code,
+                snapshot.changed_at,
+                1 if snapshot.terminal else 0,
+                snapshot.turn_id,
+                resolved_changed_at,
+                managed_thread_id,
+            ),
+        )
         return self._fetch_thread(conn, managed_thread_id)
 
     def _recover_stale_running_turns(
@@ -928,17 +948,17 @@ class PmaThreadStore:
             if thread_status != "active":
                 raise ManagedThreadNotActiveError(managed_thread_id, thread_status)
             self._recover_stale_running_turns(conn, managed_thread_id)
-            running_exists = conn.execute(
-                """
-                SELECT 1
-                  FROM orch_thread_executions
-                 WHERE thread_target_id = ?
-                   AND status = 'running'
-                 LIMIT 1
-                """,
-                (managed_thread_id,),
-            ).fetchone()
             with conn:
+                running_exists = conn.execute(
+                    """
+                    SELECT 1
+                      FROM orch_thread_executions
+                     WHERE thread_target_id = ?
+                       AND status = 'running'
+                     LIMIT 1
+                    """,
+                    (managed_thread_id,),
+                ).fetchone()
                 execution_status = "queued" if running_exists is not None else "running"
                 if execution_status == "queued" and busy_policy != "queue":
                     raise ManagedThreadAlreadyHasRunningTurnError(managed_thread_id)
@@ -995,8 +1015,7 @@ class PmaThreadStore:
                         created_at=started_at,
                         idempotency_key=client_turn_id or managed_turn_id,
                     )
-            if execution_status == "running":
-                with conn:
+                else:
                     conn.execute(
                         """
                         UPDATE orch_thread_targets
@@ -1006,13 +1025,13 @@ class PmaThreadStore:
                         """,
                         (managed_turn_id, started_at, managed_thread_id),
                     )
-                self._transition_thread_status(
-                    conn,
-                    managed_thread_id,
-                    reason=ManagedThreadStatusReason.TURN_STARTED,
-                    changed_at=started_at,
-                    turn_id=managed_turn_id,
-                )
+                    self._transition_thread_status_in_transaction(
+                        conn,
+                        managed_thread_id,
+                        reason=ManagedThreadStatusReason.TURN_STARTED,
+                        changed_at=started_at,
+                        turn_id=managed_turn_id,
+                    )
             row = conn.execute(
                 """
                 SELECT *
