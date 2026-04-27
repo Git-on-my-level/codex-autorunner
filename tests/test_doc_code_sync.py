@@ -9,6 +9,7 @@ Asserts that key documentation stays in sync with the actual codebase:
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -31,12 +32,6 @@ def _actual_dirs(parent: Path) -> set[str]:
         for d in parent.iterdir()
         if d.is_dir() and not d.name.startswith((".", "_"))
     }
-
-
-def _actual_py_files(parent: Path) -> set[str]:
-    if not parent.is_dir():
-        return set()
-    return {f.name for f in parent.iterdir() if f.is_file() and f.suffix == ".py"}
 
 
 def _read_doc(path: Path) -> str:
@@ -153,13 +148,15 @@ class TestNoDeadPaths:
 
 
 class TestContributingCommands:
+    # Match "npm run" only when not part of "pnpm run" (substring overlap).
+    _NPM_RUN_NOT_PNPM = re.compile(r"(?<!p)npm\s+run")
+
     def test_pnpm_not_npm(self):
         text = _read_doc(REPO_ROOT / "CONTRIBUTING.md")
         for line in text.splitlines():
-            if "npm run" in line:
-                assert (
-                    "pnpm run" in line
-                ), f"CONTRIBUTING.md uses 'npm run' instead of 'pnpm run': {line}"
+            assert not self._NPM_RUN_NOT_PNPM.search(
+                line
+            ), f"CONTRIBUTING.md uses 'npm run' instead of 'pnpm run': {line}"
 
 
 class TestDesignConfigSections:
