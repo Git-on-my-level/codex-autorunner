@@ -21,6 +21,7 @@ from .config import load_hub_config
 from .filebox import delete_file, list_filebox
 from .freshness import build_freshness_payload, iso_now, resolve_stale_threshold_seconds
 from .git_utils import git_available, git_is_clean
+from .hub_worktree_manager import worktree_non_metadata_child_names
 from .orchestration.bindings import OrchestrationBindingStore
 from .pma_automation_store import PmaAutomationStore
 from .pma_dispatches import list_pma_dispatches
@@ -187,6 +188,10 @@ def _build_thread_candidates(
 ) -> list[dict[str, Any]]:
     try:
         config = load_hub_config(hub_root)
+        pma_cfg = getattr(config, "pma", None)
+        cleanup_require_archive = bool(
+            getattr(pma_cfg, "cleanup_require_archive", True)
+        )
         manifest = load_manifest(config.manifest_path, hub_root)
         store = PmaThreadStore(hub_root)
         threads = store.list_threads(limit=500)
@@ -319,7 +324,11 @@ def _build_thread_candidates(
             )
         )
     for worktree_repo_id, state in worktree_candidates.items():
-        if not bool(state["all_idle_archive_candidates"]):
+        if not bool(state["all_idle_archive_candidates"]) and not (
+            bool(state["chat_bound"])
+            or bool(state["has_active_thread_binding"])
+            or bool(state["has_busy_work"])
+        ):
             continue
         path = Path(str(state["path"]))
         group = "safe"
@@ -334,7 +343,7 @@ def _build_thread_candidates(
             group = "protected"
             reason = "Managed thread still has an active binding or work in flight."
         elif path.exists() and git_available(path):
-            archive_requested = True
+            archive_requested = cleanup_require_archive
             try:
                 if not git_is_clean(path):
                     group = "needs-confirmation"
@@ -343,11 +352,7 @@ def _build_thread_candidates(
                 group = "needs-confirmation"
                 reason = "Unable to verify worktree cleanliness; review before purge."
         elif path.exists() and path.is_dir():
-            unexpected_entries = [
-                child.name
-                for child in sorted(path.iterdir(), key=lambda item: item.name)
-                if child.name not in {".codex-autorunner", ".git"}
-            ]
+            unexpected_entries = worktree_non_metadata_child_names(path)
             if unexpected_entries:
                 rendered = ", ".join(unexpected_entries[:5])
                 if len(unexpected_entries) > 5:
@@ -794,11 +799,24 @@ def apply_pma_hygiene_report(
             elif action == "purge_worktree":
                 if cleanup_worktree is None:
                     raise RuntimeError("Worktree cleanup callback not configured")
-                cleanup_worktree(
+                cleanup_result = cleanup_worktree(
                     str(target.get("worktree_repo_id") or ""),
                     bool(target.get("archive_requested")),
                 )
-                ok = True
+                if isinstance(cleanup_result, dict):
+                    status = str(cleanup_result.get("status") or "").strip().lower()
+                    if status in {"error", "failed"}:
+                        ok = False
+                        msg = str(cleanup_result.get("message") or "").strip()
+                        error = msg or status or "worktree cleanup failed"
+                    elif status in {"ok", "success", "applied", ""}:
+                        ok = True
+                    else:
+                        ok = False
+                        msg = str(cleanup_result.get("message") or "").strip()
+                        error = msg or f"unexpected worktree cleanup status: {status}"
+                else:
+                    ok = True
         except (
             Exception
         ) as exc:  # intentional: multi-action apply; records per-item failure

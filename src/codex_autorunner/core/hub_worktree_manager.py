@@ -78,6 +78,24 @@ _DOCKER_STOP_TIMEOUT_SECONDS = 15
 _DOCKER_RM_TIMEOUT_SECONDS = 30
 _WORKTREE_SETUP_COMMAND_TIMEOUT_SECONDS = 600
 
+_WORKTREE_CAR_METADATA_DIR_NAMES = frozenset({".codex-autorunner", ".git"})
+
+
+def worktree_non_metadata_child_names(worktree_path: Path) -> list[str]:
+    """Return sorted child names under a worktree path excluding CAR metadata dirs.
+
+    Used for consistent eligibility checks between hygiene classification and
+    orphaned worktree cleanup. Returns an empty list when the path is missing
+    or not a directory.
+    """
+    if not worktree_path.exists() or not worktree_path.is_dir():
+        return []
+    return [
+        child.name
+        for child in sorted(worktree_path.iterdir(), key=lambda item: item.name)
+        if child.name not in _WORKTREE_CAR_METADATA_DIR_NAMES
+    ]
+
 
 class WorktreeManager:
     def __init__(
@@ -699,11 +717,7 @@ class WorktreeManager:
                 "message": "worktree path is not a directory",
             }
 
-        unexpected_entries: list[str] = []
-        for child in sorted(worktree_path.iterdir(), key=lambda item: item.name):
-            if child.name in {".codex-autorunner", ".git"}:
-                continue
-            unexpected_entries.append(child.name)
+        unexpected_entries = worktree_non_metadata_child_names(worktree_path)
 
         if unexpected_entries:
             rendered = ", ".join(unexpected_entries[:5])
@@ -1104,7 +1118,12 @@ print(
             ),
         )
         if orphan_dir_status not in {"removed", "missing"}:
-            raise ValueError(str(orphan_dir_cleanup.get("message") or ""))
+            detail = str(orphan_dir_cleanup.get("message") or "").strip()
+            if detail:
+                raise ValueError(f"{orphan_dir_status}: {detail}")
+            raise ValueError(
+                f"worktree directory cleanup did not complete (status={orphan_dir_status})"
+            )
 
         resolved.manifest.repos = [
             r for r in resolved.manifest.repos if r.id != worktree_repo_id

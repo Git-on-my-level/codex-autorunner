@@ -449,6 +449,127 @@ def test_build_pma_hygiene_report_marks_clean_stale_worktree_safe(
     assert safe_items[0]["target"]["archive_requested"] is True
 
 
+def test_build_pma_hygiene_report_respects_cleanup_require_archive_false(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    supervisor = _build_supervisor(hub_root)
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg.setdefault("pma", {})["cleanup_require_archive"] = False
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/no-archive-policy",
+        start_point="HEAD",
+    )
+    PmaThreadStore(hub_root).create_thread(
+        "codex",
+        worktree.path,
+        repo_id=worktree.id,
+        name="stale-thread",
+    )
+
+    now = datetime.now(timezone.utc)
+    report = build_pma_hygiene_report(
+        hub_root,
+        categories=["threads"],
+        generated_at=_iso(now + timedelta(hours=2)),
+        stale_threshold_seconds=60,
+    )
+    safe_items = [item for item in report["groups"]["safe"] if isinstance(item, dict)]
+    assert {item["candidate_id"] for item in safe_items} == {
+        f"threads:worktree:{worktree.id}"
+    }
+    assert safe_items[0]["target"]["archive_requested"] is False
+
+
+def test_build_pma_hygiene_report_includes_chat_bound_stale_worktree_as_protected(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    hub_root = tmp_path / "hub"
+    supervisor = _build_supervisor(hub_root)
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/chat-bound-worktree",
+        start_point="HEAD",
+    )
+    PmaThreadStore(hub_root).create_thread(
+        "codex",
+        worktree.path,
+        repo_id=worktree.id,
+        name="stale-chat-bound",
+    )
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.pma_hygiene.repo_has_active_non_pma_chat_binding",
+        lambda **kwargs: True,
+    )
+
+    now = datetime.now(timezone.utc)
+    report = build_pma_hygiene_report(
+        hub_root,
+        categories=["threads"],
+        generated_at=_iso(now + timedelta(hours=2)),
+        stale_threshold_seconds=60,
+    )
+    protected = [
+        item
+        for item in report["groups"]["protected"]
+        if isinstance(item, dict)
+        and item.get("candidate_id") == f"threads:worktree:{worktree.id}"
+    ]
+    assert len(protected) == 1
+    assert "Chat-bound worktree" in str(protected[0].get("reason") or "")
+
+
+def test_apply_pma_hygiene_report_purge_worktree_fails_on_error_status_payload(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    report = {
+        "groups": {
+            "safe": [
+                {
+                    "candidate_id": "threads:worktree:wt-1",
+                    "group": "safe",
+                    "category": "threads",
+                    "label": "wt-1",
+                    "action": "purge_worktree",
+                    "reason": "test",
+                    "target": {
+                        "worktree_repo_id": "wt-1",
+                        "archive_requested": False,
+                    },
+                }
+            ],
+            "protected": [],
+            "needs-confirmation": [],
+        }
+    }
+
+    def _fake_cleanup(_repo_id: str, _archive: bool) -> dict[str, object]:
+        return {"status": "error", "message": "cleanup refused"}
+
+    apply_result = apply_pma_hygiene_report(
+        hub_root, report, cleanup_worktree=_fake_cleanup
+    )
+    assert apply_result["applied"] == 0
+    assert apply_result["failed"] == 1
+    assert apply_result["results"][0]["status"] == "failed"
+    assert apply_result["results"][0]["error"] == "cleanup refused"
+
+
 def test_build_pma_hygiene_report_marks_dirty_stale_worktree_needs_confirmation(
     tmp_path: Path,
 ) -> None:
