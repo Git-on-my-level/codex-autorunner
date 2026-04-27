@@ -62,6 +62,17 @@
     "turn_stall_timeout_seconds": 60,
     "turn_timeout_seconds": 7200
   },
+  "apps": {
+    "enabled": true,
+    "repos": [
+      {
+        "default_ref": "main",
+        "id": "blessed",
+        "trusted": true,
+        "url": "https://github.com/Git-on-my-level/car-ticket-templates"
+      }
+    ]
+  },
   "discord_bot": {
     "allowed_channel_ids": [],
     "allowed_guild_ids": [],
@@ -246,6 +257,17 @@
     "worktree_archive_profile": "portable"
   },
   "repo_defaults": {
+    "apps": {
+      "enabled": true,
+      "repos": [
+        {
+          "default_ref": "main",
+          "id": "blessed",
+          "trusted": true,
+          "url": "https://github.com/Git-on-my-level/car-ticket-templates"
+        }
+      ]
+    },
     "autorunner": {
       "reuse_session": false
     },

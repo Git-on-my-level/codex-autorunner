@@ -5,6 +5,7 @@ import typer
 from ...core.config import load_repo_config
 from ...flows.ticket_flow import build_ticket_flow_definition
 from ...integrations.agents.build_agent_pool import build_agent_pool
+from .commands.apps import register_apps_commands
 from .commands.chat import register_chat_commands
 from .commands.cleanup import register_cleanup_commands
 from .commands.describe import register_describe_commands
@@ -64,6 +65,9 @@ from .commands.utils import (
     request_json as _request_json,
 )
 from .commands.utils import (
+    require_apps_enabled as _require_apps_enabled,
+)
+from .commands.utils import (
     require_hub_config as _require_hub_config,
 )
 from .commands.utils import (
@@ -100,6 +104,9 @@ hub_runs_app = typer.Typer(
 )
 telegram_app = typer.Typer(add_completion=False, help="Manage Telegram bot operations.")
 discord_app = typer.Typer(add_completion=False, help="Manage Discord bot operations.")
+apps_app = typer.Typer(
+    add_completion=False, help="Discover configured CAR app bundles."
+)
 templates_app = typer.Typer(
     add_completion=False, help="Fetch, apply, and discover ticket templates."
 )
@@ -220,9 +227,17 @@ register_render_commands(
     require_repo_config=_require_repo_config,
     raise_exit=_raise_exit,
 )
+app.add_typer(apps_app, name="apps")
 app.add_typer(templates_app, name="templates")
 app.add_typer(cleanup_app, name="cleanup")
 app.add_typer(chat_app, name="chat")
+register_apps_commands(
+    apps_app,
+    require_repo_config=_require_repo_config,
+    require_apps_enabled=_require_apps_enabled,
+    raise_exit=_raise_exit,
+    resolve_hub_config_path_for_cli=_resolve_hub_config_path_for_cli,
+)
 register_templates_commands(
     templates_app,
     require_repo_config=_require_repo_config,

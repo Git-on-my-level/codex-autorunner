@@ -215,6 +215,11 @@ def resolve_hub_templates_root(hub_root: Path) -> Path:
     return resolve_hub_state_root(hub_root) / "templates"
 
 
+def resolve_hub_apps_root(hub_root: Path) -> Path:
+    """Return the hub-scoped apps root."""
+    return resolve_hub_state_root(hub_root) / "apps"
+
+
 def resolve_hub_pma_root(hub_root: Path) -> Path:
     """Return the hub-scoped PMA compatibility root."""
     return resolve_hub_state_root(hub_root) / "pma"
@@ -425,6 +430,7 @@ __all__ = [
     "resolve_global_state_root",
     "resolve_global_github_broker_db_path",
     "resolve_hub_agent_workspace_root",
+    "resolve_hub_apps_root",
     "resolve_hub_lifecycle_events_db_path",
     "resolve_hub_lifecycle_events_path",
     "resolve_hub_manifest_path",
