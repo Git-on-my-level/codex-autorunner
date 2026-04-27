@@ -20,7 +20,9 @@ Agents inbox you when they need input — no babysitting.
 
 Collaborate with agents in a shared `contextspace/` scratchpad, independent of the codebase.
 ![Contextspace](workspace.png)
-![Contextspace new doc](workspace-new-md.png)## Built-in terminals
+![Contextspace new doc](workspace-new-md.png)
+
+## Built-in terminals
 
 Drop into your favorite agent TUI when you need fine-grained control.
 ![Terminal — Codex](terminal-codex.png)
