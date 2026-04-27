@@ -144,17 +144,6 @@ def evaluate(
     )
 
 
-# Keep a source-level reference so dead-code heuristics treat these helpers as
-# an intentional public policy surface even before runtime integrations land.
-_MUTATION_POLICY_PUBLIC_API = (
-    PolicyDecision,
-    default_mutation_policy_for_action,
-    evaluate,
-    normalize_mutation_policy_value,
-    resolve_mutation_policy_mapping,
-)
-
-
 __all__ = [
     "MUTATION_POLICY_ACTION_TYPES",
     "MUTATION_POLICY_ALLOWED_VALUES",

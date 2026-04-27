@@ -367,9 +367,15 @@ def reset_global_accumulator() -> None:
         _global_accumulator = None
 
 
-# Keep explicit module-level references so dead-code heuristics treat these
-# test and diagnostics hooks as part of the supported telemetry surface.
-_CHAT_UX_TELEMETRY_TEST_SURFACE = (
-    get_global_accumulator,
-    reset_global_accumulator,
-)
+__all__ = [
+    "ChatUxFailureReason",
+    "ChatUxMilestone",
+    "ChatUxPlatformSummary",
+    "ChatUxTimingAccumulator",
+    "ChatUxTimingSnapshot",
+    "ChatUxDeltaSummary",
+    "emit_chat_ux_timing",
+    "format_chat_ux_summary",
+    "get_global_accumulator",
+    "reset_global_accumulator",
+]

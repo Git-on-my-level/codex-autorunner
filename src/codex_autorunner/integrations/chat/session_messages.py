@@ -227,12 +227,6 @@ def format_update_status_message(status: Optional[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-# Keep source-level references for helpers that are exercised via tests and
-# selective imports so dead-code heuristics do not misclassify them.
-_FORMAT_RESUMED_SESSION_MESSAGE = format_resumed_session_message
-_FORMAT_UPDATE_PREPARING_MESSAGE = format_update_preparing_message
-
-
 __all__ = [
     "build_branch_reset_started_lines",
     "build_fresh_session_started_lines",

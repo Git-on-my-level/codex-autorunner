@@ -417,9 +417,18 @@ def format_hub_flow_overview_line(
     )
 
 
-# Keep explicit module-level references so dead-code heuristics treat these queue
-# helpers as part of the Discord normalization surface (tests import them too).
-_DISCORD_QUEUE_SURFACE_HELPERS = (
-    build_discord_queue_notice_message,
-    build_discord_queue_status_message,
-)
+__all__ = [
+    "AttachmentContextPayload",
+    "DiscordAttachmentAdapter",
+    "DiscordMessagePayload",
+    "DiscordUpdateNoticeContext",
+    "SavedDiscordAttachment",
+    "build_attachment_context_payload",
+    "build_discord_approval_components",
+    "build_discord_approval_message",
+    "build_discord_queue_notice_message",
+    "build_discord_queue_status_message",
+    "format_discord_approval_prompt",
+    "format_discord_update_status_message",
+    "format_hub_flow_overview_line",
+]
