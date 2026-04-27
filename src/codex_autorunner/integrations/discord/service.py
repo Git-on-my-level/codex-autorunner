@@ -38,8 +38,8 @@ from ...core.config import (
     find_nearest_hub_config_path,
     load_hub_config,
     load_repo_config,
-    resolve_env_for_root,
 )
+from ...core.config_env import resolve_env_for_root
 from ...core.filebox import (
     inbox_dir,
     list_regular_files,

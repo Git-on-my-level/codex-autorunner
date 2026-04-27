@@ -8,7 +8,8 @@ from unittest.mock import patch
 import pytest
 
 from codex_autorunner.bootstrap import seed_hub_files
-from codex_autorunner.core.config import AgentConfig, load_hub_config
+from codex_autorunner.core.agent_config import AgentConfig
+from codex_autorunner.core.config import load_hub_config
 from codex_autorunner.core.destinations import DockerReadiness
 from codex_autorunner.core.managed_processes.registry import ProcessRecord
 from codex_autorunner.core.runtime import (

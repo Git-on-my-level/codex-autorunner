@@ -3,7 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable, Optional
 
-from ...core.config import AppServerAutorunnerPromptConfig, Config
+from ...core.config import AppServerAutorunnerPromptConfig
+from ...core.config_types import RepoConfig
 
 TRUNCATION_MARKER = "...[truncated]"
 
@@ -82,7 +83,7 @@ def _shrink_prompt(
 
 
 def build_autorunner_prompt(
-    config: Config,
+    config: RepoConfig,
     *,
     message: str,
     prev_run_summary: Optional[str] = None,

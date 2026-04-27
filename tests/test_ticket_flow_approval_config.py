@@ -14,10 +14,12 @@ from codex_autorunner.agents.types import (
 from codex_autorunner.core.config import (
     DEFAULT_REPO_CONFIG,
     TicketFlowConfig,
+)
+from codex_autorunner.core.config_contract import ConfigError
+from codex_autorunner.core.config_parsers import (
     _parse_app_server_config,
     _parse_opencode_config,
 )
-from codex_autorunner.core.config_contract import ConfigError
 from codex_autorunner.integrations.agents.agent_pool_impl import DefaultAgentPool
 from codex_autorunner.tickets.agent_pool import AgentTurnRequest
 

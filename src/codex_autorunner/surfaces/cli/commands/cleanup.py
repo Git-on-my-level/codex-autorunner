@@ -14,9 +14,7 @@ from ....core.archive_retention import (
 )
 from ....core.config import (
     ConfigError,
-    default_housekeeping_rule_named,
     load_hub_config,
-    resolve_housekeeping_rule,
 )
 from ....core.filebox_retention import (
     prune_filebox_root,
@@ -63,7 +61,13 @@ from ....core.state_retention import (
     summarize_cleanup_plan_lifecycle,
 )
 from ....core.state_roots import resolve_global_state_root
-from ....housekeeping import HousekeepingConfig, HousekeepingRule, run_housekeeping_once
+from ....housekeeping import (
+    HousekeepingConfig,
+    HousekeepingRule,
+    default_housekeeping_rule_named,
+    resolve_housekeeping_rule,
+    run_housekeeping_once,
+)
 from ....integrations.app_server.retention import (
     prune_workspace_root,
     resolve_global_workspace_root,
