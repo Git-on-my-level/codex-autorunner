@@ -33,6 +33,69 @@ def test_apply_orchestration_migrations_sets_latest_schema_version(
     assert runs[0]["target_version"] == ORCHESTRATION_SCHEMA_VERSION
 
 
+def test_apply_orchestration_migrations_copies_legacy_backfill_flags_into_operation_flags(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "orchestration.sqlite3"
+
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE orch_schema_migrations (
+                version INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                applied_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE orch_migration_runs (
+                run_id TEXT PRIMARY KEY,
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                from_version INTEGER NOT NULL,
+                target_version INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                error_text TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE orch_legacy_backfill_flags (
+                backfill_key TEXT PRIMARY KEY,
+                completed_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO orch_legacy_backfill_flags (backfill_key, completed_at)
+            VALUES ('legacy-flag', '2026-04-06T00:00:00Z')
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO orch_schema_migrations (version, name, applied_at)
+            VALUES (25, 'extend_publish_dedupe_index_for_effect_applied', '2026-04-06T00:00:00Z')
+            """
+        )
+
+        version_after = apply_orchestration_migrations(conn)
+        row = conn.execute(
+            """
+            SELECT completed_at
+              FROM orch_operation_flags
+             WHERE flag_key = 'legacy-flag'
+            """
+        ).fetchone()
+
+    assert version_after == ORCHESTRATION_SCHEMA_VERSION
+    assert row is not None
+    assert row["completed_at"] == "2026-04-06T00:00:00Z"
+
+
 def test_apply_orchestration_migrations_upgrades_v1_database_to_latest(
     tmp_path: Path,
 ) -> None:

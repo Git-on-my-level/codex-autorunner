@@ -5,8 +5,7 @@ adapters translate the resulting attempts into Discord or Telegram delivery
 operations via the out-of-core runtime registry.
 
 Canonical domain types (``PmaDeliveryTarget``, ``PmaDeliveryAttempt``) live in
-``pma_domain.models``.  This module re-exports them under their legacy names
-for backward compatibility while ``PmaChatDeliveryIntent`` adds the
+``pma_domain.models`` while ``PmaChatDeliveryIntent`` adds the
 ``context_payload`` field needed by the delivery runtime.
 """
 
@@ -31,9 +30,6 @@ from .pma_domain.publish_policy import evaluate_publish_suppression
 from .text_utils import _normalize_optional_text, _normalize_pma_delivery_target
 
 logger = logging.getLogger(__name__)
-
-PmaChatDeliveryTarget = PmaDeliveryTarget
-PmaChatDeliveryAttempt = PmaDeliveryAttempt
 
 
 def _notification_context_payload(
@@ -424,9 +420,7 @@ async def notify_primary_pma_chat_for_repo(
 
 
 __all__ = [
-    "PmaChatDeliveryAttempt",
     "PmaChatDeliveryIntent",
-    "PmaChatDeliveryTarget",
     "deliver_pma_notification",
     "notify_preferred_bound_chat_for_workspace",
     "notify_primary_pma_chat_for_repo",

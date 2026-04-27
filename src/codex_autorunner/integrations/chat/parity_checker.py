@@ -1858,10 +1858,6 @@ def _is_command_path_prefix_slice(expr: ast.expr) -> bool:
 
 
 def _is_first_item_slice(slice_node: ast.expr | ast.slice) -> bool:
-    # ast.Index exists in older Python versions and wraps the real slice node.
-    index_type = getattr(ast, "Index", None)
-    if index_type is not None and isinstance(slice_node, index_type):
-        slice_node = slice_node.value
     if not isinstance(slice_node, ast.Slice):
         return False
     lower_ok = slice_node.lower is None or _is_int_constant(slice_node.lower, 0)

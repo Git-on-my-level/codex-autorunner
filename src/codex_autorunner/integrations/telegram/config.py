@@ -13,7 +13,6 @@ from ...core.app_server_command import (
 )
 from ...core.app_server_command import (
     GLOBAL_APP_SERVER_COMMAND_ENV,
-    LEGACY_TELEGRAM_APP_SERVER_COMMAND_ENV,
     resolve_app_server_command,
 )
 from ..chat.approval_modes import resolve_approval_mode_policies
@@ -609,30 +608,12 @@ class TelegramBotConfig:
         app_server_command_env = str(
             cfg.get("app_server_command_env", GLOBAL_APP_SERVER_COMMAND_ENV)
         )
-        extra_env_vars = list(
-            dict.fromkeys(
-                (
-                    app_server_command_env,
-                    LEGACY_TELEGRAM_APP_SERVER_COMMAND_ENV,
-                )
-            )
-        )
         app_server_command = resolve_app_server_command(
             cfg.get("app_server_command"),
             env=env,
-            extra_env_vars=extra_env_vars,
+            extra_env_vars=(app_server_command_env,),
             fallback=DEFAULT_APP_SERVER_COMMAND,
         )
-
-        _legacy_telegram_env_value = env.get(LEGACY_TELEGRAM_APP_SERVER_COMMAND_ENV)
-        if _legacy_telegram_env_value and _legacy_telegram_env_value.strip():
-            if not env.get(GLOBAL_APP_SERVER_COMMAND_ENV, "").strip():
-                _TELEGRAM_CONFIG_LOGGER.warning(
-                    "The %s env var is deprecated and will be removed in a "
-                    "future release. Use %s instead.",
-                    LEGACY_TELEGRAM_APP_SERVER_COMMAND_ENV,
-                    GLOBAL_APP_SERVER_COMMAND_ENV,
-                )
 
         app_server_raw_value = cfg.get("app_server")
         app_server_raw: dict[str, Any] = (

@@ -1358,7 +1358,6 @@ def test_pma_queue_worker_uses_contextual_delivery_helper_for_progress_targets(
             captured["cleared_turn_id"] = managed_turn_id
 
     def _fake_ensure_queue_worker(*args: Any, **kwargs: Any) -> None:
-        captured["deliver_result"] = kwargs["deliver_managed_thread_execution_result"]
         captured["hooks"] = kwargs["hooks"]
 
     monkeypatch.setattr(
@@ -1377,7 +1376,7 @@ def test_pma_queue_worker_uses_contextual_delivery_helper_for_progress_targets(
     managed_thread_runtime.ensure_managed_thread_queue_worker(app, managed_thread_id)
 
     hooks = captured["hooks"]
-    assert hooks.deliver_result is None
+    assert hooks.durable_delivery is not None
     assert hooks.queue_execution_hooks is not None
     assert captured["controller_kwargs"]["retain_completed_surface_targets"] is True
     assert callable(captured["controller_kwargs"]["surface_target_resolver"])

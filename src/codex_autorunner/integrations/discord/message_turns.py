@@ -2147,13 +2147,6 @@ async def _run_discord_orchestrated_turn_for_message(
             _first_progress_recorded = True
             chat_ux_snapshot.record(ChatUxMilestone.FIRST_SEMANTIC_PROGRESS)
 
-    async def _suppress_managed_thread_delivery(
-        _finalized: ManagedThreadFinalizationResult,
-    ) -> None:
-        # Compaction uses the PMA execution path to generate the summary, but the
-        # compact command itself owns the single visible summary post.
-        return None
-
     runner_hooks = ManagedThreadCoordinatorHooks(
         on_execution_started=runner_hooks.on_execution_started,
         on_execution_finished=runner_hooks.on_execution_finished,
@@ -2162,11 +2155,6 @@ async def _run_discord_orchestrated_turn_for_message(
             None
             if suppress_managed_thread_delivery
             else queue_worker_hooks.durable_delivery
-        ),
-        deliver_result=(
-            _suppress_managed_thread_delivery
-            if suppress_managed_thread_delivery
-            else queue_worker_hooks.deliver_result
         ),
         run_with_indicator=queue_worker_hooks.run_with_indicator,
         queue_execution_hooks=queue_worker_hooks.execution_hooks,

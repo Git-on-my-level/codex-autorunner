@@ -12,7 +12,8 @@ from ...core.chat_bindings import (
     resolve_discord_state_path,
     resolve_repo_id_by_workspace_path,
 )
-from ...core.pma_chat_delivery import PmaChatDeliveryAttempt, PmaChatDeliveryIntent
+from ...core.pma_chat_delivery import PmaChatDeliveryIntent
+from ...core.pma_domain.models import PmaDeliveryAttempt
 from ...core.text_utils import _normalize_optional_text
 from ...core.time_utils import now_iso
 from ..chat.pma_delivery import (
@@ -43,7 +44,7 @@ def _build_discord_record_id(
 
 def _notification_record(
     *,
-    attempt: PmaChatDeliveryAttempt,
+    attempt: PmaDeliveryAttempt,
     surface_key: str,
     delivery_record_id: str,
     workspace_root: Optional[str],
@@ -66,7 +67,7 @@ class DiscordPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
         self,
         intent: PmaChatDeliveryIntent,
         *,
-        attempt: PmaChatDeliveryAttempt,
+        attempt: PmaDeliveryAttempt,
         hub_root: Path,
         raw_config: Mapping[str, Any],
     ) -> PmaChatDeliveryAdapterResult:
@@ -101,7 +102,7 @@ class DiscordPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
         self,
         intent: PmaChatDeliveryIntent,
         *,
-        attempt: PmaChatDeliveryAttempt,
+        attempt: PmaDeliveryAttempt,
         hub_root: Path,
         raw_config: Mapping[str, Any],
     ) -> PmaChatDeliveryAdapterResult:
@@ -173,7 +174,7 @@ class DiscordPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
         self,
         intent: PmaChatDeliveryIntent,
         *,
-        attempt: PmaChatDeliveryAttempt,
+        attempt: PmaDeliveryAttempt,
         hub_root: Path,
         raw_config: Mapping[str, Any],
     ) -> PmaChatDeliveryAdapterResult:
@@ -265,7 +266,7 @@ class DiscordPmaChatDeliveryAdapter(PmaChatDeliveryAdapter):
         self,
         intent: PmaChatDeliveryIntent,
         *,
-        attempt: PmaChatDeliveryAttempt,
+        attempt: PmaDeliveryAttempt,
         hub_root: Path,
         raw_config: Mapping[str, Any],
     ) -> PmaChatDeliveryAdapterResult:
