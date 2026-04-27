@@ -10,6 +10,7 @@ from typing import Any, Callable, Iterable, Optional, cast
 from ..core.agent_config import AgentConfig, resolve_agent_target_from_agents
 from ..core.config import load_hub_config, load_repo_config
 from ..core.config_contract import ConfigError
+from ..core.orchestration.catalog import KNOWN_CAPABILITIES
 from ..plugin_api import CAR_AGENT_ENTRYPOINT_GROUP, CAR_PLUGIN_API_VERSION
 from .aliased_harness import AliasedAgentHarness
 from .base import AgentHarness
@@ -31,7 +32,6 @@ from .zeroclaw.supervisor import (
 )
 
 _logger = logging.getLogger(__name__)
-AgentCapability = RuntimeCapability
 
 
 @dataclass(frozen=True)
@@ -57,10 +57,21 @@ class AgentDescriptor:
     plugin_api_version: int = CAR_PLUGIN_API_VERSION
 
     def __post_init__(self) -> None:
+        normalized_capabilities = normalize_agent_capabilities(self.capabilities)
+        unknown_capabilities = {
+            capability
+            for capability in normalized_capabilities
+            if capability not in KNOWN_CAPABILITIES
+        }
+        if unknown_capabilities:
+            raise ValueError(
+                "Unknown runtime capabilities: "
+                + ", ".join(sorted(unknown_capabilities))
+            )
         object.__setattr__(
             self,
             "capabilities",
-            normalize_agent_capabilities(self.capabilities),
+            normalized_capabilities,
         )
         runtime_kind = str(self.runtime_kind or self.id or "").strip().lower()
         object.__setattr__(
@@ -844,21 +855,14 @@ def _load_agent_plugins() -> dict[str, AgentDescriptor]:
                 api_version_raw,
             )
             continue
-        if api_version > CAR_PLUGIN_API_VERSION:
+        if api_version != CAR_PLUGIN_API_VERSION:
             _logger.warning(
-                "Ignoring agent plugin %s (api_version=%s) requires newer core (%s)",
+                "Ignoring agent plugin %s: api_version=%s does not match current core (%s)",
                 agent_id,
                 api_version,
                 CAR_PLUGIN_API_VERSION,
             )
             continue
-        if api_version < CAR_PLUGIN_API_VERSION:
-            _logger.info(
-                "Loaded agent plugin %s with older api_version=%s (current=%s)",
-                agent_id,
-                api_version,
-                CAR_PLUGIN_API_VERSION,
-            )
 
         if agent_id in _BUILTIN_AGENTS:
             _logger.warning(
@@ -944,7 +948,6 @@ def has_capability(agent_id: str, capability: str, context: Any = None) -> bool:
 
 
 __all__ = [
-    "AgentCapability",
     "AgentExecutionTarget",
     "AgentRuntimeResolution",
     "CAR_AGENT_ENTRYPOINT_GROUP",

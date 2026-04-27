@@ -33,14 +33,12 @@ Plugins MUST declare compatibility with the current plugin API version:
 CAR accepts or rejects a plugin based on the declared `plugin_api_version`:
 
 - Missing or unparseable version: rejected
-- Newer than `CAR_PLUGIN_API_VERSION`: rejected because the plugin requires a
-  newer CAR core
+- Not equal to `CAR_PLUGIN_API_VERSION`: rejected
 - Equal to `CAR_PLUGIN_API_VERSION`: accepted
-- Older than `CAR_PLUGIN_API_VERSION`: accepted on a best-effort basis with an
-  informational log
 
-The compatibility contract is asymmetric: older plugins may continue to load,
-but plugins that require newer core behavior do not.
+The compatibility contract is exact-match only. Backwards-incompatible cleanup
+ships behind a plugin API version bump, and older plugin contracts are not kept
+alive inside the loader.
 
 ## Agent backend entry point
 

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from codex_autorunner import agents
-from codex_autorunner.api import AgentCapability, RuntimeCapability
+import codex_autorunner.agents as agents
+import codex_autorunner.api as api
 
 
-def test_public_api_preserves_agent_capability_alias() -> None:
-    assert AgentCapability is RuntimeCapability
-    assert agents.AgentCapability is RuntimeCapability
+def test_public_api_exposes_runtime_capability_only() -> None:
+    assert hasattr(api, "RuntimeCapability") is True
+    assert hasattr(api, "AgentCapability") is False
+    assert hasattr(agents, "RuntimeCapability") is True
+    assert hasattr(agents, "AgentCapability") is False

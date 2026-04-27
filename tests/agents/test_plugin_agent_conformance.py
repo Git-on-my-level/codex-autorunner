@@ -13,6 +13,7 @@ import pytest
 
 from codex_autorunner.agents.base import AgentHarness, UnsupportedAgentCapabilityError
 from codex_autorunner.agents.registry import (
+    CAR_PLUGIN_API_VERSION,
     AgentDescriptor,
     get_registered_agents,
     reload_agents,
@@ -315,36 +316,42 @@ async def test_minimal_harness_nominal_thread_lifecycle() -> None:
     assert result.assistant_text == "response"
 
 
-def test_capability_normalization_aliases() -> None:
-    """Test that runtime checks preserve v1 capability alias compatibility."""
+def test_capability_checks_use_canonical_names() -> None:
     harness = _MinimalConformingHarness()
 
-    assert harness.supports("threads") is True
-    assert harness.supports("turns") is True
     assert harness.supports("durable_threads") is True
     assert harness.supports("message_turns") is True
 
 
-def test_descriptor_capability_normalization() -> None:
-    """Test that AgentDescriptor normalizes legacy aliases to canonical values."""
+def test_descriptor_rejects_non_canonical_capabilities() -> None:
     descriptor = AgentDescriptor(
         id="test-norm",
         name="Test Normalized",
         capabilities=frozenset(
             [
-                RuntimeCapability("threads"),
-                RuntimeCapability("turns"),
+                RuntimeCapability("durable_threads"),
+                RuntimeCapability("message_turns"),
                 RuntimeCapability("interrupt"),
             ]
         ),
         make_harness=lambda _ctx: _MinimalConformingHarness(),
     )
 
-    assert RuntimeCapability("durable_threads") in descriptor.capabilities
-    assert RuntimeCapability("message_turns") in descriptor.capabilities
-    assert RuntimeCapability("interrupt") in descriptor.capabilities
-    assert RuntimeCapability("threads") not in descriptor.capabilities
-    assert RuntimeCapability("turns") not in descriptor.capabilities
+    assert descriptor.capabilities == frozenset(
+        [
+            RuntimeCapability("durable_threads"),
+            RuntimeCapability("message_turns"),
+            RuntimeCapability("interrupt"),
+        ]
+    )
+
+    with pytest.raises(ValueError, match="Unknown runtime capabilities: threads"):
+        AgentDescriptor(
+            id="test-legacy",
+            name="Test Legacy",
+            capabilities=frozenset([RuntimeCapability("threads")]),
+            make_harness=lambda _ctx: _MinimalConformingHarness(),
+        )
 
 
 def test_zeroclaw_descriptor_conforms_to_contract() -> None:
@@ -418,7 +425,7 @@ def test_plugin_descriptor_loading() -> None:
         if agent_id != "zeroclaw":
             assert descriptor.capabilities
         assert callable(descriptor.make_harness)
-        assert descriptor.plugin_api_version >= 1
+        assert descriptor.plugin_api_version == CAR_PLUGIN_API_VERSION
 
 
 def test_no_duplicate_agent_ids() -> None:

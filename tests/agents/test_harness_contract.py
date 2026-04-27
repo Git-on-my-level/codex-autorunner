@@ -99,7 +99,6 @@ async def test_agent_harness_required_contract_and_capability_report() -> None:
     terminal = await harness.wait_for_turn(Path("."), resumed.id, turn.turn_id)
 
     assert harness.supports("durable_threads") is True
-    assert harness.supports("turns") is True
     assert harness.supports("message_turns") is True
     assert harness.supports("interrupt") is False
     assert report.capabilities == harness.capabilities
