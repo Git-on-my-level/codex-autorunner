@@ -534,5 +534,5 @@ conversation id, and highlights likely error lines with nearby context.
 
 ## Related Docs
 
-- `src/codex_autorunner/surfaces/discord/README.md`
+- `src/codex_autorunner/integrations/discord/README.md`
 - `docs/ops/env-and-defaults.md`

@@ -6,8 +6,13 @@ This package contains surface-specific code for codex-autorunner. Surfaces are r
 
 - `web/`: FastAPI web UI, API routes, and web-specific workflows
 - `cli/`: Command-line interface
-- `telegram/`: Telegram bot and adapters
-- `discord/`: Discord bot docs and surface notes
+
+> **Note:** Chat platforms (Discord, Telegram) have no separate surface layer.
+> The integration IS the surface — all code lives directly in
+> `integrations/discord/` and `integrations/telegram/`. Unlike Web (which has
+> distinct routes, middleware, and static assets), chat platforms are thin
+> adapters over their respective APIs, so an extra surface indirection adds
+> complexity without benefit.
 
 ## Architecture
 

@@ -290,7 +290,7 @@ def _make_descriptor(
     return AgentDescriptor(
         id=agent_id,
         name=name,
-        capabilities=frozenset(["threads", "turns", "review"]),
+        capabilities=frozenset(["durable_threads", "message_turns", "review"]),
         make_harness=lambda _ctx: None,  # type: ignore[return-value]
     )
 

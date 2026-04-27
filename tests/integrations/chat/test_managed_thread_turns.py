@@ -1607,7 +1607,7 @@ async def test_finalize_managed_thread_execution_self_claims_existing_pr_binding
     )
     monkeypatch.setattr(
         managed_thread_turns_module,
-        "harness_supports_progress_event_stream",
+        "harness_supports_event_streaming",
         lambda _harness: False,
     )
 
@@ -1696,7 +1696,7 @@ async def test_finalize_managed_thread_execution_logs_timeout_source(
     fake_hub_client = _FakeHubPersistenceClient()
     monkeypatch.setattr(
         managed_thread_turns_module,
-        "harness_supports_progress_event_stream",
+        "harness_supports_event_streaming",
         lambda _harness: False,
     )
 
@@ -1780,7 +1780,7 @@ async def test_finalize_managed_thread_execution_uses_idle_only_timeout_mode_for
     fake_hub_client = _FakeHubPersistenceClient()
     monkeypatch.setattr(
         managed_thread_turns_module,
-        "harness_supports_progress_event_stream",
+        "harness_supports_event_streaming",
         lambda _harness: False,
     )
     captured_kwargs: dict[str, Any] = {}
@@ -1852,7 +1852,7 @@ async def test_finalize_managed_thread_execution_prefers_recorded_interrupt_over
     fake_hub_client = _FakeHubPersistenceClient()
     monkeypatch.setattr(
         managed_thread_turns_module,
-        "harness_supports_progress_event_stream",
+        "harness_supports_event_streaming",
         lambda _harness: False,
     )
 
@@ -1954,7 +1954,7 @@ async def test_finalize_managed_thread_execution_propagates_session_recovery_met
     fake_hub_client = _FakeHubPersistenceClient()
     monkeypatch.setattr(
         managed_thread_turns_module,
-        "harness_supports_progress_event_stream",
+        "harness_supports_event_streaming",
         lambda _harness: False,
     )
 
@@ -2043,7 +2043,7 @@ async def test_finalize_managed_thread_execution_logs_finalization_failure_after
     fake_hub_client = _FakeHubPersistenceClient()
     monkeypatch.setattr(
         managed_thread_turns_module,
-        "harness_supports_progress_event_stream",
+        "harness_supports_event_streaming",
         lambda _harness: False,
     )
 
@@ -2130,7 +2130,7 @@ async def test_finalize_managed_thread_execution_continues_when_transcript_persi
     recorded_results: list[dict[str, Any]] = []
     monkeypatch.setattr(
         managed_thread_turns_module,
-        "harness_supports_progress_event_stream",
+        "harness_supports_event_streaming",
         lambda _harness: False,
     )
 
@@ -2210,7 +2210,7 @@ async def test_finalize_managed_thread_execution_continues_when_execution_result
     fake_hub_client = _FakeHubPersistenceClient()
     monkeypatch.setattr(
         managed_thread_turns_module,
-        "harness_supports_progress_event_stream",
+        "harness_supports_event_streaming",
         lambda _harness: False,
     )
 
@@ -2283,7 +2283,7 @@ async def test_finalize_managed_thread_execution_continues_when_thread_activity_
     fake_hub_client = _FakeHubPersistenceClient()
     monkeypatch.setattr(
         managed_thread_turns_module,
-        "harness_supports_progress_event_stream",
+        "harness_supports_event_streaming",
         lambda _harness: False,
     )
 
@@ -2361,7 +2361,7 @@ async def test_finalize_managed_thread_execution_continues_when_timeline_persist
     fake_hub_client = _FakeHubPersistenceClient()
     monkeypatch.setattr(
         managed_thread_turns_module,
-        "harness_supports_progress_event_stream",
+        "harness_supports_event_streaming",
         lambda _harness: True,
     )
 
@@ -2466,7 +2466,7 @@ async def test_finalize_managed_thread_execution_batches_live_timeline_persisten
     fake_hub_client = _FakeHubPersistenceClient()
     monkeypatch.setattr(
         managed_thread_turns_module,
-        "harness_supports_progress_event_stream",
+        "harness_supports_event_streaming",
         lambda _harness: True,
     )
     monkeypatch.setattr(
@@ -2594,7 +2594,7 @@ async def test_finalize_managed_thread_execution_flushes_live_timeline_on_delay_
     fake_hub_client = _FakeHubPersistenceClient()
     monkeypatch.setattr(
         managed_thread_turns_module,
-        "harness_supports_progress_event_stream",
+        "harness_supports_event_streaming",
         lambda _harness: True,
     )
     monkeypatch.setattr(
@@ -2703,7 +2703,7 @@ async def test_finalize_managed_thread_execution_continues_when_progress_pump_is
     fake_hub_client = _FakeHubPersistenceClient()
     monkeypatch.setattr(
         managed_thread_turns_module,
-        "harness_supports_progress_event_stream",
+        "harness_supports_event_streaming",
         lambda _harness: True,
     )
 
@@ -2931,7 +2931,7 @@ class TestBackendTurnIdFallbackCharacterization:
         fake_hub_client = _FakeHubPersistenceClient()
         monkeypatch.setattr(
             managed_thread_turns_module,
-            "harness_supports_progress_event_stream",
+            "harness_supports_event_streaming",
             lambda _harness: False,
         )
 
@@ -3005,7 +3005,7 @@ class TestFinalizationSideEffectsCharacterization:
         fake_hub_client = _FakeHubPersistenceClient()
         monkeypatch.setattr(
             managed_thread_turns_module,
-            "harness_supports_progress_event_stream",
+            "harness_supports_event_streaming",
             lambda _harness: False,
         )
 
@@ -3108,7 +3108,7 @@ class TestFinalizationSideEffectsCharacterization:
         fake_hub_client = _FakeHubPersistenceClient()
         monkeypatch.setattr(
             managed_thread_turns_module,
-            "harness_supports_progress_event_stream",
+            "harness_supports_event_streaming",
             lambda _harness: False,
         )
 
@@ -3173,7 +3173,7 @@ class TestFinalizationSideEffectsCharacterization:
         fake_hub_client = _FakeHubPersistenceClient()
         monkeypatch.setattr(
             managed_thread_turns_module,
-            "harness_supports_progress_event_stream",
+            "harness_supports_event_streaming",
             lambda _harness: False,
         )
 
@@ -3321,7 +3321,7 @@ class TestTranscriptFailureDoesNotBlockOrchestration:
         recorded_results: list[dict[str, Any]] = []
         monkeypatch.setattr(
             managed_thread_turns_module,
-            "harness_supports_progress_event_stream",
+            "harness_supports_event_streaming",
             lambda _harness: False,
         )
 
@@ -3409,7 +3409,7 @@ class TestActivityWriteOnlyAfterAcknowledgedOk:
         fake_hub_client = _FakeHubPersistenceClient()
         monkeypatch.setattr(
             managed_thread_turns_module,
-            "harness_supports_progress_event_stream",
+            "harness_supports_event_streaming",
             lambda _harness: False,
         )
 

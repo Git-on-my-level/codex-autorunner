@@ -32,7 +32,7 @@ def test_load_agent_plugin(monkeypatch):
     plugin = AgentDescriptor(
         id="myagent",
         name="My Agent",
-        capabilities=frozenset(["threads"]),
+        capabilities=frozenset(["durable_threads", "message_turns"]),
         make_harness=lambda ctx: None,  # type: ignore[return-value]
         plugin_api_version=CAR_PLUGIN_API_VERSION,
     )
@@ -52,7 +52,7 @@ def test_skip_agent_plugin_version_mismatch(monkeypatch):
     plugin = AgentDescriptor(
         id="badagent",
         name="Bad Agent",
-        capabilities=frozenset(["threads"]),
+        capabilities=frozenset(["durable_threads", "message_turns"]),
         make_harness=lambda ctx: None,  # type: ignore[return-value]
         plugin_api_version=CAR_PLUGIN_API_VERSION + 1,
     )

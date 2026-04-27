@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
+from ...harness_capabilities import harness_supports_event_streaming
 from ..sse import format_sse
 from .models import ExecutionRecord, MessageRequest, ThreadTarget
 from .runtime_turn_terminal_state import (
@@ -23,16 +24,6 @@ RUNTIME_THREAD_INTERRUPTED_ERROR = "Runtime thread interrupted"
 RUNTIME_THREAD_MISSING_BACKEND_IDS_ERROR = (
     "Runtime thread execution is missing backend ids"
 )
-
-
-def _harness_supports_progress_event_stream(harness: Any) -> bool:
-    supports = getattr(harness, "supports", None)
-    if not callable(supports) or not supports("event_streaming"):
-        return False
-    allows_parallel = getattr(harness, "allows_parallel_event_stream", None)
-    if callable(allows_parallel):
-        return bool(allows_parallel())
-    return True
 
 
 async def _recover_stalled_turn(
@@ -276,9 +267,7 @@ async def await_runtime_thread_outcome(
             _wait_for_progress_recovery_probe(state, recovery_probe_interval)
         )
     stream_task = None
-    if observe_progress_events and _harness_supports_progress_event_stream(
-        execution.harness
-    ):
+    if observe_progress_events and harness_supports_event_streaming(execution.harness):
         stream_task = asyncio.create_task(
             _observe_runtime_terminal_state(execution, state)
         )

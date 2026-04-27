@@ -10,8 +10,8 @@ from typing import Any, Optional
 from fastapi import HTTPException, Request
 
 from .....agents.base import (
-    harness_allows_parallel_event_stream,
     harness_progress_event_stream,
+    harness_supports_event_streaming,
 )
 from .....agents.codex.harness import CodexHarness
 from .....agents.opencode.harness import OpenCodeHarness
@@ -338,7 +338,7 @@ async def execute_harness_turn(
     streamed_raw_events: list[Any] = []
     stream_task: Optional[asyncio.Task[None]] = None
     activity_tracker = _TurnActivityTracker()
-    if harness_allows_parallel_event_stream(harness):
+    if harness_supports_event_streaming(harness):
 
         async def _collect_events() -> None:
             async for raw_event in harness_progress_event_stream(

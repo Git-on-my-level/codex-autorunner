@@ -1,9 +1,9 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { api, flash, confirmModal, inputModal, openModal, } from "./utils.js?v=672f0b14d26680ec4c346e9b1c1cd1ec3bab19c20c06c2593893e8ee4601afcd";
-import { setCleanupAllInFlight, renderSummary } from "./hubRepoCards.js?v=672f0b14d26680ec4c346e9b1c1cd1ec3bab19c20c06c2593893e8ee4601afcd";
-import { getHubData, startHubJob, } from "./hubActions.js?v=672f0b14d26680ec4c346e9b1c1cd1ec3bab19c20c06c2593893e8ee4601afcd";
-import { refreshHub } from "./hubRefresh.js?v=672f0b14d26680ec4c346e9b1c1cd1ec3bab19c20c06c2593893e8ee4601afcd";
-import { loadUpdateTargetOptions, handleSystemUpdate } from "./hubRefresh.js?v=672f0b14d26680ec4c346e9b1c1cd1ec3bab19c20c06c2593893e8ee4601afcd";
+import { api, flash, confirmModal, inputModal, openModal, } from "./utils.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
+import { setCleanupAllInFlight, renderSummary } from "./hubRepoCards.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
+import { getHubData, startHubJob, } from "./hubActions.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
+import { refreshHub } from "./hubRefresh.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
+import { loadUpdateTargetOptions, handleSystemUpdate } from "./hubRefresh.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
 function splitCommaSeparated(value) {
     return value
         .split(",")

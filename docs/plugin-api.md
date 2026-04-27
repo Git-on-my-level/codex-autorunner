@@ -1,6 +1,6 @@
 # CAR Plugin API
 
-This document describes the stable public API surface for external plugins.
+This document is the canonical external contract for CAR agent plugins.
 
 ## Scope
 
@@ -8,7 +8,7 @@ CAR supports plugin loading via Python packaging **entry points**.
 
 Currently supported plugin type:
 
-- **Agent backends**: add a new agent implementation (harness + supervisor).
+- **Agent backends**: add a new agent implementation (harness + supervisor)
 
 ## Choose The Right CAR Resource
 
@@ -17,7 +17,7 @@ External runtimes do not always map to repos.
 - Use repo semantics when the agent's durable identity is a project worktree and
   CAR should execute against that code checkout.
 - Use `agent_workspace` semantics when the durable identity is runtime-managed
-  memory/config/session state that should live under
+  memory, config, or session state that should live under
   `<hub_root>/.codex-autorunner/runtimes/<runtime>/<workspace_id>/`.
 
 CAR does not install runtimes for plugins. A plugin may detect or launch a
@@ -30,52 +30,104 @@ Plugins MUST declare compatibility with the current plugin API version:
 
 - `codex_autorunner.api.CAR_PLUGIN_API_VERSION`
 
-CAR will skip plugins whose declared `plugin_api_version` does not match.
+CAR accepts or rejects a plugin based on the declared `plugin_api_version`:
+
+- Missing or unparseable version: rejected
+- Not equal to `CAR_PLUGIN_API_VERSION`: rejected
+- Equal to `CAR_PLUGIN_API_VERSION`: accepted
+
+The compatibility contract is exact-match only. Backwards-incompatible cleanup
+ships behind a plugin API version bump, and older plugin contracts are not kept
+alive inside the loader.
 
 ## Agent backend entry point
 
 Entry point group:
 
 - `codex_autorunner.api.CAR_AGENT_ENTRYPOINT_GROUP`
-- (currently: `codex_autorunner.agent_backends`)
+- currently `codex_autorunner.agent_backends`
 
 A plugin package should expose an `AgentDescriptor` object:
 
 ```python
-from codex_autorunner.api import AgentDescriptor, AgentHarness, CAR_PLUGIN_API_VERSION
+from __future__ import annotations
+
+from codex_autorunner.api import (
+    AgentDescriptor,
+    AgentHarness,
+    CAR_PLUGIN_API_VERSION,
+    RuntimeCapability,
+)
+
 
 def _make(ctx: object) -> AgentHarness:
     raise NotImplementedError
 
+
+def _healthcheck(ctx: object) -> bool:
+    _ = ctx
+    return True
+
+
 AGENT_BACKEND = AgentDescriptor(
     id="myagent",
     name="My Agent",
-    capabilities=frozenset(["threads", "turns"]),
+    capabilities=frozenset(
+        {
+            RuntimeCapability("durable_threads"),
+            RuntimeCapability("message_turns"),
+            RuntimeCapability("event_streaming"),
+        }
+    ),
     make_harness=_make,
+    healthcheck=_healthcheck,
+    backend_factory=None,
+    runtime_preflight=None,
+    runtime_kind="myagent",
     plugin_api_version=CAR_PLUGIN_API_VERSION,
 )
 ```
 
-and declare it in `pyproject.toml`:
+And declare it in `pyproject.toml`:
 
 ```toml
 [project.entry-points."codex_autorunner.agent_backends"]
 myagent = "my_package.my_agent_plugin:AGENT_BACKEND"
 ```
 
+Descriptor fields:
+
+- Required: `id`, `name`, `capabilities`, `make_harness`,
+  `plugin_api_version`
+- Optional: `healthcheck`, `backend_factory`, `runtime_preflight`,
+  `runtime_kind`
+
+Optional field meanings:
+
+- `healthcheck`: report whether the runtime is currently available so CAR can
+  hide unavailable agents from operator-facing surfaces
+- `backend_factory`: provide runtime-specific backend construction when the
+  integration needs more than a harness
+- `runtime_preflight`: run targeted readiness checks and return diagnostics
+  before CAR starts routing traffic to the runtime
+- `runtime_kind`: set a stable runtime family identifier when multiple logical
+  agent ids share one backend implementation
+
 Notes:
 
 - Plugin ids are normalized to lowercase.
 - Plugins cannot override built-in agent ids.
-- Plugins SHOULD avoid import-time side effects; do heavy initialization inside `make_harness`.
+- Plugins SHOULD avoid import-time side effects; do heavy initialization inside
+  `make_harness`.
 
 ## Durable-Thread Contract
 
-CAR v1 orchestration requires agent backends to implement a **durable thread/session model**:
+CAR v1 orchestration requires agent backends to implement a **durable
+thread/session model**:
 
-1. **Threads persist beyond a single interaction**: Creating a conversation produces a session ID that remains valid across CAR restarts
-2. **Threads support resume**: Given a thread/session ID, the agent can resume from where it left off
-3. **Turns are atomic**: Each turn has a clear start and terminal state
+1. Threads persist beyond a single interaction.
+2. Threads support resume by thread or session id.
+3. Turns are atomic and reach a clear terminal state.
 
 ### Must-Support Core Interface
 
@@ -87,20 +139,24 @@ async def wait_for_turn(...) -> TerminalTurnResult
 ```
 
 Hermes is the in-tree example of a backend that satisfies this contract through
-an external thread/session API while still omitting other optional capabilities
-such as `review` and `model_listing`.
+an external thread/session API while still omitting optional capabilities such
+as `review` and `model_listing`.
 
 ### Single-Session Runtimes (Out of Scope)
 
-**Single-session runtimes are explicitly out of scope for CAR v1 orchestration.** These are runtimes that:
+**Single-session runtimes are explicitly out of scope for CAR v1 orchestration.**
 
-- Do not persist conversation state beyond a single request/response cycle
+These are runtimes that:
+
+- Do not persist conversation state beyond a single request or response cycle
 - Cannot resume a previous conversation
-- Do not expose a session/conversation ID
+- Do not expose a session or conversation id
 
-If your runtime does not expose a documented public thread/session API, do not
-advertise the durable-thread contract unless CAR can prove equivalent
-relaunch/resume semantics with a first-class CAR-managed `agent_workspace`.
+If your runtime does not expose a documented public thread or session API, do
+not advertise the durable-thread contract unless CAR can prove equivalent
+relaunch and resume semantics with a first-class CAR-managed
+`agent_workspace`.
+
 Hermes is the reference example for the documented repo-backed path: CAR trusts
 Hermes durable sessions through ACP when the installed build advertises the ACP
 launch contract CAR expects. ZeroClaw is the reference example for the narrower
@@ -116,49 +172,53 @@ incompatible instead of inferring durability from workspace selection alone.
 
 All agent backends must declare these core capabilities:
 
-- `durable_threads`: Thread create/resume/list operations
-- `message_turns`: Turn execution within threads
+- `durable_threads`: thread creation and resume for durable conversations
+- `message_turns`: turn execution inside durable conversations
 
 ### Optional Capabilities
 
 Plugins can optionally declare additional capabilities:
 
-- `model_listing`: Return available models via `model_catalog()`
-- `active_thread_discovery`: List existing conversations via `list_conversations()`
-- `interrupt`: Interrupt running turns
-- `review`: Run code review operations
-- `event_streaming`: Stream turn events in real-time
-- `transcript_history`: Retrieve conversation transcript
-- `approvals`: Support approval/workflow mechanisms
-- `structured_event_streaming`: Structured event format support
-
-Capability aliases (legacy → canonical):
-- `threads` → `durable_threads`
-- `turns` → `message_turns`
+- `active_thread_discovery`: list existing conversations via `list_conversations()`
+- `approvals`: support approval or workflow mechanisms
+- `event_streaming`: stream turn events in real time
+- `interrupt`: interrupt running turns
+- `model_listing`: return available models via `model_catalog()`
+- `review`: run code review operations
+- `transcript_history`: retrieve conversation transcript history
 
 ### Capability Discovery
 
 CAR supports both static and runtime capability discovery:
 
-1. **Static capabilities**: Declared in `AgentDescriptor.capabilities` at registration
-2. **Runtime capabilities**: Reported via `harness.runtime_capability_report()` after initialization
+1. **Static capabilities**: declared in `AgentDescriptor.capabilities` at
+   registration time
+2. **Runtime capabilities**: reported via
+   `harness.runtime_capability_report()` after initialization
 
 The harness automatically gates optional helper methods:
-- Calling `model_catalog()` on an agent without `model_listing` raises `UnsupportedAgentCapabilityError`
-- Calling `interrupt()` on an agent without `interrupt` raises `UnsupportedAgentCapabilityError`
+
+- Calling `model_catalog()` on an agent without `model_listing` raises
+  `UnsupportedAgentCapabilityError`
+- Calling `interrupt()` on an agent without `interrupt` raises
+  `UnsupportedAgentCapabilityError`
+- Calling `transcript_history()` on an agent without `transcript_history`
+  raises `UnsupportedAgentCapabilityError`
+- Calling `stream_events()` on an agent without `event_streaming` raises
+  `UnsupportedAgentCapabilityError`
 
 ## Reference Implementations
 
-- **ZeroClaw**: Detect-only CAR-managed `agent_workspace` adapter. Supports
+- **ZeroClaw**: detect-only CAR-managed `agent_workspace` adapter. Supports
   `durable_threads`, `message_turns`, `active_thread_discovery`, and
   `event_streaming` for CAR-managed agent workspaces. Caveats remain explicit:
   workspace memory is shared across threads, one active turn is allowed per
-  ZeroClaw session, and `interrupt`/`review` are not advertised.
-- **Hermes**: ACP-backed repo/worktree adapter. Supports `durable_threads`,
+  ZeroClaw session, and `interrupt` and `review` are not advertised.
+- **Hermes**: ACP-backed repo or worktree adapter. Supports `durable_threads`,
   `message_turns`, `active_thread_discovery`, `interrupt`, `event_streaming`,
   and `approvals`. Caveats remain explicit: Hermes runs against a shared
   `HERMES_HOME`, model catalogs are not advertised, review is unsupported, and
   CAR does not promise transcript-history reconstruction beyond CAR-observed
   turns.
-- **Codex**: Full-featured, supports all optional capabilities
-- **OpenCode**: Full-featured except `approvals`
+- **Codex**: full-featured runtime that advertises every optional capability
+- **OpenCode**: full-featured runtime except `approvals`
