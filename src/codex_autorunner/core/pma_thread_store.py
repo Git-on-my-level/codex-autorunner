@@ -1495,7 +1495,7 @@ class PmaThreadStore:
             if isinstance(row["thread_target_id"], str) and row["thread_target_id"]
         ]
 
-    def cancel_queued_turns(self, managed_thread_id: str) -> int:
+    def cancel_queued_turns(self, managed_thread_id: str) -> list[str]:
         with self._write_conn() as conn:
             return self._lifecycle.cancel_queued_turns(conn, managed_thread_id)
 

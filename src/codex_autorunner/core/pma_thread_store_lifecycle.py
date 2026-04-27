@@ -187,7 +187,7 @@ class PmaThreadStoreLifecycle:
         ).fetchall()
         return [PmaPendingQueueItem.from_queue_row(row).to_dict() for row in rows]
 
-    def cancel_queued_turns(self, conn: Any, managed_thread_id: str) -> int:
+    def cancel_queued_turns(self, conn: Any, managed_thread_id: str) -> list[str]:
         cancelled_at = now_iso()
         rows = conn.execute(
             """
@@ -209,7 +209,7 @@ class PmaThreadStoreLifecycle:
         ).fetchall()
         execution_ids = [str(row["execution_id"]) for row in rows]
         if not execution_ids:
-            return 0
+            return []
         placeholders = ",".join("?" for _ in execution_ids)
         with conn:
             conn.execute(
@@ -230,7 +230,7 @@ class PmaThreadStoreLifecycle:
                 completed_at=cancelled_at,
                 error_text="interrupted",
             )
-        return len(execution_ids)
+        return execution_ids
 
     def cancel_queued_turn(
         self,

@@ -19,7 +19,7 @@ import typer
 from ...agents.registry import get_registered_agents
 from ...core.config import load_hub_config
 from ...core.config_contract import ConfigError
-from ...core.text_utils import _truncate_text
+from ...core.text_utils import _redacted_prompt_preview_for_match
 
 logger = logging.getLogger(__name__)
 
@@ -295,6 +295,7 @@ class ManagedThreadSendRequest:
     message: str
     busy_policy: str
     defer_execution: bool
+    wait_for_confirmation: bool = True
     model: Optional[str] = None
     reasoning: Optional[str] = None
     notify_on: Optional[str] = None
@@ -306,6 +307,7 @@ class ManagedThreadSendRequest:
             "message": self.message,
             "busy_policy": self.busy_policy,
             "defer_execution": self.defer_execution,
+            "wait_for_confirmation": self.wait_for_confirmation,
         }
         if self.model:
             payload["model"] = self.model
@@ -415,6 +417,7 @@ class ManagedThreadSendTimeoutProbe:
     last_message_preview: str
     active_managed_turn_id: str
     active_turn_status: str
+    active_prompt_preview: str
     queue_depth: int
     queued_turn_ids: tuple[str, ...]
     queued_prompt_previews: tuple[str, ...]
@@ -426,12 +429,14 @@ class ManagedThreadSendTimeoutProbe:
         thread: dict[str, Any] = raw_thread if isinstance(raw_thread, dict) else {}
         raw_turn = payload.get("turn")
         turn: dict[str, Any] = raw_turn if isinstance(raw_turn, dict) else {}
+        raw_diagnostics = payload.get("active_turn_diagnostics")
+        diagnostics = raw_diagnostics if isinstance(raw_diagnostics, dict) else {}
         raw_queued_turns = payload.get("queued_turns")
         queued_turns = raw_queued_turns if isinstance(raw_queued_turns, list) else []
         normalized_queued_turns = tuple(
             (
                 str(item.get("managed_turn_id") or "").strip(),
-                str(item.get("prompt_preview") or "").strip(),
+                _redacted_prompt_preview_for_match(item.get("prompt_preview")),
             )
             for item in queued_turns
             if isinstance(item, dict) and str(item.get("managed_turn_id") or "").strip()
@@ -443,9 +448,14 @@ class ManagedThreadSendTimeoutProbe:
                 or payload.get("latest_turn_id")
                 or ""
             ).strip(),
-            last_message_preview=str(thread.get("last_message_preview") or "").strip(),
+            last_message_preview=_redacted_prompt_preview_for_match(
+                thread.get("last_message_preview")
+            ),
             active_managed_turn_id=str(turn.get("managed_turn_id") or "").strip(),
             active_turn_status=str(turn.get("status") or "").strip(),
+            active_prompt_preview=_redacted_prompt_preview_for_match(
+                diagnostics.get("prompt_preview")
+            ),
             queue_depth=coerce_optional_int(payload.get("queue_depth")) or 0,
             queued_turn_ids=tuple(
                 managed_turn_id for managed_turn_id, _ in normalized_queued_turns
@@ -495,8 +505,9 @@ def recover_managed_thread_send_timeout(
     if baseline is None:
         return None
 
-    expected_preview = _truncate_text(
-        message_body, MANAGED_THREAD_SEND_PREVIEW_LIMIT
+    expected_preview = _redacted_prompt_preview_for_match(
+        message_body,
+        max_length=MANAGED_THREAD_SEND_PREVIEW_LIMIT,
     ).strip()
     if not expected_preview:
         return None
@@ -519,12 +530,23 @@ def recover_managed_thread_send_timeout(
 
         recovered_turn_id = ""
         queued = False
+        active_prompt_matches = (
+            current.queue_depth == 0
+            and bool(baseline.active_prompt_preview)
+            and current.active_prompt_preview == expected_preview
+            and (
+                current.active_managed_turn_id != baseline.active_managed_turn_id
+                or baseline.active_prompt_preview != expected_preview
+            )
+        )
         if current.last_turn_id != baseline.last_turn_id and current.last_turn_id:
             recovered_turn_id = current.last_turn_id
             queued = recovered_turn_id in current.queued_turn_ids or (
                 bool(current.active_managed_turn_id)
                 and current.active_managed_turn_id != recovered_turn_id
             )
+        elif active_prompt_matches and current.active_managed_turn_id:
+            recovered_turn_id = current.active_managed_turn_id
         elif (
             current.last_message_preview == expected_preview
             and baseline.last_message_preview != expected_preview

@@ -437,6 +437,37 @@ def build_accepted_send_payload(
     return payload
 
 
+def build_enqueued_send_payload(
+    *,
+    managed_thread_id: str,
+    managed_turn_id: str,
+    backend_thread_id: str,
+    delivery_payload: dict[str, Any],
+    execution_state: str,
+    queue_depth: Optional[int] = None,
+    active_managed_turn_id: Optional[str] = None,
+    notification: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "status": "ok",
+        "send_state": "enqueued",
+        "execution_state": execution_state,
+        "managed_thread_id": managed_thread_id,
+        "managed_turn_id": managed_turn_id,
+        "backend_thread_id": backend_thread_id,
+        "assistant_text": "",
+        "error": None,
+        **delivery_payload,
+    }
+    if queue_depth is not None:
+        payload["queue_depth"] = queue_depth
+    if active_managed_turn_id is not None:
+        payload["active_managed_turn_id"] = active_managed_turn_id
+    if notification is not None:
+        payload["notification"] = notification
+    return payload
+
+
 def build_execution_result_payload(
     *,
     status: str,
@@ -463,6 +494,7 @@ __all__ = [
     "ManagedThreadMessageOptions",
     "build_accepted_send_payload",
     "build_archived_thread_payload",
+    "build_enqueued_send_payload",
     "build_execution_result_payload",
     "build_execution_setup_error_payload",
     "build_interrupt_failure_payload",
