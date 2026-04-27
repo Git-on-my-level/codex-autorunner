@@ -19,8 +19,9 @@ class UsageError(Exception):
 
 
 def _default_codex_home() -> Path:
-    """Return the Codex CLI data directory (sessions, auth), not CAR's state root."""
-    val = os.environ.get("CODEX_HOME", "~/.codex")
+    # Codex CLI session logs and related data live under CODEX_HOME (default ~/.codex).
+    # Do not fall back to CAR_GLOBAL_STATE_ROOT; that is CAR state, not the CLI home.
+    val = os.environ.get("CODEX_HOME") or "~/.codex"
     return Path(val).expanduser()
 
 

@@ -53,11 +53,9 @@ If none are set, `vi` is used.
 | --- | --- | --- |
 | `CAR_HUB_ROOT` | Explicit path to the hub root directory. Set by CLI `--hub` flag. | `null` |
 | `CAR_GLOBAL_STATE_ROOT` | Overrides `state_roots.global`: global CAR state for caches, locks, and durable CAR metadata (not the Codex CLI data directory). | Default `~/.codex-autorunner` when unset. |
-| `CODEX_HOME` | Codex CLI data directory (`auth.json`, session logs, etc.). **Not interchangeable** with `CAR_GLOBAL_STATE_ROOT`. | Default `~/.codex` when unset. Used by usage session discovery and app-server credential seeding. |
-| `CAR_DEV_INCLUDE_ROOT_REPO` | Dev-only: include the source repo in the hub manifest when the hub root is the source tree. | Not set (falsy). |
-| `CODEX_AUTORUNNER_SKIP_UPDATE_CHECKS=1` | Skip `./scripts/check.sh` during system updates. | Overrides `update.skip_checks` (default `false`). |
+| `CODEX_HOME` | Codex CLI data directory (`auth.json`, session logs, and the default base for usage-derived caches when `usage.global_cache_root` is unset). **Not interchangeable** with `CAR_GLOBAL_STATE_ROOT`. | Default `~/.codex` when unset. |
 
-When `usage.global_cache_root` is omitted from config, CAR defaults it to `CAR_GLOBAL_STATE_ROOT` if set, otherwise `~/.codex-autorunner` (aligned with global CAR state). It does **not** read Codex CLI sessions from `CODEX_HOME`; that variable only affects where CAR looks for the Codex CLI’s own files.
+When `usage.global_cache_root` is omitted from config, CAR defaults it to match the Codex CLI data directory: `CODEX_HOME` if set, otherwise `~/.codex` (same resolution as session logs). CAR global state (`CAR_GLOBAL_STATE_ROOT` / `state_roots.global`) remains separate and is not used for this default.
 
 ## Agent binaries
 
