@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# ruff: noqa: E402
 """Idle CPU soak harness for CAR service commands.
 
 Reads profiles from scripts/idle_cpu_profiles.yml, starts the target
