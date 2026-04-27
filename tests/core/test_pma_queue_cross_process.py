@@ -95,6 +95,33 @@ async def test_refresh_does_not_duplicate_items(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_replay_pending_recovers_running_item_after_restart(
+    tmp_path: Path,
+) -> None:
+    lane_id = "discord:channel-1"
+    producer_queue = PmaQueue(tmp_path)
+
+    item, _ = producer_queue.enqueue_sync(
+        lane_id,
+        "running-key-1",
+        {"message": "hello"},
+    )
+    item.state = QueueItemState.RUNNING
+    item.started_at = "2026-04-27T14:10:00Z"
+    await producer_queue._update_in_file(item)
+
+    recovered_queue = PmaQueue(tmp_path)
+    replayed = await recovered_queue.replay_pending(lane_id)
+    assert replayed == 1
+
+    recovered = await recovered_queue.dequeue(lane_id)
+    assert recovered is not None
+    assert recovered.item_id == item.item_id
+    assert recovered.state == QueueItemState.RUNNING
+    assert recovered.started_at is not None
+
+
+@pytest.mark.anyio
 async def test_enqueue_sync_idempotency_dedupe(tmp_path: Path) -> None:
     lane_id = "pma:default"
     queue = PmaQueue(tmp_path)

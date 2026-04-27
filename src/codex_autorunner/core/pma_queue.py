@@ -288,15 +288,25 @@ class PmaQueue:
         known = self._ensure_lane_known_ids(lane_id)
         for item in items:
             known.add(item.item_id)
-        pending = [item for item in items if item.state == QueueItemState.PENDING]
-        if not pending:
+        replayable: list[PmaQueueItem] = []
+        for item in items:
+            if item.state == QueueItemState.PENDING:
+                replayable.append(item)
+                continue
+            if item.state != QueueItemState.RUNNING:
+                continue
+            item.state = QueueItemState.PENDING
+            item.started_at = None
+            await self._update_in_file(item)
+            replayable.append(item)
+        if not replayable:
             return 0
 
         queue = self._ensure_lane_queue(lane_id)
-        for item in pending:
+        for item in replayable:
             await queue.put(item)
         self._ensure_lane_event(lane_id).set()
-        return len(pending)
+        return len(replayable)
 
     async def wait_for_lane_item(
         self,
