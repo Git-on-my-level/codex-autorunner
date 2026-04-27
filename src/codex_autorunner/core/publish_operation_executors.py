@@ -196,9 +196,7 @@ def _managed_turn_dependency_deadline(
     timeout_seconds = _coerce_int(dependency.get("timeout_seconds"))
     if timeout_seconds <= 0:
         timeout_seconds = _MANAGED_TURN_START_CONFIRMATION_TIMEOUT_SECONDS
-    return base + timedelta(
-        seconds=max(timeout_seconds, _MANAGED_TURN_START_CONFIRMATION_TIMEOUT_SECONDS)
-    )
+    return base + timedelta(seconds=timeout_seconds)
 
 
 def _resolve_notify_message(
