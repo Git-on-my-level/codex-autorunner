@@ -22,7 +22,7 @@ set -euo pipefail
 #   DISCORD_LOG            discord stdout/stderr log path (default: ${WORKSPACE}/.codex-autorunner/codex-autorunner-discord.log)
 #   NVM_BIN                Node bin path to prepend (default: ~/.nvm/versions/node/v22.12.0/bin)
 #   LOCAL_BIN              Local bin path to prepend (default: ~/.local/bin)
-#   PY39_BIN               Python bin path to prepend (default: ~/Library/Python/3.9/bin)
+#   PY39_BIN               Python bin path to prepend (default: auto-detected from active Python)
 #   OPENCODE_BIN           OpenCode bin path to prepend (default: ~/.opencode/bin)
 
 WORKSPACE="${WORKSPACE:-$HOME/car-workspace}"
@@ -40,7 +40,7 @@ DISCORD_PLIST_PATH="${DISCORD_PLIST_PATH:-$HOME/Library/LaunchAgents/${DISCORD_L
 DISCORD_LOG="${DISCORD_LOG:-${WORKSPACE}/.codex-autorunner/codex-autorunner-discord.log}"
 NVM_BIN="${NVM_BIN:-$HOME/.nvm/versions/node/v22.12.0/bin}"
 LOCAL_BIN="${LOCAL_BIN:-$HOME/.local/bin}"
-PY39_BIN="${PY39_BIN:-$HOME/Library/Python/3.9/bin}"
+PY39_BIN="${PY39_BIN:-$HOME/Library/Python/$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')/bin}"
 OPENCODE_BIN="${OPENCODE_BIN:-$HOME/.opencode/bin}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

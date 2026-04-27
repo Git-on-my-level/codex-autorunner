@@ -1092,7 +1092,10 @@ def _parse_usage_config(
     )
     global_cache_default = defaults.get("global_cache_root")
     if global_cache_default is None:
-        global_cache_default = os.environ.get("CODEX_HOME", "~/.codex")
+        # CODEX_HOME is deprecated; prefer CAR_GLOBAL_STATE_ROOT.
+        global_cache_default = os.environ.get(
+            "CAR_GLOBAL_STATE_ROOT"
+        ) or os.environ.get("CODEX_HOME", "~/.codex-autorunner")
     global_cache_raw = cfg.get("global_cache_root", global_cache_default)
     if global_cache_raw is None:
         global_cache_raw = global_cache_default

@@ -22,7 +22,7 @@ set -euo pipefail
 #   DISCORD_LOG   Discord stdout/stderr log path (default: ${CAR_ROOT}/.codex-autorunner/codex-autorunner-discord.log)
 #   NVM_BIN       Node bin path to prepend (default: ~/.nvm/versions/node/v22.12.0/bin)
 #   LOCAL_BIN     Local bin path to prepend (default: ~/.local/bin)
-#   PY39_BIN      Python bin path to prepend (default: ~/Library/Python/3.9/bin)
+#   PY39_BIN      Python bin path to prepend (default: auto-detected from active Python)
 #   OPENCODE_BIN  OpenCode bin path to prepend (default: ~/.opencode/bin)
 #   HUB_BIN       Full path to codex-autorunner binary (default: ~/.local/pipx/venvs/codex-autorunner.current/bin/codex-autorunner)
 
@@ -43,7 +43,7 @@ DISCORD_LOG="${DISCORD_LOG:-${CAR_ROOT}/.codex-autorunner/codex-autorunner-disco
 
 NVM_BIN="${NVM_BIN:-$HOME/.nvm/versions/node/v22.12.0/bin}"
 LOCAL_BIN="${LOCAL_BIN:-$HOME/.local/bin}"
-PY39_BIN="${PY39_BIN:-$HOME/Library/Python/3.9/bin}"
+PY39_BIN="${PY39_BIN:-$HOME/Library/Python/$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')/bin}"
 OPENCODE_BIN="${OPENCODE_BIN:-$HOME/.opencode/bin}"
 HUB_BIN="${HUB_BIN:-$HOME/.local/pipx/venvs/codex-autorunner.current/bin/codex-autorunner}"
 
