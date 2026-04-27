@@ -39,7 +39,8 @@ from ...helpers import (
     _paths_compatible,
     _set_thread_summary,
 )
-from ...state import APPROVAL_MODE_YOLO, normalize_agent
+from ...state import APPROVAL_MODE_YOLO
+from ...state_types import normalize_agent
 from .agent_model_utils import (
     _handle_agent_command,
     _model_list_all_with_agent_compat,

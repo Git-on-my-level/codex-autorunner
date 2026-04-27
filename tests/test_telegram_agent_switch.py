@@ -14,8 +14,8 @@ from codex_autorunner.integrations.telegram.handlers.commands.workspace import (
 from codex_autorunner.integrations.telegram.state import (
     TelegramStateStore,
     TelegramTopicRecord,
-    ThreadSummary,
 )
+from codex_autorunner.integrations.telegram.state_types import ThreadSummary
 
 
 class _RouterStub:

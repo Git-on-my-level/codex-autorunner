@@ -23,7 +23,8 @@ from .constants import (
     RESUME_PREVIEW_SCAN_LINES,
     RESUME_PREVIEW_USER_LIMIT,
 )
-from .state import TelegramTopicRecord, ThreadSummary
+from .state import TelegramTopicRecord
+from .state_types import ThreadSummary
 
 
 def _compact_preview(text: Any, limit: int = 40) -> str:

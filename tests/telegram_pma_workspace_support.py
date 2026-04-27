@@ -33,8 +33,8 @@ from codex_autorunner.integrations.telegram.handlers.selections import Selection
 from codex_autorunner.integrations.telegram.helpers import _format_help_text
 from codex_autorunner.integrations.telegram.state import (
     TelegramTopicRecord,
-    ThreadSummary,
 )
+from codex_autorunner.integrations.telegram.state_types import ThreadSummary
 from tests.telegram_pma_managed_thread_support import (
     _InProcessHubControlPlaneClient,
     _PMAClientStub,

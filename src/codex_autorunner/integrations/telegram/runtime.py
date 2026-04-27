@@ -18,8 +18,9 @@ from .constants import (
     TurnKey,
 )
 from .rendering import prepare_telegram_message, render_telegram_message
-from .state import TOPIC_ROOT, parse_topic_key
+from .state import parse_topic_key
 from .state import topic_key as build_topic_key
+from .state_types import TOPIC_ROOT
 from .types import TurnContext
 
 
