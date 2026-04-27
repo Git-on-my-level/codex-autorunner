@@ -45,8 +45,7 @@ def create_thread_target_with_profile_fallback(
             if key_error is not None
             else KeyError(f"Unknown agent definition '{agent_id}'")
         )
-    caps = getattr(definition, "capabilities", frozenset())
-    if "durable_threads" not in caps:
+    if "durable_threads" not in getattr(definition, "capabilities", frozenset()):
         raise ValueError(
             f"Agent definition '{agent_id}' does not support durable_threads"
         )
