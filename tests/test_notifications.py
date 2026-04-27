@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import yaml
+
 from codex_autorunner.core.config import CONFIG_FILENAME, load_repo_config
 from codex_autorunner.core.notifications import NotificationManager
 

@@ -3,9 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Request
-
 import yaml
+from fastapi import APIRouter, HTTPException, Request
 
 from ....agents.registry import validate_agent_id
 from ....core.config import (

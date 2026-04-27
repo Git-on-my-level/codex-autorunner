@@ -4,7 +4,6 @@ from pathlib import Path
 from typing import Any, Optional
 
 import typer
-
 import yaml
 
 from ...core.config import CONFIG_FILENAME, load_hub_config

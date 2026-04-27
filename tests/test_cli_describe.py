@@ -2,9 +2,9 @@ import json
 import re
 from pathlib import Path
 
+import yaml
 from typer.testing import CliRunner
 
-import yaml
 from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.cli import app
 from codex_autorunner.core.config import CONFIG_FILENAME
