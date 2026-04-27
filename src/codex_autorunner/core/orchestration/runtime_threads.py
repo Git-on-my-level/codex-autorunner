@@ -71,13 +71,14 @@ async def _wait_for_late_collector_result(
 ) -> Optional[Any]:
     if collector_task.done():
         return await collector_task
+    grace = float(grace_seconds)
+    if grace <= 0.0:
+        return None
     # Under heavy test or runtime load, an extremely small grace window can
     # expire before the loop gets a fair chance to schedule the completed
     # collector result. Use at least one stall poll interval as the final
     # prompt-return grace period.
-    timeout_seconds = max(float(grace_seconds), _STALL_POLL_INTERVAL_SECONDS, 0.0)
-    if timeout_seconds <= 0.0:
-        return None
+    timeout_seconds = max(grace, _STALL_POLL_INTERVAL_SECONDS)
     try:
         return await asyncio.wait_for(
             asyncio.shield(collector_task),
