@@ -2135,12 +2135,16 @@ async def _run_discord_orchestrated_turn_for_message(
         public_execution_error=public_execution_error,
     )
     if suppress_managed_thread_delivery:
-        _dd = runner_hooks.durable_delivery
+        base_durable_delivery = runner_hooks.durable_delivery
+        if base_durable_delivery is None:
+            raise ValueError(
+                "suppress_managed_thread_delivery requires durable_delivery hooks"
+            )
         runner_hooks = replace(
             runner_hooks,
             durable_delivery=ManagedThreadDurableDeliveryHooks(
-                engine=_dd.engine,
-                adapter=_dd.adapter,
+                engine=base_durable_delivery.engine,
+                adapter=base_durable_delivery.adapter,
                 build_delivery_intent=lambda _finalized: None,
             ),
         )
