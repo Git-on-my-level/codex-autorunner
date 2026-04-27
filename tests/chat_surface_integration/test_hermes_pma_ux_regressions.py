@@ -497,18 +497,14 @@ async def test_discord_duplicate_interactions_are_deduped(
             text for text in response_texts if "workspace:" in text.lower()
         ]
         assert len(status_messages) == 1
-        duplicate_resumes = [
+        duplicate_suppressed = [
             record
             for record in rest.log_records
-            if record.get("event") == "discord.interaction.duplicate_resuming"
+            if record.get("event")
+            == "discord.interaction.duplicate_in_flight_suppressed"
             and record.get("interaction_id") == "inter-dup-1"
         ]
-        assert duplicate_resumes
-        assert any(
-            record.get("event") == "discord.interaction.ack.reused"
-            and record.get("interaction_id") == "inter-dup-1"
-            for record in rest.log_records
-        )
+        assert duplicate_suppressed
         assert any(
             event.get("kind") == "duplicate_interaction_injected"
             for event in rest.surface_timeline

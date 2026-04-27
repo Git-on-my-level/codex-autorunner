@@ -14,6 +14,12 @@ from .catalog import (
     map_agent_capabilities,
     merge_agent_capabilities,
 )
+from .chat_operation_duplicates import (
+    ChatOperationDuplicateAction,
+    ChatOperationDuplicateDecision,
+    chat_operation_is_terminal_duplicate,
+    plan_chat_operation_duplicate,
+)
 from .chat_operation_ledger import (
     ChatOperationRegistration,
     SQLiteChatOperationLedger,
@@ -186,6 +192,8 @@ __all__ = [
     "Binding",
     "CHAT_OPERATION_ALLOWED_TRANSITIONS",
     "CHAT_OPERATION_TERMINAL_STATES",
+    "ChatOperationDuplicateAction",
+    "ChatOperationDuplicateDecision",
     "ChatOperationRecoveryAction",
     "ChatOperationRecoveryDecision",
     "ChatOperationRegistration",
@@ -291,6 +299,7 @@ __all__ = [
     "build_ticket_flow_orchestration_service",
     "build_ticket_flow_target",
     "build_ticket_flow_target_wrapper",
+    "chat_operation_is_terminal_duplicate",
     "current_orchestration_schema_version",
     "classify_run_event_family",
     "compact_completed_execution_history",
@@ -310,6 +319,7 @@ __all__ = [
     "map_agent_capabilities",
     "merge_agent_capabilities",
     "normalize_managed_thread_delivery_intent",
+    "plan_chat_operation_duplicate",
     "plan_chat_operation_recovery",
     "plan_managed_thread_delivery_recovery",
     "record_from_intent",

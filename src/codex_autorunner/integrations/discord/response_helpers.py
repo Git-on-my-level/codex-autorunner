@@ -147,6 +147,14 @@ class DiscordResponder:
             "respond_modal": "modal",
         }.get(operation)
 
+    @staticmethod
+    def _operation_uses_delivery_cursor(operation: str) -> bool:
+        return operation not in {
+            "defer_ephemeral",
+            "defer_public",
+            "defer_component_update",
+        }
+
     async def _record_delivery_attempt(
         self,
         interaction_id: str,
@@ -157,6 +165,8 @@ class DiscordResponder:
         session: Optional[DiscordInteractionSession] = None,
     ) -> None:
         if self._record_delivery_cursor is None:
+            return
+        if not self._operation_uses_delivery_cursor(operation):
             return
         if state == "completed":
             await self._clear_delivery_attempt(interaction_id)
