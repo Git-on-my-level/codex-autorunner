@@ -70,7 +70,7 @@ async def handle_car_update(
                 "discord.update.target_definitions_failed",
                 exc=exc,
             )
-            target_definitions = None
+            target_definitions = ()
         return [
             build_update_target_picker(
                 custom_id=UPDATE_TARGET_SELECT_ID,
