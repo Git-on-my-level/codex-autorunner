@@ -37,28 +37,22 @@ class _InspectingProvider:
         return self.stream
 
 
-def test_voice_config_env_overrides_and_provider_defaults():
+def test_voice_config_uses_config_values_and_provider_defaults():
     raw = {
-        "enabled": False,
-        "provider": "openai_whisper",
-        "latency_mode": "quality",
-        "chunk_ms": 800,
-        "sample_rate": 44_100,
-        "push_to_talk": {"max_ms": 10_000},
+        "enabled": True,
+        "provider": "custom",
+        "latency_mode": "realtime",
+        "chunk_ms": 450,
+        "sample_rate": 22_050,
+        "push_to_talk": {
+            "max_ms": 9000,
+            "silence_auto_stop_ms": 750,
+            "min_hold_ms": 80,
+        },
         "providers": {"openai_whisper": {"base_url": "https://api.example.com"}},
     }
-    env = {
-        "CODEX_AUTORUNNER_VOICE_ENABLED": "1",
-        "CODEX_AUTORUNNER_VOICE_PROVIDER": "custom",
-        "CODEX_AUTORUNNER_VOICE_LATENCY": "realtime",
-        "CODEX_AUTORUNNER_VOICE_CHUNK_MS": "450",
-        "CODEX_AUTORUNNER_VOICE_SAMPLE_RATE": "22050",
-        "CODEX_AUTORUNNER_VOICE_MAX_MS": "9000",
-        "CODEX_AUTORUNNER_VOICE_SILENCE_MS": "750",
-        "CODEX_AUTORUNNER_VOICE_MIN_HOLD_MS": "80",
-    }
 
-    cfg = VoiceConfig.from_raw(raw, env=env)
+    cfg = VoiceConfig.from_raw(raw, env={})
 
     assert cfg.enabled is True
     assert cfg.provider == "custom"
@@ -75,10 +69,7 @@ def test_voice_config_env_overrides_and_provider_defaults():
 
 
 def test_resolve_provider_requires_enabled_and_known_provider():
-    # Avoid auto-enabling when local dev env has an API key loaded.
-    disabled = VoiceConfig.from_raw(
-        {"enabled": False}, env={"CODEX_AUTORUNNER_VOICE_ENABLED": "0"}
-    )
+    disabled = VoiceConfig.from_raw({"enabled": False}, env={})
     with pytest.raises(ValueError):
         resolve_speech_provider(disabled)
 

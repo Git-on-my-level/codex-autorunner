@@ -1562,7 +1562,6 @@ async def test_merge_turn_state_keeps_newer_gap_clear_state(
 async def test_disconnect_with_autorestart_preserves_active_turns(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.delenv("CODEX_DISABLE_APP_SERVER_AUTORESTART_FOR_TESTS", raising=False)
     client = CodexAppServerClient(
         fixture_command("basic"),
         cwd=tmp_path,
@@ -1596,7 +1595,6 @@ async def test_disconnect_with_autorestart_preserves_active_turns(
 async def test_disconnect_when_closed_fails_active_turns(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.delenv("CODEX_DISABLE_APP_SERVER_AUTORESTART_FOR_TESTS", raising=False)
     client = CodexAppServerClient(
         fixture_command("basic"),
         cwd=tmp_path,
@@ -1620,7 +1618,6 @@ async def test_disconnect_when_closed_fails_active_turns(
 async def test_disconnect_without_stall_recovery_fails_active_turns(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.delenv("CODEX_DISABLE_APP_SERVER_AUTORESTART_FOR_TESTS", raising=False)
     client = CodexAppServerClient(
         fixture_command("basic"),
         cwd=tmp_path,

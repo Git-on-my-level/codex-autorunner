@@ -72,15 +72,15 @@ def test_discord_bot_config_coerces_allowlists_to_string_sets(
 def test_collect_env_overrides_includes_discord() -> None:
     overrides = collect_env_overrides(
         env={
-            "CAR_APP_SERVER_COMMAND": "codex app-server",
             "CAR_DISCORD_BOT_TOKEN": "token",
             "CAR_DISCORD_APP_ID": "app-id",
+            "CAR_DISCORD_WEBHOOK_URL": "https://discord.invalid/webhook",
         },
         include_discord=True,
     )
-    assert "CAR_APP_SERVER_COMMAND" in overrides
     assert "CAR_DISCORD_BOT_TOKEN" in overrides
     assert "CAR_DISCORD_APP_ID" in overrides
+    assert "CAR_DISCORD_WEBHOOK_URL" in overrides
 
 
 def test_discord_bot_config_upgrades_legacy_intents_without_message_content(

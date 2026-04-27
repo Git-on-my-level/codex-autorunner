@@ -5,9 +5,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
-from codex_autorunner.core.config import load_hub_config
+from codex_autorunner.core.config import REPO_OVERRIDE_FILENAME, load_hub_config
 from codex_autorunner.manifest import load_manifest, save_manifest
 from codex_autorunner.server import create_hub_app
+from tests.conftest import write_test_config
 
 
 @dataclass(frozen=True)
@@ -26,6 +27,10 @@ def _voice_env(tmp_path_factory):
     repo_root.mkdir(parents=True)
     (repo_root / ".git").mkdir()
     seed_repo_files(repo_root, git_required=False)
+    write_test_config(
+        repo_root / REPO_OVERRIDE_FILENAME,
+        {"voice": {"enabled": True, "provider": "openai_whisper"}},
+    )
     hub_config = load_hub_config(hub_root)
     manifest = load_manifest(hub_config.manifest_path, hub_root)
     manifest.ensure_repo(hub_root, repo_root, repo_id=repo_id, display_name=repo_id)
@@ -39,7 +44,6 @@ def _voice_env(tmp_path_factory):
 
 
 def test_voice_transcribe_reads_uploaded_file_bytes(_voice_env, monkeypatch) -> None:
-    monkeypatch.setenv("CODEX_AUTORUNNER_VOICE_PROVIDER", "openai_whisper")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     res = _voice_env.client.post(
         f"/repos/{_voice_env.repo_id}/api/voice/transcribe",

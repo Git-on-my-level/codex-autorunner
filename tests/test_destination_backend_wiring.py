@@ -7,7 +7,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from codex_autorunner.core.agent_config import AgentProfileConfig
-from codex_autorunner.core.app_server_command import GLOBAL_APP_SERVER_COMMAND_ENV
 from codex_autorunner.core.config import (
     CONFIG_FILENAME,
     REPO_OVERRIDE_FILENAME,
@@ -157,11 +156,14 @@ def test_build_app_server_supervisor_factory_preserves_runtime_policy_settings(
     assert kwargs["output_policy"] == config.app_server.output.policy
 
 
-def test_build_app_server_supervisor_factory_prefers_global_env_override(
+def test_build_app_server_supervisor_factory_uses_configured_command(
     monkeypatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setenv(GLOBAL_APP_SERVER_COMMAND_ENV, "/env/codex app-server --global")
     hub_root, repo_root = _make_repo_config(tmp_path)
+    write_test_config(
+        repo_root / REPO_OVERRIDE_FILENAME,
+        {"app_server": {"command": ["/cfg/codex", "app-server", "--repo"]}},
+    )
     config = load_repo_config(repo_root, hub_path=hub_root)
 
     captured: dict[str, object] = {}
@@ -178,7 +180,7 @@ def test_build_app_server_supervisor_factory_prefers_global_env_override(
     factory = build_app_server_supervisor_factory(config)
     factory("autorunner", None)
 
-    assert captured["command"] == ["/env/codex", "app-server", "--global"]
+    assert captured["command"] == ["/cfg/codex", "app-server", "--repo"]
 
 
 def test_agent_backend_factory_codex_supervisor_wraps_for_docker(

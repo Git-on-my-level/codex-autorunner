@@ -35,7 +35,6 @@ Required env vars are typically:
 
 - `CAR_TELEGRAM_BOT_TOKEN`
 - `CAR_TELEGRAM_CHAT_ID` (optional convenience for allowed chat ids)
-- `CAR_TELEGRAM_APP_SERVER_COMMAND` (optional override)
 
 The allowlist must include both chat ids and user ids or the bot will ignore
 messages. Those filters intersect, and `collaboration_policy.telegram.destinations`

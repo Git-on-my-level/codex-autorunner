@@ -3704,8 +3704,6 @@ def test_voice_service_for_workspace_uses_hub_config_path(tmp_path: Path) -> Non
         resolve_calls.append((root, base_env))
         return {
             "OPENAI_API_KEY": "workspace-key",
-            "CODEX_AUTORUNNER_VOICE_ENABLED": "1",
-            "CODEX_AUTORUNNER_VOICE_PROVIDER": "local_whisper",
         }
 
     class _StubVoiceService:
@@ -3736,7 +3734,7 @@ def test_voice_service_for_workspace_uses_hub_config_path(tmp_path: Path) -> Non
     assert load_calls == [(workspace.resolve(), hub_config_path)]
     assert resolve_calls == [(workspace.resolve(), {"BASE": "1"})]
     assert voice_config.enabled is True
-    assert voice_config.provider == "local_whisper"
+    assert voice_config.provider == "openai_whisper"
     assert voice_service.env.get("OPENAI_API_KEY") == "workspace-key"
 
 

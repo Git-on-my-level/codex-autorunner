@@ -11,10 +11,7 @@ from typing import Any, Iterable, Optional
 from ...core.app_server_command import (
     DEFAULT_APP_SERVER_COMMAND as CORE_DEFAULT_APP_SERVER_COMMAND,
 )
-from ...core.app_server_command import (
-    GLOBAL_APP_SERVER_COMMAND_ENV,
-    resolve_app_server_command,
-)
+from ...core.app_server_command import resolve_app_server_command
 from ..chat.approval_modes import resolve_approval_mode_policies
 from ..chat.collaboration_policy import (
     CollaborationPolicy,
@@ -225,7 +222,6 @@ class TelegramBotConfig:
     command_registration: TelegramBotCommandRegistration
     opencode_command: list[str]
     state_file: Path
-    app_server_command_env: str
     app_server_command: list[str]
     app_server_max_handles: Optional[int]
     app_server_idle_ttl_seconds: Optional[int]
@@ -589,12 +585,7 @@ class TelegramBotConfig:
             enabled=command_reg_enabled, scopes=scopes
         )
 
-        opencode_command = []
-        opencode_env_command = env.get("CAR_OPENCODE_COMMAND")
-        if opencode_env_command:
-            opencode_command = _parse_command(opencode_env_command)
-        if not opencode_command:
-            opencode_command = _parse_command(cfg.get("opencode_command"))
+        opencode_command = _parse_command(cfg.get("opencode_command"))
 
         state_file = Path(cfg.get("state_file", DEFAULT_STATE_FILE))
         if not state_file.is_absolute():
@@ -605,13 +596,8 @@ class TelegramBotConfig:
                 "(.sqlite3). Update your config to .codex-autorunner/telegram_state.sqlite3"
             )
 
-        app_server_command_env = str(
-            cfg.get("app_server_command_env", GLOBAL_APP_SERVER_COMMAND_ENV)
-        )
         app_server_command = resolve_app_server_command(
             cfg.get("app_server_command"),
-            env=env,
-            extra_env_vars=(app_server_command_env,),
             fallback=DEFAULT_APP_SERVER_COMMAND,
         )
 
@@ -759,7 +745,6 @@ class TelegramBotConfig:
             command_registration=command_registration,
             opencode_command=opencode_command,
             state_file=state_file,
-            app_server_command_env=app_server_command_env,
             app_server_command=app_server_command,
             app_server_max_handles=app_server_max_handles,
             app_server_idle_ttl_seconds=app_server_idle_ttl_seconds,

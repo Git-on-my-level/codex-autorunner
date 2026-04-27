@@ -890,14 +890,8 @@ def _system_update_worker(
 
         _cleanup_update_build_artifacts(update_dir, logger)
 
-        skip_checks_env = os.environ.get("CODEX_AUTORUNNER_SKIP_UPDATE_CHECKS") == "1"
-        if skip_checks_env or skip_checks:
-            if skip_checks_env:
-                logger.info(
-                    "Skipping update checks (CODEX_AUTORUNNER_SKIP_UPDATE_CHECKS=1)."
-                )
-            else:
-                logger.info("Skipping update checks (update.skip_checks=true).")
+        if skip_checks:
+            logger.info("Skipping update checks (update.skip_checks=true).")
         else:
             logger.info("Running checks...")
             try:
