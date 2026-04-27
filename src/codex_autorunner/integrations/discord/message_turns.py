@@ -16,7 +16,7 @@ import contextlib
 import logging
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import partial
 from pathlib import Path
 from typing import Any, Optional, cast
@@ -90,6 +90,7 @@ from ..chat.managed_thread_progress_projector import (
 )
 from ..chat.managed_thread_turns import (
     ManagedThreadCoordinatorHooks,
+    ManagedThreadDurableDeliveryHooks,
     ManagedThreadFinalizationResult,
     ManagedThreadQueuedExecutionStarter,
     ManagedThreadTurnCoordinator,  # noqa: F401  re-export for test monkeypatch compat
@@ -2133,6 +2134,16 @@ async def _run_discord_orchestrated_turn_for_message(
         workspace_root=workspace_root,
         public_execution_error=public_execution_error,
     )
+    if suppress_managed_thread_delivery:
+        _dd = runner_hooks.durable_delivery
+        runner_hooks = replace(
+            runner_hooks,
+            durable_delivery=ManagedThreadDurableDeliveryHooks(
+                engine=_dd.engine,
+                adapter=_dd.adapter,
+                build_delivery_intent=lambda _finalized: None,
+            ),
+        )
     queue_worker_hooks = runner_hooks.queue_worker_hooks()
     _first_progress_recorded = False
 
@@ -2151,11 +2162,7 @@ async def _run_discord_orchestrated_turn_for_message(
         on_execution_started=runner_hooks.on_execution_started,
         on_execution_finished=runner_hooks.on_execution_finished,
         on_progress_event=_handle_progress_event,
-        durable_delivery=(
-            None
-            if suppress_managed_thread_delivery
-            else queue_worker_hooks.durable_delivery
-        ),
+        durable_delivery=queue_worker_hooks.durable_delivery,
         run_with_indicator=queue_worker_hooks.run_with_indicator,
         queue_execution_hooks=queue_worker_hooks.execution_hooks,
     )
