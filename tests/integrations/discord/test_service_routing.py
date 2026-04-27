@@ -9444,10 +9444,51 @@ async def test_component_interaction_update_target_uses_component_defer(
         assert len(rest.interaction_responses) == 1
         assert rest.interaction_responses[0]["payload"]["type"] == 6
         assert len(rest.edited_original_interaction_responses) == 1
-        content = rest.edited_original_interaction_responses[0]["payload"][
-            "content"
-        ].lower()
+        payload = rest.edited_original_interaction_responses[0]["payload"]
+        content = payload["content"].lower()
         assert "preparing update (all)" in content
+        assert payload["components"] == []
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_component_interaction_update_confirm_clears_confirmation_buttons(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway([_component_interaction(custom_id="update_confirm:all")])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    observed: dict[str, Any] = {}
+
+    def _fake_spawn_update_process(**kwargs: Any) -> None:
+        observed.update(kwargs)
+
+    monkeypatch.setattr(
+        discord_service_module,
+        "_spawn_update_process",
+        _fake_spawn_update_process,
+    )
+
+    try:
+        await service.run_forever()
+        assert observed["update_target"] == "all"
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 6
+        assert len(rest.edited_original_interaction_responses) == 1
+        payload = rest.edited_original_interaction_responses[0]["payload"]
+        assert "preparing update (all)" in payload["content"].lower()
+        assert payload["components"] == []
     finally:
         await store.close()
 

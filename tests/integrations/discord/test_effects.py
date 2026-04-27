@@ -203,6 +203,37 @@ async def test_deferred_component_response_effect_edits_original_message() -> No
 
 
 @pytest.mark.anyio
+async def test_deferred_component_response_effect_clears_components_by_default() -> (
+    None
+):
+    rest, responder, sink = _build_sink()
+    session = responder.start_session(
+        interaction_id="inter-1",
+        interaction_token="token-1",
+        kind=InteractionSessionKind.COMPONENT,
+    )
+    session.restore_initial_response(InteractionInitialResponse.DEFER_COMPONENT_UPDATE)
+
+    await sink.apply(
+        interaction_id="inter-1",
+        interaction_token="token-1",
+        effect=DiscordComponentResponseEffect(
+            text="after defer",
+            deferred=True,
+        ),
+    )
+
+    assert rest.interaction_responses == []
+    assert rest.edited_original_interaction_responses == [
+        {
+            "application_id": "app-1",
+            "interaction_token": "token-1",
+            "payload": {"content": "after defer", "components": []},
+        }
+    ]
+
+
+@pytest.mark.anyio
 async def test_original_message_edit_effect_translates_to_original_edit() -> None:
     rest, responder, sink = _build_sink()
     session = responder.start_session(

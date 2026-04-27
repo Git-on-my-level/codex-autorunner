@@ -74,6 +74,14 @@ DiscordEffect = Union[
 ]
 
 
+def _replacement_components(
+    components: Optional[list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    # Component interactions should retire stale buttons unless the caller
+    # explicitly provides replacement components for the updated message.
+    return [] if components is None else components
+
+
 @dataclass
 class DiscordHandlerResult:
     effects: list[DiscordEffect] = field(default_factory=list)
@@ -205,18 +213,19 @@ class DiscordEffectSink:
             return
 
         if isinstance(effect, DiscordComponentResponseEffect):
+            components = _replacement_components(effect.components)
             if effect.deferred:
                 updated = await self._responder.edit_original_component_message(
                     interaction_token=interaction_token,
                     text=effect.text,
-                    components=effect.components,
+                    components=components,
                 )
                 if updated:
                     return
                 sent = await self._responder.send_followup(
                     interaction_token=interaction_token,
                     content=effect.text,
-                    components=effect.components,
+                    components=components,
                     ephemeral=True,
                 )
                 if not sent:
@@ -231,7 +240,7 @@ class DiscordEffectSink:
                 interaction_token=interaction_token,
                 effect=DiscordComponentUpdateEffect(
                     text=effect.text,
-                    components=effect.components or [],
+                    components=components,
                 ),
             )
             return
