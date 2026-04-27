@@ -73,9 +73,29 @@ async def schedule_ingressed_interaction(
             ctx, now=dispatch_started_at, envelope=envelope
         ),
     )
-    await service._register_chat_operation_received(
+    registration = await service._register_chat_operation_received(
         ctx, conversation_id=envelope.conversation_id
     )
+    if registration is not None and not registration.inserted:
+        duplicate_suppressed = await service._suppress_registered_duplicate_interaction(
+            interaction_id=ctx.interaction_id,
+            snapshot=registration.snapshot,
+        )
+        if duplicate_suppressed:
+            log_event(
+                service._logger,
+                logging.INFO,
+                "discord.interaction.rejected",
+                rejection_reason="duplicate_interaction",
+                **service._interaction_telemetry_fields(
+                    ctx, now=dispatch_started_at, envelope=envelope
+                ),
+            )
+            ctx.timing = replace(
+                ctx.timing,
+                ingress_finished_at=time.monotonic(),
+            )
+            return ScheduleResult(submitted=False)
     acked = await service._acknowledge_runtime_envelope(envelope, stage="dispatch")
     if not acked and service._dispatch_ack_failure_confirms_expiry(ctx, envelope):
         log_event(

@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from codex_autorunner.core.orchestration import (
+    ChatOperationState,
     SQLiteChatOperationLedger,
     initialize_orchestration_sqlite,
 )
@@ -648,6 +649,76 @@ async def test_chaos_callback_failure_before_defer_does_not_persist_ack(
 
 
 @pytest.mark.anyio
+async def test_defer_ack_does_not_project_delivery_pending_before_ack(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    harness = _ChaosHarness(tmp_path)
+    await harness.initialize()
+    try:
+        service = _build_recovery_service(
+            store=harness.store,
+            rest=harness.rest,
+            operation_store=harness.operation_store,
+        )
+        ctx = _make_ctx(
+            interaction_id="defer-ordering-1",
+            interaction_token="token-defer-ordering-1",
+        )
+        payload = _slash_payload(
+            interaction_id=ctx.interaction_id,
+            interaction_token=ctx.interaction_token,
+        )
+        await harness.store.register_interaction(
+            interaction_id=ctx.interaction_id,
+            interaction_token=ctx.interaction_token,
+            interaction_kind=ctx.kind.value,
+            channel_id=ctx.channel_id,
+            guild_id=ctx.guild_id,
+            user_id=ctx.user_id,
+            metadata_json=service._interaction_ledger_metadata(ctx),
+        )
+        envelope = RuntimeInteractionEnvelope(
+            context=ctx,
+            conversation_id="conversation:discord:chan-1:guild-1",
+            resource_keys=("conversation:discord:chan-1:guild-1",),
+            dispatch_ack_policy="defer_ephemeral",
+        )
+        await service._persist_runtime_interaction(
+            envelope,
+            payload,
+            scheduler_state="dispatch_ack_pending",
+        )
+
+        with caplog.at_level(logging.INFO, logger=service._logger.name):
+            deferred = await service._responder.defer(
+                interaction_id=ctx.interaction_id,
+                interaction_token=ctx.interaction_token,
+                ephemeral=True,
+            )
+
+        assert deferred is True
+
+        record = await harness.store.get_interaction(ctx.interaction_id)
+        assert record is not None
+        assert record.ack_mode == "defer_ephemeral"
+        assert record.delivery_cursor_json is None
+
+        snapshot = await service._chat_operation_get(ctx.interaction_id)
+        assert snapshot is not None
+        assert snapshot.state == ChatOperationState.ACKNOWLEDGED
+        assert snapshot.delivery_cursor is None
+
+        events = _logged_events(caplog, service._logger.name)
+        assert not any(
+            event["event"] == "discord.chat_operation.invalid_transition_rejected"
+            for event in events
+        )
+    finally:
+        await harness.close()
+
+
+@pytest.mark.anyio
 async def test_chaos_followup_failure_after_defer_recovers_after_restart(
     tmp_path: Path,
 ) -> None:
@@ -1170,6 +1241,165 @@ async def test_duplicate_completed_interaction_is_rejected_without_rerun(
         assert duplicate.rejection_reason == "duplicate_interaction"
         service._handle_car_command.assert_not_awaited()
         assert harness.rest.interaction_responses == []
+    finally:
+        await harness.close()
+
+
+@pytest.mark.anyio
+async def test_duplicate_delivery_pending_interaction_is_suppressed_without_rerun(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    harness = _ChaosHarness(tmp_path)
+    await harness.initialize()
+    try:
+        service = _build_recovery_service(
+            store=harness.store,
+            rest=harness.rest,
+            operation_store=harness.operation_store,
+        )
+        ctx = _make_ctx(
+            interaction_id="recover-dup-delivery-1",
+            interaction_token="token-recover-dup-delivery-1",
+        )
+        payload = _slash_payload(
+            interaction_id="recover-dup-delivery-1",
+            interaction_token="token-recover-dup-delivery-1",
+        )
+        await harness.store.register_interaction(
+            interaction_id=ctx.interaction_id,
+            interaction_token=ctx.interaction_token,
+            interaction_kind=ctx.kind.value,
+            channel_id=ctx.channel_id,
+            guild_id=ctx.guild_id,
+            user_id=ctx.user_id,
+            metadata_json=service._interaction_ledger_metadata(ctx),
+        )
+        envelope = RuntimeInteractionEnvelope(
+            context=ctx,
+            conversation_id="conversation:discord:chan-1:guild-1",
+            resource_keys=("conversation:discord:chan-1:guild-1",),
+            dispatch_ack_policy="defer_ephemeral",
+        )
+        await service._persist_runtime_interaction(
+            envelope,
+            payload,
+            scheduler_state="delivery_pending",
+        )
+        await harness.store.mark_interaction_acknowledged(
+            ctx.interaction_id,
+            ack_mode="defer_ephemeral",
+        )
+        await harness.store.mark_interaction_execution(
+            ctx.interaction_id,
+            execution_status="completed",
+        )
+        await harness.store.update_interaction_delivery_cursor(
+            ctx.interaction_id,
+            delivery_cursor_json={
+                "state": "pending",
+                "operation": "send_followup",
+                "payload": {
+                    "content": "Recovered final message.",
+                    "ephemeral": True,
+                },
+            },
+            scheduler_state="delivery_pending",
+        )
+        harness.set_operation_delivery_pending(
+            ctx.interaction_id,
+            cursor={
+                "state": "pending",
+                "operation": "send_followup",
+                "payload": {
+                    "content": "Recovered final message.",
+                    "ephemeral": True,
+                },
+            },
+        )
+
+        ingress = InteractionIngress(service, logger=service._logger)
+        with caplog.at_level(logging.INFO, logger=service._logger.name):
+            duplicate = await ingress.process_raw_payload(payload)
+
+        assert duplicate.accepted is False
+        assert duplicate.rejection_reason == "duplicate_interaction"
+        service._handle_car_command.assert_not_awaited()
+        assert harness.rest.interaction_responses == []
+        assert harness.rest.followup_messages == []
+
+        events = _logged_events(caplog, service._logger.name)
+        assert any(
+            event["event"]
+            == "discord.interaction.duplicate_delivery_pending_suppressed"
+            for event in events
+        )
+        assert not any(
+            event["event"] == "discord.chat_operation.invalid_transition_rejected"
+            for event in events
+        )
+    finally:
+        await harness.close()
+
+
+@pytest.mark.anyio
+async def test_duplicate_non_terminal_interaction_is_suppressed_before_ack_reuse(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    harness = _ChaosHarness(tmp_path)
+    await harness.initialize()
+    try:
+        service = _build_recovery_service(
+            store=harness.store,
+            rest=harness.rest,
+            operation_store=harness.operation_store,
+        )
+        ctx = _make_ctx(
+            interaction_id="recover-dup-in-flight-1",
+            interaction_token="token-recover-dup-in-flight-1",
+        )
+        payload = _slash_payload(
+            interaction_id="recover-dup-in-flight-1",
+            interaction_token="token-recover-dup-in-flight-1",
+        )
+        await harness.store.register_interaction(
+            interaction_id=ctx.interaction_id,
+            interaction_token=ctx.interaction_token,
+            interaction_kind=ctx.kind.value,
+            channel_id=ctx.channel_id,
+            guild_id=ctx.guild_id,
+            user_id=ctx.user_id,
+            metadata_json=service._interaction_ledger_metadata(ctx),
+        )
+        envelope = RuntimeInteractionEnvelope(
+            context=ctx,
+            conversation_id="conversation:discord:chan-1:guild-1",
+            resource_keys=("conversation:discord:chan-1:guild-1",),
+            dispatch_ack_policy="defer_ephemeral",
+        )
+        await service._persist_runtime_interaction(
+            envelope,
+            payload,
+            scheduler_state="scheduled",
+        )
+
+        ingress = InteractionIngress(service, logger=service._logger)
+        with caplog.at_level(logging.INFO, logger=service._logger.name):
+            duplicate = await ingress.process_raw_payload(payload)
+
+        assert duplicate.accepted is False
+        assert duplicate.rejection_reason == "duplicate_interaction"
+        service._handle_car_command.assert_not_awaited()
+        assert harness.rest.interaction_responses == []
+        assert harness.rest.followup_messages == []
+
+        events = _logged_events(caplog, service._logger.name)
+        assert any(
+            event["event"] == "discord.interaction.duplicate_in_flight_suppressed"
+            for event in events
+        )
+        assert not any(
+            event["event"] == "discord.interaction.ack.reused" for event in events
+        )
     finally:
         await harness.close()
 

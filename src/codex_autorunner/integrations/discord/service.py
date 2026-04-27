@@ -80,11 +80,14 @@ from ...core.managed_thread_identity import (
 )
 from ...core.orchestration import (
     ORCHESTRATION_SCHEMA_VERSION,
+    ChatOperationDuplicateAction,
+    ChatOperationRegistration,
     ChatOperationRecoveryAction,
     ChatOperationSnapshot,
     ChatOperationState,
     SQLiteChatOperationLedger,
     build_ticket_flow_orchestration_service,
+    plan_chat_operation_duplicate,
     plan_chat_operation_recovery,
 )
 from ...core.orchestration.managed_thread_delivery_ledger import (
@@ -5043,17 +5046,47 @@ class DiscordBotService:
         async with self._chat_operation_write_guard(operation_id):
             return await asyncio.to_thread(store.get_operation, operation_id)
 
-    def _chat_operation_terminal_duplicate(
-        self, snapshot: ChatOperationSnapshot
-    ) -> bool:
-        if snapshot.terminal_outcome in {"abandoned", "expired"}:
-            return True
-        return snapshot.state in {
-            ChatOperationState.COMPLETED,
-            ChatOperationState.INTERRUPTED,
-            ChatOperationState.FAILED,
-            ChatOperationState.CANCELLED,
-        }
+    async def _maybe_reject_duplicate_interaction(
+        self,
+        *,
+        interaction_id: str,
+        snapshot: Optional[ChatOperationSnapshot],
+        operation_already_registered: bool,
+        has_pending_delivery: bool,
+        scheduler_state: Optional[str],
+        execution_status: Optional[str],
+        release_reservation: bool,
+    ) -> Optional[bool]:
+        decision = plan_chat_operation_duplicate(
+            snapshot,
+            operation_already_registered=operation_already_registered,
+            delivery_pending=has_pending_delivery,
+        )
+        if decision.action == ChatOperationDuplicateAction.ACCEPT_FRESH:
+            return None
+        if release_reservation:
+            await self._release_interaction_ingress(interaction_id)
+        event_name = (
+            "discord.interaction.duplicate_terminal_rejected"
+            if decision.action == ChatOperationDuplicateAction.REJECT_TERMINAL
+            else (
+                "discord.interaction.duplicate_delivery_pending_suppressed"
+                if decision.action
+                == ChatOperationDuplicateAction.SUPPRESS_PENDING_DELIVERY
+                else "discord.interaction.duplicate_in_flight_suppressed"
+            )
+        )
+        log_event(
+            self._logger,
+            logging.INFO,
+            event_name,
+            interaction_id=interaction_id,
+            scheduler_state=scheduler_state,
+            execution_status=execution_status,
+            shared_state=snapshot.state.value if snapshot is not None else None,
+            reason=decision.reason,
+        )
+        return True
 
     def _discord_chat_operation_state_for_scheduler(
         self, scheduler_state: str
@@ -5089,7 +5122,7 @@ class DiscordBotService:
         ctx: IngressContext,
         *,
         conversation_id: Optional[str] = None,
-    ) -> Optional[ChatOperationSnapshot]:
+    ) -> Optional[ChatOperationRegistration]:
         store = self._chat_operation_store_or_none()
         if store is None:
             return None
@@ -5097,7 +5130,7 @@ class DiscordBotService:
         interaction_id = ctx.interaction_id
         metadata = self._interaction_ledger_metadata(ctx)
 
-        def _register_sync() -> Optional[ChatOperationSnapshot]:
+        def _register_sync() -> Optional[ChatOperationRegistration]:
             registration = store.register_operation(
                 operation_id=interaction_id,
                 surface_kind="discord",
@@ -5111,17 +5144,39 @@ class DiscordBotService:
                 ack_requested_at=now_iso(),
             )
             if registration.inserted:
-                return registration.snapshot
-            return store.patch_operation(
+                return registration
+            updated = store.patch_operation(
                 interaction_id,
                 conversation_id=(
                     conversation_id or registration.snapshot.conversation_id
                 ),
                 metadata_updates=metadata,
             )
+            return ChatOperationRegistration(
+                snapshot=updated or registration.snapshot,
+                inserted=False,
+            )
 
         async with self._chat_operation_write_guard(interaction_id):
             return await asyncio.to_thread(_register_sync)
+
+    async def _suppress_registered_duplicate_interaction(
+        self,
+        *,
+        interaction_id: str,
+        snapshot: ChatOperationSnapshot,
+    ) -> bool:
+        has_pending_delivery = snapshot.delivery_state in {"pending", "failed"}
+        duplicate_rejected = await self._maybe_reject_duplicate_interaction(
+            interaction_id=interaction_id,
+            snapshot=snapshot,
+            operation_already_registered=True,
+            has_pending_delivery=has_pending_delivery,
+            scheduler_state=None,
+            execution_status=None,
+            release_reservation=False,
+        )
+        return bool(duplicate_rejected)
 
     async def _patch_chat_operation(
         self,
@@ -5877,13 +5932,26 @@ class DiscordBotService:
 
         has_pending_delivery = bool(
             record is not None
-            and isinstance(record.delivery_cursor_json, dict)
-            and str(record.delivery_cursor_json.get("state") or "").strip()
-            in {"pending", "failed"}
+            and (
+                (
+                    isinstance(record.delivery_cursor_json, dict)
+                    and str(record.delivery_cursor_json.get("state") or "").strip()
+                    in {"pending", "failed"}
+                )
+                or record.scheduler_state in {"delivery_pending", "delivery_replaying"}
+            )
         )
-        if snapshot is not None and self._chat_operation_terminal_duplicate(snapshot):
-            await self._release_interaction_ingress(ctx.interaction_id)
-            return True
+        duplicate_rejected = await self._maybe_reject_duplicate_interaction(
+            interaction_id=ctx.interaction_id,
+            snapshot=snapshot,
+            operation_already_registered=(snapshot is not None or record is not None),
+            has_pending_delivery=has_pending_delivery,
+            scheduler_state=(record.scheduler_state if record is not None else None),
+            execution_status=(record.execution_status if record is not None else None),
+            release_reservation=True,
+        )
+        if duplicate_rejected is not None:
+            return duplicate_rejected
         if record is not None and record.scheduler_state in {
             "completed",
             "delivery_expired",
@@ -5936,12 +6004,24 @@ class DiscordBotService:
         record = registration.record
         snapshot = await self._chat_operation_get(ctx.interaction_id)
         has_pending_delivery = bool(
-            isinstance(record.delivery_cursor_json, dict)
-            and str(record.delivery_cursor_json.get("state") or "").strip()
-            in {"pending", "failed"}
+            (
+                isinstance(record.delivery_cursor_json, dict)
+                and str(record.delivery_cursor_json.get("state") or "").strip()
+                in {"pending", "failed"}
+            )
+            or record.scheduler_state in {"delivery_pending", "delivery_replaying"}
         )
-        if snapshot is not None and self._chat_operation_terminal_duplicate(snapshot):
-            return True
+        duplicate_rejected = await self._maybe_reject_duplicate_interaction(
+            interaction_id=ctx.interaction_id,
+            snapshot=snapshot,
+            operation_already_registered=True,
+            has_pending_delivery=has_pending_delivery,
+            scheduler_state=record.scheduler_state,
+            execution_status=record.execution_status,
+            release_reservation=False,
+        )
+        if duplicate_rejected is not None:
+            return duplicate_rejected
         if record.scheduler_state in {"completed", "delivery_expired", "abandoned"}:
             return True
         if (

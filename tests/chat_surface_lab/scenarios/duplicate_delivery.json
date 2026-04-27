@@ -55,7 +55,7 @@
         "discord"
       ],
       "params": {
-        "event_name": "discord.interaction.duplicate_resuming",
+        "event_name": "discord.interaction.duplicate_in_flight_suppressed",
         "field": "interaction_id",
         "value": "inter-dup-1"
       }
@@ -66,9 +66,9 @@
         "discord"
       ],
       "params": {
-        "event_name": "discord.interaction.ack.reused",
-        "field": "interaction_id",
-        "value": "inter-dup-1"
+        "event_name": "discord.interaction.rejected",
+        "field": "rejection_reason",
+        "value": "duplicate_interaction"
       }
     },
     {
