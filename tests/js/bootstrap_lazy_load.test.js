@@ -127,13 +127,14 @@ test("app.ts deduplicates module loading with promise caching", () => {
   assert.match(content, /\?\?\s*=\s*importVersionedModule<typeof import\("\.\/pma\.js"\)>/, "pma module should use nullish coalescing for dedup");
 });
 
-test("assetLoader.ts appends bootstrap asset suffix to dynamic imports", () => {
+test("assetLoader.ts derives dynamic import suffix from its own stamped module URL", () => {
   const content = fs.readFileSync(
     path.join(ROOT, "src", "codex_autorunner", "static_src", "assetLoader.ts"),
     "utf8"
   );
 
-  assert.match(content, /__assetSuffix/, "should read bootstrap asset suffix");
+  assert.match(content, /import\.meta\.url/, "should read the loader module URL");
+  assert.match(content, /searchParams\.get\("v"\)/, "should reuse the stamped build hash");
   assert.match(
     content,
     /import\(`\$\{path\}\$\{getAssetSuffix\(\)\}`\)/,
