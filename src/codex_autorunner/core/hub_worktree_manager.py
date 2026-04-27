@@ -888,7 +888,15 @@ print(
             worktree_repo_id=entry.id,
             worktree_path=worktree_path,
         )
-        self._remove_orphaned_worktree_dir(worktree_path)
+        orphan = self._remove_orphaned_worktree_dir(worktree_path)
+        orphan_status = str(orphan.get("status", "unknown"))
+        if orphan_status not in {"removed", "missing"}:
+            detail = str(orphan.get("message") or "").strip()
+            if detail:
+                raise ValueError(f"{orphan_status}: {detail}")
+            raise ValueError(
+                f"{orphan_status}: orphaned worktree directory cleanup did not complete"
+            )
 
         manifest = self._topology_repository.load_manifest()
         manifest.repos = [repo for repo in manifest.repos if repo.id != entry.id]

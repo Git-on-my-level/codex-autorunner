@@ -16,6 +16,7 @@ from codex_autorunner.core.filebox import ensure_structure, inbox_dir
 from codex_autorunner.core.git_utils import run_git
 from codex_autorunner.core.hub import HubSupervisor
 from codex_autorunner.core.orchestration.bindings import OrchestrationBindingStore
+from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.core.pma_automation_store import PmaAutomationStore
 from codex_autorunner.core.pma_dispatches import ensure_pma_dispatches_dir
 from codex_autorunner.core.pma_hygiene import (
@@ -412,6 +413,154 @@ def test_apply_pma_hygiene_report_revalidates_reviewed_thread_lifecycle(
         == "Managed thread cleanup no longer safe: managed thread lifecycle is archived"
     )
     assert thread_store.get_thread(managed_thread_id)["lifecycle_status"] == "archived"
+
+
+def _bump_thread_status_timestamps(
+    hub_root: Path, managed_thread_id: str, when: datetime
+) -> None:
+    ts = _iso(when)
+    with open_orchestration_sqlite(hub_root, durable=False) as conn:
+        conn.execute(
+            """
+            UPDATE orch_thread_targets
+               SET status_updated_at = ?,
+                   updated_at = ?
+             WHERE thread_target_id = ?
+            """,
+            (ts, ts, managed_thread_id),
+        )
+        conn.commit()
+
+
+def test_build_pma_hygiene_report_blocks_worktree_purge_when_repo_has_fresh_thread(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    supervisor = _build_supervisor(hub_root)
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/mixed-fresh-stale",
+        start_point="HEAD",
+    )
+    store = PmaThreadStore(hub_root)
+    stale_thread = store.create_thread(
+        "codex",
+        worktree.path,
+        repo_id=worktree.id,
+        name="stale-only",
+    )
+    store.create_thread(
+        "codex",
+        worktree.path,
+        repo_id=worktree.id,
+        name="still-fresh",
+    )
+    now = datetime.now(timezone.utc)
+    _bump_thread_status_timestamps(
+        hub_root, stale_thread["managed_thread_id"], now - timedelta(hours=2)
+    )
+    # Keep the second thread recent so only one thread is stale for this report.
+    with open_orchestration_sqlite(hub_root, durable=False) as conn:
+        cur = conn.execute(
+            """
+            SELECT thread_target_id
+              FROM orch_thread_targets
+             WHERE display_name = 'still-fresh'
+            """
+        )
+        row = cur.fetchone()
+        assert row is not None
+        _bump_thread_status_timestamps(
+            hub_root, str(row[0]), now - timedelta(seconds=30)
+        )
+
+    report = build_pma_hygiene_report(
+        hub_root,
+        categories=["threads"],
+        generated_at=_iso(now),
+        stale_threshold_seconds=60,
+    )
+    protected = [
+        item
+        for item in report["groups"]["protected"]
+        if isinstance(item, dict)
+        and item.get("candidate_id") == f"threads:worktree:{worktree.id}"
+    ]
+    assert len(protected) == 1
+    assert "non-stale" in str(protected[0].get("reason") or "").lower()
+
+
+def test_build_pma_hygiene_report_marks_mixed_idle_followup_stale_worktree_needs_confirmation(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    supervisor = _build_supervisor(hub_root)
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/mixed-followup-states",
+        start_point="HEAD",
+    )
+    store = PmaThreadStore(hub_root)
+    idleish = store.create_thread(
+        "codex",
+        worktree.path,
+        repo_id=worktree.id,
+        name="idleish",
+    )
+    failedish = store.create_thread(
+        "codex",
+        worktree.path,
+        repo_id=worktree.id,
+        name="failedish",
+    )
+    now = datetime.now(timezone.utc)
+    old = now - timedelta(hours=2)
+    ts = _iso(old)
+    with open_orchestration_sqlite(hub_root, durable=False) as conn:
+        conn.execute(
+            """
+            UPDATE orch_thread_targets
+               SET status_updated_at = ?,
+                   updated_at = ?
+             WHERE thread_target_id = ?
+            """,
+            (ts, ts, idleish["managed_thread_id"]),
+        )
+        conn.execute(
+            """
+            UPDATE orch_thread_targets
+               SET runtime_status = 'failed',
+                   status_reason = 'test',
+                   status_updated_at = ?,
+                   updated_at = ?,
+                   status_terminal = 0
+             WHERE thread_target_id = ?
+            """,
+            (ts, ts, failedish["managed_thread_id"]),
+        )
+        conn.commit()
+
+    report = build_pma_hygiene_report(
+        hub_root,
+        categories=["threads"],
+        generated_at=_iso(now + timedelta(hours=2)),
+        stale_threshold_seconds=60,
+    )
+    needs_confirmation = [
+        item
+        for item in report["groups"]["needs-confirmation"]
+        if isinstance(item, dict)
+        and item.get("candidate_id") == f"threads:worktree:{worktree.id}"
+    ]
+    assert len(needs_confirmation) == 1
+    assert (
+        "not all stale threads"
+        in str(needs_confirmation[0].get("reason") or "").lower()
+    )
 
 
 def test_build_pma_hygiene_report_marks_clean_stale_worktree_safe(

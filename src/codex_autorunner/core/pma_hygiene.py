@@ -204,6 +204,7 @@ def _build_thread_candidates(
         return []
 
     candidates: list[dict[str, Any]] = []
+    worktree_non_stale_active: set[str] = set()
     worktree_candidates: dict[str, dict[str, Any]] = {}
     for thread in threads:
         managed_thread_id = str(thread.get("managed_thread_id") or "").strip()
@@ -221,7 +222,17 @@ def _build_thread_candidates(
                 ("thread_updated_at", thread.get("updated_at")),
             ],
         )
+        worktree_repo_id_early = str(thread.get("repo_id") or "").strip()
+        worktree_entry_early = (
+            manifest.get(worktree_repo_id_early) if worktree_repo_id_early else None
+        )
+        is_worktree_backed = (
+            worktree_entry_early is not None
+            and getattr(worktree_entry_early, "kind", None) == "worktree"
+        )
         if freshness.get("is_stale") is not True:
+            if is_worktree_backed and worktree_repo_id_early:
+                worktree_non_stale_active.add(worktree_repo_id_early)
             continue
         try:
             bindings = binding_store.list_bindings(
@@ -324,16 +335,22 @@ def _build_thread_candidates(
             )
         )
     for worktree_repo_id, state in worktree_candidates.items():
-        if not bool(state["all_idle_archive_candidates"]) and not (
-            bool(state["chat_bound"])
-            or bool(state["has_active_thread_binding"])
-            or bool(state["has_busy_work"])
-        ):
-            continue
         path = Path(str(state["path"]))
         group = "safe"
         reason = "Dormant worktree has only stale managed threads and is safe to purge."
         archive_requested = False
+        if worktree_repo_id in worktree_non_stale_active:
+            group = "protected"
+            reason = (
+                "Worktree still has at least one non-stale active managed thread; "
+                "purge is blocked until all threads in this repo are stale or archived."
+            )
+        elif not bool(state["all_idle_archive_candidates"]):
+            group = "needs-confirmation"
+            reason = (
+                "Not all stale threads on this worktree are idle archive candidates; "
+                "review before purging the entire worktree."
+            )
         if bool(state["chat_bound"]):
             group = "protected"
             reason = (
@@ -816,7 +833,9 @@ def apply_pma_hygiene_report(
                         msg = str(cleanup_result.get("message") or "").strip()
                         error = msg or f"unexpected worktree cleanup status: {status}"
                 else:
-                    ok = True
+                    raise ValueError(
+                        "Worktree cleanup callback must return a dict with a status field"
+                    )
         except (
             Exception
         ) as exc:  # intentional: multi-action apply; records per-item failure
