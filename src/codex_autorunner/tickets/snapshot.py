@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Sequence
 
 from .files import list_ticket_paths, read_ticket_frontmatter, safe_relpath
 
@@ -30,11 +31,13 @@ def list_ticket_snapshots(
     workspace_root: Path,
     *,
     status_filter: str = "all",
+    paths: Sequence[Path] | None = None,
 ) -> list[TicketSnapshot]:
     normalized_filter = _normalize_status_filter(status_filter)
     ticket_dir = _ticket_dir(workspace_root)
     snapshots: list[TicketSnapshot] = []
-    for path in list_ticket_paths(ticket_dir):
+    path_iter = paths if paths is not None else list_ticket_paths(ticket_dir)
+    for path in path_iter:
         frontmatter, errors = read_ticket_frontmatter(path)
         is_done = bool(frontmatter and frontmatter.done and not errors)
         if normalized_filter == "open" and is_done:

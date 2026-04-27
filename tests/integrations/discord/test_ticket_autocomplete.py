@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -10,28 +9,6 @@ import pytest
 from codex_autorunner.integrations.discord.car_autocomplete import (
     build_ticket_autocomplete_choices,
 )
-
-
-def _make_service(
-    *,
-    workspace_root: Path | None = Path("/fake/workspace"),
-    ticket_choices: list[tuple[str, str, str]] | None = None,
-    list_choices_fn=None,
-):
-    service = SimpleNamespace()
-    service._bound_workspace_root_for_channel = Mock(
-        return_value=(
-            asyncio.coroutine(lambda: workspace_root)()
-            if workspace_root is not None
-            else asyncio.coroutine(lambda: None)()
-        )
-    )
-    service._pending_ticket_filters = {"chan-1": "all"}
-    if list_choices_fn is not None:
-        service._list_ticket_choices = list_choices_fn
-    elif ticket_choices is not None:
-        service._list_ticket_choices = Mock(return_value=ticket_choices)
-    return service
 
 
 async def _acoro(value):

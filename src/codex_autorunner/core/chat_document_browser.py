@@ -101,7 +101,7 @@ def _list_ticket_items(repo_root: Path, *, query: str) -> list[DocumentBrowserIt
     paths = list_ticket_paths(ticket_dir)
     index_counts = _ticket_index_counts(paths)
     path_by_name = {path.name: path for path in paths}
-    for snap in list_ticket_snapshots(repo_root):
+    for snap in list_ticket_snapshots(repo_root, paths=paths):
         path = path_by_name.get(snap.filename)
         if path is None:
             continue
