@@ -183,8 +183,8 @@ repo_defaults:
   usage:
     # Cache scope for aggregated usage series: global|repo
     cache_scope: global
-    # Override global cache root (null = CAR_GLOBAL_STATE_ROOT env or ~/.codex-autorunner).
-    # CODEX_HOME is deprecated; prefer CAR_GLOBAL_STATE_ROOT.
+    # Override global cache root (null = CODEX_HOME env or ~/.codex).
+    # This is CAR usage aggregation cache data, colocated with Codex CLI by default.
     global_cache_root: null
     # Repo-local cache path (relative to repo root).
     repo_cache_path: .codex-autorunner/usage/usage_series_cache.json
@@ -374,8 +374,8 @@ update:
 usage:
   # Cache scope for aggregated usage series: global|repo
   cache_scope: global
-  # Override global cache root (null = CAR_GLOBAL_STATE_ROOT env or ~/.codex-autorunner).
-  # CODEX_HOME is deprecated; prefer CAR_GLOBAL_STATE_ROOT.
+  # Override global cache root (null = CODEX_HOME env or ~/.codex).
+  # CAR usage aggregation cache; defaults next to Codex CLI data unless overridden.
   global_cache_root: null
   # Hub-level cache path (relative to repo root).
   repo_cache_path: .codex-autorunner/usage/usage_series_cache.json

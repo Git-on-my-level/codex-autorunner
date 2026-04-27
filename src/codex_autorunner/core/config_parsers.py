@@ -13,6 +13,7 @@ Ownership contract (TICKET-1040):
 """
 
 import dataclasses
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, cast
 
@@ -1089,7 +1090,8 @@ def _parse_usage_config(
     )
     global_cache_default = defaults.get("global_cache_root")
     if global_cache_default is None:
-        global_cache_default = "~/.codex-autorunner"
+        # Align with Codex CLI data dir (same default as _default_codex_home); not CAR state.
+        global_cache_default = os.environ.get("CODEX_HOME") or "~/.codex"
     global_cache_raw = cfg.get("global_cache_root", global_cache_default)
     if global_cache_raw is None:
         global_cache_raw = global_cache_default
