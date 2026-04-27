@@ -20,7 +20,7 @@ CAR is a meta-harness for coding agents (Codex, Hermes, OpenCode, anything ACP).
 
 ### Option 1 — Let your agent install it (recommended)
 
-Paste this to Codex, Cursor, Hermes, OpenClaw, or whichever assistant you trust on your machine:
+Paste this to Codex, Cursor, Hermes, OpenCode, or whichever assistant you trust on your machine:
 
 > Please walk me through setting up CAR (codex-autorunner) using this guide:
 > https://github.com/Git-on-my-level/codex-autorunner/blob/main/docs/AGENT_SETUP_GUIDE.md

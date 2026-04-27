@@ -1,6 +1,6 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { resolvePath, getAuthToken, api } from "./utils.js?v=672f0b14d26680ec4c346e9b1c1cd1ec3bab19c20c06c2593893e8ee4601afcd";
-import { readEventStream, handleStreamEvent, parseMaybeJson, } from "./streamUtils.js?v=672f0b14d26680ec4c346e9b1c1cd1ec3bab19c20c06c2593893e8ee4601afcd";
+import { resolvePath, getAuthToken, api } from "./utils.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
+import { readEventStream, handleStreamEvent, parseMaybeJson, } from "./streamUtils.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
 export async function sendFileChat(target, message, controller, handlers = {}, options = {}) {
     const endpoint = resolvePath(options.basePath || "/api/file-chat");
     const headers = {

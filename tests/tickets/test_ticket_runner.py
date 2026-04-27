@@ -1112,8 +1112,10 @@ async def test_previous_ticket_context_excluded_by_default(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
-async def test_previous_ticket_context_included_when_enabled(tmp_path: Path) -> None:
-    """Test that previous ticket content IS included (and truncated) when enabled."""
+async def test_previous_ticket_context_not_injected_when_enabled(
+    tmp_path: Path,
+) -> None:
+    """Previous ticket content is no longer injected even when the knob is enabled."""
     workspace_root = tmp_path
     ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
     ticket_dir.mkdir(parents=True, exist_ok=True)
@@ -1149,15 +1151,8 @@ async def test_previous_ticket_context_included_when_enabled(tmp_path: Path) -> 
 
     assert result.status == "continue"
     assert len(pool.requests) == 1
-    assert (
-        "PREVIOUS TICKET CONTEXT (DEPRECATED legacy compatibility"
-        in pool.requests[0].prompt
-    )
-    assert (
-        "Cross-ticket context should flow through contextspace docs"
-        in pool.requests[0].prompt
-    )
-    assert "agent: codex\ndone: true" in pool.requests[0].prompt
+    assert "PREVIOUS TICKET CONTEXT" not in pool.requests[0].prompt
+    assert "agent: codex\ndone: true" not in pool.requests[0].prompt
 
 
 def test_is_network_error_detection() -> None:

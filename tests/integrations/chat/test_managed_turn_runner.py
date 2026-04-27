@@ -65,7 +65,6 @@ async def test_run_managed_surface_turn_routes_queued_turns_through_shared_queue
 ) -> None:
     started = _build_started_execution(tmp_path, status="queued")
     ensured: dict[str, Any] = {}
-    callbacks: list[str] = []
 
     async def _submit_execution(
         *args: Any, **kwargs: Any
@@ -105,9 +104,7 @@ async def test_run_managed_surface_turn_routes_queued_turns_through_shared_queue
             ),
             client_request_id="req-1",
             sandbox_policy=None,
-            hooks=ManagedThreadCoordinatorHooks(
-                deliver_result=lambda finalized: callbacks.append(finalized.status)
-            ),
+            hooks=ManagedThreadCoordinatorHooks(durable_delivery=SimpleNamespace()),
             queue=managed_turn_runner_module.ManagedSurfaceQueueConfig(
                 task_map={},
                 managed_thread_id="thread-1",
@@ -122,8 +119,7 @@ async def test_run_managed_surface_turn_routes_queued_turns_through_shared_queue
 
     assert result == "queued"
     assert ensured["managed_thread_id"] == "thread-1"
-    assert callable(ensured["hooks"].deliver_result)
-    assert callbacks == []
+    assert ensured["hooks"].durable_delivery is not None
 
 
 @pytest.mark.anyio

@@ -16,7 +16,8 @@ import httpx
 
 from .....agents.opencode.client import OpenCodeProtocolError
 from .....agents.opencode.supervisor import OpenCodeSupervisorError
-from .....agents.registry import get_registered_agents, normalize_agent_capabilities
+from .....agents.registry import get_registered_agents
+from .....agents.types import normalize_runtime_capabilities
 from .....core.coercion import coerce_int
 from .....core.logging_utils import log_event
 from .....core.utils import canonicalize_path
@@ -125,13 +126,13 @@ class TelegramCommandSupportMixin:
         descriptor = self._agent_descriptor(agent)
         if descriptor is None:
             return False
-        normalized = normalize_agent_capabilities([capability])
+        normalized = normalize_runtime_capabilities([capability])
         if not normalized:
             return False
         return next(iter(normalized)) in descriptor.capabilities
 
     def _agents_supporting_capability(self, capability: str) -> list[str]:
-        normalized = normalize_agent_capabilities([capability])
+        normalized = normalize_runtime_capabilities([capability])
         if not normalized:
             return []
         resolved = next(iter(normalized))

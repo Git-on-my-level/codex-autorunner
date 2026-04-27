@@ -25,11 +25,9 @@ from ..chat.managed_thread_surface_kernel import (
 from ..chat.managed_thread_turns import (
     ManagedThreadCoordinatorHooks,
     ManagedThreadExecutionHooks,
-    ManagedThreadFinalizationResult,
     ManagedThreadSurfaceInfo,
     ManagedThreadTargetRequest,
     ManagedThreadTurnCoordinator,
-    render_managed_thread_response_text,
 )
 from ..chat.managed_thread_turns import (
     build_managed_thread_input_items as _shared_build_managed_thread_input_items,
@@ -37,12 +35,8 @@ from ..chat.managed_thread_turns import (
 from ..chat.managed_thread_turns import (
     resolve_managed_thread_target as _shared_resolve_managed_thread_target,
 )
-from ..chat.turn_metrics import compose_turn_response_with_footer
 from .managed_thread_delivery import build_discord_managed_thread_durable_delivery_hooks
 from .rendering import (
-    DISCORD_MAX_MESSAGE_LENGTH,
-    chunk_discord_message,
-    format_discord_message,
     truncate_for_discord,
 )
 
@@ -465,59 +459,18 @@ def _build_discord_runner_hooks(
         ),
     )
 
-    async def _deliver_result(finalized: ManagedThreadFinalizationResult) -> None:
-        if finalized.status == "ok":
-            assistant_text = compose_turn_response_with_footer(
-                render_managed_thread_response_text(finalized),
-                summary_text=None,
-                token_usage=(
-                    dict(finalized.token_usage) if finalized.token_usage else None
-                ),
-                elapsed_seconds=None,
-                empty_response_text="(No response text returned.)",
-            )
-            formatted = (
-                format_discord_message(assistant_text)
-                if assistant_text
-                else "(No response text returned.)"
-            )
-            chunks = chunk_discord_message(
-                formatted,
-                max_len=DISCORD_MAX_MESSAGE_LENGTH,
-                with_numbering=False,
-            )
-            if not chunks:
-                chunks = [formatted]
-            base_record_id = (
-                f"discord-queued:{managed_thread_id}:{finalized.managed_turn_id}"
-            )
-            for chunk_index, chunk in enumerate(chunks, start=1):
-                record_id = (
-                    f"{base_record_id}:chunk:{chunk_index}"
-                    if len(chunks) > 1
-                    else base_record_id
-                )
-                await service._send_channel_message_safe(
-                    channel_id,
-                    {"content": chunk},
-                    record_id=record_id,
-                )
-            return
-        if finalized.status == "interrupted":
-            return
-        await service._send_channel_message_safe(
-            channel_id,
-            {"content": (f"Turn failed: {finalized.error or public_execution_error}")},
-            record_id=(
-                f"discord-queued-error:{managed_thread_id}:{finalized.managed_turn_id}"
-            ),
-        )
+    durable_delivery = build_discord_managed_thread_durable_delivery_hooks(
+        service,
+        channel_id=channel_id,
+        managed_thread_id=managed_thread_id,
+        workspace_root=workspace_root,
+        public_execution_error=public_execution_error,
+    )
 
     return ManagedThreadCoordinatorHooks(
         on_execution_started=_on_execution_started,
         on_execution_finished=_on_execution_finished,
         durable_delivery=durable_delivery,
-        deliver_result=_deliver_result,
         run_with_indicator=_run_with_discord_typing_indicator,
         queue_execution_hooks=queue_execution_hooks,
     )

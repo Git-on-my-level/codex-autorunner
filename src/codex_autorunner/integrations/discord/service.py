@@ -29,8 +29,8 @@ from ...agents.registry import (
     AgentDescriptor,
     get_agent_descriptor,
     get_registered_agents,
-    normalize_agent_capabilities,
 )
+from ...agents.types import normalize_runtime_capabilities
 from ...bootstrap import seed_repo_files
 from ...core.config import (
     ConfigError,
@@ -6561,13 +6561,13 @@ class DiscordBotService:
         descriptor = self._agent_descriptor(agent)
         if descriptor is None:
             return False
-        normalized = normalize_agent_capabilities([capability])
+        normalized = normalize_runtime_capabilities([capability])
         if not normalized:
             return False
         return next(iter(normalized)) in descriptor.capabilities
 
     def _agents_supporting_capability(self, capability: str) -> list[str]:
-        normalized = normalize_agent_capabilities([capability])
+        normalized = normalize_runtime_capabilities([capability])
         if not normalized:
             return []
         resolved = next(iter(normalized))

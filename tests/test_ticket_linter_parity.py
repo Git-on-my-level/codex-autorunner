@@ -4,20 +4,25 @@ import io
 import sys
 from pathlib import Path
 
-from codex_autorunner.core.ticket_linter_cli import _SCRIPT as LINTER_SCRIPT
-from codex_autorunner.core.ticket_manager_cli import _SCRIPT as MANAGER_SCRIPT
+from codex_autorunner.core.ticket_manager_cli import (
+    _SCRIPT as MANAGER_SCRIPT,
+    ensure_ticket_manager,
+)
+from codex_autorunner.tickets import portable_lint as _portable_lint_module
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _exec_linter_namespace():
+    """Exec the shared portable linter source (same module as lint_tickets.py delegates to)."""
     ns: dict = {}
-    exec(LINTER_SCRIPT, ns)
+    exec(Path(_portable_lint_module.__file__).read_text(encoding="utf-8"), ns)
     return ns
 
 
 def _exec_manager_namespace():
-    ns: dict = {}
+    manager_path = ensure_ticket_manager(_REPO_ROOT)
+    ns: dict = {"__file__": str(manager_path)}
     exec(MANAGER_SCRIPT, ns)
     return ns
 
@@ -139,7 +144,7 @@ def test_cmd_lint_detects_duplicate_ticket_ids_across_all_files(tmp_path: Path) 
     old_stderr = sys.stderr
     sys.stderr = io.StringIO()
     try:
-        rc = manager_ns["cmd_lint"](ticket_dir)
+        rc = manager_ns["cmd_lint"](ticket_dir, fix_ticket_ids=False)
     finally:
         captured = sys.stderr.getvalue()
         sys.stderr = old_stderr
@@ -167,7 +172,7 @@ def test_cmd_lint_clean_tickets(tmp_path: Path) -> None:
     old_stdout = sys.stdout
     sys.stdout = io.StringIO()
     try:
-        rc = manager_ns["cmd_lint"](ticket_dir)
+        rc = manager_ns["cmd_lint"](ticket_dir, fix_ticket_ids=False)
     finally:
         captured = sys.stdout.getvalue()
         sys.stdout = old_stdout
@@ -223,7 +228,7 @@ def test_cmd_lint_detects_duplicate_ticket_ids_even_with_other_errors(
     old_stderr = sys.stderr
     sys.stderr = io.StringIO()
     try:
-        rc = manager_ns["cmd_lint"](ticket_dir)
+        rc = manager_ns["cmd_lint"](ticket_dir, fix_ticket_ids=False)
     finally:
         captured = sys.stderr.getvalue()
         sys.stderr = old_stderr

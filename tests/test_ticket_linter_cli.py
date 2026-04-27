@@ -146,6 +146,30 @@ def test_linter_allows_runtime_valid_extra_frontmatter(repo: Path) -> None:
     assert "OK" in result.stdout
 
 
+def test_linter_allows_context_list_of_mappings_without_pyyaml(repo: Path) -> None:
+    tickets_dir = repo / ".codex-autorunner" / "tickets"
+    tickets_dir.mkdir(parents=True, exist_ok=True)
+
+    (tickets_dir / "TICKET-001.md").write_text(
+        "---\n"
+        'ticket_id: "tkt_lintcontext001"\n'
+        "agent: codex\n"
+        "done: false\n"
+        "context:\n"
+        "  - path: docs/one.md\n"
+        "    max_bytes: 512\n"
+        "    required: true\n"
+        "  - path: notes/two.txt\n"
+        "---\n"
+        "Body\n",
+        encoding="utf-8",
+    )
+
+    result = _run_linter(repo)
+    assert result.returncode == 0
+    assert "OK" in result.stdout
+
+
 def test_linter_detects_duplicate_indices(repo: Path) -> None:
     tickets_dir = repo / ".codex-autorunner" / "tickets"
     tickets_dir.mkdir(parents=True, exist_ok=True)

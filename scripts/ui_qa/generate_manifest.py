@@ -87,7 +87,14 @@ def _step_shot(name: str) -> dict[str, Any]:
 
 
 def _load_ui_mock_scenario_ids(hub_root: Path) -> list[str]:
-    gen = hub_root / "src" / "codex_autorunner" / "static" / "generated" / "uiMockScenarios.js"
+    gen = (
+        hub_root
+        / "src"
+        / "codex_autorunner"
+        / "static"
+        / "generated"
+        / "uiMockScenarios.js"
+    )
     if not gen.is_file():
         return list(UI_MOCK_SCENARIO_ORDER_FALLBACK)
     uri = gen.resolve().as_uri()

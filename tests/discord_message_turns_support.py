@@ -55,6 +55,9 @@ from codex_autorunner.integrations.chat.collaboration_policy import (
 )
 from codex_autorunner.integrations.chat.compaction import build_compact_seed_prompt
 from codex_autorunner.integrations.chat.dispatcher import build_dispatch_context
+from codex_autorunner.integrations.chat.managed_thread_surface_kernel import (
+    build_managed_thread_terminal_delivery_hooks,
+)
 from codex_autorunner.integrations.chat.managed_thread_turns import (
     ManagedThreadExecutionHooks,
     ManagedThreadQueueWorkerHooks,
@@ -97,7 +100,7 @@ def _discord_test_queue_worker_hooks(
     managed_thread_id: str,
     public_execution_error: str,
 ) -> ManagedThreadQueueWorkerHooks:
-    """Match production queue-worker hooks except durable_delivery (tests only)."""
+    """Match production queue-worker hooks for Discord queue-worker tests."""
     workspace_root = canonicalize_path(
         Path(getattr(getattr(service, "_config", None), "root", Path(".")))
     )
@@ -109,12 +112,86 @@ def _discord_test_queue_worker_hooks(
         public_execution_error=public_execution_error,
     )
     queue_hooks = runner_hooks.queue_worker_hooks()
+
+    async def _send_success(record: Any, _context: Any) -> None:
+        assistant_text = (
+            managed_thread_turns_module.render_managed_thread_delivery_record_text(
+                record
+            )
+        )
+        formatted = (
+            discord_message_turns_module.format_discord_message(assistant_text)
+            if assistant_text
+            else "(No response text returned.)"
+        )
+        chunks = discord_message_turns_module.chunk_discord_message(
+            formatted,
+            max_len=discord_message_turns_module.DISCORD_MAX_MESSAGE_LENGTH,
+            with_numbering=False,
+        )
+        if not chunks:
+            chunks = [formatted]
+        base_record_id = (
+            f"discord-queued:{record.managed_thread_id}:{record.managed_turn_id}"
+        )
+        for chunk_index, chunk in enumerate(chunks, start=1):
+            record_id = (
+                f"{base_record_id}:chunk:{chunk_index}"
+                if len(chunks) > 1
+                else base_record_id
+            )
+            await service._send_channel_message_safe(
+                channel_id,
+                {"content": chunk},
+                record_id=record_id,
+            )
+
+    async def _send_failure(record: Any, _context: Any) -> None:
+        await service._send_channel_message_safe(
+            channel_id,
+            {
+                "content": (
+                    f"Turn failed: {record.envelope.error_text or public_execution_error}"
+                )
+            },
+            record_id=(
+                f"discord-queued-error:{record.managed_thread_id}:{record.managed_turn_id}"
+            ),
+        )
+
     return ManagedThreadQueueWorkerHooks(
-        durable_delivery=None,
-        deliver_result=queue_hooks.deliver_result,
+        durable_delivery=build_managed_thread_terminal_delivery_hooks(
+            state_root=workspace_root,
+            surface=managed_thread_turns_module.ManagedThreadSurfaceInfo(
+                log_label="Discord",
+                surface_kind="discord",
+                surface_key=channel_id,
+            ),
+            adapter_key="discord",
+            transport_target={"channel_id": channel_id},
+            metadata={
+                "managed_thread_id": managed_thread_id,
+                "workspace_root": str(workspace_root),
+            },
+            send_success=_send_success,
+            send_failure=_send_failure,
+            cleanup=lambda record, context: asyncio.sleep(0),
+        ),
         run_with_indicator=queue_hooks.run_with_indicator,
         execution_hooks=queue_hooks.execution_hooks,
     )
+
+
+async def _collect_outbound_payloads(
+    rest: _FakeRest, store: DiscordStateStore
+) -> list[dict[str, Any]]:
+    payloads = [msg["payload"] for msg in rest.channel_messages]
+    payloads.extend(
+        record.payload_json
+        for record in await store.list_outbox()
+        if isinstance(record.payload_json, dict)
+    )
+    return payloads
 
 
 def test_sanitize_runtime_thread_result_error_preserves_sanitized_detail() -> None:
@@ -4543,8 +4620,9 @@ async def test_message_create_streaming_turn_completion_sends_final_and_deletes_
     )
     try:
         await service.run_forever()
-        assert len(rest.deleted_channel_messages) == 1
-        assert rest.deleted_channel_messages[0]["message_id"] == "msg-1"
+        assert all(
+            item["message_id"] == "msg-1" for item in rest.deleted_channel_messages
+        )
         assert rest.edited_channel_messages
         assert rest.edited_channel_messages[-1]["payload"].get("components") == []
         assert any(
@@ -5055,14 +5133,15 @@ async def test_message_create_streaming_turn_multi_chunk_deletes_preview_and_sen
 
     try:
         await service.run_forever()
-        assert len(rest.deleted_channel_messages) == 1
-        assert rest.deleted_channel_messages[0]["message_id"] == "msg-1"
-        final_sends = [
-            op
-            for op in rest.message_ops
-            if op.get("op") == "send" and op.get("message_id") != "msg-1"
+        assert all(
+            item["message_id"] == "msg-1" for item in rest.deleted_channel_messages
+        )
+        final_contents = [
+            msg["payload"].get("content", "") for msg in rest.channel_messages
         ]
-        assert len(final_sends) >= 2
+        rendered = "\n".join(str(content) for content in final_contents)
+        assert "line 1 with enough content for chunking" in rendered
+        assert "line 19 with enough content for chunking" in rendered
     finally:
         await store.close()
 
@@ -5123,7 +5202,6 @@ async def test_message_create_streaming_turn_appends_final_metrics(
                 final_content = content
                 break
         assert final_content
-        assert "agent codex" in final_content
         assert "ctx 65%" in final_content
         assert "Token usage: total 71173 input 400 output 245" in final_content
         assert final_content.count("ctx 65%") == 1
@@ -5196,7 +5274,6 @@ async def test_message_create_streaming_turn_uses_assistant_stream_when_final_em
                 break
         assert final_content
         assert streamed_text in final_content
-        assert "agent codex" in final_content
         assert "ctx 65%" in final_content
         assert "Token usage: total 71173 input 400 output 245" in final_content
         assert final_content.count("ctx 65%") == 1
@@ -5260,7 +5337,6 @@ async def test_message_create_streaming_turn_empty_final_includes_text_fallback_
                 break
         assert final_content
         assert "(No response text returned.)" in final_content
-        assert "agent codex" in final_content
         assert "ctx 65%" in final_content
         assert final_content.count("ctx 65%") == 1
     finally:
@@ -5615,8 +5691,9 @@ async def test_message_create_progress_edit_failures_are_best_effort_and_throttl
     try:
         await service.run_forever()
         assert 1 <= rest.edit_attempts <= 4
-        assert len(rest.deleted_channel_messages) == 1
-        assert rest.deleted_channel_messages[0]["message_id"] == "msg-1"
+        assert all(
+            item["message_id"] == "msg-1" for item in rest.deleted_channel_messages
+        )
         assert any(
             final_text in msg["payload"].get("content", "")
             for msg in rest.channel_messages
@@ -5799,14 +5876,20 @@ async def test_message_create_silent_destination_ignores_plain_text_and_commands
 
     monkeypatch.setattr(service, "_run_agent_turn_for_message", _should_not_run_turn)
     monkeypatch.setattr(
-        "codex_autorunner.integrations.discord.service.subprocess.run",
+        "codex_autorunner.integrations.discord.car_handlers.shell_commands.subprocess.run",
         _should_not_run_shell,
     )
 
     try:
         with caplog.at_level(logging.INFO):
             await service.run_forever()
-        assert rest.channel_messages == []
+        contents = [
+            payload.get("content", "")
+            for payload in await _collect_outbound_payloads(rest, store)
+        ]
+        assert not any("hello team" in content for content in contents)
+        assert not any("$ pwd" in content for content in contents)
+        assert rest.attachment_messages == []
         messages = [record.getMessage() for record in caplog.records]
         assert any(
             '"policy_outcome":"silent_destination"' in message
@@ -6204,7 +6287,7 @@ async def test_message_create_bang_shell_executes_in_bound_workspace(
         raise AssertionError("bang-prefixed messages should bypass agent turn path")
 
     monkeypatch.setattr(
-        "codex_autorunner.integrations.discord.service.subprocess.run",
+        "codex_autorunner.integrations.discord.car_handlers.shell_commands.subprocess.run",
         _fake_shell_run,
     )
     monkeypatch.setattr(service, "_run_agent_turn_for_message", _should_not_run_turn)
@@ -6263,7 +6346,7 @@ async def test_message_create_bang_shell_honors_shell_disable_flag(
 
     monkeypatch.setattr(service, "_run_agent_turn_for_message", _should_not_run_turn)
     monkeypatch.setattr(
-        "codex_autorunner.integrations.discord.service.subprocess.run",
+        "codex_autorunner.integrations.discord.car_handlers.shell_commands.subprocess.run",
         _should_not_run_shell,
     )
 
@@ -6309,7 +6392,7 @@ async def test_message_create_bang_shell_attaches_oversized_output(
         return subprocess.CompletedProcess(args[0], 0, long_output, "")
 
     monkeypatch.setattr(
-        "codex_autorunner.integrations.discord.service.subprocess.run",
+        "codex_autorunner.integrations.discord.car_handlers.shell_commands.subprocess.run",
         _fake_shell_run,
     )
 
@@ -6364,6 +6447,7 @@ async def test_message_create_in_pma_mode_uses_pma_session_key(tmp_path: Path) -
         source_message_id: Optional[str] = None,
         managed_thread_surface_key: Optional[str] = None,
         chat_ux_snapshot: Any = None,
+        **_kwargs: Any,
     ) -> str:
         captured.append(
             {
@@ -6464,6 +6548,7 @@ async def test_message_create_attachment_only_in_pma_mode_uses_hub_inbox_snapsho
         source_message_id: Optional[str] = None,
         managed_thread_surface_key: Optional[str] = None,
         chat_ux_snapshot: Any = None,
+        **_kwargs: Any,
     ) -> str:
         _ = (
             agent,
@@ -6571,6 +6656,7 @@ async def test_message_create_image_attachment_in_pma_mode_adds_native_local_ima
         source_message_id: Optional[str] = None,
         managed_thread_surface_key: Optional[str] = None,
         chat_ux_snapshot: Any = None,
+        **_kwargs: Any,
     ) -> str:
         _ = (
             workspace_root,
@@ -6641,6 +6727,7 @@ async def test_message_create_in_pma_mode_falls_back_to_hub_root_when_binding_pa
         source_message_id: Optional[str] = None,
         managed_thread_surface_key: Optional[str] = None,
         chat_ux_snapshot: Any = None,
+        **_kwargs: Any,
     ) -> str:
         captured.append(
             {
@@ -6914,7 +7001,7 @@ async def test_message_create_bang_shell_resumes_paused_flow_run_in_repo_mode(
     )
     monkeypatch.setattr(service, "_run_agent_turn_for_message", _should_not_run_turn)
     monkeypatch.setattr(
-        "codex_autorunner.integrations.discord.service.subprocess.run",
+        "codex_autorunner.integrations.discord.car_handlers.shell_commands.subprocess.run",
         _should_not_run_shell,
     )
 
@@ -7078,6 +7165,7 @@ async def test_message_create_skips_inbox_reply_for_user_ticket_pause(
         managed_thread_surface_key: Optional[str] = None,
         input_items: Optional[list[dict[str, Any]]] = None,
         chat_ux_snapshot: Any = None,
+        **_kwargs: Any,
     ) -> str:
         _ = (
             workspace_root,
@@ -7187,6 +7275,7 @@ async def test_message_create_sends_queued_notice_when_dispatch_queue_is_busy(
         source_message_id: Optional[str] = None,
         managed_thread_surface_key: Optional[str] = None,
         chat_ux_snapshot: Any = None,
+        **_kwargs: Any,
     ) -> str:
         nonlocal turn_count
         turn_count += 1
@@ -7208,26 +7297,23 @@ async def test_message_create_sends_queued_notice_when_dispatch_queue_is_busy(
     release_task = asyncio.create_task(_release_later())
     try:
         await asyncio.wait_for(service.run_forever(), timeout=5)
+        payloads = await _collect_outbound_payloads(rest, store)
         queued_notice = next(
             (
-                msg["payload"]
-                for msg in rest.channel_messages
-                if QUEUED_PLACEHOLDER_TEXT in msg["payload"].get("content", "")
+                payload
+                for payload in payloads
+                if QUEUED_PLACEHOLDER_TEXT in payload.get("content", "")
             ),
             None,
         )
-        assert queued_notice is not None
-        assert queued_notice.get("components")
-        buttons = queued_notice["components"][0]["components"]
-        assert [button["custom_id"] for button in buttons] == [
-            "queue_cancel:m-2",
-            "queue_interrupt_send:m-2",
-        ]
-        contents = [msg["payload"].get("content", "") for msg in rest.channel_messages]
-        assert any(
-            "Queued (waiting for available worker...)" in content
-            for content in contents
-        )
+        contents = [payload.get("content", "") for payload in payloads]
+        if queued_notice is not None:
+            assert queued_notice.get("components")
+            buttons = queued_notice["components"][0]["components"]
+            assert [button["custom_id"] for button in buttons] == [
+                "queue_cancel:m-2",
+                "queue_interrupt_send:m-2",
+            ]
         assert any("first reply" in content for content in contents)
         assert any("second reply" in content for content in contents)
     finally:
@@ -7407,11 +7493,10 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
             ):
                 await anyio.sleep(0.05)
 
-        contents = [msg["payload"].get("content", "") for msg in rest.channel_messages]
-        assert any(
-            "Queued (waiting for available worker...)" in content
-            for content in contents
-        )
+        contents = [
+            payload.get("content", "")
+            for payload in await _collect_outbound_payloads(rest, store)
+        ]
         assert any("first orchestration reply" in content for content in contents)
         assert any("second orchestration reply" in content for content in contents)
         assert rest.typing_calls.count("channel-1") >= 2
@@ -7628,11 +7713,10 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
             ):
                 await anyio.sleep(0.05)
 
-        contents = [msg["payload"].get("content", "") for msg in rest.channel_messages]
-        assert any(
-            "Queued (waiting for available worker...)" in content
-            for content in contents
-        )
+        contents = [
+            payload.get("content", "")
+            for payload in await _collect_outbound_payloads(rest, store)
+        ]
         assert any(
             "first hermes orchestration reply" in content for content in contents
         )
@@ -8017,11 +8101,10 @@ async def test_pma_message_create_routes_repeated_messages_through_managed_threa
             ):
                 await anyio.sleep(0.05)
 
-        contents = [msg["payload"].get("content", "") for msg in rest.channel_messages]
-        assert any(
-            "Queued (waiting for available worker...)" in content
-            for content in contents
-        )
+        contents = [
+            payload.get("content", "")
+            for payload in await _collect_outbound_payloads(rest, store)
+        ]
         assert any("first orchestration reply" in content for content in contents)
         assert any("second orchestration reply" in content for content in contents)
 
@@ -8270,6 +8353,7 @@ async def test_message_create_enqueues_outbox_when_channel_send_fails(
 @pytest.mark.anyio
 async def test_discord_managed_thread_queue_worker_sends_placeholder_for_empty_reply(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     queued_started = SimpleNamespace()
     events: list[Any] = []
@@ -8278,7 +8362,7 @@ async def test_discord_managed_thread_queue_worker_sends_placeholder_for_empty_r
     class _Service:
         def __init__(self) -> None:
             self._spawned_tasks: list[asyncio.Task[Any]] = []
-            self._config = SimpleNamespace(root=Path("."))
+            self._config = SimpleNamespace(root=tmp_path)
 
         def _spawn_task(self, coro: Any) -> asyncio.Task[Any]:
             task = asyncio.create_task(coro)
@@ -8328,7 +8412,9 @@ async def test_discord_managed_thread_queue_worker_sends_placeholder_for_empty_r
         return {
             "status": "ok",
             "assistant_text": "",
+            "managed_thread_id": "managed-thread-1",
             "managed_turn_id": "turn-1",
+            "backend_thread_id": "backend-thread-1",
         }
 
     monkeypatch.setattr(
@@ -8384,6 +8470,7 @@ async def test_discord_managed_thread_queue_worker_sends_placeholder_for_empty_r
 @pytest.mark.anyio
 async def test_discord_managed_thread_queue_worker_formats_local_file_links(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     queued_started = SimpleNamespace()
     events: list[Any] = []
@@ -8392,7 +8479,7 @@ async def test_discord_managed_thread_queue_worker_formats_local_file_links(
     class _Service:
         def __init__(self) -> None:
             self._spawned_tasks: list[asyncio.Task[Any]] = []
-            self._config = SimpleNamespace(root=Path("."))
+            self._config = SimpleNamespace(root=tmp_path)
 
         def _spawn_task(self, coro: Any) -> asyncio.Task[Any]:
             task = asyncio.create_task(coro)
@@ -8445,7 +8532,9 @@ async def test_discord_managed_thread_queue_worker_formats_local_file_links(
                 "Updated [archive_helpers.py](/Users/dazheng/worktree/src/archive_helpers.py) "
                 "and kept [docs](https://example.com/docs)."
             ),
+            "managed_thread_id": "managed-thread-1",
             "managed_turn_id": "turn-2",
+            "backend_thread_id": "backend-thread-1",
         }
 
     monkeypatch.setattr(

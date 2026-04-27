@@ -46,7 +46,9 @@ def compare_nested_data(name: str, expected: Any, actual: Any) -> list[str]:
         for key in sorted(expected_keys & actual_keys):
             child_name = f"{name}.{key}"
             if expected[key] != actual[key]:
-                differences.extend(compare_nested_data(child_name, expected[key], actual[key]))
+                differences.extend(
+                    compare_nested_data(child_name, expected[key], actual[key])
+                )
         return differences
 
     if _is_sequence(expected) and _is_sequence(actual):
@@ -58,7 +60,9 @@ def compare_nested_data(name: str, expected: Any, actual: Any) -> list[str]:
             if expected_item == actual_item:
                 continue
             child_name = f"{name}[{index}]"
-            differences.extend(compare_nested_data(child_name, expected_item, actual_item))
+            differences.extend(
+                compare_nested_data(child_name, expected_item, actual_item)
+            )
         return differences
 
     return [f"  {name}: value changed"]
@@ -112,4 +116,6 @@ def _format_key_change(name: str, verb: str, keys: set[str]) -> str:
 
 
 def _is_sequence(value: Any) -> bool:
-    return isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray))
+    return isinstance(value, Sequence) and not isinstance(
+        value, (str, bytes, bytearray)
+    )

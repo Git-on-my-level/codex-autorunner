@@ -94,7 +94,6 @@ def archive_dispatch_and_create_summary(
         ticket_id=dispatch_ticket_id,
         agent_id=agent_id,
         turn_number=turn_number,
-        diff_stats=turn_diff_stats,
     )
 
     if emit_event is not None and isinstance(turn_diff_stats, dict):

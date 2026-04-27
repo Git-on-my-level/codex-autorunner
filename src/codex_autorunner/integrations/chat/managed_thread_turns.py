@@ -43,7 +43,7 @@ from typing import Any, Awaitable, Callable, Literal, Mapping, Optional, Protoco
 
 from ...agents.base import (
     harness_progress_event_stream,
-    harness_supports_progress_event_stream,
+    harness_supports_event_streaming,
 )
 from ...core.config import ConfigError, load_repo_config
 from ...core.hub_control_plane import (
@@ -150,11 +150,6 @@ FinalizeQueuedExecution = Callable[
 ManagedThreadDeliveryIntentBuilder = Callable[
     [ManagedThreadFinalizationResult], Optional[ManagedThreadDeliveryIntent]
 ]
-# Legacy bridge: queue workers used to hand finalized results straight to a
-# surface-owned `deliver_result` callback. Durable intent creation plus engine
-# handoff is now the correctness boundary; this callback remains compatibility-
-# only for tests or non-migrated call sites.
-DeliverQueuedResult = Callable[[ManagedThreadFinalizationResult], Awaitable[None]]
 
 
 @dataclass(frozen=True)
@@ -264,8 +259,7 @@ class ManagedThreadExecutionHooks:
 class ManagedThreadQueueWorkerHooks:
     """Queue-worker hooks with durable handoff ownership for final delivery."""
 
-    durable_delivery: Optional[ManagedThreadDurableDeliveryHooks] = None
-    deliver_result: Optional[DeliverQueuedResult] = None
+    durable_delivery: ManagedThreadDurableDeliveryHooks
     run_with_indicator: Optional[RunWithIndicator] = None
     execution_hooks: ManagedThreadExecutionHooks = field(
         default_factory=ManagedThreadExecutionHooks
@@ -282,7 +276,6 @@ class ManagedThreadCoordinatorHooks:
     on_execution_error: Optional[ManagedThreadExecutionErrorHook] = None
     on_progress_event: Optional[ProgressEventHandler] = None
     durable_delivery: Optional[ManagedThreadDurableDeliveryHooks] = None
-    deliver_result: Optional[DeliverQueuedResult] = None
     run_with_indicator: Optional[RunWithIndicator] = None
     queue_execution_hooks: Optional[ManagedThreadExecutionHooks] = None
 
@@ -296,13 +289,10 @@ class ManagedThreadCoordinatorHooks:
         )
 
     def queue_worker_hooks(self) -> ManagedThreadQueueWorkerHooks:
-        if self.durable_delivery is None and self.deliver_result is None:
-            raise ValueError(
-                "Queue-worker hooks require durable_delivery or deliver_result"
-            )
+        if self.durable_delivery is None:
+            raise ValueError("Queue-worker hooks require durable_delivery")
         return ManagedThreadQueueWorkerHooks(
             durable_delivery=self.durable_delivery,
-            deliver_result=self.deliver_result,
             run_with_indicator=self.run_with_indicator,
             execution_hooks=self.queue_execution_hooks or self.execution_hooks(),
         )
@@ -1229,7 +1219,6 @@ class ManagedThreadTurnCoordinator:
                 ),
             ),
             durable_delivery=resolved_hooks.durable_delivery,
-            deliver_result=resolved_hooks.deliver_result,
             run_with_indicator=resolved_hooks.run_with_indicator,
             execution_hooks=resolved_hooks.execution_hooks,
             poll_interval_seconds=poll_interval_seconds,
@@ -1542,17 +1531,13 @@ async def _finalize_queue_worker_failure(
 async def _dispatch_finalized_delivery(
     finalized: ManagedThreadFinalizationResult,
     *,
-    durable_delivery: Optional[ManagedThreadDurableDeliveryHooks],
-    deliver_result: Optional[DeliverQueuedResult],
+    durable_delivery: ManagedThreadDurableDeliveryHooks,
 ) -> None:
-    if durable_delivery is not None:
-        await handoff_managed_thread_final_delivery(
-            finalized,
-            delivery=durable_delivery,
-            logger=logger,
-        )
-    elif deliver_result is not None:
-        await deliver_result(finalized)
+    await handoff_managed_thread_final_delivery(
+        finalized,
+        delivery=durable_delivery,
+        logger=logger,
+    )
 
 
 def _queue_worker_task_cancellation_requested() -> bool:
@@ -1575,8 +1560,7 @@ async def _process_queued_execution(
     *,
     orchestration_service: Any,
     finalize_started_execution: FinalizeQueuedExecution,
-    durable_delivery: Optional[ManagedThreadDurableDeliveryHooks],
-    deliver_result: Optional[DeliverQueuedResult],
+    durable_delivery: ManagedThreadDurableDeliveryHooks,
     run_with_indicator: Optional[RunWithIndicator],
 ) -> None:
     finalized: Optional[ManagedThreadFinalizationResult] = None
@@ -1624,7 +1608,6 @@ async def _process_queued_execution(
                 await _dispatch_finalized_delivery(
                     finalized,
                     durable_delivery=durable_delivery,
-                    deliver_result=deliver_result,
                 )
             except asyncio.CancelledError:
                 if _queue_worker_task_cancellation_requested():
@@ -1655,7 +1638,6 @@ async def _process_queued_execution(
         await _dispatch_finalized_delivery(
             finalized,
             durable_delivery=durable_delivery,
-            deliver_result=deliver_result,
         )
     except asyncio.CancelledError:
         if _queue_worker_task_cancellation_requested():
@@ -1685,15 +1667,12 @@ def ensure_managed_thread_queue_worker(
     orchestration_service: Any,
     spawn_task: SpawnTask,
     finalize_started_execution: FinalizeQueuedExecution,
-    durable_delivery: Optional[ManagedThreadDurableDeliveryHooks] = None,
-    deliver_result: Optional[DeliverQueuedResult] = None,
+    durable_delivery: ManagedThreadDurableDeliveryHooks,
     run_with_indicator: Optional[RunWithIndicator] = None,
     execution_hooks: Optional[ManagedThreadExecutionHooks] = None,
     poll_interval_seconds: float = 0.1,
     begin_next_execution: Optional[ManagedThreadQueuedExecutionStarter] = None,
 ) -> None:
-    if durable_delivery is None and deliver_result is None:
-        raise ValueError("Queue worker requires durable_delivery or deliver_result")
     existing = task_map.get(managed_thread_id)
     if isinstance(existing, asyncio.Task) and not existing.done():
         return
@@ -1724,7 +1703,6 @@ def ensure_managed_thread_queue_worker(
                     orchestration_service=orchestration_service,
                     finalize_started_execution=queue_finalize,
                     durable_delivery=durable_delivery,
-                    deliver_result=deliver_result,
                     run_with_indicator=run_with_indicator,
                 )
         except BaseException as exc:
@@ -2271,7 +2249,7 @@ async def finalize_managed_thread_execution(
         )
 
     if (
-        harness_supports_progress_event_stream(started.harness)
+        harness_supports_event_streaming(started.harness)
         and stream_backend_thread_id
         and stream_backend_turn_id
     ):

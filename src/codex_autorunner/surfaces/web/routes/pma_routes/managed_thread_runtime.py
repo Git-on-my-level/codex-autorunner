@@ -11,7 +11,12 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from .....core.config import ConfigError, load_repo_config
-from .....core.orchestration import MessageRequest
+from .....core.orchestration import (
+    ManagedThreadDeliveryAttemptResult,
+    ManagedThreadDeliveryOutcome,
+    MessageRequest,
+    SQLiteManagedThreadDeliveryEngine,
+)
 from .....core.orchestration.runtime_thread_events import RuntimeThreadRunEventState
 from .....core.orchestration.runtime_threads import (
     RuntimeThreadExecution,
@@ -35,11 +40,14 @@ from .....integrations.chat.bound_live_progress import (
 )
 from .....integrations.chat.managed_thread_turns import (
     ManagedThreadCoordinatorHooks,
+    ManagedThreadDurableDeliveryHooks,
     ManagedThreadErrorMessages,
     ManagedThreadExecutionHooks,
     ManagedThreadFinalizationResult,
+    ManagedThreadStatus,
     ManagedThreadSurfaceInfo,
     ManagedThreadTurnCoordinator,
+    build_managed_thread_delivery_intent,
 )
 from .....integrations.github.managed_thread_pr_binding import (
     self_claim_and_arm_pr_binding,
@@ -636,6 +644,87 @@ async def _deliver_managed_thread_execution_result(
     )
 
 
+def _build_pma_queue_delivery_hooks(
+    request: Request,
+    *,
+    thread_store: PmaThreadStore,
+    thread: dict[str, Any],
+    managed_thread_id: str,
+    queue_progress: Any,
+) -> ManagedThreadDurableDeliveryHooks:
+    surface = ManagedThreadSurfaceInfo(
+        log_label="PMA",
+        surface_kind="pma_web",
+        surface_key=managed_thread_id,
+    )
+
+    class _PmaQueueDeliveryAdapter:
+        @property
+        def adapter_key(self) -> str:
+            return "pma_web"
+
+        async def deliver_managed_thread_record(
+            self, record: Any, *, claim: Any
+        ) -> ManagedThreadDeliveryAttemptResult:
+            _ = claim
+            envelope = getattr(record, "envelope", None)
+            raw_status = str(getattr(envelope, "final_status", "") or "").strip()
+            if raw_status == "ok":
+                status: ManagedThreadStatus = "ok"
+            elif raw_status == "interrupted":
+                status = "interrupted"
+            else:
+                status = "error"
+            finalized = ManagedThreadFinalizationResult(
+                status=status,
+                assistant_text=str(getattr(envelope, "assistant_text", "") or ""),
+                error=normalize_optional_text(getattr(envelope, "error_text", None)),
+                managed_thread_id=str(getattr(record, "managed_thread_id", "") or ""),
+                managed_turn_id=str(getattr(record, "managed_turn_id", "") or ""),
+                backend_thread_id=normalize_optional_text(
+                    getattr(envelope, "backend_thread_id", None)
+                ),
+                token_usage=(
+                    dict(getattr(envelope, "token_usage", {}) or {})
+                    if getattr(envelope, "token_usage", None)
+                    else None
+                ),
+                session_notice=normalize_optional_text(
+                    getattr(envelope, "session_notice", None)
+                ),
+            )
+            current_thread_row = thread_store.get_thread(managed_thread_id) or thread
+            try:
+                await _deliver_managed_thread_execution_result(
+                    request,
+                    thread_store=thread_store,
+                    thread=current_thread_row,
+                    finalized=finalized,
+                    response_payload={},
+                    progress_targets=queue_progress.surface_targets_for(
+                        finalized.managed_turn_id
+                    ),
+                    clear_progress_targets=queue_progress.clear_surface_targets,
+                )
+            except Exception as exc:
+                return ManagedThreadDeliveryAttemptResult(
+                    outcome=ManagedThreadDeliveryOutcome.FAILED,
+                    error=str(exc) or exc.__class__.__name__,
+                )
+            return ManagedThreadDeliveryAttemptResult(
+                outcome=ManagedThreadDeliveryOutcome.DELIVERED,
+            )
+
+    return ManagedThreadDurableDeliveryHooks(
+        engine=SQLiteManagedThreadDeliveryEngine(request.app.state.config.root),
+        adapter=_PmaQueueDeliveryAdapter(),
+        build_delivery_intent=lambda finalized: build_managed_thread_delivery_intent(
+            finalized,
+            surface=surface,
+        ),
+    )
+
+
 async def _cleanup_progress_targets_after_delivery_failure(
     request: Request,
     *,
@@ -672,6 +761,10 @@ async def _cleanup_progress_targets_after_delivery_failure(
 
 
 def ensure_managed_thread_queue_worker(app: Any, managed_thread_id: str) -> None:
+    request = _managed_thread_request_for_app(app)
+    thread_store = PmaThreadStore(app.state.config.root)
+    current_thread_row = thread_store.get_thread(managed_thread_id) or {}
+
     def _resolve_surface_targets(_started: Any) -> tuple[tuple[str, str], ...]:
         service = _build_managed_thread_orchestration_service_for_app(app)
         return _resolve_pma_chat_bound_surface_targets(
@@ -692,25 +785,21 @@ def ensure_managed_thread_queue_worker(app: Any, managed_thread_id: str) -> None
         retain_completed_surface_targets=True,
     )
 
-    async def _deliver_with_progress_targets(*args: Any, **kwargs: Any) -> Any:
-        finalized = kwargs.get("finalized")
-        managed_turn_id = str(getattr(finalized, "managed_turn_id", "") or "").strip()
-        return await _deliver_managed_thread_execution_result(
-            *args,
-            **kwargs,
-            progress_targets=queue_progress.surface_targets_for(managed_turn_id),
-            clear_progress_targets=queue_progress.clear_surface_targets,
-        )
-
     ensure_queue_worker(
         app,
         managed_thread_id,
         managed_thread_request_for_app=_managed_thread_request_for_app,
         build_service_for_app=_build_managed_thread_orchestration_service_for_app,
         finalize_managed_thread_execution=_finalize_managed_thread_execution,
-        deliver_managed_thread_execution_result=_deliver_with_progress_targets,
         track_managed_thread_task=_track_managed_thread_task,
         hooks=ManagedThreadCoordinatorHooks(
+            durable_delivery=_build_pma_queue_delivery_hooks(
+                request,
+                thread_store=thread_store,
+                thread=current_thread_row,
+                managed_thread_id=managed_thread_id,
+                queue_progress=queue_progress,
+            ),
             queue_execution_hooks=queue_progress.hooks,
         ),
     )

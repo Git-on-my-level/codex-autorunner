@@ -47,8 +47,8 @@ The codebase is organized into four layers, from most stable (left) to most vola
 - Tolerate retries, restarts, partial failures
 
 **Module prefixes:**
-- `codex_autorunner.integrations*` - External integrations (Telegram, App Server, templates)
-- `codex_autorunner.agents*` - Agent implementations (codex, opencode)
+- `codex_autorunner.integrations*` - External integrations (Telegram, Discord, GitHub, Docker, Chat, App Server, templates). See `10_CODEBASE_CONSTITUTION.md` for the canonical list.
+- `codex_autorunner.agents*` - Agent implementations (codex, opencode, hermes, zeroclaw). See `10_CODEBASE_CONSTITUTION.md` for the canonical list.
 
 **Non-responsibilities:**
 - Avoid owning business logic; keep logic in engine/control plane
@@ -60,7 +60,7 @@ The codebase is organized into four layers, from most stable (left) to most vola
 - Provide ergonomics (logs, terminal, dashboards)
 
 **Module prefixes:**
-- `codex_autorunner.surfaces*` - Web UI, CLI, Telegram surface
+- `codex_autorunner.surfaces*` - Web UI, CLI, Telegram surface, Discord surface
 
 **Non-responsibilities:**
 - Do not become state owners; never be the only place truth lives

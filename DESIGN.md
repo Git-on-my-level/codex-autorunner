@@ -31,7 +31,7 @@ Per-repo (under hub or standalone for development):
     state.sqlite3, codex-autorunner.log, codex-server.log, lock
     prompt.txt (optional template)
 
-Config sections (repo): docs, codex, prompt, runner, git, github, server, terminal, voice, log, server_log, app_server, opencode.
+Config sections (repo): docs, codex, prompt, runner, git, github, server, terminal, voice, log, server_log, app_server, opencode, hermes, zeroclaw, discord_bot, telegram_bot, agents, notifications.
 Precedence: built-ins < codex-autorunner.yml < override < .codex-autorunner/config.yml < env.
 
 ## Core loop

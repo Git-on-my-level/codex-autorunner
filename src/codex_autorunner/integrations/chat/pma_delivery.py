@@ -1,8 +1,6 @@
 """Adapter contract for PMA chat delivery intents.
 
-Canonical delivery types live in ``pma_domain.models``.  The
-``PmaChatDelivery*`` names are re-exported from ``pma_chat_delivery`` for
-backward compatibility (they are type aliases for the domain types).
+Canonical delivery types live in ``pma_domain.models``.
 """
 
 from __future__ import annotations
@@ -11,7 +9,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Protocol, runtime_checkable
 
-from ...core.pma_chat_delivery import PmaChatDeliveryAttempt, PmaChatDeliveryIntent
+from ...core.pma_chat_delivery import PmaChatDeliveryIntent
+from ...core.pma_domain.models import PmaDeliveryAttempt
 
 
 @dataclass(frozen=True)
@@ -48,7 +47,7 @@ class PmaChatDeliveryAdapter(Protocol):
         self,
         intent: PmaChatDeliveryIntent,
         *,
-        attempt: PmaChatDeliveryAttempt,
+        attempt: PmaDeliveryAttempt,
         hub_root: Path,
         raw_config: Mapping[str, Any],
     ) -> PmaChatDeliveryAdapterResult:
