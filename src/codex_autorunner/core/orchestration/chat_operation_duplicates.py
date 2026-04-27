@@ -105,6 +105,18 @@ def plan_chat_operation_duplicate(
             rationale={"delivery_state": snapshot.delivery_state},
         )
 
+    if snapshot.state == ChatOperationState.RECEIVED:
+        # RECEIVED is the earliest durable row (often before transport ACK/ledger
+        # persistence completes). A redelivered event must be allowed to proceed so
+        # a failed or skipped first attempt can run ACK/registration again; only
+        # true in-flight *past* received is suppressed for higher states.
+        return ChatOperationDuplicateDecision(
+            action=ChatOperationDuplicateAction.ACCEPT_FRESH,
+            reason="received_allows_ingress_replay",
+            previous_state=snapshot.state,
+            delivery_pending=False,
+        )
+
     return ChatOperationDuplicateDecision(
         action=ChatOperationDuplicateAction.SUPPRESS_IN_FLIGHT,
         reason="non_terminal_duplicate_suppressed",

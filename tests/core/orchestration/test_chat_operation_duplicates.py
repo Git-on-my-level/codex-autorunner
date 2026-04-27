@@ -72,6 +72,13 @@ def test_duplicate_plan_suppresses_non_terminal_non_delivery_state() -> None:
     assert decision.reason == "non_terminal_duplicate_suppressed"
 
 
+def test_duplicate_plan_accepts_received_for_replay() -> None:
+    """RECEIVED may exist before full ACK/ledger; redelivery must be able to continue."""
+    decision = plan_chat_operation_duplicate(_snap(state=ChatOperationState.RECEIVED))
+    assert decision.action is ChatOperationDuplicateAction.ACCEPT_FRESH
+    assert decision.reason == "received_allows_ingress_replay"
+
+
 def test_duplicate_plan_suppresses_existing_record_without_snapshot() -> None:
     decision = plan_chat_operation_duplicate(
         None,

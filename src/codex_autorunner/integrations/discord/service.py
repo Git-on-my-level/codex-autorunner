@@ -81,8 +81,8 @@ from ...core.managed_thread_identity import (
 from ...core.orchestration import (
     ORCHESTRATION_SCHEMA_VERSION,
     ChatOperationDuplicateAction,
-    ChatOperationRegistration,
     ChatOperationRecoveryAction,
+    ChatOperationRegistration,
     ChatOperationSnapshot,
     ChatOperationState,
     SQLiteChatOperationLedger,
@@ -5941,7 +5941,7 @@ class DiscordBotService:
                 or record.scheduler_state in {"delivery_pending", "delivery_replaying"}
             )
         )
-        await self._maybe_reject_duplicate_interaction(
+        rejected = await self._maybe_reject_duplicate_interaction(
             interaction_id=ctx.interaction_id,
             snapshot=snapshot,
             operation_already_registered=True,
@@ -5950,6 +5950,9 @@ class DiscordBotService:
             execution_status=(record.execution_status if record is not None else None),
             release_reservation=True,
         )
+        if rejected is None:
+            await self._release_interaction_ingress(ctx.interaction_id)
+            return False
         return True
 
     async def _release_interaction_ingress(self, interaction_id: str) -> None:
@@ -5985,7 +5988,7 @@ class DiscordBotService:
             )
             or record.scheduler_state in {"delivery_pending", "delivery_replaying"}
         )
-        await self._maybe_reject_duplicate_interaction(
+        rejected = await self._maybe_reject_duplicate_interaction(
             interaction_id=ctx.interaction_id,
             snapshot=snapshot,
             operation_already_registered=True,
@@ -5994,7 +5997,7 @@ class DiscordBotService:
             execution_status=record.execution_status,
             release_reservation=False,
         )
-        return True
+        return rejected is not None
 
     async def _begin_interaction_execution(self, ctx: IngressContext) -> bool:
         claimed = await self._store.claim_interaction_execution(ctx.interaction_id)
