@@ -363,7 +363,7 @@ __all__ = ["{agent_name.capitalize()}Supervisor", "{agent_name.capitalize()}Supe
 
 def create_init(agent_name: str) -> str:
     """Generate __init__.py content."""
-    return f'''from .harness import {agent_name.capitalize()}Harness
+    return f"""from .harness import {agent_name.capitalize()}Harness
 from .supervisor import {agent_name.capitalize()}Supervisor, {agent_name.capitalize()}SupervisorError
 
 
@@ -372,7 +372,7 @@ __all__ = [
     "{agent_name.capitalize()}Supervisor",
     "{agent_name.capitalize()}SupervisorError",
 ]
-'''
+"""
 
 
 def main():

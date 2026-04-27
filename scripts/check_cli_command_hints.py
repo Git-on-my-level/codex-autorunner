@@ -312,7 +312,9 @@ def _scan_markdown_files(
             if key in seen:
                 continue
             seen.add(key)
-            violations.append((path, line_no, f"unknown CLI path {' '.join(pth)!r}", pth))
+            violations.append(
+                (path, line_no, f"unknown CLI path {' '.join(pth)!r}", pth)
+            )
     return violations
 
 

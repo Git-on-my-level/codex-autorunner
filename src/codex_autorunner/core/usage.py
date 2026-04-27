@@ -19,7 +19,11 @@ class UsageError(Exception):
 
 
 def _default_codex_home() -> Path:
-    return Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser()
+    # CODEX_HOME is deprecated; prefer CAR_GLOBAL_STATE_ROOT.
+    val = os.environ.get("CODEX_HOME")
+    if not val:
+        val = os.environ.get("CAR_GLOBAL_STATE_ROOT", "~/.codex-autorunner")
+    return Path(val).expanduser()
 
 
 def _parse_timestamp(value: str) -> datetime:

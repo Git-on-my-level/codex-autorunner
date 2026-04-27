@@ -47,7 +47,7 @@ set -euo pipefail
 #   KEEP_OLD_VENVS         how many old next-* venvs to keep (default: 3)
 #   NVM_BIN                Node bin path to prepend (default: ~/.nvm/versions/node/v22.12.0/bin)
 #   LOCAL_BIN              Local bin path to prepend (default: ~/.local/bin)
-#   PY39_BIN               Python bin path to prepend (default: ~/Library/Python/3.9/bin)
+#   PY39_BIN               Python bin path to prepend (default: auto-detected from active Python)
 #   OPENCODE_BIN           OpenCode bin path to prepend (default: ~/.opencode/bin)
 
 LABEL="${LABEL:-com.codex.autorunner}"
@@ -87,7 +87,7 @@ LAUNCHD_STOP_WAIT_SECONDS="${LAUNCHD_STOP_WAIT_SECONDS:-10}"
 KEEP_OLD_VENVS="${KEEP_OLD_VENVS:-3}"
 NVM_BIN="${NVM_BIN:-$HOME/.nvm/versions/node/v22.12.0/bin}"
 LOCAL_BIN="${LOCAL_BIN:-$HOME/.local/bin}"
-PY39_BIN="${PY39_BIN:-$HOME/Library/Python/3.9/bin}"
+PY39_BIN="${PY39_BIN:-$HOME/Library/Python/$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')/bin}"
 OPENCODE_BIN="${OPENCODE_BIN:-$HOME/.opencode/bin}"
 
 current_target=""
