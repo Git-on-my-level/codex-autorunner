@@ -1,3 +1,8 @@
+from .apply import (
+    AppApplyError,
+    AppliedAppTicket,
+    apply_app_entrypoint,
+)
 from .git_mirror import (
     AppNotFoundError,
     AppRepoSnapshot,
@@ -59,6 +64,7 @@ from .tool_runner import (
 )
 
 __all__ = [
+    "AppApplyError",
     "AppHook",
     "AppHookEntry",
     "AppInput",
@@ -79,6 +85,7 @@ __all__ = [
     "AppToolRunnerError",
     "AppToolTimeoutError",
     "AppTool",
+    "AppliedAppTicket",
     "FetchedAppManifest",
     "InstalledAppToolInfo",
     "InstallResult",
@@ -88,6 +95,7 @@ __all__ = [
     "NetworkUnavailableError",
     "RefNotFoundError",
     "RepoNotConfiguredError",
+    "apply_app_entrypoint",
     "compute_bundle_sha",
     "ensure_git_mirror",
     "fetch_app_manifest",

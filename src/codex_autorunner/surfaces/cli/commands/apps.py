@@ -6,14 +6,17 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 import typer
+import yaml
 
 from ....core.apps import (
+    AppApplyError,
     AppInstallConflictError,
     AppInstallError,
     AppLock,
     AppSourceInfo,
     AppToolRunnerError,
     AppToolRunResult,
+    apply_app_entrypoint,
     get_app_by_ref,
     get_installed_app,
     index_apps,
@@ -167,6 +170,66 @@ def register_apps_commands(
                 f"  {item.app_id} | {item.app_version} | "
                 f"{_source_ref_from_lock(item.lock)} | {item.lock.installed_at}"
             )
+
+    @app.command("apply")
+    def apps_apply(
+        app_ref_or_id: str = typer.Argument(
+            ..., help="Source app ref (REPO_ID:PATH[@REF]) or installed app id"
+        ),
+        at: Optional[int] = typer.Option(None, "--at", help="Explicit ticket index"),
+        next_index: bool = typer.Option(
+            True, "--next/--no-next", help="Use next available index (default)"
+        ),
+        suffix: Optional[str] = typer.Option(
+            None, "--suffix", help="Optional filename suffix (e.g. -foo)"
+        ),
+        set_values: Optional[list[str]] = typer.Option(
+            None,
+            "--set",
+            help="Set an app input as key=value. May be provided multiple times.",
+        ),
+        repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
+        hub: Optional[Path] = hub_root_path_option(),
+        output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    ) -> None:
+        """Apply an app entrypoint template into the ticket queue."""
+        ctx = require_repo_config(repo, hub)
+        require_apps_enabled(ctx.config)
+        parsed_inputs = _parse_set_values(set_values, raise_exit)
+
+        hub_config = None
+        hub_root = None
+        if not is_probably_installed_app_id(app_ref_or_id):
+            hub_config, hub_root = _load_hub_context(
+                ctx.repo_root,
+                hub,
+                raise_exit,
+                resolve_hub_config_path_for_cli,
+            )
+
+        try:
+            result = apply_app_entrypoint(
+                ctx.repo_root,
+                app_ref_or_id,
+                hub_config=hub_config,
+                hub_root=hub_root,
+                at=at,
+                next_index=next_index,
+                suffix=suffix,
+                app_inputs=parsed_inputs,
+            )
+        except (AppApplyError, AppInstallConflictError, AppInstallError) as exc:
+            raise_exit(str(exc), cause=exc)
+
+        if output_json:
+            typer.echo(json.dumps(_app_apply_payload(result, ctx.repo_root), indent=2))
+            return
+
+        typer.echo(
+            "Created ticket "
+            f"{result.ticket_path} (index={result.ticket_index}, app={result.app.app_id})"
+        )
+        typer.echo(json.dumps(_app_apply_payload(result, ctx.repo_root), indent=2))
 
     @app.command("show")
     def apps_show(
@@ -452,6 +515,42 @@ def _tool_run_payload(result: AppToolRunResult) -> dict[str, object]:
             for output in result.outputs
         ],
     }
+
+
+def _app_apply_payload(result, repo_root: Path) -> dict[str, object]:
+    return {
+        "app_id": result.app.app_id,
+        "app_version": result.app.app_version,
+        "ticket_path": str(result.ticket_path),
+        "ticket_path_repo_relative": str(result.ticket_path.relative_to(repo_root)),
+        "ticket_index": result.ticket_index,
+        "source_ref": result.source_ref,
+        "app_inputs": result.app_inputs,
+        "apply_inputs_path": str(result.apply_inputs_path),
+        "install_changed": result.install_changed,
+    }
+
+
+def _parse_set_values(
+    raw_values: Optional[list[str]],
+    raise_exit: Callable[..., None],
+) -> dict[str, Any]:
+    parsed: dict[str, Any] = {}
+    for item in raw_values or []:
+        if "=" not in item:
+            raise_exit(f"Invalid --set value {item!r}; expected key=value.")
+        key, value = item.split("=", 1)
+        cleaned_key = key.strip()
+        if not cleaned_key:
+            raise_exit(f"Invalid --set value {item!r}; key must not be empty.")
+        if cleaned_key in parsed:
+            raise_exit(f"Duplicate --set key: {cleaned_key}")
+        try:
+            parsed_value = yaml.safe_load(value)
+        except yaml.YAMLError as exc:
+            raise_exit(f"Invalid YAML value for --set {cleaned_key}: {exc}", cause=exc)
+        parsed[cleaned_key] = parsed_value
+    return parsed
 
 
 def _echo_tool_run(result: AppToolRunResult) -> None:

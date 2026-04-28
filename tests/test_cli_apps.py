@@ -54,15 +54,34 @@ def _create_app_repo(tmp_path: Path) -> Path:
     _init_repo(app_repo)
     (app_repo / "apps" / "hello").mkdir(parents=True)
     (app_repo / "apps" / "hello" / "scripts").mkdir(parents=True)
+    (app_repo / "apps" / "hello" / "templates").mkdir(parents=True)
     (app_repo / "apps" / "hello" / "car-app.yaml").write_text(
         """schema_version: 1
 id: local.hello
 name: Hello App
 version: 1.0.0
 description: CLI-visible app.
+entrypoint:
+  template: templates/bootstrap.md
+inputs:
+  goal:
+    required: true
+    description: Goal for the entrypoint ticket.
 tools:
   check:
     argv: ["python3", "scripts/check.py"]
+""",
+        encoding="utf-8",
+    )
+    (app_repo / "apps" / "hello" / "templates" / "bootstrap.md").write_text(
+        """---
+agent: codex
+done: false
+title: CLI Ticket
+---
+
+# Bootstrap
+Hello from CLI apply.
 """,
         encoding="utf-8",
     )
@@ -196,3 +215,36 @@ def test_apps_run_json(repo, hub_env, tmp_path: Path) -> None:
     assert payload["exit_code"] == 0
     assert payload["argv"][-2:] == ["alpha", "beta"]
     assert "cli check" in payload["stdout_excerpt"]
+
+
+def test_apps_apply_json(repo, hub_env, tmp_path: Path) -> None:
+    app_repo = _create_app_repo(tmp_path)
+    _configure_apps_repo(hub_env.hub_root, app_repo)
+
+    result = runner.invoke(
+        app,
+        [
+            "apps",
+            "apply",
+            "local:apps/hello",
+            "--repo",
+            str(repo),
+            "--json",
+            "--set",
+            "goal=demo",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["app_id"] == "local.hello"
+    assert payload["ticket_index"] == 1
+    assert payload["source_ref"] == "local:apps/hello@main"
+    assert payload["app_inputs"] == {"goal": "demo"}
+    assert payload["install_changed"] is True
+
+    ticket_path = Path(payload["ticket_path"])
+    assert ticket_path.exists()
+    ticket_text = ticket_path.read_text(encoding="utf-8")
+    assert "## App Inputs" in ticket_text
+    assert "- `goal`: `demo`" in ticket_text
