@@ -300,12 +300,11 @@ def _payload_with_bound_progress_metadata(
     request = _normalize_mapping(payload.get("request"))
     source = request if request else payload
     metadata = _normalize_mapping(source.get("metadata"))
-    origin_surface_kind, origin_surface_key = progress_targets[0]
     merged_metadata = merge_bound_chat_execution_metadata(
         metadata,
-        origin_kind="surface",
-        origin_surface_kind=origin_surface_kind,
-        origin_surface_key=origin_surface_key,
+        # SCM wake-ups are not user chat turns; use a distinct origin so
+        # execution_mapping_has_chat_surface_origin does not skip orphan recovery.
+        origin_kind="github_scm",
         progress_targets=progress_targets,
     )
     if request:
@@ -358,7 +357,7 @@ def build_github_enqueue_managed_turn_executor(
 ) -> PublishActionExecutor:
     base_executor = build_enqueue_managed_turn_executor(hub_root=repo_root)
 
-    def executor(operation: PublishOperation) -> dict[str, Any]:
+    def executor(operation: PublishOperation) -> Optional[dict[str, Any]]:
         from ..chat.bound_live_progress import bound_chat_live_progress_targets
 
         payload = _normalize_payload(operation.payload)
@@ -381,6 +380,8 @@ def build_github_enqueue_managed_turn_executor(
             else replace(operation, payload=progress_payload)
         )
         result = base_executor(effective_operation)
+        if result is None:
+            return None
         if (
             progress_targets
             and result.get("deduped") is not True

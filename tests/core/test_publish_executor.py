@@ -868,8 +868,11 @@ def test_github_enqueue_managed_turn_publishes_bound_progress_placeholder(
         result["managed_turn_id"],
     )
     assert turn is not None
-    progress_targets = turn["metadata"]["bound_chat_execution"]["progress_targets"]
-    assert progress_targets == [{"surface_kind": "discord", "surface_key": "channel-1"}]
+    bound = turn["metadata"]["bound_chat_execution"]
+    assert bound["origin"] == {"kind": "github_scm"}
+    assert bound["progress_targets"] == [
+        {"surface_kind": "discord", "surface_key": "channel-1"}
+    ]
 
     discord_store = DiscordStateStore(discord_state)
     try:
