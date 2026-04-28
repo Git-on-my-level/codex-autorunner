@@ -53,6 +53,7 @@ def _create_app_repo(tmp_path: Path) -> Path:
     app_repo = tmp_path / "app_repo"
     _init_repo(app_repo)
     (app_repo / "apps" / "hello").mkdir(parents=True)
+    (app_repo / "apps" / "hello" / "scripts").mkdir(parents=True)
     (app_repo / "apps" / "hello" / "car-app.yaml").write_text(
         """schema_version: 1
 id: local.hello
@@ -62,6 +63,14 @@ description: CLI-visible app.
 tools:
   check:
     argv: ["python3", "scripts/check.py"]
+""",
+        encoding="utf-8",
+    )
+    (app_repo / "apps" / "hello" / "scripts" / "check.py").write_text(
+        """import json
+import sys
+
+print(json.dumps({"argv": sys.argv[1:], "message": "cli check"}))
 """,
         encoding="utf-8",
     )
@@ -98,14 +107,92 @@ def test_apps_show_json(repo, hub_env, tmp_path: Path) -> None:
     assert "manifest_text" in parsed
 
 
-def test_apps_show_installed_id_not_implemented(repo, hub_env, tmp_path: Path) -> None:
+def test_apps_install_and_show_installed_json(repo, hub_env, tmp_path: Path) -> None:
     app_repo = _create_app_repo(tmp_path)
     _configure_apps_repo(hub_env.hub_root, app_repo)
 
-    result = runner.invoke(
+    install_result = runner.invoke(
         app,
-        ["apps", "show", "local.hello", "--repo", str(repo)],
+        ["apps", "install", "local:apps/hello", "--repo", str(repo), "--json"],
     )
 
-    assert result.exit_code != 0
-    assert "Installed app lookup is not implemented yet" in result.output
+    assert install_result.exit_code == 0
+    install_payload = json.loads(install_result.output)
+    assert install_payload["changed"] is True
+    assert install_payload["app"]["app_id"] == "local.hello"
+    assert install_payload["app"]["source_ref_string"] == "local:apps/hello@main"
+    assert install_payload["app"]["bundle_verified"] is True
+
+    installed_result = runner.invoke(
+        app,
+        ["apps", "installed", "--repo", str(repo), "--json"],
+    )
+
+    assert installed_result.exit_code == 0
+    installed_payload = json.loads(installed_result.output)
+    assert installed_payload["count"] == 1
+    assert installed_payload["apps"][0]["app_id"] == "local.hello"
+
+    show_result = runner.invoke(
+        app,
+        ["apps", "show", "local.hello", "--repo", str(repo), "--json"],
+    )
+
+    assert show_result.exit_code == 0
+    show_payload = json.loads(show_result.output)
+    assert show_payload["app_id"] == "local.hello"
+    assert show_payload["bundle_verified"] is True
+    assert show_payload["manifest"]["name"] == "Hello App"
+
+
+def test_apps_tools_json(repo, hub_env, tmp_path: Path) -> None:
+    app_repo = _create_app_repo(tmp_path)
+    _configure_apps_repo(hub_env.hub_root, app_repo)
+    runner.invoke(
+        app,
+        ["apps", "install", "local:apps/hello", "--repo", str(repo), "--json"],
+    )
+
+    result = runner.invoke(
+        app,
+        ["apps", "tools", "local.hello", "--repo", str(repo), "--json"],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["app_id"] == "local.hello"
+    assert payload["count"] == 1
+    assert payload["tools"][0]["tool_id"] == "check"
+
+
+def test_apps_run_json(repo, hub_env, tmp_path: Path) -> None:
+    app_repo = _create_app_repo(tmp_path)
+    _configure_apps_repo(hub_env.hub_root, app_repo)
+    runner.invoke(
+        app,
+        ["apps", "install", "local:apps/hello", "--repo", str(repo), "--json"],
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "apps",
+            "run",
+            "local.hello",
+            "check",
+            "--repo",
+            str(repo),
+            "--json",
+            "--",
+            "alpha",
+            "beta",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["app_id"] == "local.hello"
+    assert payload["tool_id"] == "check"
+    assert payload["exit_code"] == 0
+    assert payload["argv"][-2:] == ["alpha", "beta"]
+    assert "cli check" in payload["stdout_excerpt"]
