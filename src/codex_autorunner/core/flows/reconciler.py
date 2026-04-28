@@ -557,9 +557,16 @@ def reconcile_flow_run(
 
             if updated is not None and updated.status.is_terminal():
                 try:
-                    from .flow_telemetry_hooks import housekeep_on_run_terminal
+                    from .flow_telemetry_hooks import (
+                        build_store_event_emitter,
+                        handle_run_terminal_side_effects,
+                    )
 
-                    housekeep_on_run_terminal(repo_root, updated.id)
+                    handle_run_terminal_side_effects(
+                        repo_root,
+                        updated,
+                        emit_event=build_store_event_emitter(store, updated.id),
+                    )
                 except Exception:
                     pass
 
