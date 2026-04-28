@@ -73,18 +73,20 @@ def plan_chat_operation_duplicate(
         )
 
     if snapshot is None:
-        if operation_already_registered:
-            return ChatOperationDuplicateDecision(
-                action=ChatOperationDuplicateAction.SUPPRESS_IN_FLIGHT,
-                reason="existing_operation_duplicate_suppressed",
-                previous_state=None,
-                delivery_pending=False,
-            )
+        # Transport-local ledger rows can exist without a shared chat-operation
+        # snapshot (ordering gaps, partial persistence, or tests). Those must not
+        # suppress a different interaction_id, and redelivery for the same id
+        # still needs a snapshot-backed duplicate decision once the row exists.
         return ChatOperationDuplicateDecision(
             action=ChatOperationDuplicateAction.ACCEPT_FRESH,
-            reason="no_existing_snapshot",
+            reason=(
+                "ledger_without_shared_snapshot"
+                if operation_already_registered
+                else "no_existing_snapshot"
+            ),
             previous_state=None,
             delivery_pending=False,
+            rationale={"operation_already_registered": operation_already_registered},
         )
 
     if chat_operation_is_terminal_duplicate(snapshot):
