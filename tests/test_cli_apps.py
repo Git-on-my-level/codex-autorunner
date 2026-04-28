@@ -28,7 +28,11 @@ def _commit_repo(repo_path: Path, message: str) -> None:
 
 
 def _configure_apps_repo(
-    hub_root: Path, app_repo: Path, *, enabled: bool = True
+    hub_root: Path,
+    app_repo: Path,
+    *,
+    enabled: bool = True,
+    trusted: bool = True,
 ) -> None:
     config_path = hub_root / CONFIG_FILENAME
     raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
@@ -39,7 +43,7 @@ def _configure_apps_repo(
                 {
                     "id": "local",
                     "url": str(app_repo),
-                    "trusted": True,
+                    "trusted": trusted,
                     "default_ref": "main",
                 }
             ]
@@ -294,4 +298,35 @@ def test_apps_artifacts_json_lists_registered_and_local_files(
     assert (
         payload["app_local_artifact_files"][0]["relative_path"]
         == "artifacts/summary.md"
+    )
+
+
+def test_apps_run_refuses_untrusted_install(repo, hub_env, tmp_path: Path) -> None:
+    app_repo = _create_app_repo(tmp_path)
+    _configure_apps_repo(hub_env.hub_root, app_repo, trusted=False)
+    runner.invoke(
+        app,
+        ["apps", "install", "local:apps/hello", "--repo", str(repo), "--json"],
+    )
+
+    result = runner.invoke(
+        app,
+        ["apps", "run", "local.hello", "check", "--repo", str(repo), "--json"],
+    )
+
+    assert result.exit_code != 0
+    assert "Refusing to execute tools for untrusted installed app local.hello" in (
+        result.output
+    )
+
+
+def test_apps_list_refuses_when_disabled(repo, hub_env, tmp_path: Path) -> None:
+    app_repo = _create_app_repo(tmp_path)
+    _configure_apps_repo(hub_env.hub_root, app_repo, enabled=False)
+
+    result = runner.invoke(app, ["apps", "list", "--repo", str(repo), "--json"])
+
+    assert result.exit_code != 0
+    assert "Apps are disabled. Set apps.enabled=true in the hub config to enable." in (
+        result.output
     )

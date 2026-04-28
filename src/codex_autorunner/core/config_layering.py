@@ -886,11 +886,12 @@ def derive_repo_config_data(
     repo_defaults = hub_data.get("repo_defaults") or {}
     if not isinstance(repo_defaults, dict):
         raise ConfigError("hub.repo_defaults must be a mapping if provided")
-    merged = _merge_defaults(
-        DEFAULT_REPO_CONFIG, repo_shared_overrides_from_hub(hub_data)
-    )
+    merged = cast(Dict[str, Any], json.loads(json.dumps(DEFAULT_REPO_CONFIG)))
     if repo_defaults:
         merged = _merge_defaults(merged, repo_defaults)
+    shared_overrides = repo_shared_overrides_from_hub(hub_data)
+    if shared_overrides:
+        merged = _merge_defaults(merged, shared_overrides)
     repo_overrides = _load_repo_override(repo_root)
     if repo_overrides:
         merged = _merge_defaults(merged, repo_overrides)

@@ -33,7 +33,9 @@ def _commit_repo(repo_path: Path, message: str) -> None:
     run_git(["commit", "-m", message], repo_path, check=True)
 
 
-def _configure_apps_repo(hub_root: Path, app_repo: Path) -> None:
+def _configure_apps_repo(
+    hub_root: Path, app_repo: Path, *, trusted: bool = True
+) -> None:
     config_path = hub_root / CONFIG_FILENAME
     raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     raw["apps"] = {
@@ -42,7 +44,7 @@ def _configure_apps_repo(hub_root: Path, app_repo: Path) -> None:
             {
                 "id": "local",
                 "url": str(app_repo),
-                "trusted": True,
+                "trusted": trusted,
                 "default_ref": "main",
             }
         ],
@@ -117,6 +119,23 @@ def _install_runner_app(tmp_path: Path):
     repo_root.mkdir(parents=True, exist_ok=True)
     _init_repo(app_repo)
     _configure_apps_repo(hub_root, app_repo)
+    _write_runner_app(app_repo)
+    _commit_repo(app_repo, "add runner app")
+
+    hub_config = load_hub_config(hub_root)
+    install_result = install_app(hub_config, hub_root, repo_root, "local:apps/runner")
+    return repo_root, install_result
+
+
+def _install_runner_app_with_trust(tmp_path: Path, *, trusted: bool):
+    hub_root = tmp_path / "hub"
+    repo_root = tmp_path / "repo"
+    app_repo = tmp_path / "app_repo"
+
+    seed_hub_files(hub_root, force=True)
+    repo_root.mkdir(parents=True, exist_ok=True)
+    _init_repo(app_repo)
+    _configure_apps_repo(hub_root, app_repo, trusted=trusted)
     _write_runner_app(app_repo)
     _commit_repo(app_repo, "add runner app")
 
@@ -286,6 +305,14 @@ def test_dirty_bundle_refusal(tmp_path: Path) -> None:
     script_path.write_text(script_path.read_text(encoding="utf-8") + "\n# dirty\n")
 
     with pytest.raises(AppToolRunnerError, match="does not match app.lock.json"):
+        run_installed_app_tool(repo_root, "local.runner", "echo-env")
+
+
+def test_untrusted_app_refusal(tmp_path: Path) -> None:
+    repo_root, install_result = _install_runner_app_with_trust(tmp_path, trusted=False)
+
+    assert install_result.app.lock.trusted is False
+    with pytest.raises(AppToolRunnerError, match="Refusing to execute tools"):
         run_installed_app_tool(repo_root, "local.runner", "echo-env")
 
 

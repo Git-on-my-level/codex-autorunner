@@ -106,6 +106,7 @@ def run_installed_app_tool(
     repo_root = repo_root.resolve()
     workspace_root = (workspace_root or repo_root).resolve()
     installed = _require_installed_app(repo_root, app_id)
+    _ensure_installed_app_is_trusted(installed)
     _ensure_bundle_is_clean(installed)
     tool = _resolve_tool(installed, tool_id)
     runtime_timeout = _resolve_timeout_seconds(tool, timeout_seconds)
@@ -226,6 +227,15 @@ def _ensure_bundle_is_clean(installed: InstalledAppInfo) -> None:
     raise AppToolRunnerError(
         "Installed app bundle does not match app.lock.json; reinstall the app "
         f"before running tools: {installed.app_id}"
+    )
+
+
+def _ensure_installed_app_is_trusted(installed: InstalledAppInfo) -> None:
+    if installed.lock.trusted:
+        return
+    raise AppToolRunnerError(
+        "Refusing to execute tools for untrusted installed app "
+        f"{installed.app_id}. Reinstall from a trusted apps repo before running tools."
     )
 
 
