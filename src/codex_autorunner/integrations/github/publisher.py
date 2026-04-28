@@ -15,13 +15,21 @@ Ownership boundaries:
 
 from __future__ import annotations
 
+import asyncio
+import logging
+import threading
+from dataclasses import replace
 from pathlib import Path
-from typing import Any, Callable, Optional, Protocol, cast
+from typing import Any, Callable, Coroutine, Optional, Protocol, cast
 
 from ...core.publish_executor import PublishActionExecutor, TerminalPublishError
 from ...core.publish_journal import PublishOperation
+from ...core.publish_operation_executors import build_enqueue_managed_turn_executor
 from ...core.text_utils import _normalize_optional_text
+from ..chat.bound_chat_execution_metadata import merge_bound_chat_execution_metadata
 from .service import GitHubError, GitHubService, RepoInfo, parse_pr_input
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class GitHubCommentPublisher(Protocol):
@@ -55,6 +63,33 @@ GitHubServiceFactory = Callable[
 
 def _normalize_payload(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, dict) else {}
+
+
+def _normalize_mapping(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _run_coroutine_sync(coro: Coroutine[Any, Any, Any]) -> Any:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    result: list[Any] = []
+    error: list[BaseException] = []
+
+    def _runner() -> None:
+        try:
+            result.append(asyncio.run(coro))
+        except BaseException as exc:  # pragma: no cover - defensive bridge
+            error.append(exc)
+
+    thread = threading.Thread(target=_runner, daemon=True)
+    thread.start()
+    thread.join()
+    if error:
+        raise error[0]
+    return result[0] if result else None
 
 
 def _require_text(value: Any, *, field_name: str) -> str:
@@ -222,6 +257,173 @@ def build_react_pr_review_comment_executor(
     return executor
 
 
+def _scm_progress_subject(tracking: dict[str, Any]) -> str:
+    repo_slug = _normalize_optional_text(tracking.get("repo_slug"))
+    pr_number = tracking.get("pr_number")
+    if isinstance(pr_number, str) and pr_number.strip().isdigit():
+        pr_number = int(pr_number.strip())
+    if isinstance(pr_number, int):
+        if repo_slug:
+            return f"{repo_slug}#{pr_number}"
+        return f"PR #{pr_number}"
+    return repo_slug or "the bound PR"
+
+
+def _scm_progress_message(payload: dict[str, Any]) -> str:
+    tracking = _normalize_mapping(payload.get("scm_reaction"))
+    reaction_kind = _normalize_optional_text(tracking.get("reaction_kind"))
+    subject = _scm_progress_subject(tracking)
+    if reaction_kind == "ci_failed":
+        return f"Investigating CI failure on {subject}..."
+    if reaction_kind == "review_comment":
+        return f"Processing review comment on {subject}..."
+    if reaction_kind == "changes_requested":
+        return f"Addressing requested changes on {subject}..."
+    if reaction_kind:
+        return f"Processing {reaction_kind.replace('_', ' ')} on {subject}..."
+    request = _normalize_mapping(payload.get("request")) or payload
+    prompt = _normalize_optional_text(
+        request.get("message_text") or request.get("prompt") or request.get("body")
+    )
+    if prompt:
+        return prompt
+    return f"Processing SCM wake-up for {subject}..."
+
+
+def _payload_with_bound_progress_metadata(
+    payload: dict[str, Any],
+    *,
+    progress_targets: tuple[tuple[str, str], ...],
+) -> dict[str, Any]:
+    if not progress_targets:
+        return payload
+    request = _normalize_mapping(payload.get("request"))
+    source = request if request else payload
+    metadata = _normalize_mapping(source.get("metadata"))
+    origin_surface_kind, origin_surface_key = progress_targets[0]
+    merged_metadata = merge_bound_chat_execution_metadata(
+        metadata,
+        origin_kind="surface",
+        origin_surface_kind=origin_surface_kind,
+        origin_surface_key=origin_surface_key,
+        progress_targets=progress_targets,
+    )
+    if request:
+        return {
+            **payload,
+            "request": {
+                **request,
+                "metadata": merged_metadata,
+            },
+        }
+    return {
+        **payload,
+        "metadata": merged_metadata,
+    }
+
+
+async def _start_scm_bound_live_progress(
+    *,
+    hub_root: Path,
+    raw_config: Optional[dict[str, Any]],
+    managed_thread_id: str,
+    managed_turn_id: str,
+    agent: str,
+    model: Optional[str],
+    progress_targets: tuple[tuple[str, str], ...],
+    message: str,
+) -> bool:
+    from ..chat.bound_live_progress import build_bound_chat_live_progress_session
+
+    session = build_bound_chat_live_progress_session(
+        hub_root=hub_root,
+        raw_config=raw_config or {},
+        managed_thread_id=managed_thread_id,
+        managed_turn_id=managed_turn_id,
+        agent=agent,
+        model=model,
+        surface_targets=progress_targets,
+    )
+    session.tracker.note_commentary(message)
+    try:
+        return await session.start()
+    finally:
+        await session.close()
+
+
+def build_github_enqueue_managed_turn_executor(
+    *,
+    repo_root: Path,
+    raw_config: Optional[dict[str, Any]] = None,
+) -> PublishActionExecutor:
+    base_executor = build_enqueue_managed_turn_executor(hub_root=repo_root)
+
+    def executor(operation: PublishOperation) -> dict[str, Any]:
+        from ..chat.bound_live_progress import bound_chat_live_progress_targets
+
+        payload = _normalize_payload(operation.payload)
+        requested_thread_id = _normalize_optional_text(payload.get("thread_target_id"))
+        progress_targets = (
+            bound_chat_live_progress_targets(
+                hub_root=repo_root,
+                managed_thread_id=requested_thread_id,
+            )
+            if requested_thread_id is not None
+            else ()
+        )
+        progress_payload = _payload_with_bound_progress_metadata(
+            payload,
+            progress_targets=progress_targets,
+        )
+        effective_operation = (
+            operation
+            if progress_payload == payload
+            else replace(operation, payload=progress_payload)
+        )
+        result = base_executor(effective_operation)
+        if (
+            progress_targets
+            and result.get("deduped") is not True
+            and result.get("queued") is not True
+        ):
+            managed_thread_id = _normalize_optional_text(result.get("thread_target_id"))
+            managed_turn_id = _normalize_optional_text(result.get("managed_turn_id"))
+            request = _normalize_mapping(progress_payload.get("request"))
+            source = request if request else progress_payload
+            if managed_thread_id is not None and managed_turn_id is not None:
+                try:
+                    published = _run_coroutine_sync(
+                        _start_scm_bound_live_progress(
+                            hub_root=repo_root,
+                            raw_config=raw_config,
+                            managed_thread_id=managed_thread_id,
+                            managed_turn_id=managed_turn_id,
+                            agent="agent",
+                            model=_normalize_optional_text(source.get("model")),
+                            progress_targets=progress_targets,
+                            message=_scm_progress_message(progress_payload),
+                        )
+                    )
+                except Exception:
+                    _LOGGER.warning(
+                        "GitHub SCM managed-turn progress placeholder failed "
+                        "(thread_target_id=%s, managed_turn_id=%s)",
+                        managed_thread_id,
+                        managed_turn_id,
+                        exc_info=True,
+                    )
+                else:
+                    result["progress_published"] = bool(published)
+                    result["progress_targets"] = [
+                        {"surface_kind": kind, "surface_key": key}
+                        for kind, key in progress_targets
+                    ]
+        return result
+
+    cast(Any, executor).mutation_policy_config = raw_config
+    return executor
+
+
 def build_github_publish_executors(
     *,
     repo_root: Path,
@@ -229,15 +431,20 @@ def build_github_publish_executors(
     github_service_factory: Optional[GitHubServiceFactory] = None,
 ) -> dict[str, PublishActionExecutor]:
     return {
+        "enqueue_managed_turn": build_github_enqueue_managed_turn_executor(
+            repo_root=repo_root,
+            raw_config=raw_config,
+        ),
         "react_pr_review_comment": build_react_pr_review_comment_executor(
             repo_root=repo_root,
             raw_config=raw_config,
             github_service_factory=github_service_factory,
-        )
+        ),
     }
 
 
 __all__ = [
+    "build_github_enqueue_managed_turn_executor",
     "build_github_publish_executors",
     "build_react_pr_review_comment_executor",
     "build_post_pr_comment_executor",
