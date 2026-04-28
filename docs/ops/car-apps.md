@@ -80,12 +80,16 @@ car apps apply my-org.my-workflow --set goal="Fix the bug"
 
 # Explicit ticket index
 car apps apply my-org.my-workflow --at 5 --set goal="Fix the bug"
+
+# Apply a named template instead of the entrypoint
+car apps apply my-org.my-workflow --template iteration --set goal="Fix the bug"
 ```
 
 Applying an app:
 
 1. Installs the app first if not already installed (when using a source ref).
-2. Creates an entrypoint ticket from `entrypoint.template`.
+2. Creates a ticket from `entrypoint.template` unless `--template <name>` selects a
+   named template from `templates`.
 3. Injects app provenance into ticket frontmatter (`app`, `app_version`,
    `app_source`, `app_commit`, `app_manifest_sha`, `app_bundle_sha`).
 4. Writes apply inputs to `state/apply-inputs.json`.

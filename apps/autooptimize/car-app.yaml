@@ -1,0 +1,95 @@
+schema_version: 1
+id: blessed.autooptimize
+name: AutoOptimize
+version: 0.1.0
+description: >
+  Metric-driven iterative optimization workflow for CAR using app-owned state,
+  declared tools, reusable ticket templates, and summary artifacts.
+
+entrypoint:
+  template: templates/bootstrap.md
+
+inputs:
+  goal:
+    required: true
+    description: Optimization goal or campaign objective.
+  metric_name:
+    required: false
+    description: Primary metric name if already known.
+  direction:
+    required: false
+    description: "Metric direction hint: higher or lower."
+  unit:
+    required: false
+    description: Metric unit hint such as ms, %, or req/s.
+
+templates:
+  bootstrap:
+    path: templates/bootstrap.md
+    description: Bootstrap an optimization campaign and queue baseline work.
+  baseline:
+    path: templates/baseline.md
+    description: Record the baseline measurement for the campaign.
+  iteration:
+    path: templates/iteration.md
+    description: Run one measurable optimization hypothesis.
+  closeout:
+    path: templates/closeout.md
+    description: Validate state and render final summary artifacts.
+
+tools:
+  init-run:
+    description: Initialize or reset AutoOptimize campaign state.
+    argv: ["python3", "scripts/init_run.py"]
+    timeout_seconds: 15
+  record-baseline:
+    description: Record the baseline metric and seed the current best result.
+    argv: ["python3", "scripts/record_baseline.py"]
+    timeout_seconds: 15
+  record-iteration:
+    description: Append one iteration record and update the current best result.
+    argv: ["python3", "scripts/record_iteration.py"]
+    timeout_seconds: 15
+  status:
+    description: Print or emit JSON campaign status.
+    argv: ["python3", "scripts/status.py"]
+    timeout_seconds: 10
+  validate-state:
+    description: Validate AutoOptimize state files and derived best result.
+    argv: ["python3", "scripts/validate_state.py"]
+    timeout_seconds: 15
+  render-summary-card:
+    description: Render markdown and SVG summary artifacts for the campaign.
+    argv: ["python3", "scripts/render_summary_card.py"]
+    timeout_seconds: 30
+    outputs:
+      - kind: markdown
+        path: artifacts/summary.md
+        label: "AutoOptimize summary"
+      - kind: image
+        path: artifacts/summary.svg
+        label: "AutoOptimize summary card (SVG)"
+      - kind: image
+        path: artifacts/summary.png
+        label: "AutoOptimize summary card (PNG)"
+
+hooks:
+  after_flow_terminal:
+    - tool: render-summary-card
+      when:
+        status: completed
+      failure: warn
+  before_chat_wrapup:
+    - artifacts:
+        - "artifacts/summary.md"
+        - "artifacts/summary.svg"
+        - "artifacts/summary.png"
+
+permissions:
+  network: false
+  writes:
+    - "state/**"
+    - "artifacts/**"
+    - "logs/**"
+  reads:
+    - "**"

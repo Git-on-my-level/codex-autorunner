@@ -110,6 +110,12 @@ Or using an installed app id:
 car apps apply my-org.my-workflow --set goal="Improve performance"
 ```
 
+Or apply a named template declared by the manifest:
+
+```bash
+car apps apply my-org.my-workflow --template iteration --set goal="Improve performance"
+```
+
 ### 5. Run a tool
 
 ```bash
@@ -194,7 +200,7 @@ car apps show <app-ref-or-id> [--repo .] [--json]
 car apps install <app-ref> [--repo .] [--force] [--json]
 car apps installed [--repo .] [--json]
 car apps tools <app-id> [--repo .] [--json]
-car apps apply <app-ref-or-id> [--repo .] [--at N] [--next] [--set key=value]... [--json]
+car apps apply <app-ref-or-id> [--repo .] [--at N] [--next] [--template NAME] [--set key=value]... [--json]
 car apps run <app-id> <tool-id> [--repo .] [--timeout SECONDS] [--json] -- <tool-args...>
 car apps artifacts <app-id> [--repo .] [--run-id RUN_ID] [--json]
 ```

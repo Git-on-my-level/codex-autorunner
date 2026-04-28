@@ -72,6 +72,10 @@ inputs:
 tools:
   check:
     argv: ["python3", "scripts/check.py"]
+templates:
+  followup:
+    path: templates/followup.md
+    description: Follow-up ticket template.
 """,
         encoding="utf-8",
     )
@@ -84,6 +88,18 @@ title: Hello Ticket
 
 # Bootstrap
 Base body.
+""",
+        encoding="utf-8",
+    )
+    (app_root / "templates" / "followup.md").write_text(
+        """---
+agent: opencode
+done: false
+title: Follow-up Ticket
+---
+
+# Follow-up
+Secondary body.
 """,
         encoding="utf-8",
     )
@@ -240,3 +256,27 @@ def test_apply_generated_ticket_passes_lint_without_dependency_frontmatter(
     assert lint_result.returncode == 0
     assert lint_result.stdout == "OK: 1 ticket(s) linted.\n"
     assert lint_result.stderr == ""
+
+
+def test_apply_named_template_uses_declared_template(tmp_path: Path) -> None:
+    hub_root, repo_root, _app_repo = _setup_apply_env(tmp_path)
+    hub_config = load_hub_config(hub_root)
+    install_app(hub_config, hub_root, repo_root, "local:apps/hello")
+
+    result = apply_app_entrypoint(
+        repo_root,
+        "local.hello",
+        template_name="followup",
+        app_inputs={"goal": "follow"},
+    )
+
+    frontmatter, body = parse_markdown_frontmatter(
+        result.ticket_path.read_text(encoding="utf-8")
+    )
+    persisted = json.loads(result.apply_inputs_path.read_text(encoding="utf-8"))
+
+    assert result.template_name == "followup"
+    assert frontmatter["agent"] == "opencode"
+    assert frontmatter["title"] == "Follow-up Ticket"
+    assert "# Follow-up" in body
+    assert persisted["template_name"] == "followup"

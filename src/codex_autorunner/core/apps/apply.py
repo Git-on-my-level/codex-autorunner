@@ -34,6 +34,7 @@ class AppliedAppTicket:
     ticket_path: Path
     ticket_index: int
     source_ref: str
+    template_name: str
     app_inputs: dict[str, Any]
     apply_inputs_path: Path
     install_changed: bool
@@ -48,6 +49,7 @@ def apply_app_entrypoint(
     at: Optional[int] = None,
     next_index: bool = True,
     suffix: Optional[str] = None,
+    template_name: Optional[str] = None,
     app_inputs: Optional[dict[str, Any]] = None,
 ) -> AppliedAppTicket:
     installed_app, install_changed = _resolve_app_install(
@@ -57,7 +59,7 @@ def apply_app_entrypoint(
         hub_root=hub_root,
     )
     manifest = installed_app.manifest
-    if manifest.entrypoint is None:
+    if template_name is None and manifest.entrypoint is None:
         raise AppApplyError(
             f"Installed app {installed_app.app_id} does not declare entrypoint.template"
         )
@@ -96,7 +98,11 @@ def apply_app_entrypoint(
     parsed_inputs = dict(app_inputs or {})
     _validate_declared_inputs(installed_app, parsed_inputs)
 
-    content = _render_ticket_content(installed_app, parsed_inputs)
+    selected_template_name, content = _render_ticket_content(
+        installed_app,
+        parsed_inputs,
+        template_name=template_name,
+    )
     atomic_write(ticket_path, content)
 
     apply_inputs_path = installed_app.paths.state_root / "apply-inputs.json"
@@ -107,6 +113,7 @@ def apply_app_entrypoint(
         "app_commit": installed_app.lock.commit_sha,
         "app_manifest_sha": installed_app.lock.manifest_sha,
         "app_bundle_sha": installed_app.lock.bundle_sha,
+        "template_name": selected_template_name,
         "ticket_path": str(ticket_path.relative_to(repo_root)),
         "ticket_index": ticket_index,
         "inputs": parsed_inputs,
@@ -121,6 +128,7 @@ def apply_app_entrypoint(
         ticket_path=ticket_path,
         ticket_index=ticket_index,
         source_ref=_source_ref_from_lock(installed_app),
+        template_name=selected_template_name,
         app_inputs=parsed_inputs,
         apply_inputs_path=apply_inputs_path,
         install_changed=install_changed,
@@ -155,28 +163,65 @@ def _resolve_app_install(
 def _render_ticket_content(
     installed_app: InstalledAppInfo,
     app_inputs: dict[str, Any],
-) -> str:
-    entrypoint = installed_app.manifest.entrypoint
-    assert entrypoint is not None
-    template_path = installed_app.paths.bundle_root / entrypoint.path
+    *,
+    template_name: Optional[str],
+) -> tuple[str, str]:
+    selected_template_name, template_path = _resolve_template_path(
+        installed_app,
+        template_name=template_name,
+    )
+    return _render_selected_template(
+        installed_app,
+        app_inputs,
+        selected_template_name=selected_template_name,
+        template_path=template_path,
+    )
+
+
+def _resolve_template_path(
+    installed_app: InstalledAppInfo,
+    *,
+    template_name: Optional[str],
+) -> tuple[str, Path]:
+    manifest = installed_app.manifest
+    if template_name is None:
+        entrypoint = manifest.entrypoint
+        assert entrypoint is not None
+        return "entrypoint", installed_app.paths.bundle_root / entrypoint.path
+
+    selected = manifest.templates.get(template_name)
+    if selected is None:
+        available = ", ".join(sorted(manifest.templates)) or "(none declared)"
+        raise AppApplyError(
+            f"Unknown app template for {installed_app.app_id}: {template_name}. "
+            f"Available templates: {available}"
+        )
+    return template_name, installed_app.paths.bundle_root / selected.path
+
+
+def _render_selected_template(
+    installed_app: InstalledAppInfo,
+    app_inputs: dict[str, Any],
+    *,
+    selected_template_name: str,
+    template_path: Path,
+) -> tuple[str, str]:
     if not template_path.exists() or not template_path.is_file():
-        raise AppApplyError(f"Entrypoint template not found: {template_path}")
+        raise AppApplyError(f"App template not found: {template_path}")
 
     raw = template_path.read_text(encoding="utf-8")
     fm_yaml, body = split_markdown_frontmatter(raw)
     if fm_yaml is None:
         raise AppApplyError(
-            f"Entrypoint template is missing YAML frontmatter: {template_path}"
+            f"App template is missing YAML frontmatter: {template_path}"
         )
     try:
         frontmatter = yaml.safe_load(fm_yaml)
     except yaml.YAMLError as exc:
-        raise AppApplyError(
-            f"Entrypoint template frontmatter is invalid YAML: {exc}"
-        ) from exc
+        raise AppApplyError(f"App template frontmatter is invalid YAML: {exc}") from exc
     if not isinstance(frontmatter, dict):
         raise AppApplyError(
-            f"Entrypoint template frontmatter must be a YAML mapping: {template_path}"
+            f"App template frontmatter must be a YAML mapping: {template_path}"
         )
 
     frontmatter["app"] = installed_app.app_id
@@ -186,7 +231,7 @@ def _render_ticket_content(
     frontmatter["app_manifest_sha"] = installed_app.lock.manifest_sha
     frontmatter["app_bundle_sha"] = installed_app.lock.bundle_sha
 
-    return render_markdown_frontmatter(
+    return selected_template_name, render_markdown_frontmatter(
         frontmatter,
         _append_app_inputs_section(body, app_inputs),
     )

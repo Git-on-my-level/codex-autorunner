@@ -72,6 +72,10 @@ inputs:
   goal:
     required: true
     description: Goal for the entrypoint ticket.
+templates:
+  followup:
+    path: templates/followup.md
+    description: Follow-up ticket.
 tools:
   check:
     argv: ["python3", "scripts/check.py"]
@@ -87,6 +91,18 @@ title: CLI Ticket
 
 # Bootstrap
 Hello from CLI apply.
+""",
+        encoding="utf-8",
+    )
+    (app_repo / "apps" / "hello" / "templates" / "followup.md").write_text(
+        """---
+agent: opencode
+done: false
+title: Followup CLI Ticket
+---
+
+# Followup
+Hello from CLI named template.
 """,
         encoding="utf-8",
     )
@@ -253,6 +269,36 @@ def test_apps_apply_json(repo, hub_env, tmp_path: Path) -> None:
     ticket_text = ticket_path.read_text(encoding="utf-8")
     assert "## App Inputs" in ticket_text
     assert "- `goal`: `demo`" in ticket_text
+
+
+def test_apps_apply_named_template_json(repo, hub_env, tmp_path: Path) -> None:
+    app_repo = _create_app_repo(tmp_path)
+    _configure_apps_repo(hub_env.hub_root, app_repo)
+
+    result = runner.invoke(
+        app,
+        [
+            "apps",
+            "apply",
+            "local:apps/hello",
+            "--repo",
+            str(repo),
+            "--template",
+            "followup",
+            "--json",
+            "--set",
+            "goal=demo",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["template_name"] == "followup"
+
+    ticket_path = Path(payload["ticket_path"])
+    ticket_text = ticket_path.read_text(encoding="utf-8")
+    assert "Followup CLI Ticket" in ticket_text
+    assert "# Followup" in ticket_text
 
 
 def test_apps_artifacts_json_lists_registered_and_local_files(

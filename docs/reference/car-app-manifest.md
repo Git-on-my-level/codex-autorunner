@@ -74,6 +74,10 @@ Each template has:
 | `path` | string | Bundle-relative path to the template file |
 | `description` | string | Human-readable description |
 
+When `car apps apply --template <name>` is used, CAR renders the matching
+declared template. When `--template` is omitted, CAR uses
+`entrypoint.template`.
+
 ## Tools
 
 ```yaml

@@ -183,6 +183,11 @@ def register_apps_commands(
         next_index: bool = typer.Option(
             True, "--next/--no-next", help="Use next available index (default)"
         ),
+        template_name: Optional[str] = typer.Option(
+            None,
+            "--template",
+            help="Apply a named app template instead of the entrypoint template.",
+        ),
         suffix: Optional[str] = typer.Option(
             None, "--suffix", help="Optional filename suffix (e.g. -foo)"
         ),
@@ -219,6 +224,7 @@ def register_apps_commands(
                 at=at,
                 next_index=next_index,
                 suffix=suffix,
+                template_name=template_name,
                 app_inputs=parsed_inputs,
             )
         except (AppApplyError, AppInstallConflictError, AppInstallError) as exc:
@@ -605,6 +611,7 @@ def _app_apply_payload(result, repo_root: Path) -> dict[str, object]:
         "ticket_path_repo_relative": str(result.ticket_path.relative_to(repo_root)),
         "ticket_index": result.ticket_index,
         "source_ref": result.source_ref,
+        "template_name": result.template_name,
         "app_inputs": result.app_inputs,
         "apply_inputs_path": str(result.apply_inputs_path),
         "install_changed": result.install_changed,
