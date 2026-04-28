@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping, Optional, Sequence
 
+from ...tickets.files import read_ticket_frontmatter
 from ..utils import subprocess_env
 from .artifacts import (
     collect_declared_tool_artifact_candidates,
@@ -108,6 +109,7 @@ def run_installed_app_tool(
     installed = _require_installed_app(repo_root, app_id)
     _ensure_installed_app_is_trusted(installed)
     _ensure_bundle_is_clean(installed)
+    _validate_ticket_app_provenance(installed, ticket_path)
     tool = _resolve_tool(installed, tool_id)
     runtime_timeout = _resolve_timeout_seconds(tool, timeout_seconds)
     argv = _build_tool_argv(installed, tool, extra_argv)
@@ -246,6 +248,77 @@ def _resolve_tool(installed: InstalledAppInfo, tool_id: str) -> AppTool:
             f"Unknown tool for installed app {installed.app_id}: {tool_id}"
         )
     return tool
+
+
+def _validate_ticket_app_provenance(
+    installed: InstalledAppInfo, ticket_path: Optional[Path]
+) -> None:
+    if ticket_path is None:
+        return
+    resolved_ticket_path = ticket_path.resolve()
+    frontmatter, errors = read_ticket_frontmatter(resolved_ticket_path)
+    if errors or frontmatter is None:
+        detail = errors[0] if errors else "missing ticket frontmatter"
+        raise AppToolRunnerError(
+            "Unable to validate ticket app provenance from "
+            f"{resolved_ticket_path}: {detail}"
+        )
+
+    payload: dict[str, object] = {}
+    extra = getattr(frontmatter, "extra", None)
+    if isinstance(extra, Mapping):
+        payload.update({str(key): value for key, value in extra.items()})
+
+    app_id = payload.get("app")
+    if app_id is not None and str(app_id).strip() != installed.app_id:
+        raise AppToolRunnerError(
+            "Ticket app provenance mismatch: "
+            f"{resolved_ticket_path} targets app {app_id!r}, "
+            f"but runner was asked to execute {installed.app_id!r}."
+        )
+
+    _ensure_expected_ticket_value(
+        label="app_version",
+        expected=payload.get("app_version"),
+        actual=installed.app_version,
+        installed=installed,
+        ticket_path=resolved_ticket_path,
+    )
+    _ensure_expected_ticket_value(
+        label="app_manifest_sha",
+        expected=payload.get("app_manifest_sha"),
+        actual=installed.lock.manifest_sha,
+        installed=installed,
+        ticket_path=resolved_ticket_path,
+    )
+    _ensure_expected_ticket_value(
+        label="app_bundle_sha",
+        expected=payload.get("app_bundle_sha"),
+        actual=installed.lock.bundle_sha,
+        installed=installed,
+        ticket_path=resolved_ticket_path,
+    )
+
+
+def _ensure_expected_ticket_value(
+    *,
+    label: str,
+    expected: object,
+    actual: str,
+    installed: InstalledAppInfo,
+    ticket_path: Path,
+) -> None:
+    if expected is None:
+        return
+    expected_text = str(expected).strip()
+    if not expected_text or expected_text == actual:
+        return
+    raise AppToolRunnerError(
+        "Ticket app provenance mismatch: "
+        f"{ticket_path} expects {installed.app_id} {label}={expected_text!r}, "
+        f"but the installed app has {label}={actual!r}. Reinstall the expected app "
+        "version or regenerate the ticket from the current app."
+    )
 
 
 def _resolve_timeout_seconds(tool: AppTool, override: Optional[float]) -> float:

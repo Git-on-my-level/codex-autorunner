@@ -157,10 +157,28 @@ def test_list_installed_app_tools(tmp_path: Path) -> None:
 
 
 def test_run_installed_app_tool_success(tmp_path: Path) -> None:
-    repo_root, _install_result = _install_runner_app(tmp_path)
+    repo_root, install_result = _install_runner_app(tmp_path)
     ticket_path = repo_root / ".codex-autorunner" / "tickets" / "TICKET-1.md"
     ticket_path.parent.mkdir(parents=True, exist_ok=True)
-    ticket_path.write_text("# ticket\n", encoding="utf-8")
+    ticket_path.write_text(
+        "\n".join(
+            [
+                "---",
+                'ticket_id: "tkt_runner_success"',
+                'agent: "codex"',
+                "done: false",
+                'app: "local.runner"',
+                f'app_version: "{install_result.app.app_version}"',
+                f'app_manifest_sha: "{install_result.app.lock.manifest_sha}"',
+                f'app_bundle_sha: "{install_result.app.lock.bundle_sha}"',
+                "---",
+                "",
+                "runner ticket",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
 
     result = run_installed_app_tool(
         repo_root,
@@ -314,6 +332,37 @@ def test_untrusted_app_refusal(tmp_path: Path) -> None:
     assert install_result.app.lock.trusted is False
     with pytest.raises(AppToolRunnerError, match="Refusing to execute tools"):
         run_installed_app_tool(repo_root, "local.runner", "echo-env")
+
+
+def test_ticket_app_version_mismatch_refusal(tmp_path: Path) -> None:
+    repo_root, _install_result = _install_runner_app(tmp_path)
+    ticket_path = repo_root / ".codex-autorunner" / "tickets" / "TICKET-2.md"
+    ticket_path.parent.mkdir(parents=True, exist_ok=True)
+    ticket_path.write_text(
+        "\n".join(
+            [
+                "---",
+                'ticket_id: "tkt_runner_mismatch"',
+                'agent: "codex"',
+                "done: false",
+                'app: "local.runner"',
+                'app_version: "9.9.9"',
+                "---",
+                "",
+                "runner ticket",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(AppToolRunnerError, match="app_version"):
+        run_installed_app_tool(
+            repo_root,
+            "local.runner",
+            "echo-env",
+            ticket_path=ticket_path,
+        )
 
 
 def test_unknown_app_and_tool_errors(tmp_path: Path) -> None:
