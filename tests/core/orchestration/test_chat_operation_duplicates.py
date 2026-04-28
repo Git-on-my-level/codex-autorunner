@@ -79,13 +79,13 @@ def test_duplicate_plan_accepts_received_for_replay() -> None:
     assert decision.reason == "received_allows_ingress_replay"
 
 
-def test_duplicate_plan_suppresses_existing_record_without_snapshot() -> None:
+def test_duplicate_plan_accepts_fresh_when_registered_without_shared_snapshot() -> None:
     decision = plan_chat_operation_duplicate(
         None,
         operation_already_registered=True,
     )
-    assert decision.action is ChatOperationDuplicateAction.SUPPRESS_IN_FLIGHT
-    assert decision.reason == "existing_operation_duplicate_suppressed"
+    assert decision.action is ChatOperationDuplicateAction.ACCEPT_FRESH
+    assert decision.reason == "ledger_without_shared_snapshot"
 
 
 def test_terminal_duplicate_helper_accepts_abandoned_terminal_outcome() -> None:

@@ -249,6 +249,69 @@ async def test_managed_thread_turn_coordinator_runs_lifecycle_hooks(
 
 
 @pytest.mark.anyio
+async def test_managed_thread_turn_coordinator_records_error_when_finalization_is_cancelled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = _build_started_execution(tmp_path)
+    recorded: list[dict[str, Any]] = []
+
+    async def _cancelled_finalize(**kwargs: Any) -> None:
+        _ = kwargs
+        raise asyncio.CancelledError()
+
+    class _Service:
+        def get_execution(
+            self, managed_thread_id: str, managed_turn_id: str
+        ) -> SimpleNamespace:
+            _ = managed_thread_id, managed_turn_id
+            return SimpleNamespace(status="running")
+
+        def record_execution_result(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
+            recorded.append({"args": args, "kwargs": kwargs})
+            return SimpleNamespace(status="error", error=kwargs["error"])
+
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "finalize_managed_thread_execution",
+        _cancelled_finalize,
+    )
+    coordinator = managed_thread_turns_module.ManagedThreadTurnCoordinator(
+        orchestration_service=_Service(),
+        state_root=tmp_path,
+        surface=managed_thread_turns_module.ManagedThreadSurfaceInfo(
+            log_label="Test",
+            surface_kind="test",
+            surface_key="surface-1",
+        ),
+        errors=managed_thread_turns_module.ManagedThreadErrorMessages(
+            public_execution_error="public finalization failure",
+            timeout_error="timeout",
+            interrupted_error="interrupted",
+            timeout_seconds=30,
+        ),
+        logger=logging.getLogger("test"),
+        turn_preview="preview",
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await coordinator.run_started_execution(started)
+
+    assert recorded == [
+        {
+            "args": ("thread-1", "exec-1"),
+            "kwargs": {
+                "status": "error",
+                "assistant_text": "",
+                "error": "public finalization failure",
+                "backend_turn_id": None,
+                "transcript_turn_id": None,
+            },
+        }
+    ]
+
+
+@pytest.mark.anyio
 async def test_managed_thread_turn_coordinator_uses_preview_builder_per_execution(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

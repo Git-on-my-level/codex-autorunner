@@ -1148,6 +1148,7 @@ class ManagedThreadTurnCoordinator:
             ManagedThreadExecutionHooks | ManagedThreadCoordinatorHooks
         ] = None,
         runtime_event_state: Optional[RuntimeThreadRunEventState] = None,
+        record_finalization_failure: bool = True,
     ) -> ManagedThreadFinalizationResult:
         resolved_hooks = _coerce_execution_hooks(hooks)
         turn_preview = self.turn_preview
@@ -1187,6 +1188,17 @@ class ManagedThreadTurnCoordinator:
             )
             return finalized
         except BaseException as exc:
+            if record_finalization_failure and isinstance(
+                exc, (asyncio.CancelledError, Exception)
+            ):
+                _record_managed_thread_finalization_failure(
+                    orchestration_service=self.orchestration_service,
+                    started=started,
+                    surface=self.surface,
+                    errors=self.errors,
+                    logger=self.logger,
+                    exc=exc,
+                )
             await _invoke_execution_error_hook(
                 resolved_hooks.on_execution_error,
                 started,
@@ -1217,6 +1229,7 @@ class ManagedThreadTurnCoordinator:
                 hooks=_queue_worker_progress_execution_hooks(
                     resolved_hooks.execution_hooks
                 ),
+                record_finalization_failure=False,
             ),
             durable_delivery=resolved_hooks.durable_delivery,
             run_with_indicator=resolved_hooks.run_with_indicator,
@@ -1338,6 +1351,97 @@ def _resolve_repo_raw_config_for_workspace(
         if isinstance(resolved_raw_config, dict)
         else normalized_raw_config
     )
+
+
+def _managed_thread_finalization_failure_detail(
+    started: RuntimeThreadExecution,
+    errors: ManagedThreadErrorMessages,
+    exc: BaseException,
+) -> str:
+    metadata = getattr(started.request, "metadata", {})
+    configured = ""
+    if isinstance(metadata, Mapping):
+        configured = str(metadata.get("execution_error_message") or "").strip()
+    if configured:
+        return configured
+    detail = str(exc).strip()
+    if detail:
+        return detail
+    return errors.public_execution_error
+
+
+def _record_managed_thread_finalization_failure(
+    *,
+    orchestration_service: Any,
+    started: RuntimeThreadExecution,
+    surface: ManagedThreadSurfaceInfo,
+    errors: ManagedThreadErrorMessages,
+    logger: logging.Logger,
+    exc: BaseException,
+) -> None:
+    managed_thread_id = started.thread.thread_target_id
+    managed_turn_id = started.execution.execution_id
+    detail = _managed_thread_finalization_failure_detail(started, errors, exc)
+    try:
+        get_execution = getattr(orchestration_service, "get_execution", None)
+        if callable(get_execution):
+            current = get_execution(managed_thread_id, managed_turn_id)
+            current_status = str(getattr(current, "status", "") or "").strip()
+            if current is not None and current_status != "running":
+                return
+        orchestration_service.record_execution_result(
+            managed_thread_id,
+            managed_turn_id,
+            status="error",
+            assistant_text="",
+            error=detail,
+            backend_turn_id=getattr(started.execution, "backend_id", None),
+            transcript_turn_id=None,
+        )
+    except asyncio.CancelledError:
+        log_event(
+            logger,
+            logging.WARNING,
+            "chat.managed_thread.finalization_failure_status_record_cancelled",
+            **_managed_thread_trace_fields(
+                managed_thread_id=managed_thread_id,
+                managed_turn_id=managed_turn_id,
+                backend_thread_id=getattr(started.thread, "backend_thread_id", None),
+                backend_turn_id=getattr(started.execution, "backend_id", None),
+                surface=surface,
+            ),
+            detail=detail,
+        )
+    except Exception as record_exc:
+        log_event(
+            logger,
+            logging.WARNING,
+            "chat.managed_thread.finalization_failure_status_record_failed",
+            **_managed_thread_trace_fields(
+                managed_thread_id=managed_thread_id,
+                managed_turn_id=managed_turn_id,
+                backend_thread_id=getattr(started.thread, "backend_thread_id", None),
+                backend_turn_id=getattr(started.execution, "backend_id", None),
+                surface=surface,
+            ),
+            detail=detail,
+            exc=record_exc,
+        )
+    else:
+        log_event(
+            logger,
+            logging.WARNING,
+            "chat.managed_thread.finalization_failure_status_recorded",
+            **_managed_thread_trace_fields(
+                managed_thread_id=managed_thread_id,
+                managed_turn_id=managed_turn_id,
+                backend_thread_id=getattr(started.thread, "backend_thread_id", None),
+                backend_turn_id=getattr(started.execution, "backend_id", None),
+                surface=surface,
+            ),
+            detail=detail,
+            error_type=type(exc).__name__,
+        )
 
 
 async def _persist_execution_timeline_via_hub(
