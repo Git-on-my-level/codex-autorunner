@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
+from codex_autorunner.core.orchestration import OrchestrationBindingStore
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.pr_bindings import PrBindingStore
@@ -28,6 +29,7 @@ from codex_autorunner.core.publish_operation_executors import (
 from codex_autorunner.core.scm_events import ScmEventStore
 from codex_autorunner.integrations.discord.state import DiscordStateStore
 from codex_autorunner.integrations.github.publisher import (
+    build_github_enqueue_managed_turn_executor,
     build_post_pr_comment_executor,
     build_react_pr_review_comment_executor,
 )
@@ -811,6 +813,79 @@ def test_enqueue_managed_turn_executor_reuses_existing_execution_for_same_operat
     assert len(turns) == 1
     assert turns[0]["request_kind"] == "review"
     assert turns[0]["client_turn_id"] == first["client_request_id"]
+
+
+def test_github_enqueue_managed_turn_publishes_bound_progress_placeholder(
+    tmp_path: Path,
+) -> None:
+    hub_root, workspace_root, repo_id = _publish_hub(tmp_path)
+    discord_state = hub_root / ".codex-autorunner" / "discord_state.json"
+    raw_config = {"discord_bot": {"state_file": str(discord_state)}}
+    thread_store = PmaThreadStore(hub_root)
+    thread = thread_store.create_thread("codex", workspace_root, repo_id=repo_id)
+    OrchestrationBindingStore(hub_root).upsert_binding(
+        surface_kind="discord",
+        surface_key="channel-1",
+        thread_target_id=thread["managed_thread_id"],
+        agent_id="codex",
+        repo_id=repo_id,
+        resource_kind="repo",
+        resource_id=repo_id,
+    )
+    journal = PublishJournalStore(hub_root)
+    operation, _ = journal.create_operation(
+        operation_key=f"enqueue:{thread['managed_thread_id']}:ci-failure",
+        operation_kind="enqueue_managed_turn",
+        payload={
+            "thread_target_id": thread["managed_thread_id"],
+            "request": {
+                "message_text": (
+                    "CI failed for acme/widgets#42: tests (failure). "
+                    "Inspect the failing check and push a fix."
+                ),
+                "request_kind": "review",
+            },
+            "scm_reaction": {
+                "reaction_kind": "ci_failed",
+                "repo_slug": "acme/widgets",
+                "pr_number": 42,
+            },
+        },
+    )
+
+    result = build_github_enqueue_managed_turn_executor(
+        repo_root=hub_root,
+        raw_config=raw_config,
+    )(operation)
+
+    assert result["queued"] is False
+    assert result["progress_published"] is True
+    assert result["progress_targets"] == [
+        {"surface_kind": "discord", "surface_key": "channel-1"}
+    ]
+    turn = thread_store.get_turn(
+        thread["managed_thread_id"],
+        result["managed_turn_id"],
+    )
+    assert turn is not None
+    bound = turn["metadata"]["bound_chat_execution"]
+    assert bound["origin"] == {"kind": "github_scm"}
+    assert bound["progress_targets"] == [
+        {"surface_kind": "discord", "surface_key": "channel-1"}
+    ]
+
+    discord_store = DiscordStateStore(discord_state)
+    try:
+        outbox = asyncio.run(discord_store.list_outbox())
+    finally:
+        asyncio.run(discord_store.close())
+    assert len(outbox) == 1
+    record = outbox[0]
+    assert record.operation == "send"
+    assert record.channel_id == "channel-1"
+    assert (
+        "Investigating CI failure on acme/widgets#42" in record.payload_json["content"]
+    )
 
 
 @pytest.mark.parametrize(

@@ -794,6 +794,7 @@ def build_enqueue_managed_turn_executor(
                 model=request.model,
                 reasoning=request.reasoning,
                 client_turn_id=client_request_id,
+                metadata=request.metadata,
                 queue_payload=queue_payload,
             )
         except ManagedThreadNotActiveError as exc:
@@ -850,6 +851,7 @@ def build_enqueue_managed_turn_executor(
                 model=request.model,
                 reasoning=request.reasoning,
                 client_turn_id=client_request_id,
+                metadata=request.metadata,
                 queue_payload=queue_payload,
             )
             _LOGGER.info(
