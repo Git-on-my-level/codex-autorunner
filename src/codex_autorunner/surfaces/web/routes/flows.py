@@ -15,6 +15,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from ....agents.hermes_identity import canonicalize_hermes_identity
+from ....core.apps import resolve_registered_app_artifact_path
 from ....core.config import load_repo_config
 from ....core.config_contract import ConfigError
 from ....core.file_chat_keys import (
@@ -1679,12 +1680,20 @@ def build_flow_routes() -> APIRouter:
                 status_code=404, detail=f"Artifact file not found: {artifact.path}"
             )
 
-        if not artifact_path.resolve().is_relative_to(artifacts_root.resolve()):
+        resolved_path = artifact_path.resolve()
+        allowed_app_artifact_path = resolve_registered_app_artifact_path(
+            repo_root,
+            artifact,
+        )
+        if not resolved_path.is_relative_to(artifacts_root.resolve()) and (
+            allowed_app_artifact_path is None
+            or allowed_app_artifact_path.resolve() != resolved_path
+        ):
             from fastapi import HTTPException
 
             raise HTTPException(
                 status_code=403,
-                detail="Access denied: artifact path outside run directory",
+                detail="Access denied: artifact path outside allowed run/app artifact roots",
             )
 
         return FileResponse(artifact_path, filename=artifact_path.name)

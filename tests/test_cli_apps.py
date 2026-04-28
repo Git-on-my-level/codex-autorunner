@@ -8,6 +8,7 @@ from typer.testing import CliRunner
 
 from codex_autorunner.cli import app
 from codex_autorunner.core.config import CONFIG_FILENAME
+from codex_autorunner.core.flows import FlowStore
 from codex_autorunner.core.git_utils import run_git
 
 runner = CliRunner()
@@ -248,3 +249,49 @@ def test_apps_apply_json(repo, hub_env, tmp_path: Path) -> None:
     ticket_text = ticket_path.read_text(encoding="utf-8")
     assert "## App Inputs" in ticket_text
     assert "- `goal`: `demo`" in ticket_text
+
+
+def test_apps_artifacts_json_lists_registered_and_local_files(
+    repo, hub_env, tmp_path: Path
+) -> None:
+    app_repo = _create_app_repo(tmp_path)
+    _configure_apps_repo(hub_env.hub_root, app_repo)
+    runner.invoke(
+        app,
+        ["apps", "install", "local:apps/hello", "--repo", str(repo), "--json"],
+    )
+    app_root = repo / ".codex-autorunner" / "apps" / "local.hello"
+    artifact_path = app_root / "artifacts" / "summary.md"
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    artifact_path.write_text("# summary\n", encoding="utf-8")
+
+    with FlowStore(repo / ".codex-autorunner" / "flows.db") as store:
+        store.create_flow_run("run-1", "ticket_flow", input_data={}, state={})
+        store.create_artifact(
+            artifact_id="artifact-1",
+            run_id="run-1",
+            kind="markdown",
+            path=str(artifact_path.resolve()),
+            metadata={
+                "app_id": "local.hello",
+                "app_version": "1.0.0",
+                "tool_id": "check",
+                "label": "Summary",
+                "kind": "markdown",
+                "relative_path": "artifacts/summary.md",
+            },
+        )
+
+    result = runner.invoke(
+        app,
+        ["apps", "artifacts", "local.hello", "--repo", str(repo), "--json"],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["app_id"] == "local.hello"
+    assert payload["registered_artifacts"][0]["metadata"]["app_id"] == "local.hello"
+    assert (
+        payload["app_local_artifact_files"][0]["relative_path"]
+        == "artifacts/summary.md"
+    )

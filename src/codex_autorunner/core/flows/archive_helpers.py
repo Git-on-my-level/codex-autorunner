@@ -27,6 +27,7 @@ Canonical vs compatibility
 from __future__ import annotations
 
 import logging
+import shutil
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,6 +37,10 @@ from ...bootstrap import seed_repo_files
 from ...manifest import ManifestError, load_manifest
 from ...tickets.files import list_ticket_paths
 from ...tickets.outbox import resolve_outbox_paths
+from ..apps.artifacts import (
+    is_registered_app_artifact,
+    resolve_registered_app_artifact_path,
+)
 from ..archive import (
     ArchiveEntrySpec,
     _contextspace_source,
@@ -95,6 +100,50 @@ def _get_run_archive_retention_policy(
         return resolve_run_archive_retention_policy(load_repo_config(repo_root).pma)
     except ConfigError:
         return resolve_run_archive_retention_policy({})
+
+
+def _copy_registered_app_artifacts_into_archive(
+    repo_root: Path,
+    *,
+    run_id: str,
+    archive_root: Path,
+) -> dict[str, Any]:
+    db_path = resolve_repo_flows_db_path(repo_root)
+    if not db_path.exists():
+        return {"archived_app_artifacts": 0, "archived_app_artifact_paths": []}
+
+    try:
+        with FlowStore(db_path, durable=_get_durable_writes(repo_root)) as store:
+            if store.get_flow_run(run_id) is None:
+                return {"archived_app_artifacts": 0, "archived_app_artifact_paths": []}
+            artifacts = store.get_artifacts(run_id)
+    except (sqlite3.Error, OSError, RuntimeError, ValueError, TypeError):
+        return {"archived_app_artifacts": 0, "archived_app_artifact_paths": []}
+
+    copied_paths: list[str] = []
+    destination_root = archive_root / "app_artifacts"
+    for artifact in artifacts:
+        if not is_registered_app_artifact(artifact):
+            continue
+        source_path = resolve_registered_app_artifact_path(repo_root, artifact)
+        if source_path is None or not source_path.exists() or not source_path.is_file():
+            continue
+        metadata = artifact.metadata if isinstance(artifact.metadata, dict) else {}
+        app_id = str(metadata.get("app_id") or "app")
+        app_dest_dir = destination_root / app_id
+        app_dest_dir.mkdir(parents=True, exist_ok=True)
+        destination = app_dest_dir / source_path.name
+        if destination.exists():
+            destination = (
+                app_dest_dir
+                / f"{source_path.stem}-{artifact.id[:8]}{source_path.suffix}"
+            )
+        shutil.copy2(source_path, destination)
+        copied_paths.append(str(destination.relative_to(archive_root)))
+    return {
+        "archived_app_artifacts": len(copied_paths),
+        "archived_app_artifact_paths": sorted(copied_paths),
+    }
 
 
 def _next_archive_dir(base_dir: Path) -> Path:
@@ -526,6 +575,13 @@ def _archive_run_scoped_artifacts(
         "archived_paths": sorted(execution.moved_paths),
         "missing_paths": list(execution.missing_paths),
     }
+    summary.update(
+        _copy_registered_app_artifacts_into_archive(
+            repo_root,
+            run_id=record.id,
+            archive_root=Path(str(archive_plan["archive_root"])),
+        )
+    )
     return summary
 
 
@@ -654,6 +710,8 @@ def archive_flow_run_artifacts(
             "archived_runs": False,
             "archived_contextspace": False,
             "archived_flow_state": False,
+            "archived_app_artifacts": 0,
+            "archived_app_artifact_paths": [],
             "archived_pma_threads": 0,
             "archived_pma_thread_ids": [],
             "archived_pma_threads_skipped": None,
@@ -677,6 +735,13 @@ def archive_flow_run_artifacts(
             list(execution.copied_paths) + list(execution.moved_paths)
         )
         summary["missing_paths"] = list(execution.missing_paths)
+        summary.update(
+            _copy_registered_app_artifacts_into_archive(
+                repo_root,
+                run_id=record.id,
+                archive_root=Path(str(archive_plan["archive_root"])),
+            )
+        )
         retention_policy = _get_run_archive_retention_policy(repo_root)
         if retention_policy is not None:
             runs_root = _run_archive_root(repo_root)

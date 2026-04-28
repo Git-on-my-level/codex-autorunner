@@ -23,6 +23,10 @@ from ..chat.pause_notifications import (
     format_pause_notification_source,
     format_pause_notification_text,
 )
+from ..chat.ticket_flow_artifacts import (
+    collect_terminal_wrapup_artifacts,
+    render_terminal_notification_with_artifacts,
+)
 from .rendering import chunk_discord_message
 from .state import OutboxRecord
 
@@ -327,11 +331,19 @@ async def _scan_and_enqueue_terminal_notifications(service: Any) -> int:
         run_id, status, error_message = terminal_run
         if binding.get("last_terminal_run_id") == run_id:
             continue
-        message = _format_terminal_notification(
-            service,
-            run_id=run_id,
-            status=status,
-            error_message=error_message,
+        artifacts = collect_terminal_wrapup_artifacts(
+            workspace_root,
+            max_file_size_bytes=8 * 1024 * 1024,
+        )
+        message = render_terminal_notification_with_artifacts(
+            _format_terminal_notification(
+                service,
+                run_id=run_id,
+                status=status,
+                error_message=error_message,
+            ),
+            artifacts,
+            attachment_delivery_supported=False,
         )
         record_id = f"terminal:{channel_id}:{run_id}"
         try:

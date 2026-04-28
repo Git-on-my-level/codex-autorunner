@@ -12,6 +12,10 @@ from pathlib import Path
 from typing import Mapping, Optional, Sequence
 
 from ..utils import subprocess_env
+from .artifacts import (
+    collect_declared_tool_artifact_candidates,
+    register_app_artifact_candidates,
+)
 from .install import AppInstallError, InstalledAppInfo, get_installed_app
 from .manifest import AppOutput, AppTool
 from .paths import AppPathError, validate_app_path
@@ -182,7 +186,14 @@ def run_installed_app_tool(
         _remove_if_exists(stdout_tmp_path)
         _remove_if_exists(stderr_tmp_path)
 
-    outputs = tuple(_collect_declared_outputs(installed, tool))
+    output_candidates = collect_declared_tool_artifact_candidates(
+        installed,
+        tool,
+        hook_point=hook_point,
+    )
+    outputs = tuple(_collect_declared_outputs(output_candidates))
+    if flow_run_id:
+        register_app_artifact_candidates(repo_root, flow_run_id, output_candidates)
     if timeout_error is not None:
         raise timeout_error
     return AppToolRunResult(
@@ -359,22 +370,17 @@ def _excerpt_text(text: str) -> str:
 
 
 def _collect_declared_outputs(
-    installed: InstalledAppInfo, tool: AppTool
+    candidates,
 ) -> list[AppToolRunOutput]:
-    found: list[AppToolRunOutput] = []
-    for output in tool.outputs:
-        rel_path = validate_app_path(output.path)
-        absolute_path = installed.paths.app_root.joinpath(*rel_path.parts)
-        if absolute_path.exists():
-            found.append(
-                AppToolRunOutput(
-                    kind=output.kind,
-                    label=output.label,
-                    relative_path=output.path,
-                    absolute_path=absolute_path.resolve(),
-                )
-            )
-    return found
+    return [
+        AppToolRunOutput(
+            kind=candidate.kind,
+            label=candidate.label,
+            relative_path=candidate.relative_path,
+            absolute_path=candidate.absolute_path,
+        )
+        for candidate in candidates
+    ]
 
 
 def _remove_if_exists(path: Optional[Path]) -> None:

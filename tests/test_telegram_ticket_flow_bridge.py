@@ -8,8 +8,10 @@ from typing import Optional
 import pytest
 
 from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
+from codex_autorunner.core.apps import compute_bundle_sha
 from codex_autorunner.core.flows import FlowStore
 from codex_autorunner.core.flows.models import FlowRunStatus
+from codex_autorunner.core.state_roots import resolve_repo_state_root
 from codex_autorunner.integrations.telegram.config import PauseDispatchNotifications
 from codex_autorunner.integrations.telegram.handlers.paused_flow_reply import (
     submit_flow_reply_core,
@@ -43,6 +45,50 @@ def _init_repo(workspace: Path) -> None:
     seed_hub_files(workspace, force=True)
     (workspace / ".git").mkdir()
     seed_repo_files(workspace, git_required=False)
+
+
+def _write_installed_wrapup_app(workspace: Path) -> None:
+    state_root = resolve_repo_state_root(workspace)
+    app_root = state_root / "apps" / "local.wrapup"
+    bundle_root = app_root / "bundle"
+    bundle_root.mkdir(parents=True, exist_ok=True)
+    manifest_text = """schema_version: 1
+id: local.wrapup
+name: Wrapup App
+version: 1.0.0
+hooks:
+  before_chat_wrapup:
+    - artifacts:
+        - "artifacts/summary.md"
+"""
+    (bundle_root / "car-app.yaml").write_text(manifest_text, encoding="utf-8")
+    bundle_sha = compute_bundle_sha(bundle_root)
+    (app_root / "artifacts").mkdir(parents=True, exist_ok=True)
+    (app_root / "state").mkdir(parents=True, exist_ok=True)
+    (app_root / "logs").mkdir(parents=True, exist_ok=True)
+    (app_root / "artifacts" / "summary.md").write_text(
+        "# wrapup\n",
+        encoding="utf-8",
+    )
+    (app_root / "app.lock.json").write_text(
+        json.dumps(
+            {
+                "id": "local.wrapup",
+                "version": "1.0.0",
+                "source_repo_id": "local",
+                "source_url": "https://example.invalid/apps.git",
+                "source_path": "apps/wrapup",
+                "source_ref": "main",
+                "commit_sha": "deadbeef",
+                "manifest_sha": "manifest-sha",
+                "bundle_sha": bundle_sha,
+                "trusted": True,
+                "installed_at": "2026-04-28T00:00:00Z",
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
 
 
 def _create_paused_run_with_dispatch(
@@ -742,6 +788,66 @@ async def test_terminal_scan_does_not_suppress_same_second_new_run(
 
     assert len(calls) == 1
     assert "completed successfully (run run-new)" in calls[0]
+
+
+@pytest.mark.asyncio
+async def test_terminal_scan_sends_before_chat_wrapup_attachments(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "tg-terminal-artifacts"
+    workspace.mkdir()
+    _init_repo(workspace)
+    _write_installed_wrapup_app(workspace)
+    record = _DummyRecord(workspace)
+    calls: list[str] = []
+    docs: list[str] = []
+
+    async def send_message_with_outbox(
+        chat_id: int, text: str, thread_id=None, reply_to=None
+    ):
+        calls.append(text)
+        return True
+
+    async def send_document(
+        chat_id: int,
+        data: bytes,
+        *,
+        filename: str,
+        thread_id=None,
+        reply_to=None,
+        caption=None,
+    ):
+        docs.append(filename)
+        return True
+
+    bridge = TelegramTicketFlowBridge(
+        logger=logging.getLogger("test"),
+        store=_DummyStore({"123:456": record}),
+        pause_targets={},
+        send_message_with_outbox=send_message_with_outbox,
+        send_document=send_document,
+        pause_config=PauseDispatchNotifications(
+            enabled=True,
+            send_attachments=True,
+            max_file_size_bytes=1024,
+            chunk_long_messages=False,
+        ),
+        default_notification_chat_id=None,
+        hub_root=None,
+        manifest_path=None,
+        config_root=workspace,
+    )
+    bridge._load_latest_terminal_run = lambda _path: (  # type: ignore[assignment]
+        "run-completed",
+        FlowRunStatus.COMPLETED.value,
+        None,
+        "2026-04-10T10:00:00Z",
+    )
+
+    await bridge._notify_terminal_for_workspace(workspace, [("123:456", record)])
+
+    assert calls == ["Ticket flow completed successfully (run run-completed)."]
+    assert docs == ["summary.md"]
 
 
 @pytest.mark.asyncio

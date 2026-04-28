@@ -10,6 +10,7 @@ import yaml
 
 from ....core.apps import (
     AppApplyError,
+    AppArtifactError,
     AppInstallConflictError,
     AppInstallError,
     AppLock,
@@ -22,8 +23,10 @@ from ....core.apps import (
     index_apps,
     install_app,
     is_probably_installed_app_id,
+    list_app_local_artifact_files,
     list_installed_app_tools,
     list_installed_apps,
+    list_registered_app_artifacts,
     run_installed_app_tool,
 )
 from ....core.config import ConfigError, load_hub_config
@@ -381,6 +384,83 @@ def register_apps_commands(
 
         if result.exit_code != 0:
             raise typer.Exit(code=result.exit_code)
+
+    @app.command("artifacts")
+    def apps_artifacts(
+        app_id: str = typer.Argument(..., help="Installed app id"),
+        repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
+        hub: Optional[Path] = hub_root_path_option(),
+        run_id: Optional[str] = typer.Option(
+            None, "--run-id", help="Optional flow run id filter"
+        ),
+        output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    ) -> None:
+        """List registered run artifacts and app-local artifact files."""
+        repo_ctx = require_repo_config(repo, hub)
+        require_apps_enabled(repo_ctx.config)
+        try:
+            registered = list_registered_app_artifacts(
+                repo_ctx.repo_root,
+                app_id,
+                run_id=run_id,
+            )
+            local_files = list_app_local_artifact_files(repo_ctx.repo_root, app_id)
+        except (AppArtifactError, AppInstallError, AppToolRunnerError) as exc:
+            raise_exit(str(exc), cause=exc)
+
+        if output_json:
+            typer.echo(
+                json.dumps(
+                    {
+                        "app_id": app_id,
+                        "run_id": run_id,
+                        "registered_artifacts": [
+                            {
+                                "id": artifact.id,
+                                "run_id": artifact.run_id,
+                                "kind": artifact.kind,
+                                "path": artifact.path,
+                                "created_at": artifact.created_at,
+                                "metadata": artifact.metadata,
+                            }
+                            for artifact in registered
+                        ],
+                        "app_local_artifact_files": [
+                            {
+                                "app_id": candidate.app_id,
+                                "app_version": candidate.app_version,
+                                "tool_id": candidate.tool_id,
+                                "hook_point": candidate.hook_point,
+                                "kind": candidate.kind,
+                                "label": candidate.label,
+                                "relative_path": candidate.relative_path,
+                                "absolute_path": str(candidate.absolute_path),
+                            }
+                            for candidate in local_files
+                        ],
+                    },
+                    indent=2,
+                )
+            )
+            return
+
+        typer.echo(f"App artifacts for {app_id}:")
+        if run_id:
+            typer.echo(f"Run filter: {run_id}")
+        if registered:
+            typer.echo("Registered:")
+            for artifact in registered:
+                typer.echo(f"  {artifact.run_id} | {artifact.kind} | {artifact.path}")
+        else:
+            typer.echo("Registered: none")
+        if local_files:
+            typer.echo("Local files:")
+            for candidate in local_files:
+                typer.echo(
+                    f"  {candidate.kind} | {candidate.relative_path} | {candidate.absolute_path}"
+                )
+        else:
+            typer.echo("Local files: none")
 
 
 def _load_hub_context(
