@@ -48,6 +48,12 @@ def _format_human(data: dict[str, Any]) -> str:
         apply_cmds = commands.get("apply", []) if isinstance(commands, dict) else []
         if apply_cmds:
             lines.append(f"template_apply: {', '.join(apply_cmds[:2])}")
+    apps = data.get("apps", {})
+    if isinstance(apps, dict):
+        installed = apps.get("installed", [])
+        if installed:
+            app_ids = [a.get("id", "?") for a in installed]
+            lines.append(f"apps({len(installed)}): {', '.join(app_ids)}")
     return "\n".join(lines)
 
 

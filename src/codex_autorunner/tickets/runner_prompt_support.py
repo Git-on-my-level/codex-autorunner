@@ -279,12 +279,19 @@ def build_ticket_block(ticket_path: Path, rel_ticket: str) -> str:
     )
 
 
+def _apps_hint_block(apps_hint: str) -> str:
+    if not apps_hint:
+        return ""
+    return f"<CAR_INSTALLED_APPS>\n{apps_hint}\n</CAR_INSTALLED_APPS>"
+
+
 def render_full_prompt(
     *,
     rel_ticket: str,
     rel_dispatch_dir: str,
     rel_dispatch_path: str,
     car_hud: str,
+    apps_hint: str,
     checkpoint_block: str,
     commit_block: str,
     lint_block: str,
@@ -338,6 +345,7 @@ def render_full_prompt(
         "<CAR_HUD>\n"
         f"{car_hud}\n"
         "</CAR_HUD>\n\n"
+        f"{_apps_hint_block(apps_hint)}\n\n"
         f"{checkpoint_block}\n\n"
         f"{commit_block}\n\n"
         f"{lint_block}\n\n"

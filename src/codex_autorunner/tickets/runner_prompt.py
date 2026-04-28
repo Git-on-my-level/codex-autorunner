@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any, Optional
 
+from ..core.apps.prompt_hints import build_installed_apps_prompt_hint
 from . import runner_prompt_support as _support
 from .files import safe_relpath
 from .runner_prompt_support import (
@@ -18,6 +20,8 @@ from .runner_prompt_support import (
     prompt_has_ticket_control_plane,
     render_full_prompt,
 )
+
+_logger = logging.getLogger(__name__)
 
 CAR_HUD_MAX_LINES = 14
 CAR_HUD_MAX_CHARS = 900
@@ -49,6 +53,14 @@ def _build_car_hud() -> str:
     return hud
 
 
+def _build_apps_hint(workspace_root: Path) -> str:
+    try:
+        return build_installed_apps_prompt_hint(workspace_root)
+    except Exception as exc:
+        _logger.warning("App hint generation failed, degrading: %s", exc)
+        return ""
+
+
 def build_prompt(
     *,
     ticket_path: Path,
@@ -72,6 +84,7 @@ def build_prompt(
     rel_dispatch_dir = safe_relpath(outbox_paths.dispatch_dir, workspace_root)
     rel_dispatch_path = safe_relpath(outbox_paths.dispatch_path, workspace_root)
     checkpoint_block = build_checkpoint_block(last_checkpoint_error)
+    apps_hint = _build_apps_hint(workspace_root)
     commit_block = build_commit_block(
         commit_required=commit_required,
         commit_attempt=commit_attempt,
@@ -100,6 +113,7 @@ def build_prompt(
             rel_dispatch_dir=rel_dispatch_dir,
             rel_dispatch_path=rel_dispatch_path,
             car_hud=_build_car_hud(),
+            apps_hint=apps_hint,
             checkpoint_block=checkpoint_block,
             commit_block=commit_block,
             lint_block=lint_block,

@@ -62,6 +62,12 @@ from .manifest import (
     parse_app_manifest,
 )
 from .paths import validate_app_glob, validate_app_path
+from .prompt_hints import (
+    MAX_APPS,
+    MAX_HINT_BYTES,
+    MAX_TOOLS_PER_APP,
+    build_installed_apps_prompt_hint,
+)
 from .refs import AppRef, parse_app_ref
 from .tool_runner import (
     AppToolNotFoundError,
@@ -108,10 +114,14 @@ __all__ = [
     "InstalledAppHook",
     "InstalledAppPaths",
     "ManifestError",
+    "MAX_APPS",
+    "MAX_HINT_BYTES",
+    "MAX_TOOLS_PER_APP",
     "NetworkUnavailableError",
     "RefNotFoundError",
     "RepoNotConfiguredError",
     "apply_app_entrypoint",
+    "build_installed_apps_prompt_hint",
     "compute_bundle_sha",
     "ensure_git_mirror",
     "fetch_app_manifest",
