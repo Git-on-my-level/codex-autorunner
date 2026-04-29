@@ -5,6 +5,7 @@ VENV_PIP := $(VENV)/bin/pip
 # Prefer venv python if it exists
 PYTHON := $(shell if [ -x $(VENV_PYTHON) ]; then echo $(VENV_PYTHON); else echo python3; fi)
 PYTHON_ABS := $(abspath $(PYTHON))
+PYTEST_FAST_WORKERS ?= 4
 
 export PATH := $(CURDIR)/$(VENV)/bin:$(PATH)
 HOST ?= 127.0.0.1
@@ -85,7 +86,7 @@ hooks:
 test: test-fast
 
 test-fast:
-	$(PYTHON) -m pytest -m "not integration and not slow"
+	$(PYTHON) -m pytest -m "not integration and not slow" -n $(PYTEST_FAST_WORKERS)
 
 test-full:
 	$(PYTHON) -m pytest -m "not integration"
