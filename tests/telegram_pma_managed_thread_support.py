@@ -261,6 +261,92 @@ class _SessionRecoveryFakeHarness:
             yield ""
 
 
+class _BaseFakeHarness:
+    display_name = "Fake"
+    capabilities = frozenset(
+        {"durable_threads", "message_turns", "interrupt", "event_streaming"}
+    )
+
+    async def ensure_ready(self, workspace_root: Path) -> None:
+        _ = workspace_root
+
+    async def backend_runtime_instance_id(self, workspace_root: Path) -> Optional[str]:
+        _ = workspace_root
+        return "runtime-test-1"
+
+    def supports(self, capability: str) -> bool:
+        return capability in self.capabilities
+
+    async def new_conversation(
+        self, workspace_root: Path, title: Optional[str] = None
+    ) -> SimpleNamespace:
+        _ = workspace_root, title
+        return SimpleNamespace(id="telegram-backend-thread-1")
+
+    async def resume_conversation(
+        self, workspace_root: Path, conversation_id: str
+    ) -> SimpleNamespace:
+        _ = workspace_root
+        return SimpleNamespace(id=conversation_id)
+
+    async def start_turn(
+        self,
+        workspace_root: Path,
+        conversation_id: str,
+        prompt: str,
+        model: Optional[str],
+        reasoning: Optional[str],
+        *,
+        approval_mode: Optional[str],
+        sandbox_policy: Optional[Any],
+        input_items: Optional[list[dict[str, Any]]] = None,
+    ) -> SimpleNamespace:
+        _ = (
+            workspace_root,
+            conversation_id,
+            prompt,
+            model,
+            reasoning,
+            approval_mode,
+            sandbox_policy,
+            input_items,
+        )
+        return SimpleNamespace(
+            conversation_id=conversation_id,
+            turn_id="telegram-backend-turn-1",
+        )
+
+    async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
+        raise AssertionError("review mode should not be used in this test")
+
+    async def wait_for_turn(
+        self,
+        workspace_root: Path,
+        conversation_id: str,
+        turn_id: Optional[str],
+        *,
+        timeout: Optional[float] = None,
+    ) -> SimpleNamespace:
+        _ = workspace_root, conversation_id, turn_id, timeout
+        return SimpleNamespace(
+            status="ok",
+            assistant_text="telegram managed final reply",
+            errors=[],
+        )
+
+    async def interrupt(
+        self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
+    ) -> None:
+        _ = workspace_root, conversation_id, turn_id
+
+    async def stream_events(
+        self, workspace_root: Path, conversation_id: str, turn_id: str
+    ):
+        _ = workspace_root, conversation_id, turn_id
+        if False:
+            yield ""
+
+
 class _NoopSupervisor:
     def list_agent_workspaces(self, *, use_cache: bool = True) -> list[object]:
         _ = use_cache
@@ -1070,71 +1156,7 @@ async def test_pma_managed_thread_turn_edits_placeholder_with_live_progress(
     handler = _ManagedThreadPMAHandler(record, tmp_path)
     stream_finished = asyncio.Event()
 
-    class _FakeHarness:
-        display_name = "Fake"
-        capabilities = frozenset(
-            {
-                "durable_threads",
-                "message_turns",
-                "interrupt",
-                "event_streaming",
-            }
-        )
-
-        async def ensure_ready(self, workspace_root: Path) -> None:
-            _ = workspace_root
-
-        async def backend_runtime_instance_id(
-            self, workspace_root: Path
-        ) -> Optional[str]:
-            _ = workspace_root
-            return "runtime-test-1"
-
-        def supports(self, capability: str) -> bool:
-            return capability in self.capabilities
-
-        async def new_conversation(
-            self, workspace_root: Path, title: Optional[str] = None
-        ) -> SimpleNamespace:
-            _ = workspace_root, title
-            return SimpleNamespace(id="telegram-backend-thread-1")
-
-        async def resume_conversation(
-            self, workspace_root: Path, conversation_id: str
-        ) -> SimpleNamespace:
-            _ = workspace_root
-            return SimpleNamespace(id=conversation_id)
-
-        async def start_turn(
-            self,
-            workspace_root: Path,
-            conversation_id: str,
-            prompt: str,
-            model: Optional[str],
-            reasoning: Optional[str],
-            *,
-            approval_mode: Optional[str],
-            sandbox_policy: Optional[Any],
-            input_items: Optional[list[dict[str, Any]]] = None,
-        ) -> SimpleNamespace:
-            _ = (
-                workspace_root,
-                conversation_id,
-                prompt,
-                model,
-                reasoning,
-                approval_mode,
-                sandbox_policy,
-                input_items,
-            )
-            return SimpleNamespace(
-                conversation_id=conversation_id,
-                turn_id="telegram-backend-turn-1",
-            )
-
-        async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
-            raise AssertionError("review mode should not be used in this test")
-
+    class _FakeHarness(_BaseFakeHarness):
         async def wait_for_turn(
             self,
             workspace_root: Path,
@@ -1150,11 +1172,6 @@ async def test_pma_managed_thread_turn_edits_placeholder_with_live_progress(
                 assistant_text="telegram managed final reply",
                 errors=[],
             )
-
-        async def interrupt(
-            self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
-        ) -> None:
-            _ = workspace_root, conversation_id, turn_id
 
         async def stream_events(
             self, workspace_root: Path, conversation_id: str, turn_id: str
@@ -1239,71 +1256,7 @@ async def test_pma_managed_opencode_turn_edits_placeholder_with_thinking_and_too
     handler = _ManagedThreadPMAHandler(record, tmp_path)
     stream_finished = asyncio.Event()
 
-    class _FakeHarness:
-        display_name = "Fake"
-        capabilities = frozenset(
-            {
-                "durable_threads",
-                "message_turns",
-                "interrupt",
-                "event_streaming",
-            }
-        )
-
-        async def ensure_ready(self, workspace_root: Path) -> None:
-            _ = workspace_root
-
-        async def backend_runtime_instance_id(
-            self, workspace_root: Path
-        ) -> Optional[str]:
-            _ = workspace_root
-            return "runtime-test-1"
-
-        def supports(self, capability: str) -> bool:
-            return capability in self.capabilities
-
-        async def new_conversation(
-            self, workspace_root: Path, title: Optional[str] = None
-        ) -> SimpleNamespace:
-            _ = workspace_root, title
-            return SimpleNamespace(id="telegram-backend-thread-1")
-
-        async def resume_conversation(
-            self, workspace_root: Path, conversation_id: str
-        ) -> SimpleNamespace:
-            _ = workspace_root
-            return SimpleNamespace(id=conversation_id)
-
-        async def start_turn(
-            self,
-            workspace_root: Path,
-            conversation_id: str,
-            prompt: str,
-            model: Optional[str],
-            reasoning: Optional[str],
-            *,
-            approval_mode: Optional[str],
-            sandbox_policy: Optional[Any],
-            input_items: Optional[list[dict[str, Any]]] = None,
-        ) -> SimpleNamespace:
-            _ = (
-                workspace_root,
-                conversation_id,
-                prompt,
-                model,
-                reasoning,
-                approval_mode,
-                sandbox_policy,
-                input_items,
-            )
-            return SimpleNamespace(
-                conversation_id=conversation_id,
-                turn_id="telegram-backend-turn-1",
-            )
-
-        async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
-            raise AssertionError("review mode should not be used in this test")
-
+    class _FakeHarness(_BaseFakeHarness):
         async def wait_for_turn(
             self,
             workspace_root: Path,
@@ -1319,11 +1272,6 @@ async def test_pma_managed_opencode_turn_edits_placeholder_with_thinking_and_too
                 assistant_text="telegram opencode managed final reply",
                 errors=[],
             )
-
-        async def interrupt(
-            self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
-        ) -> None:
-            _ = workspace_root, conversation_id, turn_id
 
         async def stream_events(
             self, workspace_root: Path, conversation_id: str, turn_id: str
@@ -1432,71 +1380,7 @@ async def test_pma_managed_thread_turn_recovers_if_wait_disconnects_after_comple
     handler = _ManagedThreadPMAHandler(record, tmp_path)
     stream_finished = asyncio.Event()
 
-    class _FakeHarness:
-        display_name = "Fake"
-        capabilities = frozenset(
-            {
-                "durable_threads",
-                "message_turns",
-                "interrupt",
-                "event_streaming",
-            }
-        )
-
-        async def ensure_ready(self, workspace_root: Path) -> None:
-            _ = workspace_root
-
-        async def backend_runtime_instance_id(
-            self, workspace_root: Path
-        ) -> Optional[str]:
-            _ = workspace_root
-            return "runtime-test-1"
-
-        def supports(self, capability: str) -> bool:
-            return capability in self.capabilities
-
-        async def new_conversation(
-            self, workspace_root: Path, title: Optional[str] = None
-        ) -> SimpleNamespace:
-            _ = workspace_root, title
-            return SimpleNamespace(id="telegram-backend-thread-1")
-
-        async def resume_conversation(
-            self, workspace_root: Path, conversation_id: str
-        ) -> SimpleNamespace:
-            _ = workspace_root
-            return SimpleNamespace(id=conversation_id)
-
-        async def start_turn(
-            self,
-            workspace_root: Path,
-            conversation_id: str,
-            prompt: str,
-            model: Optional[str],
-            reasoning: Optional[str],
-            *,
-            approval_mode: Optional[str],
-            sandbox_policy: Optional[Any],
-            input_items: Optional[list[dict[str, Any]]] = None,
-        ) -> SimpleNamespace:
-            _ = (
-                workspace_root,
-                conversation_id,
-                prompt,
-                model,
-                reasoning,
-                approval_mode,
-                sandbox_policy,
-                input_items,
-            )
-            return SimpleNamespace(
-                conversation_id=conversation_id,
-                turn_id="telegram-backend-turn-1",
-            )
-
-        async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
-            raise AssertionError("review mode should not be used in this test")
-
+    class _FakeHarness(_BaseFakeHarness):
         async def wait_for_turn(
             self,
             workspace_root: Path,
@@ -1508,11 +1392,6 @@ async def test_pma_managed_thread_turn_recovers_if_wait_disconnects_after_comple
             _ = workspace_root, conversation_id, turn_id, timeout
             await stream_finished.wait()
             raise CodexAppServerDisconnected("Reconnecting... 2/5")
-
-        async def interrupt(
-            self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
-        ) -> None:
-            _ = workspace_root, conversation_id, turn_id
 
         async def stream_events(
             self, workspace_root: Path, conversation_id: str, turn_id: str
@@ -1677,44 +1556,10 @@ async def test_pma_text_messages_route_repeated_messages_through_managed_thread_
     first_started = asyncio.Event()
     release_first = asyncio.Event()
 
-    class _FakeHarness:
-        display_name = "Fake"
-        capabilities = frozenset(
-            {
-                "durable_threads",
-                "message_turns",
-                "interrupt",
-                "event_streaming",
-            }
-        )
-
+    class _FakeHarness(_BaseFakeHarness):
         def __init__(self) -> None:
             self.turn_prompts: list[str] = []
             self.waited_turns: list[str] = []
-
-        async def ensure_ready(self, workspace_root: Path) -> None:
-            _ = workspace_root
-
-        async def backend_runtime_instance_id(
-            self, workspace_root: Path
-        ) -> Optional[str]:
-            _ = workspace_root
-            return "runtime-test-1"
-
-        def supports(self, capability: str) -> bool:
-            return capability in self.capabilities
-
-        async def new_conversation(
-            self, workspace_root: Path, title: Optional[str] = None
-        ) -> SimpleNamespace:
-            _ = workspace_root, title
-            return SimpleNamespace(id="telegram-backend-thread-1")
-
-        async def resume_conversation(
-            self, workspace_root: Path, conversation_id: str
-        ) -> SimpleNamespace:
-            _ = workspace_root
-            return SimpleNamespace(id=conversation_id)
 
         async def start_turn(
             self,
@@ -1741,9 +1586,6 @@ async def test_pma_text_messages_route_repeated_messages_through_managed_thread_
             self.turn_prompts.append(prompt)
             return SimpleNamespace(conversation_id=conversation_id, turn_id=turn_id)
 
-        async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
-            raise AssertionError("review mode should not be used in this test")
-
         async def wait_for_turn(
             self,
             workspace_root: Path,
@@ -1768,18 +1610,6 @@ async def test_pma_text_messages_route_repeated_messages_through_managed_thread_
                 assistant_text="second telegram orchestration reply",
                 errors=[],
             )
-
-        async def interrupt(
-            self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
-        ) -> None:
-            _ = workspace_root, conversation_id, turn_id
-
-        async def stream_events(
-            self, workspace_root: Path, conversation_id: str, turn_id: str
-        ):
-            _ = workspace_root, conversation_id, turn_id
-            if False:
-                yield ""
 
     harness = _FakeHarness()
     monkeypatch.setattr(
@@ -1865,43 +1695,9 @@ async def test_pma_followup_turn_without_new_thread_reuses_managed_thread_and_re
     )
     handler = _ManagedThreadPMAHandler(record, tmp_path)
 
-    class _FakeHarness:
-        display_name = "Fake"
-        capabilities = frozenset(
-            {
-                "durable_threads",
-                "message_turns",
-                "interrupt",
-                "event_streaming",
-            }
-        )
-
+    class _FakeHarness(_BaseFakeHarness):
         def __init__(self) -> None:
             self.start_calls: list[tuple[str, str]] = []
-
-        async def ensure_ready(self, workspace_root: Path) -> None:
-            _ = workspace_root
-
-        async def backend_runtime_instance_id(
-            self, workspace_root: Path
-        ) -> Optional[str]:
-            _ = workspace_root
-            return "runtime-test-1"
-
-        def supports(self, capability: str) -> bool:
-            return capability in self.capabilities
-
-        async def new_conversation(
-            self, workspace_root: Path, title: Optional[str] = None
-        ) -> SimpleNamespace:
-            _ = workspace_root, title
-            return SimpleNamespace(id="telegram-backend-thread-1")
-
-        async def resume_conversation(
-            self, workspace_root: Path, conversation_id: str
-        ) -> SimpleNamespace:
-            _ = workspace_root
-            return SimpleNamespace(id=conversation_id)
 
         async def start_turn(
             self,
@@ -1930,9 +1726,6 @@ async def test_pma_followup_turn_without_new_thread_reuses_managed_thread_and_re
                 turn_id=turn_id,
             )
 
-        async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
-            raise AssertionError("review mode should not be used in this test")
-
         async def wait_for_turn(
             self,
             workspace_root: Path,
@@ -1949,18 +1742,6 @@ async def test_pma_followup_turn_without_new_thread_reuses_managed_thread_and_re
                 assistant_text=f"reply for {turn_id}",
                 errors=[],
             )
-
-        async def interrupt(
-            self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
-        ) -> None:
-            _ = workspace_root, conversation_id, turn_id
-
-        async def stream_events(
-            self, workspace_root: Path, conversation_id: str, turn_id: str
-        ):
-            _ = workspace_root, conversation_id, turn_id
-            if False:
-                yield ""
 
     harness = _FakeHarness()
     monkeypatch.setattr(
@@ -2181,41 +1962,7 @@ async def test_pma_native_input_items_route_through_managed_thread_execution(
     image_path.write_bytes(b"png-bytes")
     captured_input_items: list[Optional[list[dict[str, Any]]]] = []
 
-    class _FakeHarness:
-        display_name = "Fake"
-        capabilities = frozenset(
-            {
-                "durable_threads",
-                "message_turns",
-                "interrupt",
-                "event_streaming",
-            }
-        )
-
-        async def ensure_ready(self, workspace_root: Path) -> None:
-            _ = workspace_root
-
-        async def backend_runtime_instance_id(
-            self, workspace_root: Path
-        ) -> Optional[str]:
-            _ = workspace_root
-            return "runtime-test-1"
-
-        def supports(self, capability: str) -> bool:
-            return capability in self.capabilities
-
-        async def new_conversation(
-            self, workspace_root: Path, title: Optional[str] = None
-        ) -> SimpleNamespace:
-            _ = workspace_root, title
-            return SimpleNamespace(id="telegram-backend-thread-1")
-
-        async def resume_conversation(
-            self, workspace_root: Path, conversation_id: str
-        ) -> SimpleNamespace:
-            _ = workspace_root
-            return SimpleNamespace(id=conversation_id)
-
+    class _FakeHarness(_BaseFakeHarness):
         async def start_turn(
             self,
             workspace_root: Path,
@@ -2243,9 +1990,6 @@ async def test_pma_native_input_items_route_through_managed_thread_execution(
                 turn_id="telegram-backend-turn-1",
             )
 
-        async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
-            raise AssertionError("review mode should not be used in this test")
-
         async def wait_for_turn(
             self,
             workspace_root: Path,
@@ -2260,18 +2004,6 @@ async def test_pma_native_input_items_route_through_managed_thread_execution(
                 assistant_text="telegram managed attachment reply",
                 errors=[],
             )
-
-        async def interrupt(
-            self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
-        ) -> None:
-            _ = workspace_root, conversation_id, turn_id
-
-        async def stream_events(
-            self, workspace_root: Path, conversation_id: str, turn_id: str
-        ):
-            _ = workspace_root, conversation_id, turn_id
-            if False:
-                yield ""
 
     harness = _FakeHarness()
     monkeypatch.setattr(
@@ -2337,43 +2069,9 @@ async def test_pma_interrupt_uses_managed_thread_orchestration_for_text_turns(
     first_started = asyncio.Event()
     release_first = asyncio.Event()
 
-    class _FakeHarness:
-        display_name = "Fake"
-        capabilities = frozenset(
-            {
-                "durable_threads",
-                "message_turns",
-                "interrupt",
-                "event_streaming",
-            }
-        )
-
+    class _FakeHarness(_BaseFakeHarness):
         def __init__(self) -> None:
             self.interrupt_calls: list[tuple[Path, str, Optional[str]]] = []
-
-        async def ensure_ready(self, workspace_root: Path) -> None:
-            _ = workspace_root
-
-        async def backend_runtime_instance_id(
-            self, workspace_root: Path
-        ) -> Optional[str]:
-            _ = workspace_root
-            return "runtime-test-1"
-
-        def supports(self, capability: str) -> bool:
-            return capability in self.capabilities
-
-        async def new_conversation(
-            self, workspace_root: Path, title: Optional[str] = None
-        ) -> SimpleNamespace:
-            _ = workspace_root, title
-            return SimpleNamespace(id="telegram-backend-thread-1")
-
-        async def resume_conversation(
-            self, workspace_root: Path, conversation_id: str
-        ) -> SimpleNamespace:
-            _ = workspace_root
-            return SimpleNamespace(id=conversation_id)
 
         async def start_turn(
             self,
@@ -2401,9 +2099,6 @@ async def test_pma_interrupt_uses_managed_thread_orchestration_for_text_turns(
             if release_first.is_set():
                 turn_id = "telegram-backend-turn-2"
             return SimpleNamespace(conversation_id=conversation_id, turn_id=turn_id)
-
-        async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
-            raise AssertionError("review mode should not be used in this test")
 
         async def wait_for_turn(
             self,
@@ -2434,13 +2129,6 @@ async def test_pma_interrupt_uses_managed_thread_orchestration_for_text_turns(
         ) -> None:
             self.interrupt_calls.append((workspace_root, conversation_id, turn_id))
             release_first.set()
-
-        async def stream_events(
-            self, workspace_root: Path, conversation_id: str, turn_id: str
-        ):
-            _ = workspace_root, conversation_id, turn_id
-            if False:
-                yield ""
 
     harness = _FakeHarness()
     monkeypatch.setattr(
@@ -2545,43 +2233,9 @@ async def test_pma_interrupt_recovers_missing_backend_thread_for_text_turns(
     first_started = asyncio.Event()
     release_first = asyncio.Event()
 
-    class _FakeHarness:
-        display_name = "Fake"
-        capabilities = frozenset(
-            {
-                "durable_threads",
-                "message_turns",
-                "interrupt",
-                "event_streaming",
-            }
-        )
-
+    class _FakeHarness(_BaseFakeHarness):
         def __init__(self) -> None:
             self.interrupt_calls: list[tuple[Path, str, Optional[str]]] = []
-
-        async def ensure_ready(self, workspace_root: Path) -> None:
-            _ = workspace_root
-
-        async def backend_runtime_instance_id(
-            self, workspace_root: Path
-        ) -> Optional[str]:
-            _ = workspace_root
-            return "runtime-test-1"
-
-        def supports(self, capability: str) -> bool:
-            return capability in self.capabilities
-
-        async def new_conversation(
-            self, workspace_root: Path, title: Optional[str] = None
-        ) -> SimpleNamespace:
-            _ = workspace_root, title
-            return SimpleNamespace(id="telegram-backend-thread-1")
-
-        async def resume_conversation(
-            self, workspace_root: Path, conversation_id: str
-        ) -> SimpleNamespace:
-            _ = workspace_root
-            return SimpleNamespace(id=conversation_id)
 
         async def start_turn(
             self,
@@ -2609,9 +2263,6 @@ async def test_pma_interrupt_recovers_missing_backend_thread_for_text_turns(
             if release_first.is_set():
                 turn_id = "telegram-backend-turn-2"
             return SimpleNamespace(conversation_id=conversation_id, turn_id=turn_id)
-
-        async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
-            raise AssertionError("review mode should not be used in this test")
 
         async def wait_for_turn(
             self,
@@ -2647,13 +2298,6 @@ async def test_pma_interrupt_recovers_missing_backend_thread_for_text_turns(
                 message="thread not found: telegram-backend-thread-1",
                 data=None,
             )
-
-        async def stream_events(
-            self, workspace_root: Path, conversation_id: str, turn_id: str
-        ):
-            _ = workspace_root, conversation_id, turn_id
-            if False:
-                yield ""
 
     harness = _FakeHarness()
     monkeypatch.setattr(
@@ -2742,17 +2386,7 @@ async def test_repo_text_turns_use_orchestration_binding_and_preserve_thread_con
     )
     handler = _ManagedThreadPMAHandler(record, tmp_path)
 
-    class _FakeHarness:
-        display_name = "Fake"
-        capabilities = frozenset(
-            {
-                "durable_threads",
-                "message_turns",
-                "interrupt",
-                "event_streaming",
-            }
-        )
-
+    class _FakeHarness(_BaseFakeHarness):
         def __init__(self) -> None:
             self.start_calls: list[tuple[str, str]] = []
 
@@ -2765,20 +2399,11 @@ async def test_repo_text_turns_use_orchestration_binding_and_preserve_thread_con
             assert workspace_root == tmp_path
             return "runtime-test-1"
 
-        def supports(self, capability: str) -> bool:
-            return capability in self.capabilities
-
         async def new_conversation(
             self, workspace_root: Path, title: Optional[str] = None
         ) -> SimpleNamespace:
             _ = workspace_root, title
             return SimpleNamespace(id="repo-backend-thread-1")
-
-        async def resume_conversation(
-            self, workspace_root: Path, conversation_id: str
-        ) -> SimpleNamespace:
-            _ = workspace_root
-            return SimpleNamespace(id=conversation_id)
 
         async def start_turn(
             self,
@@ -2798,9 +2423,6 @@ async def test_repo_text_turns_use_orchestration_binding_and_preserve_thread_con
             turn_id = f"repo-backend-turn-{len(self.start_calls)}"
             return SimpleNamespace(conversation_id=conversation_id, turn_id=turn_id)
 
-        async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
-            raise AssertionError("review mode should not be used in this test")
-
         async def wait_for_turn(
             self,
             workspace_root: Path,
@@ -2817,18 +2439,6 @@ async def test_repo_text_turns_use_orchestration_binding_and_preserve_thread_con
                 assistant_text=f"reply for {turn_id}",
                 errors=[],
             )
-
-        async def interrupt(
-            self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
-        ) -> None:
-            _ = workspace_root, conversation_id, turn_id
-
-        async def stream_events(
-            self, workspace_root: Path, conversation_id: str, turn_id: str
-        ):
-            _ = workspace_root, conversation_id, turn_id
-            if False:
-                yield ""
 
     harness = _FakeHarness()
     monkeypatch.setattr(
@@ -2906,43 +2516,15 @@ async def test_repo_media_turns_preserve_input_items_via_orchestration(
     image_path = tmp_path / "image.png"
     image_path.write_bytes(b"png-bytes")
 
-    class _FakeHarness:
-        display_name = "Fake"
-        capabilities = frozenset(
-            {
-                "durable_threads",
-                "message_turns",
-                "interrupt",
-                "event_streaming",
-            }
-        )
-
+    class _FakeHarness(_BaseFakeHarness):
         def __init__(self) -> None:
             self.input_items: Optional[list[dict[str, Any]]] = None
-
-        async def ensure_ready(self, workspace_root: Path) -> None:
-            _ = workspace_root
-
-        async def backend_runtime_instance_id(
-            self, workspace_root: Path
-        ) -> Optional[str]:
-            _ = workspace_root
-            return "runtime-test-1"
-
-        def supports(self, capability: str) -> bool:
-            return capability in self.capabilities
 
         async def new_conversation(
             self, workspace_root: Path, title: Optional[str] = None
         ) -> SimpleNamespace:
             _ = workspace_root, title
             return SimpleNamespace(id="repo-media-thread-1")
-
-        async def resume_conversation(
-            self, workspace_root: Path, conversation_id: str
-        ) -> SimpleNamespace:
-            _ = workspace_root
-            return SimpleNamespace(id=conversation_id)
 
         async def start_turn(
             self,
@@ -2971,9 +2553,6 @@ async def test_repo_media_turns_preserve_input_items_via_orchestration(
                 turn_id="repo-media-turn-1",
             )
 
-        async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
-            raise AssertionError("review mode should not be used in this test")
-
         async def wait_for_turn(
             self,
             workspace_root: Path,
@@ -2988,18 +2567,6 @@ async def test_repo_media_turns_preserve_input_items_via_orchestration(
                 assistant_text="repo media orchestration reply",
                 errors=[],
             )
-
-        async def interrupt(
-            self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
-        ) -> None:
-            _ = workspace_root, conversation_id, turn_id
-
-        async def stream_events(
-            self, workspace_root: Path, conversation_id: str, turn_id: str
-        ):
-            _ = workspace_root, conversation_id, turn_id
-            if False:
-                yield ""
 
     harness = _FakeHarness()
     monkeypatch.setattr(
@@ -3059,43 +2626,15 @@ async def test_repo_interrupt_uses_orchestration_binding_for_text_turns(
     first_started = asyncio.Event()
     release_first = asyncio.Event()
 
-    class _FakeHarness:
-        display_name = "Fake"
-        capabilities = frozenset(
-            {
-                "durable_threads",
-                "message_turns",
-                "interrupt",
-                "event_streaming",
-            }
-        )
-
+    class _FakeHarness(_BaseFakeHarness):
         def __init__(self) -> None:
             self.interrupt_calls: list[tuple[Path, str, Optional[str]]] = []
-
-        async def ensure_ready(self, workspace_root: Path) -> None:
-            _ = workspace_root
-
-        async def backend_runtime_instance_id(
-            self, workspace_root: Path
-        ) -> Optional[str]:
-            _ = workspace_root
-            return "runtime-test-1"
-
-        def supports(self, capability: str) -> bool:
-            return capability in self.capabilities
 
         async def new_conversation(
             self, workspace_root: Path, title: Optional[str] = None
         ) -> SimpleNamespace:
             _ = workspace_root, title
             return SimpleNamespace(id="repo-backend-thread-1")
-
-        async def resume_conversation(
-            self, workspace_root: Path, conversation_id: str
-        ) -> SimpleNamespace:
-            _ = workspace_root
-            return SimpleNamespace(id=conversation_id)
 
         async def start_turn(
             self,
@@ -3123,9 +2662,6 @@ async def test_repo_interrupt_uses_orchestration_binding_for_text_turns(
             if release_first.is_set():
                 turn_id = "repo-backend-turn-2"
             return SimpleNamespace(conversation_id=conversation_id, turn_id=turn_id)
-
-        async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
-            raise AssertionError("review mode should not be used in this test")
 
         async def wait_for_turn(
             self,
@@ -3156,13 +2692,6 @@ async def test_repo_interrupt_uses_orchestration_binding_for_text_turns(
         ) -> None:
             self.interrupt_calls.append((workspace_root, conversation_id, turn_id))
             release_first.set()
-
-        async def stream_events(
-            self, workspace_root: Path, conversation_id: str, turn_id: str
-        ):
-            _ = workspace_root, conversation_id, turn_id
-            if False:
-                yield ""
 
     harness = _FakeHarness()
     monkeypatch.setattr(
@@ -3301,40 +2830,12 @@ async def test_repo_message_ingress_callback_reaches_orchestrated_thread_executi
         async def _dismiss_review_custom_prompt(self, *_args, **_kwargs) -> None:
             return None
 
-    class _FakeHarness:
-        display_name = "Fake"
-        capabilities = frozenset(
-            {
-                "durable_threads",
-                "message_turns",
-                "interrupt",
-                "event_streaming",
-            }
-        )
-
-        async def ensure_ready(self, workspace_root: Path) -> None:
-            _ = workspace_root
-
-        async def backend_runtime_instance_id(
-            self, workspace_root: Path
-        ) -> Optional[str]:
-            _ = workspace_root
-            return "runtime-test-1"
-
-        def supports(self, capability: str) -> bool:
-            return capability in self.capabilities
-
+    class _FakeHarness(_BaseFakeHarness):
         async def new_conversation(
             self, workspace_root: Path, title: Optional[str] = None
         ) -> SimpleNamespace:
             _ = workspace_root, title
             return SimpleNamespace(id="repo-ingress-thread-1")
-
-        async def resume_conversation(
-            self, workspace_root: Path, conversation_id: str
-        ) -> SimpleNamespace:
-            _ = workspace_root
-            return SimpleNamespace(id=conversation_id)
 
         async def start_turn(
             self,
@@ -3363,9 +2864,6 @@ async def test_repo_message_ingress_callback_reaches_orchestrated_thread_executi
                 turn_id="repo-ingress-turn-1",
             )
 
-        async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
-            raise AssertionError("review mode should not be used in this test")
-
         async def wait_for_turn(
             self,
             workspace_root: Path,
@@ -3380,18 +2878,6 @@ async def test_repo_message_ingress_callback_reaches_orchestrated_thread_executi
                 assistant_text="repo ingress orchestration reply",
                 errors=[],
             )
-
-        async def interrupt(
-            self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
-        ) -> None:
-            _ = workspace_root, conversation_id, turn_id
-
-        async def stream_events(
-            self, workspace_root: Path, conversation_id: str, turn_id: str
-        ):
-            _ = workspace_root, conversation_id, turn_id
-            if False:
-                yield ""
 
     handler = _RepoIngressHandler(record, tmp_path)
     harness = _FakeHarness()
@@ -3503,7 +2989,7 @@ async def test_repo_message_ingress_callback_reaches_hermes_orchestrated_thread_
         async def _dismiss_review_custom_prompt(self, *_args, **_kwargs) -> None:
             return None
 
-    class _FakeHarness:
+    class _FakeHarness(_BaseFakeHarness):
         display_name = "Hermes"
         capabilities = frozenset(
             {
@@ -3516,29 +3002,17 @@ async def test_repo_message_ingress_callback_reaches_hermes_orchestrated_thread_
             }
         )
 
-        async def ensure_ready(self, workspace_root: Path) -> None:
-            _ = workspace_root
-
         async def backend_runtime_instance_id(
             self, workspace_root: Path
         ) -> Optional[str]:
             _ = workspace_root
             return "runtime-hermes-1"
 
-        def supports(self, capability: str) -> bool:
-            return capability in self.capabilities
-
         async def new_conversation(
             self, workspace_root: Path, title: Optional[str] = None
         ) -> SimpleNamespace:
             _ = workspace_root, title
             return SimpleNamespace(id="hermes-repo-thread-1")
-
-        async def resume_conversation(
-            self, workspace_root: Path, conversation_id: str
-        ) -> SimpleNamespace:
-            _ = workspace_root
-            return SimpleNamespace(id=conversation_id)
 
         async def start_turn(
             self,
@@ -3567,9 +3041,6 @@ async def test_repo_message_ingress_callback_reaches_hermes_orchestrated_thread_
                 turn_id="hermes-repo-turn-1",
             )
 
-        async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
-            raise AssertionError("review mode should not be used in this test")
-
         async def wait_for_turn(
             self,
             workspace_root: Path,
@@ -3584,18 +3055,6 @@ async def test_repo_message_ingress_callback_reaches_hermes_orchestrated_thread_
                 assistant_text="hermes repo ingress reply",
                 errors=[],
             )
-
-        async def interrupt(
-            self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
-        ) -> None:
-            _ = workspace_root, conversation_id, turn_id
-
-        async def stream_events(
-            self, workspace_root: Path, conversation_id: str, turn_id: str
-        ):
-            _ = workspace_root, conversation_id, turn_id
-            if False:
-                yield ""
 
     handler = _RepoIngressHandler(record, tmp_path)
     harness = _FakeHarness()
@@ -3666,7 +3125,7 @@ async def test_repo_interrupt_uses_orchestration_binding_for_hermes_text_turns(
     first_started = asyncio.Event()
     release_first = asyncio.Event()
 
-    class _FakeHarness:
+    class _FakeHarness(_BaseFakeHarness):
         display_name = "Hermes"
         capabilities = frozenset(
             {
@@ -3682,29 +3141,17 @@ async def test_repo_interrupt_uses_orchestration_binding_for_hermes_text_turns(
         def __init__(self) -> None:
             self.interrupt_calls: list[tuple[Path, str, Optional[str]]] = []
 
-        async def ensure_ready(self, workspace_root: Path) -> None:
-            _ = workspace_root
-
         async def backend_runtime_instance_id(
             self, workspace_root: Path
         ) -> Optional[str]:
             _ = workspace_root
             return "runtime-hermes-1"
 
-        def supports(self, capability: str) -> bool:
-            return capability in self.capabilities
-
         async def new_conversation(
             self, workspace_root: Path, title: Optional[str] = None
         ) -> SimpleNamespace:
             _ = workspace_root, title
             return SimpleNamespace(id="hermes-fresh-1")
-
-        async def resume_conversation(
-            self, workspace_root: Path, conversation_id: str
-        ) -> SimpleNamespace:
-            _ = workspace_root
-            return SimpleNamespace(id=conversation_id)
 
         async def start_turn(
             self,
@@ -3732,9 +3179,6 @@ async def test_repo_interrupt_uses_orchestration_binding_for_hermes_text_turns(
             if release_first.is_set():
                 turn_id = "hermes-turn-2"
             return SimpleNamespace(conversation_id=conversation_id, turn_id=turn_id)
-
-        async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
-            raise AssertionError("review mode should not be used in this test")
 
         async def wait_for_turn(
             self,
@@ -3765,13 +3209,6 @@ async def test_repo_interrupt_uses_orchestration_binding_for_hermes_text_turns(
         ) -> None:
             self.interrupt_calls.append((workspace_root, conversation_id, turn_id))
             release_first.set()
-
-        async def stream_events(
-            self, workspace_root: Path, conversation_id: str, turn_id: str
-        ):
-            _ = workspace_root, conversation_id, turn_id
-            if False:
-                yield ""
 
     harness = _FakeHarness()
     monkeypatch.setattr(
