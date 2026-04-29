@@ -2,7 +2,7 @@
 agent: codex
 done: false
 title: "AutoOptimize bootstrap"
-goal: "Bootstrap an AutoOptimize campaign, define the metric contract, and queue the baseline plus the first bounded iteration tickets."
+goal: "Bootstrap an AutoOptimize campaign, define the metric contract, and queue the baseline ticket."
 ---
 
 # AutoOptimize Bootstrap
@@ -17,10 +17,10 @@ This ticket was created by the `blessed.autooptimize` app.
    - unit
    - target if one exists
 2. Run `car apps run blessed.autooptimize init-run -- ...` with the agreed run settings.
-3. Create or ensure one baseline ticket:
+3. Ask the app which ticket should come next:
+   - `car apps run blessed.autooptimize plan-next-ticket`
+4. Create or ensure the recommended baseline ticket:
    - `car apps apply blessed.autooptimize --template baseline --set goal="<goal>"`
-4. Create the first one or two iteration tickets:
-   - `car apps apply blessed.autooptimize --template iteration --set goal="<goal>"`
 5. Keep the workflow strict:
    - one ticket = one hypothesis = one measurable attempt
 6. Record any metric caveats or environmental assumptions in contextspace.

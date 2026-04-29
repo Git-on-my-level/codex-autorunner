@@ -121,6 +121,7 @@ def test_autooptimize_install_run_and_after_flow_terminal_hook(tmp_path: Path) -
         "record-baseline",
         "record-iteration",
         "render-summary-card",
+        "plan-next-ticket",
         "status",
         "validate-state",
     }
@@ -151,6 +152,16 @@ def test_autooptimize_install_run_and_after_flow_terminal_hook(tmp_path: Path) -
         extra_argv=["--value", "110", "--unit", "ms", "--summary", "main baseline"],
     )
     assert baseline_result.exit_code == 0
+
+    plan_result = run_installed_app_tool(
+        repo_root,
+        "blessed.autooptimize",
+        "plan-next-ticket",
+        extra_argv=["--json"],
+    )
+    assert plan_result.exit_code == 0
+    assert '"template": "iteration"' in plan_result.stdout_excerpt
+    assert '"next_iteration": 1' in plan_result.stdout_excerpt
 
     iteration_result = run_installed_app_tool(
         repo_root,

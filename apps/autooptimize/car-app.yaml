@@ -54,6 +54,10 @@ tools:
     description: Print or emit JSON campaign status.
     argv: ["python3", "scripts/status.py"]
     timeout_seconds: 10
+  plan-next-ticket:
+    description: Recommend the next ticket template and apply command from campaign state.
+    argv: ["python3", "scripts/plan_next_ticket.py"]
+    timeout_seconds: 10
   validate-state:
     description: Validate AutoOptimize state files and derived best result.
     argv: ["python3", "scripts/validate_state.py"]

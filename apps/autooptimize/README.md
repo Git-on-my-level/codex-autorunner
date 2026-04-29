@@ -70,6 +70,7 @@ Check status and render artifacts:
 
 ```bash
 car apps run blessed.autooptimize status -- --json
+car apps run blessed.autooptimize plan-next-ticket -- --json
 car apps run blessed.autooptimize validate-state
 car apps run blessed.autooptimize render-summary-card
 ```
@@ -94,15 +95,21 @@ conversion dependency is available.
 
 1. Apply the bootstrap template and define the campaign goal.
 2. Run `init-run` once the metric contract is clear.
-3. Apply and complete the baseline ticket.
-4. Apply one iteration ticket per hypothesis.
+3. Run `plan-next-ticket` and apply the recommended baseline template.
+4. After every baseline or iteration ticket, run `plan-next-ticket` and apply
+   its recommended template.
 5. Use `status` frequently to review progress and stop-condition hints.
 6. Finish with the closeout template, `validate-state`, and
    `render-summary-card`.
 
+The loop is ticket-driven on purpose. Hooks render or attach artifacts at
+lifecycle boundaries, while tickets remain the durable units that agents can
+resume, review, and audit.
+
 ## Limitations
 
-- AutoOptimize does not schedule iterations automatically.
+- AutoOptimize does not run hidden background loops. It recommends the next
+  explicit ticket through `plan-next-ticket`.
 - It does not add CAR-core schemas, background loops, or web UI.
 - Guard commands are recorded in run state but must still be run explicitly by
   the agent.

@@ -11,14 +11,16 @@ goal: "Validate the AutoOptimize campaign state, render final artifacts, and sum
 
 1. Validate campaign state:
    - `car apps run blessed.autooptimize validate-state`
-2. Render final artifacts:
+2. Confirm the app recommends closeout:
+   - `car apps run blessed.autooptimize plan-next-ticket`
+3. Render final artifacts:
    - `car apps run blessed.autooptimize render-summary-card`
-3. Summarize:
+4. Summarize:
    - best result
    - failed or discarded attempts
    - caveats
    - recommended follow-ups
-4. Ensure the artifacts exist for chat wrap-up:
+5. Ensure the artifacts exist for chat wrap-up:
    - `.codex-autorunner/apps/blessed.autooptimize/artifacts/summary.md`
    - `.codex-autorunner/apps/blessed.autooptimize/artifacts/summary.svg`
    - optional `.codex-autorunner/apps/blessed.autooptimize/artifacts/summary.png`

@@ -84,6 +84,13 @@ def test_autooptimize_end_to_end_scripts(tmp_path: Path) -> None:
     )
     assert baseline_result.returncode == 0, baseline_result.stderr
 
+    first_plan_result = _run_script("plan_next_ticket.py", "--json", env=env)
+    assert first_plan_result.returncode == 0, first_plan_result.stderr
+    first_plan = json.loads(first_plan_result.stdout)
+    assert first_plan["template"] == "iteration"
+    assert first_plan["next_iteration"] == 1
+    assert "--template iteration" in first_plan["command"]
+
     keep_result = _run_script(
         "record_iteration.py",
         "--iteration",
@@ -146,6 +153,12 @@ def test_autooptimize_end_to_end_scripts(tmp_path: Path) -> None:
     assert status_payload["improvement_absolute"] == 24.0
     assert status_payload["guard_status_counts"] == {"fail": 1, "pass": 1}
 
+    next_plan_result = _run_script("plan_next_ticket.py", "--json", env=env)
+    assert next_plan_result.returncode == 0, next_plan_result.stderr
+    next_plan = json.loads(next_plan_result.stdout)
+    assert next_plan["template"] == "iteration"
+    assert next_plan["next_iteration"] == 3
+
     validate_result = _run_script("validate_state.py", env=env)
     assert validate_result.returncode == 0, validate_result.stderr
 
@@ -162,6 +175,98 @@ def test_autooptimize_end_to_end_scripts(tmp_path: Path) -> None:
     assert "manifest-cache" in summary_md
     assert "AutoOptimize" in summary_svg
     assert "Guard status: fail=1 pass=1" in summary_svg
+
+
+def test_plan_next_ticket_recommends_baseline_before_measurement(tmp_path: Path) -> None:
+    env = _app_env(tmp_path)
+
+    assert (
+        _run_script(
+            "init_run.py",
+            "--goal",
+            "Reduce p95 latency",
+            "--metric",
+            "p95 latency",
+            "--direction",
+            "lower",
+            "--unit",
+            "ms",
+            env=env,
+        ).returncode
+        == 0
+    )
+
+    plan_result = _run_script("plan_next_ticket.py", "--json", env=env)
+
+    assert plan_result.returncode == 0, plan_result.stderr
+    plan = json.loads(plan_result.stdout)
+    assert plan["template"] == "baseline"
+    assert plan["next_iteration"] is None
+    assert plan["reason"] == "baseline not recorded"
+    assert "--template baseline" in plan["command"]
+
+
+def test_plan_next_ticket_recommends_closeout_when_stop_condition_is_met(
+    tmp_path: Path,
+) -> None:
+    env = _app_env(tmp_path)
+
+    assert (
+        _run_script(
+            "init_run.py",
+            "--goal",
+            "Reduce p95 latency",
+            "--metric",
+            "p95 latency",
+            "--direction",
+            "lower",
+            "--unit",
+            "ms",
+            "--max-iterations",
+            "1",
+            env=env,
+        ).returncode
+        == 0
+    )
+    assert (
+        _run_script(
+            "record_baseline.py",
+            "--value",
+            "100",
+            "--unit",
+            "ms",
+            env=env,
+        ).returncode
+        == 0
+    )
+    assert (
+        _run_script(
+            "record_iteration.py",
+            "--iteration",
+            "1",
+            "--ticket",
+            "TICKET-301.md",
+            "--hypothesis",
+            "First attempt",
+            "--value",
+            "90",
+            "--unit",
+            "ms",
+            "--decision",
+            "keep",
+            env=env,
+        ).returncode
+        == 0
+    )
+
+    plan_result = _run_script("plan_next_ticket.py", "--json", env=env)
+
+    assert plan_result.returncode == 0, plan_result.stderr
+    plan = json.loads(plan_result.stdout)
+    assert plan["template"] == "closeout"
+    assert plan["next_iteration"] is None
+    assert plan["reason"] == "max_iterations reached"
+    assert "--template closeout" in plan["command"]
 
 
 def test_record_iteration_force_replaces_duplicate_iteration(tmp_path: Path) -> None:
