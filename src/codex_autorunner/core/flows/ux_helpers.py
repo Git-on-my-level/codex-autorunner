@@ -242,7 +242,7 @@ def _shorten_command(command: str, *, max_chars: int = 96) -> str:
     text = " ".join(command.split())
     if len(text) <= max_chars:
         return text
-    return text[: max_chars - 1].rstrip() + "..."
+    return text[: max_chars - 3].rstrip() + "..."
 
 
 def _format_active_tool_line(active_tool: Any, freshness: Any) -> Optional[str]:
