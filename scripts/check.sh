@@ -93,6 +93,7 @@ need_cmd make
 # unless the caller opts in with CODEX_FAST_TEST_ENFORCE_BUDGET=1.
 FAST_TEST_MARKERS='not integration and not slow'
 FAST_TEST_ENFORCE_BUDGET="${CODEX_FAST_TEST_ENFORCE_BUDGET:-0}"
+FAST_TEST_WORKERS="${CODEX_FAST_TEST_WORKERS:-4}"
 
 # --- Lane detection (if not explicitly set) ----------------------------------
 if [[ -z "$LANE" ]]; then
@@ -209,7 +210,7 @@ if [[ "$RUN_CORE" == true ]]; then
         rm -f "$FAST_TEST_JUNIT" "${FAST_TEST_SELECTED:-}"
       }
       trap cleanup_fast_test_artifacts EXIT
-      "$PYTHON_BIN" -m pytest -m "$FAST_TEST_MARKERS" -n auto -o junit_duration_report=call --junitxml "$FAST_TEST_JUNIT"
+      "$PYTHON_BIN" -m pytest -m "$FAST_TEST_MARKERS" -n "$FAST_TEST_WORKERS" -o junit_duration_report=call --junitxml "$FAST_TEST_JUNIT"
       FAST_TEST_REPORT_ARGS=(
         "$FAST_TEST_JUNIT"
         --repo-root "$REPO_ROOT"
@@ -238,7 +239,7 @@ if [[ "$RUN_CORE" == true ]]; then
           rm -f "$FAST_TEST_JUNIT" "${FAST_TEST_SELECTED:-}"
         }
         trap cleanup_fast_test_artifacts EXIT
-        "$PYTHON_BIN" -m pytest -m "$FAST_TEST_MARKERS" -n auto -o junit_duration_report=call --junitxml "$FAST_TEST_JUNIT"
+        "$PYTHON_BIN" -m pytest -m "$FAST_TEST_MARKERS" -n "$FAST_TEST_WORKERS" -o junit_duration_report=call --junitxml "$FAST_TEST_JUNIT"
         FAST_TEST_REPORT_ARGS=(
           "$FAST_TEST_JUNIT"
           --repo-root "$REPO_ROOT"
@@ -257,7 +258,7 @@ if [[ "$RUN_CORE" == true ]]; then
         echo "Enforcing fast-test budget (CODEX_FAST_TEST_ENFORCE_BUDGET=1)."
         "$PYTHON_BIN" scripts/report_fast_test_budget.py "${FAST_TEST_REPORT_ARGS[@]}"
       else
-        "$PYTHON_BIN" -m pytest -m "$FAST_TEST_MARKERS" -n auto
+        "$PYTHON_BIN" -m pytest -m "$FAST_TEST_MARKERS" -n "$FAST_TEST_WORKERS"
       fi
   fi
 

@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540" viewBox="0 0 960 540" role="img" aria-label="AutoOptimize test speed chart">
+  <rect width="960" height="540" fill="#f8fafc"/>
+  <rect x="24" y="24" width="912" height="492" rx="10" fill="#ffffff" stroke="#cbd5e1"/>
+  <text x="48" y="70" font-family="Arial, sans-serif" font-size="24" font-weight="700" fill="#0f172a">AutoOptimize Test Speed Run</text>
+  <text x="48" y="100" font-family="Arial, sans-serif" font-size="14" fill="#475569">Metric: pytest wall time in seconds. Lower is better. Full-suite xdist was fast but not mergeable due to new failures.</text>
+
+  <g font-family="Arial, sans-serif" font-size="13" fill="#334155">
+    <text x="640" y="70">Baseline: 746.25s</text>
+    <text x="640" y="94">Best observed: 251.12s</text>
+    <text x="640" y="118">Best passing: none beyond baseline</text>
+    <text x="640" y="142">Recorded iterations: 4 of 5</text>
+  </g>
+
+  <g transform="translate(90 160)">
+    <line x1="0" y1="0" x2="0" y2="280" stroke="#94a3b8"/>
+    <line x1="0" y1="280" x2="780" y2="280" stroke="#94a3b8"/>
+    <g stroke="#e2e8f0">
+      <line x1="0" y1="0" x2="780" y2="0"/>
+      <line x1="0" y1="70" x2="780" y2="70"/>
+      <line x1="0" y1="140" x2="780" y2="140"/>
+      <line x1="0" y1="210" x2="780" y2="210"/>
+    </g>
+    <g font-family="Arial, sans-serif" font-size="12" fill="#64748b" text-anchor="end">
+      <text x="-10" y="4">800s</text>
+      <text x="-10" y="74">600s</text>
+      <text x="-10" y="144">400s</text>
+      <text x="-10" y="214">200s</text>
+      <text x="-10" y="284">0s</text>
+    </g>
+
+    <polyline fill="none" stroke="#0f766e" stroke-width="3" points="0,18.8 195,182.3 390,192.1 585,83.8 780,144.8"/>
+
+    <g font-family="Arial, sans-serif" font-size="12" text-anchor="middle">
+      <circle cx="0" cy="18.8" r="6" fill="#0f172a"/>
+      <text x="0" y="305" fill="#334155">B</text>
+      <text x="0" y="5" fill="#0f172a">746.25</text>
+
+      <polygon points="195,175.3 202,182.3 195,189.3 188,182.3" fill="#d97706"/>
+      <text x="195" y="305" fill="#334155">I1</text>
+      <text x="195" y="169" fill="#92400e">279.05</text>
+
+      <polygon points="390,185.1 397,192.1 390,199.1 383,192.1" fill="#d97706"/>
+      <text x="390" y="305" fill="#334155">I2</text>
+      <text x="390" y="179" fill="#92400e">251.12</text>
+
+      <rect x="579" y="77.8" width="12" height="12" fill="#dc2626"/>
+      <text x="585" y="305" fill="#334155">I3</text>
+      <text x="585" y="70" fill="#991b1b">560.47</text>
+
+      <rect x="774" y="138.8" width="12" height="12" fill="#dc2626"/>
+      <text x="780" y="305" fill="#334155">I4</text>
+      <text x="780" y="132" fill="#991b1b">386.17</text>
+    </g>
+  </g>
+
+  <g font-family="Arial, sans-serif" font-size="13" fill="#475569">
+    <circle cx="96" cy="492" r="5" fill="#0f172a"/>
+    <text x="108" y="496">baseline</text>
+    <polygon points="196,487 202,493 196,499 190,493" fill="#d97706"/>
+    <text x="212" y="496">pivot after failed guard</text>
+    <rect x="390" y="487" width="10" height="10" fill="#dc2626"/>
+    <text x="408" y="496">discard after failed guard</text>
+  </g>
+</svg>
