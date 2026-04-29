@@ -165,7 +165,9 @@ def test_detect_active_tool_respects_artifacts_root(
     artifacts_dir = worker_process._worker_artifacts_dir(
         tmp_path, run_id, artifacts_root=custom_root
     )
-    (artifacts_dir / "worker.out.log").write_text("custom root logs\n", encoding="utf-8")
+    (artifacts_dir / "worker.out.log").write_text(
+        "custom root logs\n", encoding="utf-8"
+    )
 
     monkeypatch.setattr(worker_process, "_process_group_for_pid", lambda _pid: 4242)
     monkeypatch.setattr(
@@ -195,7 +197,12 @@ def test_detect_active_tool_respects_artifacts_root(
 
     assert active_tool is not None
     assert active_tool.output_updated_at is not None
-    default_dir = tmp_path / ".codex-autorunner" / "flows" / worker_process._normalized_run_id(run_id)
+    default_dir = (
+        tmp_path
+        / ".codex-autorunner"
+        / "flows"
+        / worker_process._normalized_run_id(run_id)
+    )
     assert not default_dir.exists()
 
 
