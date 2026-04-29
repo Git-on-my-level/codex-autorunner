@@ -20,6 +20,13 @@ from .contract import (
     default_runtime_schema_path,
 )
 
+try:
+    from ..apps.install import list_installed_apps as _list_installed_apps
+
+    _APPS_AVAILABLE = True
+except Exception:
+    _APPS_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 SECRET_PATTERNS = [
@@ -218,6 +225,24 @@ def _get_features(raw: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _collect_apps_info(repo_root: Path) -> dict[str, Any]:
+    if not _APPS_AVAILABLE:
+        return {"installed": []}
+    try:
+        apps = _list_installed_apps(repo_root)
+    except Exception:
+        return {"installed": []}
+    installed = []
+    for app in apps:
+        entry: dict[str, Any] = {
+            "id": app.app_id,
+            "version": app.app_version,
+            "tools": sorted(app.manifest.tools.keys()),
+        }
+        installed.append(entry)
+    return {"installed": installed}
+
+
 def collect_describe_data(
     repo_root: Path, *, hub_root: Path | None = None
 ) -> dict[str, Any]:
@@ -254,6 +279,7 @@ def collect_describe_data(
         "schema_path": str(schema_path) if schema_exists else None,
         "runtime_schema_exists": schema_exists,
         "templates": _collect_template_info(repo_root, raw, hub_root=hub_root),
+        "apps": _collect_apps_info(repo_root),
     }
 
     return _redact_dict(data)

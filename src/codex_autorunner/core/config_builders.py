@@ -30,6 +30,7 @@ from .config_layering import (
 )
 from .config_parsers import (
     _parse_app_server_config,
+    _parse_apps_config,
     _parse_destination_config_section,
     _parse_notifications_config_section,
     _parse_opencode_config,
@@ -348,6 +349,7 @@ def build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
         templates=_parse_templates_config(
             cfg.get("templates"), DEFAULT_HUB_CONFIG.get("templates")
         ),
+        apps=_parse_apps_config(cfg.get("apps"), DEFAULT_HUB_CONFIG.get("apps")),
     )
 
 
@@ -402,6 +404,7 @@ def build_hub_config(config_path: Path, cfg: Dict[str, Any]) -> HubConfig:
         templates=_parse_templates_config(
             cfg.get("templates"), DEFAULT_HUB_CONFIG.get("templates")
         ),
+        apps=_parse_apps_config(cfg.get("apps"), DEFAULT_HUB_CONFIG.get("apps")),
         repos_root=(root / hub_cfg["repos_root"]).resolve(),
         worktrees_root=(root / hub_cfg["worktrees_root"]).resolve(),
         manifest_path=root / hub_cfg["manifest"],

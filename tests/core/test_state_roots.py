@@ -24,6 +24,7 @@ from codex_autorunner.core.state_roots import (
     resolve_global_github_broker_db_path,
     resolve_global_state_root,
     resolve_hub_agent_workspace_root,
+    resolve_hub_apps_root,
     resolve_hub_lifecycle_events_db_path,
     resolve_hub_lifecycle_events_path,
     resolve_hub_manifest_path,
@@ -96,6 +97,10 @@ class TestResolveHubStateRoot:
     def test_hub_state_includes_templates(self, tmp_path):
         templates = resolve_hub_templates_root(Path(tmp_path))
         assert templates == Path(tmp_path) / REPO_STATE_DIR / "templates"
+
+    def test_hub_state_includes_apps(self, tmp_path):
+        apps = resolve_hub_apps_root(Path(tmp_path))
+        assert apps == Path(tmp_path) / REPO_STATE_DIR / "apps"
 
     def test_hub_state_includes_manifest_and_legacy_state_paths(self, tmp_path):
         hub_root = Path(tmp_path)

@@ -214,6 +214,17 @@ class TestDeriveRepoConfigData:
         assert "agents" in result
         assert result["agents"]["codex"]["binary"] == "codex"
 
+    def test_hub_shared_keys_override_repo_defaults(self, tmp_path):
+        hub_data = {
+            "repo_defaults": {"apps": {"enabled": True, "repos": [{"id": "x"}]}},
+            "apps": {"enabled": False, "repos": []},
+        }
+
+        result = derive_repo_config_data(hub_data, tmp_path)
+
+        assert result["apps"]["enabled"] is False
+        assert result["apps"]["repos"] == []
+
 
 class TestFindNearestHubConfigPath:
     def test_finds_config_in_current_dir(self, tmp_path):

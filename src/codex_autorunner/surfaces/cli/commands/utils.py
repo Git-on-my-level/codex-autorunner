@@ -443,6 +443,13 @@ def require_templates_enabled(config: RepoConfig) -> None:
         )
 
 
+def require_apps_enabled(config: RepoConfig) -> None:
+    if not config.apps.enabled:
+        raise_exit(
+            "Apps are disabled. Set apps.enabled=true in the hub config to enable."
+        )
+
+
 def resolve_hub_config_path_for_cli(
     repo_root: Path, hub: Optional[Path]
 ) -> Optional[Path]:

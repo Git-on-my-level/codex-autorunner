@@ -745,6 +745,50 @@ def reconcile_post_turn(
             ticket_id=current_ticket_id,
             reason="ticket_completed",
         )
+        from ..core.apps.hooks import execute_matching_installed_app_hooks
+
+        hook_result = execute_matching_installed_app_hooks(
+            workspace_root,
+            "after_ticket_done",
+            workspace_root=workspace_root,
+            flow_run_id=run_id,
+            ticket_id=current_ticket_id,
+            ticket_path=current_ticket_path_obj,
+            ticket_frontmatter=updated_fm,
+            emit_event=emit_event,
+        )
+        if hook_result.paused:
+            paused = build_pause_result(
+                state=state,
+                reason=hook_result.reason or "App hook requested pause.",
+                reason_code="app_hook_failed",
+                reason_details=hook_result.reason_details,
+                current_ticket=current_ticket_path,
+                workspace_root=workspace_root,
+            )
+            return TicketResult(
+                status="paused",
+                state=paused["state"],
+                reason=paused["reason"],
+                reason_details=paused["reason_details"],
+                current_ticket=paused["current_ticket"],
+                agent_output=result.text,
+                agent_id=result.agent_id,
+                agent_conversation_id=result.conversation_id,
+                agent_turn_id=result.turn_id,
+            )
+        if hook_result.failed:
+            return TicketResult(
+                status="failed",
+                state=state,
+                reason=hook_result.reason or "App hook failed.",
+                reason_details=hook_result.reason_details,
+                current_ticket=current_ticket_path,
+                agent_output=result.text,
+                agent_id=result.agent_id,
+                agent_conversation_id=result.conversation_id,
+                agent_turn_id=result.turn_id,
+            )
         state = dict(apply_completion_cleanup(state=state, updated_fm=updated_fm))
     else:
         state.pop("commit", None)

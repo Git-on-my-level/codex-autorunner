@@ -110,6 +110,8 @@ class TestConfigTypeIdentity:
             "AppServerAutorunnerPromptConfig",
             "AppServerDocChatPromptConfig",
             "AppServerSpecIngestPromptConfig",
+            "AppsConfig",
+            "AppRepoConfig",
             "StaticAssetsConfig",
             "TemplatesConfig",
             "TemplateRepoConfig",

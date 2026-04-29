@@ -65,6 +65,8 @@ class FlowEventType(str, Enum):
     RUN_NO_PROGRESS = "run_no_progress"
     PLAN_UPDATED = "plan_updated"
     DIFF_UPDATED = "diff_updated"
+    APP_HOOK_STARTED = "app_hook_started"
+    APP_HOOK_RESULT = "app_hook_result"
     RUN_TIMEOUT = "run_timeout"
     RUN_CANCELLED = "run_cancelled"
 

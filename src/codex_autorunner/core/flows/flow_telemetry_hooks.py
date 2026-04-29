@@ -16,15 +16,23 @@ from __future__ import annotations
 import dataclasses
 import logging
 import sqlite3
+import uuid
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Callable, Optional, Sequence
 
 from ..config import ConfigError, FlowRetentionConfig, load_repo_config
 from ..state_roots import resolve_repo_flows_db_path
 from .flow_housekeeping import HousekeepResult, execute_housekeep
+from .models import FlowEventType, FlowRunRecord
 from .store import FlowStore
 
 _logger = logging.getLogger(__name__)
+
+
+@dataclasses.dataclass
+class TerminalSideEffectResult:
+    hook_result: Optional[object] = None
+    housekeeping_result: Optional[HousekeepResult] = None
 
 
 def _resolve_retention_config(repo_root: Path) -> FlowRetentionConfig:
@@ -111,6 +119,49 @@ def housekeep_on_run_terminal(
     return _run_housekeep(repo_root, run_ids=[run_id])
 
 
+def handle_run_terminal_side_effects(
+    repo_root: Path,
+    record: FlowRunRecord,
+    *,
+    emit_event: Optional[Callable[[FlowEventType, dict], None]] = None,
+) -> TerminalSideEffectResult:
+    from ..apps.hooks import execute_matching_installed_app_hooks
+
+    hook_result = execute_matching_installed_app_hooks(
+        repo_root,
+        "after_flow_terminal",
+        workspace_root=repo_root,
+        flow_run_id=record.id,
+        flow_status=record.status,
+        emit_event=emit_event,
+    )
+    if hook_result.paused or hook_result.failed:
+        _logger.warning(
+            "after_flow_terminal hook reported terminal failure: run=%s paused=%s failed=%s reason=%s",
+            record.id,
+            hook_result.paused,
+            hook_result.failed,
+            hook_result.reason,
+        )
+    housekeeping = housekeep_on_run_terminal(repo_root, record.id)
+    return TerminalSideEffectResult(
+        hook_result=hook_result,
+        housekeeping_result=housekeeping,
+    )
+
+
+def build_store_event_emitter(store: FlowStore, run_id: str):
+    def _emit(event_type: FlowEventType, data: dict) -> None:
+        store.create_event(
+            event_id=str(uuid.uuid4()),
+            run_id=run_id,
+            event_type=event_type,
+            data=data,
+        )
+
+    return _emit
+
+
 def housekeep_on_worktree_cleanup(
     repo_root: Path,
 ) -> Optional[HousekeepResult]:
@@ -171,6 +222,9 @@ def housekeep_sweep_repos(
 
 __all__ = [
     "SweepResult",
+    "TerminalSideEffectResult",
+    "build_store_event_emitter",
+    "handle_run_terminal_side_effects",
     "housekeep_on_run_terminal",
     "housekeep_on_worktree_cleanup",
     "housekeep_sweep_repos",

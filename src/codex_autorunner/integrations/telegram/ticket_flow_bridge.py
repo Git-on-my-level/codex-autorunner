@@ -28,6 +28,10 @@ from ..chat.pause_notifications import (
     format_pause_notification_text,
 )
 from ..chat.run_mirror import ChatRunMirror
+from ..chat.ticket_flow_artifacts import (
+    collect_terminal_wrapup_artifacts,
+    render_terminal_notification_with_artifacts,
+)
 from .adapter import chunk_message
 from .constants import TELEGRAM_MAX_MESSAGE_LENGTH
 from .state import parse_topic_key
@@ -820,13 +824,27 @@ class TelegramTicketFlowBridge:
         except (ValueError, TypeError) as exc:
             self._logger.debug("Failed to parse topic key: %s", exc)
             return
-        message = self._format_terminal_notification(
-            run_id=run_id, status=status, error_message=error_message
+        artifacts = self._load_terminal_wrapup_artifacts(workspace_root)
+        attachment_delivery_supported = bool(self._pause_config.send_attachments)
+        message = render_terminal_notification_with_artifacts(
+            self._format_terminal_notification(
+                run_id=run_id,
+                status=status,
+                error_message=error_message,
+            ),
+            artifacts,
+            attachment_delivery_supported=attachment_delivery_supported,
         )
         try:
             await self._send_message_with_outbox(
                 chat_id, message, thread_id=thread_id, reply_to=None
             )
+            if attachment_delivery_supported and artifacts:
+                await self._send_terminal_wrapup_attachments(
+                    chat_id,
+                    thread_id,
+                    artifacts=artifacts,
+                )
             run_mirror = ChatRunMirror(workspace_root, logger_=self._logger)
             run_mirror.mirror_outbound(
                 run_id=run_id,
@@ -916,6 +934,45 @@ class TelegramTicketFlowBridge:
         elif status == FlowRunStatus.STOPPED.value:
             return f"Ticket flow stopped (run {run_id})."
         return f"Ticket flow ended (run {run_id}, status: {status})."
+
+    def _load_terminal_wrapup_artifacts(
+        self, workspace_root: Path
+    ) -> tuple[object, ...]:
+        return collect_terminal_wrapup_artifacts(
+            workspace_root,
+            max_file_size_bytes=self._pause_config.max_file_size_bytes,
+        )
+
+    async def _send_terminal_wrapup_attachments(
+        self,
+        chat_id: int,
+        thread_id: Optional[int],
+        *,
+        artifacts: tuple[object, ...],
+    ) -> None:
+        for artifact in artifacts:
+            path = getattr(artifact, "absolute_path", None)
+            if not isinstance(path, Path):
+                continue
+            try:
+                data = path.read_bytes()
+            except OSError:
+                continue
+            caption = (
+                f"{getattr(artifact, 'app_id', 'app')} | "
+                f"{getattr(artifact, 'relative_path', path.name)}"
+            )
+            try:
+                await self._send_document(
+                    chat_id,
+                    data,
+                    filename=path.name,
+                    thread_id=thread_id,
+                    reply_to=None,
+                    caption=caption[:1024],
+                )
+            except (RuntimeError, OSError, ConnectionError):
+                continue
 
     def _truncate_error(self, error_message: Optional[str], limit: int = 200) -> str:
         if not error_message:

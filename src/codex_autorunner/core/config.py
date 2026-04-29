@@ -32,6 +32,8 @@ from .config_layering import (
 )
 from .config_parsers import parse_flow_retention_config
 from .config_types import (
+    AppRepoConfig,
+    AppsConfig,
     AppServerAutorunnerPromptConfig,
     AppServerClientConfig,
     AppServerConfig,
@@ -77,6 +79,8 @@ __all__ = [
     "AppServerOutputConfig",
     "AppServerPromptsConfig",
     "AppServerSpecIngestPromptConfig",
+    "AppRepoConfig",
+    "AppsConfig",
     "DestinationConfigSection",
     "FlowRetentionConfig",
     "HubConfig",

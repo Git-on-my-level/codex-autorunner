@@ -43,6 +43,8 @@ from .config_layering import (
 from .config_types import (
     _DEFAULT_FLOW_RETENTION_DAYS,
     _DEFAULT_FLOW_SWEEP_INTERVAL_SECONDS,
+    AppRepoConfig,
+    AppsConfig,
     AppServerAutorunnerPromptConfig,
     AppServerClientConfig,
     AppServerConfig,
@@ -1179,6 +1181,55 @@ def _parse_templates_config(
             )
         )
     return TemplatesConfig(enabled=enabled, repos=repos)
+
+
+def _parse_apps_config(
+    cfg: Optional[Dict[str, Any]],
+    defaults: Optional[Dict[str, Any]],
+) -> AppsConfig:
+    cfg = cfg if isinstance(cfg, dict) else {}
+    defaults = defaults if isinstance(defaults, dict) else {}
+    enabled_raw = cfg.get("enabled", defaults.get("enabled", True))
+    if "enabled" in cfg and not isinstance(enabled_raw, bool):
+        raise ConfigError("apps.enabled must be boolean")
+    enabled = bool(enabled_raw)
+    repos_raw = cfg.get("repos", defaults.get("repos", []))
+    if repos_raw is None:
+        repos_raw = []
+    if not isinstance(repos_raw, list):
+        raise ConfigError("apps.repos must be a list")
+    repos: List[AppRepoConfig] = []
+    seen_ids: set[str] = set()
+    for idx, repo in enumerate(repos_raw):
+        if not isinstance(repo, dict):
+            raise ConfigError(f"apps.repos[{idx}] must be a mapping")
+        repo_id = repo.get("id")
+        if not isinstance(repo_id, str) or not repo_id.strip():
+            raise ConfigError(f"apps.repos[{idx}].id must be a non-empty string")
+        repo_id = repo_id.strip()
+        if repo_id in seen_ids:
+            raise ConfigError(f"apps.repos[{idx}].id must be unique")
+        seen_ids.add(repo_id)
+        url = repo.get("url")
+        if not isinstance(url, str) or not url.strip():
+            raise ConfigError(f"apps.repos[{idx}].url must be a non-empty string")
+        trusted = repo.get("trusted", False)
+        if "trusted" in repo and not isinstance(trusted, bool):
+            raise ConfigError(f"apps.repos[{idx}].trusted must be boolean")
+        default_ref = repo.get("default_ref", "main")
+        if not isinstance(default_ref, str) or not default_ref.strip():
+            raise ConfigError(
+                f"apps.repos[{idx}].default_ref must be a non-empty string"
+            )
+        repos.append(
+            AppRepoConfig(
+                id=repo_id,
+                url=url.strip(),
+                trusted=bool(trusted),
+                default_ref=default_ref.strip(),
+            )
+        )
+    return AppsConfig(enabled=enabled, repos=repos)
 
 
 def _parse_static_assets_config(

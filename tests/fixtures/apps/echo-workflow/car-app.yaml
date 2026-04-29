@@ -1,0 +1,54 @@
+schema_version: 1
+id: fixture.echo-workflow
+name: Echo Workflow
+version: 0.1.0
+description: >
+  Minimal fixture app for testing CAR app install, apply, run, and hook
+  flows. Writes state, produces artifacts, and exercises the after_ticket_done
+  hook point.
+
+entrypoint:
+  template: templates/entry.md
+
+inputs:
+  message:
+    required: true
+    description: Message to echo through the workflow.
+  repeat:
+    required: false
+    description: Number of times to repeat the message in state.
+
+templates:
+  entry:
+    path: templates/entry.md
+    description: Create an echo-workflow ticket.
+
+tools:
+  record-state:
+    description: Append the input message to app-owned state as JSONL.
+    argv: ["python3", "scripts/record_state.py"]
+    timeout_seconds: 10
+  render-summary:
+    description: Render a markdown summary artifact from recorded state.
+    argv: ["python3", "scripts/render_summary.py"]
+    timeout_seconds: 15
+    outputs:
+      - kind: markdown
+        path: artifacts/summary.md
+        label: "Echo Workflow summary"
+
+hooks:
+  after_ticket_done:
+    - tool: record-state
+      when:
+        ticket_frontmatter:
+          app: fixture.echo-workflow
+      failure: warn
+
+permissions:
+  network: false
+  writes:
+    - "state/**"
+    - "artifacts/**"
+  reads:
+    - "**"

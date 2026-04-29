@@ -11,6 +11,10 @@ from ..lifecycle_events import LifecycleEventEmitter, LifecycleEventType
 from ..state_roots import resolve_hub_manifest_path
 from ..utils import find_repo_root
 from .definition import FlowDefinition
+from .flow_telemetry_hooks import (
+    build_store_event_emitter,
+    handle_run_terminal_side_effects,
+)
 from .models import FlowEvent, FlowRunRecord, FlowRunStatus
 from .runtime import FlowRuntime
 from .store import FlowStore
@@ -67,6 +71,7 @@ class FlowController:
             self._lifecycle_emitter = LifecycleEventEmitter(hub_root)
             self.add_lifecycle_event_listener(self._emit_to_lifecycle_store)
             self._repo_id = self._resolve_repo_id(hub_root)
+        self.add_lifecycle_event_listener(self._handle_terminal_lifecycle)
 
     def _resolve_repo_id(self, hub_root: Path) -> str:
         repo_root = self.db_path.parent.parent if self.db_path else None
@@ -450,6 +455,32 @@ class FlowController:
                 Exception
             ) as e:  # intentional: arbitrary listener callbacks must not break event dispatch
                 _logger.exception("Error in event listener: %s", e)
+
+    def _handle_terminal_lifecycle(
+        self,
+        event_type: LifecycleEventType,
+        repo_id: str,
+        run_id: str,
+        data: Dict[str, Any],
+        origin: str,
+    ) -> None:
+        if event_type not in {
+            LifecycleEventType.FLOW_COMPLETED,
+            LifecycleEventType.FLOW_FAILED,
+            LifecycleEventType.FLOW_STOPPED,
+        }:
+            return
+        repo_root = self._repo_root()
+        if repo_root is None:
+            return
+        record = self.store.get_flow_run(run_id)
+        if record is None:
+            return
+        handle_run_terminal_side_effects(
+            repo_root,
+            record,
+            emit_event=build_store_event_emitter(self.store, run_id),
+        )
 
     def _prepare_artifacts_dir(self, run_id: str) -> Path:
         artifacts_dir = self.artifacts_root / run_id

@@ -23,6 +23,11 @@ from ..chat.pause_notifications import (
     format_pause_notification_source,
     format_pause_notification_text,
 )
+from ..chat.ticket_flow_artifacts import (
+    collect_terminal_wrapup_artifacts,
+    publish_terminal_wrapup_artifacts_to_outbox,
+    render_terminal_notification_with_artifacts,
+)
 from .rendering import chunk_discord_message
 from .state import OutboxRecord
 
@@ -327,11 +332,28 @@ async def _scan_and_enqueue_terminal_notifications(service: Any) -> int:
         run_id, status, error_message = terminal_run
         if binding.get("last_terminal_run_id") == run_id:
             continue
-        message = _format_terminal_notification(
-            service,
-            run_id=run_id,
-            status=status,
-            error_message=error_message,
+        artifacts = collect_terminal_wrapup_artifacts(
+            workspace_root,
+            max_file_size_bytes=8 * 1024 * 1024,
+        )
+        published_artifacts = await asyncio.to_thread(
+            publish_terminal_wrapup_artifacts_to_outbox,
+            workspace_root,
+            artifacts,
+        )
+        flush_outbox_files = getattr(service, "_flush_outbox_files", None)
+        attachment_delivery_supported = bool(published_artifacts) and callable(
+            flush_outbox_files
+        )
+        message = render_terminal_notification_with_artifacts(
+            _format_terminal_notification(
+                service,
+                run_id=run_id,
+                status=status,
+                error_message=error_message,
+            ),
+            artifacts,
+            attachment_delivery_supported=attachment_delivery_supported,
         )
         record_id = f"terminal:{channel_id}:{run_id}"
         try:
@@ -356,6 +378,11 @@ async def _scan_and_enqueue_terminal_notifications(service: Any) -> int:
                 message_id=record_id,
                 meta={"status": status},
             )
+            if published_artifacts and callable(flush_outbox_files):
+                await flush_outbox_files(
+                    workspace_root=workspace_root,
+                    channel_id=channel_id,
+                )
         except (OSError, ValueError, KeyError, TypeError) as exc:
             log_event(
                 service._logger,

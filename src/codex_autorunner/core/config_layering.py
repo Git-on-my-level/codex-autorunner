@@ -338,6 +338,21 @@ def _default_github_automation_section() -> Dict[str, Any]:
     }
 
 
+def _default_apps_section() -> Dict[str, Any]:
+    """Build the default apps section."""
+    return {
+        "enabled": True,
+        "repos": [
+            {
+                "id": "blessed",
+                "url": "https://github.com/Git-on-my-level/car-ticket-templates",
+                "trusted": True,
+                "default_ref": "main",
+            }
+        ],
+    }
+
+
 def _default_housekeeping_rules_basic() -> list:
     """Build the basic housekeeping rules (shared by repo and hub)."""
     return [
@@ -640,6 +655,7 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
     "storage": {
         "durable_writes": False,
     },
+    "apps": _default_apps_section(),
 }
 
 REPO_DEFAULT_KEYS = {
@@ -661,6 +677,7 @@ REPO_DEFAULT_KEYS = {
     "opencode",
     "usage",
     "flow_retention",
+    "apps",
 }
 DEFAULT_REPO_DEFAULTS = {
     key: json.loads(json.dumps(DEFAULT_REPO_CONFIG[key])) for key in REPO_DEFAULT_KEYS
@@ -679,6 +696,7 @@ REPO_SHARED_KEYS = {
     "update",
     "usage",
     "templates",
+    "apps",
 }
 
 DEFAULT_HUB_CONFIG: Dict[str, Any] = {
@@ -728,17 +746,8 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
         "orchestration_hot_history_retention_days": 30,
         "orchestration_cold_trace_retention_days": 90,
     },
-    "templates": {
-        "enabled": True,
-        "repos": [
-            {
-                "id": "blessed",
-                "url": "https://github.com/Git-on-my-level/car-ticket-templates",
-                "trusted": True,
-                "default_ref": "main",
-            }
-        ],
-    },
+    "templates": _default_apps_section(),
+    "apps": _default_apps_section(),
     "agents": _default_agents_section(),
     "terminal": _default_terminal_section(),
     "telegram_bot": _default_telegram_bot_section(
@@ -877,11 +886,12 @@ def derive_repo_config_data(
     repo_defaults = hub_data.get("repo_defaults") or {}
     if not isinstance(repo_defaults, dict):
         raise ConfigError("hub.repo_defaults must be a mapping if provided")
-    merged = _merge_defaults(
-        DEFAULT_REPO_CONFIG, repo_shared_overrides_from_hub(hub_data)
-    )
+    merged = cast(Dict[str, Any], json.loads(json.dumps(DEFAULT_REPO_CONFIG)))
     if repo_defaults:
         merged = _merge_defaults(merged, repo_defaults)
+    shared_overrides = repo_shared_overrides_from_hub(hub_data)
+    if shared_overrides:
+        merged = _merge_defaults(merged, shared_overrides)
     repo_overrides = _load_repo_override(repo_root)
     if repo_overrides:
         merged = _merge_defaults(merged, repo_overrides)

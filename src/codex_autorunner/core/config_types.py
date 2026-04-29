@@ -179,6 +179,20 @@ class TemplatesConfig:
 
 
 @dataclasses.dataclass(frozen=True)
+class AppRepoConfig:
+    id: str
+    url: str
+    trusted: bool
+    default_ref: str
+
+
+@dataclasses.dataclass(frozen=True)
+class AppsConfig:
+    enabled: bool
+    repos: List[AppRepoConfig]
+
+
+@dataclasses.dataclass(frozen=True)
 class TicketFlowConfig:
     approval_mode: str
     default_approval_decision: str
@@ -358,6 +372,7 @@ class RepoConfig(AgentConfigMixin):
     flow_retention: FlowRetentionConfig
     durable_writes: bool
     templates: TemplatesConfig
+    apps: AppsConfig
     effective_destination: DestinationConfigSection = dataclasses.field(
         default_factory=lambda: cast(DestinationConfigSection, {"kind": "local"})
     )
@@ -375,6 +390,7 @@ class HubConfig(AgentConfigMixin):
     repo_defaults: Dict[str, Any]
     agents: Dict[str, AgentConfig]
     templates: TemplatesConfig
+    apps: AppsConfig
     repos_root: Path
     worktrees_root: Path
     manifest_path: Path
