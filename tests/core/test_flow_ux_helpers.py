@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+from codex_autorunner.core import ticket_flow_operator
 from codex_autorunner.core.flows import ux_helpers
 from codex_autorunner.core.flows.models import FlowRunRecord, FlowRunStatus
 from codex_autorunner.core.flows.worker_process import FlowWorkerHealth
@@ -233,3 +234,79 @@ def test_flow_status_lines_include_app_only_when_present() -> None:
 
     assert "App: local.my-workflow v1.2.3" in lines
     assert all(not line.startswith("App:") for line in no_app_lines)
+
+
+def test_flow_status_lines_include_active_tool() -> None:
+    record = _run("tool-run", FlowRunStatus.RUNNING)
+    lines = ux_helpers.format_ticket_flow_status_lines(
+        record,
+        {
+            "worker_health": None,
+            "last_event_seq": 7,
+            "last_event_at": "2026-03-11T00:00:00Z",
+            "effective_current_ticket": "TICKET-001.md",
+            "ticket_progress": None,
+            "active_tool": {
+                "command": ".venv/bin/python -m pytest -q",
+                "elapsed_seconds": 245,
+                "last_activity_at": "2026-03-11T01:00:00+00:00",
+                "output_updated_at": "2026-03-11T01:00:00+00:00",
+            },
+            "freshness": {
+                "status": "fresh",
+                "recency_basis": "effective_last_activity_at",
+                "basis_at": "2026-03-11T01:00:00+00:00",
+                "age_seconds": 20,
+            },
+        },
+    )
+
+    assert (
+        "Active tool: .venv/bin/python -m pytest -q (running 4m, output updated 20s ago)"
+        in lines
+    )
+    assert "Freshness: fresh · activity 20s ago" in lines
+
+
+def test_flow_status_snapshot_uses_active_tool_as_effective_activity(
+    monkeypatch, tmp_path: Path
+) -> None:
+    record = _run("tool-run", FlowRunStatus.RUNNING)
+    health = FlowWorkerHealth(
+        status="alive",
+        pid=4242,
+        cmdline=["worker"],
+        artifact_path=tmp_path / ".codex-autorunner" / "flows" / "tool-run",
+    )
+    health.active_tool = SimpleNamespace(
+        to_dict=lambda: {
+            "command": ".venv/bin/python -m pytest -q",
+            "elapsed_seconds": 245,
+            "last_activity_at": "2026-03-11T01:00:00+00:00",
+            "output_updated_at": "2026-03-11T01:00:00+00:00",
+        }
+    )
+    monkeypatch.setattr(
+        ticket_flow_operator, "check_worker_health", lambda *_args, **_kwargs: health
+    )
+    monkeypatch.setattr(
+        ticket_flow_operator,
+        "_canonical_flow_status_state",
+        lambda *_args, **_kwargs: {
+            "freshness": {
+                "generated_at": "2026-03-11T01:00:20+00:00",
+                "stale_threshold_seconds": 1800,
+                "basis_at": "2026-03-11T00:00:00+00:00",
+                "status": "stale",
+            }
+        },
+    )
+
+    snapshot = ticket_flow_operator.build_ticket_flow_status_snapshot(
+        tmp_path, record, store=None
+    )
+
+    assert snapshot["agent_status"] == "busy"
+    assert snapshot["active_tool"]["command"] == ".venv/bin/python -m pytest -q"
+    assert snapshot["effective_last_activity_at"] == "2026-03-11T01:00:00+00:00"
+    assert snapshot["freshness"]["status"] == "fresh"

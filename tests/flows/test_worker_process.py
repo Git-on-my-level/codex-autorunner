@@ -118,6 +118,94 @@ def test_read_process_cmdline_falls_back_without_wide_flag(monkeypatch) -> None:
     assert seen[1] == ["ps", "-p", "456", "-o", "command="]
 
 
+def test_detect_active_tool_uses_worker_process_group(
+    monkeypatch, tmp_path: Path
+) -> None:
+    run_id = "3022db08-82b8-40dd-8cfa-d04eb0fcded2"
+    artifacts_dir = worker_process._worker_artifacts_dir(tmp_path, run_id)
+    out_log = artifacts_dir / "worker.out.log"
+    out_log.write_text("pytest output\n", encoding="utf-8")
+    monkeypatch.setattr(worker_process, "_process_group_for_pid", lambda _pid: 4242)
+    monkeypatch.setattr(
+        worker_process,
+        "_read_process_group_rows",
+        lambda _pgid: [
+            {
+                "pid": 4242,
+                "ppid": 1,
+                "pgid": 4242,
+                "elapsed_seconds": 120,
+                "command": "python -m codex_autorunner flow worker",
+            },
+            {
+                "pid": 4300,
+                "ppid": 4242,
+                "pgid": 4242,
+                "elapsed_seconds": 65,
+                "command": ".venv/bin/python -m pytest -q",
+            },
+        ],
+    )
+
+    active_tool = worker_process.detect_active_tool(tmp_path, run_id, 4242)
+
+    assert active_tool is not None
+    assert active_tool.pid == 4300
+    assert active_tool.command == ".venv/bin/python -m pytest -q"
+    assert active_tool.elapsed_seconds == 65
+    assert active_tool.last_activity_at is not None
+
+
+def test_detect_active_tool_respects_artifacts_root(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Log-based activity must use the same artifacts root as worker health checks."""
+    run_id = "3022db08-82b8-40dd-8cfa-d04eb0fcded2"
+    custom_root = tmp_path / "custom-flow-artifacts"
+    artifacts_dir = worker_process._worker_artifacts_dir(
+        tmp_path, run_id, artifacts_root=custom_root
+    )
+    (artifacts_dir / "worker.out.log").write_text(
+        "custom root logs\n", encoding="utf-8"
+    )
+
+    monkeypatch.setattr(worker_process, "_process_group_for_pid", lambda _pid: 4242)
+    monkeypatch.setattr(
+        worker_process,
+        "_read_process_group_rows",
+        lambda _pgid: [
+            {
+                "pid": 4242,
+                "ppid": 1,
+                "pgid": 4242,
+                "elapsed_seconds": 10,
+                "command": "python -m codex_autorunner flow worker",
+            },
+            {
+                "pid": 4300,
+                "ppid": 4242,
+                "pgid": 4242,
+                "elapsed_seconds": 5,
+                "command": "tool",
+            },
+        ],
+    )
+
+    active_tool = worker_process.detect_active_tool(
+        tmp_path, run_id, 4242, artifacts_root=custom_root
+    )
+
+    assert active_tool is not None
+    assert active_tool.output_updated_at is not None
+    default_dir = (
+        tmp_path
+        / ".codex-autorunner"
+        / "flows"
+        / worker_process._normalized_run_id(run_id)
+    )
+    assert not default_dir.exists()
+
+
 def test_spawn_flow_worker_closes_streams_when_popen_fails(
     monkeypatch, tmp_path: Path
 ) -> None:

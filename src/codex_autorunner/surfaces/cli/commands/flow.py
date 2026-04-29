@@ -201,6 +201,14 @@ def register_flow_commands(
             "duration_seconds": flow_run_duration_seconds(record),
             "last_event_seq": snapshot.get("last_event_seq"),
             "last_event_at": snapshot.get("last_event_at"),
+            "effective_last_activity_at": snapshot.get("effective_last_activity_at"),
+            "agent": (
+                {"status": snapshot.get("agent_status")}
+                if snapshot.get("agent_status")
+                else None
+            ),
+            "active_tool": snapshot.get("active_tool"),
+            "freshness": snapshot.get("freshness"),
             "current_ticket": effective_ticket,
             "app": snapshot.get("app"),
             "ticket_progress": snapshot.get("ticket_progress"),
@@ -216,6 +224,7 @@ def register_flow_commands(
                     "message": health.message,
                     "exit_code": getattr(health, "exit_code", None),
                     "stderr_tail": getattr(health, "stderr_tail", None),
+                    "active_tool": snapshot.get("active_tool"),
                 }
                 if health
                 else None
@@ -249,6 +258,22 @@ def register_flow_commands(
         typer.echo(
             f"last_event={payload.get('last_event_at')} seq={payload.get('last_event_seq')}"
         )
+        effective_last_activity_at = payload.get("effective_last_activity_at")
+        if effective_last_activity_at:
+            typer.echo(f"effective_last_activity={effective_last_activity_at}")
+        active_tool = payload.get("active_tool")
+        if isinstance(active_tool, dict):
+            command = active_tool.get("command")
+            if isinstance(command, str) and command.strip():
+                detail_parts = []
+                elapsed = active_tool.get("elapsed_seconds")
+                if isinstance(elapsed, int):
+                    detail_parts.append(f"running={format_flow_duration(elapsed)}")
+                output_updated_at = active_tool.get("output_updated_at")
+                if isinstance(output_updated_at, str) and output_updated_at.strip():
+                    detail_parts.append(f"output_updated={output_updated_at.strip()}")
+                suffix = f" {' '.join(detail_parts)}" if detail_parts else ""
+                typer.echo(f"active_tool: {command.strip()}{suffix}")
         status = payload.get("status") or ""
         reason_summary = payload.get("reason_summary")
         if isinstance(reason_summary, str) and reason_summary.strip():
