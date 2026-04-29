@@ -382,11 +382,7 @@ def build_github_enqueue_managed_turn_executor(
         result = base_executor(effective_operation)
         if result is None:
             return None
-        if (
-            progress_targets
-            and result.get("deduped") is not True
-            and result.get("queued") is not True
-        ):
+        if progress_targets and result.get("deduped") is not True:
             managed_thread_id = _normalize_optional_text(result.get("thread_target_id"))
             managed_turn_id = _normalize_optional_text(result.get("managed_turn_id"))
             request = _normalize_mapping(progress_payload.get("request"))

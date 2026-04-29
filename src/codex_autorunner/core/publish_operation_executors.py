@@ -36,8 +36,10 @@ from .scm_observability import correlation_id_for_operation, correlation_id_from
 from .text_utils import _coerce_int, _normalize_optional_text
 
 _LOGGER = logging.getLogger(__name__)
-_MANAGED_TURN_START_CONFIRMATION_TIMEOUT_SECONDS = 300
-_MANAGED_TURN_START_CONFIRMATION_RETRY_SECONDS = 5
+_MANAGED_TURN_START_CONFIRMATION_TIMEOUT_SECONDS = 120
+_MANAGED_TURN_START_CONFIRMATION_INITIAL_RETRY_SECONDS = 5
+_MANAGED_TURN_START_CONFIRMATION_MAX_RETRY_SECONDS = 30
+_MANAGED_TURN_START_CONFIRMATION_MAX_ATTEMPTS = 12
 _RUNTIME_STARTED_AT_KEY = "runtime_started_at"
 
 
@@ -202,6 +204,27 @@ def _managed_turn_dependency_deadline(
     return base + timedelta(seconds=timeout_seconds)
 
 
+def _managed_turn_start_retry_seconds(operation: PublishOperation) -> float:
+    attempt_index = max(int(operation.attempt_count or 1) - 1, 0)
+    delay = _MANAGED_TURN_START_CONFIRMATION_INITIAL_RETRY_SECONDS * (2**attempt_index)
+    return float(min(delay, _MANAGED_TURN_START_CONFIRMATION_MAX_RETRY_SECONDS))
+
+
+def _managed_turn_dependency_exhausted(operation: PublishOperation) -> bool:
+    return (
+        int(operation.attempt_count or 0)
+        >= _MANAGED_TURN_START_CONFIRMATION_MAX_ATTEMPTS
+    )
+
+
+def _managed_turn_start_failure_message(
+    failure_message: Optional[str],
+    detail: str,
+) -> str:
+    base = failure_message or "Failed to wake the bound agent thread."
+    return f"{base} {detail}".strip()
+
+
 def _resolve_notify_message(
     *,
     operation: PublishOperation,
@@ -239,7 +262,7 @@ def _resolve_notify_message(
     if enqueue_operation.state in {"pending", "running"}:
         raise RetryablePublishError(
             "Waiting for enqueue_managed_turn to finish",
-            retry_after_seconds=_MANAGED_TURN_START_CONFIRMATION_RETRY_SECONDS,
+            retry_after_seconds=_managed_turn_start_retry_seconds(operation),
         )
 
     failure_message = _normalize_optional_text(dependency.get("failure_message"))
@@ -271,13 +294,19 @@ def _resolve_notify_message(
         )
         if datetime.now(timezone.utc) >= deadline:
             if failure_message is not None:
-                return failure_message, None
+                return (
+                    _managed_turn_start_failure_message(
+                        failure_message,
+                        "The managed turn record never became visible before timeout.",
+                    ),
+                    None,
+                )
             raise TerminalPublishError(
                 "Managed turn record never became visible before timeout"
             )
         raise RetryablePublishError(
             "Waiting for managed turn record to become visible",
-            retry_after_seconds=_MANAGED_TURN_START_CONFIRMATION_RETRY_SECONDS,
+            retry_after_seconds=_managed_turn_start_retry_seconds(operation),
         )
     turn_status = _normalize_optional_text(turn.get("status")) or "unknown"
     metadata = _normalize_mapping(turn.get("metadata"))
@@ -302,15 +331,22 @@ def _resolve_notify_message(
         enqueue_operation=enqueue_operation,
         turn=turn,
     )
-    if datetime.now(timezone.utc) >= deadline:
+    if datetime.now(timezone.utc) >= deadline or _managed_turn_dependency_exhausted(
+        operation
+    ):
+        detail = (
+            "The execution was created but the runtime never launched it."
+            if _normalize_optional_text(turn.get("backend_turn_id")) is None
+            else "The managed turn did not reach a confirmed running state before timeout."
+        )
         if failure_message is not None:
-            return failure_message, None
+            return _managed_turn_start_failure_message(failure_message, detail), None
         raise TerminalPublishError(
             "Managed turn did not reach a confirmed running state before timeout"
         )
     raise RetryablePublishError(
         "Waiting for managed turn start confirmation",
-        retry_after_seconds=_MANAGED_TURN_START_CONFIRMATION_RETRY_SECONDS,
+        retry_after_seconds=_managed_turn_start_retry_seconds(operation),
     )
 
 
@@ -847,6 +883,7 @@ def build_enqueue_managed_turn_executor(
                 client_turn_id=client_request_id,
                 metadata=request.metadata,
                 queue_payload=queue_payload,
+                force_queue=bool(tracking),
             )
         except ManagedThreadNotActiveError as exc:
             if not tracking:
@@ -904,6 +941,7 @@ def build_enqueue_managed_turn_executor(
                 client_turn_id=client_request_id,
                 metadata=request.metadata,
                 queue_payload=queue_payload,
+                force_queue=bool(tracking),
             )
             _LOGGER.info(
                 "scm.enqueue_managed_turn.rebound_thread "

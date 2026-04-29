@@ -926,6 +926,7 @@ class PmaThreadStore:
         client_turn_id: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
         queue_payload: Optional[dict[str, Any]] = None,
+        force_queue: bool = False,
     ) -> dict[str, Any]:
         managed_turn_id = str(uuid.uuid4())
         started_at = now_iso()
@@ -960,7 +961,9 @@ class PmaThreadStore:
                     """,
                     (managed_thread_id,),
                 ).fetchone()
-                execution_status = "queued" if running_exists is not None else "running"
+                execution_status = (
+                    "queued" if force_queue or running_exists is not None else "running"
+                )
                 if execution_status == "queued" and busy_policy != "queue":
                     raise ManagedThreadAlreadyHasRunningTurnError(managed_thread_id)
                 conn.execute(
