@@ -104,7 +104,7 @@ def _require_str(data: Any, field: str) -> str:
 def _require_int(data: Any, field: str) -> int:
     if isinstance(data, bool) or not isinstance(data, int):
         raise ManifestError(f"{field} must be an integer", field=field)
-    return data
+    return int(data)
 
 
 def _require_list(data: Any, field: str) -> List[Any]:
