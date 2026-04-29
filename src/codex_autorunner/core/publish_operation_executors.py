@@ -7,7 +7,7 @@ import threading
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Coroutine, Optional
+from typing import Any, Callable, Coroutine, Optional, cast
 
 from ..manifest import ManifestError, load_manifest
 from .config import load_hub_config
@@ -16,6 +16,7 @@ from .pma_chat_delivery import (
     deliver_pma_notification,
     notify_preferred_bound_chat_for_workspace,
     notify_primary_pma_chat_for_repo,
+    start_bound_chat_live_progress_for_thread,
 )
 from .pma_thread_store import ManagedThreadNotActiveError, PmaThreadStore
 from .pr_bindings import PrBinding, PrBindingStore
@@ -207,12 +208,15 @@ def _resolve_notify_message(
     payload: dict[str, Any],
     journal: PublishJournalStore,
     thread_store: PmaThreadStore,
-) -> str:
+) -> tuple[str, Optional[tuple[str, str, dict[str, Any]]]]:
     dependency = _normalize_mapping(payload.get("managed_turn_dependency"))
     if not dependency:
-        return _require_text(
-            payload.get("message") or payload.get("body") or payload.get("text"),
-            field_name="notify_chat message",
+        return (
+            _require_text(
+                payload.get("message") or payload.get("body") or payload.get("text"),
+                field_name="notify_chat message",
+            ),
+            None,
         )
 
     if (
@@ -241,7 +245,7 @@ def _resolve_notify_message(
     failure_message = _normalize_optional_text(dependency.get("failure_message"))
     if enqueue_operation.state != "succeeded":
         if failure_message is not None:
-            return failure_message
+            return failure_message, None
         raise TerminalPublishError(
             "notify_chat dependency enqueue_managed_turn did not succeed"
         )
@@ -253,7 +257,7 @@ def _resolve_notify_message(
     managed_turn_id = _normalize_optional_text(enqueue_response.get("managed_turn_id"))
     if thread_target_id is None or managed_turn_id is None:
         if failure_message is not None:
-            return failure_message
+            return failure_message, None
         raise TerminalPublishError(
             "notify_chat dependency is missing managed-turn identifiers"
         )
@@ -267,7 +271,7 @@ def _resolve_notify_message(
         )
         if datetime.now(timezone.utc) >= deadline:
             if failure_message is not None:
-                return failure_message
+                return failure_message, None
             raise TerminalPublishError(
                 "Managed turn record never became visible before timeout"
             )
@@ -279,13 +283,16 @@ def _resolve_notify_message(
     metadata = _normalize_mapping(turn.get("metadata"))
     runtime_started_at = _normalize_optional_text(metadata.get(_RUNTIME_STARTED_AT_KEY))
     if runtime_started_at is not None:
-        return _require_text(
-            payload.get("message") or payload.get("body") or payload.get("text"),
-            field_name="notify_chat message",
+        return (
+            _require_text(
+                payload.get("message") or payload.get("body") or payload.get("text"),
+                field_name="notify_chat message",
+            ),
+            (thread_target_id, managed_turn_id, turn),
         )
     if turn_status in {"error", "interrupted", "ok"}:
         if failure_message is not None:
-            return failure_message
+            return failure_message, None
         raise TerminalPublishError(
             f"Managed turn reached terminal status '{turn_status}' before start confirmation"
         )
@@ -297,7 +304,7 @@ def _resolve_notify_message(
     )
     if datetime.now(timezone.utc) >= deadline:
         if failure_message is not None:
-            return failure_message
+            return failure_message, None
         raise TerminalPublishError(
             "Managed turn did not reach a confirmed running state before timeout"
         )
@@ -305,6 +312,50 @@ def _resolve_notify_message(
         "Waiting for managed turn start confirmation",
         retry_after_seconds=_MANAGED_TURN_START_CONFIRMATION_RETRY_SECONDS,
     )
+
+
+def _maybe_start_bound_live_progress_for_notify(
+    *,
+    hub_root: Path,
+    thread_store: PmaThreadStore,
+    run_coroutine: Callable[[Coroutine[Any, Any, Any]], Any],
+    workspace_root: Optional[Path],
+    repo_id: Optional[str],
+    confirmed: Optional[tuple[str, str, dict[str, Any]]],
+) -> Optional[dict[str, Any]]:
+    if confirmed is None:
+        return None
+    thread_target_id, managed_turn_id, turn = confirmed
+    try:
+        thread = thread_store.get_thread(thread_target_id) or {}
+        raw_config = load_hub_config(hub_root).raw
+        return cast(
+            dict[str, Any],
+            run_coroutine(
+                start_bound_chat_live_progress_for_thread(
+                    hub_root=hub_root,
+                    raw_config=raw_config if isinstance(raw_config, Mapping) else {},
+                    managed_thread_id=thread_target_id,
+                    managed_turn_id=managed_turn_id,
+                    agent=(
+                        _normalize_optional_text(thread.get("agent_id"))
+                        or _normalize_optional_text(thread.get("agent"))
+                        or "agent"
+                    ),
+                    model=_normalize_optional_text(turn.get("model")),
+                    workspace_root=workspace_root,
+                    repo_id=repo_id,
+                )
+            ),
+        )
+    except Exception:
+        _LOGGER.exception(
+            "Failed to seed bound chat live progress for managed turn "
+            "thread_target_id=%s managed_turn_id=%s",
+            thread_target_id,
+            managed_turn_id,
+        )
+        return None
 
 
 def _merge_into_existing_queued_scm_turn(
@@ -931,14 +982,13 @@ def build_notify_chat_executor(
                     )
                     if resolved_thread_id is not None:
                         payload["thread_target_id"] = resolved_thread_id
-        message = _normalize_optional_text(
-            _resolve_notify_message(
-                operation=operation,
-                payload=payload,
-                journal=journal,
-                thread_store=store,
-            )
+        raw_message, confirmed_managed_turn = _resolve_notify_message(
+            operation=operation,
+            payload=payload,
+            journal=journal,
+            thread_store=store,
         )
+        message = _normalize_optional_text(raw_message)
         if message is None:
             raise TerminalPublishError("Publish payload is missing notify_chat message")
 
@@ -956,6 +1006,17 @@ def build_notify_chat_executor(
             prefix="publish-chat",
         )
         repo_id, workspace_root = _resolve_thread_context(store, payload=payload)
+        # Do not enqueue bound live-progress when notify is muted (none) or when only
+        # primary_pma is selected (invalid/missing repo_id would still have skipped chat).
+        should_seed_bound_progress = delivery not in {"none", "primary_pma"}
+        progress_start = _maybe_start_bound_live_progress_for_notify(
+            hub_root=hub_root,
+            thread_store=store,
+            run_coroutine=coroutine_runner,
+            workspace_root=workspace_root,
+            repo_id=repo_id,
+            confirmed=(confirmed_managed_turn if should_seed_bound_progress else None),
+        )
 
         if delivery == "none":
             outcome = {"route": "none", "targets": 0, "published": 0}
@@ -1001,7 +1062,7 @@ def build_notify_chat_executor(
 
         targets = _coerce_int((outcome or {}).get("targets", 0))
         published = _coerce_int((outcome or {}).get("published", 0))
-        result = {
+        result: dict[str, Any] = {
             "delivery": delivery,
             "repo_id": repo_id,
             "targets": targets,
@@ -1012,6 +1073,8 @@ def build_notify_chat_executor(
             result["route"] = route
         if correlation_id is not None:
             result["correlation_id"] = correlation_id
+        if progress_start is not None:
+            result["progress_start"] = progress_start
         return result
 
     return executor

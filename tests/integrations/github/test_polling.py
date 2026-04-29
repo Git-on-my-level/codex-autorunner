@@ -375,9 +375,10 @@ def _write_manifest(hub_root: Path, *, repo_rel: str, repo_id: str = "repo-1") -
 
 
 class _SimpleOutboxRecord:
-    __slots__ = ("channel_id", "payload_json")
+    __slots__ = ("record_id", "channel_id", "payload_json")
 
-    def __init__(self, channel_id: str, payload_json: str) -> None:
+    def __init__(self, record_id: str, channel_id: str, payload_json: str) -> None:
+        self.record_id = record_id
         self.channel_id = channel_id
         self.payload_json = json.loads(payload_json)
 
@@ -388,9 +389,9 @@ def _read_outbox_records(db_path: Path) -> list[_SimpleOutboxRecord]:
     conn = sqlite3.connect(db_path)
     try:
         rows = conn.execute(
-            "SELECT channel_id, payload_json FROM outbox ORDER BY created_at ASC"
+            "SELECT record_id, channel_id, payload_json FROM outbox ORDER BY created_at ASC"
         ).fetchall()
-        return [_SimpleOutboxRecord(row[0], row[1]) for row in rows]
+        return [_SimpleOutboxRecord(row[0], row[1], row[2]) for row in rows]
     finally:
         conn.close()
 
@@ -1700,6 +1701,8 @@ def test_process_due_watches_reacts_then_wakes_thread_and_notifies_bound_chat(
     assert confirmed[0].response["route"] == "bound"
     assert confirmed[0].response["targets"] == 1
     assert confirmed[0].response["published"] == 1
+    assert confirmed[0].response["progress_start"]["targets"] == 1
+    assert confirmed[0].response["progress_start"]["published"] == 1
     assert reaction_calls == [("acme", "widgets", str(hub_root), 2844, "eyes")]
 
     turns = _thread_store.list_turns(thread["managed_thread_id"], limit=10)
@@ -1714,6 +1717,12 @@ def test_process_due_watches_reacts_then_wakes_thread_and_notifies_bound_chat(
         in str(record.payload_json.get("content", "")).lower()
         and "working on the latest review feedback now"
         in str(record.payload_json.get("content", "")).lower()
+        for record in outbox
+    )
+    assert any(
+        record.channel_id == "repo-discord"
+        and record.record_id.startswith("managed-thread-progress:discord:")
+        and "working · agent codex" in str(record.payload_json.get("content", ""))
         for record in outbox
     )
 

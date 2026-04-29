@@ -586,6 +586,63 @@ def active_chat_binding_metadata_by_thread(
     return metadata_by_thread
 
 
+def orchestration_surface_targets_for_thread(
+    *, hub_root: Path, thread_target_id: str
+) -> tuple[tuple[str, str], ...]:
+    """Return (surface_kind, surface_key) pairs for all active orchestration bindings.
+
+    ``active_chat_binding_metadata_by_thread`` exposes a single preferred binding; this
+    includes every non-disabled row so multi-surface threads fan out (e.g. Discord + Telegram).
+    """
+    normalized_thread = _normalize_scope(thread_target_id)
+    if normalized_thread is None:
+        return ()
+    try:
+        with open_orchestration_sqlite(hub_root, durable=False, migrate=False) as conn:
+            rows = conn.execute(
+                """
+                SELECT surface_kind, surface_key, updated_at
+                  FROM orch_bindings
+                 WHERE disabled_at IS NULL
+                   AND target_kind = 'thread'
+                   AND target_id = ?
+                   AND surface_kind IN ('discord', 'telegram')
+                   AND TRIM(COALESCE(surface_key, '')) != ''
+                """,
+                (normalized_thread,),
+            ).fetchall()
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc).lower():
+            return ()
+        raise RuntimeError(
+            f"Failed reading orchestration chat bindings for thread {thread_target_id!r}: {exc}"
+        ) from exc
+
+    ordered = sorted(
+        rows,
+        key=lambda row: (
+            _parse_iso_timestamp_float(row["updated_at"]),
+            1 if str(row["surface_kind"] or "").strip() == "telegram" else 0,
+            str(row["surface_key"] or "").strip(),
+        ),
+    )
+    out: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for row in ordered:
+        sk = _normalize_scope(row["surface_kind"])
+        skey = _normalize_scope(row["surface_key"])
+        if sk is None or skey is None:
+            continue
+        if sk not in {"discord", "telegram"}:
+            continue
+        pair = (sk, skey)
+        if pair in seen:
+            continue
+        seen.add(pair)
+        out.append(pair)
+    return tuple(out)
+
+
 def _orchestration_binding_timestamps_by_workspace(
     *,
     hub_root: Path,
@@ -843,23 +900,6 @@ def preferred_non_pma_chat_notification_sources_by_workspace(
     return preferred_by_workspace
 
 
-__all__ = [
-    "active_chat_binding_counts",
-    "active_chat_binding_counts_by_source",
-    "active_chat_binding_metadata_by_thread",
-    "preferred_non_pma_chat_notification_source_for_workspace",
-    "preferred_non_pma_chat_notification_sources_by_workspace",
-    "repo_has_active_chat_binding",
-    "repo_has_active_non_pma_chat_binding",
-    "resolve_chat_state_path",
-    "resolve_repo_id_by_workspace_path",
-    "resolve_bound_repo_id",
-    "normalize_workspace_path",
-    "resolve_discord_state_path",
-    "resolve_telegram_state_path",
-]
-
-
 def resolve_chat_state_path(
     *,
     hub_root: Path,
@@ -915,3 +955,21 @@ def resolve_discord_state_path(hub_root: Path, raw_config: Mapping[str, Any]) ->
 
 def resolve_telegram_state_path(hub_root: Path, raw_config: Mapping[str, Any]) -> Path:
     return _resolve_telegram_state_path(hub_root, raw_config)
+
+
+__all__ = [
+    "active_chat_binding_counts",
+    "active_chat_binding_counts_by_source",
+    "active_chat_binding_metadata_by_thread",
+    "orchestration_surface_targets_for_thread",
+    "preferred_non_pma_chat_notification_source_for_workspace",
+    "preferred_non_pma_chat_notification_sources_by_workspace",
+    "repo_has_active_chat_binding",
+    "repo_has_active_non_pma_chat_binding",
+    "resolve_chat_state_path",
+    "resolve_repo_id_by_workspace_path",
+    "resolve_bound_repo_id",
+    "normalize_workspace_path",
+    "resolve_discord_state_path",
+    "resolve_telegram_state_path",
+]
