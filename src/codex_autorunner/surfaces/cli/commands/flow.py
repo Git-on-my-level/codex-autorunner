@@ -31,7 +31,10 @@ from ....core.flows.models import (
     format_flow_duration,
 )
 from ....core.flows.telemetry_export import export_all_runs
-from ....core.flows.ux_helpers import build_flow_status_snapshot
+from ....core.flows.ux_helpers import (
+    build_flow_status_snapshot,
+    format_ticket_flow_app_label,
+)
 from ....core.flows.worker_process import (
     register_worker_metadata,
     write_worker_crash_info,
@@ -199,6 +202,7 @@ def register_flow_commands(
             "last_event_seq": snapshot.get("last_event_seq"),
             "last_event_at": snapshot.get("last_event_at"),
             "current_ticket": effective_ticket,
+            "app": snapshot.get("app"),
             "ticket_progress": snapshot.get("ticket_progress"),
             "reason_summary": normalized_reason_summary,
             "reason": normalized_reason,
@@ -232,6 +236,9 @@ def register_flow_commands(
         step = payload.get("current_step")
         ticket = payload.get("current_ticket") or "n/a"
         typer.echo(f"step={step} ticket={ticket}")
+        app_label = format_ticket_flow_app_label(payload.get("app"))
+        if app_label:
+            typer.echo(f"app={app_label}")
         typer.echo(
             f"created={payload.get('created_at')} started={payload.get('started_at')} "
             f"finished={payload.get('finished_at')}"

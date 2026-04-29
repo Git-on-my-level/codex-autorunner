@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Literal, Mapping, Optional, Sequence, TypedDict
 
 from ..tickets.files import list_ticket_paths, read_ticket, safe_relpath, ticket_is_done
+from ..tickets.frontmatter import parse_markdown_frontmatter
 from ..tickets.models import Dispatch
 from ..tickets.outbox import parse_dispatch, resolve_outbox_paths
 from ..tickets.replies import resolve_reply_paths
@@ -929,6 +930,59 @@ def _canonical_flow_status_state(
         return None
 
 
+def _normalize_optional_text(value: Any) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return value or None
+
+
+def _resolve_ticket_path(repo_root: Path, ticket_ref: str) -> Optional[Path]:
+    candidate = Path(ticket_ref)
+    candidates: list[Path]
+    if candidate.is_absolute():
+        candidates = [candidate]
+    else:
+        candidates = [
+            repo_root / candidate,
+            repo_root / ".codex-autorunner" / "tickets" / candidate,
+        ]
+    for path in candidates:
+        try:
+            if path.is_file():
+                return path
+        except OSError:
+            continue
+    return None
+
+
+def _read_ticket_flow_app_metadata(
+    repo_root: Path, ticket_ref: Optional[str]
+) -> Optional[dict[str, str]]:
+    if not ticket_ref:
+        return None
+    ticket_path = _resolve_ticket_path(repo_root, ticket_ref)
+    if ticket_path is None:
+        return None
+    try:
+        data, _body = parse_markdown_frontmatter(
+            ticket_path.read_text(encoding="utf-8")
+        )
+    except OSError:
+        return None
+    app_id = _normalize_optional_text(data.get("app"))
+    if app_id is None:
+        return None
+    metadata = {"id": app_id}
+    app_version = _normalize_optional_text(data.get("app_version"))
+    if app_version is not None:
+        metadata["version"] = app_version
+    app_source = _normalize_optional_text(data.get("app_source"))
+    if app_source is not None:
+        metadata["source"] = app_source
+    return metadata
+
+
 def build_ticket_flow_status_snapshot(
     repo_root: Path,
     record: FlowRunRecord,
@@ -946,6 +1000,7 @@ def build_ticket_flow_status_snapshot(
                 current_ticket = None
 
     effective_ticket = current_ticket or _derive_effective_current_ticket(record, store)
+    app_metadata = _read_ticket_flow_app_metadata(repo_root, effective_ticket)
     updated_state: Optional[dict[str, Any]] = None
     if effective_ticket and not current_ticket and isinstance(state, dict):
         ticket_engine = state.get("ticket_engine")
@@ -960,6 +1015,7 @@ def build_ticket_flow_status_snapshot(
             "last_event_at": None,
             "worker_health": None,
             "effective_current_ticket": effective_ticket,
+            "app": app_metadata,
             "ticket_progress": None,
             "state": updated_state,
             "canonical_state_v1": None,
@@ -984,6 +1040,7 @@ def build_ticket_flow_status_snapshot(
         "last_event_at": last_event_at,
         "worker_health": health,
         "effective_current_ticket": effective_ticket,
+        "app": app_metadata,
         "ticket_progress": ticket_progress(repo_root),
         "state": updated_state,
         "canonical_state_v1": canonical_state,

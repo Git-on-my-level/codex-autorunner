@@ -277,6 +277,19 @@ def _flow_status_current_step(record: FlowRunRecord) -> Optional[str]:
     return extract_current_step(record)
 
 
+def format_ticket_flow_app_label(app_payload: Any) -> Optional[str]:
+    if not isinstance(app_payload, Mapping):
+        return None
+    app_id = app_payload.get("id")
+    if not isinstance(app_id, str) or not app_id.strip():
+        return None
+    label = app_id.strip()
+    version = app_payload.get("version")
+    if isinstance(version, str) and version.strip():
+        label = f"{label} v{version.strip()}"
+    return label
+
+
 def format_ticket_flow_status_lines(
     record: FlowRunRecord,
     snapshot: Mapping[str, Any],
@@ -322,6 +335,9 @@ def format_ticket_flow_status_lines(
             f"Current ticket: {current_ticket or '-'}",
         ]
     )
+    app_label = format_ticket_flow_app_label(snapshot.get("app"))
+    if app_label:
+        lines.append(f"App: {app_label}")
 
     freshness_summary = summarize_flow_freshness(snapshot.get("freshness"))
     if freshness_summary:
@@ -358,6 +374,7 @@ __all__ = [
     "bootstrap_check",
     "build_flow_status_snapshot",
     "ensure_worker",
+    "format_ticket_flow_app_label",
     "format_ticket_flow_status_lines",
     "format_issue_as_markdown",
     "issue_md_has_content",
