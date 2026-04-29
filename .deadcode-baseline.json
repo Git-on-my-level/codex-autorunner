@@ -1,28 +1,3 @@
 {
-  "findings": [
-    "python:class:src/codex_autorunner/core/supervisor_protocol.py:7:AppServerSupervisorProtocol",
-    "python:class:src/codex_autorunner/integrations/app_server/logging.py:72:AppServerEventFormatter",
-    "python:function:src/codex_autorunner/core/config_parsers.py:892:_parse_log_config",
-    "python:function:src/codex_autorunner/core/git_utils.py:127:git_ls_files",
-    "python:function:src/codex_autorunner/core/git_utils.py:155:git_diff_name_status",
-    "python:function:src/codex_autorunner/core/hub_control_plane/_remote_helpers.py:32:run_sync_via_thread",
-    "python:function:src/codex_autorunner/core/patch_utils.py:127:ensure_patch_targets_allowed",
-    "python:function:src/codex_autorunner/core/patch_utils.py:167:apply_patch_file",
-    "python:function:src/codex_autorunner/core/patch_utils.py:176:preview_patch",
-    "python:function:src/codex_autorunner/core/patch_utils.py:97:normalize_patch_text",
-    "python:function:src/codex_autorunner/core/pma_ticket_flow_state.py:84:_get_ticket_flow_summary",
-    "python:function:src/codex_autorunner/core/state_retention.py:226:make_cleanup_result",
-    "python:function:src/codex_autorunner/integrations/agents/runner.py:21:run_turn_with_backend",
-    "python:function:src/codex_autorunner/integrations/chat/agents.py:168:validate_hermes_profile",
-    "python:function:src/codex_autorunner/integrations/discord/hub_handshake.py:25:perform_hub_handshake",
-    "python:function:src/codex_autorunner/integrations/chat/chat_ux_telemetry.py:347:reset_global_accumulator",
-    "python:function:src/codex_autorunner/integrations/telegram/handlers/utils.py:19:_flatten_opencode_tokens",
-    "python:function:src/codex_autorunner/tickets/runner_post_turn.py:325:apply_successful_turn_state",
-    "python:function:src/codex_autorunner/tickets/runner_post_turn.py:347:apply_loop_guard_state",
-    "python:function:src/codex_autorunner/tickets/runner_post_turn.py:358:build_loop_guard_pause_result",
-    "python:function:src/codex_autorunner/tickets/runner_post_turn.py:403:build_dispatch_pause_result",
-    "python:function:src/codex_autorunner/tickets/runner_post_turn.py:438:apply_completion_cleanup",
-    "python:function:src/codex_autorunner/tickets/runner_post_turn.py:456:apply_checkpoint_error_state",
-    "python:function:src/codex_autorunner/tickets/runner_selection.py:465:plan_pre_turn"
-  ]
+  "findings": []
 }

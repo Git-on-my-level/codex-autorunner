@@ -77,6 +77,7 @@ from codex_autorunner.integrations.discord.service import (
 )
 from codex_autorunner.integrations.discord.state import DiscordStateStore
 from tests.support.discord_turn_fakes import (
+    _build_discord_service,
     _config,
     _DeleteFailingProgressRest,
     _EditFailingProgressRest,
@@ -1497,25 +1498,10 @@ async def test_message_create_personal_bound_channel_runs_without_collaboration_
 async def test_car_session_compact_finishes_interaction_when_finalize_fails(
     tmp_path: Path,
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    rest = _FakeRest()
-    service = DiscordBotService(
-        _config(tmp_path, max_message_length=120),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=_FakeGateway([]),
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [],
+        config_kwargs=dict(max_message_length=120),
     )
 
     orchestration_service = service._discord_thread_service()
@@ -1601,25 +1587,10 @@ async def test_car_session_compact_finishes_interaction_when_finalize_fails(
 async def test_car_session_compact_restores_previous_thread_when_seed_save_fails(
     tmp_path: Path,
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    rest = _FakeRest()
-    service = DiscordBotService(
-        _config(tmp_path, max_message_length=120),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=_FakeGateway([]),
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [],
+        config_kwargs=dict(max_message_length=120),
     )
 
     orchestration_service = service._discord_thread_service()
@@ -1725,25 +1696,10 @@ async def test_car_session_compact_restores_previous_thread_when_seed_save_fails
 async def test_car_session_compact_keeps_previous_thread_when_summary_is_blank(
     tmp_path: Path,
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    rest = _FakeRest()
-    service = DiscordBotService(
-        _config(tmp_path, max_message_length=120),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=_FakeGateway([]),
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [],
+        config_kwargs=dict(max_message_length=120),
     )
 
     orchestration_service = service._discord_thread_service()
@@ -1842,25 +1798,10 @@ async def test_car_session_compact_keeps_previous_thread_when_summary_is_blank(
 async def test_car_session_compact_surfaces_empty_summary_without_transcript_fallback(
     tmp_path: Path,
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    rest = _FakeRest()
-    service = DiscordBotService(
-        _config(tmp_path, max_message_length=120),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=_FakeGateway([]),
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [],
+        config_kwargs=dict(max_message_length=120),
     )
 
     orchestration_service = service._discord_thread_service()
@@ -2044,26 +1985,9 @@ async def test_message_event_submits_through_surface_orchestration_ingress(
 async def test_message_create_after_compact_uses_pending_seed_and_clears_it(
     tmp_path: Path,
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    rest = _FakeRest()
-    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("please continue"))])
-    service = DiscordBotService(
-        _config(tmp_path),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [("MESSAGE_CREATE", _message_create("please continue"))],
     )
 
     session_key = service._build_message_session_key(
@@ -2587,26 +2511,9 @@ async def test_message_create_non_pma_prompt_hint_ignores_reply_context_prompt_t
 async def test_message_create_non_pma_injects_filebox_hint_for_outbox_keyword(
     tmp_path: Path,
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    rest = _FakeRest()
-    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("outbox me"))])
-    service = DiscordBotService(
-        _config(tmp_path),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [("MESSAGE_CREATE", _message_create("outbox me"))],
     )
 
     captured_prompts: list[str] = []
@@ -2656,26 +2563,9 @@ async def test_message_create_non_pma_injects_filebox_hint_for_outbox_keyword(
 async def test_message_create_non_pma_injects_filebox_hint_for_inbox_keyword(
     tmp_path: Path,
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    rest = _FakeRest()
-    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("check inbox"))])
-    service = DiscordBotService(
-        _config(tmp_path),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [("MESSAGE_CREATE", _message_create("check inbox"))],
     )
 
     captured_prompts: list[str] = []
@@ -3850,26 +3740,9 @@ async def test_message_create_streaming_turn_posts_progress_placeholder_and_edit
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    rest = _FakeRest()
-    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
-    service = DiscordBotService(
-        _config(tmp_path),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [("MESSAGE_CREATE", _message_create("ship it"))],
     )
     _patch_streaming_harness(
         monkeypatch,
@@ -3904,26 +3777,9 @@ async def test_message_create_streaming_turn_surfaces_fast_transient_thinking_an
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    rest = _FakeRest()
-    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
-    service = DiscordBotService(
-        _config(tmp_path),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [("MESSAGE_CREATE", _message_create("ship it"))],
     )
     _patch_streaming_harness(
         monkeypatch,
@@ -4088,26 +3944,9 @@ async def test_message_create_streaming_turn_skips_live_progress_when_parallel_s
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    rest = _FakeRest()
-    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
-    service = DiscordBotService(
-        _config(tmp_path),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [("MESSAGE_CREATE", _message_create("ship it"))],
     )
     _patch_streaming_harness(
         monkeypatch,
@@ -4143,26 +3982,9 @@ async def test_message_create_streaming_turn_persists_full_output_in_progress(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    rest = _FakeRest()
-    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
-    service = DiscordBotService(
-        _config(tmp_path),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [("MESSAGE_CREATE", _message_create("ship it"))],
     )
     full_output = (
         "This output line is intentionally longer than one hundred twenty characters "
@@ -4197,26 +4019,9 @@ async def test_message_create_streaming_turn_updates_token_usage_log_line_in_pla
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    rest = _FakeRest()
-    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
-    service = DiscordBotService(
-        _config(tmp_path),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [("MESSAGE_CREATE", _message_create("ship it"))],
     )
     _patch_streaming_harness(
         monkeypatch,
@@ -4256,26 +4061,9 @@ async def test_message_create_streaming_turn_accumulates_segmented_intermediate_
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    rest = _FakeRest()
-    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
-    service = DiscordBotService(
-        _config(tmp_path),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [("MESSAGE_CREATE", _message_create("ship it"))],
     )
     _patch_streaming_harness(
         monkeypatch,
@@ -4319,28 +4107,11 @@ async def test_message_create_streaming_turn_final_progress_omits_duplicate_term
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [("MESSAGE_CREATE", _message_create("ship it"))],
     )
-    rest = _FakeRest()
-    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
     final_text = "intermediate output two"
-    service = DiscordBotService(
-        _config(tmp_path),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
     _patch_streaming_harness(
         monkeypatch,
         [
@@ -4385,26 +4156,10 @@ async def test_message_create_turn_sends_only_final_attachment_when_long(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    rest = _FakeRest()
-    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
-    service = DiscordBotService(
-        _config(tmp_path, max_message_length=40, message_overflow="document"),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [("MESSAGE_CREATE", _message_create("ship it"))],
+        config_kwargs=dict(max_message_length=40, message_overflow="document"),
     )
 
     async def _fake_run_turn(**_kwargs: Any) -> DiscordMessageTurnResult:
@@ -4432,26 +4187,9 @@ async def test_message_create_turn_uses_progress_snapshot_when_final_empty(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    rest = _FakeRest()
-    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
-    service = DiscordBotService(
-        _config(tmp_path),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [("MESSAGE_CREATE", _message_create("ship it"))],
     )
 
     async def _fake_run_turn(**_kwargs: Any) -> DiscordMessageTurnResult:
@@ -4585,28 +4323,11 @@ async def test_message_create_streaming_turn_completion_sends_final_and_deletes_
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [("MESSAGE_CREATE", _message_create("ship it"))],
     )
-    rest = _FakeRest()
-    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
     final_text = "done from streaming turn"
-    service = DiscordBotService(
-        _config(tmp_path),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
     _patch_streaming_harness(
         monkeypatch,
         [
@@ -4639,26 +4360,9 @@ async def test_message_create_streaming_turn_keeps_components_cleared_after_comp
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    rest = _FakeRest()
-    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
-    service = DiscordBotService(
-        _config(tmp_path),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [("MESSAGE_CREATE", _message_create("ship it"))],
     )
     _patch_streaming_harness(
         monkeypatch,
@@ -4684,26 +4388,9 @@ async def test_message_create_streaming_turn_keeps_components_cleared_after_comp
 async def test_message_create_streaming_turn_ignores_late_failed_after_completed_output(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    rest = _FakeRest()
-    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
-    service = DiscordBotService(
-        _config(tmp_path),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [("MESSAGE_CREATE", _message_create("ship it"))],
     )
     final_text = "done before late failure"
     logged_events: list[dict[str, Any]] = []
@@ -4757,26 +4444,9 @@ async def test_message_create_streaming_turn_ignores_late_failed_after_completed
 async def test_message_create_streaming_turn_ignores_late_failed_with_stream_fallback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    rest = _FakeRest()
-    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
-    service = DiscordBotService(
-        _config(tmp_path),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [("MESSAGE_CREATE", _message_create("ship it"))],
     )
     streamed_text = "fallback streamed answer survives"
     logged_events: list[dict[str, Any]] = []
@@ -4834,26 +4504,9 @@ async def test_message_create_streaming_turn_ignores_late_failed_with_stream_fal
 async def test_message_create_streaming_turn_ignores_commentary_when_stream_falls_back(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    rest = _FakeRest()
-    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
-    service = DiscordBotService(
-        _config(tmp_path),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [("MESSAGE_CREATE", _message_create("ship it"))],
     )
     commentary_text = "draft release summary"
     final_text = "final release summary"
@@ -4902,26 +4555,9 @@ async def test_message_create_streaming_turn_ignores_commentary_when_stream_fall
 async def test_message_create_streaming_turn_recovers_if_wait_disconnects_after_completion(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    rest = _FakeRest()
-    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
-    service = DiscordBotService(
-        _config(tmp_path),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [("MESSAGE_CREATE", _message_create("ship it"))],
     )
     final_text = "completed answer survives reconnect"
     harness = _patch_streaming_harness(
@@ -4968,26 +4604,9 @@ async def test_message_create_streaming_turn_recovers_if_wait_disconnects_after_
 async def test_message_create_streaming_turn_recovers_if_wait_times_out_after_streamed_completion(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    rest = _FakeRest()
-    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
-    service = DiscordBotService(
-        _config(tmp_path),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [("MESSAGE_CREATE", _message_create("ship it"))],
     )
     final_text = "completed answer survives timeout"
     harness = _patch_streaming_harness(
@@ -5039,26 +4658,9 @@ async def test_message_create_streaming_turn_failure_before_completion_still_fai
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    rest = _FakeRest()
-    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
-    service = DiscordBotService(
-        _config(tmp_path),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [("MESSAGE_CREATE", _message_create("ship it"))],
     )
     _patch_streaming_harness(
         monkeypatch,
@@ -5095,26 +4697,10 @@ async def test_message_create_streaming_turn_multi_chunk_deletes_preview_and_sen
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    rest = _FakeRest()
-    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
-    service = DiscordBotService(
-        _config(tmp_path, max_message_length=80),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [("MESSAGE_CREATE", _message_create("ship it"))],
+        config_kwargs=dict(max_message_length=80),
     )
     final_text = "\n".join(
         [f"line {index} with enough content for chunking" for index in range(1, 20)]
@@ -5152,26 +4738,9 @@ async def test_message_create_streaming_turn_appends_final_metrics(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    rest = _FakeRest()
-    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
-    service = DiscordBotService(
-        _config(tmp_path),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [("MESSAGE_CREATE", _message_create("ship it"))],
     )
     final_text = "done from streaming turn"
     _patch_streaming_harness(
@@ -5215,26 +4784,9 @@ async def test_message_create_streaming_turn_uses_assistant_stream_when_final_em
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    rest = _FakeRest()
-    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
-    service = DiscordBotService(
-        _config(tmp_path),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [("MESSAGE_CREATE", _message_create("ship it"))],
     )
     streamed_text = "fallback streamed answer"
     _patch_streaming_harness(
@@ -5288,26 +4840,9 @@ async def test_message_create_streaming_turn_empty_final_includes_text_fallback_
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    rest = _FakeRest()
-    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
-    service = DiscordBotService(
-        _config(tmp_path),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [("MESSAGE_CREATE", _message_create("ship it"))],
     )
     _patch_streaming_harness(
         monkeypatch,
@@ -5349,26 +4884,9 @@ async def test_message_create_streaming_turn_fallback_preserves_multichunk_white
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    rest = _FakeRest()
-    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
-    service = DiscordBotService(
-        _config(tmp_path),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [("MESSAGE_CREATE", _message_create("ship it"))],
     )
     expected_text = "go go \nnext line"
     _patch_streaming_harness(
@@ -5414,26 +4932,9 @@ async def test_message_create_streaming_turn_fallback_preserves_whitespace_only_
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    rest = _FakeRest()
-    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
-    service = DiscordBotService(
-        _config(tmp_path),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [("MESSAGE_CREATE", _message_create("ship it"))],
     )
     expected_text = "line 1\n\nline 2"
     _patch_streaming_harness(
@@ -5479,26 +4980,9 @@ async def test_message_create_streaming_turn_fallback_handles_cumulative_deltas(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    rest = _FakeRest()
-    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
-    service = DiscordBotService(
-        _config(tmp_path),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [("MESSAGE_CREATE", _message_create("ship it"))],
     )
     expected_text = "Hello world"
     _patch_streaming_harness(
@@ -5540,26 +5024,9 @@ async def test_message_create_streaming_turn_ignores_user_message_delta(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    rest = _FakeRest()
-    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
-    service = DiscordBotService(
-        _config(tmp_path),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [("MESSAGE_CREATE", _message_create("ship it"))],
     )
     secret = "SECRET PMA CONTEXT SHOULD NOT LEAK"
     visible = "assistant output"
@@ -5598,26 +5065,10 @@ async def test_message_create_progress_failures_are_best_effort_and_do_not_block
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    rest = _FailingProgressRest()
-    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
-    service = DiscordBotService(
-        _config(tmp_path),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [("MESSAGE_CREATE", _message_create("ship it"))],
+        rest=_FailingProgressRest(),
     )
     final_text = "final despite progress failures"
     _patch_streaming_harness(
@@ -5649,26 +5100,10 @@ async def test_message_create_progress_edit_failures_are_best_effort_and_throttl
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    rest = _EditFailingProgressRest()
-    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
-    service = DiscordBotService(
-        _config(tmp_path),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [("MESSAGE_CREATE", _message_create("ship it"))],
+        rest=_EditFailingProgressRest(),
     )
     final_text = "final despite edit failures"
     _patch_streaming_harness(
@@ -5708,26 +5143,10 @@ async def test_message_create_streaming_turn_enqueues_preview_delete_when_delete
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    rest = _DeleteFailingProgressRest()
-    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
-    service = DiscordBotService(
-        _config(tmp_path),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [("MESSAGE_CREATE", _message_create("ship it"))],
+        rest=_DeleteFailingProgressRest(),
     )
     final_text = "final with preview kept"
     _patch_streaming_harness(
@@ -5760,26 +5179,9 @@ async def test_message_create_streaming_turn_exception_marks_progress_failed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    rest = _FakeRest()
-    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
-    service = DiscordBotService(
-        _config(tmp_path),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [("MESSAGE_CREATE", _message_create("ship it"))],
     )
     _patch_streaming_harness(
         monkeypatch,
@@ -5910,26 +5312,9 @@ async def test_message_create_silent_destination_ignores_plain_text_and_commands
 async def test_message_create_honors_shared_turn_policy_gate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    rest = _FakeRest()
-    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
-    service = DiscordBotService(
-        _config(tmp_path),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [("MESSAGE_CREATE", _message_create("ship it"))],
     )
 
     calls: list[tuple[str, str]] = []
@@ -6212,26 +5597,9 @@ async def test_message_create_command_only_destination_allows_bang_commands_only
 async def test_message_create_ignores_slash_prefixed_text(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    rest = _FakeRest()
-    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("/car status"))])
-    service = DiscordBotService(
-        _config(tmp_path),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [("MESSAGE_CREATE", _message_create("/car status"))],
     )
 
     async def _should_not_run_turn(
@@ -6315,26 +5683,10 @@ async def test_message_create_bang_shell_executes_in_bound_workspace(
 async def test_message_create_bang_shell_honors_shell_disable_flag(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    rest = _FakeRest()
-    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("!ls"))])
-    service = DiscordBotService(
-        _config(tmp_path, shell_enabled=False),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [("MESSAGE_CREATE", _message_create("!ls"))],
+        config_kwargs=dict(shell_enabled=False),
     )
 
     async def _should_not_run_turn(
@@ -6365,26 +5717,10 @@ async def test_message_create_bang_shell_honors_shell_disable_flag(
 async def test_message_create_bang_shell_attaches_oversized_output(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    rest = _FakeRest()
-    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("!echo long"))])
-    service = DiscordBotService(
-        _config(tmp_path, shell_max_output_chars=12),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [("MESSAGE_CREATE", _message_create("!echo long"))],
+        config_kwargs=dict(shell_max_output_chars=12),
     )
 
     long_output = "1234567890abcdefghijklmnopqrstuvwxyz\n"
@@ -6865,26 +6201,9 @@ async def test_message_create_denied_by_guild_allowlist(tmp_path: Path) -> None:
 async def test_message_create_resumes_paused_flow_run_in_repo_mode(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    rest = _FakeRest()
-    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("needs approval"))])
-    service = DiscordBotService(
-        _config(tmp_path),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [("MESSAGE_CREATE", _message_create("needs approval"))],
     )
 
     paused = SimpleNamespace(id="run-paused")
@@ -6939,26 +6258,9 @@ async def test_message_create_resumes_paused_flow_run_in_repo_mode(
 async def test_message_create_bang_shell_resumes_paused_flow_run_in_repo_mode(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    rest = _FakeRest()
-    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("!pwd"))])
-    service = DiscordBotService(
-        _config(tmp_path),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [("MESSAGE_CREATE", _message_create("!pwd"))],
     )
 
     paused = SimpleNamespace(id="run-paused")
@@ -7120,26 +6422,9 @@ async def test_message_create_attachment_only_resumes_paused_flow_run(
 async def test_message_create_skips_inbox_reply_for_user_ticket_pause(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    rest = _FakeRest()
-    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("needs approval"))])
-    service = DiscordBotService(
-        _config(tmp_path),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [("MESSAGE_CREATE", _message_create("needs approval"))],
     )
 
     paused = SimpleNamespace(id="run-paused")
@@ -8298,26 +7583,10 @@ async def test_pma_message_create_image_attachment_routes_through_managed_thread
 async def test_message_create_enqueues_outbox_when_channel_send_fails(
     tmp_path: Path,
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    rest = _FailingChannelRest()
-    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
-    service = DiscordBotService(
-        _config(tmp_path),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [("MESSAGE_CREATE", _message_create("ship it"))],
+        rest=_FailingChannelRest(),
     )
 
     async def _fake_run_turn(
@@ -8735,25 +8004,10 @@ async def test_discord_managed_thread_coordinator_uses_started_execution_preview
 async def test_car_review_single_chunk_deletes_preview_and_sends_chunk_when_flush_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    rest = _FakeRest()
-    service = DiscordBotService(
-        _config(tmp_path, max_message_length=200),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=_FakeGateway([]),
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [],
+        config_kwargs=dict(max_message_length=200),
     )
 
     async def _fake_run_turn(
@@ -8843,25 +8097,10 @@ async def test_car_review_single_chunk_deletes_preview_and_sends_chunk_when_flus
 async def test_car_session_compact_reuses_preview_without_part_numbering(
     tmp_path: Path,
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    rest = _FakeRest()
-    service = DiscordBotService(
-        _config(tmp_path, max_message_length=120),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=_FakeGateway([]),
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [],
+        config_kwargs=dict(max_message_length=120),
     )
 
     orchestration_service = service._discord_thread_service()
@@ -8978,24 +8217,10 @@ async def test_car_session_compact_reuses_preview_without_part_numbering(
 async def test_resolve_discord_thread_target_reuses_archived_managed_thread(
     tmp_path: Path,
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    service = DiscordBotService(
-        _config(tmp_path, max_message_length=120),
-        logger=logging.getLogger("test"),
-        rest_client=_FakeRest(),
-        gateway_client=_FakeGateway([]),
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [],
+        config_kwargs=dict(max_message_length=120),
     )
 
     try:
@@ -9036,25 +8261,10 @@ async def test_resolve_discord_thread_target_reuses_archived_managed_thread(
 async def test_car_session_compact_places_continue_button_on_last_chunk_without_preview(
     tmp_path: Path,
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    rest = _FakeRest()
-    service = DiscordBotService(
-        _config(tmp_path, max_message_length=120),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=_FakeGateway([]),
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [],
+        config_kwargs=dict(max_message_length=120),
     )
 
     orchestration_service = service._discord_thread_service()
@@ -9212,24 +8422,10 @@ def test_discord_harness_factory_accepts_profile(
 async def test_resolve_discord_thread_target_stores_agent_profile_in_metadata(
     tmp_path: Path,
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    service = DiscordBotService(
-        _config(tmp_path, max_message_length=120),
-        logger=logging.getLogger("test"),
-        rest_client=_FakeRest(),
-        gateway_client=_FakeGateway([]),
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [],
+        config_kwargs=dict(max_message_length=120),
     )
 
     try:
@@ -9289,24 +8485,10 @@ async def test_resolve_discord_thread_target_reuses_legacy_hermes_runtime_alias_
         lambda ctx: hub_config,
     )
 
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    service = DiscordBotService(
-        _config(tmp_path, max_message_length=120),
-        logger=logging.getLogger("test"),
-        rest_client=_FakeRest(),
-        gateway_client=_FakeGateway([]),
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
+        [],
+        config_kwargs=dict(max_message_length=120),
     )
 
     try:
