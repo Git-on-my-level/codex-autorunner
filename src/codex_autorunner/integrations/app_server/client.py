@@ -1420,13 +1420,6 @@ class CodexAppServerClient:
     def _cancel_turn_completion_settle(self, state: _TurnState) -> None:
         self._turn_state_manager.cancel_turn_completion_settle(state)
 
-    def _set_turn_result_if_pending(
-        self, state: _TurnState, *, cancel_settle_task: bool = True
-    ) -> None:
-        self._turn_state_manager.set_turn_result_if_pending(
-            state, cancel_settle_task=cancel_settle_task
-        )
-
     def _schedule_turn_completion_settle(self, state: _TurnState) -> None:
         self._turn_state_manager.schedule_turn_completion_settle(state)
 

@@ -553,29 +553,6 @@ class OpenCodeBackend(AgentBackend):
             _logger.warning("Error in event collection: %s", e)
             yield AgentEvent.error(error_message=str(e))
 
-    async def _yield_run_events_until_completion(
-        self,
-    ) -> AsyncGenerator[RunEvent, None]:
-        try:
-            client = await self._ensure_client()
-            async for sse in client.stream_events(
-                directory=None,
-                session_id=self._session_id,
-            ):
-                if not self._sse_matches_session(sse):
-                    continue
-                for run_event in self._convert_sse_to_run_event(sse):
-                    yield run_event
-                    if isinstance(run_event, (Completed, Failed)):
-                        if isinstance(run_event, Completed):
-                            self._final_messages.append(run_event.final_message)
-                        return
-        except (
-            Exception
-        ) as e:  # intentional: top-level error boundary yields error event
-            _logger.warning("Error in run event collection: %s", e)
-            yield Failed(timestamp=now_iso(), error_message=str(e))
-
     def _convert_sse_to_run_event(self, sse: SSEEvent) -> list[RunEvent]:
         events: list[RunEvent] = []
 

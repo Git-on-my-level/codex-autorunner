@@ -279,7 +279,6 @@ from .flow_commands import (
     handle_flow_status,
     handle_flow_stop,
     prompt_flow_action_picker,
-    resolve_flow_run_input,
     write_user_reply,
 )
 from .flow_watchers import (
@@ -3652,26 +3651,6 @@ class DiscordBotService:
             interaction_token,
             workspace_root=workspace_root,
             action=action,
-            deferred=deferred,
-        )
-
-    async def _resolve_flow_run_input(
-        self,
-        interaction_id: str,
-        interaction_token: str,
-        *,
-        workspace_root: Path,
-        action: str,
-        run_id_opt: Any,
-        deferred: bool = False,
-    ) -> Optional[str]:
-        return await resolve_flow_run_input(
-            self,
-            interaction_id,
-            interaction_token,
-            workspace_root=workspace_root,
-            action=action,
-            run_id_opt=run_id_opt,
             deferred=deferred,
         )
 
@@ -8456,23 +8435,6 @@ class DiscordBotService:
             source_message_id=source_message_id,
             source_command=source_command,
             source_user_id=source_user_id,
-        )
-
-    async def _send_interrupt_component_response(
-        self,
-        interaction_id: str,
-        interaction_token: str,
-        text: str,
-    ) -> None:
-        from .car_handlers.queue_interrupt_handlers import (
-            send_interrupt_component_response,
-        )
-
-        await send_interrupt_component_response(
-            self,
-            interaction_id,
-            interaction_token,
-            text,
         )
 
     async def _handle_cancel_turn_button(
