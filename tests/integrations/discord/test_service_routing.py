@@ -15,6 +15,23 @@ import pytest
 
 pytestmark = pytest.mark.integration
 
+from tests.support.discord_turn_fakes import (
+    _autocomplete_interaction,
+    _autocomplete_interaction_path,
+    _component_interaction,
+    _dispatch_gateway_interaction,
+    _FakeOutboxManager,
+    _interaction,
+    _interaction_path,
+    _latest_public_response_payload,
+)
+from tests.support.discord_turn_fakes import (
+    _InteractionFakeGateway as _FakeGateway,
+)
+from tests.support.discord_turn_fakes import (
+    _InteractionFakeRest as _FakeRest,
+)
+
 import codex_autorunner.integrations.chat.managed_thread_turns as managed_thread_turns_module
 from codex_autorunner.core.filebox import (
     inbox_dir,
@@ -97,127 +114,6 @@ from codex_autorunner.manifest import (
 )
 
 
-class _FakeRest:
-    def __init__(self) -> None:
-        self.interaction_responses: list[dict[str, Any]] = []
-        self.followup_messages: list[dict[str, Any]] = []
-        self.edited_original_interaction_responses: list[dict[str, Any]] = []
-        self.channel_messages: list[dict[str, Any]] = []
-        self.edited_channel_messages: list[dict[str, Any]] = []
-        self.deleted_channel_messages: list[dict[str, Any]] = []
-        self.typing_calls: list[str] = []
-        self.command_sync_calls: list[dict[str, Any]] = []
-        self.fetched_channel_messages: dict[tuple[str, str], dict[str, Any]] = {}
-        self._typing_event: asyncio.Event | None = None
-
-    def _new_typing_event(self) -> asyncio.Event:
-        self._typing_event = asyncio.Event()
-        return self._typing_event
-
-    async def create_interaction_response(
-        self,
-        *,
-        interaction_id: str,
-        interaction_token: str,
-        payload: dict[str, Any],
-    ) -> None:
-        self.interaction_responses.append(
-            {
-                "interaction_id": interaction_id,
-                "interaction_token": interaction_token,
-                "payload": payload,
-            }
-        )
-
-    async def create_channel_message(
-        self, *, channel_id: str, payload: dict[str, Any]
-    ) -> dict[str, Any]:
-        message_id = f"msg-{len(self.channel_messages) + 1}"
-        self.channel_messages.append(
-            {
-                "channel_id": channel_id,
-                "payload": payload,
-                "message_id": message_id,
-            }
-        )
-        return {"id": message_id, "channel_id": channel_id, "payload": payload}
-
-    async def get_channel_message(
-        self, *, channel_id: str, message_id: str
-    ) -> dict[str, Any]:
-        return dict(self.fetched_channel_messages.get((channel_id, message_id), {}))
-
-    async def edit_channel_message(
-        self, *, channel_id: str, message_id: str, payload: dict[str, Any]
-    ) -> dict[str, Any]:
-        self.edited_channel_messages.append(
-            {
-                "channel_id": channel_id,
-                "message_id": message_id,
-                "payload": payload,
-            }
-        )
-        return {"id": message_id}
-
-    async def delete_channel_message(self, *, channel_id: str, message_id: str) -> None:
-        self.deleted_channel_messages.append(
-            {"channel_id": channel_id, "message_id": message_id}
-        )
-
-    async def trigger_typing(self, *, channel_id: str) -> None:
-        self.typing_calls.append(channel_id)
-        if self._typing_event is not None:
-            self._typing_event.set()
-
-    async def create_followup_message(
-        self,
-        *,
-        application_id: str,
-        interaction_token: str,
-        payload: dict[str, Any],
-    ) -> dict[str, Any]:
-        self.followup_messages.append(
-            {
-                "application_id": application_id,
-                "interaction_token": interaction_token,
-                "payload": payload,
-            }
-        )
-        return {"id": "followup-1"}
-
-    async def edit_original_interaction_response(
-        self,
-        *,
-        application_id: str,
-        interaction_token: str,
-        payload: dict[str, Any],
-    ) -> dict[str, Any]:
-        self.edited_original_interaction_responses.append(
-            {
-                "application_id": application_id,
-                "interaction_token": interaction_token,
-                "payload": payload,
-            }
-        )
-        return {"id": "@original"}
-
-    async def bulk_overwrite_application_commands(
-        self,
-        *,
-        application_id: str,
-        commands: list[dict[str, Any]],
-        guild_id: str | None = None,
-    ) -> list[dict[str, Any]]:
-        self.command_sync_calls.append(
-            {
-                "application_id": application_id,
-                "guild_id": guild_id,
-                "commands": commands,
-            }
-        )
-        return commands
-
-
 class _TypingExpiryFakeRest(_FakeRest):
     def __init__(self, *, ttl_seconds: float) -> None:
         super().__init__()
@@ -232,41 +128,6 @@ class _TypingExpiryFakeRest(_FakeRest):
 
     def typing_visible(self, channel_id: str) -> bool:
         return time.monotonic() < self._visible_until_by_channel.get(channel_id, 0.0)
-
-
-class _FakeGateway:
-    def __init__(
-        self, events: list[dict[str, Any] | tuple[str, dict[str, Any]]]
-    ) -> None:
-        self._events = events
-        self.stopped = False
-
-    async def run(self, on_dispatch) -> None:
-        for item in self._events:
-            if isinstance(item, tuple):
-                event_type, payload = item
-            else:
-                event_type, payload = "INTERACTION_CREATE", item
-            await on_dispatch(event_type, payload)
-
-    async def stop(self) -> None:
-        self.stopped = True
-
-
-class _FakeOutboxManager:
-    def start(self) -> None:
-        return None
-
-    async def run_loop(self) -> None:
-        await asyncio.Event().wait()
-
-
-def _latest_public_response_payload(rest: _FakeRest) -> dict[str, Any]:
-    if rest.edited_original_interaction_responses:
-        return rest.edited_original_interaction_responses[-1]["payload"]
-    if rest.followup_messages:
-        return rest.followup_messages[-1]["payload"]
-    raise AssertionError("expected a Discord public response payload")
 
 
 class _DeleteFailingRest(_FakeRest):
@@ -1542,63 +1403,6 @@ def test_discord_thread_matches_agent_rejects_unknown_thread_agent_id(
     )
 
 
-def _interaction(
-    *,
-    name: str,
-    options: list[dict[str, Any]],
-    user_id: str = "user-1",
-    interaction_id: str = "inter-1",
-    interaction_token: str = "token-1",
-) -> dict[str, Any]:
-    return {
-        "id": interaction_id,
-        "token": interaction_token,
-        "channel_id": "channel-1",
-        "guild_id": "guild-1",
-        "member": {"user": {"id": user_id}},
-        "data": {
-            "name": "car",
-            "options": [{"type": 1, "name": name, "options": options}],
-        },
-    }
-
-
-def _interaction_path(
-    *,
-    command_path: tuple[str, ...],
-    options: list[dict[str, Any]],
-    user_id: str = "user-1",
-) -> dict[str, Any]:
-    assert command_path and command_path[0] == "car"
-    if len(command_path) == 2:
-        return _interaction(name=command_path[1], options=options, user_id=user_id)
-    if len(command_path) == 3:
-        return {
-            "id": "inter-1",
-            "token": "token-1",
-            "channel_id": "channel-1",
-            "guild_id": "guild-1",
-            "member": {"user": {"id": user_id}},
-            "data": {
-                "name": "car",
-                "options": [
-                    {
-                        "type": 2,
-                        "name": command_path[1],
-                        "options": [
-                            {
-                                "type": 1,
-                                "name": command_path[2],
-                                "options": options,
-                            }
-                        ],
-                    }
-                ],
-            },
-        }
-    raise AssertionError(f"Unsupported command path for test helper: {command_path}")
-
-
 def _pma_interaction(*, name: str, user_id: str = "user-1") -> dict[str, Any]:
     return {
         "id": "inter-1",
@@ -1649,109 +1453,6 @@ def _bind_select_interaction(
     }
 
 
-def _autocomplete_interaction(
-    *,
-    name: str,
-    focused_name: str,
-    focused_value: str,
-    user_id: str = "user-1",
-) -> dict[str, Any]:
-    return {
-        "id": "inter-autocomplete-1",
-        "token": "token-autocomplete-1",
-        "channel_id": "channel-1",
-        "guild_id": "guild-1",
-        "type": 4,
-        "member": {"user": {"id": user_id}},
-        "data": {
-            "name": "car",
-            "options": [
-                {
-                    "type": 1,
-                    "name": name,
-                    "options": [
-                        {
-                            "type": 3,
-                            "name": focused_name,
-                            "value": focused_value,
-                            "focused": True,
-                        }
-                    ],
-                }
-            ],
-        },
-    }
-
-
-def _autocomplete_interaction_path(
-    *,
-    command_path: tuple[str, ...],
-    focused_name: str,
-    focused_value: str,
-    user_id: str = "user-1",
-) -> dict[str, Any]:
-    assert command_path and command_path[0] == "car"
-    if len(command_path) == 2:
-        return _autocomplete_interaction(
-            name=command_path[1],
-            focused_name=focused_name,
-            focused_value=focused_value,
-            user_id=user_id,
-        )
-    if len(command_path) == 3:
-        return {
-            "id": "inter-autocomplete-1",
-            "token": "token-autocomplete-1",
-            "channel_id": "channel-1",
-            "guild_id": "guild-1",
-            "type": 4,
-            "member": {"user": {"id": user_id}},
-            "data": {
-                "name": "car",
-                "options": [
-                    {
-                        "type": 2,
-                        "name": command_path[1],
-                        "options": [
-                            {
-                                "type": 1,
-                                "name": command_path[2],
-                                "options": [
-                                    {
-                                        "type": 3,
-                                        "name": focused_name,
-                                        "value": focused_value,
-                                        "focused": True,
-                                    }
-                                ],
-                            }
-                        ],
-                    }
-                ],
-            },
-        }
-    raise AssertionError(f"Unsupported command path for test helper: {command_path}")
-
-
-def _component_interaction(
-    *, custom_id: str | None, values: list[Any] | None = None, user_id: str = "user-1"
-) -> dict[str, Any]:
-    data: dict[str, Any] = {"component_type": 3}
-    if custom_id is not None:
-        data["custom_id"] = custom_id
-    if values is not None:
-        data["values"] = values
-    return {
-        "id": "inter-component-1",
-        "token": "token-component-1",
-        "channel_id": "channel-1",
-        "guild_id": "guild-1",
-        "type": 3,
-        "member": {"user": {"id": user_id}},
-        "data": data,
-    }
-
-
 def _normalized_interaction_event(
     *, command: str, options: dict[str, Any] | None = None, user_id: str = "user-1"
 ) -> ChatInteractionEvent:
@@ -1795,14 +1496,6 @@ def _normalized_component_event(
             separators=(",", ":"),
         ),
     )
-
-
-async def _dispatch_gateway_interaction(
-    service: DiscordBotService,
-    payload: dict[str, Any],
-) -> None:
-    await service._on_dispatch("INTERACTION_CREATE", payload)
-    await asyncio.wait_for(service._command_runner.shutdown(), timeout=3.0)
 
 
 def test_model_picker_items_are_deduplicated_and_labeled() -> None:
