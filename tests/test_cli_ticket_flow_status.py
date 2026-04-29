@@ -13,11 +13,26 @@ from codex_autorunner.core.flows.store import FlowStore
 runner = CliRunner()
 
 
-def _setup_paused_run(repo_root: Path, run_id: str) -> None:
+def _setup_paused_run(
+    repo_root: Path, run_id: str, *, app_ticket: bool = False
+) -> None:
     ticket_dir = repo_root / ".codex-autorunner" / "tickets"
     ticket_dir.mkdir(parents=True, exist_ok=True)
+    app_frontmatter = (
+        'app: "local.my-workflow"\n'
+        'app_version: "1.2.3"\n'
+        'app_source: "local:apps/my-workflow@main"\n'
+        if app_ticket
+        else ""
+    )
     (ticket_dir / "TICKET-001.md").write_text(
-        '---\nticket_id: "tkt_status001"\nagent: user\ndone: false\n---\n\nStatus ticket\n',
+        "---\n"
+        'ticket_id: "tkt_status001"\n'
+        "agent: user\n"
+        "done: false\n"
+        f"{app_frontmatter}"
+        "---\n\n"
+        "Status ticket\n",
         encoding="utf-8",
     )
 
@@ -35,6 +50,7 @@ def _setup_paused_run(repo_root: Path, run_id: str) -> None:
             state={
                 "reason_summary": "Paused for user input.",
                 "ticket_engine": {
+                    "current_ticket": ".codex-autorunner/tickets/TICKET-001.md",
                     "reason": (
                         "Paused for user input. Mark ticket as done when ready: "
                         ".codex-autorunner/tickets/TICKET-001.md"
@@ -103,3 +119,57 @@ def test_ticket_flow_status_includes_pause_reason_in_json_output(
     assert payload["reason"].startswith(
         "Paused for user input. Mark ticket as done when ready:"
     )
+
+
+def test_ticket_flow_status_includes_app_in_human_output(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True)
+    (repo_root / ".git").mkdir()
+    seed_hub_files(tmp_path, force=True)
+    seed_repo_files(repo_root, git_required=False)
+
+    run_id = "56565656-5656-5656-5656-565656565656"
+    _setup_paused_run(repo_root, run_id, app_ticket=True)
+
+    result = runner.invoke(
+        app, ["ticket-flow", "status", "--repo", str(repo_root), "--run-id", run_id]
+    )
+
+    assert result.exit_code == 0
+    assert "app=local.my-workflow v1.2.3" in result.stdout
+
+
+def test_ticket_flow_status_includes_app_in_json_output(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True)
+    (repo_root / ".git").mkdir()
+    seed_hub_files(tmp_path, force=True)
+    seed_repo_files(repo_root, git_required=False)
+
+    run_id = "78787878-7878-7878-7878-787878787878"
+    _setup_paused_run(repo_root, run_id, app_ticket=True)
+
+    result = runner.invoke(
+        app,
+        [
+            "ticket-flow",
+            "status",
+            "--repo",
+            str(repo_root),
+            "--run-id",
+            run_id,
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["app"] == {
+        "id": "local.my-workflow",
+        "version": "1.2.3",
+        "source": "local:apps/my-workflow@main",
+    }

@@ -174,3 +174,62 @@ def test_select_ticket_flow_run_record_authoritative_matches_existing_policy() -
 
     assert result is not None
     assert result.id == "paused-run"
+
+
+def test_flow_status_snapshot_includes_current_ticket_app_metadata(
+    tmp_path: Path,
+) -> None:
+    ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    (ticket_dir / "TICKET-001.md").write_text(
+        "---\n"
+        'ticket_id: "tkt_appstatus001"\n'
+        "agent: codex\n"
+        "done: false\n"
+        "app: local.my-workflow\n"
+        "app_version: 1.2.3\n"
+        "app_source: local:apps/my-workflow@main\n"
+        "---\n\n"
+        "App ticket\n",
+        encoding="utf-8",
+    )
+    record = FlowRunRecord(
+        id="app-run",
+        flow_type="ticket_flow",
+        status=FlowRunStatus.RUNNING,
+        created_at="2026-01-01T00:00:00Z",
+        state={"ticket_engine": {"current_ticket": "TICKET-001.md"}},
+    )
+
+    snapshot = ux_helpers.build_flow_status_snapshot(
+        tmp_path, record, store=None, lite=True
+    )
+
+    assert snapshot["app"] == {
+        "id": "local.my-workflow",
+        "version": "1.2.3",
+        "source": "local:apps/my-workflow@main",
+    }
+
+
+def test_flow_status_lines_include_app_only_when_present() -> None:
+    record = _run("app-run", FlowRunStatus.RUNNING)
+    base_snapshot = {
+        "worker_health": None,
+        "last_event_seq": None,
+        "last_event_at": None,
+        "effective_current_ticket": "TICKET-001.md",
+        "ticket_progress": None,
+    }
+
+    lines = ux_helpers.format_ticket_flow_status_lines(
+        record,
+        {
+            **base_snapshot,
+            "app": {"id": "local.my-workflow", "version": "1.2.3"},
+        },
+    )
+    no_app_lines = ux_helpers.format_ticket_flow_status_lines(record, base_snapshot)
+
+    assert "App: local.my-workflow v1.2.3" in lines
+    assert all(not line.startswith("App:") for line in no_app_lines)
