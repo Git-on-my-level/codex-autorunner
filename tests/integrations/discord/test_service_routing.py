@@ -1080,16 +1080,7 @@ async def test_discord_service_fetches_missing_reply_context_from_rest(
 async def test_discord_backend_approval_request_sends_prompt_and_accepts(
     tmp_path: Path,
 ) -> None:
-    rest = _FakeRest()
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=_FakeGateway([]),
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
+    service, rest, store = await _build_service(tmp_path)
     try:
         service._discord_turn_approval_contexts["turn-1"] = (
             discord_service_module._DiscordTurnApprovalContext(channel_id="channel-1")
@@ -1228,6 +1219,31 @@ def _config(
         dispatch=DiscordBotDispatchConfig(ack_budget_ms=ack_budget_ms),
         collaboration_policy=collaboration_policy,
     )
+
+
+async def _build_service(
+    tmp_path: Path,
+    *,
+    gateway: _FakeGateway | None = None,
+    rest: _FakeRest | None = None,
+    init_store: bool = False,
+) -> tuple[DiscordBotService, _FakeRest, DiscordStateStore]:
+    if rest is None:
+        rest = _FakeRest()
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    if init_store:
+        await store.initialize()
+    if gateway is None:
+        gateway = _FakeGateway([])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    return service, rest, store
 
 
 def test_list_discord_thread_targets_for_picker_filters_by_mode(tmp_path: Path) -> None:
@@ -2172,17 +2188,9 @@ async def test_service_bind_accepts_repo_id_as_workspace_option(tmp_path: Path) 
 async def test_service_routes_bind_page_component_interaction(tmp_path: Path) -> None:
     repos = [(f"repo-{index:02d}", f"/tmp/repo-{index:02d}") for index in range(30)]
 
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
     gateway = _FakeGateway([_component_interaction(custom_id="bind_page:1")])
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store = await _build_service(
+        tmp_path, gateway=gateway, init_store=True
     )
     service._list_manifest_repos = lambda: repos
 
@@ -2209,9 +2217,6 @@ async def test_service_bind_workspace_autocomplete_returns_matching_repo_ids(
         ("codex-autorunner--discord-2", "/tmp/worktrees/codex-autorunner--discord-2"),
         ("ios-app-template", "/tmp/repos/ios-app-template"),
     ]
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
     gateway = _FakeGateway(
         [
             _autocomplete_interaction(
@@ -2221,13 +2226,8 @@ async def test_service_bind_workspace_autocomplete_returns_matching_repo_ids(
             )
         ]
     )
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store = await _build_service(
+        tmp_path, gateway=gateway, init_store=True
     )
     service._list_manifest_repos = lambda: repos
 
@@ -2255,9 +2255,6 @@ async def test_service_bind_workspace_autocomplete_keeps_repo_id_aliases_for_sha
         ("repo-primary", str(shared_workspace)),
         ("repo-alias", str(shared_workspace)),
     ]
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
     gateway = _FakeGateway(
         [
             _autocomplete_interaction(
@@ -2267,13 +2264,8 @@ async def test_service_bind_workspace_autocomplete_keeps_repo_id_aliases_for_sha
             )
         ]
     )
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store = await _build_service(
+        tmp_path, gateway=gateway, init_store=True
     )
     service._list_manifest_repos = lambda: repos
 
@@ -2300,9 +2292,6 @@ async def test_service_bind_accepts_repo_alias_when_manifest_repos_share_workspa
         ("repo-primary", str(shared_workspace)),
         ("repo-alias", str(shared_workspace)),
     ]
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
     gateway = _FakeGateway(
         [
             _interaction(
@@ -2311,13 +2300,8 @@ async def test_service_bind_accepts_repo_alias_when_manifest_repos_share_workspa
             )
         ]
     )
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store = await _build_service(
+        tmp_path, gateway=gateway, init_store=True
     )
     service._list_manifest_repos = lambda: repos
 
@@ -2341,9 +2325,6 @@ async def test_service_bind_partial_workspace_value_returns_filtered_picker(
         ("stablecoin-engine", str(stablecoin_workspace)),
         ("ios-app-template", str(tmp_path / "repos" / "ios-app-template")),
     ]
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
     gateway = _FakeGateway(
         [
             _interaction(
@@ -2352,13 +2333,8 @@ async def test_service_bind_partial_workspace_value_returns_filtered_picker(
             )
         ]
     )
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store = await _build_service(
+        tmp_path, gateway=gateway, init_store=True
     )
     service._list_manifest_repos = lambda: repos
 
@@ -2388,9 +2364,6 @@ async def test_service_bind_partial_workspace_value_returns_path_candidate_picke
     engine_workspace.mkdir()
     misc_workspace = tmp_path / "misc"
     misc_workspace.mkdir()
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
     gateway = _FakeGateway(
         [
             _interaction(
@@ -2399,13 +2372,8 @@ async def test_service_bind_partial_workspace_value_returns_path_candidate_picke
             )
         ]
     )
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store = await _build_service(
+        tmp_path, gateway=gateway, init_store=True
     )
     service._list_bind_workspace_candidates = lambda: [  # type: ignore[assignment]
         (None, None, str(engine_workspace.resolve())),
@@ -2438,9 +2406,6 @@ async def test_service_bind_workspace_autocomplete_long_repo_id_uses_token(
 ) -> None:
     long_repo_id = "repo-" + ("x" * 140)
     repos = [(long_repo_id, "/tmp/worktrees/repo-long")]
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
     gateway = _FakeGateway(
         [
             _autocomplete_interaction(
@@ -2450,13 +2415,8 @@ async def test_service_bind_workspace_autocomplete_long_repo_id_uses_token(
             )
         ]
     )
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store = await _build_service(
+        tmp_path, gateway=gateway, init_store=True
     )
     service._list_manifest_repos = lambda: repos
 
@@ -2480,19 +2440,11 @@ async def test_service_routes_bind_picker_component_interaction_for_path_candida
     workspace = tmp_path / "engine-room"
     workspace.mkdir()
 
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
     gateway = _FakeGateway(
         [_bind_select_interaction(selected_value=str(workspace.resolve()))]
     )
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store = await _build_service(
+        tmp_path, gateway=gateway, init_store=True
     )
     service._list_bind_workspace_candidates = lambda: [  # type: ignore[assignment]
         (None, None, str(workspace.resolve()))
@@ -2536,9 +2488,6 @@ async def test_service_routes_bind_picker_component_interaction_for_tokenized_pa
     workspace = tmp_path / long_dir
     workspace.mkdir()
 
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
     gateway = _FakeGateway(
         [
             _bind_select_interaction(
@@ -2546,13 +2495,8 @@ async def test_service_routes_bind_picker_component_interaction_for_tokenized_pa
             )
         ]
     )
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store = await _build_service(
+        tmp_path, gateway=gateway, init_store=True
     )
     service._list_bind_workspace_candidates = lambda: [  # type: ignore[assignment]
         (None, None, str(workspace.resolve()))
@@ -2824,17 +2768,9 @@ async def test_service_bind_accepts_autocomplete_repo_token(tmp_path: Path) -> N
     long_repo_id = "repo-" + ("y" * 140)
     workspace = tmp_path / "worktrees" / "repo-token"
     workspace.mkdir(parents=True)
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
     gateway = _FakeGateway([_interaction(name="bind", options=[])])
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store = await _build_service(
+        tmp_path, gateway=gateway, init_store=True
     )
     service._list_manifest_repos = lambda: [(long_repo_id, str(workspace))]
     token = repo_autocomplete_value(long_repo_id)
@@ -2925,17 +2861,9 @@ async def test_service_routes_bind_picker_component_interaction(tmp_path: Path) 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
 
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
     gateway = _FakeGateway([_bind_select_interaction(selected_value="repo-1")])
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store = await _build_service(
+        tmp_path, gateway=gateway, init_store=True
     )
     service._list_manifest_repos = lambda: [("repo-1", str(workspace))]
 
@@ -2966,17 +2894,9 @@ async def test_service_routes_bind_picker_component_interaction(tmp_path: Path) 
 async def test_component_interaction_missing_custom_id_returns_error(
     tmp_path: Path,
 ) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
     gateway = _FakeGateway([_component_interaction(custom_id=None, values=["repo-1"])])
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store = await _build_service(
+        tmp_path, gateway=gateway, init_store=True
     )
 
     try:
@@ -3007,17 +2927,9 @@ async def test_component_interaction_missing_custom_id_returns_error(
 async def test_component_interaction_with_empty_values_returns_error(
     tmp_path: Path, custom_id: str, expected_error_snippet: str
 ) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
     gateway = _FakeGateway([_component_interaction(custom_id=custom_id, values=[])])
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store = await _build_service(
+        tmp_path, gateway=gateway, init_store=True
     )
 
     try:
@@ -3034,17 +2946,7 @@ async def test_component_interaction_with_empty_values_returns_error(
 async def test_component_interaction_queue_cancel_cancels_selected_pending_message(
     tmp_path: Path,
 ) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=_FakeGateway([]),
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
+    service, rest, store = await _build_service(tmp_path, init_store=True)
 
     try:
         conversation_id = service._dispatcher_conversation_id(
@@ -3102,17 +3004,7 @@ async def test_component_interaction_queue_cancel_cancels_selected_pending_messa
 async def test_refresh_queue_status_message_reposts_status_below_terminal(
     tmp_path: Path,
 ) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=_FakeGateway([]),
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
+    service, rest, store = await _build_service(tmp_path, init_store=True)
 
     try:
         conversation_id = service._dispatcher_conversation_id(
@@ -3155,17 +3047,7 @@ async def test_refresh_queue_status_message_reposts_status_below_terminal(
 async def test_component_interaction_queue_interrupt_send_promotes_and_interrupts(
     tmp_path: Path,
 ) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=_FakeGateway([]),
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
+    service, rest, store = await _build_service(tmp_path, init_store=True)
     calls: list[tuple[str, str, str, str, str]] = []
 
     try:
@@ -3236,17 +3118,7 @@ async def test_component_interaction_queue_interrupt_send_promotes_and_interrupt
 async def test_component_interaction_queue_interrupt_send_wakes_dispatcher_without_active_thread(
     tmp_path: Path,
 ) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=_FakeGateway([]),
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
+    service, rest, store = await _build_service(tmp_path, init_store=True)
     wake_calls: list[str] = []
 
     try:
@@ -3301,17 +3173,7 @@ async def test_component_interaction_queue_interrupt_send_wakes_dispatcher_witho
 async def test_component_interaction_cancel_queued_turn_cancels_selected_execution(
     tmp_path: Path,
 ) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=_FakeGateway([]),
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
+    service, rest, store = await _build_service(tmp_path, init_store=True)
 
     class _FakeThreadService:
         def cancel_queued_execution(
@@ -3389,17 +3251,7 @@ async def test_component_interaction_cancel_queued_turn_cancels_selected_executi
 async def test_component_interaction_queued_turn_interrupt_send_promotes_and_interrupts(
     tmp_path: Path,
 ) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=_FakeGateway([]),
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
+    service, rest, store = await _build_service(tmp_path, init_store=True)
     calls: list[tuple[str, str, str, str, bool]] = []
 
     class _FakeThreadService:
@@ -3473,17 +3325,7 @@ async def test_component_interaction_queued_turn_interrupt_send_promotes_and_int
 async def test_component_interaction_queued_turn_interrupt_send_acknowledges_when_active_turn_already_finished(
     tmp_path: Path,
 ) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=_FakeGateway([]),
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
+    service, rest, store = await _build_service(tmp_path, init_store=True)
     interrupt_called = False
 
     class _FakeThreadService:
@@ -3541,17 +3383,7 @@ async def test_component_interaction_queued_turn_interrupt_send_acknowledges_whe
 async def test_queued_turn_interrupt_send_uses_followup_after_predefer(
     tmp_path: Path,
 ) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=_FakeGateway([]),
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
+    service, rest, store = await _build_service(tmp_path, init_store=True)
 
     class _FakeThreadService:
         def promote_queued_execution(
@@ -3605,17 +3437,7 @@ async def test_queued_turn_interrupt_send_uses_followup_after_predefer(
 async def test_queued_notice_keeps_interrupt_when_message_turn_active(
     tmp_path: Path,
 ) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=_FakeGateway([]),
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
+    service, rest, store = await _build_service(tmp_path, init_store=True)
 
     try:
         conversation_id = service._dispatcher_conversation_id(
@@ -3647,17 +3469,7 @@ async def test_queued_notice_keeps_interrupt_when_message_turn_active(
 async def test_queued_notice_hides_interrupt_when_only_ingressed_busy(
     tmp_path: Path,
 ) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=_FakeGateway([]),
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
+    service, rest, store = await _build_service(tmp_path, init_store=True)
 
     try:
         conversation_id = service._dispatcher_conversation_id(
@@ -3687,17 +3499,9 @@ async def test_queued_notice_hides_interrupt_when_only_ingressed_busy(
 
 @pytest.mark.anyio
 async def test_service_syncs_commands_on_startup(tmp_path: Path) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
     gateway = _FakeGateway([])
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store = await _build_service(
+        tmp_path, gateway=gateway, init_store=True
     )
 
     try:
@@ -3773,17 +3577,9 @@ async def test_service_raises_on_invalid_command_sync_config(tmp_path: Path) -> 
 async def test_service_routes_car_agent_and_model_without_generic_fallback(
     tmp_path: Path, subcommand: str
 ) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
     gateway = _FakeGateway([_interaction(name=subcommand, options=[])])
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store = await _build_service(
+        tmp_path, gateway=gateway, init_store=True
     )
 
     try:
@@ -4531,17 +4327,9 @@ async def test_component_model_effort_pending_state_is_user_scoped(
 async def test_service_routes_car_new_without_generic_fallback(
     tmp_path: Path,
 ) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
     gateway = _FakeGateway([_interaction(name="new", options=[])])
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store = await _build_service(
+        tmp_path, gateway=gateway, init_store=True
     )
 
     try:
@@ -4560,17 +4348,7 @@ async def test_service_routes_car_new_without_generic_fallback(
 async def test_normalized_interaction_routes_car_agent_without_generic_fallback(
     tmp_path: Path,
 ) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=_FakeGateway([]),
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
+    service, rest, store = await _build_service(tmp_path, init_store=True)
 
     try:
         await _dispatch_gateway_interaction(
@@ -4898,19 +4676,11 @@ async def test_normalized_interaction_session_resume_without_thread_uses_picker(
 async def test_component_interaction_session_resume_select_routes_to_resume(
     tmp_path: Path,
 ) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
     gateway = _FakeGateway(
         [_component_interaction(custom_id="session_resume_select", values=["th-2"])]
     )
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store = await _build_service(
+        tmp_path, gateway=gateway, init_store=True
     )
     captured: dict[str, Any] = {}
 
@@ -5193,17 +4963,7 @@ async def test_car_update_status_uses_prepared_interaction_state(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=_FakeGateway([]),
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
+    service, rest, store = await _build_service(tmp_path, init_store=True)
 
     session = service._ensure_interaction_session(
         "inter-1",
@@ -5283,17 +5043,9 @@ async def test_car_review_target_commitment_is_treated_as_custom(
 
 @pytest.mark.anyio
 async def test_car_update_without_target_returns_picker(tmp_path: Path) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
     gateway = _FakeGateway([_interaction(name="update", options=[])])
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store = await _build_service(
+        tmp_path, gateway=gateway, init_store=True
     )
 
     try:
@@ -5314,17 +5066,9 @@ async def test_car_update_without_target_returns_picker(tmp_path: Path) -> None:
 async def test_car_update_without_target_replies_when_dispatch_ack_fails_without_expiry(
     tmp_path: Path,
 ) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
     gateway = _FakeGateway([_interaction(name="update", options=[])])
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store = await _build_service(
+        tmp_path, gateway=gateway, init_store=True
     )
 
     async def _skip_dispatch_ack(**_kwargs: Any) -> bool:
@@ -5352,17 +5096,9 @@ async def test_car_update_without_target_uses_fallback_picker_on_definition_fail
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
     gateway = _FakeGateway([_interaction(name="update", options=[])])
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store = await _build_service(
+        tmp_path, gateway=gateway, init_store=True
     )
 
     def _raise_available_update_target_definitions(
@@ -5392,17 +5128,7 @@ async def test_car_update_without_target_uses_fallback_picker_on_definition_fail
 async def test_send_channel_message_safe_collapses_local_file_links(
     tmp_path: Path,
 ) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=_FakeGateway([]),
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
+    service, rest, store = await _build_service(tmp_path, init_store=True)
 
     try:
         await service._send_channel_message_safe(
@@ -6043,19 +5769,11 @@ async def test_ticket_browser_chunks_large_ticket_content(tmp_path: Path) -> Non
 async def test_component_interaction_update_target_select_routes_update(
     tmp_path: Path,
 ) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
     gateway = _FakeGateway(
         [_component_interaction(custom_id="update_target_select", values=["discord"])]
     )
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store = await _build_service(
+        tmp_path, gateway=gateway, init_store=True
     )
     captured: dict[str, Any] = {}
 
@@ -6132,17 +5850,7 @@ async def test_normalized_flow_refresh_component_defers_before_workspace_lookup(
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=_FakeGateway([]),
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
+    service, rest, store = await _build_service(tmp_path, init_store=True)
     captured: dict[str, Any] = {}
 
     async def _fake_require_bound_workspace(
@@ -6196,17 +5904,7 @@ async def test_normalized_flow_refresh_component_defers_before_workspace_lookup(
 async def test_normalized_flow_refresh_component_binding_error_uses_followup(
     tmp_path: Path,
 ) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=_FakeGateway([]),
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
+    service, rest, store = await _build_service(tmp_path, init_store=True)
 
     try:
         await _dispatch_gateway_interaction(
@@ -6230,17 +5928,9 @@ async def test_normalized_flow_refresh_component_binding_error_uses_followup(
 async def test_unknown_car_subcommand_has_explicit_unknown_message(
     tmp_path: Path,
 ) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
     gateway = _FakeGateway([_interaction(name="mystery", options=[])])
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store = await _build_service(
+        tmp_path, gateway=gateway, init_store=True
     )
 
     try:
@@ -6257,17 +5947,9 @@ async def test_unknown_car_subcommand_has_explicit_unknown_message(
 async def test_unknown_pma_subcommand_has_explicit_unknown_message(
     tmp_path: Path,
 ) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
     gateway = _FakeGateway([_pma_interaction(name="mystery")])
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store = await _build_service(
+        tmp_path, gateway=gateway, init_store=True
     )
 
     try:
@@ -8658,17 +8340,7 @@ async def test_reset_discord_thread_binding_archives_after_lost_backend_recovery
     workspace = tmp_path / "workspace"
     workspace.mkdir()
 
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=_FakeGateway([]),
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
+    service, rest, store = await _build_service(tmp_path, init_store=True)
 
     calls: list[tuple[str, str]] = []
     import codex_autorunner.integrations.discord.progress_leases as _progress_leases
@@ -8749,9 +8421,6 @@ async def test_car_update_status_reports_absent_status(
     monkeypatch.setattr(
         discord_update_service_module, "_read_update_status", lambda: None
     )
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
     gateway = _FakeGateway(
         [
             _interaction(
@@ -8760,13 +8429,8 @@ async def test_car_update_status_reports_absent_status(
             )
         ]
     )
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store = await _build_service(
+        tmp_path, gateway=gateway, init_store=True
     )
 
     try:
@@ -8784,9 +8448,6 @@ async def test_car_update_status_reports_absent_status(
 async def test_car_update_status_defers_before_reading_status(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
     gateway = _FakeGateway(
         [
             _interaction(
@@ -8795,13 +8456,8 @@ async def test_car_update_status_defers_before_reading_status(
             )
         ]
     )
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store = await _build_service(
+        tmp_path, gateway=gateway, init_store=True
     )
 
     observed: dict[str, Any] = {}
@@ -8991,9 +8647,6 @@ async def test_component_flow_status_defers_publicly_before_flow_store_work(
 async def test_car_update_starts_worker_with_explicit_target(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
     gateway = _FakeGateway(
         [
             _interaction(
@@ -9002,13 +8655,8 @@ async def test_car_update_starts_worker_with_explicit_target(
             )
         ]
     )
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store = await _build_service(
+        tmp_path, gateway=gateway, init_store=True
     )
 
     observed: dict[str, Any] = {}
@@ -9101,9 +8749,6 @@ async def test_car_init_defers_before_repo_seed(
 async def test_car_update_accepts_legacy_both_target_alias(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
     gateway = _FakeGateway(
         [
             _interaction(
@@ -9112,13 +8757,8 @@ async def test_car_update_accepts_legacy_both_target_alias(
             )
         ]
     )
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store = await _build_service(
+        tmp_path, gateway=gateway, init_store=True
     )
 
     observed: dict[str, Any] = {}
@@ -9148,9 +8788,6 @@ async def test_car_update_accepts_legacy_both_target_alias(
 async def test_car_update_prompts_for_confirmation_when_sessions_active(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
     gateway = _FakeGateway(
         [
             _interaction(
@@ -9159,13 +8796,8 @@ async def test_car_update_prompts_for_confirmation_when_sessions_active(
             )
         ]
     )
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store = await _build_service(
+        tmp_path, gateway=gateway, init_store=True
     )
 
     observed: dict[str, Any] = {}
@@ -9213,19 +8845,11 @@ async def test_car_update_prompts_for_confirmation_when_sessions_active(
 async def test_component_update_prompts_for_confirmation_after_defer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
     gateway = _FakeGateway(
         [_component_interaction(custom_id="update_target_select", values=["all"])]
     )
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store = await _build_service(
+        tmp_path, gateway=gateway, init_store=True
     )
 
     observed: dict[str, Any] = {}
@@ -9344,19 +8968,11 @@ def test_active_update_session_count_does_not_skip_non_flow_threads_by_name() ->
 async def test_component_interaction_update_cancel_reports_cancelled(
     tmp_path: Path,
 ) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
     gateway = _FakeGateway(
         [_component_interaction(custom_id="update_cancel:all", values=["all"])]
     )
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store = await _build_service(
+        tmp_path, gateway=gateway, init_store=True
     )
 
     try:
@@ -9375,19 +8991,11 @@ async def test_component_interaction_update_status_updates_original_message(
     monkeypatch.setattr(
         discord_update_service_module, "_read_update_status", lambda: None
     )
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
     gateway = _FakeGateway(
         [_component_interaction(custom_id="update_target_select", values=["status"])]
     )
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store = await _build_service(
+        tmp_path, gateway=gateway, init_store=True
     )
 
     try:
@@ -9405,19 +9013,11 @@ async def test_component_interaction_update_status_updates_original_message(
 async def test_component_interaction_update_target_uses_component_defer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
     gateway = _FakeGateway(
         [_component_interaction(custom_id="update_target_select", values=["all"])]
     )
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store = await _build_service(
+        tmp_path, gateway=gateway, init_store=True
     )
 
     observed: dict[str, Any] = {}
@@ -9449,17 +9049,9 @@ async def test_component_interaction_update_target_uses_component_defer(
 async def test_component_interaction_update_confirm_clears_confirmation_buttons(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
     gateway = _FakeGateway([_component_interaction(custom_id="update_confirm:all")])
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store = await _build_service(
+        tmp_path, gateway=gateway, init_store=True
     )
 
     observed: dict[str, Any] = {}
@@ -9490,9 +9082,6 @@ async def test_component_interaction_update_confirm_clears_confirmation_buttons(
 async def test_car_update_acknowledges_before_spawning_restart_target(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
     gateway = _FakeGateway(
         [
             _interaction(
@@ -9501,13 +9090,8 @@ async def test_car_update_acknowledges_before_spawning_restart_target(
             )
         ]
     )
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store = await _build_service(
+        tmp_path, gateway=gateway, init_store=True
     )
 
     observed: dict[str, Any] = {}
@@ -9535,19 +9119,11 @@ async def test_car_update_acknowledges_before_spawning_restart_target(
 async def test_component_update_acknowledges_before_spawning_restart_target(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
     gateway = _FakeGateway(
         [_component_interaction(custom_id="update_target_select", values=["discord"])]
     )
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store = await _build_service(
+        tmp_path, gateway=gateway, init_store=True
     )
 
     observed: dict[str, Any] = {}
@@ -9579,9 +9155,6 @@ async def test_component_update_acknowledges_before_spawning_restart_target(
 async def test_car_update_web_target_skips_confirmation_when_sessions_active(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
     gateway = _FakeGateway(
         [
             _interaction(
@@ -9590,13 +9163,8 @@ async def test_car_update_web_target_skips_confirmation_when_sessions_active(
             )
         ]
     )
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store = await _build_service(
+        tmp_path, gateway=gateway, init_store=True
     )
 
     observed: dict[str, Any] = {}
@@ -9627,9 +9195,6 @@ async def test_car_update_web_target_skips_confirmation_when_sessions_active(
 async def test_car_update_restart_target_reports_lock_error_after_neutral_prep_text(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
     gateway = _FakeGateway(
         [
             _interaction(
@@ -9638,13 +9203,8 @@ async def test_car_update_restart_target_reports_lock_error_after_neutral_prep_t
             )
         ]
     )
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store = await _build_service(
+        tmp_path, gateway=gateway, init_store=True
     )
 
     def _fake_spawn_update_process(**_kwargs: Any) -> None:
@@ -9693,17 +9253,9 @@ async def test_run_forever_sends_pending_update_notice(
         "mark_update_status_notified",
         _fake_mark_update_status_notified,
     )
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
     gateway = _FakeGateway([])
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store = await _build_service(
+        tmp_path, gateway=gateway, init_store=True
     )
 
     try:
@@ -9718,9 +9270,6 @@ async def test_run_forever_sends_pending_update_notice(
 
 @pytest.mark.anyio
 async def test_car_update_rejects_invalid_target(tmp_path: Path) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
     gateway = _FakeGateway(
         [
             _interaction(
@@ -9729,13 +9278,8 @@ async def test_car_update_rejects_invalid_target(tmp_path: Path) -> None:
             )
         ]
     )
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store = await _build_service(
+        tmp_path, gateway=gateway, init_store=True
     )
 
     try:
@@ -9843,9 +9387,6 @@ async def test_car_experimental_unknown_action_returns_guidance(
 async def test_car_command_raises_on_invalid_workspace(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
     gateway = _FakeGateway(
         [
             _interaction(
@@ -9856,14 +9397,8 @@ async def test_car_command_raises_on_invalid_workspace(
             )
         ]
     )
-
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+    service, rest, store = await _build_service(
+        tmp_path, gateway=gateway, init_store=True
     )
 
     try:
@@ -9934,17 +9469,7 @@ async def test_handle_chat_event_message_starts_and_stops_typing_indicator(
 async def test_typing_indicator_reference_count_waits_for_last_end(
     tmp_path: Path,
 ) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=_FakeGateway([]),
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
+    service, rest, store = await _build_service(tmp_path, init_store=True)
 
     try:
         await service._begin_typing_indicator("channel-1")
@@ -10000,17 +9525,7 @@ async def test_typing_indicator_can_remain_visible_briefly_after_local_end(
 async def test_typing_indicator_cleans_up_if_begin_is_cancelled_after_start(
     tmp_path: Path,
 ) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    rest = _FakeRest()
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=_FakeGateway([]),
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
+    service, rest, store = await _build_service(tmp_path, init_store=True)
     original_begin = service._begin_typing_indicator
 
     async def _cancel_after_start(channel_id: str) -> None:
