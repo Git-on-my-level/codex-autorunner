@@ -393,6 +393,33 @@ async def notify_preferred_bound_chat_for_workspace(
     )
 
 
+async def start_bound_chat_live_progress_for_thread(
+    *,
+    hub_root: Path,
+    raw_config: Mapping[str, Any],
+    managed_thread_id: str,
+    managed_turn_id: str,
+    agent: str,
+    model: Optional[str],
+    workspace_root: Optional[Path] = None,
+    repo_id: Optional[str] = None,
+) -> dict[str, Any]:
+    from ..pma_chat_delivery_runtime import (
+        start_bound_chat_live_progress_for_thread as runtime_start,
+    )
+
+    return await runtime_start(
+        hub_root=hub_root,
+        raw_config=raw_config,
+        managed_thread_id=managed_thread_id,
+        managed_turn_id=managed_turn_id,
+        agent=agent,
+        model=model,
+        workspace_root=workspace_root,
+        repo_id=repo_id,
+    )
+
+
 async def notify_primary_pma_chat_for_repo(
     *,
     hub_root: Path,
@@ -424,4 +451,5 @@ __all__ = [
     "deliver_pma_notification",
     "notify_preferred_bound_chat_for_workspace",
     "notify_primary_pma_chat_for_repo",
+    "start_bound_chat_live_progress_for_thread",
 ]

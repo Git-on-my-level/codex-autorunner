@@ -7,7 +7,7 @@ import threading
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Coroutine, Optional
+from typing import Any, Callable, Coroutine, Optional, cast
 
 from ..manifest import ManifestError, load_manifest
 from .config import load_hub_config
@@ -16,6 +16,7 @@ from .pma_chat_delivery import (
     deliver_pma_notification,
     notify_preferred_bound_chat_for_workspace,
     notify_primary_pma_chat_for_repo,
+    start_bound_chat_live_progress_for_thread,
 )
 from .pma_thread_store import ManagedThreadNotActiveError, PmaThreadStore
 from .pr_bindings import PrBinding, PrBindingStore
@@ -305,6 +306,90 @@ def _resolve_notify_message(
         "Waiting for managed turn start confirmation",
         retry_after_seconds=_MANAGED_TURN_START_CONFIRMATION_RETRY_SECONDS,
     )
+
+
+def _confirmed_managed_turn_for_notify(
+    *,
+    payload: dict[str, Any],
+    journal: PublishJournalStore,
+    thread_store: PmaThreadStore,
+) -> Optional[tuple[str, str, dict[str, Any]]]:
+    dependency = _normalize_mapping(payload.get("managed_turn_dependency"))
+    if (
+        _normalize_optional_text(dependency.get("dependency_kind"))
+        != "enqueue_managed_turn_started"
+    ):
+        return None
+    dependency_operation_id = _normalize_optional_text(dependency.get("operation_id"))
+    if dependency_operation_id is None:
+        return None
+    enqueue_operation = journal.get_operation(dependency_operation_id)
+    if enqueue_operation is None or enqueue_operation.state != "succeeded":
+        return None
+    enqueue_response = _normalize_mapping(enqueue_operation.response)
+    thread_target_id = _normalize_optional_text(
+        enqueue_response.get("thread_target_id")
+    ) or _normalize_optional_text(dependency.get("thread_target_id"))
+    managed_turn_id = _normalize_optional_text(enqueue_response.get("managed_turn_id"))
+    if thread_target_id is None or managed_turn_id is None:
+        return None
+    turn = thread_store.get_turn(thread_target_id, managed_turn_id)
+    if turn is None:
+        return None
+    metadata = _normalize_mapping(turn.get("metadata"))
+    if _normalize_optional_text(metadata.get(_RUNTIME_STARTED_AT_KEY)) is None:
+        return None
+    return thread_target_id, managed_turn_id, turn
+
+
+def _maybe_start_bound_live_progress_for_notify(
+    *,
+    hub_root: Path,
+    payload: dict[str, Any],
+    journal: PublishJournalStore,
+    thread_store: PmaThreadStore,
+    run_coroutine: Callable[[Coroutine[Any, Any, Any]], Any],
+    workspace_root: Optional[Path],
+    repo_id: Optional[str],
+) -> Optional[dict[str, Any]]:
+    confirmed = _confirmed_managed_turn_for_notify(
+        payload=payload,
+        journal=journal,
+        thread_store=thread_store,
+    )
+    if confirmed is None:
+        return None
+    thread_target_id, managed_turn_id, turn = confirmed
+    try:
+        thread = thread_store.get_thread(thread_target_id) or {}
+        raw_config = load_hub_config(hub_root).raw
+        return cast(
+            dict[str, Any],
+            run_coroutine(
+                start_bound_chat_live_progress_for_thread(
+                    hub_root=hub_root,
+                    raw_config=raw_config if isinstance(raw_config, Mapping) else {},
+                    managed_thread_id=thread_target_id,
+                    managed_turn_id=managed_turn_id,
+                    agent=(
+                        _normalize_optional_text(thread.get("agent_id"))
+                        or _normalize_optional_text(thread.get("agent"))
+                        or "agent"
+                    ),
+                    model=_normalize_optional_text(turn.get("model")),
+                    workspace_root=workspace_root,
+                    repo_id=repo_id,
+                )
+            ),
+        )
+    except Exception:
+        _LOGGER.exception(
+            "Failed to seed bound chat live progress for managed turn "
+            "thread_target_id=%s managed_turn_id=%s",
+            thread_target_id,
+            managed_turn_id,
+        )
+        return None
 
 
 def _merge_into_existing_queued_scm_turn(
@@ -954,6 +1039,15 @@ def build_notify_chat_executor(
             prefix="publish-chat",
         )
         repo_id, workspace_root = _resolve_thread_context(store, payload=payload)
+        progress_start = _maybe_start_bound_live_progress_for_notify(
+            hub_root=hub_root,
+            payload=payload,
+            journal=journal,
+            thread_store=store,
+            run_coroutine=coroutine_runner,
+            workspace_root=workspace_root,
+            repo_id=repo_id,
+        )
 
         if delivery == "none":
             outcome = {"route": "none", "targets": 0, "published": 0}
@@ -999,7 +1093,7 @@ def build_notify_chat_executor(
 
         targets = _coerce_int((outcome or {}).get("targets", 0))
         published = _coerce_int((outcome or {}).get("published", 0))
-        result = {
+        result: dict[str, Any] = {
             "delivery": delivery,
             "repo_id": repo_id,
             "targets": targets,
@@ -1010,6 +1104,8 @@ def build_notify_chat_executor(
             result["route"] = route
         if correlation_id is not None:
             result["correlation_id"] = correlation_id
+        if progress_start is not None:
+            result["progress_start"] = progress_start
         return result
 
     return executor
