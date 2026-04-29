@@ -10,6 +10,7 @@ import pytest
 
 from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
 from codex_autorunner.core.apps import compute_bundle_sha
+from codex_autorunner.core.filebox import outbox_dir
 from codex_autorunner.core.state_roots import resolve_repo_state_root
 from codex_autorunner.integrations.discord.flow_watchers import (
     _scan_and_enqueue_terminal_notifications,
@@ -72,7 +73,7 @@ class _Mirror:
 
 
 @pytest.mark.anyio
-async def test_discord_terminal_notification_falls_back_to_paths_when_artifacts_exist(
+async def test_discord_terminal_notification_publishes_and_flushes_artifacts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -83,6 +84,11 @@ async def test_discord_terminal_notification_falls_back_to_paths_when_artifacts_
 
     async def _enqueue(record):
         enqueued.append(record)
+
+    flush_calls = []
+
+    async def _flush_outbox_files(*, workspace_root: Path, channel_id: str) -> None:
+        flush_calls.append((workspace_root, channel_id))
 
     service = SimpleNamespace(
         _logger=logging.getLogger("test"),
@@ -101,6 +107,7 @@ async def test_discord_terminal_notification_falls_back_to_paths_when_artifacts_
         ),
         _hub_raw_config_cache={},
         _flow_run_mirror=lambda _workspace: _Mirror(),
+        _flush_outbox_files=AsyncMock(side_effect=_flush_outbox_files),
     )
     monkeypatch.setattr(
         "codex_autorunner.integrations.discord.flow_watchers._load_latest_terminal_ticket_flow_run",
@@ -111,10 +118,13 @@ async def test_discord_terminal_notification_falls_back_to_paths_when_artifacts_
 
     assert notified == 1
     assert len(enqueued) == 1
-    content = enqueued[0].payload_json["content"]
-    assert "Ticket flow completed successfully (run run-1)." in content
-    assert "file attachment delivery is unavailable on this surface" in content
-    assert "local.wrapup: artifacts/summary.md" in content
+    assert enqueued[0].payload_json["content"] == (
+        "Ticket flow completed successfully (run run-1)."
+    )
+    assert flush_calls == [(workspace.resolve(), "channel-1")]
+    assert (outbox_dir(workspace) / "local.wrapup-summary.md").read_text(
+        encoding="utf-8"
+    ) == "# summary\n"
 
 
 @pytest.mark.anyio
