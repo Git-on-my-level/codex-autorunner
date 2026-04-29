@@ -29,6 +29,17 @@ MANAGED_THREAD_SEND_TIMEOUT_STATUS_LIMIT = 50
 MANAGED_THREAD_SEND_TIMEOUT_RECOVERY_WINDOW_SECONDS = 15.0
 MANAGED_THREAD_SEND_TIMEOUT_RECOVERY_POLL_SECONDS = 0.25
 
+# Upper bound on status polls during send-timeout recovery. Keeps recovery bounded
+# when tests (or broken environments) stub ``time.monotonic`` so the deadline
+# check never advances.
+_MANAGED_THREAD_SEND_TIMEOUT_RECOVERY_MAX_POLLS = (
+    int(
+        MANAGED_THREAD_SEND_TIMEOUT_RECOVERY_WINDOW_SECONDS
+        / MANAGED_THREAD_SEND_TIMEOUT_RECOVERY_POLL_SECONDS
+    )
+    + 4
+)
+
 CAPABILITY_REQUIREMENTS = {
     "models": "model_listing",
     "interrupt": "interrupt",
@@ -514,6 +525,7 @@ def recover_managed_thread_send_timeout(
 
     deadline = time.monotonic() + MANAGED_THREAD_SEND_TIMEOUT_RECOVERY_WINDOW_SECONDS
     baseline_queued_ids = set(baseline.queued_turn_ids)
+    recovery_polls = 0
     while True:
         try:
             current = ManagedThreadSendTimeoutProbe.from_status(
@@ -524,6 +536,9 @@ def recover_managed_thread_send_timeout(
             )
         except (httpx.HTTPError, ValueError, OSError, TypeError):
             if time.monotonic() >= deadline:
+                return None
+            recovery_polls += 1
+            if recovery_polls > _MANAGED_THREAD_SEND_TIMEOUT_RECOVERY_MAX_POLLS:
                 return None
             time.sleep(MANAGED_THREAD_SEND_TIMEOUT_RECOVERY_POLL_SECONDS)
             continue
@@ -634,5 +649,8 @@ def recover_managed_thread_send_timeout(
             )
 
         if time.monotonic() >= deadline:
+            return None
+        recovery_polls += 1
+        if recovery_polls > _MANAGED_THREAD_SEND_TIMEOUT_RECOVERY_MAX_POLLS:
             return None
         time.sleep(MANAGED_THREAD_SEND_TIMEOUT_RECOVERY_POLL_SECONDS)
