@@ -32,6 +32,7 @@ from .flows.worker_process import (
 from .flows.workspace_root import resolve_ticket_flow_workspace_root
 from .freshness import resolve_stale_threshold_seconds
 from .state_roots import resolve_repo_flows_db_path
+from .text_utils import _normalize_optional_text
 from .ticket_flow_projection import (
     build_canonical_state_v1,
     collect_ticket_flow_census,
@@ -928,13 +929,6 @@ def _canonical_flow_status_state(
         )
     except (AttributeError, KeyError, OSError, RuntimeError, TypeError, ValueError):
         return None
-
-
-def _normalize_optional_text(value: Any) -> Optional[str]:
-    if not isinstance(value, str):
-        return None
-    value = value.strip()
-    return value or None
 
 
 def _resolve_ticket_path(repo_root: Path, ticket_ref: str) -> Optional[Path]:
