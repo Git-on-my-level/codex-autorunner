@@ -384,14 +384,18 @@ def _read_process_group_rows(pgid: int) -> list[dict[str, Any]]:
 
 
 def detect_active_tool(
-    repo_root: Path, run_id: str, worker_pid: int
+    repo_root: Path,
+    run_id: str,
+    worker_pid: int,
+    *,
+    artifacts_root: Optional[Path] = None,
 ) -> Optional[FlowActiveTool]:
     """Infer active tool work from descendants in the flow worker's process group."""
 
     pgid = _process_group_for_pid(worker_pid)
     if pgid is None or pgid != worker_pid:
         return None
-    artifacts_dir = _worker_artifacts_dir(repo_root, run_id)
+    artifacts_dir = _worker_artifacts_dir(repo_root, run_id, artifacts_root)
     rows = [
         row
         for row in _read_process_group_rows(pgid)
@@ -599,7 +603,9 @@ def check_worker_health(
             cmdline=cmd,
             artifact_path=metadata_path,
             message="worker running (cmdline unknown)",
-            active_tool=detect_active_tool(repo_root, run_id, pid),
+            active_tool=detect_active_tool(
+                repo_root, run_id, pid, artifacts_root=artifacts_root
+            ),
         )
 
     if not _cmdline_matches(expected_cmd, actual_cmd):
@@ -617,7 +623,9 @@ def check_worker_health(
         cmdline=actual_cmd,
         artifact_path=metadata_path,
         message="worker running",
-        active_tool=detect_active_tool(repo_root, run_id, pid),
+        active_tool=detect_active_tool(
+            repo_root, run_id, pid, artifacts_root=artifacts_root
+        ),
     )
 
 
