@@ -8,6 +8,7 @@ import subprocess
 import sys
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import IO, Any, Literal, Optional, Tuple
 
@@ -22,6 +23,28 @@ _WORKER_CRASH_FILENAME = "crash.json"
 _MAX_TAIL_BYTES = 32_768
 
 
+@dataclass(frozen=True)
+class FlowActiveTool:
+    pid: int
+    ppid: Optional[int]
+    pgid: Optional[int]
+    command: str
+    elapsed_seconds: Optional[int]
+    last_activity_at: Optional[str]
+    output_updated_at: Optional[str] = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "pid": self.pid,
+            "ppid": self.ppid,
+            "pgid": self.pgid,
+            "command": self.command,
+            "elapsed_seconds": self.elapsed_seconds,
+            "last_activity_at": self.last_activity_at,
+            "output_updated_at": self.output_updated_at,
+        }
+
+
 @dataclass
 class FlowWorkerHealth:
     status: Literal["absent", "alive", "dead", "invalid", "mismatch"]
@@ -34,6 +57,7 @@ class FlowWorkerHealth:
     crash_path: Optional[Path] = None
     crash_info: Optional[dict[str, Any]] = None
     shutdown_intent: bool = False
+    active_tool: Optional[FlowActiveTool] = None
 
     @property
     def is_alive(self) -> bool:
@@ -281,6 +305,126 @@ def _read_process_cmdline(pid: int) -> list[str] | None:
     return None
 
 
+def _iso_from_epoch(value: float) -> str:
+    return datetime.fromtimestamp(value, timezone.utc).isoformat()
+
+
+def _process_group_for_pid(pid: int) -> Optional[int]:
+    if os.name == "nt" or not hasattr(os, "getpgid"):
+        return None
+    try:
+        return os.getpgid(pid)
+    except OSError:
+        return None
+
+
+def _latest_log_activity_at(artifacts_dir: Path) -> Optional[str]:
+    mtimes: list[float] = []
+    for name in ("worker.out.log", "worker.err.log"):
+        try:
+            path = artifacts_dir / name
+            if path.exists() and path.is_file():
+                mtimes.append(path.stat().st_mtime)
+        except OSError:
+            continue
+    if not mtimes:
+        return None
+    return _iso_from_epoch(max(mtimes))
+
+
+def _read_process_group_rows(pgid: int) -> list[dict[str, Any]]:
+    if pgid <= 0:
+        return []
+    try:
+        out = subprocess.check_output(
+            ["ps", "-ww", "-g", str(pgid), "-o", "pid=,ppid=,pgid=,etimes=,command="],
+            stderr=subprocess.DEVNULL,
+        )
+    except (subprocess.SubprocessError, OSError, ValueError):
+        try:
+            out = subprocess.check_output(
+                ["ps", "-ww", "-g", str(pgid), "-o", "pid=,ppid=,pgid=,command="],
+                stderr=subprocess.DEVNULL,
+            )
+        except (subprocess.SubprocessError, OSError, ValueError):
+            return []
+        has_elapsed = False
+    else:
+        has_elapsed = True
+
+    rows: list[dict[str, Any]] = []
+    for raw_line in out.decode(errors="replace").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        parts = line.split(maxsplit=4 if has_elapsed else 3)
+        expected_parts = 5 if has_elapsed else 4
+        if len(parts) < expected_parts:
+            continue
+        try:
+            pid = int(parts[0])
+            ppid = int(parts[1])
+            row_pgid = int(parts[2])
+            elapsed = int(parts[3]) if has_elapsed else None
+        except ValueError:
+            continue
+        command = parts[4] if has_elapsed else parts[3]
+        if row_pgid != pgid or not command.strip():
+            continue
+        rows.append(
+            {
+                "pid": pid,
+                "ppid": ppid,
+                "pgid": row_pgid,
+                "elapsed_seconds": elapsed,
+                "command": command.strip(),
+            }
+        )
+    return rows
+
+
+def detect_active_tool(
+    repo_root: Path, run_id: str, worker_pid: int
+) -> Optional[FlowActiveTool]:
+    """Infer active tool work from descendants in the flow worker's process group."""
+
+    pgid = _process_group_for_pid(worker_pid)
+    if pgid is None or pgid != worker_pid:
+        return None
+    artifacts_dir = _worker_artifacts_dir(repo_root, run_id)
+    rows = [
+        row
+        for row in _read_process_group_rows(pgid)
+        if row.get("pid") != worker_pid and row.get("pid") != os.getpid()
+    ]
+    if not rows:
+        return None
+
+    direct_children = [row for row in rows if row.get("ppid") == worker_pid]
+    candidates = direct_children or rows
+
+    def _elapsed_sort_key(row: dict[str, Any]) -> int:
+        elapsed = row.get("elapsed_seconds")
+        return elapsed if isinstance(elapsed, int) else 2**31
+
+    selected = min(
+        candidates,
+        key=_elapsed_sort_key,
+    )
+    elapsed = selected.get("elapsed_seconds")
+    observed_at = datetime.now(timezone.utc).isoformat()
+    output_updated_at = _latest_log_activity_at(artifacts_dir)
+    return FlowActiveTool(
+        pid=selected["pid"],
+        ppid=selected.get("ppid"),
+        pgid=selected.get("pgid"),
+        command=selected["command"],
+        elapsed_seconds=elapsed if isinstance(elapsed, int) else None,
+        last_activity_at=output_updated_at or observed_at,
+        output_updated_at=output_updated_at,
+    )
+
+
 def _normalize_executable_token(token: str) -> str:
     resolved = resolve_executable(token)
     candidate = resolved or token
@@ -455,6 +599,7 @@ def check_worker_health(
             cmdline=cmd,
             artifact_path=metadata_path,
             message="worker running (cmdline unknown)",
+            active_tool=detect_active_tool(repo_root, run_id, pid),
         )
 
     if not _cmdline_matches(expected_cmd, actual_cmd):
@@ -472,6 +617,7 @@ def check_worker_health(
         cmdline=actual_cmd,
         artifact_path=metadata_path,
         message="worker running",
+        active_tool=detect_active_tool(repo_root, run_id, pid),
     )
 
 

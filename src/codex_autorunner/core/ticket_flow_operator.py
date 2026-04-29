@@ -30,7 +30,11 @@ from .flows.worker_process import (
     spawn_flow_worker,
 )
 from .flows.workspace_root import resolve_ticket_flow_workspace_root
-from .freshness import resolve_stale_threshold_seconds
+from .freshness import (
+    build_freshness_payload,
+    normalize_iso_datetime,
+    resolve_stale_threshold_seconds,
+)
 from .state_roots import resolve_repo_flows_db_path
 from .text_utils import _normalize_optional_text
 from .ticket_flow_projection import (
@@ -977,6 +981,45 @@ def _read_ticket_flow_app_metadata(
     return metadata
 
 
+def _effective_last_activity_at(
+    *,
+    last_event_at: Optional[str],
+    freshness: Any,
+    active_tool: Optional[Mapping[str, Any]],
+) -> Optional[str]:
+    candidates = [
+        normalize_iso_datetime(last_event_at),
+        normalize_iso_datetime(
+            freshness.get("basis_at") if isinstance(freshness, Mapping) else None
+        ),
+        normalize_iso_datetime(
+            active_tool.get("last_activity_at")
+            if isinstance(active_tool, Mapping)
+            else None
+        ),
+    ]
+    normalized = [candidate for candidate in candidates if candidate is not None]
+    if not normalized:
+        return None
+    return max(normalized)
+
+
+def _effective_freshness(
+    *, freshness: Any, effective_last_activity_at: Optional[str]
+) -> Any:
+    if not isinstance(freshness, Mapping) or effective_last_activity_at is None:
+        return freshness
+    generated_at = freshness.get("generated_at")
+    threshold = freshness.get("stale_threshold_seconds")
+    return build_freshness_payload(
+        generated_at=generated_at if isinstance(generated_at, str) else None,
+        stale_threshold_seconds=threshold,
+        candidates=[
+            ("effective_last_activity_at", effective_last_activity_at),
+        ],
+    )
+
+
 def build_ticket_flow_status_snapshot(
     repo_root: Path,
     record: FlowRunRecord,
@@ -1029,16 +1072,34 @@ def build_ticket_flow_status_snapshot(
     freshness = (
         canonical_state.get("freshness") if isinstance(canonical_state, dict) else None
     )
+    active_tool = getattr(health, "active_tool", None)
+    active_tool_payload = (
+        active_tool.to_dict()
+        if active_tool is not None and hasattr(active_tool, "to_dict")
+        else None
+    )
+    effective_last_activity_at = _effective_last_activity_at(
+        last_event_at=last_event_at,
+        freshness=freshness,
+        active_tool=active_tool_payload,
+    )
+    effective_freshness = _effective_freshness(
+        freshness=freshness,
+        effective_last_activity_at=effective_last_activity_at,
+    )
     return {
         "last_event_seq": last_event_seq,
         "last_event_at": last_event_at,
         "worker_health": health,
+        "agent_status": "busy" if active_tool_payload else None,
+        "active_tool": active_tool_payload,
+        "effective_last_activity_at": effective_last_activity_at,
         "effective_current_ticket": effective_ticket,
         "app": app_metadata,
         "ticket_progress": ticket_progress(repo_root),
         "state": updated_state,
         "canonical_state_v1": canonical_state,
-        "freshness": freshness,
+        "freshness": effective_freshness,
     }
 
 

@@ -502,9 +502,11 @@ class FlowWorkerHealthResponse(BaseModel):
     message: Optional[str] = None
     exit_code: Optional[int] = None
     stderr_tail: Optional[str] = None
+    active_tool: Optional[Dict[str, Any]] = None
 
     @classmethod
     def from_health(cls, health: FlowWorkerHealth) -> "FlowWorkerHealthResponse":
+        active_tool = getattr(health, "active_tool", None)
         return cls(
             status=health.status,
             pid=health.pid,
@@ -512,6 +514,7 @@ class FlowWorkerHealthResponse(BaseModel):
             message=health.message,
             exit_code=getattr(health, "exit_code", None),
             stderr_tail=getattr(health, "stderr_tail", None),
+            active_tool=active_tool.to_dict() if active_tool is not None else None,
         )
 
 
@@ -530,6 +533,10 @@ class FlowStatusResponse(BaseModel):
     ticket_progress: Optional[Dict[str, int]] = None
     last_event_seq: Optional[int] = None
     last_event_at: Optional[str] = None
+    effective_last_activity_at: Optional[str] = None
+    agent: Optional[Dict[str, Any]] = None
+    active_tool: Optional[Dict[str, Any]] = None
+    freshness: Optional[Dict[str, Any]] = None
     worker_health: Optional[FlowWorkerHealthResponse] = None
 
     @classmethod
@@ -540,6 +547,10 @@ class FlowStatusResponse(BaseModel):
         last_event_seq: Optional[int] = None,
         last_event_at: Optional[str] = None,
         worker_health: Optional[FlowWorkerHealth] = None,
+        effective_last_activity_at: Optional[str] = None,
+        agent_status: Optional[str] = None,
+        active_tool: Optional[dict[str, Any]] = None,
+        freshness: Optional[dict[str, Any]] = None,
     ) -> "FlowStatusResponse":
         state = record.state or {}
         state_outcome = _validate_run_state(record.state)
@@ -564,6 +575,10 @@ class FlowStatusResponse(BaseModel):
             reason_summary=reason_summary,
             last_event_seq=last_event_seq,
             last_event_at=last_event_at,
+            effective_last_activity_at=effective_last_activity_at,
+            agent={"status": agent_status} if agent_status else None,
+            active_tool=active_tool,
+            freshness=freshness,
             worker_health=(
                 FlowWorkerHealthResponse.from_health(worker_health)
                 if worker_health
@@ -639,6 +654,10 @@ def _build_flow_status_response(
         last_event_seq=snapshot["last_event_seq"],
         last_event_at=snapshot["last_event_at"],
         worker_health=snapshot["worker_health"],
+        effective_last_activity_at=snapshot.get("effective_last_activity_at"),
+        agent_status=snapshot.get("agent_status"),
+        active_tool=snapshot.get("active_tool"),
+        freshness=snapshot.get("freshness"),
     )
     resp.ticket_progress = snapshot.get("ticket_progress")
     if lite:

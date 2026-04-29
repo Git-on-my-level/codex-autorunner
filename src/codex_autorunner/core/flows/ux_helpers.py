@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Protocol
 
 from ...tickets.files import list_ticket_paths
+from ..freshness import normalize_iso_datetime
 from ..ticket_flow_operator import TicketFlowRunSelection
 from ..ticket_flow_operator import (
     build_ticket_flow_status_snapshot as _build_ticket_flow_status_snapshot,
@@ -227,6 +228,58 @@ def _format_age_compact(age_seconds: Any) -> Optional[str]:
     return f"{age_seconds // 86400}d ago"
 
 
+def _format_duration_compact(seconds: Any) -> Optional[str]:
+    if not isinstance(seconds, int) or seconds < 0:
+        return None
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        return f"{seconds // 60}m"
+    return f"{seconds // 3600}h {(seconds % 3600) // 60}m"
+
+
+def _shorten_command(command: str, *, max_chars: int = 96) -> str:
+    text = " ".join(command.split())
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 1].rstrip() + "..."
+
+
+def _format_active_tool_line(active_tool: Any, freshness: Any) -> Optional[str]:
+    if not isinstance(active_tool, Mapping):
+        return None
+    command = active_tool.get("command")
+    if not isinstance(command, str) or not command.strip():
+        return None
+    details: list[str] = []
+    elapsed = _format_duration_compact(active_tool.get("elapsed_seconds"))
+    if elapsed:
+        details.append(f"running {elapsed}")
+
+    output_updated_at = active_tool.get("output_updated_at")
+    last_activity_at = active_tool.get("last_activity_at")
+    freshness_basis = (
+        freshness.get("basis_at") if isinstance(freshness, Mapping) else None
+    )
+    if isinstance(output_updated_at, str) and output_updated_at.strip():
+        age_seconds = (
+            freshness.get("age_seconds") if isinstance(freshness, Mapping) else None
+        )
+        output_at = normalize_iso_datetime(output_updated_at)
+        basis_at = normalize_iso_datetime(freshness_basis)
+        age = (
+            _format_age_compact(age_seconds)
+            if output_at is not None and output_at == basis_at
+            else None
+        )
+        details.append(f"output updated {age or output_updated_at}")
+    elif isinstance(last_activity_at, str) and last_activity_at.strip():
+        details.append(f"observed active {last_activity_at}")
+
+    suffix = f" ({', '.join(details)})" if details else ""
+    return f"Active tool: {_shorten_command(command)}{suffix}"
+
+
 def _freshness_basis_label(value: Any) -> Optional[str]:
     if not isinstance(value, str):
         return None
@@ -241,6 +294,7 @@ def _freshness_basis_label(value: Any) -> Optional[str]:
         "latest_run_created_at": "run created",
         "ticket_ingested_at": "ticket ingest",
         "snapshot_generated_at": "snapshot time",
+        "effective_last_activity_at": "activity",
     }
     return labels.get(basis, basis.replace("_", " "))
 
@@ -340,6 +394,11 @@ def format_ticket_flow_status_lines(
         lines.append(f"App: {app_label}")
 
     freshness_summary = summarize_flow_freshness(snapshot.get("freshness"))
+    active_tool_line = _format_active_tool_line(
+        snapshot.get("active_tool"), snapshot.get("freshness")
+    )
+    if active_tool_line:
+        lines.append(active_tool_line)
     if freshness_summary:
         lines.append(f"Freshness: {freshness_summary}")
 
