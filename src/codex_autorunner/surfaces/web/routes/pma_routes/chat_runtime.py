@@ -317,22 +317,6 @@ def build_chat_runtime_router(
     router: APIRouter,
     get_runtime_state: Any,
 ) -> None:
-    """Build PMA chat runtime routes.
-
-    This includes:
-    - /active - Get current PMA status
-    - /chat - Submit a PMA chat message
-    - /interrupt - Interrupt running PMA turn
-    - /stop - Stop a PMA lane
-    - /new - Create new PMA session
-    - /reset - Reset PMA state
-    - /compact - Compact PMA history
-    - /thread/reset - Reset PMA thread
-    - /queue - Get queue summary
-    - /queue/{lane_id} - Get lane queue items
-    - /turns/{turn_id}/events - Stream turn events
-    """
-
     @router.get("/active")
     async def pma_active_status(
         request: Request, client_turn_id: Optional[str] = None

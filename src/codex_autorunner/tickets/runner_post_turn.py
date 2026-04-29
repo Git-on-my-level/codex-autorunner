@@ -297,52 +297,6 @@ def build_pause_result(
     }
 
 
-def process_commit_required(
-    *,
-    clean_after_agent: Optional[bool],
-    commit_pending: bool,
-    commit_retries: int,
-    head_before_turn: Optional[str],
-    head_after_agent: Optional[str],
-    agent_committed_this_turn: Optional[bool],
-    status_after_agent: Optional[str],
-    max_commit_retries: int,
-) -> tuple[dict[str, Any], str, Optional[str], str, Optional[str]]:
-    from .runner_commit import process_commit_required as _process_commit_required
-
-    return _process_commit_required(
-        clean_after_agent=clean_after_agent,
-        commit_pending=commit_pending,
-        commit_retries=commit_retries,
-        head_before_turn=head_before_turn,
-        head_after_agent=head_after_agent,
-        agent_committed_this_turn=agent_committed_this_turn,
-        status_after_agent=status_after_agent,
-        max_commit_retries=max_commit_retries,
-    )
-
-
-def apply_successful_turn_state(
-    *,
-    state: dict[str, Any],
-    agent_text: Optional[str],
-    agent_id: Optional[str],
-    agent_conversation_id: Optional[str],
-    agent_turn_id: Optional[str],
-    reply_max_seq: int,
-    reply_seq: int,
-) -> dict[str, Any]:
-    state = dict(state)
-    if reply_max_seq > reply_seq:
-        state["reply_seq"] = reply_max_seq
-    state["last_agent_output"] = agent_text
-    state.pop("network_retry", None)
-    state["last_agent_id"] = agent_id
-    state["last_agent_conversation_id"] = agent_conversation_id
-    state["last_agent_turn_id"] = agent_turn_id
-    return state
-
-
 def apply_loop_guard_state(
     *,
     state: dict[str, Any],

@@ -225,12 +225,6 @@ STANDARD_FUNCTION_BUDGETS = (
     ),
     FunctionBudget(
         path="src/codex_autorunner/tickets/runner_post_turn.py",
-        qualname="process_commit_required",
-        max_lines=65,
-        reason="Commit gating should remain extracted from TicketRunner.step().",
-    ),
-    FunctionBudget(
-        path="src/codex_autorunner/tickets/runner_post_turn.py",
         qualname="build_pause_result",
         max_lines=50,
         reason="Pause-result assembly should remain extracted from TicketRunner.step().",
@@ -302,11 +296,6 @@ TEST_FILE_CAPS = (
 )
 
 DISCORD_EXTRACTED_SEAM_BUDGETS = (
-    FileBudget(
-        path="src/codex_autorunner/integrations/discord/hub_handshake.py",
-        max_lines=120,
-        reason="Hub handshake must stay a thin RPC wrapper; logic belongs in hub_control_plane.",
-    ),
     FileBudget(
         path="src/codex_autorunner/integrations/discord/service_lifecycle.py",
         max_lines=600,
