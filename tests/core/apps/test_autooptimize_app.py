@@ -215,3 +215,4 @@ def test_autooptimize_install_run_and_after_flow_terminal_hook(tmp_path: Path) -
     summary_md = (app_root / "artifacts" / "summary.md").read_text(encoding="utf-8")
     assert "AutoOptimize Summary" in summary_md
     assert "discovery-cache" in summary_md
+    assert not any(install_result.app.paths.bundle_root.rglob("__pycache__"))

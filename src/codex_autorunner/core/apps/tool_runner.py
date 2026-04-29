@@ -405,6 +405,7 @@ def _build_tool_env(
             "CAR_APP_STATE_DIR": str(installed.paths.state_root.resolve()),
             "CAR_APP_ARTIFACT_DIR": str(installed.paths.artifacts_root.resolve()),
             "CAR_APP_LOG_DIR": str(installed.paths.logs_root.resolve()),
+            "PYTHONDONTWRITEBYTECODE": "1",
         }
     )
     optional_values: Mapping[str, Optional[str]] = {
