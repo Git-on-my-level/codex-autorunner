@@ -224,6 +224,47 @@ class PublishJournalStore:
                 refreshed = self._load_operation_row(conn, normalized_operation_id)
         return _operation_from_row(refreshed) if refreshed is not None else None
 
+    def patch_running_operation_payload(
+        self,
+        operation_id: str,
+        payload_patch: dict[str, Any],
+    ) -> Optional[PublishOperation]:
+        """Shallow-merge ``payload_patch`` into ``payload_json`` for a running operation.
+
+        Used to persist executor-local retry hints (e.g. dependency wait counters)
+        before transitioning back to ``pending`` on retryable failure.
+        """
+        normalized_operation_id = _normalize_text(operation_id)
+        if normalized_operation_id is None:
+            return None
+        patch = _normalize_json_object(payload_patch, field_name="payload_patch")
+        updated_at = now_iso()
+        with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            row = self._load_operation_row(conn, normalized_operation_id)
+            if row is None or str(row["state"]) != "running":
+                return None
+            payload = _json_loads_object(row["payload_json"])
+            payload.update(patch)
+            with conn:
+                cursor = conn.execute(
+                    """
+                    UPDATE orch_publish_operations
+                       SET payload_json = ?,
+                           updated_at = ?
+                     WHERE operation_id = ?
+                       AND state = 'running'
+                    """,
+                    (
+                        _json_dumps(payload),
+                        updated_at,
+                        normalized_operation_id,
+                    ),
+                )
+                if cursor.rowcount == 0:
+                    return None
+                refreshed = self._load_operation_row(conn, normalized_operation_id)
+        return _operation_from_row(refreshed) if refreshed is not None else None
+
     def get_operation(self, operation_id: str) -> Optional[PublishOperation]:
         normalized_operation_id = _normalize_text(operation_id)
         if normalized_operation_id is None:

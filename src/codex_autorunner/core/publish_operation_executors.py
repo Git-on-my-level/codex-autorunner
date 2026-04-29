@@ -40,6 +40,9 @@ _MANAGED_TURN_START_CONFIRMATION_TIMEOUT_SECONDS = 120
 _MANAGED_TURN_START_CONFIRMATION_INITIAL_RETRY_SECONDS = 5
 _MANAGED_TURN_START_CONFIRMATION_MAX_RETRY_SECONDS = 30
 _MANAGED_TURN_START_CONFIRMATION_MAX_ATTEMPTS = 12
+# Counts notify_chat retries after enqueue succeeded; not incremented while
+# waiting for enqueue_managed_turn so backlog cannot exhaust the start window.
+_MANAGED_TURN_POST_ENQUEUE_WAIT_CYCLES_KEY = "_managed_turn_post_enqueue_wait_cycles"
 _RUNTIME_STARTED_AT_KEY = "runtime_started_at"
 
 
@@ -210,10 +213,23 @@ def _managed_turn_start_retry_seconds(operation: PublishOperation) -> float:
     return float(min(delay, _MANAGED_TURN_START_CONFIRMATION_MAX_RETRY_SECONDS))
 
 
-def _managed_turn_dependency_exhausted(operation: PublishOperation) -> bool:
-    return (
-        int(operation.attempt_count or 0)
-        >= _MANAGED_TURN_START_CONFIRMATION_MAX_ATTEMPTS
+def _managed_turn_post_enqueue_wait_exhausted(dependency: Mapping[str, Any]) -> bool:
+    cycles = _coerce_int(dependency.get(_MANAGED_TURN_POST_ENQUEUE_WAIT_CYCLES_KEY))
+    return cycles >= _MANAGED_TURN_START_CONFIRMATION_MAX_ATTEMPTS - 1
+
+
+def _bump_managed_turn_post_enqueue_wait_cycles(
+    journal: PublishJournalStore,
+    operation_id: str,
+    dependency: Mapping[str, Any],
+) -> None:
+    dep = dict(dependency)
+    dep[_MANAGED_TURN_POST_ENQUEUE_WAIT_CYCLES_KEY] = (
+        _coerce_int(dep.get(_MANAGED_TURN_POST_ENQUEUE_WAIT_CYCLES_KEY)) + 1
+    )
+    journal.patch_running_operation_payload(
+        operation_id,
+        {"managed_turn_dependency": dep},
     )
 
 
@@ -304,6 +320,9 @@ def _resolve_notify_message(
             raise TerminalPublishError(
                 "Managed turn record never became visible before timeout"
             )
+        _bump_managed_turn_post_enqueue_wait_cycles(
+            journal, operation.operation_id, dependency
+        )
         raise RetryablePublishError(
             "Waiting for managed turn record to become visible",
             retry_after_seconds=_managed_turn_start_retry_seconds(operation),
@@ -331,9 +350,9 @@ def _resolve_notify_message(
         enqueue_operation=enqueue_operation,
         turn=turn,
     )
-    if datetime.now(timezone.utc) >= deadline or _managed_turn_dependency_exhausted(
-        operation
-    ):
+    if datetime.now(
+        timezone.utc
+    ) >= deadline or _managed_turn_post_enqueue_wait_exhausted(dependency):
         detail = (
             "The execution was created but the runtime never launched it."
             if _normalize_optional_text(turn.get("backend_turn_id")) is None
@@ -344,6 +363,9 @@ def _resolve_notify_message(
         raise TerminalPublishError(
             "Managed turn did not reach a confirmed running state before timeout"
         )
+    _bump_managed_turn_post_enqueue_wait_cycles(
+        journal, operation.operation_id, dependency
+    )
     raise RetryablePublishError(
         "Waiting for managed turn start confirmation",
         retry_after_seconds=_managed_turn_start_retry_seconds(operation),
