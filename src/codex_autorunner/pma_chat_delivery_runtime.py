@@ -6,8 +6,8 @@ from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from .core.chat_bindings import (
-    active_chat_binding_metadata_by_thread,
     normalize_workspace_path,
+    orchestration_surface_targets_for_thread,
     preferred_non_pma_chat_notification_source_for_workspace,
     resolve_bound_repo_id,
     resolve_discord_state_path,
@@ -75,14 +75,10 @@ async def _resolve_bound_progress_targets(
         seen.add(pair)
         targets.append(pair)
 
-    binding = active_chat_binding_metadata_by_thread(hub_root=hub_root).get(
-        managed_thread_id
-    )
-    if isinstance(binding, Mapping):
-        surface_kind = _normalize_optional_text(binding.get("binding_kind"))
-        surface_key = _normalize_optional_text(binding.get("binding_id"))
-        if surface_kind is not None and surface_key is not None:
-            _append_target(surface_kind, surface_key)
+    for sk, skey in orchestration_surface_targets_for_thread(
+        hub_root=hub_root, thread_target_id=managed_thread_id
+    ):
+        _append_target(sk, skey)
 
     if workspace_root is None:
         return tuple(targets)

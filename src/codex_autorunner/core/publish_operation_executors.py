@@ -980,13 +980,13 @@ def build_notify_chat_executor(
                     )
                     if resolved_thread_id is not None:
                         payload["thread_target_id"] = resolved_thread_id
-        message, confirmed_managed_turn = _resolve_notify_message(
+        raw_message, confirmed_managed_turn = _resolve_notify_message(
             operation=operation,
             payload=payload,
             journal=journal,
             thread_store=store,
         )
-        message = _normalize_optional_text(message)
+        message = _normalize_optional_text(raw_message)
         if message is None:
             raise TerminalPublishError("Publish payload is missing notify_chat message")
 
@@ -1004,13 +1004,16 @@ def build_notify_chat_executor(
             prefix="publish-chat",
         )
         repo_id, workspace_root = _resolve_thread_context(store, payload=payload)
+        # Do not enqueue bound live-progress when notify is muted (none) or when only
+        # primary_pma is selected (invalid/missing repo_id would still have skipped chat).
+        should_seed_bound_progress = delivery not in {"none", "primary_pma"}
         progress_start = _maybe_start_bound_live_progress_for_notify(
             hub_root=hub_root,
             thread_store=store,
             run_coroutine=coroutine_runner,
             workspace_root=workspace_root,
             repo_id=repo_id,
-            confirmed=confirmed_managed_turn,
+            confirmed=(confirmed_managed_turn if should_seed_bound_progress else None),
         )
 
         if delivery == "none":
