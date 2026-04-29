@@ -24,6 +24,54 @@ from .progress_leases import (
 )
 
 
+def recover_pending_discord_managed_thread_queue(
+    service: Any,
+    *,
+    orchestration_service: Any,
+    surface_key: str,
+    managed_thread_id: str,
+    thread: Any,
+    public_execution_error: str = "Discord PMA turn failed",
+) -> bool:
+    workspace_root = getattr(thread, "workspace_root", None)
+    if not workspace_root:
+        return False
+    coordinator = _build_discord_managed_thread_coordinator(
+        service=service,
+        orchestration_service=orchestration_service,
+        channel_id=surface_key,
+        public_execution_error=public_execution_error,
+        timeout_error="Discord PMA turn timed out",
+        interrupted_error="Discord PMA turn interrupted",
+        pma_enabled=True,
+    )
+    queue_worker_hooks = _build_discord_runner_hooks(
+        service,
+        channel_id=surface_key,
+        managed_thread_id=managed_thread_id,
+        workspace_root=Path(str(workspace_root)),
+        public_execution_error=public_execution_error,
+    ).queue_worker_hooks()
+    coordinator.ensure_queue_worker(
+        task_map=_get_discord_thread_queue_task_map(service),
+        managed_thread_id=managed_thread_id,
+        spawn_task=lambda coro: _spawn_discord_progress_background_task(
+            service,
+            coro,
+            managed_thread_id=managed_thread_id,
+            failure_note=(
+                "Status: this progress message lost its queue worker and is "
+                "no longer live. Please retry if needed."
+            ),
+            orphaned=True,
+            reconcile_on_cancel=True,
+            await_on_shutdown=True,
+        ),
+        hooks=queue_worker_hooks,
+    )
+    return True
+
+
 async def recover_managed_thread_executions_on_startup(service: Any) -> None:
     public_execution_error = "Discord PMA turn failed"
 
@@ -77,43 +125,14 @@ async def recover_managed_thread_executions_on_startup(service: Any) -> None:
         managed_thread_id: str,
         thread: Any,
     ) -> bool:
-        workspace_root = getattr(thread, "workspace_root", None)
-        if not workspace_root:
-            return False
-        coordinator = _build_discord_managed_thread_coordinator(
-            service=owner,
-            orchestration_service=orchestration_service,
-            channel_id=surface_key,
-            public_execution_error=public_execution_error,
-            timeout_error="Discord PMA turn timed out",
-            interrupted_error="Discord PMA turn interrupted",
-            pma_enabled=True,
-        )
-        queue_worker_hooks = _build_discord_runner_hooks(
+        return recover_pending_discord_managed_thread_queue(
             owner,
-            channel_id=surface_key,
+            orchestration_service=orchestration_service,
+            surface_key=surface_key,
             managed_thread_id=managed_thread_id,
-            workspace_root=Path(str(workspace_root)),
+            thread=thread,
             public_execution_error=public_execution_error,
-        ).queue_worker_hooks()
-        coordinator.ensure_queue_worker(
-            task_map=_get_discord_thread_queue_task_map(owner),
-            managed_thread_id=managed_thread_id,
-            spawn_task=lambda coro: _spawn_discord_progress_background_task(
-                owner,
-                coro,
-                managed_thread_id=managed_thread_id,
-                failure_note=(
-                    "Status: this progress message lost its queue worker and is "
-                    "no longer live. Please retry if needed."
-                ),
-                orphaned=True,
-                reconcile_on_cancel=True,
-                await_on_shutdown=True,
-            ),
-            hooks=queue_worker_hooks,
         )
-        return True
 
     await recover_surface_managed_thread_executions_on_startup(
         service,

@@ -324,6 +324,9 @@ from .managed_thread_routing import build_discord_thread_orchestration_service
 from .managed_thread_startup_recovery import (
     recover_managed_thread_executions_on_startup as _recover_managed_thread_executions_on_startup_impl,
 )
+from .managed_thread_startup_recovery import (
+    recover_pending_discord_managed_thread_queue as _recover_pending_discord_managed_thread_queue,
+)
 from .message_turns import (
     DiscordMessageTurnResult,
     resolve_bound_workspace_root,
@@ -3945,6 +3948,33 @@ class DiscordBotService:
                 delivery_record_id=record.record_id,
                 delivered_message_id=delivered_id,
             )
+            parts = record.record_id.split(":")
+            if len(parts) >= 6 and parts[1] == "discord":
+                managed_thread_id = parts[3].strip()
+                if managed_thread_id:
+                    try:
+                        orchestration_service = (
+                            build_discord_thread_orchestration_service(self)
+                        )
+                        thread = orchestration_service.get_thread_target(
+                            managed_thread_id
+                        )
+                        if thread is not None:
+                            _recover_pending_discord_managed_thread_queue(
+                                self,
+                                orchestration_service=orchestration_service,
+                                surface_key=record.channel_id,
+                                managed_thread_id=managed_thread_id,
+                                thread=thread,
+                            )
+                    except Exception:
+                        self._logger.warning(
+                            "discord.outbox.progress_queue_wake_failed "
+                            "record_id=%s managed_thread_id=%s",
+                            record.record_id,
+                            managed_thread_id,
+                            exc_info=True,
+                        )
         cleanup_payload = (
             record.payload_json.get("_codex_autorunner_cleanup")
             if isinstance(record.payload_json, dict)

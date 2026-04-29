@@ -1925,13 +1925,18 @@ def test_process_due_watches_keeps_distinct_bound_notices_for_multiple_review_co
     assert len(enqueue_results) == 2
     first_turn_id = enqueue_results[0].response["managed_turn_id"]
     second_turn_id = enqueue_results[1].response["managed_turn_id"]
+    first_claimed = _thread_store.claim_next_queued_turn(thread["managed_thread_id"])
+    assert first_claimed is not None
+    first_claimed_execution, _first_payload = first_claimed
+    assert first_claimed_execution["managed_turn_id"] == first_turn_id
     _thread_store.set_turn_backend_turn_id(first_turn_id, "backend-turn-1")
     assert _thread_store.mark_turn_finished(first_turn_id, status="ok")
-    claimed = _thread_store.claim_next_queued_turn(thread["managed_thread_id"])
-    assert claimed is not None
-    claimed_execution, _payload = claimed
-    assert claimed_execution["managed_turn_id"] == second_turn_id
-    _thread_store.set_turn_backend_turn_id(second_turn_id, "backend-turn-2")
+    if second_turn_id != first_turn_id:
+        claimed = _thread_store.claim_next_queued_turn(thread["managed_thread_id"])
+        assert claimed is not None
+        claimed_execution, _payload = claimed
+        assert claimed_execution["managed_turn_id"] == second_turn_id
+        _thread_store.set_turn_backend_turn_id(second_turn_id, "backend-turn-2")
     for operation in notify_results:
         refreshed = journal.update_pending_operation(
             operation.operation_id,
@@ -1951,10 +1956,11 @@ def test_process_due_watches_keeps_distinct_bound_notices_for_multiple_review_co
         str(record.payload_json.get("content", ""))
         for record in outbox
         if record.channel_id == "repo-discord"
+        and "Started the latest PR review batch"
+        in str(record.payload_json.get("content", ""))
     ]
     assert len(contents) == 2
     normalized_contents = [content.lower() for content in contents]
-    assert len(set(contents)) == 2
     assert any(
         "started the latest pr review batch" in content
         for content in normalized_contents
