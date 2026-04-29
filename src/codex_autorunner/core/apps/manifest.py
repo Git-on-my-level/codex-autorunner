@@ -102,7 +102,7 @@ def _require_str(data: Any, field: str) -> str:
 
 
 def _require_int(data: Any, field: str) -> int:
-    if not isinstance(data, int):
+    if isinstance(data, bool) or not isinstance(data, int):
         raise ManifestError(f"{field} must be an integer", field=field)
     return data
 
@@ -164,11 +164,23 @@ def _parse_tool(tool_id: str, data: Dict[str, Any], context: str) -> AppTool:
             )
         )
 
+    if "timeout_seconds" not in data:
+        timeout_seconds = 60
+    else:
+        timeout_seconds = _require_int(
+            data["timeout_seconds"], f"{context}.timeout_seconds"
+        )
+        if timeout_seconds < 1:
+            raise ManifestError(
+                f"{context}.timeout_seconds must be positive",
+                field=f"{context}.timeout_seconds",
+            )
+
     return AppTool(
         id=tool_id,
         description=_require_str(data.get("description", ""), f"{context}.description"),
         argv=list(argv),
-        timeout_seconds=data.get("timeout_seconds", 60),
+        timeout_seconds=timeout_seconds,
         outputs=outputs,
     )
 
@@ -255,6 +267,8 @@ def _parse_permissions(data: Dict[str, Any], context: str) -> AppPermission:
 
 def parse_app_manifest(raw: dict[str, Any]) -> AppManifest:
     sv = raw.get("schema_version")
+    if isinstance(sv, bool) or not isinstance(sv, int):
+        raise ManifestError("schema_version must be an integer", field="schema_version")
     if sv not in _SUPPORTED_SCHEMA_VERSIONS:
         raise ManifestError(
             f"unsupported schema_version: {sv!r} "

@@ -4,6 +4,7 @@ import dataclasses
 import hashlib
 import json
 import shutil
+import subprocess
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -12,7 +13,7 @@ from typing import Any, Optional
 from ..config import HubConfig
 from ..git_utils import GitError, run_git
 from ..state_roots import resolve_repo_state_root
-from ..utils import atomic_write
+from ..utils import atomic_write, subprocess_env
 from .git_mirror import (
     AppNotFoundError,
     AppRepoSnapshot,
@@ -501,10 +502,25 @@ def _relative_bundle_path(
 
 def _read_blob(git_dir: Path, blob_sha: str) -> bytes:
     try:
-        proc = run_git(["cat-file", "blob", blob_sha], git_dir, check=True)
-    except GitError as exc:
-        raise AppInstallError(f"failed to read blob {blob_sha}: {exc}") from exc
-    return (proc.stdout or "").encode("utf-8")
+        proc = subprocess.run(
+            ["git", "cat-file", "blob", blob_sha],
+            cwd=str(git_dir),
+            capture_output=True,
+            text=False,
+            timeout=30,
+            env=subprocess_env(),
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        raise AppInstallError("git binary not found") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise AppInstallError(f"git cat-file timed out for blob {blob_sha}") from exc
+    if proc.returncode != 0:
+        stderr = (proc.stderr or b"").decode(errors="replace").strip()
+        stdout = (proc.stdout or b"").decode(errors="replace").strip()
+        detail = stderr or stdout or f"exit {proc.returncode}"
+        raise AppInstallError(f"git cat-file failed: {detail}")
+    return proc.stdout or b""
 
 
 __all__ = [

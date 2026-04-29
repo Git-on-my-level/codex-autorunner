@@ -228,6 +228,26 @@ class TestInvalidManifest:
         with pytest.raises(ManifestError, match="unsupported schema_version"):
             parse_app_manifest(_minimal_manifest(schema_version=0))
 
+    def test_schema_version_true_rejected(self):
+        with pytest.raises(ManifestError, match="must be an integer"):
+            parse_app_manifest(_minimal_manifest(schema_version=True))
+
+    def test_tool_timeout_seconds_true_rejected(self):
+        with pytest.raises(ManifestError, match="must be an integer"):
+            parse_app_manifest(
+                _minimal_manifest(
+                    tools={"run": {"argv": ["echo"], "timeout_seconds": True}}
+                )
+            )
+
+    def test_tool_timeout_seconds_zero_rejected(self):
+        with pytest.raises(ManifestError, match="timeout_seconds must be positive"):
+            parse_app_manifest(
+                _minimal_manifest(
+                    tools={"run": {"argv": ["echo"], "timeout_seconds": 0}}
+                )
+            )
+
     def test_absolute_path_in_template(self):
         with pytest.raises(AppPathError, match="absolute"):
             parse_app_manifest(
