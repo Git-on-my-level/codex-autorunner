@@ -360,10 +360,12 @@ def _resolve_cleanup_targets(
         for match in app_root.glob(normalized):
             resolved = match.resolve()
             _ensure_cleanup_target_allowed(installed, resolved)
+            _ensure_cleanup_target_not_runtime_root(installed, resolved)
             yield resolved, resolved.relative_to(app_root).as_posix()
         return
     resolved = (app_root / normalized).resolve()
     _ensure_cleanup_target_allowed(installed, resolved)
+    _ensure_cleanup_target_not_runtime_root(installed, resolved)
     yield resolved, normalized
 
 
@@ -415,6 +417,22 @@ def _ensure_cleanup_target_allowed(
     ):
         raise AppHookExecutionError(
             f"Archive cleanup target escapes app runtime roots: {resolved_target}"
+        )
+
+
+def _ensure_cleanup_target_not_runtime_root(
+    installed: InstalledAppInfo,
+    target: Path,
+) -> None:
+    resolved_target = target.resolve()
+    runtime_roots = (
+        installed.paths.state_root.resolve(),
+        installed.paths.artifacts_root.resolve(),
+        installed.paths.logs_root.resolve(),
+    )
+    if resolved_target in runtime_roots:
+        raise AppHookExecutionError(
+            f"Archive cleanup path must not target a runtime root directly: {resolved_target}"
         )
 
 

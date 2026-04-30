@@ -261,6 +261,33 @@ def test_archive_cleanup_hook_rejects_paths_outside_runtime_roots(
     assert (app_root / "bundle" / "car-app.yaml").exists()
 
 
+def test_archive_cleanup_hook_rejects_globs_matching_runtime_root(
+    tmp_path: Path,
+) -> None:
+    repo_root, app_id = _setup_installed_app(
+        tmp_path,
+        slug="cleanup-root-glob",
+        app_id="local.cleanup-root-glob",
+        hook_point="after_flow_archive",
+        when={"status": "completed"},
+        cleanup_paths=["state/**"],
+    )
+    app_root = repo_root / ".codex-autorunner" / "apps" / app_id
+    (app_root / "state" / "run.json").write_text("{}", encoding="utf-8")
+
+    result = execute_app_archive_cleanup_hooks(
+        repo_root,
+        flow_run_id="run-cleanup",
+        flow_status="completed",
+    )
+
+    assert result.failed is True
+    assert len(result.entries) == 1
+    assert "must not target a runtime root" in (result.entries[0].error or "")
+    assert (app_root / "state").is_dir()
+    assert (app_root / "state" / "run.json").exists()
+
+
 def test_execute_matching_installed_app_hooks_runs_matching_tool(
     tmp_path: Path,
 ) -> None:
