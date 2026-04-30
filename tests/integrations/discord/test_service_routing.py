@@ -184,6 +184,70 @@ class _ThreadIngressStub:
         return SimpleNamespace(route="thread", thread_result=thread_result)
 
 
+class _FakeThreadService:
+    def __init__(self, **kw):
+        object.__setattr__(self, "_kw", kw)
+
+    def __getattr__(self, name):
+        kw = object.__getattribute__(self, "_kw")
+        if name in kw:
+            return kw[name]
+        raise AttributeError(name)
+
+
+def _ts_bind(cid="channel-1", tid="thread-1", mode="repo"):
+    def fn(*, surface_kind, surface_key):
+        assert surface_kind == "discord"
+        assert surface_key == cid
+        return SimpleNamespace(thread_target_id=tid, mode=mode)
+
+    return fn
+
+
+def _ts_tgt(tid="thread-1", value=None):
+    def fn(t):
+        assert t == tid
+        return value if value is not None else SimpleNamespace(thread_target_id=tid)
+
+    return fn
+
+
+def _ts_exec(tid="thread-1", value=None):
+    def fn(t):
+        assert t == tid
+        return value
+
+    return fn
+
+
+def _ts_stop(tid="thread-1", value=None, calls=None):
+    async def fn(t, **kw):
+        assert t == tid
+        if calls is not None:
+            calls.append(t)
+        return value
+
+    return fn
+
+
+def _ts_resume(tid, value, calls=None):
+    def fn(t, **kw):
+        if calls is not None:
+            calls.append((t, kw))
+        return value
+
+    return fn
+
+
+def _ts_assert_ret(tid="thread-1", eid="turn-2"):
+    def fn(t, e):
+        assert t == tid
+        assert e == eid
+        return True
+
+    return fn
+
+
 @pytest.mark.anyio
 async def test_discord_message_turns_route_through_orchestration_ingress(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -3134,14 +3198,7 @@ async def test_component_interaction_cancel_queued_turn_cancels_selected_executi
     tmp_path: Path,
 ) -> None:
     service, rest, store = await _build_service(tmp_path, init_store=True)
-
-    class _FakeThreadService:
-        def cancel_queued_execution(
-            self, thread_target_id: str, execution_id: str
-        ) -> bool:
-            assert thread_target_id == "thread-1"
-            assert execution_id == "turn-2"
-            return True
+    _fts = _FakeThreadService(cancel_queued_execution=_ts_assert_ret())
 
     async def _clear_progress_leases(*args, **kwargs) -> int:
         assert kwargs["managed_thread_id"] == "thread-1"
@@ -3156,7 +3213,7 @@ async def test_component_interaction_cancel_queued_turn_cancels_selected_executi
             repo_id="repo-1",
         )
         service._get_discord_thread_binding = lambda **_kwargs: (  # type: ignore[method-assign]
-            _FakeThreadService(),
+            _fts,
             None,
             SimpleNamespace(thread_target_id="thread-1"),
         )
@@ -3213,14 +3270,7 @@ async def test_component_interaction_queued_turn_interrupt_send_promotes_and_int
 ) -> None:
     service, rest, store = await _build_service(tmp_path, init_store=True)
     calls: list[tuple[str, str, str, str, bool]] = []
-
-    class _FakeThreadService:
-        def promote_queued_execution(
-            self, thread_target_id: str, execution_id: str
-        ) -> bool:
-            assert thread_target_id == "thread-1"
-            assert execution_id == "turn-2"
-            return True
+    _fts = _FakeThreadService(promote_queued_execution=_ts_assert_ret())
 
     try:
         await store.upsert_binding(
@@ -3231,7 +3281,7 @@ async def test_component_interaction_queued_turn_interrupt_send_promotes_and_int
         )
 
         service._get_discord_thread_binding = lambda **_kwargs: (  # type: ignore[method-assign]
-            _FakeThreadService(),
+            _fts,
             None,
             SimpleNamespace(thread_target_id="thread-1"),
         )
@@ -3287,18 +3337,9 @@ async def test_component_interaction_queued_turn_interrupt_send_acknowledges_whe
 ) -> None:
     service, rest, store = await _build_service(tmp_path, init_store=True)
     interrupt_called = False
-
-    class _FakeThreadService:
-        def promote_queued_execution(
-            self, thread_target_id: str, execution_id: str
-        ) -> bool:
-            assert thread_target_id == "thread-1"
-            assert execution_id == "turn-2"
-            return True
-
-        def get_running_execution(self, thread_target_id: str) -> Any:
-            assert thread_target_id == "thread-1"
-            return None
+    _fts = _FakeThreadService(
+        promote_queued_execution=_ts_assert_ret(), get_running_execution=_ts_exec()
+    )
 
     try:
         await store.upsert_binding(
@@ -3309,7 +3350,7 @@ async def test_component_interaction_queued_turn_interrupt_send_acknowledges_whe
         )
 
         service._get_discord_thread_binding = lambda **_kwargs: (  # type: ignore[method-assign]
-            _FakeThreadService(),
+            _fts,
             None,
             SimpleNamespace(thread_target_id="thread-1"),
         )
@@ -3344,18 +3385,9 @@ async def test_queued_turn_interrupt_send_uses_followup_after_predefer(
     tmp_path: Path,
 ) -> None:
     service, rest, store = await _build_service(tmp_path, init_store=True)
-
-    class _FakeThreadService:
-        def promote_queued_execution(
-            self, thread_target_id: str, execution_id: str
-        ) -> bool:
-            assert thread_target_id == "thread-1"
-            assert execution_id == "turn-2"
-            return True
-
-        def get_running_execution(self, thread_target_id: str) -> Any:
-            assert thread_target_id == "thread-1"
-            return None
+    _fts = _FakeThreadService(
+        promote_queued_execution=_ts_assert_ret(), get_running_execution=_ts_exec()
+    )
 
     try:
         await store.upsert_binding(
@@ -3366,7 +3398,7 @@ async def test_queued_turn_interrupt_send_uses_followup_after_predefer(
         )
 
         service._get_discord_thread_binding = lambda **_kwargs: (  # type: ignore[method-assign]
-            _FakeThreadService(),
+            _fts,
             None,
             SimpleNamespace(thread_target_id="thread-1"),
         )
@@ -7423,30 +7455,22 @@ async def test_car_session_resume_reactivates_thread_without_backend_rebinding(
         lifecycle_status="archived",
         backend_thread_id="legacy-backend",
     )
-
-    class _FakeThreadService:
-        def get_binding(self, *, surface_kind: str, surface_key: str) -> Any:
-            assert surface_kind == "discord"
-            assert surface_key == "channel-1"
-            return SimpleNamespace(thread_target_id="thread-1", mode="repo")
-
-        def get_thread_target(self, thread_target_id: str) -> Any:
-            assert thread_target_id == "thread-1"
-            return archived_thread
-
-        def resume_thread_target(self, thread_target_id: str, **kwargs: Any) -> Any:
-            resumed_calls.append((thread_target_id, kwargs))
-            return SimpleNamespace(
-                thread_target_id=thread_target_id,
-                agent_id="codex",
-                workspace_root=str(workspace),
-                lifecycle_status="active",
-                backend_thread_id="legacy-backend",
-            )
+    _active = SimpleNamespace(
+        thread_target_id="thread-1",
+        agent_id="codex",
+        workspace_root=str(workspace),
+        lifecycle_status="active",
+        backend_thread_id="legacy-backend",
+    )
+    _fts = _FakeThreadService(
+        get_binding=_ts_bind(),
+        get_thread_target=_ts_tgt(value=archived_thread),
+        resume_thread_target=_ts_resume("thread-1", _active, calls=resumed_calls),
+    )
 
     service._get_discord_thread_binding = (  # type: ignore[assignment]
         lambda *args, **kwargs: (
-            _FakeThreadService(),
+            _fts,
             SimpleNamespace(thread_target_id="thread-1", mode="repo"),
             archived_thread,
         )
@@ -7517,25 +7541,24 @@ async def test_car_session_resume_accepts_legacy_hermes_runtime_alias_thread(
         agent_profile="m4-pma",
     )
 
-    class _FakeThreadService:
-        def get_thread_target(self, thread_target_id: str) -> Any:
-            assert thread_target_id == "thread-1"
-            return archived_thread
-
-        def resume_thread_target(self, thread_target_id: str, **kwargs: Any) -> Any:
-            resumed_calls.append((thread_target_id, kwargs))
-            return SimpleNamespace(
-                thread_target_id=thread_target_id,
-                agent_id="hermes-m4-pma",
-                workspace_root=str(workspace),
-                lifecycle_status="active",
-                backend_thread_id="legacy-backend",
-                agent_profile="m4-pma",
-            )
+    _hermes_active = SimpleNamespace(
+        thread_target_id="thread-1",
+        agent_id="hermes-m4-pma",
+        workspace_root=str(workspace),
+        lifecycle_status="active",
+        backend_thread_id="legacy-backend",
+        agent_profile="m4-pma",
+    )
+    _fts = _FakeThreadService(
+        get_thread_target=_ts_tgt(value=archived_thread),
+        resume_thread_target=_ts_resume(
+            "thread-1", _hermes_active, calls=resumed_calls
+        ),
+    )
 
     service._get_discord_thread_binding = (  # type: ignore[assignment]
         lambda *args, **kwargs: (
-            _FakeThreadService(),
+            _fts,
             SimpleNamespace(thread_target_id="thread-1", mode="repo"),
             archived_thread,
         )
@@ -7611,18 +7634,16 @@ async def test_car_session_resume_rejects_different_hermes_profile_thread(
         agent_profile="m4-other",
     )
 
-    class _FakeThreadService:
-        def get_thread_target(self, thread_target_id: str) -> Any:
-            assert thread_target_id == "thread-1"
-            return mismatched_thread
-
-        def resume_thread_target(self, thread_target_id: str, **kwargs: Any) -> Any:
-            resumed_calls.append((thread_target_id, kwargs))
-            return mismatched_thread
+    _fts = _FakeThreadService(
+        get_thread_target=_ts_tgt(value=mismatched_thread),
+        resume_thread_target=_ts_resume(
+            "thread-1", mismatched_thread, calls=resumed_calls
+        ),
+    )
 
     service._get_discord_thread_binding = (  # type: ignore[assignment]
         lambda *args, **kwargs: (
-            _FakeThreadService(),
+            _fts,
             SimpleNamespace(thread_target_id="thread-1", mode="repo"),
             mismatched_thread,
         )
@@ -7675,26 +7696,20 @@ async def test_car_interrupt_uses_orchestration_thread_state(tmp_path: Path) -> 
     )
 
     interrupted: list[str] = []
-
-    class _FakeThreadService:
-        def get_binding(self, *, surface_kind: str, surface_key: str) -> Any:
-            assert surface_kind == "discord"
-            assert surface_key == "channel-1"
-            return SimpleNamespace(thread_target_id="thread-1", mode="repo")
-
-        def get_thread_target(self, thread_target_id: str) -> Any:
-            assert thread_target_id == "thread-1"
-            return SimpleNamespace(thread_target_id="thread-1")
-
-        async def stop_thread(self, thread_target_id: str) -> Any:
-            interrupted.append(thread_target_id)
-            return SimpleNamespace(
+    _fts = _FakeThreadService(
+        get_binding=_ts_bind(),
+        get_thread_target=_ts_tgt(),
+        stop_thread=_ts_stop(
+            value=SimpleNamespace(
                 interrupted_active=True,
                 recovered_lost_backend=False,
                 cancelled_queued=2,
-            )
+            ),
+            calls=interrupted,
+        ),
+    )
 
-    service._discord_thread_service = lambda: _FakeThreadService()  # type: ignore[assignment]
+    service._discord_thread_service = lambda: _fts  # type: ignore[assignment]
 
     try:
         await service._handle_car_interrupt(
@@ -7737,25 +7752,19 @@ async def test_car_interrupt_recovers_missing_backend_thread(tmp_path: Path) -> 
         outbox_manager=_FakeOutboxManager(),
     )
 
-    class _FakeThreadService:
-        def get_binding(self, *, surface_kind: str, surface_key: str) -> Any:
-            assert surface_kind == "discord"
-            assert surface_key == "channel-1"
-            return SimpleNamespace(thread_target_id="thread-1", mode="repo")
-
-        def get_thread_target(self, thread_target_id: str) -> Any:
-            assert thread_target_id == "thread-1"
-            return SimpleNamespace(thread_target_id="thread-1")
-
-        async def stop_thread(self, thread_target_id: str) -> Any:
-            assert thread_target_id == "thread-1"
-            return SimpleNamespace(
+    _fts = _FakeThreadService(
+        get_binding=_ts_bind(),
+        get_thread_target=_ts_tgt(),
+        stop_thread=_ts_stop(
+            value=SimpleNamespace(
                 interrupted_active=False,
                 recovered_lost_backend=True,
                 cancelled_queued=0,
             )
+        ),
+    )
 
-    service._discord_thread_service = lambda: _FakeThreadService()  # type: ignore[assignment]
+    service._discord_thread_service = lambda: _fts  # type: ignore[assignment]
     import codex_autorunner.integrations.discord.progress_leases as _progress_leases
 
     _progress_leases.request_discord_turn_progress_reuse(
@@ -7834,31 +7843,25 @@ async def test_car_interrupt_treats_promoted_no_active_as_success(
     )
     wake_calls: list[str] = []
 
-    class _FakeThreadService:
-        def get_binding(self, *, surface_kind: str, surface_key: str) -> Any:
-            assert surface_kind == "discord"
-            assert surface_key == "channel-1"
-            return SimpleNamespace(thread_target_id="thread-1", mode="repo")
+    async def _stop_no_cancel(t, **kw):
+        assert t == "thread-1" and kw == {"cancel_queued": False}
+        return SimpleNamespace(
+            interrupted_active=False,
+            recovered_lost_backend=False,
+            cancelled_queued=0,
+            execution=None,
+        )
 
-        def get_thread_target(self, thread_target_id: str) -> Any:
-            assert thread_target_id == "thread-1"
-            return SimpleNamespace(thread_target_id="thread-1")
+    _fts = _FakeThreadService(
+        get_binding=_ts_bind(),
+        get_thread_target=_ts_tgt(),
+        get_running_execution=_ts_exec(
+            value=SimpleNamespace(execution_id="turn-1", status="running")
+        ),
+        stop_thread=_stop_no_cancel,
+    )
 
-        def get_running_execution(self, thread_target_id: str) -> Any:
-            assert thread_target_id == "thread-1"
-            return SimpleNamespace(execution_id="turn-1", status="running")
-
-        async def stop_thread(self, thread_target_id: str, **kwargs: Any) -> Any:
-            assert thread_target_id == "thread-1"
-            assert kwargs == {"cancel_queued": False}
-            return SimpleNamespace(
-                interrupted_active=False,
-                recovered_lost_backend=False,
-                cancelled_queued=0,
-                execution=None,
-            )
-
-    service._discord_thread_service = lambda: _FakeThreadService()  # type: ignore[assignment]
+    service._discord_thread_service = lambda: _fts  # type: ignore[assignment]
 
     async def _wake_conversation(conversation_id: str) -> bool:
         wake_calls.append(conversation_id)
@@ -7940,26 +7943,21 @@ async def test_car_interrupt_reports_still_stopping_from_shared_ledger(
         },
     )
 
-    class _FakeThreadService:
-        def get_binding(self, *, surface_kind: str, surface_key: str) -> Any:
-            assert surface_kind == "discord"
-            assert surface_key == "channel-1"
-            return SimpleNamespace(thread_target_id="thread-1", mode="repo")
+    async def _stop_raises(t, **kw):
+        raise AssertionError(
+            f"stop_thread should not run for duplicate interrupt: {t} {kw}"
+        )
 
-        def get_thread_target(self, thread_target_id: str) -> Any:
-            assert thread_target_id == "thread-1"
-            return SimpleNamespace(thread_target_id="thread-1")
+    _fts = _FakeThreadService(
+        get_binding=_ts_bind(),
+        get_thread_target=_ts_tgt(),
+        get_running_execution=_ts_exec(
+            value=SimpleNamespace(execution_id="turn-1", status="running")
+        ),
+        stop_thread=_stop_raises,
+    )
 
-        def get_running_execution(self, thread_target_id: str) -> Any:
-            assert thread_target_id == "thread-1"
-            return SimpleNamespace(execution_id="turn-1", status="running")
-
-        async def stop_thread(self, thread_target_id: str, **kwargs: Any) -> Any:
-            raise AssertionError(
-                f"stop_thread should not run for duplicate interrupt: {thread_target_id} {kwargs}"
-            )
-
-    service._discord_thread_service = lambda: _FakeThreadService()  # type: ignore[assignment]
+    service._discord_thread_service = lambda: _fts  # type: ignore[assignment]
 
     try:
         await service._handle_car_interrupt(
@@ -8004,30 +8002,21 @@ async def test_car_interrupt_reports_already_finished_when_turn_is_no_longer_act
         outbox_manager=_FakeOutboxManager(),
     )
 
-    class _FakeThreadService:
-        def get_binding(self, *, surface_kind: str, surface_key: str) -> Any:
-            assert surface_kind == "discord"
-            assert surface_key == "channel-1"
-            return SimpleNamespace(thread_target_id="thread-1", mode="repo")
-
-        def get_thread_target(self, thread_target_id: str) -> Any:
-            assert thread_target_id == "thread-1"
-            return SimpleNamespace(thread_target_id="thread-1")
-
-        def get_running_execution(self, thread_target_id: str) -> Any:
-            assert thread_target_id == "thread-1"
-            return None
-
-        async def stop_thread(self, thread_target_id: str, **kwargs: Any) -> Any:
-            assert thread_target_id == "thread-1"
-            return SimpleNamespace(
+    _fts = _FakeThreadService(
+        get_binding=_ts_bind(),
+        get_thread_target=_ts_tgt(),
+        get_running_execution=_ts_exec(),
+        stop_thread=_ts_stop(
+            value=SimpleNamespace(
                 interrupted_active=False,
                 recovered_lost_backend=False,
                 cancelled_queued=0,
                 execution=None,
             )
+        ),
+    )
 
-    service._discord_thread_service = lambda: _FakeThreadService()  # type: ignore[assignment]
+    service._discord_thread_service = lambda: _fts  # type: ignore[assignment]
 
     try:
         await service._handle_car_interrupt(
@@ -8072,25 +8061,22 @@ async def test_cancel_turn_button_updates_component_to_interrupt_success_on_conf
         outbox_manager=_FakeOutboxManager(),
     )
 
-    class _FakeThreadService:
-        def get_thread_target(self, thread_target_id: str) -> Any:
-            assert thread_target_id == "thread-1"
-            return SimpleNamespace(thread_target_id="thread-1")
-
-        def get_running_execution(self, thread_target_id: str) -> Any:
-            assert thread_target_id == "thread-1"
-            return SimpleNamespace(execution_id="turn-1", status="running")
-
-        async def stop_thread(self, thread_target_id: str) -> Any:
-            assert thread_target_id == "thread-1"
-            return SimpleNamespace(
+    _fts = _FakeThreadService(
+        get_thread_target=_ts_tgt(),
+        get_running_execution=_ts_exec(
+            value=SimpleNamespace(execution_id="turn-1", status="running")
+        ),
+        stop_thread=_ts_stop(
+            value=SimpleNamespace(
                 interrupted_active=True,
                 recovered_lost_backend=False,
                 cancelled_queued=0,
                 execution=SimpleNamespace(execution_id="turn-1"),
             )
+        ),
+    )
 
-    service._discord_thread_service = lambda: _FakeThreadService()  # type: ignore[assignment]
+    service._discord_thread_service = lambda: _fts  # type: ignore[assignment]
 
     try:
         await service._handle_cancel_turn_button(
@@ -8155,21 +8141,17 @@ async def test_cancel_turn_button_stale_execution_does_not_interrupt_newer_turn(
     )
 
     stop_calls: list[str] = []
+    _fts = _FakeThreadService(
+        get_thread_target=_ts_tgt(),
+        get_running_execution=_ts_exec(
+            value=SimpleNamespace(execution_id="turn-2", status="running")
+        ),
+        stop_thread=_ts_stop(
+            value=SimpleNamespace(interrupted_active=True), calls=stop_calls
+        ),
+    )
 
-    class _FakeThreadService:
-        def get_thread_target(self, thread_target_id: str) -> Any:
-            assert thread_target_id == "thread-1"
-            return SimpleNamespace(thread_target_id="thread-1")
-
-        def get_running_execution(self, thread_target_id: str) -> Any:
-            assert thread_target_id == "thread-1"
-            return SimpleNamespace(execution_id="turn-2", status="running")
-
-        async def stop_thread(self, thread_target_id: str) -> Any:
-            stop_calls.append(thread_target_id)
-            return SimpleNamespace(interrupted_active=True)
-
-    service._discord_thread_service = lambda: _FakeThreadService()  # type: ignore[assignment]
+    service._discord_thread_service = lambda: _fts  # type: ignore[assignment]
 
     try:
         await service._handle_cancel_turn_button(
@@ -8256,16 +8238,14 @@ async def test_cancel_turn_button_stale_execution_ignores_message_fetch_failures
         outbox_manager=_FakeOutboxManager(),
     )
 
-    class _FakeThreadService:
-        def get_thread_target(self, thread_target_id: str) -> Any:
-            assert thread_target_id == "thread-1"
-            return SimpleNamespace(thread_target_id="thread-1")
+    _fts = _FakeThreadService(
+        get_thread_target=_ts_tgt(),
+        get_running_execution=_ts_exec(
+            value=SimpleNamespace(execution_id="turn-2", status="running")
+        ),
+    )
 
-        def get_running_execution(self, thread_target_id: str) -> Any:
-            assert thread_target_id == "thread-1"
-            return SimpleNamespace(execution_id="turn-2", status="running")
-
-    service._discord_thread_service = lambda: _FakeThreadService()  # type: ignore[assignment]
+    service._discord_thread_service = lambda: _fts  # type: ignore[assignment]
 
     try:
         await service._handle_cancel_turn_button(
@@ -8319,35 +8299,30 @@ async def test_reset_discord_thread_binding_archives_after_lost_backend_recovery
         message_id="preview-1",
     )
 
-    class _FakeThreadService:
-        def get_binding(self, *, surface_kind: str, surface_key: str) -> Any:
-            assert surface_kind == "discord"
-            assert surface_key == "channel-1"
-            return SimpleNamespace(thread_target_id="thread-1", mode="repo")
+    async def _stop_rec(t, **kw):
+        calls.append(("stop", t))
+        return SimpleNamespace(recovered_lost_backend=True)
 
-        def get_thread_target(self, thread_target_id: str) -> Any:
-            assert thread_target_id == "thread-1"
-            return SimpleNamespace(thread_target_id="thread-1")
+    _fts = _FakeThreadService(
+        get_binding=_ts_bind(),
+        get_thread_target=_ts_tgt(),
+        stop_thread=_stop_rec,
+        archive_thread_target=lambda tid: calls.append(("archive", tid)),
+        create_thread_target=lambda agent, workspace_root, **kw: (
+            (
+                calls.append(("create", agent)),
+                SimpleNamespace(thread_target_id="thread-2"),
+            )[1]
+            if workspace_root == workspace
+            else None
+        ),
+        upsert_binding=lambda **kw: (
+            calls.append(("bind", str(kw["thread_target_id"]))),
+            SimpleNamespace(thread_target_id=kw["thread_target_id"]),
+        )[1],
+    )
 
-        async def stop_thread(self, thread_target_id: str) -> Any:
-            calls.append(("stop", thread_target_id))
-            return SimpleNamespace(recovered_lost_backend=True)
-
-        def archive_thread_target(self, thread_target_id: str) -> None:
-            calls.append(("archive", thread_target_id))
-
-        def create_thread_target(
-            self, agent: str, workspace_root: Path, **kwargs: Any
-        ) -> Any:
-            calls.append(("create", agent))
-            assert workspace_root == workspace
-            return SimpleNamespace(thread_target_id="thread-2")
-
-        def upsert_binding(self, **kwargs: Any) -> Any:
-            calls.append(("bind", str(kwargs["thread_target_id"])))
-            return SimpleNamespace(thread_target_id=kwargs["thread_target_id"])
-
-    service._discord_thread_service = lambda: _FakeThreadService()  # type: ignore[assignment]
+    service._discord_thread_service = lambda: _fts  # type: ignore[assignment]
 
     try:
         had_previous, new_thread_id = await service._reset_discord_thread_binding(
