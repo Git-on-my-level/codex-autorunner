@@ -292,11 +292,15 @@ def _codex_runtime_preflight_details(
     version_command = _codex_version_command(app_cmd)
     if version_command:
         try:
-            output = subprocess.check_output(
+            raw_output = subprocess.check_output(
                 version_command,
                 stderr=subprocess.STDOUT,
-                text=True,
                 timeout=_CODEX_VERSION_TIMEOUT_SECONDS,
+            )
+            output = (
+                raw_output.decode("utf-8", errors="replace")
+                if isinstance(raw_output, bytes)
+                else str(raw_output)
             )
             version = " ".join(output.split())
             details.append(f"version: {version or 'no output'}")
