@@ -33,6 +33,7 @@ from tests.pma_support.managed_threads import (
     FakeAutomationStore,
     FakeClient,
     FakeSupervisor,
+    FakeZeroClawSupervisor,
     install_fake_supervisor,
 )
 
@@ -945,67 +946,6 @@ def test_send_message_defaults_agent_from_agent_workspace_runtime(hub_env) -> No
         display_name="ZeroClaw Main",
     )
 
-    class FakeZeroClawSupervisor:
-        def __init__(self) -> None:
-            self.create_calls: list[tuple[Path, str | None]] = []
-            self.attach_calls: list[tuple[Path, str]] = []
-            self.turn_calls: list[dict[str, object]] = []
-
-        async def create_session(
-            self, workspace_root: Path, title: str | None = None
-        ) -> str:
-            self.create_calls.append((workspace_root, title))
-            return "zeroclaw-session-1"
-
-        async def attach_session(self, workspace_root: Path, session_id: str) -> str:
-            self.attach_calls.append((workspace_root, session_id))
-            return session_id
-
-        async def start_turn(
-            self,
-            workspace_root: Path,
-            conversation_id: str,
-            prompt: str,
-            *,
-            model: str | None = None,
-        ) -> str:
-            self.turn_calls.append(
-                {
-                    "workspace_root": workspace_root,
-                    "conversation_id": conversation_id,
-                    "prompt": prompt,
-                    "model": model,
-                }
-            )
-            return f"zeroclaw-turn-{len(self.turn_calls)}"
-
-        async def wait_for_turn(
-            self,
-            workspace_root: Path,
-            conversation_id: str,
-            turn_id: str,
-            *,
-            timeout: float | None = None,
-        ):
-            _ = workspace_root, conversation_id, turn_id, timeout
-            return type(
-                "Result",
-                (),
-                {
-                    "status": "ok",
-                    "assistant_text": f"zeroclaw-output-{len(self.turn_calls)}",
-                    "raw_events": [],
-                    "errors": [],
-                },
-            )()
-
-        async def stream_turn_events(
-            self, workspace_root: Path, conversation_id: str, turn_id: str
-        ):
-            _ = workspace_root, conversation_id, turn_id
-            if False:
-                yield None
-
     app.state.zeroclaw_supervisor = FakeZeroClawSupervisor()
 
     with TestClient(app) as client:
@@ -1093,65 +1033,6 @@ def test_zeroclaw_managed_threads_keep_compaction_seed_without_pma_discoverabili
         display_name="ZeroClaw Main",
     )
 
-    class FakeZeroClawSupervisor:
-        def __init__(self) -> None:
-            self.turn_calls: list[dict[str, object]] = []
-
-        async def create_session(
-            self, workspace_root: Path, title: str | None = None
-        ) -> str:
-            _ = workspace_root, title
-            return "zeroclaw-session-1"
-
-        async def attach_session(self, workspace_root: Path, session_id: str) -> str:
-            _ = workspace_root
-            return session_id
-
-        async def start_turn(
-            self,
-            workspace_root: Path,
-            conversation_id: str,
-            prompt: str,
-            *,
-            model: str | None = None,
-        ) -> str:
-            self.turn_calls.append(
-                {
-                    "workspace_root": workspace_root,
-                    "conversation_id": conversation_id,
-                    "prompt": prompt,
-                    "model": model,
-                }
-            )
-            return f"zeroclaw-turn-{len(self.turn_calls)}"
-
-        async def wait_for_turn(
-            self,
-            workspace_root: Path,
-            conversation_id: str,
-            turn_id: str,
-            *,
-            timeout: float | None = None,
-        ):
-            _ = workspace_root, conversation_id, turn_id, timeout
-            return type(
-                "Result",
-                (),
-                {
-                    "status": "ok",
-                    "assistant_text": f"zeroclaw-output-{len(self.turn_calls)}",
-                    "raw_events": [],
-                    "errors": [],
-                },
-            )()
-
-        async def stream_turn_events(
-            self, workspace_root: Path, conversation_id: str, turn_id: str
-        ):
-            _ = workspace_root, conversation_id, turn_id
-            if False:
-                yield None
-
     app.state.zeroclaw_supervisor = FakeZeroClawSupervisor()
 
     with TestClient(app) as client:
@@ -1200,75 +1081,9 @@ async def test_agent_workspace_threads_run_in_parallel_without_workspace_wide_qu
         display_name="ZeroClaw Main",
     )
 
-    class FakeZeroClawSupervisor:
-        def __init__(self) -> None:
-            self.create_calls: list[tuple[Path, str | None]] = []
-            self.turn_calls: list[dict[str, object]] = []
-            self.wait_started: list[str] = []
-            self._session_seq = 0
-            self._session_events: dict[str, asyncio.Event] = {}
-
-        async def create_session(
-            self, workspace_root: Path, title: str | None = None
-        ) -> str:
-            self.create_calls.append((workspace_root, title))
-            self._session_seq += 1
-            session_id = f"zeroclaw-session-{self._session_seq}"
-            self._session_events[session_id] = asyncio.Event()
-            return session_id
-
-        async def attach_session(self, workspace_root: Path, session_id: str) -> str:
-            _ = workspace_root
-            return session_id
-
-        async def start_turn(
-            self,
-            workspace_root: Path,
-            conversation_id: str,
-            prompt: str,
-            *,
-            model: str | None = None,
-        ) -> str:
-            self.turn_calls.append(
-                {
-                    "workspace_root": workspace_root,
-                    "conversation_id": conversation_id,
-                    "prompt": prompt,
-                    "model": model,
-                }
-            )
-            return f"{conversation_id}-turn-{len(self.turn_calls)}"
-
-        async def wait_for_turn(
-            self,
-            workspace_root: Path,
-            conversation_id: str,
-            turn_id: str,
-            *,
-            timeout: float | None = None,
-        ):
-            _ = workspace_root, turn_id, timeout
-            self.wait_started.append(conversation_id)
-            await self._session_events[conversation_id].wait()
-            return type(
-                "Result",
-                (),
-                {
-                    "status": "ok",
-                    "assistant_text": f"zeroclaw-output:{conversation_id}",
-                    "raw_events": [],
-                    "errors": [],
-                },
-            )()
-
-        async def stream_turn_events(
-            self, workspace_root: Path, conversation_id: str, turn_id: str
-        ):
-            _ = workspace_root, conversation_id, turn_id
-            if False:
-                yield None
-
-    fake_supervisor = FakeZeroClawSupervisor()
+    fake_supervisor = FakeZeroClawSupervisor(
+        sequential_sessions=True, block_on_wait=True
+    )
     app.state.zeroclaw_supervisor = fake_supervisor
 
     transport = httpx.ASGITransport(app=app)
