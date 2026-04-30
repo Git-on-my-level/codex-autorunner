@@ -136,6 +136,54 @@ class _DeleteFailingRest(_FakeRest):
         raise RuntimeError("delete failed")
 
 
+class _ManagedThreadDeliveryStub:
+    _config: SimpleNamespace
+
+    def __init__(self, *, root: Path, sent_messages: list[dict[str, object]]) -> None:
+        self._config = SimpleNamespace(root=root, raw={})
+        self._sent_messages = sent_messages
+
+    async def _send_channel_message_safe(
+        self,
+        channel_id: str,
+        payload: dict[str, object],
+        *,
+        record_id: str,
+    ) -> bool:
+        self._sent_messages.append(
+            {
+                "channel_id": channel_id,
+                "payload": dict(payload),
+                "record_id": record_id,
+            }
+        )
+        return True
+
+    async def _run_with_typing_indicator(self, *, channel_id: str, work: Any) -> None:
+        _ = channel_id
+        await work()
+
+    def _register_discord_turn_approval_context(self, **_kwargs: object) -> None:
+        return
+
+    def _clear_discord_turn_approval_context(self, **_kwargs: object) -> None:
+        return
+
+
+class _ThreadIngressStub:
+    async def submit_message(
+        self,
+        request,
+        *,
+        resolve_paused_flow_target,
+        submit_flow_reply,
+        submit_thread_message,
+    ):
+        _ = resolve_paused_flow_target, submit_flow_reply
+        thread_result = await submit_thread_message(request)
+        return SimpleNamespace(route="thread", thread_result=thread_result)
+
+
 @pytest.mark.anyio
 async def test_discord_message_turns_route_through_orchestration_ingress(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -384,23 +432,10 @@ async def test_discord_message_turns_delete_immediate_placeholder_when_backgroun
             task.add_done_callback(self._background_tasks.discard)
             return task
 
-    class _IngressStub:
-        async def submit_message(
-            self,
-            request,
-            *,
-            resolve_paused_flow_target,
-            submit_flow_reply,
-            submit_thread_message,
-        ):
-            _ = resolve_paused_flow_target, submit_flow_reply
-            thread_result = await submit_thread_message(request)
-            return SimpleNamespace(route="thread", thread_result=thread_result)
-
     monkeypatch.setattr(
         discord_message_turns,
         "build_surface_orchestration_ingress",
-        lambda **_: _IngressStub(),
+        lambda **_: _ThreadIngressStub(),
     )
     monkeypatch.setattr(
         discord_message_turns,
@@ -457,39 +492,8 @@ async def test_discord_managed_thread_delivery_uses_unique_record_ids_per_chunk(
 ) -> None:
     sent_messages: list[dict[str, object]] = []
 
-    class _ServiceStub:
-        _config = SimpleNamespace(root=tmp_path, raw={})
-
-        async def _send_channel_message_safe(
-            self,
-            channel_id: str,
-            payload: dict[str, object],
-            *,
-            record_id: str,
-        ) -> bool:
-            sent_messages.append(
-                {
-                    "channel_id": channel_id,
-                    "payload": dict(payload),
-                    "record_id": record_id,
-                }
-            )
-            return True
-
-        async def _run_with_typing_indicator(
-            self, *, channel_id: str, work: Any
-        ) -> None:
-            _ = channel_id
-            await work()
-
-        def _register_discord_turn_approval_context(self, **_kwargs: object) -> None:
-            return
-
-        def _clear_discord_turn_approval_context(self, **_kwargs: object) -> None:
-            return
-
     hooks = discord_message_turns._build_discord_runner_hooks(
-        _ServiceStub(),
+        _ManagedThreadDeliveryStub(root=tmp_path, sent_messages=sent_messages),
         channel_id="channel-1",
         managed_thread_id="thread-1",
         workspace_root=tmp_path,
@@ -532,39 +536,8 @@ async def test_discord_managed_thread_delivery_includes_token_usage_footer(
 ) -> None:
     sent_messages: list[dict[str, object]] = []
 
-    class _ServiceStub:
-        _config = SimpleNamespace(root=tmp_path, raw={})
-
-        async def _send_channel_message_safe(
-            self,
-            channel_id: str,
-            payload: dict[str, object],
-            *,
-            record_id: str,
-        ) -> bool:
-            sent_messages.append(
-                {
-                    "channel_id": channel_id,
-                    "payload": dict(payload),
-                    "record_id": record_id,
-                }
-            )
-            return True
-
-        async def _run_with_typing_indicator(
-            self, *, channel_id: str, work: Any
-        ) -> None:
-            _ = channel_id
-            await work()
-
-        def _register_discord_turn_approval_context(self, **_kwargs: object) -> None:
-            return
-
-        def _clear_discord_turn_approval_context(self, **_kwargs: object) -> None:
-            return
-
     hooks = discord_message_turns._build_discord_runner_hooks(
-        _ServiceStub(),
+        _ManagedThreadDeliveryStub(root=tmp_path, sent_messages=sent_messages),
         channel_id="channel-1",
         managed_thread_id="thread-1",
         workspace_root=tmp_path,
@@ -669,19 +642,6 @@ async def test_discord_message_turns_show_busy_placeholder_for_attachment_prep(
             task.add_done_callback(self._background_tasks.discard)
             return task
 
-    class _IngressStub:
-        async def submit_message(
-            self,
-            request,
-            *,
-            resolve_paused_flow_target,
-            submit_flow_reply,
-            submit_thread_message,
-        ):
-            _ = resolve_paused_flow_target, submit_flow_reply
-            thread_result = await submit_thread_message(request)
-            return SimpleNamespace(route="thread", thread_result=thread_result)
-
     class _BusyOrchestrationService:
         def get_binding(self, *, surface_kind: str, surface_key: str) -> object | None:
             assert surface_kind == "discord"
@@ -708,7 +668,7 @@ async def test_discord_message_turns_show_busy_placeholder_for_attachment_prep(
     monkeypatch.setattr(
         discord_message_turns,
         "build_surface_orchestration_ingress",
-        lambda **_: _IngressStub(),
+        lambda **_: _ThreadIngressStub(),
     )
     import codex_autorunner.integrations.discord.managed_thread_routing as _managed_thread_routing
 
