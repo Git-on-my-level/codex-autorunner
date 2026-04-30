@@ -444,12 +444,27 @@ async def test_run_managed_thread_turn_for_message_uses_binding_policies(
     assert captured["sandbox_policy"] == "workspaceWrite"
 
 
-@pytest.mark.asyncio
-async def test_orchestrated_turn_interrupt_send_hands_off_progress_message(
+async def _run_interrupt_send_turn_harness(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-) -> None:
-    rest = _FakeRest()
+    *,
+    rest: _FakeRest | None = None,
+    finalize_result: dict[str, Any] | None = None,
+    send_channel_message_raises: bool = False,
+    spawn_task: bool = True,
+    progress_source_message_id: str = "m-2",
+    prompt_text: str = "first prompt",
+    source_message_id: str = "m-1",
+    session_key: str = "session-1",
+    pre_run: Any | None = None,
+) -> tuple[Any, DiscordMessageTurnResult, _FakeRest]:
+    if rest is None:
+        rest = _FakeRest()
+    if finalize_result is None:
+        finalize_result = {
+            "status": "interrupted",
+            "error": "Discord PMA turn interrupted",
+        }
     thread = SimpleNamespace(thread_target_id="thread-1")
     started_execution = SimpleNamespace(
         execution=SimpleNamespace(status="running"),
@@ -467,11 +482,14 @@ async def test_orchestrated_turn_interrupt_send_hands_off_progress_message(
             self._store = _Store()
             self._rest = rest
             self._logger = logging.getLogger(__name__)
-            self._spawn_task = asyncio.create_task
+            if spawn_task:
+                self._spawn_task = asyncio.create_task
 
         async def _send_channel_message(
             self, channel_id: str, payload: dict[str, Any]
         ) -> dict[str, Any]:
+            if send_channel_message_raises:
+                raise RuntimeError("progress send failed")
             return await rest.create_channel_message(
                 channel_id=channel_id,
                 payload=payload,
@@ -497,7 +515,7 @@ async def test_orchestrated_turn_interrupt_send_hands_off_progress_message(
 
     async def _fake_finalize(*args: Any, **kwargs: Any) -> dict[str, Any]:
         _ = args, kwargs
-        return {"status": "interrupted", "error": "Discord PMA turn interrupted"}
+        return finalize_result
 
     async def _fake_complete(*args: Any, **kwargs: Any) -> Any:
         _ = args, kwargs
@@ -523,25 +541,26 @@ async def test_orchestrated_turn_interrupt_send_hands_off_progress_message(
     discord_progress_leases_module.request_discord_turn_progress_reuse(
         service,
         thread_target_id="thread-1",
-        source_message_id="m-2",
+        source_message_id=progress_source_message_id,
         acknowledgement="Message received. Switching to it now...",
     )
-
+    if pre_run is not None:
+        await pre_run(service)
     result = (
         await discord_message_turns_module._run_discord_orchestrated_turn_for_message(
             service,
             workspace_root=tmp_path,
-            prompt_text="first prompt",
-            source_message_id="m-1",
+            prompt_text=prompt_text,
+            source_message_id=source_message_id,
             agent="codex",
             model_override=None,
             reasoning_effort=None,
-            session_key="session-1",
+            session_key=session_key,
             orchestrator_channel_key="channel-1",
             managed_thread_surface_key=None,
             mode="pma",
             pma_enabled=True,
-            execution_prompt="<user_message>\nfirst prompt\n</user_message>\n",
+            execution_prompt=f"<user_message>\n{prompt_text}\n</user_message>\n",
             public_execution_error="Discord PMA turn failed",
             timeout_error="Discord PMA turn timed out",
             interrupted_error="Discord PMA turn interrupted",
@@ -551,6 +570,19 @@ async def test_orchestrated_turn_interrupt_send_hands_off_progress_message(
             min_edit_interval_seconds=1.0,
             heartbeat_interval_seconds=2.0,
         )
+    )
+    return service, result, rest
+
+
+@pytest.mark.asyncio
+async def test_orchestrated_turn_interrupt_send_hands_off_progress_message(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    service, result, rest = await _run_interrupt_send_turn_harness(
+        monkeypatch,
+        tmp_path,
+        spawn_task=True,
     )
 
     assert result.send_final_message is False
@@ -576,119 +608,28 @@ async def test_orchestrated_turn_interrupt_send_reuses_existing_progress_message
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    rest = _FakeRest()
-    thread = SimpleNamespace(thread_target_id="thread-1")
-    started_execution = SimpleNamespace(
-        execution=SimpleNamespace(status="running"),
-        thread=thread,
-    )
+    async def _stash(service: Any) -> None:
+        discord_message_turns_module._stash_discord_reusable_progress_message(
+            service,
+            thread_target_id="thread-1",
+            source_message_id="m-2",
+            channel_id="channel-1",
+            message_id="preview-1",
+        )
 
-    class _Store:
-        async def get_binding(self, *, channel_id: str) -> dict[str, Any]:
-            assert channel_id == "channel-1"
-            return {}
-
-    class _Service:
-        def __init__(self) -> None:
-            self._config = _config(tmp_path)
-            self._store = _Store()
-            self._rest = rest
-            self._logger = logging.getLogger(__name__)
-            self._spawn_task = asyncio.create_task
-
-        async def _send_channel_message(
-            self, channel_id: str, payload: dict[str, Any]
-        ) -> dict[str, Any]:
-            return await rest.create_channel_message(
-                channel_id=channel_id,
-                payload=payload,
-            )
-
-        def _register_discord_turn_approval_context(self, **kwargs: Any) -> None:
-            _ = kwargs
-
-        def _clear_discord_turn_approval_context(self, **kwargs: Any) -> None:
-            _ = kwargs
-
-        def _resolve_agent_state(self, binding: Any) -> tuple[str, Optional[str]]:
-            _ = binding
-            return "codex", None
-
-        def _runtime_agent_for_binding(self, binding: Any) -> str:
-            _ = binding
-            return "codex"
-
-    async def _fake_begin(*args: Any, **kwargs: Any) -> Any:
-        _ = args, kwargs
-        return started_execution
-
-    async def _fake_finalize(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        _ = args, kwargs
-        return {
+    service, result, rest = await _run_interrupt_send_turn_harness(
+        monkeypatch,
+        tmp_path,
+        spawn_task=True,
+        finalize_result={
             "status": "ok",
             "assistant_text": "updated reply",
             "token_usage": None,
-        }
-
-    async def _fake_complete(*args: Any, **kwargs: Any) -> Any:
-        _ = args, kwargs
-        return SimpleNamespace(finalized=await _fake_finalize())
-
-    monkeypatch.setattr(
-        discord_message_turns_module,
-        "resolve_discord_thread_target",
-        lambda *args, **kwargs: (SimpleNamespace(), thread),
-    )
-    monkeypatch.setattr(
-        discord_message_turns_module,
-        "begin_runtime_thread_execution",
-        _fake_begin,
-    )
-    monkeypatch.setattr(
-        discord_message_turns_module,
-        "complete_managed_thread_execution",
-        _fake_complete,
-    )
-
-    service = _Service()
-    discord_progress_leases_module.request_discord_turn_progress_reuse(
-        service,
-        thread_target_id="thread-1",
+        },
+        prompt_text="next prompt",
         source_message_id="m-2",
-        acknowledgement="Message received. Switching to it now...",
-    )
-    discord_message_turns_module._stash_discord_reusable_progress_message(
-        service,
-        thread_target_id="thread-1",
-        source_message_id="m-2",
-        channel_id="channel-1",
-        message_id="preview-1",
-    )
-
-    result = (
-        await discord_message_turns_module._run_discord_orchestrated_turn_for_message(
-            service,
-            workspace_root=tmp_path,
-            prompt_text="next prompt",
-            source_message_id="m-2",
-            agent="codex",
-            model_override=None,
-            reasoning_effort=None,
-            session_key="session-2",
-            orchestrator_channel_key="channel-1",
-            managed_thread_surface_key=None,
-            mode="pma",
-            pma_enabled=True,
-            execution_prompt="<user_message>\nnext prompt\n</user_message>\n",
-            public_execution_error="Discord PMA turn failed",
-            timeout_error="Discord PMA turn timed out",
-            interrupted_error="Discord PMA turn interrupted",
-            approval_mode="never",
-            sandbox_policy="dangerFullAccess",
-            max_actions=12,
-            min_edit_interval_seconds=1.0,
-            heartbeat_interval_seconds=2.0,
-        )
+        session_key="session-2",
+        pre_run=_stash,
     )
 
     assert result.preview_message_id == "preview-1"
@@ -703,104 +644,10 @@ async def test_orchestrated_turn_interrupt_send_acknowledges_when_progress_messa
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    thread = SimpleNamespace(thread_target_id="thread-1")
-    started_execution = SimpleNamespace(
-        execution=SimpleNamespace(status="running"),
-        thread=thread,
-    )
-
-    class _Store:
-        async def get_binding(self, *, channel_id: str) -> dict[str, Any]:
-            assert channel_id == "channel-1"
-            return {}
-
-    class _Service:
-        def __init__(self) -> None:
-            self._config = _config(tmp_path)
-            self._store = _Store()
-            self._rest = _FakeRest()
-            self._logger = logging.getLogger(__name__)
-
-        async def _send_channel_message(
-            self, channel_id: str, payload: dict[str, Any]
-        ) -> dict[str, Any]:
-            _ = channel_id, payload
-            raise RuntimeError("progress send failed")
-
-        def _register_discord_turn_approval_context(self, **kwargs: Any) -> None:
-            _ = kwargs
-
-        def _clear_discord_turn_approval_context(self, **kwargs: Any) -> None:
-            _ = kwargs
-
-        def _resolve_agent_state(self, binding: Any) -> tuple[str, Optional[str]]:
-            _ = binding
-            return "codex", None
-
-        def _runtime_agent_for_binding(self, binding: Any) -> str:
-            _ = binding
-            return "codex"
-
-    async def _fake_begin(*args: Any, **kwargs: Any) -> Any:
-        _ = args, kwargs
-        return started_execution
-
-    async def _fake_finalize(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        _ = args, kwargs
-        return {"status": "interrupted", "error": "Discord PMA turn interrupted"}
-
-    async def _fake_complete(*args: Any, **kwargs: Any) -> Any:
-        _ = args, kwargs
-        return SimpleNamespace(finalized=await _fake_finalize())
-
-    monkeypatch.setattr(
-        discord_message_turns_module,
-        "resolve_discord_thread_target",
-        lambda *args, **kwargs: (SimpleNamespace(), thread),
-    )
-    monkeypatch.setattr(
-        discord_message_turns_module,
-        "begin_runtime_thread_execution",
-        _fake_begin,
-    )
-    monkeypatch.setattr(
-        discord_message_turns_module,
-        "complete_managed_thread_execution",
-        _fake_complete,
-    )
-
-    service = _Service()
-    discord_progress_leases_module.request_discord_turn_progress_reuse(
-        service,
-        thread_target_id="thread-1",
-        source_message_id="m-2",
-        acknowledgement="Message received. Switching to it now...",
-    )
-
-    result = (
-        await discord_message_turns_module._run_discord_orchestrated_turn_for_message(
-            service,
-            workspace_root=tmp_path,
-            prompt_text="first prompt",
-            source_message_id="m-1",
-            agent="codex",
-            model_override=None,
-            reasoning_effort=None,
-            session_key="session-1",
-            orchestrator_channel_key="channel-1",
-            managed_thread_surface_key=None,
-            mode="pma",
-            pma_enabled=True,
-            execution_prompt="<user_message>\nfirst prompt\n</user_message>\n",
-            public_execution_error="Discord PMA turn failed",
-            timeout_error="Discord PMA turn timed out",
-            interrupted_error="Discord PMA turn interrupted",
-            approval_mode="never",
-            sandbox_policy="dangerFullAccess",
-            max_actions=12,
-            min_edit_interval_seconds=1.0,
-            heartbeat_interval_seconds=2.0,
-        )
+    service, result, _ = await _run_interrupt_send_turn_harness(
+        monkeypatch,
+        tmp_path,
+        send_channel_message_raises=True,
     )
 
     assert result.send_final_message is True
@@ -814,115 +661,17 @@ async def test_orchestrated_turn_interrupt_send_falls_back_when_progress_ack_edi
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    thread = SimpleNamespace(thread_target_id="thread-1")
-    started_execution = SimpleNamespace(
-        execution=SimpleNamespace(status="running"),
-        thread=thread,
-    )
-
-    class _Rest(_FakeRest):
+    class _EditFailingRest(_FakeRest):
         async def edit_channel_message(
             self, *, channel_id: str, message_id: str, payload: dict[str, Any]
         ) -> dict[str, Any]:
             _ = channel_id, message_id, payload
             raise RuntimeError("edit failed")
 
-    rest = _Rest()
-
-    class _Store:
-        async def get_binding(self, *, channel_id: str) -> dict[str, Any]:
-            assert channel_id == "channel-1"
-            return {}
-
-    class _Service:
-        def __init__(self) -> None:
-            self._config = _config(tmp_path)
-            self._store = _Store()
-            self._rest = rest
-            self._logger = logging.getLogger(__name__)
-
-        async def _send_channel_message(
-            self, channel_id: str, payload: dict[str, Any]
-        ) -> dict[str, Any]:
-            return await rest.create_channel_message(
-                channel_id=channel_id,
-                payload=payload,
-            )
-
-        def _register_discord_turn_approval_context(self, **kwargs: Any) -> None:
-            _ = kwargs
-
-        def _clear_discord_turn_approval_context(self, **kwargs: Any) -> None:
-            _ = kwargs
-
-        def _resolve_agent_state(self, binding: Any) -> tuple[str, Optional[str]]:
-            _ = binding
-            return "codex", None
-
-        def _runtime_agent_for_binding(self, binding: Any) -> str:
-            _ = binding
-            return "codex"
-
-    async def _fake_begin(*args: Any, **kwargs: Any) -> Any:
-        _ = args, kwargs
-        return started_execution
-
-    async def _fake_finalize(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        _ = args, kwargs
-        return {"status": "interrupted", "error": "Discord PMA turn interrupted"}
-
-    async def _fake_complete(*args: Any, **kwargs: Any) -> Any:
-        _ = args, kwargs
-        return SimpleNamespace(finalized=await _fake_finalize())
-
-    monkeypatch.setattr(
-        discord_message_turns_module,
-        "resolve_discord_thread_target",
-        lambda *args, **kwargs: (SimpleNamespace(), thread),
-    )
-    monkeypatch.setattr(
-        discord_message_turns_module,
-        "begin_runtime_thread_execution",
-        _fake_begin,
-    )
-    monkeypatch.setattr(
-        discord_message_turns_module,
-        "complete_managed_thread_execution",
-        _fake_complete,
-    )
-
-    service = _Service()
-    discord_progress_leases_module.request_discord_turn_progress_reuse(
-        service,
-        thread_target_id="thread-1",
-        source_message_id="m-2",
-        acknowledgement="Message received. Switching to it now...",
-    )
-
-    result = (
-        await discord_message_turns_module._run_discord_orchestrated_turn_for_message(
-            service,
-            workspace_root=tmp_path,
-            prompt_text="first prompt",
-            source_message_id="m-1",
-            agent="codex",
-            model_override=None,
-            reasoning_effort=None,
-            session_key="session-1",
-            orchestrator_channel_key="channel-1",
-            managed_thread_surface_key=None,
-            mode="pma",
-            pma_enabled=True,
-            execution_prompt="<user_message>\nfirst prompt\n</user_message>\n",
-            public_execution_error="Discord PMA turn failed",
-            timeout_error="Discord PMA turn timed out",
-            interrupted_error="Discord PMA turn interrupted",
-            approval_mode="never",
-            sandbox_policy="dangerFullAccess",
-            max_actions=12,
-            min_edit_interval_seconds=1.0,
-            heartbeat_interval_seconds=2.0,
-        )
+    service, result, rest = await _run_interrupt_send_turn_harness(
+        monkeypatch,
+        tmp_path,
+        rest=_EditFailingRest(),
     )
 
     assert result.send_final_message is True
