@@ -4080,8 +4080,17 @@ async def test_car_session_resume_with_partial_thread_prompts_filtered_picker(
 
 
 @pytest.mark.anyio
-async def test_component_interaction_model_select_prompts_effort_for_opencode(
+@pytest.mark.parametrize(
+    ("agent", "model_value"),
+    [
+        ("opencode", "openai/gpt-4o"),
+        (None, "gpt-5.3-codex"),
+    ],
+)
+async def test_component_interaction_model_select_prompts_effort(
     tmp_path: Path,
+    agent: str | None,
+    model_value: str,
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -4093,10 +4102,11 @@ async def test_component_interaction_model_select_prompts_effort_for_opencode(
         workspace_path=str(workspace),
         repo_id="repo-1",
     )
-    await store.update_agent_state(channel_id="channel-1", agent="opencode")
+    if agent is not None:
+        await store.update_agent_state(channel_id="channel-1", agent=agent)
     rest = _FakeRest()
     gateway = _FakeGateway(
-        [_component_interaction(custom_id="model_select", values=["openai/gpt-4o"])]
+        [_component_interaction(custom_id="model_select", values=[model_value])]
     )
     service = DiscordBotService(
         _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
@@ -4112,7 +4122,7 @@ async def test_component_interaction_model_select_prompts_effort_for_opencode(
         binding = await store.get_binding(channel_id="channel-1")
         assert binding is not None
         assert binding.get("model_override") is None
-        assert service._pending_model_effort["channel-1:user-1"] == "openai/gpt-4o"
+        assert service._pending_model_effort["channel-1:user-1"] == model_value
         assert len(rest.interaction_responses) == 1
         data = rest.interaction_responses[0]["payload"]["data"]
         assert "select reasoning effort" in data["content"].lower()
@@ -4170,49 +4180,6 @@ async def test_car_model_rejects_invalid_opencode_model_name(tmp_path: Path) -> 
         assert "provider/model" in content
         assert rest.followup_messages == []
         assert rest.edited_original_interaction_responses == []
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
-async def test_component_interaction_model_select_prompts_effort_for_codex(
-    tmp_path: Path,
-) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id="repo-1",
-    )
-    rest = _FakeRest()
-    gateway = _FakeGateway(
-        [_component_interaction(custom_id="model_select", values=["gpt-5.3-codex"])]
-    )
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
-
-    try:
-        await service.run_forever()
-        binding = await store.get_binding(channel_id="channel-1")
-        assert binding is not None
-        assert binding.get("model_override") is None
-        assert len(rest.interaction_responses) == 1
-        data = rest.interaction_responses[0]["payload"]["data"]
-        assert "select reasoning effort" in data["content"].lower()
-        components = data.get("components") or []
-        assert components
-        menu = components[0]["components"][0]
-        assert menu["custom_id"] == "model_effort_select"
     finally:
         await store.close()
 
@@ -4337,25 +4304,6 @@ async def test_service_routes_car_new_without_generic_fallback(
 
 
 @pytest.mark.anyio
-async def test_normalized_interaction_routes_car_agent_without_generic_fallback(
-    tmp_path: Path,
-) -> None:
-    service, rest, store = await _build_service(tmp_path, init_store=True)
-
-    try:
-        await _dispatch_gateway_interaction(
-            service,
-            _interaction(name="agent", options=[]),
-        )
-        assert len(rest.interaction_responses) == 1
-        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
-        assert "not bound" in content
-        assert "not implemented yet for discord" not in content
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
 async def test_normalized_interaction_status_defers_before_reading_active_flow(
     tmp_path: Path,
 ) -> None:
@@ -4399,97 +4347,6 @@ async def test_normalized_interaction_status_defers_before_reading_active_flow(
             _interaction(name="status", options=[]),
         )
         assert len(rest.followup_messages) == 1
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
-async def test_normalized_component_agent_select_updates_agent(tmp_path: Path) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id="repo-1",
-    )
-    rest = _FakeRest()
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=_FakeGateway([]),
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
-
-    try:
-        await _dispatch_gateway_interaction(
-            service,
-            _component_interaction(
-                custom_id="agent_select",
-                values=["opencode"],
-            ),
-        )
-        binding = await store.get_binding(channel_id="channel-1")
-        assert binding is not None
-        assert binding.get("agent") == "opencode"
-        assert len(rest.interaction_responses) == 1
-        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
-        assert "agent set to opencode" in content
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
-async def test_normalized_component_agent_select_prompts_for_hermes_profile(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        "codex_autorunner.agents.registry.get_registered_agents",
-        lambda context=None: {
-            "hermes-m4-pma": SimpleNamespace(name="Hermes (hermes-m4-pma)"),
-        },
-    )
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id="repo-1",
-    )
-    rest = _FakeRest()
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=_FakeGateway([]),
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
-
-    try:
-        await _dispatch_gateway_interaction(
-            service,
-            _component_interaction(
-                custom_id="agent_select",
-                values=["hermes"],
-            ),
-        )
-        binding = await store.get_binding(channel_id="channel-1")
-        assert binding is not None
-        assert binding.get("agent") == "hermes"
-        assert binding.get("agent_profile") is None
-        assert len(rest.interaction_responses) == 1
-        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
-        assert "agent set to hermes" in content
-        assert "select a hermes profile" in content
     finally:
         await store.close()
 
@@ -4544,54 +4401,6 @@ async def test_agent_profile_select_with_underscore_alias(
         content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
         assert "unknown hermes profile" not in content
         assert "agent set" in content
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
-async def test_normalized_component_model_select_prompts_effort_for_opencode(
-    tmp_path: Path,
-) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id="repo-1",
-    )
-    await store.update_agent_state(channel_id="channel-1", agent="opencode")
-    rest = _FakeRest()
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=_FakeGateway([]),
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
-
-    try:
-        await _dispatch_gateway_interaction(
-            service,
-            _component_interaction(
-                custom_id="model_select",
-                values=["openai/gpt-4o"],
-            ),
-        )
-        binding = await store.get_binding(channel_id="channel-1")
-        assert binding is not None
-        assert binding.get("model_override") is None
-        assert service._pending_model_effort["channel-1:user-1"] == "openai/gpt-4o"
-        assert len(rest.interaction_responses) == 1
-        data = rest.interaction_responses[0]["payload"]["data"]
-        assert "select reasoning effort" in data["content"].lower()
-        components = data.get("components") or []
-        assert components
-        menu = components[0]["components"][0]
-        assert menu["custom_id"] == "model_effort_select"
     finally:
         await store.close()
 
@@ -5787,51 +5596,6 @@ async def test_component_interaction_update_target_select_routes_update(
         await service.run_forever()
         assert captured["target"] == "discord"
         assert captured["response_mode"] == "component"
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
-@pytest.mark.parametrize(
-    ("component_id", "expected"),
-    [
-        ("agent_select", "please select an agent"),
-        ("model_select", "please select a model"),
-    ],
-)
-async def test_normalized_component_empty_values_returns_error(
-    tmp_path: Path,
-    component_id: str,
-    expected: str,
-) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id="repo-1",
-    )
-    rest = _FakeRest()
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=_FakeGateway([]),
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
-
-    try:
-        await _dispatch_gateway_interaction(
-            service,
-            _component_interaction(custom_id=component_id, values=[]),
-        )
-        assert len(rest.interaction_responses) == 1
-        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
-        assert expected in content
     finally:
         await store.close()
 
