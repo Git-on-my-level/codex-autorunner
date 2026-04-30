@@ -11,7 +11,7 @@ from typing import Any, Iterable, Optional
 from ...core.app_server_command import (
     DEFAULT_APP_SERVER_COMMAND as CORE_DEFAULT_APP_SERVER_COMMAND,
 )
-from ...core.app_server_command import resolve_app_server_command
+from ...core.app_server_command import resolve_app_server_command_with_source
 from ..chat.approval_modes import resolve_approval_mode_policies
 from ..chat.collaboration_policy import (
     CollaborationPolicy,
@@ -596,10 +596,18 @@ class TelegramBotConfig:
                 "(.sqlite3). Update your config to .codex-autorunner/telegram_state.sqlite3"
             )
 
-        app_server_command = resolve_app_server_command(
-            cfg.get("app_server_command"),
-            fallback=DEFAULT_APP_SERVER_COMMAND,
+        app_server_command_env = (
+            str(cfg.get("app_server_command_env", "CAR_APP_SERVER_COMMAND")).strip()
+            or "CAR_APP_SERVER_COMMAND"
         )
+        telegram_env_names = (app_server_command_env, "CAR_TELEGRAM_APP_SERVER_COMMAND")
+        app_server_command = resolve_app_server_command_with_source(
+            cfg.get("app_server_command"),
+            env=env,
+            env_names=telegram_env_names,
+            ignored_env_names=(),
+            fallback=DEFAULT_APP_SERVER_COMMAND,
+        ).command
 
         app_server_raw_value = cfg.get("app_server")
         app_server_raw: dict[str, Any] = (

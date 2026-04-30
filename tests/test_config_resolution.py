@@ -1052,8 +1052,10 @@ def test_load_repo_config_fails_when_manifest_yaml_is_invalid(tmp_path: Path) ->
 
 
 def test_load_repo_config_preserves_explicit_empty_app_server_command(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.delenv("CAR_CODEX_APP_SERVER_COMMAND", raising=False)
+    monkeypatch.delenv("CAR_APP_SERVER_COMMAND", raising=False)
     hub_root = tmp_path / "hub"
     hub_root.mkdir()
     write_test_config(hub_root / CONFIG_FILENAME, {"mode": "hub"})
@@ -1067,6 +1069,51 @@ def test_load_repo_config_preserves_explicit_empty_app_server_command(
     config = load_repo_config(repo_root, hub_path=hub_root)
 
     assert config.app_server.command == []
+
+
+def test_load_repo_config_uses_codex_app_server_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CAR_CODEX_APP_SERVER_COMMAND", "/opt/codex app-server")
+    monkeypatch.setenv(
+        "CAR_TELEGRAM_APP_SERVER_COMMAND", "/stale/telegram/codex app-server"
+    )
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    write_test_config(hub_root / CONFIG_FILENAME, {"mode": "hub"})
+    repo_root = hub_root / "repo"
+    repo_root.mkdir()
+
+    config = load_repo_config(repo_root, hub_path=hub_root)
+
+    assert config.app_server.command == ["/opt/codex", "app-server"]
+    assert config.app_server.command_source == "env:CAR_CODEX_APP_SERVER_COMMAND"
+    assert config.app_server.ignored_command_env == ("CAR_TELEGRAM_APP_SERVER_COMMAND",)
+
+
+def test_load_repo_config_ignores_telegram_app_server_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("CAR_CODEX_APP_SERVER_COMMAND", raising=False)
+    monkeypatch.delenv("CAR_APP_SERVER_COMMAND", raising=False)
+    monkeypatch.setenv(
+        "CAR_TELEGRAM_APP_SERVER_COMMAND", "/stale/telegram/codex app-server"
+    )
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    write_test_config(hub_root / CONFIG_FILENAME, {"mode": "hub"})
+    repo_root = hub_root / "repo"
+    repo_root.mkdir()
+    write_test_config(
+        repo_root / REPO_OVERRIDE_FILENAME,
+        {"app_server": {"command": ["/cfg/codex", "app-server"]}},
+    )
+
+    config = load_repo_config(repo_root, hub_path=hub_root)
+
+    assert config.app_server.command == ["/cfg/codex", "app-server"]
+    assert config.app_server.command_source == "config"
+    assert config.app_server.ignored_command_env == ("CAR_TELEGRAM_APP_SERVER_COMMAND",)
 
 
 def test_load_hub_config_raises_when_no_config_in_git_repo(

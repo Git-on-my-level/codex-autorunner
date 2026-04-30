@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shlex
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Mapping, Optional, Sequence, TypedDict
@@ -47,6 +49,7 @@ from .utils import resolve_executable
 logger = logging.getLogger(__name__)
 
 DEFAULT_MAX_TEXT_CHARS = 800
+_CODEX_VERSION_TIMEOUT_SECONDS = 5.0
 TicketFlowRunSelection = Literal["active", "authoritative", "non_terminal", "paused"]
 
 
@@ -257,6 +260,54 @@ def _trim_extra(extra: Any, limit: Optional[int]) -> Any:
         "note": "extra omitted due to size",
         "preview": _truncate(raw, limit),
     }
+
+
+def _codex_version_command(app_server_command: Sequence[str]) -> list[str]:
+    command = [str(part) for part in app_server_command if str(part).strip()]
+    try:
+        app_server_index = command.index("app-server")
+    except ValueError:
+        app_server_index = 1 if len(command) > 1 else len(command)
+    return command[:app_server_index] + ["--version"]
+
+
+def _codex_runtime_preflight_details(config: Any, app_cmd: Sequence[str]) -> list[str]:
+    details = [f"command: {shlex.join([str(part) for part in app_cmd])}"]
+    source = getattr(getattr(config, "app_server", None), "command_source", None)
+    if source:
+        details.append(f"source: {source}")
+    model = getattr(config, "codex_model", None)
+    if model:
+        details.append(f"model: {model}")
+    app_binary = app_cmd[0] if app_cmd else None
+    resolved = resolve_executable(app_binary) if app_binary else None
+    if resolved:
+        details.append(f"executable: {resolved}")
+    elif app_binary:
+        details.append(f"executable: not found ({app_binary})")
+    version_command = _codex_version_command(app_cmd)
+    if version_command:
+        try:
+            output = subprocess.check_output(
+                version_command,
+                stderr=subprocess.STDOUT,
+                text=True,
+                timeout=_CODEX_VERSION_TIMEOUT_SECONDS,
+            )
+            version = " ".join(output.split())
+            details.append(f"version: {version or 'no output'}")
+        except (OSError, subprocess.SubprocessError) as exc:
+            details.append(f"version: unavailable ({type(exc).__name__}: {exc})")
+    ignored_env = getattr(
+        getattr(config, "app_server", None), "ignored_command_env", ()
+    )
+    if ignored_env:
+        details.append(
+            "ignored surface env: " + ", ".join(str(name) for name in ignored_env)
+        )
+    elif os.environ.get("CAR_TELEGRAM_APP_SERVER_COMMAND"):
+        details.append("ignored surface env: CAR_TELEGRAM_APP_SERVER_COMMAND")
+    return details
 
 
 def _dispatch_dict(
@@ -737,9 +788,11 @@ def ticket_flow_preflight(repo_root: Path, *, config: Any = None) -> PreflightRe
     agents = sorted({doc.frontmatter.agent for doc in ticket_docs})
     agent_errors: list[str] = []
     agent_warnings: list[str] = []
+    codex_details: list[str] = []
 
     if "codex" in agents:
         app_cmd = getattr(getattr(config, "app_server", None), "command", None) or []
+        codex_details = _codex_runtime_preflight_details(config, app_cmd)
         app_binary = app_cmd[0] if app_cmd else None
         resolved = resolve_executable(app_binary) if app_binary else None
         if config is not None and not resolved:
@@ -777,7 +830,7 @@ def ticket_flow_preflight(repo_root: Path, *, config: Any = None) -> PreflightRe
                 check_id="agents",
                 status="error",
                 message="Agent backend validation failed.",
-                details=agent_errors,
+                details=agent_errors + codex_details,
             )
         )
     elif agent_warnings:
@@ -786,7 +839,7 @@ def ticket_flow_preflight(repo_root: Path, *, config: Any = None) -> PreflightRe
                 check_id="agents",
                 status="warning",
                 message="Some agents could not be verified automatically.",
-                details=agent_warnings,
+                details=agent_warnings + codex_details,
             )
         )
     else:
@@ -795,6 +848,7 @@ def ticket_flow_preflight(repo_root: Path, *, config: Any = None) -> PreflightRe
                 check_id="agents",
                 status="ok",
                 message="All referenced agents appear available.",
+                details=codex_details,
             )
         )
 

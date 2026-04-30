@@ -61,8 +61,9 @@ When `usage.global_cache_root` is omitted from config, CAR defaults it to match 
 
 | Env var | Purpose | Default / config key |
 | --- | --- | --- |
-| `CAR_APP_SERVER_COMMAND` | Override the command used to launch the app-server subprocess. Checked first; takes precedence over per-integration env vars and config. | Falls back to `("codex", "app-server")`. |
-| `CAR_TELEGRAM_APP_SERVER_COMMAND` | Legacy per-Telegram override for the app-server command. Honored as a fallback when `CAR_APP_SERVER_COMMAND` is unset. | Configurable via `telegram_bot.app_server_command_env`. |
+| `CAR_CODEX_APP_SERVER_COMMAND` | Override the command used to launch Codex app-server subprocesses for Codex-backed runtimes such as ticket-flow. Checked before `CAR_APP_SERVER_COMMAND` and config. | Falls back to `("codex", "app-server")`. |
+| `CAR_APP_SERVER_COMMAND` | Legacy generic override for Codex app-server subprocesses. Checked after `CAR_CODEX_APP_SERVER_COMMAND` and before config. | Falls back to `("codex", "app-server")`. |
+| `CAR_TELEGRAM_APP_SERVER_COMMAND` | Legacy per-Telegram override for the Telegram app-server command. Ignored by non-Telegram runtimes, including ticket-flow. | Configurable via `telegram_bot.app_server_command_env`. |
 | `CAR_OPENCODE_COMMAND` | Override the OpenCode binary command path for the Telegram integration. | Overrides `telegram_bot.opencode_command`. |
 | `CODEX_BIN` | Explicit path to the Codex CLI binary (protocol schema generation). | Falls back to PATH resolution of `codex`. |
 | `OPENCODE_BIN` | Explicit path to the OpenCode binary (protocol schema generation). | Falls back to PATH resolution of `opencode`. |
@@ -72,9 +73,10 @@ When `usage.global_cache_root` is omitted from config, CAR defaults it to match 
 Env overrides that take precedence over config:
 
 - `CAR_OPENCODE_COMMAND` overrides `telegram_bot.opencode_command`
-- `CAR_APP_SERVER_COMMAND` overrides `telegram_bot.app_server_command` (checked first)
-- `CAR_TELEGRAM_APP_SERVER_COMMAND` is still honored as a fallback when the global env is unset
-  - The preferred env var name is configurable via `telegram_bot.app_server_command_env` (default `CAR_APP_SERVER_COMMAND`).
+- `CAR_CODEX_APP_SERVER_COMMAND` overrides `app_server.command` for Codex-backed runtimes (checked first)
+- `CAR_APP_SERVER_COMMAND` is still honored as a generic fallback when `CAR_CODEX_APP_SERVER_COMMAND` is unset
+- `CAR_TELEGRAM_APP_SERVER_COMMAND` is only honored by Telegram-specific config/runtime paths
+  - The preferred Telegram env var name is configurable via `telegram_bot.app_server_command_env` (default `CAR_APP_SERVER_COMMAND`).
 
 Telegram auth envs (names configurable via `telegram_bot.*_env`):
 
