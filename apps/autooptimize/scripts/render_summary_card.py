@@ -102,7 +102,9 @@ def build_summary_markdown(payload: dict, rows: list[dict]) -> str:
 
 
 def build_summary_png(payload: dict, rows: list[dict]) -> bytes:
+    metric = payload["metric"]
     baseline = payload["baseline"]
+    best = payload["best"] if isinstance(payload["best"], dict) else None
     points = []
     if isinstance(baseline, dict):
         points.append(
@@ -125,16 +127,55 @@ def build_summary_png(payload: dict, rows: list[dict]) -> bytes:
 
     width = 1000
     height = 580
-    chart_left = 80
-    chart_top = 185
-    chart_width = 850
-    chart_height = 300
+    chart_left = 96
+    chart_top = 248
+    chart_width = 812
+    chart_height = 238
     image = _new_image(width, height, (248, 250, 252))
     _fill_rect(image, width, 24, 24, width - 48, height - 48, (255, 255, 255))
     _rect(image, width, 24, 24, width - 48, height - 48, (219, 228, 240))
-    _fill_rect(image, width, 50, 54, 250, 28, (15, 118, 110))
-    _fill_rect(image, width, 50, 96, 520, 10, (203, 213, 225))
-    _fill_rect(image, width, 50, 126, 420, 10, (226, 232, 240))
+
+    title_color = (15, 23, 42)
+    body_color = (51, 65, 85)
+    muted_color = (100, 116, 139)
+    accent_color = (15, 118, 110)
+    _draw_text(image, width, 50, 54, "AUTOOPTIMIZE SUMMARY", title_color, scale=3)
+    for line_index, line in enumerate(_wrap_text(str(payload["goal"]), 82)[:2]):
+        _draw_text(
+            image,
+            width,
+            50,
+            92 + line_index * 18,
+            line,
+            body_color,
+            scale=2,
+        )
+
+    baseline_text = format_metric_value(
+        baseline.get("value") if isinstance(baseline, dict) else None,
+        metric.get("unit"),
+    )
+    best_text = format_metric_value(
+        best.get("value") if best else None, metric.get("unit")
+    )
+    delta_text = "N/A"
+    if payload["improvement_absolute"] is not None:
+        delta_text = f"{payload['improvement_absolute']:.0f}"
+        if metric.get("unit"):
+            delta_text += f" {metric.get('unit')}"
+        if payload["improvement_percent"] is not None:
+            delta_text += f" ({payload['improvement_percent']:.2f}%)"
+
+    summary_items = [
+        ("METRIC", str(metric.get("name") or "metric")),
+        ("BASELINE", baseline_text),
+        ("BEST", best_text),
+        ("IMPROVEMENT", delta_text),
+    ]
+    for index, (label, value) in enumerate(summary_items):
+        x = 50 + index * 230
+        _draw_text(image, width, x, 140, label, muted_color, scale=1)
+        _draw_text(image, width, x, 158, _truncate(value, 18), title_color, scale=2)
 
     values = [point["value"] for point in points] or [0.0]
     min_value = min(values)
@@ -157,17 +198,26 @@ def build_summary_png(payload: dict, rows: list[dict]) -> bytes:
 
     counts = Counter(row["decision"] for row in rows)
     legend_items = [
-        ((22, 163, 74), counts.get("keep", 0)),
-        ((220, 38, 38), counts.get("discard", 0)),
-        ((217, 119, 6), counts.get("pivot", 0)),
-        ((100, 116, 139), counts.get("blocked", 0)),
+        ("KEEP", (22, 163, 74), counts.get("keep", 0)),
+        ("DISCARD", (220, 38, 38), counts.get("discard", 0)),
+        ("PIVOT", (217, 119, 6), counts.get("pivot", 0)),
+        ("BLOCKED", (100, 116, 139), counts.get("blocked", 0)),
     ]
-    legend_x = 620
-    for index, (color, count) in enumerate(legend_items):
-        bar_height = max(8, count * 18)
-        x = legend_x + index * 70
-        _fill_rect(image, width, x, 110 - bar_height, 36, bar_height, color)
-        _fill_rect(image, width, x, 122, 36, 6, color)
+    legend_x = 96
+    for index, (label, color, count) in enumerate(legend_items):
+        x = legend_x + index * 142
+        _fill_rect(image, width, x, 207, 14, 14, color)
+        _draw_text(image, width, x + 22, 207, f"{label} {count}", body_color, scale=1)
+
+    _draw_text(
+        image,
+        width,
+        726,
+        207,
+        f"ITERATIONS {payload['iterations_count']}",
+        body_color,
+        scale=1,
+    )
 
     _fill_rect(
         image, width, chart_left, chart_top, chart_width, chart_height, (248, 250, 252)
@@ -178,6 +228,18 @@ def build_summary_png(payload: dict, rows: list[dict]) -> bytes:
     for grid_index in range(1, 5):
         y = chart_top + grid_index * chart_height // 5
         _line(image, width, chart_left, y, chart_left + chart_width, y, (226, 232, 240))
+    _draw_text(
+        image, width, 50, chart_top - 4, _short_number(max_value), muted_color, scale=1
+    )
+    _draw_text(
+        image,
+        width,
+        50,
+        chart_top + chart_height - 6,
+        _short_number(min_value),
+        muted_color,
+        scale=1,
+    )
 
     previous: tuple[int, int] | None = None
     for index, point in enumerate(points):
@@ -186,9 +248,78 @@ def build_summary_png(payload: dict, rows: list[dict]) -> bytes:
         if previous is not None:
             _wide_line(image, width, previous[0], previous[1], x, y, (15, 118, 110))
         _marker(image, width, x, y, point["decision"])
+        label = str(point["label"])
+        value_label = _short_number(float(point["value"]))
+        _draw_text(
+            image,
+            width,
+            max(chart_left, x - 18),
+            min(chart_top + chart_height + 22, y + 16),
+            label,
+            body_color,
+            scale=1,
+        )
+        _draw_text(
+            image,
+            width,
+            max(chart_left, x - 32),
+            max(chart_top + 8, y - 22),
+            value_label,
+            title_color,
+            scale=1,
+        )
         previous = (x, y)
 
+    hint = (
+        "LOWER IS BETTER" if metric.get("direction") == "lower" else "HIGHER IS BETTER"
+    )
+    _draw_text(image, width, chart_left, 522, hint, accent_color, scale=1)
+    guard_counts = payload.get("guard_status_counts") or {}
+    guard_text = (
+        " ".join(
+            f"{name.upper()}={guard_counts[name]}" for name in sorted(guard_counts)
+        )
+        if guard_counts
+        else "GUARDS NONE"
+    )
+    _draw_text(image, width, 690, 522, _truncate(guard_text, 34), muted_color, scale=1)
+
     return _encode_png(width, height, image)
+
+
+def _truncate(text: str, max_chars: int) -> str:
+    text = " ".join(str(text).split())
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 1].rstrip() + "+"
+
+
+def _wrap_text(text: str, max_chars: int) -> list[str]:
+    words = str(text).split()
+    if not words:
+        return [""]
+    lines: list[str] = []
+    current = ""
+    for word in words:
+        candidate = word if not current else f"{current} {word}"
+        if len(candidate) <= max_chars:
+            current = candidate
+            continue
+        if current:
+            lines.append(current)
+        current = word
+    if current:
+        lines.append(current)
+    return lines
+
+
+def _short_number(value: float) -> str:
+    absolute = abs(value)
+    if absolute >= 1000:
+        return f"{value / 1000:.1f}K"
+    if value == int(value):
+        return str(int(value))
+    return f"{value:.1f}"
 
 
 def _new_image(width: int, height: int, color: tuple[int, int, int]) -> bytearray:
@@ -220,6 +351,41 @@ def _fill_rect(
     for row in range(y, y + rect_height):
         for col in range(x, x + rect_width):
             _set_pixel(image, width, col, row, color)
+
+
+def _draw_text(
+    image: bytearray,
+    width: int,
+    x: int,
+    y: int,
+    text: str,
+    color: tuple[int, int, int],
+    *,
+    scale: int = 1,
+) -> None:
+    cursor_x = x
+    for char in str(text).upper():
+        if char == " ":
+            cursor_x += 4 * scale
+            continue
+        glyph = _FONT_5X7.get(char, _FONT_5X7.get("?"))
+        if glyph is None:
+            cursor_x += 6 * scale
+            continue
+        for row_index, row_bits in enumerate(glyph):
+            for col_index, bit in enumerate(row_bits):
+                if bit != "1":
+                    continue
+                _fill_rect(
+                    image,
+                    width,
+                    cursor_x + col_index * scale,
+                    y + row_index * scale,
+                    scale,
+                    scale,
+                    color,
+                )
+        cursor_x += 6 * scale
 
 
 def _rect(
@@ -329,6 +495,59 @@ def _encode_png(width: int, height: int, pixels: bytearray) -> bytes:
         + chunk(b"IDAT", zlib.compress(bytes(rows), level=9))
         + chunk(b"IEND", b"")
     )
+
+
+_FONT_5X7: dict[str, tuple[str, ...]] = {
+    "A": ("01110", "10001", "10001", "11111", "10001", "10001", "10001"),
+    "B": ("11110", "10001", "10001", "11110", "10001", "10001", "11110"),
+    "C": ("01111", "10000", "10000", "10000", "10000", "10000", "01111"),
+    "D": ("11110", "10001", "10001", "10001", "10001", "10001", "11110"),
+    "E": ("11111", "10000", "10000", "11110", "10000", "10000", "11111"),
+    "F": ("11111", "10000", "10000", "11110", "10000", "10000", "10000"),
+    "G": ("01111", "10000", "10000", "10011", "10001", "10001", "01111"),
+    "H": ("10001", "10001", "10001", "11111", "10001", "10001", "10001"),
+    "I": ("11111", "00100", "00100", "00100", "00100", "00100", "11111"),
+    "J": ("00111", "00010", "00010", "00010", "10010", "10010", "01100"),
+    "K": ("10001", "10010", "10100", "11000", "10100", "10010", "10001"),
+    "L": ("10000", "10000", "10000", "10000", "10000", "10000", "11111"),
+    "M": ("10001", "11011", "10101", "10101", "10001", "10001", "10001"),
+    "N": ("10001", "11001", "10101", "10011", "10001", "10001", "10001"),
+    "O": ("01110", "10001", "10001", "10001", "10001", "10001", "01110"),
+    "P": ("11110", "10001", "10001", "11110", "10000", "10000", "10000"),
+    "Q": ("01110", "10001", "10001", "10001", "10101", "10010", "01101"),
+    "R": ("11110", "10001", "10001", "11110", "10100", "10010", "10001"),
+    "S": ("01111", "10000", "10000", "01110", "00001", "00001", "11110"),
+    "T": ("11111", "00100", "00100", "00100", "00100", "00100", "00100"),
+    "U": ("10001", "10001", "10001", "10001", "10001", "10001", "01110"),
+    "V": ("10001", "10001", "10001", "10001", "10001", "01010", "00100"),
+    "W": ("10001", "10001", "10001", "10101", "10101", "10101", "01010"),
+    "X": ("10001", "10001", "01010", "00100", "01010", "10001", "10001"),
+    "Y": ("10001", "10001", "01010", "00100", "00100", "00100", "00100"),
+    "Z": ("11111", "00001", "00010", "00100", "01000", "10000", "11111"),
+    "0": ("01110", "10001", "10011", "10101", "11001", "10001", "01110"),
+    "1": ("00100", "01100", "00100", "00100", "00100", "00100", "01110"),
+    "2": ("01110", "10001", "00001", "00010", "00100", "01000", "11111"),
+    "3": ("11110", "00001", "00001", "01110", "00001", "00001", "11110"),
+    "4": ("00010", "00110", "01010", "10010", "11111", "00010", "00010"),
+    "5": ("11111", "10000", "10000", "11110", "00001", "00001", "11110"),
+    "6": ("01110", "10000", "10000", "11110", "10001", "10001", "01110"),
+    "7": ("11111", "00001", "00010", "00100", "01000", "01000", "01000"),
+    "8": ("01110", "10001", "10001", "01110", "10001", "10001", "01110"),
+    "9": ("01110", "10001", "10001", "01111", "00001", "00001", "01110"),
+    ".": ("00000", "00000", "00000", "00000", "00000", "01100", "01100"),
+    ",": ("00000", "00000", "00000", "00000", "01100", "00100", "01000"),
+    ":": ("00000", "01100", "01100", "00000", "01100", "01100", "00000"),
+    ";": ("00000", "01100", "01100", "00000", "01100", "00100", "01000"),
+    "(": ("00010", "00100", "01000", "01000", "01000", "00100", "00010"),
+    ")": ("01000", "00100", "00010", "00010", "00010", "00100", "01000"),
+    "%": ("11001", "11010", "00010", "00100", "01000", "01011", "10011"),
+    "+": ("00000", "00100", "00100", "11111", "00100", "00100", "00000"),
+    "-": ("00000", "00000", "00000", "11111", "00000", "00000", "00000"),
+    "/": ("00001", "00010", "00010", "00100", "01000", "01000", "10000"),
+    "=": ("00000", "00000", "11111", "00000", "11111", "00000", "00000"),
+    "#": ("01010", "01010", "11111", "01010", "11111", "01010", "01010"),
+    "?": ("01110", "10001", "00001", "00010", "00100", "00000", "00100"),
+}
 
 
 if __name__ == "__main__":
