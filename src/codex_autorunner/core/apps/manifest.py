@@ -13,6 +13,7 @@ _SUPPORTED_SCHEMA_VERSIONS = {1}
 _SUPPORTED_HOOK_POINTS = {
     "after_ticket_done",
     "after_flow_terminal",
+    "after_flow_archive",
     "before_chat_wrapup",
 }
 _SUPPORTED_OUTPUT_KINDS = {"image", "markdown", "text", "json", "html"}
@@ -59,6 +60,7 @@ class AppHookEntry:
     when: Dict[str, Any] = dataclasses.field(default_factory=dict)
     failure: str = "warn"
     artifacts: List[str] = dataclasses.field(default_factory=list)
+    cleanup_paths: List[str] = dataclasses.field(default_factory=list)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -212,11 +214,20 @@ def _parse_hook_entry(
         validate_app_path(art_str)
         artifacts.append(str(PurePosixPath(art_str)))
 
+    cleanup_paths: List[str] = []
+    for i, cleanup_path in enumerate(
+        _require_list(data.get("cleanup_paths", []), f"{context}.cleanup_paths")
+    ):
+        cleanup_path_str = _require_str(cleanup_path, f"{context}.cleanup_paths[{i}]")
+        validate_app_glob(cleanup_path_str)
+        cleanup_paths.append(str(PurePosixPath(cleanup_path_str)))
+
     return AppHookEntry(
         tool=tool,
         when=data.get("when", {}),
         failure=failure,
         artifacts=artifacts,
+        cleanup_paths=cleanup_paths,
     )
 
 

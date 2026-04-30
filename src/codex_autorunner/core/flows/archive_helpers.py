@@ -41,6 +41,7 @@ from ..apps.artifacts import (
     is_registered_app_artifact,
     resolve_registered_app_artifact_path,
 )
+from ..apps.hooks import AppHookExecutionError, execute_app_archive_cleanup_hooks
 from ..archive import (
     ArchiveEntrySpec,
     _contextspace_source,
@@ -712,6 +713,7 @@ def archive_flow_run_artifacts(
             "archived_flow_state": False,
             "archived_app_artifacts": 0,
             "archived_app_artifact_paths": [],
+            "app_archive_cleanup": {"entries": [], "failed": False},
             "archived_pma_threads": 0,
             "archived_pma_thread_ids": [],
             "archived_pma_threads_skipped": None,
@@ -742,6 +744,33 @@ def archive_flow_run_artifacts(
                 archive_root=Path(str(archive_plan["archive_root"])),
             )
         )
+        try:
+            cleanup_result = execute_app_archive_cleanup_hooks(
+                repo_root,
+                flow_run_id=record.id,
+                flow_status=record.status,
+            )
+        except AppHookExecutionError as exc:
+            summary["app_archive_cleanup"] = {
+                "failed": True,
+                "entries": [],
+                "error": str(exc).strip() or exc.__class__.__name__,
+            }
+        else:
+            summary["app_archive_cleanup"] = {
+                "failed": cleanup_result.failed,
+                "entries": [
+                    {
+                        "app_id": entry.app_id,
+                        "hook_point": entry.hook_point.value,
+                        "cleanup_paths": list(entry.cleanup_paths),
+                        "removed_paths": list(entry.removed_paths),
+                        "missing_paths": list(entry.missing_paths),
+                        "error": entry.error,
+                    }
+                    for entry in cleanup_result.entries
+                ],
+            }
         retention_policy = _get_run_archive_retention_policy(repo_root)
         if retention_policy is not None:
             runs_root = _run_archive_root(repo_root)
