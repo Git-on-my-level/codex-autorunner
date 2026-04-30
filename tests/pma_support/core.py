@@ -45,6 +45,28 @@ from tests.pma_support import (
 pytestmark = pytest.mark.slow
 
 
+def _hermes_cfg(
+    *,
+    profile_display_name: Optional[str] = None,
+    pma_profile: Optional[str] = None,
+) -> dict:
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg.setdefault("pma", {})
+    cfg["pma"]["enabled"] = True
+    if pma_profile is not None:
+        cfg["pma"]["profile"] = pma_profile
+    cfg.setdefault("agents", {})
+    profile: dict[str, Any] = {"binary": "hermes-m4"}
+    if profile_display_name is not None:
+        profile["display_name"] = profile_display_name
+    cfg["agents"]["hermes"] = {
+        "binary": "hermes",
+        "profiles": {"m4": profile},
+        "default_profile": "m4",
+    }
+    return cfg
+
+
 def test_build_pma_routes_does_not_construct_async_primitives_on_route_build(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -200,16 +222,7 @@ def test_pma_agents_endpoint_surfaces_hermes_optional_controls_and_commands(
 def test_pma_agents_endpoint_prefers_hermes_default_profile_over_global_default(
     hub_env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    cfg.setdefault("pma", {})
-    cfg["pma"]["enabled"] = True
-    cfg["pma"]["profile"] = "codex-profile"
-    cfg.setdefault("agents", {})
-    cfg["agents"]["hermes"] = {
-        "binary": "hermes",
-        "profiles": {"m4": {"binary": "hermes-m4"}},
-        "default_profile": "m4",
-    }
+    cfg = _hermes_cfg(pma_profile="codex-profile")
     write_test_config(hub_env.hub_root / CONFIG_FILENAME, cfg)
     app = create_hub_app(hub_env.hub_root)
     observed: dict[str, Any] = {"profiles": []}
@@ -251,15 +264,7 @@ def test_pma_agents_endpoint_prefers_hermes_default_profile_over_global_default(
 def test_pma_agents_endpoint_includes_unavailable_hermes_static_profile_metadata(
     hub_env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    cfg.setdefault("pma", {})
-    cfg["pma"]["enabled"] = True
-    cfg.setdefault("agents", {})
-    cfg["agents"]["hermes"] = {
-        "binary": "hermes",
-        "profiles": {"m4": {"binary": "hermes-m4", "display_name": "M4 PMA"}},
-        "default_profile": "m4",
-    }
+    cfg = _hermes_cfg(profile_display_name="M4 PMA")
     write_test_config(hub_env.hub_root / CONFIG_FILENAME, cfg)
 
     monkeypatch.setattr(
@@ -2078,16 +2083,7 @@ def test_pma_chat_hermes_reuses_agent_scoped_registry_binding(hub_env) -> None:
 def test_pma_chat_hermes_profile_uses_profile_scoped_registry_binding(
     hub_env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    cfg.setdefault("pma", {})
-    cfg["pma"]["enabled"] = True
-    cfg["pma"]["profile"] = "m4"
-    cfg.setdefault("agents", {})
-    cfg["agents"]["hermes"] = {
-        "binary": "hermes",
-        "profiles": {"m4": {"binary": "hermes-m4"}},
-        "default_profile": "m4",
-    }
+    cfg = _hermes_cfg(pma_profile="m4")
     write_test_config(hub_env.hub_root / CONFIG_FILENAME, cfg)
     app = create_hub_app(hub_env.hub_root)
     registry = app.state.app_server_threads
@@ -2165,16 +2161,7 @@ def test_pma_chat_hermes_profile_uses_profile_scoped_registry_binding(
 def test_pma_chat_codex_ignores_global_profile_default_when_agent_has_no_profiles(
     hub_env,
 ) -> None:
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    cfg.setdefault("pma", {})
-    cfg["pma"]["enabled"] = True
-    cfg["pma"]["profile"] = "m4"
-    cfg.setdefault("agents", {})
-    cfg["agents"]["hermes"] = {
-        "binary": "hermes",
-        "profiles": {"m4": {"binary": "hermes-m4"}},
-        "default_profile": "m4",
-    }
+    cfg = _hermes_cfg(pma_profile="m4")
     write_test_config(hub_env.hub_root / CONFIG_FILENAME, cfg)
     app = create_hub_app(hub_env.hub_root)
     _install_fake_successful_chat_supervisor(

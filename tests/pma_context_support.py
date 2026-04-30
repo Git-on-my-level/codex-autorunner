@@ -31,6 +31,37 @@ from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.state import RunnerState, save_state
 from codex_autorunner.manifest import load_manifest, save_manifest
 
+_STUB_SNAPSHOT = {"test": "data"}
+
+_EMPTY_SNAPSHOT = {"inbox": [], "repos": [], "pma_files": {"inbox": [], "outbox": []}}
+
+
+def _snapshot(
+    *,
+    inbox=None,
+    repos=None,
+    pma_files=None,
+    pma_files_detail=None,
+    generated_at=None,
+    action_queue=None,
+):
+    s = {
+        "inbox": inbox if inbox is not None else [],
+        "repos": repos if repos is not None else [],
+        "pma_files": (
+            pma_files if pma_files is not None else {"inbox": [], "outbox": []}
+        ),
+    }
+    if pma_files_detail is not None:
+        s["pma_files_detail"] = pma_files_detail
+    elif inbox is None and repos is None and pma_files is None:
+        s["pma_files_detail"] = {"inbox": [], "outbox": []}
+    if generated_at is not None:
+        s["generated_at"] = generated_at
+    if action_queue is not None:
+        s["action_queue"] = action_queue
+    return s
+
 
 def _build_supervisor(hub_root: Path) -> HubSupervisor:
     config = load_hub_config(hub_root)
@@ -216,7 +247,7 @@ def test_format_pma_prompt_includes_workspace_docs(tmp_path: Path) -> None:
     """Test that format_pma_prompt with hub_root includes the PMA docs block."""
     seed_hub_files(tmp_path, force=True)
 
-    snapshot = {"test": "data"}
+    snapshot = _STUB_SNAPSHOT
     base_prompt = "Base prompt"
     message = "User message"
 
@@ -230,7 +261,7 @@ def test_format_pma_prompt_includes_agents_section(tmp_path: Path) -> None:
     """Test that AGENTS.md content is included in the prompt."""
     seed_hub_files(tmp_path, force=True)
 
-    snapshot = {"test": "data"}
+    snapshot = _STUB_SNAPSHOT
     base_prompt = "Base prompt"
     message = "User message"
 
@@ -245,7 +276,7 @@ def test_format_pma_prompt_includes_active_context_section(tmp_path: Path) -> No
     """Test that active_context.md content is included in the prompt."""
     seed_hub_files(tmp_path, force=True)
 
-    snapshot = {"test": "data"}
+    snapshot = _STUB_SNAPSHOT
     base_prompt = "Base prompt"
     message = "User message"
 
@@ -260,7 +291,7 @@ def test_format_pma_prompt_includes_budget_metadata(tmp_path: Path) -> None:
     """Test that active_context_budget metadata is included in the prompt."""
     seed_hub_files(tmp_path, force=True)
 
-    snapshot = {"test": "data"}
+    snapshot = _STUB_SNAPSHOT
     base_prompt = "Base prompt"
     message = "User message"
 
@@ -276,7 +307,7 @@ def test_format_pma_prompt_includes_context_log_tail(tmp_path: Path) -> None:
     """Test that context_log_tail.md section is included in the prompt."""
     seed_hub_files(tmp_path, force=True)
 
-    snapshot = {"test": "data"}
+    snapshot = _STUB_SNAPSHOT
     base_prompt = "Base prompt"
     message = "User message"
 
@@ -289,7 +320,7 @@ def test_format_pma_prompt_includes_context_log_tail(tmp_path: Path) -> None:
 
 def test_format_pma_prompt_without_hub_root(tmp_path: Path) -> None:
     """Test that format_pma_prompt without hub_root does not include PMA docs."""
-    snapshot = {"test": "data"}
+    snapshot = _STUB_SNAPSHOT
     base_prompt = "Base prompt"
     message = "User message"
 
@@ -306,7 +337,7 @@ def test_format_pma_prompt_load_failure_still_includes_fastpath(
     """Fastpath remains available even when PMA docs cannot be loaded."""
     seed_hub_files(tmp_path, force=True)
 
-    snapshot = {"test": "data"}
+    snapshot = _STUB_SNAPSHOT
     base_prompt = "Base prompt"
     message = "User message"
 
@@ -341,7 +372,7 @@ def test_truncation_applied_to_long_agents(tmp_path: Path) -> None:
         },
     )
 
-    snapshot = {"test": "data"}
+    snapshot = _STUB_SNAPSHOT
     base_prompt = "Base prompt"
     message = "User message"
 
@@ -373,7 +404,7 @@ def test_truncation_applied_to_long_active_context(tmp_path: Path) -> None:
         },
     )
 
-    snapshot = {"test": "data"}
+    snapshot = _STUB_SNAPSHOT
     base_prompt = "Base prompt"
     message = "User message"
 
@@ -405,7 +436,7 @@ def test_context_log_tail_lines(tmp_path: Path) -> None:
         },
     )
 
-    snapshot = {"test": "data"}
+    snapshot = _STUB_SNAPSHOT
     base_prompt = "Base prompt"
     message = "User message"
 
@@ -443,7 +474,7 @@ def test_context_log_tail_lines_one(tmp_path: Path) -> None:
     log_lines = ["line 1", "line 2", "line 3"]
     context_log_path.write_text("\n".join(log_lines), encoding="utf-8")
 
-    snapshot = {"test": "data"}
+    snapshot = _STUB_SNAPSHOT
     base_prompt = "Base prompt"
     message = "User message"
 
@@ -528,7 +559,7 @@ def test_format_pma_prompt_with_custom_agent_content(tmp_path: Path) -> None:
     custom_content = "# Custom AGENTS\n\nThis is custom content."
     agents_path.write_text(custom_content, encoding="utf-8")
 
-    snapshot = {"test": "data"}
+    snapshot = _STUB_SNAPSHOT
     base_prompt = "Base prompt"
     message = "User message"
 
@@ -560,7 +591,7 @@ def test_active_context_line_count_reflected_in_metadata(tmp_path: Path) -> None
         },
     )
 
-    snapshot = {"test": "data"}
+    snapshot = _STUB_SNAPSHOT
     base_prompt = "Base prompt"
     message = "User message"
 
@@ -596,7 +627,7 @@ def test_format_pma_prompt_auto_prunes_active_context_when_over_budget(
     )
 
     result = format_pma_prompt(
-        "Base prompt", {"test": "data"}, "hello", hub_root=tmp_path
+        "Base prompt", _STUB_SNAPSHOT, "hello", hub_root=tmp_path
     )
 
     pruned_active = active_context_path.read_text(encoding="utf-8")
@@ -1496,8 +1527,8 @@ def test_render_hub_snapshot_distinguishes_run_dispatch_vs_pma_files(
 
     seed_hub_files(tmp_path, force=True)
 
-    snapshot = {
-        "inbox": [
+    snapshot = _snapshot(
+        inbox=[
             {
                 "item_type": "run_dispatch",
                 "next_action": "reply_and_resume",
@@ -1518,9 +1549,8 @@ def test_render_hub_snapshot_distinguishes_run_dispatch_vs_pma_files(
                 },
             }
         ],
-        "repos": [],
-        "pma_files": {"inbox": ["upload.md", "data.csv"], "outbox": []},
-        "pma_files_detail": {
+        pma_files={"inbox": ["upload.md", "data.csv"], "outbox": []},
+        pma_files_detail={
             "inbox": [
                 {
                     "item_type": "pma_file",
@@ -1543,7 +1573,7 @@ def test_render_hub_snapshot_distinguishes_run_dispatch_vs_pma_files(
             ],
             "outbox": [],
         },
-    }
+    )
 
     result = _render_hub_snapshot(snapshot)
 
@@ -1561,9 +1591,8 @@ def test_render_hub_snapshot_includes_repo_destination(tmp_path: Path) -> None:
 
     seed_hub_files(tmp_path, force=True)
 
-    snapshot = {
-        "inbox": [],
-        "repos": [
+    snapshot = _snapshot(
+        repos=[
             {
                 "id": "repo-1",
                 "display_name": "Repo One",
@@ -1575,9 +1604,7 @@ def test_render_hub_snapshot_includes_repo_destination(tmp_path: Path) -> None:
                 "effective_destination": {"kind": "docker", "image": "python:3.12"},
             }
         ],
-        "pma_files": {"inbox": [], "outbox": []},
-        "pma_files_detail": {"inbox": [], "outbox": []},
-    }
+    )
 
     result = _render_hub_snapshot(snapshot)
 
@@ -1590,11 +1617,9 @@ def test_render_hub_snapshot_pma_files_only(tmp_path: Path) -> None:
 
     seed_hub_files(tmp_path, force=True)
 
-    snapshot = {
-        "inbox": [],
-        "repos": [],
-        "pma_files": {"inbox": ["ticket-pack.md"], "outbox": []},
-        "pma_files_detail": {
+    snapshot = _snapshot(
+        pma_files={"inbox": ["ticket-pack.md"], "outbox": []},
+        pma_files_detail={
             "inbox": [
                 {
                     "item_type": "pma_file",
@@ -1608,7 +1633,7 @@ def test_render_hub_snapshot_pma_files_only(tmp_path: Path) -> None:
             ],
             "outbox": [],
         },
-    }
+    )
 
     result = _render_hub_snapshot(snapshot)
 
@@ -1625,11 +1650,9 @@ def test_render_hub_snapshot_marks_stale_pma_files_as_review_only(
 
     seed_hub_files(tmp_path, force=True)
 
-    snapshot = {
-        "inbox": [],
-        "repos": [],
-        "pma_files": {"inbox": ["forgotten.zip"], "outbox": []},
-        "pma_files_detail": {
+    snapshot = _snapshot(
+        pma_files={"inbox": ["forgotten.zip"], "outbox": []},
+        pma_files_detail={
             "inbox": [
                 {
                     "item_type": "pma_file",
@@ -1649,7 +1672,7 @@ def test_render_hub_snapshot_marks_stale_pma_files_as_review_only(
             ],
             "outbox": [],
         },
-    }
+    )
 
     result = _render_hub_snapshot(snapshot)
 
@@ -1666,14 +1689,12 @@ def test_render_hub_snapshot_caps_pma_file_action_summaries(
 
     seed_hub_files(tmp_path, force=True)
 
-    snapshot = {
-        "inbox": [],
-        "repos": [],
-        "pma_files": {
+    snapshot = _snapshot(
+        pma_files={
             "inbox": ["fresh-1.md", "stale-1.zip", "fresh-2.md"],
             "outbox": [],
         },
-        "pma_files_detail": {
+        pma_files_detail={
             "inbox": [
                 {
                     "item_type": "pma_file",
@@ -1705,7 +1726,7 @@ def test_render_hub_snapshot_caps_pma_file_action_summaries(
             ],
             "outbox": [],
         },
-    }
+    )
 
     result = _render_hub_snapshot(snapshot, max_pma_files=2)
 
@@ -1720,12 +1741,7 @@ def test_render_hub_snapshot_empty_both(tmp_path: Path) -> None:
 
     seed_hub_files(tmp_path, force=True)
 
-    snapshot = {
-        "inbox": [],
-        "repos": [],
-        "pma_files": {"inbox": [], "outbox": []},
-        "pma_files_detail": {"inbox": [], "outbox": []},
-    }
+    snapshot = _snapshot()
 
     result = _render_hub_snapshot(snapshot)
 
@@ -1737,7 +1753,7 @@ def test_render_hub_snapshot_empty_both(tmp_path: Path) -> None:
 def test_format_pma_prompt_includes_filebox_paths(tmp_path: Path) -> None:
     seed_hub_files(tmp_path, force=True)
 
-    snapshot = {"test": "data"}
+    snapshot = _STUB_SNAPSHOT
     base_prompt = "Base prompt"
     message = "User message"
 
@@ -1753,7 +1769,7 @@ def test_format_pma_prompt_includes_ticket_template_discoverability(
     seed_hub_files(tmp_path, force=True)
 
     result = format_pma_prompt(
-        "Base prompt", {"test": "data"}, "User message", hub_root=tmp_path
+        "Base prompt", _STUB_SNAPSHOT, "User message", hub_root=tmp_path
     )
 
     assert "car templates list --repo <path>" in result
@@ -1768,8 +1784,8 @@ def test_render_hub_snapshot_includes_all_next_action_types(tmp_path: Path) -> N
 
     seed_hub_files(tmp_path, force=True)
 
-    snapshot = {
-        "inbox": [
+    snapshot = _snapshot(
+        inbox=[
             {
                 "item_type": "worker_dead",
                 "next_action": "restart_worker",
@@ -1799,10 +1815,7 @@ def test_render_hub_snapshot_includes_all_next_action_types(tmp_path: Path) -> N
                 },
             },
         ],
-        "repos": [],
-        "pma_files": {"inbox": [], "outbox": []},
-        "pma_files_detail": {"inbox": [], "outbox": []},
-    }
+    )
 
     result = _render_hub_snapshot(snapshot)
 
@@ -1823,8 +1836,8 @@ class TestIssue975DeltaPmaPromptAssembly:
         """First turn keeps the full context path and action queue section ordering."""
         seed_hub_files(tmp_path, force=True)
 
-        snapshot = {
-            "inbox": [
+        snapshot = _snapshot(
+            inbox=[
                 {
                     "item_type": "run_dispatch",
                     "next_action": "reply_and_resume",
@@ -1845,10 +1858,7 @@ class TestIssue975DeltaPmaPromptAssembly:
                     },
                 }
             ],
-            "repos": [],
-            "pma_files": {"inbox": [], "outbox": []},
-            "pma_files_detail": {"inbox": [], "outbox": []},
-        }
+        )
 
         result = format_pma_prompt(
             "Base prompt",
@@ -1895,9 +1905,9 @@ class TestIssue975DeltaPmaPromptAssembly:
             "# Current Context\n\nWorking on issue 975.\n", encoding="utf-8"
         )
 
-        snapshot = {
-            "generated_at": "2026-03-16T00:00:00Z",
-            "action_queue": [
+        snapshot = _snapshot(
+            generated_at="2026-03-16T00:00:00Z",
+            action_queue=[
                 {
                     "action_queue_id": "ticket_flow_inbox:repo-1:run-1",
                     "queue_source": "ticket_flow_inbox",
@@ -1910,10 +1920,7 @@ class TestIssue975DeltaPmaPromptAssembly:
                     "supersession": {"status": "primary", "is_primary": True},
                 }
             ],
-            "inbox": [],
-            "repos": [],
-            "pma_files": {"inbox": [], "outbox": []},
-        }
+        )
         result1 = format_pma_prompt(
             "Base prompt",
             snapshot,
@@ -1957,14 +1964,7 @@ class TestIssue975DeltaPmaPromptAssembly:
         """Fresh backend conversation during delta should still see prompt.md body."""
         seed_hub_files(tmp_path, force=True)
 
-        snapshot = {
-            "generated_at": "2026-03-16T00:00:00Z",
-            "action_queue": [],
-            "inbox": [],
-            "repos": [],
-            "pma_files": {"inbox": [], "outbox": []},
-            "pma_files_detail": {"inbox": [], "outbox": []},
-        }
+        snapshot = _snapshot(generated_at="2026-03-16T00:00:00Z", action_queue=[])
 
         _ = format_pma_prompt(
             "Stable prompt.md instructions for PMA.",
@@ -1998,13 +1998,7 @@ class TestIssue975DeltaPmaPromptAssembly:
     ) -> None:
         seed_hub_files(tmp_path, force=True)
 
-        snapshot = {
-            "generated_at": "2026-03-16T00:00:00Z",
-            "action_queue": [],
-            "inbox": [],
-            "repos": [],
-            "pma_files": {"inbox": [], "outbox": []},
-        }
+        snapshot = _snapshot(generated_at="2026-03-16T00:00:00Z", action_queue=[])
 
         variants = format_pma_prompt_variants(
             "Base prompt",
@@ -2038,14 +2032,7 @@ class TestIssue975DeltaPmaPromptAssembly:
             "# Current Context\n\nWorking on issue 975.\n", encoding="utf-8"
         )
 
-        snapshot = {
-            "generated_at": "2026-03-16T00:00:00Z",
-            "action_queue": [],
-            "inbox": [],
-            "repos": [],
-            "pma_files": {"inbox": [], "outbox": []},
-            "pma_files_detail": {"inbox": [], "outbox": []},
-        }
+        snapshot = _snapshot(generated_at="2026-03-16T00:00:00Z", action_queue=[])
 
         _ = format_pma_prompt(
             "Base prompt",
@@ -2082,14 +2069,7 @@ class TestIssue975DeltaPmaPromptAssembly:
         """Changed prompt.md content is re-injected while stable prompt text stays cached."""
         seed_hub_files(tmp_path, force=True)
 
-        snapshot = {
-            "generated_at": "2026-03-16T00:00:00Z",
-            "action_queue": [],
-            "inbox": [],
-            "repos": [],
-            "pma_files": {"inbox": [], "outbox": []},
-            "pma_files_detail": {"inbox": [], "outbox": []},
-        }
+        snapshot = _snapshot(generated_at="2026-03-16T00:00:00Z", action_queue=[])
 
         _ = format_pma_prompt(
             "Base prompt v1",
@@ -2117,17 +2097,10 @@ class TestIssue975DeltaPmaPromptAssembly:
     ) -> None:
         seed_hub_files(tmp_path, force=True)
 
-        snapshot1 = {
-            "generated_at": "2026-03-16T00:00:00Z",
-            "action_queue": [],
-            "inbox": [],
-            "repos": [],
-            "pma_files": {"inbox": [], "outbox": []},
-            "pma_files_detail": {"inbox": [], "outbox": []},
-        }
-        snapshot2 = {
-            "generated_at": "2026-03-16T00:01:00Z",
-            "action_queue": [
+        snapshot1 = _snapshot(generated_at="2026-03-16T00:00:00Z", action_queue=[])
+        snapshot2 = _snapshot(
+            generated_at="2026-03-16T00:01:00Z",
+            action_queue=[
                 {
                     "action_queue_id": "managed_thread_followup:thread-1",
                     "queue_source": "managed_thread_followup",
@@ -2139,11 +2112,7 @@ class TestIssue975DeltaPmaPromptAssembly:
                     "supersession": {"status": "primary", "is_primary": True},
                 }
             ],
-            "inbox": [],
-            "repos": [],
-            "pma_files": {"inbox": [], "outbox": []},
-            "pma_files_detail": {"inbox": [], "outbox": []},
-        }
+        )
 
         _ = format_pma_prompt(
             "Base prompt",
@@ -2172,7 +2141,7 @@ class TestIssue975DeltaPmaPromptAssembly:
     def test_format_pma_prompt_force_full_context_refresh(self, tmp_path: Path) -> None:
         seed_hub_files(tmp_path, force=True)
 
-        snapshot = {"inbox": [], "repos": [], "pma_files": {"inbox": [], "outbox": []}}
+        snapshot = _EMPTY_SNAPSHOT
         _ = format_pma_prompt(
             "Base prompt",
             snapshot,
@@ -2198,7 +2167,7 @@ class TestIssue975DeltaPmaPromptAssembly:
     ) -> None:
         seed_hub_files(tmp_path, force=True)
 
-        snapshot = {"inbox": [], "repos": [], "pma_files": {"inbox": [], "outbox": []}}
+        snapshot = _EMPTY_SNAPSHOT
         _ = format_pma_prompt(
             "Base prompt",
             snapshot,
@@ -2232,7 +2201,7 @@ class TestIssue975DeltaPmaPromptAssembly:
         """Without prompt_state_key, every turn sends full context (no delta mode)."""
         seed_hub_files(tmp_path, force=True)
 
-        snapshot = {"inbox": [], "repos": [], "pma_files": {"inbox": [], "outbox": []}}
+        snapshot = _EMPTY_SNAPSHOT
 
         result1 = format_pma_prompt(
             "Base prompt",
@@ -2260,7 +2229,7 @@ class TestIssue975DeltaPmaPromptAssembly:
         """Delta header summarizes all cached sections compactly."""
         seed_hub_files(tmp_path, force=True)
 
-        snapshot = {"inbox": [], "repos": [], "pma_files": {"inbox": [], "outbox": []}}
+        snapshot = _EMPTY_SNAPSHOT
         _ = format_pma_prompt(
             "Base prompt",
             snapshot,
@@ -2312,7 +2281,7 @@ class TestIssue975DeltaPmaPromptAssembly:
             },
         )
 
-        snapshot = {"inbox": [], "repos": [], "pma_files": {"inbox": [], "outbox": []}}
+        snapshot = _EMPTY_SNAPSHOT
 
         for turn_num in range(3):
             long_content = "\n".join(f"Turn {turn_num} line {idx}" for idx in range(30))
