@@ -383,16 +383,107 @@ class _RaisingStreamingFakeOrchestrator(_StreamingFakeOrchestrator):
         raise self._exc
 
 
-class _StreamingFakeHarness:
-    display_name = "StreamingFake"
+class _BaseDiscordFakeHarness:
+    display_name = "Fake"
     capabilities = frozenset(
-        {
-            "durable_threads",
-            "message_turns",
-            "interrupt",
-            "event_streaming",
-        }
+        {"durable_threads", "message_turns", "interrupt", "event_streaming"}
     )
+    _conversation_id = "backend-thread-1"
+
+    async def ensure_ready(self, workspace_root: Path) -> None:
+        _ = workspace_root
+
+    def supports(self, capability: str) -> bool:
+        return capability in self.capabilities
+
+    async def new_conversation(
+        self, workspace_root: Path, title: Optional[str] = None
+    ) -> SimpleNamespace:
+        _ = workspace_root, title
+        return SimpleNamespace(id=self._conversation_id)
+
+    async def resume_conversation(
+        self, workspace_root: Path, conversation_id: str
+    ) -> SimpleNamespace:
+        _ = workspace_root
+        return SimpleNamespace(id=conversation_id)
+
+    async def start_turn(
+        self,
+        workspace_root: Path,
+        conversation_id: str,
+        prompt: str,
+        model: Optional[str],
+        reasoning: Optional[str],
+        *,
+        approval_mode: Optional[str],
+        sandbox_policy: Optional[Any],
+        input_items: Optional[list[dict[str, Any]]] = None,
+    ) -> SimpleNamespace:
+        _ = (
+            workspace_root,
+            conversation_id,
+            prompt,
+            model,
+            reasoning,
+            approval_mode,
+            sandbox_policy,
+            input_items,
+        )
+        return SimpleNamespace(
+            conversation_id=conversation_id, turn_id="backend-turn-1"
+        )
+
+    async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
+        raise AssertionError("review mode should not be used in this test")
+
+    async def wait_for_turn(
+        self,
+        workspace_root: Path,
+        conversation_id: str,
+        turn_id: Optional[str],
+        *,
+        timeout: Optional[float] = None,
+    ) -> SimpleNamespace:
+        _ = workspace_root, conversation_id, turn_id, timeout
+        return SimpleNamespace(status="ok", assistant_text="reply", errors=[])
+
+    async def interrupt(
+        self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
+    ) -> None:
+        _ = workspace_root, conversation_id, turn_id
+
+    async def stream_events(
+        self, workspace_root: Path, conversation_id: str, turn_id: str
+    ):
+        _ = workspace_root, conversation_id, turn_id
+        if False:
+            yield ""
+
+
+def _patch_harness(
+    monkeypatch: pytest.MonkeyPatch,
+    harness: Any,
+    *,
+    agent_id: str = "codex",
+    agent_name: str = "Codex",
+) -> None:
+    monkeypatch.setattr(
+        agent_registry_module,
+        "get_registered_agents",
+        lambda context=None: {
+            agent_id: AgentDescriptor(
+                id=agent_id,
+                name=agent_name,
+                capabilities=harness.capabilities,
+                make_harness=lambda _ctx: harness,
+            )
+        },
+    )
+
+
+class _StreamingFakeHarness(_BaseDiscordFakeHarness):
+    display_name = "StreamingFake"
 
     def __init__(
         self,
@@ -421,51 +512,6 @@ class _StreamingFakeHarness:
             )
         self._stream_done = asyncio.Event()
 
-    async def ensure_ready(self, workspace_root: Path) -> None:
-        _ = workspace_root
-
-    def supports(self, capability: str) -> bool:
-        return capability in self.capabilities
-
-    async def new_conversation(
-        self, workspace_root: Path, title: Optional[str] = None
-    ) -> SimpleNamespace:
-        _ = workspace_root, title
-        return SimpleNamespace(id="backend-thread-1")
-
-    async def resume_conversation(
-        self, workspace_root: Path, conversation_id: str
-    ) -> SimpleNamespace:
-        _ = workspace_root
-        return SimpleNamespace(id=conversation_id)
-
-    async def start_turn(
-        self,
-        workspace_root: Path,
-        conversation_id: str,
-        prompt: str,
-        model: Optional[str],
-        reasoning: Optional[str],
-        *,
-        approval_mode: Optional[str],
-        sandbox_policy: Optional[Any],
-        input_items: Optional[list[dict[str, Any]]] = None,
-    ) -> SimpleNamespace:
-        _ = (
-            workspace_root,
-            model,
-            reasoning,
-            approval_mode,
-            sandbox_policy,
-            input_items,
-        )
-        return SimpleNamespace(
-            conversation_id=conversation_id, turn_id="backend-turn-1"
-        )
-
-    async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
-        raise AssertionError("review mode should not be used in this test")
-
     async def wait_for_turn(
         self,
         workspace_root: Path,
@@ -483,11 +529,6 @@ class _StreamingFakeHarness:
             assistant_text=self._assistant_text,
             errors=list(self._errors),
         )
-
-    async def interrupt(
-        self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
-    ) -> None:
-        _ = workspace_root, conversation_id, turn_id
 
     async def stream_events(
         self, workspace_root: Path, conversation_id: str, turn_id: str

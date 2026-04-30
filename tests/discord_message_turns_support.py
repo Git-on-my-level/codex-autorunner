@@ -77,6 +77,7 @@ from codex_autorunner.integrations.discord.service import (
 )
 from codex_autorunner.integrations.discord.state import DiscordStateStore
 from tests.support.discord_turn_fakes import (
+    _BaseDiscordFakeHarness,
     _build_discord_service,
     _config,
     _DeleteFailingProgressRest,
@@ -90,6 +91,7 @@ from tests.support.discord_turn_fakes import (
     _FakeVoiceService,
     _latest_interaction_completion_payload,
     _message_create,
+    _patch_harness,
     _patch_streaming_harness,
     _pma_interaction,
 )
@@ -6402,38 +6404,10 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
     first_started = asyncio.Event()
     release_first = asyncio.Event()
 
-    class _FakeHarness:
-        display_name = "Fake"
-        capabilities = frozenset(
-            {
-                "durable_threads",
-                "message_turns",
-                "interrupt",
-                "event_streaming",
-            }
-        )
-
+    class _FakeHarness(_BaseDiscordFakeHarness):
         def __init__(self) -> None:
             self.turn_prompts: list[str] = []
             self.turn_conversation_ids: list[str] = []
-
-        async def ensure_ready(self, workspace_root: Path) -> None:
-            _ = workspace_root
-
-        def supports(self, capability: str) -> bool:
-            return capability in self.capabilities
-
-        async def new_conversation(
-            self, workspace_root: Path, title: Optional[str] = None
-        ) -> SimpleNamespace:
-            _ = workspace_root, title
-            return SimpleNamespace(id="backend-thread-1")
-
-        async def resume_conversation(
-            self, workspace_root: Path, conversation_id: str
-        ) -> SimpleNamespace:
-            _ = workspace_root
-            return SimpleNamespace(id=conversation_id)
 
         async def start_turn(
             self,
@@ -6449,7 +6423,6 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
         ) -> SimpleNamespace:
             _ = (
                 workspace_root,
-                conversation_id,
                 model,
                 reasoning,
                 approval_mode,
@@ -6460,9 +6433,6 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
             self.turn_prompts.append(prompt)
             self.turn_conversation_ids.append(conversation_id)
             return SimpleNamespace(conversation_id=conversation_id, turn_id=turn_id)
-
-        async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
-            raise AssertionError("review mode should not be used in this test")
 
         async def wait_for_turn(
             self,
@@ -6487,31 +6457,8 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
                 errors=[],
             )
 
-        async def interrupt(
-            self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
-        ) -> None:
-            _ = workspace_root, conversation_id, turn_id
-
-        async def stream_events(
-            self, workspace_root: Path, conversation_id: str, turn_id: str
-        ):
-            _ = workspace_root, conversation_id, turn_id
-            if False:
-                yield ""
-
     harness = _FakeHarness()
-    monkeypatch.setattr(
-        agent_registry_module,
-        "get_registered_agents",
-        lambda context=None: {
-            "codex": AgentDescriptor(
-                id="codex",
-                name="Codex",
-                capabilities=harness.capabilities,
-                make_harness=lambda _ctx: harness,
-            )
-        },
-    )
+    _patch_harness(monkeypatch, harness)
 
     async def _release_later() -> None:
         await first_started.wait()
@@ -6609,7 +6556,7 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
     first_started = asyncio.Event()
     release_first = asyncio.Event()
 
-    class _FakeHarness:
+    class _FakeHarness(_BaseDiscordFakeHarness):
         display_name = "Hermes"
         capabilities = frozenset(
             {
@@ -6620,28 +6567,11 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
                 "approvals",
             }
         )
+        _conversation_id = "hermes-backend-thread-1"
 
         def __init__(self) -> None:
             self.turn_prompts: list[str] = []
             self.turn_conversation_ids: list[str] = []
-
-        async def ensure_ready(self, workspace_root: Path) -> None:
-            _ = workspace_root
-
-        def supports(self, capability: str) -> bool:
-            return capability in self.capabilities
-
-        async def new_conversation(
-            self, workspace_root: Path, title: Optional[str] = None
-        ) -> SimpleNamespace:
-            _ = workspace_root, title
-            return SimpleNamespace(id="hermes-backend-thread-1")
-
-        async def resume_conversation(
-            self, workspace_root: Path, conversation_id: str
-        ) -> SimpleNamespace:
-            _ = workspace_root
-            return SimpleNamespace(id=conversation_id)
 
         async def start_turn(
             self,
@@ -6669,9 +6599,6 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
             self.turn_conversation_ids.append(conversation_id)
             return SimpleNamespace(conversation_id=conversation_id, turn_id=turn_id)
 
-        async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
-            raise AssertionError("review mode should not be used in this test")
-
         async def wait_for_turn(
             self,
             workspace_root: Path,
@@ -6695,18 +6622,6 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
                 errors=[],
             )
 
-        async def interrupt(
-            self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
-        ) -> None:
-            _ = workspace_root, conversation_id, turn_id
-
-        async def stream_events(
-            self, workspace_root: Path, conversation_id: str, turn_id: str
-        ):
-            _ = workspace_root, conversation_id, turn_id
-            if False:
-                yield ""
-
     harness = _FakeHarness()
     hub_config = SimpleNamespace(
         agent_profiles=lambda agent_id: (
@@ -6720,18 +6635,7 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
         "codex_autorunner.agents.registry._resolve_runtime_agent_config",
         lambda ctx: hub_config,
     )
-    monkeypatch.setattr(
-        agent_registry_module,
-        "get_registered_agents",
-        lambda context=None: {
-            "hermes": AgentDescriptor(
-                id="hermes",
-                name="Hermes",
-                capabilities=harness.capabilities,
-                make_harness=lambda _ctx: harness,
-            )
-        },
-    )
+    _patch_harness(monkeypatch, harness, agent_id="hermes", agent_name="Hermes")
 
     async def _release_later() -> None:
         await first_started.wait()
@@ -6827,35 +6731,7 @@ async def test_pma_message_create_streams_progress_before_terminal_reply(
 
     stream_finished = asyncio.Event()
 
-    class _FakeHarness:
-        display_name = "Fake"
-        capabilities = frozenset(
-            {
-                "durable_threads",
-                "message_turns",
-                "interrupt",
-                "event_streaming",
-            }
-        )
-
-        async def ensure_ready(self, workspace_root: Path) -> None:
-            _ = workspace_root
-
-        def supports(self, capability: str) -> bool:
-            return capability in self.capabilities
-
-        async def new_conversation(
-            self, workspace_root: Path, title: Optional[str] = None
-        ) -> SimpleNamespace:
-            _ = workspace_root, title
-            return SimpleNamespace(id="backend-thread-1")
-
-        async def resume_conversation(
-            self, workspace_root: Path, conversation_id: str
-        ) -> SimpleNamespace:
-            _ = workspace_root
-            return SimpleNamespace(id=conversation_id)
-
+    class _FakeHarness(_BaseDiscordFakeHarness):
         async def start_turn(
             self,
             workspace_root: Path,
@@ -6882,9 +6758,6 @@ async def test_pma_message_create_streams_progress_before_terminal_reply(
                 turn_id="backend-turn-1",
             )
 
-        async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
-            raise AssertionError("review mode should not be used in this test")
-
         async def wait_for_turn(
             self,
             workspace_root: Path,
@@ -6900,11 +6773,6 @@ async def test_pma_message_create_streams_progress_before_terminal_reply(
                 assistant_text="discord managed thread final reply",
                 errors=[],
             )
-
-        async def interrupt(
-            self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
-        ) -> None:
-            _ = workspace_root, conversation_id, turn_id
 
         async def stream_events(
             self, workspace_root: Path, conversation_id: str, turn_id: str
@@ -6935,18 +6803,7 @@ async def test_pma_message_create_streams_progress_before_terminal_reply(
             stream_finished.set()
 
     harness = _FakeHarness()
-    monkeypatch.setattr(
-        agent_registry_module,
-        "get_registered_agents",
-        lambda context=None: {
-            "codex": AgentDescriptor(
-                id="codex",
-                name="Codex",
-                capabilities=harness.capabilities,
-                make_harness=lambda _ctx: harness,
-            )
-        },
-    )
+    _patch_harness(monkeypatch, harness)
 
     try:
         await asyncio.wait_for(service.run_forever(), timeout=10)
@@ -7010,38 +6867,10 @@ async def test_pma_message_create_routes_repeated_messages_through_managed_threa
     first_started = asyncio.Event()
     release_first = asyncio.Event()
 
-    class _FakeHarness:
-        display_name = "Fake"
-        capabilities = frozenset(
-            {
-                "durable_threads",
-                "message_turns",
-                "interrupt",
-                "event_streaming",
-            }
-        )
-
+    class _FakeHarness(_BaseDiscordFakeHarness):
         def __init__(self) -> None:
             self.turn_prompts: list[str] = []
             self.waited_turns: list[str] = []
-
-        async def ensure_ready(self, workspace_root: Path) -> None:
-            _ = workspace_root
-
-        def supports(self, capability: str) -> bool:
-            return capability in self.capabilities
-
-        async def new_conversation(
-            self, workspace_root: Path, title: Optional[str] = None
-        ) -> SimpleNamespace:
-            _ = workspace_root, title
-            return SimpleNamespace(id="backend-thread-1")
-
-        async def resume_conversation(
-            self, workspace_root: Path, conversation_id: str
-        ) -> SimpleNamespace:
-            _ = workspace_root
-            return SimpleNamespace(id=conversation_id)
 
         async def start_turn(
             self,
@@ -7066,9 +6895,6 @@ async def test_pma_message_create_routes_repeated_messages_through_managed_threa
             turn_id = f"backend-turn-{len(self.turn_prompts) + 1}"
             self.turn_prompts.append(prompt)
             return SimpleNamespace(conversation_id=conversation_id, turn_id=turn_id)
-
-        async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
-            raise AssertionError("review mode should not be used in this test")
 
         async def wait_for_turn(
             self,
@@ -7095,31 +6921,8 @@ async def test_pma_message_create_routes_repeated_messages_through_managed_threa
                 errors=[],
             )
 
-        async def interrupt(
-            self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
-        ) -> None:
-            _ = workspace_root, conversation_id, turn_id
-
-        async def stream_events(
-            self, workspace_root: Path, conversation_id: str, turn_id: str
-        ):
-            _ = workspace_root, conversation_id, turn_id
-            if False:
-                yield ""
-
     harness = _FakeHarness()
-    monkeypatch.setattr(
-        agent_registry_module,
-        "get_registered_agents",
-        lambda context=None: {
-            "codex": AgentDescriptor(
-                id="codex",
-                name="Codex",
-                capabilities=harness.capabilities,
-                make_harness=lambda _ctx: harness,
-            )
-        },
-    )
+    _patch_harness(monkeypatch, harness)
 
     async def _release_later() -> None:
         await first_started.wait()
@@ -7210,35 +7013,7 @@ async def test_pma_message_create_image_attachment_routes_through_managed_thread
 
     captured_input_items: list[Optional[list[dict[str, Any]]]] = []
 
-    class _FakeHarness:
-        display_name = "Fake"
-        capabilities = frozenset(
-            {
-                "durable_threads",
-                "message_turns",
-                "interrupt",
-                "event_streaming",
-            }
-        )
-
-        async def ensure_ready(self, workspace_root: Path) -> None:
-            _ = workspace_root
-
-        def supports(self, capability: str) -> bool:
-            return capability in self.capabilities
-
-        async def new_conversation(
-            self, workspace_root: Path, title: Optional[str] = None
-        ) -> SimpleNamespace:
-            _ = workspace_root, title
-            return SimpleNamespace(id="backend-thread-1")
-
-        async def resume_conversation(
-            self, workspace_root: Path, conversation_id: str
-        ) -> SimpleNamespace:
-            _ = workspace_root
-            return SimpleNamespace(id=conversation_id)
-
+    class _FakeHarness(_BaseDiscordFakeHarness):
         async def start_turn(
             self,
             workspace_root: Path,
@@ -7266,49 +7041,8 @@ async def test_pma_message_create_image_attachment_routes_through_managed_thread
                 turn_id="backend-turn-1",
             )
 
-        async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
-            raise AssertionError("review mode should not be used in this test")
-
-        async def wait_for_turn(
-            self,
-            workspace_root: Path,
-            conversation_id: str,
-            turn_id: Optional[str],
-            *,
-            timeout: Optional[float] = None,
-        ) -> SimpleNamespace:
-            _ = workspace_root, conversation_id, turn_id, timeout
-            return SimpleNamespace(
-                status="ok",
-                assistant_text="discord managed attachment reply",
-                errors=[],
-            )
-
-        async def interrupt(
-            self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
-        ) -> None:
-            _ = workspace_root, conversation_id, turn_id
-
-        async def stream_events(
-            self, workspace_root: Path, conversation_id: str, turn_id: str
-        ):
-            _ = workspace_root, conversation_id, turn_id
-            if False:
-                yield ""
-
     harness = _FakeHarness()
-    monkeypatch.setattr(
-        agent_registry_module,
-        "get_registered_agents",
-        lambda context=None: {
-            "codex": AgentDescriptor(
-                id="codex",
-                name="Codex",
-                capabilities=harness.capabilities,
-                make_harness=lambda _ctx: harness,
-            )
-        },
-    )
+    _patch_harness(monkeypatch, harness)
 
     try:
         await service.run_forever()
