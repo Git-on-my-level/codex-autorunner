@@ -153,5 +153,28 @@ def _pid_is_running(pid: int) -> bool:
     return True
 
 
+def _coerce_number(value: Any) -> Optional[float]:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _next_available_ticket_index(existing: list[int]) -> int:
+    if not existing:
+        return 1
+    seen = set(existing)
+    candidate = 1
+    while candidate in seen:
+        candidate += 1
+    return candidate
+
+
 def _iso_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")

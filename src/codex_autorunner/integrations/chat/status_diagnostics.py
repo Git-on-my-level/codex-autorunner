@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from ...core.diagnostics import build_process_monitor_summary
-from ...core.text_utils import _parse_iso_timestamp
+from ...core.text_utils import _coerce_number, _parse_iso_timestamp
 from ...core.usage import (
     extract_rate_limits as _extract_shared_rate_limits,
 )
@@ -57,19 +57,6 @@ def format_sandbox_policy(sandbox_policy: Any) -> str:
                 suffix = f", network={sandbox_policy.get('networkAccess')}"
             return f"{sandbox_type}{suffix}"
     return str(sandbox_policy)
-
-
-def _coerce_number(value: Any) -> Optional[float]:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
-        try:
-            return float(value)
-        except ValueError:
-            return None
-    return None
 
 
 def _compute_used_percent(entry: dict[str, Any]) -> Optional[float]:

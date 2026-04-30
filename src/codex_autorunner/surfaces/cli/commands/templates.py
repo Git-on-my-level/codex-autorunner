@@ -23,6 +23,7 @@ from ....core.templates import (
     scan_lock,
     search_templates,
 )
+from ....core.text_utils import _next_available_ticket_index
 from ....integrations.templates.scan_agent import (
     TemplateScanError,
     TemplateScanRejectedError,
@@ -264,16 +265,6 @@ def _collect_ticket_indices(ticket_dir: Path) -> list[int]:
             continue
         indices.append(idx)
     return indices
-
-
-def _next_available_ticket_index(existing: list[int]) -> int:
-    if not existing:
-        return 1
-    seen = set(existing)
-    candidate = 1
-    while candidate in seen:
-        candidate += 1
-    return candidate
 
 
 def _ticket_filename(index: int, *, suffix: str, width: int) -> str:

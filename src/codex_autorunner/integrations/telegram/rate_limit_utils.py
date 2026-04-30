@@ -3,19 +3,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from ...core.coercion import coerce_int
-
-
-def _coerce_number(value: Any) -> Optional[float]:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
-        try:
-            return float(value)
-        except ValueError:
-            return None
-    return None
+from ...core.text_utils import _coerce_number
 
 
 def _format_percent(value: Any) -> Optional[str]:

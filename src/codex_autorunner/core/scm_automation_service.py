@@ -56,7 +56,7 @@ from .scm_reaction_types import (
     ScmReactionConfig,
     stable_reaction_operation_key,
 )
-from .text_utils import _normalize_text
+from .text_utils import _normalize_text, _parse_iso_timestamp
 
 _LOGGER = logging.getLogger(__name__)
 _MARKDOWN_LINK_RE = re.compile(r"!\[([^\]\n]*)\]\([^)]+\)|\[([^\]\n]+)\]\([^)]+\)")
@@ -271,21 +271,6 @@ def _publish_notice_payload(
                 "surface_key": surface_key,
             }
     return payload
-
-
-def _parse_iso_datetime(value: object) -> Optional[datetime]:
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    if not text:
-        return None
-    try:
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
 
 
 def _isoformat_z(value: datetime) -> str:
@@ -524,7 +509,7 @@ class ScmAutomationService:
             return
         if not next_attempt_at_iso:
             return
-        parsed = _parse_iso_datetime(next_attempt_at_iso)
+        parsed = _parse_iso_timestamp(next_attempt_at_iso)
         if parsed is None:
             return
         delay = max(0.0, (parsed - datetime.now(timezone.utc)).total_seconds())
@@ -551,7 +536,7 @@ class ScmAutomationService:
         for op in pending:
             if not op.next_attempt_at:
                 continue
-            parsed = _parse_iso_datetime(op.next_attempt_at)
+            parsed = _parse_iso_timestamp(op.next_attempt_at)
             if parsed is None:
                 continue
             if parsed <= now:
@@ -614,9 +599,9 @@ class ScmAutomationService:
                 thread_target_id=binding.thread_target_id,
             )
         event_time = (
-            _parse_iso_datetime(event.received_at)
-            or _parse_iso_datetime(event.occurred_at)
-            or _parse_iso_datetime(event.created_at)
+            _parse_iso_timestamp(event.received_at)
+            or _parse_iso_timestamp(event.occurred_at)
+            or _parse_iso_timestamp(event.created_at)
             or datetime.now(timezone.utc)
         )
         bucket_start_seconds = (
@@ -647,9 +632,9 @@ class ScmAutomationService:
         if batch_window_seconds <= 0:
             return None
         event_time = (
-            _parse_iso_datetime(event.received_at)
-            or _parse_iso_datetime(event.occurred_at)
-            or _parse_iso_datetime(event.created_at)
+            _parse_iso_timestamp(event.received_at)
+            or _parse_iso_timestamp(event.occurred_at)
+            or _parse_iso_timestamp(event.created_at)
             or datetime.now(timezone.utc)
         )
         bucket_start_seconds = (
@@ -672,14 +657,14 @@ class ScmAutomationService:
         if batch_window_seconds <= 0:
             return None
         event_time = (
-            _parse_iso_datetime(event.received_at)
-            or _parse_iso_datetime(event.occurred_at)
-            or _parse_iso_datetime(event.created_at)
+            _parse_iso_timestamp(event.received_at)
+            or _parse_iso_timestamp(event.occurred_at)
+            or _parse_iso_timestamp(event.created_at)
             or datetime.now(timezone.utc)
         )
         next_attempt_at = event_time + timedelta(seconds=batch_window_seconds)
         max_window_seconds = self._reaction_config.ci_failed_batch_max_window_seconds
-        opened_at = _parse_iso_datetime(bundle.get("opened_at")) or event_time
+        opened_at = _parse_iso_timestamp(bundle.get("opened_at")) or event_time
         if max_window_seconds > 0:
             max_attempt_at = opened_at + timedelta(seconds=max_window_seconds)
             if next_attempt_at > max_attempt_at:

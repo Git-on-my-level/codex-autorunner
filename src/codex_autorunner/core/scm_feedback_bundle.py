@@ -8,7 +8,7 @@ from typing import Any, Optional
 from .pr_bindings import PrBinding
 from .scm_events import ScmEvent
 from .scm_reaction_types import ReactionIntent
-from .text_utils import _normalize_text
+from .text_utils import _normalize_text, _parse_iso_timestamp
 
 _GENERIC_CI_CHECK_NAMES = frozenset({"check", "aggregate"})
 
@@ -18,26 +18,15 @@ def _event_payload(event: ScmEvent) -> Mapping[str, Any]:
     return payload if isinstance(payload, Mapping) else {}
 
 
-def _parse_iso_datetime(value: Any) -> Optional[datetime]:
-    text = _normalize_text(value)
-    if text is None:
-        return None
-    try:
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
-
-
 def _isoformat_z(value: datetime) -> str:
     return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _max_iso_datetime(*values: Any) -> Optional[str]:
     parsed = [
-        candidate for candidate in (_parse_iso_datetime(v) for v in values) if candidate
+        candidate
+        for candidate in (_parse_iso_timestamp(v) for v in values)
+        if candidate
     ]
     if not parsed:
         return None
