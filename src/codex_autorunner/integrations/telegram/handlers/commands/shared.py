@@ -18,7 +18,6 @@ from .....agents.opencode.client import OpenCodeProtocolError
 from .....agents.opencode.supervisor import OpenCodeSupervisorError
 from .....agents.registry import get_registered_agents
 from .....agents.types import normalize_runtime_capabilities
-from .....core.coercion import coerce_int
 from .....core.logging_utils import log_event
 from .....core.utils import canonicalize_path
 from ....app_server.client import _normalize_sandbox_policy
@@ -79,17 +78,6 @@ class TelegramCommandSupportMixin:
     and OpenCode session handling across Telegram command handler classes.
     All methods use `self` to access instance attributes.
     """
-
-    def _coerce_optional_int(self, value: Any) -> Optional[int]:
-        """Safely coerce value to int, rejecting bool.
-
-        Args:
-            value: Value to coerce to int.
-
-        Returns:
-            Integer value if coercion succeeds and value is not bool, None otherwise.
-        """
-        return coerce_int(value)
 
     def _agent_descriptor(self, agent: object) -> Any:
         normalized = normalize_chat_agent(
@@ -201,7 +189,7 @@ class TelegramCommandSupportMixin:
         if isinstance(exc, httpx.HTTPStatusError):
             detail = None
             try:
-                detail = self._extract_opencode_error_detail(exc.response.json())
+                detail = extract_opencode_error_detail(exc.response.json())
             except (json.JSONDecodeError, ValueError):
                 detail = None
             if detail:
@@ -216,17 +204,6 @@ class TelegramCommandSupportMixin:
                 return f"OpenCode request failed: {format_public_error(detail)}"
             return "OpenCode request failed."
         return None
-
-    def _extract_opencode_error_detail(self, payload: Any) -> Optional[str]:
-        """Extract error detail from OpenCode response payload.
-
-        Args:
-            payload: Response payload to extract error detail from.
-
-        Returns:
-            Error detail string if found, None otherwise.
-        """
-        return extract_opencode_error_detail(payload)
 
     def _extract_opencode_session_path(self, payload: Any) -> Optional[str]:
         """Extract session path from OpenCode payload.
@@ -259,9 +236,7 @@ class TelegramCommandSupportMixin:
                     return True
                 detail = None
                 try:
-                    detail = self._extract_opencode_error_detail(
-                        current.response.json()
-                    )
+                    detail = extract_opencode_error_detail(current.response.json())
                 except (json.JSONDecodeError, ValueError):
                     detail = None
                 candidates = [detail, current.response.text, str(current)]

@@ -31,13 +31,6 @@ def _normalize_message_request_kind(value: Any) -> MessageRequestKind:
     return "message"
 
 
-def _normalize_target_kind(value: Any) -> TargetKind:
-    normalized = _normalize_optional_text(value)
-    if normalized == "flow":
-        return "flow"
-    return "thread"
-
-
 def _normalize_busy_thread_policy(value: Any) -> BusyThreadPolicy:
     normalized = _normalize_optional_text(value)
     if normalized == "interrupt":
@@ -45,13 +38,6 @@ def _normalize_busy_thread_policy(value: Any) -> BusyThreadPolicy:
     if normalized == "reject":
         return "reject"
     return "queue"
-
-
-def _normalize_input_items(value: Any) -> Optional[list[dict[str, Any]]]:
-    if not isinstance(value, list):
-        return None
-    normalized_items = [dict(item) for item in value if isinstance(item, dict)]
-    return normalized_items or None
 
 
 def normalize_resource_owner_fields(
@@ -299,7 +285,11 @@ class MessageRequest:
             metadata = {}
         return cls(
             target_id=target_id,
-            target_kind=_normalize_target_kind(data.get("target_kind")),
+            target_kind=(
+                "flow"
+                if _normalize_optional_text(data.get("target_kind")) == "flow"
+                else "thread"
+            ),
             message_text=message_text,
             kind=_normalize_message_request_kind(data.get("kind")),
             busy_policy=busy_policy
@@ -308,7 +298,13 @@ class MessageRequest:
             model=_normalize_optional_text(data.get("model")),
             reasoning=_normalize_optional_text(data.get("reasoning")),
             approval_mode=_normalize_optional_text(data.get("approval_mode")),
-            input_items=_normalize_input_items(data.get("input_items")),
+            input_items=(
+                lambda v: (
+                    None
+                    if not isinstance(v, list)
+                    else ([dict(i) for i in v if isinstance(i, dict)] or None)
+                )
+            )(data.get("input_items")),
             context_profile=normalize_car_context_profile(data.get("context_profile")),
             metadata=dict(metadata),
         )

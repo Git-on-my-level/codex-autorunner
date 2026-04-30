@@ -12,8 +12,7 @@ from ...core.pr_binding_runtime import (
 )
 from ...core.pr_bindings import PrBinding
 from ...core.scm_polling_watches import ScmPollingWatch
-from ...core.text_utils import _mapping, _normalize_text
-from .polling_quota import _normalize_positive_int
+from ...core.text_utils import _mapping, _normalize_positive_int, _normalize_text
 
 _ACTIVE_PR_STATES = frozenset({"open", "draft"})
 _VALID_PR_STATES = frozenset({"open", "draft", "closed", "merged"})

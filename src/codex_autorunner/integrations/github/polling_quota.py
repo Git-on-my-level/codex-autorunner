@@ -4,23 +4,12 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Mapping, Optional
 
-from ...core.text_utils import _mapping, _normalize_text
-
-
-def _normalize_positive_int(value: Any) -> Optional[int]:
-    try:
-        normalized = int(value)
-    except (TypeError, ValueError):
-        return None
-    return normalized if normalized > 0 else None
-
-
-def _normalize_non_negative_int(value: Any) -> Optional[int]:
-    try:
-        normalized = int(value)
-    except (TypeError, ValueError):
-        return None
-    return normalized if normalized >= 0 else None
+from ...core.text_utils import (
+    _mapping,
+    _normalize_non_negative_int,
+    _normalize_positive_int,
+    _normalize_text,
+)
 
 
 def _timestamp_from_epoch(epoch_seconds: Optional[int]) -> Optional[str]:

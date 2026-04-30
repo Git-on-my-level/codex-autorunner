@@ -4,19 +4,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from ..config import ConfigError, load_repo_config
 from ..redaction import redact_text
 from ..ticket_flow_projection import select_authoritative_run_record
 from .models import FlowRunRecord, FlowRunStatus
-from .store import FlowStore
-
-
-def _get_durable_writes(repo_root: Path) -> bool:
-    """Get durable_writes from repo config, defaulting to False if uninitialized."""
-    try:
-        return load_repo_config(repo_root).durable_writes
-    except ConfigError:
-        return False
+from .store import FlowStore, _get_durable_writes
 
 
 @dataclass(frozen=True)

@@ -15,7 +15,11 @@ from typing import Any, Callable, Optional
 
 from ...core.sqlite_utils import open_sqlite
 from ...core.state_roots import resolve_global_github_broker_db_path
-from ...core.text_utils import _mapping
+from ...core.text_utils import (
+    _mapping,
+    _normalize_non_negative_int,
+    _normalize_positive_int,
+)
 from ...core.time_utils import now_iso
 
 _LOGGER = logging.getLogger(__name__)
@@ -67,22 +71,6 @@ def _iso_after_seconds(seconds: int) -> str:
     return (_utc_now() + timedelta(seconds=max(0, int(seconds)))).strftime(
         "%Y-%m-%dT%H:%M:%SZ"
     )
-
-
-def _normalize_positive_int(value: Any) -> Optional[int]:
-    try:
-        normalized = int(value)
-    except (TypeError, ValueError):
-        return None
-    return normalized if normalized > 0 else None
-
-
-def _normalize_non_negative_int(value: Any) -> Optional[int]:
-    try:
-        normalized = int(value)
-    except (TypeError, ValueError):
-        return None
-    return normalized if normalized >= 0 else None
 
 
 def looks_like_rate_limit(detail: str) -> bool:

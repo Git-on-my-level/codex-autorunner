@@ -152,14 +152,6 @@ def _extract_output_delta(params: dict[str, Any]) -> str:
     return _event_extract_output_delta(params, include_part_text=True)
 
 
-def _extract_output_delta_only(params: dict[str, Any]) -> str:
-    return _event_extract_output_delta(params, include_part_text=False)
-
-
-def _extract_session_update(params: dict[str, Any]) -> dict[str, Any]:
-    return _shared_acp_session_update(params)
-
-
 def _extract_session_update_message_params(update: dict[str, Any]) -> dict[str, Any]:
     content = update.get("content")
     if isinstance(content, dict):
@@ -387,7 +379,7 @@ def _extract_opencode_reasoning_text(
             state.reasoning_buffers[key] = full_text
         return full_text
 
-    delta_text = _extract_output_delta_only(params)
+    delta_text = _event_extract_output_delta(params, include_part_text=False)
     if not delta_text:
         return ""
     if key:
@@ -1010,7 +1002,7 @@ class SessionUpdateDecoder(MessageDecoder):
         return []
 
     def _decode_session_update(self, params, state, ts, acp):
-        update = _extract_session_update(params)
+        update = _shared_acp_session_update(params)
         update_kind = acp.session_update_kind or ""
         if update_kind == "agent_message_chunk":
             if acp.message_phase == "commentary":

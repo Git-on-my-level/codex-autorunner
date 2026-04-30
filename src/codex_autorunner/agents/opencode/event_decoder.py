@@ -141,7 +141,8 @@ def _decode_permission_event(event: SSEEvent) -> Optional[PermissionEvent]:
     if not permission_id:
         return None
 
-    permission = _extract_permission(payload)
+    _perm = payload.get("permission")
+    permission: str = _perm if isinstance(_perm, str) else "unknown"
     reason = payload.get("reason")
 
     return PermissionEvent(
@@ -160,13 +161,6 @@ def _extract_permission_id(payload: dict[str, Any]) -> Optional[str]:
     return None
 
 
-def _extract_permission(payload: dict[str, Any]) -> str:
-    permission = payload.get("permission")
-    if isinstance(permission, str):
-        return permission
-    return "unknown"
-
-
 def _decode_question_event(event: SSEEvent) -> Optional[QuestionEvent]:
     try:
         payload = json.loads(event.data)
@@ -181,7 +175,9 @@ def _decode_question_event(event: SSEEvent) -> Optional[QuestionEvent]:
         return None
 
     question = payload.get("question")
-    context = _extract_question_context(payload)
+    context = (
+        payload.get("context") if isinstance(payload.get("context"), list) else None
+    )
 
     return QuestionEvent(
         event_type=event.event,
@@ -196,13 +192,6 @@ def _extract_question_id(payload: dict[str, Any]) -> Optional[str]:
         value = payload.get(key)
         if isinstance(value, str) and value:
             return value
-    return None
-
-
-def _extract_question_context(payload: dict[str, Any]) -> Optional[list[list[str]]]:
-    context = payload.get("context")
-    if isinstance(context, list):
-        return context
     return None
 
 

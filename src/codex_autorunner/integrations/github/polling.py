@@ -17,7 +17,11 @@ from ...core.pr_bindings import PrBinding, PrBindingStore
 from ...core.scm_events import ScmEventStore
 from ...core.scm_polling_watches import ScmPollingWatch, ScmPollingWatchStore
 from ...core.scm_reaction_types import ScmReactionConfig
-from ...core.text_utils import _mapping, _normalize_text, lock_path_for
+from ...core.text_utils import (
+    _mapping,
+    _normalize_text,
+    lock_path_for,
+)
 from ...core.time_utils import now_iso
 from ...core.utils import atomic_write, read_json
 from .broker import looks_like_rate_limit
@@ -96,14 +100,6 @@ def _parse_optional_iso(value: Any) -> Optional[datetime]:
         return _parse_iso(normalized)
     except ValueError:
         return None
-
-
-def _normalize_positive_int(value: Any) -> Optional[int]:
-    try:
-        normalized = int(value)
-    except (TypeError, ValueError):
-        return None
-    return normalized if normalized > 0 else None
 
 
 def _normalize_lower_text(value: Any) -> Optional[str]:

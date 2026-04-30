@@ -24,14 +24,13 @@ from typing import Any, Optional
 import yaml
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 
-from ....core.config import ConfigError, load_repo_config
 from ....core.filebox import ensure_structure, save_file
 from ....core.flows.failure_diagnostics import (
     format_failure_summary,
     get_failure_payload,
 )
 from ....core.flows.models import FlowRunStatus
-from ....core.flows.store import FlowStore
+from ....core.flows.store import FlowStore, _get_durable_writes
 from ....core.flows.workspace_root import resolve_ticket_flow_workspace_root
 from ....core.state_roots import resolve_repo_flows_db_path
 from ....core.utils import find_repo_root
@@ -66,13 +65,6 @@ def _resolve_workspace_root(record_input: dict[str, Any], repo_root: Path) -> Pa
         return resolve_ticket_flow_workspace_root(record_input, repo_root)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-
-def _get_durable_writes(repo_root: Path) -> bool:
-    try:
-        return load_repo_config(repo_root).durable_writes
-    except ConfigError:
-        return False
 
 
 def _collect_dispatch_history(

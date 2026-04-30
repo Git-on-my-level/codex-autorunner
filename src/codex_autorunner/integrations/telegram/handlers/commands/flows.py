@@ -6,6 +6,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Optional, TypeVar
 
+from .....core.coercion import coerce_int
 from .....core.config import ConfigError, load_repo_config
 from .....core.flows import (
     FLOW_ACTION_TOKENS,
@@ -1381,7 +1382,7 @@ class FlowCommands(TelegramCommandSupportMixin):
         limit = 5
         limit_raw = self._first_non_flag(argv)
         if limit_raw:
-            limit_value = self._coerce_optional_int(limit_raw)
+            limit_value = coerce_int(limit_raw)
             if limit_value is None or limit_value <= 0:
                 await self._send_message(
                     message.chat_id,
