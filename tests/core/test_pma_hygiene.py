@@ -13,7 +13,6 @@ from codex_autorunner.core.config import (
     load_hub_config,
 )
 from codex_autorunner.core.filebox import ensure_structure, inbox_dir
-from codex_autorunner.core.git_utils import run_git
 from codex_autorunner.core.hub import HubSupervisor
 from codex_autorunner.core.orchestration.bindings import OrchestrationBindingStore
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
@@ -34,6 +33,7 @@ from codex_autorunner.integrations.agents.wiring import (
 from codex_autorunner.manifest import load_manifest
 from codex_autorunner.surfaces.cli.pma_cli import pma_app
 from tests.conftest import write_test_config
+from tests.support.git_test_helpers import init_git_repo as _init_git_repo
 
 
 def _iso(dt: datetime) -> str:
@@ -90,26 +90,6 @@ def _reviewed_thread_cleanup_report(managed_thread_id: str) -> dict[str, object]
             ],
         }
     }
-
-
-def _init_git_repo(path: Path) -> None:
-    path.mkdir(parents=True, exist_ok=True)
-    run_git(["init"], path, check=True)
-    (path / "README.md").write_text("hello\n", encoding="utf-8")
-    run_git(["add", "README.md"], path, check=True)
-    run_git(
-        [
-            "-c",
-            "user.name=Test",
-            "-c",
-            "user.email=test@example.com",
-            "commit",
-            "-m",
-            "init",
-        ],
-        path,
-        check=True,
-    )
 
 
 def _build_supervisor(hub_root: Path) -> HubSupervisor:

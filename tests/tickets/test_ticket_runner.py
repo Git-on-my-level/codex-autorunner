@@ -9,6 +9,8 @@ import pytest
 
 pytestmark = pytest.mark.slow
 
+from tests.support.git_test_helpers import init_git_repo as _init_git_repo
+
 from codex_autorunner.agents.hermes_identity import CanonicalHermesIdentity
 from codex_autorunner.tickets import runner as runner_module
 from codex_autorunner.tickets import runner_selection as runner_selection_module
@@ -65,29 +67,6 @@ def _set_ticket_id(path: Path, ticket_id: str) -> None:
             lines[index] = f'ticket_id: "{ticket_id}"'
             break
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
-def _init_git_repo(path: Path) -> None:
-    subprocess.run(["git", "init"], cwd=path, check=True, capture_output=True)
-    subprocess.run(
-        ["git", "config", "user.email", "test@example.com"],
-        cwd=path,
-        check=True,
-        capture_output=True,
-    )
-    subprocess.run(
-        ["git", "config", "user.name", "Test User"],
-        cwd=path,
-        check=True,
-        capture_output=True,
-    )
-    (path / "README.md").write_text("seed\n", encoding="utf-8")
-    subprocess.run(
-        ["git", "add", "README.md"], cwd=path, check=True, capture_output=True
-    )
-    subprocess.run(
-        ["git", "commit", "-m", "init"], cwd=path, check=True, capture_output=True
-    )
 
 
 def test_ticket_run_config_default_max_turns() -> None:

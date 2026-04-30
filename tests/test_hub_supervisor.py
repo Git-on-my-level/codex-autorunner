@@ -51,29 +51,10 @@ from codex_autorunner.integrations.agents.wiring import (
 from codex_autorunner.manifest import load_manifest, sanitize_repo_id, save_manifest
 from codex_autorunner.server import create_hub_app
 from tests.conftest import write_test_config
+from tests.support.git_test_helpers import init_git_repo as _init_git_repo
 from tests.support.waits import wait_for_predicate
 
 pytestmark = pytest.mark.slow
-
-
-def _init_git_repo(path: Path) -> None:
-    path.mkdir(parents=True, exist_ok=True)
-    run_git(["init"], path, check=True)
-    (path / "README.md").write_text("hello\n", encoding="utf-8")
-    run_git(["add", "README.md"], path, check=True)
-    run_git(
-        [
-            "-c",
-            "user.name=Test",
-            "-c",
-            "user.email=test@example.com",
-            "commit",
-            "-m",
-            "init",
-        ],
-        path,
-        check=True,
-    )
 
 
 def _git_stdout(path: Path, *args: str) -> str:

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 from typing import Any, List
 
@@ -9,6 +8,7 @@ import pytest
 from codex_autorunner.core.flows.controller import FlowController
 from codex_autorunner.core.flows.definition import FlowDefinition, StepOutcome
 from codex_autorunner.core.flows.models import FlowEventType, FlowRunStatus
+from tests.support.git_test_helpers import init_git_repo as _init_git_repo
 
 
 def _make_controller(
@@ -30,29 +30,6 @@ def _make_controller(
     )
     controller.initialize()
     return controller
-
-
-def _init_git_repo(path: Path) -> None:
-    subprocess.run(["git", "init"], cwd=path, check=True, capture_output=True)
-    subprocess.run(
-        ["git", "config", "user.email", "test@example.com"],
-        cwd=path,
-        check=True,
-        capture_output=True,
-    )
-    subprocess.run(
-        ["git", "config", "user.name", "Test User"],
-        cwd=path,
-        check=True,
-        capture_output=True,
-    )
-    (path / "README.md").write_text("seed\n", encoding="utf-8")
-    subprocess.run(
-        ["git", "add", "README.md"], cwd=path, check=True, capture_output=True
-    )
-    subprocess.run(
-        ["git", "commit", "-m", "init"], cwd=path, check=True, capture_output=True
-    )
 
 
 @pytest.mark.asyncio
