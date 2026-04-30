@@ -84,6 +84,15 @@ hooks:
     - artifacts:
         - "artifacts/summary.md"
         - "artifacts/summary.png"
+  after_flow_archive:
+    - cleanup_paths:
+        - "state/run.json"
+        - "state/iterations.jsonl"
+        - "state/apply-inputs.json"
+        - "artifacts/summary.md"
+        - "artifacts/summary.svg"
+        - "artifacts/summary.png"
+      failure: warn
 
 permissions:
   network: false

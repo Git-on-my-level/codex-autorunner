@@ -11,6 +11,7 @@ from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.core.apps import (
     AppHookPoint,
     InstalledAppHook,
+    execute_app_archive_cleanup_hooks,
     execute_matching_installed_app_hooks,
     install_app,
     list_installed_app_hooks,
@@ -61,9 +62,17 @@ def _write_hook_app(
     when: dict,
     failure: str = "warn",
     mode: str = "record",
+    cleanup_paths: list[str] | None = None,
 ) -> None:
     app_root = app_repo / "apps" / slug
     (app_root / "scripts").mkdir(parents=True, exist_ok=True)
+    hook_entry = {
+        "tool": "run-hook",
+        "when": when,
+        "failure": failure,
+    }
+    if cleanup_paths is not None:
+        hook_entry["cleanup_paths"] = cleanup_paths
     manifest = {
         "schema_version": 1,
         "id": app_id,
@@ -76,15 +85,7 @@ def _write_hook_app(
                 "timeout_seconds": 5,
             }
         },
-        "hooks": {
-            hook_point: [
-                {
-                    "tool": "run-hook",
-                    "when": when,
-                    "failure": failure,
-                }
-            ]
-        },
+        "hooks": {hook_point: [hook_entry]},
     }
     (app_root / "car-app.yaml").write_text(
         yaml.safe_dump(manifest, sort_keys=False),
@@ -192,6 +193,72 @@ body
     )
     assert matches_installed_app_hook(status_hook, flow_status="completed")
     assert not matches_installed_app_hook(status_hook, flow_status="failed")
+
+
+def test_archive_cleanup_hook_removes_only_declared_app_runtime_paths(
+    tmp_path: Path,
+) -> None:
+    repo_root, app_id = _setup_installed_app(
+        tmp_path,
+        slug="cleanup",
+        app_id="local.cleanup",
+        hook_point="after_flow_archive",
+        when={"status": "completed"},
+        cleanup_paths=[
+            "state/run.json",
+            "state/iterations.jsonl",
+            "artifacts/summary.md",
+            "artifacts/missing.md",
+        ],
+    )
+    app_root = repo_root / ".codex-autorunner" / "apps" / app_id
+    (app_root / "state" / "run.json").write_text("{}", encoding="utf-8")
+    (app_root / "state" / "iterations.jsonl").write_text("", encoding="utf-8")
+    (app_root / "artifacts" / "summary.md").write_text("summary", encoding="utf-8")
+
+    result = execute_app_archive_cleanup_hooks(
+        repo_root,
+        flow_run_id="run-cleanup",
+        flow_status="completed",
+    )
+
+    assert result.failed is False
+    assert len(result.entries) == 1
+    assert sorted(result.entries[0].removed_paths) == [
+        "artifacts/summary.md",
+        "state/iterations.jsonl",
+        "state/run.json",
+    ]
+    assert result.entries[0].missing_paths == ("artifacts/missing.md",)
+    assert not (app_root / "state" / "run.json").exists()
+    assert not (app_root / "state" / "iterations.jsonl").exists()
+    assert not (app_root / "artifacts" / "summary.md").exists()
+    assert (app_root / "bundle" / "car-app.yaml").exists()
+
+
+def test_archive_cleanup_hook_rejects_paths_outside_runtime_roots(
+    tmp_path: Path,
+) -> None:
+    repo_root, app_id = _setup_installed_app(
+        tmp_path,
+        slug="cleanup-escape",
+        app_id="local.cleanup-escape",
+        hook_point="after_flow_archive",
+        when={"status": "completed"},
+        cleanup_paths=["bundle/car-app.yaml"],
+    )
+    app_root = repo_root / ".codex-autorunner" / "apps" / app_id
+
+    result = execute_app_archive_cleanup_hooks(
+        repo_root,
+        flow_run_id="run-cleanup",
+        flow_status="completed",
+    )
+
+    assert result.failed is True
+    assert len(result.entries) == 1
+    assert "state/, artifacts/, or logs/" in (result.entries[0].error or "")
+    assert (app_root / "bundle" / "car-app.yaml").exists()
 
 
 def test_execute_matching_installed_app_hooks_runs_matching_tool(

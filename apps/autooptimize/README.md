@@ -111,5 +111,7 @@ resume, review, and audit.
 - It does not add CAR-core schemas, background loops, or web UI.
 - Guard commands are recorded in run state but must still be run explicitly by
   the agent.
-- `before_chat_wrapup` currently attaches generated artifacts; rendering is
-  performed by the explicit closeout step and the `after_flow_terminal` hook.
+- `before_chat_wrapup` attaches generated artifacts; rendering is performed by
+  the explicit closeout step and the `after_flow_terminal` hook.
+- `after_flow_archive` declares app-local state/artifact files that CAR deletes
+  after the ticket-flow archive has copied review artifacts.

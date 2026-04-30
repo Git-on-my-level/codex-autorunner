@@ -165,6 +165,16 @@ class TestFullManifest:
                 "before_chat_wrapup": [
                     {"artifacts": ["artifacts/summary.png", "artifacts/summary.md"]}
                 ],
+                "after_flow_archive": [
+                    {
+                        "cleanup_paths": [
+                            "state/run.json",
+                            "state/iterations.jsonl",
+                            "artifacts/summary.md",
+                        ],
+                        "failure": "warn",
+                    }
+                ],
             },
             permissions={
                 "network": False,
@@ -186,13 +196,20 @@ class TestFullManifest:
         assert m.tools["render-card"].outputs[0].kind == "image"
         assert m.tools["render-card"].outputs[0].path == "artifacts/summary.png"
 
-        assert len(m.hooks) == 3
+        assert len(m.hooks) == 4
         hook_points = {h.point for h in m.hooks}
         assert hook_points == {
             "after_ticket_done",
             "after_flow_terminal",
+            "after_flow_archive",
             "before_chat_wrapup",
         }
+        archive_hook = next(h for h in m.hooks if h.point == "after_flow_archive")
+        assert archive_hook.entries[0].cleanup_paths == [
+            "state/run.json",
+            "state/iterations.jsonl",
+            "artifacts/summary.md",
+        ]
 
         assert m.permissions.network is False
         assert m.permissions.writes == ["state/**", "artifacts/**"]
@@ -332,6 +349,16 @@ class TestInvalidManifest:
                 _minimal_manifest(
                     tools={"t": {"argv": ["echo"]}},
                     hooks={"after_ticket_done": [{"tool": "t", "failure": "explode"}]},
+                )
+            )
+
+    def test_dot_dot_in_cleanup_path(self):
+        with pytest.raises(AppPathError, match=r"\.\."):
+            parse_app_manifest(
+                _minimal_manifest(
+                    hooks={
+                        "after_flow_archive": [{"cleanup_paths": ["state/../outside"]}]
+                    },
                 )
             )
 

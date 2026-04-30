@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import shutil
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Mapping, Optional
+from typing import Any, Callable, Iterable, Mapping, Optional
 
 from ..flows.models import FlowEventType
-from .install import AppInstallError, list_installed_apps
+from .install import AppInstallError, InstalledAppInfo, list_installed_apps
+from .paths import AppPathError, validate_app_glob
 from .tool_runner import (
     AppToolRunnerError,
     AppToolRunResult,
@@ -21,6 +23,7 @@ _logger = logging.getLogger(__name__)
 class AppHookPoint(str, Enum):
     AFTER_TICKET_DONE = "after_ticket_done"
     AFTER_FLOW_TERMINAL = "after_flow_terminal"
+    AFTER_FLOW_ARCHIVE = "after_flow_archive"
     BEFORE_CHAT_WRAPUP = "before_chat_wrapup"
 
 
@@ -58,6 +61,26 @@ class AppHookInvocationResult:
     failed: bool = False
     reason: Optional[str] = None
     reason_details: Optional[str] = None
+
+
+@dataclasses.dataclass(frozen=True)
+class AppArchiveCleanupEntry:
+    app_id: str
+    hook_point: AppHookPoint
+    cleanup_paths: tuple[str, ...]
+    removed_paths: tuple[str, ...] = ()
+    missing_paths: tuple[str, ...] = ()
+    error: Optional[str] = None
+
+
+@dataclasses.dataclass(frozen=True)
+class AppArchiveCleanupResult:
+    hook_point: AppHookPoint
+    entries: tuple[AppArchiveCleanupEntry, ...] = ()
+
+    @property
+    def failed(self) -> bool:
+        return any(entry.error is not None for entry in self.entries)
 
 
 EmitHookEventFn = Callable[[FlowEventType, dict[str, Any]], None]
@@ -218,6 +241,181 @@ def execute_matching_installed_app_hooks(
         hook_point=point,
         executions=tuple(executions),
     )
+
+
+def execute_app_archive_cleanup_hooks(
+    repo_root: Path,
+    *,
+    flow_run_id: Optional[str] = None,
+    flow_status: Any = None,
+) -> AppArchiveCleanupResult:
+    """Apply constrained cleanup declarations for installed apps after archiving.
+
+    This lifecycle hook is intentionally data-driven: app manifests can declare
+    app-local runtime paths to delete, but CAR performs the deletion after
+    validating that every target is under that app's own state/artifacts/logs
+    roots. Hook cleanup cannot target the bundle, lockfile, tickets, or repo
+    files.
+    """
+
+    point = AppHookPoint.AFTER_FLOW_ARCHIVE
+    repo_root = repo_root.resolve()
+    try:
+        apps = list_installed_apps(repo_root)
+    except AppInstallError as exc:
+        raise AppHookExecutionError(str(exc)) from exc
+
+    entries: list[AppArchiveCleanupEntry] = []
+    for installed in apps:
+        for hook in installed.manifest.hooks:
+            if hook.point != point.value:
+                continue
+            for hook_entry in hook.entries:
+                installed_hook = InstalledAppHook(
+                    app_id=installed.app_id,
+                    tool_id="",
+                    hook_point=point,
+                    failure=hook_entry.failure,
+                    when=dict(hook_entry.when or {}),
+                )
+                if not matches_installed_app_hook(
+                    installed_hook,
+                    flow_status=flow_status,
+                ):
+                    continue
+                cleanup_paths = tuple(hook_entry.cleanup_paths)
+                if not cleanup_paths:
+                    continue
+                try:
+                    removed, missing = _cleanup_installed_app_paths(
+                        installed,
+                        cleanup_paths,
+                    )
+                    entries.append(
+                        AppArchiveCleanupEntry(
+                            app_id=installed.app_id,
+                            hook_point=point,
+                            cleanup_paths=cleanup_paths,
+                            removed_paths=tuple(removed),
+                            missing_paths=tuple(missing),
+                        )
+                    )
+                except Exception as exc:
+                    _logger.warning(
+                        "App archive cleanup failed: app=%s flow_run_id=%s error=%s",
+                        installed.app_id,
+                        flow_run_id,
+                        exc,
+                    )
+                    entries.append(
+                        AppArchiveCleanupEntry(
+                            app_id=installed.app_id,
+                            hook_point=point,
+                            cleanup_paths=cleanup_paths,
+                            error=str(exc).strip() or exc.__class__.__name__,
+                        )
+                    )
+    return AppArchiveCleanupResult(hook_point=point, entries=tuple(entries))
+
+
+def _cleanup_installed_app_paths(
+    installed: InstalledAppInfo,
+    cleanup_paths: Iterable[str],
+) -> tuple[list[str], list[str]]:
+    removed: list[str] = []
+    missing: list[str] = []
+    targets: dict[Path, str] = {}
+
+    for raw_path in cleanup_paths:
+        for target, display_path in _resolve_cleanup_targets(installed, raw_path):
+            targets[target] = display_path
+        if not any(
+            True for _ in _resolve_existing_cleanup_targets(installed, raw_path)
+        ):
+            missing.append(raw_path)
+
+    for target, display_path in sorted(
+        targets.items(),
+        key=lambda item: len(item[0].parts),
+        reverse=True,
+    ):
+        _ensure_cleanup_target_allowed(installed, target)
+        if not target.exists() and not target.is_symlink():
+            continue
+        if target.is_dir() and not target.is_symlink():
+            shutil.rmtree(target)
+        else:
+            target.unlink()
+        removed.append(display_path)
+
+    return sorted(set(removed)), sorted(set(missing))
+
+
+def _resolve_cleanup_targets(
+    installed: InstalledAppInfo, raw_path: str
+) -> Iterable[tuple[Path, str]]:
+    normalized = _normalize_cleanup_path(raw_path)
+    app_root = installed.paths.app_root.resolve()
+    if _contains_glob(normalized):
+        for match in app_root.glob(normalized):
+            resolved = match.resolve()
+            _ensure_cleanup_target_allowed(installed, resolved)
+            yield resolved, resolved.relative_to(app_root).as_posix()
+        return
+    resolved = (app_root / normalized).resolve()
+    _ensure_cleanup_target_allowed(installed, resolved)
+    yield resolved, normalized
+
+
+def _resolve_existing_cleanup_targets(
+    installed: InstalledAppInfo, raw_path: str
+) -> Iterable[Path]:
+    for target, _display_path in _resolve_cleanup_targets(installed, raw_path):
+        if target.exists() or target.is_symlink():
+            yield target
+
+
+def _normalize_cleanup_path(raw_path: str) -> str:
+    try:
+        normalized = validate_app_glob(raw_path)
+    except AppPathError as exc:
+        raise AppHookExecutionError(
+            f"Invalid archive cleanup path {raw_path!r}: {exc}"
+        ) from exc
+    parts = normalized.parts
+    if not parts or parts[0] not in {"state", "artifacts", "logs"}:
+        raise AppHookExecutionError(
+            "Archive cleanup paths must be under state/, artifacts/, or logs/: "
+            f"{raw_path!r}"
+        )
+    if len(parts) == 1:
+        raise AppHookExecutionError(
+            f"Archive cleanup path must not target a runtime root directly: {raw_path!r}"
+        )
+    return normalized.as_posix()
+
+
+def _contains_glob(path: str) -> bool:
+    return "*" in path or "?" in path
+
+
+def _ensure_cleanup_target_allowed(
+    installed: InstalledAppInfo,
+    target: Path,
+) -> None:
+    resolved_target = target.resolve()
+    allowed_roots = (
+        installed.paths.state_root.resolve(),
+        installed.paths.artifacts_root.resolve(),
+        installed.paths.logs_root.resolve(),
+    )
+    if not any(
+        resolved_target == root or resolved_target.is_relative_to(root)
+        for root in allowed_roots
+    ):
+        raise AppHookExecutionError(
+            f"Archive cleanup target escapes app runtime roots: {resolved_target}"
+        )
 
 
 def _run_single_hook(

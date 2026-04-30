@@ -4,15 +4,19 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 from typer.testing import CliRunner
 
 import codex_autorunner.core.flows.archive_helpers as archive_helpers_module
 from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.cli import app
+from codex_autorunner.core.apps import install_app
+from codex_autorunner.core.config import CONFIG_FILENAME, load_hub_config
 from codex_autorunner.core.flows.archive_helpers import archive_flow_run_artifacts
 from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.core.flows.store import FlowStore
 from codex_autorunner.core.force_attestation import FORCE_ATTESTATION_REQUIRED_ERROR
+from codex_autorunner.core.git_utils import run_git
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
 
 runner = CliRunner()
@@ -70,6 +74,60 @@ def _setup_repo(tmp_path: Path) -> Path:
         (ca_dir / "contextspace" / name).write_text("", encoding="utf-8")
     seed_hub_files(tmp_path, force=True)
     return repo_root
+
+
+def _install_cleanup_app(tmp_path: Path, repo_root: Path) -> str:
+    app_repo = tmp_path / "app_repo"
+    app_root = app_repo / "apps" / "cleanup"
+    app_root.mkdir(parents=True, exist_ok=True)
+    run_git(["init"], app_repo, check=True)
+    run_git(["config", "user.email", "test@example.com"], app_repo, check=True)
+    run_git(["config", "user.name", "Test User"], app_repo, check=True)
+    run_git(["checkout", "-b", "main"], app_repo, check=True)
+    app_id = "local.cleanup"
+    (app_root / "car-app.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": 1,
+                "id": app_id,
+                "name": "Cleanup",
+                "version": "1.0.0",
+                "hooks": {
+                    "after_flow_archive": [
+                        {
+                            "when": {"status": "stopped"},
+                            "cleanup_paths": [
+                                "state/run.json",
+                                "artifacts/summary.md",
+                            ],
+                            "failure": "warn",
+                        }
+                    ]
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    run_git(["add", "."], app_repo, check=True)
+    run_git(["commit", "-m", "add cleanup app"], app_repo, check=True)
+
+    config_path = tmp_path / CONFIG_FILENAME
+    raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    raw["apps"] = {
+        "enabled": True,
+        "repos": [
+            {
+                "id": "local",
+                "url": str(app_repo),
+                "trusted": True,
+                "default_ref": "main",
+            }
+        ],
+    }
+    config_path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+    install_app(load_hub_config(tmp_path), tmp_path, repo_root, "local:apps/cleanup")
+    return app_id
 
 
 class _RecordingSqliteConnection:
@@ -206,6 +264,39 @@ def test_ticket_flow_archive_moves_run_artifacts_and_deletes_run(
     with FlowStore(db_path) as store:
         store.initialize()
         assert store.get_flow_run(run_id) is None
+
+
+def test_ticket_flow_archive_runs_constrained_app_cleanup(
+    tmp_path: Path,
+) -> None:
+    repo_root = _setup_repo(tmp_path)
+    app_id = _install_cleanup_app(tmp_path, repo_root)
+    app_root = repo_root / ".codex-autorunner" / "apps" / app_id
+    (app_root / "state" / "run.json").write_text("{}", encoding="utf-8")
+    (app_root / "artifacts" / "summary.md").write_text("summary", encoding="utf-8")
+
+    run_id = "10101010-1010-1010-1010-101010101010"
+    _seed_repo_run(repo_root, run_id, FlowRunStatus.STOPPED)
+    run_dir = repo_root / ".codex-autorunner" / "runs" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    payload = archive_flow_run_artifacts(
+        repo_root,
+        run_id=run_id,
+        force=False,
+        delete_run=True,
+    )
+
+    cleanup = payload["app_archive_cleanup"]
+    assert cleanup["failed"] is False
+    assert cleanup["entries"][0]["app_id"] == app_id
+    assert sorted(cleanup["entries"][0]["removed_paths"]) == [
+        "artifacts/summary.md",
+        "state/run.json",
+    ]
+    assert not (app_root / "state" / "run.json").exists()
+    assert not (app_root / "artifacts" / "summary.md").exists()
+    assert (app_root / "bundle" / "car-app.yaml").exists()
 
 
 def test_ticket_flow_archive_also_archives_ticket_flow_pma_threads(
