@@ -1208,6 +1208,22 @@ async def test_discord_approval_component_falls_back_to_edit_when_delete_fails(
         await store.close()
 
 
+def assert_in(substring: str, text: str) -> None:
+    assert substring in text, f"{substring!r} not in {text!r}"
+
+
+def assert_not_in(substring: str, text: str) -> None:
+    assert substring not in text, f"{substring!r} unexpectedly in {text!r}"
+
+
+def assert_eq(actual: object, expected: object) -> None:
+    assert actual == expected, f"{actual!r} != {expected!r}"
+
+
+def assert_starts_with(text: str, prefix: str) -> None:
+    assert text.startswith(prefix), f"{text!r} does not start with {prefix!r}"
+
+
 def _config(
     root: Path,
     *,
@@ -1553,71 +1569,81 @@ def test_model_picker_items_are_deduplicated_and_labeled() -> None:
     ]
 
 
-def test_session_thread_picker_label_prefers_preview_and_marks_current() -> None:
-    label = discord_picker_helpers_module._format_session_thread_picker_label(
-        "019cc7c1-ec10-7981-8e8b-ec5db4619efb",
-        {
-            "id": "019cc7c1-ec10-7981-8e8b-ec5db4619efb",
-            "last_user_message": "Fix resume picker so the options show summaries",
-            "last_assistant_message": "I will update labels to include preview text",
-        },
-        is_current=True,
-    )
-    assert "(current)" in label
-    assert "[019cc7c1]" in label
-    assert "Fix resume picker so the options show summaries" in label
-
-
-def test_session_thread_picker_label_falls_back_to_thread_id() -> None:
-    thread_id = "019cc738-5168-7ca1-9d80-ab180b4b31dd"
-    label = discord_picker_helpers_module._format_session_thread_picker_label(
-        thread_id,
-        {"id": thread_id},
-        is_current=False,
-    )
-    assert label == thread_id
-
-
-def test_session_thread_picker_label_strips_injected_context_from_preview() -> None:
-    thread_id = "019cc77b-ec10-7981-8e8b-ec5db4619efb"
-    label = discord_picker_helpers_module._format_session_thread_picker_label(
-        thread_id,
-        {
-            "id": thread_id,
-            "last_user_message": (
-                "<injected context>\n"
-                "You are operating inside a Codex Autorunner (CAR) managed repo.\n"
-                "</injected context>\n\n"
-                "Resume this thread"
+@pytest.mark.parametrize(
+    "thread_id,thread_data,is_current,assertions",
+    [
+        pytest.param(
+            "019cc7c1-ec10-7981-8e8b-ec5db4619efb",
+            {
+                "id": "019cc7c1-ec10-7981-8e8b-ec5db4619efb",
+                "last_user_message": "Fix resume picker so the options show summaries",
+                "last_assistant_message": "I will update labels to include preview text",
+            },
+            True,
+            lambda label: (
+                assert_in("(current)", label),
+                assert_in("[019cc7c1]", label),
+                assert_in("Fix resume picker so the options show summaries", label),
             ),
-        },
-        is_current=False,
-    )
-    assert "<injected context>" not in label
-    assert "Resume this thread" in label
-
-
-def test_session_thread_picker_label_prioritizes_datetime_and_first_user_message() -> (
-    None
-):
-    thread_id = "019cc77b-ec10-7981-8e8b-ec5db4619efb"
-    label = discord_picker_helpers_module._format_session_thread_picker_label(
-        thread_id,
-        {
-            "id": thread_id,
-            "created_at": "2026-03-31T09:15:00Z",
-            "first_user_message": (
-                "<injected context>\nworkspace details\n</injected context>\n\n"
-                "Fix the Discord resume labels."
+            id="prefers-preview-and-marks-current",
+        ),
+        pytest.param(
+            "019cc738-5168-7ca1-9d80-ab180b4b31dd",
+            {"id": "019cc738-5168-7ca1-9d80-ab180b4b31dd"},
+            False,
+            lambda label: (assert_eq(label, "019cc738-5168-7ca1-9d80-ab180b4b31dd"),),
+            id="falls-back-to-thread-id",
+        ),
+        pytest.param(
+            "019cc77b-ec10-7981-8e8b-ec5db4619efb",
+            {
+                "id": "019cc77b-ec10-7981-8e8b-ec5db4619efb",
+                "last_user_message": (
+                    "<injected context>\n"
+                    "You are operating inside a Codex Autorunner (CAR) managed repo.\n"
+                    "</injected context>\n\n"
+                    "Resume this thread"
+                ),
+            },
+            False,
+            lambda label: (
+                assert_not_in("<injected context>", label),
+                assert_in("Resume this thread", label),
             ),
-            "last_user_message": "Latest request that should not win",
-            "last_assistant_message": "Latest assistant reply",
-        },
-        is_current=False,
+            id="strips-injected-context-from-preview",
+        ),
+        pytest.param(
+            "019cc77b-ec10-7981-8e8b-ec5db4619efb",
+            {
+                "id": "019cc77b-ec10-7981-8e8b-ec5db4619efb",
+                "created_at": "2026-03-31T09:15:00Z",
+                "first_user_message": (
+                    "<injected context>\nworkspace details\n</injected context>\n\n"
+                    "Fix the Discord resume labels."
+                ),
+                "last_user_message": "Latest request that should not win",
+                "last_assistant_message": "Latest assistant reply",
+            },
+            False,
+            lambda label: (
+                assert_starts_with(label, "2026-03-31 09:15Z"),
+                assert_in("Fix the Discord resume labels.", label),
+                assert_not_in("Latest request that should not win", label),
+            ),
+            id="prioritizes-datetime-and-first-user-message",
+        ),
+    ],
+)
+def test_session_thread_picker_label_variants(
+    thread_id: str,
+    thread_data: dict[str, Any],
+    is_current: bool,
+    assertions: Any,
+) -> None:
+    label = discord_picker_helpers_module._format_session_thread_picker_label(
+        thread_id, thread_data, is_current=is_current
     )
-    assert label.startswith("2026-03-31 09:15Z")
-    assert "Fix the Discord resume labels." in label
-    assert "Latest request that should not win" not in label
+    assertions(label)
 
 
 def test_discord_thread_picker_label_prioritizes_datetime_and_strips_car_comment() -> (
@@ -5681,10 +5707,27 @@ async def test_normalized_flow_refresh_component_binding_error_uses_followup(
 
 
 @pytest.mark.anyio
-async def test_unknown_car_subcommand_has_explicit_unknown_message(
+@pytest.mark.parametrize(
+    "gateway_factory,expected_substring",
+    [
+        pytest.param(
+            lambda: _FakeGateway([_interaction(name="mystery", options=[])]),
+            "unknown car subcommand: mystery",
+            id="car-subcommand",
+        ),
+        pytest.param(
+            lambda: _FakeGateway([_pma_interaction(name="mystery")]),
+            "unknown pma subcommand",
+            id="pma-subcommand",
+        ),
+    ],
+)
+async def test_unknown_subcommand_has_explicit_unknown_message(
     tmp_path: Path,
+    gateway_factory: Any,
+    expected_substring: str,
 ) -> None:
-    gateway = _FakeGateway([_interaction(name="mystery", options=[])])
+    gateway = gateway_factory()
     service, rest, store = await _build_service(
         tmp_path, gateway=gateway, init_store=True
     )
@@ -5693,26 +5736,7 @@ async def test_unknown_car_subcommand_has_explicit_unknown_message(
         await service.run_forever()
         assert len(rest.interaction_responses) == 1
         content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
-        assert "unknown car subcommand: mystery" in content
-        assert "not implemented yet for discord" not in content
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
-async def test_unknown_pma_subcommand_has_explicit_unknown_message(
-    tmp_path: Path,
-) -> None:
-    gateway = _FakeGateway([_pma_interaction(name="mystery")])
-    service, rest, store = await _build_service(
-        tmp_path, gateway=gateway, init_store=True
-    )
-
-    try:
-        await service.run_forever()
-        assert len(rest.interaction_responses) == 1
-        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
-        assert "unknown pma subcommand" in content
+        assert expected_substring in content
         assert "not implemented yet for discord" not in content
     finally:
         await store.close()
@@ -8709,46 +8733,20 @@ async def test_component_interaction_update_status_updates_original_message(
 
 
 @pytest.mark.anyio
-async def test_component_interaction_update_target_uses_component_defer(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    "custom_id,values",
+    [
+        pytest.param("update_target_select", ["all"], id="target-select"),
+        pytest.param("update_confirm:all", None, id="confirm-clear-buttons"),
+    ],
+)
+async def test_component_interaction_update_target_spawns_process(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    custom_id: str,
+    values: list[str] | None,
 ) -> None:
-    gateway = _FakeGateway(
-        [_component_interaction(custom_id="update_target_select", values=["all"])]
-    )
-    service, rest, store = await _build_service(
-        tmp_path, gateway=gateway, init_store=True
-    )
-
-    observed: dict[str, Any] = {}
-
-    def _fake_spawn_update_process(**kwargs: Any) -> None:
-        observed.update(kwargs)
-
-    monkeypatch.setattr(
-        discord_update_service_module,
-        "_spawn_update_process",
-        _fake_spawn_update_process,
-    )
-
-    try:
-        await service.run_forever()
-        assert observed["update_target"] == "all"
-        assert len(rest.interaction_responses) == 1
-        assert rest.interaction_responses[0]["payload"]["type"] == 6
-        assert len(rest.edited_original_interaction_responses) == 1
-        payload = rest.edited_original_interaction_responses[0]["payload"]
-        content = payload["content"].lower()
-        assert "preparing update (all)" in content
-        assert payload["components"] == []
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
-async def test_component_interaction_update_confirm_clears_confirmation_buttons(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    gateway = _FakeGateway([_component_interaction(custom_id="update_confirm:all")])
+    gateway = _FakeGateway([_component_interaction(custom_id=custom_id, values=values)])
     service, rest, store = await _build_service(
         tmp_path, gateway=gateway, init_store=True
     )
@@ -8998,8 +8996,43 @@ async def test_car_update_rejects_invalid_target(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
-async def test_car_experimental_enable_without_feature_returns_usage(
+@pytest.mark.parametrize(
+    "gateway_factory,expected_in_content",
+    [
+        pytest.param(
+            lambda: _FakeGateway(
+                [
+                    _interaction_path(
+                        command_path=("car", "admin", "experimental"),
+                        options=[{"type": 3, "name": "action", "value": "enable"}],
+                    )
+                ]
+            ),
+            ["missing feature for `enable`", "/car admin experimental action:list"],
+            id="enable-without-feature",
+        ),
+        pytest.param(
+            lambda: _FakeGateway(
+                [
+                    _interaction(
+                        name="experimental",
+                        options=[{"type": 3, "name": "action", "value": "toggle"}],
+                    )
+                ]
+            ),
+            [
+                "unknown action: toggle",
+                "valid actions: list, enable, disable",
+                "/car admin experimental action:list",
+            ],
+            id="unknown-action",
+        ),
+    ],
+)
+async def test_car_experimental_action_validation(
     tmp_path: Path,
+    gateway_factory: Any,
+    expected_in_content: list[str],
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -9012,14 +9045,7 @@ async def test_car_experimental_enable_without_feature_returns_usage(
         repo_id="repo-1",
     )
     rest = _FakeRest()
-    gateway = _FakeGateway(
-        [
-            _interaction_path(
-                command_path=("car", "admin", "experimental"),
-                options=[{"type": 3, "name": "action", "value": "enable"}],
-            )
-        ]
-    )
+    gateway = gateway_factory()
     service = DiscordBotService(
         _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
         logger=logging.getLogger("test"),
@@ -9033,51 +9059,8 @@ async def test_car_experimental_enable_without_feature_returns_usage(
         await service.run_forever()
         assert len(rest.interaction_responses) == 1
         content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
-        assert "missing feature for `enable`" in content
-        assert "/car admin experimental action:list" in content
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
-async def test_car_experimental_unknown_action_returns_guidance(
-    tmp_path: Path,
-) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id="repo-1",
-    )
-    rest = _FakeRest()
-    gateway = _FakeGateway(
-        [
-            _interaction(
-                name="experimental",
-                options=[{"type": 3, "name": "action", "value": "toggle"}],
-            )
-        ]
-    )
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
-
-    try:
-        await service.run_forever()
-        assert len(rest.interaction_responses) == 1
-        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
-        assert "unknown action: toggle" in content
-        assert "valid actions: list, enable, disable" in content
-        assert "/car admin experimental action:list" in content
+        for expected in expected_in_content:
+            assert expected in content
     finally:
         await store.close()
 
@@ -9337,9 +9320,32 @@ async def test_run_agent_turn_for_message_wraps_typing_indicator(
 
 
 @pytest.mark.anyio
-async def test_run_agent_turn_for_message_forwards_managed_thread_delivery_suppression(
+@pytest.mark.parametrize(
+    "orchestrator_key,monkeypatch_target,monkeypatch_fn,suppress_kwarg",
+    [
+        pytest.param(
+            "pma:channel-1",
+            "run_managed_thread_turn_for_message",
+            "run_managed_thread_turn_for_message",
+            "suppress_managed_thread_delivery",
+            id="managed-thread",
+        ),
+        pytest.param(
+            "channel-1",
+            "run_agent_turn_for_message",
+            "run_agent_turn_for_message",
+            "suppress_managed_thread_delivery",
+            id="repo-delivery",
+        ),
+    ],
+)
+async def test_run_agent_turn_for_message_forwards_delivery_suppression(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    orchestrator_key: str,
+    monkeypatch_target: str,
+    monkeypatch_fn: str,
+    suppress_kwarg: str,
 ) -> None:
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
     await store.initialize()
@@ -9353,7 +9359,7 @@ async def test_run_agent_turn_for_message_forwards_managed_thread_delivery_suppr
     )
     captured: dict[str, Any] = {}
 
-    async def _fake_run_managed_thread_turn_for_message(
+    async def _fake_run(
         _service: Any,
         **kwargs: Any,
     ) -> DiscordMessageTurnResult:
@@ -9362,8 +9368,8 @@ async def test_run_agent_turn_for_message_forwards_managed_thread_delivery_suppr
 
     monkeypatch.setattr(
         discord_service_module,
-        "run_managed_thread_turn_for_message",
-        _fake_run_managed_thread_turn_for_message,
+        monkeypatch_fn,
+        _fake_run,
     )
 
     try:
@@ -9374,66 +9380,61 @@ async def test_run_agent_turn_for_message_forwards_managed_thread_delivery_suppr
             model_override=None,
             reasoning_effort=None,
             session_key="session-1",
-            orchestrator_channel_key="pma:channel-1",
+            orchestrator_channel_key=orchestrator_key,
             suppress_managed_thread_delivery=True,
         )
         assert result.final_message == "ok"
-        assert captured["suppress_managed_thread_delivery"] is True
+        assert captured[suppress_kwarg] is True
     finally:
         await store.close()
 
 
 @pytest.mark.anyio
-async def test_run_agent_turn_for_message_forwards_repo_delivery_suppression(
+@pytest.mark.parametrize(
+    "task_context,reconcile_return,allow_fallback,expected_messages",
+    [
+        pytest.param(
+            {
+                "failure_note": "worker lost",
+                "channel_id": "channel-1",
+                "managed_thread_id": "thread-1",
+                "execution_id": "exec-1",
+                "lease_id": "lease-1",
+            },
+            0,
+            False,
+            [],
+            id="no-channel-fallback",
+        ),
+        pytest.param(
+            {
+                "failure_note": "worker lost",
+                "channel_id": "channel-1",
+            },
+            0,
+            True,
+            [{"payload": {"content": "worker lost"}}],
+            id="explicit-channel-fallback",
+        ),
+        pytest.param(
+            {
+                "failure_note": "worker lost",
+                "channel_id": "channel-1",
+            },
+            2,
+            False,
+            [],
+            id="successful-reconcile-count",
+        ),
+    ],
+)
+async def test_reconcile_background_task_failure_variants(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=_FakeRest(),
-        gateway_client=_FakeGateway([]),
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
-    captured: dict[str, Any] = {}
-
-    async def _fake_run_agent_turn_for_message(
-        _service: Any,
-        **kwargs: Any,
-    ) -> DiscordMessageTurnResult:
-        captured.update(kwargs)
-        return DiscordMessageTurnResult(final_message="ok")
-
-    monkeypatch.setattr(
-        discord_service_module,
-        "run_agent_turn_for_message",
-        _fake_run_agent_turn_for_message,
-    )
-
-    try:
-        result = await service._run_agent_turn_for_message(
-            workspace_root=tmp_path,
-            prompt_text="hello",
-            agent="codex",
-            model_override=None,
-            reasoning_effort=None,
-            session_key="session-1",
-            orchestrator_channel_key="channel-1",
-            suppress_managed_thread_delivery=True,
-        )
-        assert result.final_message == "ok"
-        assert captured["suppress_managed_thread_delivery"] is True
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
-async def test_reconcile_background_task_failure_does_not_fabricate_channel_fallback(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    task_context: dict[str, Any],
+    reconcile_return: int,
+    allow_fallback: bool,
+    expected_messages: list[dict[str, Any]],
 ) -> None:
     from codex_autorunner.integrations.discord.service_lifecycle import (
         reconcile_background_task_failure,
@@ -9443,7 +9444,7 @@ async def test_reconcile_background_task_failure_does_not_fabricate_channel_fall
     log_events: list[dict[str, Any]] = []
 
     async def _fake_reconcile(service, **kwargs):  # type: ignore[no-untyped-def]
-        return 0
+        return reconcile_return
 
     def _fake_log_event(logger, level, event_name, **kwargs):  # type: ignore[no-untyped-def]
         log_events.append({"level": level, "event_name": event_name, **kwargs})
@@ -9465,117 +9466,32 @@ async def test_reconcile_background_task_failure_does_not_fabricate_channel_fall
         ) -> None:
             sent_messages.append({"channel_id": channel_id, "payload": payload})
 
-    task_context = {
-        "failure_note": "worker lost",
-        "channel_id": "channel-1",
-        "managed_thread_id": "thread-1",
-        "execution_id": "exec-1",
-        "lease_id": "lease-1",
-    }
-
-    result = await reconcile_background_task_failure(_FakeService(), task_context)
-
-    assert result == 0
-    assert sent_messages == []
-    reconcile_failures = [
-        e
-        for e in log_events
-        if e["event_name"] == "discord.background_task.reconcile_failed"
-    ]
-    assert len(reconcile_failures) == 1
-    assert reconcile_failures[0]["channel_id"] == "channel-1"
-    assert reconcile_failures[0]["managed_thread_id"] == "thread-1"
-    assert reconcile_failures[0]["level"] == logging.ERROR
-
-
-@pytest.mark.anyio
-async def test_reconcile_background_task_failure_sends_channel_message_when_explicitly_allowed(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from codex_autorunner.integrations.discord.service_lifecycle import (
-        reconcile_background_task_failure,
-    )
-
-    sent_messages: list[dict[str, Any]] = []
-
-    async def _fake_reconcile(service, **kwargs):  # type: ignore[no-untyped-def]
-        return 0
-
-    def _fake_log_event(logger, level, event_name, **kwargs):  # type: ignore[no-untyped-def]
-        pass
-
-    import codex_autorunner.integrations.discord.progress_leases as _progress_leases
-    import codex_autorunner.integrations.discord.service_lifecycle as _lifecycle_mod
-
-    monkeypatch.setattr(
-        _progress_leases, "reconcile_discord_turn_progress_leases", _fake_reconcile
-    )
-    monkeypatch.setattr(_lifecycle_mod, "log_event", _fake_log_event)
-
-    class _FakeService:
-        def __init__(self) -> None:
-            self._logger = logging.getLogger("test")
-
-        async def _send_channel_message_safe(
-            self, channel_id: str, payload: dict[str, Any]
-        ) -> None:
-            sent_messages.append({"channel_id": channel_id, "payload": payload})
-
-    task_context = {
-        "failure_note": "worker lost",
-        "channel_id": "channel-1",
-    }
-
+    kwargs: dict[str, Any] = {}
+    if allow_fallback:
+        kwargs["allow_channel_fallback"] = True
     result = await reconcile_background_task_failure(
-        _FakeService(), task_context, allow_channel_fallback=True
+        _FakeService(), task_context, **kwargs
     )
 
-    assert result == 0
-    assert len(sent_messages) == 1
-    assert sent_messages[0]["payload"]["content"] == "worker lost"
-
-
-@pytest.mark.anyio
-async def test_reconcile_background_task_failure_returns_count_on_successful_reconcile(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from codex_autorunner.integrations.discord.service_lifecycle import (
-        reconcile_background_task_failure,
-    )
-
-    sent_messages: list[dict[str, Any]] = []
-
-    async def _fake_reconcile(service, **kwargs):  # type: ignore[no-untyped-def]
-        return 2
-
-    def _fake_log_event(logger, level, event_name, **kwargs):  # type: ignore[no-untyped-def]
-        pass
-
-    import codex_autorunner.integrations.discord.progress_leases as _progress_leases
-    import codex_autorunner.integrations.discord.service_lifecycle as _lifecycle_mod
-
-    monkeypatch.setattr(
-        _progress_leases, "reconcile_discord_turn_progress_leases", _fake_reconcile
-    )
-    monkeypatch.setattr(_lifecycle_mod, "log_event", _fake_log_event)
-
-    class _FakeService:
-        def __init__(self) -> None:
-            self._logger = logging.getLogger("test")
-
-        async def _send_channel_message_safe(
-            self, channel_id: str, payload: dict[str, Any]
-        ) -> None:
-            sent_messages.append({"channel_id": channel_id, "payload": payload})
-
-    task_context = {
-        "failure_note": "worker lost",
-        "channel_id": "channel-1",
-    }
-
-    result = await reconcile_background_task_failure(_FakeService(), task_context)
-
-    assert result == 2
-    assert sent_messages == []
+    assert result == reconcile_return
+    assert len(sent_messages) == len(expected_messages)
+    for actual, expected in zip(sent_messages, expected_messages):
+        for key, val in expected.items():
+            assert actual[key] == val
+    if (
+        reconcile_return == 0
+        and not allow_fallback
+        and "managed_thread_id" in task_context
+    ):
+        reconcile_failures = [
+            e
+            for e in log_events
+            if e["event_name"] == "discord.background_task.reconcile_failed"
+        ]
+        assert len(reconcile_failures) == 1
+        assert reconcile_failures[0]["channel_id"] == task_context["channel_id"]
+        assert (
+            reconcile_failures[0]["managed_thread_id"]
+            == task_context["managed_thread_id"]
+        )
+        assert reconcile_failures[0]["level"] == logging.ERROR
