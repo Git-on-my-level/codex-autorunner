@@ -3487,9 +3487,16 @@ def test_build_attachment_filename_does_not_infer_audio_suffix_for_video(
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    "wait_for_stream,allow_parallel_event_stream",
+    [(True, True), (False, False)],
+    ids=["streaming-enabled", "streaming-disabled"],
+)
 async def test_message_create_streaming_turn_posts_progress_placeholder_and_edits(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    wait_for_stream: bool,
+    allow_parallel_event_stream: bool,
 ) -> None:
     service, rest, store, workspace = await _build_discord_service(
         tmp_path,
@@ -3505,7 +3512,8 @@ async def test_message_create_streaming_turn_posts_progress_placeholder_and_edit
             ),
         ],
         assistant_text="done from streaming turn",
-        wait_for_stream=True,
+        wait_for_stream=wait_for_stream,
+        allow_parallel_event_stream=allow_parallel_event_stream,
     )
 
     try:
@@ -3686,44 +3694,6 @@ async def test_message_create_opencode_streaming_turn_surfaces_thinking_and_tool
             for content in progress_contents
         )
         assert any("tool: shell" in content for content in progress_contents)
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
-async def test_message_create_streaming_turn_skips_live_progress_when_parallel_streaming_is_disabled(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    service, rest, store, workspace = await _build_discord_service(
-        tmp_path,
-        [("MESSAGE_CREATE", _message_create("ship it"))],
-    )
-    _patch_streaming_harness(
-        monkeypatch,
-        [
-            OutputDelta(
-                timestamp="2026-01-01T00:00:01Z",
-                content="thinking",
-                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
-            ),
-        ],
-        assistant_text="done from streaming turn",
-        wait_for_stream=False,
-        allow_parallel_event_stream=False,
-    )
-
-    try:
-        await service.run_forever()
-        send_indices = [
-            idx for idx, op in enumerate(rest.message_ops) if op.get("op") == "send"
-        ]
-        edit_indices = [
-            idx for idx, op in enumerate(rest.message_ops) if op.get("op") == "edit"
-        ]
-        assert send_indices
-        assert edit_indices
-        assert send_indices[0] < edit_indices[0]
     finally:
         await store.close()
 
@@ -4107,43 +4077,33 @@ async def test_message_create_streaming_turn_completion_sends_final_and_deletes_
 
 
 @pytest.mark.anyio
-async def test_message_create_streaming_turn_keeps_components_cleared_after_completion(
+@pytest.mark.parametrize(
+    "completed_final,expected_text,forbidden_texts",
+    [
+        (
+            "done before late failure",
+            "done before late failure",
+            ["Turn failed:"],
+        ),
+        (
+            "",
+            "fallback streamed answer survives",
+            ["Turn failed:", "(No response text returned.)"],
+        ),
+    ],
+    ids=["completed-has-text", "completed-empty-stream-fallback"],
+)
+async def test_message_create_streaming_turn_ignores_late_failed_after_completed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    completed_final: str,
+    expected_text: str,
+    forbidden_texts: list[str],
 ) -> None:
     service, rest, store, workspace = await _build_discord_service(
         tmp_path,
         [("MESSAGE_CREATE", _message_create("ship it"))],
     )
-    _patch_streaming_harness(
-        monkeypatch,
-        [
-            OutputDelta(
-                timestamp="2026-01-01T00:00:01Z",
-                content="thinking",
-                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
-            ),
-        ],
-        assistant_text="done from streaming turn",
-        wait_for_stream=True,
-    )
-    try:
-        await service.run_forever()
-        assert rest.edited_channel_messages
-        assert rest.edited_channel_messages[-1]["payload"].get("components") == []
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
-async def test_message_create_streaming_turn_ignores_late_failed_after_completed_output(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    service, rest, store, workspace = await _build_discord_service(
-        tmp_path,
-        [("MESSAGE_CREATE", _message_create("ship it"))],
-    )
-    final_text = "done before late failure"
     logged_events: list[dict[str, Any]] = []
 
     def _capture_log_event(
@@ -4158,91 +4118,33 @@ async def test_message_create_streaming_turn_ignores_late_failed_after_completed
         logged_events.append({"level": level, "event": event, "exc": exc, **fields})
 
     monkeypatch.setattr(discord_service_module, "log_event", _capture_log_event)
+    stream_content = expected_text
     _patch_streaming_harness(
         monkeypatch,
         [
             OutputDelta(
                 timestamp="2026-01-01T00:00:01Z",
-                content="thinking",
+                content=stream_content,
                 delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
             ),
-            Completed(timestamp="2026-01-01T00:00:02Z", final_message=final_text),
+            Completed(timestamp="2026-01-01T00:00:02Z", final_message=completed_final),
             Failed(timestamp="2026-01-01T00:00:03Z", error_message="Turn failed"),
         ],
-        assistant_text=final_text,
+        assistant_text=completed_final,
         wait_for_stream=True,
     )
 
     try:
         await service.run_forever()
         assert any(
-            final_text in msg["payload"].get("content", "")
+            expected_text in msg["payload"].get("content", "")
             for msg in rest.channel_messages
         )
-        assert not any(
-            "Turn failed:" in msg["payload"].get("content", "")
-            for msg in rest.channel_messages
-        )
-        assert not any(
-            event["event"] == "discord.turn.failed_late_ignored"
-            for event in logged_events
-        )
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
-async def test_message_create_streaming_turn_ignores_late_failed_with_stream_fallback(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    service, rest, store, workspace = await _build_discord_service(
-        tmp_path,
-        [("MESSAGE_CREATE", _message_create("ship it"))],
-    )
-    streamed_text = "fallback streamed answer survives"
-    logged_events: list[dict[str, Any]] = []
-
-    def _capture_log_event(
-        logger: logging.Logger,
-        level: int,
-        event: str,
-        *,
-        exc: Optional[Exception] = None,
-        **fields: Any,
-    ) -> None:
-        _ = logger
-        logged_events.append({"level": level, "event": event, "exc": exc, **fields})
-
-    monkeypatch.setattr(discord_service_module, "log_event", _capture_log_event)
-    _patch_streaming_harness(
-        monkeypatch,
-        [
-            OutputDelta(
-                timestamp="2026-01-01T00:00:01Z",
-                content=streamed_text,
-                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
-            ),
-            Completed(timestamp="2026-01-01T00:00:02Z", final_message=""),
-            Failed(timestamp="2026-01-01T00:00:03Z", error_message="Turn failed"),
-        ],
-        assistant_text="",
-        wait_for_stream=True,
-    )
-
-    try:
-        await service.run_forever()
-        assert any(
-            streamed_text in msg["payload"].get("content", "")
-            for msg in rest.channel_messages
-        )
-        assert not any(
-            "(No response text returned.)" in msg["payload"].get("content", "")
-            for msg in rest.channel_messages
-        )
-        assert not any(
-            "Turn failed:" in msg["payload"].get("content", "")
-            for msg in rest.channel_messages
-        )
+        for forbidden in forbidden_texts:
+            assert not any(
+                forbidden in msg["payload"].get("content", "")
+                for msg in rest.channel_messages
+            )
         assert not any(
             event["event"] == "discord.turn.failed_late_ignored"
             for event in logged_events
@@ -4631,33 +4533,58 @@ async def test_message_create_streaming_turn_empty_final_includes_text_fallback_
 
 
 @pytest.mark.anyio
-async def test_message_create_streaming_turn_fallback_preserves_multichunk_whitespace(
+@pytest.mark.parametrize(
+    "deltas,expected_text,extra_forbidden",
+    [
+        (
+            [
+                ("go ", "2026-01-01T00:00:01Z"),
+                ("go go ", "2026-01-01T00:00:02Z"),
+                ("\nnext line", "2026-01-01T00:00:03Z"),
+            ],
+            "go go \nnext line",
+            [],
+        ),
+        (
+            [
+                ("line 1", "2026-01-01T00:00:01Z"),
+                ("\n\n", "2026-01-01T00:00:02Z"),
+                ("line 2", "2026-01-01T00:00:03Z"),
+            ],
+            "line 1\n\nline 2",
+            [],
+        ),
+        (
+            [
+                ("Hello", "2026-01-01T00:00:01Z"),
+                ("Hello world", "2026-01-01T00:00:02Z"),
+            ],
+            "Hello world",
+            ["HelloHello world"],
+        ),
+    ],
+    ids=["multichunk-whitespace", "whitespace-only-chunk", "cumulative-no-dup"],
+)
+async def test_message_create_streaming_turn_fallback_preserves_delta_accumulation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    deltas: list[tuple[str, str]],
+    expected_text: str,
+    extra_forbidden: list[str],
 ) -> None:
     service, rest, store, workspace = await _build_discord_service(
         tmp_path,
         [("MESSAGE_CREATE", _message_create("ship it"))],
     )
-    expected_text = "go go \nnext line"
     _patch_streaming_harness(
         monkeypatch,
         [
             OutputDelta(
-                timestamp="2026-01-01T00:00:01Z",
-                content="go ",
+                timestamp=ts,
+                content=content,
                 delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
-            ),
-            OutputDelta(
-                timestamp="2026-01-01T00:00:02Z",
-                content="go go ",
-                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
-            ),
-            OutputDelta(
-                timestamp="2026-01-01T00:00:03Z",
-                content="\nnext line",
-                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
-            ),
+            )
+            for content, ts in deltas
         ],
         assistant_text="",
         wait_for_stream=True,
@@ -4674,98 +4601,8 @@ async def test_message_create_streaming_turn_fallback_preserves_multichunk_white
                 break
         assert final_content
         assert expected_text in final_content
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
-async def test_message_create_streaming_turn_fallback_preserves_whitespace_only_chunks(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    service, rest, store, workspace = await _build_discord_service(
-        tmp_path,
-        [("MESSAGE_CREATE", _message_create("ship it"))],
-    )
-    expected_text = "line 1\n\nline 2"
-    _patch_streaming_harness(
-        monkeypatch,
-        [
-            OutputDelta(
-                timestamp="2026-01-01T00:00:01Z",
-                content="line 1",
-                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
-            ),
-            OutputDelta(
-                timestamp="2026-01-01T00:00:02Z",
-                content="\n\n",
-                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
-            ),
-            OutputDelta(
-                timestamp="2026-01-01T00:00:03Z",
-                content="line 2",
-                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
-            ),
-        ],
-        assistant_text="",
-        wait_for_stream=True,
-    )
-
-    try:
-        await service.run_forever()
-        final_candidates = [*rest.edited_channel_messages, *rest.channel_messages]
-        final_content = ""
-        for message in final_candidates:
-            content = str(message.get("payload", {}).get("content", ""))
-            if expected_text in content:
-                final_content = content
-                break
-        assert final_content
-        assert expected_text in final_content
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
-async def test_message_create_streaming_turn_fallback_handles_cumulative_deltas(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    service, rest, store, workspace = await _build_discord_service(
-        tmp_path,
-        [("MESSAGE_CREATE", _message_create("ship it"))],
-    )
-    expected_text = "Hello world"
-    _patch_streaming_harness(
-        monkeypatch,
-        [
-            OutputDelta(
-                timestamp="2026-01-01T00:00:01Z",
-                content="Hello",
-                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
-            ),
-            OutputDelta(
-                timestamp="2026-01-01T00:00:02Z",
-                content="Hello world",
-                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
-            ),
-        ],
-        assistant_text="",
-        wait_for_stream=True,
-    )
-
-    try:
-        await service.run_forever()
-        final_candidates = [*rest.edited_channel_messages, *rest.channel_messages]
-        final_content = ""
-        for message in final_candidates:
-            content = str(message.get("payload", {}).get("content", ""))
-            if expected_text in content:
-                final_content = content
-                break
-        assert final_content
-        assert expected_text in final_content
-        assert "HelloHello world" not in final_content
+        for forbidden in extra_forbidden:
+            assert forbidden not in final_content
     finally:
         await store.close()
 
