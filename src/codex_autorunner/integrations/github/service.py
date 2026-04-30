@@ -1184,8 +1184,6 @@ class GitHubService:
             commit_mode = "auto"
 
         dirty = not self.is_clean(cwd=cwd)
-        if commit_mode in ("always", "auto") and dirty:
-            pass
         if commit_mode == "none" and dirty:
             raise GitHubError(
                 "Uncommitted changes present; commit them before syncing PR.",

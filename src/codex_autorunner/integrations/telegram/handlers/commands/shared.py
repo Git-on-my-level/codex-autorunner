@@ -10,7 +10,7 @@ import secrets
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
+from typing import Any, Optional
 
 import httpx
 
@@ -51,10 +51,6 @@ from ...payload_utils import (
     extract_opencode_error_detail,
     extract_opencode_session_path,
 )
-
-if TYPE_CHECKING:
-    pass
-
 
 FILES_HINT_TEMPLATE = (
     "Inbox: {inbox}\n"

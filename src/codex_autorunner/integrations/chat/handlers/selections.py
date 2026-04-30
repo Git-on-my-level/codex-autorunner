@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Dict, List
+from typing import Any, Dict, List
 
 from .models import ChatContext
-
-if TYPE_CHECKING:
-    pass
 
 
 class ChatSelectionHandlers:

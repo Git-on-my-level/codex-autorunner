@@ -1,16 +1,12 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Optional
+from typing import Optional
 
 from .....core.logging_utils import log_event
 from ...adapter import TelegramAPIError, TelegramMessage
 from ...constants import PLACEHOLDER_TEXT
 from ...state import PendingVoiceRecord
-
-if TYPE_CHECKING:
-    pass
-
 from .shared import TelegramCommandSupportMixin
 
 

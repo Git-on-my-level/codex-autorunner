@@ -3,14 +3,11 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import Any, Dict, Optional
 
 from ....core.logging_utils import log_event
 from ..models import ChatInteractionEvent, ChatMessageEvent
 from .models import ChatContext
-
-if TYPE_CHECKING:
-    pass
 
 
 async def handle_custom_text_input(handlers: Any, event: ChatMessageEvent) -> bool:

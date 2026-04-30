@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, Optional, cast
+from typing import Annotated, Any, Optional, cast
 
 from fastapi import APIRouter, Body, HTTPException, Request
 
@@ -58,10 +58,6 @@ from .managed_thread_route_helpers import (
     serialize_binding_record,
     serialize_managed_thread_turn_summary,
 )
-
-if TYPE_CHECKING:
-    pass
-
 
 _logger = logging.getLogger(__name__)
 

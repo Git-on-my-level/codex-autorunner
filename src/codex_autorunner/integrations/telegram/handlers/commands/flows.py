@@ -982,9 +982,7 @@ class FlowCommands(TelegramCommandSupportMixin):
             lines.append(f"Summary: {_truncate_text(reason_summary, 300)}")
         reason = engine.get("reason") if isinstance(engine, dict) else None
         if isinstance(reason, str) and reason.strip():
-            if reason_summary and reason.strip() == reason_summary:
-                pass
-            else:
+            if not reason_summary or reason.strip() != reason_summary:
                 lines.append(f"Reason: {_truncate_text(reason.strip(), 300)}")
         error_message = getattr(run, "error_message", None)
         if isinstance(error_message, str) and error_message.strip():

@@ -486,9 +486,7 @@ def _inbox_process_run(
     run_state["active_run_id"] = active_run_id
 
     if not run_state.get("attention_required") and not is_terminal_failed:
-        if dispatch["has_dispatch"]:
-            pass
-        else:
+        if not dispatch["has_dispatch"]:
             return None
 
     base_item = _inbox_build_base_item(
