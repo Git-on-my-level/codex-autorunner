@@ -14,6 +14,38 @@ from codex_autorunner.surfaces.cli.pma_cli import pma_app
 _SENTINEL = object()
 
 
+def _patch_load_hub_config(monkeypatch):
+    monkeypatch.setattr(
+        pma_thread_commands,
+        "load_hub_config",
+        lambda hub_root: SimpleNamespace(
+            server_base_path="",
+            server_host="127.0.0.1",
+            server_port=4321,
+            server_auth_token_env=None,
+        ),
+    )
+
+
+def _patch_send_timeout_recovery_env(
+    monkeypatch,
+    status_payloads,
+    *,
+    default_payload=_SENTINEL,
+    monotonic_fn,
+    sleep_fn=None,
+):
+    _patch_load_hub_config(monkeypatch)
+    _status_req = _make_next_status_request_json(status_payloads, default_payload)
+    monkeypatch.setattr(
+        pma_thread_commands, "_request_json_with_status", _always_timeout_with_status
+    )
+    monkeypatch.setattr(pma_thread_commands, "_request_json", _status_req)
+    monkeypatch.setattr(pma_control_plane, "request_json", _status_req)
+    monkeypatch.setattr(pma_control_plane.time, "monotonic", monotonic_fn)
+    monkeypatch.setattr(pma_control_plane.time, "sleep", sleep_fn or (lambda s: None))
+
+
 def _always_timeout_with_status(
     method: str, url: str, payload=None, token_env=None, timeout=None
 ):
@@ -448,16 +480,7 @@ def test_pma_cli_thread_query_commands_use_orchestration_routes(
 ) -> None:
     calls: list[tuple[str, str, dict[str, object] | None]] = []
 
-    monkeypatch.setattr(
-        pma_thread_commands,
-        "load_hub_config",
-        lambda hub_root: SimpleNamespace(
-            server_base_path="",
-            server_host="127.0.0.1",
-            server_port=4321,
-            server_auth_token_env=None,
-        ),
-    )
+    _patch_load_hub_config(monkeypatch)
 
     responses = {
         "/hub/pma/threads": {
@@ -655,16 +678,7 @@ def test_pma_cli_thread_status_info_applies_post_filter_limit(
     monkeypatch, tmp_path: Path
 ) -> None:
     seen_params: list[dict[str, object] | None] = []
-    monkeypatch.setattr(
-        pma_thread_commands,
-        "load_hub_config",
-        lambda hub_root: SimpleNamespace(
-            server_base_path="",
-            server_host="127.0.0.1",
-            server_port=4321,
-            server_auth_token_env=None,
-        ),
-    )
+    _patch_load_hub_config(monkeypatch)
 
     def _fake_request_json(
         method: str,
@@ -761,16 +775,7 @@ def test_pma_cli_thread_status_info_applies_post_filter_limit(
 
 
 def test_pma_cli_thread_queue_renders_table(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(
-        pma_thread_commands,
-        "load_hub_config",
-        lambda hub_root: SimpleNamespace(
-            server_base_path="",
-            server_host="127.0.0.1",
-            server_port=4321,
-            server_auth_token_env=None,
-        ),
-    )
+    _patch_load_hub_config(monkeypatch)
 
     def _fake_request_json(
         method: str,
@@ -817,16 +822,7 @@ def test_pma_cli_thread_queue_renders_table(monkeypatch, tmp_path: Path) -> None
 def test_pma_cli_thread_queue_handles_only_malformed_rows(
     monkeypatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(
-        pma_thread_commands,
-        "load_hub_config",
-        lambda hub_root: SimpleNamespace(
-            server_base_path="",
-            server_host="127.0.0.1",
-            server_port=4321,
-            server_auth_token_env=None,
-        ),
-    )
+    _patch_load_hub_config(monkeypatch)
 
     def _fake_request_json(
         method: str,
@@ -857,16 +853,7 @@ def test_pma_cli_thread_queue_handles_only_malformed_rows(
 def test_pma_cli_thread_cancel_and_clear_queue_commands(
     monkeypatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(
-        pma_thread_commands,
-        "load_hub_config",
-        lambda hub_root: SimpleNamespace(
-            server_base_path="",
-            server_host="127.0.0.1",
-            server_port=4321,
-            server_auth_token_env=None,
-        ),
-    )
+    _patch_load_hub_config(monkeypatch)
     calls: list[tuple[str, str]] = []
 
     def _fake_request_json_with_status(
@@ -942,16 +929,7 @@ def test_pma_cli_thread_status_output_renders_paginated_assistant_text(
 ) -> None:
     assistant_text = "\n".join(f"line {index}" for index in range(1, 26))
 
-    monkeypatch.setattr(
-        pma_thread_commands,
-        "load_hub_config",
-        lambda hub_root: SimpleNamespace(
-            server_base_path="",
-            server_host="127.0.0.1",
-            server_port=4321,
-            server_auth_token_env=None,
-        ),
-    )
+    _patch_load_hub_config(monkeypatch)
     monkeypatch.setattr(
         pma_thread_commands.shutil,
         "get_terminal_size",
@@ -1018,16 +996,7 @@ def test_pma_cli_thread_status_lines_header_clarifies_slice(
 ) -> None:
     assistant_text = "\n".join(f"line {index}" for index in range(1, 6))
 
-    monkeypatch.setattr(
-        pma_thread_commands,
-        "load_hub_config",
-        lambda hub_root: SimpleNamespace(
-            server_base_path="",
-            server_host="127.0.0.1",
-            server_port=4321,
-            server_auth_token_env=None,
-        ),
-    )
+    _patch_load_hub_config(monkeypatch)
 
     def _fake_request_json(
         method: str,
@@ -1090,16 +1059,7 @@ def test_pma_cli_thread_output_supports_continue_and_output_file(
 ) -> None:
     assistant_text = "\n".join(f"line {index}" for index in range(1, 26))
 
-    monkeypatch.setattr(
-        pma_thread_commands,
-        "load_hub_config",
-        lambda hub_root: SimpleNamespace(
-            server_base_path="",
-            server_host="127.0.0.1",
-            server_port=4321,
-            server_auth_token_env=None,
-        ),
-    )
+    _patch_load_hub_config(monkeypatch)
     monkeypatch.setattr(
         pma_thread_commands.shutil,
         "get_terminal_size",
@@ -1173,16 +1133,7 @@ def test_pma_cli_thread_output_supports_continue_and_output_file(
 def test_pma_cli_thread_subscribe_posts_thread_scoped_payload(
     monkeypatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(
-        pma_thread_commands,
-        "load_hub_config",
-        lambda hub_root: SimpleNamespace(
-            server_base_path="",
-            server_host="127.0.0.1",
-            server_port=4321,
-            server_auth_token_env=None,
-        ),
-    )
+    _patch_load_hub_config(monkeypatch)
     calls: list[tuple[str, str, dict[str, object]]] = []
 
     def _fake_request_json(
@@ -1248,16 +1199,7 @@ def test_pma_cli_thread_compact_dry_run_with_status_filter(
         "pma: {}\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(
-        pma_thread_commands,
-        "load_hub_config",
-        lambda hub_root: SimpleNamespace(
-            server_base_path="",
-            server_host="127.0.0.1",
-            server_port=4321,
-            server_auth_token_env=None,
-        ),
-    )
+    _patch_load_hub_config(monkeypatch)
     calls: list[tuple[str, str, dict[str, object] | None]] = []
 
     def _fake_request_json(
@@ -1344,16 +1286,7 @@ def test_pma_cli_thread_compact_executes_batch_for_completed_threads(
         "pma: {}\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(
-        pma_thread_commands,
-        "load_hub_config",
-        lambda hub_root: SimpleNamespace(
-            server_base_path="",
-            server_host="127.0.0.1",
-            server_port=4321,
-            server_auth_token_env=None,
-        ),
-    )
+    _patch_load_hub_config(monkeypatch)
     calls: list[
         tuple[
             str,
@@ -1464,16 +1397,7 @@ def test_pma_cli_thread_compact_all_requires_force(monkeypatch, tmp_path: Path) 
         "pma: {}\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(
-        pma_thread_commands,
-        "load_hub_config",
-        lambda hub_root: SimpleNamespace(
-            server_base_path="",
-            server_host="127.0.0.1",
-            server_port=4321,
-            server_auth_token_env=None,
-        ),
-    )
+    _patch_load_hub_config(monkeypatch)
 
     runner = CliRunner()
     result = runner.invoke(
@@ -1496,16 +1420,7 @@ def test_pma_cli_thread_compact_all_requires_force(monkeypatch, tmp_path: Path) 
 def test_pma_cli_thread_send_reports_queued_busy_thread(
     monkeypatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(
-        pma_thread_commands,
-        "load_hub_config",
-        lambda hub_root: SimpleNamespace(
-            server_base_path="",
-            server_host="127.0.0.1",
-            server_port=4321,
-            server_auth_token_env=None,
-        ),
-    )
+    _patch_load_hub_config(monkeypatch)
     captured: dict[str, object] = {}
 
     def _fake_request_json_with_status(
@@ -1573,16 +1488,7 @@ def test_pma_cli_thread_send_reports_queued_busy_thread(
 def test_pma_cli_thread_send_reads_message_from_file(
     monkeypatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(
-        pma_thread_commands,
-        "load_hub_config",
-        lambda hub_root: SimpleNamespace(
-            server_base_path="",
-            server_host="127.0.0.1",
-            server_port=4321,
-            server_auth_token_env=None,
-        ),
-    )
+    _patch_load_hub_config(monkeypatch)
     captured: dict[str, object] = {}
     message_path = tmp_path / "prompt.md"
     message_path.write_text("literal `glm-5-turbo`\nsecond line\n", encoding="utf-8")
@@ -1641,16 +1547,7 @@ def test_pma_cli_thread_send_reads_message_from_file(
 def test_pma_cli_thread_send_reads_message_from_stdin(
     monkeypatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(
-        pma_thread_commands,
-        "load_hub_config",
-        lambda hub_root: SimpleNamespace(
-            server_base_path="",
-            server_host="127.0.0.1",
-            server_port=4321,
-            server_auth_token_env=None,
-        ),
-    )
+    _patch_load_hub_config(monkeypatch)
     captured: dict[str, object] = {}
 
     def _fake_request_json_with_status(
@@ -1709,16 +1606,7 @@ def test_pma_cli_thread_send_reads_message_from_stdin(
 def test_pma_cli_thread_send_no_wait_sets_enqueue_mode(
     monkeypatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(
-        pma_thread_commands,
-        "load_hub_config",
-        lambda hub_root: SimpleNamespace(
-            server_base_path="",
-            server_host="127.0.0.1",
-            server_port=4321,
-            server_auth_token_env=None,
-        ),
-    )
+    _patch_load_hub_config(monkeypatch)
     captured: dict[str, object] = {}
 
     def _fake_request_json_with_status(
@@ -1773,16 +1661,7 @@ def test_pma_cli_thread_send_no_wait_sets_enqueue_mode(
 def test_pma_cli_thread_send_uses_extended_post_timeout(
     monkeypatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(
-        pma_thread_commands,
-        "load_hub_config",
-        lambda hub_root: SimpleNamespace(
-            server_base_path="",
-            server_host="127.0.0.1",
-            server_port=4321,
-            server_auth_token_env=None,
-        ),
-    )
+    _patch_load_hub_config(monkeypatch)
     captured: dict[str, object] = {}
 
     def _fake_request_json_with_status(
@@ -1835,17 +1714,6 @@ def test_pma_cli_thread_send_uses_extended_post_timeout(
 def test_pma_cli_thread_send_no_wait_does_not_error_when_timeout_recovery_fails(
     monkeypatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(
-        pma_thread_commands,
-        "load_hub_config",
-        lambda hub_root: SimpleNamespace(
-            server_base_path="",
-            server_host="127.0.0.1",
-            server_port=4321,
-            server_auth_token_env=None,
-        ),
-    )
-
     status_payloads = itertools.cycle(
         [
             {
@@ -1860,18 +1728,12 @@ def test_pma_cli_thread_send_no_wait_does_not_error_when_timeout_recovery_fails(
             }
         ]
     )
-
-    _status_req = _make_next_status_request_json(status_payloads)
-    monkeypatch.setattr(
-        pma_thread_commands, "_request_json_with_status", _always_timeout_with_status
+    _monotonic = iter([100.0, 116.0])
+    _patch_send_timeout_recovery_env(
+        monkeypatch,
+        status_payloads,
+        monotonic_fn=lambda: next(_monotonic, 116.0),
     )
-    monkeypatch.setattr(pma_thread_commands, "_request_json", _status_req)
-    monkeypatch.setattr(pma_control_plane, "request_json", _status_req)
-    monotonic_values = iter([100.0, 116.0])
-    monkeypatch.setattr(
-        pma_control_plane.time, "monotonic", lambda: next(monotonic_values, 116.0)
-    )
-    monkeypatch.setattr(pma_control_plane.time, "sleep", lambda seconds: None)
 
     result = CliRunner().invoke(
         pma_app,
@@ -1896,17 +1758,6 @@ def test_pma_cli_thread_send_no_wait_does_not_error_when_timeout_recovery_fails(
 def test_pma_cli_thread_send_recovers_timeout_from_status_probe(
     monkeypatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(
-        pma_thread_commands,
-        "load_hub_config",
-        lambda hub_root: SimpleNamespace(
-            server_base_path="",
-            server_host="127.0.0.1",
-            server_port=4321,
-            server_auth_token_env=None,
-        ),
-    )
-
     status_payloads = iter(
         [
             {
@@ -1930,18 +1781,12 @@ def test_pma_cli_thread_send_recovers_timeout_from_status_probe(
             },
         ]
     )
-
-    _status_req = _make_next_status_request_json(status_payloads)
-    monkeypatch.setattr(
-        pma_thread_commands, "_request_json_with_status", _always_timeout_with_status
+    _monotonic = itertools.count(100.0, 0.01)
+    _patch_send_timeout_recovery_env(
+        monkeypatch,
+        status_payloads,
+        monotonic_fn=lambda: next(_monotonic),
     )
-    monkeypatch.setattr(pma_thread_commands, "_request_json", _status_req)
-    monkeypatch.setattr(pma_control_plane, "request_json", _status_req)
-    monotonic_values = itertools.count(100.0, 0.01)
-    monkeypatch.setattr(
-        pma_control_plane.time, "monotonic", lambda: next(monotonic_values)
-    )
-    monkeypatch.setattr(pma_control_plane.time, "sleep", lambda seconds: None)
 
     runner = CliRunner()
     result = runner.invoke(
@@ -1967,17 +1812,6 @@ def test_pma_cli_thread_send_recovers_timeout_from_status_probe(
 def test_pma_cli_thread_send_recovers_queued_timeout_from_status_probe(
     monkeypatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(
-        pma_thread_commands,
-        "load_hub_config",
-        lambda hub_root: SimpleNamespace(
-            server_base_path="",
-            server_host="127.0.0.1",
-            server_port=4321,
-            server_auth_token_env=None,
-        ),
-    )
-
     status_payloads = iter(
         [
             {
@@ -2008,18 +1842,12 @@ def test_pma_cli_thread_send_recovers_queued_timeout_from_status_probe(
             },
         ]
     )
-
-    _status_req = _make_next_status_request_json(status_payloads)
-    monkeypatch.setattr(
-        pma_thread_commands, "_request_json_with_status", _always_timeout_with_status
+    _monotonic = itertools.count(100.0, 1.0)
+    _patch_send_timeout_recovery_env(
+        monkeypatch,
+        status_payloads,
+        monotonic_fn=lambda: next(_monotonic),
     )
-    monkeypatch.setattr(pma_thread_commands, "_request_json", _status_req)
-    monkeypatch.setattr(pma_control_plane, "request_json", _status_req)
-    monotonic_seq = itertools.count(100.0, 1.0)
-    monkeypatch.setattr(
-        pma_control_plane.time, "monotonic", lambda: next(monotonic_seq)
-    )
-    monkeypatch.setattr(pma_control_plane.time, "sleep", lambda seconds: None)
 
     runner = CliRunner()
     result = runner.invoke(
@@ -2048,17 +1876,6 @@ def test_pma_cli_thread_send_recovers_queued_timeout_from_status_probe(
 def test_pma_cli_thread_send_recovers_queued_timeout_when_last_turn_advances(
     monkeypatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(
-        pma_thread_commands,
-        "load_hub_config",
-        lambda hub_root: SimpleNamespace(
-            server_base_path="",
-            server_host="127.0.0.1",
-            server_port=4321,
-            server_auth_token_env=None,
-        ),
-    )
-
     status_payloads = iter(
         [
             {
@@ -2089,18 +1906,12 @@ def test_pma_cli_thread_send_recovers_queued_timeout_when_last_turn_advances(
             },
         ]
     )
-
-    _status_req = _make_next_status_request_json(status_payloads)
-    monkeypatch.setattr(
-        pma_thread_commands, "_request_json_with_status", _always_timeout_with_status
+    _monotonic = iter([100.0, 115.0])
+    _patch_send_timeout_recovery_env(
+        monkeypatch,
+        status_payloads,
+        monotonic_fn=lambda: next(_monotonic, 115.0),
     )
-    monkeypatch.setattr(pma_thread_commands, "_request_json", _status_req)
-    monkeypatch.setattr(pma_control_plane, "request_json", _status_req)
-    monotonic_values = iter([100.0, 115.0])
-    monkeypatch.setattr(
-        pma_control_plane.time, "monotonic", lambda: next(monotonic_values, 115.0)
-    )
-    monkeypatch.setattr(pma_control_plane.time, "sleep", lambda seconds: None)
 
     runner = CliRunner()
     result = runner.invoke(
@@ -2128,17 +1939,6 @@ def test_pma_cli_thread_send_recovers_queued_timeout_when_last_turn_advances(
 def test_pma_cli_thread_send_timeout_recovery_keeps_queued_turn_rows_aligned(
     monkeypatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(
-        pma_thread_commands,
-        "load_hub_config",
-        lambda hub_root: SimpleNamespace(
-            server_base_path="",
-            server_host="127.0.0.1",
-            server_port=4321,
-            server_auth_token_env=None,
-        ),
-    )
-
     status_payloads = iter(
         [
             {
@@ -2174,18 +1974,12 @@ def test_pma_cli_thread_send_timeout_recovery_keeps_queued_turn_rows_aligned(
             },
         ]
     )
-
-    _status_req = _make_next_status_request_json(status_payloads)
-    monkeypatch.setattr(
-        pma_thread_commands, "_request_json_with_status", _always_timeout_with_status
+    _monotonic = itertools.count(100.0, 1.0)
+    _patch_send_timeout_recovery_env(
+        monkeypatch,
+        status_payloads,
+        monotonic_fn=lambda: next(_monotonic),
     )
-    monkeypatch.setattr(pma_thread_commands, "_request_json", _status_req)
-    monkeypatch.setattr(pma_control_plane, "request_json", _status_req)
-    monotonic_seq = itertools.count(100.0, 1.0)
-    monkeypatch.setattr(
-        pma_control_plane.time, "monotonic", lambda: next(monotonic_seq)
-    )
-    monkeypatch.setattr(pma_control_plane.time, "sleep", lambda seconds: None)
 
     runner = CliRunner()
     result = runner.invoke(
@@ -2213,17 +2007,6 @@ def test_pma_cli_thread_send_timeout_recovery_keeps_queued_turn_rows_aligned(
 def test_pma_cli_thread_send_timeout_recovery_preview_match_prefers_queued_turn_id(
     monkeypatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(
-        pma_thread_commands,
-        "load_hub_config",
-        lambda hub_root: SimpleNamespace(
-            server_base_path="",
-            server_host="127.0.0.1",
-            server_port=4321,
-            server_auth_token_env=None,
-        ),
-    )
-
     status_payloads = iter(
         [
             {
@@ -2254,18 +2037,12 @@ def test_pma_cli_thread_send_timeout_recovery_preview_match_prefers_queued_turn_
             },
         ]
     )
-
-    _status_req = _make_next_status_request_json(status_payloads)
-    monkeypatch.setattr(
-        pma_thread_commands, "_request_json_with_status", _always_timeout_with_status
+    _monotonic = iter([100.0, 103.0])
+    _patch_send_timeout_recovery_env(
+        monkeypatch,
+        status_payloads,
+        monotonic_fn=lambda: next(_monotonic, 103.0),
     )
-    monkeypatch.setattr(pma_thread_commands, "_request_json", _status_req)
-    monkeypatch.setattr(pma_control_plane, "request_json", _status_req)
-    monotonic_values = iter([100.0, 103.0])
-    monkeypatch.setattr(
-        pma_control_plane.time, "monotonic", lambda: next(monotonic_values, 103.0)
-    )
-    monkeypatch.setattr(pma_control_plane.time, "sleep", lambda seconds: None)
 
     runner = CliRunner()
     result = runner.invoke(
@@ -2292,17 +2069,6 @@ def test_pma_cli_thread_send_timeout_recovery_preview_match_prefers_queued_turn_
 def test_pma_cli_thread_send_recovers_timeout_from_redacted_active_prompt(
     monkeypatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(
-        pma_thread_commands,
-        "load_hub_config",
-        lambda hub_root: SimpleNamespace(
-            server_base_path="",
-            server_host="127.0.0.1",
-            server_port=4321,
-            server_auth_token_env=None,
-        ),
-    )
-
     message_body = "please use sk-abcdefghijklmnopqrstuvwxyz1234567890 now"
     status_payloads = iter(
         [
@@ -2332,18 +2098,12 @@ def test_pma_cli_thread_send_recovers_timeout_from_redacted_active_prompt(
             },
         ]
     )
-
-    _status_req = _make_next_status_request_json(status_payloads)
-    monkeypatch.setattr(
-        pma_thread_commands, "_request_json_with_status", _always_timeout_with_status
+    _monotonic = iter([100.0, 103.0])
+    _patch_send_timeout_recovery_env(
+        monkeypatch,
+        status_payloads,
+        monotonic_fn=lambda: next(_monotonic, 103.0),
     )
-    monkeypatch.setattr(pma_thread_commands, "_request_json", _status_req)
-    monkeypatch.setattr(pma_control_plane, "request_json", _status_req)
-    monotonic_values = iter([100.0, 103.0])
-    monkeypatch.setattr(
-        pma_control_plane.time, "monotonic", lambda: next(monotonic_values, 103.0)
-    )
-    monkeypatch.setattr(pma_control_plane.time, "sleep", lambda seconds: None)
 
     result = CliRunner().invoke(
         pma_app,
@@ -2367,17 +2127,6 @@ def test_pma_cli_thread_send_recovers_timeout_from_redacted_active_prompt(
 def test_pma_cli_thread_send_active_prompt_recovery_ignores_preexisting_queue(
     monkeypatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(
-        pma_thread_commands,
-        "load_hub_config",
-        lambda hub_root: SimpleNamespace(
-            server_base_path="",
-            server_host="127.0.0.1",
-            server_port=4321,
-            server_auth_token_env=None,
-        ),
-    )
-
     baseline_payload = {
         "thread": {
             "last_turn_id": "turn-1",
@@ -2413,18 +2162,13 @@ def test_pma_cli_thread_send_active_prompt_recovery_ignores_preexisting_queue(
         ],
     }
     status_payloads = iter([baseline_payload, current_payload])
-
-    _status_req = _make_next_status_request_json(status_payloads, current_payload)
-    monkeypatch.setattr(
-        pma_thread_commands, "_request_json_with_status", _always_timeout_with_status
+    _monotonic = itertools.count(100.0, 1.0)
+    _patch_send_timeout_recovery_env(
+        monkeypatch,
+        status_payloads,
+        default_payload=current_payload,
+        monotonic_fn=lambda: next(_monotonic),
     )
-    monkeypatch.setattr(pma_thread_commands, "_request_json", _status_req)
-    monkeypatch.setattr(pma_control_plane, "request_json", _status_req)
-    monotonic_seq = itertools.count(100.0, 1.0)
-    monkeypatch.setattr(
-        pma_control_plane.time, "monotonic", lambda: next(monotonic_seq)
-    )
-    monkeypatch.setattr(pma_control_plane.time, "sleep", lambda seconds: None)
 
     result = CliRunner().invoke(
         pma_app,
@@ -2447,17 +2191,6 @@ def test_pma_cli_thread_send_active_prompt_recovery_ignores_preexisting_queue(
 def test_pma_cli_thread_send_retries_timeout_recovery_until_status_catches_up(
     monkeypatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(
-        pma_thread_commands,
-        "load_hub_config",
-        lambda hub_root: SimpleNamespace(
-            server_base_path="",
-            server_host="127.0.0.1",
-            server_port=4321,
-            server_auth_token_env=None,
-        ),
-    )
-
     status_payloads = iter(
         [
             {
@@ -2492,21 +2225,13 @@ def test_pma_cli_thread_send_retries_timeout_recovery_until_status_catches_up(
             },
         ]
     )
-
-    _status_req = _make_next_status_request_json(status_payloads)
-    monotonic_seq = itertools.count(100.0, 1.0)
+    _monotonic = itertools.count(100.0, 1.0)
     sleep_calls: list[float] = []
-
-    monkeypatch.setattr(
-        pma_thread_commands, "_request_json_with_status", _always_timeout_with_status
-    )
-    monkeypatch.setattr(pma_thread_commands, "_request_json", _status_req)
-    monkeypatch.setattr(pma_control_plane, "request_json", _status_req)
-    monkeypatch.setattr(
-        pma_control_plane.time, "monotonic", lambda: next(monotonic_seq)
-    )
-    monkeypatch.setattr(
-        pma_control_plane.time, "sleep", lambda seconds: sleep_calls.append(seconds)
+    _patch_send_timeout_recovery_env(
+        monkeypatch,
+        status_payloads,
+        monotonic_fn=lambda: next(_monotonic),
+        sleep_fn=lambda s: sleep_calls.append(s),
     )
 
     message_path = tmp_path / "prompt.md"
@@ -2538,17 +2263,6 @@ def test_pma_cli_thread_send_retries_timeout_recovery_until_status_catches_up(
 def test_pma_cli_thread_send_timeout_warns_before_retry_when_status_unclear(
     monkeypatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(
-        pma_thread_commands,
-        "load_hub_config",
-        lambda hub_root: SimpleNamespace(
-            server_base_path="",
-            server_host="127.0.0.1",
-            server_port=4321,
-            server_auth_token_env=None,
-        ),
-    )
-
     status_payloads = itertools.cycle(
         [
             {
@@ -2571,18 +2285,12 @@ def test_pma_cli_thread_send_timeout_warns_before_retry_when_status_unclear(
             },
         ]
     )
-
-    _status_req = _make_next_status_request_json(status_payloads)
-    monkeypatch.setattr(
-        pma_thread_commands, "_request_json_with_status", _always_timeout_with_status
+    _monotonic = itertools.count(100.0, 1.0)
+    _patch_send_timeout_recovery_env(
+        monkeypatch,
+        status_payloads,
+        monotonic_fn=lambda: next(_monotonic),
     )
-    monkeypatch.setattr(pma_thread_commands, "_request_json", _status_req)
-    monkeypatch.setattr(pma_control_plane, "request_json", _status_req)
-    monotonic_seq = itertools.count(100.0, 1.0)
-    monkeypatch.setattr(
-        pma_control_plane.time, "monotonic", lambda: next(monotonic_seq)
-    )
-    monkeypatch.setattr(pma_control_plane.time, "sleep", lambda seconds: None)
 
     runner = CliRunner()
     result = runner.invoke(
@@ -2608,16 +2316,7 @@ def test_pma_cli_thread_send_timeout_warns_before_retry_when_status_unclear(
 def test_pma_cli_thread_send_requires_exactly_one_message_source(
     monkeypatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(
-        pma_thread_commands,
-        "load_hub_config",
-        lambda hub_root: SimpleNamespace(
-            server_base_path="",
-            server_host="127.0.0.1",
-            server_port=4321,
-            server_auth_token_env=None,
-        ),
-    )
+    _patch_load_hub_config(monkeypatch)
     message_path = tmp_path / "prompt.md"
     message_path.write_text("hello\n", encoding="utf-8")
 
@@ -2650,16 +2349,7 @@ def test_pma_cli_thread_control_commands_use_orchestration_routes(
 ) -> None:
     calls: list[tuple[str, str, dict[str, object] | None]] = []
 
-    monkeypatch.setattr(
-        pma_thread_commands,
-        "load_hub_config",
-        lambda hub_root: SimpleNamespace(
-            server_base_path="",
-            server_host="127.0.0.1",
-            server_port=4321,
-            server_auth_token_env=None,
-        ),
-    )
+    _patch_load_hub_config(monkeypatch)
 
     def _fake_request_json(
         method: str,
@@ -2782,16 +2472,7 @@ def test_pma_cli_thread_resume_reports_already_active_noop(
 ) -> None:
     calls: list[tuple[str, str, dict[str, object] | None]] = []
 
-    monkeypatch.setattr(
-        pma_thread_commands,
-        "load_hub_config",
-        lambda hub_root: SimpleNamespace(
-            server_base_path="",
-            server_host="127.0.0.1",
-            server_port=4321,
-            server_auth_token_env=None,
-        ),
-    )
+    _patch_load_hub_config(monkeypatch)
 
     def _fake_request_json(
         method: str,
@@ -2833,16 +2514,7 @@ def test_pma_cli_thread_resume_reports_already_active_noop(
 def test_pma_cli_thread_interrupt_reports_running_conflict_cleanly(
     monkeypatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(
-        pma_thread_commands,
-        "load_hub_config",
-        lambda hub_root: SimpleNamespace(
-            server_base_path="",
-            server_host="127.0.0.1",
-            server_port=4321,
-            server_auth_token_env=None,
-        ),
-    )
+    _patch_load_hub_config(monkeypatch)
     monkeypatch.setattr(
         pma_thread_commands,
         "_fetch_agent_capabilities",
@@ -2895,16 +2567,7 @@ def test_pma_cli_thread_archive_bulk_uses_bulk_route(
 ) -> None:
     calls: list[tuple[str, str, dict[str, object] | None]] = []
 
-    monkeypatch.setattr(
-        pma_thread_commands,
-        "load_hub_config",
-        lambda hub_root: SimpleNamespace(
-            server_base_path="",
-            server_host="127.0.0.1",
-            server_port=4321,
-            server_auth_token_env=None,
-        ),
-    )
+    _patch_load_hub_config(monkeypatch)
 
     def _fake_request_json(
         method: str,
@@ -2968,16 +2631,7 @@ def test_pma_cli_thread_archive_id_is_single_value_not_split_on_commas(
 ) -> None:
     calls: list[tuple[str, str, dict[str, object] | None]] = []
 
-    monkeypatch.setattr(
-        pma_thread_commands,
-        "load_hub_config",
-        lambda hub_root: SimpleNamespace(
-            server_base_path="",
-            server_host="127.0.0.1",
-            server_port=4321,
-            server_auth_token_env=None,
-        ),
-    )
+    _patch_load_hub_config(monkeypatch)
 
     def _fake_request_json(
         method: str,
@@ -3028,16 +2682,7 @@ def test_pma_cli_thread_archive_reads_ids_from_stdin(
 ) -> None:
     calls: list[tuple[str, str, dict[str, object] | None]] = []
 
-    monkeypatch.setattr(
-        pma_thread_commands,
-        "load_hub_config",
-        lambda hub_root: SimpleNamespace(
-            server_base_path="",
-            server_host="127.0.0.1",
-            server_port=4321,
-            server_auth_token_env=None,
-        ),
-    )
+    _patch_load_hub_config(monkeypatch)
 
     def _fake_request_json(
         method: str,
@@ -3088,16 +2733,7 @@ def test_pma_cli_thread_archive_reads_ids_from_stdin(
 def test_pma_cli_thread_archive_bulk_json_exits_nonzero_on_errors(
     monkeypatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(
-        pma_thread_commands,
-        "load_hub_config",
-        lambda hub_root: SimpleNamespace(
-            server_base_path="",
-            server_host="127.0.0.1",
-            server_port=4321,
-            server_auth_token_env=None,
-        ),
-    )
+    _patch_load_hub_config(monkeypatch)
 
     def _fake_request_json(
         method: str,
@@ -3148,16 +2784,7 @@ def test_pma_cli_thread_create_rejects_backend_id_option() -> None:
 def test_pma_cli_thread_archive_reports_unreachable_host_port(
     monkeypatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(
-        pma_thread_commands,
-        "load_hub_config",
-        lambda hub_root: SimpleNamespace(
-            server_base_path="",
-            server_host="127.0.0.1",
-            server_port=4321,
-            server_auth_token_env=None,
-        ),
-    )
+    _patch_load_hub_config(monkeypatch)
 
     def _raise_connect_error(
         method: str,
@@ -3191,16 +2818,7 @@ def test_pma_cli_thread_archive_reports_unreachable_host_port(
 def test_pma_cli_thread_archive_reports_base_path_mismatch(
     monkeypatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(
-        pma_thread_commands,
-        "load_hub_config",
-        lambda hub_root: SimpleNamespace(
-            server_base_path="",
-            server_host="127.0.0.1",
-            server_port=4321,
-            server_auth_token_env=None,
-        ),
-    )
+    _patch_load_hub_config(monkeypatch)
 
     def _raise_http_status(
         method: str,
@@ -3232,16 +2850,7 @@ def test_pma_cli_thread_archive_reports_base_path_mismatch(
 def test_pma_cli_thread_archive_preserves_not_found_detail(
     monkeypatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(
-        pma_thread_commands,
-        "load_hub_config",
-        lambda hub_root: SimpleNamespace(
-            server_base_path="",
-            server_host="127.0.0.1",
-            server_port=4321,
-            server_auth_token_env=None,
-        ),
-    )
+    _patch_load_hub_config(monkeypatch)
 
     def _raise_thread_not_found(
         method: str,
@@ -3279,16 +2888,7 @@ def test_pma_cli_thread_spawn_defaults_agent_for_agent_workspace(
         []
     )
 
-    monkeypatch.setattr(
-        pma_thread_commands,
-        "load_hub_config",
-        lambda hub_root: SimpleNamespace(
-            server_base_path="",
-            server_host="127.0.0.1",
-            server_port=4321,
-            server_auth_token_env=None,
-        ),
-    )
+    _patch_load_hub_config(monkeypatch)
 
     def _fake_request_json(
         method: str,
@@ -3393,16 +2993,7 @@ def test_pma_cli_thread_spawn_defaults_agent_for_agent_workspace(
 
 
 def test_pma_cli_thread_list_json_emits_array(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(
-        pma_thread_commands,
-        "load_hub_config",
-        lambda hub_root: SimpleNamespace(
-            server_base_path="",
-            server_host="127.0.0.1",
-            server_port=4321,
-            server_auth_token_env=None,
-        ),
-    )
+    _patch_load_hub_config(monkeypatch)
 
     def _fake_request_json(
         method: str,
@@ -3449,16 +3040,7 @@ def test_pma_cli_thread_list_json_emits_array(monkeypatch, tmp_path: Path) -> No
 def test_pma_cli_thread_list_ndjson_emits_one_object_per_line(
     monkeypatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(
-        pma_thread_commands,
-        "load_hub_config",
-        lambda hub_root: SimpleNamespace(
-            server_base_path="",
-            server_host="127.0.0.1",
-            server_port=4321,
-            server_auth_token_env=None,
-        ),
-    )
+    _patch_load_hub_config(monkeypatch)
 
     def _fake_request_json(
         method: str,
@@ -3512,16 +3094,7 @@ def test_pma_cli_thread_list_rejects_json_and_ndjson_together(
 
 
 def test_pma_cli_thread_fork_posts_to_api(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(
-        pma_thread_commands,
-        "load_hub_config",
-        lambda hub_root: SimpleNamespace(
-            server_base_path="",
-            server_host="127.0.0.1",
-            server_port=4321,
-            server_auth_token_env=None,
-        ),
-    )
+    _patch_load_hub_config(monkeypatch)
     calls: list[tuple[str, str, object]] = []
 
     def _fake_request_json(
@@ -3571,16 +3144,7 @@ def test_pma_cli_thread_fork_posts_to_api(monkeypatch, tmp_path: Path) -> None:
 def test_pma_cli_thread_spawn_rejects_invalid_context_profile(
     monkeypatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(
-        pma_thread_commands,
-        "load_hub_config",
-        lambda hub_root: SimpleNamespace(
-            server_base_path="",
-            server_host="127.0.0.1",
-            server_port=4321,
-            server_auth_token_env=None,
-        ),
-    )
+    _patch_load_hub_config(monkeypatch)
 
     runner = CliRunner()
     result = runner.invoke(

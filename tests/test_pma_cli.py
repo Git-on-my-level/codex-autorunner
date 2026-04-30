@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from typer.testing import CliRunner
 
 from codex_autorunner.bootstrap import seed_hub_files
@@ -47,41 +48,24 @@ def test_pma_cli_targets_commands_removed() -> None:
     assert "No such command 'targets'" in result.output
 
 
-def test_pma_chat_help_shows_json_option():
-    """Verify PMA chat command supports JSON output mode."""
+@pytest.mark.parametrize(
+    "subcommand,expected_options",
+    [
+        ("chat", {"--json", "--stream"}),
+        ("interrupt", {"--json"}),
+        ("reset", {"--json"}),
+        ("files", {"--json"}),
+        ("active", {"--json"}),
+        ("agents", {"--json"}),
+        ("models", {"--json", "AGENT"}),
+    ],
+)
+def test_pma_help_shows_json_option(subcommand, expected_options):
     runner = CliRunner()
-    result = runner.invoke(pma_app, ["chat", "--help"])
+    result = runner.invoke(pma_app, [subcommand, "--help"])
     assert result.exit_code == 0
-    output = result.stdout
-    assert "--json" in output, "PMA chat should support --json output mode"
-    assert "--stream" in output, "PMA chat should support streaming"
-
-
-def test_pma_interrupt_help_shows_json_option():
-    """Verify PMA interrupt command supports JSON output mode."""
-    runner = CliRunner()
-    result = runner.invoke(pma_app, ["interrupt", "--help"])
-    assert result.exit_code == 0
-    output = result.stdout
-    assert "--json" in output, "PMA interrupt should support --json output mode"
-
-
-def test_pma_reset_help_shows_json_option():
-    """Verify PMA reset command supports JSON output mode."""
-    runner = CliRunner()
-    result = runner.invoke(pma_app, ["reset", "--help"])
-    assert result.exit_code == 0
-    output = result.stdout
-    assert "--json" in output, "PMA reset should support --json output mode"
-
-
-def test_pma_files_help_shows_json_option():
-    """Verify PMA files command supports JSON output mode."""
-    runner = CliRunner()
-    result = runner.invoke(pma_app, ["files", "--help"])
-    assert result.exit_code == 0
-    output = result.stdout
-    assert "--json" in output, "PMA files should support --json output mode"
+    for opt in expected_options:
+        assert opt in result.stdout, f"PMA {subcommand} should show {opt}"
 
 
 def test_pma_file_group_has_required_commands() -> None:
@@ -181,15 +165,6 @@ def test_pma_file_lifecycle_commands_round_trip_local_files(tmp_path: Path) -> N
     assert [entry["name"] for entry in payload["dismissed"]] == ["brief.md"]
 
 
-def test_pma_active_help_shows_json_option():
-    """Verify PMA active command supports JSON output mode."""
-    runner = CliRunner()
-    result = runner.invoke(pma_app, ["active", "--help"])
-    assert result.exit_code == 0
-    output = result.stdout
-    assert "--json" in output, "PMA active should support --json output mode"
-
-
 def test_pma_hygiene_help_shows_apply_and_category_options():
     runner = CliRunner()
     result = runner.invoke(pma_app, ["hygiene", "--help"])
@@ -200,25 +175,6 @@ def test_pma_hygiene_help_shows_apply_and_category_options():
     assert "--summary" in output
     assert "--include-needs-confirmation" in output
     assert "--json" in output
-
-
-def test_pma_agents_help_shows_json_option():
-    """Verify PMA agents command supports JSON output mode."""
-    runner = CliRunner()
-    result = runner.invoke(pma_app, ["agents", "--help"])
-    assert result.exit_code == 0
-    output = result.stdout
-    assert "--json" in output, "PMA agents should support --json output mode"
-
-
-def test_pma_models_help_shows_json_option():
-    """Verify PMA models command supports JSON output mode."""
-    runner = CliRunner()
-    result = runner.invoke(pma_app, ["models", "--help"])
-    assert result.exit_code == 0
-    output = result.stdout
-    assert "--json" in output, "PMA models should support --json output mode"
-    assert "AGENT" in output, "PMA models should require agent argument"
 
 
 def test_pma_binding_work_help_uses_busy_work_copy() -> None:

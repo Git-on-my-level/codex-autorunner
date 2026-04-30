@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from codex_autorunner.core.managed_thread_status import (
     ManagedThreadStatusReason,
     backfill_managed_thread_status,
@@ -148,33 +150,20 @@ def test_backfill_prefers_terminal_latest_turn_over_compacted_state() -> None:
     assert failed.reason_code == "managed_turn_failed"
 
 
-def test_operator_status_marks_completed_active_threads_as_reusable() -> None:
+@pytest.mark.parametrize(
+    "status,expected",
+    [
+        ("completed", "reusable"),
+        ("interrupted", "reusable"),
+        ("failed", "attention_required"),
+    ],
+)
+def test_operator_status_for_active_threads(status: str, expected: str) -> None:
     assert (
         derive_managed_thread_operator_status(
-            normalized_status="completed",
-            lifecycle_status="active",
+            normalized_status=status, lifecycle_status="active"
         )
-        == "reusable"
-    )
-
-
-def test_operator_status_marks_interrupted_active_threads_as_reusable() -> None:
-    assert (
-        derive_managed_thread_operator_status(
-            normalized_status="interrupted",
-            lifecycle_status="active",
-        )
-        == "reusable"
-    )
-
-
-def test_operator_status_marks_failed_active_threads_as_attention_required() -> None:
-    assert (
-        derive_managed_thread_operator_status(
-            normalized_status="failed",
-            lifecycle_status="active",
-        )
-        == "attention_required"
+        == expected
     )
 
 

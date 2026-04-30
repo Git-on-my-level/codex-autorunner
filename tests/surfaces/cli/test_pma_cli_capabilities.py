@@ -2,6 +2,7 @@
 
 from unittest.mock import MagicMock, patch
 
+import pytest
 from typer.testing import CliRunner
 
 from codex_autorunner.surfaces.cli.pma_cli import pma_app
@@ -16,23 +17,19 @@ runner = CliRunner()
 
 
 class TestCapabilityRequirements:
-    def test_models_requires_model_listing(self):
-        assert CAPABILITY_REQUIREMENTS.get("models") == "model_listing"
-
-    def test_interrupt_requires_interrupt(self):
-        assert CAPABILITY_REQUIREMENTS.get("interrupt") == "interrupt"
-
-    def test_thread_interrupt_requires_interrupt(self):
-        assert CAPABILITY_REQUIREMENTS.get("thread_interrupt") == "interrupt"
-
-    def test_thread_spawn_requires_durable_threads(self):
-        assert CAPABILITY_REQUIREMENTS.get("thread_spawn") == "durable_threads"
-
-    def test_thread_turns_requires_transcript_history(self):
-        assert CAPABILITY_REQUIREMENTS.get("thread_turns") == "transcript_history"
-
-    def test_thread_tail_requires_event_streaming(self):
-        assert CAPABILITY_REQUIREMENTS.get("thread_tail") == "event_streaming"
+    @pytest.mark.parametrize(
+        "command,capability",
+        [
+            ("models", "model_listing"),
+            ("interrupt", "interrupt"),
+            ("thread_interrupt", "interrupt"),
+            ("thread_spawn", "durable_threads"),
+            ("thread_turns", "transcript_history"),
+            ("thread_tail", "event_streaming"),
+        ],
+    )
+    def test_capability_requirement(self, command, capability):
+        assert CAPABILITY_REQUIREMENTS.get(command) == capability
 
 
 class TestCheckCapability:
