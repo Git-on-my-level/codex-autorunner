@@ -9,8 +9,8 @@ from typing import Any
 from _autooptimize import (
     build_paths,
     build_status_payload,
-    compare_is_better,
     coerce_float,
+    compare_is_better,
     load_iterations,
     load_run,
 )

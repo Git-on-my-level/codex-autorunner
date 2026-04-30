@@ -1,17 +1,18 @@
 from __future__ import annotations
 
 import json
+import struct
+import zlib
 from collections import Counter
-from html import escape
 
 from _autooptimize import (
+    atomic_write_bytes,
     atomic_write_text,
     build_paths,
     build_status_payload,
     format_metric_value,
     load_iterations,
     load_run,
-    maybe_write_png,
     validate_state,
 )
 
@@ -26,18 +27,16 @@ def main() -> int:
     rows = load_iterations(paths)
     payload = build_status_payload(run, rows)
     markdown = build_summary_markdown(payload, rows)
-    svg = build_summary_svg(payload, rows)
+    png = build_summary_png(payload, rows)
 
     atomic_write_text(paths.summary_md_path, markdown)
-    atomic_write_text(paths.summary_svg_path, svg)
-    wrote_png = maybe_write_png(paths.summary_svg_path, paths.summary_png_path)
+    atomic_write_bytes(paths.summary_png_path, png)
 
     print(
         json.dumps(
             {
                 "summary_md": str(paths.summary_md_path),
-                "summary_svg": str(paths.summary_svg_path),
-                "summary_png": str(paths.summary_png_path) if wrote_png else None,
+                "summary_png": str(paths.summary_png_path),
             },
             indent=2,
             sort_keys=True,
@@ -102,8 +101,7 @@ def build_summary_markdown(payload: dict, rows: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def build_summary_svg(payload: dict, rows: list[dict]) -> str:
-    metric = payload["metric"]
+def build_summary_png(payload: dict, rows: list[dict]) -> bytes:
     baseline = payload["baseline"]
     points = []
     if isinstance(baseline, dict):
@@ -125,12 +123,19 @@ def build_summary_svg(payload: dict, rows: list[dict]) -> str:
             }
         )
 
-    chart_left = 70
-    chart_top = 250
-    chart_width = 860
-    chart_height = 210
     width = 1000
     height = 580
+    chart_left = 80
+    chart_top = 185
+    chart_width = 850
+    chart_height = 300
+    image = _new_image(width, height, (248, 250, 252))
+    _fill_rect(image, width, 24, 24, width - 48, height - 48, (255, 255, 255))
+    _rect(image, width, 24, 24, width - 48, height - 48, (219, 228, 240))
+    _fill_rect(image, width, 50, 54, 250, 28, (15, 118, 110))
+    _fill_rect(image, width, 50, 96, 520, 10, (203, 213, 225))
+    _fill_rect(image, width, 50, 126, 420, 10, (226, 232, 240))
+
     values = [point["value"] for point in points] or [0.0]
     min_value = min(values)
     max_value = max(values)
@@ -150,86 +155,179 @@ def build_summary_svg(payload: dict, rows: list[dict]) -> str:
         ratio = (value - min_value) / (max_value - min_value)
         return chart_top + chart_height - (ratio * chart_height)
 
-    polyline = " ".join(
-        f"{x_for(index):.1f},{y_for(point['value']):.1f}"
-        for index, point in enumerate(points)
-    )
     counts = Counter(row["decision"] for row in rows)
-    guard_counts = payload.get("guard_status_counts") or {}
-    best = payload["best"] if isinstance(payload["best"], dict) else {}
-    best_text = format_metric_value(best.get("value"), metric.get("unit"))
-    delta_text = "n/a"
-    if payload["improvement_absolute"] is not None:
-        delta_text = f"{payload['improvement_absolute']:.3f}"
-        if metric.get("unit"):
-            delta_text += f" {metric.get('unit')}"
-        if payload["improvement_percent"] is not None:
-            delta_text += f" ({payload['improvement_percent']:.2f}%)"
-    guard_text = (
-        " ".join(f"{name}={guard_counts[name]}" for name in sorted(guard_counts))
-        if guard_counts
-        else "none"
+    legend_items = [
+        ((22, 163, 74), counts.get("keep", 0)),
+        ((220, 38, 38), counts.get("discard", 0)),
+        ((217, 119, 6), counts.get("pivot", 0)),
+        ((100, 116, 139), counts.get("blocked", 0)),
+    ]
+    legend_x = 620
+    for index, (color, count) in enumerate(legend_items):
+        bar_height = max(8, count * 18)
+        x = legend_x + index * 70
+        _fill_rect(image, width, x, 110 - bar_height, 36, bar_height, color)
+        _fill_rect(image, width, x, 122, 36, 6, color)
+
+    _fill_rect(
+        image, width, chart_left, chart_top, chart_width, chart_height, (248, 250, 252)
     )
+    _rect(
+        image, width, chart_left, chart_top, chart_width, chart_height, (203, 213, 225)
+    )
+    for grid_index in range(1, 5):
+        y = chart_top + grid_index * chart_height // 5
+        _line(image, width, chart_left, y, chart_left + chart_width, y, (226, 232, 240))
 
-    marker_fragments = []
+    previous: tuple[int, int] | None = None
     for index, point in enumerate(points):
-        x = x_for(index)
-        y = y_for(point["value"])
-        marker_fragments.append(render_marker(x, y, point["decision"]))
-        marker_fragments.append(
-            f'<text x="{x:.1f}" y="{chart_top + chart_height + 24}" text-anchor="middle" '
-            'font-size="12" fill="#334155">'
-            f"{escape(point['label'])}</text>"
-        )
-        if point.get("milestone"):
-            marker_fragments.append(
-                f'<text x="{x:.1f}" y="{y - 14:.1f}" text-anchor="middle" '
-                'font-size="11" fill="#7c3aed">'
-                f"{escape(str(point['milestone']))}</text>"
-            )
+        x = int(round(x_for(index)))
+        y = int(round(y_for(point["value"])))
+        if previous is not None:
+            _wide_line(image, width, previous[0], previous[1], x, y, (15, 118, 110))
+        _marker(image, width, x, y, point["decision"])
+        previous = (x, y)
 
-    hints = payload.get("stop_condition_hints") or []
-    hint_text = " | ".join(str(item) for item in hints[:2]) if hints else "none"
-    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">
-  <rect width="{width}" height="{height}" fill="#f8fafc"/>
-  <rect x="24" y="24" width="{width - 48}" height="{height - 48}" rx="18" fill="#ffffff" stroke="#dbe4f0"/>
-  <text x="50" y="72" font-size="28" font-weight="700" fill="#0f172a">AutoOptimize</text>
-  <text x="50" y="104" font-size="16" fill="#334155">{escape(str(payload['goal']))}</text>
-  <text x="50" y="136" font-size="14" fill="#475569">Metric: {escape(str(metric.get('name')))} ({escape(str(metric.get('direction')))}, unit={escape(str(metric.get('unit') or 'n/a'))})</text>
-  <text x="50" y="166" font-size="14" fill="#475569">Baseline: {escape(format_metric_value(baseline.get('value') if isinstance(baseline, dict) else None, metric.get('unit')))}</text>
-  <text x="50" y="196" font-size="14" fill="#475569">Best: {escape(best_text)}</text>
-  <text x="50" y="226" font-size="14" fill="#475569">Improvement: {escape(delta_text)}</text>
-  <text x="610" y="72" font-size="14" fill="#475569">Iterations: {payload['iterations_count']}</text>
-  <text x="610" y="98" font-size="14" fill="#475569">keep={counts.get('keep', 0)} discard={counts.get('discard', 0)} pivot={counts.get('pivot', 0)} blocked={counts.get('blocked', 0)}</text>
-  <text x="610" y="124" font-size="14" fill="#475569">Last decision: {escape(str(payload['last_decision'] or 'n/a'))}</text>
-  <text x="610" y="150" font-size="14" fill="#475569">Guard status: {escape(guard_text)}</text>
-  <text x="610" y="176" font-size="14" fill="#475569">Stop hints: {escape(hint_text)}</text>
-  <rect x="{chart_left}" y="{chart_top}" width="{chart_width}" height="{chart_height}" fill="#f8fafc" stroke="#cbd5e1"/>
-  <line x1="{chart_left}" y1="{chart_top}" x2="{chart_left}" y2="{chart_top + chart_height}" stroke="#cbd5e1"/>
-  <line x1="{chart_left}" y1="{chart_top + chart_height}" x2="{chart_left + chart_width}" y2="{chart_top + chart_height}" stroke="#cbd5e1"/>
-  <text x="{chart_left - 10}" y="{chart_top + 10}" text-anchor="end" font-size="12" fill="#64748b">{max_value:.2f}</text>
-  <text x="{chart_left - 10}" y="{chart_top + chart_height}" text-anchor="end" font-size="12" fill="#64748b">{min_value:.2f}</text>
-  <polyline fill="none" stroke="#0f766e" stroke-width="3" points="{polyline}"/>
-  {''.join(marker_fragments)}
-</svg>
-"""
+    return _encode_png(width, height, image)
 
 
-def render_marker(x: float, y: float, decision: str) -> str:
-    if decision == "baseline":
-        return f'<circle cx="{x:.1f}" cy="{y:.1f}" r="6" fill="#0f172a"/>'
-    if decision == "keep":
-        return f'<circle cx="{x:.1f}" cy="{y:.1f}" r="6" fill="#16a34a"/>'
+def _new_image(width: int, height: int, color: tuple[int, int, int]) -> bytearray:
+    return bytearray(color * (width * height))
+
+
+def _set_pixel(
+    image: bytearray,
+    width: int,
+    x: int,
+    y: int,
+    color: tuple[int, int, int],
+) -> None:
+    if x < 0 or y < 0 or x >= width or y >= len(image) // (width * 3):
+        return
+    offset = (y * width + x) * 3
+    image[offset : offset + 3] = bytes(color)
+
+
+def _fill_rect(
+    image: bytearray,
+    width: int,
+    x: int,
+    y: int,
+    rect_width: int,
+    rect_height: int,
+    color: tuple[int, int, int],
+) -> None:
+    for row in range(y, y + rect_height):
+        for col in range(x, x + rect_width):
+            _set_pixel(image, width, col, row, color)
+
+
+def _rect(
+    image: bytearray,
+    width: int,
+    x: int,
+    y: int,
+    rect_width: int,
+    rect_height: int,
+    color: tuple[int, int, int],
+) -> None:
+    _line(image, width, x, y, x + rect_width, y, color)
+    _line(image, width, x, y + rect_height, x + rect_width, y + rect_height, color)
+    _line(image, width, x, y, x, y + rect_height, color)
+    _line(image, width, x + rect_width, y, x + rect_width, y + rect_height, color)
+
+
+def _line(
+    image: bytearray,
+    width: int,
+    x1: int,
+    y1: int,
+    x2: int,
+    y2: int,
+    color: tuple[int, int, int],
+) -> None:
+    dx = abs(x2 - x1)
+    dy = -abs(y2 - y1)
+    sx = 1 if x1 < x2 else -1
+    sy = 1 if y1 < y2 else -1
+    error = dx + dy
+    while True:
+        _set_pixel(image, width, x1, y1, color)
+        if x1 == x2 and y1 == y2:
+            break
+        twice_error = 2 * error
+        if twice_error >= dy:
+            error += dy
+            x1 += sx
+        if twice_error <= dx:
+            error += dx
+            y1 += sy
+
+
+def _wide_line(
+    image: bytearray,
+    width: int,
+    x1: int,
+    y1: int,
+    x2: int,
+    y2: int,
+    color: tuple[int, int, int],
+) -> None:
+    for offset in (-1, 0, 1):
+        _line(image, width, x1, y1 + offset, x2, y2 + offset, color)
+
+
+def _fill_circle(
+    image: bytearray,
+    width: int,
+    center_x: int,
+    center_y: int,
+    radius: int,
+    color: tuple[int, int, int],
+) -> None:
+    radius_squared = radius * radius
+    for y in range(center_y - radius, center_y + radius + 1):
+        for x in range(center_x - radius, center_x + radius + 1):
+            if (x - center_x) ** 2 + (y - center_y) ** 2 <= radius_squared:
+                _set_pixel(image, width, x, y, color)
+
+
+def _marker(image: bytearray, width: int, x: int, y: int, decision: str) -> None:
+    colors = {
+        "baseline": (15, 23, 42),
+        "keep": (22, 163, 74),
+        "discard": (220, 38, 38),
+        "pivot": (217, 119, 6),
+        "blocked": (100, 116, 139),
+    }
+    color = colors.get(decision, colors["blocked"])
     if decision == "discard":
-        return f'<rect x="{x - 6:.1f}" y="{y - 6:.1f}" width="12" height="12" fill="#dc2626"/>'
-    if decision == "pivot":
+        _fill_rect(image, width, x - 7, y - 7, 14, 14, color)
+        return
+    _fill_circle(image, width, x, y, 8, color)
+
+
+def _encode_png(width: int, height: int, pixels: bytearray) -> bytes:
+    rows = bytearray()
+    stride = width * 3
+    for y in range(height):
+        rows.append(0)
+        start = y * stride
+        rows.extend(pixels[start : start + stride])
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
         return (
-            f'<polygon points="{x:.1f},{y - 7:.1f} {x + 7:.1f},{y:.1f} '
-            f'{x:.1f},{y + 7:.1f} {x - 7:.1f},{y:.1f}" fill="#d97706"/>'
+            struct.pack(">I", len(data))
+            + kind
+            + data
+            + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
         )
+
     return (
-        f'<polygon points="{x:.1f},{y - 7:.1f} {x + 7:.1f},{y + 7:.1f} '
-        f'{x - 7:.1f},{y + 7:.1f}" fill="#64748b"/>'
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(bytes(rows), level=9))
+        + chunk(b"IEND", b"")
     )
 
 

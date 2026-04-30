@@ -63,7 +63,7 @@ tools:
     argv: ["python3", "scripts/validate_state.py"]
     timeout_seconds: 15
   render-summary-card:
-    description: Render markdown and SVG summary artifacts for the campaign.
+    description: Render markdown and PNG summary artifacts for the campaign.
     argv: ["python3", "scripts/render_summary_card.py"]
     timeout_seconds: 30
     outputs:
@@ -71,11 +71,8 @@ tools:
         path: artifacts/summary.md
         label: "AutoOptimize summary"
       - kind: image
-        path: artifacts/summary.svg
-        label: "AutoOptimize summary card (SVG)"
-      - kind: image
         path: artifacts/summary.png
-        label: "AutoOptimize summary card (PNG)"
+        label: "AutoOptimize summary chart (PNG)"
 
 hooks:
   after_flow_terminal:
@@ -86,7 +83,6 @@ hooks:
   before_chat_wrapup:
     - artifacts:
         - "artifacts/summary.md"
-        - "artifacts/summary.svg"
         - "artifacts/summary.png"
 
 permissions:

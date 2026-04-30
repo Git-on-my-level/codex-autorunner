@@ -49,7 +49,7 @@ def test_autooptimize_end_to_end_scripts(tmp_path: Path) -> None:
     run_path = Path(env["CAR_APP_STATE_DIR"]) / "run.json"
     iterations_path = Path(env["CAR_APP_STATE_DIR"]) / "iterations.jsonl"
     summary_md_path = Path(env["CAR_APP_ARTIFACT_DIR"]) / "summary.md"
-    summary_svg_path = Path(env["CAR_APP_ARTIFACT_DIR"]) / "summary.svg"
+    summary_png_path = Path(env["CAR_APP_ARTIFACT_DIR"]) / "summary.png"
 
     init_result = _run_script(
         "init_run.py",
@@ -165,19 +165,20 @@ def test_autooptimize_end_to_end_scripts(tmp_path: Path) -> None:
     render_result = _run_script("render_summary_card.py", env=env)
     assert render_result.returncode == 0, render_result.stderr
     assert summary_md_path.exists()
-    assert summary_svg_path.exists()
+    assert summary_png_path.exists()
 
     summary_md = summary_md_path.read_text(encoding="utf-8")
-    summary_svg = summary_svg_path.read_text(encoding="utf-8")
+    summary_png = summary_png_path.read_bytes()
     assert "AutoOptimize Summary" in summary_md
     assert "Improvement vs baseline: 24.000 ms (20.00%)" in summary_md
     assert "Guard status counts: fail=1, pass=1" in summary_md
     assert "manifest-cache" in summary_md
-    assert "AutoOptimize" in summary_svg
-    assert "Guard status: fail=1 pass=1" in summary_svg
+    assert summary_png.startswith(b"\x89PNG\r\n\x1a\n")
 
 
-def test_plan_next_ticket_recommends_baseline_before_measurement(tmp_path: Path) -> None:
+def test_plan_next_ticket_recommends_baseline_before_measurement(
+    tmp_path: Path,
+) -> None:
     env = _app_env(tmp_path)
 
     assert (

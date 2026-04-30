@@ -21,7 +21,6 @@ class AutoOptimizePaths:
     iterations_path: Path
     lock_path: Path
     summary_md_path: Path
-    summary_svg_path: Path
     summary_png_path: Path
 
 
@@ -46,7 +45,6 @@ def build_paths() -> AutoOptimizePaths:
         iterations_path=state_dir / "iterations.jsonl",
         lock_path=state_dir / ".autooptimize.lock",
         summary_md_path=artifact_dir / "summary.md",
-        summary_svg_path=artifact_dir / "summary.svg",
         summary_png_path=artifact_dir / "summary.png",
     )
 
@@ -74,6 +72,20 @@ def atomic_write_text(path: Path, content: str) -> None:
     with tempfile.NamedTemporaryFile(
         "w",
         encoding="utf-8",
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        delete=False,
+    ) as handle:
+        handle.write(content)
+        tmp_path = Path(handle.name)
+    tmp_path.replace(path)
+
+
+def atomic_write_bytes(path: Path, content: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        "wb",
         dir=path.parent,
         prefix=f".{path.name}.",
         suffix=".tmp",
@@ -124,7 +136,9 @@ def load_iterations(paths: AutoOptimizePaths) -> list[dict[str, Any]]:
 def ensure_direction(direction: str) -> str:
     normalized = str(direction).strip().lower()
     if normalized not in {"higher", "lower"}:
-        raise RuntimeError(f"Metric direction must be 'higher' or 'lower', got {direction!r}")
+        raise RuntimeError(
+            f"Metric direction must be 'higher' or 'lower', got {direction!r}"
+        )
     return normalized
 
 
@@ -241,7 +255,9 @@ def build_status_payload(
         else None
     )
     absolute_delta = (
-        None if baseline_value is None or best_value is None else best_value - baseline_value
+        None
+        if baseline_value is None or best_value is None
+        else best_value - baseline_value
     )
     percent_delta = None
     if absolute_delta is not None and baseline_value not in (None, 0):
@@ -252,7 +268,9 @@ def build_status_payload(
         else absolute_delta if direction == "higher" else -absolute_delta
     )
     improvement_percent = (
-        None if percent_delta is None else percent_delta if direction == "higher" else -percent_delta
+        None
+        if percent_delta is None
+        else percent_delta if direction == "higher" else -percent_delta
     )
 
     last_decision = rows[-1]["decision"] if rows else None
@@ -356,7 +374,9 @@ def validate_state(paths: AutoOptimizePaths) -> list[str]:
             ensure_guard_status(str(row.get("guard_status", "")))
         except Exception as exc:
             errors.append(str(exc))
-        expected_unit = normalize_optional_text((run.get("primary_metric") or {}).get("unit"))
+        expected_unit = normalize_optional_text(
+            (run.get("primary_metric") or {}).get("unit")
+        )
         row_unit = normalize_optional_text(row.get("unit"))
         if expected_unit and row_unit and row_unit != expected_unit:
             errors.append(
@@ -370,13 +390,17 @@ def validate_state(paths: AutoOptimizePaths) -> list[str]:
         expected_best = None
     actual_best = run.get("best")
     if expected_best is None and actual_best is not None:
-        errors.append("run.json best should be null when no baseline or kept iterations exist")
+        errors.append(
+            "run.json best should be null when no baseline or kept iterations exist"
+        )
     if expected_best is not None:
         if not isinstance(actual_best, dict):
             errors.append("run.json best is missing or invalid")
         else:
             try:
-                actual_value = coerce_float(actual_best.get("value"), label="best.value")
+                actual_value = coerce_float(
+                    actual_best.get("value"), label="best.value"
+                )
             except Exception as exc:
                 errors.append(str(exc))
             else:
@@ -389,9 +413,9 @@ def validate_state(paths: AutoOptimizePaths) -> list[str]:
                     errors.append(
                         f"run.json best value mismatch: expected {expected_best['value']}, got {actual_value}"
                     )
-            if normalize_optional_text(actual_best.get("unit")) != normalize_optional_text(
-                expected_best.get("unit")
-            ):
+            if normalize_optional_text(
+                actual_best.get("unit")
+            ) != normalize_optional_text(expected_best.get("unit")):
                 errors.append("run.json best unit does not match derived best unit")
             if actual_best.get("source") != expected_best.get("source"):
                 errors.append("run.json best source does not match derived best source")
@@ -414,18 +438,6 @@ def validate_state(paths: AutoOptimizePaths) -> list[str]:
         except Exception:
             pass
     return errors
-
-
-def maybe_write_png(svg_path: Path, png_path: Path) -> bool:
-    try:
-        import cairosvg  # type: ignore
-    except Exception:
-        return False
-    try:
-        cairosvg.svg2png(url=str(svg_path), write_to=str(png_path))
-    except Exception:
-        return False
-    return png_path.exists()
 
 
 def format_metric_value(value: float | None, unit: str | None) -> str:

@@ -57,11 +57,7 @@ def main(argv: list[str] | None = None) -> int:
         }
         atomic_write_json(paths.run_path, payload)
         atomic_write_jsonl(paths.iterations_path, [])
-        for artifact_path in (
-            paths.summary_md_path,
-            paths.summary_svg_path,
-            paths.summary_png_path,
-        ):
+        for artifact_path in (paths.summary_md_path, paths.summary_png_path):
             if artifact_path.exists():
                 artifact_path.unlink()
     print(paths.run_path)
