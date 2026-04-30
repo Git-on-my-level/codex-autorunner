@@ -58,6 +58,13 @@ from codex_autorunner.integrations.telegram.notifications import (
 from codex_autorunner.integrations.telegram.state import (
     TelegramTopicRecord,
 )
+from tests.support.telegram_turn_fakes import (
+    _BaseTelegramFakeHarness as _BaseFakeHarness,
+)
+from tests.support.telegram_turn_fakes import (
+    _patch_telegram_harness,
+    _StreamingTelegramFakeHarness,
+)
 
 
 class _SqliteConnectionCache:
@@ -257,92 +264,6 @@ class _SessionRecoveryFakeHarness:
     async def stream_events(
         self, workspace_root: Path, conversation_id: str, turn_id: str
     ):
-        if False:
-            yield ""
-
-
-class _BaseFakeHarness:
-    display_name = "Fake"
-    capabilities = frozenset(
-        {"durable_threads", "message_turns", "interrupt", "event_streaming"}
-    )
-
-    async def ensure_ready(self, workspace_root: Path) -> None:
-        _ = workspace_root
-
-    async def backend_runtime_instance_id(self, workspace_root: Path) -> Optional[str]:
-        _ = workspace_root
-        return "runtime-test-1"
-
-    def supports(self, capability: str) -> bool:
-        return capability in self.capabilities
-
-    async def new_conversation(
-        self, workspace_root: Path, title: Optional[str] = None
-    ) -> SimpleNamespace:
-        _ = workspace_root, title
-        return SimpleNamespace(id="telegram-backend-thread-1")
-
-    async def resume_conversation(
-        self, workspace_root: Path, conversation_id: str
-    ) -> SimpleNamespace:
-        _ = workspace_root
-        return SimpleNamespace(id=conversation_id)
-
-    async def start_turn(
-        self,
-        workspace_root: Path,
-        conversation_id: str,
-        prompt: str,
-        model: Optional[str],
-        reasoning: Optional[str],
-        *,
-        approval_mode: Optional[str],
-        sandbox_policy: Optional[Any],
-        input_items: Optional[list[dict[str, Any]]] = None,
-    ) -> SimpleNamespace:
-        _ = (
-            workspace_root,
-            conversation_id,
-            prompt,
-            model,
-            reasoning,
-            approval_mode,
-            sandbox_policy,
-            input_items,
-        )
-        return SimpleNamespace(
-            conversation_id=conversation_id,
-            turn_id="telegram-backend-turn-1",
-        )
-
-    async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
-        raise AssertionError("review mode should not be used in this test")
-
-    async def wait_for_turn(
-        self,
-        workspace_root: Path,
-        conversation_id: str,
-        turn_id: Optional[str],
-        *,
-        timeout: Optional[float] = None,
-    ) -> SimpleNamespace:
-        _ = workspace_root, conversation_id, turn_id, timeout
-        return SimpleNamespace(
-            status="ok",
-            assistant_text="telegram managed final reply",
-            errors=[],
-        )
-
-    async def interrupt(
-        self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
-    ) -> None:
-        _ = workspace_root, conversation_id, turn_id
-
-    async def stream_events(
-        self, workspace_root: Path, conversation_id: str, turn_id: str
-    ):
-        _ = workspace_root, conversation_id, turn_id
         if False:
             yield ""
 
@@ -1156,28 +1077,9 @@ async def test_pma_managed_thread_turn_edits_placeholder_with_live_progress(
     handler = _ManagedThreadPMAHandler(record, tmp_path)
     stream_finished = asyncio.Event()
 
-    class _FakeHarness(_BaseFakeHarness):
-        async def wait_for_turn(
-            self,
-            workspace_root: Path,
-            conversation_id: str,
-            turn_id: Optional[str],
-            *,
-            timeout: Optional[float] = None,
-        ) -> SimpleNamespace:
-            _ = workspace_root, conversation_id, turn_id, timeout
-            await stream_finished.wait()
-            return SimpleNamespace(
-                status="ok",
-                assistant_text="telegram managed final reply",
-                errors=[],
-            )
-
-        async def stream_events(
-            self, workspace_root: Path, conversation_id: str, turn_id: str
-        ):
-            _ = workspace_root, conversation_id, turn_id
-            yield format_sse(
+    harness = _StreamingTelegramFakeHarness(
+        [
+            format_sse(
                 "app-server",
                 {
                     "message": {
@@ -1188,8 +1090,8 @@ async def test_pma_managed_thread_turn_edits_placeholder_with_live_progress(
                         },
                     }
                 },
-            )
-            yield format_sse(
+            ),
+            format_sse(
                 "app-server",
                 {
                     "message": {
@@ -1197,22 +1099,11 @@ async def test_pma_managed_thread_turn_edits_placeholder_with_live_progress(
                         "params": {"delta": "partial telegram managed reply"},
                     }
                 },
-            )
-            stream_finished.set()
-
-    harness = _FakeHarness()
-    monkeypatch.setattr(
-        execution_commands_module,
-        "get_registered_agents",
-        lambda context=None: {
-            "codex": AgentDescriptor(
-                id="codex",
-                name="Codex",
-                capabilities=harness.capabilities,
-                make_harness=lambda _ctx: harness,
-            )
-        },
+            ),
+        ],
+        stream_finished=stream_finished,
     )
+    _patch_telegram_harness(monkeypatch, harness, execution_commands_module)
 
     message = TelegramMessage(
         update_id=1,
@@ -1256,28 +1147,9 @@ async def test_pma_managed_opencode_turn_edits_placeholder_with_thinking_and_too
     handler = _ManagedThreadPMAHandler(record, tmp_path)
     stream_finished = asyncio.Event()
 
-    class _FakeHarness(_BaseFakeHarness):
-        async def wait_for_turn(
-            self,
-            workspace_root: Path,
-            conversation_id: str,
-            turn_id: Optional[str],
-            *,
-            timeout: Optional[float] = None,
-        ) -> SimpleNamespace:
-            _ = workspace_root, conversation_id, turn_id, timeout
-            await stream_finished.wait()
-            return SimpleNamespace(
-                status="ok",
-                assistant_text="telegram opencode managed final reply",
-                errors=[],
-            )
-
-        async def stream_events(
-            self, workspace_root: Path, conversation_id: str, turn_id: str
-        ):
-            _ = workspace_root, conversation_id, turn_id
-            yield {
+    harness = _StreamingTelegramFakeHarness(
+        [
+            {
                 "message": {
                     "method": "message.part.updated",
                     "params": {
@@ -1296,8 +1168,8 @@ async def test_pma_managed_opencode_turn_edits_placeholder_with_thinking_and_too
                         },
                     },
                 }
-            }
-            yield {
+            },
+            {
                 "message": {
                     "method": "message.part.updated",
                     "params": {
@@ -1318,21 +1190,17 @@ async def test_pma_managed_opencode_turn_edits_placeholder_with_thinking_and_too
                         },
                     },
                 }
-            }
-            stream_finished.set()
-
-    harness = _FakeHarness()
-    monkeypatch.setattr(
+            },
+        ],
+        stream_finished=stream_finished,
+        assistant_text="telegram opencode managed final reply",
+    )
+    _patch_telegram_harness(
+        monkeypatch,
+        harness,
         execution_commands_module,
-        "get_registered_agents",
-        lambda context=None: {
-            "opencode": AgentDescriptor(
-                id="opencode",
-                name="OpenCode",
-                capabilities=harness.capabilities,
-                make_harness=lambda _ctx: harness,
-            )
-        },
+        agent_id="opencode",
+        agent_name="OpenCode",
     )
 
     message = TelegramMessage(
@@ -1380,24 +1248,9 @@ async def test_pma_managed_thread_turn_recovers_if_wait_disconnects_after_comple
     handler = _ManagedThreadPMAHandler(record, tmp_path)
     stream_finished = asyncio.Event()
 
-    class _FakeHarness(_BaseFakeHarness):
-        async def wait_for_turn(
-            self,
-            workspace_root: Path,
-            conversation_id: str,
-            turn_id: Optional[str],
-            *,
-            timeout: Optional[float] = None,
-        ) -> SimpleNamespace:
-            _ = workspace_root, conversation_id, turn_id, timeout
-            await stream_finished.wait()
-            raise CodexAppServerDisconnected("Reconnecting... 2/5")
-
-        async def stream_events(
-            self, workspace_root: Path, conversation_id: str, turn_id: str
-        ):
-            _ = workspace_root, conversation_id, turn_id
-            yield format_sse(
+    harness = _StreamingTelegramFakeHarness(
+        [
+            format_sse(
                 "app-server",
                 {
                     "message": {
@@ -1408,8 +1261,8 @@ async def test_pma_managed_thread_turn_recovers_if_wait_disconnects_after_comple
                         },
                     }
                 },
-            )
-            yield format_sse(
+            ),
+            format_sse(
                 "app-server",
                 {
                     "message": {
@@ -1417,22 +1270,12 @@ async def test_pma_managed_thread_turn_recovers_if_wait_disconnects_after_comple
                         "params": {"status": "completed"},
                     }
                 },
-            )
-            stream_finished.set()
-
-    harness = _FakeHarness()
-    monkeypatch.setattr(
-        execution_commands_module,
-        "get_registered_agents",
-        lambda context=None: {
-            "codex": AgentDescriptor(
-                id="codex",
-                name="Codex",
-                capabilities=harness.capabilities,
-                make_harness=lambda _ctx: harness,
-            )
-        },
+            ),
+        ],
+        stream_finished=stream_finished,
+        wait_exception=CodexAppServerDisconnected("Reconnecting... 2/5"),
     )
+    _patch_telegram_harness(monkeypatch, harness, execution_commands_module)
 
     message = TelegramMessage(
         update_id=1,
@@ -1612,18 +1455,7 @@ async def test_pma_text_messages_route_repeated_messages_through_managed_thread_
             )
 
     harness = _FakeHarness()
-    monkeypatch.setattr(
-        execution_commands_module,
-        "get_registered_agents",
-        lambda context=None: {
-            "codex": AgentDescriptor(
-                id="codex",
-                name="Codex",
-                capabilities=harness.capabilities,
-                make_harness=lambda _ctx: harness,
-            )
-        },
-    )
+    _patch_telegram_harness(monkeypatch, harness, execution_commands_module)
 
     first_message = TelegramMessage(
         update_id=1,
@@ -1744,18 +1576,7 @@ async def test_pma_followup_turn_without_new_thread_reuses_managed_thread_and_re
             )
 
     harness = _FakeHarness()
-    monkeypatch.setattr(
-        execution_commands_module,
-        "get_registered_agents",
-        lambda context=None: {
-            "codex": AgentDescriptor(
-                id="codex",
-                name="Codex",
-                capabilities=harness.capabilities,
-                make_harness=lambda _ctx: harness,
-            )
-        },
-    )
+    _patch_telegram_harness(monkeypatch, harness, execution_commands_module)
 
     first_message = TelegramMessage(
         update_id=1,
@@ -1963,6 +1784,8 @@ async def test_pma_native_input_items_route_through_managed_thread_execution(
     captured_input_items: list[Optional[list[dict[str, Any]]]] = []
 
     class _FakeHarness(_BaseFakeHarness):
+        _assistant_text = "telegram managed attachment reply"
+
         async def start_turn(
             self,
             workspace_root: Path,
@@ -1987,37 +1810,11 @@ async def test_pma_native_input_items_route_through_managed_thread_execution(
             captured_input_items.append(input_items)
             return SimpleNamespace(
                 conversation_id=conversation_id,
-                turn_id="telegram-backend-turn-1",
-            )
-
-        async def wait_for_turn(
-            self,
-            workspace_root: Path,
-            conversation_id: str,
-            turn_id: Optional[str],
-            *,
-            timeout: Optional[float] = None,
-        ) -> SimpleNamespace:
-            _ = workspace_root, conversation_id, turn_id, timeout
-            return SimpleNamespace(
-                status="ok",
-                assistant_text="telegram managed attachment reply",
-                errors=[],
+                turn_id=self._turn_id,
             )
 
     harness = _FakeHarness()
-    monkeypatch.setattr(
-        execution_commands_module,
-        "get_registered_agents",
-        lambda context=None: {
-            "codex": AgentDescriptor(
-                id="codex",
-                name="Codex",
-                capabilities=harness.capabilities,
-                make_harness=lambda _ctx: harness,
-            )
-        },
-    )
+    _patch_telegram_harness(monkeypatch, harness, execution_commands_module)
 
     message = TelegramMessage(
         update_id=1,
@@ -2131,18 +1928,7 @@ async def test_pma_interrupt_uses_managed_thread_orchestration_for_text_turns(
             release_first.set()
 
     harness = _FakeHarness()
-    monkeypatch.setattr(
-        execution_commands_module,
-        "get_registered_agents",
-        lambda context=None: {
-            "codex": AgentDescriptor(
-                id="codex",
-                name="Codex",
-                capabilities=harness.capabilities,
-                make_harness=lambda _ctx: harness,
-            )
-        },
-    )
+    _patch_telegram_harness(monkeypatch, harness, execution_commands_module)
 
     message = TelegramMessage(
         update_id=1,
@@ -2300,18 +2086,7 @@ async def test_pma_interrupt_recovers_missing_backend_thread_for_text_turns(
             )
 
     harness = _FakeHarness()
-    monkeypatch.setattr(
-        execution_commands_module,
-        "get_registered_agents",
-        lambda context=None: {
-            "codex": AgentDescriptor(
-                id="codex",
-                name="Codex",
-                capabilities=harness.capabilities,
-                make_harness=lambda _ctx: harness,
-            )
-        },
-    )
+    _patch_telegram_harness(monkeypatch, harness, execution_commands_module)
 
     message = TelegramMessage(
         update_id=1,
@@ -2387,6 +2162,8 @@ async def test_repo_text_turns_use_orchestration_binding_and_preserve_thread_con
     handler = _ManagedThreadPMAHandler(record, tmp_path)
 
     class _FakeHarness(_BaseFakeHarness):
+        _conversation_id = "repo-backend-thread-1"
+
         def __init__(self) -> None:
             self.start_calls: list[tuple[str, str]] = []
 
@@ -2398,12 +2175,6 @@ async def test_repo_text_turns_use_orchestration_binding_and_preserve_thread_con
         ) -> Optional[str]:
             assert workspace_root == tmp_path
             return "runtime-test-1"
-
-        async def new_conversation(
-            self, workspace_root: Path, title: Optional[str] = None
-        ) -> SimpleNamespace:
-            _ = workspace_root, title
-            return SimpleNamespace(id="repo-backend-thread-1")
 
         async def start_turn(
             self,
@@ -2441,18 +2212,7 @@ async def test_repo_text_turns_use_orchestration_binding_and_preserve_thread_con
             )
 
     harness = _FakeHarness()
-    monkeypatch.setattr(
-        execution_commands_module,
-        "get_registered_agents",
-        lambda context=None: {
-            "codex": AgentDescriptor(
-                id="codex",
-                name="Codex",
-                capabilities=harness.capabilities,
-                make_harness=lambda _ctx: harness,
-            )
-        },
-    )
+    _patch_telegram_harness(monkeypatch, harness, execution_commands_module)
 
     first_message = TelegramMessage(
         update_id=1,
@@ -2517,14 +2277,12 @@ async def test_repo_media_turns_preserve_input_items_via_orchestration(
     image_path.write_bytes(b"png-bytes")
 
     class _FakeHarness(_BaseFakeHarness):
+        _conversation_id = "repo-media-thread-1"
+        _turn_id = "repo-media-turn-1"
+        _assistant_text = "repo media orchestration reply"
+
         def __init__(self) -> None:
             self.input_items: Optional[list[dict[str, Any]]] = None
-
-        async def new_conversation(
-            self, workspace_root: Path, title: Optional[str] = None
-        ) -> SimpleNamespace:
-            _ = workspace_root, title
-            return SimpleNamespace(id="repo-media-thread-1")
 
         async def start_turn(
             self,
@@ -2550,37 +2308,11 @@ async def test_repo_media_turns_preserve_input_items_via_orchestration(
             self.input_items = input_items
             return SimpleNamespace(
                 conversation_id=conversation_id,
-                turn_id="repo-media-turn-1",
-            )
-
-        async def wait_for_turn(
-            self,
-            workspace_root: Path,
-            conversation_id: str,
-            turn_id: Optional[str],
-            *,
-            timeout: Optional[float] = None,
-        ) -> SimpleNamespace:
-            _ = workspace_root, conversation_id, turn_id, timeout
-            return SimpleNamespace(
-                status="ok",
-                assistant_text="repo media orchestration reply",
-                errors=[],
+                turn_id=self._turn_id,
             )
 
     harness = _FakeHarness()
-    monkeypatch.setattr(
-        execution_commands_module,
-        "get_registered_agents",
-        lambda context=None: {
-            "codex": AgentDescriptor(
-                id="codex",
-                name="Codex",
-                capabilities=harness.capabilities,
-                make_harness=lambda _ctx: harness,
-            )
-        },
-    )
+    _patch_telegram_harness(monkeypatch, harness, execution_commands_module)
 
     message = TelegramMessage(
         update_id=1,
@@ -2627,14 +2359,10 @@ async def test_repo_interrupt_uses_orchestration_binding_for_text_turns(
     release_first = asyncio.Event()
 
     class _FakeHarness(_BaseFakeHarness):
+        _conversation_id = "repo-backend-thread-1"
+
         def __init__(self) -> None:
             self.interrupt_calls: list[tuple[Path, str, Optional[str]]] = []
-
-        async def new_conversation(
-            self, workspace_root: Path, title: Optional[str] = None
-        ) -> SimpleNamespace:
-            _ = workspace_root, title
-            return SimpleNamespace(id="repo-backend-thread-1")
 
         async def start_turn(
             self,
@@ -2694,18 +2422,7 @@ async def test_repo_interrupt_uses_orchestration_binding_for_text_turns(
             release_first.set()
 
     harness = _FakeHarness()
-    monkeypatch.setattr(
-        execution_commands_module,
-        "get_registered_agents",
-        lambda context=None: {
-            "codex": AgentDescriptor(
-                id="codex",
-                name="Codex",
-                capabilities=harness.capabilities,
-                make_harness=lambda _ctx: harness,
-            )
-        },
-    )
+    _patch_telegram_harness(monkeypatch, harness, execution_commands_module)
 
     first_message = TelegramMessage(
         update_id=1,
@@ -2831,68 +2548,13 @@ async def test_repo_message_ingress_callback_reaches_orchestrated_thread_executi
             return None
 
     class _FakeHarness(_BaseFakeHarness):
-        async def new_conversation(
-            self, workspace_root: Path, title: Optional[str] = None
-        ) -> SimpleNamespace:
-            _ = workspace_root, title
-            return SimpleNamespace(id="repo-ingress-thread-1")
-
-        async def start_turn(
-            self,
-            workspace_root: Path,
-            conversation_id: str,
-            prompt: str,
-            model: Optional[str],
-            reasoning: Optional[str],
-            *,
-            approval_mode: Optional[str],
-            sandbox_policy: Optional[Any],
-            input_items: Optional[list[dict[str, Any]]] = None,
-        ) -> SimpleNamespace:
-            _ = (
-                workspace_root,
-                conversation_id,
-                prompt,
-                model,
-                reasoning,
-                approval_mode,
-                sandbox_policy,
-                input_items,
-            )
-            return SimpleNamespace(
-                conversation_id=conversation_id,
-                turn_id="repo-ingress-turn-1",
-            )
-
-        async def wait_for_turn(
-            self,
-            workspace_root: Path,
-            conversation_id: str,
-            turn_id: Optional[str],
-            *,
-            timeout: Optional[float] = None,
-        ) -> SimpleNamespace:
-            _ = workspace_root, conversation_id, turn_id, timeout
-            return SimpleNamespace(
-                status="ok",
-                assistant_text="repo ingress orchestration reply",
-                errors=[],
-            )
+        _conversation_id = "repo-ingress-thread-1"
+        _turn_id = "repo-ingress-turn-1"
+        _assistant_text = "repo ingress orchestration reply"
 
     handler = _RepoIngressHandler(record, tmp_path)
     harness = _FakeHarness()
-    monkeypatch.setattr(
-        execution_commands_module,
-        "get_registered_agents",
-        lambda context=None: {
-            "codex": AgentDescriptor(
-                id="codex",
-                name="Codex",
-                capabilities=harness.capabilities,
-                make_harness=lambda _ctx: harness,
-            )
-        },
-    )
+    _patch_telegram_harness(monkeypatch, harness, execution_commands_module)
 
     class _IngressStub:
         async def submit_message(self, request, **kwargs):  # type: ignore[no-untyped-def]
@@ -3001,74 +2663,19 @@ async def test_repo_message_ingress_callback_reaches_hermes_orchestrated_thread_
                 "active_thread_discovery",
             }
         )
-
-        async def backend_runtime_instance_id(
-            self, workspace_root: Path
-        ) -> Optional[str]:
-            _ = workspace_root
-            return "runtime-hermes-1"
-
-        async def new_conversation(
-            self, workspace_root: Path, title: Optional[str] = None
-        ) -> SimpleNamespace:
-            _ = workspace_root, title
-            return SimpleNamespace(id="hermes-repo-thread-1")
-
-        async def start_turn(
-            self,
-            workspace_root: Path,
-            conversation_id: str,
-            prompt: str,
-            model: Optional[str],
-            reasoning: Optional[str],
-            *,
-            approval_mode: Optional[str],
-            sandbox_policy: Optional[Any],
-            input_items: Optional[list[dict[str, Any]]] = None,
-        ) -> SimpleNamespace:
-            _ = (
-                workspace_root,
-                conversation_id,
-                prompt,
-                model,
-                reasoning,
-                approval_mode,
-                sandbox_policy,
-                input_items,
-            )
-            return SimpleNamespace(
-                conversation_id=conversation_id,
-                turn_id="hermes-repo-turn-1",
-            )
-
-        async def wait_for_turn(
-            self,
-            workspace_root: Path,
-            conversation_id: str,
-            turn_id: Optional[str],
-            *,
-            timeout: Optional[float] = None,
-        ) -> SimpleNamespace:
-            _ = workspace_root, conversation_id, turn_id, timeout
-            return SimpleNamespace(
-                status="ok",
-                assistant_text="hermes repo ingress reply",
-                errors=[],
-            )
+        _runtime_id = "runtime-hermes-1"
+        _conversation_id = "hermes-repo-thread-1"
+        _turn_id = "hermes-repo-turn-1"
+        _assistant_text = "hermes repo ingress reply"
 
     handler = _RepoIngressHandler(record, tmp_path)
     harness = _FakeHarness()
-    monkeypatch.setattr(
+    _patch_telegram_harness(
+        monkeypatch,
+        harness,
         execution_commands_module,
-        "get_registered_agents",
-        lambda context=None: {
-            "hermes": AgentDescriptor(
-                id="hermes",
-                name="Hermes",
-                capabilities=harness.capabilities,
-                make_harness=lambda _ctx: harness,
-            )
-        },
+        agent_id="hermes",
+        agent_name="Hermes",
     )
 
     class _IngressStub:
@@ -3138,20 +2745,11 @@ async def test_repo_interrupt_uses_orchestration_binding_for_hermes_text_turns(
             }
         )
 
+        _runtime_id = "runtime-hermes-1"
+        _conversation_id = "hermes-fresh-1"
+
         def __init__(self) -> None:
             self.interrupt_calls: list[tuple[Path, str, Optional[str]]] = []
-
-        async def backend_runtime_instance_id(
-            self, workspace_root: Path
-        ) -> Optional[str]:
-            _ = workspace_root
-            return "runtime-hermes-1"
-
-        async def new_conversation(
-            self, workspace_root: Path, title: Optional[str] = None
-        ) -> SimpleNamespace:
-            _ = workspace_root, title
-            return SimpleNamespace(id="hermes-fresh-1")
 
         async def start_turn(
             self,
@@ -3211,17 +2809,12 @@ async def test_repo_interrupt_uses_orchestration_binding_for_hermes_text_turns(
             release_first.set()
 
     harness = _FakeHarness()
-    monkeypatch.setattr(
+    _patch_telegram_harness(
+        monkeypatch,
+        harness,
         execution_commands_module,
-        "get_registered_agents",
-        lambda context=None: {
-            "hermes": AgentDescriptor(
-                id="hermes",
-                name="Hermes",
-                capabilities=harness.capabilities,
-                make_harness=lambda _ctx: harness,
-            )
-        },
+        agent_id="hermes",
+        agent_name="Hermes",
     )
 
     first_message = TelegramMessage(
