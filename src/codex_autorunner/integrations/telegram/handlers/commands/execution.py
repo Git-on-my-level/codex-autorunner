@@ -195,7 +195,6 @@ TELEGRAM_REPO_TIMEOUT_ERROR = "Telegram turn timed out"
 TELEGRAM_PMA_INTERRUPTED_ERROR = "Telegram PMA turn interrupted"
 TELEGRAM_REPO_INTERRUPTED_ERROR = "Telegram turn interrupted"
 TELEGRAM_PMA_IDLE_TIMEOUT_SECONDS = 1800
-TELEGRAM_PMA_TIMEOUT_SECONDS = TELEGRAM_PMA_IDLE_TIMEOUT_SECONDS
 _DEFAULT_TELEGRAM_PMA_IDLE_TIMEOUT_SECONDS = 1800
 _DEFAULT_TELEGRAM_REPO_TURN_TIMEOUT_SECONDS = 7200
 
@@ -647,12 +646,6 @@ def _load_telegram_pma_turn_idle_timeout_seconds(handlers: Any) -> float:
     )
     if overridden_timeout != _DEFAULT_TELEGRAM_PMA_IDLE_TIMEOUT_SECONDS:
         return float(overridden_timeout)
-    legacy_timeout = globals().get(
-        "TELEGRAM_PMA_TIMEOUT_SECONDS",
-        _DEFAULT_TELEGRAM_PMA_IDLE_TIMEOUT_SECONDS,
-    )
-    if legacy_timeout != _DEFAULT_TELEGRAM_PMA_IDLE_TIMEOUT_SECONDS:
-        return float(legacy_timeout)
 
     supervisor = getattr(handlers, "_hub_supervisor", None)
     configured_timeout = getattr(

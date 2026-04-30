@@ -556,10 +556,7 @@ def _log_event(
     exc_value = raw_exc if isinstance(raw_exc, Exception) else None
     if raw_exc is not None and exc_value is None:
         fields["exc_info"] = raw_exc
-    try:
-        from .core.logging_utils import log_event
-    except ImportError:
-        logger.log(level, f"{event} {fields}")
-        return
+    from .core.logging_utils import log_event
+
     log_event_typed = cast(_LogEvent, log_event)
     log_event_typed(logger, level, event, exc=exc_value, **fields)

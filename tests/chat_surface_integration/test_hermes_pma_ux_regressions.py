@@ -520,7 +520,7 @@ async def test_discord_timeout_lifecycle_is_explicit(
 ) -> None:
     runtime = HermesFixtureRuntime("official_prompt_hang")
     patch_hermes_runtime(monkeypatch, runtime)
-    monkeypatch.setattr(discord_message_turns, "DISCORD_PMA_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(discord_message_turns, "DISCORD_PMA_IDLE_TIMEOUT_SECONDS", 0.05)
     harness = DiscordSurfaceHarness(tmp_path / "discord-timeout-lifecycle")
     await harness.setup(agent="hermes")
     try:

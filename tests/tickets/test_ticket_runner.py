@@ -19,10 +19,8 @@ from codex_autorunner.tickets.models import (
     DEFAULT_MAX_TOTAL_TURNS,
     TicketRunConfig,
 )
-from codex_autorunner.tickets.runner import (
-    TICKET_CONTEXT_TOTAL_MAX_BYTES,
-    TicketRunner,
-)
+from codex_autorunner.tickets.runner import TicketRunner
+from codex_autorunner.tickets.runner_selection import TICKET_CONTEXT_TOTAL_MAX_BYTES
 
 
 def _write_ticket(

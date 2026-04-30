@@ -4382,7 +4382,7 @@ async def test_message_create_streaming_turn_recovers_if_wait_times_out_after_st
     monkeypatch.setattr(harness, "wait_for_turn", _hanging_wait_for_turn)
     monkeypatch.setattr(
         discord_message_turns_module,
-        "DISCORD_PMA_TIMEOUT_SECONDS",
+        "DISCORD_PMA_IDLE_TIMEOUT_SECONDS",
         0.05,
     )
 

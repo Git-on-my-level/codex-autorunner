@@ -236,13 +236,13 @@ class TestStopAndWaitForExit:
         def fake_reconcile(self) -> None:
             pass
 
-        import codex_autorunner.core.hub as hub_module
+        import codex_autorunner.core.hub_topology as hub_topology_module
 
         with patch.object(ProcessRunnerController, "reconcile", fake_reconcile):
             with patch.object(
-                hub_module,
+                hub_topology_module,
                 "read_lock_status",
-                return_value=hub_module.LockStatus.LOCKED_ALIVE,
+                return_value=hub_topology_module.LockStatus.LOCKED_ALIVE,
             ):
                 with pytest.raises(ValueError, match="Timed out"):
                     orchestrator.stop_and_wait_for_exit(

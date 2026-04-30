@@ -378,13 +378,6 @@ def _load_discord_pma_turn_idle_timeout_seconds(service: Any) -> float:
     )
     if new_timeout != _DEFAULT_DISCORD_PMA_IDLE_TIMEOUT_SECONDS:
         return float(new_timeout)
-    legacy_timeout = getattr(
-        _mt,
-        "DISCORD_PMA_TIMEOUT_SECONDS",
-        _DEFAULT_DISCORD_PMA_IDLE_TIMEOUT_SECONDS,
-    )
-    if legacy_timeout != _DEFAULT_DISCORD_PMA_IDLE_TIMEOUT_SECONDS:
-        return float(legacy_timeout)
     try:
         hub_config = load_hub_config(Path(service._config.root))
     except (ConfigError, OSError, RuntimeError, TypeError, ValueError):

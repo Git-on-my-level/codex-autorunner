@@ -23,18 +23,6 @@ from .runner_execution import (
     capture_git_state_after,
     is_network_error,
 )
-from .runner_prompt import (
-    CAR_HUD_MAX_CHARS,  # noqa: F401  # re-exported for backwards compatibility
-    CAR_HUD_MAX_LINES,  # noqa: F401  # re-exported for backwards compatibility
-    _preserve_ticket_structure,  # noqa: F401  # re-exported for backwards compatibility
-    _shrink_prompt,  # noqa: F401  # re-exported for backwards compatibility
-)
-from .runner_prompt_support import (
-    TRUNCATION_MARKER,  # noqa: F401  # re-exported for backwards compatibility
-)
-from .runner_selection import (  # noqa: F401  # re-exported for backwards compatibility
-    TICKET_CONTEXT_TOTAL_MAX_BYTES,
-)
 from .runner_step_support import (
     capture_pre_turn_git_state,
     execute_turn_with_thread_binding_retry,

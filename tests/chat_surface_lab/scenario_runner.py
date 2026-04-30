@@ -1770,20 +1770,20 @@ class ChatSurfaceScenarioRunner:
                 default=0.05,
             )
             if surface == SurfaceKind.DISCORD:
-                previous = discord_message_turns.DISCORD_PMA_TIMEOUT_SECONDS
-                discord_message_turns.DISCORD_PMA_TIMEOUT_SECONDS = timeout_seconds
+                previous = discord_message_turns.DISCORD_PMA_IDLE_TIMEOUT_SECONDS
+                discord_message_turns.DISCORD_PMA_IDLE_TIMEOUT_SECONDS = timeout_seconds
                 restorers.append(
                     lambda prev=previous: setattr(
-                        discord_message_turns, "DISCORD_PMA_TIMEOUT_SECONDS", prev
+                        discord_message_turns, "DISCORD_PMA_IDLE_TIMEOUT_SECONDS", prev
                     )
                 )
                 continue
             if surface == SurfaceKind.TELEGRAM:
-                previous = telegram_execution.TELEGRAM_PMA_TIMEOUT_SECONDS
-                telegram_execution.TELEGRAM_PMA_TIMEOUT_SECONDS = timeout_seconds
+                previous = telegram_execution.TELEGRAM_PMA_IDLE_TIMEOUT_SECONDS
+                telegram_execution.TELEGRAM_PMA_IDLE_TIMEOUT_SECONDS = timeout_seconds
                 restorers.append(
                     lambda prev=previous: setattr(
-                        telegram_execution, "TELEGRAM_PMA_TIMEOUT_SECONDS", prev
+                        telegram_execution, "TELEGRAM_PMA_IDLE_TIMEOUT_SECONDS", prev
                     )
                 )
         return restorers

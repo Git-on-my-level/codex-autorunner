@@ -31,10 +31,11 @@ from codex_autorunner.core.flows import FlowStore
 from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.core.force_attestation import FORCE_ATTESTATION_REQUIRED_PHRASE
 from codex_autorunner.core.git_utils import run_git
-from codex_autorunner.core.hub import HubSupervisor, RepoStatus
+from codex_autorunner.core.hub import HubSupervisor
 from codex_autorunner.core.hub_topology import (
     LockStatus,
     RepoSnapshot,
+    RepoStatus,
 )
 from codex_autorunner.core.hub_worktree_manager import WorktreeManager
 from codex_autorunner.core.orchestration.bindings import OrchestrationBindingStore

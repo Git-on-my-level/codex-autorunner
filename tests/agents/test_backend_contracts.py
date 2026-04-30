@@ -96,7 +96,7 @@ async def test_backend_event_types():
     assert hasattr(AgentEventType, "APPROVAL_REQUESTED")
     assert hasattr(AgentEventType, "APPROVAL_GRANTED")
     assert hasattr(AgentEventType, "APPROVAL_DENIED")
-    assert hasattr(AgentEventType, "SESION_STARTED")
+    assert hasattr(AgentEventType, "SESSION_STARTED")
     assert hasattr(AgentEventType, "SESSION_ENDED")
 
 
