@@ -11,6 +11,25 @@ from codex_autorunner.core.pma_audit import PmaActionType, PmaAuditLog
 from codex_autorunner.surfaces.cli import pma_control_plane, pma_thread_commands
 from codex_autorunner.surfaces.cli.pma_cli import pma_app
 
+_SENTINEL = object()
+
+
+def _always_timeout_with_status(
+    method: str, url: str, payload=None, token_env=None, timeout=None
+):
+    _ = method, url, payload, token_env, timeout
+    raise httpx.TimeoutException("timed out")
+
+
+def _make_next_status_request_json(payloads, default=_SENTINEL):
+    def _request_json(method, url, payload=None, token_env=None, params=None):
+        _ = method, url, payload, token_env, params
+        if default is _SENTINEL:
+            return next(payloads)
+        return next(payloads, default)
+
+    return _request_json
+
 
 def test_pma_cli_thread_group_has_required_commands():
     runner = CliRunner()
@@ -1827,16 +1846,6 @@ def test_pma_cli_thread_send_no_wait_does_not_error_when_timeout_recovery_fails(
         ),
     )
 
-    def _fake_request_json_with_status(
-        method: str,
-        url: str,
-        payload=None,
-        token_env=None,
-        timeout=None,
-    ):
-        _ = method, url, payload, token_env, timeout
-        raise httpx.TimeoutException("timed out")
-
     status_payloads = itertools.cycle(
         [
             {
@@ -1852,21 +1861,12 @@ def test_pma_cli_thread_send_no_wait_does_not_error_when_timeout_recovery_fails(
         ]
     )
 
-    def _fake_request_json(
-        method: str,
-        url: str,
-        payload=None,
-        token_env=None,
-        params=None,
-    ):
-        _ = method, url, payload, token_env, params
-        return next(status_payloads)
-
+    _status_req = _make_next_status_request_json(status_payloads)
     monkeypatch.setattr(
-        pma_thread_commands, "_request_json_with_status", _fake_request_json_with_status
+        pma_thread_commands, "_request_json_with_status", _always_timeout_with_status
     )
-    monkeypatch.setattr(pma_thread_commands, "_request_json", _fake_request_json)
-    monkeypatch.setattr(pma_control_plane, "request_json", _fake_request_json)
+    monkeypatch.setattr(pma_thread_commands, "_request_json", _status_req)
+    monkeypatch.setattr(pma_control_plane, "request_json", _status_req)
     monotonic_values = iter([100.0, 116.0])
     monkeypatch.setattr(
         pma_control_plane.time, "monotonic", lambda: next(monotonic_values, 116.0)
@@ -1907,16 +1907,6 @@ def test_pma_cli_thread_send_recovers_timeout_from_status_probe(
         ),
     )
 
-    def _fake_request_json_with_status(
-        method: str,
-        url: str,
-        payload=None,
-        token_env=None,
-        timeout=None,
-    ):
-        _ = method, url, payload, token_env, timeout
-        raise httpx.TimeoutException("timed out")
-
     status_payloads = iter(
         [
             {
@@ -1941,21 +1931,12 @@ def test_pma_cli_thread_send_recovers_timeout_from_status_probe(
         ]
     )
 
-    def _fake_request_json(
-        method: str,
-        url: str,
-        payload=None,
-        token_env=None,
-        params=None,
-    ):
-        _ = method, url, payload, token_env, params
-        return next(status_payloads)
-
+    _status_req = _make_next_status_request_json(status_payloads)
     monkeypatch.setattr(
-        pma_thread_commands, "_request_json_with_status", _fake_request_json_with_status
+        pma_thread_commands, "_request_json_with_status", _always_timeout_with_status
     )
-    monkeypatch.setattr(pma_thread_commands, "_request_json", _fake_request_json)
-    monkeypatch.setattr(pma_control_plane, "request_json", _fake_request_json)
+    monkeypatch.setattr(pma_thread_commands, "_request_json", _status_req)
+    monkeypatch.setattr(pma_control_plane, "request_json", _status_req)
     monotonic_values = itertools.count(100.0, 0.01)
     monkeypatch.setattr(
         pma_control_plane.time, "monotonic", lambda: next(monotonic_values)
@@ -1997,16 +1978,6 @@ def test_pma_cli_thread_send_recovers_queued_timeout_from_status_probe(
         ),
     )
 
-    def _fake_request_json_with_status(
-        method: str,
-        url: str,
-        payload=None,
-        token_env=None,
-        timeout=None,
-    ):
-        _ = method, url, payload, token_env, timeout
-        raise httpx.TimeoutException("timed out")
-
     status_payloads = iter(
         [
             {
@@ -2038,21 +2009,12 @@ def test_pma_cli_thread_send_recovers_queued_timeout_from_status_probe(
         ]
     )
 
-    def _fake_request_json(
-        method: str,
-        url: str,
-        payload=None,
-        token_env=None,
-        params=None,
-    ):
-        _ = method, url, payload, token_env, params
-        return next(status_payloads)
-
+    _status_req = _make_next_status_request_json(status_payloads)
     monkeypatch.setattr(
-        pma_thread_commands, "_request_json_with_status", _fake_request_json_with_status
+        pma_thread_commands, "_request_json_with_status", _always_timeout_with_status
     )
-    monkeypatch.setattr(pma_thread_commands, "_request_json", _fake_request_json)
-    monkeypatch.setattr(pma_control_plane, "request_json", _fake_request_json)
+    monkeypatch.setattr(pma_thread_commands, "_request_json", _status_req)
+    monkeypatch.setattr(pma_control_plane, "request_json", _status_req)
     monotonic_seq = itertools.count(100.0, 1.0)
     monkeypatch.setattr(
         pma_control_plane.time, "monotonic", lambda: next(monotonic_seq)
@@ -2097,16 +2059,6 @@ def test_pma_cli_thread_send_recovers_queued_timeout_when_last_turn_advances(
         ),
     )
 
-    def _fake_request_json_with_status(
-        method: str,
-        url: str,
-        payload=None,
-        token_env=None,
-        timeout=None,
-    ):
-        _ = method, url, payload, token_env, timeout
-        raise httpx.TimeoutException("timed out")
-
     status_payloads = iter(
         [
             {
@@ -2138,21 +2090,12 @@ def test_pma_cli_thread_send_recovers_queued_timeout_when_last_turn_advances(
         ]
     )
 
-    def _fake_request_json(
-        method: str,
-        url: str,
-        payload=None,
-        token_env=None,
-        params=None,
-    ):
-        _ = method, url, payload, token_env, params
-        return next(status_payloads)
-
+    _status_req = _make_next_status_request_json(status_payloads)
     monkeypatch.setattr(
-        pma_thread_commands, "_request_json_with_status", _fake_request_json_with_status
+        pma_thread_commands, "_request_json_with_status", _always_timeout_with_status
     )
-    monkeypatch.setattr(pma_thread_commands, "_request_json", _fake_request_json)
-    monkeypatch.setattr(pma_control_plane, "request_json", _fake_request_json)
+    monkeypatch.setattr(pma_thread_commands, "_request_json", _status_req)
+    monkeypatch.setattr(pma_control_plane, "request_json", _status_req)
     monotonic_values = iter([100.0, 115.0])
     monkeypatch.setattr(
         pma_control_plane.time, "monotonic", lambda: next(monotonic_values, 115.0)
@@ -2196,16 +2139,6 @@ def test_pma_cli_thread_send_timeout_recovery_keeps_queued_turn_rows_aligned(
         ),
     )
 
-    def _fake_request_json_with_status(
-        method: str,
-        url: str,
-        payload=None,
-        token_env=None,
-        timeout=None,
-    ):
-        _ = method, url, payload, token_env, timeout
-        raise httpx.TimeoutException("timed out")
-
     status_payloads = iter(
         [
             {
@@ -2242,21 +2175,12 @@ def test_pma_cli_thread_send_timeout_recovery_keeps_queued_turn_rows_aligned(
         ]
     )
 
-    def _fake_request_json(
-        method: str,
-        url: str,
-        payload=None,
-        token_env=None,
-        params=None,
-    ):
-        _ = method, url, payload, token_env, params
-        return next(status_payloads)
-
+    _status_req = _make_next_status_request_json(status_payloads)
     monkeypatch.setattr(
-        pma_thread_commands, "_request_json_with_status", _fake_request_json_with_status
+        pma_thread_commands, "_request_json_with_status", _always_timeout_with_status
     )
-    monkeypatch.setattr(pma_thread_commands, "_request_json", _fake_request_json)
-    monkeypatch.setattr(pma_control_plane, "request_json", _fake_request_json)
+    monkeypatch.setattr(pma_thread_commands, "_request_json", _status_req)
+    monkeypatch.setattr(pma_control_plane, "request_json", _status_req)
     monotonic_seq = itertools.count(100.0, 1.0)
     monkeypatch.setattr(
         pma_control_plane.time, "monotonic", lambda: next(monotonic_seq)
@@ -2300,16 +2224,6 @@ def test_pma_cli_thread_send_timeout_recovery_preview_match_prefers_queued_turn_
         ),
     )
 
-    def _fake_request_json_with_status(
-        method: str,
-        url: str,
-        payload=None,
-        token_env=None,
-        timeout=None,
-    ):
-        _ = method, url, payload, token_env, timeout
-        raise httpx.TimeoutException("timed out")
-
     status_payloads = iter(
         [
             {
@@ -2341,21 +2255,12 @@ def test_pma_cli_thread_send_timeout_recovery_preview_match_prefers_queued_turn_
         ]
     )
 
-    def _fake_request_json(
-        method: str,
-        url: str,
-        payload=None,
-        token_env=None,
-        params=None,
-    ):
-        _ = method, url, payload, token_env, params
-        return next(status_payloads)
-
+    _status_req = _make_next_status_request_json(status_payloads)
     monkeypatch.setattr(
-        pma_thread_commands, "_request_json_with_status", _fake_request_json_with_status
+        pma_thread_commands, "_request_json_with_status", _always_timeout_with_status
     )
-    monkeypatch.setattr(pma_thread_commands, "_request_json", _fake_request_json)
-    monkeypatch.setattr(pma_control_plane, "request_json", _fake_request_json)
+    monkeypatch.setattr(pma_thread_commands, "_request_json", _status_req)
+    monkeypatch.setattr(pma_control_plane, "request_json", _status_req)
     monotonic_values = iter([100.0, 103.0])
     monkeypatch.setattr(
         pma_control_plane.time, "monotonic", lambda: next(monotonic_values, 103.0)
@@ -2398,16 +2303,6 @@ def test_pma_cli_thread_send_recovers_timeout_from_redacted_active_prompt(
         ),
     )
 
-    def _fake_request_json_with_status(
-        method: str,
-        url: str,
-        payload=None,
-        token_env=None,
-        timeout=None,
-    ):
-        _ = method, url, payload, token_env, timeout
-        raise httpx.TimeoutException("timed out")
-
     message_body = "please use sk-abcdefghijklmnopqrstuvwxyz1234567890 now"
     status_payloads = iter(
         [
@@ -2438,21 +2333,12 @@ def test_pma_cli_thread_send_recovers_timeout_from_redacted_active_prompt(
         ]
     )
 
-    def _fake_request_json(
-        method: str,
-        url: str,
-        payload=None,
-        token_env=None,
-        params=None,
-    ):
-        _ = method, url, payload, token_env, params
-        return next(status_payloads)
-
+    _status_req = _make_next_status_request_json(status_payloads)
     monkeypatch.setattr(
-        pma_thread_commands, "_request_json_with_status", _fake_request_json_with_status
+        pma_thread_commands, "_request_json_with_status", _always_timeout_with_status
     )
-    monkeypatch.setattr(pma_thread_commands, "_request_json", _fake_request_json)
-    monkeypatch.setattr(pma_control_plane, "request_json", _fake_request_json)
+    monkeypatch.setattr(pma_thread_commands, "_request_json", _status_req)
+    monkeypatch.setattr(pma_control_plane, "request_json", _status_req)
     monotonic_values = iter([100.0, 103.0])
     monkeypatch.setattr(
         pma_control_plane.time, "monotonic", lambda: next(monotonic_values, 103.0)
@@ -2492,16 +2378,6 @@ def test_pma_cli_thread_send_active_prompt_recovery_ignores_preexisting_queue(
         ),
     )
 
-    def _fake_request_json_with_status(
-        method: str,
-        url: str,
-        payload=None,
-        token_env=None,
-        timeout=None,
-    ):
-        _ = method, url, payload, token_env, timeout
-        raise httpx.TimeoutException("timed out")
-
     baseline_payload = {
         "thread": {
             "last_turn_id": "turn-1",
@@ -2538,21 +2414,12 @@ def test_pma_cli_thread_send_active_prompt_recovery_ignores_preexisting_queue(
     }
     status_payloads = iter([baseline_payload, current_payload])
 
-    def _fake_request_json(
-        method: str,
-        url: str,
-        payload=None,
-        token_env=None,
-        params=None,
-    ):
-        _ = method, url, payload, token_env, params
-        return next(status_payloads, current_payload)
-
+    _status_req = _make_next_status_request_json(status_payloads, current_payload)
     monkeypatch.setattr(
-        pma_thread_commands, "_request_json_with_status", _fake_request_json_with_status
+        pma_thread_commands, "_request_json_with_status", _always_timeout_with_status
     )
-    monkeypatch.setattr(pma_thread_commands, "_request_json", _fake_request_json)
-    monkeypatch.setattr(pma_control_plane, "request_json", _fake_request_json)
+    monkeypatch.setattr(pma_thread_commands, "_request_json", _status_req)
+    monkeypatch.setattr(pma_control_plane, "request_json", _status_req)
     monotonic_seq = itertools.count(100.0, 1.0)
     monkeypatch.setattr(
         pma_control_plane.time, "monotonic", lambda: next(monotonic_seq)
@@ -2591,16 +2458,6 @@ def test_pma_cli_thread_send_retries_timeout_recovery_until_status_catches_up(
         ),
     )
 
-    def _fake_request_json_with_status(
-        method: str,
-        url: str,
-        payload=None,
-        token_env=None,
-        timeout=None,
-    ):
-        _ = method, url, payload, token_env, timeout
-        raise httpx.TimeoutException("timed out")
-
     status_payloads = iter(
         [
             {
@@ -2636,24 +2493,15 @@ def test_pma_cli_thread_send_retries_timeout_recovery_until_status_catches_up(
         ]
     )
 
-    def _fake_request_json(
-        method: str,
-        url: str,
-        payload=None,
-        token_env=None,
-        params=None,
-    ):
-        _ = method, url, payload, token_env, params
-        return next(status_payloads)
-
+    _status_req = _make_next_status_request_json(status_payloads)
     monotonic_seq = itertools.count(100.0, 1.0)
     sleep_calls: list[float] = []
 
     monkeypatch.setattr(
-        pma_thread_commands, "_request_json_with_status", _fake_request_json_with_status
+        pma_thread_commands, "_request_json_with_status", _always_timeout_with_status
     )
-    monkeypatch.setattr(pma_thread_commands, "_request_json", _fake_request_json)
-    monkeypatch.setattr(pma_control_plane, "request_json", _fake_request_json)
+    monkeypatch.setattr(pma_thread_commands, "_request_json", _status_req)
+    monkeypatch.setattr(pma_control_plane, "request_json", _status_req)
     monkeypatch.setattr(
         pma_control_plane.time, "monotonic", lambda: next(monotonic_seq)
     )
@@ -2701,16 +2549,6 @@ def test_pma_cli_thread_send_timeout_warns_before_retry_when_status_unclear(
         ),
     )
 
-    def _fake_request_json_with_status(
-        method: str,
-        url: str,
-        payload=None,
-        token_env=None,
-        timeout=None,
-    ):
-        _ = method, url, payload, token_env, timeout
-        raise httpx.TimeoutException("timed out")
-
     status_payloads = itertools.cycle(
         [
             {
@@ -2734,21 +2572,12 @@ def test_pma_cli_thread_send_timeout_warns_before_retry_when_status_unclear(
         ]
     )
 
-    def _fake_request_json(
-        method: str,
-        url: str,
-        payload=None,
-        token_env=None,
-        params=None,
-    ):
-        _ = method, url, payload, token_env, params
-        return next(status_payloads)
-
+    _status_req = _make_next_status_request_json(status_payloads)
     monkeypatch.setattr(
-        pma_thread_commands, "_request_json_with_status", _fake_request_json_with_status
+        pma_thread_commands, "_request_json_with_status", _always_timeout_with_status
     )
-    monkeypatch.setattr(pma_thread_commands, "_request_json", _fake_request_json)
-    monkeypatch.setattr(pma_control_plane, "request_json", _fake_request_json)
+    monkeypatch.setattr(pma_thread_commands, "_request_json", _status_req)
+    monkeypatch.setattr(pma_control_plane, "request_json", _status_req)
     monotonic_seq = itertools.count(100.0, 1.0)
     monkeypatch.setattr(
         pma_control_plane.time, "monotonic", lambda: next(monotonic_seq)
