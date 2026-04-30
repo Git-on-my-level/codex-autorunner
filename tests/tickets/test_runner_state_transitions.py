@@ -25,7 +25,6 @@ from codex_autorunner.tickets.runner_post_turn import (
     apply_checkpoint_error_state,
     apply_completion_cleanup,
     apply_loop_guard_state,
-    apply_successful_turn_state,
     build_dispatch_pause_result,
     build_loop_guard_pause_result,
     build_pause_result,
@@ -81,64 +80,6 @@ def _init_git_repo(path: Path) -> None:
     subprocess.run(
         ["git", "commit", "-m", "init"], cwd=path, check=True, capture_output=True
     )
-
-
-class TestApplySuccessfulTurnState:
-    def test_records_agent_output_and_clears_network_retry(self):
-        state = {"network_retry": {"retries": 2, "last_error": "timeout"}}
-        result = apply_successful_turn_state(
-            state=state,
-            agent_text="agent output",
-            agent_id="codex",
-            agent_conversation_id="conv-1",
-            agent_turn_id="turn-1",
-            reply_max_seq=0,
-            reply_seq=0,
-        )
-        assert result["last_agent_output"] == "agent output"
-        assert result["last_agent_id"] == "codex"
-        assert result["last_agent_conversation_id"] == "conv-1"
-        assert result["last_agent_turn_id"] == "turn-1"
-        assert "network_retry" not in result
-
-    def test_consumes_replies_only_when_new_replies_exist(self):
-        state: dict[str, Any] = {}
-        result = apply_successful_turn_state(
-            state=state,
-            agent_text="ok",
-            agent_id="a",
-            agent_conversation_id="c",
-            agent_turn_id="t",
-            reply_max_seq=3,
-            reply_seq=1,
-        )
-        assert result["reply_seq"] == 3
-
-    def test_skips_reply_update_when_no_new_replies(self):
-        state: dict[str, Any] = {"reply_seq": 5}
-        result = apply_successful_turn_state(
-            state=state,
-            agent_text="ok",
-            agent_id="a",
-            agent_conversation_id="c",
-            agent_turn_id="t",
-            reply_max_seq=3,
-            reply_seq=5,
-        )
-        assert result.get("reply_seq") == 5
-
-    def test_does_not_mutate_input_state(self):
-        original = {"network_retry": {"retries": 1}}
-        apply_successful_turn_state(
-            state=original,
-            agent_text="x",
-            agent_id="a",
-            agent_conversation_id="c",
-            agent_turn_id="t",
-            reply_max_seq=0,
-            reply_seq=0,
-        )
-        assert "network_retry" in original
 
 
 class TestApplyLoopGuardState:

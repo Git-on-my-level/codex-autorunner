@@ -22,8 +22,7 @@ goal: "Validate the AutoOptimize campaign state, render final artifacts, and sum
    - recommended follow-ups
 5. Ensure the artifacts exist for chat wrap-up:
    - `.codex-autorunner/apps/blessed.autooptimize/artifacts/summary.md`
-   - `.codex-autorunner/apps/blessed.autooptimize/artifacts/summary.svg`
-   - optional `.codex-autorunner/apps/blessed.autooptimize/artifacts/summary.png`
+   - `.codex-autorunner/apps/blessed.autooptimize/artifacts/summary.png`
 
 ## Constraints
 

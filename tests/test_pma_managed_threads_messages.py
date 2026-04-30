@@ -11,7 +11,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
-from codex_autorunner.core.hub import HubSupervisor
 from codex_autorunner.core.orchestration.runtime_bindings import (
     clear_runtime_thread_binding,
 )
@@ -38,15 +37,6 @@ from tests.pma_support.managed_threads import (
 )
 
 pytestmark = pytest.mark.slow
-
-
-@pytest.fixture(autouse=True)
-def _disable_hub_lifecycle_worker(monkeypatch) -> None:
-    monkeypatch.setattr(
-        HubSupervisor,
-        "_start_lifecycle_event_processor",
-        lambda self: None,
-    )
 
 
 def test_send_message_persists_turns_and_reuses_backend_thread(hub_env) -> None:

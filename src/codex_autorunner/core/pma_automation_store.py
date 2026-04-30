@@ -942,50 +942,6 @@ class PmaAutomationStore:
             ),
         )
 
-    def _insert_wakeup_row(self, conn: Any, wakeup: PmaAutomationWakeup) -> None:
-        conn.execute(
-            """
-            INSERT INTO orch_automation_wakeups (
-                wakeup_id, subscription_id, repo_id, run_id,
-                thread_target_id, lane_id, wakeup_kind, state,
-                available_at, claimed_at, completed_at, reason_text,
-                payload_json, created_at, updated_at,
-                dispatched_at, timestamp, idempotency_key,
-                timer_id, event_id, event_type
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                wakeup.wakeup_id,
-                wakeup.subscription_id,
-                wakeup.repo_id,
-                wakeup.run_id,
-                wakeup.thread_id,
-                wakeup.lane_id,
-                wakeup.source,
-                wakeup.state,
-                wakeup.timestamp,
-                None,
-                None,
-                wakeup.reason,
-                json.dumps(
-                    {
-                        "metadata": wakeup.metadata,
-                        "event_data": wakeup.event_data,
-                        "from_state": wakeup.from_state,
-                        "to_state": wakeup.to_state,
-                    }
-                ),
-                wakeup.created_at,
-                wakeup.updated_at,
-                wakeup.dispatched_at,
-                wakeup.timestamp,
-                wakeup.idempotency_key,
-                wakeup.timer_id,
-                wakeup.event_id,
-                wakeup.event_type,
-            ),
-        )
-
     def _find_active_subscription_by_key(
         self, conn: Any, key: str
     ) -> Optional[PmaLifecycleSubscription]:
@@ -1013,18 +969,6 @@ class PmaAutomationStore:
             (key,),
         ).fetchall()
         return self._row_to_timer(rows[0]) if rows else None
-
-    def _find_wakeup_by_key(self, conn: Any, key: str) -> Optional[PmaAutomationWakeup]:
-        rows = conn.execute(
-            """
-            SELECT *
-              FROM orch_automation_wakeups
-             WHERE idempotency_key = ?
-             LIMIT 1
-            """,
-            (key,),
-        ).fetchall()
-        return self._row_to_wakeup(rows[0]) if rows else None
 
     def _subscription_id_exists(self, conn: Any, sub_id: str) -> bool:
         row = conn.execute(

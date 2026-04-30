@@ -42,7 +42,9 @@ def main(argv: list[str] | None = None) -> int:
     with locked_state(paths):
         run = load_run(paths)
         rows = load_iterations(paths)
-        duplicates = [row for row in rows if int(row.get("iteration", 0)) == args.iteration]
+        duplicates = [
+            row for row in rows if int(row.get("iteration", 0)) == args.iteration
+        ]
         if duplicates and not args.force:
             raise RuntimeError(
                 f"Iteration {args.iteration} already exists. Re-run with --force to replace it."

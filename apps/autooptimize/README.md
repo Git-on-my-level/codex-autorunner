@@ -83,13 +83,11 @@ AutoOptimize writes only to app-owned runtime paths:
 $CAR_APP_STATE_DIR/run.json
 $CAR_APP_STATE_DIR/iterations.jsonl
 $CAR_APP_ARTIFACT_DIR/summary.md
-$CAR_APP_ARTIFACT_DIR/summary.svg
 $CAR_APP_ARTIFACT_DIR/summary.png
 ```
 
-`summary.png` is optional. The renderer always emits `summary.md` and
-`summary.svg`. PNG conversion is attempted only when a compatible local SVG
-conversion dependency is available.
+The renderer always emits `summary.md` and `summary.png`. The PNG chart is
+generated directly so chat surfaces do not need SVG rendering support.
 
 ## Recommended workflow
 

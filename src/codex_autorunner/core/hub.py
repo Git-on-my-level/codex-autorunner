@@ -33,11 +33,8 @@ from .hub_topology import (
     RepoSnapshot,
     RepoStatus,  # noqa: F401  re-exported for consumers
     RepoTopologyRecord,
-    build_agent_workspace_snapshots,
-    build_repo_snapshots,
     load_hub_state,
     normalize_pinned_parent_repo_ids,
-    prune_pinned_parent_repo_ids,
     read_lock_status,  # noqa: F401  re-exported for consumers
     refresh_pma_threads_artifact,
     save_hub_state,
@@ -873,21 +870,6 @@ class HubSupervisor:
             return manifest, records
         return manifest, records
 
-    def _build_snapshots(
-        self, records: Sequence[RepoTopologyRecord]
-    ) -> List[RepoSnapshot]:
-        return build_repo_snapshots(records)
-
-    def _build_agent_workspace_snapshots(
-        self, workspaces: List[ManifestAgentWorkspace]
-    ) -> List[AgentWorkspaceSnapshot]:
-        return build_agent_workspace_snapshots(workspaces, self.hub_config.root)
-
-    def _prune_pinned_parent_repo_ids(self, snapshots: List[RepoSnapshot]) -> List[str]:
-        return prune_pinned_parent_repo_ids(
-            self.state.pinned_parent_repo_ids, snapshots
-        )
-
     def _snapshot_for_repo(self, repo_id: str) -> RepoSnapshot:
         self.list_repos(use_cache=False)
         snapshot = next((item for item in self.state.repos if item.id == repo_id), None)
@@ -1037,12 +1019,6 @@ class HubSupervisor:
     def startup(self) -> None:
         self._lifecycle_orchestrator.startup()
         self._startup_phase = HUB_STARTUP_STARTED
-
-    def _stop_lifecycle_event_processor(self) -> None:
-        self._lifecycle_orchestrator.shutdown()
-
-    def _start_lifecycle_event_processor(self) -> None:
-        self._lifecycle_orchestrator.startup()
 
     def _build_lifecycle_retry_policy(self):
         return self._lifecycle_orchestrator._build_lifecycle_retry_policy()

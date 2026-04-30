@@ -257,10 +257,6 @@ def test_contract_legacy_normalized_interaction_path_is_removed() -> None:
 
 
 EXTRACTED_MODULE_SEAMS: dict[str, set[str]] = {
-    "src/codex_autorunner/integrations/discord/hub_handshake.py": {
-        "perform_hub_handshake",
-        "HubHandshakeResult",
-    },
     "src/codex_autorunner/integrations/discord/service_lifecycle.py": {
         "service_uptime_ms",
         "is_within_cold_start_window",
@@ -302,20 +298,6 @@ def test_contract_extracted_modules_are_importable() -> None:
             module_path.replace("src/", "").replace("/", ".").removesuffix(".py")
         )
         importlib.import_module(module_name)
-
-
-def test_contract_hub_handshake_does_not_import_gateway_or_rest() -> None:
-    tree = ast.parse(
-        (DISCORD_DIR / "hub_handshake.py").read_text(encoding="utf-8"),
-    )
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom):
-            assert (
-                node.module is None or "gateway" not in node.module
-            ), f"hub_handshake.py must not import from gateway: {node.module}"
-            assert (
-                node.module is None or "rest" not in node.module.split(".")[-1]
-            ), f"hub_handshake.py must not import from rest: {node.module}"
 
 
 def test_contract_service_lifecycle_does_not_import_interaction_session() -> None:

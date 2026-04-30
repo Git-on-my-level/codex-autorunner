@@ -210,11 +210,16 @@ def test_autooptimize_install_run_and_after_flow_terminal_hook(tmp_path: Path) -
 
     app_root = resolve_repo_state_root(repo_root) / "apps" / install_result.app.app_id
     assert (app_root / "artifacts" / "summary.md").exists()
-    assert (app_root / "artifacts" / "summary.svg").exists()
+    assert (app_root / "artifacts" / "summary.png").exists()
 
     summary_md = (app_root / "artifacts" / "summary.md").read_text(encoding="utf-8")
     assert "AutoOptimize Summary" in summary_md
     assert "discovery-cache" in summary_md
+    assert (
+        (app_root / "artifacts" / "summary.png")
+        .read_bytes()
+        .startswith(b"\x89PNG\r\n\x1a\n")
+    )
     reloaded = get_installed_app(repo_root, "blessed.autooptimize")
     assert reloaded is not None
     assert reloaded.bundle_verified is True
