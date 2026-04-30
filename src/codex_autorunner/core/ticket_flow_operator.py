@@ -264,6 +264,8 @@ def _trim_extra(extra: Any, limit: Optional[int]) -> Any:
 
 def _codex_version_command(app_server_command: Sequence[str]) -> list[str]:
     command = [str(part) for part in app_server_command if str(part).strip()]
+    if not command:
+        return []
     try:
         app_server_index = command.index("app-server")
     except ValueError:
@@ -271,7 +273,9 @@ def _codex_version_command(app_server_command: Sequence[str]) -> list[str]:
     return command[:app_server_index] + ["--version"]
 
 
-def _codex_runtime_preflight_details(config: Any, app_cmd: Sequence[str]) -> list[str]:
+def _codex_runtime_preflight_details(
+    config: Any, app_cmd: Sequence[str]
+) -> tuple[list[str], Optional[str]]:
     details = [f"command: {shlex.join([str(part) for part in app_cmd])}"]
     source = getattr(getattr(config, "app_server", None), "command_source", None)
     if source:
@@ -307,7 +311,7 @@ def _codex_runtime_preflight_details(config: Any, app_cmd: Sequence[str]) -> lis
         )
     elif os.environ.get("CAR_TELEGRAM_APP_SERVER_COMMAND"):
         details.append("ignored surface env: CAR_TELEGRAM_APP_SERVER_COMMAND")
-    return details
+    return details, resolved
 
 
 def _dispatch_dict(
@@ -792,9 +796,7 @@ def ticket_flow_preflight(repo_root: Path, *, config: Any = None) -> PreflightRe
 
     if "codex" in agents:
         app_cmd = getattr(getattr(config, "app_server", None), "command", None) or []
-        codex_details = _codex_runtime_preflight_details(config, app_cmd)
-        app_binary = app_cmd[0] if app_cmd else None
-        resolved = resolve_executable(app_binary) if app_binary else None
+        codex_details, resolved = _codex_runtime_preflight_details(config, app_cmd)
         if config is not None and not resolved:
             agent_errors.append("codex: app_server command not available in PATH.")
 
