@@ -443,6 +443,17 @@ def pma_notes_content() -> str:
 - `car templates apply <id> --repo <path>`
 - Blessed repo: `https://github.com/Git-on-my-level/car-ticket-templates`
 
+## CAR apps
+
+- Use `car apps list --repo <path>` to discover apps from configured app repos.
+- Use `car apps show blessed:apps/autooptimize --repo <path>` when a user asks about AutoOptimize.
+- To use AutoOptimize:
+  `car apps install blessed:apps/autooptimize --repo <path>`
+  then
+  `car apps apply blessed.autooptimize --repo <path> --set goal="<goal>"`.
+- Inspect runnable tools with `car apps tools blessed.autooptimize --repo <path>`.
+- Blessed app repo: `https://github.com/Git-on-my-level/blessed-car-apps`
+
 ## Ticket flow (start/resume)
 
 - Bootstrap (creates TICKET-001 if missing):
@@ -633,6 +644,16 @@ This document is jointly maintained by the user and PMA.
 - Inspect/apply with `car templates show <id> --repo <path>` and `car templates apply <id> --repo <path>` (same `--path` rule).
 - Blessed repo: `https://github.com/Git-on-my-level/car-ticket-templates`
 - Add durable shortcuts here as `template_id` plus when to apply it.
+
+## CAR app shortcuts (optional)
+
+- Discover apps with `car apps list --repo <path>`.
+- AutoOptimize lives at `blessed:apps/autooptimize` and installs as `blessed.autooptimize`.
+- When a user asks to use AutoOptimize, inspect it with
+  `car apps show blessed:apps/autooptimize --repo <path>`, install it with
+  `car apps install blessed:apps/autooptimize --repo <path>`, then apply it with
+  `car apps apply blessed.autooptimize --repo <path> --set goal="<goal>"`.
+- Blessed app repo: `https://github.com/Git-on-my-level/blessed-car-apps`
 
 ## CLI help-first rule
 

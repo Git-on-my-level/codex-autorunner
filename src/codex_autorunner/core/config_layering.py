@@ -338,6 +338,21 @@ def _default_github_automation_section() -> Dict[str, Any]:
     }
 
 
+def _default_templates_section() -> Dict[str, Any]:
+    """Build the default templates section."""
+    return {
+        "enabled": True,
+        "repos": [
+            {
+                "id": "blessed",
+                "url": "https://github.com/Git-on-my-level/car-ticket-templates",
+                "trusted": True,
+                "default_ref": "main",
+            }
+        ],
+    }
+
+
 def _default_apps_section() -> Dict[str, Any]:
     """Build the default apps section."""
     return {
@@ -345,7 +360,7 @@ def _default_apps_section() -> Dict[str, Any]:
         "repos": [
             {
                 "id": "blessed",
-                "url": "https://github.com/Git-on-my-level/car-ticket-templates",
+                "url": "https://github.com/Git-on-my-level/blessed-car-apps",
                 "trusted": True,
                 "default_ref": "main",
             }
@@ -746,7 +761,7 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
         "orchestration_hot_history_retention_days": 30,
         "orchestration_cold_trace_retention_days": 90,
     },
-    "templates": _default_apps_section(),
+    "templates": _default_templates_section(),
     "apps": _default_apps_section(),
     "agents": _default_agents_section(),
     "terminal": _default_terminal_section(),

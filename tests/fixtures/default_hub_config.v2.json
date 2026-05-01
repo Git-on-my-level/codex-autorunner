@@ -69,7 +69,7 @@
         "default_ref": "main",
         "id": "blessed",
         "trusted": true,
-        "url": "https://github.com/Git-on-my-level/car-ticket-templates"
+        "url": "https://github.com/Git-on-my-level/blessed-car-apps"
       }
     ]
   },
@@ -264,7 +264,7 @@
           "default_ref": "main",
           "id": "blessed",
           "trusted": true,
-          "url": "https://github.com/Git-on-my-level/car-ticket-templates"
+          "url": "https://github.com/Git-on-my-level/blessed-car-apps"
         }
       ]
     },
