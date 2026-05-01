@@ -11,15 +11,16 @@ from pathlib import Path
 from typing import Any, Optional
 
 from ..diagnostics.process_snapshot import collect_processes
+from ..flow_worker_reaper_constants import (
+    DEFAULT_FLOW_WORKER_MAX_AGE_SECONDS,
+    DEFAULT_FLOW_WORKER_TERMINATE_GRACE_SECONDS,
+    DEFAULT_TERMINAL_RUN_GRACE_SECONDS,
+)
 from ..state_roots import resolve_repo_flows_db_path, resolve_repo_state_root
 from ..text_utils import _pid_is_running
 from .models import FlowRunRecord, parse_flow_timestamp
 from .store import FlowStore
 from .worker_process import write_worker_exit_info
-
-DEFAULT_FLOW_WORKER_MAX_AGE_SECONDS = 2 * 60 * 60
-DEFAULT_TERMINAL_RUN_GRACE_SECONDS = 60 * 60
-DEFAULT_FLOW_WORKER_TERMINATE_GRACE_SECONDS = 10.0
 
 
 @dataclasses.dataclass(frozen=True)
@@ -74,7 +75,11 @@ class FlowWorkerReapSummary:
         }
 
 
-def inspect_flow_workers(repo_root: Path) -> list[FlowWorkerDiagnostic]:
+def inspect_flow_workers(
+    repo_root: Path,
+    *,
+    stale_age_seconds: float = DEFAULT_FLOW_WORKER_MAX_AGE_SECONDS,
+) -> list[FlowWorkerDiagnostic]:
     repo_root = repo_root.resolve()
     state_root = resolve_repo_state_root(repo_root)
     flows_root = state_root / "flows"
@@ -106,7 +111,9 @@ def inspect_flow_workers(repo_root: Path) -> list[FlowWorkerDiagnostic]:
         record = runs_by_id.get(run_id)
         proc = process_by_pid.get(pid)
         metadata_age = _metadata_age_seconds(metadata, metadata_path)
-        classification, reason = _classify_worker(record, alive, metadata_age)
+        classification, reason = _classify_worker(
+            record, alive, metadata_age, stale_age_seconds=stale_age_seconds
+        )
         diagnostics.append(
             FlowWorkerDiagnostic(
                 run_id=run_id,
@@ -133,7 +140,7 @@ def reap_stale_flow_workers(
     prune: bool = True,
     logger: Optional[logging.Logger] = None,
 ) -> FlowWorkerReapSummary:
-    workers = inspect_flow_workers(repo_root)
+    workers = inspect_flow_workers(repo_root, stale_age_seconds=max_age_seconds)
     pruned = 0
     errors: list[str] = []
 
@@ -218,6 +225,8 @@ def _classify_worker(
     record: Optional[FlowRunRecord],
     alive: bool,
     metadata_age_seconds: Optional[float],
+    *,
+    stale_age_seconds: float,
 ) -> tuple[str, str]:
     if not alive:
         return "dead", "pid_not_running"
@@ -227,7 +236,7 @@ def _classify_worker(
         return "stale", f"run_{record.status.value}"
     if (
         metadata_age_seconds is not None
-        and metadata_age_seconds >= DEFAULT_FLOW_WORKER_MAX_AGE_SECONDS
+        and metadata_age_seconds >= stale_age_seconds
     ):
         return "stale", "metadata_age_exceeded"
     return "active", f"run_{record.status.value}"

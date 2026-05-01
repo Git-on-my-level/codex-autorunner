@@ -9,12 +9,15 @@ from collections import deque
 from pathlib import Path
 from typing import Any, Iterable, Optional, Protocol, cast
 
+from .core.flow_worker_reaper_constants import (
+    DEFAULT_FLOW_WORKER_MAX_AGE_SECONDS,
+    DEFAULT_FLOW_WORKER_TERMINATE_GRACE_SECONDS,
+    DEFAULT_TERMINAL_RUN_GRACE_SECONDS,
+)
+
 _MAX_ERROR_SAMPLES = 5
 DEFAULT_MANAGED_DOCKER_CONTAINER_TTL_SECONDS = 12 * 60 * 60
 DEFAULT_FLOW_WORKER_REAP_INTERVAL_SECONDS = 15 * 60
-DEFAULT_FLOW_WORKER_MAX_AGE_SECONDS = 2 * 60 * 60
-DEFAULT_TERMINAL_RUN_GRACE_SECONDS = 60 * 60
-DEFAULT_FLOW_WORKER_TERMINATE_GRACE_SECONDS = 10.0
 
 
 @dataclasses.dataclass(frozen=True)
