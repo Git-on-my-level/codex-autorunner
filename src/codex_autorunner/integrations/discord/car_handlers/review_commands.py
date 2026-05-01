@@ -130,6 +130,8 @@ async def handle_car_review(
                     target_value = sha
             else:
                 prompt_commit_picker = True
+        elif target_lower in ("uncommitted", ""):
+            pass
         elif target_lower == "custom":
             await service.send_or_respond_ephemeral(
                 interaction_id=interaction_id,

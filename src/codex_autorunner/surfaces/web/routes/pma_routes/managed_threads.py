@@ -341,7 +341,7 @@ def build_automation_routes(
             normalized_payload = payload.normalized_payload() if payload else {}
             touched = await call_store_action_with_id(
                 store,
-                ("touch_timer", "refresh_timer", "renew_timer"),
+                ("touch_timer",),
                 normalized_id,
                 payload=normalized_payload,
                 id_aliases=("timer_id", "id"),
