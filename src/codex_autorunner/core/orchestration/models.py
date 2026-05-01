@@ -18,7 +18,6 @@ TargetCapability = Literal[
     "approvals",
 ]
 TargetKind = Literal["thread", "flow"]
-NativeTargetKind = Literal["ticket_flow", "pma"]
 MessageRequestKind = Literal["message", "review"]
 BusyThreadPolicy = Literal["queue", "interrupt", "reject"]
 OrchestrationTableRole = Literal["authoritative", "mirror", "projection", "ops"]
@@ -77,31 +76,6 @@ class AgentDefinition:
     workspace_root: Optional[str] = None
     default_model: Optional[str] = None
     description: Optional[str] = None
-    available: bool = True
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
-
-
-@dataclass(frozen=True)
-class NativeTargetDefinition:
-    """Orchestration-visible CAR-native target (not a runtime-backed agent).
-
-    Native targets are durable, addressable CAR-native services that participate
-    in orchestration routing. They are distinct from runtime-backed agents which
-    are managed through the agent registry.
-
-    Examples:
-    - ticket_flow: CAR-native flow execution engine
-    - pma: CAR-native thread management (generalized orchestration client)
-    """
-
-    target_id: str
-    target_kind: NativeTargetKind
-    display_name: str
-    description: Optional[str] = None
-    repo_id: Optional[str] = None
-    workspace_root: Optional[str] = None
     available: bool = True
 
     def to_dict(self) -> dict[str, Any]:
@@ -536,8 +510,6 @@ __all__ = [
     "FlowRunTarget",
     "FlowTarget",
     "MessageRequest",
-    "NativeTargetDefinition",
-    "NativeTargetKind",
     "OrchestrationTableDefinition",
     "OrchestrationTableRole",
     "TargetCapability",
