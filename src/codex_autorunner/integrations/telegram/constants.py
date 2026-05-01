@@ -1,15 +1,10 @@
 from __future__ import annotations
 
-from ...core.constants import (
-    DEFAULT_UPDATE_REPO_REF as DEFAULT_UPDATE_REPO_REF,
-)
-from ...core.constants import (
-    DEFAULT_UPDATE_REPO_URL as DEFAULT_UPDATE_REPO_URL,
-)
+from ...core.constants import DEFAULT_UPDATE_REPO_REF as DEFAULT_UPDATE_REPO_REF
+from ...core.constants import DEFAULT_UPDATE_REPO_URL as DEFAULT_UPDATE_REPO_URL
 from ...core.update_targets import update_target_label_pairs
 from ..chat.agents import (
     DEFAULT_CHAT_AGENT,
-    DEFAULT_CHAT_AGENT_MODELS,
 )
 from ..chat.model_selection import (
     REASONING_EFFORT_VALUES as CHAT_REASONING_EFFORT_VALUES,
@@ -135,8 +130,6 @@ COMMAND_DISABLED_TEMPLATE = "'/{name}' is disabled while a task is in progress."
 MAX_MENTION_BYTES = 200_000
 REASONING_EFFORT_VALUES = CHAT_REASONING_EFFORT_VALUES
 VALID_REASONING_EFFORTS = CHAT_VALID_REASONING_EFFORTS
-DEFAULT_AGENT_MODELS = dict(DEFAULT_CHAT_AGENT_MODELS)
-LEGACY_DEFAULT_AGENT_MODELS = DEFAULT_AGENT_MODELS
 CONTEXT_BASELINE_TOKENS = 12000
 APPROVAL_POLICY_VALUES = {"untrusted", "on-failure", "on-request", "never"}
 SHELL_OUTPUT_TRUNCATION_SUFFIX = "\n...(truncated)"

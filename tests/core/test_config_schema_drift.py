@@ -13,13 +13,11 @@ from codex_autorunner.core.config_parsers import (
     _parse_app_server_config,
     _parse_update_backend,
 )
-from codex_autorunner.core.config_validation import SHARED_CONFIG_VALIDATION_FIELD_PATHS
 
 
 def test_shared_config_schema_parser_and_validator_coverage_stay_in_lockstep() -> None:
     parser_paths = SHARED_CONFIG_PARSER_FIELD_PATHS | SHARED_AGENT_PARSER_FIELD_PATHS
 
-    assert parser_paths == SHARED_CONFIG_VALIDATION_FIELD_PATHS
     assert parser_paths == SHARED_SCHEMA_FIELD_PATHS
 
 

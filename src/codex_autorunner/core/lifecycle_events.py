@@ -27,7 +27,6 @@ logger = logging.getLogger(__name__)
 
 LIFECYCLE_EVENTS_FILENAME = "lifecycle_events.json"
 LIFECYCLE_EVENTS_DB_FILENAME = "lifecycle_events.sqlite3"
-LIFECYCLE_EVENTS_LOCK_SUFFIX = ".lock"
 LIFECYCLE_EVENTS_MALFORMED_PREFIX = "lifecycle_events.malformed"
 TRANSITION_TOKEN_KEY = "transition_token"
 
@@ -1005,19 +1004,11 @@ class LifecycleEventStore:
     def __init__(self, hub_root: Path) -> None:
         ensure_legacy_orchestration_backfill(hub_root)
         self._hub_root = hub_root
-        self._legacy_store = _LegacyJsonLifecycleEventStore(hub_root)
-        self._legacy_sqlite_store = _SqliteLifecycleEventStore(
-            hub_root, initialize_schema=False
-        )
         self._orchestration_store = _OrchestrationLifecycleEventStore(hub_root)
 
     @property
     def path(self) -> Path:
         return self._orchestration_store.path
-
-    @property
-    def legacy_path(self) -> Path:
-        return self._legacy_store.path
 
     def load(self, *, ensure_exists: bool = True) -> list[LifecycleEvent]:
         return self._orchestration_store.load(ensure_exists=ensure_exists)
