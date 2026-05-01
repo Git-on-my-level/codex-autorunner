@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import logging
+import mimetypes
+from datetime import datetime
+from email.utils import format_datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, BinaryIO, Iterator, Optional
+from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import StreamingResponse
 from starlette.datastructures import UploadFile
 
 from ....core.filebox import (
@@ -13,8 +17,12 @@ from ....core.filebox import (
     FileBoxEntry,
     ensure_structure,
     list_filebox,
-    resolve_file,
+    open_file,
+    sanitize_filename,
     save_file,
+)
+from ....core.filebox import (
+    delete_file as delete_filebox_file,
 )
 from ....core.hub import HubSupervisor
 from ....core.utils import find_repo_root
@@ -60,6 +68,37 @@ def _resolve_repo_root(request: Request) -> Path:
     return find_repo_root()
 
 
+def _stream_file(handle: BinaryIO) -> Iterator[bytes]:
+    try:
+        while True:
+            chunk = handle.read(1024 * 1024)
+            if not chunk:
+                break
+            yield chunk
+    finally:
+        handle.close()
+
+
+def _file_download_response(entry: FileBoxEntry, handle: BinaryIO) -> StreamingResponse:
+    encoded = quote(entry.name, safe="")
+    content_type = mimetypes.guess_type(entry.name)[0] or "application/octet-stream"
+    headers = {"Content-Disposition": f"attachment; filename*=UTF-8''{encoded}"}
+    if entry.size is not None:
+        headers["Content-Length"] = str(entry.size)
+    if entry.modified_at:
+        try:
+            modified = datetime.fromisoformat(entry.modified_at)
+            headers["Last-Modified"] = format_datetime(modified, usegmt=True)
+            headers["ETag"] = f'W/"{entry.size or 0}-{int(modified.timestamp())}"'
+        except ValueError:
+            pass
+    return StreamingResponse(
+        _stream_file(handle),
+        media_type=content_type,
+        headers=headers,
+    )
+
+
 async def _upload_files_to_box(
     *, repo_root: Path, box: str, request: Request
 ) -> dict[str, Any]:
@@ -71,13 +110,18 @@ async def _upload_files_to_box(
         if not isinstance(file, UploadFile):
             continue
         try:
+            sanitize_filename(filename)
+            effective_filename = sanitize_filename(file.filename or filename)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        try:
             data = await _read_upload_limited(file, max_upload_bytes=max_upload_bytes)
         except OSError as exc:
             logger.warning("Failed to read upload: %s", exc)
             continue
         except ValueError as exc:
             raise HTTPException(status_code=413, detail=str(exc)) from exc
-        pending.append((file.filename or filename, data))
+        pending.append((effective_filename, data))
 
     saved = []
     for filename, data in pending:
@@ -147,27 +191,27 @@ def build_filebox_routes() -> APIRouter:
         if box not in BOXES:
             raise HTTPException(status_code=400, detail="Invalid box")
         repo_root = _resolve_repo_root(request)
-        entry = resolve_file(repo_root, box, filename)
-        if entry is None:
+        result = open_file(repo_root, box, filename)
+        if result is None:
             raise HTTPException(status_code=404, detail="File not found")
-        return FileResponse(entry.path, filename=entry.name)
+        entry, handle = result
+        return _file_download_response(entry, handle)
 
     @router.delete("/filebox/{box}/{filename}")
     def delete_file_entry(box: str, filename: str, request: Request) -> dict[str, Any]:
         if box not in BOXES:
             raise HTTPException(status_code=400, detail="Invalid box")
         repo_root = _resolve_repo_root(request)
-        entry = resolve_file(repo_root, box, filename)
-        if entry is None:
-            raise HTTPException(status_code=404, detail="File not found")
         try:
-            entry.path.unlink()
-        except FileNotFoundError:
-            raise HTTPException(status_code=404, detail="File not found") from None
+            removed = delete_filebox_file(repo_root, box, filename)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         except OSError as exc:
             raise HTTPException(
                 status_code=500, detail="Failed to delete file"
             ) from exc
+        if not removed:
+            raise HTTPException(status_code=404, detail="File not found") from None
         return {"status": "ok"}
 
     return router
@@ -239,10 +283,11 @@ def build_hub_filebox_routes() -> APIRouter:
         if box not in BOXES:
             raise HTTPException(status_code=400, detail="Invalid box")
         repo_root = _resolve_hub_repo_root(request, repo_id)
-        entry = resolve_file(repo_root, box, filename)
-        if entry is None:
+        result = open_file(repo_root, box, filename)
+        if result is None:
             raise HTTPException(status_code=404, detail="File not found")
-        return FileResponse(entry.path, filename=entry.name)
+        entry, handle = result
+        return _file_download_response(entry, handle)
 
     @router.delete("/{repo_id}/{box}/{filename}")
     def hub_delete(
@@ -251,17 +296,16 @@ def build_hub_filebox_routes() -> APIRouter:
         if box not in BOXES:
             raise HTTPException(status_code=400, detail="Invalid box")
         repo_root = _resolve_hub_repo_root(request, repo_id)
-        entry = resolve_file(repo_root, box, filename)
-        if entry is None:
-            raise HTTPException(status_code=404, detail="File not found")
         try:
-            entry.path.unlink()
-        except FileNotFoundError:
-            raise HTTPException(status_code=404, detail="File not found") from None
+            removed = delete_filebox_file(repo_root, box, filename)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         except OSError as exc:
             raise HTTPException(
                 status_code=500, detail="Failed to delete file"
             ) from exc
+        if not removed:
+            raise HTTPException(status_code=404, detail="File not found") from None
         return {"status": "ok"}
 
     return router

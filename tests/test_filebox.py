@@ -43,6 +43,17 @@ def test_save_resolve_and_delete(tmp_path: Path) -> None:
     assert entry is not None
     assert entry.source == "filebox"
     assert entry.path.read_bytes() == b"hello"
+    loaded = filebox.read_file(repo, "inbox", "note.md")
+    assert loaded is not None
+    loaded_entry, loaded_data = loaded
+    assert loaded_entry.name == "note.md"
+    assert loaded_data == b"hello"
+    opened = filebox.open_file(repo, "inbox", "note.md")
+    assert opened is not None
+    opened_entry, opened_handle = opened
+    with opened_handle:
+        assert opened_entry.name == "note.md"
+        assert opened_handle.read() == b"hello"
 
     removed = filebox.delete_file(repo, "inbox", "note.md")
     assert removed
@@ -60,12 +71,43 @@ def test_resolve_ignores_symlinked_filebox_entries(tmp_path: Path) -> None:
     assert filebox.list_filebox(repo)["inbox"] == []
 
 
+def test_filebox_ignores_hardlinked_entries(tmp_path: Path) -> None:
+    repo = tmp_path
+    outside = _write(tmp_path / "outside", "secret.txt", b"secret")
+    inbox = filebox.inbox_dir(repo)
+    inbox.mkdir(parents=True, exist_ok=True)
+    try:
+        os.link(outside, inbox / "hardlink.txt")
+    except OSError as exc:
+        pytest.skip(f"hard links unavailable: {exc}")
+
+    assert filebox.resolve_file(repo, "inbox", "hardlink.txt") is None
+    assert filebox.read_file(repo, "inbox", "hardlink.txt") is None
+    assert filebox.open_file(repo, "inbox", "hardlink.txt") is None
+    assert filebox.list_filebox(repo)["inbox"] == []
+
+
 def test_save_rejects_symlinked_filebox_target(tmp_path: Path) -> None:
     repo = tmp_path
     target = _write(tmp_path / "outside", "secret.txt", b"secret")
     inbox = filebox.inbox_dir(repo)
     inbox.mkdir(parents=True, exist_ok=True)
     (inbox / "note.md").symlink_to(target)
+
+    with pytest.raises(ValueError):
+        filebox.save_file(repo, "inbox", "note.md", b"replacement")
+    assert target.read_bytes() == b"secret"
+
+
+def test_save_rejects_hardlinked_filebox_target(tmp_path: Path) -> None:
+    repo = tmp_path
+    target = _write(tmp_path / "outside", "secret.txt", b"secret")
+    inbox = filebox.inbox_dir(repo)
+    inbox.mkdir(parents=True, exist_ok=True)
+    try:
+        os.link(target, inbox / "note.md")
+    except OSError as exc:
+        pytest.skip(f"hard links unavailable: {exc}")
 
     with pytest.raises(ValueError):
         filebox.save_file(repo, "inbox", "note.md", b"replacement")
@@ -83,6 +125,42 @@ def test_save_rejects_symlinked_filebox_box_dir(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="must not be a symlink"):
         filebox.save_file(repo, "inbox", "note.md", b"secret")
     assert not (outside / "note.md").exists()
+
+
+def test_save_rejects_symlinked_filebox_root(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    outside = tmp_path / "outside-filebox"
+    outside.mkdir()
+    root = filebox.filebox_root(repo)
+    root.parent.mkdir(parents=True, exist_ok=True)
+    root.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="must not be a symlink"):
+        filebox.save_file(repo, "inbox", "note.md", b"secret")
+    assert not (outside / "inbox" / "note.md").exists()
+
+
+def test_save_rejects_symlinked_repo_root(tmp_path: Path) -> None:
+    real_repo = tmp_path / "real-repo"
+    real_repo.mkdir()
+    repo = tmp_path / "repo-link"
+    repo.symlink_to(real_repo, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="must not be a symlink"):
+        filebox.save_file(repo, "inbox", "note.md", b"secret")
+    assert not (filebox.inbox_dir(real_repo) / "note.md").exists()
+
+
+def test_list_filebox_rejects_symlinked_control_root(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    outside = tmp_path / "outside-control"
+    outside.mkdir()
+    control_root = repo / ".codex-autorunner"
+    control_root.parent.mkdir(parents=True, exist_ok=True)
+    control_root.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="must not be a symlink"):
+        filebox.list_filebox(repo)
 
 
 def test_consume_inbox_file_moves_file_out_of_active_inbox(tmp_path: Path) -> None:
