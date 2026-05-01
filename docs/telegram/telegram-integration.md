@@ -1,6 +1,70 @@
 # Telegram Integration Specification
 
-This document describes the normative specifications for the Telegram integration, including dispatch behavior, outbox operations, trigger mode, and security controls.
+The Telegram integration is a polling bot that bridges Telegram chats to CAR's
+shared chat-turn stack. It runs as a long-lived process (`car telegram start`)
+and uses the Telegram Bot API to fetch updates, route them through shared
+orchestration ingress, and stream responses back to Telegram. This is separate
+from the lightweight `notifications.telegram` settings (which only send one-way
+notifications).
+
+This document describes the normative specifications for the Telegram
+integration, including configuration, dispatch behavior, outbox operations,
+trigger mode, and security controls.
+
+## Configuration Reference
+
+Config lives under `telegram_bot` in `codex-autorunner.yml` and the generated
+`.codex-autorunner/config.yml`:
+
+- `telegram_bot.enabled`: turn the bot on.
+- `telegram_bot.bot_token_env`: env var name that holds the bot token.
+- `telegram_bot.allowed_chat_ids`: allowlist of chat ids.
+- `telegram_bot.allowed_user_ids`: allowlist of Telegram user ids.
+- `telegram_bot.require_topics`: if true, only accept messages in forum topics.
+- `telegram_bot.trigger_mode`: `all` (default) or `mentions` (only start runs when explicitly invoked).
+- `collaboration_policy.telegram`: optional shared-chat policy overlay for topic/root destinations, modes, and per-destination plain-text triggers.
+- `telegram_bot.parse_mode`: `HTML`, `Markdown`, `MarkdownV2`, or null.
+- `telegram_bot.debug.prefix_context`: when true, prefix outgoing messages with routing metadata.
+- `telegram_bot.app_server_command(_env)`: how to launch `codex app-server`.
+- `telegram_bot.app_server`: app-server tuning (`max_handles`, `idle_ttl_seconds`, `turn_timeout_seconds`).
+- `telegram_bot.media`: image/voice handling limits and prompts.
+- `telegram_bot.shell`: `!<cmd>` settings (enable flag, timeouts, output limits).
+- `telegram_bot.cache`: in-memory TTLs for pending approvals, selections, and progress state.
+- `telegram_bot.defaults`: approval/sandbox defaults for the app-server client.
+
+Required env vars:
+
+- `CAR_TELEGRAM_BOT_TOKEN`
+- `CAR_TELEGRAM_CHAT_ID` (optional convenience for allowed chat ids)
+
+The allowlist must include both chat ids and user ids or the bot will ignore
+messages. For shared groups, add `collaboration_policy.telegram.destinations`
+to make root-chat vs topic behavior explicit.
+
+## Runtime Overview
+
+1. `car telegram start --path <repo_or_hub>` starts the polling loop.
+2. `TelegramUpdatePoller` fetches updates from the Bot API.
+3. Updates are admitted through the shared collaboration policy, then routed by
+   chat/topic to a consistent durable CAR thread under the selected resource
+   (repo workspace, PMA, or an agent-workspace-backed thread).
+4. Commands (`/bind`, `/new`, `/resume`, `/approvals`, `/interrupt`) run locally;
+   ordinary messages go through shared orchestration ingress, which resolves a
+   paused flow target or an orchestration-managed thread target before any
+   runtime turn is started. `!<cmd>` runs a shell command in the bound workspace
+   (if enabled).
+5. Responses are streamed back to Telegram with edits/chunks based on length.
+
+## Quickstart
+
+1. Create a Telegram bot token (BotFather) and decide which chat/topic to use.
+2. Find your Telegram user id and the chat id you want to allow.
+3. Set env vars (`CAR_TELEGRAM_BOT_TOKEN`, optional `CAR_TELEGRAM_CHAT_ID`).
+4. Enable `telegram_bot.enabled` and set `allowed_user_ids`/`allowed_chat_ids`.
+5. Run `car telegram start --path <repo_or_hub>` and send `/status` or `/help`.
+
+For full setup instructions see `docs/AGENT_SETUP_TELEGRAM_GUIDE.md`.
+For troubleshooting see `docs/ops/telegram-debugging.md`.
 
 ## Outbox Specification
 

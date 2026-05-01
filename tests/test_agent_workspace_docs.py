@@ -89,13 +89,13 @@ def test_plugin_api_stays_consistent_with_runtime_capability_contract() -> None:
 
 
 def test_telegram_docs_describe_authoritative_binding_storage() -> None:
-    architecture_text = _read("docs/telegram/architecture.md")
+    integration_text = _read("docs/telegram/telegram-integration.md")
     security_text = _read("docs/telegram/security.md")
 
-    assert "Authoritative binding and durable-thread metadata live in hub" in (
-        architecture_text
+    assert "authoritative binding and durable-thread metadata live in hub" in (
+        integration_text.lower()
     )
-    assert "`.codex-autorunner/orchestration.sqlite3`" in architecture_text
+    assert "orchestration.sqlite3" in integration_text
     assert "Authoritative binding and durable-thread metadata live in hub" in (
         security_text
     )

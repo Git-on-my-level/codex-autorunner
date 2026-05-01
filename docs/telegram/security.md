@@ -109,5 +109,5 @@ tradeoffs involved.
 
 ## References
 
-- `docs/telegram/architecture.md`
+- `docs/telegram/telegram-integration.md`
 - `docs/ops/telegram-bot-runbook.md`
