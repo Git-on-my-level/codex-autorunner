@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 from pathlib import Path
 
 import pytest
 
+from codex_autorunner.core.orchestration.migrations import _apply_v27
 from codex_autorunner.core.pma_lane_worker import PmaLaneWorker
 from codex_autorunner.core.pma_queue import PmaQueue, QueueItemState
 from tests.support.waits import wait_for_async_event, wait_for_async_predicate
@@ -142,6 +144,98 @@ async def test_enqueue_sync_idempotency_dedupe(tmp_path: Path) -> None:
     states = [item.state for item in items]
     assert states.count(QueueItemState.PENDING) == 1
     assert states.count(QueueItemState.DEDUPED) == 1
+
+
+@pytest.mark.anyio
+async def test_enqueue_sync_dedupes_after_sqlite_idempotency_conflict(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lane_id = "pma:default"
+    queue = PmaQueue(tmp_path)
+    original_insert = queue._insert_or_update_item
+
+    item, reason = queue.enqueue_sync(lane_id, "race-key", {"message": "a"})
+    assert reason is None
+    calls = 0
+
+    def _raise_once_then_allow(conn, candidate):
+        nonlocal calls
+        if candidate.item_id != item.item_id and calls == 0:
+            calls += 1
+            conn.execute(
+                """
+                UPDATE orch_queue_items
+                   SET state = 'completed'
+                 WHERE queue_item_id = ?
+                """,
+                (item.item_id,),
+            )
+            raise sqlite3.IntegrityError("simulated active idempotency conflict")
+        return original_insert(conn, candidate)
+
+    monkeypatch.setattr(queue, "_insert_or_update_item", _raise_once_then_allow)
+    monkeypatch.setattr(queue, "_find_by_idempotency_key_sync", lambda *_args: None)
+
+    deduped, reason = queue.enqueue_sync(lane_id, "race-key", {"message": "b"})
+    assert reason is None
+    assert deduped.state == QueueItemState.PENDING
+    assert deduped.dedupe_reason is None
+
+    items = await queue.list_items(lane_id)
+    assert [queued.state for queued in items].count(QueueItemState.COMPLETED) == 1
+    assert [queued.state for queued in items].count(QueueItemState.PENDING) == 1
+
+
+def test_v27_migration_dedupes_existing_active_queue_rows() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.execute(
+        """
+        CREATE TABLE orch_queue_items (
+            queue_item_id TEXT PRIMARY KEY,
+            lane_id TEXT NOT NULL,
+            source_kind TEXT NOT NULL,
+            source_key TEXT,
+            dedupe_key TEXT,
+            state TEXT NOT NULL,
+            visible_at TEXT,
+            claimed_at TEXT,
+            completed_at TEXT,
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            idempotency_key TEXT,
+            error_text TEXT,
+            dedupe_reason TEXT,
+            result_json TEXT NOT NULL DEFAULT '{}'
+        )
+        """
+    )
+    conn.executemany(
+        """
+        INSERT INTO orch_queue_items (
+            queue_item_id, lane_id, source_kind, state, created_at, updated_at,
+            idempotency_key
+        ) VALUES (?, 'pma:default', 'pma_lane', 'pending', 't', 't', 'same')
+        """,
+        [("first",), ("second",)],
+    )
+
+    _apply_v27(conn)
+
+    rows = conn.execute(
+        "SELECT queue_item_id, state, dedupe_reason FROM orch_queue_items ORDER BY rowid"
+    ).fetchall()
+    assert rows[0] == ("first", "pending", None)
+    assert rows[1] == ("second", "deduped", "duplicate_of_first")
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            """
+            INSERT INTO orch_queue_items (
+                queue_item_id, lane_id, source_kind, state, created_at, updated_at,
+                idempotency_key
+            ) VALUES ('third', 'pma:default', 'pma_lane', 'running', 't', 't', 'same')
+            """
+        )
 
 
 @pytest.mark.anyio

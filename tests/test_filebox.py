@@ -1,9 +1,16 @@
 import os
+from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+from starlette.datastructures import UploadFile
 
 from codex_autorunner.core import filebox, filebox_lifecycle
+from codex_autorunner.surfaces.web.routes.filebox import (
+    _read_upload_limited,
+    _upload_files_to_box,
+)
 
 
 def _write(dir_path: Path, name: str, content: bytes = b"x") -> Path:
@@ -36,10 +43,124 @@ def test_save_resolve_and_delete(tmp_path: Path) -> None:
     assert entry is not None
     assert entry.source == "filebox"
     assert entry.path.read_bytes() == b"hello"
+    loaded = filebox.read_file(repo, "inbox", "note.md")
+    assert loaded is not None
+    loaded_entry, loaded_data = loaded
+    assert loaded_entry.name == "note.md"
+    assert loaded_data == b"hello"
+    opened = filebox.open_file(repo, "inbox", "note.md")
+    assert opened is not None
+    opened_entry, opened_handle = opened
+    with opened_handle:
+        assert opened_entry.name == "note.md"
+        assert opened_handle.read() == b"hello"
 
     removed = filebox.delete_file(repo, "inbox", "note.md")
     assert removed
     assert filebox.resolve_file(repo, "inbox", "note.md") is None
+
+
+def test_resolve_ignores_symlinked_filebox_entries(tmp_path: Path) -> None:
+    repo = tmp_path
+    outside = _write(tmp_path / "outside", "secret.txt", b"secret")
+    inbox = filebox.inbox_dir(repo)
+    inbox.mkdir(parents=True, exist_ok=True)
+    (inbox / "link.txt").symlink_to(outside)
+
+    assert filebox.resolve_file(repo, "inbox", "link.txt") is None
+    assert filebox.list_filebox(repo)["inbox"] == []
+
+
+def test_filebox_ignores_hardlinked_entries(tmp_path: Path) -> None:
+    repo = tmp_path
+    outside = _write(tmp_path / "outside", "secret.txt", b"secret")
+    inbox = filebox.inbox_dir(repo)
+    inbox.mkdir(parents=True, exist_ok=True)
+    try:
+        os.link(outside, inbox / "hardlink.txt")
+    except OSError as exc:
+        pytest.skip(f"hard links unavailable: {exc}")
+
+    assert filebox.resolve_file(repo, "inbox", "hardlink.txt") is None
+    assert filebox.read_file(repo, "inbox", "hardlink.txt") is None
+    assert filebox.open_file(repo, "inbox", "hardlink.txt") is None
+    assert filebox.list_filebox(repo)["inbox"] == []
+
+
+def test_save_rejects_symlinked_filebox_target(tmp_path: Path) -> None:
+    repo = tmp_path
+    target = _write(tmp_path / "outside", "secret.txt", b"secret")
+    inbox = filebox.inbox_dir(repo)
+    inbox.mkdir(parents=True, exist_ok=True)
+    (inbox / "note.md").symlink_to(target)
+
+    with pytest.raises(ValueError):
+        filebox.save_file(repo, "inbox", "note.md", b"replacement")
+    assert target.read_bytes() == b"secret"
+
+
+def test_save_rejects_hardlinked_filebox_target(tmp_path: Path) -> None:
+    repo = tmp_path
+    target = _write(tmp_path / "outside", "secret.txt", b"secret")
+    inbox = filebox.inbox_dir(repo)
+    inbox.mkdir(parents=True, exist_ok=True)
+    try:
+        os.link(target, inbox / "note.md")
+    except OSError as exc:
+        pytest.skip(f"hard links unavailable: {exc}")
+
+    with pytest.raises(ValueError):
+        filebox.save_file(repo, "inbox", "note.md", b"replacement")
+    assert target.read_bytes() == b"secret"
+
+
+def test_save_rejects_symlinked_filebox_box_dir(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    outside = tmp_path / "outside-inbox"
+    outside.mkdir()
+    inbox = filebox.inbox_dir(repo)
+    inbox.parent.mkdir(parents=True, exist_ok=True)
+    inbox.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="must not be a symlink"):
+        filebox.save_file(repo, "inbox", "note.md", b"secret")
+    assert not (outside / "note.md").exists()
+
+
+def test_save_rejects_symlinked_filebox_root(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    outside = tmp_path / "outside-filebox"
+    outside.mkdir()
+    root = filebox.filebox_root(repo)
+    root.parent.mkdir(parents=True, exist_ok=True)
+    root.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="must not be a symlink"):
+        filebox.save_file(repo, "inbox", "note.md", b"secret")
+    assert not (outside / "inbox" / "note.md").exists()
+
+
+def test_save_rejects_symlinked_repo_root(tmp_path: Path) -> None:
+    real_repo = tmp_path / "real-repo"
+    real_repo.mkdir()
+    repo = tmp_path / "repo-link"
+    repo.symlink_to(real_repo, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="must not be a symlink"):
+        filebox.save_file(repo, "inbox", "note.md", b"secret")
+    assert not (filebox.inbox_dir(real_repo) / "note.md").exists()
+
+
+def test_list_filebox_rejects_symlinked_control_root(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    outside = tmp_path / "outside-control"
+    outside.mkdir()
+    control_root = repo / ".codex-autorunner"
+    control_root.parent.mkdir(parents=True, exist_ok=True)
+    control_root.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="must not be a symlink"):
+        filebox.list_filebox(repo)
 
 
 def test_consume_inbox_file_moves_file_out_of_active_inbox(tmp_path: Path) -> None:
@@ -120,6 +241,27 @@ def test_list_regular_files_sorts_newest_first(tmp_path: Path) -> None:
     ]
 
 
+def test_list_regular_files_skips_symlinked_files(tmp_path: Path) -> None:
+    folder = tmp_path / "files"
+    real = _write(folder, "real.txt", b"real")
+    outside = _write(tmp_path / "outside", "secret.txt", b"secret")
+    (folder / "link.txt").symlink_to(outside)
+
+    assert filebox.list_regular_files(folder) == [real]
+
+
+def test_lifecycle_rejects_symlinked_archive_entries(tmp_path: Path) -> None:
+    repo = tmp_path
+    filebox.save_file(repo, "inbox", "note.md", b"hello")
+    consumed = filebox_lifecycle.consumed_dir(repo)
+    consumed.mkdir(parents=True, exist_ok=True)
+    link = consumed / "note.md"
+    link.symlink_to(filebox.inbox_dir(repo) / "note.md")
+
+    with pytest.raises(ValueError, match="Invalid filename"):
+        filebox_lifecycle.consume_inbox_file(repo, "note.md")
+
+
 def test_delete_regular_files_only_removes_regular_files(tmp_path: Path) -> None:
     folder = tmp_path / "files"
     first = _write(folder, "first.txt", b"1")
@@ -141,6 +283,51 @@ def test_delete_ignores_legacy_duplicates(tmp_path: Path) -> None:
     removed = filebox.delete_file(repo, "inbox", "shared.txt")
     assert not removed
     assert (repo / ".codex-autorunner" / "pma" / "inbox" / "shared.txt").exists()
+
+
+class _ChunkedUpload:
+    def __init__(self, chunks: list[bytes]) -> None:
+        self._chunks = list(chunks)
+
+    async def read(self, _size: int) -> bytes:
+        if not self._chunks:
+            return b""
+        return self._chunks.pop(0)
+
+
+@pytest.mark.asyncio
+async def test_upload_reader_enforces_max_bytes() -> None:
+    upload = _ChunkedUpload([b"abc", b"def"])
+
+    with pytest.raises(ValueError, match="File too large"):
+        await _read_upload_limited(upload, max_upload_bytes=5)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_filebox_upload_limit_failure_does_not_partially_save(
+    tmp_path: Path,
+) -> None:
+    class _Request:
+        app = SimpleNamespace(
+            state=SimpleNamespace(
+                config=SimpleNamespace(pma=SimpleNamespace(max_upload_bytes=3))
+            )
+        )
+
+        async def form(self):
+            return {
+                "small": UploadFile(filename="small.txt", file=BytesIO(b"ok")),
+                "large": UploadFile(filename="large.txt", file=BytesIO(b"too-big")),
+            }
+
+    with pytest.raises(Exception, match="File too large"):
+        await _upload_files_to_box(
+            repo_root=tmp_path,
+            box="inbox",
+            request=_Request(),  # type: ignore[arg-type]
+        )
+
+    assert filebox.list_filebox(tmp_path)["inbox"] == []
 
 
 @pytest.mark.parametrize(

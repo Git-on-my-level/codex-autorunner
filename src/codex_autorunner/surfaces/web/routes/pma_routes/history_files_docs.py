@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import mimetypes
 from datetime import datetime, timezone
+from email.utils import format_datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, BinaryIO, Iterator, Optional
+from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import StreamingResponse
 from starlette.datastructures import UploadFile
 
 from .....bootstrap import (
@@ -42,6 +45,39 @@ logger = logging.getLogger(__name__)
 PMA_CONTEXT_SNAPSHOT_MAX_BYTES = 200_000
 PMA_CONTEXT_LOG_SOFT_LIMIT_BYTES = 5_000_000
 PMA_BULK_DELETE_SAMPLE_LIMIT = 10
+
+
+def _stream_file(handle: BinaryIO) -> Iterator[bytes]:
+    try:
+        while True:
+            chunk = handle.read(1024 * 1024)
+            if not chunk:
+                break
+            yield chunk
+    finally:
+        handle.close()
+
+
+def _file_download_response(
+    entry: filebox.FileBoxEntry, handle: BinaryIO
+) -> StreamingResponse:
+    encoded = quote(entry.name, safe="")
+    content_type = mimetypes.guess_type(entry.name)[0] or "application/octet-stream"
+    headers = {"Content-Disposition": f"attachment; filename*=UTF-8''{encoded}"}
+    if entry.size is not None:
+        headers["Content-Length"] = str(entry.size)
+    if entry.modified_at:
+        try:
+            modified = datetime.fromisoformat(entry.modified_at)
+            headers["Last-Modified"] = format_datetime(modified, usegmt=True)
+            headers["ETag"] = f'W/"{entry.size or 0}-{int(modified.timestamp())}"'
+        except ValueError:
+            pass
+    return StreamingResponse(
+        _stream_file(handle),
+        media_type=content_type,
+        headers=headers,
+    )
 
 
 def build_history_files_docs_router(
@@ -277,13 +313,14 @@ def build_history_files_docs_router(
         context = get_pma_request_context(request)
         hub_root = context.hub_root
         try:
-            entry = filebox.resolve_file(hub_root, box, filename)
+            result = filebox.open_file(hub_root, box, filename)
         except ValueError as exc:
             logger.warning("Invalid filename in PMA download: %s (%s)", filename, exc)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if entry is None:
+        if result is None:
             logger.warning("File not found in PMA download: %s", filename)
             raise HTTPException(status_code=404, detail="File not found")
+        entry, handle = result
         _get_safety_checker(request).record_action(
             action_type=PmaActionType.FILE_DOWNLOADED,
             details={
@@ -292,7 +329,7 @@ def build_history_files_docs_router(
                 "size": entry.size,
             },
         )
-        return FileResponse(entry.path, filename=entry.name)
+        return _file_download_response(entry, handle)
 
     @router.delete("/files/{box}/{filename}")
     async def delete_pma_file(box: str, filename: str, request: Request):
@@ -309,7 +346,12 @@ def build_history_files_docs_router(
                 if entry is None:
                     logger.warning("File not found in PMA delete: %s", filename)
                     raise HTTPException(status_code=404, detail="File not found")
-                await asyncio.to_thread(entry.path.unlink)
+                removed = await asyncio.to_thread(
+                    filebox.delete_file, hub_root, box, filename
+                )
+                if not removed:
+                    logger.warning("File not found in PMA delete: %s", filename)
+                    raise HTTPException(status_code=404, detail="File not found")
         except ValueError as exc:
             logger.warning("Invalid filename in PMA delete: %s (%s)", filename, exc)
             raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -14,6 +14,7 @@ Ownership contract (TICKET-1040):
 
 import dataclasses
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, cast
 
@@ -72,8 +73,19 @@ from .report_retention import (
     DEFAULT_REPORT_MAX_TOTAL_BYTES,
 )
 
+_SAFE_REPO_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _APP_SERVER_OUTPUT_POLICIES = set(APP_SERVER_OUTPUT_POLICIES)
 SHARED_CONFIG_PARSER_FIELD_PATHS = _SHARED_CONFIG_PARSER_FIELD_PATHS
+
+
+def _validate_safe_repo_id(repo_id: str, *, field: str) -> str:
+    normalized = repo_id.strip()
+    if not _SAFE_REPO_ID_RE.fullmatch(normalized):
+        raise ConfigError(
+            f"{field} must be a safe path segment containing only letters, "
+            "numbers, '.', '_', or '-'"
+        )
+    return normalized
 
 
 def _parse_optional_int(value: Any) -> Optional[int]:
@@ -1164,7 +1176,7 @@ def _parse_templates_config(
         repo_id = repo.get("id")
         if not isinstance(repo_id, str) or not repo_id.strip():
             raise ConfigError(f"templates.repos[{idx}].id must be a non-empty string")
-        repo_id = repo_id.strip()
+        repo_id = _validate_safe_repo_id(repo_id, field=f"templates.repos[{idx}].id")
         if repo_id in seen_ids:
             raise ConfigError(f"templates.repos[{idx}].id must be unique")
         seen_ids.add(repo_id)
@@ -1213,7 +1225,7 @@ def _parse_apps_config(
         repo_id = repo.get("id")
         if not isinstance(repo_id, str) or not repo_id.strip():
             raise ConfigError(f"apps.repos[{idx}].id must be a non-empty string")
-        repo_id = repo_id.strip()
+        repo_id = _validate_safe_repo_id(repo_id, field=f"apps.repos[{idx}].id")
         if repo_id in seen_ids:
             raise ConfigError(f"apps.repos[{idx}].id must be unique")
         seen_ids.add(repo_id)

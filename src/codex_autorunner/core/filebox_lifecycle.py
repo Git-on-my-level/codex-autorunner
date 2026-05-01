@@ -21,6 +21,8 @@ def ensure_lifecycle_structure(repo_root: Path) -> None:
         consumed_dir(repo_root),
         dismissed_dir(repo_root),
     ):
+        if path.is_symlink():
+            raise ValueError(f"FileBox lifecycle path must not be a symlink: {path}")
         path.mkdir(parents=True, exist_ok=True)
 
 
@@ -80,7 +82,7 @@ def _lifecycle_dir(repo_root: Path, box: str) -> Path:
 
 
 def _list_box_entries(folder: Path, *, box: str) -> list[FileBoxEntry]:
-    if not folder.exists():
+    if folder.is_symlink() or not folder.exists():
         return []
     entries: list[FileBoxEntry] = []
     try:
@@ -89,7 +91,7 @@ def _list_box_entries(folder: Path, *, box: str) -> list[FileBoxEntry]:
         return []
     for path in iterator:
         try:
-            if not path.is_file():
+            if path.is_symlink() or not path.is_file():
                 continue
             entries.append(_build_entry(path, box=box))
         except OSError:
@@ -102,7 +104,11 @@ def _find_archived_sources(repo_root: Path, filename: str) -> list[Path]:
     for box in LIFECYCLE_BOXES:
         candidate = _resolve_child_path(_lifecycle_dir(repo_root, box), filename)
         try:
-            if candidate.exists() and candidate.is_file():
+            if (
+                not candidate.is_symlink()
+                and candidate.exists()
+                and candidate.is_file()
+            ):
                 sources.append(candidate)
         except OSError:
             continue
@@ -145,10 +151,15 @@ def _build_entry(path: Path, *, box: str) -> FileBoxEntry:
 
 def _resolve_child_path(root: Path, filename: str, *, create_dir: bool = False) -> Path:
     safe_name = sanitize_filename(filename)
+    if root.is_symlink():
+        raise ValueError("Invalid filebox")
     if create_dir:
         root.mkdir(parents=True, exist_ok=True)
     resolved_root = root.resolve()
-    candidate = (resolved_root / safe_name).resolve()
+    candidate = resolved_root / safe_name
+    if candidate.is_symlink():
+        raise ValueError("Invalid filename")
+    candidate = candidate.resolve()
     try:
         candidate.relative_to(resolved_root)
     except ValueError as exc:

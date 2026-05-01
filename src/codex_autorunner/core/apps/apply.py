@@ -23,6 +23,7 @@ from .install import (
     get_installed_app,
     install_app,
 )
+from .refs import parse_app_ref
 
 
 class AppApplyError(Exception):
@@ -59,6 +60,11 @@ def apply_app_entrypoint(
         hub_config=hub_config,
         hub_root=hub_root,
     )
+    if not installed_app.lock.trusted:
+        raise AppApplyError(
+            f"Installed app {installed_app.app_id} is untrusted; "
+            "trust the source app repo before applying ticket templates"
+        )
     manifest = installed_app.manifest
     if template_name is None and manifest.entrypoint is None:
         raise AppApplyError(
@@ -152,6 +158,24 @@ def _resolve_app_install(
     if hub_config is None or hub_root is None:
         raise AppApplyError(
             "Applying an app source ref requires hub configuration context."
+        )
+    try:
+        parsed = parse_app_ref(app_ref_or_id)
+    except ValueError as exc:
+        raise AppApplyError(str(exc)) from exc
+    repo = next(
+        (
+            candidate
+            for candidate in hub_config.apps.repos
+            if candidate.id == parsed.repo_id
+        ),
+        None,
+    )
+    if repo is None:
+        raise AppApplyError(f"App repo not configured: {parsed.repo_id}")
+    if not repo.trusted:
+        raise AppApplyError(
+            f"App repo {repo.id} is untrusted; trust it before applying ticket templates"
         )
 
     try:

@@ -9,7 +9,7 @@ from ..sqlite_utils import table_columns, table_exists
 from ..time_utils import now_iso
 from .models import OrchestrationTableDefinition
 
-ORCHESTRATION_SCHEMA_VERSION = 26
+ORCHESTRATION_SCHEMA_VERSION = 27
 
 
 @dataclass(frozen=True)
@@ -1358,6 +1358,51 @@ def _apply_v26(conn: sqlite3.Connection) -> None:
     )
 
 
+def _apply_v27(conn: sqlite3.Connection) -> None:
+    if not table_exists(conn, "orch_queue_items"):
+        return
+    conn.execute(
+        """
+        UPDATE orch_queue_items
+           SET state = 'deduped',
+               dedupe_reason = COALESCE(
+                   dedupe_reason,
+                   'duplicate_of_' || (
+                       SELECT keep.queue_item_id
+                         FROM orch_queue_items AS keep
+                        WHERE keep.lane_id = orch_queue_items.lane_id
+                          AND keep.source_kind = orch_queue_items.source_kind
+                          AND keep.idempotency_key = orch_queue_items.idempotency_key
+                          AND keep.state IN ('pending', 'running')
+                        ORDER BY keep.rowid ASC
+                        LIMIT 1
+                   )
+               ),
+               updated_at = COALESCE(updated_at, created_at)
+         WHERE state IN ('pending', 'running')
+           AND idempotency_key IS NOT NULL
+           AND idempotency_key != ''
+           AND rowid NOT IN (
+               SELECT MIN(rowid)
+                 FROM orch_queue_items
+                WHERE state IN ('pending', 'running')
+                  AND idempotency_key IS NOT NULL
+                  AND idempotency_key != ''
+                GROUP BY lane_id, source_kind, idempotency_key
+           )
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_orch_queue_items_active_idempotency
+            ON orch_queue_items(lane_id, source_kind, idempotency_key)
+         WHERE state IN ('pending', 'running')
+           AND idempotency_key IS NOT NULL
+           AND idempotency_key != ''
+        """
+    )
+
+
 _MIGRATIONS = (
     _MigrationStep(1, "create_core_orchestration_schema", _apply_v1),
     _MigrationStep(2, "add_binding_and_flow_projection_scaffolding", _apply_v2),
@@ -1397,6 +1442,7 @@ _MIGRATIONS = (
     _MigrationStep(24, "add_thread_identity_bindings", _apply_v24),
     _MigrationStep(25, "extend_publish_dedupe_index_for_effect_applied", _apply_v25),
     _MigrationStep(26, "add_operation_flags", _apply_v26),
+    _MigrationStep(27, "enforce_active_queue_item_idempotency", _apply_v27),
 )
 
 

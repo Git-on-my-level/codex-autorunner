@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -142,6 +143,23 @@ def test_lock_contents_and_lookup(tmp_path: Path) -> None:
     assert installed is not None
     assert installed.lock == lock
     assert installed.bundle_verified is True
+
+
+def test_load_app_lock_rejects_non_boolean_trusted(tmp_path: Path) -> None:
+    hub_root, repo_root, app_repo = _setup_install_env(tmp_path)
+    _write_valid_app(app_repo)
+    _commit_repo(app_repo, "add hello app")
+    hub_config = load_hub_config(hub_root)
+    result = install_app(hub_config, hub_root, repo_root, "local:apps/hello")
+
+    payload = json.loads(result.app.paths.lock_path.read_text(encoding="utf-8"))
+    payload["trusted"] = "false"
+    result.app.paths.lock_path.write_text(
+        json.dumps(payload, indent=2) + "\n", encoding="utf-8"
+    )
+
+    with pytest.raises(AppInstallError, match="trusted must be boolean"):
+        load_app_lock(result.app.paths.lock_path)
 
 
 def test_compute_bundle_sha_is_deterministic(tmp_path: Path) -> None:
