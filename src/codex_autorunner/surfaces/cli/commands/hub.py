@@ -31,7 +31,6 @@ from ....core.orchestration import (
     export_execution_history_bundle,
     resolve_execution_history_maintenance_policy,
     vacuum_execution_history,
-    verify_migration,
 )
 from ....core.orchestration.canary import run_execution_history_canary
 from ....core.orchestration.execution_history_maintenance import (
@@ -82,7 +81,7 @@ def register_hub_commands(
     agent_workspace_app.add_typer(agent_workspace_destination_app, name="destination")
 
     orchestration_app = typer.Typer(
-        add_completion=False, help="Orchestration state migration and verification."
+        add_completion=False, help="Orchestration state inspection and maintenance."
     )
     hub_app.add_typer(orchestration_app, name="orchestration")
 
@@ -921,45 +920,6 @@ def register_hub_commands(
         typer.echo(
             f"destination: {workspace_id} -> {payload['effective_destination']['kind']} (source={payload['source']})"
         )
-
-    @orchestration_app.command("verify")
-    def orchestration_verify(
-        path: Optional[Path] = typer.Option(None, "--path", help="Hub root path"),
-        output_json: bool = typer.Option(
-            False, "--json", help="Emit JSON payload for scripting"
-        ),
-    ):
-        """Verify orchestration migration parity."""
-        config = require_hub_config(path)
-        try:
-            with open_orchestration_sqlite(config.root, migrate=False) as conn:
-                summary = verify_migration(config.root, conn)
-        except (sqlite3.Error, OSError) as exc:  # intentional: top-level error handler
-            raise_exit(f"Migration verification failed: {exc}", cause=exc)
-        if output_json:
-            typer.echo(json.dumps(summary.to_dict(), indent=2))
-            return
-        typer.echo(
-            f"verify: {summary.status} passed={summary.overall_passed} run={summary.run_id}"
-        )
-        for check in (
-            summary.thread_parity
-            + summary.automation_parity
-            + summary.queue_parity
-            + summary.event_parity
-        ):
-            icon = "ok" if check.status == "passed" else "FAIL"
-            typer.echo(f"  {icon} {check.check_name}: {check.message}")
-        tp = summary.transcript_parity
-        if tp:
-            icon = "ok" if tp.status == "passed" else "FAIL"
-            typer.echo(f"  {icon} {tp.check_name}: {tp.message}")
-        ap = summary.audit_parity
-        icon = "ok" if ap.status == "passed" else "FAIL"
-        typer.echo(f"  {icon} {ap.check_name}: {ap.message}")
-        if summary.recommendations:
-            for rec in summary.recommendations:
-                typer.echo(f"  rec: {rec}")
 
     @orchestration_app.command("status")
     def orchestration_status(

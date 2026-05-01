@@ -170,18 +170,6 @@ from .sqlite import (
 )
 from .threads import SurfaceThreadMessageRequest, ThreadControlRequest
 from .transcript_mirror import TranscriptMirrorRow, TranscriptMirrorStore
-from .verification import (
-    MigrationVerificationSummary,
-    ParityCheckResult,
-    TranscriptParityResult,
-    verify_audit_parity,
-    verify_automation_parity,
-    verify_event_parity,
-    verify_migration,
-    verify_queue_parity,
-    verify_thread_parity,
-    verify_transcript_parity,
-)
 
 __all__ = [
     "ORCHESTRATION_DB_FILENAME",
@@ -247,7 +235,6 @@ __all__ = [
     "ManagedThreadDeliveryTarget",
     "MessageRequest",
     "MessageRequestKind",
-    "MigrationVerificationSummary",
     "NativeTargetCatalog",
     "NativeTargetDefinition",
     "NativeTargetKind",
@@ -258,7 +245,6 @@ __all__ = [
     "OrchestrationTableDefinition",
     "OrchestrationTableRole",
     "OrchestrationThreadService",
-    "ParityCheckResult",
     "PausedFlowTarget",
     "PmaThreadExecutionStore",
     "QueuedExecutionRequest",
@@ -284,7 +270,6 @@ __all__ = [
     "TicketFlowTargetWrapper",
     "TranscriptMirrorRow",
     "TranscriptMirrorStore",
-    "TranscriptParityResult",
     "WorkspaceRuntimeAcquisition",
     "apply_orchestration_migrations",
     "await_runtime_thread_outcome",
@@ -333,11 +318,4 @@ __all__ = [
     "stream_runtime_thread_events",
     "truncate_hot_event_payload",
     "vacuum_execution_history",
-    "verify_audit_parity",
-    "verify_automation_parity",
-    "verify_event_parity",
-    "verify_migration",
-    "verify_queue_parity",
-    "verify_thread_parity",
-    "verify_transcript_parity",
 ]

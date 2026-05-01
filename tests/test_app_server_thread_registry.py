@@ -22,9 +22,6 @@ from codex_autorunner.core.managed_thread_identity import (
     pma_topic_scoped_key,
 )
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
-from codex_autorunner.core.orchestration.verification import (
-    verify_thread_identity_parity,
-)
 
 
 def test_thread_registry_corruption_creates_backup(tmp_path: Path) -> None:
@@ -81,21 +78,6 @@ def test_thread_registry_imports_legacy_file_into_canonical_store(
         ).fetchone()
     assert row is not None
     assert row["thread_id"] == "thread-123"
-
-
-def test_thread_registry_keeps_compatibility_cache_in_parity(
-    tmp_path: Path,
-) -> None:
-    registry = AppServerThreadRegistry(tmp_path)
-    registry.set_thread_id("pma", "thread-1")
-    registry.set_thread_id("pma.opencode", "thread-2")
-
-    parity = registry.compatibility_cache_parity()
-
-    assert parity["passed"] is True
-    with open_orchestration_sqlite(tmp_path, durable=False) as conn:
-        results = verify_thread_identity_parity(tmp_path, conn)
-    assert all(result.status == "passed" for result in results)
 
 
 def test_normalize_feature_key_accepts_pma() -> None:
