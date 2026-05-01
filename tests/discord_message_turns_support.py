@@ -77,6 +77,7 @@ from codex_autorunner.integrations.discord.service import (
 )
 from codex_autorunner.integrations.discord.state import DiscordStateStore
 from tests.support.discord_turn_fakes import (
+    _BaseDiscordFakeHarness,
     _build_discord_service,
     _config,
     _DeleteFailingProgressRest,
@@ -90,6 +91,7 @@ from tests.support.discord_turn_fakes import (
     _FakeVoiceService,
     _latest_interaction_completion_payload,
     _message_create,
+    _patch_harness,
     _patch_streaming_harness,
     _pma_interaction,
 )
@@ -444,12 +446,27 @@ async def test_run_managed_thread_turn_for_message_uses_binding_policies(
     assert captured["sandbox_policy"] == "workspaceWrite"
 
 
-@pytest.mark.asyncio
-async def test_orchestrated_turn_interrupt_send_hands_off_progress_message(
+async def _run_interrupt_send_turn_harness(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-) -> None:
-    rest = _FakeRest()
+    *,
+    rest: _FakeRest | None = None,
+    finalize_result: dict[str, Any] | None = None,
+    send_channel_message_raises: bool = False,
+    spawn_task: bool = True,
+    progress_source_message_id: str = "m-2",
+    prompt_text: str = "first prompt",
+    source_message_id: str = "m-1",
+    session_key: str = "session-1",
+    pre_run: Any | None = None,
+) -> tuple[Any, DiscordMessageTurnResult, _FakeRest]:
+    if rest is None:
+        rest = _FakeRest()
+    if finalize_result is None:
+        finalize_result = {
+            "status": "interrupted",
+            "error": "Discord PMA turn interrupted",
+        }
     thread = SimpleNamespace(thread_target_id="thread-1")
     started_execution = SimpleNamespace(
         execution=SimpleNamespace(status="running"),
@@ -467,11 +484,14 @@ async def test_orchestrated_turn_interrupt_send_hands_off_progress_message(
             self._store = _Store()
             self._rest = rest
             self._logger = logging.getLogger(__name__)
-            self._spawn_task = asyncio.create_task
+            if spawn_task:
+                self._spawn_task = asyncio.create_task
 
         async def _send_channel_message(
             self, channel_id: str, payload: dict[str, Any]
         ) -> dict[str, Any]:
+            if send_channel_message_raises:
+                raise RuntimeError("progress send failed")
             return await rest.create_channel_message(
                 channel_id=channel_id,
                 payload=payload,
@@ -497,7 +517,7 @@ async def test_orchestrated_turn_interrupt_send_hands_off_progress_message(
 
     async def _fake_finalize(*args: Any, **kwargs: Any) -> dict[str, Any]:
         _ = args, kwargs
-        return {"status": "interrupted", "error": "Discord PMA turn interrupted"}
+        return finalize_result
 
     async def _fake_complete(*args: Any, **kwargs: Any) -> Any:
         _ = args, kwargs
@@ -523,25 +543,26 @@ async def test_orchestrated_turn_interrupt_send_hands_off_progress_message(
     discord_progress_leases_module.request_discord_turn_progress_reuse(
         service,
         thread_target_id="thread-1",
-        source_message_id="m-2",
+        source_message_id=progress_source_message_id,
         acknowledgement="Message received. Switching to it now...",
     )
-
+    if pre_run is not None:
+        await pre_run(service)
     result = (
         await discord_message_turns_module._run_discord_orchestrated_turn_for_message(
             service,
             workspace_root=tmp_path,
-            prompt_text="first prompt",
-            source_message_id="m-1",
+            prompt_text=prompt_text,
+            source_message_id=source_message_id,
             agent="codex",
             model_override=None,
             reasoning_effort=None,
-            session_key="session-1",
+            session_key=session_key,
             orchestrator_channel_key="channel-1",
             managed_thread_surface_key=None,
             mode="pma",
             pma_enabled=True,
-            execution_prompt="<user_message>\nfirst prompt\n</user_message>\n",
+            execution_prompt=f"<user_message>\n{prompt_text}\n</user_message>\n",
             public_execution_error="Discord PMA turn failed",
             timeout_error="Discord PMA turn timed out",
             interrupted_error="Discord PMA turn interrupted",
@@ -551,6 +572,19 @@ async def test_orchestrated_turn_interrupt_send_hands_off_progress_message(
             min_edit_interval_seconds=1.0,
             heartbeat_interval_seconds=2.0,
         )
+    )
+    return service, result, rest
+
+
+@pytest.mark.asyncio
+async def test_orchestrated_turn_interrupt_send_hands_off_progress_message(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    service, result, rest = await _run_interrupt_send_turn_harness(
+        monkeypatch,
+        tmp_path,
+        spawn_task=True,
     )
 
     assert result.send_final_message is False
@@ -576,119 +610,28 @@ async def test_orchestrated_turn_interrupt_send_reuses_existing_progress_message
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    rest = _FakeRest()
-    thread = SimpleNamespace(thread_target_id="thread-1")
-    started_execution = SimpleNamespace(
-        execution=SimpleNamespace(status="running"),
-        thread=thread,
-    )
+    async def _stash(service: Any) -> None:
+        discord_message_turns_module._stash_discord_reusable_progress_message(
+            service,
+            thread_target_id="thread-1",
+            source_message_id="m-2",
+            channel_id="channel-1",
+            message_id="preview-1",
+        )
 
-    class _Store:
-        async def get_binding(self, *, channel_id: str) -> dict[str, Any]:
-            assert channel_id == "channel-1"
-            return {}
-
-    class _Service:
-        def __init__(self) -> None:
-            self._config = _config(tmp_path)
-            self._store = _Store()
-            self._rest = rest
-            self._logger = logging.getLogger(__name__)
-            self._spawn_task = asyncio.create_task
-
-        async def _send_channel_message(
-            self, channel_id: str, payload: dict[str, Any]
-        ) -> dict[str, Any]:
-            return await rest.create_channel_message(
-                channel_id=channel_id,
-                payload=payload,
-            )
-
-        def _register_discord_turn_approval_context(self, **kwargs: Any) -> None:
-            _ = kwargs
-
-        def _clear_discord_turn_approval_context(self, **kwargs: Any) -> None:
-            _ = kwargs
-
-        def _resolve_agent_state(self, binding: Any) -> tuple[str, Optional[str]]:
-            _ = binding
-            return "codex", None
-
-        def _runtime_agent_for_binding(self, binding: Any) -> str:
-            _ = binding
-            return "codex"
-
-    async def _fake_begin(*args: Any, **kwargs: Any) -> Any:
-        _ = args, kwargs
-        return started_execution
-
-    async def _fake_finalize(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        _ = args, kwargs
-        return {
+    service, result, rest = await _run_interrupt_send_turn_harness(
+        monkeypatch,
+        tmp_path,
+        spawn_task=True,
+        finalize_result={
             "status": "ok",
             "assistant_text": "updated reply",
             "token_usage": None,
-        }
-
-    async def _fake_complete(*args: Any, **kwargs: Any) -> Any:
-        _ = args, kwargs
-        return SimpleNamespace(finalized=await _fake_finalize())
-
-    monkeypatch.setattr(
-        discord_message_turns_module,
-        "resolve_discord_thread_target",
-        lambda *args, **kwargs: (SimpleNamespace(), thread),
-    )
-    monkeypatch.setattr(
-        discord_message_turns_module,
-        "begin_runtime_thread_execution",
-        _fake_begin,
-    )
-    monkeypatch.setattr(
-        discord_message_turns_module,
-        "complete_managed_thread_execution",
-        _fake_complete,
-    )
-
-    service = _Service()
-    discord_progress_leases_module.request_discord_turn_progress_reuse(
-        service,
-        thread_target_id="thread-1",
+        },
+        prompt_text="next prompt",
         source_message_id="m-2",
-        acknowledgement="Message received. Switching to it now...",
-    )
-    discord_message_turns_module._stash_discord_reusable_progress_message(
-        service,
-        thread_target_id="thread-1",
-        source_message_id="m-2",
-        channel_id="channel-1",
-        message_id="preview-1",
-    )
-
-    result = (
-        await discord_message_turns_module._run_discord_orchestrated_turn_for_message(
-            service,
-            workspace_root=tmp_path,
-            prompt_text="next prompt",
-            source_message_id="m-2",
-            agent="codex",
-            model_override=None,
-            reasoning_effort=None,
-            session_key="session-2",
-            orchestrator_channel_key="channel-1",
-            managed_thread_surface_key=None,
-            mode="pma",
-            pma_enabled=True,
-            execution_prompt="<user_message>\nnext prompt\n</user_message>\n",
-            public_execution_error="Discord PMA turn failed",
-            timeout_error="Discord PMA turn timed out",
-            interrupted_error="Discord PMA turn interrupted",
-            approval_mode="never",
-            sandbox_policy="dangerFullAccess",
-            max_actions=12,
-            min_edit_interval_seconds=1.0,
-            heartbeat_interval_seconds=2.0,
-        )
+        session_key="session-2",
+        pre_run=_stash,
     )
 
     assert result.preview_message_id == "preview-1"
@@ -703,104 +646,10 @@ async def test_orchestrated_turn_interrupt_send_acknowledges_when_progress_messa
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    thread = SimpleNamespace(thread_target_id="thread-1")
-    started_execution = SimpleNamespace(
-        execution=SimpleNamespace(status="running"),
-        thread=thread,
-    )
-
-    class _Store:
-        async def get_binding(self, *, channel_id: str) -> dict[str, Any]:
-            assert channel_id == "channel-1"
-            return {}
-
-    class _Service:
-        def __init__(self) -> None:
-            self._config = _config(tmp_path)
-            self._store = _Store()
-            self._rest = _FakeRest()
-            self._logger = logging.getLogger(__name__)
-
-        async def _send_channel_message(
-            self, channel_id: str, payload: dict[str, Any]
-        ) -> dict[str, Any]:
-            _ = channel_id, payload
-            raise RuntimeError("progress send failed")
-
-        def _register_discord_turn_approval_context(self, **kwargs: Any) -> None:
-            _ = kwargs
-
-        def _clear_discord_turn_approval_context(self, **kwargs: Any) -> None:
-            _ = kwargs
-
-        def _resolve_agent_state(self, binding: Any) -> tuple[str, Optional[str]]:
-            _ = binding
-            return "codex", None
-
-        def _runtime_agent_for_binding(self, binding: Any) -> str:
-            _ = binding
-            return "codex"
-
-    async def _fake_begin(*args: Any, **kwargs: Any) -> Any:
-        _ = args, kwargs
-        return started_execution
-
-    async def _fake_finalize(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        _ = args, kwargs
-        return {"status": "interrupted", "error": "Discord PMA turn interrupted"}
-
-    async def _fake_complete(*args: Any, **kwargs: Any) -> Any:
-        _ = args, kwargs
-        return SimpleNamespace(finalized=await _fake_finalize())
-
-    monkeypatch.setattr(
-        discord_message_turns_module,
-        "resolve_discord_thread_target",
-        lambda *args, **kwargs: (SimpleNamespace(), thread),
-    )
-    monkeypatch.setattr(
-        discord_message_turns_module,
-        "begin_runtime_thread_execution",
-        _fake_begin,
-    )
-    monkeypatch.setattr(
-        discord_message_turns_module,
-        "complete_managed_thread_execution",
-        _fake_complete,
-    )
-
-    service = _Service()
-    discord_progress_leases_module.request_discord_turn_progress_reuse(
-        service,
-        thread_target_id="thread-1",
-        source_message_id="m-2",
-        acknowledgement="Message received. Switching to it now...",
-    )
-
-    result = (
-        await discord_message_turns_module._run_discord_orchestrated_turn_for_message(
-            service,
-            workspace_root=tmp_path,
-            prompt_text="first prompt",
-            source_message_id="m-1",
-            agent="codex",
-            model_override=None,
-            reasoning_effort=None,
-            session_key="session-1",
-            orchestrator_channel_key="channel-1",
-            managed_thread_surface_key=None,
-            mode="pma",
-            pma_enabled=True,
-            execution_prompt="<user_message>\nfirst prompt\n</user_message>\n",
-            public_execution_error="Discord PMA turn failed",
-            timeout_error="Discord PMA turn timed out",
-            interrupted_error="Discord PMA turn interrupted",
-            approval_mode="never",
-            sandbox_policy="dangerFullAccess",
-            max_actions=12,
-            min_edit_interval_seconds=1.0,
-            heartbeat_interval_seconds=2.0,
-        )
+    service, result, _ = await _run_interrupt_send_turn_harness(
+        monkeypatch,
+        tmp_path,
+        send_channel_message_raises=True,
     )
 
     assert result.send_final_message is True
@@ -814,115 +663,17 @@ async def test_orchestrated_turn_interrupt_send_falls_back_when_progress_ack_edi
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    thread = SimpleNamespace(thread_target_id="thread-1")
-    started_execution = SimpleNamespace(
-        execution=SimpleNamespace(status="running"),
-        thread=thread,
-    )
-
-    class _Rest(_FakeRest):
+    class _EditFailingRest(_FakeRest):
         async def edit_channel_message(
             self, *, channel_id: str, message_id: str, payload: dict[str, Any]
         ) -> dict[str, Any]:
             _ = channel_id, message_id, payload
             raise RuntimeError("edit failed")
 
-    rest = _Rest()
-
-    class _Store:
-        async def get_binding(self, *, channel_id: str) -> dict[str, Any]:
-            assert channel_id == "channel-1"
-            return {}
-
-    class _Service:
-        def __init__(self) -> None:
-            self._config = _config(tmp_path)
-            self._store = _Store()
-            self._rest = rest
-            self._logger = logging.getLogger(__name__)
-
-        async def _send_channel_message(
-            self, channel_id: str, payload: dict[str, Any]
-        ) -> dict[str, Any]:
-            return await rest.create_channel_message(
-                channel_id=channel_id,
-                payload=payload,
-            )
-
-        def _register_discord_turn_approval_context(self, **kwargs: Any) -> None:
-            _ = kwargs
-
-        def _clear_discord_turn_approval_context(self, **kwargs: Any) -> None:
-            _ = kwargs
-
-        def _resolve_agent_state(self, binding: Any) -> tuple[str, Optional[str]]:
-            _ = binding
-            return "codex", None
-
-        def _runtime_agent_for_binding(self, binding: Any) -> str:
-            _ = binding
-            return "codex"
-
-    async def _fake_begin(*args: Any, **kwargs: Any) -> Any:
-        _ = args, kwargs
-        return started_execution
-
-    async def _fake_finalize(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        _ = args, kwargs
-        return {"status": "interrupted", "error": "Discord PMA turn interrupted"}
-
-    async def _fake_complete(*args: Any, **kwargs: Any) -> Any:
-        _ = args, kwargs
-        return SimpleNamespace(finalized=await _fake_finalize())
-
-    monkeypatch.setattr(
-        discord_message_turns_module,
-        "resolve_discord_thread_target",
-        lambda *args, **kwargs: (SimpleNamespace(), thread),
-    )
-    monkeypatch.setattr(
-        discord_message_turns_module,
-        "begin_runtime_thread_execution",
-        _fake_begin,
-    )
-    monkeypatch.setattr(
-        discord_message_turns_module,
-        "complete_managed_thread_execution",
-        _fake_complete,
-    )
-
-    service = _Service()
-    discord_progress_leases_module.request_discord_turn_progress_reuse(
-        service,
-        thread_target_id="thread-1",
-        source_message_id="m-2",
-        acknowledgement="Message received. Switching to it now...",
-    )
-
-    result = (
-        await discord_message_turns_module._run_discord_orchestrated_turn_for_message(
-            service,
-            workspace_root=tmp_path,
-            prompt_text="first prompt",
-            source_message_id="m-1",
-            agent="codex",
-            model_override=None,
-            reasoning_effort=None,
-            session_key="session-1",
-            orchestrator_channel_key="channel-1",
-            managed_thread_surface_key=None,
-            mode="pma",
-            pma_enabled=True,
-            execution_prompt="<user_message>\nfirst prompt\n</user_message>\n",
-            public_execution_error="Discord PMA turn failed",
-            timeout_error="Discord PMA turn timed out",
-            interrupted_error="Discord PMA turn interrupted",
-            approval_mode="never",
-            sandbox_policy="dangerFullAccess",
-            max_actions=12,
-            min_edit_interval_seconds=1.0,
-            heartbeat_interval_seconds=2.0,
-        )
+    service, result, rest = await _run_interrupt_send_turn_harness(
+        monkeypatch,
+        tmp_path,
+        rest=_EditFailingRest(),
     )
 
     assert result.send_final_message is True
@@ -3736,9 +3487,16 @@ def test_build_attachment_filename_does_not_infer_audio_suffix_for_video(
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    "wait_for_stream,allow_parallel_event_stream",
+    [(True, True), (False, False)],
+    ids=["streaming-enabled", "streaming-disabled"],
+)
 async def test_message_create_streaming_turn_posts_progress_placeholder_and_edits(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    wait_for_stream: bool,
+    allow_parallel_event_stream: bool,
 ) -> None:
     service, rest, store, workspace = await _build_discord_service(
         tmp_path,
@@ -3754,7 +3512,8 @@ async def test_message_create_streaming_turn_posts_progress_placeholder_and_edit
             ),
         ],
         assistant_text="done from streaming turn",
-        wait_for_stream=True,
+        wait_for_stream=wait_for_stream,
+        allow_parallel_event_stream=allow_parallel_event_stream,
     )
 
     try:
@@ -3935,44 +3694,6 @@ async def test_message_create_opencode_streaming_turn_surfaces_thinking_and_tool
             for content in progress_contents
         )
         assert any("tool: shell" in content for content in progress_contents)
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
-async def test_message_create_streaming_turn_skips_live_progress_when_parallel_streaming_is_disabled(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    service, rest, store, workspace = await _build_discord_service(
-        tmp_path,
-        [("MESSAGE_CREATE", _message_create("ship it"))],
-    )
-    _patch_streaming_harness(
-        monkeypatch,
-        [
-            OutputDelta(
-                timestamp="2026-01-01T00:00:01Z",
-                content="thinking",
-                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
-            ),
-        ],
-        assistant_text="done from streaming turn",
-        wait_for_stream=False,
-        allow_parallel_event_stream=False,
-    )
-
-    try:
-        await service.run_forever()
-        send_indices = [
-            idx for idx, op in enumerate(rest.message_ops) if op.get("op") == "send"
-        ]
-        edit_indices = [
-            idx for idx, op in enumerate(rest.message_ops) if op.get("op") == "edit"
-        ]
-        assert send_indices
-        assert edit_indices
-        assert send_indices[0] < edit_indices[0]
     finally:
         await store.close()
 
@@ -4356,43 +4077,33 @@ async def test_message_create_streaming_turn_completion_sends_final_and_deletes_
 
 
 @pytest.mark.anyio
-async def test_message_create_streaming_turn_keeps_components_cleared_after_completion(
+@pytest.mark.parametrize(
+    "completed_final,expected_text,forbidden_texts",
+    [
+        (
+            "done before late failure",
+            "done before late failure",
+            ["Turn failed:"],
+        ),
+        (
+            "",
+            "fallback streamed answer survives",
+            ["Turn failed:", "(No response text returned.)"],
+        ),
+    ],
+    ids=["completed-has-text", "completed-empty-stream-fallback"],
+)
+async def test_message_create_streaming_turn_ignores_late_failed_after_completed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    completed_final: str,
+    expected_text: str,
+    forbidden_texts: list[str],
 ) -> None:
     service, rest, store, workspace = await _build_discord_service(
         tmp_path,
         [("MESSAGE_CREATE", _message_create("ship it"))],
     )
-    _patch_streaming_harness(
-        monkeypatch,
-        [
-            OutputDelta(
-                timestamp="2026-01-01T00:00:01Z",
-                content="thinking",
-                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
-            ),
-        ],
-        assistant_text="done from streaming turn",
-        wait_for_stream=True,
-    )
-    try:
-        await service.run_forever()
-        assert rest.edited_channel_messages
-        assert rest.edited_channel_messages[-1]["payload"].get("components") == []
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
-async def test_message_create_streaming_turn_ignores_late_failed_after_completed_output(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    service, rest, store, workspace = await _build_discord_service(
-        tmp_path,
-        [("MESSAGE_CREATE", _message_create("ship it"))],
-    )
-    final_text = "done before late failure"
     logged_events: list[dict[str, Any]] = []
 
     def _capture_log_event(
@@ -4407,91 +4118,33 @@ async def test_message_create_streaming_turn_ignores_late_failed_after_completed
         logged_events.append({"level": level, "event": event, "exc": exc, **fields})
 
     monkeypatch.setattr(discord_service_module, "log_event", _capture_log_event)
+    stream_content = expected_text
     _patch_streaming_harness(
         monkeypatch,
         [
             OutputDelta(
                 timestamp="2026-01-01T00:00:01Z",
-                content="thinking",
+                content=stream_content,
                 delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
             ),
-            Completed(timestamp="2026-01-01T00:00:02Z", final_message=final_text),
+            Completed(timestamp="2026-01-01T00:00:02Z", final_message=completed_final),
             Failed(timestamp="2026-01-01T00:00:03Z", error_message="Turn failed"),
         ],
-        assistant_text=final_text,
+        assistant_text=completed_final,
         wait_for_stream=True,
     )
 
     try:
         await service.run_forever()
         assert any(
-            final_text in msg["payload"].get("content", "")
+            expected_text in msg["payload"].get("content", "")
             for msg in rest.channel_messages
         )
-        assert not any(
-            "Turn failed:" in msg["payload"].get("content", "")
-            for msg in rest.channel_messages
-        )
-        assert not any(
-            event["event"] == "discord.turn.failed_late_ignored"
-            for event in logged_events
-        )
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
-async def test_message_create_streaming_turn_ignores_late_failed_with_stream_fallback(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    service, rest, store, workspace = await _build_discord_service(
-        tmp_path,
-        [("MESSAGE_CREATE", _message_create("ship it"))],
-    )
-    streamed_text = "fallback streamed answer survives"
-    logged_events: list[dict[str, Any]] = []
-
-    def _capture_log_event(
-        logger: logging.Logger,
-        level: int,
-        event: str,
-        *,
-        exc: Optional[Exception] = None,
-        **fields: Any,
-    ) -> None:
-        _ = logger
-        logged_events.append({"level": level, "event": event, "exc": exc, **fields})
-
-    monkeypatch.setattr(discord_service_module, "log_event", _capture_log_event)
-    _patch_streaming_harness(
-        monkeypatch,
-        [
-            OutputDelta(
-                timestamp="2026-01-01T00:00:01Z",
-                content=streamed_text,
-                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
-            ),
-            Completed(timestamp="2026-01-01T00:00:02Z", final_message=""),
-            Failed(timestamp="2026-01-01T00:00:03Z", error_message="Turn failed"),
-        ],
-        assistant_text="",
-        wait_for_stream=True,
-    )
-
-    try:
-        await service.run_forever()
-        assert any(
-            streamed_text in msg["payload"].get("content", "")
-            for msg in rest.channel_messages
-        )
-        assert not any(
-            "(No response text returned.)" in msg["payload"].get("content", "")
-            for msg in rest.channel_messages
-        )
-        assert not any(
-            "Turn failed:" in msg["payload"].get("content", "")
-            for msg in rest.channel_messages
-        )
+        for forbidden in forbidden_texts:
+            assert not any(
+                forbidden in msg["payload"].get("content", "")
+                for msg in rest.channel_messages
+            )
         assert not any(
             event["event"] == "discord.turn.failed_late_ignored"
             for event in logged_events
@@ -4631,7 +4284,7 @@ async def test_message_create_streaming_turn_recovers_if_wait_times_out_after_st
     monkeypatch.setattr(harness, "wait_for_turn", _hanging_wait_for_turn)
     monkeypatch.setattr(
         discord_message_turns_module,
-        "DISCORD_PMA_TIMEOUT_SECONDS",
+        "DISCORD_PMA_IDLE_TIMEOUT_SECONDS",
         0.05,
     )
 
@@ -4880,33 +4533,58 @@ async def test_message_create_streaming_turn_empty_final_includes_text_fallback_
 
 
 @pytest.mark.anyio
-async def test_message_create_streaming_turn_fallback_preserves_multichunk_whitespace(
+@pytest.mark.parametrize(
+    "deltas,expected_text,extra_forbidden",
+    [
+        (
+            [
+                ("go ", "2026-01-01T00:00:01Z"),
+                ("go go ", "2026-01-01T00:00:02Z"),
+                ("\nnext line", "2026-01-01T00:00:03Z"),
+            ],
+            "go go \nnext line",
+            [],
+        ),
+        (
+            [
+                ("line 1", "2026-01-01T00:00:01Z"),
+                ("\n\n", "2026-01-01T00:00:02Z"),
+                ("line 2", "2026-01-01T00:00:03Z"),
+            ],
+            "line 1\n\nline 2",
+            [],
+        ),
+        (
+            [
+                ("Hello", "2026-01-01T00:00:01Z"),
+                ("Hello world", "2026-01-01T00:00:02Z"),
+            ],
+            "Hello world",
+            ["HelloHello world"],
+        ),
+    ],
+    ids=["multichunk-whitespace", "whitespace-only-chunk", "cumulative-no-dup"],
+)
+async def test_message_create_streaming_turn_fallback_preserves_delta_accumulation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    deltas: list[tuple[str, str]],
+    expected_text: str,
+    extra_forbidden: list[str],
 ) -> None:
     service, rest, store, workspace = await _build_discord_service(
         tmp_path,
         [("MESSAGE_CREATE", _message_create("ship it"))],
     )
-    expected_text = "go go \nnext line"
     _patch_streaming_harness(
         monkeypatch,
         [
             OutputDelta(
-                timestamp="2026-01-01T00:00:01Z",
-                content="go ",
+                timestamp=ts,
+                content=content,
                 delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
-            ),
-            OutputDelta(
-                timestamp="2026-01-01T00:00:02Z",
-                content="go go ",
-                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
-            ),
-            OutputDelta(
-                timestamp="2026-01-01T00:00:03Z",
-                content="\nnext line",
-                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
-            ),
+            )
+            for content, ts in deltas
         ],
         assistant_text="",
         wait_for_stream=True,
@@ -4923,98 +4601,8 @@ async def test_message_create_streaming_turn_fallback_preserves_multichunk_white
                 break
         assert final_content
         assert expected_text in final_content
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
-async def test_message_create_streaming_turn_fallback_preserves_whitespace_only_chunks(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    service, rest, store, workspace = await _build_discord_service(
-        tmp_path,
-        [("MESSAGE_CREATE", _message_create("ship it"))],
-    )
-    expected_text = "line 1\n\nline 2"
-    _patch_streaming_harness(
-        monkeypatch,
-        [
-            OutputDelta(
-                timestamp="2026-01-01T00:00:01Z",
-                content="line 1",
-                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
-            ),
-            OutputDelta(
-                timestamp="2026-01-01T00:00:02Z",
-                content="\n\n",
-                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
-            ),
-            OutputDelta(
-                timestamp="2026-01-01T00:00:03Z",
-                content="line 2",
-                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
-            ),
-        ],
-        assistant_text="",
-        wait_for_stream=True,
-    )
-
-    try:
-        await service.run_forever()
-        final_candidates = [*rest.edited_channel_messages, *rest.channel_messages]
-        final_content = ""
-        for message in final_candidates:
-            content = str(message.get("payload", {}).get("content", ""))
-            if expected_text in content:
-                final_content = content
-                break
-        assert final_content
-        assert expected_text in final_content
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
-async def test_message_create_streaming_turn_fallback_handles_cumulative_deltas(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    service, rest, store, workspace = await _build_discord_service(
-        tmp_path,
-        [("MESSAGE_CREATE", _message_create("ship it"))],
-    )
-    expected_text = "Hello world"
-    _patch_streaming_harness(
-        monkeypatch,
-        [
-            OutputDelta(
-                timestamp="2026-01-01T00:00:01Z",
-                content="Hello",
-                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
-            ),
-            OutputDelta(
-                timestamp="2026-01-01T00:00:02Z",
-                content="Hello world",
-                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
-            ),
-        ],
-        assistant_text="",
-        wait_for_stream=True,
-    )
-
-    try:
-        await service.run_forever()
-        final_candidates = [*rest.edited_channel_messages, *rest.channel_messages]
-        final_content = ""
-        for message in final_candidates:
-            content = str(message.get("payload", {}).get("content", ""))
-            if expected_text in content:
-                final_content = content
-                break
-        assert final_content
-        assert expected_text in final_content
-        assert "HelloHello world" not in final_content
+        for forbidden in extra_forbidden:
+            assert forbidden not in final_content
     finally:
         await store.close()
 
@@ -6653,38 +6241,10 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
     first_started = asyncio.Event()
     release_first = asyncio.Event()
 
-    class _FakeHarness:
-        display_name = "Fake"
-        capabilities = frozenset(
-            {
-                "durable_threads",
-                "message_turns",
-                "interrupt",
-                "event_streaming",
-            }
-        )
-
+    class _FakeHarness(_BaseDiscordFakeHarness):
         def __init__(self) -> None:
             self.turn_prompts: list[str] = []
             self.turn_conversation_ids: list[str] = []
-
-        async def ensure_ready(self, workspace_root: Path) -> None:
-            _ = workspace_root
-
-        def supports(self, capability: str) -> bool:
-            return capability in self.capabilities
-
-        async def new_conversation(
-            self, workspace_root: Path, title: Optional[str] = None
-        ) -> SimpleNamespace:
-            _ = workspace_root, title
-            return SimpleNamespace(id="backend-thread-1")
-
-        async def resume_conversation(
-            self, workspace_root: Path, conversation_id: str
-        ) -> SimpleNamespace:
-            _ = workspace_root
-            return SimpleNamespace(id=conversation_id)
 
         async def start_turn(
             self,
@@ -6700,7 +6260,6 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
         ) -> SimpleNamespace:
             _ = (
                 workspace_root,
-                conversation_id,
                 model,
                 reasoning,
                 approval_mode,
@@ -6711,9 +6270,6 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
             self.turn_prompts.append(prompt)
             self.turn_conversation_ids.append(conversation_id)
             return SimpleNamespace(conversation_id=conversation_id, turn_id=turn_id)
-
-        async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
-            raise AssertionError("review mode should not be used in this test")
 
         async def wait_for_turn(
             self,
@@ -6738,31 +6294,8 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
                 errors=[],
             )
 
-        async def interrupt(
-            self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
-        ) -> None:
-            _ = workspace_root, conversation_id, turn_id
-
-        async def stream_events(
-            self, workspace_root: Path, conversation_id: str, turn_id: str
-        ):
-            _ = workspace_root, conversation_id, turn_id
-            if False:
-                yield ""
-
     harness = _FakeHarness()
-    monkeypatch.setattr(
-        agent_registry_module,
-        "get_registered_agents",
-        lambda context=None: {
-            "codex": AgentDescriptor(
-                id="codex",
-                name="Codex",
-                capabilities=harness.capabilities,
-                make_harness=lambda _ctx: harness,
-            )
-        },
-    )
+    _patch_harness(monkeypatch, harness)
 
     async def _release_later() -> None:
         await first_started.wait()
@@ -6860,7 +6393,7 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
     first_started = asyncio.Event()
     release_first = asyncio.Event()
 
-    class _FakeHarness:
+    class _FakeHarness(_BaseDiscordFakeHarness):
         display_name = "Hermes"
         capabilities = frozenset(
             {
@@ -6871,28 +6404,11 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
                 "approvals",
             }
         )
+        _conversation_id = "hermes-backend-thread-1"
 
         def __init__(self) -> None:
             self.turn_prompts: list[str] = []
             self.turn_conversation_ids: list[str] = []
-
-        async def ensure_ready(self, workspace_root: Path) -> None:
-            _ = workspace_root
-
-        def supports(self, capability: str) -> bool:
-            return capability in self.capabilities
-
-        async def new_conversation(
-            self, workspace_root: Path, title: Optional[str] = None
-        ) -> SimpleNamespace:
-            _ = workspace_root, title
-            return SimpleNamespace(id="hermes-backend-thread-1")
-
-        async def resume_conversation(
-            self, workspace_root: Path, conversation_id: str
-        ) -> SimpleNamespace:
-            _ = workspace_root
-            return SimpleNamespace(id=conversation_id)
 
         async def start_turn(
             self,
@@ -6920,9 +6436,6 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
             self.turn_conversation_ids.append(conversation_id)
             return SimpleNamespace(conversation_id=conversation_id, turn_id=turn_id)
 
-        async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
-            raise AssertionError("review mode should not be used in this test")
-
         async def wait_for_turn(
             self,
             workspace_root: Path,
@@ -6946,18 +6459,6 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
                 errors=[],
             )
 
-        async def interrupt(
-            self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
-        ) -> None:
-            _ = workspace_root, conversation_id, turn_id
-
-        async def stream_events(
-            self, workspace_root: Path, conversation_id: str, turn_id: str
-        ):
-            _ = workspace_root, conversation_id, turn_id
-            if False:
-                yield ""
-
     harness = _FakeHarness()
     hub_config = SimpleNamespace(
         agent_profiles=lambda agent_id: (
@@ -6971,18 +6472,7 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
         "codex_autorunner.agents.registry._resolve_runtime_agent_config",
         lambda ctx: hub_config,
     )
-    monkeypatch.setattr(
-        agent_registry_module,
-        "get_registered_agents",
-        lambda context=None: {
-            "hermes": AgentDescriptor(
-                id="hermes",
-                name="Hermes",
-                capabilities=harness.capabilities,
-                make_harness=lambda _ctx: harness,
-            )
-        },
-    )
+    _patch_harness(monkeypatch, harness, agent_id="hermes", agent_name="Hermes")
 
     async def _release_later() -> None:
         await first_started.wait()
@@ -7078,35 +6568,7 @@ async def test_pma_message_create_streams_progress_before_terminal_reply(
 
     stream_finished = asyncio.Event()
 
-    class _FakeHarness:
-        display_name = "Fake"
-        capabilities = frozenset(
-            {
-                "durable_threads",
-                "message_turns",
-                "interrupt",
-                "event_streaming",
-            }
-        )
-
-        async def ensure_ready(self, workspace_root: Path) -> None:
-            _ = workspace_root
-
-        def supports(self, capability: str) -> bool:
-            return capability in self.capabilities
-
-        async def new_conversation(
-            self, workspace_root: Path, title: Optional[str] = None
-        ) -> SimpleNamespace:
-            _ = workspace_root, title
-            return SimpleNamespace(id="backend-thread-1")
-
-        async def resume_conversation(
-            self, workspace_root: Path, conversation_id: str
-        ) -> SimpleNamespace:
-            _ = workspace_root
-            return SimpleNamespace(id=conversation_id)
-
+    class _FakeHarness(_BaseDiscordFakeHarness):
         async def start_turn(
             self,
             workspace_root: Path,
@@ -7133,9 +6595,6 @@ async def test_pma_message_create_streams_progress_before_terminal_reply(
                 turn_id="backend-turn-1",
             )
 
-        async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
-            raise AssertionError("review mode should not be used in this test")
-
         async def wait_for_turn(
             self,
             workspace_root: Path,
@@ -7151,11 +6610,6 @@ async def test_pma_message_create_streams_progress_before_terminal_reply(
                 assistant_text="discord managed thread final reply",
                 errors=[],
             )
-
-        async def interrupt(
-            self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
-        ) -> None:
-            _ = workspace_root, conversation_id, turn_id
 
         async def stream_events(
             self, workspace_root: Path, conversation_id: str, turn_id: str
@@ -7186,18 +6640,7 @@ async def test_pma_message_create_streams_progress_before_terminal_reply(
             stream_finished.set()
 
     harness = _FakeHarness()
-    monkeypatch.setattr(
-        agent_registry_module,
-        "get_registered_agents",
-        lambda context=None: {
-            "codex": AgentDescriptor(
-                id="codex",
-                name="Codex",
-                capabilities=harness.capabilities,
-                make_harness=lambda _ctx: harness,
-            )
-        },
-    )
+    _patch_harness(monkeypatch, harness)
 
     try:
         await asyncio.wait_for(service.run_forever(), timeout=10)
@@ -7261,38 +6704,10 @@ async def test_pma_message_create_routes_repeated_messages_through_managed_threa
     first_started = asyncio.Event()
     release_first = asyncio.Event()
 
-    class _FakeHarness:
-        display_name = "Fake"
-        capabilities = frozenset(
-            {
-                "durable_threads",
-                "message_turns",
-                "interrupt",
-                "event_streaming",
-            }
-        )
-
+    class _FakeHarness(_BaseDiscordFakeHarness):
         def __init__(self) -> None:
             self.turn_prompts: list[str] = []
             self.waited_turns: list[str] = []
-
-        async def ensure_ready(self, workspace_root: Path) -> None:
-            _ = workspace_root
-
-        def supports(self, capability: str) -> bool:
-            return capability in self.capabilities
-
-        async def new_conversation(
-            self, workspace_root: Path, title: Optional[str] = None
-        ) -> SimpleNamespace:
-            _ = workspace_root, title
-            return SimpleNamespace(id="backend-thread-1")
-
-        async def resume_conversation(
-            self, workspace_root: Path, conversation_id: str
-        ) -> SimpleNamespace:
-            _ = workspace_root
-            return SimpleNamespace(id=conversation_id)
 
         async def start_turn(
             self,
@@ -7317,9 +6732,6 @@ async def test_pma_message_create_routes_repeated_messages_through_managed_threa
             turn_id = f"backend-turn-{len(self.turn_prompts) + 1}"
             self.turn_prompts.append(prompt)
             return SimpleNamespace(conversation_id=conversation_id, turn_id=turn_id)
-
-        async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
-            raise AssertionError("review mode should not be used in this test")
 
         async def wait_for_turn(
             self,
@@ -7346,31 +6758,8 @@ async def test_pma_message_create_routes_repeated_messages_through_managed_threa
                 errors=[],
             )
 
-        async def interrupt(
-            self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
-        ) -> None:
-            _ = workspace_root, conversation_id, turn_id
-
-        async def stream_events(
-            self, workspace_root: Path, conversation_id: str, turn_id: str
-        ):
-            _ = workspace_root, conversation_id, turn_id
-            if False:
-                yield ""
-
     harness = _FakeHarness()
-    monkeypatch.setattr(
-        agent_registry_module,
-        "get_registered_agents",
-        lambda context=None: {
-            "codex": AgentDescriptor(
-                id="codex",
-                name="Codex",
-                capabilities=harness.capabilities,
-                make_harness=lambda _ctx: harness,
-            )
-        },
-    )
+    _patch_harness(monkeypatch, harness)
 
     async def _release_later() -> None:
         await first_started.wait()
@@ -7461,35 +6850,7 @@ async def test_pma_message_create_image_attachment_routes_through_managed_thread
 
     captured_input_items: list[Optional[list[dict[str, Any]]]] = []
 
-    class _FakeHarness:
-        display_name = "Fake"
-        capabilities = frozenset(
-            {
-                "durable_threads",
-                "message_turns",
-                "interrupt",
-                "event_streaming",
-            }
-        )
-
-        async def ensure_ready(self, workspace_root: Path) -> None:
-            _ = workspace_root
-
-        def supports(self, capability: str) -> bool:
-            return capability in self.capabilities
-
-        async def new_conversation(
-            self, workspace_root: Path, title: Optional[str] = None
-        ) -> SimpleNamespace:
-            _ = workspace_root, title
-            return SimpleNamespace(id="backend-thread-1")
-
-        async def resume_conversation(
-            self, workspace_root: Path, conversation_id: str
-        ) -> SimpleNamespace:
-            _ = workspace_root
-            return SimpleNamespace(id=conversation_id)
-
+    class _FakeHarness(_BaseDiscordFakeHarness):
         async def start_turn(
             self,
             workspace_root: Path,
@@ -7517,49 +6878,8 @@ async def test_pma_message_create_image_attachment_routes_through_managed_thread
                 turn_id="backend-turn-1",
             )
 
-        async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
-            raise AssertionError("review mode should not be used in this test")
-
-        async def wait_for_turn(
-            self,
-            workspace_root: Path,
-            conversation_id: str,
-            turn_id: Optional[str],
-            *,
-            timeout: Optional[float] = None,
-        ) -> SimpleNamespace:
-            _ = workspace_root, conversation_id, turn_id, timeout
-            return SimpleNamespace(
-                status="ok",
-                assistant_text="discord managed attachment reply",
-                errors=[],
-            )
-
-        async def interrupt(
-            self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
-        ) -> None:
-            _ = workspace_root, conversation_id, turn_id
-
-        async def stream_events(
-            self, workspace_root: Path, conversation_id: str, turn_id: str
-        ):
-            _ = workspace_root, conversation_id, turn_id
-            if False:
-                yield ""
-
     harness = _FakeHarness()
-    monkeypatch.setattr(
-        agent_registry_module,
-        "get_registered_agents",
-        lambda context=None: {
-            "codex": AgentDescriptor(
-                id="codex",
-                name="Codex",
-                capabilities=harness.capabilities,
-                make_harness=lambda _ctx: harness,
-            )
-        },
-    )
+    _patch_harness(monkeypatch, harness)
 
     try:
         await service.run_forever()

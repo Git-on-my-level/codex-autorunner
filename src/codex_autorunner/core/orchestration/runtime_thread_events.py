@@ -522,9 +522,15 @@ def terminal_run_event_from_outcome(
             timestamp=now_iso(),
             final_message=outcome.assistant_text or state.best_assistant_text(),
         )
+    _error_detail = str(outcome.error or "").strip()
     return Failed(
         timestamp=now_iso(),
-        error_message=_public_terminal_error_message(outcome),
+        error_message=(
+            _error_detail
+            if _error_detail
+            in {"Runtime thread timed out", "Runtime thread interrupted"}
+            else "Runtime thread failed"
+        ),
     )
 
 
@@ -560,13 +566,6 @@ def recover_post_completion_outcome(
         backend_thread_id=outcome.backend_thread_id,
         backend_turn_id=outcome.backend_turn_id,
     )
-
-
-def _public_terminal_error_message(outcome: RuntimeThreadOutcome) -> str:
-    detail = str(outcome.error or "").strip()
-    if detail in {"Runtime thread timed out", "Runtime thread interrupted"}:
-        return detail
-    return "Runtime thread failed"
 
 
 async def _parse_runtime_thread_sse(raw_event: str):

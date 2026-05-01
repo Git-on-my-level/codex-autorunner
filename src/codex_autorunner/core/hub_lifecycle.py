@@ -17,6 +17,7 @@ from .lifecycle_events import (
 )
 from .pma_automation_store import PmaAutomationStore
 from .pma_safety import PmaSafetyChecker
+from .text_utils import _parse_iso_timestamp
 
 LIFECYCLE_RETRY_METADATA_KEY = "lifecycle_retry"
 
@@ -82,22 +83,6 @@ class LifecycleEventProcessor:
         self._logger = logger or logging.getLogger("codex_autorunner.hub")
 
     @staticmethod
-    def _parse_iso_datetime(value: Any) -> Optional[datetime]:
-        if not isinstance(value, str):
-            return None
-        raw = value.strip()
-        if not raw:
-            return None
-        normalized = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
-        try:
-            parsed = datetime.fromisoformat(normalized)
-        except ValueError:
-            return None
-        if parsed.tzinfo is None:
-            return parsed.replace(tzinfo=timezone.utc)
-        return parsed.astimezone(timezone.utc)
-
-    @staticmethod
     def _to_iso(value: datetime) -> str:
         return value.astimezone(timezone.utc).isoformat()
 
@@ -126,7 +111,7 @@ class LifecycleEventProcessor:
         if status == "quarantined":
             self._store.mark_processed(event.event_id)
             return False
-        next_retry_at = self._parse_iso_datetime(metadata.get("next_retry_at"))
+        next_retry_at = _parse_iso_timestamp(metadata.get("next_retry_at"))
         if next_retry_at is not None and now < next_retry_at:
             return False
         return True

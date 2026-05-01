@@ -6,11 +6,11 @@ from unittest.mock import MagicMock
 
 from codex_autorunner.tickets.files import read_ticket
 from codex_autorunner.tickets.models import TicketRunConfig
-from codex_autorunner.tickets.runner import (
+from codex_autorunner.tickets.runner_prompt import (
     CAR_HUD_MAX_CHARS,
     CAR_HUD_MAX_LINES,
+    build_prompt,
 )
-from codex_autorunner.tickets.runner_prompt import build_prompt
 
 
 def _make_outbox(workspace_root: Path) -> MagicMock:

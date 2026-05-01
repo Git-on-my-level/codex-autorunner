@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from ..text_utils import _normalize_text
 from .constants import (
     DEFAULT_PMA_LANE_ID,
     NOTICE_KIND_ESCALATION,
@@ -24,13 +25,6 @@ from .constants import (
 
 def _iso_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _normalize_text(value: Any) -> Optional[str]:
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    return text or None
 
 
 def _normalize_bool(value: Any, *, fallback: Optional[bool] = None) -> Optional[bool]:

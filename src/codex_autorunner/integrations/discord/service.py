@@ -95,11 +95,6 @@ from ...core.orchestration.managed_thread_delivery_ledger import (
 )
 from ...core.state import now_iso
 from ...core.state_roots import resolve_global_state_root
-from ...core.update_paths import resolve_update_paths  # noqa: F401
-from ...core.update_targets import (  # noqa: F401
-    all_update_target_definitions,
-    get_update_target_label,
-)
 from ...core.utils import (
     canonicalize_path,
     is_within,

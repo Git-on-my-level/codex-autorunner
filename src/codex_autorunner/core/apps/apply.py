@@ -13,6 +13,7 @@ from ...tickets.frontmatter import (
 )
 from ...tickets.lint import parse_ticket_index
 from ..config import HubConfig
+from ..text_utils import _next_available_ticket_index
 from ..utils import atomic_write
 from .indexer import is_probably_installed_app_id
 from .install import (
@@ -298,16 +299,6 @@ def _collect_ticket_indices(ticket_dir: Path) -> list[int]:
             continue
         indices.append(idx)
     return indices
-
-
-def _next_available_ticket_index(existing: list[int]) -> int:
-    if not existing:
-        return 1
-    seen = set(existing)
-    candidate = 1
-    while candidate in seen:
-        candidate += 1
-    return candidate
 
 
 def _ticket_filename(index: int, *, suffix: str, width: int) -> str:

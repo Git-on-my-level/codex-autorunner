@@ -35,6 +35,18 @@ from codex_autorunner.integrations.telegram.doctor import (
 from tests.conftest import write_test_config
 
 
+def _tg_cfg(**overrides):
+    cfg: dict = {
+        "telegram_bot": {
+            "enabled": True,
+            "allowed_chat_ids": [-1001],
+            "allowed_user_ids": [42],
+        }
+    }
+    cfg.update(overrides)
+    return cfg
+
+
 def test_telegram_doctor_checks_disabled():
     """Test Telegram doctor checks when disabled."""
     checks = telegram_doctor_checks({"telegram_bot": {"enabled": False}})
@@ -60,20 +72,15 @@ def test_telegram_doctor_checks_mode_validation():
 
 
 def test_telegram_doctor_reports_collaboration_policy_summary():
-    cfg = {
-        "telegram_bot": {
-            "enabled": True,
-            "allowed_chat_ids": [-1001],
-            "allowed_user_ids": [42],
-        },
-        "collaboration_policy": {
+    cfg = _tg_cfg(
+        collaboration_policy={
             "telegram": {
                 "destinations": [
                     {"chat_id": -1001, "thread_id": 7, "mode": "command_only"}
                 ]
             }
         },
-    }
+    )
     checks = telegram_doctor_checks(cfg)
     by_id = {check.check_id: check for check in checks}
     assert by_id["telegram.collaboration_policy"].passed is True
@@ -81,13 +88,7 @@ def test_telegram_doctor_reports_collaboration_policy_summary():
 
 
 def test_telegram_doctor_reports_collaboration_migration_guidance():
-    cfg = {
-        "telegram_bot": {
-            "enabled": True,
-            "allowed_chat_ids": [-1001],
-            "allowed_user_ids": [42],
-        }
-    }
+    cfg = _tg_cfg()
     checks = telegram_doctor_checks(cfg)
     by_id = {check.check_id: check for check in checks}
     assert by_id["telegram.collaboration_migration"].passed is True
@@ -95,14 +96,8 @@ def test_telegram_doctor_reports_collaboration_migration_guidance():
 
 
 def test_telegram_doctor_reports_mentions_privacy_guidance():
-    cfg = {
-        "telegram_bot": {
-            "enabled": True,
-            "allowed_chat_ids": [-1001],
-            "allowed_user_ids": [42],
-            "trigger_mode": "mentions",
-        }
-    }
+    cfg = _tg_cfg()
+    cfg["telegram_bot"]["trigger_mode"] = "mentions"
     checks = telegram_doctor_checks(cfg)
     by_id = {check.check_id: check for check in checks}
     assert by_id["telegram.privacy_mode_guidance"].passed is True
@@ -110,13 +105,8 @@ def test_telegram_doctor_reports_mentions_privacy_guidance():
 
 
 def test_telegram_doctor_warns_when_root_chat_remains_active():
-    cfg = {
-        "telegram_bot": {
-            "enabled": True,
-            "allowed_chat_ids": [-1001],
-            "allowed_user_ids": [42],
-        },
-        "collaboration_policy": {
+    cfg = _tg_cfg(
+        collaboration_policy={
             "telegram": {
                 "default_mode": "active",
                 "destinations": [
@@ -128,7 +118,7 @@ def test_telegram_doctor_warns_when_root_chat_remains_active():
                 ],
             }
         },
-    }
+    )
     checks = telegram_doctor_checks(cfg)
     by_id = {check.check_id: check for check in checks}
     assert by_id["telegram.collaboration_policy.root_chat"].passed is False
@@ -136,13 +126,8 @@ def test_telegram_doctor_warns_when_root_chat_remains_active():
 
 
 def test_telegram_doctor_reports_configured_collaboration_migration_guidance():
-    cfg = {
-        "telegram_bot": {
-            "enabled": True,
-            "allowed_chat_ids": [-1001],
-            "allowed_user_ids": [42],
-        },
-        "collaboration_policy": {
+    cfg = _tg_cfg(
+        collaboration_policy={
             "telegram": {
                 "destinations": [
                     {
@@ -153,7 +138,7 @@ def test_telegram_doctor_reports_configured_collaboration_migration_guidance():
                 ]
             }
         },
-    }
+    )
     checks = telegram_doctor_checks(cfg)
     by_id = {check.check_id: check for check in checks}
     assert by_id["telegram.collaboration_migration"].passed is True

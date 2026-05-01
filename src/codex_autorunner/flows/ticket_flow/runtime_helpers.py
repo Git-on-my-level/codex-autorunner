@@ -286,8 +286,6 @@ async def wait_for_ticket_flow_terminal(
         latest = record
         if record.status.is_terminal():
             return record
-        if locked:
-            pass
         await asyncio.sleep(poll_interval_seconds)
 
     return latest

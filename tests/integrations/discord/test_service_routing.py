@@ -136,6 +136,118 @@ class _DeleteFailingRest(_FakeRest):
         raise RuntimeError("delete failed")
 
 
+class _ManagedThreadDeliveryStub:
+    _config: SimpleNamespace
+
+    def __init__(self, *, root: Path, sent_messages: list[dict[str, object]]) -> None:
+        self._config = SimpleNamespace(root=root, raw={})
+        self._sent_messages = sent_messages
+
+    async def _send_channel_message_safe(
+        self,
+        channel_id: str,
+        payload: dict[str, object],
+        *,
+        record_id: str,
+    ) -> bool:
+        self._sent_messages.append(
+            {
+                "channel_id": channel_id,
+                "payload": dict(payload),
+                "record_id": record_id,
+            }
+        )
+        return True
+
+    async def _run_with_typing_indicator(self, *, channel_id: str, work: Any) -> None:
+        _ = channel_id
+        await work()
+
+    def _register_discord_turn_approval_context(self, **_kwargs: object) -> None:
+        return
+
+    def _clear_discord_turn_approval_context(self, **_kwargs: object) -> None:
+        return
+
+
+class _ThreadIngressStub:
+    async def submit_message(
+        self,
+        request,
+        *,
+        resolve_paused_flow_target,
+        submit_flow_reply,
+        submit_thread_message,
+    ):
+        _ = resolve_paused_flow_target, submit_flow_reply
+        thread_result = await submit_thread_message(request)
+        return SimpleNamespace(route="thread", thread_result=thread_result)
+
+
+class _FakeThreadService:
+    def __init__(self, **kw):
+        object.__setattr__(self, "_kw", kw)
+
+    def __getattr__(self, name):
+        kw = object.__getattribute__(self, "_kw")
+        if name in kw:
+            return kw[name]
+        raise AttributeError(name)
+
+
+def _ts_bind(cid="channel-1", tid="thread-1", mode="repo"):
+    def fn(*, surface_kind, surface_key):
+        assert surface_kind == "discord"
+        assert surface_key == cid
+        return SimpleNamespace(thread_target_id=tid, mode=mode)
+
+    return fn
+
+
+def _ts_tgt(tid="thread-1", value=None):
+    def fn(t):
+        assert t == tid
+        return value if value is not None else SimpleNamespace(thread_target_id=tid)
+
+    return fn
+
+
+def _ts_exec(tid="thread-1", value=None):
+    def fn(t):
+        assert t == tid
+        return value
+
+    return fn
+
+
+def _ts_stop(tid="thread-1", value=None, calls=None):
+    async def fn(t, **kw):
+        assert t == tid
+        if calls is not None:
+            calls.append(t)
+        return value
+
+    return fn
+
+
+def _ts_resume(tid, value, calls=None):
+    def fn(t, **kw):
+        if calls is not None:
+            calls.append((t, kw))
+        return value
+
+    return fn
+
+
+def _ts_assert_ret(tid="thread-1", eid="turn-2"):
+    def fn(t, e):
+        assert t == tid
+        assert e == eid
+        return True
+
+    return fn
+
+
 @pytest.mark.anyio
 async def test_discord_message_turns_route_through_orchestration_ingress(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -384,23 +496,10 @@ async def test_discord_message_turns_delete_immediate_placeholder_when_backgroun
             task.add_done_callback(self._background_tasks.discard)
             return task
 
-    class _IngressStub:
-        async def submit_message(
-            self,
-            request,
-            *,
-            resolve_paused_flow_target,
-            submit_flow_reply,
-            submit_thread_message,
-        ):
-            _ = resolve_paused_flow_target, submit_flow_reply
-            thread_result = await submit_thread_message(request)
-            return SimpleNamespace(route="thread", thread_result=thread_result)
-
     monkeypatch.setattr(
         discord_message_turns,
         "build_surface_orchestration_ingress",
-        lambda **_: _IngressStub(),
+        lambda **_: _ThreadIngressStub(),
     )
     monkeypatch.setattr(
         discord_message_turns,
@@ -457,39 +556,8 @@ async def test_discord_managed_thread_delivery_uses_unique_record_ids_per_chunk(
 ) -> None:
     sent_messages: list[dict[str, object]] = []
 
-    class _ServiceStub:
-        _config = SimpleNamespace(root=tmp_path, raw={})
-
-        async def _send_channel_message_safe(
-            self,
-            channel_id: str,
-            payload: dict[str, object],
-            *,
-            record_id: str,
-        ) -> bool:
-            sent_messages.append(
-                {
-                    "channel_id": channel_id,
-                    "payload": dict(payload),
-                    "record_id": record_id,
-                }
-            )
-            return True
-
-        async def _run_with_typing_indicator(
-            self, *, channel_id: str, work: Any
-        ) -> None:
-            _ = channel_id
-            await work()
-
-        def _register_discord_turn_approval_context(self, **_kwargs: object) -> None:
-            return
-
-        def _clear_discord_turn_approval_context(self, **_kwargs: object) -> None:
-            return
-
     hooks = discord_message_turns._build_discord_runner_hooks(
-        _ServiceStub(),
+        _ManagedThreadDeliveryStub(root=tmp_path, sent_messages=sent_messages),
         channel_id="channel-1",
         managed_thread_id="thread-1",
         workspace_root=tmp_path,
@@ -532,39 +600,8 @@ async def test_discord_managed_thread_delivery_includes_token_usage_footer(
 ) -> None:
     sent_messages: list[dict[str, object]] = []
 
-    class _ServiceStub:
-        _config = SimpleNamespace(root=tmp_path, raw={})
-
-        async def _send_channel_message_safe(
-            self,
-            channel_id: str,
-            payload: dict[str, object],
-            *,
-            record_id: str,
-        ) -> bool:
-            sent_messages.append(
-                {
-                    "channel_id": channel_id,
-                    "payload": dict(payload),
-                    "record_id": record_id,
-                }
-            )
-            return True
-
-        async def _run_with_typing_indicator(
-            self, *, channel_id: str, work: Any
-        ) -> None:
-            _ = channel_id
-            await work()
-
-        def _register_discord_turn_approval_context(self, **_kwargs: object) -> None:
-            return
-
-        def _clear_discord_turn_approval_context(self, **_kwargs: object) -> None:
-            return
-
     hooks = discord_message_turns._build_discord_runner_hooks(
-        _ServiceStub(),
+        _ManagedThreadDeliveryStub(root=tmp_path, sent_messages=sent_messages),
         channel_id="channel-1",
         managed_thread_id="thread-1",
         workspace_root=tmp_path,
@@ -669,19 +706,6 @@ async def test_discord_message_turns_show_busy_placeholder_for_attachment_prep(
             task.add_done_callback(self._background_tasks.discard)
             return task
 
-    class _IngressStub:
-        async def submit_message(
-            self,
-            request,
-            *,
-            resolve_paused_flow_target,
-            submit_flow_reply,
-            submit_thread_message,
-        ):
-            _ = resolve_paused_flow_target, submit_flow_reply
-            thread_result = await submit_thread_message(request)
-            return SimpleNamespace(route="thread", thread_result=thread_result)
-
     class _BusyOrchestrationService:
         def get_binding(self, *, surface_kind: str, surface_key: str) -> object | None:
             assert surface_kind == "discord"
@@ -708,7 +732,7 @@ async def test_discord_message_turns_show_busy_placeholder_for_attachment_prep(
     monkeypatch.setattr(
         discord_message_turns,
         "build_surface_orchestration_ingress",
-        lambda **_: _IngressStub(),
+        lambda **_: _ThreadIngressStub(),
     )
     import codex_autorunner.integrations.discord.managed_thread_routing as _managed_thread_routing
 
@@ -1184,6 +1208,22 @@ async def test_discord_approval_component_falls_back_to_edit_when_delete_fails(
         await store.close()
 
 
+def assert_in(substring: str, text: str) -> None:
+    assert substring in text, f"{substring!r} not in {text!r}"
+
+
+def assert_not_in(substring: str, text: str) -> None:
+    assert substring not in text, f"{substring!r} unexpectedly in {text!r}"
+
+
+def assert_eq(actual: object, expected: object) -> None:
+    assert actual == expected, f"{actual!r} != {expected!r}"
+
+
+def assert_starts_with(text: str, prefix: str) -> None:
+    assert text.startswith(prefix), f"{text!r} does not start with {prefix!r}"
+
+
 def _config(
     root: Path,
     *,
@@ -1529,71 +1569,81 @@ def test_model_picker_items_are_deduplicated_and_labeled() -> None:
     ]
 
 
-def test_session_thread_picker_label_prefers_preview_and_marks_current() -> None:
-    label = discord_picker_helpers_module._format_session_thread_picker_label(
-        "019cc7c1-ec10-7981-8e8b-ec5db4619efb",
-        {
-            "id": "019cc7c1-ec10-7981-8e8b-ec5db4619efb",
-            "last_user_message": "Fix resume picker so the options show summaries",
-            "last_assistant_message": "I will update labels to include preview text",
-        },
-        is_current=True,
-    )
-    assert "(current)" in label
-    assert "[019cc7c1]" in label
-    assert "Fix resume picker so the options show summaries" in label
-
-
-def test_session_thread_picker_label_falls_back_to_thread_id() -> None:
-    thread_id = "019cc738-5168-7ca1-9d80-ab180b4b31dd"
-    label = discord_picker_helpers_module._format_session_thread_picker_label(
-        thread_id,
-        {"id": thread_id},
-        is_current=False,
-    )
-    assert label == thread_id
-
-
-def test_session_thread_picker_label_strips_injected_context_from_preview() -> None:
-    thread_id = "019cc77b-ec10-7981-8e8b-ec5db4619efb"
-    label = discord_picker_helpers_module._format_session_thread_picker_label(
-        thread_id,
-        {
-            "id": thread_id,
-            "last_user_message": (
-                "<injected context>\n"
-                "You are operating inside a Codex Autorunner (CAR) managed repo.\n"
-                "</injected context>\n\n"
-                "Resume this thread"
+@pytest.mark.parametrize(
+    "thread_id,thread_data,is_current,assertions",
+    [
+        pytest.param(
+            "019cc7c1-ec10-7981-8e8b-ec5db4619efb",
+            {
+                "id": "019cc7c1-ec10-7981-8e8b-ec5db4619efb",
+                "last_user_message": "Fix resume picker so the options show summaries",
+                "last_assistant_message": "I will update labels to include preview text",
+            },
+            True,
+            lambda label: (
+                assert_in("(current)", label),
+                assert_in("[019cc7c1]", label),
+                assert_in("Fix resume picker so the options show summaries", label),
             ),
-        },
-        is_current=False,
-    )
-    assert "<injected context>" not in label
-    assert "Resume this thread" in label
-
-
-def test_session_thread_picker_label_prioritizes_datetime_and_first_user_message() -> (
-    None
-):
-    thread_id = "019cc77b-ec10-7981-8e8b-ec5db4619efb"
-    label = discord_picker_helpers_module._format_session_thread_picker_label(
-        thread_id,
-        {
-            "id": thread_id,
-            "created_at": "2026-03-31T09:15:00Z",
-            "first_user_message": (
-                "<injected context>\nworkspace details\n</injected context>\n\n"
-                "Fix the Discord resume labels."
+            id="prefers-preview-and-marks-current",
+        ),
+        pytest.param(
+            "019cc738-5168-7ca1-9d80-ab180b4b31dd",
+            {"id": "019cc738-5168-7ca1-9d80-ab180b4b31dd"},
+            False,
+            lambda label: (assert_eq(label, "019cc738-5168-7ca1-9d80-ab180b4b31dd"),),
+            id="falls-back-to-thread-id",
+        ),
+        pytest.param(
+            "019cc77b-ec10-7981-8e8b-ec5db4619efb",
+            {
+                "id": "019cc77b-ec10-7981-8e8b-ec5db4619efb",
+                "last_user_message": (
+                    "<injected context>\n"
+                    "You are operating inside a Codex Autorunner (CAR) managed repo.\n"
+                    "</injected context>\n\n"
+                    "Resume this thread"
+                ),
+            },
+            False,
+            lambda label: (
+                assert_not_in("<injected context>", label),
+                assert_in("Resume this thread", label),
             ),
-            "last_user_message": "Latest request that should not win",
-            "last_assistant_message": "Latest assistant reply",
-        },
-        is_current=False,
+            id="strips-injected-context-from-preview",
+        ),
+        pytest.param(
+            "019cc77b-ec10-7981-8e8b-ec5db4619efb",
+            {
+                "id": "019cc77b-ec10-7981-8e8b-ec5db4619efb",
+                "created_at": "2026-03-31T09:15:00Z",
+                "first_user_message": (
+                    "<injected context>\nworkspace details\n</injected context>\n\n"
+                    "Fix the Discord resume labels."
+                ),
+                "last_user_message": "Latest request that should not win",
+                "last_assistant_message": "Latest assistant reply",
+            },
+            False,
+            lambda label: (
+                assert_starts_with(label, "2026-03-31 09:15Z"),
+                assert_in("Fix the Discord resume labels.", label),
+                assert_not_in("Latest request that should not win", label),
+            ),
+            id="prioritizes-datetime-and-first-user-message",
+        ),
+    ],
+)
+def test_session_thread_picker_label_variants(
+    thread_id: str,
+    thread_data: dict[str, Any],
+    is_current: bool,
+    assertions: Any,
+) -> None:
+    label = discord_picker_helpers_module._format_session_thread_picker_label(
+        thread_id, thread_data, is_current=is_current
     )
-    assert label.startswith("2026-03-31 09:15Z")
-    assert "Fix the Discord resume labels." in label
-    assert "Latest request that should not win" not in label
+    assertions(label)
 
 
 def test_discord_thread_picker_label_prioritizes_datetime_and_strips_car_comment() -> (
@@ -3174,14 +3224,7 @@ async def test_component_interaction_cancel_queued_turn_cancels_selected_executi
     tmp_path: Path,
 ) -> None:
     service, rest, store = await _build_service(tmp_path, init_store=True)
-
-    class _FakeThreadService:
-        def cancel_queued_execution(
-            self, thread_target_id: str, execution_id: str
-        ) -> bool:
-            assert thread_target_id == "thread-1"
-            assert execution_id == "turn-2"
-            return True
+    _fts = _FakeThreadService(cancel_queued_execution=_ts_assert_ret())
 
     async def _clear_progress_leases(*args, **kwargs) -> int:
         assert kwargs["managed_thread_id"] == "thread-1"
@@ -3196,7 +3239,7 @@ async def test_component_interaction_cancel_queued_turn_cancels_selected_executi
             repo_id="repo-1",
         )
         service._get_discord_thread_binding = lambda **_kwargs: (  # type: ignore[method-assign]
-            _FakeThreadService(),
+            _fts,
             None,
             SimpleNamespace(thread_target_id="thread-1"),
         )
@@ -3253,14 +3296,7 @@ async def test_component_interaction_queued_turn_interrupt_send_promotes_and_int
 ) -> None:
     service, rest, store = await _build_service(tmp_path, init_store=True)
     calls: list[tuple[str, str, str, str, bool]] = []
-
-    class _FakeThreadService:
-        def promote_queued_execution(
-            self, thread_target_id: str, execution_id: str
-        ) -> bool:
-            assert thread_target_id == "thread-1"
-            assert execution_id == "turn-2"
-            return True
+    _fts = _FakeThreadService(promote_queued_execution=_ts_assert_ret())
 
     try:
         await store.upsert_binding(
@@ -3271,7 +3307,7 @@ async def test_component_interaction_queued_turn_interrupt_send_promotes_and_int
         )
 
         service._get_discord_thread_binding = lambda **_kwargs: (  # type: ignore[method-assign]
-            _FakeThreadService(),
+            _fts,
             None,
             SimpleNamespace(thread_target_id="thread-1"),
         )
@@ -3327,18 +3363,9 @@ async def test_component_interaction_queued_turn_interrupt_send_acknowledges_whe
 ) -> None:
     service, rest, store = await _build_service(tmp_path, init_store=True)
     interrupt_called = False
-
-    class _FakeThreadService:
-        def promote_queued_execution(
-            self, thread_target_id: str, execution_id: str
-        ) -> bool:
-            assert thread_target_id == "thread-1"
-            assert execution_id == "turn-2"
-            return True
-
-        def get_running_execution(self, thread_target_id: str) -> Any:
-            assert thread_target_id == "thread-1"
-            return None
+    _fts = _FakeThreadService(
+        promote_queued_execution=_ts_assert_ret(), get_running_execution=_ts_exec()
+    )
 
     try:
         await store.upsert_binding(
@@ -3349,7 +3376,7 @@ async def test_component_interaction_queued_turn_interrupt_send_acknowledges_whe
         )
 
         service._get_discord_thread_binding = lambda **_kwargs: (  # type: ignore[method-assign]
-            _FakeThreadService(),
+            _fts,
             None,
             SimpleNamespace(thread_target_id="thread-1"),
         )
@@ -3384,18 +3411,9 @@ async def test_queued_turn_interrupt_send_uses_followup_after_predefer(
     tmp_path: Path,
 ) -> None:
     service, rest, store = await _build_service(tmp_path, init_store=True)
-
-    class _FakeThreadService:
-        def promote_queued_execution(
-            self, thread_target_id: str, execution_id: str
-        ) -> bool:
-            assert thread_target_id == "thread-1"
-            assert execution_id == "turn-2"
-            return True
-
-        def get_running_execution(self, thread_target_id: str) -> Any:
-            assert thread_target_id == "thread-1"
-            return None
+    _fts = _FakeThreadService(
+        promote_queued_execution=_ts_assert_ret(), get_running_execution=_ts_exec()
+    )
 
     try:
         await store.upsert_binding(
@@ -3406,7 +3424,7 @@ async def test_queued_turn_interrupt_send_uses_followup_after_predefer(
         )
 
         service._get_discord_thread_binding = lambda **_kwargs: (  # type: ignore[method-assign]
-            _FakeThreadService(),
+            _fts,
             None,
             SimpleNamespace(thread_target_id="thread-1"),
         )
@@ -4088,8 +4106,17 @@ async def test_car_session_resume_with_partial_thread_prompts_filtered_picker(
 
 
 @pytest.mark.anyio
-async def test_component_interaction_model_select_prompts_effort_for_opencode(
+@pytest.mark.parametrize(
+    ("agent", "model_value"),
+    [
+        ("opencode", "openai/gpt-4o"),
+        (None, "gpt-5.3-codex"),
+    ],
+)
+async def test_component_interaction_model_select_prompts_effort(
     tmp_path: Path,
+    agent: str | None,
+    model_value: str,
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -4101,10 +4128,11 @@ async def test_component_interaction_model_select_prompts_effort_for_opencode(
         workspace_path=str(workspace),
         repo_id="repo-1",
     )
-    await store.update_agent_state(channel_id="channel-1", agent="opencode")
+    if agent is not None:
+        await store.update_agent_state(channel_id="channel-1", agent=agent)
     rest = _FakeRest()
     gateway = _FakeGateway(
-        [_component_interaction(custom_id="model_select", values=["openai/gpt-4o"])]
+        [_component_interaction(custom_id="model_select", values=[model_value])]
     )
     service = DiscordBotService(
         _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
@@ -4120,7 +4148,7 @@ async def test_component_interaction_model_select_prompts_effort_for_opencode(
         binding = await store.get_binding(channel_id="channel-1")
         assert binding is not None
         assert binding.get("model_override") is None
-        assert service._pending_model_effort["channel-1:user-1"] == "openai/gpt-4o"
+        assert service._pending_model_effort["channel-1:user-1"] == model_value
         assert len(rest.interaction_responses) == 1
         data = rest.interaction_responses[0]["payload"]["data"]
         assert "select reasoning effort" in data["content"].lower()
@@ -4178,49 +4206,6 @@ async def test_car_model_rejects_invalid_opencode_model_name(tmp_path: Path) -> 
         assert "provider/model" in content
         assert rest.followup_messages == []
         assert rest.edited_original_interaction_responses == []
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
-async def test_component_interaction_model_select_prompts_effort_for_codex(
-    tmp_path: Path,
-) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id="repo-1",
-    )
-    rest = _FakeRest()
-    gateway = _FakeGateway(
-        [_component_interaction(custom_id="model_select", values=["gpt-5.3-codex"])]
-    )
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
-
-    try:
-        await service.run_forever()
-        binding = await store.get_binding(channel_id="channel-1")
-        assert binding is not None
-        assert binding.get("model_override") is None
-        assert len(rest.interaction_responses) == 1
-        data = rest.interaction_responses[0]["payload"]["data"]
-        assert "select reasoning effort" in data["content"].lower()
-        components = data.get("components") or []
-        assert components
-        menu = components[0]["components"][0]
-        assert menu["custom_id"] == "model_effort_select"
     finally:
         await store.close()
 
@@ -4345,25 +4330,6 @@ async def test_service_routes_car_new_without_generic_fallback(
 
 
 @pytest.mark.anyio
-async def test_normalized_interaction_routes_car_agent_without_generic_fallback(
-    tmp_path: Path,
-) -> None:
-    service, rest, store = await _build_service(tmp_path, init_store=True)
-
-    try:
-        await _dispatch_gateway_interaction(
-            service,
-            _interaction(name="agent", options=[]),
-        )
-        assert len(rest.interaction_responses) == 1
-        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
-        assert "not bound" in content
-        assert "not implemented yet for discord" not in content
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
 async def test_normalized_interaction_status_defers_before_reading_active_flow(
     tmp_path: Path,
 ) -> None:
@@ -4407,97 +4373,6 @@ async def test_normalized_interaction_status_defers_before_reading_active_flow(
             _interaction(name="status", options=[]),
         )
         assert len(rest.followup_messages) == 1
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
-async def test_normalized_component_agent_select_updates_agent(tmp_path: Path) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id="repo-1",
-    )
-    rest = _FakeRest()
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=_FakeGateway([]),
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
-
-    try:
-        await _dispatch_gateway_interaction(
-            service,
-            _component_interaction(
-                custom_id="agent_select",
-                values=["opencode"],
-            ),
-        )
-        binding = await store.get_binding(channel_id="channel-1")
-        assert binding is not None
-        assert binding.get("agent") == "opencode"
-        assert len(rest.interaction_responses) == 1
-        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
-        assert "agent set to opencode" in content
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
-async def test_normalized_component_agent_select_prompts_for_hermes_profile(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        "codex_autorunner.agents.registry.get_registered_agents",
-        lambda context=None: {
-            "hermes-m4-pma": SimpleNamespace(name="Hermes (hermes-m4-pma)"),
-        },
-    )
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id="repo-1",
-    )
-    rest = _FakeRest()
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=_FakeGateway([]),
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
-
-    try:
-        await _dispatch_gateway_interaction(
-            service,
-            _component_interaction(
-                custom_id="agent_select",
-                values=["hermes"],
-            ),
-        )
-        binding = await store.get_binding(channel_id="channel-1")
-        assert binding is not None
-        assert binding.get("agent") == "hermes"
-        assert binding.get("agent_profile") is None
-        assert len(rest.interaction_responses) == 1
-        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
-        assert "agent set to hermes" in content
-        assert "select a hermes profile" in content
     finally:
         await store.close()
 
@@ -4552,54 +4427,6 @@ async def test_agent_profile_select_with_underscore_alias(
         content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
         assert "unknown hermes profile" not in content
         assert "agent set" in content
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
-async def test_normalized_component_model_select_prompts_effort_for_opencode(
-    tmp_path: Path,
-) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id="repo-1",
-    )
-    await store.update_agent_state(channel_id="channel-1", agent="opencode")
-    rest = _FakeRest()
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=_FakeGateway([]),
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
-
-    try:
-        await _dispatch_gateway_interaction(
-            service,
-            _component_interaction(
-                custom_id="model_select",
-                values=["openai/gpt-4o"],
-            ),
-        )
-        binding = await store.get_binding(channel_id="channel-1")
-        assert binding is not None
-        assert binding.get("model_override") is None
-        assert service._pending_model_effort["channel-1:user-1"] == "openai/gpt-4o"
-        assert len(rest.interaction_responses) == 1
-        data = rest.interaction_responses[0]["payload"]["data"]
-        assert "select reasoning effort" in data["content"].lower()
-        components = data.get("components") or []
-        assert components
-        menu = components[0]["components"][0]
-        assert menu["custom_id"] == "model_effort_select"
     finally:
         await store.close()
 
@@ -5800,51 +5627,6 @@ async def test_component_interaction_update_target_select_routes_update(
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize(
-    ("component_id", "expected"),
-    [
-        ("agent_select", "please select an agent"),
-        ("model_select", "please select a model"),
-    ],
-)
-async def test_normalized_component_empty_values_returns_error(
-    tmp_path: Path,
-    component_id: str,
-    expected: str,
-) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id="repo-1",
-    )
-    rest = _FakeRest()
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=_FakeGateway([]),
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
-
-    try:
-        await _dispatch_gateway_interaction(
-            service,
-            _component_interaction(custom_id=component_id, values=[]),
-        )
-        assert len(rest.interaction_responses) == 1
-        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
-        assert expected in content
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
 async def test_normalized_flow_refresh_component_defers_before_workspace_lookup(
     tmp_path: Path,
 ) -> None:
@@ -5925,10 +5707,27 @@ async def test_normalized_flow_refresh_component_binding_error_uses_followup(
 
 
 @pytest.mark.anyio
-async def test_unknown_car_subcommand_has_explicit_unknown_message(
+@pytest.mark.parametrize(
+    "gateway_factory,expected_substring",
+    [
+        pytest.param(
+            lambda: _FakeGateway([_interaction(name="mystery", options=[])]),
+            "unknown car subcommand: mystery",
+            id="car-subcommand",
+        ),
+        pytest.param(
+            lambda: _FakeGateway([_pma_interaction(name="mystery")]),
+            "unknown pma subcommand",
+            id="pma-subcommand",
+        ),
+    ],
+)
+async def test_unknown_subcommand_has_explicit_unknown_message(
     tmp_path: Path,
+    gateway_factory: Any,
+    expected_substring: str,
 ) -> None:
-    gateway = _FakeGateway([_interaction(name="mystery", options=[])])
+    gateway = gateway_factory()
     service, rest, store = await _build_service(
         tmp_path, gateway=gateway, init_store=True
     )
@@ -5937,26 +5736,7 @@ async def test_unknown_car_subcommand_has_explicit_unknown_message(
         await service.run_forever()
         assert len(rest.interaction_responses) == 1
         content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
-        assert "unknown car subcommand: mystery" in content
-        assert "not implemented yet for discord" not in content
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
-async def test_unknown_pma_subcommand_has_explicit_unknown_message(
-    tmp_path: Path,
-) -> None:
-    gateway = _FakeGateway([_pma_interaction(name="mystery")])
-    service, rest, store = await _build_service(
-        tmp_path, gateway=gateway, init_store=True
-    )
-
-    try:
-        await service.run_forever()
-        assert len(rest.interaction_responses) == 1
-        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
-        assert "unknown pma subcommand" in content
+        assert expected_substring in content
         assert "not implemented yet for discord" not in content
     finally:
         await store.close()
@@ -7463,30 +7243,22 @@ async def test_car_session_resume_reactivates_thread_without_backend_rebinding(
         lifecycle_status="archived",
         backend_thread_id="legacy-backend",
     )
-
-    class _FakeThreadService:
-        def get_binding(self, *, surface_kind: str, surface_key: str) -> Any:
-            assert surface_kind == "discord"
-            assert surface_key == "channel-1"
-            return SimpleNamespace(thread_target_id="thread-1", mode="repo")
-
-        def get_thread_target(self, thread_target_id: str) -> Any:
-            assert thread_target_id == "thread-1"
-            return archived_thread
-
-        def resume_thread_target(self, thread_target_id: str, **kwargs: Any) -> Any:
-            resumed_calls.append((thread_target_id, kwargs))
-            return SimpleNamespace(
-                thread_target_id=thread_target_id,
-                agent_id="codex",
-                workspace_root=str(workspace),
-                lifecycle_status="active",
-                backend_thread_id="legacy-backend",
-            )
+    _active = SimpleNamespace(
+        thread_target_id="thread-1",
+        agent_id="codex",
+        workspace_root=str(workspace),
+        lifecycle_status="active",
+        backend_thread_id="legacy-backend",
+    )
+    _fts = _FakeThreadService(
+        get_binding=_ts_bind(),
+        get_thread_target=_ts_tgt(value=archived_thread),
+        resume_thread_target=_ts_resume("thread-1", _active, calls=resumed_calls),
+    )
 
     service._get_discord_thread_binding = (  # type: ignore[assignment]
         lambda *args, **kwargs: (
-            _FakeThreadService(),
+            _fts,
             SimpleNamespace(thread_target_id="thread-1", mode="repo"),
             archived_thread,
         )
@@ -7557,25 +7329,24 @@ async def test_car_session_resume_accepts_legacy_hermes_runtime_alias_thread(
         agent_profile="m4-pma",
     )
 
-    class _FakeThreadService:
-        def get_thread_target(self, thread_target_id: str) -> Any:
-            assert thread_target_id == "thread-1"
-            return archived_thread
-
-        def resume_thread_target(self, thread_target_id: str, **kwargs: Any) -> Any:
-            resumed_calls.append((thread_target_id, kwargs))
-            return SimpleNamespace(
-                thread_target_id=thread_target_id,
-                agent_id="hermes-m4-pma",
-                workspace_root=str(workspace),
-                lifecycle_status="active",
-                backend_thread_id="legacy-backend",
-                agent_profile="m4-pma",
-            )
+    _hermes_active = SimpleNamespace(
+        thread_target_id="thread-1",
+        agent_id="hermes-m4-pma",
+        workspace_root=str(workspace),
+        lifecycle_status="active",
+        backend_thread_id="legacy-backend",
+        agent_profile="m4-pma",
+    )
+    _fts = _FakeThreadService(
+        get_thread_target=_ts_tgt(value=archived_thread),
+        resume_thread_target=_ts_resume(
+            "thread-1", _hermes_active, calls=resumed_calls
+        ),
+    )
 
     service._get_discord_thread_binding = (  # type: ignore[assignment]
         lambda *args, **kwargs: (
-            _FakeThreadService(),
+            _fts,
             SimpleNamespace(thread_target_id="thread-1", mode="repo"),
             archived_thread,
         )
@@ -7651,18 +7422,16 @@ async def test_car_session_resume_rejects_different_hermes_profile_thread(
         agent_profile="m4-other",
     )
 
-    class _FakeThreadService:
-        def get_thread_target(self, thread_target_id: str) -> Any:
-            assert thread_target_id == "thread-1"
-            return mismatched_thread
-
-        def resume_thread_target(self, thread_target_id: str, **kwargs: Any) -> Any:
-            resumed_calls.append((thread_target_id, kwargs))
-            return mismatched_thread
+    _fts = _FakeThreadService(
+        get_thread_target=_ts_tgt(value=mismatched_thread),
+        resume_thread_target=_ts_resume(
+            "thread-1", mismatched_thread, calls=resumed_calls
+        ),
+    )
 
     service._get_discord_thread_binding = (  # type: ignore[assignment]
         lambda *args, **kwargs: (
-            _FakeThreadService(),
+            _fts,
             SimpleNamespace(thread_target_id="thread-1", mode="repo"),
             mismatched_thread,
         )
@@ -7715,26 +7484,20 @@ async def test_car_interrupt_uses_orchestration_thread_state(tmp_path: Path) -> 
     )
 
     interrupted: list[str] = []
-
-    class _FakeThreadService:
-        def get_binding(self, *, surface_kind: str, surface_key: str) -> Any:
-            assert surface_kind == "discord"
-            assert surface_key == "channel-1"
-            return SimpleNamespace(thread_target_id="thread-1", mode="repo")
-
-        def get_thread_target(self, thread_target_id: str) -> Any:
-            assert thread_target_id == "thread-1"
-            return SimpleNamespace(thread_target_id="thread-1")
-
-        async def stop_thread(self, thread_target_id: str) -> Any:
-            interrupted.append(thread_target_id)
-            return SimpleNamespace(
+    _fts = _FakeThreadService(
+        get_binding=_ts_bind(),
+        get_thread_target=_ts_tgt(),
+        stop_thread=_ts_stop(
+            value=SimpleNamespace(
                 interrupted_active=True,
                 recovered_lost_backend=False,
                 cancelled_queued=2,
-            )
+            ),
+            calls=interrupted,
+        ),
+    )
 
-    service._discord_thread_service = lambda: _FakeThreadService()  # type: ignore[assignment]
+    service._discord_thread_service = lambda: _fts  # type: ignore[assignment]
 
     try:
         await service._handle_car_interrupt(
@@ -7777,25 +7540,19 @@ async def test_car_interrupt_recovers_missing_backend_thread(tmp_path: Path) -> 
         outbox_manager=_FakeOutboxManager(),
     )
 
-    class _FakeThreadService:
-        def get_binding(self, *, surface_kind: str, surface_key: str) -> Any:
-            assert surface_kind == "discord"
-            assert surface_key == "channel-1"
-            return SimpleNamespace(thread_target_id="thread-1", mode="repo")
-
-        def get_thread_target(self, thread_target_id: str) -> Any:
-            assert thread_target_id == "thread-1"
-            return SimpleNamespace(thread_target_id="thread-1")
-
-        async def stop_thread(self, thread_target_id: str) -> Any:
-            assert thread_target_id == "thread-1"
-            return SimpleNamespace(
+    _fts = _FakeThreadService(
+        get_binding=_ts_bind(),
+        get_thread_target=_ts_tgt(),
+        stop_thread=_ts_stop(
+            value=SimpleNamespace(
                 interrupted_active=False,
                 recovered_lost_backend=True,
                 cancelled_queued=0,
             )
+        ),
+    )
 
-    service._discord_thread_service = lambda: _FakeThreadService()  # type: ignore[assignment]
+    service._discord_thread_service = lambda: _fts  # type: ignore[assignment]
     import codex_autorunner.integrations.discord.progress_leases as _progress_leases
 
     _progress_leases.request_discord_turn_progress_reuse(
@@ -7874,31 +7631,25 @@ async def test_car_interrupt_treats_promoted_no_active_as_success(
     )
     wake_calls: list[str] = []
 
-    class _FakeThreadService:
-        def get_binding(self, *, surface_kind: str, surface_key: str) -> Any:
-            assert surface_kind == "discord"
-            assert surface_key == "channel-1"
-            return SimpleNamespace(thread_target_id="thread-1", mode="repo")
+    async def _stop_no_cancel(t, **kw):
+        assert t == "thread-1" and kw == {"cancel_queued": False}
+        return SimpleNamespace(
+            interrupted_active=False,
+            recovered_lost_backend=False,
+            cancelled_queued=0,
+            execution=None,
+        )
 
-        def get_thread_target(self, thread_target_id: str) -> Any:
-            assert thread_target_id == "thread-1"
-            return SimpleNamespace(thread_target_id="thread-1")
+    _fts = _FakeThreadService(
+        get_binding=_ts_bind(),
+        get_thread_target=_ts_tgt(),
+        get_running_execution=_ts_exec(
+            value=SimpleNamespace(execution_id="turn-1", status="running")
+        ),
+        stop_thread=_stop_no_cancel,
+    )
 
-        def get_running_execution(self, thread_target_id: str) -> Any:
-            assert thread_target_id == "thread-1"
-            return SimpleNamespace(execution_id="turn-1", status="running")
-
-        async def stop_thread(self, thread_target_id: str, **kwargs: Any) -> Any:
-            assert thread_target_id == "thread-1"
-            assert kwargs == {"cancel_queued": False}
-            return SimpleNamespace(
-                interrupted_active=False,
-                recovered_lost_backend=False,
-                cancelled_queued=0,
-                execution=None,
-            )
-
-    service._discord_thread_service = lambda: _FakeThreadService()  # type: ignore[assignment]
+    service._discord_thread_service = lambda: _fts  # type: ignore[assignment]
 
     async def _wake_conversation(conversation_id: str) -> bool:
         wake_calls.append(conversation_id)
@@ -7980,26 +7731,21 @@ async def test_car_interrupt_reports_still_stopping_from_shared_ledger(
         },
     )
 
-    class _FakeThreadService:
-        def get_binding(self, *, surface_kind: str, surface_key: str) -> Any:
-            assert surface_kind == "discord"
-            assert surface_key == "channel-1"
-            return SimpleNamespace(thread_target_id="thread-1", mode="repo")
+    async def _stop_raises(t, **kw):
+        raise AssertionError(
+            f"stop_thread should not run for duplicate interrupt: {t} {kw}"
+        )
 
-        def get_thread_target(self, thread_target_id: str) -> Any:
-            assert thread_target_id == "thread-1"
-            return SimpleNamespace(thread_target_id="thread-1")
+    _fts = _FakeThreadService(
+        get_binding=_ts_bind(),
+        get_thread_target=_ts_tgt(),
+        get_running_execution=_ts_exec(
+            value=SimpleNamespace(execution_id="turn-1", status="running")
+        ),
+        stop_thread=_stop_raises,
+    )
 
-        def get_running_execution(self, thread_target_id: str) -> Any:
-            assert thread_target_id == "thread-1"
-            return SimpleNamespace(execution_id="turn-1", status="running")
-
-        async def stop_thread(self, thread_target_id: str, **kwargs: Any) -> Any:
-            raise AssertionError(
-                f"stop_thread should not run for duplicate interrupt: {thread_target_id} {kwargs}"
-            )
-
-    service._discord_thread_service = lambda: _FakeThreadService()  # type: ignore[assignment]
+    service._discord_thread_service = lambda: _fts  # type: ignore[assignment]
 
     try:
         await service._handle_car_interrupt(
@@ -8044,30 +7790,21 @@ async def test_car_interrupt_reports_already_finished_when_turn_is_no_longer_act
         outbox_manager=_FakeOutboxManager(),
     )
 
-    class _FakeThreadService:
-        def get_binding(self, *, surface_kind: str, surface_key: str) -> Any:
-            assert surface_kind == "discord"
-            assert surface_key == "channel-1"
-            return SimpleNamespace(thread_target_id="thread-1", mode="repo")
-
-        def get_thread_target(self, thread_target_id: str) -> Any:
-            assert thread_target_id == "thread-1"
-            return SimpleNamespace(thread_target_id="thread-1")
-
-        def get_running_execution(self, thread_target_id: str) -> Any:
-            assert thread_target_id == "thread-1"
-            return None
-
-        async def stop_thread(self, thread_target_id: str, **kwargs: Any) -> Any:
-            assert thread_target_id == "thread-1"
-            return SimpleNamespace(
+    _fts = _FakeThreadService(
+        get_binding=_ts_bind(),
+        get_thread_target=_ts_tgt(),
+        get_running_execution=_ts_exec(),
+        stop_thread=_ts_stop(
+            value=SimpleNamespace(
                 interrupted_active=False,
                 recovered_lost_backend=False,
                 cancelled_queued=0,
                 execution=None,
             )
+        ),
+    )
 
-    service._discord_thread_service = lambda: _FakeThreadService()  # type: ignore[assignment]
+    service._discord_thread_service = lambda: _fts  # type: ignore[assignment]
 
     try:
         await service._handle_car_interrupt(
@@ -8112,25 +7849,22 @@ async def test_cancel_turn_button_updates_component_to_interrupt_success_on_conf
         outbox_manager=_FakeOutboxManager(),
     )
 
-    class _FakeThreadService:
-        def get_thread_target(self, thread_target_id: str) -> Any:
-            assert thread_target_id == "thread-1"
-            return SimpleNamespace(thread_target_id="thread-1")
-
-        def get_running_execution(self, thread_target_id: str) -> Any:
-            assert thread_target_id == "thread-1"
-            return SimpleNamespace(execution_id="turn-1", status="running")
-
-        async def stop_thread(self, thread_target_id: str) -> Any:
-            assert thread_target_id == "thread-1"
-            return SimpleNamespace(
+    _fts = _FakeThreadService(
+        get_thread_target=_ts_tgt(),
+        get_running_execution=_ts_exec(
+            value=SimpleNamespace(execution_id="turn-1", status="running")
+        ),
+        stop_thread=_ts_stop(
+            value=SimpleNamespace(
                 interrupted_active=True,
                 recovered_lost_backend=False,
                 cancelled_queued=0,
                 execution=SimpleNamespace(execution_id="turn-1"),
             )
+        ),
+    )
 
-    service._discord_thread_service = lambda: _FakeThreadService()  # type: ignore[assignment]
+    service._discord_thread_service = lambda: _fts  # type: ignore[assignment]
 
     try:
         await service._handle_cancel_turn_button(
@@ -8195,21 +7929,17 @@ async def test_cancel_turn_button_stale_execution_does_not_interrupt_newer_turn(
     )
 
     stop_calls: list[str] = []
+    _fts = _FakeThreadService(
+        get_thread_target=_ts_tgt(),
+        get_running_execution=_ts_exec(
+            value=SimpleNamespace(execution_id="turn-2", status="running")
+        ),
+        stop_thread=_ts_stop(
+            value=SimpleNamespace(interrupted_active=True), calls=stop_calls
+        ),
+    )
 
-    class _FakeThreadService:
-        def get_thread_target(self, thread_target_id: str) -> Any:
-            assert thread_target_id == "thread-1"
-            return SimpleNamespace(thread_target_id="thread-1")
-
-        def get_running_execution(self, thread_target_id: str) -> Any:
-            assert thread_target_id == "thread-1"
-            return SimpleNamespace(execution_id="turn-2", status="running")
-
-        async def stop_thread(self, thread_target_id: str) -> Any:
-            stop_calls.append(thread_target_id)
-            return SimpleNamespace(interrupted_active=True)
-
-    service._discord_thread_service = lambda: _FakeThreadService()  # type: ignore[assignment]
+    service._discord_thread_service = lambda: _fts  # type: ignore[assignment]
 
     try:
         await service._handle_cancel_turn_button(
@@ -8296,16 +8026,14 @@ async def test_cancel_turn_button_stale_execution_ignores_message_fetch_failures
         outbox_manager=_FakeOutboxManager(),
     )
 
-    class _FakeThreadService:
-        def get_thread_target(self, thread_target_id: str) -> Any:
-            assert thread_target_id == "thread-1"
-            return SimpleNamespace(thread_target_id="thread-1")
+    _fts = _FakeThreadService(
+        get_thread_target=_ts_tgt(),
+        get_running_execution=_ts_exec(
+            value=SimpleNamespace(execution_id="turn-2", status="running")
+        ),
+    )
 
-        def get_running_execution(self, thread_target_id: str) -> Any:
-            assert thread_target_id == "thread-1"
-            return SimpleNamespace(execution_id="turn-2", status="running")
-
-    service._discord_thread_service = lambda: _FakeThreadService()  # type: ignore[assignment]
+    service._discord_thread_service = lambda: _fts  # type: ignore[assignment]
 
     try:
         await service._handle_cancel_turn_button(
@@ -8359,35 +8087,30 @@ async def test_reset_discord_thread_binding_archives_after_lost_backend_recovery
         message_id="preview-1",
     )
 
-    class _FakeThreadService:
-        def get_binding(self, *, surface_kind: str, surface_key: str) -> Any:
-            assert surface_kind == "discord"
-            assert surface_key == "channel-1"
-            return SimpleNamespace(thread_target_id="thread-1", mode="repo")
+    async def _stop_rec(t, **kw):
+        calls.append(("stop", t))
+        return SimpleNamespace(recovered_lost_backend=True)
 
-        def get_thread_target(self, thread_target_id: str) -> Any:
-            assert thread_target_id == "thread-1"
-            return SimpleNamespace(thread_target_id="thread-1")
+    _fts = _FakeThreadService(
+        get_binding=_ts_bind(),
+        get_thread_target=_ts_tgt(),
+        stop_thread=_stop_rec,
+        archive_thread_target=lambda tid: calls.append(("archive", tid)),
+        create_thread_target=lambda agent, workspace_root, **kw: (
+            (
+                calls.append(("create", agent)),
+                SimpleNamespace(thread_target_id="thread-2"),
+            )[1]
+            if workspace_root == workspace
+            else None
+        ),
+        upsert_binding=lambda **kw: (
+            calls.append(("bind", str(kw["thread_target_id"]))),
+            SimpleNamespace(thread_target_id=kw["thread_target_id"]),
+        )[1],
+    )
 
-        async def stop_thread(self, thread_target_id: str) -> Any:
-            calls.append(("stop", thread_target_id))
-            return SimpleNamespace(recovered_lost_backend=True)
-
-        def archive_thread_target(self, thread_target_id: str) -> None:
-            calls.append(("archive", thread_target_id))
-
-        def create_thread_target(
-            self, agent: str, workspace_root: Path, **kwargs: Any
-        ) -> Any:
-            calls.append(("create", agent))
-            assert workspace_root == workspace
-            return SimpleNamespace(thread_target_id="thread-2")
-
-        def upsert_binding(self, **kwargs: Any) -> Any:
-            calls.append(("bind", str(kwargs["thread_target_id"])))
-            return SimpleNamespace(thread_target_id=kwargs["thread_target_id"])
-
-    service._discord_thread_service = lambda: _FakeThreadService()  # type: ignore[assignment]
+    service._discord_thread_service = lambda: _fts  # type: ignore[assignment]
 
     try:
         had_previous, new_thread_id = await service._reset_discord_thread_binding(
@@ -9010,46 +8733,20 @@ async def test_component_interaction_update_status_updates_original_message(
 
 
 @pytest.mark.anyio
-async def test_component_interaction_update_target_uses_component_defer(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    "custom_id,values",
+    [
+        pytest.param("update_target_select", ["all"], id="target-select"),
+        pytest.param("update_confirm:all", None, id="confirm-clear-buttons"),
+    ],
+)
+async def test_component_interaction_update_target_spawns_process(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    custom_id: str,
+    values: list[str] | None,
 ) -> None:
-    gateway = _FakeGateway(
-        [_component_interaction(custom_id="update_target_select", values=["all"])]
-    )
-    service, rest, store = await _build_service(
-        tmp_path, gateway=gateway, init_store=True
-    )
-
-    observed: dict[str, Any] = {}
-
-    def _fake_spawn_update_process(**kwargs: Any) -> None:
-        observed.update(kwargs)
-
-    monkeypatch.setattr(
-        discord_update_service_module,
-        "_spawn_update_process",
-        _fake_spawn_update_process,
-    )
-
-    try:
-        await service.run_forever()
-        assert observed["update_target"] == "all"
-        assert len(rest.interaction_responses) == 1
-        assert rest.interaction_responses[0]["payload"]["type"] == 6
-        assert len(rest.edited_original_interaction_responses) == 1
-        payload = rest.edited_original_interaction_responses[0]["payload"]
-        content = payload["content"].lower()
-        assert "preparing update (all)" in content
-        assert payload["components"] == []
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
-async def test_component_interaction_update_confirm_clears_confirmation_buttons(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    gateway = _FakeGateway([_component_interaction(custom_id="update_confirm:all")])
+    gateway = _FakeGateway([_component_interaction(custom_id=custom_id, values=values)])
     service, rest, store = await _build_service(
         tmp_path, gateway=gateway, init_store=True
     )
@@ -9299,8 +8996,43 @@ async def test_car_update_rejects_invalid_target(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
-async def test_car_experimental_enable_without_feature_returns_usage(
+@pytest.mark.parametrize(
+    "gateway_factory,expected_in_content",
+    [
+        pytest.param(
+            lambda: _FakeGateway(
+                [
+                    _interaction_path(
+                        command_path=("car", "admin", "experimental"),
+                        options=[{"type": 3, "name": "action", "value": "enable"}],
+                    )
+                ]
+            ),
+            ["missing feature for `enable`", "/car admin experimental action:list"],
+            id="enable-without-feature",
+        ),
+        pytest.param(
+            lambda: _FakeGateway(
+                [
+                    _interaction(
+                        name="experimental",
+                        options=[{"type": 3, "name": "action", "value": "toggle"}],
+                    )
+                ]
+            ),
+            [
+                "unknown action: toggle",
+                "valid actions: list, enable, disable",
+                "/car admin experimental action:list",
+            ],
+            id="unknown-action",
+        ),
+    ],
+)
+async def test_car_experimental_action_validation(
     tmp_path: Path,
+    gateway_factory: Any,
+    expected_in_content: list[str],
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -9313,14 +9045,7 @@ async def test_car_experimental_enable_without_feature_returns_usage(
         repo_id="repo-1",
     )
     rest = _FakeRest()
-    gateway = _FakeGateway(
-        [
-            _interaction_path(
-                command_path=("car", "admin", "experimental"),
-                options=[{"type": 3, "name": "action", "value": "enable"}],
-            )
-        ]
-    )
+    gateway = gateway_factory()
     service = DiscordBotService(
         _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
         logger=logging.getLogger("test"),
@@ -9334,51 +9059,8 @@ async def test_car_experimental_enable_without_feature_returns_usage(
         await service.run_forever()
         assert len(rest.interaction_responses) == 1
         content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
-        assert "missing feature for `enable`" in content
-        assert "/car admin experimental action:list" in content
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
-async def test_car_experimental_unknown_action_returns_guidance(
-    tmp_path: Path,
-) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id="repo-1",
-    )
-    rest = _FakeRest()
-    gateway = _FakeGateway(
-        [
-            _interaction(
-                name="experimental",
-                options=[{"type": 3, "name": "action", "value": "toggle"}],
-            )
-        ]
-    )
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
-
-    try:
-        await service.run_forever()
-        assert len(rest.interaction_responses) == 1
-        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
-        assert "unknown action: toggle" in content
-        assert "valid actions: list, enable, disable" in content
-        assert "/car admin experimental action:list" in content
+        for expected in expected_in_content:
+            assert expected in content
     finally:
         await store.close()
 
@@ -9638,9 +9320,32 @@ async def test_run_agent_turn_for_message_wraps_typing_indicator(
 
 
 @pytest.mark.anyio
-async def test_run_agent_turn_for_message_forwards_managed_thread_delivery_suppression(
+@pytest.mark.parametrize(
+    "orchestrator_key,monkeypatch_target,monkeypatch_fn,suppress_kwarg",
+    [
+        pytest.param(
+            "pma:channel-1",
+            "run_managed_thread_turn_for_message",
+            "run_managed_thread_turn_for_message",
+            "suppress_managed_thread_delivery",
+            id="managed-thread",
+        ),
+        pytest.param(
+            "channel-1",
+            "run_agent_turn_for_message",
+            "run_agent_turn_for_message",
+            "suppress_managed_thread_delivery",
+            id="repo-delivery",
+        ),
+    ],
+)
+async def test_run_agent_turn_for_message_forwards_delivery_suppression(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    orchestrator_key: str,
+    monkeypatch_target: str,
+    monkeypatch_fn: str,
+    suppress_kwarg: str,
 ) -> None:
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
     await store.initialize()
@@ -9654,7 +9359,7 @@ async def test_run_agent_turn_for_message_forwards_managed_thread_delivery_suppr
     )
     captured: dict[str, Any] = {}
 
-    async def _fake_run_managed_thread_turn_for_message(
+    async def _fake_run(
         _service: Any,
         **kwargs: Any,
     ) -> DiscordMessageTurnResult:
@@ -9663,8 +9368,8 @@ async def test_run_agent_turn_for_message_forwards_managed_thread_delivery_suppr
 
     monkeypatch.setattr(
         discord_service_module,
-        "run_managed_thread_turn_for_message",
-        _fake_run_managed_thread_turn_for_message,
+        monkeypatch_fn,
+        _fake_run,
     )
 
     try:
@@ -9675,66 +9380,61 @@ async def test_run_agent_turn_for_message_forwards_managed_thread_delivery_suppr
             model_override=None,
             reasoning_effort=None,
             session_key="session-1",
-            orchestrator_channel_key="pma:channel-1",
+            orchestrator_channel_key=orchestrator_key,
             suppress_managed_thread_delivery=True,
         )
         assert result.final_message == "ok"
-        assert captured["suppress_managed_thread_delivery"] is True
+        assert captured[suppress_kwarg] is True
     finally:
         await store.close()
 
 
 @pytest.mark.anyio
-async def test_run_agent_turn_for_message_forwards_repo_delivery_suppression(
+@pytest.mark.parametrize(
+    "task_context,reconcile_return,allow_fallback,expected_messages",
+    [
+        pytest.param(
+            {
+                "failure_note": "worker lost",
+                "channel_id": "channel-1",
+                "managed_thread_id": "thread-1",
+                "execution_id": "exec-1",
+                "lease_id": "lease-1",
+            },
+            0,
+            False,
+            [],
+            id="no-channel-fallback",
+        ),
+        pytest.param(
+            {
+                "failure_note": "worker lost",
+                "channel_id": "channel-1",
+            },
+            0,
+            True,
+            [{"payload": {"content": "worker lost"}}],
+            id="explicit-channel-fallback",
+        ),
+        pytest.param(
+            {
+                "failure_note": "worker lost",
+                "channel_id": "channel-1",
+            },
+            2,
+            False,
+            [],
+            id="successful-reconcile-count",
+        ),
+    ],
+)
+async def test_reconcile_background_task_failure_variants(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=_FakeRest(),
-        gateway_client=_FakeGateway([]),
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
-    captured: dict[str, Any] = {}
-
-    async def _fake_run_agent_turn_for_message(
-        _service: Any,
-        **kwargs: Any,
-    ) -> DiscordMessageTurnResult:
-        captured.update(kwargs)
-        return DiscordMessageTurnResult(final_message="ok")
-
-    monkeypatch.setattr(
-        discord_service_module,
-        "run_agent_turn_for_message",
-        _fake_run_agent_turn_for_message,
-    )
-
-    try:
-        result = await service._run_agent_turn_for_message(
-            workspace_root=tmp_path,
-            prompt_text="hello",
-            agent="codex",
-            model_override=None,
-            reasoning_effort=None,
-            session_key="session-1",
-            orchestrator_channel_key="channel-1",
-            suppress_managed_thread_delivery=True,
-        )
-        assert result.final_message == "ok"
-        assert captured["suppress_managed_thread_delivery"] is True
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
-async def test_reconcile_background_task_failure_does_not_fabricate_channel_fallback(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    task_context: dict[str, Any],
+    reconcile_return: int,
+    allow_fallback: bool,
+    expected_messages: list[dict[str, Any]],
 ) -> None:
     from codex_autorunner.integrations.discord.service_lifecycle import (
         reconcile_background_task_failure,
@@ -9744,7 +9444,7 @@ async def test_reconcile_background_task_failure_does_not_fabricate_channel_fall
     log_events: list[dict[str, Any]] = []
 
     async def _fake_reconcile(service, **kwargs):  # type: ignore[no-untyped-def]
-        return 0
+        return reconcile_return
 
     def _fake_log_event(logger, level, event_name, **kwargs):  # type: ignore[no-untyped-def]
         log_events.append({"level": level, "event_name": event_name, **kwargs})
@@ -9766,117 +9466,32 @@ async def test_reconcile_background_task_failure_does_not_fabricate_channel_fall
         ) -> None:
             sent_messages.append({"channel_id": channel_id, "payload": payload})
 
-    task_context = {
-        "failure_note": "worker lost",
-        "channel_id": "channel-1",
-        "managed_thread_id": "thread-1",
-        "execution_id": "exec-1",
-        "lease_id": "lease-1",
-    }
-
-    result = await reconcile_background_task_failure(_FakeService(), task_context)
-
-    assert result == 0
-    assert sent_messages == []
-    reconcile_failures = [
-        e
-        for e in log_events
-        if e["event_name"] == "discord.background_task.reconcile_failed"
-    ]
-    assert len(reconcile_failures) == 1
-    assert reconcile_failures[0]["channel_id"] == "channel-1"
-    assert reconcile_failures[0]["managed_thread_id"] == "thread-1"
-    assert reconcile_failures[0]["level"] == logging.ERROR
-
-
-@pytest.mark.anyio
-async def test_reconcile_background_task_failure_sends_channel_message_when_explicitly_allowed(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from codex_autorunner.integrations.discord.service_lifecycle import (
-        reconcile_background_task_failure,
-    )
-
-    sent_messages: list[dict[str, Any]] = []
-
-    async def _fake_reconcile(service, **kwargs):  # type: ignore[no-untyped-def]
-        return 0
-
-    def _fake_log_event(logger, level, event_name, **kwargs):  # type: ignore[no-untyped-def]
-        pass
-
-    import codex_autorunner.integrations.discord.progress_leases as _progress_leases
-    import codex_autorunner.integrations.discord.service_lifecycle as _lifecycle_mod
-
-    monkeypatch.setattr(
-        _progress_leases, "reconcile_discord_turn_progress_leases", _fake_reconcile
-    )
-    monkeypatch.setattr(_lifecycle_mod, "log_event", _fake_log_event)
-
-    class _FakeService:
-        def __init__(self) -> None:
-            self._logger = logging.getLogger("test")
-
-        async def _send_channel_message_safe(
-            self, channel_id: str, payload: dict[str, Any]
-        ) -> None:
-            sent_messages.append({"channel_id": channel_id, "payload": payload})
-
-    task_context = {
-        "failure_note": "worker lost",
-        "channel_id": "channel-1",
-    }
-
+    kwargs: dict[str, Any] = {}
+    if allow_fallback:
+        kwargs["allow_channel_fallback"] = True
     result = await reconcile_background_task_failure(
-        _FakeService(), task_context, allow_channel_fallback=True
+        _FakeService(), task_context, **kwargs
     )
 
-    assert result == 0
-    assert len(sent_messages) == 1
-    assert sent_messages[0]["payload"]["content"] == "worker lost"
-
-
-@pytest.mark.anyio
-async def test_reconcile_background_task_failure_returns_count_on_successful_reconcile(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from codex_autorunner.integrations.discord.service_lifecycle import (
-        reconcile_background_task_failure,
-    )
-
-    sent_messages: list[dict[str, Any]] = []
-
-    async def _fake_reconcile(service, **kwargs):  # type: ignore[no-untyped-def]
-        return 2
-
-    def _fake_log_event(logger, level, event_name, **kwargs):  # type: ignore[no-untyped-def]
-        pass
-
-    import codex_autorunner.integrations.discord.progress_leases as _progress_leases
-    import codex_autorunner.integrations.discord.service_lifecycle as _lifecycle_mod
-
-    monkeypatch.setattr(
-        _progress_leases, "reconcile_discord_turn_progress_leases", _fake_reconcile
-    )
-    monkeypatch.setattr(_lifecycle_mod, "log_event", _fake_log_event)
-
-    class _FakeService:
-        def __init__(self) -> None:
-            self._logger = logging.getLogger("test")
-
-        async def _send_channel_message_safe(
-            self, channel_id: str, payload: dict[str, Any]
-        ) -> None:
-            sent_messages.append({"channel_id": channel_id, "payload": payload})
-
-    task_context = {
-        "failure_note": "worker lost",
-        "channel_id": "channel-1",
-    }
-
-    result = await reconcile_background_task_failure(_FakeService(), task_context)
-
-    assert result == 2
-    assert sent_messages == []
+    assert result == reconcile_return
+    assert len(sent_messages) == len(expected_messages)
+    for actual, expected in zip(sent_messages, expected_messages):
+        for key, val in expected.items():
+            assert actual[key] == val
+    if (
+        reconcile_return == 0
+        and not allow_fallback
+        and "managed_thread_id" in task_context
+    ):
+        reconcile_failures = [
+            e
+            for e in log_events
+            if e["event_name"] == "discord.background_task.reconcile_failed"
+        ]
+        assert len(reconcile_failures) == 1
+        assert reconcile_failures[0]["channel_id"] == task_context["channel_id"]
+        assert (
+            reconcile_failures[0]["managed_thread_id"]
+            == task_context["managed_thread_id"]
+        )
+        assert reconcile_failures[0]["level"] == logging.ERROR

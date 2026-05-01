@@ -3,7 +3,6 @@ import json
 import logging
 import os
 import re
-from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -30,12 +29,18 @@ from ....integrations.telegram.state import (
     topic_key,
 )
 from ....voice import VoiceConfig
-
-_LOG_PREFIX_PATTERN = re.compile(
-    r"^(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}) "
-    r"\[(?P<level>[A-Z]+)\] "
-    r"(?P<message>.*)$"
+from ._log_trace_common import (
+    LogTraceMatch,
+    collect_log_paths,
+    extract_conversation_id,
+    format_match_line,
+    is_error_candidate,
+    parse_log_payload,
+    read_log_lines,
+    sanitize_payload_value,
+    split_log_line,
 )
+
 _CONVERSATION_IN_TEXT_PATTERN = re.compile(
     r"\bconversation\s+(?P<conversation_id>-?\d+:(?:\d+|root)(?::[^\s\)]+)?)",
     re.IGNORECASE,
@@ -43,14 +48,6 @@ _CONVERSATION_IN_TEXT_PATTERN = re.compile(
 _TOPIC_KEY_IN_TEXT_PATTERN = re.compile(
     r"(?P<conversation_id>-?\d+:(?:\d+|root)(?::[^\s\)\"',]+)?)",
     re.IGNORECASE,
-)
-_ERROR_EVENT_HINTS = (
-    ".failed",
-    ".error",
-    ".timeout",
-    ".disconnected",
-    ".exception",
-    "turn_error",
 )
 _SEARCH_LOG_GLOBS = (
     "codex-autorunner.log*",
@@ -73,36 +70,8 @@ class _ConversationTarget:
     thread_id: Optional[int]
 
 
-@dataclass(frozen=True)
-class _LogTraceMatch:
-    path: Path
-    line_no: int
-    sequence: int
-    timestamp: Optional[str]
-    level: Optional[str]
-    event: Optional[str]
-    payload: Optional[dict[str, Any]]
-    raw_line: str
-    is_error_candidate: bool
-    context: tuple[str, ...]
-
-
-def _extract_conversation_id(query: str) -> str:
-    cleaned = query.strip()
-    if not cleaned:
-        raise ValueError("conversation query is empty")
-    match = _CONVERSATION_IN_TEXT_PATTERN.search(cleaned)
-    if match:
-        return match.group("conversation_id").strip()
-    lowered = cleaned.lower()
-    if lowered.startswith("conversation "):
-        cleaned = cleaned[len("conversation ") :].strip()
-    cleaned = cleaned.strip("()[]{}.,;\"' ")
-    return cleaned
-
-
 def _parse_conversation_target(query: str) -> _ConversationTarget:
-    conversation_id = _extract_conversation_id(query)
+    conversation_id = extract_conversation_id(query, _CONVERSATION_IN_TEXT_PATTERN)
     chat_id: int
     thread_id: Optional[int]
     try:
@@ -117,28 +86,6 @@ def _parse_conversation_target(query: str) -> _ConversationTarget:
         chat_id=chat_id,
         thread_id=thread_id,
     )
-
-
-def _split_log_line(raw_line: str) -> tuple[Optional[str], Optional[str], str]:
-    match = _LOG_PREFIX_PATTERN.match(raw_line)
-    if not match:
-        return None, None, raw_line
-    return (
-        match.group("timestamp"),
-        match.group("level"),
-        match.group("message"),
-    )
-
-
-def _parse_log_payload(message: str) -> Optional[dict[str, Any]]:
-    stripped = message.strip()
-    if not stripped.startswith("{"):
-        return None
-    try:
-        payload = json.loads(stripped)
-    except json.JSONDecodeError:
-        return None
-    return payload if isinstance(payload, dict) else None
 
 
 def _payload_matches_conversation(
@@ -228,77 +175,10 @@ def _raw_line_mentions_conversation(raw_line: str, target: _ConversationTarget) 
     return False
 
 
-def _match_chronological_key(match: _LogTraceMatch) -> tuple[int, str, int]:
-    # Use parsed timestamps first; preserve original sequence for stable ties.
+def _match_chronological_key(match: LogTraceMatch) -> tuple[int, str, int]:
     if isinstance(match.timestamp, str) and match.timestamp:
         return (0, match.timestamp, match.sequence)
     return (1, "", match.sequence)
-
-
-def _is_error_candidate(
-    *,
-    level: Optional[str],
-    event: Optional[str],
-    payload: Optional[dict[str, Any]],
-    message: str,
-) -> bool:
-    normalized_level = (level or "").upper()
-    if normalized_level in {"ERROR", "CRITICAL"}:
-        return True
-    normalized_event = (event or "").lower()
-    if normalized_event and any(
-        hint in normalized_event for hint in _ERROR_EVENT_HINTS
-    ):
-        return True
-    if isinstance(payload, dict) and (
-        isinstance(payload.get("error"), str)
-        or isinstance(payload.get("error_type"), str)
-    ):
-        return True
-    lowered_message = message.lower()
-    return "traceback" in lowered_message or "exception" in lowered_message
-
-
-def _collect_log_paths(
-    roots: list[Path], log_path: Path, backup_count: int
-) -> list[Path]:
-    candidates: set[Path] = set()
-    if log_path.exists():
-        candidates.add(log_path)
-
-    if backup_count > 0:
-        for idx in range(1, backup_count + 1):
-            rotated = log_path.with_name(f"{log_path.name}.{idx}")
-            if rotated.exists():
-                candidates.add(rotated)
-
-    for root in roots:
-        state_root = root / ".codex-autorunner"
-        for pattern in _SEARCH_LOG_GLOBS:
-            for path in state_root.glob(pattern):
-                if path.is_file():
-                    candidates.add(path)
-
-    return sorted(candidates, key=lambda item: str(item))
-
-
-def _read_log_lines(path: Path, scan_lines: int) -> list[tuple[int, str]]:
-    with path.open("r", encoding="utf-8", errors="replace") as handle:
-        if scan_lines <= 0:
-            return [
-                (idx, line.rstrip("\n")) for idx, line in enumerate(handle, start=1)
-            ]
-        tail: deque[tuple[int, str]] = deque(maxlen=scan_lines)
-        for idx, line in enumerate(handle, start=1):
-            tail.append((idx, line.rstrip("\n")))
-    return list(tail)
-
-
-def _format_match_line(match: _LogTraceMatch) -> str:
-    timestamp = match.timestamp or "unknown-time"
-    level = (match.level or "INFO").upper()
-    event = f" event={match.event}" if match.event else ""
-    return f"{timestamp} {level} {match.path}:{match.line_no}{event}"
 
 
 def _sanitize_trace_text(text: str) -> str:
@@ -308,19 +188,6 @@ def _sanitize_trace_text(text: str) -> str:
         "[TELEGRAM_BOT_TOKEN_REDACTED]", redacted
     )
     return redacted
-
-
-def _sanitize_payload_value(value: Any) -> Any:
-    if isinstance(value, str):
-        return _sanitize_trace_text(value)
-    if isinstance(value, list):
-        return [_sanitize_payload_value(item) for item in value]
-    if isinstance(value, dict):
-        return {
-            str(key): _sanitize_payload_value(inner_value)
-            for key, inner_value in value.items()
-        }
-    return value
 
 
 def register_telegram_commands(
@@ -549,10 +416,11 @@ def register_telegram_commands(
             },
             key=lambda item: str(item),
         )
-        log_paths = _collect_log_paths(
+        log_paths = collect_log_paths(
             search_roots,
             config.log.path,
             backup_count=max(int(config.log.backup_count), 0),
+            search_globs=_SEARCH_LOG_GLOBS,
         )
         if not log_paths:
             searched = ", ".join(
@@ -560,24 +428,24 @@ def register_telegram_commands(
             )
             raise_exit(f"No log files found under: {searched}")
 
-        matches: list[_LogTraceMatch] = []
+        matches: list[LogTraceMatch] = []
         match_sequence = 0
         total_scanned_lines = 0
         read_errors: list[str] = []
         for log_path in log_paths:
             try:
-                indexed_lines = _read_log_lines(log_path, scan_lines)
+                indexed_lines = read_log_lines(log_path, scan_lines)
             except OSError as exc:
                 read_errors.append(f"{log_path}: {exc}")
                 continue
             total_scanned_lines += len(indexed_lines)
             for index, (line_no, raw_line) in enumerate(indexed_lines):
-                timestamp, level, message = _split_log_line(raw_line)
-                payload = _parse_log_payload(message)
+                timestamp, level, message = split_log_line(raw_line)
+                payload = parse_log_payload(message)
                 if not _line_matches_conversation(raw_line, payload, target):
                     continue
                 safe_payload = (
-                    _sanitize_payload_value(payload)
+                    sanitize_payload_value(payload, _sanitize_trace_text)
                     if isinstance(payload, dict)
                     else None
                 )
@@ -592,7 +460,7 @@ def register_telegram_commands(
                     for context_line_no, context_line in indexed_lines[start:end]
                 )
                 matches.append(
-                    _LogTraceMatch(
+                    LogTraceMatch(
                         path=log_path,
                         line_no=line_no,
                         sequence=match_sequence,
@@ -603,7 +471,7 @@ def register_telegram_commands(
                             safe_payload if isinstance(safe_payload, dict) else None
                         ),
                         raw_line=_sanitize_trace_text(raw_line),
-                        is_error_candidate=_is_error_candidate(
+                        is_error_candidate=is_error_candidate(
                             level=level,
                             event=event,
                             payload=payload,
@@ -627,7 +495,7 @@ def register_telegram_commands(
 
         if json_output:
 
-            def _serialize_match(match: _LogTraceMatch) -> dict[str, Any]:
+            def _serialize_match(match: LogTraceMatch) -> dict[str, Any]:
                 return {
                     "path": str(match.path),
                     "line_no": match.line_no,
@@ -687,7 +555,7 @@ def register_telegram_commands(
         if recent_error_matches:
             typer.echo("Error candidates:")
             for match in recent_error_matches:
-                typer.echo(f"- {_format_match_line(match)}")
+                typer.echo(f"- {format_match_line(match)}")
                 if match.payload and isinstance(match.payload.get("reason"), str):
                     typer.echo(f"  reason={match.payload['reason']}")
                 if match.payload and isinstance(match.payload.get("error"), str):
@@ -699,4 +567,4 @@ def register_telegram_commands(
 
         typer.echo("Recent matched lines:")
         for match in recent_matches:
-            typer.echo(f"- {_format_match_line(match)}")
+            typer.echo(f"- {format_match_line(match)}")

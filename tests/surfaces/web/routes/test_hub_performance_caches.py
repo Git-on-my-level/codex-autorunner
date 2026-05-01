@@ -12,8 +12,9 @@ from typing import Any, Optional
 import codex_autorunner.core.chat_bindings as chat_bindings_module
 import codex_autorunner.core.hub_projection_store as projection_store_module
 from codex_autorunner.core.flows.store import FlowStore
-from codex_autorunner.core.hub import LockStatus, RepoSnapshot, RepoStatus
+from codex_autorunner.core.hub import RepoSnapshot
 from codex_autorunner.core.hub_projection_store import HubProjectionStore
+from codex_autorunner.core.hub_topology import LockStatus, RepoStatus
 from codex_autorunner.surfaces.web.routes.hub_repo_routes import (
     channels as hub_channels_module,
 )

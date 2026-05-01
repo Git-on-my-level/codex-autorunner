@@ -1,24 +1,13 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
-from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.server import create_hub_app
-from tests.conftest import write_test_config
-
-
-def _enable_pma(hub_root: Path, *, max_text_chars: int | None = None) -> None:
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    cfg.setdefault("pma", {})
-    cfg["pma"]["enabled"] = True
-    if max_text_chars is not None:
-        cfg["pma"]["max_text_chars"] = max_text_chars
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+from tests.pma_support import _enable_pma
 
 
 @pytest.mark.slow

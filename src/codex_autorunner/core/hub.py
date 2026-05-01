@@ -29,13 +29,10 @@ from .hub_topology import (
     AgentWorkspaceSnapshot,
     HubState,
     HubTopologyRepository,
-    LockStatus,  # noqa: F401  re-exported for consumers
     RepoSnapshot,
-    RepoStatus,  # noqa: F401  re-exported for consumers
     RepoTopologyRecord,
     load_hub_state,
     normalize_pinned_parent_repo_ids,
-    read_lock_status,  # noqa: F401  re-exported for consumers
     refresh_pma_threads_artifact,
     save_hub_state,
 )
@@ -53,7 +50,7 @@ from .ports.backend_orchestrator import (
 )
 from .runner_controller import ProcessRunnerController, SpawnRunnerFn
 from .runtime import RuntimeContext
-from .state import RunnerState, now_iso  # noqa: F401
+from .state import now_iso
 from .state_roots import resolve_hub_agent_workspace_root
 from .types import AppServerSupervisorFactory, BackendFactory
 

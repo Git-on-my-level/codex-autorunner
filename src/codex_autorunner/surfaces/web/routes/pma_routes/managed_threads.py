@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, Optional, cast
+from typing import Annotated, Any, Optional, cast
 
 from fastapi import APIRouter, Body, HTTPException, Request
 
@@ -58,10 +58,6 @@ from .managed_thread_route_helpers import (
     serialize_binding_record,
     serialize_managed_thread_turn_summary,
 )
-
-if TYPE_CHECKING:
-    pass
-
 
 _logger = logging.getLogger(__name__)
 
@@ -345,7 +341,7 @@ def build_automation_routes(
             normalized_payload = payload.normalized_payload() if payload else {}
             touched = await call_store_action_with_id(
                 store,
-                ("touch_timer", "refresh_timer", "renew_timer"),
+                ("touch_timer",),
                 normalized_id,
                 payload=normalized_payload,
                 id_aliases=("timer_id", "id"),

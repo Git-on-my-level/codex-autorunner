@@ -123,6 +123,22 @@ def _coerce_int(value: Any) -> int:
     return 0
 
 
+def _normalize_positive_int(value: Any) -> Optional[int]:
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        return None
+    return normalized if normalized > 0 else None
+
+
+def _normalize_non_negative_int(value: Any) -> Optional[int]:
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        return None
+    return normalized if normalized >= 0 else None
+
+
 def _pid_is_running(pid: int) -> bool:
     if pid <= 0:
         return False
@@ -135,6 +151,29 @@ def _pid_is_running(pid: int) -> bool:
     except OSError:
         return False
     return True
+
+
+def _coerce_number(value: Any) -> Optional[float]:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _next_available_ticket_index(existing: list[int]) -> int:
+    if not existing:
+        return 1
+    seen = set(existing)
+    candidate = 1
+    while candidate in seen:
+        candidate += 1
+    return candidate
 
 
 def _iso_now() -> str:

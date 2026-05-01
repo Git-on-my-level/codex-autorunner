@@ -12,12 +12,8 @@ from codex_autorunner.core.force_attestation import (
     FORCE_ATTESTATION_REQUIRED_ERROR,
     FORCE_ATTESTATION_REQUIRED_PHRASE,
 )
-from codex_autorunner.core.hub import (
-    HubSupervisor,
-    LockStatus,
-    RepoSnapshot,
-    RepoStatus,
-)
+from codex_autorunner.core.hub import HubSupervisor, RepoSnapshot
+from codex_autorunner.core.hub_topology import LockStatus, RepoStatus
 from tests.conftest import write_test_config
 
 

@@ -5,7 +5,7 @@ import logging
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, Callable, Optional, cast
+from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -89,32 +89,27 @@ from .managed_threads import (
     build_managed_thread_orchestration_service as _shared_managed_thread_orchestration_service,
 )
 
-if TYPE_CHECKING:
-    from fastapi import Request
-
 logger = logging.getLogger(__name__)
 
 PMA_TURN_IDLE_TIMEOUT_SECONDS = 1800
 _DEFAULT_PMA_TURN_IDLE_TIMEOUT_SECONDS = 1800
 
 
+def _managed_thread_request_for_app(app: Any) -> Any:
+    return SimpleNamespace(app=app)
+
+
 def _build_managed_thread_orchestration_service(
-    request: Request, *, thread_store: Optional[PmaThreadStore] = None
-):
-    _ = thread_store
+    request: Any, *, thread_store: Any = None
+) -> Any:
     return _shared_managed_thread_orchestration_service(request)
 
 
-def _managed_thread_request_for_app(app: Any) -> Request:
-    return cast(Request, SimpleNamespace(app=app))
-
-
 def _build_managed_thread_orchestration_service_for_app(
-    app: Any, *, thread_store: Optional[PmaThreadStore] = None
-):
+    app: Any,
+) -> Any:
     return _build_managed_thread_orchestration_service(
-        _managed_thread_request_for_app(app),
-        thread_store=thread_store,
+        _managed_thread_request_for_app(app)
     )
 
 

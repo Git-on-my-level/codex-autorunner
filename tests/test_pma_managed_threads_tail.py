@@ -11,7 +11,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from codex_autorunner.agents.hermes.harness import HermesHarness
-from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.orchestration.turn_timeline import persist_turn_timeline
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.ports.run_event import OutputDelta
@@ -21,16 +20,10 @@ from codex_autorunner.surfaces.web.routes.pma_routes import tail_stream
 from codex_autorunner.surfaces.web.routes.pma_routes.managed_thread_tail_serializers import (
     _refresh_active_turn_diagnostics,
 )
-from tests.conftest import write_test_config
+from tests.pma_support import _enable_pma
+from tests.pma_support.managed_threads import FakeZeroClawEventSupervisor
 
 pytestmark = pytest.mark.slow
-
-
-def _enable_pma(hub_root: Path) -> None:
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    cfg.setdefault("pma", {})
-    cfg["pma"]["enabled"] = True
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
 
 
 def _seed_managed_thread_with_events(hub_env, app) -> tuple[str, str]:
@@ -1077,28 +1070,18 @@ def test_managed_thread_status_surfaces_zeroclaw_phase_and_last_tool(hub_env) ->
     store.set_thread_backend_id(managed_thread_id, "zeroclaw-session-1")
     store.set_turn_backend_turn_id(managed_turn_id, "zeroclaw-turn-1")
 
-    class FakeZeroClawSupervisor:
-        async def list_turn_events(
-            self, workspace_root: Path, session_id: str, turn_id: str
-        ) -> list[dict[str, str]]:
-            _ = workspace_root, session_id, turn_id
-            return [
-                {
-                    "raw_event": 'event: zeroclaw\ndata: {"message":{"method":"message.delta","params":{"text":"🤔 Thinking..."}}}\n\n',
-                    "published_at": "2026-03-17T01:00:00Z",
-                },
-                {
-                    "raw_event": 'event: zeroclaw\ndata: {"message":{"method":"message.delta","params":{"text":"⏳ web_search"}}}\n\n',
-                    "published_at": "2026-03-17T01:00:05Z",
-                },
-            ]
-
-        async def list_turn_events_by_turn_id(
-            self, turn_id: str
-        ) -> list[dict[str, Any]]:
-            return await self.list_turn_events(Path("."), "zeroclaw-session-1", turn_id)
-
-    app.state.zeroclaw_supervisor = FakeZeroClawSupervisor()
+    app.state.zeroclaw_supervisor = FakeZeroClawEventSupervisor(
+        events=[
+            {
+                "raw_event": 'event: zeroclaw\ndata: {"message":{"method":"message.delta","params":{"text":"🤔 Thinking..."}}}\n\n',
+                "published_at": "2026-03-17T01:00:00Z",
+            },
+            {
+                "raw_event": 'event: zeroclaw\ndata: {"message":{"method":"message.delta","params":{"text":"⏳ web_search"}}}\n\n',
+                "published_at": "2026-03-17T01:00:05Z",
+            },
+        ]
+    )
 
     with TestClient(app) as client:
         status_resp = client.get(f"/hub/pma/threads/{managed_thread_id}/status")
@@ -1139,19 +1122,9 @@ def test_managed_thread_status_degrades_when_zeroclaw_turn_buffer_is_missing(
     store.set_thread_backend_id(managed_thread_id, "zeroclaw-session-1")
     store.set_turn_backend_turn_id(managed_turn_id, "zeroclaw-turn-1")
 
-    class FakeZeroClawSupervisor:
-        async def list_turn_events(
-            self, workspace_root: Path, session_id: str, turn_id: str
-        ) -> list[dict[str, str]]:
-            _ = workspace_root, session_id, turn_id
-            raise RuntimeError("missing in-memory turn buffer")
-
-        async def list_turn_events_by_turn_id(
-            self, turn_id: str
-        ) -> list[dict[str, Any]]:
-            return await self.list_turn_events(Path("."), "zeroclaw-session-1", turn_id)
-
-    app.state.zeroclaw_supervisor = FakeZeroClawSupervisor()
+    app.state.zeroclaw_supervisor = FakeZeroClawEventSupervisor(
+        error=RuntimeError("missing in-memory turn buffer")
+    )
 
     with TestClient(app) as client:
         status_resp = client.get(f"/hub/pma/threads/{managed_thread_id}/status")

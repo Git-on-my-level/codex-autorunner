@@ -186,11 +186,6 @@ class TelegramChatAdapter(ChatAdapter):
         message_id = self._message_id_from_response(response)
         return ChatMessageRef(thread=request.thread, message_id=message_id)
 
-    async def send_file(self, request: SendAttachmentRequest) -> ChatMessageRef:
-        """Back-compat alias for attachment delivery naming."""
-
-        return await self.send_attachment(request)
-
     async def ack_interaction(
         self,
         interaction: ChatInteractionRef,

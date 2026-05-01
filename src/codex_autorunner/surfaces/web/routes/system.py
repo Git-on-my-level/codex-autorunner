@@ -13,7 +13,6 @@ from ....core.orchestration.execution_history_maintenance import (
     collect_execution_history_database_health,
 )
 from ....core.self_describe import collect_describe_data
-from ....core.text_utils import _pid_is_running
 from ....core.update import (
     UpdateInProgressError,
     _format_update_confirmation_warning,
@@ -39,7 +38,6 @@ from ..serializers import build_orchestration_health
 from ..static_assets import missing_static_assets
 from ..static_refresh import refresh_static_assets
 
-_pid_is_running = _pid_is_running
 _system_update_worker = update_core._system_update_worker
 _update_lock_active = update_core._update_lock_active
 _update_lock_path = update_core._update_lock_path
@@ -47,8 +45,8 @@ _update_status_path = update_core._update_status_path
 _normalize_update_backend = update_core._normalize_update_backend
 _resolve_update_backend = update_core._resolve_update_backend
 _required_update_commands = update_core._required_update_commands
-_available_update_target_definitions = update_core._available_update_target_definitions
 _available_update_target_options = update_core._available_update_target_options
+_available_update_target_definitions = update_core._available_update_target_definitions
 _default_update_target = update_core._default_update_target
 _get_update_target_definition = update_core._get_update_target_definition
 shutil = update_core.shutil

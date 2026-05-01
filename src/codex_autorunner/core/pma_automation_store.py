@@ -2090,22 +2090,6 @@ class PmaAutomationStore:
                     return {"status": "ok", "timer": entry.to_dict(), "touched": True}
         return {"status": "ok", "timer_id": target_id, "touched": False}
 
-    def refresh_timer(
-        self,
-        timer_id: str,
-        payload: Optional[dict[str, Any]] = None,
-        **kwargs: Any,
-    ) -> dict[str, Any]:
-        return self.touch_timer(timer_id, payload=payload, **kwargs)
-
-    def renew_timer(
-        self,
-        timer_id: str,
-        payload: Optional[dict[str, Any]] = None,
-        **kwargs: Any,
-    ) -> dict[str, Any]:
-        return self.touch_timer(timer_id, payload=payload, **kwargs)
-
     def dequeue_due_timers(
         self,
         *,
@@ -2181,9 +2165,6 @@ class PmaAutomationStore:
             self._save_structured_unlocked(state, subscriptions, timers, wakeups)
         return created, False
 
-    def enqueue_event(self, **kwargs: Any) -> tuple[PmaAutomationWakeup, bool]:
-        return self.enqueue_wakeup(**kwargs)
-
     def list_wakeups(
         self,
         *,
@@ -2215,9 +2196,6 @@ class PmaAutomationStore:
                 if isinstance((d.get("metadata") or {}).get("dispatch_decision"), dict)
             ]
         return pending[:take]
-
-    def list_pending_events(self, *, limit: int = 100) -> list[dict[str, Any]]:
-        return self.list_pending_wakeups(limit=limit)
 
     def notify_transition(
         self, payload: Optional[dict[str, Any]] = None, **kwargs: Any

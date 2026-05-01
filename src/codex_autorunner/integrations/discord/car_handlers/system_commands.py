@@ -29,24 +29,10 @@ from ..interaction_runtime import (
 )
 from ..rendering import format_discord_message
 from ..update_service import (
-    active_update_session_count,
     build_update_confirmation_components,
     dynamic_update_target_definitions,
     format_update_status_message,
-    mark_notified,
-    send_update_status_notice,
-    update_status_path,
-    update_thread_blocks_restart_warning,
 )
-
-_update_thread_blocks_restart_warning = update_thread_blocks_restart_warning
-_active_update_session_count = active_update_session_count
-_build_update_confirmation_components = build_update_confirmation_components
-_update_status_path = update_status_path
-_format_update_status_message = format_update_status_message
-_dynamic_update_target_definitions = dynamic_update_target_definitions
-_send_update_status_notice = send_update_status_notice
-_mark_update_notified = mark_notified
 
 
 async def handle_car_update(
@@ -62,7 +48,7 @@ async def handle_car_update(
 
     def _build_update_target_components() -> list[dict[str, Any]]:
         try:
-            target_definitions = _dynamic_update_target_definitions(service)
+            target_definitions = dynamic_update_target_definitions(service)
         except Exception as exc:
             log_event(
                 service._logger,
@@ -155,7 +141,7 @@ async def handle_car_update(
         )
         if warning:
             warning_text = format_discord_message(warning)
-            components = _build_update_confirmation_components(
+            components = build_update_confirmation_components(
                 service,
                 update_target=update_target,
             )
@@ -324,7 +310,7 @@ async def handle_car_update_status(
         status = await asyncio.to_thread(discord_update_service._read_update_status)
         if not isinstance(status, dict):
             status = None
-        text = _format_update_status_message(service, status)
+        text = format_update_status_message(service, status)
         await update_runtime_component_message(
             service,
             interaction_id,
@@ -341,7 +327,7 @@ async def handle_car_update_status(
     status = await asyncio.to_thread(discord_update_service._read_update_status)
     if not isinstance(status, dict):
         status = None
-    text = _format_update_status_message(service, status)
+    text = format_update_status_message(service, status)
     await service.send_or_respond_ephemeral(
         interaction_id=interaction_id,
         interaction_token=interaction_token,

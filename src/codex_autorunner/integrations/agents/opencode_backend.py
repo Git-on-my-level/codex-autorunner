@@ -585,9 +585,6 @@ class OpenCodeBackend(AgentBackend):
                 )
             )
 
-        elif payload_type == "toolCallEnd":
-            pass
-
         elif payload_type == "usage":
             usage = payload.get("usage")
             if usage is None and decoded is not None:

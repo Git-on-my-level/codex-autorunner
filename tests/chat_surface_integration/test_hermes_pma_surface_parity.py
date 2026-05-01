@@ -321,7 +321,9 @@ async def _run_discord_case(
     runtime = HermesFixtureRuntime(case.runtime_scenario)
     patch_hermes_runtime(monkeypatch, runtime)
     if case.use_short_runtime_timeout:
-        monkeypatch.setattr(discord_message_turns, "DISCORD_PMA_TIMEOUT_SECONDS", 0.05)
+        monkeypatch.setattr(
+            discord_message_turns, "DISCORD_PMA_IDLE_TIMEOUT_SECONDS", 0.05
+        )
     harness = DiscordSurfaceHarness(
         tmp_path / f"{case.case_id}-discord",
         timeout_seconds=case.harness_timeout_seconds,
@@ -352,7 +354,7 @@ async def _run_telegram_case(
     if case.use_short_runtime_timeout:
         monkeypatch.setattr(
             telegram_execution,
-            "TELEGRAM_PMA_TIMEOUT_SECONDS",
+            "TELEGRAM_PMA_IDLE_TIMEOUT_SECONDS",
             0.05,
         )
     harness = TelegramSurfaceHarness(

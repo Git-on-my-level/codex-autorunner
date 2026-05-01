@@ -62,7 +62,7 @@ from ..state_lifecycle import (
 )
 from ..state_roots import resolve_hub_manifest_path, resolve_repo_flows_db_path
 from .models import FlowRunStatus
-from .store import FlowStore
+from .store import FlowStore, _get_durable_writes
 
 logger = logging.getLogger(__name__)
 
@@ -84,14 +84,6 @@ def flow_run_artifacts_root(repo_root: Path, run_id: str) -> Path:
 
 def flow_run_archive_root(repo_root: Path, run_id: str) -> Path:
     return _run_archive_root(repo_root) / run_id
-
-
-def _get_durable_writes(repo_root: Path) -> bool:
-    """Get durable_writes from repo config, defaulting to False if uninitialized."""
-    try:
-        return load_repo_config(repo_root).durable_writes
-    except ConfigError:
-        return False
 
 
 def _get_run_archive_retention_policy(

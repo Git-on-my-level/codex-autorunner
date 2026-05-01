@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional, cast
 
+from ..config import ConfigError, load_repo_config
 from ..sqlite_utils import (
     DEFAULT_SQLITE_BUSY_TIMEOUT_MS,
     SqliteMigrationStep,
@@ -31,6 +32,15 @@ _logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 3
 UNSET = object()
+
+
+def _get_durable_writes(repo_root: Path) -> bool:
+    try:
+        return load_repo_config(repo_root).durable_writes
+    except ConfigError:
+        return False
+
+
 _REQUIRED_SCHEMA_TABLES = frozenset(
     {"schema_info", "flow_runs", "flow_events", "flow_artifacts"}
 )

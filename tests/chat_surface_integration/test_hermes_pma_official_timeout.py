@@ -27,7 +27,7 @@ async def test_discord_hermes_pma_times_out_for_missing_terminal_and_missing_ret
 ) -> None:
     runtime = HermesFixtureRuntime("official_prompt_hang")
     patch_hermes_runtime(monkeypatch, runtime)
-    monkeypatch.setattr(discord_message_turns, "DISCORD_PMA_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(discord_message_turns, "DISCORD_PMA_IDLE_TIMEOUT_SECONDS", 0.05)
     harness = DiscordSurfaceHarness(tmp_path / "discord")
     await harness.setup(agent="hermes")
     try:
@@ -59,7 +59,7 @@ async def test_discord_hermes_pma_stall_timeout_surfaces_timeout_for_silent_hang
 ) -> None:
     runtime = HermesFixtureRuntime("official_prompt_hang")
     patch_hermes_runtime(monkeypatch, runtime)
-    monkeypatch.setattr(discord_message_turns, "DISCORD_PMA_TIMEOUT_SECONDS", 30.0)
+    monkeypatch.setattr(discord_message_turns, "DISCORD_PMA_IDLE_TIMEOUT_SECONDS", 30.0)
     monkeypatch.setattr(
         discord_message_turns,
         "DISCORD_PMA_STALL_TIMEOUT_SECONDS",
@@ -96,7 +96,7 @@ async def test_discord_hermes_pma_accepts_prompt_return_arriving_just_after_idle
         "_STALL_COMPLETION_GRACE_SECONDS",
         0.5,
     )
-    monkeypatch.setattr(discord_message_turns, "DISCORD_PMA_TIMEOUT_SECONDS", 30.0)
+    monkeypatch.setattr(discord_message_turns, "DISCORD_PMA_IDLE_TIMEOUT_SECONDS", 30.0)
     monkeypatch.setattr(
         discord_message_turns,
         "DISCORD_PMA_STALL_TIMEOUT_SECONDS",
@@ -137,7 +137,7 @@ async def test_discord_hermes_pma_does_not_replay_second_turn_from_persisted_ses
         base_env={"HERMES_HOME": str(tmp_path / "hermes-home")},
     )
     patch_hermes_runtime(monkeypatch, runtime)
-    monkeypatch.setattr(discord_message_turns, "DISCORD_PMA_TIMEOUT_SECONDS", 30.0)
+    monkeypatch.setattr(discord_message_turns, "DISCORD_PMA_IDLE_TIMEOUT_SECONDS", 30.0)
     monkeypatch.setattr(
         discord_message_turns,
         "DISCORD_PMA_STALL_TIMEOUT_SECONDS",
@@ -189,7 +189,7 @@ async def test_discord_hermes_pma_does_not_recover_from_persisted_completion_bef
         "_STALL_RECOVERY_PROBE_INTERVAL_SECONDS",
         0.05,
     )
-    monkeypatch.setattr(discord_message_turns, "DISCORD_PMA_TIMEOUT_SECONDS", 0.2)
+    monkeypatch.setattr(discord_message_turns, "DISCORD_PMA_IDLE_TIMEOUT_SECONDS", 0.2)
     monkeypatch.setattr(
         discord_message_turns,
         "DISCORD_PMA_STALL_TIMEOUT_SECONDS",
@@ -233,7 +233,7 @@ async def test_telegram_hermes_pma_times_out_for_missing_terminal_and_missing_re
 ) -> None:
     runtime = HermesFixtureRuntime("official_prompt_hang")
     patch_hermes_runtime(monkeypatch, runtime)
-    monkeypatch.setattr(telegram_execution, "TELEGRAM_PMA_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(telegram_execution, "TELEGRAM_PMA_IDLE_TIMEOUT_SECONDS", 0.05)
     harness = TelegramSurfaceHarness(tmp_path / "telegram", timeout_seconds=8.0)
     await harness.setup(agent="hermes")
     try:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any, Optional
 
+from ..text_utils import _normalize_text
 from .models import FlowEventType
 
 _MESSAGE_PART_METHODS = frozenset({"message.part.updated", "message.part.delta"})
@@ -28,13 +29,6 @@ def _coerce_dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def _coerce_non_empty_str(value: Any) -> Optional[str]:
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    return text or None
-
-
 def _truncate_head_tail(
     value: Any, limit: int = _APP_SERVER_PREVIEW_CHARS
 ) -> Optional[str]:
@@ -53,7 +47,7 @@ def _truncate_head_tail(
 
 def _first_non_empty_str(*values: Any) -> Optional[str]:
     for value in values:
-        text = _coerce_non_empty_str(value)
+        text = _normalize_text(value)
         if text is not None:
             return text
     return None
@@ -363,7 +357,7 @@ def _compact_app_server_event_data(data: dict[str, Any]) -> dict[str, Any]:
         return dict(data)
 
     message = _coerce_dict(data.get("message"))
-    method = _coerce_non_empty_str(message.get("method"))
+    method = _normalize_text(message.get("method"))
     if method is None or method not in _COMPACT_APP_SERVER_METHODS:
         return dict(data)
 

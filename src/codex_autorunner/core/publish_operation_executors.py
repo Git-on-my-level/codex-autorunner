@@ -33,7 +33,7 @@ from .scm_feedback_bundle import (
     merge_feedback_bundles,
 )
 from .scm_observability import correlation_id_for_operation, correlation_id_from_payload
-from .text_utils import _coerce_int, _normalize_optional_text
+from .text_utils import _coerce_int, _normalize_optional_text, _parse_iso_timestamp
 
 _LOGGER = logging.getLogger(__name__)
 _MANAGED_TURN_START_CONFIRMATION_TIMEOUT_SECONDS = 120
@@ -162,38 +162,25 @@ def _managed_turn_result(
     return result
 
 
-def _parse_iso_datetime(value: Any) -> Optional[datetime]:
-    normalized = _normalize_optional_text(value)
-    if normalized is None:
-        return None
-    try:
-        parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
-
-
 def _managed_turn_dependency_deadline(
     dependency: Mapping[str, Any],
     *,
     enqueue_operation: Optional[PublishOperation],
     turn: Optional[Mapping[str, Any]],
 ) -> datetime:
-    explicit_deadline = _parse_iso_datetime(dependency.get("deadline_at"))
+    explicit_deadline = _parse_iso_timestamp(dependency.get("deadline_at"))
     if explicit_deadline is not None:
         return explicit_deadline
     bases = [
-        _parse_iso_datetime(dependency.get("created_at")),
-        _parse_iso_datetime((turn or {}).get("started_at")),
-        _parse_iso_datetime(
+        _parse_iso_timestamp(dependency.get("created_at")),
+        _parse_iso_timestamp((turn or {}).get("started_at")),
+        _parse_iso_timestamp(
             enqueue_operation.finished_at if enqueue_operation is not None else None
         ),
-        _parse_iso_datetime(
+        _parse_iso_timestamp(
             enqueue_operation.started_at if enqueue_operation is not None else None
         ),
-        _parse_iso_datetime(
+        _parse_iso_timestamp(
             enqueue_operation.created_at if enqueue_operation is not None else None
         ),
     ]
