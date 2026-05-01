@@ -257,4 +257,4 @@ rg -n "telegram\\.(allowlist\\.denied|update\\.received|turn\\.completed|turn\\.
 
 - `docs/ops/telegram-bot-runbook.md`
 - `docs/ops/telegram-debugging.md`
-- `docs/telegram/architecture.md`
+- `docs/telegram/telegram-integration.md`

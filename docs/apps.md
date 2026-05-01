@@ -61,14 +61,16 @@ Installing an app creates a repo-local directory under
     car-app.yaml
     templates/
     scripts/
-  state/                # App-owned state (JSON, JSONL, etc.)
+  state/                # App-owned state (JSON, JSONL, SQLite, etc.)
   artifacts/            # Tool-produced output files
   logs/                 # Execution logs
 ```
 
 App-specific data belongs in app-owned state files under `state/`, **not** in
 core database schemas. CAR core stores only installation metadata, hook/tool
-execution events, and artifact references.
+execution events, and artifact references. Common state patterns include JSONL
+append-only logs, JSON configuration files, and SQLite databases for complex
+app-local queries.
 
 ## Quick start
 
@@ -115,6 +117,18 @@ apps:
       default_ref: main
 ```
 
+App source repo config fields:
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `id` | yes | Unique identifier for this repo |
+| `url` | yes | Git repository URL |
+| `trusted` | no | Whether to allow install/run without approval (default: `false`) |
+| `default_ref` | no | Default Git ref (default: `main`) |
+
+When `apps.enabled` is `false`, all `car apps` commands except basic help and
+config diagnostics refuse app operations with a clear message.
+
 ### 3. List available apps
 
 ```bash
@@ -146,6 +160,21 @@ car apps run blessed.autooptimize status --repo /path/to/repo
 car apps install my-org:apps/my-workflow
 ```
 
+Installation steps:
+
+1. Fetches the app repo through a hub-scoped mirror.
+2. Validates the `car-app.yaml` manifest.
+3. Materializes bundle files under `.codex-autorunner/apps/<id>/bundle/`.
+4. Creates `app.lock.json` with provenance and integrity hashes.
+5. Creates `state/`, `artifacts/`, and `logs/` directories.
+
+Installing the same source reference twice without changes is a no-op (lock
+file, bundle hash, and commit SHA must all match). Installing a different
+version without `--force` produces a clear error; use `--force` to replace
+the existing installation. Every tool run verifies the installed bundle SHA
+against `app.lock.json`; if the bundle has been tampered with or corrupted,
+tool execution is refused until the app is reinstalled.
+
 ### 6. Apply (create an entrypoint ticket)
 
 ```bash
@@ -164,17 +193,44 @@ Or apply a named template declared by the manifest:
 car apps apply my-org.my-workflow --template iteration --set goal="Improve performance"
 ```
 
+Applying an app:
+
+1. Installs the app first if not already installed (when using a source ref).
+2. Creates a ticket from `entrypoint.template` unless `--template <name>` selects
+   a named template from `templates`.
+3. Injects app provenance into ticket frontmatter (`app`, `app_version`,
+   `app_source`, `app_commit`, `app_manifest_sha`, `app_bundle_sha`).
+4. Writes apply inputs to `state/apply-inputs.json`.
+5. Preserves all existing ticket-flow rules.
+
 ### 7. Run a tool
 
 ```bash
 car apps run my-org.my-workflow record-state -- "hello world"
 ```
 
+Tool execution steps:
+
+1. Loads and validates `app.lock.json`.
+2. Verifies bundle integrity against the lock.
+3. Resolves the tool from the manifest.
+4. Builds argv from manifest plus extra args after `--`.
+5. Creates missing runtime directories.
+6. Sets `CAR_*` environment variables.
+7. Runs the process with `shell=False`.
+8. Captures stdout/stderr to bounded log files.
+9. Registers declared outputs as flow artifacts when a flow run is active.
+
 ### 8. List artifacts
 
 ```bash
 car apps artifacts my-org.my-workflow
 ```
+
+Artifacts are produced by tool scripts in the `artifacts/` directory. They are
+registered against flow runs when `CAR_FLOW_RUN_ID` is available, included in
+flow archive retention, eligible for Discord/Telegram notification attachments,
+and listed via `car apps artifacts` and the web/API.
 
 ## Trust model and security
 
@@ -209,6 +265,22 @@ Hooks dispatch manifest-declared tools through the app tool runner. They do not
 execute raw shell snippets. Hook failures are controlled by the `failure` field:
 `warn` (default), `pause`, or `fail`.
 
+### Monitoring hooks
+
+Hooks fire automatically during ticket-flow execution. Observe them through
+flow events:
+
+- `APP_HOOK_STARTED`: Hook execution began.
+- `APP_HOOK_RESULT`: Hook execution finished (with exit code, duration, error).
+
+Hook failure policies:
+
+| Policy | Effect on flow |
+|--------|---------------|
+| `warn` | Log and continue |
+| `pause` | Pause the flow run |
+| `fail` | Fail the flow run |
+
 ## Tool runner environment variables
 
 Every tool invocation receives these environment variables:
@@ -241,6 +313,17 @@ Every tool invocation receives these environment variables:
 7. Avoid interactive input; tools run non-interactively.
 8. Honor `CAR_HOOK_POINT` when present to enable idempotent hook behavior.
 
+## Uninstalling / cleanup
+
+Remove the installed app directory:
+
+```bash
+rm -rf .codex-autorunner/apps/<app-id>/
+```
+
+There is no uninstall command in v1. Removing the directory is sufficient
+because apps do not modify core database schemas.
+
 ## CLI reference
 
 ```bash
@@ -271,6 +354,36 @@ app-owned state directory:
 ```bash
 car apps install blessed:apps/autooptimize --repo /path/to/repo --force
 ```
+
+## Troubleshooting
+
+### "Installed app bundle does not match app.lock.json"
+
+The installed bundle has been modified or corrupted. Reinstall:
+
+```bash
+car apps install my-org:apps/my-workflow --force
+```
+
+### "App already installed" conflict
+
+A different version is installed. Reinstall with `--force` or use the installed
+app id directly.
+
+### "apps.enabled is false"
+
+Enable apps in your hub configuration:
+
+```yaml
+apps:
+  enabled: true
+```
+
+### Hooks not firing
+
+- Check that the app is installed and trusted.
+- Verify the `when` selector matches the ticket frontmatter or flow status.
+- Check tool logs under `.codex-autorunner/apps/<id>/logs/`.
 
 ## Example fixture
 

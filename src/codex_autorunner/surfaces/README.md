@@ -16,37 +16,6 @@ This package contains surface-specific code for codex-autorunner. Surfaces are r
 
 ## Architecture
 
-Surfaces are the outermost layer in the architecture map:
+Surfaces are Layer 3 (outermost). For the full layer definitions, dependency rules, and enforcement, see `docs/ARCHITECTURE_BOUNDARIES.md`.
 
-```
-[ Surfaces ] → [ Adapters ] → [ Control Plane ] → [ Engine ]
-```
-
-**Responsibilities:**
-- Render state
-- Collect inputs
-- Support reconnects
-- Provide ergonomics (logs, terminal, dashboards)
-
-**Non-responsibilities:**
-- Do not become state owners; never be the only place truth lives
-
-## Allowed Dependencies
-
-Surfaces MAY import from:
-- `core.*` (engine and control-plane primitives)
-- `integrations.*` (adapters and backend orchestration)
-- Other surface modules
-
-Surfaces MUST NOT import from:
-- External vendor SDK assumptions should be isolated to integrations
-
-## One-way Dependency Rule
-
-Dependencies must flow in one direction:
-
-```
-Surfaces → Adapters → Control Plane → Engine
-```
-
-Never reverse dependencies (e.g., core importing from surfaces).
+Allowed dependencies: Surfaces may import from `core.*`, `integrations.*`, and other surface modules. Vendor SDK assumptions stay in integrations.
