@@ -159,38 +159,6 @@ def _is_single_regular_file(stat_result: os.stat_result) -> bool:
     return stat.S_ISREG(stat_result.st_mode) and stat_result.st_nlink == 1
 
 
-def _target_path(repo_root: Path, box: str, filename: str) -> Path:
-    """Return a resolved path within the FileBox, rejecting traversal attempts."""
-
-    safe_name = sanitize_filename(filename)
-    _ensure_filebox_ancestors(repo_root)
-    target_dir = _box_dir(repo_root, box)
-    if target_dir.is_symlink():
-        raise ValueError("Invalid filebox")
-    target_dir.mkdir(parents=True, exist_ok=True)
-
-    root = target_dir.resolve()
-    candidate = (root / safe_name).resolve()
-    try:
-        candidate.relative_to(root)
-    except ValueError as exc:
-        raise ValueError("Invalid filename") from exc
-    if candidate.parent != root:
-        # Disallow sneaky path tricks that resolve inside nested folders.
-        raise ValueError("Invalid filename")
-    return candidate
-
-
-def _unresolved_target_path(repo_root: Path, box: str, filename: str) -> Path:
-    safe_name = sanitize_filename(filename)
-    _ensure_filebox_ancestors(repo_root)
-    target_dir = _box_dir(repo_root, box)
-    if target_dir.is_symlink():
-        raise ValueError("Invalid filebox")
-    target_dir.mkdir(parents=True, exist_ok=True)
-    return target_dir.resolve() / safe_name
-
-
 def _existing_regular_entry(repo_root: Path, box: str, filename: str) -> Path | None:
     safe_name = sanitize_filename(filename)
     _ensure_filebox_ancestors(repo_root)
