@@ -46,7 +46,7 @@ set -euo pipefail
 #                          SIGKILL (default: 10). Hub/chat can hold DB handles briefly; 5s was tight.
 #   KEEP_OLD_VENVS         how many old next-* venvs to keep (default: 3)
 #   NVM_BIN                Node bin path to prepend (default: ~/.nvm/versions/node/v22.12.0/bin)
-#   LOCAL_BIN              Local bin path to prepend (default: ~/.local/bin)
+#   LOCAL_BIN              Local bin path for the `car` wrapper and PATH bootstrap (default: ~/.local/bin)
 #   PY39_BIN               Python bin path to prepend (default: auto-detected from active Python)
 #   OPENCODE_BIN           OpenCode bin path to prepend (default: ~/.opencode/bin)
 
@@ -639,7 +639,7 @@ if [[ ! -d "${PIPX_VENV}" ]]; then
   fi
 fi
 
-for cmd in git launchctl curl pipx; do
+for cmd in git launchctl curl; do
   if ! command -v "${cmd}" >/dev/null 2>&1; then
     fail "Missing required command: ${cmd}."
   fi
@@ -1970,13 +1970,11 @@ if [[ "${health_ok}" == "true" ]]; then
   if [[ -n "${discord_health_reason}" ]]; then
     status_msg+=" ${discord_health_reason}"
   fi
-  echo "Updating global car CLI..."
-  if ! pipx install --force "${PACKAGE_INSTALL_SPEC}"; then
+  echo "Updating global car CLI wrapper..."
+  if ! CURRENT_VENV_LINK="${CURRENT_VENV_LINK}" LOCAL_BIN="${LOCAL_BIN}" \
+    bash "${PACKAGE_SRC}/scripts/install-car-cli-wrapper.sh"; then
     _warn_post_cutover \
-      "Global pipx install failed after cutover; keeping the healthy staged venv active and skipping rollback."
-  elif ! _ensure_playwright_chromium "${PIPX_VENV}/bin/python"; then
-    _warn_post_cutover \
-      "Playwright Chromium install for the global pipx venv failed after cutover; the staged service venv remains active."
+      "Global car CLI wrapper update failed after cutover; keeping the healthy staged venv active and skipping rollback."
   fi
   ensure_login_shell_path "${LOCAL_BIN}"
 else
