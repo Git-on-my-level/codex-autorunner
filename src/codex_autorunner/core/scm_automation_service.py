@@ -388,6 +388,39 @@ def _ci_failed_head_sha_from_payload(
     return _normalize_text(bundle.get("ci_head_sha"))
 
 
+def _ci_head_already_has_reaction(
+    reaction_state_store: ScmReactionStateTracker,
+    *,
+    binding_id: str,
+    head_sha: str,
+    fingerprint: str,
+) -> bool:
+    list_reaction_states = getattr(reaction_state_store, "list_reaction_states", None)
+    if not callable(list_reaction_states):
+        return False
+    try:
+        states = list_reaction_states(
+            binding_id=binding_id,
+            reaction_kind="ci_failed",
+            limit=200,
+        )
+    except Exception:
+        _LOGGER.debug(
+            "Unable to list SCM reaction state for CI head suppression",
+            exc_info=True,
+        )
+        return False
+    for state in states:
+        if _normalize_text(getattr(state, "fingerprint", None)) == fingerprint:
+            continue
+        metadata = getattr(state, "metadata", None)
+        if not isinstance(metadata, Mapping):
+            continue
+        if _normalize_text(metadata.get("ci_head_sha")) == head_sha:
+            return True
+    return False
+
+
 def _merged_feedback_publish_payload(
     base_payload: Mapping[str, Any],
     incoming_payload: Mapping[str, Any],
@@ -989,8 +1022,6 @@ class ScmAutomationService:
                 ),
                 tracking=tracking,
             )
-            if tracking:
-                payload["scm_reaction"] = tracking
             operation: PublishOperation
             deduped = False
             if (
@@ -999,6 +1030,18 @@ class ScmAutomationService:
                 and intent.operation_kind == "enqueue_managed_turn"
             ):
                 head_sha = _ci_failed_head_sha_from_payload(payload)
+                if tracking and head_sha is not None:
+                    tracking["ci_head_sha"] = head_sha
+                    payload["scm_reaction"] = tracking
+            else:
+                head_sha = None
+            if tracking and "scm_reaction" not in payload:
+                payload["scm_reaction"] = tracking
+            if (
+                binding is not None
+                and intent.reaction_kind == "ci_failed"
+                and intent.operation_kind == "enqueue_managed_turn"
+            ):
                 if head_sha is not None:
                     existing_ci_batch = self._find_pending_ci_failed_batch_operation(
                         binding=binding,
@@ -1022,6 +1065,28 @@ class ScmAutomationService:
                         )
                         deduped = True
                     else:
+                        if (
+                            binding_id is not None
+                            and fingerprint is not None
+                            and rsk is not None
+                            and _ci_head_already_has_reaction(
+                                self._reaction_state_store,
+                                binding_id=binding_id,
+                                head_sha=head_sha,
+                                fingerprint=fingerprint,
+                            )
+                        ):
+                            self._reaction_state_store.mark_reaction_suppressed(
+                                binding_id=binding_id,
+                                reaction_kind=rsk,
+                                fingerprint=fingerprint,
+                                event_id=intent.event_id or event.event_id,
+                                metadata={
+                                    **tracking,
+                                    "suppression_reason": "ci_head_already_queued",
+                                },
+                            )
+                            continue
                         next_attempt_at = self._ci_failed_enqueue_next_attempt_at(
                             event=event,
                             bundle=extract_feedback_bundle(payload) or {},

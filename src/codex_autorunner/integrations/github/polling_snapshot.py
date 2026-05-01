@@ -246,7 +246,7 @@ def build_snapshot(
             "status": status,
             "conclusion": conclusion,
             "details_url": _normalize_text(check.get("details_url")),
-            "head_sha": head_sha,
+            "head_sha": _normalize_text(check.get("head_sha")) or head_sha,
         }
         failed_checks[_check_key(payload)] = {
             key: value for key, value in payload.items() if value is not None
