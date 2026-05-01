@@ -72,7 +72,36 @@ execution events, and artifact references.
 
 ## Quick start
 
-### 1. Configure an app source repo
+### 1. Use the default blessed app repo
+
+Fresh hub configs enable apps and point the `blessed` app repo id at the
+blessed CAR app catalog:
+
+```yaml
+apps:
+  enabled: true
+  repos:
+    - id: blessed
+      url: https://github.com/Git-on-my-level/blessed-car-apps
+      trusted: true
+      default_ref: main
+```
+
+The template catalog remains separate:
+
+```yaml
+templates:
+  repos:
+    - id: blessed
+      url: https://github.com/Git-on-my-level/car-ticket-templates
+      trusted: true
+      default_ref: main
+```
+
+This split is intentional. Template repos contain static Markdown. App repos
+can contain executable tools and hooks.
+
+### 2. Add an organization app source repo
 
 Add an `apps` section to your hub configuration (`codex-autorunner.yml`):
 
@@ -86,19 +115,38 @@ apps:
       default_ref: main
 ```
 
-### 2. List available apps
+### 3. List available apps
 
 ```bash
 car apps list
 ```
 
-### 3. Install an app
+### 4. Use AutoOptimize
+
+When a user asks PMA or a CLI operator to "use the AutoOptimize CAR app", the
+default path is:
+
+```bash
+car apps list --repo /path/to/repo
+car apps show blessed:apps/autooptimize --repo /path/to/repo
+car apps install blessed:apps/autooptimize --repo /path/to/repo
+car apps apply blessed.autooptimize --repo /path/to/repo --set goal="Improve performance"
+```
+
+After installation, PMA can inspect tools and run the app-owned commands:
+
+```bash
+car apps tools blessed.autooptimize --repo /path/to/repo
+car apps run blessed.autooptimize status --repo /path/to/repo
+```
+
+### 5. Install another app
 
 ```bash
 car apps install my-org:apps/my-workflow
 ```
 
-### 4. Apply (create an entrypoint ticket)
+### 6. Apply (create an entrypoint ticket)
 
 ```bash
 car apps apply my-org:apps/my-workflow --set goal="Improve performance"
@@ -116,13 +164,13 @@ Or apply a named template declared by the manifest:
 car apps apply my-org.my-workflow --template iteration --set goal="Improve performance"
 ```
 
-### 5. Run a tool
+### 7. Run a tool
 
 ```bash
 car apps run my-org.my-workflow record-state -- "hello world"
 ```
 
-### 6. List artifacts
+### 8. List artifacts
 
 ```bash
 car apps artifacts my-org.my-workflow
@@ -132,9 +180,10 @@ car apps artifacts my-org.my-workflow
 
 - **Trusted repos** may be installed and run without additional approval, but
   provenance is always recorded in `app.lock.json`.
-- **Untrusted repos** may be listed and shown, but `install` and `run` require
-  explicit approval. Hooks for untrusted apps are disabled until the app is
-  explicitly approved.
+- **Untrusted repos** may be listed, shown, and installed so operators can
+  inspect the locked bundle and provenance. Tool and hook execution is refused
+  for untrusted installed apps. Reinstall from a trusted app repo before
+  running tools.
 - No app tool may run from a source ref that has not been installed and locked.
 - No hook may run a tool when the installed bundle hash differs from
   `app.lock.json`.
@@ -206,8 +255,22 @@ car apps artifacts <app-id> [--repo .] [--run-id RUN_ID] [--json]
 ```
 
 App references use the format `REPO_ID:APP_PATH[@REF]`. For example,
-`blessed:apps/autoresearch@main` means fetch the app bundle directory
-`apps/autoresearch` from app repo `blessed` at the `main` ref.
+`blessed:apps/autooptimize@main` means fetch the app bundle directory
+`apps/autooptimize` from app repo `blessed` at the `main` ref.
+
+## Migrating AutoOptimize installs
+
+Older development installs of `blessed.autooptimize` may have provenance from
+the CAR core repository path. The app id stays `blessed.autooptimize`, but the
+source now becomes `blessed:apps/autooptimize@main` from the external blessed
+app repo.
+
+Use a force reinstall to replace the locked bundle while preserving the
+app-owned state directory:
+
+```bash
+car apps install blessed:apps/autooptimize --repo /path/to/repo --force
+```
 
 ## Example fixture
 

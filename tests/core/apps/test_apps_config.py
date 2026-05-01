@@ -5,7 +5,12 @@ from pathlib import Path
 import pytest
 
 from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
-from codex_autorunner.core.config import ConfigError, load_hub_config, load_repo_config
+from codex_autorunner.core.config import (
+    DEFAULT_HUB_CONFIG,
+    ConfigError,
+    load_hub_config,
+    load_repo_config,
+)
 from codex_autorunner.core.config_parsers import _parse_apps_config
 
 
@@ -85,5 +90,20 @@ def test_default_loaded_config_exposes_apps_shape(tmp_path: Path) -> None:
     assert hub_config.apps.enabled is True
     assert hub_config.apps.repos
     assert hub_config.apps.repos[0].id == "blessed"
+    assert hub_config.apps.repos[0].url == (
+        "https://github.com/Git-on-my-level/blessed-car-apps"
+    )
     assert repo_config.apps.enabled is True
     assert repo_config.apps.repos == hub_config.apps.repos
+
+
+def test_default_hub_config_keeps_template_and_app_catalogs_separate() -> None:
+    assert DEFAULT_HUB_CONFIG["templates"]["repos"][0]["id"] == "blessed"
+    assert DEFAULT_HUB_CONFIG["templates"]["repos"][0]["url"] == (
+        "https://github.com/Git-on-my-level/car-ticket-templates"
+    )
+
+    assert DEFAULT_HUB_CONFIG["apps"]["repos"][0]["id"] == "blessed"
+    assert DEFAULT_HUB_CONFIG["apps"]["repos"][0]["url"] == (
+        "https://github.com/Git-on-my-level/blessed-car-apps"
+    )

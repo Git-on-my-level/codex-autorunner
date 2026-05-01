@@ -4,7 +4,33 @@ Operations guide for installing, configuring, and managing CAR Apps.
 
 ## Enabling apps
 
-Add an `apps` section to your hub configuration (`codex-autorunner.yml`):
+Fresh hub configs enable apps and point the `blessed` app repo id at the
+blessed CAR app catalog:
+
+```yaml
+apps:
+  enabled: true
+  repos:
+    - id: blessed
+      url: https://github.com/Git-on-my-level/blessed-car-apps
+      trusted: true
+      default_ref: main
+```
+
+Template repos stay separate and continue to use the static Markdown template
+catalog:
+
+```yaml
+templates:
+  repos:
+    - id: blessed
+      url: https://github.com/Git-on-my-level/car-ticket-templates
+      trusted: true
+      default_ref: main
+```
+
+For organization-specific app catalogs, add or override an `apps` section in
+your hub configuration (`codex-autorunner.yml`):
 
 ```yaml
 apps:
@@ -36,6 +62,13 @@ templates.
 | `default_ref` | no | Default Git ref (default: `main`) |
 
 ## Installing apps
+
+The default blessed AutoOptimize app installs from the external blessed app
+catalog:
+
+```bash
+car apps install blessed:apps/autooptimize --repo /path/to/repo
+```
 
 ```bash
 # Install from a source reference
@@ -70,6 +103,16 @@ the bundle has been tampered with or corrupted, tool execution is refused until
 the app is reinstalled.
 
 ## Applying apps
+
+For PMA or CLI operators, "use the AutoOptimize CAR app" means list/show if
+needed, install the blessed app, then apply the installed app id:
+
+```bash
+car apps list --repo /path/to/repo
+car apps show blessed:apps/autooptimize --repo /path/to/repo
+car apps install blessed:apps/autooptimize --repo /path/to/repo
+car apps apply blessed.autooptimize --repo /path/to/repo --set goal="Improve performance"
+```
 
 ```bash
 # Apply with inputs
@@ -167,11 +210,24 @@ own state format and lifecycle.
 | Scenario | Behavior |
 |----------|----------|
 | Trusted repo, install | Allowed, provenance recorded |
-| Untrusted repo, install | Requires explicit approval |
-| Untrusted app, hooks | Disabled until explicitly approved |
+| Untrusted repo, install | Allowed for inspection, provenance recorded as untrusted |
+| Untrusted app, tools/hooks | Refused until reinstalled from a trusted app repo |
 | Bundle hash mismatch | Tool execution refused |
 | Manifest path escape | Rejected at install and run time |
 | `shell=True` | Never used |
+
+## Migrating AutoOptimize installs
+
+Older development installs of `blessed.autooptimize` may have been locked from
+the CAR core repo path. The external blessed app repo keeps the app id stable
+but changes source provenance to `blessed:apps/autooptimize@main`.
+
+Use `--force` to replace the lock and bundle while preserving app-owned state,
+artifacts, and logs:
+
+```bash
+car apps install blessed:apps/autooptimize --repo /path/to/repo --force
+```
 
 ## Uninstalling / cleanup
 

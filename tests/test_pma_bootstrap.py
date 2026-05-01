@@ -71,6 +71,16 @@ def test_pma_files_created_on_hub_init(tmp_path: Path) -> None:
     assert "car templates apply <id> --repo <path>" in about_content
     assert "--path <hub_root>" in about_content
     assert "https://github.com/Git-on-my-level/car-ticket-templates" in about_content
+    assert "## CAR apps" in about_content
+    assert "car apps show blessed:apps/autooptimize --repo <path>" in about_content
+    assert "car apps install blessed:apps/autooptimize --repo <path>" in about_content
+    assert "car apps apply blessed.autooptimize --repo <path>" in about_content
+    assert "provenance conflict from the old in-repo" in about_content
+    assert (
+        "car apps install blessed:apps/autooptimize --repo <path> --force"
+        in about_content
+    )
+    assert "https://github.com/Git-on-my-level/blessed-car-apps" in about_content
     assert "Ticket flow mechanics (planning constraints)" in about_content
     assert "Ticket turn prompt context" in about_content
     assert "Destinations (local/docker runtime)" in about_content
@@ -91,6 +101,12 @@ def test_pma_files_created_on_hub_init(tmp_path: Path) -> None:
     assert "car templates show <id> --repo <path>" in agents_content
     assert "--path <hub_root>" in agents_content
     assert "https://github.com/Git-on-my-level/car-ticket-templates" in agents_content
+    assert "## CAR app shortcuts" in agents_content
+    assert "AutoOptimize lives at `blessed:apps/autooptimize`" in agents_content
+    assert "car apps install blessed:apps/autooptimize --repo <path>" in agents_content
+    assert "provenance conflict from an older in-repo" in agents_content
+    assert "rerun the install command with `--force`" in agents_content
+    assert "https://github.com/Git-on-my-level/blessed-car-apps" in agents_content
     assert (
         "Default to managed threads for straightforward single-session work"
         in agents_content
