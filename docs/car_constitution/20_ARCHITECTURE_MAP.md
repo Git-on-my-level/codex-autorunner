@@ -2,48 +2,11 @@
 
 Goal: allow a new agent to locate the correct seam for a change without relying on fragile file-level details.
 
-## Mental model
-```
-[ Engine ]  →  [ Control Plane ]  →  [ Adapters ]  →  [ Surfaces ]
-```
-Left is most stable; right is most volatile.
+## Layer Definitions & Dependency Rules
 
-## Engine (protocol-agnostic)
-Responsibilities:
-- run lifecycle + state transitions
-- scheduling/locks/queues
-- deterministic semantics
+See `docs/ARCHITECTURE_BOUNDARIES.md` for the canonical layer definitions (Engine, Control Plane, Adapters, Surfaces), responsibilities, non-responsibilities, module prefixes, allowed-dependency table, and enforcement details.
 
-Non-responsibilities:
-- no UI concepts
-- no transport/protocol coupling
-- no vendor SDK assumptions
-
-## Control plane (filesystem-backed intent)
-Responsibilities:
-- canonical state + artifacts under `.codex-autorunner/`
-- plans/snapshots/outputs/run metadata
-- a durable bridge between humans, agents, and the engine
-- PMA delivery intent selection and durable notification bookkeeping before any transport adapter writes outbox state
-
-## Adapters (protocol translation)
-Responsibilities:
-- translate external events/requests into engine commands
-- normalize streaming/logging into canonical run artifacts
-- tolerate retries, restarts, partial failures
-
-Non-responsibilities:
-- avoid owning business logic; keep logic in engine/control plane
-
-## Surfaces (UX)
-Responsibilities:
-- render state; collect inputs; support reconnects
-- provide ergonomics (logs, terminal, dashboards)
-
-Non-responsibilities:
-- do not become state owners; never be the only place truth lives
-
-## Cross-cutting constraints
+Cross-cutting constraints:
 - **One-way dependencies**: Surfaces → Adapters → Control Plane → Engine (never reverse).
 - **Isolation is structural**: containment via workspaces/credentials, not interactive prompts.
 - **Replaceability**: any adapter/surface can be rewritten; engine/control plane must remain stable.

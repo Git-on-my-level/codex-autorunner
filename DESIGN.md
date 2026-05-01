@@ -15,24 +15,10 @@ Agent coordination hub that drives Codex app-server and OpenCode using markdown 
 > Constitution alignment: transport/vendor-specific logic (Codex subprocesses, app-server/OpenCode runtime, Telegram, etc.) lives in adapters/surfaces; the Engine consumes a protocol-neutral backend interface. This preserves the one-way dependency rule in `docs/car_constitution/20_ARCHITECTURE_MAP.md`.
 
 ## Layout and config
-Hub root:
-  codex-autorunner.yml (defaults, committed)
-  codex-autorunner.override.yml (local overrides, gitignored)
-  .codex-autorunner/
-    manifest.yml, hub_state.json, codex-autorunner-hub.log
-    config.yml (generated)
-  repos/ (managed repositories)
 
-Per-repo (under hub or standalone for development):
-  .codex-autorunner/
-    tickets/ (TICKET-###.md files)
-    contextspace/ (active_context.md, decisions.md, spec.md)
-    config.yml (generated)
-    state.sqlite3, codex-autorunner.log, codex-server.log, lock
-    prompt.txt (optional template)
+See `docs/car_constitution/20_ARCHITECTURE_MAP.md` → "Data Layout & Config" for the authoritative directory layout and config precedence.
 
 Config sections (repo): docs, codex, prompt, runner, git, github, server, terminal, voice, log, server_log, app_server, opencode, hermes, zeroclaw, discord_bot, telegram_bot, agents, notifications.
-Precedence: built-ins < codex-autorunner.yml < override < .codex-autorunner/config.yml < env.
 
 ## Core loop
 - Parse TODO checkboxes and preserve ordering.
