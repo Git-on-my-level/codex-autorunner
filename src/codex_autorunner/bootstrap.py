@@ -451,6 +451,9 @@ def pma_notes_content() -> str:
   `car apps install blessed:apps/autooptimize --repo <path>`
   then
   `car apps apply blessed.autooptimize --repo <path> --set goal="<goal>"`.
+- If install reports an existing provenance conflict from the old in-repo
+  AutoOptimize bundle, rerun with
+  `car apps install blessed:apps/autooptimize --repo <path> --force`.
 - Inspect runnable tools with `car apps tools blessed.autooptimize --repo <path>`.
 - Blessed app repo: `https://github.com/Git-on-my-level/blessed-car-apps`
 
@@ -653,6 +656,8 @@ This document is jointly maintained by the user and PMA.
   `car apps show blessed:apps/autooptimize --repo <path>`, install it with
   `car apps install blessed:apps/autooptimize --repo <path>`, then apply it with
   `car apps apply blessed.autooptimize --repo <path> --set goal="<goal>"`.
+- If install reports a provenance conflict from an older in-repo
+  AutoOptimize install, rerun the install command with `--force`.
 - Blessed app repo: `https://github.com/Git-on-my-level/blessed-car-apps`
 
 ## CLI help-first rule
