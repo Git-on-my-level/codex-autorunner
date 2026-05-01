@@ -318,6 +318,19 @@ class AgentBackendFactory:
             raise ValueError("app_server.command is required for codex backend")
 
         supervisor_command = list(self._config.app_server.command)
+        ignored_env = getattr(self._config.app_server, "ignored_command_env", ())
+        if ignored_env:
+            self._logger.warning(
+                "Ignoring surface-specific app-server command env for Codex runtime: %s",
+                ", ".join(str(name) for name in ignored_env),
+            )
+        self._logger.info(
+            "Codex app-server command selected",
+            extra={
+                "command": supervisor_command,
+                "source": getattr(self._config.app_server, "command_source", "config"),
+            },
+        )
         state_root = self._config.app_server.state_root
         if isinstance(self._destination, DockerDestination):
             wrapped = wrap_command_for_destination(

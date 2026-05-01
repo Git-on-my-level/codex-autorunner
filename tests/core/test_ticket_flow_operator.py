@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
+from codex_autorunner.core import ticket_flow_operator as operator_module
 from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.core.flows.store import FlowStore
 from codex_autorunner.core.ticket_flow_operator import (
@@ -80,6 +82,59 @@ def test_ticket_flow_operator_preflight_reports_no_tickets(tmp_path: Path) -> No
     report = ticket_flow_preflight(tmp_path, config=None)
     failing = {check.check_id for check in report.checks if check.status == "error"}
     assert "tickets_present" in failing
+
+
+def test_ticket_flow_operator_preflight_reports_codex_runtime_details(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repo_root = Path(tmp_path)
+    _write_ticket(repo_root, "TICKET-001.md")
+    monkeypatch.setenv("CAR_TELEGRAM_APP_SERVER_COMMAND", "/stale/codex app-server")
+    config = SimpleNamespace(
+        codex_model="gpt-5.5",
+        app_server=SimpleNamespace(
+            command=["echo", "app-server"],
+            command_source="config",
+            ignored_command_env=("CAR_TELEGRAM_APP_SERVER_COMMAND",),
+        ),
+    )
+
+    report = ticket_flow_preflight(repo_root, config=config)
+    agents = next(check for check in report.checks if check.check_id == "agents")
+
+    assert agents.status == "ok"
+    assert "command: echo app-server" in agents.details
+    assert "source: config" in agents.details
+    assert "model: gpt-5.5" in agents.details
+    assert "ignored surface env: CAR_TELEGRAM_APP_SERVER_COMMAND" in agents.details
+
+
+def test_codex_version_command_skips_empty_command() -> None:
+    assert operator_module._codex_version_command([]) == []
+
+
+def test_codex_runtime_preflight_decodes_non_utf8_version_output(
+    monkeypatch,
+) -> None:
+    def fake_check_output(*args, **kwargs):
+        return b"codex \xff\n"
+
+    monkeypatch.setattr(operator_module.subprocess, "check_output", fake_check_output)
+    config = SimpleNamespace(
+        codex_model="gpt-5.5",
+        app_server=SimpleNamespace(
+            command=["echo", "app-server"],
+            command_source="config",
+            ignored_command_env=(),
+        ),
+    )
+
+    details, resolved = operator_module._codex_runtime_preflight_details(
+        config, ["echo", "app-server"]
+    )
+
+    assert resolved is not None
+    assert any(detail.startswith("version: codex") for detail in details)
 
 
 def test_ticket_flow_operator_latest_dispatch_prefers_handoff_and_turn_summary(

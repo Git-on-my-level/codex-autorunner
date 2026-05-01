@@ -52,6 +52,25 @@ def test_telegram_bot_config_uses_configured_app_server_command(
     assert cfg.app_server_command == ["config-codex", "app-server"]
 
 
+def test_telegram_bot_config_honors_telegram_app_server_env(
+    tmp_path: Path,
+) -> None:
+    raw = {
+        "enabled": True,
+        "bot_token_env": "TEST_BOT_TOKEN",
+        "chat_id_env": "TEST_CHAT_ID",
+        "allowed_user_ids": [123],
+        "app_server_command": ["config-codex", "app-server"],
+    }
+    env = {
+        "TEST_BOT_TOKEN": "token",
+        "TEST_CHAT_ID": "-100",
+        "CAR_TELEGRAM_APP_SERVER_COMMAND": "/telegram/codex app-server",
+    }
+    cfg = TelegramBotConfig.from_raw(raw, root=tmp_path, env=env)
+    assert cfg.app_server_command == ["/telegram/codex", "app-server"]
+
+
 def test_telegram_bot_config_uses_explicit_opencode_lifecycle_settings(
     tmp_path: Path,
 ) -> None:

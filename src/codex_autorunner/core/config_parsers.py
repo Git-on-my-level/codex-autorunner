@@ -17,7 +17,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, cast
 
-from .app_server_command import resolve_app_server_command
+from .app_server_command import resolve_app_server_command_with_source
 from .config_contract import APP_SERVER_OUTPUT_POLICIES, ConfigError
 from .config_field_schema import (
     APP_SERVER_CLIENT_FIELD_SCHEMAS,
@@ -540,16 +540,21 @@ def _parse_app_server_config(
     defaults = defaults if isinstance(defaults, dict) else {}
     raw_command = cfg.get("command", dataclasses.MISSING)
     if raw_command is dataclasses.MISSING:
-        command = resolve_app_server_command(
+        resolved_command = resolve_app_server_command_with_source(
             default_from_mapping(
                 defaults, "command", APP_SERVER_FIELD_SCHEMAS["command"]
-            )
+            ),
+            env=os.environ,
+            fallback_source="default",
         )
     else:
-        command = resolve_app_server_command(
+        resolved_command = resolve_app_server_command_with_source(
             raw_command,
+            env=os.environ,
             fallback=(),
+            fallback_source="empty-config",
         )
+    command = resolved_command.command
     state_root = cast(
         Path,
         parse_schema_field(
@@ -710,6 +715,8 @@ def _parse_app_server_config(
     prompts = _parse_app_server_prompts_config(cfg.get("prompts"), prompt_defaults)
     return AppServerConfig(
         command=command,
+        command_source=resolved_command.source,
+        ignored_command_env=resolved_command.ignored_env,
         state_root=state_root,
         auto_restart=auto_restart,
         max_handles=max_handles,

@@ -87,6 +87,8 @@ class AppServerOutputConfig:
 @dataclasses.dataclass
 class AppServerConfig:
     command: List[str]
+    command_source: str
+    ignored_command_env: tuple[str, ...]
     state_root: Path
     auto_restart: Optional[bool]
     max_handles: Optional[int]
