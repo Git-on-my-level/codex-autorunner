@@ -907,6 +907,7 @@ class DiscordBotService:
         self._ingress = InteractionIngress(self, logger=self._logger)
         self._ingress_pre_ack_reservations: set[str] = set()
         self._ingress_pre_ack_reservations_lock = asyncio.Lock()
+        self._recent_interaction_ingress: dict[str, float] = {}
         self._chat_operation_write_lock_guard = asyncio.Lock()
         self._chat_operation_write_locks: dict[str, asyncio.Lock] = {}
         self._command_runner = _CommandRunner(
@@ -5208,16 +5209,27 @@ class DiscordBotService:
                 )
             except ValueError as exc:
                 current = store.get_operation(interaction_id)
+                current_state = current.state if current is not None else None
+                requested_state = (
+                    state if isinstance(state, ChatOperationState) else None
+                )
                 log_event(
                     self._logger,
-                    logging.ERROR,
+                    (
+                        logging.WARNING
+                        if self._is_known_chat_operation_transition_race(
+                            current_state,
+                            requested_state,
+                        )
+                        else logging.ERROR
+                    ),
                     "discord.chat_operation.invalid_transition_rejected",
                     interaction_id=interaction_id,
                     current_state=(
-                        current.state.value if current is not None else None
+                        current_state.value if current_state is not None else None
                     ),
                     requested_state=(
-                        state.value if isinstance(state, ChatOperationState) else None
+                        requested_state.value if requested_state is not None else None
                     ),
                     error=str(exc),
                 )
@@ -5225,6 +5237,18 @@ class DiscordBotService:
 
         async with self._chat_operation_write_guard(interaction_id):
             return await asyncio.to_thread(_patch_sync)
+
+    @staticmethod
+    def _is_known_chat_operation_transition_race(
+        current_state: Optional[ChatOperationState],
+        requested_state: Optional[ChatOperationState],
+    ) -> bool:
+        if current_state in {ChatOperationState.RUNNING, ChatOperationState.QUEUED}:
+            return requested_state == ChatOperationState.ACKNOWLEDGED
+        return (
+            current_state == ChatOperationState.COMPLETED
+            and requested_state == ChatOperationState.DELIVERING
+        )
 
     async def _patch_chat_operation_recovery(
         self,
@@ -5242,6 +5266,69 @@ class DiscordBotService:
             **changes,
         )
 
+    @staticmethod
+    def _is_interrupt_component_custom_id(custom_id: Optional[str]) -> bool:
+        normalized = str(custom_id or "").strip()
+        if not normalized:
+            return False
+        return normalized == "cancel_turn" or normalized.startswith(
+            (
+                "cancel_turn:",
+                "queue_interrupt_send:",
+                "queued_turn_interrupt_send",
+                "qis:",
+            )
+        )
+
+    async def _interaction_custom_id(self, interaction_id: str) -> Optional[str]:
+        record = await self._store.get_interaction(interaction_id)
+        envelope = record.envelope_json if record is not None else None
+        if isinstance(envelope, Mapping):
+            custom_id = envelope.get("custom_id")
+            if isinstance(custom_id, str) and custom_id.strip():
+                return custom_id.strip()
+        metadata = record.metadata_json if record is not None else None
+        if isinstance(metadata, Mapping):
+            custom_id = metadata.get("custom_id")
+            if isinstance(custom_id, str) and custom_id.strip():
+                return custom_id.strip()
+        return None
+
+    async def _chat_operation_ack_state_for_interaction(
+        self,
+        interaction_id: str,
+        *,
+        visible_delivery: bool,
+    ) -> Optional[ChatOperationState]:
+        default_state = (
+            ChatOperationState.VISIBLE
+            if visible_delivery
+            else ChatOperationState.ACKNOWLEDGED
+        )
+        custom_id = await self._interaction_custom_id(interaction_id)
+        if not self._is_interrupt_component_custom_id(custom_id):
+            return default_state
+        snapshot = await self._chat_operation_get(interaction_id)
+        if snapshot is None:
+            return ChatOperationState.INTERRUPTING
+        if snapshot.state in {
+            ChatOperationState.QUEUED,
+            ChatOperationState.RUNNING,
+            ChatOperationState.INTERRUPTING,
+        }:
+            return ChatOperationState.INTERRUPTING
+        if snapshot.state == ChatOperationState.DELIVERING:
+            log_event(
+                self._logger,
+                logging.INFO,
+                "discord.chat_operation.interrupt_ack_noop",
+                interaction_id=interaction_id,
+                current_state=snapshot.state.value,
+                custom_id=custom_id,
+            )
+            return None
+        return default_state
+
     async def _record_interaction_ack(
         self,
         interaction_id: str,
@@ -5255,13 +5342,13 @@ class DiscordBotService:
             original_response_message_id=original_response_message_id,
         )
         visible_delivery = ack_mode in {"immediate_message", "component_update"}
+        state = await self._chat_operation_ack_state_for_interaction(
+            interaction_id,
+            visible_delivery=visible_delivery,
+        )
         await self._patch_chat_operation(
             interaction_id,
-            state=(
-                ChatOperationState.VISIBLE
-                if visible_delivery
-                else ChatOperationState.ACKNOWLEDGED
-            ),
+            state=state,
             ack_completed_at=now_iso(),
             first_visible_feedback_at=(now_iso() if visible_delivery else None),
             anchor_ref=original_response_message_id,
@@ -5305,6 +5392,18 @@ class DiscordBotService:
             state = ChatOperationState.DELIVERING
             delivery_state = "failed"
             terminal_outcome = "delivery_failed"
+        if state == ChatOperationState.DELIVERING:
+            snapshot = await self._chat_operation_get(interaction_id)
+            if snapshot is not None and snapshot.state == ChatOperationState.COMPLETED:
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "discord.chat_operation.delivery_already_finalized",
+                    interaction_id=interaction_id,
+                    current_state=snapshot.state.value,
+                    delivery_status=delivery_status,
+                )
+                return
         await self._patch_chat_operation(
             interaction_id,
             state=state,
@@ -5319,6 +5418,22 @@ class DiscordBotService:
         interaction_id: str,
         cursor: Optional[dict[str, Any]],
     ) -> None:
+        snapshot = await self._chat_operation_get(interaction_id)
+        if (
+            isinstance(cursor, dict)
+            and str(cursor.get("state") or "").strip() in {"pending", "failed"}
+            and snapshot is not None
+            and snapshot.state == ChatOperationState.COMPLETED
+        ):
+            log_event(
+                self._logger,
+                logging.INFO,
+                "discord.chat_operation.delivery_already_finalized",
+                interaction_id=interaction_id,
+                current_state=snapshot.state.value,
+                delivery_cursor_state=str(cursor.get("state") or "").strip(),
+            )
+            return
         scheduler_state = None
         if isinstance(cursor, dict):
             state = str(cursor.get("state") or "").strip()
@@ -5921,11 +6036,42 @@ class DiscordBotService:
         if not isinstance(reservations, set):
             reservations = set()
             self._ingress_pre_ack_reservations = reservations
+        recent_ingress = getattr(self, "_recent_interaction_ingress", None)
+        if not isinstance(recent_ingress, dict):
+            recent_ingress = {}
+            self._recent_interaction_ingress = recent_ingress
         reservation_lock = getattr(self, "_ingress_pre_ack_reservations_lock", None)
         if reservation_lock is None:
             reservation_lock = asyncio.Lock()
             self._ingress_pre_ack_reservations_lock = reservation_lock
+        now = time.monotonic()
         async with reservation_lock:
+            expired_before = now - 2.0
+            for interaction_id, seen_at in list(recent_ingress.items()):
+                if seen_at < expired_before:
+                    recent_ingress.pop(interaction_id, None)
+            previous_seen_at = recent_ingress.get(ctx.interaction_id)
+            if previous_seen_at is not None and now - previous_seen_at <= 2.0:
+                age_ms = round((now - previous_seen_at) * 1000, 1)
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "discord.interaction.rapid_duplicate_suppressed",
+                    interaction_id=ctx.interaction_id,
+                    duplicate_window_seconds=2.0,
+                    age_ms=age_ms,
+                )
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "discord.interaction.duplicate_in_flight_suppressed",
+                    interaction_id=ctx.interaction_id,
+                    reason="rapid_duplicate_suppressed",
+                    duplicate_window_seconds=2.0,
+                    age_ms=age_ms,
+                )
+                return True
+            recent_ingress[ctx.interaction_id] = now
             if ctx.interaction_id in reservations:
                 return True
             reservations.add(ctx.interaction_id)
