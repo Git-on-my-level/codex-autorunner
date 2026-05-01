@@ -28,6 +28,7 @@ from codex_autorunner.integrations.github.polling import (
     GitHubPollingConfig,
     GitHubScmPollingService,
 )
+from codex_autorunner.integrations.github.polling_events import emit_new_conditions
 
 pytestmark = pytest.mark.integration
 from codex_autorunner.integrations.github.publisher import (
@@ -1343,6 +1344,61 @@ def test_process_due_watches_emits_only_new_review_and_check_transitions(
         "pull_request_review",
         "check_run",
     }
+
+
+def test_emit_new_conditions_skips_failed_checks_from_stale_head(
+    tmp_path: Path,
+) -> None:
+    binding = PrBindingStore(tmp_path).upsert_binding(
+        provider="github",
+        repo_slug="acme/widgets",
+        pr_number=17,
+        pr_state="open",
+        head_branch="feature/scm-polling",
+        base_branch="main",
+    )
+    watch = ScmPollingWatchStore(tmp_path).upsert_watch(
+        provider="github",
+        binding_id=binding.binding_id,
+        repo_slug=binding.repo_slug,
+        pr_number=binding.pr_number,
+        workspace_root=str((tmp_path / "repo").resolve()),
+        poll_interval_seconds=90,
+        next_poll_at="2026-03-30T00:00:00Z",
+        expires_at="2099-03-30T01:00:00Z",
+        reaction_config={"enabled": True},
+        snapshot={"head_sha": "oldsha"},
+    )
+    event_store = ScmEventStore(tmp_path)
+    _AutomationServiceFake.ingested_events = []
+    _AutomationServiceFake.process_calls = 0
+
+    emitted = emit_new_conditions(
+        event_store=event_store,
+        watch=watch,
+        binding=binding,
+        previous_snapshot={"head_sha": "oldsha", "failed_checks": {}},
+        snapshot={
+            "head_sha": "newsha",
+            "failed_checks": {
+                "oldsha:unit-tests:failure:https://example.invalid/checks/1": {
+                    "action": "completed",
+                    "name": "unit-tests",
+                    "status": "completed",
+                    "conclusion": "failure",
+                    "head_sha": "oldsha",
+                    "details_url": "https://example.invalid/checks/1",
+                }
+            },
+        },
+        automation_service_factory=lambda: _AutomationServiceFake(tmp_path),
+        now_iso_fn=lambda: "2026-03-30T00:00:00Z",
+    )
+
+    assert emitted == 0
+    assert _AutomationServiceFake.ingested_events == []
+    assert _AutomationServiceFake.process_calls == 0
+    assert event_store.list_events(limit=10) == []
 
 
 def test_process_due_watches_emits_new_pr_comment_and_inline_review_comment(

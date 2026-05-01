@@ -798,28 +798,62 @@ class ScmReactionStateStore:
                 fingerprint=normalized_fingerprint,
             )
             if row is None:
-                raise RuntimeError("reaction state row missing before suppression")
-            merged_metadata = self._merge_metadata(row, metadata_object)
-            conn.execute(
-                """
-                UPDATE orch_reaction_state
-                   SET last_event_id = COALESCE(?, last_event_id),
-                       updated_at = ?,
-                       attempt_count = attempt_count + 1,
-                       metadata_json = ?
-                 WHERE binding_id = ?
-                   AND reaction_kind = ?
-                   AND fingerprint = ?
-                """,
-                (
-                    normalized_event_id,
-                    timestamp,
-                    _json_dumps(merged_metadata),
-                    normalized_binding_id,
-                    normalized_reaction_kind,
-                    normalized_fingerprint,
-                ),
-            )
+                conn.execute(
+                    """
+                    INSERT INTO orch_reaction_state (
+                        binding_id,
+                        reaction_kind,
+                        fingerprint,
+                        state,
+                        first_event_id,
+                        last_event_id,
+                        last_operation_key,
+                        created_at,
+                        updated_at,
+                        first_emitted_at,
+                        last_emitted_at,
+                        last_delivery_failed_at,
+                        escalated_at,
+                        resolved_at,
+                        attempt_count,
+                        delivery_failure_count,
+                        last_error_text,
+                        metadata_json
+                    ) VALUES (?, ?, ?, 'suppressed', ?, ?, NULL, ?, ?, NULL, NULL, NULL, NULL, NULL, 1, 0, NULL, ?)
+                    """,
+                    (
+                        normalized_binding_id,
+                        normalized_reaction_kind,
+                        normalized_fingerprint,
+                        normalized_event_id,
+                        normalized_event_id,
+                        timestamp,
+                        timestamp,
+                        _json_dumps(metadata_object),
+                    ),
+                )
+            else:
+                merged_metadata = self._merge_metadata(row, metadata_object)
+                conn.execute(
+                    """
+                    UPDATE orch_reaction_state
+                       SET last_event_id = COALESCE(?, last_event_id),
+                           updated_at = ?,
+                           attempt_count = attempt_count + 1,
+                           metadata_json = ?
+                     WHERE binding_id = ?
+                       AND reaction_kind = ?
+                       AND fingerprint = ?
+                    """,
+                    (
+                        normalized_event_id,
+                        timestamp,
+                        _json_dumps(merged_metadata),
+                        normalized_binding_id,
+                        normalized_reaction_kind,
+                        normalized_fingerprint,
+                    ),
+                )
             refreshed = self._load_reaction_state_row(
                 conn,
                 binding_id=normalized_binding_id,

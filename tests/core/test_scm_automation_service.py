@@ -1171,6 +1171,64 @@ def test_ingest_event_batches_ci_failures_for_same_head_and_refreshes_timer(
     )
 
 
+def test_ingest_event_suppresses_late_ci_failure_for_already_handled_head(
+    tmp_path: Path,
+) -> None:
+    first = _ci_failed_event(event_id="github:check-1", head_sha="abc123")
+    second = ScmEvent(
+        **{
+            **first.to_dict(),
+            "event_id": "github:check-2",
+            "payload": {
+                **first.payload,
+                "name": "aggregate",
+            },
+        }
+    )
+    binding = _binding()
+    journal = _JournalFake()
+    state_store = ScmReactionStateStore(tmp_path)
+    service = ScmAutomationService(
+        tmp_path,
+        event_store=_EventStoreFake(first, second),
+        binding_resolver=_BindingResolverFake(binding),
+        reaction_router=route_scm_reactions,
+        reaction_state_store=state_store,
+        journal=journal,
+        publish_processor=_ProcessorFake(processed=[]),
+    )
+
+    first_result = service.ingest_event(first.event_id)
+    first_operation = first_result.publish_operations[0]
+    journal.operations_by_key[first_operation.operation_key] = PublishOperation(
+        **{
+            **first_operation.to_dict(),
+            "state": "succeeded",
+        }
+    )
+
+    second_result = service.ingest_event(second.event_id)
+
+    assert second_result.publish_operations == ()
+    assert journal.create_calls == [
+        (first_operation.operation_key, "enqueue_managed_turn")
+    ]
+    second_fingerprint = state_store.compute_reaction_fingerprint(
+        second,
+        binding=binding,
+        intent=second_result.reaction_intents[0],
+    )
+    suppressed = state_store.get_reaction_state(
+        binding_id=binding.binding_id,
+        reaction_kind="ci_failed",
+        fingerprint=second_fingerprint,
+    )
+    assert suppressed is not None
+    assert suppressed.state == "suppressed"
+    assert suppressed.metadata["ci_head_sha"] == "abc123"
+    assert suppressed.metadata["suppression_reason"] == "ci_head_already_queued"
+
+
 def test_ingest_event_ci_failure_batch_refresh_honors_max_window(
     tmp_path: Path,
 ) -> None:

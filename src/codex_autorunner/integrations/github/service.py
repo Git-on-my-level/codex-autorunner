@@ -876,6 +876,9 @@ class GitHubService:
     def pr_checks(
         self, *, number: int, cwd: Optional[Path] = None
     ) -> list[dict[str, Any]]:
+        graphql_checks = self._pr_checks_from_graphql(number=number, cwd=cwd)
+        if graphql_checks is not None:
+            return graphql_checks
         proc = self._gh(
             ["pr", "view", str(number), "--json", "statusCheckRollup"],
             cwd=cwd or self.repo_root,
@@ -902,6 +905,12 @@ class GitHubService:
             status = entry.get("status") or entry.get("state")
             conclusion = entry.get("conclusion") or entry.get("result")
             details_url = entry.get("detailsUrl") or entry.get("targetUrl")
+            head_sha = (
+                entry.get("headSha")
+                or entry.get("head_sha")
+                or entry.get("commitOid")
+                or entry.get("commit_oid")
+            )
             if name or status or conclusion:
                 checks.append(
                     {
@@ -909,9 +918,148 @@ class GitHubService:
                         "status": status,
                         "conclusion": conclusion,
                         "details_url": details_url,
+                        "head_sha": head_sha,
                     }
                 )
         return checks
+
+    def _pr_checks_from_graphql(
+        self, *, number: int, cwd: Optional[Path] = None
+    ) -> Optional[list[dict[str, Any]]]:
+        try:
+            repo = self.repo_info()
+        except GitHubError:
+            return None
+        if "/" not in repo.name_with_owner:
+            return None
+        owner, repo_name = repo.name_with_owner.split("/", 1)
+        query = """
+        query($owner: String!, $name: String!, $number: Int!) {
+          repository(owner: $owner, name: $name) {
+            pullRequest(number: $number) {
+              commits(last: 1) {
+                nodes {
+                  commit {
+                    oid
+                    statusCheckRollup {
+                      contexts(first: 100) {
+                        nodes {
+                          __typename
+                          ... on CheckRun {
+                            name
+                            status
+                            conclusion
+                            detailsUrl
+                            checkSuite {
+                              commit {
+                                oid
+                              }
+                            }
+                          }
+                          ... on StatusContext {
+                            context
+                            state
+                            targetUrl
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        """
+        proc = self._gh(
+            [
+                "api",
+                "graphql",
+                "-f",
+                f"owner={owner}",
+                "-f",
+                f"name={repo_name}",
+                "-F",
+                f"number={int(number)}",
+                "-f",
+                f"query={query}",
+            ],
+            cwd=cwd or self.repo_root,
+            check=False,
+            timeout_seconds=30,
+        )
+        if proc.returncode != 0:
+            return None
+        try:
+            payload = json.loads(proc.stdout or "{}")
+        except json.JSONDecodeError:
+            return None
+        pull_request = (
+            ((payload.get("data") or {}).get("repository") or {}).get("pullRequest")
+            if isinstance(payload, dict)
+            else None
+        )
+        if not isinstance(pull_request, dict):
+            return None
+        commits = pull_request.get("commits")
+        nodes = commits.get("nodes") if isinstance(commits, dict) else None
+        if not isinstance(nodes, list) or not nodes:
+            return None
+        commit = nodes[-1].get("commit") if isinstance(nodes[-1], dict) else None
+        if not isinstance(commit, dict):
+            return None
+        commit_oid = _normalize_optional_text(commit.get("oid"))
+        rollup = commit.get("statusCheckRollup")
+        contexts_container = (
+            rollup.get("contexts") if isinstance(rollup, dict) else None
+        )
+        contexts = (
+            contexts_container.get("nodes")
+            if isinstance(contexts_container, dict)
+            else None
+        )
+        if not isinstance(contexts, list):
+            return []
+        checks: list[dict[str, Any]] = []
+        for entry in contexts:
+            if not isinstance(entry, dict):
+                continue
+            typename = _normalize_optional_text(entry.get("__typename"))
+            if typename == "CheckRun":
+                check_suite = entry.get("checkSuite")
+                check_commit = (
+                    check_suite.get("commit") if isinstance(check_suite, dict) else None
+                )
+                check_head_sha = (
+                    _normalize_optional_text(check_commit.get("oid"))
+                    if isinstance(check_commit, dict)
+                    else None
+                )
+                checks.append(
+                    {
+                        "name": entry.get("name"),
+                        "status": entry.get("status"),
+                        "conclusion": entry.get("conclusion"),
+                        "details_url": entry.get("detailsUrl"),
+                        "head_sha": check_head_sha or commit_oid,
+                    }
+                )
+                continue
+            if typename == "StatusContext":
+                checks.append(
+                    {
+                        "name": entry.get("context"),
+                        "status": entry.get("state"),
+                        "conclusion": entry.get("state"),
+                        "details_url": entry.get("targetUrl"),
+                        "head_sha": commit_oid,
+                    }
+                )
+        return [
+            check
+            for check in checks
+            if check.get("name") or check.get("status") or check.get("conclusion")
+        ]
 
     def issue_meta(
         self, *, owner: str, repo: str, number: int, cwd: Optional[Path] = None

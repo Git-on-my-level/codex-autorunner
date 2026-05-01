@@ -156,6 +156,98 @@ def test_pr_reviews_preserves_numeric_review_ids(
     ]
 
 
+def test_pr_checks_reads_per_check_head_sha_from_graphql(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = GitHubService(tmp_path, raw_config={})
+    monkeypatch.setattr(
+        service,
+        "repo_info",
+        lambda: RepoInfo(
+            name_with_owner="acme/widgets",
+            url="https://github.com/acme/widgets",
+            default_branch="main",
+        ),
+    )
+
+    def _fake_gh(
+        args: list[str], *, cwd=None, check=True, timeout_seconds=None
+    ):  # type: ignore[no-untyped-def]
+        assert args[:2] == ["api", "graphql"]
+        _ = cwd, check, timeout_seconds
+        return type(
+            "Proc",
+            (),
+            {
+                "returncode": 0,
+                "stdout": json.dumps(
+                    {
+                        "data": {
+                            "repository": {
+                                "pullRequest": {
+                                    "commits": {
+                                        "nodes": [
+                                            {
+                                                "commit": {
+                                                    "oid": "current-sha",
+                                                    "statusCheckRollup": {
+                                                        "contexts": {
+                                                            "nodes": [
+                                                                {
+                                                                    "__typename": "CheckRun",
+                                                                    "name": "unit",
+                                                                    "status": "COMPLETED",
+                                                                    "conclusion": "FAILURE",
+                                                                    "detailsUrl": "https://example.invalid/check",
+                                                                    "checkSuite": {
+                                                                        "commit": {
+                                                                            "oid": "check-sha"
+                                                                        }
+                                                                    },
+                                                                },
+                                                                {
+                                                                    "__typename": "StatusContext",
+                                                                    "context": "legacy/status",
+                                                                    "state": "SUCCESS",
+                                                                    "targetUrl": "https://example.invalid/status",
+                                                                },
+                                                            ]
+                                                        }
+                                                    },
+                                                }
+                                            }
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    }
+                ),
+            },
+        )()
+
+    monkeypatch.setattr(service, "_gh", _fake_gh)
+
+    checks = service.pr_checks(number=17)
+
+    assert checks == [
+        {
+            "name": "unit",
+            "status": "COMPLETED",
+            "conclusion": "FAILURE",
+            "details_url": "https://example.invalid/check",
+            "head_sha": "check-sha",
+        },
+        {
+            "name": "legacy/status",
+            "status": "SUCCESS",
+            "conclusion": "SUCCESS",
+            "details_url": "https://example.invalid/status",
+            "head_sha": "current-sha",
+        },
+    ]
+
+
 def test_sync_pr_does_not_append_duplicate_close_keyword(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
