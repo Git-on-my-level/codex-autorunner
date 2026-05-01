@@ -5346,13 +5346,14 @@ class DiscordBotService:
             interaction_id,
             visible_delivery=visible_delivery,
         )
-        await self._patch_chat_operation(
-            interaction_id,
-            state=state,
-            ack_completed_at=now_iso(),
-            first_visible_feedback_at=(now_iso() if visible_delivery else None),
-            anchor_ref=original_response_message_id,
-        )
+        if state is not None:
+            await self._patch_chat_operation(
+                interaction_id,
+                state=state,
+                ack_completed_at=now_iso(),
+                first_visible_feedback_at=(now_iso() if visible_delivery else None),
+                anchor_ref=original_response_message_id,
+            )
 
     async def _record_interaction_delivery(
         self,
