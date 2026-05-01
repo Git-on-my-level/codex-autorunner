@@ -47,6 +47,8 @@ def ensure_structure(repo_root: Path) -> None:
         outbox_pending_dir(repo_root),
         outbox_sent_dir(repo_root),
     ):
+        if path.is_symlink():
+            raise ValueError(f"FileBox path must not be a symlink: {path}")
         path.mkdir(parents=True, exist_ok=True)
 
 
@@ -70,12 +72,12 @@ def sanitize_filename(name: str) -> str:
 def _gather_files(entries: Iterable[tuple[str, Path]], box: str) -> List[FileBoxEntry]:
     collected: List[FileBoxEntry] = []
     for source, folder in entries:
-        if not folder.exists():
+        if folder.is_symlink() or not folder.exists():
             continue
         try:
             for path in folder.iterdir():
                 try:
-                    if not path.is_file():
+                    if path.is_symlink() or not path.is_file():
                         continue
                     stat = path.stat()
                     collected.append(
@@ -125,6 +127,8 @@ def _target_path(repo_root: Path, box: str, filename: str) -> Path:
 
     safe_name = sanitize_filename(filename)
     target_dir = _box_dir(repo_root, box)
+    if target_dir.is_symlink():
+        raise ValueError("Invalid filebox")
     target_dir.mkdir(parents=True, exist_ok=True)
 
     root = target_dir.resolve()
@@ -139,10 +143,22 @@ def _target_path(repo_root: Path, box: str, filename: str) -> Path:
     return candidate
 
 
+def _unresolved_target_path(repo_root: Path, box: str, filename: str) -> Path:
+    safe_name = sanitize_filename(filename)
+    target_dir = _box_dir(repo_root, box)
+    if target_dir.is_symlink():
+        raise ValueError("Invalid filebox")
+    target_dir.mkdir(parents=True, exist_ok=True)
+    return target_dir.resolve() / safe_name
+
+
 def save_file(repo_root: Path, box: str, filename: str, data: bytes) -> Path:
     if box not in BOXES:
         raise ValueError("Invalid box")
     ensure_structure(repo_root)
+    unresolved = _unresolved_target_path(repo_root, box, filename)
+    if unresolved.is_symlink():
+        raise ValueError("Invalid filename")
     path = _target_path(repo_root, box, filename)
     path.write_bytes(data)
     return path
@@ -150,6 +166,9 @@ def save_file(repo_root: Path, box: str, filename: str, data: bytes) -> Path:
 
 def resolve_file(repo_root: Path, box: str, filename: str) -> FileBoxEntry | None:
     if box not in BOXES:
+        return None
+    unresolved = _unresolved_target_path(repo_root, box, filename)
+    if unresolved.is_symlink():
         return None
     path = _target_path(repo_root, box, filename)
     if not path.exists() or not path.is_file():
@@ -168,6 +187,9 @@ def resolve_file(repo_root: Path, box: str, filename: str) -> FileBoxEntry | Non
 def delete_file(repo_root: Path, box: str, filename: str) -> bool:
     if box not in BOXES:
         return False
+    unresolved = _unresolved_target_path(repo_root, box, filename)
+    if unresolved.is_symlink():
+        return False
     path = _target_path(repo_root, box, filename)
     if not path.exists() or not path.is_file():
         return False
@@ -179,13 +201,13 @@ def delete_file(repo_root: Path, box: str, filename: str) -> bool:
 
 
 def list_regular_files(folder: Path) -> List[Path]:
-    if not folder.exists():
+    if folder.is_symlink() or not folder.exists():
         return []
     files: List[Path] = []
     try:
         for path in folder.iterdir():
             try:
-                if path.is_file():
+                if not path.is_symlink() and path.is_file():
                     files.append(path)
             except OSError:
                 continue
@@ -202,13 +224,13 @@ def list_regular_files(folder: Path) -> List[Path]:
 
 
 def delete_regular_files(folder: Path) -> int:
-    if not folder.exists():
+    if folder.is_symlink() or not folder.exists():
         return 0
     deleted = 0
     try:
         for path in folder.iterdir():
             try:
-                if path.is_file():
+                if not path.is_symlink() and path.is_file():
                     path.unlink()
                     deleted += 1
             except OSError:

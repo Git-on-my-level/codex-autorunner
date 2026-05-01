@@ -34,7 +34,9 @@ def _commit_repo(repo_path: Path, message: str) -> str:
     return (run_git(["rev-parse", "HEAD"], repo_path, check=True).stdout or "").strip()
 
 
-def _configure_apps_repo(hub_root: Path, app_repo: Path) -> None:
+def _configure_apps_repo(
+    hub_root: Path, app_repo: Path, *, trusted: bool = True
+) -> None:
     config_path = hub_root / CONFIG_FILENAME
     raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     raw["apps"] = {
@@ -43,7 +45,7 @@ def _configure_apps_repo(hub_root: Path, app_repo: Path) -> None:
             {
                 "id": "local",
                 "url": str(app_repo),
-                "trusted": True,
+                "trusted": trusted,
                 "default_ref": "main",
             }
         ],
@@ -134,6 +136,22 @@ def _setup_apply_env(tmp_path: Path) -> tuple[Path, Path, Path]:
     return hub_root, repo_root, app_repo
 
 
+def _setup_untrusted_apply_env(tmp_path: Path) -> tuple[Path, Path, Path]:
+    from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
+
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    seed_repo_files(repo_root, git_required=False)
+    app_repo = tmp_path / "app_repo"
+    _init_repo(app_repo)
+    _configure_apps_repo(hub_root, app_repo, trusted=False)
+    _write_valid_app(app_repo)
+    _commit_repo(app_repo, "add untrusted app")
+    return hub_root, repo_root, app_repo
+
+
 def test_apply_installed_app_by_id_creates_ticket_and_persists_inputs(
     tmp_path: Path,
 ) -> None:
@@ -186,6 +204,36 @@ def test_apply_source_ref_installs_implicitly(tmp_path: Path) -> None:
     assert installed is not None
     assert result.ticket_path.exists()
     assert result.source_ref == "local:apps/hello@main"
+
+
+def test_apply_refuses_untrusted_app_template(tmp_path: Path) -> None:
+    hub_root, repo_root, _app_repo = _setup_untrusted_apply_env(tmp_path)
+    hub_config = load_hub_config(hub_root)
+    install_result = install_app(hub_config, hub_root, repo_root, "local:apps/hello")
+    assert install_result.app.lock.trusted is False
+
+    with pytest.raises(AppApplyError, match="is untrusted"):
+        apply_app_entrypoint(
+            repo_root,
+            "local.hello",
+            app_inputs={"goal": "blocked"},
+        )
+
+
+def test_apply_refuses_untrusted_source_ref_before_install(tmp_path: Path) -> None:
+    hub_root, repo_root, _app_repo = _setup_untrusted_apply_env(tmp_path)
+    hub_config = load_hub_config(hub_root)
+
+    with pytest.raises(AppApplyError, match="repo local is untrusted"):
+        apply_app_entrypoint(
+            repo_root,
+            "local:apps/hello",
+            hub_config=hub_config,
+            hub_root=hub_root,
+            app_inputs={"goal": "blocked"},
+        )
+
+    assert get_installed_app(repo_root, "local.hello") is None
 
 
 def test_apply_injects_provenance_frontmatter(tmp_path: Path) -> None:

@@ -12,6 +12,7 @@ from .orchestration.transcript_mirror import (
     TranscriptMirrorStore,
     build_plain_text_transcript,
 )
+from .redaction import redact_jsonable, redact_text
 from .time_utils import now_iso
 from .utils import atomic_write
 
@@ -100,18 +101,37 @@ class PmaTranscriptStore:
         if resolved_user_text:
             payload["user_text_chars"] = len(resolved_user_text)
 
+        redacted_user_text = (
+            redact_text(resolved_user_text) if resolved_user_text is not None else None
+        )
+        redacted_assistant_text = redact_text(assistant_text or "")
+        redacted_payload, metadata_redacted = redact_jsonable(payload)
+        payload = dict(redacted_payload)
+        existing_redactions = payload.get("redactions_applied") or []
+        if not isinstance(existing_redactions, list):
+            existing_redactions = []
+        redactions_applied = {str(item) for item in existing_redactions}
+        if (
+            metadata_redacted
+            or redacted_user_text != resolved_user_text
+            or redacted_assistant_text != (assistant_text or "")
+        ):
+            redactions_applied.add("secret-patterns")
+        if redactions_applied:
+            payload["redactions_applied"] = sorted(redactions_applied)
+
         self._dir.mkdir(parents=True, exist_ok=True)
         transcript_content = build_plain_text_transcript(
-            user_text=resolved_user_text or "",
-            assistant_text=assistant_text or "",
+            user_text=redacted_user_text or "",
+            assistant_text=redacted_assistant_text,
         )
         atomic_write(md_path, transcript_content + "\n")
         atomic_write(json_path, json.dumps(payload, indent=2) + "\n")
         self._mirror_store.write_mirror(
             turn_id=turn_id,
             metadata=payload,
-            user_text=resolved_user_text,
-            assistant_text=assistant_text,
+            user_text=redacted_user_text,
+            assistant_text=redacted_assistant_text,
         )
 
         return PmaTranscriptPointer(

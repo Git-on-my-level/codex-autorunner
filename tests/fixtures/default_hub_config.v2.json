@@ -97,7 +97,7 @@
       "voice": true
     },
     "shell": {
-      "enabled": true,
+      "enabled": false,
       "max_output_chars": 3800,
       "timeout_ms": 120000
     },

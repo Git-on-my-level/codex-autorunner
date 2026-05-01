@@ -20,6 +20,8 @@ from ....core.hub import HubSupervisor
 from ....core.utils import find_repo_root
 
 logger = logging.getLogger(__name__)
+DEFAULT_FILEBOX_MAX_UPLOAD_BYTES = 10_000_000
+UPLOAD_CHUNK_BYTES = 1024 * 1024
 
 
 def _serialize_entry(entry: FileBoxEntry, *, request: Request) -> dict[str, Any]:
@@ -63,21 +65,55 @@ async def _upload_files_to_box(
 ) -> dict[str, Any]:
     ensure_structure(repo_root)
     form = await request.form()
-    saved = []
+    max_upload_bytes = _resolve_max_upload_bytes(request)
+    pending: list[tuple[str, bytes]] = []
     for filename, file in form.items():
         if not isinstance(file, UploadFile):
             continue
         try:
-            data = await file.read()
+            data = await _read_upload_limited(file, max_upload_bytes=max_upload_bytes)
         except OSError as exc:
             logger.warning("Failed to read upload: %s", exc)
             continue
+        except ValueError as exc:
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
+        pending.append((file.filename or filename, data))
+
+    saved = []
+    for filename, data in pending:
         try:
             path = save_file(repo_root, box, filename, data)
             saved.append(path.name)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"status": "ok", "saved": saved}
+
+
+def _resolve_max_upload_bytes(request: Request) -> int:
+    config = getattr(request.app.state, "config", None)
+    pma_config = getattr(config, "pma", None)
+    raw = getattr(pma_config, "max_upload_bytes", None)
+    if raw is None:
+        return DEFAULT_FILEBOX_MAX_UPLOAD_BYTES
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = DEFAULT_FILEBOX_MAX_UPLOAD_BYTES
+    return value if value > 0 else DEFAULT_FILEBOX_MAX_UPLOAD_BYTES
+
+
+async def _read_upload_limited(file: UploadFile, *, max_upload_bytes: int) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(UPLOAD_CHUNK_BYTES)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_upload_bytes:
+            raise ValueError(f"File too large (max {max_upload_bytes} bytes)")
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def build_filebox_routes() -> APIRouter:

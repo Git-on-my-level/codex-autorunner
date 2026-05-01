@@ -209,7 +209,7 @@ def _default_discord_bot_section() -> Dict[str, Any]:
         "intents": 33281,
         "max_message_length": 2000,
         "shell": {
-            "enabled": True,
+            "enabled": False,
             "timeout_ms": 120000,
             "max_output_chars": 3800,
         },

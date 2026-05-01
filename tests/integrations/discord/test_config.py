@@ -125,7 +125,7 @@ def test_discord_bot_config_migrates_legacy_intents_to_default(
 
 def test_discord_bot_config_shell_defaults(tmp_path) -> None:
     cfg = DiscordBotConfig.from_raw(root=tmp_path, raw={"enabled": False})
-    assert cfg.shell.enabled is True
+    assert cfg.shell.enabled is False
     assert cfg.shell.timeout_ms == 120000
     assert cfg.shell.max_output_chars == 3800
 

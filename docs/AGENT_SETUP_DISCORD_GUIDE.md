@@ -179,7 +179,7 @@ discord_bot:
     guild_ids:
       - "123456789012345678"
   shell:
-    enabled: true
+    enabled: false
     timeout_ms: 120000
     max_output_chars: 3800
   dispatch:
@@ -399,7 +399,7 @@ Notes:
 - Plain-text turns now require both collaboration-policy approval and an active execution target (`/car bind ...` or `/pma on`).
 - `plain_text_trigger: mentions` uses Discord bot mentions such as `<@bot-id>` and is the recommended trigger for shared channels.
 - Unbound but allowlisted channels stay quiet for ordinary conversation instead of replying with repeated "not bound" notices.
-- `!<cmd>` runs a local non-interactive shell command in the bound workspace when `discord_bot.shell.enabled` is `true`.
+- `!<cmd>` runs a local non-interactive shell command in the bound workspace only when `discord_bot.shell.enabled` is explicitly set to `true`.
 
 ### PMA Commands
 

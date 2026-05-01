@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import sqlite3
 import uuid
 from dataclasses import asdict, dataclass
 from enum import Enum
@@ -466,46 +467,80 @@ class PmaQueue:
     def _append_to_file_sync(self, item: PmaQueueItem) -> None:
         with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
             with conn:
-                conn.execute(
-                    """
-                    INSERT INTO orch_queue_items (
-                        queue_item_id,
-                        lane_id,
-                        source_kind,
-                        source_key,
-                        dedupe_key,
-                        state,
-                        visible_at,
-                        claimed_at,
-                        completed_at,
-                        payload_json,
-                        created_at,
-                        updated_at,
-                        idempotency_key,
-                        error_text,
-                        dedupe_reason,
-                        result_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(queue_item_id) DO UPDATE SET
-                        lane_id = excluded.lane_id,
-                        source_kind = excluded.source_kind,
-                        source_key = excluded.source_key,
-                        dedupe_key = excluded.dedupe_key,
-                        state = excluded.state,
-                        visible_at = excluded.visible_at,
-                        claimed_at = excluded.claimed_at,
-                        completed_at = excluded.completed_at,
-                        payload_json = excluded.payload_json,
-                        created_at = excluded.created_at,
-                        updated_at = excluded.updated_at,
-                        idempotency_key = excluded.idempotency_key,
-                        error_text = excluded.error_text,
-                        dedupe_reason = excluded.dedupe_reason,
-                        result_json = excluded.result_json
-                    """,
-                    self._item_db_tuple(item),
-                )
+                try:
+                    self._insert_or_update_item(conn, item)
+                except sqlite3.IntegrityError:
+                    existing = self._find_active_item_by_idempotency_key_conn(
+                        conn, item.lane_id, item.idempotency_key
+                    )
+                    if existing is None:
+                        self._insert_or_update_item(conn, item)
+                        return
+                    item.state = QueueItemState.DEDUPED
+                    item.dedupe_reason = f"duplicate_of_{existing.item_id}"
+                    self._insert_or_update_item(conn, item)
         self._sync_lane_mirror_sync(item.lane_id)
+
+    def _insert_or_update_item(
+        self, conn: sqlite3.Connection, item: PmaQueueItem
+    ) -> None:
+        conn.execute(
+            """
+            INSERT INTO orch_queue_items (
+                queue_item_id,
+                lane_id,
+                source_kind,
+                source_key,
+                dedupe_key,
+                state,
+                visible_at,
+                claimed_at,
+                completed_at,
+                payload_json,
+                created_at,
+                updated_at,
+                idempotency_key,
+                error_text,
+                dedupe_reason,
+                result_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(queue_item_id) DO UPDATE SET
+                lane_id = excluded.lane_id,
+                source_kind = excluded.source_kind,
+                source_key = excluded.source_key,
+                dedupe_key = excluded.dedupe_key,
+                state = excluded.state,
+                visible_at = excluded.visible_at,
+                claimed_at = excluded.claimed_at,
+                completed_at = excluded.completed_at,
+                payload_json = excluded.payload_json,
+                created_at = excluded.created_at,
+                updated_at = excluded.updated_at,
+                idempotency_key = excluded.idempotency_key,
+                error_text = excluded.error_text,
+                dedupe_reason = excluded.dedupe_reason,
+                result_json = excluded.result_json
+            """,
+            self._item_db_tuple(item),
+        )
+
+    def _find_active_item_by_idempotency_key_conn(
+        self, conn: sqlite3.Connection, lane_id: str, idempotency_key: str
+    ) -> Optional[PmaQueueItem]:
+        row = conn.execute(
+            """
+            SELECT *
+              FROM orch_queue_items
+             WHERE lane_id = ?
+               AND source_kind = ?
+               AND idempotency_key = ?
+               AND state IN ('pending', 'running')
+             ORDER BY rowid ASC
+             LIMIT 1
+            """,
+            (lane_id, PMA_LANE_SOURCE_KIND, idempotency_key),
+        ).fetchone()
+        return self._row_to_item(row) if row is not None else None
 
     def _update_in_file_sync(self, item: PmaQueueItem) -> None:
         with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
