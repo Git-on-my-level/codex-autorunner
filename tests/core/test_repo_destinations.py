@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from codex_autorunner.core.repo_destinations import (
+from codex_autorunner.core.destinations import (
     default_local_destination,
     resolve_effective_repo_destination,
 )
@@ -23,7 +23,7 @@ def test_resolve_effective_destination_prefers_repo_destination() -> None:
     )
     repos = {base.id: base, worktree.id: worktree}
 
-    assert resolve_effective_repo_destination(worktree, repos) == {
+    assert resolve_effective_repo_destination(worktree, repos).to_dict() == {
         "kind": "docker",
         "image": "feat:latest",
     }
@@ -44,7 +44,7 @@ def test_resolve_effective_destination_inherits_base_for_worktree() -> None:
     )
     repos = {base.id: base, worktree.id: worktree}
 
-    assert resolve_effective_repo_destination(worktree, repos) == {
+    assert resolve_effective_repo_destination(worktree, repos).to_dict() == {
         "kind": "docker",
         "image": "base:latest",
     }
@@ -55,7 +55,8 @@ def test_resolve_effective_destination_defaults_to_local() -> None:
     repos = {base.id: base}
 
     assert (
-        resolve_effective_repo_destination(base, repos) == default_local_destination()
+        resolve_effective_repo_destination(base, repos).to_dict()
+        == default_local_destination()
     )
 
 
@@ -75,7 +76,7 @@ def test_resolve_effective_destination_ignores_invalid_destination_shapes() -> N
     )
     repos = {base.id: base, worktree.id: worktree}
 
-    assert resolve_effective_repo_destination(worktree, repos) == {
+    assert resolve_effective_repo_destination(worktree, repos).to_dict() == {
         "kind": "docker",
         "image": "base:latest",
     }

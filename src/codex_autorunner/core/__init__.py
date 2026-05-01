@@ -61,18 +61,6 @@ from .scm_reaction_types import (
     stable_reaction_operation_key,
 )
 from .sse import SSEEvent, format_sse, parse_sse_lines
-from .type_debt_ledger import (
-    build_type_debt_ledger,
-    ledger_to_dict,
-    render_markdown_report,
-)
-from .validation_lanes import (
-    ValidationLane,
-    ValidationLaneSelection,
-    classify_changed_files,
-    lane_selection_to_payload,
-    render_lane_selection,
-)
 
 __all__ = [
     "CAR_AWARENESS_BLOCK",
@@ -115,25 +103,17 @@ __all__ = [
     "archive_worktree_snapshot",
     "build_car_context_bundle",
     "compute_reaction_fingerprint",
-    "build_type_debt_ledger",
     "drain_pending_publish_operations",
     "default_managed_thread_context_profile",
     "format_file_role_addendum",
     "format_sse",
-    "ledger_to_dict",
     "mark_reaction_delivery_failed",
     "mark_reaction_emitted",
     "mark_reaction_resolved",
     "parse_sse_lines",
     "route_scm_reactions",
     "render_injected_car_context",
-    "render_markdown_report",
     "render_runtime_compat_agents_md",
-    "ValidationLane",
-    "ValidationLaneSelection",
-    "classify_changed_files",
-    "lane_selection_to_payload",
-    "render_lane_selection",
     "should_emit_reaction",
     "stable_reaction_fingerprint",
     "stable_reaction_operation_key",
