@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Any, Optional, Sequence
 
 from ...core.redaction import redact_text
@@ -269,53 +268,6 @@ def _format_token_usage(token_usage: Optional[dict[str, Any]]) -> list[str]:
 
 def _extract_rate_limits(payload: Any) -> Optional[dict[str, Any]]:
     return extract_rate_limits(payload)
-
-
-def _format_rate_limit_refresh(rate_limits: dict[str, Any]) -> Optional[str]:
-    refresh_dt = _extract_rate_limit_timestamp(rate_limits)
-    if refresh_dt is None:
-        return None
-    return _format_friendly_time(refresh_dt.astimezone())
-
-
-def _extract_rate_limit_timestamp(rate_limits: dict[str, Any]) -> Optional[datetime]:
-    candidates: list[tuple[int, datetime]] = []
-    for section in ("primary", "secondary"):
-        entry = rate_limits.get(section)
-        if not isinstance(entry, dict):
-            continue
-        window_minutes = _rate_limit_window_minutes(entry, section) or 0
-        for key in (
-            "resets_at",
-            "resetsAt",
-            "reset_at",
-            "resetAt",
-            "refresh_at",
-            "refreshAt",
-            "updated_at",
-            "updatedAt",
-        ):
-            if key in entry:
-                dt = _coerce_datetime(entry.get(key))
-                if dt is not None:
-                    candidates.append((window_minutes, dt))
-    if candidates:
-        return max(candidates, key=lambda item: (item[0], item[1]))[1]
-    for key in (
-        "refreshed_at",
-        "refreshedAt",
-        "refresh_at",
-        "refreshAt",
-        "updated_at",
-        "updatedAt",
-        "timestamp",
-        "time",
-        "as_of",
-        "asOf",
-    ):
-        if key in rate_limits:
-            return _coerce_datetime(rate_limits.get(key))
-    return None
 
 
 def _format_token_row(label: str, usage: dict[str, Any]) -> Optional[str]:
