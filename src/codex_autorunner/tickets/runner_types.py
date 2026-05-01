@@ -83,48 +83,6 @@ class PreTurnPlan:
 
 
 @dataclass(frozen=True)
-class PromptInputs:
-    """Inputs required for prompt assembly."""
-
-    ticket_path: Path
-    ticket_rel_path: str
-    ticket_doc: Any
-    last_agent_output: Optional[str] = None
-    last_checkpoint_error: Optional[str] = None
-    commit_required: bool = False
-    commit_attempt: int = 0
-    commit_max_attempts: int = 2
-    outbox_paths: Any = None
-    lint_errors: Optional[list[str]] = None
-    reply_context: Optional[str] = None
-    requested_context: Optional[str] = None
-    previous_ticket_content: Optional[str] = None
-    prior_no_change_turns: int = 0
-    dispatch_dir: Optional[Path] = None
-    dispatch_path: Optional[Path] = None
-
-
-@dataclass(frozen=True)
-class PromptResult:
-    """Result of prompt assembly phase."""
-
-    prompt: str
-    ticket_turns: int
-    total_turns: int
-
-
-@dataclass(frozen=True)
-class TurnExecutionInputs:
-    """Inputs required for turn execution."""
-
-    agent_id: str
-    prompt: str
-    workspace_root: Path
-    conversation_id: Optional[str] = None
-    options: Optional[dict[str, Any]] = None
-
-
-@dataclass(frozen=True)
 class TurnExecutionResult:
     """Result of turn execution phase."""
 
@@ -144,44 +102,6 @@ class TurnExecutionResult:
     agent_committed_this_turn: Optional[bool] = None
     repo_fingerprint_before: Optional[str] = None
     repo_fingerprint_after: Optional[str] = None
-
-
-@dataclass(frozen=True)
-class PostTurnInputs:
-    """Inputs required for post-turn reconciliation."""
-
-    workspace_root: Path
-    repo_id: str
-    run_id: str
-    current_ticket_id: str
-    dispatch_seq: int
-    agent_output: str
-    agent_id: str
-    total_turns: int
-    head_before_turn: Optional[str]
-    turn_diff_stats: Optional[dict[str, Any]] = None
-    emit_event: Any = None
-
-
-@dataclass(frozen=True)
-class PostTurnResult:
-    """Result of post-turn reconciliation phase."""
-
-    status: str = "continue"  # "continue" | "paused" | "completed" | "failed"
-    dispatch: Any = None
-    state_updates: dict[str, Any] = field(default_factory=dict)
-    loop_guard_updates: dict[str, Any] = field(default_factory=dict)
-    pause_reason: Optional[str] = None
-    pause_reason_code: Optional[str] = None
-    pause_reason_details: Optional[str] = None
-    ticket_done: bool = False
-    commit_required: bool = False
-    commit_pending: bool = False
-    commit_retries: int = 0
-    checkpoint_error: Optional[str] = None
-    lint_updates: Optional[dict[str, Any]] = None
-    updated_frontmatter: Any = None
-    lint_errors: Optional[list[str]] = None
 
 
 @dataclass(frozen=True)
