@@ -933,14 +933,6 @@ def register_hub_commands(
         Displays schema version, migration history, and table statistics.
         """
         config = require_hub_config(path)
-        from ....core.orchestration.migrate_legacy_state import (
-            LEGACY_PMA_AUDIT_LOG_PATH,
-            LEGACY_PMA_AUTOMATION_PATH,
-            LEGACY_PMA_LIFECYCLE_LOG_PATH,
-            LEGACY_PMA_QUEUE_DIR,
-            LEGACY_PMA_THREADS_DB_PATH,
-            LEGACY_PMA_TRANSCRIPTS_DIR,
-        )
         from ....core.orchestration.migrations import (
             ORCHESTRATION_SCHEMA_VERSION,
             current_orchestration_schema_version,
@@ -961,19 +953,10 @@ def register_hub_commands(
                     table_counts[table_name] = int(cnt["cnt"]) if cnt else 0
         except (sqlite3.Error, OSError) as exc:  # intentional: top-level error handler
             raise_exit(f"Failed to read orchestration state: {exc}", cause=exc)
-        legacy_status = {
-            "threads_db": (config.root / LEGACY_PMA_THREADS_DB_PATH).exists(),
-            "automation": (config.root / LEGACY_PMA_AUTOMATION_PATH).exists(),
-            "queue": (config.root / LEGACY_PMA_QUEUE_DIR).exists(),
-            "transcripts": (config.root / LEGACY_PMA_TRANSCRIPTS_DIR).exists(),
-            "audit_log": (config.root / LEGACY_PMA_AUDIT_LOG_PATH).exists(),
-            "lifecycle": (config.root / LEGACY_PMA_LIFECYCLE_LOG_PATH).exists(),
-        }
         payload = {
             "schema_version": current_version,
             "target_version": ORCHESTRATION_SCHEMA_VERSION,
             "tables": table_counts,
-            "legacy_stores": legacy_status,
         }
         if output_json:
             typer.echo(json.dumps(payload, indent=2))
@@ -981,8 +964,6 @@ def register_hub_commands(
         typer.echo(f"schema: {current_version}/{ORCHESTRATION_SCHEMA_VERSION}")
         for table, count in sorted(table_counts.items()):
             typer.echo(f"  {table}: {count}")
-        for store, exists in legacy_status.items():
-            typer.echo(f"  legacy_{store}: {'yes' if exists else 'no'}")
 
     @orchestration_app.command("audit")
     def orchestration_audit(

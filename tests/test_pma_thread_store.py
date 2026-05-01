@@ -208,10 +208,6 @@ def test_connect_readonly_does_not_prepare_shared_state_on_read(
         raise AssertionError("readonly access must not prepare shared state")
 
     monkeypatch.setattr(
-        "codex_autorunner.core.pma_thread_store_bootstrap.ensure_legacy_orchestration_backfill",
-        _fail_prepare,
-    )
-    monkeypatch.setattr(
         "codex_autorunner.core.pma_thread_store_bootstrap.prepare_orchestration_sqlite",
         _fail_prepare,
     )

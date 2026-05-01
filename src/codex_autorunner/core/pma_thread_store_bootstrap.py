@@ -1,9 +1,6 @@
-"""Thread store bootstrap and legacy backfill gating.
+"""Thread store bootstrap.
 
-Manages the SQLite lock file and backfill-flags that gate one-time migration
-from the old ``threads.sqlite3`` layout to the orchestration store.  This is
-infrastructure, not PMA policy.  Can be simplified once all deployments have
-completed backfill.
+Manages the SQLite lock file and prepare-flags for the orchestration store.
 """
 
 from __future__ import annotations
@@ -13,9 +10,6 @@ from pathlib import Path
 from typing import Any, Callable, Iterator
 
 from .locks import file_lock
-from .orchestration.legacy_backfill_gate import (
-    ensure_legacy_orchestration_backfill,
-)
 from .orchestration.sqlite import (
     open_orchestration_sqlite,
     prepare_orchestration_sqlite,
@@ -86,10 +80,6 @@ class PmaThreadStoreBootstrap:
     def prepare(self) -> None:
         with pma_threads_db_lock(self._db_path):
             prepare_orchestration_sqlite(self._hub_root, durable=self._durable)
-            ensure_legacy_orchestration_backfill(
-                self._hub_root,
-                durable=self._durable,
-            )
             with open_orchestration_sqlite(
                 self._hub_root,
                 durable=self._durable,

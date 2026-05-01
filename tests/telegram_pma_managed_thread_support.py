@@ -142,7 +142,6 @@ def patch_sqlite_connection_cache(
     _patch_targets = [
         "codex_autorunner.core.orchestration.sqlite",
         "codex_autorunner.core.orchestration.verification",
-        "codex_autorunner.core.orchestration.migrate_legacy_state",
         "codex_autorunner.core.chat_bindings",
         "codex_autorunner.core.hub_projection_store",
         "codex_autorunner.core.state",

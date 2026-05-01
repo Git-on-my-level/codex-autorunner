@@ -9,8 +9,6 @@ from codex_autorunner.core.state_roots import (
     GITHUB_BROKER_DB_FILENAME,
     GLOBAL_STATE_ROOT_ENV,
     HUB_MANIFEST_FILENAME,
-    LIFECYCLE_EVENTS_DB_FILENAME,
-    LIFECYCLE_EVENTS_FILENAME,
     ORCHESTRATION_DB_FILENAME,
     PMA_THREADS_DB_FILENAME,
     REPO_STATE_DIR,
@@ -25,8 +23,6 @@ from codex_autorunner.core.state_roots import (
     resolve_global_state_root,
     resolve_hub_agent_workspace_root,
     resolve_hub_apps_root,
-    resolve_hub_lifecycle_events_db_path,
-    resolve_hub_lifecycle_events_path,
     resolve_hub_manifest_path,
     resolve_hub_orchestration_db_path,
     resolve_hub_pma_threads_db_path,
@@ -106,14 +102,6 @@ class TestResolveHubStateRoot:
         hub_root = Path(tmp_path)
         hub_state = resolve_hub_state_root(hub_root)
         assert resolve_hub_manifest_path(hub_root) == hub_state / HUB_MANIFEST_FILENAME
-        assert (
-            resolve_hub_lifecycle_events_path(hub_root)
-            == hub_state / LIFECYCLE_EVENTS_FILENAME
-        )
-        assert (
-            resolve_hub_lifecycle_events_db_path(hub_root)
-            == hub_state / LIFECYCLE_EVENTS_DB_FILENAME
-        )
         assert (
             resolve_hub_pma_threads_db_path(hub_root)
             == hub_state / "pma" / PMA_THREADS_DB_FILENAME
