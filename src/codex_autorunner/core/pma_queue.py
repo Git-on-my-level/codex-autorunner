@@ -475,10 +475,10 @@ class PmaQueue:
                     )
                     if existing is None:
                         self._insert_or_update_item(conn, item)
-                        return
-                    item.state = QueueItemState.DEDUPED
-                    item.dedupe_reason = f"duplicate_of_{existing.item_id}"
-                    self._insert_or_update_item(conn, item)
+                    else:
+                        item.state = QueueItemState.DEDUPED
+                        item.dedupe_reason = f"duplicate_of_{existing.item_id}"
+                        self._insert_or_update_item(conn, item)
         self._sync_lane_mirror_sync(item.lane_id)
 
     def _insert_or_update_item(
