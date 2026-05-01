@@ -20,7 +20,7 @@ from ...core.flows.reconciler import reconcile_flow_runs
 from ...core.logging_utils import safe_log
 from ...core.state import persist_session_registry
 from ...core.utils import reset_repo_root_context, set_repo_root_context
-from ...housekeeping import run_housekeeping_once
+from ...housekeeping import reap_stale_flow_workers, run_housekeeping_once
 from .app_factory import CacheStaticFiles, resolve_allowed_hosts, resolve_auth_token
 from .app_state import AppContext, ServerOverrides, apply_app_context, build_app_context
 from .middleware import (
@@ -119,6 +119,11 @@ def _app_lifespan(context: AppContext):
                         await asyncio.to_thread(
                             run_housekeeping_once,
                             config,
+                            app.state.engine.repo_root,
+                            logger=app.state.logger,
+                        )
+                        await asyncio.to_thread(
+                            reap_stale_flow_workers,
                             app.state.engine.repo_root,
                             logger=app.state.logger,
                         )

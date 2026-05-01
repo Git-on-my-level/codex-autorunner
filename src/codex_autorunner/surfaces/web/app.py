@@ -37,7 +37,12 @@ from ...core.orchestration.execution_history_maintenance import (
 )
 from ...core.pma_domain.constants import DEFAULT_PMA_LANE_ID
 from ...core.pma_queue import PmaQueue, QueueItemState
-from ...housekeeping import reap_managed_docker_containers, run_housekeeping_once
+from ...housekeeping import (
+    DEFAULT_FLOW_WORKER_REAP_INTERVAL_SECONDS,
+    reap_managed_docker_containers,
+    reap_stale_flow_workers,
+    run_housekeeping_once,
+)
 from .app_builders import create_app, create_repo_app
 from .app_factory import CacheStaticFiles, resolve_allowed_hosts, resolve_auth_token
 from .app_state import ServerOverrides, apply_hub_context, build_hub_context
@@ -534,6 +539,45 @@ def create_hub_app(
                         await asyncio.sleep(flow_sweep_interval)
 
                 tasks.append(asyncio.create_task(_flow_telemetry_sweep_loop()))
+
+                async def _flow_worker_reaper_loop():
+                    await asyncio.sleep(
+                        min(DEFAULT_FLOW_WORKER_REAP_INTERVAL_SECONDS, 60)
+                    )
+                    while True:
+                        try:
+                            from ...manifest import load_manifest
+
+                            hub_root = app.state.config.root
+                            manifest_path = app.state.config.manifest_path
+                            if manifest_path.exists():
+                                manifest = load_manifest(manifest_path, hub_root)
+                                repo_roots = [
+                                    (hub_root / entry.path).resolve()
+                                    for entry in manifest.repos
+                                ]
+                                for repo_root in repo_roots:
+                                    await asyncio.to_thread(
+                                        reap_stale_flow_workers,
+                                        repo_root,
+                                        logger=app.state.logger,
+                                    )
+                        except (
+                            RuntimeError,
+                            OSError,
+                            ConnectionError,
+                            ValueError,
+                            TypeError,
+                        ) as exc:
+                            safe_log(
+                                app.state.logger,
+                                logging.WARNING,
+                                "Flow worker reaper failed",
+                                exc,
+                            )
+                        await asyncio.sleep(DEFAULT_FLOW_WORKER_REAP_INTERVAL_SECONDS)
+
+                tasks.append(asyncio.create_task(_flow_worker_reaper_loop()))
             app_server_supervisor = cast(
                 Optional[_IdlePrunable],
                 getattr(app.state, "app_server_supervisor", None),
