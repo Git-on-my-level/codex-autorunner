@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Any, Iterator
 
 from .locks import file_lock
 from .orchestration.sqlite import (
@@ -42,16 +42,10 @@ class PmaThreadStoreBootstrap:
         hub_root: Path,
         db_path: Path,
         durable: bool,
-        thread_row_to_record: Callable[[Any], dict[str, Any]],
-        execution_row_to_record: Callable[[Any], dict[str, Any]],
-        ensure_legacy_schema: Callable[[Any], None],
     ) -> None:
         self._hub_root = hub_root
         self._db_path = db_path
         self._durable = durable
-        self._thread_row_to_record = thread_row_to_record
-        self._execution_row_to_record = execution_row_to_record
-        self._ensure_legacy_schema = ensure_legacy_schema
 
     def _prepare_marker_present(self, conn: Any) -> bool:
         row = conn.execute(
