@@ -1,11 +1,24 @@
 from __future__ import annotations
 
-from codex_autorunner.core.pma_domain import (
-    PmaDomainEventType,
+from codex_autorunner.core.pma_domain.constants import (
+    DEFAULT_PMA_LANE_ID,
+    ROUTE_EXPLICIT,
+    SUBSCRIPTION_STATE_ACTIVE,
+    SURFACE_KIND_DISCORD,
+    SURFACE_KIND_TELEGRAM,
+    TIMER_TYPE_ONE_SHOT,
+    TIMER_TYPE_WATCHDOG,
+    WAKEUP_STATE_DISPATCHED,
+    WAKEUP_STATE_PENDING,
+)
+from codex_autorunner.core.pma_domain.events import PmaDomainEventType
+from codex_autorunner.core.pma_domain.models import (
     PmaOriginContext,
     PmaSubscription,
     PmaTimer,
     PmaWakeup,
+)
+from codex_autorunner.core.pma_domain.serialization import (
     normalize_pma_delivery_attempt,
     normalize_pma_delivery_intent,
     normalize_pma_delivery_state,
@@ -21,17 +34,6 @@ from codex_autorunner.core.pma_domain import (
     pma_subscription_to_dict,
     pma_timer_to_dict,
     pma_wakeup_to_dict,
-)
-from codex_autorunner.core.pma_domain.constants import (
-    DEFAULT_PMA_LANE_ID,
-    ROUTE_EXPLICIT,
-    SUBSCRIPTION_STATE_ACTIVE,
-    SURFACE_KIND_DISCORD,
-    SURFACE_KIND_TELEGRAM,
-    TIMER_TYPE_ONE_SHOT,
-    TIMER_TYPE_WATCHDOG,
-    WAKEUP_STATE_DISPATCHED,
-    WAKEUP_STATE_PENDING,
 )
 
 # ---------------------------------------------------------------------------
