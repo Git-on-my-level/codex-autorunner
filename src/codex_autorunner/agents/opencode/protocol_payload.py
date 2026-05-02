@@ -598,20 +598,20 @@ def extract_total_tokens(usage: dict[str, Any]) -> Optional[int]:
     return None
 
 
+_USAGE_DETAIL_SPECS: list[tuple[str, tuple[str, ...]]] = [
+    ("inputTokens", OPENCODE_USAGE_INPUT_KEYS),
+    ("cachedInputTokens", OPENCODE_USAGE_CACHED_KEYS),
+    ("outputTokens", OPENCODE_USAGE_OUTPUT_KEYS),
+    ("reasoningTokens", OPENCODE_USAGE_REASONING_KEYS),
+]
+
+
 def extract_usage_details(usage: dict[str, Any]) -> dict[str, int]:
     details: dict[str, int] = {}
-    input_tokens = extract_usage_field(usage, OPENCODE_USAGE_INPUT_KEYS)
-    if input_tokens is not None:
-        details["inputTokens"] = input_tokens
-    cached_tokens = extract_usage_field(usage, OPENCODE_USAGE_CACHED_KEYS)
-    if cached_tokens is not None:
-        details["cachedInputTokens"] = cached_tokens
-    output_tokens = extract_usage_field(usage, OPENCODE_USAGE_OUTPUT_KEYS)
-    if output_tokens is not None:
-        details["outputTokens"] = output_tokens
-    reasoning_tokens = extract_usage_field(usage, OPENCODE_USAGE_REASONING_KEYS)
-    if reasoning_tokens is not None:
-        details["reasoningTokens"] = reasoning_tokens
+    for output_key, keys in _USAGE_DETAIL_SPECS:
+        value = extract_usage_field(usage, keys)
+        if value is not None:
+            details[output_key] = value
     return details
 
 
@@ -636,6 +636,16 @@ def extract_context_window(
     return None
 
 
+def _resolve_status_value(status: Any) -> Optional[str]:
+    if isinstance(status, dict):
+        value = status.get("type") or status.get("status")
+    else:
+        value = status
+    if isinstance(value, str) and value:
+        return value
+    return None
+
+
 def extract_status_type(payload: Any) -> Optional[str]:
     if not isinstance(payload, dict):
         return None
@@ -648,22 +658,16 @@ def extract_status_type(payload: Any) -> Optional[str]:
         if not isinstance(container, dict):
             continue
         if container is payload:
-            status = container.get("status")
+            candidate = _resolve_status_value(container.get("status"))
         else:
-            status = container
-        if isinstance(status, dict):
-            value = status.get("type") or status.get("status")
-        else:
-            value = status
-        if isinstance(value, str) and value:
-            return value
+            candidate = _resolve_status_value(container)
+        if candidate is not None:
+            return candidate
     properties = payload.get("properties")
     if isinstance(properties, dict):
-        status = properties.get("status")
-        if isinstance(status, dict):
-            value = status.get("type") or status.get("status")
-            if isinstance(value, str) and value:
-                return value
+        candidate = _resolve_status_value(properties.get("status"))
+        if candidate is not None:
+            return candidate
     return None
 
 
@@ -705,11 +709,7 @@ def extract_delta_text(params: dict[str, Any]) -> Optional[str]:
     properties = params.get("properties")
     if isinstance(properties, dict):
         delta = properties.get("delta")
-        if isinstance(delta, str):
-            text = normalize_message_text(delta)
-            if text:
-                return text
-        if isinstance(delta, dict):
+        if delta is not None:
             text = normalize_message_text(delta)
             if text:
                 return text
