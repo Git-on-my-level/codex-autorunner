@@ -328,6 +328,36 @@ class TestExtractMessagePhase:
         assert extract_message_phase({"phase": "Commentary"}) == "commentary"
         assert extract_message_phase({"phase": "FINAL_ANSWER"}) == "final_answer"
 
+    def test_info_phase_takes_precedence_over_root_message_phase(self) -> None:
+        payload = {
+            "message": {"phase": "commentary"},
+            "info": {"phase": "final_answer"},
+        }
+        assert extract_message_phase(payload) == "final_answer"
+
+    def test_properties_phase_takes_precedence_over_root_message_phase(self) -> None:
+        payload = {
+            "message": {"phase": "commentary"},
+            "properties": {"phase": "final_answer"},
+        }
+        assert extract_message_phase(payload) == "final_answer"
+
+    def test_properties_message_phase_before_root_message_phase(self) -> None:
+        payload = {
+            "message": {"phase": "commentary"},
+            "properties": {"message": {"phase": "final_answer"}},
+        }
+        assert extract_message_phase(payload) == "final_answer"
+
+    def test_direct_phase_highest_precedence(self) -> None:
+        payload = {
+            "phase": "commentary",
+            "info": {"phase": "final_answer"},
+            "properties": {"phase": "final_answer"},
+            "message": {"phase": "final_answer"},
+        }
+        assert extract_message_phase(payload) == "commentary"
+
 
 class TestNormalizeMessagePhase:
     def test_valid_values(self) -> None:
