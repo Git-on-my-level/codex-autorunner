@@ -306,6 +306,14 @@ class TestExtractMessagePhase:
             extract_message_phase({"item": {"phase": "final_answer"}}) == "final_answer"
         )
 
+    def test_info_phase_wins_over_payload_message_phase(self) -> None:
+        """info.phase is higher priority than payload.message.phase (walker order)."""
+        payload = {
+            "info": {"phase": "final_answer"},
+            "message": {"phase": "commentary"},
+        }
+        assert extract_message_phase(payload) == "final_answer"
+
     def test_invalid_phase_returns_none(self) -> None:
         assert extract_message_phase({"phase": "unknown"}) is None
 

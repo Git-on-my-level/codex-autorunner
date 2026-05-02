@@ -332,6 +332,11 @@ def extract_message_phase(payload: Any) -> Optional[str]:
     if not isinstance(payload, dict):
         return None
     for container in _walk_nested_containers(payload):
+        if container is payload:
+            phase = normalize_message_phase(container.get("phase"))
+            if phase is not None:
+                return phase
+            continue
         phase = normalize_message_phase(container.get("phase"))
         if phase is not None:
             return phase
@@ -341,6 +346,12 @@ def extract_message_phase(payload: Any) -> Optional[str]:
                 phase = normalize_message_phase(child.get("phase"))
                 if phase is not None:
                     return phase
+    for key in _PHASE_EXTRA_KEYS:
+        child = payload.get(key)
+        if isinstance(child, dict):
+            phase = normalize_message_phase(child.get("phase"))
+            if phase is not None:
+                return phase
     return None
 
 
