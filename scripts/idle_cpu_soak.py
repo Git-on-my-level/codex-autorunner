@@ -298,6 +298,9 @@ def _collect_service_pids(
                         queue.extend(pp_to_pid.get(p, []))
         except ProcessLookupError:
             service_pids.append(proc.pid)
+        # proc.pid is the watchdog wrapper, not the service; omit it from idle
+        # resource measurement (see _start_service / start_new_session).
+        service_pids = [p for p in service_pids if p != proc.pid]
         pids.extend(service_pids)
     return list(set(pids))
 

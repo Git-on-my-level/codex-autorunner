@@ -227,6 +227,29 @@ class TestIdleCpuSoakProcessManagement:
         ]
         assert seen["cmd"][-2:] == ["--path", str(tmp_path / "hub")]
 
+    def test_collect_service_pids_excludes_watchdog_pid(self, monkeypatch):
+        """Session scan includes the watchdog; measurement must omit its RSS/CPU."""
+
+        class FakeProc:
+            pid = 1000
+
+        calls: list[list[str]] = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            if cmd == ["ps", "-A", "-o", "pid=", "-o", "sid="]:
+                # Watchdog is session leader (sid == watchdog pid); child shares sid.
+                return subprocess.CompletedProcess(cmd, 0, "1000 1000\n1001 1000\n", "")
+            return subprocess.CompletedProcess(cmd, 1, "", "")
+
+        monkeypatch.setattr(soak_module.subprocess, "run", fake_run)
+        monkeypatch.setattr(soak_module.os, "getsid", lambda _pid: 1000)
+
+        pids = soak_module._collect_service_pids(  # noqa: SLF001
+            [FakeProc()], logging.getLogger("test")
+        )
+        assert sorted(pids) == [1001]
+
     def test_write_and_delete_service_record(self, monkeypatch, tmp_path: Path):
         class FakeProc:
             pid = 5151
