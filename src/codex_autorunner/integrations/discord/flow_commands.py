@@ -98,6 +98,26 @@ def flow_refresh_in_progress_text(run_id: str) -> str:
     return f"Refreshing run {run_id}..."
 
 
+def _open_flow_store_or_raise(
+    service: Any,
+    workspace_root: Path,
+) -> Any:
+    try:
+        return service._open_flow_store(workspace_root)
+    except (sqlite3.Error, OSError, RuntimeError, ConfigError) as exc:
+        log_event(
+            service._logger,
+            logging.ERROR,
+            "discord.flow.store_open_failed",
+            workspace_root=str(workspace_root),
+            exc=exc,
+        )
+        raise DiscordTransientError(
+            f"Failed to open flow database: {exc}",
+            user_message="Unable to access flow database. Please try again later.",
+        ) from None
+
+
 async def _send_flow_public_response(
     service: Any,
     interaction_id: str,
@@ -668,20 +688,7 @@ async def handle_flow_status(
     )
     if run_id_opt is None:
         return
-    try:
-        store = service._open_flow_store(workspace_root)
-    except (sqlite3.Error, OSError, RuntimeError, ConfigError) as exc:
-        log_event(
-            service._logger,
-            logging.ERROR,
-            "discord.flow.store_open_failed",
-            workspace_root=str(workspace_root),
-            exc=exc,
-        )
-        raise DiscordTransientError(
-            f"Failed to open flow database: {exc}",
-            user_message="Unable to access flow database. Please try again later.",
-        ) from None
+    store = _open_flow_store_or_raise(service, workspace_root)
     try:
         record: Optional[FlowRunRecord]
         runs: list[FlowRunRecord] = []
@@ -906,20 +913,7 @@ async def handle_flow_runs(
         limit = raw_limit
     limit = max(1, min(limit, FLOW_RUNS_MAX_LIMIT))
 
-    try:
-        store = service._open_flow_store(workspace_root)
-    except (sqlite3.Error, OSError, RuntimeError, ConfigError) as exc:
-        log_event(
-            service._logger,
-            logging.ERROR,
-            "discord.flow.store_open_failed",
-            workspace_root=str(workspace_root),
-            exc=exc,
-        )
-        raise DiscordTransientError(
-            f"Failed to open flow database: {exc}",
-            user_message="Unable to access flow database. Please try again later.",
-        ) from None
+    store = _open_flow_store_or_raise(service, workspace_root)
     try:
         try:
             runs = store.list_flow_runs(flow_type="ticket_flow")[:limit]
@@ -1078,20 +1072,7 @@ async def handle_flow_start(
             interaction_token,
         )
 
-    try:
-        store = service._open_flow_store(workspace_root)
-    except (sqlite3.Error, OSError, RuntimeError, ConfigError) as exc:
-        log_event(
-            service._logger,
-            logging.ERROR,
-            "discord.flow.store_open_failed",
-            workspace_root=str(workspace_root),
-            exc=exc,
-        )
-        raise DiscordTransientError(
-            f"Failed to open flow database: {exc}",
-            user_message="Unable to access flow database. Please try again later.",
-        ) from None
+    store = _open_flow_store_or_raise(service, workspace_root)
     try:
         try:
             runs = store.list_flow_runs(flow_type="ticket_flow")
@@ -1124,20 +1105,7 @@ async def handle_flow_start(
                 active_or_paused.id,
                 is_terminal=active_or_paused.status.is_terminal(),
             )
-            try:
-                store = service._open_flow_store(workspace_root)
-            except (sqlite3.Error, OSError, RuntimeError, ConfigError) as exc:
-                log_event(
-                    service._logger,
-                    logging.ERROR,
-                    "discord.flow.store_open_failed",
-                    workspace_root=str(workspace_root),
-                    exc=exc,
-                )
-                raise DiscordTransientError(
-                    f"Failed to open flow database: {exc}",
-                    user_message="Unable to access flow database. Please try again later.",
-                ) from None
+            store = _open_flow_store_or_raise(service, workspace_root)
             try:
                 try:
                     record = service._resolve_flow_run_by_id(
@@ -1251,20 +1219,7 @@ async def handle_flow_start(
         )
         return
 
-    try:
-        store = service._open_flow_store(workspace_root)
-    except (sqlite3.Error, OSError, RuntimeError, ConfigError) as exc:
-        log_event(
-            service._logger,
-            logging.ERROR,
-            "discord.flow.store_open_failed",
-            workspace_root=str(workspace_root),
-            exc=exc,
-        )
-        raise DiscordTransientError(
-            f"Failed to open flow database: {exc}",
-            user_message="Unable to access flow database. Please try again later.",
-        ) from None
+    store = _open_flow_store_or_raise(service, workspace_root)
     try:
         try:
             record = service._resolve_flow_run_by_id(store, run_id=started.run_id)
@@ -1378,20 +1333,7 @@ async def handle_flow_restart(
     )
     if run_id_opt is None:
         return
-    try:
-        store = service._open_flow_store(workspace_root)
-    except (sqlite3.Error, OSError, RuntimeError, ConfigError) as exc:
-        log_event(
-            service._logger,
-            logging.ERROR,
-            "discord.flow.store_open_failed",
-            workspace_root=str(workspace_root),
-            exc=exc,
-        )
-        raise DiscordTransientError(
-            f"Failed to open flow database: {exc}",
-            user_message="Unable to access flow database. Please try again later.",
-        ) from None
+    store = _open_flow_store_or_raise(service, workspace_root)
     try:
         target: Optional[FlowRunRecord] = None
         if isinstance(run_id_opt, str) and run_id_opt.strip():
@@ -1513,20 +1455,7 @@ async def handle_flow_recover(
     )
     if run_id_opt is None:
         return
-    try:
-        store = service._open_flow_store(workspace_root)
-    except (sqlite3.Error, OSError, RuntimeError, ConfigError) as exc:
-        log_event(
-            service._logger,
-            logging.ERROR,
-            "discord.flow.store_open_failed",
-            workspace_root=str(workspace_root),
-            exc=exc,
-        )
-        raise DiscordTransientError(
-            f"Failed to open flow database: {exc}",
-            user_message="Unable to access flow database. Please try again later.",
-        ) from None
+    store = _open_flow_store_or_raise(service, workspace_root)
     try:
         target: Optional[FlowRunRecord] = None
         if isinstance(run_id_opt, str) and run_id_opt.strip():
@@ -1620,20 +1549,7 @@ async def handle_flow_resume(
     )
     if run_id_opt is None:
         return
-    try:
-        store = service._open_flow_store(workspace_root)
-    except (sqlite3.Error, OSError, RuntimeError, ConfigError) as exc:
-        log_event(
-            service._logger,
-            logging.ERROR,
-            "discord.flow.store_open_failed",
-            workspace_root=str(workspace_root),
-            exc=exc,
-        )
-        raise DiscordTransientError(
-            f"Failed to open flow database: {exc}",
-            user_message="Unable to access flow database. Please try again later.",
-        ) from None
+    store = _open_flow_store_or_raise(service, workspace_root)
     try:
         if isinstance(run_id_opt, str) and run_id_opt.strip():
             try:
@@ -1767,20 +1683,7 @@ async def handle_flow_stop(
     )
     if run_id_opt is None:
         return
-    try:
-        store = service._open_flow_store(workspace_root)
-    except (sqlite3.Error, OSError, RuntimeError, ConfigError) as exc:
-        log_event(
-            service._logger,
-            logging.ERROR,
-            "discord.flow.store_open_failed",
-            workspace_root=str(workspace_root),
-            exc=exc,
-        )
-        raise DiscordTransientError(
-            f"Failed to open flow database: {exc}",
-            user_message="Unable to access flow database. Please try again later.",
-        ) from None
+    store = _open_flow_store_or_raise(service, workspace_root)
     try:
         if isinstance(run_id_opt, str) and run_id_opt.strip():
             try:
@@ -1914,20 +1817,7 @@ async def handle_flow_archive(
             return
     else:
         run_id_opt = ""
-    try:
-        store = service._open_flow_store(workspace_root)
-    except (sqlite3.Error, OSError, RuntimeError, ConfigError) as exc:
-        log_event(
-            service._logger,
-            logging.ERROR,
-            "discord.flow.store_open_failed",
-            workspace_root=str(workspace_root),
-            exc=exc,
-        )
-        raise DiscordTransientError(
-            f"Failed to open flow database: {exc}",
-            user_message="Unable to access flow database. Please try again later.",
-        ) from None
+    store = _open_flow_store_or_raise(service, workspace_root)
     try:
         if isinstance(run_id_opt, str) and run_id_opt.strip():
             try:
@@ -2102,20 +1992,7 @@ async def handle_flow_reply(
         )
         if run_id_opt is None:
             return
-    try:
-        store = service._open_flow_store(workspace_root)
-    except (sqlite3.Error, OSError, RuntimeError, ConfigError) as exc:
-        log_event(
-            service._logger,
-            logging.ERROR,
-            "discord.flow.store_open_failed",
-            workspace_root=str(workspace_root),
-            exc=exc,
-        )
-        raise DiscordTransientError(
-            f"Failed to open flow database: {exc}",
-            user_message="Unable to access flow database. Please try again later.",
-        ) from None
+    store = _open_flow_store_or_raise(service, workspace_root)
     try:
         if isinstance(run_id_opt, str) and run_id_opt.strip():
             try:
@@ -2314,20 +2191,7 @@ async def handle_flow_button(
             return
 
         def _resolve_archive_target() -> Optional[FlowRunRecord]:
-            try:
-                store = service._open_flow_store(workspace_root)
-            except (sqlite3.Error, OSError, RuntimeError, ConfigError) as exc:
-                log_event(
-                    service._logger,
-                    logging.ERROR,
-                    "discord.flow.store_open_failed",
-                    workspace_root=str(workspace_root),
-                    exc=exc,
-                )
-                raise DiscordTransientError(
-                    f"Failed to open flow database: {exc}",
-                    user_message="Unable to access flow database. Please try again later.",
-                ) from None
+            store = _open_flow_store_or_raise(service, workspace_root)
             try:
                 try:
                     return cast(
