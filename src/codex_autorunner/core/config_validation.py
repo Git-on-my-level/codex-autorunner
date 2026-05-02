@@ -102,26 +102,26 @@ def _validate_app_server_config(cfg: Dict[str, Any]) -> None:
     for key, schema in APP_SERVER_FIELD_SCHEMAS.items():
         if key in app_server_cfg:
             validate_schema_field(app_server_cfg.get(key), schema)
-    client_cfg = app_server_cfg.get("client")
+    client_cfg = _require_optional_mapping(
+        app_server_cfg, "client", path="app_server.client"
+    )
     if client_cfg is not None:
-        if not isinstance(client_cfg, dict):
-            raise ConfigError("app_server.client must be a mapping if provided")
         for key, schema in APP_SERVER_CLIENT_FIELD_SCHEMAS.items():
             if key in client_cfg:
                 validate_schema_field(client_cfg.get(key), schema)
-    output_cfg = app_server_cfg.get("output")
+    output_cfg = _require_optional_mapping(
+        app_server_cfg, "output", path="app_server.output"
+    )
     if output_cfg is not None:
-        if not isinstance(output_cfg, dict):
-            raise ConfigError("app_server.output must be a mapping if provided")
         if "policy" in output_cfg:
             validate_schema_field(
                 output_cfg.get("policy"),
                 APP_SERVER_OUTPUT_FIELD_SCHEMAS["policy"],
             )
-    prompts = app_server_cfg.get("prompts")
+    prompts = _require_optional_mapping(
+        app_server_cfg, "prompts", path="app_server.prompts"
+    )
     if prompts is not None:
-        if not isinstance(prompts, dict):
-            raise ConfigError("app_server.prompts must be a mapping if provided")
         for section, section_schema in APP_SERVER_PROMPT_SECTION_SCHEMAS.items():
             section_cfg = prompts.get(section)
             if section_cfg is None:
@@ -141,10 +141,10 @@ def _validate_collaboration_policy_config(cfg: Dict[str, Any]) -> None:
     if not isinstance(collaboration_cfg, dict):
         raise ConfigError("collaboration_policy section must be a mapping if provided")
 
-    actors_cfg = collaboration_cfg.get("actors")
-    if actors_cfg is not None and not isinstance(actors_cfg, dict):
-        raise ConfigError("collaboration_policy.actors must be a mapping if provided")
-    if isinstance(actors_cfg, dict):
+    actors_cfg = _require_optional_mapping(
+        collaboration_cfg, "actors", path="collaboration_policy.actors"
+    )
+    if actors_cfg is not None:
         _validate_id_list(
             actors_cfg,
             "allowed_user_ids",
@@ -314,6 +314,17 @@ def _validate_destination_id(
         return
     if not isinstance(value, (str, int)):
         raise ConfigError(f"{path} must be a string/int ID")
+
+
+def _require_optional_mapping(
+    raw: Dict[str, Any], key: str, *, path: str
+) -> Dict[str, Any] | None:
+    value = raw.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ConfigError(f"{path} must be a mapping if provided")
+    return value
 
 
 def _validate_opencode_config(cfg: Dict[str, Any]) -> None:
@@ -501,24 +512,18 @@ def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
         val = runner.get(k)
         if val is not None and not isinstance(val, int):
             raise ConfigError(f"runner.{k} must be an integer or null")
-    autorunner_cfg = cfg.get("autorunner")
-    if autorunner_cfg is not None and not isinstance(autorunner_cfg, dict):
-        raise ConfigError("autorunner section must be a mapping if provided")
-    if isinstance(autorunner_cfg, dict):
+    autorunner_cfg = _require_optional_mapping(cfg, "autorunner", path="autorunner")
+    if autorunner_cfg is not None:
         reuse_session = autorunner_cfg.get("reuse_session")
         if reuse_session is not None and not isinstance(reuse_session, bool):
             raise ConfigError("autorunner.reuse_session must be boolean or null")
-    ticket_flow_cfg = cfg.get("ticket_flow")
-    if ticket_flow_cfg is not None and not isinstance(ticket_flow_cfg, dict):
-        raise ConfigError("ticket_flow section must be a mapping if provided")
-    if isinstance(ticket_flow_cfg, dict):
+    ticket_flow_cfg = _require_optional_mapping(cfg, "ticket_flow", path="ticket_flow")
+    if ticket_flow_cfg is not None:
         for key, schema in TICKET_FLOW_FIELD_SCHEMAS.items():
             if key in ticket_flow_cfg:
                 validate_schema_field(ticket_flow_cfg.get(key), schema)
-    ui_cfg = cfg.get("ui")
-    if ui_cfg is not None and not isinstance(ui_cfg, dict):
-        raise ConfigError("ui section must be a mapping if provided")
-    if isinstance(ui_cfg, dict):
+    ui_cfg = _require_optional_mapping(cfg, "ui", path="ui")
+    if ui_cfg is not None:
         if "editor" in ui_cfg and not isinstance(ui_cfg.get("editor"), str):
             raise ConfigError("ui.editor must be a string if provided")
     git = cfg.get("git")
@@ -544,20 +549,18 @@ def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
             github.get("sync_agent_timeout_seconds"), int
         ):
             raise ConfigError("github.sync_agent_timeout_seconds must be an integer")
-        automation = github.get("automation")
-        if automation is not None and not isinstance(automation, dict):
-            raise ConfigError("github.automation must be a mapping if provided")
-        if isinstance(automation, dict):
+        automation = _require_optional_mapping(
+            github, "automation", path="github.automation"
+        )
+        if automation is not None:
             if "enabled" in automation and not isinstance(
                 automation.get("enabled"), bool
             ):
                 raise ConfigError("github.automation.enabled must be boolean")
-            reactions = automation.get("reactions")
-            if reactions is not None and not isinstance(reactions, dict):
-                raise ConfigError(
-                    "github.automation.reactions must be a mapping if provided"
-                )
-            if isinstance(reactions, dict):
+            reactions = _require_optional_mapping(
+                automation, "reactions", path="github.automation.reactions"
+            )
+            if reactions is not None:
                 profile = reactions.get("profile")
                 if profile is not None:
                     if not isinstance(profile, str):
@@ -591,12 +594,10 @@ def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
                             raise ConfigError(
                                 f"github.automation.reactions.{key} must be a list of strings"
                             )
-            policy = automation.get("policy")
-            if policy is not None and not isinstance(policy, dict):
-                raise ConfigError(
-                    "github.automation.policy must be a mapping if provided"
-                )
-            if isinstance(policy, dict):
+            policy = _require_optional_mapping(
+                automation, "policy", path="github.automation.policy"
+            )
+            if policy is not None:
                 for action_type, value in policy.items():
                     if action_type not in MUTATION_POLICY_ACTION_TYPES:
                         allowed = ", ".join(MUTATION_POLICY_ACTION_TYPES)
@@ -610,12 +611,10 @@ def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
                             f"github.automation.policy.{action_type} must be boolean or "
                             f"one of: {allowed_values}"
                         )
-            webhook_ingress = automation.get("webhook_ingress")
-            if webhook_ingress is not None and not isinstance(webhook_ingress, dict):
-                raise ConfigError(
-                    "github.automation.webhook_ingress must be a mapping if provided"
-                )
-            if isinstance(webhook_ingress, dict):
+            webhook_ingress = _require_optional_mapping(
+                automation, "webhook_ingress", path="github.automation.webhook_ingress"
+            )
+            if webhook_ingress is not None:
                 if "enabled" in webhook_ingress and not isinstance(
                     webhook_ingress.get("enabled"), bool
                 ):
@@ -672,12 +671,10 @@ def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
                     raise ConfigError(
                         "github.automation.webhook_ingress.max_raw_payload_bytes must be <= max_payload_bytes"
                     )
-            polling = automation.get("polling")
-            if polling is not None and not isinstance(polling, dict):
-                raise ConfigError(
-                    "github.automation.polling must be a mapping if provided"
-                )
-            if isinstance(polling, dict):
+            polling = _require_optional_mapping(
+                automation, "polling", path="github.automation.polling"
+            )
+            if polling is not None:
                 if "enabled" in polling and not isinstance(
                     polling.get("enabled"), bool
                 ):
@@ -797,10 +794,10 @@ def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
                 raise ConfigError(
                     "notifications.timeout_seconds must be > 0 if provided"
                 )
-        discord_cfg = notifications_cfg.get("discord")
-        if discord_cfg is not None and not isinstance(discord_cfg, dict):
-            raise ConfigError("notifications.discord must be a mapping if provided")
-        if isinstance(discord_cfg, dict):
+        discord_cfg = _require_optional_mapping(
+            notifications_cfg, "discord", path="notifications.discord"
+        )
+        if discord_cfg is not None:
             if "enabled" in discord_cfg and not isinstance(
                 discord_cfg.get("enabled"), bool
             ):
@@ -811,10 +808,10 @@ def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
                 raise ConfigError(
                     "notifications.discord.webhook_url_env must be a string"
                 )
-        telegram_cfg = notifications_cfg.get("telegram")
-        if telegram_cfg is not None and not isinstance(telegram_cfg, dict):
-            raise ConfigError("notifications.telegram must be a mapping if provided")
-        if isinstance(telegram_cfg, dict):
+        telegram_cfg = _require_optional_mapping(
+            notifications_cfg, "telegram", path="notifications.telegram"
+        )
+        if telegram_cfg is not None:
             if "enabled" in telegram_cfg and not isinstance(
                 telegram_cfg.get("enabled"), bool
             ):
@@ -852,10 +849,8 @@ def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
                         raise ConfigError(
                             "notifications.telegram.thread_id_map must map strings to integers"
                         )
-    terminal_cfg = cfg.get("terminal")
+    terminal_cfg = _require_optional_mapping(cfg, "terminal", path="terminal")
     if terminal_cfg is not None:
-        if not isinstance(terminal_cfg, dict):
-            raise ConfigError("terminal section must be a mapping if provided")
         idle_timeout_seconds = terminal_cfg.get("idle_timeout_seconds")
         if idle_timeout_seconds is not None and not isinstance(
             idle_timeout_seconds, int
@@ -893,19 +888,17 @@ def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
     for key in ("max_bytes", "backup_count"):
         if key in server_log_cfg and not isinstance(server_log_cfg.get(key, 0), int):
             raise ConfigError(f"server_log.{key} must be an integer")
-    static_cfg = cfg.get("static_assets")
-    if static_cfg is not None and not isinstance(static_cfg, dict):
-        raise ConfigError("static_assets section must be a mapping if provided")
-    if isinstance(static_cfg, dict) and "cache_root" in static_cfg:
+    static_cfg = _require_optional_mapping(cfg, "static_assets", path="static_assets")
+    if static_cfg is not None and "cache_root" in static_cfg:
         if not isinstance(static_cfg.get("cache_root"), str):
             raise ConfigError("static_assets.cache_root must be a string path")
-    if isinstance(static_cfg, dict) and "max_cache_entries" in static_cfg:
+    if static_cfg is not None and "max_cache_entries" in static_cfg:
         max_cache_entries = static_cfg.get("max_cache_entries")
         if not isinstance(max_cache_entries, int):
             raise ConfigError("static_assets.max_cache_entries must be an integer")
         if max_cache_entries < 0:
             raise ConfigError("static_assets.max_cache_entries must be >= 0")
-    if isinstance(static_cfg, dict) and "max_cache_age_days" in static_cfg:
+    if static_cfg is not None and "max_cache_age_days" in static_cfg:
         max_cache_age_days = static_cfg.get("max_cache_age_days")
         if not isinstance(max_cache_age_days, int):
             raise ConfigError("static_assets.max_cache_age_days must be an integer")
@@ -991,17 +984,19 @@ def _validate_hub_config(cfg: Dict[str, Any], *, root: Path) -> None:
     _validate_opencode_config(cfg)
     _validate_update_config(cfg)
     _validate_usage_config(cfg, root=root)
-    server_log_cfg = cfg.get("server_log")
-    if server_log_cfg is not None and not isinstance(server_log_cfg, dict):
-        raise ConfigError("server_log section must be a mapping or null")
-    if isinstance(server_log_cfg, dict):
-        if "path" in server_log_cfg and not isinstance(
-            server_log_cfg.get("path", ""), str
-        ):
+    server_log_cfg = _require_optional_mapping(cfg, "server_log", path="server_log")
+    if server_log_cfg is None:
+        server_log_cfg = {}
+    if "path" in server_log_cfg:
+        if not isinstance(server_log_cfg.get("path", ""), str):
             raise ConfigError("server_log.path must be a string path")
-        for key in ("max_bytes", "backup_count"):
-            if key in server_log_cfg and not isinstance(server_log_cfg.get(key), int):
-                raise ConfigError(f"server_log.{key} must be an integer")
+        try:
+            resolve_config_path(server_log_cfg["path"], root, scope="server_log.path")
+        except ConfigPathError as exc:
+            raise ConfigError(str(exc)) from exc
+    for key in ("max_bytes", "backup_count"):
+        if key in server_log_cfg and not isinstance(server_log_cfg.get(key, 0), int):
+            raise ConfigError(f"server_log.{key} must be an integer")
     _validate_static_assets_config(cfg, scope="hub")
     _validate_housekeeping_config(cfg)
     _validate_pma_config(cfg)
@@ -1250,10 +1245,10 @@ def _validate_telegram_bot_config(cfg: Dict[str, Any]) -> None:
                 raise ConfigError(
                     "telegram_bot.parse_mode must be HTML, Markdown, MarkdownV2, or null"
                 )
-    debug_cfg = telegram_cfg.get("debug")
-    if debug_cfg is not None and not isinstance(debug_cfg, dict):
-        raise ConfigError("telegram_bot.debug must be a mapping if provided")
-    if isinstance(debug_cfg, dict):
+    debug_cfg = _require_optional_mapping(
+        telegram_cfg, "debug", path="telegram_bot.debug"
+    )
+    if debug_cfg is not None:
         if "prefix_context" in debug_cfg and not isinstance(
             debug_cfg.get("prefix_context"), bool
         ):
@@ -1268,10 +1263,10 @@ def _validate_telegram_bot_config(cfg: Dict[str, Any]) -> None:
         telegram_cfg.get("require_topics"), bool
     ):
         raise ConfigError("telegram_bot.require_topics must be boolean")
-    defaults_cfg = telegram_cfg.get("defaults")
-    if defaults_cfg is not None and not isinstance(defaults_cfg, dict):
-        raise ConfigError("telegram_bot.defaults must be a mapping if provided")
-    if isinstance(defaults_cfg, dict):
+    defaults_cfg = _require_optional_mapping(
+        telegram_cfg, "defaults", path="telegram_bot.defaults"
+    )
+    if defaults_cfg is not None:
         if "approval_mode" in defaults_cfg:
             _normalize_ticket_flow_approval_mode(
                 defaults_cfg.get("approval_mode"),
@@ -1291,10 +1286,10 @@ def _validate_telegram_bot_config(cfg: Dict[str, Any]) -> None:
                 raise ConfigError(
                     f"telegram_bot.defaults.{key} must be a string or null"
                 )
-    concurrency_cfg = telegram_cfg.get("concurrency")
-    if concurrency_cfg is not None and not isinstance(concurrency_cfg, dict):
-        raise ConfigError("telegram_bot.concurrency must be a mapping if provided")
-    if isinstance(concurrency_cfg, dict):
+    concurrency_cfg = _require_optional_mapping(
+        telegram_cfg, "concurrency", path="telegram_bot.concurrency"
+    )
+    if concurrency_cfg is not None:
         if "max_parallel_turns" in concurrency_cfg and not isinstance(
             concurrency_cfg.get("max_parallel_turns"), int
         ):
@@ -1307,10 +1302,10 @@ def _validate_telegram_bot_config(cfg: Dict[str, Any]) -> None:
             raise ConfigError(
                 "telegram_bot.concurrency.per_topic_queue must be boolean"
             )
-    media_cfg = telegram_cfg.get("media")
-    if media_cfg is not None and not isinstance(media_cfg, dict):
-        raise ConfigError("telegram_bot.media must be a mapping if provided")
-    if isinstance(media_cfg, dict):
+    media_cfg = _require_optional_mapping(
+        telegram_cfg, "media", path="telegram_bot.media"
+    )
+    if media_cfg is not None:
         if "enabled" in media_cfg and not isinstance(media_cfg.get("enabled"), bool):
             raise ConfigError("telegram_bot.media.enabled must be boolean")
         if "images" in media_cfg and not isinstance(media_cfg.get("images"), bool):
@@ -1329,10 +1324,10 @@ def _validate_telegram_bot_config(cfg: Dict[str, Any]) -> None:
             media_cfg.get("image_prompt"), str
         ):
             raise ConfigError("telegram_bot.media.image_prompt must be a string")
-    shell_cfg = telegram_cfg.get("shell")
-    if shell_cfg is not None and not isinstance(shell_cfg, dict):
-        raise ConfigError("telegram_bot.shell must be a mapping if provided")
-    if isinstance(shell_cfg, dict):
+    shell_cfg = _require_optional_mapping(
+        telegram_cfg, "shell", path="telegram_bot.shell"
+    )
+    if shell_cfg is not None:
         if "enabled" in shell_cfg and not isinstance(shell_cfg.get("enabled"), bool):
             raise ConfigError("telegram_bot.shell.enabled must be boolean")
         for key in ("timeout_ms", "max_output_chars"):
@@ -1341,10 +1336,10 @@ def _validate_telegram_bot_config(cfg: Dict[str, Any]) -> None:
                 raise ConfigError(f"telegram_bot.shell.{key} must be an integer")
             if isinstance(value, int) and value <= 0:
                 raise ConfigError(f"telegram_bot.shell.{key} must be greater than 0")
-    cache_cfg = telegram_cfg.get("cache")
-    if cache_cfg is not None and not isinstance(cache_cfg, dict):
-        raise ConfigError("telegram_bot.cache must be a mapping if provided")
-    if isinstance(cache_cfg, dict):
+    cache_cfg = _require_optional_mapping(
+        telegram_cfg, "cache", path="telegram_bot.cache"
+    )
+    if cache_cfg is not None:
         for key in (
             "cleanup_interval_seconds",
             "coalesce_buffer_ttl_seconds",
@@ -1364,10 +1359,10 @@ def _validate_telegram_bot_config(cfg: Dict[str, Any]) -> None:
                 raise ConfigError(f"telegram_bot.cache.{key} must be a number")
             if isinstance(value, (int, float)) and value <= 0:
                 raise ConfigError(f"telegram_bot.cache.{key} must be > 0")
-    command_reg_cfg = telegram_cfg.get("command_registration")
-    if command_reg_cfg is not None and not isinstance(command_reg_cfg, dict):
-        raise ConfigError("telegram_bot.command_registration must be a mapping")
-    if isinstance(command_reg_cfg, dict):
+    command_reg_cfg = _require_optional_mapping(
+        telegram_cfg, "command_registration", path="telegram_bot.command_registration"
+    )
+    if command_reg_cfg is not None:
         if "enabled" in command_reg_cfg and not isinstance(
             command_reg_cfg.get("enabled"), bool
         ):
@@ -1419,10 +1414,10 @@ def _validate_telegram_bot_config(cfg: Dict[str, Any]) -> None:
         telegram_cfg.get("app_server_command"), (list, str)
     ):
         raise ConfigError("telegram_bot.app_server_command must be a list or string")
-    app_server_cfg = telegram_cfg.get("app_server")
-    if app_server_cfg is not None and not isinstance(app_server_cfg, dict):
-        raise ConfigError("telegram_bot.app_server must be a mapping if provided")
-    if isinstance(app_server_cfg, dict):
+    app_server_cfg = _require_optional_mapping(
+        telegram_cfg, "app_server", path="telegram_bot.app_server"
+    )
+    if app_server_cfg is not None:
         if (
             "turn_timeout_seconds" in app_server_cfg
             and app_server_cfg.get("turn_timeout_seconds") is not None
@@ -1431,10 +1426,10 @@ def _validate_telegram_bot_config(cfg: Dict[str, Any]) -> None:
             raise ConfigError(
                 "telegram_bot.app_server.turn_timeout_seconds must be a number or null"
             )
-    agent_timeouts_cfg = telegram_cfg.get("agent_timeouts")
-    if agent_timeouts_cfg is not None and not isinstance(agent_timeouts_cfg, dict):
-        raise ConfigError("telegram_bot.agent_timeouts must be a mapping if provided")
-    if isinstance(agent_timeouts_cfg, dict):
+    agent_timeouts_cfg = _require_optional_mapping(
+        telegram_cfg, "agent_timeouts", path="telegram_bot.agent_timeouts"
+    )
+    if agent_timeouts_cfg is not None:
         for _key, value in agent_timeouts_cfg.items():
             if value is None:
                 continue
@@ -1442,10 +1437,10 @@ def _validate_telegram_bot_config(cfg: Dict[str, Any]) -> None:
                 raise ConfigError(
                     "telegram_bot.agent_timeouts values must be numbers or null"
                 )
-    polling_cfg = telegram_cfg.get("polling")
-    if polling_cfg is not None and not isinstance(polling_cfg, dict):
-        raise ConfigError("telegram_bot.polling must be a mapping if provided")
-    if isinstance(polling_cfg, dict):
+    polling_cfg = _require_optional_mapping(
+        telegram_cfg, "polling", path="telegram_bot.polling"
+    )
+    if polling_cfg is not None:
         if "timeout_seconds" in polling_cfg and not isinstance(
             polling_cfg.get("timeout_seconds"), int
         ):
@@ -1493,10 +1488,12 @@ def _validate_discord_bot_config(cfg: Dict[str, Any]) -> None:
     ):
         raise ConfigError("discord_bot.max_message_length must be an integer")
 
-    command_registration = discord_cfg.get("command_registration")
-    if command_registration is not None and not isinstance(command_registration, dict):
-        raise ConfigError("discord_bot.command_registration must be a mapping")
-    if isinstance(command_registration, dict):
+    command_registration = _require_optional_mapping(
+        discord_cfg,
+        "command_registration",
+        path="discord_bot.command_registration",
+    )
+    if command_registration is not None:
         if "enabled" in command_registration and not isinstance(
             command_registration.get("enabled"), bool
         ):
@@ -1525,10 +1522,10 @@ def _validate_discord_bot_config(cfg: Dict[str, Any]) -> None:
                         "discord_bot.command_registration.guild_ids must contain only string/int IDs"
                     )
 
-    media_cfg = discord_cfg.get("media")
-    if media_cfg is not None and not isinstance(media_cfg, dict):
-        raise ConfigError("discord_bot.media must be a mapping")
-    if isinstance(media_cfg, dict):
+    media_cfg = _require_optional_mapping(
+        discord_cfg, "media", path="discord_bot.media"
+    )
+    if media_cfg is not None:
         if "enabled" in media_cfg and not isinstance(media_cfg.get("enabled"), bool):
             raise ConfigError("discord_bot.media.enabled must be boolean")
         if "voice" in media_cfg and not isinstance(media_cfg.get("voice"), bool):
