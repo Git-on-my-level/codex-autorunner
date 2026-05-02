@@ -16,6 +16,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import atexit
 import json
 import logging
 import os
@@ -36,6 +37,48 @@ import yaml
 _SCRIPT_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = _SCRIPT_DIR.parent
 _PROFILES_PATH = _SCRIPT_DIR / "idle_cpu_profiles.yml"
+_PROCESS_KIND = "idle_cpu_soak"
+_SERVICE_WATCHDOG_CODE = r"""
+import os
+import signal
+import subprocess
+import sys
+import time
+
+owner_pid = int(sys.argv[1])
+service_cmd = sys.argv[2:]
+child = subprocess.Popen(service_cmd)
+stopping = False
+
+
+def stop(signum, _frame):
+    global stopping
+    if stopping:
+        return
+    stopping = True
+    if child.poll() is None:
+        child.terminate()
+        try:
+            child.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            child.kill()
+            child.wait(timeout=2)
+    raise SystemExit(128 + signum)
+
+
+for candidate in ("SIGTERM", "SIGINT", "SIGHUP"):
+    sig = getattr(signal, candidate, None)
+    if sig is not None:
+        signal.signal(sig, stop)
+
+while True:
+    returncode = child.poll()
+    if returncode is not None:
+        raise SystemExit(returncode)
+    if os.getppid() != owner_pid:
+        stop(signal.SIGTERM, None)
+    time.sleep(0.5)
+"""
 
 sys.path.insert(0, str(_REPO_ROOT / "src"))
 
@@ -50,6 +93,11 @@ from codex_autorunner.core.diagnostics.cpu_sampler import (
 )  # noqa: E402
 from codex_autorunner.core.diagnostics.process_snapshot import (  # noqa: E402
     ProcessCategory,
+)
+from codex_autorunner.core.managed_processes.registry import (  # noqa: E402
+    ProcessRecord,
+    delete_process_record,
+    write_process_record,
 )
 from codex_autorunner.core.utils import atomic_write  # noqa: E402
 
@@ -250,6 +298,9 @@ def _collect_service_pids(
                         queue.extend(pp_to_pid.get(p, []))
         except ProcessLookupError:
             service_pids.append(proc.pid)
+        # proc.pid is the watchdog wrapper, not the service; omit it from idle
+        # resource measurement (see _start_service / start_new_session).
+        service_pids = [p for p in service_pids if p != proc.pid]
         pids.extend(service_pids)
     return list(set(pids))
 
@@ -266,23 +317,80 @@ def _start_service(
     env["CAR_HUB_ROOT"] = str(hub_root)
     env["CAR_DEV_INCLUDE_ROOT_REPO"] = "1"
     logger.info("starting service: %s (%s)", svc["alias"], " ".join(cmd))
+    watchdog_cmd = [
+        sys.executable,
+        "-c",
+        _SERVICE_WATCHDOG_CODE,
+        str(os.getpid()),
+        *cmd,
+    ]
     proc = subprocess.Popen(
-        cmd,
+        watchdog_cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         env=env,
-        preexec_fn=os.setsid,
+        start_new_session=True,
     )
     return proc
 
 
+def _service_record_key(proc: subprocess.Popen) -> str:
+    return str(proc.pid)
+
+
+def _write_service_record(
+    proc: subprocess.Popen,
+    svc: dict[str, Any],
+    profile_name: str,
+    hub_root: Path,
+    base_url: str,
+    logger: logging.Logger,
+) -> None:
+    pgid: int | None = None
+    try:
+        pgid = os.getpgid(proc.pid)
+    except ProcessLookupError:
+        pass
+    record = ProcessRecord(
+        kind=_PROCESS_KIND,
+        workspace_id=None,
+        pid=proc.pid,
+        pgid=pgid,
+        base_url=base_url,
+        command=list(svc["command"]),
+        owner_pid=os.getpid(),
+        started_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        metadata={
+            "alias": svc.get("alias", ""),
+            "hub_root": str(hub_root),
+            "profile": profile_name,
+        },
+    )
+    write_process_record(_REPO_ROOT, record)
+    logger.debug(
+        "registered soak service process pid=%d pgid=%s kind=%s",
+        proc.pid,
+        pgid,
+        _PROCESS_KIND,
+    )
+
+
+def _delete_service_record(proc: subprocess.Popen, logger: logging.Logger) -> None:
+    try:
+        delete_process_record(_REPO_ROOT, _PROCESS_KIND, _service_record_key(proc))
+    except ValueError as exc:
+        logger.warning("failed to delete soak service process record: %s", exc)
+
+
 def _stop_service(proc: subprocess.Popen, logger: logging.Logger) -> None:
     if proc.poll() is not None:
+        _delete_service_record(proc, logger)
         return
     logger.info("stopping service pid=%d", proc.pid)
     try:
         os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
     except ProcessLookupError:
+        _delete_service_record(proc, logger)
         return
     try:
         proc.wait(timeout=5)
@@ -295,6 +403,12 @@ def _stop_service(proc: subprocess.Popen, logger: logging.Logger) -> None:
             proc.wait(timeout=2)
         except subprocess.TimeoutExpired:
             pass
+    _delete_service_record(proc, logger)
+
+
+def _stop_services(procs: list[subprocess.Popen], logger: logging.Logger) -> None:
+    for proc in procs:
+        _stop_service(proc, logger)
 
 
 def _collect_environment() -> dict[str, Any]:
@@ -443,19 +557,47 @@ def run_soak(
 
         services = _parse_services(profile, port)
         procs: list[subprocess.Popen] = []
+        cleanup_done = False
+
+        def cleanup_services() -> None:
+            nonlocal cleanup_done
+            if cleanup_done:
+                return
+            cleanup_done = True
+            _stop_services(procs, logger)
+
+        def handle_shutdown_signal(signum: int, _frame: object) -> None:
+            logger.warning("received signal %s; stopping soak services", signum)
+            cleanup_services()
+            raise SystemExit(128 + signum)
+
+        shutdown_signals = [signal.SIGTERM, signal.SIGINT]
+        if hasattr(signal, "SIGHUP"):
+            shutdown_signals.append(signal.SIGHUP)
+        previous_handlers = {
+            sig: signal.getsignal(sig)
+            for sig in shutdown_signals
+            if signal.getsignal(sig) is not None
+        }
 
         try:
+            for sig in previous_handlers:
+                signal.signal(sig, handle_shutdown_signal)
+            atexit.register(cleanup_services)
+
             for svc in services:
                 proc = _start_service(svc, hub_root, logger)
                 procs.append(proc)
                 svc["pid"] = proc.pid
+                _write_service_record(
+                    proc, svc, profile_name, hub_root, base_url, logger
+                )
 
             health_ok = _wait_for_health(
                 base_url, probe_config, timeout=60.0, logger=logger
             )
             if not health_ok:
-                for proc in procs:
-                    _stop_service(proc, logger)
+                cleanup_services()
                 raise RuntimeError(
                     f"Service(s) failed to become healthy at {base_url}/health"
                 )
@@ -487,8 +629,13 @@ def run_soak(
                     time.sleep(remaining)
 
         finally:
-            for proc in procs:
-                _stop_service(proc, logger)
+            cleanup_services()
+            try:
+                atexit.unregister(cleanup_services)
+            except ValueError:
+                pass
+            for sig, previous in previous_handlers.items():
+                signal.signal(sig, previous)
 
         finished_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 

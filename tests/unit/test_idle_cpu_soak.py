@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +14,9 @@ import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SOAK_SCRIPT = _REPO_ROOT / "scripts" / "idle_cpu_soak.py"
+sys.path.insert(0, str(_REPO_ROOT / "scripts"))
+
+import idle_cpu_soak as soak_module  # noqa: E402
 
 
 class TestIdleCpuSoakArtifactSchema:
@@ -176,6 +182,146 @@ class TestIdleCpuSoakProfileParsing:
             assert name in profiles
             assert "services" in profiles[name]
             assert "hard_budget" in profiles[name]
+
+
+class TestIdleCpuSoakProcessManagement:
+    def _assert_pid_gone(self, pid: int) -> None:
+        for _ in range(50):
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return
+            time.sleep(0.1)
+        raise AssertionError(f"process {pid} still running")
+
+    def test_start_service_uses_new_session(self, monkeypatch, tmp_path: Path):
+        seen: dict[str, Any] = {}
+
+        class FakePopen:
+            pid = 4242
+
+            def __init__(self, cmd, **kwargs):
+                seen["cmd"] = cmd
+                seen.update(kwargs)
+
+        monkeypatch.setattr(soak_module.subprocess, "Popen", FakePopen)
+        monkeypatch.setattr(soak_module.os, "getpid", lambda: 3131)
+
+        proc = soak_module._start_service(  # noqa: SLF001
+            {
+                "alias": "hub",
+                "command": ["python", "-m", "codex_autorunner.cli", "hub", "serve"],
+            },
+            tmp_path / "hub",
+            logging.getLogger("test_idle_cpu_soak"),
+        )
+
+        assert proc.pid == 4242
+        assert seen["start_new_session"] is True
+        assert "preexec_fn" not in seen
+        assert seen["cmd"][:4] == [
+            sys.executable,
+            "-c",
+            soak_module._SERVICE_WATCHDOG_CODE,  # noqa: SLF001
+            "3131",
+        ]
+        assert seen["cmd"][-2:] == ["--path", str(tmp_path / "hub")]
+
+    def test_collect_service_pids_excludes_watchdog_pid(self, monkeypatch):
+        """Session scan includes the watchdog; measurement must omit its RSS/CPU."""
+
+        class FakeProc:
+            pid = 1000
+
+        calls: list[list[str]] = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            if cmd == ["ps", "-A", "-o", "pid=", "-o", "sid="]:
+                # Watchdog is session leader (sid == watchdog pid); child shares sid.
+                return subprocess.CompletedProcess(cmd, 0, "1000 1000\n1001 1000\n", "")
+            return subprocess.CompletedProcess(cmd, 1, "", "")
+
+        monkeypatch.setattr(soak_module.subprocess, "run", fake_run)
+        monkeypatch.setattr(soak_module.os, "getsid", lambda _pid: 1000)
+
+        pids = soak_module._collect_service_pids(  # noqa: SLF001
+            [FakeProc()], logging.getLogger("test")
+        )
+        assert sorted(pids) == [1001]
+
+    def test_write_and_delete_service_record(self, monkeypatch, tmp_path: Path):
+        class FakeProc:
+            pid = 5151
+
+            def poll(self):
+                return 0
+
+        monkeypatch.setattr(soak_module, "_REPO_ROOT", tmp_path)
+        monkeypatch.setattr(soak_module.os, "getpgid", lambda _pid: 6161)
+        monkeypatch.setattr(soak_module.os, "getpid", lambda: 7171)
+
+        proc = FakeProc()
+        logger = logging.getLogger("test_idle_cpu_soak")
+        soak_module._write_service_record(  # noqa: SLF001
+            proc,
+            {
+                "alias": "hub",
+                "command": ["python", "-m", "codex_autorunner.cli", "hub", "serve"],
+            },
+            "hub_only",
+            tmp_path / "idle-cpu-soak-abcd" / "hub",
+            "http://127.0.0.1:12345",
+            logger,
+        )
+
+        record = (
+            tmp_path / ".codex-autorunner" / "processes" / "idle_cpu_soak" / "5151.json"
+        )
+        assert record.exists()
+        payload = json.loads(record.read_text(encoding="utf-8"))
+        assert payload["pid"] == 5151
+        assert payload["pgid"] == 6161
+        assert payload["owner_pid"] == 7171
+        assert payload["metadata"]["profile"] == "hub_only"
+
+        soak_module._stop_service(proc, logger)  # noqa: SLF001
+
+        assert record.exists() is False
+
+    def test_service_watchdog_exits_when_harness_parent_exits(self, tmp_path: Path):
+        helper = f"""
+import logging
+import pathlib
+import sys
+
+sys.path.insert(0, {str(_REPO_ROOT / "scripts")!r})
+import idle_cpu_soak as soak
+
+proc = soak._start_service(
+    {{
+        "alias": "sleeper",
+        "command": [
+            sys.executable,
+            "-c",
+            "import time; time.sleep(300)",
+        ],
+    }},
+    pathlib.Path({str(tmp_path / "hub")!r}),
+    logging.getLogger("test_idle_cpu_soak.helper"),
+)
+print(proc.pid, flush=True)
+"""
+        result = subprocess.run(
+            [sys.executable, "-c", helper],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=5,
+        )
+        wrapper_pid = int(result.stdout.strip().splitlines()[-1])
+
+        self._assert_pid_gone(wrapper_pid)
 
 
 class TestIdleCpuSoakSignoffLogic:
