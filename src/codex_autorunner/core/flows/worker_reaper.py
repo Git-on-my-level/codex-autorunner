@@ -10,12 +10,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from ..diagnostics.process_snapshot import collect_processes
-from ..flow_worker_reaper_constants import (
+from ...flow_worker_reaper_constants import (
     DEFAULT_FLOW_WORKER_MAX_AGE_SECONDS,
     DEFAULT_FLOW_WORKER_TERMINATE_GRACE_SECONDS,
     DEFAULT_TERMINAL_RUN_GRACE_SECONDS,
 )
+from ..diagnostics.process_snapshot import collect_processes
 from ..state_roots import resolve_repo_flows_db_path, resolve_repo_state_root
 from ..text_utils import _pid_is_running
 from .models import FlowRunRecord, parse_flow_timestamp
@@ -75,18 +75,18 @@ class FlowWorkerReapSummary:
         }
 
 
-def inspect_flow_workers(
+def _scan_flow_worker_diagnostics(
     repo_root: Path,
     *,
-    stale_age_seconds: float = DEFAULT_FLOW_WORKER_MAX_AGE_SECONDS,
-) -> list[FlowWorkerDiagnostic]:
+    stale_age_seconds: float,
+) -> tuple[list[FlowWorkerDiagnostic], list[str], dict[str, FlowRunRecord]]:
     repo_root = repo_root.resolve()
     state_root = resolve_repo_state_root(repo_root)
     flows_root = state_root / "flows"
     if not flows_root.exists():
-        return []
+        return [], [], {}
 
-    runs_by_id = _load_flow_runs(repo_root)
+    runs_by_id, load_errors = _load_flow_runs(repo_root)
     process_by_pid = {
         proc.pid: proc
         for proc in collect_processes().car_service_processes
@@ -128,7 +128,18 @@ def inspect_flow_workers(
                 reason=reason,
             )
         )
-    return diagnostics
+    return diagnostics, load_errors, runs_by_id
+
+
+def inspect_flow_workers(
+    repo_root: Path,
+    *,
+    stale_age_seconds: float = DEFAULT_FLOW_WORKER_MAX_AGE_SECONDS,
+) -> tuple[list[FlowWorkerDiagnostic], list[str]]:
+    workers, load_errors, _ = _scan_flow_worker_diagnostics(
+        repo_root, stale_age_seconds=stale_age_seconds
+    )
+    return workers, load_errors
 
 
 def reap_stale_flow_workers(
@@ -140,16 +151,34 @@ def reap_stale_flow_workers(
     prune: bool = True,
     logger: Optional[logging.Logger] = None,
 ) -> FlowWorkerReapSummary:
-    workers = inspect_flow_workers(repo_root, stale_age_seconds=max_age_seconds)
+    workers, load_errors, runs_by_id = _scan_flow_worker_diagnostics(
+        repo_root, stale_age_seconds=max_age_seconds
+    )
+    errors = list(load_errors)
     pruned = 0
-    errors: list[str] = []
+
+    if load_errors:
+        stale = [w for w in workers if w.classification == "stale"]
+        zombies = [w for w in workers if w.classification == "zombie"]
+        active = [w for w in workers if w.classification == "active"]
+        memory_waste_kb = sum(int(w.rss_kb or 0) for w in stale + zombies if w.alive)
+        return FlowWorkerReapSummary(
+            scanned_count=len(workers),
+            active_count=len(active),
+            stale_count=len(stale),
+            zombie_count=len(zombies),
+            pruned_count=0,
+            memory_waste_kb=memory_waste_kb,
+            workers=workers,
+            errors=errors,
+        )
 
     for worker in workers:
         if not worker.alive:
             continue
         if not _eligible_for_reap(
             worker,
-            repo_root,
+            runs_by_id,
             max_age_seconds=max_age_seconds,
             terminal_grace_seconds=terminal_grace_seconds,
         ):
@@ -190,15 +219,18 @@ def reap_stale_flow_workers(
     )
 
 
-def _load_flow_runs(repo_root: Path) -> dict[str, FlowRunRecord]:
+def _load_flow_runs(repo_root: Path) -> tuple[dict[str, FlowRunRecord], list[str]]:
     db_path = resolve_repo_flows_db_path(repo_root)
     if not db_path.exists():
-        return {}
+        return {}, []
     try:
         with FlowStore.connect_readonly(db_path) as store:
-            return {record.id: record for record in store.list_flow_runs()}
-    except (OSError, RuntimeError, ValueError):
-        return {}
+            return (
+                {record.id: record for record in store.list_flow_runs()},
+                [],
+            )
+    except (OSError, RuntimeError, ValueError) as exc:
+        return {}, [f"flows_db_read_failed:{exc}"]
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -244,25 +276,30 @@ def _classify_worker(
 
 def _eligible_for_reap(
     worker: FlowWorkerDiagnostic,
-    repo_root: Path,
+    runs_by_id: dict[str, FlowRunRecord],
     *,
     max_age_seconds: float,
     terminal_grace_seconds: float,
 ) -> bool:
     if worker.classification == "zombie":
         return True
-    if worker.classification != "stale":
-        return False
-    record = _load_flow_runs(repo_root).get(worker.run_id)
+    record = runs_by_id.get(worker.run_id)
     if record is not None and record.status.is_terminal():
         finished_at = parse_flow_timestamp(record.finished_at)
         if finished_at is not None:
             terminal_age_seconds = (
                 datetime.now(timezone.utc) - finished_at.astimezone(timezone.utc)
             ).total_seconds()
-            return terminal_age_seconds >= terminal_grace_seconds
-    metadata_age_seconds = worker.metadata_age_seconds
-    return metadata_age_seconds is not None and metadata_age_seconds >= max_age_seconds
+            if terminal_age_seconds >= terminal_grace_seconds:
+                return True
+    if worker.classification != "stale" and (
+        worker.metadata_age_seconds is None
+        or worker.metadata_age_seconds < max_age_seconds
+    ):
+        return False
+    if worker.metadata_age_seconds is not None:
+        return worker.metadata_age_seconds >= max_age_seconds
+    return False
 
 
 def _terminate_worker(

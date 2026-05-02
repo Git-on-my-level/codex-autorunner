@@ -587,7 +587,7 @@ def register_doctor_commands(
             workers = summary.workers
             payload = summary.to_dict()
         else:
-            workers = inspect_flow_workers(repo_root)
+            workers, diag_errors = inspect_flow_workers(repo_root)
             stale = [w for w in workers if w.classification == "stale"]
             zombies = [w for w in workers if w.classification == "zombie"]
             active = [w for w in workers if w.classification == "active"]
@@ -599,7 +599,7 @@ def register_doctor_commands(
                 "pruned_count": 0,
                 "memory_waste_kb": sum(int(w.rss_kb or 0) for w in stale + zombies),
                 "workers": [w.to_dict() for w in workers],
-                "errors": [],
+                "errors": list(diag_errors),
             }
 
         if json_output:

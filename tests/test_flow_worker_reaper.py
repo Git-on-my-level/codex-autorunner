@@ -9,6 +9,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from codex_autorunner.cli import app
+from codex_autorunner.core.flows import worker_reaper
 from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.core.flows.store import FlowStore
 from codex_autorunner.core.flows.worker_reaper import (
@@ -77,7 +78,7 @@ def test_inspect_flow_workers_classifies_active_stale_and_zombie(
         lambda pid: True,
     )
 
-    workers = inspect_flow_workers(repo)
+    workers, _errors = inspect_flow_workers(repo)
     by_run = {worker.run_id: worker for worker in workers}
     assert by_run[active_id].classification == "active"
     assert by_run[stale_id].classification == "stale"
@@ -113,6 +114,76 @@ def test_reap_stale_flow_workers_writes_exit_info_and_signals(
     )
     assert exit_info["shutdown_intent"] is True
     assert exit_info["returncode"] == -signal.SIGTERM
+
+
+def test_reap_stale_flow_workers_skips_prune_when_flows_db_unreadable(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repo = _repo(tmp_path)
+    run_id = str(uuid.uuid4())
+    _create_run(repo, run_id, FlowRunStatus.COMPLETED)
+    _write_worker(repo, run_id, 666, time.time() - 7200)
+    signals: list[tuple[int, signal.Signals]] = []
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.worker_reaper._pid_is_running",
+        lambda pid: True,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.worker_reaper._send_signal",
+        lambda pid, sig: signals.append((pid, sig)),
+    )
+
+    def _boom(cls: type[FlowStore], db_path: Path) -> FlowStore:
+        raise OSError("simulated flows db read failure")
+
+    monkeypatch.setattr(FlowStore, "connect_readonly", classmethod(_boom))
+
+    summary = reap_stale_flow_workers(repo, terminate_grace_seconds=0.01)
+
+    assert summary.pruned_count == 0
+    assert signals == []
+    assert summary.errors
+    assert any("flows_db_read_failed" in e for e in summary.errors)
+
+
+def test_reap_stale_flow_workers_eligible_despite_misclassified_active(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repo = _repo(tmp_path)
+    run_id = str(uuid.uuid4())
+    _create_run(repo, run_id, FlowRunStatus.RUNNING)
+    _write_worker(repo, run_id, 888, time.time() - 4000)
+    signals: list[tuple[int, signal.Signals]] = []
+
+    _real_classify = worker_reaper._classify_worker
+
+    def _force_active(record, alive, metadata_age_seconds, *, stale_age_seconds):
+        if record is not None and record.id == run_id:
+            return "active", "forced_active_for_test"
+        return _real_classify(
+            record, alive, metadata_age_seconds, stale_age_seconds=stale_age_seconds
+        )
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.worker_reaper._classify_worker",
+        _force_active,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.worker_reaper._pid_is_running",
+        lambda pid: not signals,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.worker_reaper._send_signal",
+        lambda pid, sig: signals.append((pid, sig)),
+    )
+
+    summary = reap_stale_flow_workers(
+        repo, max_age_seconds=60.0, terminate_grace_seconds=0.01
+    )
+
+    assert summary.pruned_count == 1
+    assert signals == [(888, signal.SIGTERM)]
 
 
 def test_doctor_flow_workers_json_lists_workers(tmp_path: Path, monkeypatch) -> None:

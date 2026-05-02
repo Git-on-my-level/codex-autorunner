@@ -367,6 +367,7 @@ def register_flow_commands(
         _artifacts_root = artifacts_root
         shutdown_event = threading.Event()
         watchdog_reason: dict[str, Optional[str]] = {"value": None}
+        watchdog_app_server_floor_seq: dict[str, Optional[int]] = {"value": None}
 
         def _write_exit_info(*, shutdown_intent: bool = False) -> None:
             try:
@@ -394,15 +395,8 @@ def register_flow_commands(
                 return float(_DEFAULT_FLOW_WORKER_MAX_WALL_SECONDS)
             return max(1.0, value)
 
-        def _last_app_server_method() -> Optional[str]:
-            try:
-                with FlowStore.connect_readonly(db_path) as watchdog_store:
-                    event = watchdog_store.get_last_telemetry_by_type(
-                        worker_run_id, FlowEventType.APP_SERVER_EVENT
-                    )
-            except (OSError, RuntimeError, ValueError):
-                return None
-            if event is None or not isinstance(event.data, dict):
+        def _extract_app_server_method_from_event(event: Any) -> Optional[str]:
+            if not isinstance(event.data, dict):
                 return None
             message = event.data.get("message")
             if isinstance(message, dict):
@@ -411,11 +405,26 @@ def register_flow_commands(
             method = event.data.get("method")
             return method if isinstance(method, str) else None
 
+        def _last_app_server_method_after_seq(min_seq_exclusive: int) -> Optional[str]:
+            try:
+                with FlowStore.connect_readonly(db_path) as watchdog_store:
+                    event = watchdog_store.get_last_telemetry_by_type(
+                        worker_run_id, FlowEventType.APP_SERVER_EVENT
+                    )
+            except (OSError, RuntimeError, ValueError):
+                return None
+            if event is None or event.seq <= min_seq_exclusive:
+                return None
+            return _extract_app_server_method_from_event(event)
+
         def _watchdog_loop() -> None:
             max_wall_seconds = _resolve_worker_max_wall_seconds()
             deadline = time.monotonic() + max_wall_seconds
             while not shutdown_event.wait(_FLOW_WORKER_WATCHDOG_POLL_SECONDS):
-                method = _last_app_server_method()
+                floor = watchdog_app_server_floor_seq["value"]
+                if floor is None:
+                    continue
+                method = _last_app_server_method_after_seq(floor)
                 if method == _OPENCODE_STALL_TIMEOUT_METHOD:
                     watchdog_reason["value"] = method
                     exit_code_holder[0] = 1
@@ -529,6 +538,16 @@ def register_flow_commands(
                 durable=engine.config.durable_writes,
             )
             controller.initialize()
+            try:
+                with FlowStore.connect_readonly(db_path) as floor_store:
+                    last_app = floor_store.get_last_telemetry_by_type(
+                        worker_run_id, FlowEventType.APP_SERVER_EVENT
+                    )
+                    watchdog_app_server_floor_seq["value"] = (
+                        last_app.seq if last_app is not None else 0
+                    )
+            except (OSError, RuntimeError, ValueError):
+                watchdog_app_server_floor_seq["value"] = 0
             shutdown_requested = False
             try:
                 record = controller.get_status(worker_run_id)

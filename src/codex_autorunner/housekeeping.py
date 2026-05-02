@@ -9,7 +9,7 @@ from collections import deque
 from pathlib import Path
 from typing import Any, Iterable, Optional, Protocol, cast
 
-from .core.flow_worker_reaper_constants import (
+from .flow_worker_reaper_constants import (
     DEFAULT_FLOW_WORKER_MAX_AGE_SECONDS,
     DEFAULT_FLOW_WORKER_TERMINATE_GRACE_SECONDS,
     DEFAULT_TERMINAL_RUN_GRACE_SECONDS,
