@@ -9,15 +9,15 @@ from collections import deque
 from pathlib import Path
 from typing import Any, Iterable, Optional, Protocol, cast
 
-from .integrations.docker.runtime import (
-    DockerManagedContainerReapResult,
-    DockerRuntime,
-    DockerRuntimeError,
-    DockerUnavailableError,
+from .flow_worker_reaper_constants import (
+    DEFAULT_FLOW_WORKER_MAX_AGE_SECONDS,
+    DEFAULT_FLOW_WORKER_TERMINATE_GRACE_SECONDS,
+    DEFAULT_TERMINAL_RUN_GRACE_SECONDS,
 )
 
 _MAX_ERROR_SAMPLES = 5
 DEFAULT_MANAGED_DOCKER_CONTAINER_TTL_SECONDS = 12 * 60 * 60
+DEFAULT_FLOW_WORKER_REAP_INTERVAL_SECONDS = 15 * 60
 
 
 @dataclasses.dataclass(frozen=True)
@@ -217,11 +217,17 @@ def run_housekeeping_once(
 def reap_managed_docker_containers(
     *,
     logger: Optional[logging.Logger] = None,
-    docker_runtime: Optional[DockerRuntime] = None,
+    docker_runtime: Optional[Any] = None,
     ttl_seconds: int = DEFAULT_MANAGED_DOCKER_CONTAINER_TTL_SECONDS,
     command_timeout_seconds: float = 5.0,
     now: Optional[dt.datetime] = None,
 ) -> HousekeepingRuleResult:
+    from .integrations.docker.runtime import (
+        DockerRuntime,
+        DockerRuntimeError,
+        DockerUnavailableError,
+    )
+
     start = time.monotonic()
     result = HousekeepingRuleResult(
         name="managed_docker_containers",
@@ -229,7 +235,7 @@ def reap_managed_docker_containers(
     )
     runtime = docker_runtime or DockerRuntime()
     try:
-        summary: DockerManagedContainerReapResult = runtime.reap_managed_containers(
+        summary = runtime.reap_managed_containers(
             ttl_seconds=ttl_seconds,
             now=now,
             command_timeout_seconds=command_timeout_seconds,
@@ -257,6 +263,44 @@ def reap_managed_docker_containers(
             payload["error_samples"] = result.error_samples
         _log_event(logger, logging.INFO, "housekeeping.docker", **payload)
     return result
+
+
+def reap_stale_flow_workers(
+    repo_root: Path,
+    *,
+    logger: Optional[logging.Logger] = None,
+    max_age_seconds: float = DEFAULT_FLOW_WORKER_MAX_AGE_SECONDS,
+    terminal_grace_seconds: float = DEFAULT_TERMINAL_RUN_GRACE_SECONDS,
+    terminate_grace_seconds: float = DEFAULT_FLOW_WORKER_TERMINATE_GRACE_SECONDS,
+    prune: bool = True,
+) -> Any:
+    from .core.flows.worker_reaper import (
+        reap_stale_flow_workers as _reap_stale_flow_workers,
+    )
+
+    summary = _reap_stale_flow_workers(
+        repo_root,
+        logger=logger,
+        max_age_seconds=max_age_seconds,
+        terminal_grace_seconds=terminal_grace_seconds,
+        terminate_grace_seconds=terminate_grace_seconds,
+        prune=prune,
+    )
+    if logger is not None:
+        _log_event(
+            logger,
+            logging.INFO,
+            "housekeeping.flow_workers",
+            root=str(repo_root),
+            scanned_count=summary.scanned_count,
+            active_count=summary.active_count,
+            stale_count=summary.stale_count,
+            zombie_count=summary.zombie_count,
+            pruned_count=summary.pruned_count,
+            memory_waste_kb=summary.memory_waste_kb,
+            errors=len(summary.errors),
+        )
+    return summary
 
 
 def _apply_directory_rule(

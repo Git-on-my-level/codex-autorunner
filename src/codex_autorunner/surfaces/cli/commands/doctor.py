@@ -13,6 +13,10 @@ from ....core.diagnostics.process_snapshot import (
     collect_processes,
     enrich_with_ownership,
 )
+from ....core.flows.worker_reaper import (
+    inspect_flow_workers,
+    reap_stale_flow_workers,
+)
 from ....core.git_utils import GitError, run_git
 from ....core.managed_processes import list_process_records
 from ....core.runtime import (
@@ -561,6 +565,74 @@ def register_doctor_commands(
             with open(output_path, "w") as f:
                 json.dump(payload, f, indent=2)
             typer.echo(f"saved: {output_path}")
+
+    @doctor_app.command("flow-workers")
+    def doctor_flow_workers(
+        repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
+        json_output: bool = typer.Option(False, "--json", help="Output JSON"),
+        prune: bool = typer.Option(
+            False,
+            "--prune",
+            help="Kill confirmed stale/orphaned flow workers",
+        ),
+    ):
+        """List and optionally prune stale flow worker processes."""
+        try:
+            repo_root = find_repo_root(repo or Path.cwd())
+        except RepoNotFoundError as exc:
+            raise_exit("No repo found for flow worker diagnostics", cause=exc)
+
+        if prune:
+            summary = reap_stale_flow_workers(repo_root, logger=logger)
+            workers = summary.workers
+            payload = summary.to_dict()
+        else:
+            workers, diag_errors = inspect_flow_workers(repo_root)
+            stale = [w for w in workers if w.classification == "stale"]
+            zombies = [w for w in workers if w.classification == "zombie"]
+            active = [w for w in workers if w.classification == "active"]
+            payload = {
+                "scanned_count": len(workers),
+                "active_count": len(active),
+                "stale_count": len(stale),
+                "zombie_count": len(zombies),
+                "pruned_count": 0,
+                "memory_waste_kb": sum(int(w.rss_kb or 0) for w in stale + zombies),
+                "workers": [w.to_dict() for w in workers],
+                "errors": list(diag_errors),
+            }
+
+        if json_output:
+            typer.echo(json.dumps(payload, indent=2))
+            return
+
+        typer.echo(f"repo: {repo_root}")
+        typer.echo(
+            "summary: active={active_count} stale={stale_count} zombie={zombie_count} "
+            "memory_waste={memory_waste_kb}KB pruned={pruned_count}".format(**payload)
+        )
+        if not workers:
+            typer.echo("workers: none")
+            return
+        for classification in ("active", "stale", "zombie", "dead"):
+            group = [w for w in workers if w.classification == classification]
+            if not group:
+                continue
+            typer.echo(f"{classification}:")
+            for worker in group:
+                age = (
+                    f"{int(worker.metadata_age_seconds)}s"
+                    if worker.metadata_age_seconds is not None
+                    else "n/a"
+                )
+                rss = f" rss={worker.rss_kb}KB" if worker.rss_kb is not None else ""
+                reason = f" reason={worker.reason}" if worker.reason else ""
+                typer.echo(
+                    f"  run={worker.run_id} pid={worker.pid} "
+                    f"status={worker.status or 'missing'} age={age}{rss}{reason}"
+                )
+        for error in payload.get("errors") or []:
+            typer.echo(f"error: {error}", err=True)
 
     @doctor_app.command("execution-history")
     def doctor_execution_history(

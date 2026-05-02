@@ -7,6 +7,7 @@ import logging
 import os
 import signal
 import threading
+import time
 import traceback
 import uuid
 from dataclasses import dataclass
@@ -69,6 +70,11 @@ from ....tickets import DEFAULT_MAX_TOTAL_TURNS, AgentPool
 from ..hub_path_option import hub_root_path_option
 
 logger = logging.getLogger(__name__)
+
+_DEFAULT_FLOW_WORKER_MAX_WALL_SECONDS = 2 * 60 * 60
+_FLOW_WORKER_WATCHDOG_GRACE_SECONDS = 30.0
+_FLOW_WORKER_WATCHDOG_POLL_SECONDS = 2.0
+_OPENCODE_STALL_TIMEOUT_METHOD = "opencode.stream.stalled.timeout"
 
 
 @dataclass(frozen=True)
@@ -360,6 +366,8 @@ def register_flow_commands(
         _repo_root = engine.repo_root
         _artifacts_root = artifacts_root
         shutdown_event = threading.Event()
+        watchdog_reason: dict[str, Optional[str]] = {"value": None}
+        watchdog_app_server_floor_seq: dict[str, Optional[int]] = {"value": None}
 
         def _write_exit_info(*, shutdown_intent: bool = False) -> None:
             try:
@@ -377,9 +385,91 @@ def register_flow_commands(
             exit_code_holder[0] = -signum
             shutdown_event.set()
 
+        def _resolve_worker_max_wall_seconds() -> float:
+            raw = os.environ.get("CAR_FLOW_WORKER_MAX_WALL_SECONDS")
+            if raw is None or not raw.strip():
+                return float(_DEFAULT_FLOW_WORKER_MAX_WALL_SECONDS)
+            try:
+                value = float(raw)
+            except ValueError:
+                return float(_DEFAULT_FLOW_WORKER_MAX_WALL_SECONDS)
+            return max(1.0, value)
+
+        def _extract_app_server_method_from_event(event: Any) -> Optional[str]:
+            if not isinstance(event.data, dict):
+                return None
+            message = event.data.get("message")
+            if isinstance(message, dict):
+                method = message.get("method")
+                return method if isinstance(method, str) else None
+            method = event.data.get("method")
+            return method if isinstance(method, str) else None
+
+        def _last_app_server_method_after_seq(min_seq_exclusive: int) -> Optional[str]:
+            try:
+                with FlowStore.connect_readonly(db_path) as watchdog_store:
+                    event = watchdog_store.get_last_telemetry_by_type(
+                        worker_run_id, FlowEventType.APP_SERVER_EVENT
+                    )
+            except (OSError, RuntimeError, ValueError):
+                return None
+            if event is None or event.seq <= min_seq_exclusive:
+                return None
+            return _extract_app_server_method_from_event(event)
+
+        def _watchdog_loop() -> None:
+            max_wall_seconds = _resolve_worker_max_wall_seconds()
+            deadline = time.monotonic() + max_wall_seconds
+            while not shutdown_event.wait(_FLOW_WORKER_WATCHDOG_POLL_SECONDS):
+                floor = watchdog_app_server_floor_seq["value"]
+                if floor is None:
+                    continue
+                method = _last_app_server_method_after_seq(floor)
+                if method == _OPENCODE_STALL_TIMEOUT_METHOD:
+                    watchdog_reason["value"] = method
+                    exit_code_holder[0] = 1
+                    write_worker_crash_info(
+                        _repo_root,
+                        worker_run_id,
+                        worker_pid=os.getpid(),
+                        exit_code=1,
+                        last_event=method,
+                        exception="opencode stream stalled timeout",
+                        artifacts_root=_artifacts_root,
+                    )
+                    _write_exit_info(shutdown_intent=True)
+                    os._exit(1)
+                if time.monotonic() < deadline:
+                    continue
+                watchdog_reason["value"] = "max_wall_time"
+                exit_code_holder[0] = -signal.SIGTERM
+                write_worker_crash_info(
+                    _repo_root,
+                    worker_run_id,
+                    worker_pid=os.getpid(),
+                    exit_code=-signal.SIGTERM,
+                    signal="SIGTERM",
+                    last_event="max_wall_time",
+                    exception=(
+                        "flow worker exceeded max wall time "
+                        f"({max_wall_seconds:.0f}s)"
+                    ),
+                    artifacts_root=_artifacts_root,
+                )
+                _write_exit_info(shutdown_intent=True)
+                shutdown_event.set()
+                time.sleep(_FLOW_WORKER_WATCHDOG_GRACE_SECONDS)
+                os._exit(137)
+
         atexit.register(_write_exit_info)
         signal.signal(signal.SIGTERM, _signal_handler)
         signal.signal(signal.SIGINT, _signal_handler)
+        watchdog_thread = threading.Thread(
+            target=_watchdog_loop,
+            name="flow-worker-watchdog",
+            daemon=True,
+        )
+        watchdog_thread.start()
 
         async def _run_worker():
             typer.echo(
@@ -448,6 +538,16 @@ def register_flow_commands(
                 durable=engine.config.durable_writes,
             )
             controller.initialize()
+            try:
+                with FlowStore.connect_readonly(db_path) as floor_store:
+                    last_app = floor_store.get_last_telemetry_by_type(
+                        worker_run_id, FlowEventType.APP_SERVER_EVENT
+                    )
+                    watchdog_app_server_floor_seq["value"] = (
+                        last_app.seq if last_app is not None else 0
+                    )
+            except (OSError, RuntimeError, ValueError):
+                watchdog_app_server_floor_seq["value"] = 0
             shutdown_requested = False
             try:
                 record = controller.get_status(worker_run_id)
@@ -472,9 +572,12 @@ def register_flow_commands(
                 )
 
                 run_task = asyncio.create_task(controller.run_flow(worker_run_id))
-                shutdown_wait_task = asyncio.create_task(
-                    asyncio.to_thread(shutdown_event.wait)
-                )
+
+                async def _wait_for_shutdown() -> None:
+                    while not shutdown_event.is_set():
+                        await asyncio.sleep(0.2)
+
+                shutdown_wait_task = asyncio.create_task(_wait_for_shutdown())
                 done, _ = await asyncio.wait(
                     {run_task, shutdown_wait_task},
                     return_when=asyncio.FIRST_COMPLETED,
@@ -499,6 +602,12 @@ def register_flow_commands(
                         typer.echo(f"Flow run {worker_run_id} cancelled by signal")
                 if not shutdown_wait_task.done():
                     shutdown_wait_task.cancel()
+                    try:
+                        await shutdown_wait_task
+                    except asyncio.CancelledError:
+                        pass
+                if watchdog_reason["value"] == "max_wall_time":
+                    raise typer.Exit(code=1)
             except (
                 Exception
             ) as exc:  # intentional: top-level worker crash handler; re-raises after logging

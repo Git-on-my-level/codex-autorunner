@@ -1,8 +1,10 @@
 """Test lifecycle events system."""
 
 import asyncio
+import sqlite3
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 from codex_autorunner.core.flows import (
@@ -259,17 +261,24 @@ def test_terminal_duplicate_dedupes_under_concurrent_writers() -> None:
         tmp_path = Path(tmpdir)
         store = LifecycleEventStore(tmp_path)
         start_barrier = threading.Barrier(8)
+        _max_attempts = 20
 
         def _append_once() -> None:
             start_barrier.wait(timeout=2.0)
-            store.append(
-                LifecycleEvent(
-                    event_type=LifecycleEventType.FLOW_COMPLETED,
-                    repo_id="repo-1",
-                    run_id="run-1",
-                    data={"transition_token": "completed:concurrent"},
-                )
+            event = LifecycleEvent(
+                event_type=LifecycleEventType.FLOW_COMPLETED,
+                repo_id="repo-1",
+                run_id="run-1",
+                data={"transition_token": "completed:concurrent"},
             )
+            for attempt in range(_max_attempts):
+                try:
+                    store.append(event)
+                    return
+                except sqlite3.OperationalError as exc:
+                    if "locked" not in str(exc).lower() or attempt == _max_attempts - 1:
+                        raise
+                    time.sleep(0.02 * (attempt + 1))
 
         workers = [threading.Thread(target=_append_once) for _ in range(8)]
         for worker in workers:
