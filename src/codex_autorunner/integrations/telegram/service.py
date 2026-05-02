@@ -818,6 +818,12 @@ class TelegramBotService(
             prune_reason="prewarm",
         )
 
+    async def _prune_stale_workspace_bindings(self) -> None:
+        await self._workspace_roots_from_state(
+            state_failed_event="telegram.workspace_binding.startup_prune_failed",
+            prune_reason="startup",
+        )
+
     async def _workspace_roots_from_state(
         self,
         *,

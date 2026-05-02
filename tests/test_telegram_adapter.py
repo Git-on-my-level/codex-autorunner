@@ -713,6 +713,27 @@ async def test_request_retries_on_rate_limit(monkeypatch: pytest.MonkeyPatch) ->
 
 
 @pytest.mark.anyio
+async def test_get_updates_leaves_transport_backoff_to_poll_loop() -> None:
+    calls = {"count": 0}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        calls["count"] += 1
+        raise httpx.ConnectError("simulated connect failure", request=request)
+
+    transport = httpx.MockTransport(handler)
+    http_client = httpx.AsyncClient(transport=transport)
+    bot = TelegramBotClient("test-token", client=http_client)
+
+    try:
+        with pytest.raises(TelegramAPIError, match="Telegram request failed"):
+            await bot.get_updates(timeout=1)
+    finally:
+        await bot.close()
+
+    assert calls["count"] == 1
+
+
+@pytest.mark.anyio
 async def test_rate_limit_scope_does_not_block_other_methods(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -169,6 +169,36 @@ async def test_housekeeping_roots_prune_missing_workspace_bindings(
 
 
 @pytest.mark.anyio
+async def test_startup_prune_clears_missing_workspace_bindings_without_spawning(
+    tmp_path: Path,
+) -> None:
+    service = TelegramBotService(_config(tmp_path), hub_root=tmp_path)
+    live_workspace = tmp_path / "startup-live"
+    live_workspace.mkdir()
+    missing_workspace = tmp_path / "startup-missing"
+    missing_key = topic_key(123, 14)
+
+    async def _unexpected_get_client(_workspace_root: Path) -> object:
+        raise AssertionError("startup prune must not start app-server clients")
+
+    service._app_server_supervisor = SimpleNamespace(get_client=_unexpected_get_client)
+
+    try:
+        await service._store.bind_topic(topic_key(123, 15), str(live_workspace))
+        await service._store.bind_topic(missing_key, str(missing_workspace))
+
+        await service._prune_stale_workspace_bindings()
+        stale_record = await service._store.get_topic(missing_key)
+    finally:
+        await service._bot.close()
+        await service._store.close()
+
+    assert stale_record is not None
+    assert stale_record.workspace_path is None
+    assert stale_record.workspace_id is None
+
+
+@pytest.mark.anyio
 async def test_prewarm_skips_missing_workspaces_without_spawning(
     tmp_path: Path,
 ) -> None:
