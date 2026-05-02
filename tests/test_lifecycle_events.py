@@ -19,6 +19,7 @@ from codex_autorunner.core.lifecycle_events import (
     LifecycleEventStore,
     LifecycleEventType,
 )
+from codex_autorunner.core.orchestration.sqlite import initialize_orchestration_sqlite
 
 
 def test_lifecycle_event_store_load_save():
@@ -259,6 +260,7 @@ def test_non_duplicate_events_still_append():
 def test_terminal_duplicate_dedupes_under_concurrent_writers() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir)
+        initialize_orchestration_sqlite(tmp_path)
         store = LifecycleEventStore(tmp_path)
         start_barrier = threading.Barrier(8)
         _max_attempts = 20

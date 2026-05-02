@@ -1200,7 +1200,7 @@ class TelegramBotClient:
             payload["offset"] = offset
         if allowed_updates:
             payload["allowed_updates"] = list(allowed_updates)
-        result = await self._request("getUpdates", payload)
+        result = await self._request_once_payload("getUpdates", payload)
         if not isinstance(result, list):
             return []
         return [item for item in result if isinstance(item, dict)]
@@ -1590,12 +1590,25 @@ class TelegramBotClient:
         return result if isinstance(result, dict) else {}
 
     async def _request(self, method: str, payload: dict[str, Any]) -> Any:
+        return await self._request_with_retry(
+            method,
+            self._build_json_sender(method, payload),
+        )
+
+    async def _request_once_payload(self, method: str, payload: dict[str, Any]) -> Any:
+        return await self._request_once(
+            method, self._build_json_sender(method, payload)
+        )
+
+    def _build_json_sender(
+        self, method: str, payload: dict[str, Any]
+    ) -> Callable[[], Awaitable[httpx.Response]]:
         url = f"{self._base_url}/bot{self._bot_token}/{method}"
 
         async def send() -> httpx.Response:
             return await self._client.post(url, json=payload)
 
-        return await self._request_with_retry(method, send)
+        return send
 
     async def _request_multipart(
         self, method: str, data: dict[str, Any], files: dict[str, Any]
@@ -1609,6 +1622,11 @@ class TelegramBotClient:
 
     @retry_transient(max_attempts=5, base_wait=1.0, max_wait=60.0)
     async def _request_with_retry(
+        self, method: str, send: Callable[[], Awaitable[httpx.Response]]
+    ) -> Any:
+        return await self._request_once(method, send)
+
+    async def _request_once(
         self, method: str, send: Callable[[], Awaitable[httpx.Response]]
     ) -> Any:
         async with self._resilience_guard(method):

@@ -11,6 +11,7 @@ import asyncio
 import logging
 from typing import Any, Awaitable, Callable, Optional
 
+from ...core.exceptions import TransientError
 from ...core.logging_utils import log_event
 from ...core.managed_processes import reap_managed_processes
 from .adapter import ChatAdapter
@@ -19,6 +20,32 @@ from .dispatcher import ChatDispatcher
 from .models import ChatEvent
 from .state_store import ChatStateStore
 from .transport import ChatTransport
+
+_POLL_FAILURE_BACKOFF_INITIAL_SECONDS = 1.0
+_POLL_FAILURE_BACKOFF_MAX_SECONDS = 60.0
+
+
+class _PollFailureBackoff:
+    def __init__(
+        self,
+        *,
+        initial_seconds: float = _POLL_FAILURE_BACKOFF_INITIAL_SECONDS,
+        max_seconds: float = _POLL_FAILURE_BACKOFF_MAX_SECONDS,
+    ) -> None:
+        self._initial_seconds = max(initial_seconds, 0.0)
+        self._max_seconds = max(max_seconds, self._initial_seconds)
+        self._current_seconds = self._initial_seconds
+
+    def next_delay(self) -> float:
+        delay = self._current_seconds
+        if self._current_seconds <= 0:
+            self._current_seconds = self._initial_seconds
+        else:
+            self._current_seconds = min(self._current_seconds * 2.0, self._max_seconds)
+        return delay
+
+    def reset(self) -> None:
+        self._current_seconds = self._initial_seconds
 
 
 class ChatBotServiceCore:
@@ -115,6 +142,11 @@ class ChatBotServiceCore:
                         name="prime_poller_offset",
                         action=owner._prime_poller_offset,
                     ),
+                    ChatBootstrapStep(
+                        name="prune_stale_workspace_bindings",
+                        action=owner._prune_stale_workspace_bindings,
+                        required=False,
+                    ),
                 ),
             )
             owner._outbox_task = asyncio.create_task(owner._outbox_manager.run_loop())
@@ -131,7 +163,6 @@ class ChatBotServiceCore:
                     owner.TICKET_FLOW_WATCH_INTERVAL_SECONDS
                 )
             )
-            owner._spawn_task(owner._prewarm_workspace_clients())
             if getattr(owner, "_delivery_worker", None) is not None:
                 owner._delivery_worker_task = asyncio.create_task(
                     owner._delivery_worker.run_loop()
@@ -175,27 +206,32 @@ class ChatBotServiceCore:
                     f"{self._platform}.compact.notify_failed",
                     exc=exc,
                 )
+            poll_failure_backoff = _PollFailureBackoff()
             while True:
                 updates = []
                 try:
                     updates = await owner._poller.poll(
                         timeout=owner._config.poll_timeout_seconds
                     )
+                    poll_failure_backoff.reset()
                     if owner._poller.offset is not None:
                         await owner._record_poll_offset(updates)
                 except (
+                    TransientError,
                     RuntimeError,
                     ConnectionError,
                     OSError,
                     ValueError,
-                ) as exc:  # transient poll failure, retry immediately
+                ) as exc:
+                    delay_seconds = poll_failure_backoff.next_delay()
                     log_event(
                         owner._logger,
                         logging.WARNING,
                         f"{self._platform}.poll.failed",
                         exc=exc,
+                        delay_seconds=delay_seconds,
                     )
-                    await asyncio.sleep(1.0)
+                    await asyncio.sleep(delay_seconds)
                     continue
                 for update in updates:
                     owner._spawn_task(owner._dispatch_update(update))

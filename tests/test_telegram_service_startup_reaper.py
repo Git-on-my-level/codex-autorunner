@@ -45,10 +45,14 @@ class _StateStoreStub:
 
 
 class _PollerStub:
-    def __init__(self) -> None:
+    def __init__(self, errors: list[BaseException] | None = None) -> None:
         self.offset = None
+        self._errors = errors or [KeyboardInterrupt("stop after startup")]
 
     async def poll(self, *, timeout: int) -> list[object]:
+        _ = timeout
+        if self._errors:
+            raise self._errors.pop(0)
         raise KeyboardInterrupt("stop after startup")
 
 
@@ -85,6 +89,8 @@ class _OwnerStub:
         self._spawned_tasks: set[asyncio.Task[object]] = set()
         self._hub_client = None
         self._poller = _PollerStub()
+        self.prewarm_called = False
+        self.prune_called = False
 
     def _acquire_instance_lock(self) -> None:
         return None
@@ -111,6 +117,11 @@ class _OwnerStub:
         await asyncio.Event().wait()
 
     async def _prewarm_workspace_clients(self) -> None:
+        self.prewarm_called = True
+        return None
+
+    async def _prune_stale_workspace_bindings(self) -> None:
+        self.prune_called = True
         return None
 
     async def _maybe_send_update_status_notice(self) -> None:
@@ -154,3 +165,46 @@ async def test_telegram_service_startup_reaps_managed_processes(
         await core.run()
 
     assert called_roots == [tmp_path]
+    assert owner.prewarm_called is False
+    assert owner.prune_called is True
+
+
+@pytest.mark.anyio
+async def test_telegram_poll_failures_use_persistent_backoff(
+    tmp_path: Path, monkeypatch
+) -> None:
+    sleep_delays: list[float] = []
+
+    async def _fake_sleep(delay: float) -> None:
+        sleep_delays.append(delay)
+
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.chat.service.asyncio.sleep",
+        _fake_sleep,
+    )
+
+    owner = _OwnerStub(tmp_path)
+    owner._poller = _PollerStub(
+        [
+            RuntimeError("poll failed 1"),
+            RuntimeError("poll failed 2"),
+            RuntimeError("poll failed 3"),
+            KeyboardInterrupt("stop after backoff"),
+        ]
+    )
+    core = ChatBotServiceCore(
+        owner=owner,
+        runtime_services=_RuntimeServicesStub(),
+        state_store=_StateStoreStub(),
+        reap_managed_processes_fn=lambda _root: SimpleNamespace(
+            killed=0,
+            signaled=0,
+            removed=0,
+            skipped=0,
+        ),
+    )
+
+    with pytest.raises(KeyboardInterrupt, match="stop after backoff"):
+        await core.run()
+
+    assert sleep_delays == [1.0, 2.0, 4.0]
