@@ -1021,37 +1021,25 @@ class DiscordBotService:
                 await self._dispatcher.wait_idle()
             with contextlib.suppress(Exception):
                 await self._dispatcher.close()
-            dispatcher_loop_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await dispatcher_loop_task
-            if self._opencode_prune_task is not None:
-                self._opencode_prune_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await self._opencode_prune_task
-                self._opencode_prune_task = None
-            if self._filebox_prune_task is not None:
-                self._filebox_prune_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await self._filebox_prune_task
-                self._filebox_prune_task = None
-            chat_queue_reset_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await chat_queue_reset_task
-            pause_watch_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await pause_watch_task
-            terminal_watch_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await terminal_watch_task
-            outbox_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await outbox_task
-            if self._delivery_worker_task is not None:
-                self._delivery_worker_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await self._delivery_worker_task
-                self._delivery_worker_task = None
+            await self._cancel_and_await_task(dispatcher_loop_task)
+            await self._cancel_and_await_task(self._opencode_prune_task)
+            self._opencode_prune_task = None
+            await self._cancel_and_await_task(self._filebox_prune_task)
+            self._filebox_prune_task = None
+            await self._cancel_and_await_task(chat_queue_reset_task)
+            await self._cancel_and_await_task(pause_watch_task)
+            await self._cancel_and_await_task(terminal_watch_task)
+            await self._cancel_and_await_task(outbox_task)
+            await self._cancel_and_await_task(self._delivery_worker_task)
+            self._delivery_worker_task = None
             await _shutdown_impl(self)
+
+    @staticmethod
+    async def _cancel_and_await_task(task: Optional[asyncio.Task]) -> None:
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
 
     def _service_uptime_ms(self, *, now: Optional[float] = None) -> Optional[float]:
         return _service_uptime_ms_impl(self, now=now)
@@ -6025,6 +6013,16 @@ class DiscordBotService:
         )
         return returned
 
+    @staticmethod
+    def _interaction_has_pending_delivery(record: InteractionLedgerRecord) -> bool:
+        cursor_pending = isinstance(record.delivery_cursor_json, dict) and str(
+            record.delivery_cursor_json.get("state") or ""
+        ).strip() in {"pending", "failed"}
+        return cursor_pending or record.scheduler_state in {
+            "delivery_pending",
+            "delivery_replaying",
+        }
+
     async def _check_interaction_ingress_duplicate(self, ctx: IngressContext) -> bool:
         reservations = getattr(self, "_ingress_pre_ack_reservations", None)
         if not isinstance(reservations, set):
@@ -6074,16 +6072,8 @@ class DiscordBotService:
         if snapshot is None and record is None:
             return False
 
-        has_pending_delivery = bool(
-            record is not None
-            and (
-                (
-                    isinstance(record.delivery_cursor_json, dict)
-                    and str(record.delivery_cursor_json.get("state") or "").strip()
-                    in {"pending", "failed"}
-                )
-                or record.scheduler_state in {"delivery_pending", "delivery_replaying"}
-            )
+        has_pending_delivery = (
+            record is not None and self._interaction_has_pending_delivery(record)
         )
         rejected = await self._maybe_reject_duplicate_interaction(
             interaction_id=ctx.interaction_id,
@@ -6124,14 +6114,7 @@ class DiscordBotService:
             return False
         record = registration.record
         snapshot = await self._chat_operation_get(ctx.interaction_id)
-        has_pending_delivery = bool(
-            (
-                isinstance(record.delivery_cursor_json, dict)
-                and str(record.delivery_cursor_json.get("state") or "").strip()
-                in {"pending", "failed"}
-            )
-            or record.scheduler_state in {"delivery_pending", "delivery_replaying"}
-        )
+        has_pending_delivery = self._interaction_has_pending_delivery(record)
         rejected = await self._maybe_reject_duplicate_interaction(
             interaction_id=ctx.interaction_id,
             snapshot=snapshot,
