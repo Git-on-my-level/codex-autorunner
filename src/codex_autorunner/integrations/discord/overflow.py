@@ -2,6 +2,13 @@ from __future__ import annotations
 
 from typing import Optional
 
+from ..chat.markdown_splitting import (
+    close_fence_suffix,
+    parse_fence_line,
+    reopen_fence,
+    scan_fence_state,
+    slice_to_boundary,
+)
 from .constants import DISCORD_MAX_MESSAGE_LENGTH
 
 TRUNCATION_SUFFIX = "..."
@@ -131,51 +138,11 @@ def _trim_text(
         limit = max(1, next_limit)
 
 
-def _slice_to_boundary(text: str, limit: int) -> str:
-    if len(text) <= limit:
-        return text
-    para_cut = text.rfind("\n\n", 0, limit + 1)
-    if para_cut != -1:
-        if para_cut + 2 <= limit:
-            return text[: para_cut + 2]
-    cut = text.rfind("\n", 0, limit + 1)
-    if cut == -1:
-        cut = text.rfind(" ", 0, limit + 1)
-    if cut <= 0:
-        cut = limit
-    return text[:cut]
-
-
-def _scan_fence_state(text: str, *, open_fence: Optional[str]) -> Optional[str]:
-    state = open_fence
-    for line in text.splitlines():
-        fence_info = _parse_fence_line(line)
-        if fence_info is None:
-            continue
-        if state is None:
-            state = fence_info
-        else:
-            state = None
-    return state
-
-
-def _parse_fence_line(line: str) -> Optional[str]:
-    stripped = line.lstrip()
-    if not stripped.startswith("```"):
-        return None
-    return stripped[3:].strip()
-
-
-def _close_fence_suffix(chunk: str) -> str:
-    if chunk.endswith("\n"):
-        return "```"
-    return "\n```"
-
-
-def _reopen_fence(info: Optional[str]) -> str:
-    if info is None:
-        return ""
-    return f"```{info}\n"
+_slice_to_boundary = slice_to_boundary
+_scan_fence_state = scan_fence_state
+_parse_fence_line = parse_fence_line
+_close_fence_suffix = close_fence_suffix
+_reopen_fence = reopen_fence
 
 
 def _part_prefix(index: int, total: int) -> str:
