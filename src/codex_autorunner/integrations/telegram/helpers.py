@@ -82,13 +82,6 @@ from .preview_utils import (  # noqa: F401
     _thread_summary_preview,
     _truncate_text,
 )
-from .rate_limit_utils import (  # noqa: F401
-    _coerce_number,
-    _compute_used_percent,
-    _format_percent,
-    _format_rate_limit_window,
-    _rate_limit_window_minutes,
-)
 from .shell_utils import (  # noqa: F401
     _extract_command_result,
     _extract_command_text,

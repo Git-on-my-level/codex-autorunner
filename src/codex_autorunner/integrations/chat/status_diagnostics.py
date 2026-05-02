@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from typing import Any, Optional
 
 from ...core.diagnostics import build_process_monitor_summary
-from ...core.text_utils import _coerce_number, _parse_iso_timestamp
+from ...core.text_utils import _coerce_number
 from ...core.usage import (
     extract_rate_limits as _extract_shared_rate_limits,
 )
@@ -57,95 +56,6 @@ def format_sandbox_policy(sandbox_policy: Any) -> str:
                 suffix = f", network={sandbox_policy.get('networkAccess')}"
             return f"{sandbox_type}{suffix}"
     return str(sandbox_policy)
-
-
-def _compute_used_percent(entry: dict[str, Any]) -> Optional[float]:
-    remaining = _coerce_number(entry.get("remaining"))
-    limit = _coerce_number(entry.get("limit"))
-    if remaining is None or limit is None or limit <= 0:
-        return None
-    used = (limit - remaining) / limit * 100
-    return max(min(used, 100.0), 0.0)
-
-
-def _format_percent(value: Any) -> Optional[str]:
-    number = _coerce_number(value)
-    if number is None:
-        return None
-    if number.is_integer():
-        return f"{int(number)}%"
-    return f"{number:.1f}%"
-
-
-def _rate_limit_window_minutes(
-    entry: dict[str, Any],
-    section: Optional[str] = None,
-) -> Optional[int]:
-    for key in (
-        "window_minutes",
-        "windowMinutes",
-        "window_mins",
-        "windowMins",
-        "period_minutes",
-        "periodMinutes",
-        "duration_minutes",
-        "durationMinutes",
-    ):
-        value = entry.get(key)
-        number = _coerce_number(value)
-        if number is not None:
-            return max(int(round(number)), 1)
-    window_seconds = _coerce_number(
-        entry.get("window_seconds", entry.get("windowSeconds"))
-    )
-    if window_seconds is not None:
-        return max(int(round(window_seconds / 60)), 1)
-    if section in ("primary", "secondary"):
-        return 300 if section == "primary" else 10080
-    return None
-
-
-def _format_rate_limit_window(window_minutes: Optional[int]) -> Optional[str]:
-    if not isinstance(window_minutes, int) or window_minutes <= 0:
-        return None
-    if window_minutes == 300:
-        return "5h"
-    if window_minutes % 1440 == 0:
-        return f"{window_minutes // 1440}d"
-    if window_minutes % 60 == 0:
-        return f"{window_minutes // 60}h"
-    return f"{window_minutes}m"
-
-
-def _coerce_datetime(value: Any) -> Optional[datetime]:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        seconds = float(value)
-        if seconds > 1e12:
-            seconds /= 1000.0
-        try:
-            return datetime.fromtimestamp(seconds, tz=timezone.utc)
-        except (ValueError, OverflowError, OSError):
-            return None
-    if isinstance(value, str):
-        parsed = _parse_iso_timestamp(value)
-        if parsed is not None:
-            return parsed
-        try:
-            return _coerce_datetime(float(value))
-        except (ValueError, OverflowError, OSError):
-            return None
-    return None
-
-
-def _format_friendly_time(value: datetime) -> str:
-    month = value.strftime("%b")
-    day = value.day
-    hour = value.strftime("%I").lstrip("0") or "12"
-    minute = value.strftime("%M")
-    ampm = value.strftime("%p").lower()
-    return f"{month} {day}, {hour}:{minute}{ampm}"
 
 
 def format_rate_limit_lines(rate_limits: Optional[dict[str, Any]]) -> list[str]:
