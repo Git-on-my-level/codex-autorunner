@@ -5693,6 +5693,54 @@ class DiscordBotService:
             reason=reason,
         )
 
+    async def _submit_execution_recovery_replay(
+        self,
+        record: InteractionLedgerRecord,
+        envelope: RuntimeInteractionEnvelope,
+        *,
+        decision: Any,
+        now: datetime,
+        reason: str,
+    ) -> bool:
+        attempt_count = int(record.attempt_count or 0)
+        if _interaction_recovery_backoff_active(
+            updated_at=record.updated_at,
+            attempt_count=attempt_count,
+            now=now,
+        ):
+            log_event(
+                self._logger,
+                logging.DEBUG,
+                "discord.interaction.recovery.execution_backoff",
+                interaction_id=record.interaction_id,
+                attempt_count=attempt_count,
+            )
+            return False
+        await self._mark_interaction_scheduler_state(
+            envelope.context,
+            scheduler_state="recovery_scheduled",
+            increment_attempt_count=True,
+            _for_recovery=True,
+        )
+        log_event(
+            self._logger,
+            logging.INFO,
+            "discord.interaction.recovery.execution_replay_submitted",
+            interaction_id=record.interaction_id,
+            attempt_count=attempt_count,
+            previous_state=decision.previous_state.value,
+            reason=reason,
+        )
+        assert record.payload_json is not None
+        self._command_runner.submit_recovery(
+            envelope.context,
+            record.payload_json,
+            resource_keys=envelope.resource_keys,
+            conversation_id=envelope.conversation_id,
+            replay_mode="execution_replay",
+        )
+        return True
+
     async def _resume_interaction_recovery(self) -> None:
         records = await self._store.list_recoverable_interactions()
         now = datetime.now(timezone.utc)
@@ -5786,41 +5834,14 @@ class DiscordBotService:
                     "defer_public",
                     "defer_component_update",
                 }:
-                    if _interaction_recovery_backoff_active(
-                        updated_at=record.updated_at,
-                        attempt_count=int(record.attempt_count or 0),
+                    if await self._submit_execution_recovery_replay(
+                        record,
+                        envelope,
+                        decision=decision,
                         now=now,
-                    ):
-                        log_event(
-                            self._logger,
-                            logging.DEBUG,
-                            "discord.interaction.recovery.execution_backoff",
-                            interaction_id=record.interaction_id,
-                            attempt_count=int(record.attempt_count or 0),
-                        )
-                        continue
-                    await self._mark_interaction_scheduler_state(
-                        envelope.context,
-                        scheduler_state="recovery_scheduled",
-                        increment_attempt_count=True,
-                        _for_recovery=True,
-                    )
-                    log_event(
-                        self._logger,
-                        logging.INFO,
-                        "discord.interaction.recovery.execution_replay_submitted",
-                        interaction_id=record.interaction_id,
-                        attempt_count=int(record.attempt_count or 0),
-                        previous_state=decision.previous_state.value,
                         reason="defer_delivery_projected_to_execution_replay",
-                    )
-                    self._command_runner.submit_recovery(
-                        envelope.context,
-                        record.payload_json,
-                        resource_keys=envelope.resource_keys,
-                        conversation_id=envelope.conversation_id,
-                        replay_mode="execution_replay",
-                    )
+                    ):
+                        pass
                     continue
                 updated_cursor, terminal_reason = _plan_delivery_recovery_cursor(
                     cursor=cursor if isinstance(cursor, dict) else {},
@@ -5882,40 +5903,12 @@ class DiscordBotService:
                 continue
 
             if decision.action == ChatOperationRecoveryAction.RESUME_EXECUTION:
-                if _interaction_recovery_backoff_active(
-                    updated_at=record.updated_at,
-                    attempt_count=int(record.attempt_count or 0),
+                await self._submit_execution_recovery_replay(
+                    record,
+                    envelope,
+                    decision=decision,
                     now=now,
-                ):
-                    log_event(
-                        self._logger,
-                        logging.DEBUG,
-                        "discord.interaction.recovery.execution_backoff",
-                        interaction_id=record.interaction_id,
-                        attempt_count=int(record.attempt_count or 0),
-                    )
-                    continue
-                await self._mark_interaction_scheduler_state(
-                    envelope.context,
-                    scheduler_state="recovery_scheduled",
-                    increment_attempt_count=True,
-                    _for_recovery=True,
-                )
-                log_event(
-                    self._logger,
-                    logging.INFO,
-                    "discord.interaction.recovery.execution_replay_submitted",
-                    interaction_id=record.interaction_id,
-                    attempt_count=int(record.attempt_count or 0),
-                    previous_state=decision.previous_state.value,
                     reason=decision.reason,
-                )
-                self._command_runner.submit_recovery(
-                    envelope.context,
-                    record.payload_json,
-                    resource_keys=envelope.resource_keys,
-                    conversation_id=envelope.conversation_id,
-                    replay_mode="execution_replay",
                 )
 
     async def _begin_interaction_recovery_execution(self, ctx: IngressContext) -> bool:
