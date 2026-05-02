@@ -266,10 +266,7 @@ def _classify_worker(
         return "zombie", "no_run_record"
     if record.status.is_terminal():
         return "stale", f"run_{record.status.value}"
-    if (
-        metadata_age_seconds is not None
-        and metadata_age_seconds >= stale_age_seconds
-    ):
+    if metadata_age_seconds is not None and metadata_age_seconds >= stale_age_seconds:
         return "stale", "metadata_age_exceeded"
     return "active", f"run_{record.status.value}"
 
