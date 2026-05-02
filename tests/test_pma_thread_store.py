@@ -64,6 +64,36 @@ def test_create_list_get_thread(tmp_path: Path) -> None:
     assert normalized_listed[0]["managed_thread_id"] == created["managed_thread_id"]
 
 
+def test_prepare_runs_legacy_backfill_before_marking_prepared(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    def fake_backfill(hub_root: Path, *, durable: bool = True) -> None:
+        assert hub_root == tmp_path / "hub"
+        assert durable is False
+        with open_orchestration_sqlite(hub_root, durable=False, migrate=False) as conn:
+            row = conn.execute(
+                """
+                SELECT 1
+                  FROM orch_operation_flags
+                 WHERE flag_key = 'pma_thread_store_prepare_v1'
+                """
+            ).fetchone()
+        assert row is None
+        calls.append("backfill")
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.pma_thread_store_bootstrap.ensure_legacy_orchestration_backfill",
+        fake_backfill,
+    )
+
+    PmaThreadStore(tmp_path / "hub")
+
+    assert calls == ["backfill"]
+
+
 def test_create_thread_mirrors_backend_thread_id_into_orchestration_row(
     tmp_path: Path,
 ) -> None:

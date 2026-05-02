@@ -4,12 +4,13 @@ import pytest
 
 from codex_autorunner.core.chat_bindings import repo_has_active_non_pma_chat_binding
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
-from codex_autorunner.core.orchestration import (
-    OrchestrationBindingStore,
-    initialize_orchestration_sqlite,
-)
+from codex_autorunner.core.orchestration.bindings import OrchestrationBindingStore
+from codex_autorunner.core.orchestration.sqlite import initialize_orchestration_sqlite
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.integrations.telegram.state import (
+    OutboxRecord,
+    PendingApprovalRecord,
+    TelegramState,
     TelegramStateStore,
     TelegramTopicRecord,
     topic_key,
@@ -50,6 +51,63 @@ async def test_telegram_state_json_path_with_sqlite(tmp_path: Path) -> None:
         assert records == []
     finally:
         await store.close()
+
+
+@pytest.mark.anyio
+async def test_telegram_state_migrates_legacy_json_on_first_open(
+    tmp_path: Path,
+) -> None:
+    key = topic_key(123, 456)
+    legacy_state = TelegramState(
+        topics={
+            key: TelegramTopicRecord(
+                workspace_path=str(tmp_path / "workspace"),
+                active_thread_id="thread-1",
+                last_update_id=99,
+            )
+        },
+        topic_scopes={key: "repo:example"},
+        pending_approvals={
+            "approval-1": PendingApprovalRecord(
+                request_id="approval-1",
+                turn_id="turn-1",
+                chat_id=123,
+                thread_id=456,
+                message_id=789,
+                prompt="approve?",
+                created_at="2026-05-02T00:00:00+00:00",
+                topic_key=key,
+            )
+        },
+        outbox={
+            "outbox-1": OutboxRecord(
+                record_id="outbox-1",
+                chat_id=123,
+                thread_id=456,
+                reply_to_message_id=None,
+                placeholder_message_id=None,
+                text="pending",
+                created_at="2026-05-02T00:00:00+00:00",
+            )
+        },
+        last_update_id_global=42,
+    )
+    (tmp_path / "telegram_state.json").write_text(
+        legacy_state.to_json(),
+        encoding="utf-8",
+    )
+
+    store = TelegramStateStore(tmp_path / "telegram_state.sqlite3")
+    try:
+        migrated = await store.load()
+    finally:
+        await store.close()
+
+    assert migrated.topics[key].active_thread_id == "thread-1"
+    assert migrated.topic_scopes[key] == "repo:example"
+    assert migrated.pending_approvals["approval-1"].turn_id == "turn-1"
+    assert migrated.outbox["outbox-1"].text == "pending"
+    assert migrated.last_update_id_global == 42
 
 
 @pytest.mark.anyio

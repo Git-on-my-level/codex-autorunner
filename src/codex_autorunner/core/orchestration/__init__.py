@@ -1,6 +1,7 @@
+from typing import TYPE_CHECKING
+
 from . import execution_history_maintenance as maintenance_module
 from . import migrations as migrations_module
-from . import runtime_threads as runtime_threads_module
 from .bindings import (
     ActiveWorkSummary,
     OrchestrationBindingStore,
@@ -84,19 +85,57 @@ from .models import (
     ThreadStopOutcome,
     ThreadTarget,
 )
-from .service import (
-    HarnessBackedOrchestrationService,
-    PmaThreadExecutionStore,
-    build_harness_backed_orchestration_service,
-    build_surface_orchestration_ingress,
-    build_ticket_flow_orchestration_service,
-)
 from .sqlite import (
     ORCHESTRATION_DB_FILENAME,
     initialize_orchestration_sqlite,
     resolve_orchestration_sqlite_path,
 )
 from .threads import SurfaceThreadMessageRequest
+
+if TYPE_CHECKING:
+    from . import runtime_threads as runtime_threads_module
+    from .service import (
+        HarnessBackedOrchestrationService,
+        PmaThreadExecutionStore,
+        build_harness_backed_orchestration_service,
+        build_surface_orchestration_ingress,
+        build_ticket_flow_orchestration_service,
+    )
+
+_LAZY_EXPORTS = {
+    "runtime_threads_module": (".runtime_threads", None),
+    "HarnessBackedOrchestrationService": (
+        ".service",
+        "HarnessBackedOrchestrationService",
+    ),
+    "PmaThreadExecutionStore": (".service", "PmaThreadExecutionStore"),
+    "build_harness_backed_orchestration_service": (
+        ".service",
+        "build_harness_backed_orchestration_service",
+    ),
+    "build_surface_orchestration_ingress": (
+        ".service",
+        "build_surface_orchestration_ingress",
+    ),
+    "build_ticket_flow_orchestration_service": (
+        ".service",
+        "build_ticket_flow_orchestration_service",
+    ),
+}
+
+
+def __getattr__(name: str):
+    target = _LAZY_EXPORTS.get(name)
+    if target is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module_name, attribute_name = target
+    from importlib import import_module
+
+    module = import_module(module_name, __name__)
+    value = module if attribute_name is None else getattr(module, attribute_name)
+    globals()[name] = value
+    return value
+
 
 __all__ = [
     "maintenance_module",

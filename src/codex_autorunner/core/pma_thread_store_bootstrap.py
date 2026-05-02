@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from .locks import file_lock
+from .orchestration.legacy_backfill_gate import ensure_legacy_orchestration_backfill
 from .orchestration.sqlite import (
     open_orchestration_sqlite,
     prepare_orchestration_sqlite,
@@ -74,6 +75,10 @@ class PmaThreadStoreBootstrap:
     def prepare(self) -> None:
         with pma_threads_db_lock(self._db_path):
             prepare_orchestration_sqlite(self._hub_root, durable=self._durable)
+            ensure_legacy_orchestration_backfill(
+                self._hub_root,
+                durable=self._durable,
+            )
             with open_orchestration_sqlite(
                 self._hub_root,
                 durable=self._durable,

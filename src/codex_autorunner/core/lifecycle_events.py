@@ -17,6 +17,7 @@ from .orchestration.sqlite import (
 logger = logging.getLogger(__name__)
 
 TRANSITION_TOKEN_KEY = "transition_token"
+LIFECYCLE_EVENTS_MALFORMED_PREFIX = "lifecycle_events.malformed"
 
 
 class LifecycleEventType(str, Enum):
@@ -431,6 +432,153 @@ class _OrchestrationLifecycleEventStore:
         if row is None:
             return 0
         return int(row["c"] or 0)
+
+
+def _deserialize_legacy_lifecycle_event(entry: Any) -> Optional[LifecycleEvent]:
+    try:
+        if not isinstance(entry, dict):
+            return None
+        event_type_raw = entry.get("event_type")
+        if not isinstance(event_type_raw, str):
+            return None
+        event_type = LifecycleEventType(event_type_raw)
+        event_id_raw = entry.get("event_id")
+        event_id = event_id_raw if isinstance(event_id_raw, str) else ""
+        data_raw = entry.get("data", {})
+        data = dict(data_raw) if isinstance(data_raw, dict) else {}
+        origin_raw = entry.get("origin")
+        origin = origin_raw if isinstance(origin_raw, str) and origin_raw else "system"
+        timestamp_raw = entry.get("timestamp")
+        timestamp = timestamp_raw if isinstance(timestamp_raw, str) else ""
+        return LifecycleEvent(
+            event_type=event_type,
+            repo_id=str(entry.get("repo_id", "")),
+            run_id=str(entry.get("run_id", "")),
+            data=data,
+            origin=origin,
+            timestamp=timestamp,
+            processed=bool(entry.get("processed", False)),
+            event_id=event_id,
+        )
+    except (TypeError, ValueError, KeyError, AttributeError):
+        return None
+
+
+def _legacy_lifecycle_events_path(hub_root: Path) -> Path:
+    return hub_root / ".codex-autorunner" / "lifecycle_events.json"
+
+
+def _legacy_lifecycle_events_db_path(hub_root: Path) -> Path:
+    return hub_root / ".codex-autorunner" / "lifecycle_events.sqlite3"
+
+
+def _load_legacy_lifecycle_sqlite_events(hub_root: Path) -> list[LifecycleEvent]:
+    db_path = _legacy_lifecycle_events_db_path(hub_root)
+    if not db_path.exists():
+        return []
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        table = conn.execute(
+            """
+            SELECT name
+              FROM sqlite_master
+             WHERE type = 'table'
+               AND name = 'lifecycle_events'
+            """
+        ).fetchone()
+        if table is None:
+            return []
+        rows = conn.execute(
+            """
+            SELECT event_id, event_type, repo_id, run_id, data_json, origin, timestamp, processed
+              FROM lifecycle_events
+             ORDER BY seq ASC
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+    events: list[LifecycleEvent] = []
+    for row in rows:
+        data_payload: Any = {}
+        raw_data = row["data_json"]
+        if isinstance(raw_data, str):
+            try:
+                parsed = json.loads(raw_data)
+            except (json.JSONDecodeError, ValueError):
+                parsed = {}
+            if isinstance(parsed, dict):
+                data_payload = parsed
+        event = _deserialize_legacy_lifecycle_event(
+            {
+                "event_id": row["event_id"],
+                "event_type": row["event_type"],
+                "repo_id": row["repo_id"],
+                "run_id": row["run_id"],
+                "data": data_payload,
+                "origin": row["origin"],
+                "timestamp": row["timestamp"],
+                "processed": row["processed"],
+            }
+        )
+        if event is not None:
+            events.append(event)
+    return events
+
+
+def _load_legacy_lifecycle_json_events(path: Path) -> tuple[list[LifecycleEvent], bool]:
+    try:
+        raw = path.read_text(encoding="utf-8")
+        payload = json.loads(raw)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return [], False
+    if isinstance(payload, list):
+        entries = payload
+    elif isinstance(payload, dict) and isinstance(payload.get("events"), list):
+        entries = payload["events"]
+    else:
+        return [], False
+    events: list[LifecycleEvent] = []
+    for entry in entries:
+        event = _deserialize_legacy_lifecycle_event(entry)
+        if event is not None:
+            events.append(event)
+    return events, True
+
+
+def _quarantine_malformed_lifecycle_events_json(path: Path) -> None:
+    if not path.exists():
+        return
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    quarantine_path = path.with_name(
+        f"{LIFECYCLE_EVENTS_MALFORMED_PREFIX}.{timestamp}.json"
+    )
+    try:
+        path.rename(quarantine_path)
+    except OSError:
+        logger.warning(
+            "Failed to quarantine malformed lifecycle events file at %s", path
+        )
+
+
+def migrate_legacy_lifecycle_event_sources_if_needed(hub_root: Path) -> bool:
+    """Copy legacy lifecycle JSON/SQLite stores into orchestration when empty."""
+    orchestration_store = _OrchestrationLifecycleEventStore(hub_root)
+    if orchestration_store.count() > 0:
+        return True
+
+    for event in _load_legacy_lifecycle_sqlite_events(hub_root):
+        orchestration_store.append_with_result(event)
+
+    legacy_json_path = _legacy_lifecycle_events_path(hub_root)
+    if legacy_json_path.exists():
+        events, valid = _load_legacy_lifecycle_json_events(legacy_json_path)
+        if not valid:
+            _quarantine_malformed_lifecycle_events_json(legacy_json_path)
+            return False
+        for event in events:
+            orchestration_store.append_with_result(event)
+    return True
 
 
 class LifecycleEventStore:
