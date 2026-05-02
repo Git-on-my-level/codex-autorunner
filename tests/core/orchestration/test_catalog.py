@@ -3,13 +3,8 @@ from __future__ import annotations
 from codex_autorunner.agents.registry import AgentDescriptor
 from codex_autorunner.core.orchestration import (
     build_agent_definition,
-    build_native_target_definition,
     get_agent_definition,
-    get_native_target_definition,
-    is_helper_subsystem,
-    is_native_target,
     list_agent_definitions,
-    list_native_target_definitions,
     map_agent_capabilities,
     merge_agent_capabilities,
 )
@@ -145,85 +140,3 @@ def test_list_and_lookup_agent_definitions_are_pma_agnostic() -> None:
     assert lookup.agent_id == "codex"
     assert "approvals" in lookup.capabilities
     assert "active_thread_discovery" in lookup.capabilities
-
-
-def test_native_target_definitions_list_ticket_flow_and_pma() -> None:
-    definitions = list_native_target_definitions()
-    display_names = [d.display_name for d in definitions]
-    target_kinds = [d.target_kind for d in definitions]
-
-    assert "Ticket Flow" in display_names
-    assert "PMA" in display_names
-    assert "ticket_flow" in target_kinds
-    assert "pma" in target_kinds
-
-
-def test_native_target_definition_has_correct_target_family() -> None:
-    ticket_flow = get_native_target_definition("ticket_flow")
-    assert ticket_flow is not None
-    assert ticket_flow.target_kind == "ticket_flow"
-    assert ticket_flow.display_name == "Ticket Flow"
-    assert ticket_flow.description is not None
-    assert "workflow" in ticket_flow.description.lower()
-
-    pma = get_native_target_definition("pma")
-    assert pma is not None
-    assert pma.target_kind == "pma"
-    assert pma.display_name == "PMA"
-    assert pma.description is not None
-    assert "thread" in pma.description.lower()
-
-
-def test_build_native_target_definition_with_custom_availability() -> None:
-    definition = build_native_target_definition(
-        "ticket_flow",
-        repo_id="repo-1",
-        workspace_root=_WORKSPACE_ROOT,
-        available=False,
-    )
-
-    assert definition.target_id == "ticket_flow"
-    assert definition.repo_id == "repo-1"
-    assert definition.workspace_root == _WORKSPACE_ROOT
-    assert definition.available is False
-
-
-def test_is_native_target_distinguishes_from_runtime_agents() -> None:
-    assert is_native_target("ticket_flow") is True
-    assert is_native_target("pma") is True
-    assert is_native_target("codex") is False
-    assert is_native_target("opencode") is False
-    assert is_native_target("unknown") is False
-
-
-def test_is_helper_subsystem_identifies_internal_plumbing() -> None:
-    assert is_helper_subsystem("dispatch_handler") is True
-    assert is_helper_subsystem("reactive_debouncer") is True
-    assert is_helper_subsystem("event_projection") is True
-    assert is_helper_subsystem("transcript_mirror_service") is True
-
-    assert is_helper_subsystem("ticket_flow") is False
-    assert is_helper_subsystem("pma") is False
-    assert is_helper_subsystem("codex") is False
-    assert is_helper_subsystem("opencode") is False
-
-
-def test_native_target_catalog_groups_targets_by_family() -> None:
-    from codex_autorunner.core.orchestration.catalog import NativeTargetCatalog
-
-    catalog = NativeTargetCatalog(
-        repo_id="repo-1",
-        workspace_root=_WORKSPACE_ROOT,
-        availability={"ticket_flow": True, "pma": False},
-    )
-
-    definitions = catalog.list_definitions()
-    assert len(definitions) == 2
-
-    ticket_flow = catalog.get_definition("ticket_flow")
-    assert ticket_flow is not None
-    assert ticket_flow.available is True
-
-    pma = catalog.get_definition("pma")
-    assert pma is not None
-    assert pma.available is False

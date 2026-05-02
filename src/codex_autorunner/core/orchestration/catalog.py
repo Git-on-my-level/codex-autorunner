@@ -6,8 +6,6 @@ from typing import Iterable, Mapping, Optional, Protocol
 from ...runtime_capabilities import RuntimeCapability, normalize_runtime_capabilities
 from .models import (
     AgentDefinition,
-    NativeTargetDefinition,
-    NativeTargetKind,
     TargetCapability,
 )
 
@@ -165,155 +163,12 @@ class MappingAgentDefinitionCatalog:
         )
 
 
-NATIVE_TARGET_REGISTRY: dict[NativeTargetKind, dict[str, str]] = {
-    "ticket_flow": {
-        "display_name": "Ticket Flow",
-        "description": "CAR-native ticket-driven workflow execution engine for deterministic multi-step delivery work.",
-    },
-    "pma": {
-        "display_name": "PMA",
-        "description": "CAR-native thread management and orchestration client for durable conversation threads.",
-    },
-}
-
-
-def build_native_target_definition(
-    target_kind: NativeTargetKind,
-    *,
-    repo_id: Optional[str] = None,
-    workspace_root: Optional[str] = None,
-    available: bool = True,
-) -> NativeTargetDefinition:
-    """Build a native target definition from the registry."""
-    registry_entry = NATIVE_TARGET_REGISTRY.get(target_kind)
-    if registry_entry is None:
-        raise ValueError(f"Unknown native target kind: {target_kind}")
-    return NativeTargetDefinition(
-        target_id=target_kind,
-        target_kind=target_kind,
-        display_name=registry_entry["display_name"],
-        description=registry_entry["description"],
-        repo_id=repo_id,
-        workspace_root=workspace_root,
-        available=available,
-    )
-
-
-def list_native_target_definitions(
-    *,
-    repo_id: Optional[str] = None,
-    workspace_root: Optional[str] = None,
-    availability: Optional[Mapping[NativeTargetKind, bool]] = None,
-) -> list[NativeTargetDefinition]:
-    """List all registered CAR-native target definitions.
-
-    Native targets are durable, addressable CAR-native services that participate
-    in orchestration routing. They are distinct from runtime-backed agents which
-    are managed through the agent registry.
-
-    Note: Helper subsystems such as dispatch interception, reactive debounce logic,
-    and event projection services are NOT standalone orchestration targets. They
-    remain internal plumbing rather than user-addressable target identities.
-    """
-    definitions = [
-        build_native_target_definition(
-            target_kind,
-            repo_id=repo_id,
-            workspace_root=workspace_root,
-            available=availability.get(target_kind, True) if availability else True,
-        )
-        for target_kind in NATIVE_TARGET_REGISTRY
-    ]
-    return sorted(definitions, key=lambda d: d.display_name.lower())
-
-
-def get_native_target_definition(
-    target_kind: NativeTargetKind,
-    *,
-    repo_id: Optional[str] = None,
-    workspace_root: Optional[str] = None,
-    availability: Optional[Mapping[NativeTargetKind, bool]] = None,
-) -> Optional[NativeTargetDefinition]:
-    """Get a specific CAR-native target definition by kind."""
-    if target_kind not in NATIVE_TARGET_REGISTRY:
-        return None
-    return build_native_target_definition(
-        target_kind,
-        repo_id=repo_id,
-        workspace_root=workspace_root,
-        available=availability.get(target_kind, True) if availability else True,
-    )
-
-
-def is_native_target(target_id: str) -> bool:
-    """Check if a target ID refers to a CAR-native target."""
-    return target_id in NATIVE_TARGET_REGISTRY
-
-
-def is_helper_subsystem(identifier: str) -> bool:
-    """Check if an identifier refers to a helper subsystem (not an orchestration target).
-
-    Helper subsystems are internal plumbing components that should not be exposed
-    as user-addressable orchestration targets. Examples include:
-    - Dispatch interception handlers
-    - Reactive debounce logic
-    - Event projection services
-    - Transcript mirroring services
-    """
-    helper_patterns = (
-        "dispatch",
-        "reactive",
-        "debounce",
-        "projection",
-        "transcript_mirror",
-        "event_sink",
-    )
-    return any(pattern in identifier.lower() for pattern in helper_patterns)
-
-
-@dataclass(frozen=True)
-class NativeTargetCatalog:
-    """Catalog of CAR-native orchestration targets.
-
-    This catalog exposes durable, addressable CAR-native services that participate
-    in orchestration routing. It is distinct from the agent registry which handles
-    runtime-backed agents.
-    """
-
-    repo_id: Optional[str] = None
-    workspace_root: Optional[str] = None
-    availability: Optional[Mapping[NativeTargetKind, bool]] = None
-
-    def list_definitions(self) -> list[NativeTargetDefinition]:
-        return list_native_target_definitions(
-            repo_id=self.repo_id,
-            workspace_root=self.workspace_root,
-            availability=self.availability,
-        )
-
-    def get_definition(
-        self, target_kind: NativeTargetKind
-    ) -> Optional[NativeTargetDefinition]:
-        return get_native_target_definition(
-            target_kind,
-            repo_id=self.repo_id,
-            workspace_root=self.workspace_root,
-            availability=self.availability,
-        )
-
-
 __all__ = [
     "MappingAgentDefinitionCatalog",
-    "NativeTargetCatalog",
     "RuntimeAgentDescriptor",
     "build_agent_definition",
-    "build_native_target_definition",
     "get_agent_definition",
-    "get_native_target_definition",
-    "is_helper_subsystem",
-    "is_native_target",
     "list_agent_definitions",
-    "list_native_target_definitions",
     "map_agent_capabilities",
     "merge_agent_capabilities",
 ]

@@ -11,8 +11,10 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .locks import file_lock
-from .orchestration.legacy_backfill_gate import ensure_legacy_orchestration_backfill
-from .orchestration.sqlite import open_orchestration_sqlite
+from .orchestration.sqlite import (
+    open_orchestration_sqlite,
+    prepare_orchestration_sqlite,
+)
 from .text_utils import _json_loads_object
 from .time_utils import now_iso
 from .utils import atomic_write
@@ -107,7 +109,7 @@ class PmaQueue:
         self._initialize_canonical_state()
 
     def _initialize_canonical_state(self) -> None:
-        ensure_legacy_orchestration_backfill(self._hub_root, durable=True)
+        prepare_orchestration_sqlite(self._hub_root, durable=True)
 
     def _lane_queue_path(self, lane_id: str) -> Path:
         safe_lane_id = lane_id.replace(":", "__COLON__").replace("/", "__SLASH__")

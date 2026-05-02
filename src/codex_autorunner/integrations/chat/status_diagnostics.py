@@ -148,53 +148,6 @@ def _format_friendly_time(value: datetime) -> str:
     return f"{month} {day}, {hour}:{minute}{ampm}"
 
 
-def _extract_rate_limit_timestamp(rate_limits: dict[str, Any]) -> Optional[datetime]:
-    candidates: list[tuple[int, datetime]] = []
-    for section in ("primary", "secondary"):
-        entry = rate_limits.get(section)
-        if not isinstance(entry, dict):
-            continue
-        window_minutes = _rate_limit_window_minutes(entry, section) or 0
-        for key in (
-            "resets_at",
-            "resetsAt",
-            "reset_at",
-            "resetAt",
-            "refresh_at",
-            "refreshAt",
-            "updated_at",
-            "updatedAt",
-        ):
-            if key in entry:
-                timestamp = _coerce_datetime(entry.get(key))
-                if timestamp is not None:
-                    candidates.append((window_minutes, timestamp))
-    if candidates:
-        return max(candidates, key=lambda item: (item[0], item[1]))[1]
-    for key in (
-        "refreshed_at",
-        "refreshedAt",
-        "refresh_at",
-        "refreshAt",
-        "updated_at",
-        "updatedAt",
-        "timestamp",
-        "time",
-        "as_of",
-        "asOf",
-    ):
-        if key in rate_limits:
-            return _coerce_datetime(rate_limits.get(key))
-    return None
-
-
-def _format_rate_limit_refresh(rate_limits: dict[str, Any]) -> Optional[str]:
-    refresh_dt = _extract_rate_limit_timestamp(rate_limits)
-    if refresh_dt is None:
-        return None
-    return _format_friendly_time(refresh_dt.astimezone())
-
-
 def format_rate_limit_lines(rate_limits: Optional[dict[str, Any]]) -> list[str]:
     return _format_shared_rate_limit_lines(rate_limits)
 

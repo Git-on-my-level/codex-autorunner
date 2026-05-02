@@ -77,13 +77,7 @@ from codex_autorunner.core.pma_domain.rebinding_policy import (
 )
 from codex_autorunner.core.pma_domain.serialization import (
     normalize_pma_dispatch_decision,
-    normalize_pma_subscription,
-    normalize_pma_timer,
-    normalize_pma_wakeup,
     pma_dispatch_decision_to_dict,
-    pma_subscription_to_dict,
-    pma_timer_to_dict,
-    pma_wakeup_to_dict,
 )
 from codex_autorunner.core.pma_domain.subscription_reducer import (
     TransitionEvent,
@@ -309,61 +303,6 @@ class TestReducerPurity:
 
 
 class TestSerializationRoundTrip:
-    def test_subscription_round_trip_preserves_fields(self) -> None:
-        data = {
-            "subscription_id": "sub-rt",
-            "created_at": "2026-01-01T00:00:00Z",
-            "updated_at": "2026-01-01T00:00:00Z",
-            "state": "active",
-            "event_types": ["flow_completed"],
-            "repo_id": "repo-1",
-            "lane_id": "discord",
-            "max_matches": 3,
-            "match_count": 1,
-            "metadata": {"key": "val"},
-        }
-        model = normalize_pma_subscription(data)
-        assert model is not None
-        serialized = pma_subscription_to_dict(model)
-        re_parsed = normalize_pma_subscription(serialized)
-        assert re_parsed is not None
-        assert re_parsed.subscription_id == model.subscription_id
-        assert re_parsed.max_matches == model.max_matches
-        assert re_parsed.match_count == model.match_count
-
-    def test_timer_round_trip_preserves_fields(self) -> None:
-        data = {
-            "timer_id": "timer-rt",
-            "due_at": "2026-06-01T00:00:00Z",
-            "created_at": "2026-01-01T00:00:00Z",
-            "updated_at": "2026-01-01T00:00:00Z",
-            "timer_type": "watchdog",
-            "idle_seconds": 300,
-        }
-        model = normalize_pma_timer(data)
-        assert model is not None
-        serialized = pma_timer_to_dict(model)
-        re_parsed = normalize_pma_timer(serialized)
-        assert re_parsed is not None
-        assert re_parsed.timer_id == model.timer_id
-        assert re_parsed.timer_type == model.timer_type
-
-    def test_wakeup_round_trip_preserves_fields(self) -> None:
-        data = {
-            "wakeup_id": "wakeup-rt",
-            "created_at": "2026-01-01T00:00:00Z",
-            "updated_at": "2026-01-01T00:00:00Z",
-            "source": "transition",
-            "event_data": {"detail": "test"},
-        }
-        model = normalize_pma_wakeup(data)
-        assert model is not None
-        serialized = pma_wakeup_to_dict(model)
-        re_parsed = normalize_pma_wakeup(serialized)
-        assert re_parsed is not None
-        assert re_parsed.wakeup_id == model.wakeup_id
-        assert re_parsed.event_data == model.event_data
-
     def test_dispatch_decision_round_trip(self) -> None:
         data = {
             "requested_delivery": "auto",
@@ -384,20 +323,6 @@ class TestSerializationRoundTrip:
         assert re_parsed is not None
         assert re_parsed.requested_delivery == model.requested_delivery
         assert len(re_parsed.attempts) == len(model.attempts)
-
-    def test_normalization_idempotent(self) -> None:
-        data = {
-            "subscription_id": "sub-idem",
-            "created_at": "2026-01-01T00:00:00Z",
-            "updated_at": "2026-01-01T00:00:00Z",
-        }
-        m1 = normalize_pma_subscription(data)
-        assert m1 is not None
-        s1 = pma_subscription_to_dict(m1)
-        m2 = normalize_pma_subscription(s1)
-        assert m2 is not None
-        s2 = pma_subscription_to_dict(m2)
-        assert s1 == s2
 
 
 # ---------------------------------------------------------------------------

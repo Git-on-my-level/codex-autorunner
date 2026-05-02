@@ -112,10 +112,6 @@ class ReviewTurnContext:
     review_session_id: Optional[str] = None
 
 
-CodexTurnContext = ReviewTurnContext
-OpencodeTurnContext = ReviewTurnContext
-
-
 @dataclass
 class CodexReviewSetup:
     """Prepared client and review payload for Codex reviews."""

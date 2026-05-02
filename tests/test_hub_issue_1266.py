@@ -1,7 +1,6 @@
-"""Regression tests for hub startup / health ordering and legacy backfill guards (GitHub #1266).
+"""Regression tests for hub startup / health ordering (GitHub #1266).
 
-Hub heavy startup is deferred via `_deferred_hub_startup`; legacy JSON->SQLite backfill is gated by
-`ensure_legacy_orchestration_backfill` / `orch_operation_flags`.
+Hub heavy startup is deferred via `_deferred_hub_startup`.
 """
 
 from __future__ import annotations
@@ -22,9 +21,6 @@ from fastapi.testclient import TestClient
 from codex_autorunner.core.hub import (
     HUB_STARTUP_READY,
     HUB_STARTUP_STARTED,
-)
-from codex_autorunner.core.orchestration import (
-    legacy_backfill_gate as legacy_backfill_gate_module,
 )
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.core.pma_queue import PmaQueue
@@ -229,79 +225,6 @@ def test_hub_root_health_serves_before_deferred_startup_work_finishes(
         assert response.status_code == 200
 
     assert entered.is_set()
-
-
-def test_pma_automation_legacy_automation_backfill_runs_once_across_store_instances(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """`orch_operation_flags` must skip re-invoking per-source backfills (GitHub #1266)."""
-    from codex_autorunner.bootstrap import seed_hub_files
-    from codex_autorunner.core.config import CONFIG_FILENAME
-    from codex_autorunner.core.pma_automation_store import PmaAutomationStore
-    from codex_autorunner.core.pma_thread_store import prepare_pma_thread_store
-
-    hub_root = tmp_path / "hub"
-    hub_root.mkdir()
-    seed_hub_files(hub_root, force=True)
-    write_test_config(
-        hub_root / CONFIG_FILENAME,
-        {"mode": "hub"},
-    )
-
-    calls: list[int] = []
-
-    def _counting_backfill(*args: object, **kwargs: object) -> dict[str, int]:
-        calls.append(1)
-        return {"subscriptions": 0, "timers": 0, "wakeups": 0}
-
-    monkeypatch.setattr(
-        legacy_backfill_gate_module,
-        "backfill_legacy_automation_state",
-        _counting_backfill,
-    )
-
-    prepare_pma_thread_store(hub_root, durable=False)
-    store_a = PmaAutomationStore(hub_root)
-    store_a.load()
-    store_b = PmaAutomationStore(hub_root)
-    store_b.load()
-
-    assert calls == [1], "durable marker must prevent a second automation backfill"
-
-
-def test_pma_automation_load_does_not_retrigger_backfill_after_explicit_prepare(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from codex_autorunner.bootstrap import seed_hub_files
-    from codex_autorunner.core.config import CONFIG_FILENAME
-    from codex_autorunner.core.pma_automation_store import PmaAutomationStore
-    from codex_autorunner.core.pma_thread_store import prepare_pma_thread_store
-
-    hub_root = tmp_path / "hub"
-    hub_root.mkdir()
-    seed_hub_files(hub_root, force=True)
-    write_test_config(
-        hub_root / CONFIG_FILENAME,
-        {"mode": "hub"},
-    )
-
-    prepare_pma_thread_store(hub_root, durable=False)
-    calls: list[int] = []
-
-    def _counting_backfill(*args: object, **kwargs: object) -> dict[str, int]:
-        calls.append(1)
-        return {"subscriptions": 0, "timers": 0, "wakeups": 0}
-
-    monkeypatch.setattr(
-        legacy_backfill_gate_module,
-        "backfill_legacy_automation_state",
-        _counting_backfill,
-    )
-
-    PmaAutomationStore(hub_root).load()
-    PmaAutomationStore(hub_root).load()
-
-    assert calls == [], "routine loads must not retrigger legacy backfill after prepare"
 
 
 def test_hub_supervisor_startup_phase_transitions(

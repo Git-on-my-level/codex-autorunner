@@ -24,8 +24,6 @@ from .pma_domain.serialization import (
 from .pma_origin import extract_pma_origin_metadata
 from .text_utils import _normalize_optional_text, _normalize_pma_delivery_target
 
-PmaDispatchAttemptSpec = PmaDispatchAttempt
-
 
 def normalize_pma_dispatch_decision(value: Any) -> Optional[PmaDispatchDecision]:
     return _domain_normalize(value)
@@ -265,7 +263,6 @@ def build_pma_dispatch_decision(
 
 
 __all__ = [
-    "PmaDispatchAttemptSpec",
     "PmaDispatchDecision",
     "build_pma_dispatch_decision",
     "normalize_pma_dispatch_decision",

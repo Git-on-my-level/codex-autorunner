@@ -1,7 +1,6 @@
 """Test lifecycle events system."""
 
 import asyncio
-import json
 import tempfile
 import threading
 from pathlib import Path
@@ -17,7 +16,6 @@ from codex_autorunner.core.lifecycle_events import (
     LifecycleEventEmitter,
     LifecycleEventStore,
     LifecycleEventType,
-    default_lifecycle_events_path,
 )
 
 
@@ -163,100 +161,6 @@ def test_lifecycle_event_store_prune():
 
         pruned = store.load()
         assert len(pruned) == 5
-
-
-def test_lifecycle_event_store_append_rewrites_malformed_file() -> None:
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tmp_path = Path(tmpdir)
-        legacy_path = default_lifecycle_events_path(tmp_path)
-        legacy_path.parent.mkdir(parents=True, exist_ok=True)
-        legacy_path.write_text("{ not-valid-json", encoding="utf-8")
-
-        store = LifecycleEventStore(tmp_path)
-        assert store.load() == []
-        assert not legacy_path.exists()
-        malformed_files = list(
-            legacy_path.parent.glob("lifecycle_events.malformed.*.json")
-        )
-        assert malformed_files
-        store.append(
-            LifecycleEvent(
-                event_type=LifecycleEventType.FLOW_PAUSED,
-                repo_id="test-repo",
-                run_id="run-1",
-            )
-        )
-
-        loaded = store.load()
-        assert len(loaded) == 1
-        assert loaded[0].event_type == LifecycleEventType.FLOW_PAUSED
-        assert loaded[0].repo_id == "test-repo"
-        assert loaded[0].run_id == "run-1"
-
-
-def test_lifecycle_event_store_migrates_legacy_json_list() -> None:
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tmp_path = Path(tmpdir)
-        legacy_path = default_lifecycle_events_path(tmp_path)
-        legacy_path.parent.mkdir(parents=True, exist_ok=True)
-        legacy_path.write_text(
-            json.dumps(
-                [
-                    {
-                        "event_id": "legacy-1",
-                        "event_type": "flow_failed",
-                        "repo_id": "repo-1",
-                        "run_id": "run-1",
-                        "data": {"error": "boom"},
-                        "origin": "system",
-                        "timestamp": "2026-03-01T00:00:00+00:00",
-                        "processed": False,
-                    }
-                ]
-            ),
-            encoding="utf-8",
-        )
-
-        store = LifecycleEventStore(tmp_path)
-        loaded = store.load()
-        assert len(loaded) == 1
-        assert loaded[0].event_id == "legacy-1"
-        assert loaded[0].event_type == LifecycleEventType.FLOW_FAILED
-        assert loaded[0].data == {"error": "boom"}
-        assert store.path.name == "orchestration.sqlite3"
-
-
-def test_lifecycle_event_store_migrates_legacy_json_dict_shape() -> None:
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tmp_path = Path(tmpdir)
-        legacy_path = default_lifecycle_events_path(tmp_path)
-        legacy_path.parent.mkdir(parents=True, exist_ok=True)
-        legacy_path.write_text(
-            json.dumps(
-                {
-                    "events": [
-                        {
-                            "event_id": "legacy-2",
-                            "event_type": "flow_completed",
-                            "repo_id": "repo-1",
-                            "run_id": "run-1",
-                            "data": {"ok": True},
-                            "origin": "runner",
-                            "timestamp": "2026-03-01T00:00:00+00:00",
-                            "processed": True,
-                        }
-                    ]
-                }
-            ),
-            encoding="utf-8",
-        )
-
-        store = LifecycleEventStore(tmp_path)
-        loaded = store.load()
-        assert len(loaded) == 1
-        assert loaded[0].event_id == "legacy-2"
-        assert loaded[0].event_type == LifecycleEventType.FLOW_COMPLETED
-        assert loaded[0].processed is True
 
 
 def test_flow_completed_duplicate_is_deduped_with_metadata_and_stable_event_id():
@@ -435,9 +339,6 @@ if __name__ == "__main__":
     test_lifecycle_event_store_update_event_data_and_processed()
     test_lifecycle_event_emitter()
     test_lifecycle_event_store_prune()
-    test_lifecycle_event_store_append_rewrites_malformed_file()
-    test_lifecycle_event_store_migrates_legacy_json_list()
-    test_lifecycle_event_store_migrates_legacy_json_dict_shape()
     test_flow_completed_duplicate_is_deduped_with_metadata_and_stable_event_id()
     test_non_duplicate_events_still_append()
     test_runtime_terminal_events_include_transition_metadata()
