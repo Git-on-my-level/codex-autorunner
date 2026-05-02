@@ -364,6 +364,29 @@ def _resolve_discord_turn_policies(
     return approval_policy or default_approval_policy, sandbox_policy
 
 
+def _extract_binding_resource_fields(
+    binding: Any,
+) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    if not isinstance(binding, (dict, ChannelBinding)):
+        return None, None, None
+    repo_id = binding.get("repo_id")
+    resource_kind = binding.get("resource_kind")
+    resource_id = binding.get("resource_id")
+    return (
+        repo_id if isinstance(repo_id, str) and repo_id.strip() else None,
+        (
+            resource_kind.strip()
+            if isinstance(resource_kind, str) and resource_kind.strip()
+            else None
+        ),
+        (
+            resource_id.strip()
+            if isinstance(resource_id, str) and resource_id.strip()
+            else None
+        ),
+    )
+
+
 async def resolve_bound_workspace_root(
     service: Any,
     *,
@@ -781,21 +804,7 @@ async def _submit_discord_thread_message(
         logical_agent, agent_profile = dispatch.service._resolve_agent_state(binding)
         if not isinstance(logical_agent, str) or not logical_agent.strip():
             logical_agent = dispatch.agent
-        repo_id = (
-            binding.get("repo_id")
-            if isinstance(binding, (dict, ChannelBinding))
-            else None
-        )
-        resource_kind = (
-            binding.get("resource_kind")
-            if isinstance(binding, (dict, ChannelBinding))
-            else None
-        )
-        resource_id = (
-            binding.get("resource_id")
-            if isinstance(binding, (dict, ChannelBinding))
-            else None
-        )
+        repo_id, resource_kind, resource_id = _extract_binding_resource_fields(binding)
         _orchestration_service, thread = resolve_discord_thread_target(
             dispatch.service,
             channel_id=dispatch.channel_id,
@@ -803,17 +812,9 @@ async def _submit_discord_thread_message(
             workspace_root=request.workspace_root,
             agent=logical_agent,
             agent_profile=agent_profile,
-            repo_id=repo_id if isinstance(repo_id, str) and repo_id.strip() else None,
-            resource_kind=(
-                resource_kind.strip()
-                if isinstance(resource_kind, str) and resource_kind.strip()
-                else None
-            ),
-            resource_id=(
-                resource_id.strip()
-                if isinstance(resource_id, str) and resource_id.strip()
-                else None
-            ),
+            repo_id=repo_id,
+            resource_kind=resource_kind,
+            resource_id=resource_id,
             mode="pma" if request.pma_enabled else "repo",
             pma_enabled=request.pma_enabled,
         )
@@ -1770,19 +1771,7 @@ async def _run_discord_orchestrated_turn_for_message(
     logical_agent, agent_profile = service._resolve_agent_state(binding)
     if not isinstance(logical_agent, str) or not logical_agent.strip():
         logical_agent = agent
-    repo_id = (
-        binding.get("repo_id") if isinstance(binding, (dict, ChannelBinding)) else None
-    )
-    resource_kind = (
-        binding.get("resource_kind")
-        if isinstance(binding, (dict, ChannelBinding))
-        else None
-    )
-    resource_id = (
-        binding.get("resource_id")
-        if isinstance(binding, (dict, ChannelBinding))
-        else None
-    )
+    repo_id, resource_kind, resource_id = _extract_binding_resource_fields(binding)
     orchestration_service, thread = resolve_discord_thread_target(
         service,
         channel_id=channel_id,
@@ -1790,17 +1779,9 @@ async def _run_discord_orchestrated_turn_for_message(
         workspace_root=workspace_root,
         agent=logical_agent,
         agent_profile=agent_profile,
-        repo_id=repo_id if isinstance(repo_id, str) and repo_id.strip() else None,
-        resource_kind=(
-            resource_kind.strip()
-            if isinstance(resource_kind, str) and resource_kind.strip()
-            else None
-        ),
-        resource_id=(
-            resource_id.strip()
-            if isinstance(resource_id, str) and resource_id.strip()
-            else None
-        ),
+        repo_id=repo_id,
+        resource_kind=resource_kind,
+        resource_id=resource_id,
         mode=mode,
         pma_enabled=pma_enabled,
     )
