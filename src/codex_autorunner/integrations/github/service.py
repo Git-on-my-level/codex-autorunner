@@ -59,6 +59,31 @@ def _json_dumps(obj: object) -> str:
     return json.dumps(obj, indent=2, sort_keys=True) + "\n"
 
 
+def _parse_gh_json(
+    proc: subprocess.CompletedProcess[str],
+    *,
+    soft_fail: bool = True,
+    expect: type = dict,
+    error_label: str = "gh",
+) -> Any:
+    if proc.returncode != 0 and soft_fail:
+        return {} if expect is dict else []
+    default_raw = "{}" if expect is dict else "[]"
+    try:
+        payload = json.loads(proc.stdout or default_raw)
+    except json.JSONDecodeError as exc:
+        if soft_fail:
+            return {} if expect is dict else []
+        raise GitHubError(
+            f"Unable to parse {error_label} output", status_code=500
+        ) from exc
+    if not isinstance(payload, expect):
+        return {} if expect is dict else []
+    if expect is list:
+        return [item for item in payload if isinstance(item, dict)]  # type: ignore[attr-defined]
+    return payload
+
+
 def _run(
     args: list[str],
     *,
@@ -424,13 +449,7 @@ class GitHubService:
             check=False,
             timeout_seconds=15,
         )
-        if proc.returncode != 0:
-            return {}
-        try:
-            payload = json.loads(proc.stdout or "{}")
-        except json.JSONDecodeError:
-            return {}
-        return payload if isinstance(payload, dict) else {}
+        return _parse_gh_json(proc)  # type: ignore[no-any-return]
 
     def repo_info(self) -> RepoInfo:
         proc = self._gh(
@@ -438,12 +457,7 @@ class GitHubService:
             timeout_seconds=15,
             check=True,
         )
-        try:
-            payload = json.loads(proc.stdout or "{}")
-        except json.JSONDecodeError as exc:
-            raise GitHubError(
-                "Unable to parse gh repo view output", status_code=500
-            ) from exc
+        payload = _parse_gh_json(proc, soft_fail=False, error_label="gh repo view")
         return _parse_repo_info(payload)
 
     def current_branch(self, *, cwd: Optional[Path] = None) -> str:
@@ -533,15 +547,7 @@ class GitHubService:
             check=False,
             timeout_seconds=20,
         )
-        if proc.returncode != 0:
-            return []
-        try:
-            payload = json.loads(proc.stdout or "[]")
-        except json.JSONDecodeError:
-            return []
-        if not isinstance(payload, list):
-            return []
-        return [item for item in payload if isinstance(item, dict)]
+        return _parse_gh_json(proc, expect=list)  # type: ignore[no-any-return]
 
     def list_open_prs(
         self, *, limit: int = 10, cwd: Optional[Path] = None
@@ -561,15 +567,7 @@ class GitHubService:
             check=False,
             timeout_seconds=20,
         )
-        if proc.returncode != 0:
-            return []
-        try:
-            payload = json.loads(proc.stdout or "[]")
-        except json.JSONDecodeError:
-            return []
-        if not isinstance(payload, list):
-            return []
-        return [item for item in payload if isinstance(item, dict)]
+        return _parse_gh_json(proc, expect=list)  # type: ignore[no-any-return]
 
     def issue_view(
         self,
@@ -593,13 +591,7 @@ class GitHubService:
             check=True,
             timeout_seconds=20,
         )
-        try:
-            payload = json.loads(proc.stdout or "{}")
-        except json.JSONDecodeError as exc:
-            raise GitHubError(
-                "Unable to parse gh issue view output", status_code=500
-            ) from exc
-        return payload if isinstance(payload, dict) else {}
+        return _parse_gh_json(proc, soft_fail=False, error_label="gh issue view")  # type: ignore[no-any-return]
 
     def validate_issue_same_repo(self, issue_ref: str) -> int:
         repo = self.repo_info()
@@ -633,13 +625,7 @@ class GitHubService:
             check=True,
             timeout_seconds=30,
         )
-        try:
-            payload = json.loads(proc.stdout or "{}")
-        except json.JSONDecodeError as exc:
-            raise GitHubError(
-                "Unable to parse gh pr view output", status_code=500
-            ) from exc
-        return payload if isinstance(payload, dict) else {}
+        return _parse_gh_json(proc, soft_fail=False, error_label="gh pr view")  # type: ignore[no-any-return]
 
     def pr_reviews(
         self,
@@ -660,18 +646,9 @@ class GitHubService:
             check=False,
             timeout_seconds=30,
         )
-        if proc.returncode != 0:
-            return []
-        try:
-            payload = json.loads(proc.stdout or "[]")
-        except json.JSONDecodeError:
-            return []
-        if not isinstance(payload, list):
-            return []
+        payload = _parse_gh_json(proc, expect=list)
         reviews: list[dict[str, Any]] = []
         for item in payload:
-            if not isinstance(item, dict):
-                continue
             user = item.get("user")
             author_login = (
                 _normalize_optional_text(user.get("login"))
@@ -756,12 +733,7 @@ class GitHubService:
             check=False,
             timeout_seconds=30,
         )
-        if proc.returncode != 0:
-            return []
-        try:
-            payload = json.loads(proc.stdout or "{}")
-        except json.JSONDecodeError:
-            return []
+        payload = _parse_gh_json(proc, soft_fail=True, expect=dict)
         nodes = _get_nested(
             payload, "data", "repository", "pullRequest", "reviewThreads", "nodes"
         )
@@ -864,14 +836,7 @@ class GitHubService:
             check=True,
             timeout_seconds=30,
         )
-        try:
-            payload = json.loads(proc.stdout or "{}")
-        except json.JSONDecodeError as exc:
-            raise GitHubError(
-                "Unable to parse gh reaction output",
-                status_code=500,
-            ) from exc
-        return payload if isinstance(payload, dict) else {}
+        return _parse_gh_json(proc, soft_fail=False, error_label="gh reaction")  # type: ignore[no-any-return]
 
     def pr_checks(
         self, *, number: int, cwd: Optional[Path] = None
@@ -885,12 +850,7 @@ class GitHubService:
             check=False,
             timeout_seconds=30,
         )
-        if proc.returncode != 0:
-            return []
-        try:
-            payload = json.loads(proc.stdout or "{}")
-        except json.JSONDecodeError:
-            return []
+        payload = _parse_gh_json(proc, soft_fail=True, expect=dict)
         rollup = payload.get("statusCheckRollup")
         entries: list[dict[str, Any]] = []
         if isinstance(rollup, list):
@@ -1070,13 +1030,7 @@ class GitHubService:
             check=False,
             timeout_seconds=20,
         )
-        if proc.returncode != 0:
-            return {}
-        try:
-            payload = json.loads(proc.stdout or "{}")
-        except json.JSONDecodeError:
-            return {}
-        return payload if isinstance(payload, dict) else {}
+        return _parse_gh_json(proc)  # type: ignore[no-any-return]
 
     def issue_comments(
         self,
@@ -1204,13 +1158,7 @@ class GitHubService:
             f"body={body}",
         ]
         proc = self._gh(args, cwd=cwd or self.repo_root, check=True, timeout_seconds=20)
-        try:
-            payload = json.loads(proc.stdout or "{}")
-        except json.JSONDecodeError as exc:
-            raise GitHubError(
-                "Unable to parse gh comment creation output", status_code=500
-            ) from exc
-        return payload if isinstance(payload, dict) else {}
+        return _parse_gh_json(proc, soft_fail=False, error_label="gh comment creation")  # type: ignore[no-any-return]
 
     # ── context file generation (delegates to context_rendering) ───────────────
 
