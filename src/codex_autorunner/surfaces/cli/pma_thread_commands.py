@@ -121,6 +121,32 @@ class _AssistantTextWindow:
     auto_paginated: bool
 
 
+def _hub_request(
+    hub_root: Path,
+    method: str,
+    path_suffix: str,
+    *,
+    body: Any = None,
+    params: Optional[dict[str, Any]] = None,
+) -> tuple[Any, dict[str, Any]]:
+    try:
+        config = load_hub_config(hub_root)
+        data = _request_json(
+            method,
+            _build_pma_url(config, path_suffix),
+            body,
+            token_env=config.server_auth_token_env,
+            params=params,
+        )
+        return config, data
+    except httpx.HTTPError as exc:
+        typer.echo(f"HTTP error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    except (ValueError, OSError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+
+
 def _resolve_hub_path(path: Optional[Path]) -> Path:
     start = path or Path.cwd()
     try:
@@ -282,9 +308,7 @@ def _load_thread_output_cursors(hub_root: Path) -> dict[str, Any]:
     path = _thread_output_cursor_path(hub_root)
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return {}
-    except (OSError, ValueError):
+    except (FileNotFoundError, OSError, ValueError):
         return {}
     return payload if isinstance(payload, dict) else {}
 
@@ -1587,20 +1611,7 @@ def pma_thread_list(
         }.items()
         if value is not None
     }
-    try:
-        config = load_hub_config(hub_root)
-        data = _request_json(
-            "GET",
-            _build_pma_url(config, "/threads"),
-            token_env=config.server_auth_token_env,
-            params=params,
-        )
-    except httpx.HTTPError as exc:
-        typer.echo(f"HTTP error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
-    except (ValueError, OSError) as exc:
-        typer.echo(f"Error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
+    _config, data = _hub_request(hub_root, "GET", "/threads", params=params)
 
     threads = data.get("threads", []) if isinstance(data, dict) else []
     if not isinstance(threads, list):
@@ -1642,19 +1653,7 @@ def pma_thread_info(
 ):
     """Show managed PMA thread details."""
     hub_root = _resolve_hub_path(path)
-    try:
-        config = load_hub_config(hub_root)
-        data = _request_json(
-            "GET",
-            _build_pma_url(config, f"/threads/{managed_thread_id}"),
-            token_env=config.server_auth_token_env,
-        )
-    except httpx.HTTPError as exc:
-        typer.echo(f"HTTP error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
-    except (ValueError, OSError) as exc:
-        typer.echo(f"Error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
+    _config, data = _hub_request(hub_root, "GET", f"/threads/{managed_thread_id}")
 
     if output_json:
         typer.echo(json.dumps(data, indent=2))
@@ -1720,20 +1719,9 @@ def pma_thread_status(
     params: dict[str, Any] = {"limit": request_limit, "level": level.value}
     if since:
         params["since"] = since
-    try:
-        config = load_hub_config(hub_root)
-        data = _request_json(
-            "GET",
-            _build_pma_url(config, f"/threads/{managed_thread_id}/status"),
-            token_env=config.server_auth_token_env,
-            params=params,
-        )
-    except httpx.HTTPError as exc:
-        typer.echo(f"HTTP error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
-    except (ValueError, OSError) as exc:
-        typer.echo(f"Error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
+    _config, data = _hub_request(
+        hub_root, "GET", f"/threads/{managed_thread_id}/status", params=params
+    )
 
     if output_json:
         typer.echo(json.dumps(data, indent=2))
@@ -2025,20 +2013,12 @@ def pma_thread_turns(
 ):
     """List managed PMA thread turns."""
     hub_root = _resolve_hub_path(path)
-    try:
-        config = load_hub_config(hub_root)
-        data = _request_json(
-            "GET",
-            _build_pma_url(config, f"/threads/{managed_thread_id}/turns"),
-            token_env=config.server_auth_token_env,
-            params={"limit": limit},
-        )
-    except httpx.HTTPError as exc:
-        typer.echo(f"HTTP error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
-    except (ValueError, OSError) as exc:
-        typer.echo(f"Error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
+    _config, data = _hub_request(
+        hub_root,
+        "GET",
+        f"/threads/{managed_thread_id}/turns",
+        params={"limit": limit},
+    )
 
     if output_json:
         typer.echo(json.dumps(data, indent=2))
@@ -2073,20 +2053,12 @@ def pma_thread_queue(
 ):
     """List queued managed-thread turns waiting to execute."""
     hub_root = _resolve_hub_path(path)
-    try:
-        config = load_hub_config(hub_root)
-        data = _request_json(
-            "GET",
-            _build_pma_url(config, f"/threads/{managed_thread_id}/queue"),
-            token_env=config.server_auth_token_env,
-            params={"limit": limit},
-        )
-    except httpx.HTTPError as exc:
-        typer.echo(f"HTTP error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
-    except (ValueError, OSError) as exc:
-        typer.echo(f"Error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
+    _config, data = _hub_request(
+        hub_root,
+        "GET",
+        f"/threads/{managed_thread_id}/queue",
+        params={"limit": limit},
+    )
 
     if output_json:
         typer.echo(json.dumps(data, indent=2))
@@ -2160,19 +2132,9 @@ def pma_thread_clear_queue(
 ):
     """Clear all queued managed-thread turns."""
     hub_root = _resolve_hub_path(path)
-    try:
-        config = load_hub_config(hub_root)
-        data = _request_json(
-            "POST",
-            _build_pma_url(config, f"/threads/{managed_thread_id}/queue/clear"),
-            token_env=config.server_auth_token_env,
-        )
-    except httpx.HTTPError as exc:
-        typer.echo(f"HTTP error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
-    except (ValueError, OSError) as exc:
-        typer.echo(f"Error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
+    _config, data = _hub_request(
+        hub_root, "POST", f"/threads/{managed_thread_id}/queue/clear"
+    )
 
     if output_json:
         typer.echo(json.dumps(data, indent=2))
@@ -2297,20 +2259,7 @@ def pma_thread_subscribe(
     if confirm_duplicate:
         payload["confirm"] = True
 
-    try:
-        config = load_hub_config(hub_root)
-        data = _request_json(
-            "POST",
-            _build_pma_url(config, "/subscriptions"),
-            payload,
-            token_env=config.server_auth_token_env,
-        )
-    except httpx.HTTPError as exc:
-        typer.echo(f"HTTP error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
-    except (ValueError, OSError) as exc:
-        typer.echo(f"Error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
+    _config, data = _hub_request(hub_root, "POST", "/subscriptions", body=payload)
 
     if output_json:
         typer.echo(json.dumps(data, indent=2))
@@ -2770,20 +2719,12 @@ def pma_thread_fork(
 ):
     """Fork a managed PMA thread when the backend runtime supports it."""
     hub_root = _resolve_hub_path(path)
-    try:
-        config = load_hub_config(hub_root)
-        data = _request_json(
-            "POST",
-            _build_pma_url(config, f"/threads/{managed_thread_id}/fork"),
-            {"name": name},
-            token_env=config.server_auth_token_env,
-        )
-    except httpx.HTTPError as exc:
-        typer.echo(f"HTTP error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
-    except (ValueError, OSError) as exc:
-        typer.echo(f"Error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
+    _config, data = _hub_request(
+        hub_root,
+        "POST",
+        f"/threads/{managed_thread_id}/fork",
+        body={"name": name},
+    )
 
     if output_json:
         typer.echo(json.dumps(data, indent=2))
