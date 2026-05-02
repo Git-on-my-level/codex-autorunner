@@ -8,7 +8,11 @@ from typing import Callable, Optional
 
 from typer.testing import CliRunner
 
-from codex_autorunner.core.flows.models import FlowRunRecord, FlowRunStatus
+from codex_autorunner.core.flows.models import (
+    FlowEventType,
+    FlowRunRecord,
+    FlowRunStatus,
+)
 from codex_autorunner.surfaces.cli.commands import flow as flow_module
 
 
@@ -72,8 +76,23 @@ body
         def __init__(self, *_args, **_kwargs) -> None:
             pass
 
+        @classmethod
+        def connect_readonly(cls, _db_path: Path) -> "_FakeFlowStore":
+            return cls()
+
+        def __enter__(self) -> "_FakeFlowStore":
+            return self
+
+        def __exit__(self, *_args) -> None:
+            self.close()
+
         def initialize(self) -> None:
             return
+
+        def get_last_telemetry_by_type(
+            self, _run_id: str, _event_type: FlowEventType
+        ) -> None:
+            return None
 
         def get_flow_run(self, requested_run_id: str) -> Optional[FlowRunRecord]:
             if requested_run_id == run_id:
