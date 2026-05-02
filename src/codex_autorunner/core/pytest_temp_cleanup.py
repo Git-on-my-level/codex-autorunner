@@ -17,6 +17,7 @@ _TEMP_ENV_KEYS = ("TMPDIR", "TMP", "TEMP")
 _CAR_TEMP_DIR_PREFIXES = (
     "car-cached-",
     "car-hub-profile-",
+    "idle-cpu-soak-",
     "car-nocache-",
     "car-patch-",
 )

@@ -97,14 +97,16 @@ def test_discover_repo_temp_paths_finds_car_dirs_and_repo_workspaces(
     repo_root.mkdir()
     temp_base = tmp_path / "tmp"
     car_profile = temp_base / "car-hub-profile-20260414"
+    idle_soak = temp_base / "idle-cpu-soak-abc123"
     workspace = temp_base / "tmp.NmYoDUn4Sd"
     (car_profile / "Profile").mkdir(parents=True)
+    (idle_soak / "hub").mkdir(parents=True)
     (workspace / "repo" / ".git").mkdir(parents=True)
     (workspace / "flows.db").write_text("sqlite", encoding="utf-8")
 
     paths = discover_repo_temp_paths(repo_root, temp_base=temp_base)
 
-    assert paths == (car_profile, workspace)
+    assert paths == (car_profile, idle_soak, workspace)
 
 
 def test_cleanup_repo_managed_temp_paths_combines_pytest_and_generic_temp_roots(
