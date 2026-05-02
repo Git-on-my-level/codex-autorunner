@@ -266,6 +266,66 @@ def _sanitize_error_detail(detail: str, *, limit: int = 200) -> str:
     return format_public_error(detail, limit=limit)
 
 
+def _try_append_turn_journal(
+    handlers: Any,
+    *,
+    execution_id: str,
+    managed_thread_id: str,
+    repo_id: Optional[str],
+    journal_notice: Any,
+) -> None:
+    try:
+        append_chat_execution_journal_notices(
+            _telegram_state_root(handlers),
+            execution_id=execution_id,
+            target_kind="thread_target",
+            target_id=managed_thread_id,
+            repo_id=repo_id or None,
+            notices=[journal_notice],
+        )
+    except (OSError, RuntimeError, TypeError, ValueError):
+        handlers._logger.debug(
+            "Telegram execution journal append failed for %s",
+            execution_id,
+            exc_info=True,
+        )
+
+
+def _log_runtime_binding_unavailable(
+    handlers: Any,
+    *,
+    surface_key: str,
+    requested_backend_thread_id: Optional[str],
+    runtime_binding: Any,
+    agent: str,
+    workspace_root: Path,
+    mode: str,
+) -> None:
+    log_event(
+        handlers._logger,
+        logging.INFO,
+        "telegram.thread.binding.runtime_unavailable",
+        surface_key=surface_key,
+        backend_thread_id=requested_backend_thread_id,
+        agent=agent,
+        workspace_root=str(workspace_root),
+        mode=mode,
+    )
+    if not runtime_binding.used_requested_backend_thread_id:
+        log_event(
+            handlers._logger,
+            logging.INFO,
+            "telegram.thread.binding.rebind_rejected",
+            surface_key=surface_key,
+            existing_backend_thread_id=runtime_binding.backend_thread_id,
+            requested_backend_thread_id=requested_backend_thread_id,
+            agent=agent,
+            workspace_root=str(workspace_root),
+            mode=mode,
+            reason="runtime_unavailable",
+        )
+
+
 def _format_telegram_download_error(exc: Exception) -> Optional[str]:
     for current in _iter_exception_chain(exc):
         if isinstance(current, Exception):
@@ -537,29 +597,15 @@ async def _resolve_telegram_managed_thread(
         agent_profile=agent_profile,
     )
     if normalized_backend_thread_id and not runtime_binding.runtime_available:
-        log_event(
-            handlers._logger,
-            logging.INFO,
-            "telegram.thread.binding.runtime_unavailable",
+        _log_runtime_binding_unavailable(
+            handlers,
             surface_key=surface_key,
-            backend_thread_id=normalized_backend_thread_id,
+            requested_backend_thread_id=normalized_backend_thread_id,
+            runtime_binding=runtime_binding,
             agent=agent,
-            workspace_root=str(workspace_root),
+            workspace_root=workspace_root,
             mode=mode,
         )
-        if not runtime_binding.used_requested_backend_thread_id:
-            log_event(
-                handlers._logger,
-                logging.INFO,
-                "telegram.thread.binding.rebind_rejected",
-                surface_key=surface_key,
-                existing_backend_thread_id=runtime_binding.backend_thread_id,
-                requested_backend_thread_id=normalized_backend_thread_id,
-                agent=agent,
-                workspace_root=str(workspace_root),
-                mode=mode,
-                reason="runtime_unavailable",
-            )
     return _shared_resolve_managed_thread_target(
         orchestration_service,
         request=ManagedThreadTargetRequest(
@@ -778,29 +824,15 @@ async def _sync_telegram_thread_binding(
         existing_thread=current_thread,
     )
     if requested_backend_thread_id and not runtime_binding.runtime_available:
-        log_event(
-            handlers._logger,
-            logging.INFO,
-            "telegram.thread.binding.runtime_unavailable",
+        _log_runtime_binding_unavailable(
+            handlers,
             surface_key=surface_key,
-            backend_thread_id=requested_backend_thread_id,
+            requested_backend_thread_id=requested_backend_thread_id,
+            runtime_binding=runtime_binding,
             agent=agent,
-            workspace_root=str(workspace_root),
+            workspace_root=workspace_root,
             mode=mode,
         )
-        if not runtime_binding.used_requested_backend_thread_id:
-            log_event(
-                handlers._logger,
-                logging.INFO,
-                "telegram.thread.binding.rebind_rejected",
-                surface_key=surface_key,
-                existing_backend_thread_id=runtime_binding.backend_thread_id,
-                requested_backend_thread_id=requested_backend_thread_id,
-                agent=agent,
-                workspace_root=str(workspace_root),
-                mode=mode,
-                reason="runtime_unavailable",
-            )
     return _shared_resolve_managed_thread_target(
         orchestration_service,
         request=ManagedThreadTargetRequest(
@@ -1307,21 +1339,13 @@ async def _run_telegram_managed_thread_turn(
                     status="queued",
                     execution_id=queued_execution_id,
                 )
-                try:
-                    append_chat_execution_journal_notices(
-                        _telegram_state_root(handlers),
-                        execution_id=queued_execution_id,
-                        target_kind="thread_target",
-                        target_id=managed_thread_id,
-                        repo_id=repo_id or None,
-                        notices=[journal_notice],
-                    )
-                except (OSError, RuntimeError, TypeError, ValueError):
-                    handlers._logger.debug(
-                        "Telegram queued journal append failed for %s",
-                        queued_execution_id,
-                        exc_info=True,
-                    )
+                _try_append_turn_journal(
+                    handlers,
+                    execution_id=queued_execution_id,
+                    managed_thread_id=managed_thread_id,
+                    repo_id=repo_id or None,
+                    journal_notice=journal_notice,
+                )
         return _TurnRunResult(
             record=record,
             thread_id=queued_thread_id,
@@ -1381,7 +1405,7 @@ async def _run_telegram_managed_thread_turn(
                     placeholder_id=prepared_placeholder_id,
                     response=failure_message,
                 )
-                if response_sent and getattr(_flow, "durable_delivery_pending", False):
+                if getattr(_flow, "durable_delivery_pending", False):
                     _record_pending_telegram_direct_delivery(
                         handlers,
                         delivery_id=getattr(_flow, "durable_delivery_id", None),
@@ -1392,20 +1416,7 @@ async def _run_telegram_managed_thread_turn(
                         ),
                         chat_id=message.chat_id,
                         thread_id=message.thread_id,
-                        delivered=True,
-                    )
-                elif getattr(_flow, "durable_delivery_pending", False):
-                    _record_pending_telegram_direct_delivery(
-                        handlers,
-                        delivery_id=getattr(_flow, "durable_delivery_id", None),
-                        claim_token=getattr(
-                            _flow,
-                            "durable_delivery_claim_token",
-                            None,
-                        ),
-                        chat_id=message.chat_id,
-                        thread_id=message.thread_id,
-                        delivered=False,
+                        delivered=response_sent,
                     )
             elif send_failure_response and prepared_placeholder_id is not None:
                 await handlers._delete_message(
@@ -1428,21 +1439,13 @@ async def _run_telegram_managed_thread_turn(
                     status=finalized.status,
                     execution_id=finalized.managed_turn_id,
                 )
-                try:
-                    append_chat_execution_journal_notices(
-                        _telegram_state_root(handlers),
-                        execution_id=finalized.managed_turn_id,
-                        target_kind="thread_target",
-                        target_id=managed_thread_id,
-                        repo_id=repo_id or None,
-                        notices=[journal_notice],
-                    )
-                except (OSError, RuntimeError, TypeError, ValueError):
-                    handlers._logger.debug(
-                        "Telegram execution journal append failed for %s",
-                        finalized.managed_turn_id,
-                        exc_info=True,
-                    )
+                _try_append_turn_journal(
+                    handlers,
+                    execution_id=finalized.managed_turn_id,
+                    managed_thread_id=managed_thread_id,
+                    repo_id=repo_id or None,
+                    journal_notice=journal_notice,
+                )
             if interrupt_status_fallback_text:
                 await handlers._clear_interrupt_status_message(
                     chat_id=message.chat_id,
@@ -1527,21 +1530,13 @@ async def _run_telegram_managed_thread_turn(
                 status="ok",
                 execution_id=finalized.managed_turn_id,
             )
-            try:
-                append_chat_execution_journal_notices(
-                    _telegram_state_root(handlers),
-                    execution_id=finalized.managed_turn_id,
-                    target_kind="thread_target",
-                    target_id=managed_thread_id,
-                    repo_id=repo_id or None,
-                    notices=[journal_notice],
-                )
-            except (OSError, RuntimeError, TypeError, ValueError):
-                handlers._logger.debug(
-                    "Telegram execution journal append failed for %s",
-                    finalized.managed_turn_id,
-                    exc_info=True,
-                )
+            _try_append_turn_journal(
+                handlers,
+                execution_id=finalized.managed_turn_id,
+                managed_thread_id=managed_thread_id,
+                repo_id=repo_id or None,
+                journal_notice=journal_notice,
+            )
         _delivery_handled = getattr(_flow, "durable_delivery_performed", False)
         return _TurnRunResult(
             record=record,
