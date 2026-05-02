@@ -6,17 +6,11 @@ so retry and severity behavior stays consistent across adapters.
 
 from __future__ import annotations
 
-from typing import Optional
-
-from ...core.exceptions import CodexError, PermanentError, TransientError
+from ...core.exceptions import CodexError, PermanentError
 
 
 class ChatAdapterError(CodexError):
     """Base chat adapter error."""
-
-
-class ChatAdapterTransientError(ChatAdapterError, TransientError):
-    """Retryable adapter failure (network/rate-limit/transient backend state)."""
 
 
 class ChatAdapterPermanentError(ChatAdapterError, PermanentError):
@@ -24,12 +18,3 @@ class ChatAdapterPermanentError(ChatAdapterError, PermanentError):
 
     recoverable = PermanentError.recoverable
     severity = PermanentError.severity
-
-
-class ChatAdapterTimeoutError(ChatAdapterTransientError):
-    """Timeout while talking to a platform API."""
-
-    def __init__(self, message: str, *, user_message: Optional[str] = None) -> None:
-        if user_message is None:
-            user_message = "Chat platform timed out. Retrying with backoff..."
-        super().__init__(message, user_message=user_message)

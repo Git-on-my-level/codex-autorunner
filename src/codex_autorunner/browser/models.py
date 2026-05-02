@@ -85,18 +85,3 @@ def resolve_out_dir(repo_root: Path, out_dir: Optional[Path]) -> Path:
     if out_dir.is_absolute():
         return out_dir
     return repo_root / out_dir
-
-
-def resolve_output_path(
-    *,
-    repo_root: Path,
-    output: Optional[Path],
-    out_dir: Optional[Path],
-    default_name: str,
-) -> Path:
-    base_dir = resolve_out_dir(repo_root, out_dir)
-    if output is None:
-        return base_dir / default_name
-    if output.is_absolute():
-        return output
-    return base_dir / output
