@@ -2179,26 +2179,6 @@ class UsageSeriesCache:
         end = max(times)
         return [_bucket_label(dt, bucket) for dt in _iter_buckets(start, end, bucket)]
 
-    def _build_series_from_map(
-        self,
-        buckets: List[str],
-        series_map: Dict[Tuple[str, Optional[str], Optional[str]], Dict[str, int]],
-    ) -> List[Dict[str, Any]]:
-        series: List[Dict[str, Any]] = []
-        for (key, model, token_type), values in series_map.items():
-            series_values = [int(values.get(bucket, 0)) for bucket in buckets]
-            series.append(
-                {
-                    "key": key,
-                    "model": model,
-                    "token_type": token_type,
-                    "total": sum(series_values),
-                    "values": series_values,
-                }
-            )
-        series.sort(key=lambda item: int(item["total"]), reverse=True)
-        return series
-
     def _build_repo_summary(
         self,
         payload: Dict[str, Any],
@@ -2368,7 +2348,7 @@ class UsageSeriesCache:
         buckets = self._buckets_for_range(
             bucket_union, since=since, until=until, bucket=bucket
         )
-        series = self._build_series_from_map(buckets, series_map)
+        series = _build_series_entries(buckets, series_map)
         return {
             "bucket": bucket,
             "segment": segment,
@@ -2434,7 +2414,7 @@ class UsageSeriesCache:
         buckets = self._buckets_for_range(
             bucket_union, since=since, until=until, bucket=bucket
         )
-        series = self._build_series_from_map(buckets, series_map)
+        series = _build_series_entries(buckets, series_map)
         return {
             "bucket": bucket,
             "segment": segment,
