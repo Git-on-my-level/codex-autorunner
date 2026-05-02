@@ -109,6 +109,22 @@ class TestColdTraceWriter:
         assert event["event_family"] == "tool_call"
         assert event["payload"]["tool_name"] == "read"
 
+    def test_append_redacts_secret_payloads(self, hub_root: Path) -> None:
+        _init_orchestration_db(hub_root)
+        secret = "sk-" + ("b" * 24)
+        with ColdTraceWriter(hub_root=hub_root, execution_id="exec-redact") as writer:
+            writer.append(
+                event_family="tool_call",
+                event_type="ToolCall",
+                payload={"tool_input": {"cmd": f"echo {secret}"}},
+            )
+            manifest = writer.finalize()
+
+        assert manifest.redactions_applied == ("secret-patterns",)
+        events = ColdTraceReader.read_events(hub_root, manifest)
+        assert secret not in json.dumps(events)
+        assert "sk-[REDACTED]" in json.dumps(events)
+
     def test_trace_id_is_stable(self, hub_root: Path) -> None:
         _init_orchestration_db(hub_root)
         with ColdTraceWriter(

@@ -30,7 +30,6 @@ from .managed_thread_identity import (
     ManagedThreadIdentityStore,
     pma_prefixes_for_reset,
 )
-from .orchestration.legacy_backfill_gate import ensure_legacy_orchestration_backfill
 from .orchestration.sqlite import open_orchestration_sqlite
 from .pma_audit import PmaActionType
 from .pma_context import (
@@ -86,7 +85,6 @@ class PmaLifecycleRouter:
         self._events_log = (
             hub_root / ".codex-autorunner" / "pma" / "lifecycle_events.jsonl"
         )
-        ensure_legacy_orchestration_backfill(hub_root)
         safety_config = PmaSafetyConfig()
         self._safety_checker = PmaSafetyChecker(hub_root, config=safety_config)
 

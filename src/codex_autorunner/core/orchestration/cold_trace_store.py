@@ -8,6 +8,7 @@ import zlib
 from pathlib import Path
 from typing import Any, Iterator, Optional, cast
 
+from ..redaction import redact_jsonable
 from ..state_roots import resolve_hub_traces_root
 from ..text_utils import _json_dumps
 from ..time_utils import now_iso
@@ -81,6 +82,7 @@ class ColdTraceWriter:
         self._event_count: int = 0
         self._byte_count: int = 0
         self._includes_families: set[str] = set()
+        self._redactions_applied: set[str] = set()
         self._started_at: Optional[str] = None
         self._finished_at: Optional[str] = None
         self._manifest: Optional[ExecutionTraceManifest] = None
@@ -142,11 +144,14 @@ class ColdTraceWriter:
         if self._disabled or self._file is None:
             raise RuntimeError("ColdTraceWriter is not open")
         self._seq += 1
+        redacted_payload, redacted = redact_jsonable(payload)
+        if redacted:
+            self._redactions_applied.add("secret-patterns")
         envelope = _build_trace_envelope(
             seq=self._seq,
             event_family=event_family,
             event_type=event_type,
-            payload=payload,
+            payload=cast(dict[str, Any], redacted_payload),
         )
         data = _serialize_envelope(envelope)
         self._file.write(data)
@@ -188,7 +193,7 @@ class ColdTraceWriter:
                 tuple[ExecutionHistoryEventFamily, ...],
                 tuple(sorted(self._includes_families)),
             ),
-            redactions_applied=(),
+            redactions_applied=tuple(sorted(self._redactions_applied)),
         )
         self._manifest = manifest
         _persist_manifest(self._hub_root, manifest)

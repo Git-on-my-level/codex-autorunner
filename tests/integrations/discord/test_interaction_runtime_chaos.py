@@ -719,6 +719,185 @@ async def test_defer_ack_does_not_project_delivery_pending_before_ack(
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    "current_state",
+    (ChatOperationState.QUEUED, ChatOperationState.RUNNING),
+)
+async def test_interrupt_component_ack_projects_interrupting_from_active_state(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    current_state: ChatOperationState,
+) -> None:
+    harness = _ChaosHarness(tmp_path)
+    await harness.initialize()
+    try:
+        service = _build_recovery_service(
+            store=harness.store,
+            rest=harness.rest,
+            operation_store=harness.operation_store,
+        )
+        interaction_id = f"interrupt-{current_state.value}-1"
+        await harness.store.register_interaction(
+            interaction_id=interaction_id,
+            interaction_token=f"token-{interaction_id}",
+            interaction_kind=InteractionKind.COMPONENT.value,
+            channel_id="chan-1",
+            guild_id="guild-1",
+            user_id="user-1",
+            metadata_json={"custom_id": "cancel_turn:thread-1:turn-1"},
+        )
+        harness.operation_store.register_operation(
+            operation_id=interaction_id,
+            surface_kind="discord",
+            surface_operation_key=interaction_id,
+            state=current_state,
+        )
+
+        with caplog.at_level(logging.INFO, logger=service._logger.name):
+            await service._record_interaction_ack(
+                interaction_id,
+                f"token-{interaction_id}",
+                "ack_deferred_component_update",
+                None,
+            )
+
+        snapshot = harness.operation_store.get_operation(interaction_id)
+        assert snapshot is not None
+        assert snapshot.state == ChatOperationState.INTERRUPTING
+        events = _logged_events(caplog, service._logger.name)
+        assert not any(
+            event["event"] == "discord.chat_operation.invalid_transition_rejected"
+            for event in events
+        )
+    finally:
+        await harness.close()
+
+
+@pytest.mark.anyio
+async def test_delivery_cursor_pending_is_idempotent_after_completion(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    harness = _ChaosHarness(tmp_path)
+    await harness.initialize()
+    try:
+        service = _build_recovery_service(
+            store=harness.store,
+            rest=harness.rest,
+            operation_store=harness.operation_store,
+        )
+        await harness.store.register_interaction(
+            interaction_id="delivery-completed-1",
+            interaction_token="token-delivery-completed-1",
+            interaction_kind=InteractionKind.SLASH_COMMAND.value,
+            channel_id="chan-1",
+            guild_id="guild-1",
+            user_id="user-1",
+            metadata_json={"command_path": ["car", "status"]},
+        )
+        harness.operation_store.register_operation(
+            operation_id="delivery-completed-1",
+            surface_kind="discord",
+            surface_operation_key="delivery-completed-1",
+            state=ChatOperationState.COMPLETED,
+        )
+
+        with caplog.at_level(logging.INFO, logger=service._logger.name):
+            await service._record_interaction_delivery_cursor(
+                "delivery-completed-1",
+                {
+                    "state": "pending",
+                    "operation": "send_followup",
+                    "payload": {"content": "late delivery"},
+                },
+            )
+
+        snapshot = harness.operation_store.get_operation("delivery-completed-1")
+        assert snapshot is not None
+        assert snapshot.state == ChatOperationState.COMPLETED
+        record = await harness.store.get_interaction("delivery-completed-1")
+        assert record is not None
+        assert record.delivery_cursor_json is None
+        events = _logged_events(caplog, service._logger.name)
+        assert any(
+            event["event"] == "discord.chat_operation.delivery_already_finalized"
+            for event in events
+        )
+    finally:
+        await harness.close()
+
+
+@pytest.mark.anyio
+async def test_rapid_same_interaction_id_is_debounced(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    harness = _ChaosHarness(tmp_path)
+    await harness.initialize()
+    try:
+        service = _build_recovery_service(
+            store=harness.store,
+            rest=harness.rest,
+            operation_store=harness.operation_store,
+        )
+        ctx = _make_ctx(interaction_id="rapid-dup-1")
+
+        first = await service._check_interaction_ingress_duplicate(ctx)
+        with caplog.at_level(logging.INFO, logger=service._logger.name):
+            second = await service._check_interaction_ingress_duplicate(ctx)
+
+        assert first is False
+        assert second is True
+        events = _logged_events(caplog, service._logger.name)
+        assert any(
+            event["event"] == "discord.interaction.rapid_duplicate_suppressed"
+            for event in events
+        )
+    finally:
+        await harness.close()
+
+
+@pytest.mark.anyio
+async def test_known_transition_race_is_logged_at_warning(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    harness = _ChaosHarness(tmp_path)
+    await harness.initialize()
+    try:
+        service = _build_recovery_service(
+            store=harness.store,
+            rest=harness.rest,
+            operation_store=harness.operation_store,
+        )
+        harness.operation_store.register_operation(
+            operation_id="completed-delivering-race-1",
+            surface_kind="discord",
+            surface_operation_key="completed-delivering-race-1",
+            state=ChatOperationState.COMPLETED,
+        )
+
+        with caplog.at_level(logging.WARNING, logger=service._logger.name):
+            updated = await service._patch_chat_operation(
+                "completed-delivering-race-1",
+                state=ChatOperationState.DELIVERING,
+            )
+
+        assert updated is None
+        records = [
+            record
+            for record in caplog.records
+            if record.name == service._logger.name
+            and "discord.chat_operation.invalid_transition_rejected"
+            in record.getMessage()
+        ]
+        assert records
+        assert records[-1].levelno == logging.WARNING
+    finally:
+        await harness.close()
+
+
+@pytest.mark.anyio
 async def test_chaos_followup_failure_after_defer_recovers_after_restart(
     tmp_path: Path,
 ) -> None:

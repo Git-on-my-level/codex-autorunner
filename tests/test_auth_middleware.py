@@ -69,3 +69,17 @@ def test_auth_middleware_extracts_ws_protocol_b64_token() -> None:
         ]
     )
     assert middleware._extract_ws_protocol_token(scope) == raw
+
+
+def test_auth_middleware_rejects_query_token_for_http_routes() -> None:
+    middleware = AuthTokenMiddleware(lambda *_: None, token="token")
+    scope = _scope("/api/repo/health")
+    scope["query_string"] = b"token=secret"
+    assert middleware._extract_query_token(scope) is None
+
+
+def test_auth_middleware_keeps_query_token_for_legacy_websockets() -> None:
+    middleware = AuthTokenMiddleware(lambda *_: None, token="token")
+    scope = _ws_scope()
+    scope["query_string"] = b"token=secret"
+    assert middleware._extract_query_token(scope) == "secret"

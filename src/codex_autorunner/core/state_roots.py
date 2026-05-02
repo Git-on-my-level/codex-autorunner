@@ -33,8 +33,6 @@ ORCHESTRATION_DB_FILENAME = "orchestration.sqlite3"
 ORCHESTRATION_COMPATIBILITY_METADATA_FILENAME = "orchestration-compatibility.json"
 HUB_PROJECTION_DB_FILENAME = "hub_projection.sqlite3"
 HUB_MANIFEST_FILENAME = "manifest.yml"
-LIFECYCLE_EVENTS_FILENAME = "lifecycle_events.json"
-LIFECYCLE_EVENTS_DB_FILENAME = "lifecycle_events.sqlite3"
 PMA_THREADS_DB_FILENAME = "threads.sqlite3"
 GITHUB_BROKER_DB_FILENAME = "github-cli.sqlite3"
 _SAFE_HUB_RESOURCE_SEGMENT = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -198,16 +196,6 @@ def resolve_hub_projection_db_path(hub_root: Path) -> Path:
         resolve=False,
     )
     return state_root / HUB_PROJECTION_DB_FILENAME
-
-
-def resolve_hub_lifecycle_events_path(hub_root: Path) -> Path:
-    """Return the legacy hub lifecycle JSON path."""
-    return resolve_hub_state_root(hub_root) / LIFECYCLE_EVENTS_FILENAME
-
-
-def resolve_hub_lifecycle_events_db_path(hub_root: Path) -> Path:
-    """Return the legacy hub lifecycle SQLite path."""
-    return resolve_hub_state_root(hub_root) / LIFECYCLE_EVENTS_DB_FILENAME
 
 
 def resolve_hub_templates_root(hub_root: Path) -> Path:
@@ -416,8 +404,6 @@ __all__ = [
     "ORCHESTRATION_DB_FILENAME",
     "HUB_PROJECTION_DB_FILENAME",
     "HUB_MANIFEST_FILENAME",
-    "LIFECYCLE_EVENTS_DB_FILENAME",
-    "LIFECYCLE_EVENTS_FILENAME",
     "PMA_THREADS_DB_FILENAME",
     "REPO_STATE_DIR",
     "RUNNER_STATE_DB_FILENAME",
@@ -431,8 +417,6 @@ __all__ = [
     "resolve_global_github_broker_db_path",
     "resolve_hub_agent_workspace_root",
     "resolve_hub_apps_root",
-    "resolve_hub_lifecycle_events_db_path",
-    "resolve_hub_lifecycle_events_path",
     "resolve_hub_manifest_path",
     "resolve_hub_orchestration_db_path",
     "resolve_hub_pma_root",

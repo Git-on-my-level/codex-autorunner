@@ -1,5 +1,5 @@
 import re
-from typing import List, Tuple
+from typing import Any, List, Tuple
 
 _REDACTIONS: List[Tuple[re.Pattern[str], str]] = [
     # OpenAI-like keys.
@@ -23,3 +23,36 @@ def redact_text(text: str) -> str:
     for pattern, replacement in _REDACTIONS:
         redacted = pattern.sub(replacement, redacted)
     return redacted
+
+
+def redact_jsonable(value: Any) -> tuple[Any, bool]:
+    """Redact known secret patterns in JSON-like values."""
+
+    if isinstance(value, str):
+        redacted = redact_text(value)
+        return redacted, redacted != value
+    if isinstance(value, list):
+        changed = False
+        items = []
+        for item in value:
+            redacted_item, item_changed = redact_jsonable(item)
+            changed = changed or item_changed
+            items.append(redacted_item)
+        return items, changed
+    if isinstance(value, tuple):
+        changed = False
+        items = []
+        for item in value:
+            redacted_item, item_changed = redact_jsonable(item)
+            changed = changed or item_changed
+            items.append(redacted_item)
+        return tuple(items), changed
+    if isinstance(value, dict):
+        changed = False
+        redacted_dict = {}
+        for key, item in value.items():
+            redacted_item, item_changed = redact_jsonable(item)
+            changed = changed or item_changed
+            redacted_dict[key] = redacted_item
+        return redacted_dict, changed
+    return value, False

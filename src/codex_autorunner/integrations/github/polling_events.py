@@ -21,6 +21,7 @@ def emit_new_conditions(
 ) -> int:
     from ...core.text_utils import _normalize_text
 
+    current_head_sha = _normalize_text(snapshot.get("head_sha"))
     previous_reviews = snapshot_map(previous_snapshot, "changes_requested_reviews")
     current_reviews = snapshot_map(snapshot, "changes_requested_reviews")
     previous_checks = snapshot_map(previous_snapshot, "failed_checks")
@@ -81,6 +82,13 @@ def emit_new_conditions(
 
     for key, payload in current_checks.items():
         if key in previous_checks:
+            continue
+        check_head_sha = _normalize_text(payload.get("head_sha"))
+        if (
+            current_head_sha is not None
+            and check_head_sha is not None
+            and check_head_sha != current_head_sha
+        ):
             continue
         event = event_store.record_event(
             event_id=f"github:poll:check:{watch.watch_id}:{uuid.uuid4().hex[:12]}",

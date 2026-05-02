@@ -152,6 +152,21 @@ def test_send_message_persists_turns_and_reuses_backend_thread(hub_env) -> None:
     assert transcript["content"].strip() == "assistant-output-1"
 
 
+def test_pma_transcript_store_redacts_known_secret_patterns(hub_env) -> None:
+    secret = "sk-" + ("a" * 24)
+    pointer = PmaTranscriptStore(hub_env.hub_root).write_transcript(
+        turn_id="turn-redaction",
+        metadata={"user_prompt": f"use {secret}"},
+        assistant_text=f"echo {secret}",
+    )
+
+    transcript = PmaTranscriptStore(hub_env.hub_root).read_transcript(pointer.turn_id)
+    assert transcript is not None
+    assert secret not in transcript["content"]
+    assert "sk-[REDACTED]" in transcript["content"]
+    assert transcript["metadata"]["redactions_applied"] == ["secret-patterns"]
+
+
 def test_send_message_resolves_alias_backed_hermes_profile_runtime(
     hub_env, monkeypatch
 ) -> None:

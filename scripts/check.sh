@@ -177,9 +177,6 @@ echo "Validating hub interface contracts..."
 echo "Checking core imports (no adapter implementations)..."
 "$PYTHON_BIN" scripts/check_core_imports.py
 
-echo "Checking for legacy TODO/SUMMARY pipeline code..."
-"$PYTHON_BIN" scripts/check_legacy_pipeline.py
-
 echo "Checking destination contract drift..."
 "$PYTHON_BIN" scripts/check_destination_contract_drift.py
 

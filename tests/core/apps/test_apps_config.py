@@ -11,7 +11,10 @@ from codex_autorunner.core.config import (
     load_hub_config,
     load_repo_config,
 )
-from codex_autorunner.core.config_parsers import _parse_apps_config
+from codex_autorunner.core.config_parsers import (
+    _parse_apps_config,
+    _parse_templates_config,
+)
 
 
 def test_parse_apps_config_valid() -> None:
@@ -68,11 +71,29 @@ def test_parse_apps_config_rejects_duplicate_repo_ids() -> None:
             {"repos": [{"id": "", "url": "https://example.com/apps.git"}]},
             r"apps\.repos\[0\]\.id must be a non-empty string",
         ),
+        (
+            {"repos": [{"id": "../escape", "url": "https://example.com/apps.git"}]},
+            r"apps\.repos\[0\]\.id must be a safe path segment",
+        ),
     ],
 )
 def test_parse_apps_config_rejects_invalid_repo_values(cfg, pattern: str) -> None:
     with pytest.raises(ConfigError, match=pattern):
         _parse_apps_config(cfg, {})
+
+
+def test_parse_templates_config_rejects_path_segment_repo_id() -> None:
+    with pytest.raises(
+        ConfigError, match=r"templates\.repos\[0\]\.id must be a safe path segment"
+    ):
+        _parse_templates_config(
+            {
+                "repos": [
+                    {"id": "nested/id", "url": "https://example.com/templates.git"}
+                ]
+            },
+            {},
+        )
 
 
 def test_default_loaded_config_exposes_apps_shape(tmp_path: Path) -> None:

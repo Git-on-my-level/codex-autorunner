@@ -10,7 +10,6 @@ from .freshness import resolve_stale_threshold_seconds
 from .managed_thread_status import (
     ManagedThreadStatusReason,
     ManagedThreadStatusSnapshot,
-    backfill_managed_thread_status,
     build_managed_thread_status_snapshot,
     transition_managed_thread_status,
 )
@@ -52,15 +51,11 @@ from .pma_thread_store_rows import (
     normalize_request_kind as _normalize_request_kind,
 )
 from .pma_thread_store_rows import (
-    row_to_dict as _row_to_dict,
-)
-from .pma_thread_store_rows import (
     sanitize_thread_metadata as _sanitize_thread_metadata,
 )
 from .pma_thread_store_rows import (
     workspace_head_branch as _workspace_head_branch,
 )
-from .sqlite_utils import ensure_columns
 from .text_utils import _json_dumps, _json_loads_object
 from .time_utils import now_iso
 
@@ -103,199 +98,6 @@ def _resolve_stale_running_threshold_seconds(
         return resolve_stale_threshold_seconds(None)
 
 
-def _latest_turn_for_thread(
-    conn: Any, managed_thread_id: str
-) -> Optional[dict[str, Any]]:
-    row = conn.execute(
-        """
-        SELECT *
-          FROM pma_managed_turns
-         WHERE managed_thread_id = ?
-         ORDER BY started_at DESC, rowid DESC
-         LIMIT 1
-        """,
-        (managed_thread_id,),
-    ).fetchone()
-    if row is None:
-        return None
-    return _row_to_dict(row)
-
-
-def _ensure_schema(conn: Any) -> None:
-    with conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS pma_managed_threads (
-                managed_thread_id TEXT PRIMARY KEY,
-                agent TEXT NOT NULL,
-                repo_id TEXT,
-                resource_kind TEXT,
-                resource_id TEXT,
-                workspace_root TEXT NOT NULL,
-                name TEXT,
-                backend_thread_id TEXT,
-                status TEXT NOT NULL,
-                normalized_status TEXT,
-                status_reason_code TEXT,
-                status_updated_at TEXT,
-                status_terminal INTEGER,
-                status_turn_id TEXT,
-                last_turn_id TEXT,
-                last_message_preview TEXT,
-                compact_seed TEXT,
-                metadata_json TEXT NOT NULL DEFAULT '{}',
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS pma_managed_turns (
-                managed_turn_id TEXT PRIMARY KEY,
-                managed_thread_id TEXT NOT NULL,
-                client_turn_id TEXT,
-                backend_turn_id TEXT,
-                prompt TEXT NOT NULL,
-                status TEXT NOT NULL,
-                assistant_text TEXT,
-                transcript_turn_id TEXT,
-                model TEXT,
-                reasoning TEXT,
-                error TEXT,
-                started_at TEXT,
-                finished_at TEXT,
-                FOREIGN KEY (managed_thread_id)
-                    REFERENCES pma_managed_threads(managed_thread_id)
-                    ON DELETE CASCADE
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS pma_managed_actions (
-                action_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                managed_thread_id TEXT,
-                action_type TEXT NOT NULL,
-                payload_json TEXT,
-                created_at TEXT NOT NULL,
-                FOREIGN KEY (managed_thread_id)
-                    REFERENCES pma_managed_threads(managed_thread_id)
-                    ON DELETE SET NULL
-            )
-            """
-        )
-
-    ensure_columns(
-        conn,
-        "pma_managed_threads",
-        (
-            ("resource_kind", "resource_kind TEXT"),
-            ("resource_id", "resource_id TEXT"),
-            ("normalized_status", "normalized_status TEXT"),
-            ("status_reason_code", "status_reason_code TEXT"),
-            ("status_updated_at", "status_updated_at TEXT"),
-            ("status_terminal", "status_terminal INTEGER"),
-            ("status_turn_id", "status_turn_id TEXT"),
-            ("metadata_json", "metadata_json TEXT NOT NULL DEFAULT '{}'"),
-        ),
-    )
-    with conn:
-        conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_pma_managed_threads_status
-            ON pma_managed_threads(status)
-            """
-        )
-        conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_pma_managed_threads_normalized_status
-            ON pma_managed_threads(normalized_status)
-            """
-        )
-        conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_pma_managed_threads_agent
-            ON pma_managed_threads(agent)
-            """
-        )
-        conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_pma_managed_threads_repo_id
-            ON pma_managed_threads(repo_id)
-            """
-        )
-        conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_pma_managed_threads_resource
-            ON pma_managed_threads(resource_kind, resource_id)
-            """
-        )
-        conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_pma_managed_turns_thread_started
-            ON pma_managed_turns(managed_thread_id, started_at)
-            """
-        )
-
-    _backfill_missing_thread_status(conn)
-
-
-def _backfill_missing_thread_status(conn: Any) -> None:
-    rows = conn.execute(
-        """
-        SELECT *
-          FROM pma_managed_threads
-         WHERE normalized_status IS NULL
-            OR TRIM(COALESCE(normalized_status, '')) = ''
-            OR status_reason_code IS NULL
-            OR TRIM(COALESCE(status_reason_code, '')) = ''
-            OR status_updated_at IS NULL
-            OR TRIM(COALESCE(status_updated_at, '')) = ''
-            OR status_terminal IS NULL
-        """
-    ).fetchall()
-    if not rows:
-        return
-
-    with conn:
-        for row in rows:
-            record = _row_to_dict(row)
-            managed_thread_id = str(record["managed_thread_id"])
-            latest_turn = _latest_turn_for_thread(conn, managed_thread_id)
-            snapshot = backfill_managed_thread_status(
-                lifecycle_status=_coerce_text(record.get("status")),
-                latest_turn_status=_coerce_text((latest_turn or {}).get("status")),
-                changed_at=(
-                    _coerce_text(record.get("status_updated_at"))
-                    or _coerce_text((latest_turn or {}).get("finished_at"))
-                    or _coerce_text((latest_turn or {}).get("started_at"))
-                    or _coerce_text(record.get("updated_at"))
-                    or _coerce_text(record.get("created_at"))
-                ),
-                compacted=_coerce_text(record.get("compact_seed")) is not None,
-            )
-            conn.execute(
-                """
-                UPDATE pma_managed_threads
-                   SET normalized_status = ?,
-                       status_reason_code = ?,
-                       status_updated_at = ?,
-                       status_terminal = ?,
-                       status_turn_id = COALESCE(status_turn_id, ?)
-                 WHERE managed_thread_id = ?
-                """,
-                (
-                    snapshot.status,
-                    snapshot.reason_code,
-                    snapshot.changed_at,
-                    1 if snapshot.terminal else 0,
-                    snapshot.turn_id,
-                    managed_thread_id,
-                ),
-            )
-
-
 def _thread_row_to_record(row: Any) -> dict[str, Any]:
     return PmaThreadRecord.from_orchestration_row(row).to_dict()
 
@@ -309,9 +111,6 @@ def prepare_pma_thread_store(hub_root: Path, *, durable: bool = False) -> None:
         hub_root=hub_root,
         db_path=default_pma_threads_db_path(hub_root),
         durable=durable,
-        thread_row_to_record=_thread_row_to_record,
-        execution_row_to_record=_execution_row_to_record,
-        ensure_legacy_schema=_ensure_schema,
     )
     bootstrap.prepare()
 
@@ -345,9 +144,6 @@ class PmaThreadStore:
             hub_root=self._hub_root,
             db_path=self._path,
             durable=self._durable,
-            thread_row_to_record=_thread_row_to_record,
-            execution_row_to_record=_execution_row_to_record,
-            ensure_legacy_schema=_ensure_schema,
         )
         self._lifecycle = PmaThreadStoreLifecycle(
             stale_running_threshold_seconds=self._stale_running_threshold_seconds,

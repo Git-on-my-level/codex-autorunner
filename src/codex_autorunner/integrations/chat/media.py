@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
@@ -41,19 +40,6 @@ AUDIO_EXT_TO_CONTENT_TYPE = {
     ".webm": "audio/webm",
 }
 GENERIC_BINARY_MIME_TYPES = {"application/octet-stream", "binary/octet-stream"}
-
-
-@dataclass(frozen=True)
-class ChatVoiceInput:
-    """Normalized voice/audio input metadata."""
-
-    kind: str
-    file_id: str
-    mime_type: Optional[str] = None
-    file_name: Optional[str] = None
-    size_bytes: Optional[int] = None
-    duration_seconds: Optional[int] = None
-    transcript: Optional[str] = None
 
 
 def is_image_mime_or_path(mime_type: Optional[str], file_name: Optional[str]) -> bool:

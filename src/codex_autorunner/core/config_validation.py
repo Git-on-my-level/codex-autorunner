@@ -19,7 +19,6 @@ from .config_field_schema import (
     APP_SERVER_OUTPUT_FIELD_SCHEMAS,
     APP_SERVER_PROMPT_SECTION_SCHEMAS,
     OPENCODE_FIELD_SCHEMAS,
-    SHARED_SCHEMA_FIELD_PATHS,
     TICKET_FLOW_FIELD_SCHEMAS,
     UPDATE_FIELD_SCHEMAS,
     UPDATE_LINUX_SERVICE_NAME_SCHEMAS,
@@ -33,8 +32,6 @@ from .mutation_policy import (
     normalize_mutation_policy_value,
 )
 from .path_utils import ConfigPathError, resolve_config_path
-
-SHARED_CONFIG_VALIDATION_FIELD_PATHS = SHARED_SCHEMA_FIELD_PATHS
 
 
 def _normalize_ticket_flow_approval_mode(value: Any, *, scope: str) -> str:
@@ -66,9 +63,6 @@ def is_loopback_host(host: str) -> bool:
         return False
 
 
-_is_loopback_host = is_loopback_host
-
-
 def _is_strict_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
@@ -93,7 +87,7 @@ def _validate_server_security(server: Dict[str, Any]) -> None:
                 raise ConfigError("server.allowed_origins must be a list of strings")
 
     host = str(server.get("host", ""))
-    if not _is_loopback_host(host) and not allowed_hosts:
+    if not is_loopback_host(host) and not allowed_hosts:
         raise ConfigError(
             "server.allowed_hosts must be set when binding to a non-loopback host"
         )

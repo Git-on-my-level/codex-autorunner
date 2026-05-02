@@ -10,10 +10,7 @@ from codex_autorunner.core.pma_automation_store import (
     PmaAutomationThreadNotFoundError,
 )
 from codex_autorunner.core.pma_domain.models import PmaDispatchDecision
-from codex_autorunner.core.pma_thread_store import (
-    PmaThreadStore,
-    prepare_pma_thread_store,
-)
+from codex_autorunner.core.pma_thread_store import PmaThreadStore
 
 
 def _create_managed_thread(
@@ -71,43 +68,6 @@ def test_subscription_idempotent_dedupe_and_lifecycle_matching(tmp_path) -> None
     )
     assert len(matches) == 1
     assert matches[0]["subscription_id"] == first.subscription_id
-
-
-def test_explicit_prepare_runs_legacy_backfill_once(tmp_path, monkeypatch) -> None:
-    call_count = 0
-
-    def _fake_backfill(*args, **kwargs):
-        nonlocal call_count
-        _ = args, kwargs
-        call_count += 1
-        return {"subscriptions": 0, "timers": 0, "wakeups": 0}
-
-    monkeypatch.setattr(
-        "codex_autorunner.core.orchestration.legacy_backfill_gate.backfill_legacy_automation_state",
-        _fake_backfill,
-    )
-
-    thread_id = _create_managed_thread(tmp_path)
-    prepare_pma_thread_store(tmp_path, durable=False)
-    prepare_pma_thread_store(tmp_path, durable=False)
-
-    store = PmaAutomationStore(tmp_path, durable=False)
-    state = store.load()
-    created, deduped = store.upsert_subscription(
-        event_types=["flow_failed"],
-        thread_id=thread_id,
-        idempotency_key="sub-key-1",
-    )
-    matches = store.match_lifecycle_subscriptions(
-        event_type="flow_failed",
-        thread_id=thread_id,
-    )
-
-    assert state["subscriptions"] == []
-    assert deduped is False
-    assert created.thread_id == thread_id
-    assert len(matches) == 1
-    assert call_count == 1
 
 
 def test_due_timers_fire_once(tmp_path) -> None:

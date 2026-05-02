@@ -23,7 +23,6 @@ from .workspace_resume import (
 from .workspace_session_commands import WorkspaceSessionCommandsMixin
 from .workspace_status import WorkspaceStatusMixin
 
-SharedHelpers = TelegramCommandSupportMixin
 WorkspaceCommandsMixin = WorkspaceCommands
 
 __all__ = [
@@ -37,7 +36,6 @@ __all__ = [
     "GitHubCommands",
     "ResumeCommandArgs",
     "ResumeThreadData",
-    "SharedHelpers",
     "TelegramCommandSupportMixin",
     "VoiceCommands",
     "WorkspaceBindingMixin",

@@ -8,7 +8,6 @@ from codex_autorunner.browser.models import (
     Viewport,
     parse_viewport,
     resolve_out_dir,
-    resolve_output_path,
 )
 from codex_autorunner.core.filebox import outbox_dir
 
@@ -25,13 +24,3 @@ def test_parse_viewport_rejects_invalid_format() -> None:
 
 def test_resolve_out_dir_defaults_to_filebox_outbox(tmp_path: Path) -> None:
     assert resolve_out_dir(tmp_path, None) == outbox_dir(tmp_path)
-
-
-def test_resolve_output_path_uses_outbox_default(tmp_path: Path) -> None:
-    path = resolve_output_path(
-        repo_root=tmp_path,
-        output=None,
-        out_dir=None,
-        default_name="observe-a11y.json",
-    )
-    assert path == outbox_dir(tmp_path) / "observe-a11y.json"

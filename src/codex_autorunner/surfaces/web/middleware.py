@@ -200,7 +200,14 @@ class AuthTokenMiddleware:
             return None
         return value.split(" ", 1)[1].strip() or None
 
+    def _allows_query_token(self, scope) -> bool:
+        # Query-string bearer tokens are intentionally limited to WebSocket
+        # migration compatibility. HTTP callers must use Authorization headers.
+        return bool(scope.get("type") == "websocket")
+
     def _extract_query_token(self, scope) -> str | None:
+        if not self._allows_query_token(scope):
+            return None
         query_string = scope.get("query_string") or b""
         if not query_string:
             return None

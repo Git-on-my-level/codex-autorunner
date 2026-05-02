@@ -109,6 +109,10 @@ class AppLock:
         if not installed_at.strip():
             raise AppInstallError("invalid app lock: installed_at must not be empty")
 
+        trusted_raw = payload.get("trusted", False)
+        if not isinstance(trusted_raw, bool):
+            raise AppInstallError("invalid app lock: trusted must be boolean")
+
         return AppLock(
             id=app_id,
             version=version,
@@ -119,7 +123,7 @@ class AppLock:
             commit_sha=commit_sha,
             manifest_sha=manifest_sha,
             bundle_sha=bundle_sha,
-            trusted=bool(payload.get("trusted", False)),
+            trusted=trusted_raw,
             installed_at=installed_at,
         )
 

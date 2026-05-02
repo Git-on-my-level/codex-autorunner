@@ -50,7 +50,7 @@ class DiscordCommandRegistration:
 
 @dataclass(frozen=True)
 class DiscordBotShellConfig:
-    enabled: bool = True
+    enabled: bool = False
     timeout_ms: int = DEFAULT_SHELL_TIMEOUT_MS
     max_output_chars: int = DEFAULT_SHELL_MAX_OUTPUT_CHARS
 
@@ -167,7 +167,7 @@ class DiscordBotConfig:
         shell_cfg = shell_raw if isinstance(shell_raw, dict) else {}
         shell_enabled = _parse_bool_or_default(
             shell_cfg.get("enabled"),
-            default=True,
+            default=False,
             key="discord_bot.shell.enabled",
         )
         shell_timeout_ms = _parse_positive_int_or_default(
