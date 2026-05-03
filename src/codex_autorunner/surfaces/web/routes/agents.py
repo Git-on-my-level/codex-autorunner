@@ -5,27 +5,26 @@ Agent harness support routes (models + event streaming).
 from __future__ import annotations
 
 import logging
-from typing import Any, AsyncIterator, Optional
+from typing import Any, AsyncIterator, Iterable, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from ....agents.registry import get_agent_descriptor, get_available_agents
-from ....agents.types import ModelCatalog
 from ....core.orchestration.catalog import map_agent_capabilities
 from ....core.sse import format_sse
-from ..services.validation import normalize_agent_id
+from .agents_helpers import (
+    normalize_path_agent_id,
+    parse_resume_after,
+    serialize_agent_profiles,
+    serialize_model_catalog,
+)
 from .shared import SSE_HEADERS
 
 _logger = logging.getLogger(__name__)
 
 
-def _normalize_path_agent_id(agent: str) -> str:
-    # Path segments that decode to blank/whitespace are malformed and should
-    # not silently fall back to the default agent.
-    if not isinstance(agent, str) or not agent.strip():
-        raise HTTPException(status_code=404, detail="Unknown agent")
-    return normalize_agent_id(agent)
+_serialize_model_catalog = serialize_model_catalog
 
 
 def _available_agents(request: Request) -> tuple[list[dict[str, Any]], str]:
@@ -85,68 +84,22 @@ def _available_agents(request: Request) -> tuple[list[dict[str, Any]], str]:
     return agents, default_agent or "codex"
 
 
-def _serialize_model_catalog(catalog: ModelCatalog) -> dict[str, Any]:
-    return {
-        "default_model": catalog.default_model,
-        "models": [
-            {
-                "id": model.id,
-                "display_name": model.display_name,
-                "supports_reasoning": model.supports_reasoning,
-                "reasoning_options": list(model.reasoning_options),
-            }
-            for model in catalog.models
-        ],
-    }
-
-
 def _serialize_agent_profiles(request: Request, agent_id: str) -> dict[str, Any]:
     config = getattr(request.app.state, "config", None)
     profile_getter = getattr(config, "agent_profiles", None)
     default_getter = getattr(config, "agent_default_profile", None)
-    profiles: list[dict[str, Any]] = []
+    configured_profiles: object = {}
     if callable(profile_getter):
         try:
             configured_profiles = profile_getter(agent_id)
         except (ValueError, TypeError):
             configured_profiles = {}
-        if isinstance(configured_profiles, dict):
-            for profile_id in sorted(configured_profiles):
-                profile_cfg = configured_profiles.get(profile_id)
-                display_name = None
-                if profile_cfg is not None:
-                    display_name = getattr(profile_cfg, "display_name", None)
-                profiles.append(
-                    {
-                        "id": profile_id,
-                        "display_name": (
-                            str(display_name).strip()
-                            if isinstance(display_name, str) and display_name.strip()
-                            else profile_id
-                        ),
-                    }
-                )
+    hermes_profile_options: Iterable[Any] = ()
     if agent_id == "hermes":
         try:
             from ....integrations.chat.agents import chat_hermes_profile_options
 
-            existing_ids = {p["id"] for p in profiles}
-            for option in chat_hermes_profile_options(request.app.state):
-                if option.profile in existing_ids:
-                    continue
-                desc = option.description
-                profiles.append(
-                    {
-                        "id": option.profile,
-                        "display_name": (
-                            desc.strip()
-                            if isinstance(desc, str) and desc.strip()
-                            else option.profile
-                        ),
-                    }
-                )
-                existing_ids.add(option.profile)
-            profiles.sort(key=lambda p: p["id"])
+            hermes_profile_options = chat_hermes_profile_options(request.app.state)
         except Exception:  # intentional: optional hermes integration
             _logger.debug("Failed to resolve hermes profile options", exc_info=True)
     default_profile = None
@@ -155,10 +108,11 @@ def _serialize_agent_profiles(request: Request, agent_id: str) -> dict[str, Any]
             default_profile = default_getter(agent_id)
         except (ValueError, TypeError):
             default_profile = None
-    return {
-        "default_profile": default_profile,
-        "profiles": profiles,
-    }
+    return serialize_agent_profiles(
+        configured_profiles,
+        default_profile,
+        hermes_profile_options=hermes_profile_options,
+    )
 
 
 def build_agents_routes() -> APIRouter:
@@ -171,7 +125,10 @@ def build_agents_routes() -> APIRouter:
 
     @router.get("/api/agents/{agent}/models")
     async def list_agent_models(agent: str, request: Request):
-        agent_id = _normalize_path_agent_id(agent)
+        try:
+            agent_id = normalize_path_agent_id(agent)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         engine = request.app.state.engine
         descriptor = get_agent_descriptor(agent_id, request.app.state)
         if descriptor is None:
@@ -184,7 +141,7 @@ def build_agents_routes() -> APIRouter:
         try:
             harness = descriptor.make_harness(request.app.state)
             catalog = await harness.model_catalog(engine.repo_root)
-            return _serialize_model_catalog(catalog)
+            return serialize_model_catalog(catalog)
         except RuntimeError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except Exception as exc:  # intentional: harness error → HTTP 502
@@ -198,15 +155,14 @@ def build_agents_routes() -> APIRouter:
         thread_id: Optional[str] = None,
         since_event_id: Optional[int] = None,
     ):
-        agent_id = _normalize_path_agent_id(agent)
-        resume_after = since_event_id
-        if resume_after is None:
-            last_event_id = request.headers.get("Last-Event-ID")
-            if last_event_id:
-                try:
-                    resume_after = int(last_event_id)
-                except ValueError:
-                    resume_after = None
+        try:
+            agent_id = normalize_path_agent_id(agent)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        resume_after = parse_resume_after(
+            since_event_id,
+            request.headers.get("Last-Event-ID"),
+        )
         events = getattr(request.app.state, "app_server_events", None)
         if agent_id == "codex":
             if events is None:
