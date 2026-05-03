@@ -95,6 +95,15 @@ class RunReuseResult:
     stale_terminal_runs: tuple[FlowRunRecord, ...] = ()
 
 
+@dataclass(frozen=True)
+class PausedDispatchFacts:
+    seq: int
+    latest_seq: int
+    dispatch_payload: Any
+    dispatch_actionable: bool
+    has_unreplied_actionable_dispatch: bool
+
+
 class TicketFlowWorkerCrash(TypedDict):
     summary: Optional[str]
     open_url: str
@@ -479,6 +488,26 @@ def dispatch_is_actionable(dispatch_payload: Any) -> bool:
     return mode == "pause"
 
 
+def _paused_dispatch_facts(
+    latest_payload: Mapping[str, Any],
+    *,
+    latest_reply_seq: int,
+) -> PausedDispatchFacts:
+    seq = int(latest_payload.get("seq") or 0)
+    latest_seq = int(latest_payload.get("latest_seq") or 0)
+    dispatch_payload = latest_payload.get("dispatch")
+    dispatch_actionable = dispatch_is_actionable(dispatch_payload)
+    return PausedDispatchFacts(
+        seq=seq,
+        latest_seq=latest_seq,
+        dispatch_payload=dispatch_payload,
+        dispatch_actionable=dispatch_actionable,
+        has_unreplied_actionable_dispatch=bool(
+            dispatch_actionable and seq > 0 and latest_reply_seq < seq
+        ),
+    )
+
+
 def ticket_flow_inbox_preflight(repo_root: Path) -> PreflightCheckResult:
     repo_root = repo_root.resolve()
     if not repo_root.exists():
@@ -554,6 +583,53 @@ def _paused_dispatch_resume_invalid_reason(repo_root: Path) -> Optional[str]:
     )
 
 
+def _paused_dispatch_resume_preflight_needed(
+    *, record_status: FlowRunStatus, facts: PausedDispatchFacts
+) -> bool:
+    return bool(
+        record_status == FlowRunStatus.PAUSED
+        and facts.has_unreplied_actionable_dispatch
+        and facts.latest_seq > facts.seq
+    )
+
+
+def _resolve_paused_dispatch_decision(
+    *,
+    record_status: FlowRunStatus,
+    latest_payload: Mapping[str, Any],
+    latest_reply_seq: int,
+    stale_resume_reason: Optional[str] = None,
+) -> tuple[bool, Optional[str]]:
+    facts = _paused_dispatch_facts(
+        latest_payload,
+        latest_reply_seq=latest_reply_seq,
+    )
+    if (
+        _paused_dispatch_resume_preflight_needed(
+            record_status=record_status,
+            facts=facts,
+        )
+        and stale_resume_reason
+    ):
+        return False, stale_resume_reason
+
+    if record_status != FlowRunStatus.PAUSED or facts.has_unreplied_actionable_dispatch:
+        return facts.has_unreplied_actionable_dispatch, None
+
+    if latest_payload.get("errors"):
+        return False, "Paused run has unreadable dispatch metadata"
+    if facts.dispatch_actionable and facts.seq > 0 and latest_reply_seq >= facts.seq:
+        return False, "Latest dispatch already replied; run is still paused"
+    if (
+        facts.dispatch_payload
+        and not facts.dispatch_actionable
+        and facts.seq > 0
+        and latest_reply_seq < facts.seq
+    ):
+        return False, "Latest dispatch is informational and does not require reply"
+    return False, "Run is paused without an actionable dispatch"
+
+
 def resolve_paused_dispatch_state(
     *,
     repo_root: Path,
@@ -561,31 +637,49 @@ def resolve_paused_dispatch_state(
     latest_payload: Mapping[str, Any],
     latest_reply_seq: int,
 ) -> tuple[bool, Optional[str]]:
-    seq = int(latest_payload.get("seq") or 0)
-    latest_seq = int(latest_payload.get("latest_seq") or 0)
-    dispatch_payload = latest_payload.get("dispatch")
-    dispatch_actionable = dispatch_is_actionable(dispatch_payload)
-    has_dispatch = bool(dispatch_actionable and seq > 0 and latest_reply_seq < seq)
-    if record_status == FlowRunStatus.PAUSED and has_dispatch and latest_seq > seq:
-        preflight_invalid_reason = _paused_dispatch_resume_invalid_reason(repo_root)
-        if preflight_invalid_reason:
-            return False, preflight_invalid_reason
-
-    if record_status != FlowRunStatus.PAUSED or has_dispatch:
-        return has_dispatch, None
-
-    if latest_payload.get("errors"):
-        return False, "Paused run has unreadable dispatch metadata"
-    if dispatch_actionable and seq > 0 and latest_reply_seq >= seq:
-        return False, "Latest dispatch already replied; run is still paused"
-    if (
-        dispatch_payload
-        and not dispatch_actionable
-        and seq > 0
-        and latest_reply_seq < seq
+    facts = _paused_dispatch_facts(
+        latest_payload,
+        latest_reply_seq=latest_reply_seq,
+    )
+    stale_resume_reason = None
+    if _paused_dispatch_resume_preflight_needed(
+        record_status=record_status,
+        facts=facts,
     ):
-        return False, "Latest dispatch is informational and does not require reply"
-    return False, "Run is paused without an actionable dispatch"
+        stale_resume_reason = _paused_dispatch_resume_invalid_reason(repo_root)
+    return _resolve_paused_dispatch_decision(
+        record_status=record_status,
+        latest_payload=latest_payload,
+        latest_reply_seq=latest_reply_seq,
+        stale_resume_reason=stale_resume_reason,
+    )
+
+
+def _resolve_pending_dispatch_state(
+    *,
+    repo_root: Path,
+    record: FlowRunRecord,
+    max_text_chars: int,
+) -> tuple[bool, Optional[str]]:
+    input_data = dict(record.input_data or {})
+    latest = latest_ticket_flow_dispatch(
+        repo_root,
+        str(record.id),
+        input_data,
+        max_text_chars=max_text_chars,
+    )
+    latest_payload = latest if isinstance(latest, dict) else {}
+    latest_reply_seq = latest_ticket_flow_reply_history_seq(
+        repo_root,
+        str(record.id),
+        input_data,
+    )
+    return resolve_paused_dispatch_state(
+        repo_root=repo_root,
+        record_status=record.status,
+        latest_payload=latest_payload,
+        latest_reply_seq=latest_reply_seq,
+    )
 
 
 def select_active_or_paused_run(
@@ -952,23 +1046,10 @@ def _canonical_flow_status_state(
 
     run_state = None
     try:
-        latest = latest_ticket_flow_dispatch(
-            repo_root,
-            str(record.id),
-            dict(record.input_data or {}),
-            max_text_chars=DEFAULT_MAX_TEXT_CHARS,
-        )
-        latest_payload = latest if isinstance(latest, dict) else {}
-        latest_reply_seq = latest_ticket_flow_reply_history_seq(
-            repo_root,
-            str(record.id),
-            dict(record.input_data or {}),
-        )
-        has_dispatch, reason = resolve_paused_dispatch_state(
+        has_dispatch, reason = _resolve_pending_dispatch_state(
             repo_root=repo_root,
-            record_status=record.status,
-            latest_payload=latest_payload,
-            latest_reply_seq=latest_reply_seq,
+            record=record,
+            max_text_chars=DEFAULT_MAX_TEXT_CHARS,
         )
         run_state = build_ticket_flow_run_state(
             repo_root=repo_root,
@@ -1396,23 +1477,10 @@ def get_latest_ticket_flow_run_state_with_record(
         record = select_authoritative_run_record(records)
         if record is None:
             return None, None
-        latest = latest_ticket_flow_dispatch(
-            repo_root,
-            str(record.id),
-            dict(record.input_data or {}),
-            max_text_chars=max_text_chars,
-        )
-        latest_payload = latest if isinstance(latest, dict) else {}
-        latest_reply_seq = latest_ticket_flow_reply_history_seq(
-            repo_root,
-            str(record.id),
-            dict(record.input_data or {}),
-        )
-        has_dispatch, reason = resolve_paused_dispatch_state(
+        has_dispatch, reason = _resolve_pending_dispatch_state(
             repo_root=repo_root,
-            record_status=record.status,
-            latest_payload=latest_payload,
-            latest_reply_seq=latest_reply_seq,
+            record=record,
+            max_text_chars=max_text_chars,
         )
         run_state = build_ticket_flow_run_state(
             repo_root=repo_root,
