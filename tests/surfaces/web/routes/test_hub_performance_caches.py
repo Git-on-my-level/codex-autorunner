@@ -14,6 +14,7 @@ import codex_autorunner.core.hub_projection_store as projection_store_module
 from codex_autorunner.core.flows.store import FlowStore
 from codex_autorunner.core.hub import RepoSnapshot
 from codex_autorunner.core.hub_projection_store import HubProjectionStore
+from codex_autorunner.core.hub_read_model import HubRepoListingProjection
 from codex_autorunner.core.hub_topology import LockStatus, RepoStatus
 from codex_autorunner.surfaces.web.routes.hub_repo_routes import (
     channels as hub_channels_module,
@@ -68,6 +69,43 @@ def _repo_snapshot(repo_root: Path, repo_id: str = "demo") -> RepoSnapshot:
         last_exit_code=0,
         runner_pid=None,
     )
+
+
+def test_hub_repo_listing_projection_shapes_freshness_without_route_setup() -> None:
+    projection = HubRepoListingProjection(
+        requested={"freshness"},
+        generated_at="2026-04-05T00:00:00+00:00",
+        stale_threshold_seconds=600,
+        last_scan_at="2026-04-05T00:00:00+00:00",
+        pinned_parent_repo_ids=["base"],
+        repos=[
+            {
+                "id": "base",
+                "canonical_state_v1": {
+                    "freshness": {
+                        "generated_at": "2026-04-05T00:00:00+00:00",
+                        "recency_basis": "run_state_last_progress_at",
+                        "basis_at": "2026-04-04T23:59:00+00:00",
+                        "age_seconds": 60,
+                        "stale_threshold_seconds": 600,
+                        "is_stale": False,
+                    },
+                },
+            },
+        ],
+        agent_workspaces=[],
+    )
+
+    payload = projection.to_payload()
+
+    assert payload["generated_at"] == "2026-04-05T00:00:00+00:00"
+    assert payload["last_scan_at"] == "2026-04-05T00:00:00+00:00"
+    assert payload["pinned_parent_repo_ids"] == ["base"]
+    assert "repos" not in payload
+    assert "agent_workspaces" not in payload
+    assert payload["freshness"]["stale_threshold_seconds"] == 600
+    assert payload["freshness"]["sections"]["repos"]["entity_count"] == 1
+    assert payload["freshness"]["sections"]["agent_workspaces"]["entity_count"] == 0
 
 
 def test_hub_repo_enricher_reuses_cached_repo_state(

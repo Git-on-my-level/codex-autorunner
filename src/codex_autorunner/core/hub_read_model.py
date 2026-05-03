@@ -121,6 +121,53 @@ class _HubRepoMessageContext:
     repo_dismissals_by_id: dict[str, dict[str, dict[str, Any]]]
 
 
+@dataclass(frozen=True)
+class HubRepoListingProjection:
+    requested: set[str]
+    generated_at: str
+    stale_threshold_seconds: int
+    last_scan_at: Any
+    pinned_parent_repo_ids: list[Any]
+    repos: list[dict[str, Any]]
+    agent_workspaces: list[dict[str, Any]]
+
+    def to_payload(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "generated_at": self.generated_at,
+            "last_scan_at": self.last_scan_at,
+            "pinned_parent_repo_ids": self.pinned_parent_repo_ids,
+        }
+        if "freshness" in self.requested:
+            payload["freshness"] = {
+                "schema_version": 1,
+                "generated_at": self.generated_at,
+                "stale_threshold_seconds": self.stale_threshold_seconds,
+                "sections": {
+                    "repos": summarize_section_freshness(
+                        self.repos,
+                        generated_at=self.generated_at,
+                        stale_threshold_seconds=self.stale_threshold_seconds,
+                        extractor=lambda item: (
+                            (item.get("canonical_state_v1") or {}).get("freshness")
+                            if isinstance(item, dict)
+                            else None
+                        ),
+                    ),
+                    "agent_workspaces": summarize_section_freshness(
+                        self.agent_workspaces,
+                        generated_at=self.generated_at,
+                        stale_threshold_seconds=self.stale_threshold_seconds,
+                        extractor=lambda _item: None,
+                    ),
+                },
+            }
+        if "repos" in self.requested:
+            payload["repos"] = self.repos
+        if "agent_workspaces" in self.requested:
+            payload["agent_workspaces"] = self.agent_workspaces
+        return payload
+
+
 _hub_snapshot_cache_lock = threading.Lock()
 _hub_snapshot_cache: dict[tuple[int, str], _HubSnapshotCacheEntry] = {}
 
@@ -671,6 +718,15 @@ class HubReadModelService:
             stale_threshold_seconds=stale_threshold_seconds,
         )
 
+    def _stale_threshold_seconds(self) -> int:
+        return resolve_stale_threshold_seconds(
+            getattr(
+                self._context.config.pma,
+                "freshness_stale_threshold_seconds",
+                None,
+            )
+        )
+
     def _listing_fingerprint(
         self,
         *,
@@ -867,13 +923,7 @@ class HubReadModelService:
                     needs_agent_workspaces=needs_agent_workspaces,
                     force_refresh=True,
                 )
-                stale_threshold_seconds = resolve_stale_threshold_seconds(
-                    getattr(
-                        self._context.config.pma,
-                        "freshness_stale_threshold_seconds",
-                        None,
-                    )
-                )
+                stale_threshold_seconds = self._stale_threshold_seconds()
                 refreshed_fingerprint = self._listing_fingerprint(
                     requested=requested,
                     stale_threshold_seconds=stale_threshold_seconds,
@@ -931,15 +981,33 @@ class HubReadModelService:
         snapshots: Optional[list[Any]] = None,
         agent_workspaces: Optional[list[Any]] = None,
     ) -> dict[str, Any]:
+        projection = await self._build_listing_projection(
+            sections=sections,
+            snapshots=snapshots,
+            agent_workspaces=agent_workspaces,
+        )
+        return projection.to_payload()
+
+    async def _build_listing_projection(
+        self,
+        *,
+        sections: Optional[set[str]] = None,
+        snapshots: Optional[list[Any]] = None,
+        agent_workspaces: Optional[list[Any]] = None,
+    ) -> HubRepoListingProjection:
         safe_log(self._context.logger, logging.INFO, "Hub list_repos")
         requested = set(sections or REPO_LISTING_SECTIONS)
         needs_repos = bool(requested & {"repos", "freshness"})
         needs_agent_workspaces = bool(requested & {"agent_workspaces", "freshness"})
+        snapshots_provided = snapshots is not None
+        agent_workspaces_provided = agent_workspaces is not None
         snapshots = list(snapshots or [])
         repos: list[dict[str, Any]] = []
         agent_workspaces = list(agent_workspaces or [])
         if needs_repos:
-            if not snapshots or (needs_agent_workspaces and not agent_workspaces):
+            if not snapshots_provided or (
+                needs_agent_workspaces and not agent_workspaces_provided
+            ):
                 snapshots, agent_workspaces = await self._current_topology_snapshots(
                     needs_repos=True,
                     needs_agent_workspaces=needs_agent_workspaces,
@@ -965,7 +1033,7 @@ class HubReadModelService:
                     for workspace in agent_workspaces
                 ]
         elif needs_agent_workspaces:
-            if not agent_workspaces:
+            if not agent_workspaces_provided:
                 _, agent_workspace_snaps = await self._current_topology_snapshots(
                     needs_repos=False,
                     needs_agent_workspaces=True,
@@ -981,47 +1049,18 @@ class HubReadModelService:
                 ]
 
         generated_at = iso_now()
-        stale_threshold_seconds = resolve_stale_threshold_seconds(
-            getattr(
-                self._context.config.pma,
-                "freshness_stale_threshold_seconds",
-                None,
-            )
+        supervisor_state = self._context.supervisor.state
+        return HubRepoListingProjection(
+            requested=requested,
+            generated_at=generated_at,
+            stale_threshold_seconds=self._stale_threshold_seconds(),
+            last_scan_at=getattr(supervisor_state, "last_scan_at", None),
+            pinned_parent_repo_ids=list(
+                getattr(supervisor_state, "pinned_parent_repo_ids", []) or []
+            ),
+            repos=repos,
+            agent_workspaces=agent_workspaces,
         )
-        payload: dict[str, Any] = {
-            "generated_at": generated_at,
-            "last_scan_at": self._context.supervisor.state.last_scan_at,
-            "pinned_parent_repo_ids": self._context.supervisor.state.pinned_parent_repo_ids,
-        }
-        if "freshness" in requested:
-            payload["freshness"] = {
-                "schema_version": 1,
-                "generated_at": generated_at,
-                "stale_threshold_seconds": stale_threshold_seconds,
-                "sections": {
-                    "repos": summarize_section_freshness(
-                        repos,
-                        generated_at=generated_at,
-                        stale_threshold_seconds=stale_threshold_seconds,
-                        extractor=lambda item: (
-                            (item.get("canonical_state_v1") or {}).get("freshness")
-                            if isinstance(item, dict)
-                            else None
-                        ),
-                    ),
-                    "agent_workspaces": summarize_section_freshness(
-                        agent_workspaces,
-                        generated_at=generated_at,
-                        stale_threshold_seconds=stale_threshold_seconds,
-                        extractor=lambda _item: None,
-                    ),
-                },
-            }
-        if "repos" in requested:
-            payload["repos"] = repos
-        if "agent_workspaces" in requested:
-            payload["agent_workspaces"] = agent_workspaces
-        return payload
 
     async def list_repos(
         self, *, sections: Optional[set[str]] = None
@@ -1049,13 +1088,7 @@ class HubReadModelService:
                     self._context.supervisor.list_agent_workspaces,
                     use_cache=False,
                 )
-        stale_threshold_seconds = resolve_stale_threshold_seconds(
-            getattr(
-                self._context.config.pma,
-                "freshness_stale_threshold_seconds",
-                None,
-            )
-        )
+        stale_threshold_seconds = self._stale_threshold_seconds()
         fingerprint = self._listing_fingerprint(
             requested=requested,
             stale_threshold_seconds=stale_threshold_seconds,
@@ -1129,63 +1162,13 @@ class HubReadModelService:
         agent_workspace_snapshots = await asyncio.to_thread(
             self._context.supervisor.list_agent_workspaces, use_cache=False
         )
-        await self._prepare_snapshots(list(snapshots))
-        chat_binding_counts_by_source = await asyncio.to_thread(
-            self._active_chat_binding_counts_by_source
+        projection = await self._build_listing_projection(
+            sections=set(REPO_LISTING_SECTIONS),
+            snapshots=list(snapshots),
+            agent_workspaces=list(agent_workspace_snapshots),
         )
-        chat_binding_counts = {
-            repo_id: sum(source_counts.values())
-            for repo_id, source_counts in chat_binding_counts_by_source.items()
-        }
-        unbound_thread_counts = await self._unbound_thread_counts_snapshot()
-        repos = await self._enrich_repos(
-            snapshots,
-            chat_binding_counts,
-            chat_binding_counts_by_source,
-            unbound_thread_counts,
-        )
-        agent_workspaces = [
-            workspace.to_dict(self._context.config.root)
-            for workspace in agent_workspace_snapshots
-        ]
-        generated_at = iso_now()
-        stale_threshold_seconds = resolve_stale_threshold_seconds(
-            getattr(
-                self._context.config.pma,
-                "freshness_stale_threshold_seconds",
-                None,
-            )
-        )
-        payload = {
-            "generated_at": generated_at,
-            "last_scan_at": self._context.supervisor.state.last_scan_at,
-            "pinned_parent_repo_ids": self._context.supervisor.state.pinned_parent_repo_ids,
-            "freshness": {
-                "schema_version": 1,
-                "generated_at": generated_at,
-                "stale_threshold_seconds": stale_threshold_seconds,
-                "sections": {
-                    "repos": summarize_section_freshness(
-                        repos,
-                        generated_at=generated_at,
-                        stale_threshold_seconds=stale_threshold_seconds,
-                        extractor=lambda item: (
-                            (item.get("canonical_state_v1") or {}).get("freshness")
-                            if isinstance(item, dict)
-                            else None
-                        ),
-                    ),
-                    "agent_workspaces": summarize_section_freshness(
-                        agent_workspaces,
-                        generated_at=generated_at,
-                        stale_threshold_seconds=stale_threshold_seconds,
-                        extractor=lambda _item: None,
-                    ),
-                },
-            },
-            "repos": repos,
-            "agent_workspaces": agent_workspaces,
-        }
+        payload = projection.to_payload()
+        stale_threshold_seconds = projection.stale_threshold_seconds
         listing_fingerprint = self._listing_fingerprint(
             requested=set(REPO_LISTING_SECTIONS),
             stale_threshold_seconds=stale_threshold_seconds,
@@ -1469,6 +1452,7 @@ __all__ = [
     "REPO_CAPABILITY_HINT_PROJECTION_NAMESPACE",
     "REPO_LISTING_SECTIONS",
     "HubReadModelService",
+    "HubRepoListingProjection",
     "RepoProjectionProvider",
     "_HubSnapshotCacheEntry",
     "_RepoCapabilityHintCacheEntry",
