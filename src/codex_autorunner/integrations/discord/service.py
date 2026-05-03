@@ -1021,37 +1021,25 @@ class DiscordBotService:
                 await self._dispatcher.wait_idle()
             with contextlib.suppress(Exception):
                 await self._dispatcher.close()
-            dispatcher_loop_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await dispatcher_loop_task
-            if self._opencode_prune_task is not None:
-                self._opencode_prune_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await self._opencode_prune_task
-                self._opencode_prune_task = None
-            if self._filebox_prune_task is not None:
-                self._filebox_prune_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await self._filebox_prune_task
-                self._filebox_prune_task = None
-            chat_queue_reset_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await chat_queue_reset_task
-            pause_watch_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await pause_watch_task
-            terminal_watch_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await terminal_watch_task
-            outbox_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await outbox_task
-            if self._delivery_worker_task is not None:
-                self._delivery_worker_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await self._delivery_worker_task
-                self._delivery_worker_task = None
+            await self._cancel_and_await_task(dispatcher_loop_task)
+            await self._cancel_and_await_task(self._opencode_prune_task)
+            self._opencode_prune_task = None
+            await self._cancel_and_await_task(self._filebox_prune_task)
+            self._filebox_prune_task = None
+            await self._cancel_and_await_task(chat_queue_reset_task)
+            await self._cancel_and_await_task(pause_watch_task)
+            await self._cancel_and_await_task(terminal_watch_task)
+            await self._cancel_and_await_task(outbox_task)
+            await self._cancel_and_await_task(self._delivery_worker_task)
+            self._delivery_worker_task = None
             await _shutdown_impl(self)
+
+    @staticmethod
+    async def _cancel_and_await_task(task: Optional[asyncio.Task]) -> None:
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
 
     def _service_uptime_ms(self, *, now: Optional[float] = None) -> Optional[float]:
         return _service_uptime_ms_impl(self, now=now)
@@ -5693,6 +5681,54 @@ class DiscordBotService:
             reason=reason,
         )
 
+    async def _submit_execution_recovery_replay(
+        self,
+        record: InteractionLedgerRecord,
+        envelope: RuntimeInteractionEnvelope,
+        *,
+        decision: Any,
+        now: datetime,
+        reason: str,
+    ) -> bool:
+        attempt_count = int(record.attempt_count or 0)
+        if _interaction_recovery_backoff_active(
+            updated_at=record.updated_at,
+            attempt_count=attempt_count,
+            now=now,
+        ):
+            log_event(
+                self._logger,
+                logging.DEBUG,
+                "discord.interaction.recovery.execution_backoff",
+                interaction_id=record.interaction_id,
+                attempt_count=attempt_count,
+            )
+            return False
+        await self._mark_interaction_scheduler_state(
+            envelope.context,
+            scheduler_state="recovery_scheduled",
+            increment_attempt_count=True,
+            _for_recovery=True,
+        )
+        log_event(
+            self._logger,
+            logging.INFO,
+            "discord.interaction.recovery.execution_replay_submitted",
+            interaction_id=record.interaction_id,
+            attempt_count=attempt_count,
+            previous_state=decision.previous_state.value,
+            reason=reason,
+        )
+        assert record.payload_json is not None
+        self._command_runner.submit_recovery(
+            envelope.context,
+            record.payload_json,
+            resource_keys=envelope.resource_keys,
+            conversation_id=envelope.conversation_id,
+            replay_mode="execution_replay",
+        )
+        return True
+
     async def _resume_interaction_recovery(self) -> None:
         records = await self._store.list_recoverable_interactions()
         now = datetime.now(timezone.utc)
@@ -5786,41 +5822,14 @@ class DiscordBotService:
                     "defer_public",
                     "defer_component_update",
                 }:
-                    if _interaction_recovery_backoff_active(
-                        updated_at=record.updated_at,
-                        attempt_count=int(record.attempt_count or 0),
+                    if await self._submit_execution_recovery_replay(
+                        record,
+                        envelope,
+                        decision=decision,
                         now=now,
-                    ):
-                        log_event(
-                            self._logger,
-                            logging.DEBUG,
-                            "discord.interaction.recovery.execution_backoff",
-                            interaction_id=record.interaction_id,
-                            attempt_count=int(record.attempt_count or 0),
-                        )
-                        continue
-                    await self._mark_interaction_scheduler_state(
-                        envelope.context,
-                        scheduler_state="recovery_scheduled",
-                        increment_attempt_count=True,
-                        _for_recovery=True,
-                    )
-                    log_event(
-                        self._logger,
-                        logging.INFO,
-                        "discord.interaction.recovery.execution_replay_submitted",
-                        interaction_id=record.interaction_id,
-                        attempt_count=int(record.attempt_count or 0),
-                        previous_state=decision.previous_state.value,
                         reason="defer_delivery_projected_to_execution_replay",
-                    )
-                    self._command_runner.submit_recovery(
-                        envelope.context,
-                        record.payload_json,
-                        resource_keys=envelope.resource_keys,
-                        conversation_id=envelope.conversation_id,
-                        replay_mode="execution_replay",
-                    )
+                    ):
+                        pass
                     continue
                 updated_cursor, terminal_reason = _plan_delivery_recovery_cursor(
                     cursor=cursor if isinstance(cursor, dict) else {},
@@ -5882,40 +5891,12 @@ class DiscordBotService:
                 continue
 
             if decision.action == ChatOperationRecoveryAction.RESUME_EXECUTION:
-                if _interaction_recovery_backoff_active(
-                    updated_at=record.updated_at,
-                    attempt_count=int(record.attempt_count or 0),
+                await self._submit_execution_recovery_replay(
+                    record,
+                    envelope,
+                    decision=decision,
                     now=now,
-                ):
-                    log_event(
-                        self._logger,
-                        logging.DEBUG,
-                        "discord.interaction.recovery.execution_backoff",
-                        interaction_id=record.interaction_id,
-                        attempt_count=int(record.attempt_count or 0),
-                    )
-                    continue
-                await self._mark_interaction_scheduler_state(
-                    envelope.context,
-                    scheduler_state="recovery_scheduled",
-                    increment_attempt_count=True,
-                    _for_recovery=True,
-                )
-                log_event(
-                    self._logger,
-                    logging.INFO,
-                    "discord.interaction.recovery.execution_replay_submitted",
-                    interaction_id=record.interaction_id,
-                    attempt_count=int(record.attempt_count or 0),
-                    previous_state=decision.previous_state.value,
                     reason=decision.reason,
-                )
-                self._command_runner.submit_recovery(
-                    envelope.context,
-                    record.payload_json,
-                    resource_keys=envelope.resource_keys,
-                    conversation_id=envelope.conversation_id,
-                    replay_mode="execution_replay",
                 )
 
     async def _begin_interaction_recovery_execution(self, ctx: IngressContext) -> bool:
@@ -6032,6 +6013,16 @@ class DiscordBotService:
         )
         return returned
 
+    @staticmethod
+    def _interaction_has_pending_delivery(record: InteractionLedgerRecord) -> bool:
+        cursor_pending = isinstance(record.delivery_cursor_json, dict) and str(
+            record.delivery_cursor_json.get("state") or ""
+        ).strip() in {"pending", "failed"}
+        return cursor_pending or record.scheduler_state in {
+            "delivery_pending",
+            "delivery_replaying",
+        }
+
     async def _check_interaction_ingress_duplicate(self, ctx: IngressContext) -> bool:
         reservations = getattr(self, "_ingress_pre_ack_reservations", None)
         if not isinstance(reservations, set):
@@ -6081,16 +6072,8 @@ class DiscordBotService:
         if snapshot is None and record is None:
             return False
 
-        has_pending_delivery = bool(
-            record is not None
-            and (
-                (
-                    isinstance(record.delivery_cursor_json, dict)
-                    and str(record.delivery_cursor_json.get("state") or "").strip()
-                    in {"pending", "failed"}
-                )
-                or record.scheduler_state in {"delivery_pending", "delivery_replaying"}
-            )
+        has_pending_delivery = (
+            record is not None and self._interaction_has_pending_delivery(record)
         )
         rejected = await self._maybe_reject_duplicate_interaction(
             interaction_id=ctx.interaction_id,
@@ -6131,14 +6114,7 @@ class DiscordBotService:
             return False
         record = registration.record
         snapshot = await self._chat_operation_get(ctx.interaction_id)
-        has_pending_delivery = bool(
-            (
-                isinstance(record.delivery_cursor_json, dict)
-                and str(record.delivery_cursor_json.get("state") or "").strip()
-                in {"pending", "failed"}
-            )
-            or record.scheduler_state in {"delivery_pending", "delivery_replaying"}
-        )
+        has_pending_delivery = self._interaction_has_pending_delivery(record)
         rejected = await self._maybe_reject_duplicate_interaction(
             interaction_id=ctx.interaction_id,
             snapshot=snapshot,
@@ -8028,230 +8004,25 @@ class DiscordBotService:
         )
         return True
 
-    async def _respond_ephemeral(
-        self,
-        interaction_id: str,
-        interaction_token: str,
-        text: str,
-    ) -> None:
-        await self.respond_ephemeral(interaction_id, interaction_token, text)
-
-    async def _defer_ephemeral(
-        self,
-        *,
-        interaction_id: str,
-        interaction_token: str,
-    ) -> bool:
-        return await self.defer_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-        )
-
-    async def _defer_component_update(
-        self,
-        *,
-        interaction_id: str,
-        interaction_token: str,
-    ) -> bool:
-        return await self.defer_component_update(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-        )
-
-    async def _send_or_respond_ephemeral(
-        self,
-        *,
-        interaction_id: str,
-        interaction_token: str,
-        deferred: bool,
-        text: str,
-    ) -> None:
-        await self.send_or_respond_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            deferred=deferred,
-            text=text,
-        )
-
-    async def _send_or_respond_with_components_ephemeral(
-        self,
-        *,
-        interaction_id: str,
-        interaction_token: str,
-        deferred: bool,
-        text: str,
-        components: list[dict[str, Any]],
-    ) -> None:
-        await self.send_or_respond_ephemeral_with_components(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            deferred=deferred,
-            text=text,
-            components=components,
-        )
-
-    async def _send_or_update_component_message(
-        self,
-        *,
-        interaction_id: str,
-        interaction_token: str,
-        deferred: bool,
-        text: str,
-        components: Optional[list[dict[str, Any]]] = None,
-    ) -> None:
-        await self.send_or_update_component_message(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            deferred=deferred,
-            text=text,
-            components=components,
-        )
-
-    async def _respond_with_components(
-        self,
-        interaction_id: str,
-        interaction_token: str,
-        text: str,
-        components: list[dict[str, Any]],
-    ) -> None:
-        await self.respond_ephemeral_with_components(
-            interaction_id,
-            interaction_token,
-            text,
-            components,
-        )
-
-    async def _respond_autocomplete(
-        self,
-        interaction_id: str,
-        interaction_token: str,
-        *,
-        choices: list[dict[str, str]],
-    ) -> None:
-        await self.respond_autocomplete(
-            interaction_id,
-            interaction_token,
-            choices=choices,
-        )
-
-    async def _update_component_message(
-        self,
-        *,
-        interaction_id: str,
-        interaction_token: str,
-        text: str,
-        components: list[dict[str, Any]],
-    ) -> None:
-        await self.update_component_message(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            text=text,
-            components=components,
-        )
-
-    async def _edit_original_component_message(
-        self,
-        *,
-        interaction_token: str,
-        text: str,
-        components: Optional[list[dict[str, Any]]] = None,
-    ) -> bool:
-        return await self.edit_original_component_message(
-            interaction_token=interaction_token,
-            text=text,
-            components=components,
-        )
-
-    async def _send_followup_ephemeral(
-        self,
-        *,
-        interaction_token: str,
-        content: str,
-        components: Optional[list[dict[str, Any]]] = None,
-    ) -> bool:
-        return await self.send_followup_ephemeral(
-            interaction_token=interaction_token,
-            content=content,
-            components=components,
-        )
-
-    async def _respond_public(
-        self,
-        interaction_id: str,
-        interaction_token: str,
-        text: str,
-    ) -> None:
-        await self.respond_public(interaction_id, interaction_token, text)
-
-    async def _defer_public(
-        self,
-        *,
-        interaction_id: str,
-        interaction_token: str,
-    ) -> bool:
-        return await self.defer_public(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-        )
-
-    async def _send_or_respond_public(
-        self,
-        *,
-        interaction_id: str,
-        interaction_token: str,
-        deferred: bool,
-        text: str,
-    ) -> None:
-        await self.send_or_respond_public(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            deferred=deferred,
-            text=text,
-        )
-
-    async def _send_or_respond_with_components_public(
-        self,
-        *,
-        interaction_id: str,
-        interaction_token: str,
-        deferred: bool,
-        text: str,
-        components: list[dict[str, Any]],
-    ) -> None:
-        await self.send_or_respond_public_with_components(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            deferred=deferred,
-            text=text,
-            components=components,
-        )
-
-    async def _respond_with_components_public(
-        self,
-        interaction_id: str,
-        interaction_token: str,
-        text: str,
-        components: list[dict[str, Any]],
-    ) -> None:
-        await self.respond_public_with_components(
-            interaction_id,
-            interaction_token,
-            text,
-            components,
-        )
-
-    async def _send_followup_public(
-        self,
-        *,
-        interaction_token: str,
-        content: str,
-        components: Optional[list[dict[str, Any]]] = None,
-    ) -> bool:
-        return await self.send_followup_public(
-            interaction_token=interaction_token,
-            content=content,
-            components=components,
-        )
+    _respond_ephemeral = respond_ephemeral
+    _defer_ephemeral = defer_ephemeral
+    _defer_component_update = defer_component_update
+    _send_or_respond_ephemeral = send_or_respond_ephemeral
+    _send_or_respond_with_components_ephemeral = (
+        send_or_respond_ephemeral_with_components
+    )
+    _send_or_update_component_message = send_or_update_component_message
+    _respond_with_components = respond_ephemeral_with_components
+    _respond_autocomplete = respond_autocomplete
+    _update_component_message = update_component_message
+    _edit_original_component_message = edit_original_component_message
+    _send_followup_ephemeral = send_followup_ephemeral
+    _respond_public = respond_public
+    _defer_public = defer_public
+    _send_or_respond_public = send_or_respond_public
+    _send_or_respond_with_components_public = send_or_respond_public_with_components
+    _respond_with_components_public = respond_public_with_components
+    _send_followup_public = send_followup_public
 
     async def _handle_component_interaction_normalized(
         self,

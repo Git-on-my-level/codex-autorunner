@@ -1524,6 +1524,34 @@ async def _record_thread_activity_via_hub(
     )
 
 
+async def _best_effort_hub_call(
+    awaitable: Awaitable[Any],
+    *,
+    event_prefix: str,
+    trace_fields: dict[str, Any],
+    extra_log_fields: dict[str, Any] | None = None,
+    error_level: int = logging.WARNING,
+    hub_client: Any = None,
+    require_hub_client: bool = False,
+) -> Any:
+    try:
+        if require_hub_client and hub_client is None:
+            raise RuntimeError("Hub control-plane client unavailable")
+        return await awaitable
+    except asyncio.CancelledError:
+        kw: dict[str, Any] = dict(trace_fields)
+        if extra_log_fields:
+            kw.update(extra_log_fields)
+        log_event(logger, logging.WARNING, f"{event_prefix}_cancelled", **kw)
+    except Exception as exc:
+        kw = dict(trace_fields)
+        if extra_log_fields:
+            kw.update(extra_log_fields)
+        kw["exc"] = exc
+        log_event(logger, error_level, f"{event_prefix}_failed", **kw)
+    return None
+
+
 async def submit_managed_thread_execution(
     orchestration_service: Any,
     request: MessageRequest,
@@ -2229,47 +2257,34 @@ async def finalize_managed_thread_execution(
             return None
         manifest_id = str(metadata.get("trace_manifest_id") or "").strip() or None
         if manifest_id is None:
-            try:
-                manifest_id = await _finalize_execution_cold_trace_via_hub(
-                    resolved_hub_client,
-                    execution_id=managed_turn_id,
-                    events=timeline_events,
-                    backend_thread_id=current_backend_thread_id or None,
-                    backend_turn_id=(
-                        outcome.backend_turn_id or started.execution.backend_id
+            manifest_id = (
+                await _best_effort_hub_call(
+                    _finalize_execution_cold_trace_via_hub(
+                        resolved_hub_client,
+                        execution_id=managed_turn_id,
+                        events=timeline_events,
+                        backend_thread_id=current_backend_thread_id or None,
+                        backend_turn_id=(
+                            outcome.backend_turn_id or started.execution.backend_id
+                        ),
                     ),
-                )
-            except asyncio.CancelledError:
-                log_event(
-                    logger,
-                    logging.WARNING,
-                    "chat.managed_thread.final_cold_trace_cancelled",
-                    **_managed_thread_trace_fields(
+                    event_prefix="chat.managed_thread.final_cold_trace",
+                    trace_fields=_managed_thread_trace_fields(
                         managed_thread_id=managed_thread_id,
                         managed_turn_id=managed_turn_id,
                         backend_thread_id=current_backend_thread_id or None,
-                        backend_turn_id=outcome.backend_turn_id
-                        or started.execution.backend_id,
+                        backend_turn_id=(
+                            outcome.backend_turn_id or started.execution.backend_id
+                        ),
                         surface=surface,
                     ),
+                    error_level=logging.WARNING,
                 )
-            except Exception:
-                log_event(
-                    logger,
-                    logging.WARNING,
-                    "chat.managed_thread.final_cold_trace_failed",
-                    **_managed_thread_trace_fields(
-                        managed_thread_id=managed_thread_id,
-                        managed_turn_id=managed_turn_id,
-                        backend_thread_id=current_backend_thread_id or None,
-                        backend_turn_id=outcome.backend_turn_id
-                        or started.execution.backend_id,
-                        surface=surface,
-                    ),
-                )
+                or None
+            )
 
-        try:
-            await _persist_execution_timeline_via_hub(
+        await _best_effort_hub_call(
+            _persist_execution_timeline_via_hub(
                 resolved_hub_client,
                 execution_id=managed_turn_id,
                 target_kind="thread_target",
@@ -2289,39 +2304,21 @@ async def finalize_managed_thread_execution(
                 | ({"trace_manifest_id": manifest_id} if manifest_id else {}),
                 events=events,
                 start_index=live_timeline_count + 1,
-            )
-        except asyncio.CancelledError:
-            log_event(
-                logger,
-                logging.WARNING,
-                "chat.managed_thread.final_timeline_persist_cancelled",
-                **_managed_thread_trace_fields(
-                    managed_thread_id=managed_thread_id,
-                    managed_turn_id=managed_turn_id,
-                    backend_thread_id=current_backend_thread_id or None,
-                    backend_turn_id=outcome.backend_turn_id
-                    or started.execution.backend_id,
-                    surface=surface,
-                ),
-                persisted_event_count=len(events),
-                start_index=live_timeline_count + 1,
-            )
-        except Exception:
-            log_event(
-                logger,
-                logging.ERROR,
-                "chat.managed_thread.final_timeline_persist_failed",
-                **_managed_thread_trace_fields(
-                    managed_thread_id=managed_thread_id,
-                    managed_turn_id=managed_turn_id,
-                    backend_thread_id=current_backend_thread_id or None,
-                    backend_turn_id=outcome.backend_turn_id
-                    or started.execution.backend_id,
-                    surface=surface,
-                ),
-                persisted_event_count=len(events),
-                start_index=live_timeline_count + 1,
-            )
+            ),
+            event_prefix="chat.managed_thread.final_timeline_persist",
+            trace_fields=_managed_thread_trace_fields(
+                managed_thread_id=managed_thread_id,
+                managed_turn_id=managed_turn_id,
+                backend_thread_id=current_backend_thread_id or None,
+                backend_turn_id=outcome.backend_turn_id or started.execution.backend_id,
+                surface=surface,
+            ),
+            extra_log_fields={
+                "persisted_event_count": len(events),
+                "start_index": live_timeline_count + 1,
+            },
+            error_level=logging.ERROR,
+        )
         return manifest_id
 
     stream_backend_thread_id = current_backend_thread_id
@@ -2814,48 +2811,28 @@ async def finalize_managed_thread_execution(
                 fresh_backend_session_reason
             )
         transcript_metadata.update(dict(surface.metadata))
-        try:
-            if resolved_hub_client is None:
-                raise RuntimeError("Hub control-plane client unavailable")
-            transcript_turn_id = await _write_transcript_via_hub(
+        transcript_turn_id = await _best_effort_hub_call(
+            _write_transcript_via_hub(
                 resolved_hub_client,
                 turn_id=managed_turn_id,
                 metadata=transcript_metadata,
                 assistant_text=resolved_assistant_text,
-            )
-        except asyncio.CancelledError:
-            log_event(
-                logger,
-                logging.WARNING,
-                "chat.managed_thread.transcript_persist_cancelled",
-                **_managed_thread_trace_fields(
-                    managed_thread_id=managed_thread_id,
-                    managed_turn_id=managed_turn_id,
-                    backend_thread_id=resolved_backend_thread_id,
-                    backend_turn_id=outcome.backend_turn_id
-                    or started.execution.backend_id,
-                    surface=surface,
-                ),
-                assistant_chars=len(resolved_assistant_text),
+            ),
+            event_prefix="chat.managed_thread.transcript_persist",
+            trace_fields=_managed_thread_trace_fields(
+                managed_thread_id=managed_thread_id,
+                managed_turn_id=managed_turn_id,
+                backend_thread_id=resolved_backend_thread_id,
+                backend_turn_id=outcome.backend_turn_id or started.execution.backend_id,
+                surface=surface,
+            ),
+            extra_log_fields={
+                "assistant_chars": len(resolved_assistant_text),
                 **runtime_trace_fields(event_state),
-            )
-        except Exception as exc:
-            log_event(
-                logger,
-                logging.WARNING,
-                "chat.managed_thread.transcript_persist_failed",
-                **_managed_thread_trace_fields(
-                    managed_thread_id=managed_thread_id,
-                    managed_turn_id=managed_turn_id,
-                    backend_thread_id=resolved_backend_thread_id,
-                    backend_turn_id=outcome.backend_turn_id
-                    or started.execution.backend_id,
-                    surface=surface,
-                ),
-                assistant_chars=len(resolved_assistant_text),
-                **runtime_trace_fields(event_state),
-                exc=exc,
-            )
+            },
+            hub_client=resolved_hub_client,
+            require_hub_client=True,
+        )
         finalized_execution: Any = None
         execution_record_failed = False
         # Orchestration: canonical execution result recording (must succeed).
@@ -3007,44 +2984,24 @@ async def finalize_managed_thread_execution(
             **runtime_trace_fields(event_state),
         )
         # Hub control-plane: thread activity record (best-effort, ok outcomes only).
-        try:
-            if resolved_hub_client is None:
-                raise RuntimeError("Hub control-plane client unavailable")
-            await _record_thread_activity_via_hub(
+        await _best_effort_hub_call(
+            _record_thread_activity_via_hub(
                 resolved_hub_client,
                 thread_target_id=managed_thread_id,
                 execution_id=managed_turn_id,
                 message_preview=turn_preview,
-            )
-        except asyncio.CancelledError:
-            log_event(
-                logger,
-                logging.WARNING,
-                "chat.managed_thread.thread_activity_persist_cancelled",
-                **_managed_thread_trace_fields(
-                    managed_thread_id=managed_thread_id,
-                    managed_turn_id=managed_turn_id,
-                    backend_thread_id=resolved_backend_thread_id,
-                    backend_turn_id=outcome.backend_turn_id
-                    or started.execution.backend_id,
-                    surface=surface,
-                ),
-            )
-        except Exception as exc:
-            log_event(
-                logger,
-                logging.WARNING,
-                "chat.managed_thread.thread_activity_persist_failed",
-                **_managed_thread_trace_fields(
-                    managed_thread_id=managed_thread_id,
-                    managed_turn_id=managed_turn_id,
-                    backend_thread_id=resolved_backend_thread_id,
-                    backend_turn_id=outcome.backend_turn_id
-                    or started.execution.backend_id,
-                    surface=surface,
-                ),
-                exc=exc,
-            )
+            ),
+            event_prefix="chat.managed_thread.thread_activity_persist",
+            trace_fields=_managed_thread_trace_fields(
+                managed_thread_id=managed_thread_id,
+                managed_turn_id=managed_turn_id,
+                backend_thread_id=resolved_backend_thread_id,
+                backend_turn_id=outcome.backend_turn_id or started.execution.backend_id,
+                surface=surface,
+            ),
+            hub_client=resolved_hub_client,
+            require_hub_client=True,
+        )
         return ManagedThreadFinalizationResult(
             status="ok",
             assistant_text=resolved_assistant_text,

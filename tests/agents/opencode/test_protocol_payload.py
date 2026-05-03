@@ -306,6 +306,14 @@ class TestExtractMessagePhase:
             extract_message_phase({"item": {"phase": "final_answer"}}) == "final_answer"
         )
 
+    def test_info_phase_wins_over_payload_message_phase(self) -> None:
+        """info.phase is higher priority than payload.message.phase (walker order)."""
+        payload = {
+            "info": {"phase": "final_answer"},
+            "message": {"phase": "commentary"},
+        }
+        assert extract_message_phase(payload) == "final_answer"
+
     def test_invalid_phase_returns_none(self) -> None:
         assert extract_message_phase({"phase": "unknown"}) is None
 
@@ -319,6 +327,36 @@ class TestExtractMessagePhase:
     def test_case_insensitive(self) -> None:
         assert extract_message_phase({"phase": "Commentary"}) == "commentary"
         assert extract_message_phase({"phase": "FINAL_ANSWER"}) == "final_answer"
+
+    def test_info_phase_takes_precedence_over_root_message_phase(self) -> None:
+        payload = {
+            "message": {"phase": "commentary"},
+            "info": {"phase": "final_answer"},
+        }
+        assert extract_message_phase(payload) == "final_answer"
+
+    def test_properties_phase_takes_precedence_over_root_message_phase(self) -> None:
+        payload = {
+            "message": {"phase": "commentary"},
+            "properties": {"phase": "final_answer"},
+        }
+        assert extract_message_phase(payload) == "final_answer"
+
+    def test_properties_message_phase_before_root_message_phase(self) -> None:
+        payload = {
+            "message": {"phase": "commentary"},
+            "properties": {"message": {"phase": "final_answer"}},
+        }
+        assert extract_message_phase(payload) == "final_answer"
+
+    def test_direct_phase_highest_precedence(self) -> None:
+        payload = {
+            "phase": "commentary",
+            "info": {"phase": "final_answer"},
+            "properties": {"phase": "final_answer"},
+            "message": {"phase": "final_answer"},
+        }
+        assert extract_message_phase(payload) == "commentary"
 
 
 class TestNormalizeMessagePhase:

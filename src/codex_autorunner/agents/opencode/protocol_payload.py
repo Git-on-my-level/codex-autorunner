@@ -12,6 +12,7 @@ before production use.
 from __future__ import annotations
 
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -92,6 +93,50 @@ def _nested_session_id(
     if isinstance(session, dict):
         return _nested_session_id(session, allow_fallback_id=True)
     return None
+
+
+_NESTED_CONTAINER_KEYS = ("info", "properties", "response")
+_PART_KEYS = ("part", "parts")
+
+
+def _walk_nested_containers(
+    payload: Any, *, include_parts: bool = False, _visited: frozenset[int] | None = None
+) -> Iterator[dict[str, Any]]:
+    if not isinstance(payload, dict):
+        return
+    if _visited is None:
+        _visited = frozenset()
+    obj_id = id(payload)
+    if obj_id in _visited:
+        return
+    _visited = _visited | {obj_id}
+    yield payload
+    if include_parts:
+        for pk in _PART_KEYS:
+            part = payload.get(pk)
+            if isinstance(part, dict):
+                yield from _walk_nested_containers(
+                    part, include_parts=True, _visited=_visited
+                )
+            elif isinstance(part, list):
+                for entry in part:
+                    if isinstance(entry, dict):
+                        yield from _walk_nested_containers(
+                            entry, include_parts=True, _visited=_visited
+                        )
+    for key in _NESTED_CONTAINER_KEYS:
+        child = payload.get(key)
+        if isinstance(child, dict):
+            yield from _walk_nested_containers(
+                child, include_parts=include_parts, _visited=_visited
+            )
+    model = payload.get("model")
+    if isinstance(model, dict):
+        yield model
+    for key in ("modelInfo", "model_info", "modelConfig", "model_config"):
+        mi = payload.get(key)
+        if isinstance(mi, dict):
+            yield mi
 
 
 def extract_session_id(
@@ -280,42 +325,33 @@ def normalize_message_phase(value: Any) -> Optional[str]:
     return None
 
 
+_PHASE_EXTRA_KEYS = ("message", "item")
+
+
 def extract_message_phase(payload: Any) -> Optional[str]:
     if not isinstance(payload, dict):
         return None
-    phase = normalize_message_phase(payload.get("phase"))
-    if phase is not None:
-        return phase
-    info = payload.get("info")
-    if isinstance(info, dict):
-        phase = normalize_message_phase(info.get("phase"))
-        if phase is not None:
-            return phase
-    properties = payload.get("properties")
-    if isinstance(properties, dict):
-        phase = normalize_message_phase(properties.get("phase"))
-        if phase is not None:
-            return phase
-        message = properties.get("message")
-        if isinstance(message, dict):
-            phase = normalize_message_phase(message.get("phase"))
+    for container in _walk_nested_containers(payload):
+        if container is payload:
+            phase = normalize_message_phase(container.get("phase"))
             if phase is not None:
                 return phase
-        item = properties.get("item")
-        if isinstance(item, dict):
-            phase = normalize_message_phase(item.get("phase"))
+            continue
+        phase = normalize_message_phase(container.get("phase"))
+        if phase is not None:
+            return phase
+        for key in _PHASE_EXTRA_KEYS:
+            child = container.get(key)
+            if isinstance(child, dict):
+                phase = normalize_message_phase(child.get("phase"))
+                if phase is not None:
+                    return phase
+    for key in _PHASE_EXTRA_KEYS:
+        child = payload.get(key)
+        if isinstance(child, dict):
+            phase = normalize_message_phase(child.get("phase"))
             if phase is not None:
                 return phase
-    message = payload.get("message")
-    if isinstance(message, dict):
-        phase = normalize_message_phase(message.get("phase"))
-        if phase is not None:
-            return phase
-    item = payload.get("item")
-    if isinstance(item, dict):
-        phase = normalize_message_phase(item.get("phase"))
-        if phase is not None:
-            return phase
     return None
 
 
@@ -562,20 +598,20 @@ def extract_total_tokens(usage: dict[str, Any]) -> Optional[int]:
     return None
 
 
+_USAGE_DETAIL_SPECS: list[tuple[str, tuple[str, ...]]] = [
+    ("inputTokens", OPENCODE_USAGE_INPUT_KEYS),
+    ("cachedInputTokens", OPENCODE_USAGE_CACHED_KEYS),
+    ("outputTokens", OPENCODE_USAGE_OUTPUT_KEYS),
+    ("reasoningTokens", OPENCODE_USAGE_REASONING_KEYS),
+]
+
+
 def extract_usage_details(usage: dict[str, Any]) -> dict[str, int]:
     details: dict[str, int] = {}
-    input_tokens = extract_usage_field(usage, OPENCODE_USAGE_INPUT_KEYS)
-    if input_tokens is not None:
-        details["inputTokens"] = input_tokens
-    cached_tokens = extract_usage_field(usage, OPENCODE_USAGE_CACHED_KEYS)
-    if cached_tokens is not None:
-        details["cachedInputTokens"] = cached_tokens
-    output_tokens = extract_usage_field(usage, OPENCODE_USAGE_OUTPUT_KEYS)
-    if output_tokens is not None:
-        details["outputTokens"] = output_tokens
-    reasoning_tokens = extract_usage_field(usage, OPENCODE_USAGE_REASONING_KEYS)
-    if reasoning_tokens is not None:
-        details["reasoningTokens"] = reasoning_tokens
+    for output_key, keys in _USAGE_DETAIL_SPECS:
+        value = extract_usage_field(usage, keys)
+        if value is not None:
+            details[output_key] = value
     return details
 
 
@@ -583,59 +619,30 @@ def extract_context_window(
     payload: Any, usage: Optional[dict[str, Any]]
 ) -> Optional[int]:
     containers: list[dict[str, Any]] = []
-
-    def _append_part_containers(container: Any) -> None:
-        if not isinstance(container, dict):
-            return
-        part = container.get("part")
-        if isinstance(part, dict):
-            containers.append(part)
-        parts = container.get("parts")
-        if isinstance(parts, list):
-            containers.extend(entry for entry in parts if isinstance(entry, dict))
-
-    if isinstance(payload, dict):
-        containers.append(payload)
-        _append_part_containers(payload)
-        info = payload.get("info")
-        if isinstance(info, dict):
-            containers.append(info)
-            _append_part_containers(info)
-        properties = payload.get("properties")
-        if isinstance(properties, dict):
-            containers.append(properties)
-            _append_part_containers(properties)
-            prop_info = properties.get("info")
-            if isinstance(prop_info, dict):
-                containers.append(prop_info)
-                _append_part_containers(prop_info)
-        response = payload.get("response")
-        if isinstance(response, dict):
-            containers.append(response)
-            _append_part_containers(response)
-            response_info = response.get("info")
-            if isinstance(response_info, dict):
-                containers.append(response_info)
-                _append_part_containers(response_info)
-            response_props = response.get("properties")
-            if isinstance(response_props, dict):
-                containers.append(response_props)
-                _append_part_containers(response_props)
-                response_prop_info = response_props.get("info")
-                if isinstance(response_prop_info, dict):
-                    containers.append(response_prop_info)
-                    _append_part_containers(response_prop_info)
-        for key in ("model", "modelInfo", "model_info", "modelConfig", "model_config"):
-            model = payload.get(key)
-            if isinstance(model, dict):
-                containers.append(model)
     if isinstance(usage, dict):
-        containers.insert(0, usage)
+        containers.append(usage)
+    if isinstance(payload, dict):
+        seen: set[int] = set()
+        for container in _walk_nested_containers(payload, include_parts=True):
+            cid = id(container)
+            if cid not in seen:
+                seen.add(cid)
+                containers.append(container)
     for container in containers:
         for key in OPENCODE_CONTEXT_WINDOW_KEYS:
             value = coerce_int(container.get(key))
             if value is not None and value > 0:
                 return value
+    return None
+
+
+def _resolve_status_value(status: Any) -> Optional[str]:
+    if isinstance(status, dict):
+        value = status.get("type") or status.get("status")
+    else:
+        value = status
+    if isinstance(value, str) and value:
+        return value
     return None
 
 
@@ -651,22 +658,16 @@ def extract_status_type(payload: Any) -> Optional[str]:
         if not isinstance(container, dict):
             continue
         if container is payload:
-            status = container.get("status")
+            candidate = _resolve_status_value(container.get("status"))
         else:
-            status = container
-        if isinstance(status, dict):
-            value = status.get("type") or status.get("status")
-        else:
-            value = status
-        if isinstance(value, str) and value:
-            return value
+            candidate = _resolve_status_value(container)
+        if candidate is not None:
+            return candidate
     properties = payload.get("properties")
     if isinstance(properties, dict):
-        status = properties.get("status")
-        if isinstance(status, dict):
-            value = status.get("type") or status.get("status")
-            if isinstance(value, str) and value:
-                return value
+        candidate = _resolve_status_value(properties.get("status"))
+        if candidate is not None:
+            return candidate
     return None
 
 
@@ -708,11 +709,7 @@ def extract_delta_text(params: dict[str, Any]) -> Optional[str]:
     properties = params.get("properties")
     if isinstance(properties, dict):
         delta = properties.get("delta")
-        if isinstance(delta, str):
-            text = normalize_message_text(delta)
-            if text:
-                return text
-        if isinstance(delta, dict):
+        if delta is not None:
             text = normalize_message_text(delta)
             if text:
                 return text

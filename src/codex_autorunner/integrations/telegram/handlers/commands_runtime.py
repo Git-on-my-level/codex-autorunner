@@ -1050,6 +1050,59 @@ class TelegramCommandHandlers(
             reply_to=message.message_id,
         )
 
+    async def _fetch_and_cache_model_list(
+        self,
+        message: TelegramMessage,
+        record_for_models: Any,
+        agent: str,
+        client: Any,
+        list_params: dict[str, Any],
+        cache_key: str,
+    ) -> tuple[Any | None, bool]:
+        try:
+            result = await self._fetch_model_list(
+                record_for_models,
+                agent=agent,
+                client=client,
+                list_params=list_params,
+            )
+            self._model_catalog_cache[cache_key] = (result, time.monotonic())
+            return result, False
+        except OpenCodeSupervisorError as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.model.list.failed",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                agent=agent,
+                exc=exc,
+            )
+            await self._send_message(
+                message.chat_id,
+                "OpenCode backend unavailable; install opencode or switch to /agent codex.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return None, True
+        except (
+            RuntimeError,
+            OSError,
+            ValueError,
+            TypeError,
+            ConnectionError,
+        ) as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.model.list.failed",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                agent=agent,
+                exc=exc,
+            )
+            return None, False
+
     async def _handle_model(
         self, message: TelegramMessage, args: str, _runtime: Any
     ) -> None:
@@ -1127,7 +1180,6 @@ class TelegramCommandHandlers(
                 return
         cache_key = f"{workspace_path}:{agent}"
         if argv and argv[0].lower() in ("list", "ls"):
-            record_for_models = self._record_with_workspace_path(record, workspace_path)
             cached_result = self._model_catalog_cache.get(cache_key)
             if cached_result is not None:
                 result, cached_time = cached_result
@@ -1147,47 +1199,18 @@ class TelegramCommandHandlers(
                         reply_to=message.message_id,
                     )
                     return
-            try:
-                result = await self._fetch_model_list(
-                    record_for_models,
-                    agent=agent,
-                    client=client,
-                    list_params=list_params,
-                )
-                self._model_catalog_cache[cache_key] = (result, time.monotonic())
-            except OpenCodeSupervisorError as exc:
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "telegram.model.list.failed",
-                    chat_id=message.chat_id,
-                    thread_id=message.thread_id,
-                    agent=agent,
-                    exc=exc,
-                )
-                await self._send_message(
-                    message.chat_id,
-                    "OpenCode backend unavailable; install opencode or switch to /agent codex.",
-                    thread_id=message.thread_id,
-                    reply_to=message.message_id,
-                )
+            record_for_models = self._record_with_workspace_path(record, workspace_path)
+            result, aborted = await self._fetch_and_cache_model_list(
+                message,
+                record_for_models,
+                agent,
+                client,
+                list_params,
+                cache_key,
+            )
+            if aborted:
                 return
-            except (
-                RuntimeError,
-                OSError,
-                ValueError,
-                TypeError,
-                ConnectionError,
-            ) as exc:
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "telegram.model.list.failed",
-                    chat_id=message.chat_id,
-                    thread_id=message.thread_id,
-                    agent=agent,
-                    exc=exc,
-                )
+            if result is None:
                 await self._send_message(
                     message.chat_id,
                     _with_conversation_id(
@@ -1240,48 +1263,16 @@ class TelegramCommandHandlers(
                 record_for_models = self._record_with_workspace_path(
                     record, workspace_path
                 )
-                try:
-                    result = await self._fetch_model_list(
-                        record_for_models,
-                        agent=agent,
-                        client=client,
-                        list_params=list_params,
-                    )
-                    self._model_catalog_cache[cache_key] = (result, time.monotonic())
-                except OpenCodeSupervisorError as exc:
-                    log_event(
-                        self._logger,
-                        logging.WARNING,
-                        "telegram.model.list.failed",
-                        chat_id=message.chat_id,
-                        thread_id=message.thread_id,
-                        agent=agent,
-                        exc=exc,
-                    )
-                    await self._send_message(
-                        message.chat_id,
-                        "OpenCode backend unavailable; install opencode or switch to /agent codex.",
-                        thread_id=message.thread_id,
-                        reply_to=message.message_id,
-                    )
+                result, aborted = await self._fetch_and_cache_model_list(
+                    message,
+                    record_for_models,
+                    agent,
+                    client,
+                    list_params,
+                    cache_key,
+                )
+                if aborted:
                     return
-                except (
-                    RuntimeError,
-                    OSError,
-                    ValueError,
-                    TypeError,
-                    ConnectionError,
-                ) as exc:
-                    log_event(
-                        self._logger,
-                        logging.WARNING,
-                        "telegram.model.list.failed",
-                        chat_id=message.chat_id,
-                        thread_id=message.thread_id,
-                        agent=agent,
-                        exc=exc,
-                    )
-                    result = None
 
             if result is not None:
                 options = _coerce_model_options(result, include_efforts=supports_effort)
@@ -1344,47 +1335,17 @@ class TelegramCommandHandlers(
                         return
         if not argv:
             record_for_models = self._record_with_workspace_path(record, workspace_path)
-            try:
-                result = await self._fetch_model_list(
-                    record_for_models,
-                    agent=agent,
-                    client=client,
-                    list_params=list_params,
-                )
-                self._model_catalog_cache[cache_key] = (result, time.monotonic())
-            except OpenCodeSupervisorError as exc:
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "telegram.model.list.failed",
-                    chat_id=message.chat_id,
-                    thread_id=message.thread_id,
-                    agent=agent,
-                    exc=exc,
-                )
-                await self._send_message(
-                    message.chat_id,
-                    "OpenCode backend unavailable; install opencode or switch to /agent codex.",
-                    thread_id=message.thread_id,
-                    reply_to=message.message_id,
-                )
+            result, aborted = await self._fetch_and_cache_model_list(
+                message,
+                record_for_models,
+                agent,
+                client,
+                list_params,
+                cache_key,
+            )
+            if aborted:
                 return
-            except (
-                RuntimeError,
-                OSError,
-                ValueError,
-                TypeError,
-                ConnectionError,
-            ) as exc:
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "telegram.model.list.failed",
-                    chat_id=message.chat_id,
-                    thread_id=message.thread_id,
-                    agent=agent,
-                    exc=exc,
-                )
+            if result is None:
                 await self._send_message(
                     message.chat_id,
                     _with_conversation_id(

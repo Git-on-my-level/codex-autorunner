@@ -63,6 +63,40 @@ _TELEGRAM_COMMANDS_SPEC_PATH = Path(
 _FUNCTION_NODE_TYPES = (ast.FunctionDef, ast.AsyncFunctionDef)
 _MISSING = object()
 
+_SKIPPED_CHECK_IDS = (
+    "contract.discord_metadata_complete",
+    "contract.telegram_metadata_complete",
+    "contract.shared_action_ux_complete",
+    "contract.registry_entries_cataloged",
+    "discord.contract_commands_routed",
+    "discord.no_generic_fallback_leak",
+    "discord.canonical_command_ingress_usage",
+    "discord.interaction_component_guard_paths",
+    "chat.shared_plain_text_turn_policy_usage",
+    "chat.ux_latency_budget_contract_complete",
+    "chat.ux_regression_contract_complete",
+)
+
+_SOURCE_FILE_MAP = {
+    "discord_service": _DISCORD_SERVICE_PATH,
+    "discord_car_dispatch": _DISCORD_CAR_DISPATCH_PATH,
+    "discord_interaction_dispatch": _DISCORD_INTERACTION_DISPATCH_PATH,
+    "discord_ingress": _DISCORD_INGRESS_PATH,
+    "discord_interaction_registry": _DISCORD_INTERACTION_REGISTRY_PATH,
+    "discord_interaction_component_handlers": _DISCORD_INTERACTION_COMPONENT_HANDLERS_PATH,
+    "discord_commands": _DISCORD_COMMANDS_PATH,
+    "telegram_trigger_mode": _TELEGRAM_TRIGGER_MODE_PATH,
+    "telegram_messages": _TELEGRAM_MESSAGES_PATH,
+    "telegram_message_policy": _TELEGRAM_MESSAGE_POLICY_PATH,
+    "telegram_commands_spec": _TELEGRAM_COMMANDS_SPEC_PATH,
+}
+
+_REQUIRED_SOURCE_KEYS = (
+    "discord_service",
+    "telegram_trigger_mode",
+    "telegram_messages",
+)
+
 
 @dataclass(frozen=True)
 class ParityCheckResult:
@@ -83,88 +117,18 @@ def run_parity_checks(
     ux_latency_budgets: Sequence[ChatUxLatencyBudgetEntry] = CHAT_UX_LATENCY_BUDGETS,
 ) -> tuple[ParityCheckResult, ...]:
     source_paths = {
-        "discord_service": _resolve_source_path(
-            repo_root=repo_root,
-            repo_relative_path=_DISCORD_SERVICE_PATH,
-        ),
-        "telegram_trigger_mode": _resolve_source_path(
-            repo_root=repo_root,
-            repo_relative_path=_TELEGRAM_TRIGGER_MODE_PATH,
-        ),
-        "telegram_messages": _resolve_source_path(
-            repo_root=repo_root,
-            repo_relative_path=_TELEGRAM_MESSAGES_PATH,
-        ),
+        name: _resolve_source_path(repo_root=repo_root, repo_relative_path=path)
+        for name, path in _SOURCE_FILE_MAP.items()
     }
-    if repo_root is None and any(path is None for path in source_paths.values()):
-        missing = [name for name, path in source_paths.items() if path is None]
+    if repo_root is None and any(
+        source_paths.get(key) is None for key in _REQUIRED_SOURCE_KEYS
+    ):
+        missing = [
+            key for key in _REQUIRED_SOURCE_KEYS if source_paths.get(key) is None
+        ]
         return _source_unavailable_results(missing=missing)
 
-    discord_service_text = _read_text(source_paths["discord_service"])
-    discord_car_dispatch_text = _read_text(
-        _resolve_source_path(
-            repo_root=repo_root,
-            repo_relative_path=_DISCORD_CAR_DISPATCH_PATH,
-        )
-    )
-    discord_interaction_dispatch_text = _read_text(
-        _resolve_source_path(
-            repo_root=repo_root,
-            repo_relative_path=_DISCORD_INTERACTION_DISPATCH_PATH,
-        )
-    )
-    discord_ingress_text = _read_text(
-        _resolve_source_path(
-            repo_root=repo_root,
-            repo_relative_path=_DISCORD_INGRESS_PATH,
-        )
-    )
-    discord_interaction_registry_text = _read_text(
-        _resolve_source_path(
-            repo_root=repo_root,
-            repo_relative_path=_DISCORD_INTERACTION_REGISTRY_PATH,
-        )
-    )
-    discord_interaction_component_handlers_text = _read_text(
-        _resolve_source_path(
-            repo_root=repo_root,
-            repo_relative_path=_DISCORD_INTERACTION_COMPONENT_HANDLERS_PATH,
-        )
-    )
-    telegram_trigger_mode_text = _read_text(source_paths["telegram_trigger_mode"])
-    telegram_messages_text = _read_text(source_paths["telegram_messages"])
-    telegram_message_policy_text = _read_text(
-        _resolve_source_path(
-            repo_root=repo_root,
-            repo_relative_path=_TELEGRAM_MESSAGE_POLICY_PATH,
-        )
-    )
-    discord_commands_text = _read_text(
-        _resolve_source_path(
-            repo_root=repo_root,
-            repo_relative_path=_DISCORD_COMMANDS_PATH,
-        )
-    )
-    telegram_commands_spec_text = _read_text(
-        _resolve_source_path(
-            repo_root=repo_root,
-            repo_relative_path=_TELEGRAM_COMMANDS_SPEC_PATH,
-        )
-    )
-
-    discord_service_ast = _parse_module(discord_service_text)
-    discord_car_dispatch_ast = _parse_module(discord_car_dispatch_text)
-    discord_interaction_dispatch_ast = _parse_module(discord_interaction_dispatch_text)
-    discord_ingress_ast = _parse_module(discord_ingress_text)
-    discord_interaction_registry_ast = _parse_module(discord_interaction_registry_text)
-    discord_interaction_component_handlers_ast = _parse_module(
-        discord_interaction_component_handlers_text
-    )
-    telegram_trigger_mode_ast = _parse_module(telegram_trigger_mode_text)
-    telegram_messages_ast = _parse_module(telegram_messages_text)
-    telegram_message_policy_ast = _parse_module(telegram_message_policy_text)
-    discord_commands_ast = _parse_module(discord_commands_text)
-    telegram_commands_spec_ast = _parse_module(telegram_commands_spec_text)
+    a = {name: _parse_module(_read_text(path)) for name, path in source_paths.items()}
 
     return (
         _check_contract_discord_metadata_complete(contract=contract),
@@ -175,38 +139,40 @@ def run_parity_checks(
         ),
         _check_contract_registry_entries_cataloged(
             contract=contract,
-            discord_commands_ast=discord_commands_ast,
-            discord_interaction_registry_ast=discord_interaction_registry_ast,
-            telegram_commands_spec_ast=telegram_commands_spec_ast,
+            discord_commands_ast=a["discord_commands"],
+            discord_interaction_registry_ast=a["discord_interaction_registry"],
+            telegram_commands_spec_ast=a["telegram_commands_spec"],
         ),
         _check_discord_contract_commands_routed(
             contract=contract,
-            discord_service_ast=discord_service_ast,
-            discord_car_dispatch_ast=discord_car_dispatch_ast,
-            discord_interaction_registry_ast=discord_interaction_registry_ast,
+            discord_service_ast=a["discord_service"],
+            discord_car_dispatch_ast=a["discord_car_dispatch"],
+            discord_interaction_registry_ast=a["discord_interaction_registry"],
         ),
         _check_discord_known_commands_not_in_generic_fallback(
-            discord_service_ast=discord_service_ast,
-            discord_car_dispatch_ast=discord_car_dispatch_ast,
-            discord_interaction_dispatch_ast=discord_interaction_dispatch_ast,
-            discord_interaction_registry_ast=discord_interaction_registry_ast,
+            discord_service_ast=a["discord_service"],
+            discord_car_dispatch_ast=a["discord_car_dispatch"],
+            discord_interaction_dispatch_ast=a["discord_interaction_dispatch"],
+            discord_interaction_registry_ast=a["discord_interaction_registry"],
         ),
         _check_discord_canonicalize_command_ingress_usage(
-            discord_service_ast=discord_service_ast,
-            discord_interaction_dispatch_ast=discord_interaction_dispatch_ast,
-            discord_ingress_ast=discord_ingress_ast,
+            discord_service_ast=a["discord_service"],
+            discord_interaction_dispatch_ast=a["discord_interaction_dispatch"],
+            discord_ingress_ast=a["discord_ingress"],
         ),
         _check_discord_interaction_component_guard_paths(
-            discord_service_ast=discord_service_ast,
-            discord_interaction_dispatch_ast=discord_interaction_dispatch_ast,
-            discord_interaction_registry_ast=discord_interaction_registry_ast,
-            discord_interaction_component_handlers_ast=discord_interaction_component_handlers_ast,
+            discord_service_ast=a["discord_service"],
+            discord_interaction_dispatch_ast=a["discord_interaction_dispatch"],
+            discord_interaction_registry_ast=a["discord_interaction_registry"],
+            discord_interaction_component_handlers_ast=a[
+                "discord_interaction_component_handlers"
+            ],
         ),
         _check_shared_plain_text_turn_policy_usage(
-            discord_service_ast=discord_service_ast,
-            telegram_trigger_mode_ast=telegram_trigger_mode_ast,
-            telegram_messages_ast=telegram_messages_ast,
-            telegram_message_policy_ast=telegram_message_policy_ast,
+            discord_service_ast=a["discord_service"],
+            telegram_trigger_mode_ast=a["telegram_trigger_mode"],
+            telegram_messages_ast=a["telegram_messages"],
+            telegram_message_policy_ast=a["telegram_message_policy"],
         ),
         _check_chat_ux_latency_budget_contract_complete(
             ux_latency_budgets=ux_latency_budgets
@@ -293,73 +259,9 @@ def _source_unavailable_results(
         "reason": "source_files_unavailable",
         "missing_sources": list(missing),
     }
-    return (
-        ParityCheckResult(
-            id="contract.discord_metadata_complete",
-            passed=True,
-            message=message,
-            metadata=metadata,
-        ),
-        ParityCheckResult(
-            id="contract.telegram_metadata_complete",
-            passed=True,
-            message=message,
-            metadata=metadata,
-        ),
-        ParityCheckResult(
-            id="contract.shared_action_ux_complete",
-            passed=True,
-            message=message,
-            metadata=metadata,
-        ),
-        ParityCheckResult(
-            id="contract.registry_entries_cataloged",
-            passed=True,
-            message=message,
-            metadata=metadata,
-        ),
-        ParityCheckResult(
-            id="discord.contract_commands_routed",
-            passed=True,
-            message=message,
-            metadata=metadata,
-        ),
-        ParityCheckResult(
-            id="discord.no_generic_fallback_leak",
-            passed=True,
-            message=message,
-            metadata=metadata,
-        ),
-        ParityCheckResult(
-            id="discord.canonical_command_ingress_usage",
-            passed=True,
-            message=message,
-            metadata=metadata,
-        ),
-        ParityCheckResult(
-            id="discord.interaction_component_guard_paths",
-            passed=True,
-            message=message,
-            metadata=metadata,
-        ),
-        ParityCheckResult(
-            id="chat.shared_plain_text_turn_policy_usage",
-            passed=True,
-            message=message,
-            metadata=metadata,
-        ),
-        ParityCheckResult(
-            id="chat.ux_latency_budget_contract_complete",
-            passed=True,
-            message=message,
-            metadata=metadata,
-        ),
-        ParityCheckResult(
-            id="chat.ux_regression_contract_complete",
-            passed=True,
-            message=message,
-            metadata=metadata,
-        ),
+    return tuple(
+        ParityCheckResult(id=check_id, passed=True, message=message, metadata=metadata)
+        for check_id in _SKIPPED_CHECK_IDS
     )
 
 
@@ -810,19 +712,10 @@ def _check_discord_known_commands_not_in_generic_fallback(
     discord_interaction_dispatch_ast: ast.Module | None = None,
     discord_interaction_registry_ast: ast.Module | None = None,
 ) -> ParityCheckResult:
-    normalized_handlers = (
-        _find_functions_by_name(
-            discord_interaction_dispatch_ast,
-            "handle_normalized_interaction",
-        )
-        or _find_functions_by_name(
-            discord_interaction_dispatch_ast,
-            "execute_ingressed_interaction",
-        )
-        or _find_functions_by_name(
-            discord_service_ast,
-            "_handle_normalized_interaction",
-        )
+    normalized_handlers = _fallback_find_functions(
+        (discord_interaction_dispatch_ast, "handle_normalized_interaction"),
+        (discord_interaction_dispatch_ast, "execute_ingressed_interaction"),
+        (discord_service_ast, "_handle_normalized_interaction"),
     )
 
     legacy_checks = {
@@ -836,32 +729,20 @@ def _check_discord_known_commands_not_in_generic_fallback(
             prefix="pma",
             require_ingress_not_none=True,
         ),
-        "generic_fallback_present": _module_has_string_literal(
-            discord_service_ast,
-            exact="Command not implemented yet for Discord.",
-        )
-        or _module_has_string_literal(
-            discord_interaction_dispatch_ast,
+        "generic_fallback_present": _any_module_has_string_literal(
+            (discord_service_ast, discord_interaction_dispatch_ast),
             exact="Command not implemented yet for Discord.",
         ),
-        "car_specific_fallback_present": _module_has_string_literal(
-            discord_service_ast,
-            contains="Unknown car subcommand:",
-        )
-        or _module_has_string_literal(
-            discord_car_dispatch_ast,
-            contains="Unknown car subcommand:",
-        )
-        or _module_has_string_literal(
-            discord_interaction_registry_ast,
+        "car_specific_fallback_present": _any_module_has_string_literal(
+            (
+                discord_service_ast,
+                discord_car_dispatch_ast,
+                discord_interaction_registry_ast,
+            ),
             contains="Unknown car subcommand:",
         ),
-        "pma_specific_fallback_present": _module_has_string_literal(
-            discord_service_ast,
-            exact="Unknown PMA subcommand. Use on, off, or status.",
-        )
-        or _module_has_string_literal(
-            discord_interaction_registry_ast,
+        "pma_specific_fallback_present": _any_module_has_string_literal(
+            (discord_service_ast, discord_interaction_registry_ast),
             exact="Unknown PMA subcommand. Use on, off, or status.",
         ),
     }
@@ -917,16 +798,9 @@ def _check_discord_canonicalize_command_ingress_usage(
         discord_ingress_ast,
         "_normalize",
     )
-    normalized_handlers = (
-        ingress_handlers
-        or _find_functions_by_name(
-            discord_interaction_dispatch_ast,
-            "handle_normalized_interaction",
-        )
-        or _find_functions_by_name(
-            discord_service_ast,
-            "_handle_normalized_interaction",
-        )
+    normalized_handlers = ingress_handlers or _fallback_find_functions(
+        (discord_interaction_dispatch_ast, "handle_normalized_interaction"),
+        (discord_service_ast, "_handle_normalized_interaction"),
     )
 
     source_ast = (
@@ -1198,12 +1072,9 @@ def _check_discord_interaction_component_guard_paths(
     discord_interaction_registry_ast: ast.Module | None = None,
     discord_interaction_component_handlers_ast: ast.Module | None = None,
 ) -> ParityCheckResult:
-    normalized_interaction_handlers = _find_functions_by_name(
-        discord_interaction_dispatch_ast,
-        "handle_normalized_interaction",
-    ) or _find_functions_by_name(
-        discord_service_ast,
-        "_handle_normalized_interaction",
+    normalized_interaction_handlers = _fallback_find_functions(
+        (discord_interaction_dispatch_ast, "handle_normalized_interaction"),
+        (discord_service_ast, "_handle_normalized_interaction"),
     )
     execute_handlers = _find_functions_by_name(
         discord_interaction_dispatch_ast,
@@ -1215,26 +1086,20 @@ def _check_discord_interaction_component_guard_paths(
     )
     interaction_handlers = normalized_interaction_handlers or execute_handlers
 
-    normalized_component_handlers = _find_functions_by_name(
-        discord_interaction_dispatch_ast,
-        "handle_component_interaction",
-    ) or _find_functions_by_name(
-        discord_service_ast,
-        "_handle_component_interaction_normalized",
+    normalized_component_handlers = _fallback_find_functions(
+        (discord_interaction_dispatch_ast, "handle_component_interaction"),
+        (discord_service_ast, "_handle_component_interaction_normalized"),
     )
-    bind_select_handlers = _find_functions_by_name(
-        discord_interaction_component_handlers_ast,
-        "_handle_bind_select_component",
-    ) or _find_functions_by_name(
-        discord_interaction_registry_ast,
-        "_handle_bind_select_component",
+    bind_select_handlers = _fallback_find_functions(
+        (discord_interaction_component_handlers_ast, "_handle_bind_select_component"),
+        (discord_interaction_registry_ast, "_handle_bind_select_component"),
     )
-    flow_runs_select_handlers = _find_functions_by_name(
-        discord_interaction_component_handlers_ast,
-        "_handle_flow_runs_select_component",
-    ) or _find_functions_by_name(
-        discord_interaction_registry_ast,
-        "_handle_flow_runs_select_component",
+    flow_runs_select_handlers = _fallback_find_functions(
+        (
+            discord_interaction_component_handlers_ast,
+            "_handle_flow_runs_select_component",
+        ),
+        (discord_interaction_registry_ast, "_handle_flow_runs_select_component"),
     )
     component_dispatch_handlers = _find_functions_by_name(
         discord_interaction_registry_ast,
@@ -1292,11 +1157,6 @@ def _check_discord_interaction_component_guard_paths(
             ),
         ),
         "interaction_unhandled_error_response": _has_call_with_string_argument(
-            interaction_handlers,
-            callee_name="respond_ephemeral",
-            exact="An unexpected error occurred. Please try again later.",
-        )
-        or _has_call_with_string_argument(
             interaction_handlers,
             callee_name="respond_ephemeral",
             exact="An unexpected error occurred. Please try again later.",
@@ -1358,11 +1218,6 @@ def _check_discord_interaction_component_guard_paths(
             event_names=(component_unhandled_error_event,),
         ),
         "component_unhandled_error_response": _has_call_with_string_argument(
-            component_handlers,
-            callee_name="respond_ephemeral",
-            exact="An unexpected error occurred. Please try again later.",
-        )
-        or _has_call_with_string_argument(
             component_handlers,
             callee_name="respond_ephemeral",
             exact="An unexpected error occurred. Please try again later.",
@@ -1715,6 +1570,28 @@ def _tuple_expr_matches_path(expr: ast.expr, path: tuple[str, ...]) -> bool:
 
 def _render_command_path(path: tuple[str, ...]) -> str:
     return ":".join(path)
+
+
+def _fallback_find_functions(
+    *specs: tuple[ast.Module | None, str],
+) -> tuple[ast.FunctionDef | ast.AsyncFunctionDef, ...]:
+    for tree, name in specs:
+        result = _find_functions_by_name(tree, name)
+        if result:
+            return result
+    return ()
+
+
+def _any_module_has_string_literal(
+    trees: Sequence[ast.Module | None],
+    *,
+    exact: str | None = None,
+    contains: str | None = None,
+) -> bool:
+    return any(
+        _module_has_string_literal(tree, exact=exact, contains=contains)
+        for tree in trees
+    )
 
 
 def _find_functions_by_name(
