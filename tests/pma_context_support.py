@@ -76,6 +76,28 @@ def _write_hub_config(hub_root: Path, data: dict) -> None:
     config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
 
 
+def _format_seeded_pma_prompt(
+    hub_root: Path,
+    *,
+    snapshot: Optional[dict] = None,
+    base_prompt: str = "Base prompt",
+    message: str = "User message",
+    seed_hub: bool = True,
+    seed_force: bool = True,
+    include_workspace_docs: bool = True,
+    **prompt_kwargs,
+) -> str:
+    if seed_hub:
+        seed_hub_files(hub_root, force=seed_force)
+    return format_pma_prompt(
+        base_prompt,
+        _STUB_SNAPSHOT if snapshot is None else snapshot,
+        message,
+        hub_root=hub_root if include_workspace_docs else None,
+        **prompt_kwargs,
+    )
+
+
 def _seed_paused_run(repo_root: Path, run_id: str) -> None:
     db_path = repo_root / ".codex-autorunner" / "flows.db"
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -245,13 +267,7 @@ def test_consumed_pma_files_do_not_appear_in_action_queue(tmp_path: Path) -> Non
 
 def test_format_pma_prompt_includes_workspace_docs(tmp_path: Path) -> None:
     """Test that format_pma_prompt with hub_root includes the PMA docs block."""
-    seed_hub_files(tmp_path, force=True)
-
-    snapshot = _STUB_SNAPSHOT
-    base_prompt = "Base prompt"
-    message = "User message"
-
-    result = format_pma_prompt(base_prompt, snapshot, message, hub_root=tmp_path)
+    result = _format_seeded_pma_prompt(tmp_path)
 
     assert "<pma_workspace_docs>" in result
     assert "</pma_workspace_docs>" in result
@@ -259,13 +275,7 @@ def test_format_pma_prompt_includes_workspace_docs(tmp_path: Path) -> None:
 
 def test_format_pma_prompt_includes_agents_section(tmp_path: Path) -> None:
     """Test that AGENTS.md content is included in the prompt."""
-    seed_hub_files(tmp_path, force=True)
-
-    snapshot = _STUB_SNAPSHOT
-    base_prompt = "Base prompt"
-    message = "User message"
-
-    result = format_pma_prompt(base_prompt, snapshot, message, hub_root=tmp_path)
+    result = _format_seeded_pma_prompt(tmp_path)
 
     assert "<AGENTS_MD>" in result
     assert "</AGENTS_MD>" in result
@@ -274,13 +284,7 @@ def test_format_pma_prompt_includes_agents_section(tmp_path: Path) -> None:
 
 def test_format_pma_prompt_includes_active_context_section(tmp_path: Path) -> None:
     """Test that active_context.md content is included in the prompt."""
-    seed_hub_files(tmp_path, force=True)
-
-    snapshot = _STUB_SNAPSHOT
-    base_prompt = "Base prompt"
-    message = "User message"
-
-    result = format_pma_prompt(base_prompt, snapshot, message, hub_root=tmp_path)
+    result = _format_seeded_pma_prompt(tmp_path)
 
     assert "<ACTIVE_CONTEXT_MD>" in result
     assert "</ACTIVE_CONTEXT_MD>" in result
@@ -289,13 +293,7 @@ def test_format_pma_prompt_includes_active_context_section(tmp_path: Path) -> No
 
 def test_format_pma_prompt_includes_budget_metadata(tmp_path: Path) -> None:
     """Test that active_context_budget metadata is included in the prompt."""
-    seed_hub_files(tmp_path, force=True)
-
-    snapshot = _STUB_SNAPSHOT
-    base_prompt = "Base prompt"
-    message = "User message"
-
-    result = format_pma_prompt(base_prompt, snapshot, message, hub_root=tmp_path)
+    result = _format_seeded_pma_prompt(tmp_path)
 
     assert "<ACTIVE_CONTEXT_BUDGET" in result
     assert "lines='200'" in result
@@ -305,13 +303,7 @@ def test_format_pma_prompt_includes_budget_metadata(tmp_path: Path) -> None:
 
 def test_format_pma_prompt_includes_context_log_tail(tmp_path: Path) -> None:
     """Test that context_log_tail.md section is included in the prompt."""
-    seed_hub_files(tmp_path, force=True)
-
-    snapshot = _STUB_SNAPSHOT
-    base_prompt = "Base prompt"
-    message = "User message"
-
-    result = format_pma_prompt(base_prompt, snapshot, message, hub_root=tmp_path)
+    result = _format_seeded_pma_prompt(tmp_path)
 
     assert "<CONTEXT_LOG_TAIL_MD>" in result
     assert "</CONTEXT_LOG_TAIL_MD>" in result
@@ -320,11 +312,9 @@ def test_format_pma_prompt_includes_context_log_tail(tmp_path: Path) -> None:
 
 def test_format_pma_prompt_without_hub_root(tmp_path: Path) -> None:
     """Test that format_pma_prompt without hub_root does not include PMA docs."""
-    snapshot = _STUB_SNAPSHOT
-    base_prompt = "Base prompt"
-    message = "User message"
-
-    result = format_pma_prompt(base_prompt, snapshot, message, hub_root=None)
+    result = _format_seeded_pma_prompt(
+        tmp_path, seed_hub=False, include_workspace_docs=False
+    )
 
     assert "<pma_workspace_docs>" not in result
     assert "</pma_workspace_docs>" not in result
@@ -335,17 +325,11 @@ def test_format_pma_prompt_load_failure_still_includes_fastpath(
     tmp_path: Path,
 ) -> None:
     """Fastpath remains available even when PMA docs cannot be loaded."""
-    seed_hub_files(tmp_path, force=True)
-
-    snapshot = _STUB_SNAPSHOT
-    base_prompt = "Base prompt"
-    message = "User message"
-
     with patch(
         "codex_autorunner.core.pma_context.load_pma_workspace_docs",
         side_effect=RuntimeError("boom"),
     ):
-        result = format_pma_prompt(base_prompt, snapshot, message, hub_root=tmp_path)
+        result = _format_seeded_pma_prompt(tmp_path)
 
     assert "<pma_workspace_docs>" not in result
     assert "</pma_workspace_docs>" not in result
@@ -372,11 +356,7 @@ def test_truncation_applied_to_long_agents(tmp_path: Path) -> None:
         },
     )
 
-    snapshot = _STUB_SNAPSHOT
-    base_prompt = "Base prompt"
-    message = "User message"
-
-    result = format_pma_prompt(base_prompt, snapshot, message, hub_root=tmp_path)
+    result = _format_seeded_pma_prompt(tmp_path, seed_hub=False)
 
     assert len(result) > 0
     assert "..." in result
@@ -404,11 +384,7 @@ def test_truncation_applied_to_long_active_context(tmp_path: Path) -> None:
         },
     )
 
-    snapshot = _STUB_SNAPSHOT
-    base_prompt = "Base prompt"
-    message = "User message"
-
-    result = format_pma_prompt(base_prompt, snapshot, message, hub_root=tmp_path)
+    result = _format_seeded_pma_prompt(tmp_path, seed_hub=False)
 
     assert len(result) > 0
     assert "..." in result
@@ -436,11 +412,7 @@ def test_context_log_tail_lines(tmp_path: Path) -> None:
         },
     )
 
-    snapshot = _STUB_SNAPSHOT
-    base_prompt = "Base prompt"
-    message = "User message"
-
-    result = format_pma_prompt(base_prompt, snapshot, message, hub_root=tmp_path)
+    result = _format_seeded_pma_prompt(tmp_path, seed_hub=False)
 
     assert "<CONTEXT_LOG_TAIL_MD>" in result
     assert "line 3" in result
@@ -474,11 +446,7 @@ def test_context_log_tail_lines_one(tmp_path: Path) -> None:
     log_lines = ["line 1", "line 2", "line 3"]
     context_log_path.write_text("\n".join(log_lines), encoding="utf-8")
 
-    snapshot = _STUB_SNAPSHOT
-    base_prompt = "Base prompt"
-    message = "User message"
-
-    result = format_pma_prompt(base_prompt, snapshot, message, hub_root=tmp_path)
+    result = _format_seeded_pma_prompt(tmp_path, seed_hub=False)
 
     assert "<CONTEXT_LOG_TAIL_MD>" in result
     assert "</CONTEXT_LOG_TAIL_MD>" in result
@@ -494,8 +462,6 @@ def test_context_log_tail_lines_one(tmp_path: Path) -> None:
 
 def test_format_pma_prompt_includes_hub_snapshot_and_message(tmp_path: Path) -> None:
     """Test that hub_snapshot and user_message sections are always included."""
-    seed_hub_files(tmp_path, force=True)
-
     snapshot = {
         "inbox": [
             {
@@ -513,10 +479,7 @@ def test_format_pma_prompt_includes_hub_snapshot_and_message(tmp_path: Path) -> 
             }
         ]
     }
-    base_prompt = "Base prompt"
-    message = "User message"
-
-    result = format_pma_prompt(base_prompt, snapshot, message, hub_root=tmp_path)
+    result = _format_seeded_pma_prompt(tmp_path, snapshot=snapshot)
 
     assert "<hub_snapshot>" in result
     assert "Run Dispatches (paused runs needing attention):" in result
@@ -559,11 +522,7 @@ def test_format_pma_prompt_with_custom_agent_content(tmp_path: Path) -> None:
     custom_content = "# Custom AGENTS\n\nThis is custom content."
     agents_path.write_text(custom_content, encoding="utf-8")
 
-    snapshot = _STUB_SNAPSHOT
-    base_prompt = "Base prompt"
-    message = "User message"
-
-    result = format_pma_prompt(base_prompt, snapshot, message, hub_root=tmp_path)
+    result = _format_seeded_pma_prompt(tmp_path, seed_hub=False)
 
     assert "Custom AGENTS" in result
     assert "This is custom content" in result
@@ -591,11 +550,7 @@ def test_active_context_line_count_reflected_in_metadata(tmp_path: Path) -> None
         },
     )
 
-    snapshot = _STUB_SNAPSHOT
-    base_prompt = "Base prompt"
-    message = "User message"
-
-    result = format_pma_prompt(base_prompt, snapshot, message, hub_root=tmp_path)
+    result = _format_seeded_pma_prompt(tmp_path, seed_hub=False)
 
     assert "current_lines='3'" in result
 
@@ -626,9 +581,7 @@ def test_format_pma_prompt_auto_prunes_active_context_when_over_budget(
         },
     )
 
-    result = format_pma_prompt(
-        "Base prompt", _STUB_SNAPSHOT, "hello", hub_root=tmp_path
-    )
+    result = _format_seeded_pma_prompt(tmp_path, message="hello", seed_hub=False)
 
     pruned_active = active_context_path.read_text(encoding="utf-8")
     assert "Auto-pruned on" in pruned_active
@@ -1751,13 +1704,7 @@ def test_render_hub_snapshot_empty_both(tmp_path: Path) -> None:
 
 
 def test_format_pma_prompt_includes_filebox_paths(tmp_path: Path) -> None:
-    seed_hub_files(tmp_path, force=True)
-
-    snapshot = _STUB_SNAPSHOT
-    base_prompt = "Base prompt"
-    message = "User message"
-
-    result = format_pma_prompt(base_prompt, snapshot, message, hub_root=tmp_path)
+    result = _format_seeded_pma_prompt(tmp_path)
 
     assert ".codex-autorunner/filebox/outbox/" in result
     assert ".codex-autorunner/filebox/inbox/" in result
@@ -1766,11 +1713,7 @@ def test_format_pma_prompt_includes_filebox_paths(tmp_path: Path) -> None:
 def test_format_pma_prompt_includes_ticket_template_discoverability(
     tmp_path: Path,
 ) -> None:
-    seed_hub_files(tmp_path, force=True)
-
-    result = format_pma_prompt(
-        "Base prompt", _STUB_SNAPSHOT, "User message", hub_root=tmp_path
-    )
+    result = _format_seeded_pma_prompt(tmp_path)
 
     assert "car templates list --repo <path>" in result
     assert "car templates search <query> --repo <path>" in result
