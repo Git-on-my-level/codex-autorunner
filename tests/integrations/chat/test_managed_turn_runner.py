@@ -58,6 +58,123 @@ def _build_started_execution(
     )
 
 
+@pytest.mark.parametrize(
+    ("queued", "expected_state", "expected_action"),
+    [
+        (
+            False,
+            managed_turn_runner_module.ManagedSurfaceTurnState.RUNNING,
+            "complete_execution",
+        ),
+        (
+            True,
+            managed_turn_runner_module.ManagedSurfaceTurnState.QUEUED,
+            "emit_queued",
+        ),
+    ],
+)
+def test_managed_surface_turn_submission_state_machine(
+    tmp_path: Path,
+    queued: bool,
+    expected_state: Any,
+    expected_action: str,
+) -> None:
+    started = _build_started_execution(
+        tmp_path,
+        status="queued" if queued else "running",
+    )
+    transition = (
+        managed_turn_runner_module.managed_surface_turn_transition_after_submission(
+            ManagedThreadSubmissionResult(
+                started_execution=started,
+                queued=queued,
+            )
+        )
+    )
+
+    assert (
+        transition.state
+        == managed_turn_runner_module.ManagedSurfaceTurnState.SUBMITTING
+    )
+    assert (
+        transition.trigger
+        == managed_turn_runner_module.ManagedSurfaceTurnTrigger.SUBMISSION_ACCEPTED
+    )
+    assert transition.next_state == expected_state
+    assert transition.action == expected_action
+
+
+@pytest.mark.parametrize(
+    ("queued", "finalized", "expected_state", "expected_action"),
+    [
+        (
+            True,
+            None,
+            managed_turn_runner_module.ManagedSurfaceTurnState.QUEUED,
+            "emit_queued",
+        ),
+        (
+            False,
+            ManagedThreadFinalizationResult(
+                status="ok",
+                assistant_text="done",
+                error=None,
+                managed_thread_id="thread-1",
+                managed_turn_id="exec-1",
+                backend_thread_id="backend-thread-1",
+            ),
+            managed_turn_runner_module.ManagedSurfaceTurnState.FINALIZED,
+            "emit_finalized",
+        ),
+    ],
+)
+def test_managed_surface_turn_execution_flow_state_machine(
+    tmp_path: Path,
+    queued: bool,
+    finalized: ManagedThreadFinalizationResult | None,
+    expected_state: Any,
+    expected_action: str,
+) -> None:
+    started = _build_started_execution(
+        tmp_path,
+        status="queued" if queued else "running",
+    )
+    transition = (
+        managed_turn_runner_module.managed_surface_turn_transition_after_execution_flow(
+            ManagedThreadExecutionFlowResult(
+                started_execution=started,
+                queued=queued,
+                finalized=finalized,
+            )
+        )
+    )
+
+    assert (
+        transition.state == managed_turn_runner_module.ManagedSurfaceTurnState.RUNNING
+    )
+    assert (
+        transition.trigger
+        == managed_turn_runner_module.ManagedSurfaceTurnTrigger.EXECUTION_FLOW_RESOLVED
+    )
+    assert transition.next_state == expected_state
+    assert transition.action == expected_action
+
+
+def test_managed_surface_turn_execution_flow_requires_finalized_result(
+    tmp_path: Path,
+) -> None:
+    started = _build_started_execution(tmp_path)
+
+    with pytest.raises(RuntimeError, match="finalized without a result"):
+        managed_turn_runner_module.managed_surface_turn_transition_after_execution_flow(
+            ManagedThreadExecutionFlowResult(
+                started_execution=started,
+                queued=False,
+                finalized=None,
+            )
+        )
+
+
 @pytest.mark.anyio
 async def test_run_managed_surface_turn_routes_queued_turns_through_shared_queue_worker(
     tmp_path: Path,

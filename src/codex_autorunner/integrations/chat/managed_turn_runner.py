@@ -4,7 +4,18 @@ import asyncio
 import inspect
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Generic, Mapping, Optional, TypeVar, cast
+from enum import Enum
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    Generic,
+    Literal,
+    Mapping,
+    Optional,
+    TypeVar,
+    cast,
+)
 
 from ...core.orchestration.managed_thread_delivery import ManagedThreadDeliveryState
 from ...core.orchestration.runtime_thread_events import RuntimeThreadRunEventState
@@ -25,6 +36,57 @@ from .managed_thread_turns import (
 _runner_logger = logging.getLogger(__name__)
 
 SurfaceResultT = TypeVar("SurfaceResultT")
+
+
+class ManagedSurfaceTurnState(Enum):
+    SUBMITTING = "submitting"
+    RUNNING = "running"
+    QUEUED = "queued"
+    FINALIZED = "finalized"
+
+
+class ManagedSurfaceTurnTrigger(Enum):
+    SUBMISSION_ACCEPTED = "submission_accepted"
+    EXECUTION_FLOW_RESOLVED = "execution_flow_resolved"
+
+
+ManagedSurfaceTurnAction = Literal[
+    "complete_execution", "emit_queued", "emit_finalized"
+]
+
+
+@dataclass(frozen=True)
+class ManagedSurfaceTurnTransition:
+    state: ManagedSurfaceTurnState
+    trigger: ManagedSurfaceTurnTrigger
+    next_state: ManagedSurfaceTurnState
+    action: ManagedSurfaceTurnAction
+
+
+_SUBMISSION_RUNNING_TRANSITION = ManagedSurfaceTurnTransition(
+    state=ManagedSurfaceTurnState.SUBMITTING,
+    trigger=ManagedSurfaceTurnTrigger.SUBMISSION_ACCEPTED,
+    next_state=ManagedSurfaceTurnState.RUNNING,
+    action="complete_execution",
+)
+_SUBMISSION_QUEUED_TRANSITION = ManagedSurfaceTurnTransition(
+    state=ManagedSurfaceTurnState.SUBMITTING,
+    trigger=ManagedSurfaceTurnTrigger.SUBMISSION_ACCEPTED,
+    next_state=ManagedSurfaceTurnState.QUEUED,
+    action="emit_queued",
+)
+_FLOW_QUEUED_TRANSITION = ManagedSurfaceTurnTransition(
+    state=ManagedSurfaceTurnState.RUNNING,
+    trigger=ManagedSurfaceTurnTrigger.EXECUTION_FLOW_RESOLVED,
+    next_state=ManagedSurfaceTurnState.QUEUED,
+    action="emit_queued",
+)
+_FLOW_FINALIZED_TRANSITION = ManagedSurfaceTurnTransition(
+    state=ManagedSurfaceTurnState.RUNNING,
+    trigger=ManagedSurfaceTurnTrigger.EXECUTION_FLOW_RESOLVED,
+    next_state=ManagedSurfaceTurnState.FINALIZED,
+    action="emit_finalized",
+)
 
 
 @dataclass(frozen=True)
@@ -94,6 +156,24 @@ def _coerce_execution_flow_result(
     )
 
 
+def managed_surface_turn_transition_after_submission(
+    submission: ManagedThreadSubmissionResult,
+) -> ManagedSurfaceTurnTransition:
+    if submission.queued:
+        return _SUBMISSION_QUEUED_TRANSITION
+    return _SUBMISSION_RUNNING_TRANSITION
+
+
+def managed_surface_turn_transition_after_execution_flow(
+    flow: ManagedThreadExecutionFlowResult,
+) -> ManagedSurfaceTurnTransition:
+    if flow.queued:
+        return _FLOW_QUEUED_TRANSITION
+    if coerce_managed_thread_finalization_result(flow.finalized) is None:
+        raise RuntimeError("Managed-thread turn finalized without a result")
+    return _FLOW_FINALIZED_TRANSITION
+
+
 async def run_managed_surface_turn(
     request: Any,
     *,
@@ -155,7 +235,10 @@ async def run_managed_surface_turn(
                     submission,
                     exc,
                 )
-        if submission.queued:
+        submission_transition = managed_surface_turn_transition_after_submission(
+            submission
+        )
+        if submission_transition.action == "emit_queued":
             if config.queue is not None:
                 _ensure_queue_worker()
             finalized_flow = ManagedThreadExecutionFlowResult(
@@ -178,7 +261,10 @@ async def run_managed_surface_turn(
                 ),
                 submission=submission,
             )
-        if finalized_flow.queued:
+        flow_transition = managed_surface_turn_transition_after_execution_flow(
+            finalized_flow
+        )
+        if flow_transition.action == "emit_queued":
             if config.on_queued is None:
                 raise RuntimeError("Queued managed-surface turn requires on_queued")
             return cast(
