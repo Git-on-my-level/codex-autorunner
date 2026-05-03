@@ -1534,9 +1534,9 @@ async def _best_effort_hub_call(
     hub_client: Any = None,
     require_hub_client: bool = False,
 ) -> Any:
-    if require_hub_client and hub_client is None:
-        raise RuntimeError("Hub control-plane client unavailable")
     try:
+        if require_hub_client and hub_client is None:
+            raise RuntimeError("Hub control-plane client unavailable")
         return await awaitable
     except asyncio.CancelledError:
         kw: dict[str, Any] = dict(trace_fields)
