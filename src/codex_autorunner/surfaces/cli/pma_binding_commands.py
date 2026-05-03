@@ -1,6 +1,5 @@
 """PMA binding CLI commands (non-thread binding queries)."""
 
-import json
 from pathlib import Path
 from typing import Optional
 
@@ -9,6 +8,7 @@ import typer
 
 from ...core.config import load_hub_config
 from .hub_path_option import hub_root_path_option
+from .output import echo_json, exit_with_error
 from .pma_control_plane import (
     build_pma_url,
     format_resource_owner_label,
@@ -75,14 +75,12 @@ def pma_binding_list(
             params=params,
         )
     except httpx.HTTPError as exc:
-        typer.echo(f"HTTP error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
+        exit_with_error(f"HTTP error: {exc}", cause=None)
     except (ValueError, OSError) as exc:  # intentional: top-level error handler
-        typer.echo(f"Error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
+        exit_with_error(f"Error: {exc}", cause=None)
 
     if output_json:
-        typer.echo(json.dumps(data, indent=2))
+        echo_json(data)
         return
 
     bindings = data.get("bindings", []) if isinstance(data, dict) else []
@@ -131,14 +129,12 @@ def pma_binding_active(
             token_env=config.server_auth_token_env,
         )
     except httpx.HTTPError as exc:
-        typer.echo(f"HTTP error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
+        exit_with_error(f"HTTP error: {exc}", cause=None)
     except (ValueError, OSError) as exc:  # intentional: top-level error handler
-        typer.echo(f"Error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
+        exit_with_error(f"Error: {exc}", cause=None)
 
     if output_json:
-        typer.echo(json.dumps(data, indent=2))
+        echo_json(data)
         return
 
     thread_target_id = data.get("thread_target_id")
@@ -191,14 +187,12 @@ def pma_binding_work(
             params=params,
         )
     except httpx.HTTPError as exc:
-        typer.echo(f"HTTP error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
+        exit_with_error(f"HTTP error: {exc}", cause=None)
     except (ValueError, OSError) as exc:  # intentional: top-level error handler
-        typer.echo(f"Error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
+        exit_with_error(f"Error: {exc}", cause=None)
 
     if output_json:
-        typer.echo(json.dumps(data, indent=2))
+        echo_json(data)
         return
 
     summaries = data.get("summaries", []) if isinstance(data, dict) else []

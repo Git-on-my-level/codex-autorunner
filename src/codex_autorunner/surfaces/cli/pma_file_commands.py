@@ -1,6 +1,5 @@
 """PMA file CLI commands (non-thread FileBox lifecycle commands)."""
 
-import json
 from pathlib import Path
 from typing import Any, Optional
 
@@ -15,6 +14,7 @@ from ...core.filebox_lifecycle import (
     unconsume_inbox_file,
 )
 from .hub_path_option import hub_root_path_option
+from .output import echo_json, exit_with_error
 from .pma_control_plane import resolve_hub_path
 
 
@@ -53,7 +53,7 @@ def _emit_pma_file_listing(
             ]
             for box in boxes
         }
-        typer.echo(json.dumps(payload, indent=2))
+        echo_json(payload)
         return
 
     for index, box in enumerate(boxes):
@@ -85,14 +85,11 @@ def pma_file_consume(
     try:
         entry = consume_inbox_file(hub_root, filename)
     except ValueError as exc:
-        typer.echo(f"Invalid filename: {exc}", err=True)
-        raise typer.Exit(code=1) from None
+        exit_with_error(f"Invalid filename: {exc}", cause=None)
     except FileNotFoundError as exc:
-        typer.echo(str(exc), err=True)
-        raise typer.Exit(code=1) from None
+        exit_with_error(str(exc), cause=None)
     except FileExistsError as exc:
-        typer.echo(str(exc), err=True)
-        raise typer.Exit(code=1) from None
+        exit_with_error(str(exc), cause=None)
 
     typer.echo(f"Consumed {entry.name} -> {entry.box}")
 
@@ -106,14 +103,11 @@ def pma_file_dismiss(
     try:
         entry = dismiss_inbox_file(hub_root, filename)
     except ValueError as exc:
-        typer.echo(f"Invalid filename: {exc}", err=True)
-        raise typer.Exit(code=1) from None
+        exit_with_error(f"Invalid filename: {exc}", cause=None)
     except FileNotFoundError as exc:
-        typer.echo(str(exc), err=True)
-        raise typer.Exit(code=1) from None
+        exit_with_error(str(exc), cause=None)
     except FileExistsError as exc:
-        typer.echo(str(exc), err=True)
-        raise typer.Exit(code=1) from None
+        exit_with_error(str(exc), cause=None)
 
     typer.echo(f"Dismissed {entry.name} -> {entry.box}")
 
@@ -127,14 +121,11 @@ def pma_file_restore(
     try:
         entry = unconsume_inbox_file(hub_root, filename)
     except ValueError as exc:
-        typer.echo(f"Invalid filename: {exc}", err=True)
-        raise typer.Exit(code=1) from None
+        exit_with_error(f"Invalid filename: {exc}", cause=None)
     except FileNotFoundError as exc:
-        typer.echo(str(exc), err=True)
-        raise typer.Exit(code=1) from None
+        exit_with_error(str(exc), cause=None)
     except FileExistsError as exc:
-        typer.echo(str(exc), err=True)
-        raise typer.Exit(code=1) from None
+        exit_with_error(str(exc), cause=None)
 
     typer.echo(f"Restored {entry.name} -> {entry.box}")
 
@@ -151,11 +142,10 @@ def pma_file_list(
     """List PMA inbox and archived lifecycle files from the local FileBox."""
     normalized_box = str(box or "").strip().lower()
     if normalized_box not in {"inbox", *LIFECYCLE_BOXES, "all"}:
-        typer.echo(
+        exit_with_error(
             f"Box must be one of: {_file_lifecycle_box_choices_text()}",
-            err=True,
+            cause=None,
         )
-        raise typer.Exit(code=1) from None
 
     hub_root = resolve_hub_path(path)
     listing = _pma_file_listings(hub_root)

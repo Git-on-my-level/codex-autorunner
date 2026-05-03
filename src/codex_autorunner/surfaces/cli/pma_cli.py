@@ -20,6 +20,7 @@ from ...core.pma_hygiene import (
 )
 from .commands.utils import build_hub_supervisor
 from .hub_path_option import hub_root_path_option
+from .output import echo_json, exit_with_error
 from .pma_binding_commands import register_binding_commands
 from .pma_context_commands import register_context_commands
 from .pma_control_plane import (
@@ -233,11 +234,9 @@ def pma_chat(
                             typer.echo(f"\nInterrupted: {detail}")
                         return
         except httpx.HTTPError as exc:
-            typer.echo(f"HTTP error: {exc}", err=True)
-            raise typer.Exit(code=1) from None
+            exit_with_error(f"HTTP error: {exc}", cause=None)
         except (ValueError, OSError) as exc:  # intentional: top-level error handler
-            typer.echo(f"Error: {exc}", err=True)
-            raise typer.Exit(code=1) from None
+            exit_with_error(f"Error: {exc}", cause=None)
         return
 
     try:
@@ -245,22 +244,20 @@ def pma_chat(
             "POST", url, payload, token_env=config.server_auth_token_env
         )
     except httpx.HTTPError as exc:
-        typer.echo(f"HTTP error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
+        exit_with_error(f"HTTP error: {exc}", cause=None)
     except (ValueError, OSError) as exc:  # intentional: top-level error handler
-        typer.echo(f"Error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
+        exit_with_error(f"Error: {exc}", cause=None)
 
     error = _is_json_response_error(data)
     if error:
         if output_json:
-            typer.echo(json.dumps({"error": error, "detail": data}, indent=2))
+            echo_json({"error": error, "detail": data})
         else:
             typer.echo(f"Chat failed: {error}", err=True)
         raise typer.Exit(code=1) from None
 
     if output_json:
-        typer.echo(json.dumps(data, indent=2))
+        echo_json(data)
     else:
         msg = data.get("message") if isinstance(data, dict) else ""
         typer.echo(msg or "No message returned")
@@ -276,8 +273,7 @@ def pma_interrupt(
     try:
         config = load_hub_config(hub_root)
     except (OSError, ValueError) as exc:
-        typer.echo(f"Failed to load hub config: {exc}", err=True)
-        raise typer.Exit(code=1) from None
+        exit_with_error(f"Failed to load hub config: {exc}", cause=None)
 
     active_url = build_pma_url(config, "/active")
     try:
@@ -293,25 +289,22 @@ def pma_interrupt(
             capabilities = fetch_agent_capabilities(config, path)
             required_cap = CAPABILITY_REQUIREMENTS.get("interrupt")
             if required_cap and not check_capability(agent, required_cap, capabilities):
-                typer.echo(
+                exit_with_error(
                     f"Agent '{agent}' does not support interrupt (missing capability: {required_cap})",
-                    err=True,
+                    cause=None,
                 )
-                raise typer.Exit(code=1) from None
 
     url = build_pma_url(config, "/interrupt")
 
     try:
         data = request_json("POST", url, token_env=config.server_auth_token_env)
     except httpx.HTTPError as exc:
-        typer.echo(f"HTTP error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
+        exit_with_error(f"HTTP error: {exc}", cause=None)
     except (ValueError, OSError) as exc:  # intentional: top-level error handler
-        typer.echo(f"Error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
+        exit_with_error(f"Error: {exc}", cause=None)
 
     if output_json:
-        typer.echo(json.dumps(data, indent=2))
+        echo_json(data)
     else:
         response = PmaInterruptResponse.from_dict(data)
         if response.interrupted:
@@ -335,8 +328,7 @@ def pma_reset(
     try:
         config = load_hub_config(hub_root)
     except (OSError, ValueError) as exc:
-        typer.echo(f"Failed to load hub config: {exc}", err=True)
-        raise typer.Exit(code=1) from None
+        exit_with_error(f"Failed to load hub config: {exc}", cause=None)
 
     url = build_pma_url(config, "/thread/reset")
     payload: dict[str, Any] = {}
@@ -348,14 +340,12 @@ def pma_reset(
             "POST", url, payload, token_env=config.server_auth_token_env
         )
     except httpx.HTTPError as exc:
-        typer.echo(f"HTTP error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
+        exit_with_error(f"HTTP error: {exc}", cause=None)
     except (ValueError, OSError) as exc:  # intentional: top-level error handler
-        typer.echo(f"Error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
+        exit_with_error(f"Error: {exc}", cause=None)
 
     if output_json:
-        typer.echo(json.dumps(data, indent=2))
+        echo_json(data)
     else:
         response = PmaResetResponse.from_dict(data)
         if response.cleared:
@@ -377,8 +367,7 @@ def pma_active(
     try:
         config = load_hub_config(hub_root)
     except (OSError, ValueError) as exc:
-        typer.echo(f"Failed to load hub config: {exc}", err=True)
-        raise typer.Exit(code=1) from None
+        exit_with_error(f"Failed to load hub config: {exc}", cause=None)
 
     url = build_pma_url(config, "/active")
     params = {}
@@ -390,14 +379,12 @@ def pma_active(
         response.raise_for_status()
         data = response.json()
     except httpx.HTTPError as exc:
-        typer.echo(f"HTTP error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
+        exit_with_error(f"HTTP error: {exc}", cause=None)
     except (ValueError, OSError) as exc:  # intentional: top-level error handler
-        typer.echo(f"Error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
+        exit_with_error(f"Error: {exc}", cause=None)
 
     if output_json:
-        typer.echo(json.dumps(data, indent=2))
+        echo_json(data)
     else:
         active_response = PmaActiveResponse.from_dict(data)
         typer.echo(f"Active: {active_response.active}")
@@ -480,11 +467,9 @@ def pma_hygiene(
                     cleanup_worktree=_cleanup_worktree,
                 )
     except ValueError as exc:
-        typer.echo(str(exc), err=True)
-        raise typer.Exit(code=1) from None
+        exit_with_error(str(exc), cause=None)
     except OSError as exc:
-        typer.echo(f"Failed to build PMA hygiene report: {exc}", err=True)
-        raise typer.Exit(code=1) from None
+        exit_with_error(f"Failed to build PMA hygiene report: {exc}", cause=None)
 
     if output_json:
         report_payload: dict[str, Any]
@@ -496,9 +481,7 @@ def pma_hygiene(
             }
         else:
             report_payload = report
-        typer.echo(
-            json.dumps({"report": report_payload, "apply": apply_result}, indent=2)
-        )
+        echo_json({"report": report_payload, "apply": apply_result})
         return
 
     typer.echo(render_pma_hygiene_report(report, apply=apply, summary_only=summary))
@@ -530,22 +513,19 @@ def pma_agents(
     try:
         config = load_hub_config(hub_root)
     except (OSError, ValueError) as exc:
-        typer.echo(f"Failed to load hub config: {exc}", err=True)
-        raise typer.Exit(code=1) from None
+        exit_with_error(f"Failed to load hub config: {exc}", cause=None)
 
     url = build_pma_url(config, "/agents")
 
     try:
         data = request_json("GET", url, token_env=config.server_auth_token_env)
     except httpx.HTTPError as exc:
-        typer.echo(f"HTTP error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
+        exit_with_error(f"HTTP error: {exc}", cause=None)
     except (ValueError, OSError) as exc:  # intentional: top-level error handler
-        typer.echo(f"Error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
+        exit_with_error(f"Error: {exc}", cause=None)
 
     if output_json:
-        typer.echo(json.dumps(data, indent=2))
+        echo_json(data)
     else:
         agents = data.get("agents", []) if isinstance(data, dict) else []
         default = data.get("default", "") if isinstance(data, dict) else ""
@@ -600,31 +580,27 @@ def pma_models(
     try:
         config = load_hub_config(hub_root)
     except (OSError, ValueError) as exc:
-        typer.echo(f"Failed to load hub config: {exc}", err=True)
-        raise typer.Exit(code=1) from None
+        exit_with_error(f"Failed to load hub config: {exc}", cause=None)
 
     capabilities = fetch_agent_capabilities(config, path)
     required_cap = CAPABILITY_REQUIREMENTS.get("models")
     if required_cap and not check_capability(agent, required_cap, capabilities):
-        typer.echo(
+        exit_with_error(
             f"Agent '{agent}' does not support model listing (missing capability: {required_cap})",
-            err=True,
+            cause=None,
         )
-        raise typer.Exit(code=1) from None
 
     url = build_pma_url(config, f"/agents/{agent}/models")
 
     try:
         data = request_json("GET", url, token_env=config.server_auth_token_env)
     except httpx.HTTPError as exc:
-        typer.echo(f"HTTP error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
+        exit_with_error(f"HTTP error: {exc}", cause=None)
     except (ValueError, OSError) as exc:  # intentional: top-level error handler
-        typer.echo(f"Error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
+        exit_with_error(f"Error: {exc}", cause=None)
 
     if output_json:
-        typer.echo(json.dumps(data, indent=2))
+        echo_json(data)
     else:
         models = data.get("models", []) if isinstance(data, dict) else []
         default_model = data.get("default_model", "") if isinstance(data, dict) else ""
@@ -649,22 +625,19 @@ def pma_files(
     try:
         config = load_hub_config(hub_root)
     except (OSError, ValueError) as exc:
-        typer.echo(f"Failed to load hub config: {exc}", err=True)
-        raise typer.Exit(code=1) from None
+        exit_with_error(f"Failed to load hub config: {exc}", cause=None)
 
     url = build_pma_url(config, "/files")
 
     try:
         data = request_json("GET", url, token_env=config.server_auth_token_env)
     except httpx.HTTPError as exc:
-        typer.echo(f"HTTP error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
+        exit_with_error(f"HTTP error: {exc}", cause=None)
     except (ValueError, OSError) as exc:  # intentional: top-level error handler
-        typer.echo(f"Error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
+        exit_with_error(f"Error: {exc}", cause=None)
 
     if output_json:
-        typer.echo(json.dumps(data, indent=2))
+        echo_json(data)
     else:
         for index, box in enumerate(BOXES):
             entries = data.get(box, []) if isinstance(data, dict) else []
@@ -694,19 +667,16 @@ def pma_upload(
     try:
         config = load_hub_config(hub_root)
     except (OSError, ValueError) as exc:
-        typer.echo(f"Failed to load hub config: {exc}", err=True)
-        raise typer.Exit(code=1) from None
+        exit_with_error(f"Failed to load hub config: {exc}", cause=None)
 
     if box not in BOXES:
-        typer.echo(f"Box must be one of: {', '.join(BOXES)}", err=True)
-        raise typer.Exit(code=1) from None
+        exit_with_error(f"Box must be one of: {', '.join(BOXES)}", cause=None)
 
     url = build_pma_url(config, f"/files/{box}")
 
     for file_path in files:
         if not file_path.exists():
-            typer.echo(f"File not found: {file_path}", err=True)
-            raise typer.Exit(code=1) from None
+            exit_with_error(f"File not found: {file_path}", cause=None)
 
     import os
 
@@ -730,14 +700,12 @@ def pma_upload(
                 saved = data.get("saved", []) if isinstance(data, dict) else []
                 saved_files.extend(saved)
         except httpx.HTTPError as exc:
-            typer.echo(f"HTTP error uploading {file_path}: {exc}", err=True)
-            raise typer.Exit(code=1) from None
+            exit_with_error(f"HTTP error uploading {file_path}: {exc}", cause=None)
         except OSError as exc:
-            typer.echo(f"Error reading file {file_path}: {exc}", err=True)
-            raise typer.Exit(code=1) from None
+            exit_with_error(f"Error reading file {file_path}: {exc}", cause=None)
 
     if output_json:
-        typer.echo(json.dumps({"saved": saved_files}, indent=2))
+        echo_json({"saved": saved_files})
     else:
         typer.echo(f"Uploaded {len(saved_files)} file(s): {', '.join(saved_files)}")
 
@@ -756,12 +724,10 @@ def pma_download(
     try:
         config = load_hub_config(hub_root)
     except (OSError, ValueError) as exc:
-        typer.echo(f"Failed to load hub config: {exc}", err=True)
-        raise typer.Exit(code=1) from None
+        exit_with_error(f"Failed to load hub config: {exc}", cause=None)
 
     if box not in BOXES:
-        typer.echo(f"Box must be one of: {', '.join(BOXES)}", err=True)
-        raise typer.Exit(code=1) from None
+        exit_with_error(f"Box must be one of: {', '.join(BOXES)}", cause=None)
 
     url = build_pma_url(config, f"/files/{box}/{filename}")
 
@@ -769,8 +735,7 @@ def pma_download(
         response = httpx.get(url, timeout=30.0)
         response.raise_for_status()
     except httpx.HTTPError as exc:
-        typer.echo(f"HTTP error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
+        exit_with_error(f"HTTP error: {exc}", cause=None)
 
     output_path = output if output else Path(filename)
     output_path.write_bytes(response.content)
@@ -792,26 +757,22 @@ def pma_delete(
     try:
         config = load_hub_config(hub_root)
     except (OSError, ValueError) as exc:
-        typer.echo(f"Failed to load hub config: {exc}", err=True)
-        raise typer.Exit(code=1) from None
+        exit_with_error(f"Failed to load hub config: {exc}", cause=None)
 
     if all_files:
         if not box or box not in BOXES:
-            typer.echo(
+            exit_with_error(
                 f"Box must be one of: {', '.join(BOXES)} when using --all",
-                err=True,
+                cause=None,
             )
-            raise typer.Exit(code=1) from None
         url = build_pma_url(config, f"/files/{box}")
         method = "DELETE"
         payload = None
     else:
         if not box or not filename:
-            typer.echo("Box and filename are required (or use --all)", err=True)
-            raise typer.Exit(code=1) from None
+            exit_with_error("Box and filename are required (or use --all)", cause=None)
         if box not in BOXES:
-            typer.echo(f"Box must be one of: {', '.join(BOXES)}", err=True)
-            raise typer.Exit(code=1) from None
+            exit_with_error(f"Box must be one of: {', '.join(BOXES)}", cause=None)
         url = build_pma_url(config, f"/files/{box}/{filename}")
         method = "DELETE"
         payload = None
@@ -821,14 +782,12 @@ def pma_delete(
         response.raise_for_status()
         data = response.json()
     except httpx.HTTPError as exc:
-        typer.echo(f"HTTP error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
+        exit_with_error(f"HTTP error: {exc}", cause=None)
     except (ValueError, OSError) as exc:  # intentional: top-level error handler
-        typer.echo(f"Error: {exc}", err=True)
-        raise typer.Exit(code=1) from None
+        exit_with_error(f"Error: {exc}", cause=None)
 
     if output_json:
-        typer.echo(json.dumps(data, indent=2))
+        echo_json(data)
     else:
         if all_files:
             typer.echo(f"Deleted all files in {box}")
