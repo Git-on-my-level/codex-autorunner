@@ -170,6 +170,23 @@ class _OpenCodePersistedTurnSnapshot:
     turn_id: Optional[str]
 
 
+@dataclasses.dataclass(frozen=True)
+class _OpenCodeSessionUsageRecord:
+    timestamp: datetime
+    raw_totals: TokenTotals
+    model: Optional[str]
+    turn_id: Optional[str]
+
+
+@dataclasses.dataclass(frozen=True)
+class _OpenCodeSessionUsageEvent:
+    timestamp: datetime
+    delta: TokenTotals
+    totals: TokenTotals
+    model: Optional[str]
+    turn_id: Optional[str]
+
+
 def _build_codex_confidence(
     events: int, heuristic_events: int = 0
 ) -> dict[str, object]:
@@ -583,6 +600,92 @@ def _iter_opencode_session_files(repo_root: Path) -> Iterable[Path]:
     return sorted(sessions_dir.glob("**/*.json"))
 
 
+def _extract_opencode_turn_identifier(
+    container: Mapping[str, object],
+) -> Optional[str]:
+    for key in ("turn_id", "turnId", "turnID", "id"):
+        raw = container.get(key)
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip()
+    return None
+
+
+def _normalize_opencode_session_usage_records(
+    payload: Mapping[str, object],
+    fallback_timestamp: datetime,
+    *,
+    stats: Optional[_OpenCodeAggregationStats] = None,
+) -> List[_OpenCodeSessionUsageRecord]:
+    top_model = payload.get("model")
+    top_provider = payload.get("provider")
+    entries = _extract_opencode_entries(payload)
+    records: List[_OpenCodeSessionUsageRecord] = []
+    for container, usage in entries:
+        if stats is not None:
+            stats.session_entries += 1
+        raw_totals = _coerce_opencode_totals(usage)
+        if not _token_totals_has_values(raw_totals):
+            continue
+        records.append(
+            _OpenCodeSessionUsageRecord(
+                timestamp=_extract_opencode_timestamp(container, fallback_timestamp),
+                raw_totals=raw_totals,
+                model=_extract_opencode_model(
+                    container,
+                    top_model if isinstance(top_model, str) else None,
+                    top_provider if isinstance(top_provider, str) else None,
+                ),
+                turn_id=_extract_opencode_turn_identifier(container),
+            )
+        )
+    return records
+
+
+def _build_opencode_session_usage_events(
+    records: List[_OpenCodeSessionUsageRecord],
+    *,
+    stats: Optional[_OpenCodeAggregationStats] = None,
+) -> List[_OpenCodeSessionUsageEvent]:
+    if not records:
+        return []
+    semantics = _infer_opencode_file_semantics(
+        [record.raw_totals for record in records]
+    )
+    if stats is not None:
+        if semantics == "cumulative":
+            stats.session_cumulative_files += 1
+        else:
+            stats.session_delta_files += 1
+
+    previous_raw: Optional[TokenTotals] = None
+    running_totals = TokenTotals()
+    events: List[_OpenCodeSessionUsageEvent] = []
+    for record in records:
+        if semantics == "cumulative":
+            if previous_raw is None:
+                delta = record.raw_totals
+            else:
+                delta = _clamp_non_negative_totals(record.raw_totals.diff(previous_raw))
+            previous_raw = record.raw_totals
+            running_totals = copy.deepcopy(record.raw_totals)
+        else:
+            delta = record.raw_totals
+            running_totals.add(delta)
+
+        if not _token_totals_has_values(delta):
+            continue
+        events.append(
+            _OpenCodeSessionUsageEvent(
+                timestamp=record.timestamp,
+                delta=delta,
+                totals=copy.deepcopy(running_totals),
+                model=record.model,
+                turn_id=record.turn_id,
+            )
+        )
+    return events
+
+
 def _iter_session_files(codex_home: Path) -> Iterable[Path]:
     sessions_dir = codex_home / "sessions"
     if not sessions_dir.exists():
@@ -781,69 +884,29 @@ def _iter_opencode_session_events(
                     stats.session_parse_errors += 1
                 mtime = datetime.now(timezone.utc)
 
-            top_model = payload.get("model") if isinstance(payload, dict) else None
-            top_provider = (
-                payload.get("provider") if isinstance(payload, dict) else None
+            if not isinstance(payload, dict):
+                continue
+            records = _normalize_opencode_session_usage_records(
+                payload, mtime, stats=stats
             )
-            entries = (
-                _extract_opencode_entries(payload) if isinstance(payload, dict) else []
-            )
-            if not entries:
+            session_events = _build_opencode_session_usage_events(records, stats=stats)
+            if not session_events:
                 continue
 
-            normalized: List[Tuple[datetime, TokenTotals, Optional[str]]] = []
-            for container, usage in entries:
-                if stats is not None:
-                    stats.session_entries += 1
-                raw_totals = _coerce_opencode_totals(usage)
-                if not _token_totals_has_values(raw_totals):
+            for usage_event in session_events:
+                if since and usage_event.timestamp < since:
                     continue
-                timestamp = _extract_opencode_timestamp(container, mtime)
-                model = _extract_opencode_model(container, top_model, top_provider)
-                normalized.append((timestamp, raw_totals, model))
-            if not normalized:
-                continue
-
-            semantics = _infer_opencode_file_semantics(
-                [raw_totals for _, raw_totals, _ in normalized]
-            )
-            if stats is not None:
-                if semantics == "cumulative":
-                    stats.session_cumulative_files += 1
-                else:
-                    stats.session_delta_files += 1
-
-            previous_raw: Optional[TokenTotals] = None
-            running_totals = TokenTotals()
-            for timestamp, raw_totals, model in normalized:
-                if semantics == "cumulative":
-                    if previous_raw is None:
-                        delta = raw_totals
-                    else:
-                        delta = _clamp_non_negative_totals(
-                            raw_totals.diff(previous_raw)
-                        )
-                    previous_raw = raw_totals
-                    running_totals = copy.deepcopy(raw_totals)
-                else:
-                    delta = raw_totals
-                    running_totals.add(delta)
-
-                if not _token_totals_has_values(delta):
-                    continue
-                if since and timestamp < since:
-                    continue
-                if until and timestamp > until:
+                if until and usage_event.timestamp > until:
                     continue
                 if stats is not None:
                     stats.session_events += 1
                 yield TokenEvent(
-                    timestamp=timestamp,
+                    timestamp=usage_event.timestamp,
                     session_path=session_path,
                     cwd=repo_root,
-                    model=model,
-                    totals=copy.deepcopy(running_totals),
-                    delta=delta,
+                    model=usage_event.model,
+                    totals=usage_event.totals,
+                    delta=usage_event.delta,
                     rate_limits=None,
                     agent=OPENCODE_AGENT_ID,
                 )
@@ -1225,53 +1288,26 @@ def _collect_opencode_fallback_session_ledgers(
             )
         except OSError:
             mtime = datetime.now(timezone.utc)
-        entries = _extract_opencode_entries(payload)
-        if not entries:
+        records = _normalize_opencode_session_usage_records(payload, mtime, stats=stats)
+        session_events = _build_opencode_session_usage_events(records, stats=stats)
+        if not session_events:
             continue
-        normalized: List[Tuple[datetime, TokenTotals, Optional[str]]] = []
-        for container, usage in entries:
-            if stats is not None:
-                stats.session_entries += 1
-            raw_totals = _coerce_opencode_totals(usage)
-            if not _token_totals_has_values(raw_totals):
+        for usage_event in session_events:
+            if since and usage_event.timestamp < since:
                 continue
-            timestamp = _extract_opencode_timestamp(container, mtime)
-            turn_id = None
-            for key in ("turn_id", "turnId", "turnID", "id"):
-                raw = container.get(key)
-                if isinstance(raw, str) and raw.strip():
-                    turn_id = raw.strip()
-                    break
-            normalized.append((timestamp, raw_totals, turn_id))
-        if not normalized:
-            continue
-        semantics = _infer_opencode_file_semantics(
-            [raw_totals for _, raw_totals, _ in normalized]
-        )
-        if stats is not None:
-            if semantics == "cumulative":
-                stats.session_cumulative_files += 1
-            else:
-                stats.session_delta_files += 1
-        previous_raw: Optional[TokenTotals] = None
-        for timestamp, raw_totals, turn_id in normalized:
-            if semantics == "cumulative":
-                if previous_raw is None:
-                    delta = raw_totals
-                else:
-                    delta = _clamp_non_negative_totals(raw_totals.diff(previous_raw))
-                previous_raw = raw_totals
-            else:
-                delta = raw_totals
-            if not _token_totals_has_values(delta):
-                continue
-            if since and timestamp < since:
-                continue
-            if until and timestamp > until:
+            if until and usage_event.timestamp > until:
                 continue
             if stats is not None:
                 stats.session_events += 1
-            rows.append((session_id, timestamp, delta, turn_id, None))
+            rows.append(
+                (
+                    session_id,
+                    usage_event.timestamp,
+                    usage_event.delta,
+                    usage_event.turn_id,
+                    None,
+                )
+            )
     if not rows:
         return {}
     confidence = {
