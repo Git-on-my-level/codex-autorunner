@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -509,6 +510,31 @@ def _rate_limit_payload(
     }
 
 
+@dataclass(frozen=True)
+class _PostOpenBoostDueScenario:
+    name: str
+    initial_snapshot: dict[str, object]
+
+    def __str__(self) -> str:
+        return self.name
+
+
+_POST_OPEN_BOOST_DUE_SCENARIOS = [
+    _PostOpenBoostDueScenario(
+        name="active-window-keeps-boost",
+        initial_snapshot={
+            "head_sha": "oldsha",
+            "pr_state": "open",
+            "post_open_boost_until": "2026-03-30T01:15:00Z",
+        },
+    ),
+    _PostOpenBoostDueScenario(
+        name="baseline-pending-initializes-boost",
+        initial_snapshot={"baseline_pending": True},
+    ),
+]
+
+
 def test_arm_watch_captures_baseline_and_minimal_noise_profile(
     tmp_path: Path,
 ) -> None:
@@ -761,9 +787,15 @@ def test_arm_watch_applies_post_open_boost_interval(
     assert watch.snapshot["post_open_boost_until"] == "2026-03-30T01:15:00Z"
 
 
-def test_process_due_watches_uses_post_open_boost_interval_while_window_active(
+@pytest.mark.parametrize(
+    "scenario",
+    _POST_OPEN_BOOST_DUE_SCENARIOS,
+    ids=str,
+)
+def test_process_due_watches_applies_post_open_boost_scenarios(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    scenario: _PostOpenBoostDueScenario,
 ) -> None:
     binding = PrBindingStore(tmp_path).upsert_binding(
         provider="github",
@@ -784,91 +816,7 @@ def test_process_due_watches_uses_post_open_boost_interval_while_window_active(
         next_poll_at="2026-03-30T00:00:00Z",
         expires_at="2099-03-30T01:00:00Z",
         reaction_config={"enabled": True},
-        snapshot={
-            "head_sha": "oldsha",
-            "pr_state": "open",
-            "post_open_boost_until": "2026-03-30T01:15:00Z",
-        },
-    )
-    assert watch is not None
-
-    def _factory(repo_root: Path, raw_config=None) -> _GitHubServiceStub:
-        return _GitHubServiceStub(
-            repo_root,
-            raw_config,
-            pr_view_payload={
-                "state": "OPEN",
-                "isDraft": False,
-                "headRefOid": "newsha",
-                "createdAt": "2026-03-30T00:55:00Z",
-                "author": {"login": "pr-author"},
-            },
-            reviews_payload=[],
-            checks_payload=[],
-        )
-
-    monkeypatch.setattr(
-        github_polling,
-        "_utc_now",
-        lambda: datetime(2026, 3, 30, 1, 0, 0, tzinfo=timezone.utc),
-    )
-    monkeypatch.setattr(github_polling, "now_iso", lambda: "2026-03-30T01:00:00Z")
-    monkeypatch.setattr(scm_polling_watches, "now_iso", lambda: "2026-03-30T01:00:00Z")
-    _AutomationServiceFake.ingested_events = []
-    _AutomationServiceFake.process_calls = 0
-    monkeypatch.setattr(
-        GitHubScmPollingService,
-        "_build_automation_service",
-        lambda self, reaction_config=None: _AutomationServiceFake(  # type: ignore[misc]
-            tmp_path,
-            reaction_config=reaction_config,
-        ),
-    )
-
-    service = GitHubScmPollingService(
-        tmp_path,
-        raw_config=_polling_config(
-            post_open_boost_minutes=20,
-            post_open_boost_interval_seconds=30,
-        ),
-        github_service_factory=_factory,
-        watch_store=watch_store,
-        event_store=ScmEventStore(tmp_path),
-    )
-
-    result = service.process_due_watches(limit=10)
-
-    assert result["polled"] == 1
-    refreshed = watch_store.get_watch(provider="github", binding_id=binding.binding_id)
-    assert refreshed is not None
-    assert refreshed.next_poll_at == "2026-03-30T01:00:30Z"
-    assert refreshed.snapshot["post_open_boost_until"] == "2026-03-30T01:15:00Z"
-
-
-def test_process_due_watches_initializes_post_open_boost_for_baseline_pending_watch(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    binding = PrBindingStore(tmp_path).upsert_binding(
-        provider="github",
-        repo_slug="acme/widgets",
-        pr_number=17,
-        pr_state="open",
-        head_branch="feature/scm-polling",
-        base_branch="main",
-    )
-    watch_store = ScmPollingWatchStore(tmp_path)
-    watch = watch_store.upsert_watch(
-        provider="github",
-        binding_id=binding.binding_id,
-        repo_slug=binding.repo_slug,
-        pr_number=binding.pr_number,
-        workspace_root=str((tmp_path / "repo").resolve()),
-        poll_interval_seconds=90,
-        next_poll_at="2026-03-30T00:00:00Z",
-        expires_at="2099-03-30T01:00:00Z",
-        reaction_config={"enabled": True},
-        snapshot={"baseline_pending": True},
+        snapshot=scenario.initial_snapshot,
     )
     assert watch is not None
 
