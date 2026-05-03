@@ -461,6 +461,77 @@ class _BaseDiscordFakeHarness:
             yield ""
 
 
+class _SequencedDiscordFakeHarness(_BaseDiscordFakeHarness):
+    def __init__(
+        self,
+        *,
+        replies: list[str],
+        turn_id_prefix: str = "backend-turn",
+        conversation_id: str = "backend-thread-1",
+        display_name: str = "Fake",
+        capabilities: frozenset[str] | None = None,
+        first_turn_started: asyncio.Event | None = None,
+        release_first_turn: asyncio.Event | None = None,
+    ) -> None:
+        self._replies = list(replies)
+        self._turn_id_prefix = turn_id_prefix
+        self._conversation_id = conversation_id
+        self.display_name = display_name
+        self.capabilities = capabilities or type(self).capabilities
+        self._first_turn_started = first_turn_started
+        self._release_first_turn = release_first_turn
+        self.turn_prompts: list[str] = []
+        self.turn_conversation_ids: list[str] = []
+        self.waited_turns: list[str] = []
+
+    async def start_turn(
+        self,
+        workspace_root: Path,
+        conversation_id: str,
+        prompt: str,
+        model: Optional[str],
+        reasoning: Optional[str],
+        *,
+        approval_mode: Optional[str],
+        sandbox_policy: Optional[Any],
+        input_items: Optional[list[dict[str, Any]]] = None,
+    ) -> SimpleNamespace:
+        _ = (
+            workspace_root,
+            model,
+            reasoning,
+            approval_mode,
+            sandbox_policy,
+            input_items,
+        )
+        self.turn_prompts.append(prompt)
+        self.turn_conversation_ids.append(conversation_id)
+        return SimpleNamespace(
+            conversation_id=conversation_id,
+            turn_id=f"{self._turn_id_prefix}-{len(self.turn_prompts)}",
+        )
+
+    async def wait_for_turn(
+        self,
+        workspace_root: Path,
+        conversation_id: str,
+        turn_id: Optional[str],
+        *,
+        timeout: Optional[float] = None,
+    ) -> SimpleNamespace:
+        _ = workspace_root, conversation_id, timeout
+        assert isinstance(turn_id, str)
+        self.waited_turns.append(turn_id)
+        if turn_id == f"{self._turn_id_prefix}-1":
+            if self._first_turn_started is not None:
+                self._first_turn_started.set()
+            if self._release_first_turn is not None:
+                await self._release_first_turn.wait()
+        turn_index = int(turn_id.removeprefix(f"{self._turn_id_prefix}-")) - 1
+        reply = self._replies[min(turn_index, len(self._replies) - 1)]
+        return SimpleNamespace(status="ok", assistant_text=reply, errors=[])
+
+
 def _patch_harness(
     monkeypatch: pytest.MonkeyPatch,
     harness: Any,
@@ -1033,6 +1104,10 @@ async def _build_discord_service(
     *,
     rest: Any | None = None,
     config_kwargs: dict[str, Any] | None = None,
+    repo_id: str | None = None,
+    pma_enabled_state: bool | None = None,
+    agent: str | None = None,
+    agent_profile: str | None = None,
 ) -> tuple[DiscordBotService, Any, DiscordStateStore, Path]:
     import logging
 
@@ -1044,8 +1119,18 @@ async def _build_discord_service(
         channel_id="channel-1",
         guild_id="guild-1",
         workspace_path=str(workspace),
-        repo_id=None,
+        repo_id=repo_id,
     )
+    if pma_enabled_state is not None:
+        await store.update_pma_state(
+            channel_id="channel-1", pma_enabled=pma_enabled_state
+        )
+    if agent is not None:
+        await store.update_agent_state(
+            channel_id="channel-1",
+            agent=agent,
+            agent_profile=agent_profile,
+        )
     if rest is None:
         rest = _FakeRest()
     gateway = _FakeGateway(gateway_events)
