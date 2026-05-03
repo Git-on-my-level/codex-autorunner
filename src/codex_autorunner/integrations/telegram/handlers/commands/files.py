@@ -32,6 +32,10 @@ from ...helpers import _path_within, format_public_error
 from ...state import PendingVoiceRecord, TelegramTopicRecord
 from ..media_ingress import record_with_media_workspace as _record_with_media_workspace
 from ..media_ingress import select_file_candidate, select_image_candidate
+from .command_utils import (
+    _format_download_failure_response,
+    _format_telegram_download_error,
+)
 from .shared import FILES_HINT_TEMPLATE, TelegramCommandSupportMixin
 
 PMA_FILES_HINT_TEMPLATE = (
@@ -41,24 +45,6 @@ PMA_FILES_HINT_TEMPLATE = (
     "Check delivery with /files outbox.\n"
     "Max file size: {max_bytes} bytes."
 )
-
-
-_GENERIC_TELEGRAM_ERRORS = {
-    "Telegram request failed",
-    "Telegram file download failed",
-    "Telegram API returned error",
-}
-
-
-def _iter_exception_chain(exc: BaseException) -> list[BaseException]:
-    chain: list[BaseException] = []
-    current: Optional[BaseException] = exc
-    seen: set[int] = set()
-    while current is not None and id(current) not in seen:
-        chain.append(current)
-        seen.add(id(current))
-        current = current.__cause__ or current.__context__
-    return chain
 
 
 def _sanitize_error_detail(detail: str, *, limit: int = 200) -> str:
@@ -166,25 +152,6 @@ class FilesCommands(TelegramCommandSupportMixin):
             return False
         return True
 
-    def _format_telegram_download_error(self, exc: Exception) -> Optional[str]:
-        for current in _iter_exception_chain(exc):
-            if isinstance(current, Exception):
-                detail = self._format_httpx_exception(current)
-                if detail:
-                    return format_public_error(detail)
-                message = str(current).strip()
-                if message and message not in _GENERIC_TELEGRAM_ERRORS:
-                    return format_public_error(message)
-        return None
-
-    def _format_download_failure_response(
-        self, kind: str, detail: Optional[str]
-    ) -> str:
-        base = f"Failed to download {kind}."
-        if detail:
-            return f"{base} Reason: {format_public_error(detail)}"
-        return base
-
     def _format_media_batch_failure(
         self,
         *,
@@ -278,7 +245,7 @@ class FilesCommands(TelegramCommandSupportMixin):
         except asyncio.CancelledError:
             raise
         except (TelegramAPIError, RuntimeError) as exc:
-            detail = self._format_telegram_download_error(exc)
+            detail = _format_telegram_download_error(exc)
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -291,7 +258,7 @@ class FilesCommands(TelegramCommandSupportMixin):
             )
             await self._send_message(
                 message.chat_id,
-                self._format_download_failure_response("image", detail),
+                _format_download_failure_response("image", detail),
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -520,7 +487,7 @@ class FilesCommands(TelegramCommandSupportMixin):
         except asyncio.CancelledError:
             raise
         except (TelegramAPIError, RuntimeError) as exc:
-            detail = self._format_telegram_download_error(exc)
+            detail = _format_telegram_download_error(exc)
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -533,7 +500,7 @@ class FilesCommands(TelegramCommandSupportMixin):
             )
             await self._send_message(
                 message.chat_id,
-                self._format_download_failure_response("file", detail),
+                _format_download_failure_response("file", detail),
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -766,7 +733,7 @@ class FilesCommands(TelegramCommandSupportMixin):
         except asyncio.CancelledError:
             raise
         except (TelegramAPIError, RuntimeError) as exc:
-            detail = self._format_telegram_download_error(exc)
+            detail = _format_telegram_download_error(exc)
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -889,7 +856,7 @@ class FilesCommands(TelegramCommandSupportMixin):
         except asyncio.CancelledError:
             raise
         except (TelegramAPIError, RuntimeError) as exc:
-            detail = self._format_telegram_download_error(exc)
+            detail = _format_telegram_download_error(exc)
             log_event(
                 self._logger,
                 logging.WARNING,

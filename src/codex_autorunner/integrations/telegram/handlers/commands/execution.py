@@ -169,10 +169,7 @@ from ...state import topic_key as build_topic_key
 if TYPE_CHECKING:
     from ...state import TelegramTopicRecord
 
-from .command_utils import (
-    _format_httpx_exception,
-    _format_opencode_exception,
-)
+from .command_utils import _format_opencode_exception
 from .opencode_stream_parts import OpenCodeStreamPartHandler
 from .shared import FILES_HINT_TEMPLATE, TelegramCommandSupportMixin
 from .turn_lifecycle import (
@@ -181,12 +178,6 @@ from .turn_lifecycle import (
     resolve_interrupt_status_fallback,
     try_register_turn_and_start_progress,
 )
-
-_GENERIC_TELEGRAM_ERRORS = {
-    "Telegram request failed",
-    "Telegram file download failed",
-    "Telegram API returned error",
-}
 
 TELEGRAM_PMA_PUBLIC_EXECUTION_ERROR = "Telegram PMA turn failed"
 TELEGRAM_REPO_PUBLIC_EXECUTION_ERROR = "Telegram turn failed"
@@ -324,25 +315,6 @@ def _log_runtime_binding_unavailable(
             mode=mode,
             reason="runtime_unavailable",
         )
-
-
-def _format_telegram_download_error(exc: Exception) -> Optional[str]:
-    for current in _iter_exception_chain(exc):
-        if isinstance(current, Exception):
-            detail = _format_httpx_exception(current)
-            if detail:
-                return format_public_error(detail)
-            message = str(current).strip()
-            if message and message not in _GENERIC_TELEGRAM_ERRORS:
-                return format_public_error(message)
-    return None
-
-
-def _format_download_failure_response(kind: str, detail: Optional[str]) -> str:
-    base = f"Failed to download {kind}."
-    if detail:
-        return f"{base} Reason: {detail}"
-    return base
 
 
 def _build_managed_thread_input_items(

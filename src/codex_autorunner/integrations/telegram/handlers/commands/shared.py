@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import math
 import secrets
@@ -14,8 +13,6 @@ from typing import Any, Optional
 
 import httpx
 
-from .....agents.opencode.client import OpenCodeProtocolError
-from .....agents.opencode.supervisor import OpenCodeSupervisorError
 from .....agents.registry import get_registered_agents
 from .....agents.types import normalize_runtime_capabilities
 from .....core.logging_utils import log_event
@@ -44,11 +41,14 @@ from ...helpers import (
     _prepare_shell_response,
     _render_command_output,
     _with_conversation_id,
-    format_public_error,
 )
 from ...payload_utils import (
     extract_opencode_error_detail,
     extract_opencode_session_path,
+)
+from .command_utils import (
+    _format_httpx_exception,
+    _format_opencode_exception,
 )
 
 FILES_HINT_TEMPLATE = (
@@ -133,77 +133,10 @@ class TelegramCommandSupportMixin:
         )
 
     def _format_httpx_exception(self, exc: Exception) -> Optional[str]:
-        """Format httpx exceptions for user-friendly error messages.
-
-        Args:
-            exc: Exception to format.
-
-        Returns:
-            Formatted error message string or None if exception is not an httpx error.
-        """
-        if isinstance(exc, httpx.HTTPStatusError):
-            try:
-                payload = exc.response.json()
-            except (json.JSONDecodeError, ValueError):
-                payload = None
-            if isinstance(payload, dict):
-                detail = (
-                    payload.get("detail")
-                    or payload.get("message")
-                    or payload.get("error")
-                )
-                if isinstance(detail, str) and detail:
-                    return format_public_error(detail)
-            response_text = exc.response.text.strip()
-            if response_text:
-                return format_public_error(response_text)
-            return f"Request failed (HTTP {exc.response.status_code})."
-        if isinstance(exc, httpx.RequestError):
-            detail = str(exc).strip()
-            if detail:
-                return format_public_error(detail)
-            return "Request failed."
-        return None
+        return _format_httpx_exception(exc)
 
     def _format_opencode_exception(self, exc: Exception) -> Optional[str]:
-        """Format OpenCode exceptions for user-friendly error messages.
-
-        Args:
-            exc: Exception to format.
-
-        Returns:
-            Formatted error message string or None if exception is not recognized.
-        """
-        if isinstance(exc, OpenCodeSupervisorError):
-            detail = str(exc).strip()
-            if detail:
-                return f"OpenCode backend unavailable ({format_public_error(detail)})."
-            return "OpenCode backend unavailable."
-        if isinstance(exc, OpenCodeProtocolError):
-            detail = str(exc).strip()
-            if detail:
-                return f"OpenCode protocol error: {format_public_error(detail)}"
-            return "OpenCode protocol error."
-        if isinstance(exc, json.JSONDecodeError):
-            return "OpenCode returned invalid JSON."
-        if isinstance(exc, httpx.HTTPStatusError):
-            detail = None
-            try:
-                detail = extract_opencode_error_detail(exc.response.json())
-            except (json.JSONDecodeError, ValueError):
-                detail = None
-            if detail:
-                return f"OpenCode error: {format_public_error(detail)}"
-            response_text = exc.response.text.strip()
-            if response_text:
-                return f"OpenCode error: {format_public_error(response_text)}"
-            return f"OpenCode request failed (HTTP {exc.response.status_code})."
-        if isinstance(exc, httpx.RequestError):
-            detail = str(exc).strip()
-            if detail:
-                return f"OpenCode request failed: {format_public_error(detail)}"
-            return "OpenCode request failed."
-        return None
+        return _format_opencode_exception(exc)
 
     def _extract_opencode_session_path(self, payload: Any) -> Optional[str]:
         """Extract session path from OpenCode payload.
@@ -237,7 +170,7 @@ class TelegramCommandSupportMixin:
                 detail = None
                 try:
                     detail = extract_opencode_error_detail(current.response.json())
-                except (json.JSONDecodeError, ValueError):
+                except (ValueError, TypeError):
                     detail = None
                 candidates = [detail, current.response.text, str(current)]
             else:

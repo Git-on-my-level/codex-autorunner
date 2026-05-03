@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import re
 import time
@@ -62,38 +61,15 @@ from ...helpers import (
     _preview_from_text,
     _set_thread_summary,
     _with_conversation_id,
-    format_public_error,
     is_interrupt_status,
 )
-from ...payload_utils import extract_opencode_error_detail
 from ...types import ReviewCommitSelectionState, TurnContext
 
 if TYPE_CHECKING:
     from ...state import TelegramTopicRecord
 
+from .command_utils import _format_opencode_exception, _opencode_review_arguments
 from .shared import TelegramCommandSupportMixin
-
-
-def _opencode_review_arguments(target: dict[str, Any]) -> str:
-    target_type = target.get("type")
-    if target_type == "uncommittedChanges":
-        return ""
-    if target_type == "baseBranch":
-        branch = target.get("branch")
-        if isinstance(branch, str) and branch:
-            return branch
-    if target_type == "commit":
-        sha = target.get("sha")
-        if isinstance(sha, str) and sha:
-            return sha
-    if target_type == "custom":
-        instructions = target.get("instructions")
-        if isinstance(instructions, str):
-            instructions = instructions.strip()
-            if instructions:
-                return f"uncommitted\n\n{instructions}"
-        return "uncommitted"
-    return json.dumps(target, sort_keys=True)
 
 
 @dataclass
@@ -1496,40 +1472,3 @@ class GitHubCommands(TelegramCommandSupportMixin):
         if exit_code not in (None, 0) and not stdout.strip():
             return []
         return _parse_review_commit_log(stdout)
-
-
-def _format_opencode_exception(exc: Exception) -> Optional[str]:
-    """Format OpenCode exceptions for user-friendly error messages."""
-    from .....agents.opencode.client import OpenCodeProtocolError
-    from .....agents.opencode.supervisor import OpenCodeSupervisorError
-
-    if isinstance(exc, OpenCodeSupervisorError):
-        detail = str(exc).strip()
-        if detail:
-            return f"OpenCode backend unavailable ({format_public_error(detail)})."
-        return "OpenCode backend unavailable."
-    if isinstance(exc, OpenCodeProtocolError):
-        detail = str(exc).strip()
-        if detail:
-            return f"OpenCode protocol error: {format_public_error(detail)}"
-        return "OpenCode protocol error."
-    if isinstance(exc, json.JSONDecodeError):
-        return "OpenCode returned invalid JSON."
-    if isinstance(exc, httpx.HTTPStatusError):
-        detail = None
-        try:
-            detail = extract_opencode_error_detail(exc.response.json())
-        except (ValueError, KeyError, TypeError):
-            detail = None
-        if detail:
-            return f"OpenCode error: {format_public_error(detail)}"
-        response_text = exc.response.text.strip()
-        if response_text:
-            return f"OpenCode error: {format_public_error(response_text)}"
-        return f"OpenCode request failed (HTTP {exc.response.status_code})."
-    if isinstance(exc, httpx.RequestError):
-        detail = str(exc).strip()
-        if detail:
-            return f"OpenCode request failed: {format_public_error(detail)}"
-        return "OpenCode request failed."
-    return None
