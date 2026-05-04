@@ -237,8 +237,13 @@ def test_paused_dispatch_decision_table(
     expected_has_dispatch: bool,
     expected_reason: str | None,
 ) -> None:
+    facts = operator_module._paused_dispatch_facts(
+        latest_payload,
+        latest_reply_seq=latest_reply_seq,
+    )
     assert operator_module._resolve_paused_dispatch_decision(
         record_status=record_status,
+        facts=facts,
         latest_payload=latest_payload,
         latest_reply_seq=latest_reply_seq,
         stale_resume_reason=stale_resume_reason,

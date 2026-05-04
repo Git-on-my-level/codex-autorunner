@@ -596,14 +596,11 @@ def _paused_dispatch_resume_preflight_needed(
 def _resolve_paused_dispatch_decision(
     *,
     record_status: FlowRunStatus,
+    facts: PausedDispatchFacts,
     latest_payload: Mapping[str, Any],
     latest_reply_seq: int,
     stale_resume_reason: Optional[str] = None,
 ) -> tuple[bool, Optional[str]]:
-    facts = _paused_dispatch_facts(
-        latest_payload,
-        latest_reply_seq=latest_reply_seq,
-    )
     if (
         _paused_dispatch_resume_preflight_needed(
             record_status=record_status,
@@ -649,6 +646,7 @@ def resolve_paused_dispatch_state(
         stale_resume_reason = _paused_dispatch_resume_invalid_reason(repo_root)
     return _resolve_paused_dispatch_decision(
         record_status=record_status,
+        facts=facts,
         latest_payload=latest_payload,
         latest_reply_seq=latest_reply_seq,
         stale_resume_reason=stale_resume_reason,
