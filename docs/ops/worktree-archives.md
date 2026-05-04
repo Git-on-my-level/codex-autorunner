@@ -67,7 +67,9 @@ out of archive listings and retention pruning.
   visible snapshots.
 
 ## Viewing archives in the UI
-Open the repo web UI and select the **Archive** tab. You can:
+Archive review is retained as a legacy/debug surface while the PMA Hub route
+migration is in progress. Use the old repo UI only when you need to inspect
+archived snapshots directly. You can:
 - browse snapshots by worktree ID and timestamp
 - view snapshot metadata and `META.json`
 - open archived files (tickets, contextspace, runs, flows, and any optional

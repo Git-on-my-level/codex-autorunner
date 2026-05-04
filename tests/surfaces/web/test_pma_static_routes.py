@@ -61,3 +61,26 @@ def test_pma_base_path_routes_redirect_and_serve_spa(tmp_path):
     response = client.get("/car/contextspace/local")
     assert response.status_code == 200
     assert "<title>PMA Hub</title>" in response.text
+
+
+def test_repo_mount_frontend_routes_are_legacy_gated(hub_env):
+    client = TestClient(create_hub_app(hub_env.hub_root), follow_redirects=False)
+    repo_id = hub_env.repo_id
+
+    primary = client.get(f"/repos/{repo_id}")
+    assert primary.status_code == 200
+    assert "<title>PMA Hub</title>" in primary.text
+
+    repo_root = client.get(f"/repos/{repo_id}/")
+    assert repo_root.status_code == 200
+    assert "<title>PMA Hub</title>" in repo_root.text
+
+    legacy_prompt = client.get(f"/repos/{repo_id}/terminal")
+    assert legacy_prompt.status_code == 200
+    assert "Legacy/debug route" in legacy_prompt.text
+    assert f"/legacy/repos/{repo_id}/terminal" in legacy_prompt.text
+
+    legacy_terminal = client.get(f"/legacy/repos/{repo_id}/terminal")
+    assert legacy_terminal.status_code == 200
+    assert "Legacy/debug CAR UI" in legacy_terminal.text
+    assert "<title>Codex Autorunner</title>" in legacy_terminal.text

@@ -134,7 +134,10 @@ Open http://localhost:8765 in your browser. From here you can:
 - Add existing repositories or clone new ones
 - Create and manage tickets
 - Monitor agent runs
-- Use the built-in terminal for interactive agent sessions
+- Chat with the PMA at `/pma`, which is the primary web experience
+
+Legacy terminal/debug screens may still exist during the PMA Hub migration, but
+they are not part of the primary navigation.
 
 ### Step 7: Add a Repository
 
@@ -175,6 +178,7 @@ Both you and the agents can read and write these. They're accessible from the we
 
 ### Hub vs Repo
 - **Hub**: The central management layer. Contains a manifest of repositories and provides the web UI, terminal, and coordination features.
+- **PMA Hub**: The primary web UI. `/pma` is the default landing page, with dashboard, repos, worktrees, tickets, contextspace, and settings as supporting routes.
 - **Repo**: An individual repository being managed. Each repo has its own `.codex-autorunner/` directory with tickets, contextspace docs, and state.
 
 ### Agents

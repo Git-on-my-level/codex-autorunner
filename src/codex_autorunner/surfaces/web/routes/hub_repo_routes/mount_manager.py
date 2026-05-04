@@ -17,6 +17,65 @@ from .....core.logging_utils import safe_log
 if TYPE_CHECKING:
     from ...app_state import HubAppContext
 
+_LEGACY_FRONTEND_TABS = {
+    "workspace",
+    "tickets",
+    "messages",
+    "inbox",
+    "contextspace",
+    "archive",
+    "analytics",
+    "terminal",
+    "settings",
+}
+
+
+def _is_legacy_frontend_opt_in(query_string: bytes) -> bool:
+    return any(
+        part in {b"legacy=1", b"legacy=true", b"debug=1", b"debug=true"}
+        for part in query_string.split(b"&")
+    )
+
+
+async def _send_redirect(send, location: str) -> None:
+    await send(
+        {
+            "type": "http.response.start",
+            "status": 307,
+            "headers": [(b"location", location.encode("utf-8", errors="replace"))],
+        }
+    )
+    await send({"type": "http.response.body", "body": b""})
+
+
+async def _send_legacy_debug_page(send, *, location: str, legacy_location: str) -> None:
+    body = f"""<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Legacy CAR UI</title>
+  </head>
+  <body>
+    <main>
+      <h1>Legacy/debug route</h1>
+      <p>This old CAR UI route is retained for migration and debugging only.</p>
+      <p><a href="{location}">Open the PMA Hub route</a></p>
+      <p><a href="{legacy_location}">Open this legacy screen</a></p>
+    </main>
+  </body>
+</html>
+"""
+    await send(
+        {
+            "type": "http.response.start",
+            "status": 200,
+            "headers": [(b"content-type", b"text/html; charset=utf-8")],
+        }
+    )
+    await send(
+        {"type": "http.response.body", "body": body.encode("utf-8", errors="replace")}
+    )
+
 
 class _LazyRepoApp:
     """Build and start a repo sub-app on first use instead of at hub startup."""
@@ -99,6 +158,39 @@ class _LazyRepoApp:
             )
 
     async def __call__(self, scope, receive, send) -> None:
+        if scope.get("type") == "http":
+            path = str(scope.get("path") or "")
+            query_string = scope.get("query_string") or b""
+            root_path = str(scope.get("root_path") or f"/repos/{self.prefix}")
+            pma_repo_location = root_path.rstrip("/") or f"/repos/{self.prefix}"
+            tab = path.strip("/").split("/", 1)[0]
+            legacy_mount = root_path.rstrip("/").endswith(
+                f"/legacy/repos/{self.prefix}"
+            )
+            if (
+                not legacy_mount
+                and path in {"", "/"}
+                and not _is_legacy_frontend_opt_in(query_string)
+            ):
+                await _send_redirect(send, pma_repo_location)
+                return
+            if (
+                not legacy_mount
+                and tab in _LEGACY_FRONTEND_TABS
+                and not _is_legacy_frontend_opt_in(query_string)
+            ):
+                query_text = query_string.decode("utf-8", errors="replace")
+                legacy_location = (
+                    f"{root_path}{path}?{query_text}&legacy=1"
+                    if query_text
+                    else f"{root_path}{path}?legacy=1"
+                )
+                await _send_legacy_debug_page(
+                    send,
+                    location=pma_repo_location,
+                    legacy_location=legacy_location,
+                )
+                return
         try:
             sub_app = await self._ensure_ready()
         except Exception:
@@ -233,12 +325,18 @@ class HubMountManager:
                     exc=exc2,
                 )
 
+    def _mount_paths(self, prefix: str) -> tuple[str, str]:
+        return (f"/repos/{prefix}", f"/legacy/repos/{prefix}")
+
+    def _mount_path(self, prefix: str) -> str:
+        return f"/repos/{prefix}"
+
     def _detach_mount_locked(self, prefix: str) -> None:
-        mount_path = f"/repos/{prefix}"
+        mount_paths = set(self._mount_paths(prefix))
         self.app.router.routes = [
             route
             for route in self.app.router.routes
-            if not (isinstance(route, Mount) and route.path == mount_path)
+            if not (isinstance(route, Mount) and route.path in mount_paths)
         ]
         self._mounted_repos.discard(prefix)
         self._repo_apps.pop(prefix, None)
@@ -294,7 +392,8 @@ class HubMountManager:
                 )
             return False
 
-        self.app.mount(f"/repos/{prefix}", sub_app)
+        self.app.mount(self._mount_path(prefix), sub_app)
+        self.app.mount(f"/legacy/repos/{prefix}", sub_app)
         self._mounted_repos.add(prefix)
         self._repo_apps[prefix] = sub_app
         if prefix not in self._mount_order:

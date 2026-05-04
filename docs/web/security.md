@@ -6,8 +6,8 @@ interface and how to secure it.
 
 ## Scope and threat model
 
-- The web server exposes a FastAPI HTTP API and a web UI with a terminal-style
-  Codex TUI embedded over WebSocket.
+- The web server exposes a FastAPI HTTP API and the PMA Hub web UI. Legacy
+  terminal/debug UI surfaces can still be exposed for migration and debugging.
 - The UI/API can run code and modify files in bound workspaces.
 - There is no built-in multi-user auth or per-endpoint role separation.
 
@@ -34,7 +34,11 @@ The UI stores the token in `sessionStorage` and removes it from the URL.
 The following endpoints remain public so health checks and static assets work:
 
 - `/` (UI shell)
+- `/pma`, `/dashboard`, `/repos`, `/worktrees`, `/tickets`, `/contextspace/*`,
+  and `/settings` (PMA Hub shell)
 - `/static/*`
+- `/_app/*`
+- `/legacy` (legacy/debug shell)
 - `/health`
 - `/cat/*`
 

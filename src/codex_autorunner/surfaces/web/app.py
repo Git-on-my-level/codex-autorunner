@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Optional, Protocol, cast
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.types import ASGIApp
@@ -80,6 +80,17 @@ __all__ = ["create_app", "create_hub_app", "create_repo_app"]
 _DEFAULT_HUB_FLOW_SWEEP_INTERVAL_SECONDS = float(
     parse_flow_retention_config(None).sweep_interval_seconds
 )
+_LEGACY_REPO_FRONTEND_TABS = {
+    "workspace",
+    "tickets",
+    "messages",
+    "inbox",
+    "contextspace",
+    "archive",
+    "analytics",
+    "terminal",
+    "settings",
+}
 
 
 class _IdlePrunable(Protocol):
@@ -263,7 +274,6 @@ def create_hub_app(
         )
         for record in records
     ]
-    mount_manager.mount_initial(initial_snapshots)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -901,7 +911,58 @@ def create_hub_app(
     def pma_hub_index():
         return _pma_index_response()
 
+    @app.get("/repos/{repo_id}/", include_in_schema=False)
+    def pma_repo_index_slash(repo_id: str):
+        return _pma_index_response()
+
+    def legacy_repo_frontend_gate(repo_id: str, request: Request, *, legacy_tab: str):
+        query = request.url.query
+        legacy_target = (
+            f"{context.base_path}/legacy/repos/{repo_id}/{legacy_tab}"
+            if context.base_path
+            else f"/legacy/repos/{repo_id}/{legacy_tab}"
+        )
+        if query:
+            legacy_target = f"{legacy_target}?{query}"
+        pma_target = (
+            f"{context.base_path}/repos/{repo_id}"
+            if context.base_path
+            else f"/repos/{repo_id}"
+        )
+        html = f"""<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Legacy CAR UI</title>
+  </head>
+  <body>
+    <main>
+      <h1>Legacy/debug route</h1>
+      <p>This old CAR UI route is retained for migration and debugging only.</p>
+      <p><a href="{pma_target}">Open the PMA Hub route</a></p>
+      <p><a href="{legacy_target}">Open this legacy screen</a></p>
+    </main>
+  </body>
+</html>
+"""
+        return HTMLResponse(html, headers=index_response_headers())
+
+    def _legacy_repo_frontend_endpoint(tab: str):
+        def endpoint(repo_id: str, request: Request):
+            return legacy_repo_frontend_gate(repo_id, request, legacy_tab=tab)
+
+        return endpoint
+
+    for legacy_tab in sorted(_LEGACY_REPO_FRONTEND_TABS):
+        app.add_api_route(
+            f"/repos/{{repo_id}}/{legacy_tab}",
+            _legacy_repo_frontend_endpoint(legacy_tab),
+            methods=["GET"],
+            include_in_schema=False,
+        )
+
     app.include_router(build_system_routes())
+    mount_manager.mount_initial(initial_snapshots)
 
     allowed_hosts = resolve_allowed_hosts(
         context.config.server_host, context.config.server_allowed_hosts
