@@ -472,11 +472,7 @@ def _format_resume_summary(
         build_resumed_thread_lines(
             thread_id=thread_id,
             workspace_path=workspace_path,
-            model=(
-                model or DEFAULT_CHAT_AGENT_MODELS.get(agent, "default")
-                if model is None
-                else model
-            ),
+            model=model or DEFAULT_CHAT_AGENT_MODELS.get(agent, "default"),
             effort="default" if effort is None else effort,
             user_preview=user_preview,
             assistant_preview=assistant_preview,
