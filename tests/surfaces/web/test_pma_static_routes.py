@@ -9,7 +9,18 @@ def test_pma_top_level_routes_serve_new_spa(tmp_path):
     seed_hub_files(hub_root, force=True)
     client = TestClient(create_hub_app(hub_root))
 
-    for path in ("/pma", "/dashboard", "/repos", "/tickets", "/settings"):
+    for path in (
+        "/pma",
+        "/dashboard",
+        "/repos",
+        "/repos/example",
+        "/worktrees",
+        "/worktrees/example",
+        "/tickets",
+        "/tickets/TICKET-100",
+        "/contextspace/local",
+        "/settings",
+    ):
         response = client.get(path)
         assert response.status_code == 200
         assert "<title>PMA Hub</title>" in response.text
@@ -28,3 +39,25 @@ def test_pma_static_assets_are_served_separately_from_legacy_static(tmp_path):
     assert asset_response.status_code == 200
     assert "max-age=31536000" in asset_response.headers.get("Cache-Control", "")
     assert client.get("/legacy").status_code == 200
+
+
+def test_pma_base_path_routes_redirect_and_serve_spa(tmp_path):
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    client = TestClient(
+        create_hub_app(hub_root, base_path="/car"), follow_redirects=False
+    )
+
+    assert client.get("/").headers["location"] == "/car/"
+    assert client.get("/pma").headers["location"] == "/car/pma"
+    assert (
+        client.get("/worktrees/example").headers["location"] == "/car/worktrees/example"
+    )
+    assert (
+        client.get("/contextspace/local").headers["location"]
+        == "/car/contextspace/local"
+    )
+
+    response = client.get("/car/contextspace/local")
+    assert response.status_code == 200
+    assert "<title>PMA Hub</title>" in response.text

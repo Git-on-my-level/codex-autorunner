@@ -8,7 +8,9 @@ export const primaryNav: NavItem[] = [
   { href: '/pma', label: 'PMA', badge: 'Primary' },
   { href: '/dashboard', label: 'Dashboard' },
   { href: '/repos', label: 'Repos' },
+  { href: '/worktrees', label: 'Worktrees' },
   { href: '/tickets', label: 'Tickets' },
+  { href: '/contextspace/local', label: 'Contextspace' },
   { href: '/settings', label: 'Settings' }
 ];
 

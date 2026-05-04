@@ -7,6 +7,9 @@ const config = {
       pages: '../pma_static',
       assets: '../pma_static'
     }),
+    prerender: {
+      handleUnseenRoutes: 'ignore'
+    },
     paths: {}
   }
 };

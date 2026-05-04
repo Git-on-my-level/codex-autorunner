@@ -1,0 +1,44 @@
+export type FoundationRouteViewModel = {
+  eyebrow: string;
+  title: string;
+  panelTitle: string;
+  description: string;
+};
+
+export const routeViewModels = {
+  repoDetail: {
+    eyebrow: 'Repository',
+    title: 'Repo detail',
+    panelTitle: 'Current execution state',
+    description:
+      'Repo identity, worktrees, active runs, tickets, and surfaced PMA artifacts will appear here.'
+  },
+  worktrees: {
+    eyebrow: 'Workspaces',
+    title: 'Worktrees',
+    panelTitle: 'Worktree index',
+    description:
+      'Worktree status, branch, linked repo, active runs, ticket queue, and last activity will appear here.'
+  },
+  worktreeDetail: {
+    eyebrow: 'Worktree',
+    title: 'Worktree detail',
+    panelTitle: 'Execution workspace',
+    description:
+      'Branch state, current PMA work, relevant tickets, previews, and recent artifacts will appear here.'
+  },
+  ticketDetail: {
+    eyebrow: 'Ticket',
+    title: 'Ticket detail',
+    panelTitle: 'Ticket context',
+    description:
+      'Ticket state, PMA-created summaries, current run progress, and surfaced artifacts will appear here.'
+  },
+  contextspace: {
+    eyebrow: 'Contextspace',
+    title: 'Workspace memory',
+    panelTitle: 'Durable shared context',
+    description:
+      'Spec, decisions, active context, and PMA-maintained workspace notes will appear here.'
+  }
+} satisfies Record<string, FoundationRouteViewModel>;

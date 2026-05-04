@@ -891,7 +891,12 @@ def create_hub_app(
     @app.get("/pma", include_in_schema=False)
     @app.get("/dashboard", include_in_schema=False)
     @app.get("/repos", include_in_schema=False)
+    @app.get("/repos/{repo_id}", include_in_schema=False)
+    @app.get("/worktrees", include_in_schema=False)
+    @app.get("/worktrees/{worktree_id}", include_in_schema=False)
     @app.get("/tickets", include_in_schema=False)
+    @app.get("/tickets/{ticket_id}", include_in_schema=False)
+    @app.get("/contextspace/{workspace_id}", include_in_schema=False)
     @app.get("/settings", include_in_schema=False)
     def pma_hub_index():
         return _pma_index_response()
