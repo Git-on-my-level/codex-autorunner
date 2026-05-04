@@ -163,14 +163,16 @@ export function mapPmaChatSummary(raw: JsonRecord): PmaChatSummary {
   const latest = asRecord(raw.latest_execution ?? raw.latest_turn ?? raw.turn);
   const status = normalizeStatus(raw.lifecycle_status ?? raw.runtime_status ?? raw.status ?? latest.status);
   const id = stringValue(raw.thread_target_id ?? raw.managed_thread_id ?? raw.thread_id ?? raw.id, 'unknown-chat');
+  const resourceKind = nullableString(raw.resource_kind);
+  const resourceId = nullableString(raw.resource_id);
   return {
     id,
     title: stringValue(raw.display_name ?? raw.name ?? raw.title, id),
     status,
     agentId: nullableString(raw.agent_id ?? raw.agent),
     model: nullableString(raw.model ?? latest.model),
-    repoId: nullableString(raw.repo_id ?? raw.resource_id),
-    worktreeId: nullableString(raw.worktree_repo_id ?? raw.worktree_id),
+    repoId: nullableString(raw.repo_id) ?? (resourceKind === 'repo' ? resourceId : null),
+    worktreeId: nullableString(raw.worktree_repo_id ?? raw.worktree_id) ?? (resourceKind === 'worktree' ? resourceId : null),
     ticketId: nullableString(raw.ticket_id ?? raw.current_ticket_id),
     progressPercent: numberOrNull(raw.progress_percent ?? raw.progress),
     updatedAt: dateString(raw.updated_at ?? raw.last_activity_at ?? latest.finished_at ?? latest.started_at),
@@ -352,6 +354,8 @@ export function mapTicketSummary(raw: JsonRecord): TicketSummary {
   const frontmatter = asRecord(raw.frontmatter);
   const index = numberOrNull(raw.index);
   const path = nullableString(raw.path);
+  const resourceKind = nullableString(raw.resource_kind ?? frontmatter.resource_kind);
+  const resourceId = nullableString(raw.resource_id ?? frontmatter.resource_id);
   const id = stringValue(
     raw.id ?? frontmatter.ticket_id ?? raw.ticket_id ?? raw.current_ticket ?? path ?? raw.run_id ?? index,
     'unknown-ticket'
@@ -365,8 +369,10 @@ export function mapTicketSummary(raw: JsonRecord): TicketSummary {
     number: index,
     title: stringValue(frontmatter.title ?? raw.title ?? raw.summary ?? raw.current_ticket_title, index ? `Ticket ${index}` : id),
     status: errors.length ? 'failed' : done ? 'done' : normalizeStatus(statusSource),
-    repoId: nullableString(raw.repo_id ?? frontmatter.repo_id),
-    worktreeId: nullableString(raw.worktree_id ?? raw.worktree_repo_id ?? frontmatter.worktree_id),
+    repoId: nullableString(raw.repo_id ?? frontmatter.repo_id) ?? (resourceKind === 'repo' ? resourceId : null),
+    worktreeId:
+      nullableString(raw.worktree_id ?? raw.worktree_repo_id ?? frontmatter.worktree_id ?? frontmatter.worktree_repo_id) ??
+      (resourceKind === 'worktree' ? resourceId : null),
     path,
     agentId: nullableString(frontmatter.agent ?? raw.agent),
     chatKey: nullableString(raw.chat_key ?? frontmatter.chat_key),

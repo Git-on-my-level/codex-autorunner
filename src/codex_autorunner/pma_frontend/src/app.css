@@ -853,13 +853,20 @@ select {
 
 .workspace-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
   gap: var(--space-4);
   padding: var(--space-4);
 }
 
+.workspace-row-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-4);
+}
+
 .workspace-row-main,
+.child-worktree-row,
+.child-worktree-row > a,
 .run-card-main,
 .detail-heading,
 .detail-actions,
@@ -876,11 +883,14 @@ select {
 
 .workspace-row-main strong,
 .workspace-row-main span span,
+.child-worktree-row strong,
+.child-worktree-row span span,
 .compact-link-list a span {
   display: block;
 }
 
 .workspace-row-main span span,
+.child-worktree-row span span,
 .workspace-row-meta,
 .compact-link-list a span {
   color: var(--color-ink-muted);
@@ -898,6 +908,31 @@ select {
 .row-links .secondary-link,
 .secondary-actions a {
   color: var(--color-ink-muted);
+}
+
+.child-worktree-list {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.child-worktree-row {
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-2);
+  background: white;
+}
+
+.child-worktree-row > a {
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.detail-child-worktrees .child-worktree-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
 }
 
 .detail-heading {
@@ -934,7 +969,7 @@ select {
 
 .compact-definition {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: var(--space-4);
   margin: var(--space-3) 0 0;
 }
@@ -1986,7 +2021,8 @@ textarea:disabled {
 
   .chat-title-row,
   .run-card-main,
-  .workspace-row,
+  .workspace-row-shell,
+  .detail-child-worktrees .child-worktree-row,
   .detail-heading,
   .agent-status-row,
   .sensitive-action {
@@ -2001,7 +2037,8 @@ textarea:disabled {
     flex-direction: column;
   }
 
-  .workspace-row {
+  .workspace-row-shell,
+  .detail-child-worktrees .child-worktree-row {
     grid-template-columns: 1fr;
   }
 

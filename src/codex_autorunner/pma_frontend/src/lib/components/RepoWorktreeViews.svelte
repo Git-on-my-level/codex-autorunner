@@ -61,19 +61,36 @@
       {:else}
         <div class="workspace-row-list">
           {#each index.rows as row}
-            <article class={`workspace-row ${row.status}`}>
-              <a class="workspace-row-main" href={row.href}>
-                <span class="status-pill {row.status}">{statusLabel(row.status)}</span>
-                <span>
-                  <strong>{row.label}</strong>
-                <span>{row.kind === 'worktree' ? 'repo child' : 'repo'} · {row.detail} · {rowRelativeTime(row)}</span>
-                </span>
-              </a>
-              <div class="workspace-row-meta">
-                <span>{row.activeRuns} runs</span>
-                <span>{row.openTickets} tickets</span>
-                {#if row.repoHref}<a href={row.repoHref}>Parent repo</a>{/if}
+            <article class={`workspace-row ${row.status}`} class:has-children={row.childWorktrees.length > 0}>
+              <div class="workspace-row-shell">
+                <a class="workspace-row-main" href={row.href}>
+                  <span class="status-pill {row.status}">{statusLabel(row.status)}</span>
+                  <span>
+                    <strong>{row.label}</strong>
+                    <span>{row.kind === 'worktree' ? 'repo child' : 'repo'} · {row.detail} · {rowRelativeTime(row)}</span>
+                  </span>
+                </a>
+                <div class="workspace-row-meta">
+                  <span>{row.activeRuns} runs</span>
+                  <span>{row.openTickets} tickets</span>
+                  {#if row.repoHref}<a href={row.repoHref}>Parent repo</a>{/if}
+                </div>
               </div>
+              {#if row.childWorktrees.length > 0}
+                <div class="child-worktree-list" aria-label={`Worktrees owned by ${row.label}`}>
+                  {#each row.childWorktrees as worktree}
+                    <a class={`child-worktree-row ${worktree.status}`} href={worktree.href}>
+                      <span class="status-pill {worktree.status}">{statusLabel(worktree.status)}</span>
+                      <span>
+                        <strong>{worktree.label}</strong>
+                        <span>
+                          branch {worktree.branch ?? 'unknown'} · {worktree.openTickets} open ticket{worktree.openTickets === 1 ? '' : 's'}{#if worktree.currentRunTitle} · {worktree.currentRunTitle}{/if}
+                        </span>
+                      </span>
+                    </a>
+                  {/each}
+                </div>
+              {/if}
             </article>
           {/each}
         </div>
@@ -99,6 +116,14 @@
       <h2>{detail.kind === 'worktree' ? 'Repo worktree' : 'Repo'} identity</h2>
       <dl class="compact-definition">
         <div><dt>ID</dt><dd>{detail.id}</dd></div>
+        {#if detail.kind === 'worktree'}
+          <div>
+            <dt>Base repo</dt>
+            <dd>
+              {#if detail.baseRepoHref}<a href={detail.baseRepoHref}>{detail.baseRepoLabel}</a>{:else}{detail.baseRepoLabel ?? 'Unknown'}{/if}
+            </dd>
+          </div>
+        {/if}
         <div><dt>Branch</dt><dd>{detail.branch ?? 'Unknown'}</dd></div>
         <div><dt>Path</dt><dd>{detail.path ?? 'Unknown'}</dd></div>
       </dl>
@@ -111,7 +136,7 @@
           <a href="/tickets">Workspace tickets</a>
         </div>
         {#if detail.currentRuns.length === 0 || !detail.hasActiveRun}
-          <div class="state-panel">No active ticket run is visible for this workspace.</div>
+          <div class="state-panel">No active ticket run is visible for this {detail.kind === 'worktree' ? 'worktree' : 'repo'}.</div>
         {/if}
         {#each detail.currentRuns as run}
           <article class={`run-card ${run.status}`}>
@@ -141,6 +166,35 @@
         {@render compactList(detail.activity, 'No live activity summary is available yet.')}
       </section>
 
+      {#if detail.kind === 'repo'}
+        <section class="page-panel execution-panel wide">
+          <h2>Child worktrees</h2>
+          {#if detail.childWorktrees.length === 0}
+            <p>No worktrees are registered for this repo.</p>
+          {:else}
+            <div class="child-worktree-list detail-child-worktrees">
+              {#each detail.childWorktrees as worktree}
+                <article class={`child-worktree-row ${worktree.status}`}>
+                  <a href={worktree.href}>
+                    <span class="status-pill {worktree.status}">{statusLabel(worktree.status)}</span>
+                    <span>
+                      <strong>{worktree.label}</strong>
+                      <span>
+                        branch {worktree.branch ?? 'unknown'} · {worktree.openTickets} open ticket{worktree.openTickets === 1 ? '' : 's'}{#if worktree.currentRunTitle} · {worktree.currentRunTitle}{/if}
+                      </span>
+                    </span>
+                  </a>
+                  <div class="workspace-row-meta">
+                    <span>{worktree.activeRuns} runs</span>
+                    {#if worktree.ticketHref}<a href={worktree.ticketHref}>Current ticket</a>{/if}
+                  </div>
+                </article>
+              {/each}
+            </div>
+          {/if}
+        </section>
+      {/if}
+
       <section class="page-panel execution-panel">
         <h2>Workspace tickets</h2>
         {#if detail.currentTickets.length === 0}
@@ -157,7 +211,7 @@
       <section class="page-panel execution-panel">
         <h2>Next workspace tickets</h2>
         {#if detail.nextTickets.length === 0}
-          <p>No next tickets are queued.</p>
+          <p>No next tickets are queued for this {detail.kind === 'worktree' ? 'worktree' : 'repo'}.</p>
         {:else}
           <div class="compact-link-list">
             {#each detail.nextTickets as ticket}

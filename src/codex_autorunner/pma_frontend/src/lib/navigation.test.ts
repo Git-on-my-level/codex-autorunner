@@ -11,11 +11,7 @@ describe('PMA navigation', () => {
   it('frames worktrees and durable docs under repo/workspace ownership', () => {
     expect(navGroupLabels.support).toBe('Repos');
     expect(navGroupLabels.workspace).toBe('Workspace indexes');
-    expect(primaryNav.find((item) => item.href === '/worktrees')).toMatchObject({
-      label: 'Repo worktrees',
-      group: 'support',
-      indent: true
-    });
+    expect(primaryNav.map((item) => item.href)).not.toContain('/worktrees');
     expect(primaryNav.find((item) => item.href === '/tickets')).toMatchObject({
       label: 'Workspace tickets',
       group: 'workspace'
@@ -28,7 +24,6 @@ describe('PMA navigation', () => {
 
   it('matches active top-level routes', () => {
     expect(isActiveRoute('/pma/thread-1', '/pma')).toBe(true);
-    expect(isActiveRoute('/worktrees/worktree-1', '/worktrees')).toBe(true);
     expect(isActiveRoute('/tickets/123', '/tickets')).toBe(true);
     expect(isActiveRoute('/contextspace/repo-1', '/contextspace/local')).toBe(true);
     expect(isActiveRoute('/settings', '/settings')).toBe(true);

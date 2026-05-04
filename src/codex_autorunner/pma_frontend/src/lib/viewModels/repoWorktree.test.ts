@@ -3,22 +3,31 @@ import { mockArtifact, mockChatSummary, mockRepoSummary, mockRunProgress, mockTi
 import { buildRepoWorktreeDetailViewModel, buildRepoWorktreeIndexViewModel } from './repoWorktree';
 
 describe('repo/worktree view models', () => {
-  it('builds a lightweight mixed repo/worktree index', () => {
+  it('builds a lightweight repo index with child worktrees grouped under the repo', () => {
     const vm = buildRepoWorktreeIndexViewModel({
       repos: [mockRepoSummary],
       worktrees: [mockWorktreeSummary],
-      runs: [mockRunProgress],
-      chats: [mockChatSummary],
+      runs: [{ ...mockRunProgress, raw: { worktree_id: 'worktree-1', current_ticket_id: 'TICKET-110' } }],
+      chats: [{ ...mockChatSummary, repoId: 'repo-1', worktreeId: 'worktree-1' }],
       tickets: [mockTicketSummary],
       artifacts: []
     });
 
-    expect(vm.rows).toHaveLength(2);
+    expect(vm.rows).toHaveLength(1);
     expect(vm.title).toBe('Repos');
     expect(vm.eyebrow).toBe('Repo ownership');
-    expect(vm.activeCount).toBe(2);
+    expect(vm.activeCount).toBe(1);
     expect(vm.openTicketCount).toBe(4);
-    expect(vm.rows[0]).toHaveProperty('href');
+    expect(vm.rows[0]).toMatchObject({
+      href: '/repos/repo-1',
+      childWorktrees: [
+        {
+          href: '/worktrees/worktree-1',
+          currentTicketId: 'TICKET-110',
+          currentRunTitle: 'Hub rewrite foundation'
+        }
+      ]
+    });
   });
 
   it('frames the worktree index as repo-owned variants', () => {
@@ -34,8 +43,8 @@ describe('repo/worktree view models', () => {
       'worktree'
     );
 
-    expect(vm.title).toBe('Repo worktree variants');
-    expect(vm.eyebrow).toBe('Repo children');
+    expect(vm.title).toBe('Secondary worktree index');
+    expect(vm.eyebrow).toBe('Repo-owned variants');
     expect(vm.rows[0]).toMatchObject({
       href: '/worktrees/worktree-1',
       repoHref: '/repos/repo-1'
@@ -68,6 +77,48 @@ describe('repo/worktree view models', () => {
     expect(vm.links.map((link) => link.label)).toContain('View workspace memory');
     expect(vm.links.map((link) => link.label)).toContain('Open preview');
     expect(vm.artifacts[0]).toMatchObject({ kind: 'preview_url' });
+    expect(vm.childWorktrees).toHaveLength(1);
+    expect(vm.childWorktrees[0]).toMatchObject({
+      href: '/worktrees/worktree-1',
+      currentTicketId: 'TICKET-110'
+    });
+  });
+
+  it('names the base repo on worktree detail when known', () => {
+    const vm = buildRepoWorktreeDetailViewModel(
+      {
+        repos: [mockRepoSummary],
+        worktrees: [mockWorktreeSummary],
+        runs: [{ ...mockRunProgress, raw: { worktree_id: 'worktree-1', current_ticket_id: 'TICKET-110' } }],
+        chats: [{ ...mockChatSummary, repoId: 'repo-1', worktreeId: 'worktree-1' }],
+        tickets: [mockTicketSummary],
+        artifacts: []
+      },
+      'worktree',
+      'worktree-1'
+    );
+
+    expect(vm.baseRepoLabel).toBe('codex-autorunner');
+    expect(vm.baseRepoHref).toBe('/repos/repo-1');
+    expect(vm.currentRuns[0].ticketHref).toBe('/tickets/TICKET-110');
+  });
+
+  it('does not match repo-level records on worktree detail through the parent repo id', () => {
+    const vm = buildRepoWorktreeDetailViewModel(
+      {
+        repos: [mockRepoSummary],
+        worktrees: [mockWorktreeSummary],
+        runs: [{ ...mockRunProgress, raw: { repo_id: 'repo-1', current_ticket_id: 'TICKET-110' } }],
+        chats: [{ ...mockChatSummary, repoId: 'repo-1', worktreeId: null }],
+        tickets: [{ ...mockTicketSummary, worktreeId: null, raw: { repo_id: 'repo-1' } }],
+        artifacts: []
+      },
+      'worktree',
+      'worktree-1'
+    );
+
+    expect(vm.currentRuns).toHaveLength(0);
+    expect(vm.nextTickets).toHaveLength(0);
   });
 
   it('builds no-active-run detail without promoting debug as primary', () => {

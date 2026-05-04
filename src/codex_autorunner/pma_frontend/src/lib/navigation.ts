@@ -10,7 +10,6 @@ export const primaryNav: NavItem[] = [
   { href: '/pma', label: 'PMA', badge: 'Primary', group: 'primary' },
   { href: '/dashboard', label: 'Dashboard', group: 'support' },
   { href: '/repos', label: 'Repos', group: 'support' },
-  { href: '/worktrees', label: 'Repo worktrees', group: 'support', indent: true },
   { href: '/tickets', label: 'Workspace tickets', group: 'workspace' },
   { href: '/contextspace/local', label: 'Workspace memory', group: 'workspace' },
   { href: '/settings', label: 'Settings', group: 'system' }

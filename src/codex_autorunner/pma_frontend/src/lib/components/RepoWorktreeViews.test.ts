@@ -24,6 +24,7 @@ describe('RepoWorktreeViews', () => {
     expect(body).toContain('discord-5');
     expect(body).toContain('href="/repos/repo-1"');
     expect(body).toContain('href="/worktrees/worktree-1"');
+    expect(body).toContain('repo · Default branch main · 1 worktree');
     expect(body).not.toContain('Terminal');
     expect(body).not.toContain('Analytics');
   });
@@ -53,6 +54,7 @@ describe('RepoWorktreeViews', () => {
     expect(body).toContain('Open preview');
     expect(body).toContain('Debug logs');
     expect(body).toContain('Surfaced artifacts');
+    expect(body).toContain('Child worktrees');
   });
 
   it('renders a no-active-run state without primary terminal or analytics content', () => {
@@ -71,6 +73,7 @@ describe('RepoWorktreeViews', () => {
     const { body } = render(RepoWorktreeViews, { props: { state: 'ready', mode: 'detail', detail } });
 
     expect(body).toContain('No active ticket run is visible');
+    expect(body).toContain('No worktrees are registered for this repo.');
     expect(body).toContain('Next workspace tickets');
     expect(body).toContain('View workspace memory');
     expect(body).toContain('href="/contextspace/repo-1"');

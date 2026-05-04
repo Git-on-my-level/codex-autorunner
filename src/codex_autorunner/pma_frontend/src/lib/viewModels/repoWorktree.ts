@@ -24,6 +24,22 @@ export type RepoWorktreeIndexRow = {
   lastActivityAt: string | null;
   href: string;
   repoHref: string | null;
+  childWorktrees: RepoWorktreeChildRow[];
+};
+
+export type RepoWorktreeChildRow = {
+  id: string;
+  label: string;
+  status: WorkStatus;
+  branch: string | null;
+  path: string | null;
+  activeRuns: number;
+  openTickets: number;
+  currentRunTitle: string | null;
+  currentTicketId: string | null;
+  lastActivityAt: string | null;
+  href: string;
+  ticketHref: string | null;
 };
 
 export type RepoWorktreeRunCard = {
@@ -85,6 +101,9 @@ export type RepoWorktreeDetailViewModel = {
   nextTickets: RepoWorktreeTicketRow[];
   artifacts: RepoWorktreeArtifactRow[];
   links: RepoWorktreeLink[];
+  childWorktrees: RepoWorktreeChildRow[];
+  baseRepoLabel: string | null;
+  baseRepoHref: string | null;
   hasActiveRun: boolean;
 };
 
@@ -101,13 +120,24 @@ export function buildRepoWorktreeIndexViewModel(
   source: RepoWorktreeSourceData,
   kind: 'all' | RepoWorktreeKind = 'all'
 ): RepoWorktreeIndexViewModel {
-  const rows = [
-    ...(kind !== 'worktree' ? source.repos.map(repoToIndexRow) : []),
-    ...(kind !== 'repo' ? source.worktrees.map(worktreeToIndexRow) : [])
-  ].sort(byActiveThenRecent);
+  const repoIds = new Set(source.repos.map((repo) => repo.id));
+  const orphanWorktrees = source.worktrees.filter((worktree) => !worktree.repoId || !repoIds.has(worktree.repoId));
+  const rows =
+    kind === 'worktree'
+      ? source.worktrees.map((worktree) => worktreeToIndexRow(worktree, source))
+      : [
+          ...source.repos.map((repo) =>
+            repoToIndexRow(
+              repo,
+              source.worktrees.filter((worktree) => worktree.repoId === repo.id),
+              source
+            )
+          ),
+          ...(kind === 'all' ? orphanWorktrees.map((worktree) => worktreeToIndexRow(worktree, source)) : [])
+        ].sort(byActiveThenRecent);
   return {
-    title: kind === 'worktree' ? 'Repo worktree variants' : 'Repos',
-    eyebrow: kind === 'worktree' ? 'Repo children' : 'Repo ownership',
+    title: kind === 'worktree' ? 'Secondary worktree index' : 'Repos',
+    eyebrow: kind === 'worktree' ? 'Repo-owned variants' : 'Repo ownership',
     rows,
     activeCount: rows.filter((row) => row.status === 'running').length,
     waitingCount: rows.filter((row) => row.status === 'waiting' || row.status === 'blocked').length,
@@ -127,6 +157,11 @@ export function buildRepoWorktreeDetailViewModel(
   const title = resource?.name ?? id;
   const branch = kind === 'repo' ? (resource as RepoSummary | null)?.defaultBranch ?? null : (resource as WorktreeSummary | null)?.branch ?? null;
   const path = resource?.path ?? null;
+  const childWorktreeSummaries = kind === 'repo' ? source.worktrees.filter((worktree) => worktree.repoId === id) : [];
+  const baseRepo =
+    kind === 'worktree'
+      ? source.repos.find((repo) => repo.id === (resource as WorktreeSummary | null)?.repoId) ?? null
+      : null;
   const relatedRuns = source.runs.filter((run) => runMatchesResource(run, kind, id));
   const relatedChats = source.chats.filter((chat) => chatMatchesResource(chat, kind, id));
   const runCards = mergeRunCards(relatedRuns, relatedChats);
@@ -160,6 +195,9 @@ export function buildRepoWorktreeDetailViewModel(
     nextTickets,
     artifacts: runArtifacts.slice(0, 6),
     links: buildContextLinks(kind, id, runArtifacts),
+    childWorktrees: childWorktreeSummaries.map((worktree) => worktreeToChildRow(worktree, source)),
+    baseRepoLabel: baseRepo?.name ?? (kind === 'worktree' ? (resource as WorktreeSummary | null)?.repoId ?? null : null),
+    baseRepoHref: kind === 'worktree' && (resource as WorktreeSummary | null)?.repoId ? `/repos/${encodeURIComponent((resource as WorktreeSummary).repoId as string)}` : null,
     hasActiveRun: activeRunCards.length > 0
   };
 }
@@ -168,24 +206,30 @@ export function rowRelativeTime(row: { lastActivityAt?: string | null; updatedAt
   return formatRelativeTime(row.lastActivityAt ?? row.updatedAt ?? row.createdAt ?? null, now);
 }
 
-function repoToIndexRow(repo: RepoSummary): RepoWorktreeIndexRow {
+function repoToIndexRow(repo: RepoSummary, worktrees: WorktreeSummary[], source: RepoWorktreeSourceData): RepoWorktreeIndexRow {
+  const childWorktrees = worktrees.map((worktree) => worktreeToChildRow(worktree, source)).sort(byChildActiveThenLabel);
+  const childActiveRuns = childWorktrees.reduce((total, worktree) => total + worktree.activeRuns, 0);
+  const childOpenTickets = childWorktrees.reduce((total, worktree) => total + worktree.openTickets, 0);
   return {
     id: repo.id,
     kind: 'repo',
     label: repo.name,
-    detail: repo.defaultBranch ? `Default branch ${repo.defaultBranch}` : 'Repository',
-    status: repo.status,
+    detail: repo.defaultBranch
+      ? `Default branch ${repo.defaultBranch} · ${childWorktrees.length} worktree${childWorktrees.length === 1 ? '' : 's'}`
+      : `Repository · ${childWorktrees.length} worktree${childWorktrees.length === 1 ? '' : 's'}`,
+    status: aggregateStatus(repo.status, childWorktrees.map((worktree) => worktree.status)),
     branch: repo.defaultBranch,
     path: repo.path,
-    activeRuns: repo.activeRuns,
-    openTickets: repo.openTickets,
-    lastActivityAt: repo.lastActivityAt,
+    activeRuns: repo.activeRuns + childActiveRuns,
+    openTickets: repo.openTickets + childOpenTickets,
+    lastActivityAt: mostRecent([repo.lastActivityAt, ...childWorktrees.map((worktree) => worktree.lastActivityAt)]),
     href: `/repos/${encodeURIComponent(repo.id)}`,
-    repoHref: null
+    repoHref: null,
+    childWorktrees
   };
 }
 
-function worktreeToIndexRow(worktree: WorktreeSummary): RepoWorktreeIndexRow {
+function worktreeToIndexRow(worktree: WorktreeSummary, _source: RepoWorktreeSourceData): RepoWorktreeIndexRow {
   return {
     id: worktree.id,
     kind: 'worktree',
@@ -198,7 +242,31 @@ function worktreeToIndexRow(worktree: WorktreeSummary): RepoWorktreeIndexRow {
     openTickets: worktree.openTickets,
     lastActivityAt: worktree.lastActivityAt,
     href: `/worktrees/${encodeURIComponent(worktree.id)}`,
-    repoHref: worktree.repoId ? `/repos/${encodeURIComponent(worktree.repoId)}` : null
+    repoHref: worktree.repoId ? `/repos/${encodeURIComponent(worktree.repoId)}` : null,
+    childWorktrees: []
+  };
+}
+
+function worktreeToChildRow(worktree: WorktreeSummary, source: RepoWorktreeSourceData): RepoWorktreeChildRow {
+  const run = mergeRunCards(
+    source.runs.filter((candidate) => runMatchesResource(candidate, 'worktree', worktree.id)),
+    source.chats.filter((candidate) => chatMatchesResource(candidate, 'worktree', worktree.id))
+  )[0];
+  const tickets = ticketsForResource(source.tickets, 'worktree', worktree.id).filter((ticket) => ticket.status !== 'done');
+  const currentTicketId = run?.ticketId ?? tickets[0]?.id ?? null;
+  return {
+    id: worktree.id,
+    label: worktree.name,
+    status: run?.status ?? worktree.status,
+    branch: worktree.branch,
+    path: worktree.path,
+    activeRuns: worktree.activeRuns || (run && ['running', 'waiting', 'blocked'].includes(run.status) ? 1 : 0),
+    openTickets: worktree.openTickets || tickets.length,
+    currentRunTitle: run?.title ?? null,
+    currentTicketId,
+    lastActivityAt: worktree.lastActivityAt,
+    href: `/worktrees/${encodeURIComponent(worktree.id)}`,
+    ticketHref: currentTicketId ? `/tickets/${encodeURIComponent(currentTicketId)}` : null
   };
 }
 
@@ -295,17 +363,23 @@ function ticketMatchesResource(ticket: TicketSummary, kind: RepoWorktreeKind, id
   const frontmatter = asRecord(raw.frontmatter);
   const repoAliases = [
     ticket.repoId,
-    stringFromRaw(raw, ['repo_id', 'resource_id', 'base_repo_id']),
-    stringFromRaw(frontmatter, ['repo_id', 'resource_id', 'base_repo_id'])
+    stringFromRaw(raw, ['repo_id', 'base_repo_id']),
+    stringFromRaw(frontmatter, ['repo_id', 'base_repo_id'])
   ];
   const worktreeAliases = [
     ticket.worktreeId,
     stringFromRaw(raw, ['worktree_id', 'worktree_repo_id']),
     stringFromRaw(frontmatter, ['worktree_id', 'worktree_repo_id'])
   ];
+  const rawResourceKind = stringFromRaw(raw, ['resource_kind']);
+  const frontmatterResourceKind = stringFromRaw(frontmatter, ['resource_kind']);
+  const rawResourceId = stringFromRaw(raw, ['resource_id']);
+  const frontmatterResourceId = stringFromRaw(frontmatter, ['resource_id']);
   return kind === 'repo'
-    ? repoAliases.some((value) => value === id)
-    : worktreeAliases.some((value) => value === id) || repoAliases.some((value) => value === id);
+    ? repoAliases.some((value) => value === id) || (rawResourceKind === 'repo' && rawResourceId === id) || (frontmatterResourceKind === 'repo' && frontmatterResourceId === id)
+    : worktreeAliases.some((value) => value === id) ||
+        (rawResourceKind === 'worktree' && rawResourceId === id) ||
+        (frontmatterResourceKind === 'worktree' && frontmatterResourceId === id);
 }
 
 function ticketHasExplicitResource(ticket: TicketSummary): boolean {
@@ -349,14 +423,19 @@ function buildContextLinks(kind: RepoWorktreeKind, id: string, artifacts: RepoWo
 }
 
 function runMatchesResource(run: PmaRunProgress, kind: RepoWorktreeKind, id: string): boolean {
-  const keys = kind === 'repo' ? ['repo_id', 'resource_id', 'base_repo_id'] : ['worktree_id', 'worktree_repo_id', 'repo_id', 'resource_id'];
+  const keys = kind === 'repo' ? ['repo_id', 'resource_id', 'base_repo_id'] : ['worktree_id', 'worktree_repo_id'];
   const state = asRecord(run.raw.state);
   const ticketEngine = asRecord(state.ticket_engine);
-  return keys.some((key) => run.raw[key] === id || state[key] === id || ticketEngine[key] === id);
+  const resourceKind = stringFromRaw(run.raw, ['resource_kind']) ?? stringFromRaw(state, ['resource_kind']) ?? stringFromRaw(ticketEngine, ['resource_kind']);
+  const resourceId = stringFromRaw(run.raw, ['resource_id']) ?? stringFromRaw(state, ['resource_id']) ?? stringFromRaw(ticketEngine, ['resource_id']);
+  return (
+    keys.some((key) => run.raw[key] === id || state[key] === id || ticketEngine[key] === id) ||
+    (resourceKind === kind && resourceId === id)
+  );
 }
 
 function chatMatchesResource(chat: PmaChatSummary, kind: RepoWorktreeKind, id: string): boolean {
-  return kind === 'repo' ? chat.repoId === id : chat.worktreeId === id || chat.repoId === id;
+  return kind === 'repo' ? chat.repoId === id : chat.worktreeId === id;
 }
 
 function stringFromRaw(raw: Record<string, unknown>, keys: string[]): string | null {
@@ -387,4 +466,30 @@ function byRunRecent(left: RepoWorktreeRunCard, right: RepoWorktreeRunCard): num
   const rightTime = Date.parse(right.updatedAt ?? '') || 0;
   if (leftTime !== rightTime) return rightTime - leftTime;
   return left.title.localeCompare(right.title);
+}
+
+function byChildActiveThenLabel(left: RepoWorktreeChildRow, right: RepoWorktreeChildRow): number {
+  const leftActive = left.activeRuns > 0 || left.status === 'running' ? 1 : 0;
+  const rightActive = right.activeRuns > 0 || right.status === 'running' ? 1 : 0;
+  if (leftActive !== rightActive) return rightActive - leftActive;
+  const leftTime = Date.parse(left.lastActivityAt ?? '') || 0;
+  const rightTime = Date.parse(right.lastActivityAt ?? '') || 0;
+  if (leftTime !== rightTime) return rightTime - leftTime;
+  return left.label.localeCompare(right.label);
+}
+
+function mostRecent(values: (string | null)[]): string | null {
+  return values
+    .filter((value): value is string => Boolean(value))
+    .sort((left, right) => (Date.parse(right) || 0) - (Date.parse(left) || 0))[0] ?? null;
+}
+
+function aggregateStatus(base: WorkStatus, children: WorkStatus[]): WorkStatus {
+  const statuses = [base, ...children];
+  if (statuses.includes('running')) return 'running';
+  if (statuses.includes('blocked')) return 'blocked';
+  if (statuses.includes('waiting')) return 'waiting';
+  if (statuses.includes('failed')) return 'failed';
+  if (statuses.includes('idle')) return 'idle';
+  return base;
 }
