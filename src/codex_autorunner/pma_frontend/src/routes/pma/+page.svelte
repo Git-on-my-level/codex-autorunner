@@ -1,9 +1,11 @@
 <script lang="ts">
   import { page } from '$app/state';
-  import { onMount } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import SensitiveApprovalCard from '$lib/components/SensitiveApprovalCard.svelte';
   import SurfaceArtifactCard from '$lib/components/SurfaceArtifactCard.svelte';
   import { pmaApi, type ApiError, type JsonRecord } from '$lib/api/client';
+  import { openPmaTailEventSource, type StreamSubscription } from '$lib/api/streaming';
+  import { mapPmaRunProgress } from '$lib/viewModels/domain';
   import type {
     PmaChatMessage,
     PmaChatSummary,
@@ -45,6 +47,7 @@
   let selectedAgent = $state('codex');
   let selectedModel = $state('');
   let filter = $state<PmaChatFilter>('all');
+  let mobilePane = $state<'list' | 'chat'>('list');
   let search = $state('');
   let draft = $state('');
   let loadingChats = $state(true);
@@ -57,6 +60,10 @@
   let composeError = $state<ApiError | null>(null);
   let agentError = $state<ApiError | null>(null);
   let modelError = $state<ApiError | null>(null);
+  let streamState = $state<'idle' | 'connecting' | 'connected' | 'interrupted'>('idle');
+  let streamError = $state<string | null>(null);
+  let streamLastEventAt = $state<string | null>(null);
+  let streamSubscription: StreamSubscription | null = null;
   let fileInput: HTMLInputElement | null = $state(null);
   let imageInput: HTMLInputElement | null = $state(null);
 
@@ -84,6 +91,10 @@
     return () => window.clearInterval(interval);
   });
 
+  onDestroy(() => {
+    closeStream();
+  });
+
   async function loadInitial(): Promise<void> {
     loadingChats = true;
     chatError = null;
@@ -97,7 +108,11 @@
     if (chatResult.ok) {
       chats = chatResult.data;
       activeChatId = chooseActiveChatId(chatResult.data, activeChatId);
-      if (activeChatId) void refreshActive(activeChatId);
+      if (activeChatId) {
+        mobilePane = 'chat';
+        void refreshActive(activeChatId);
+        connectStream(activeChatId);
+      }
     } else {
       chatError = chatResult.error;
     }
@@ -138,7 +153,9 @@
 
   async function selectChat(chatId: string): Promise<void> {
     activeChatId = chatId;
+    mobilePane = 'chat';
     await refreshActive(chatId);
+    connectStream(chatId);
   }
 
   async function refreshActive(chatId: string, options: { quiet?: boolean } = {}): Promise<void> {
@@ -162,6 +179,42 @@
 
     void refreshApprovals();
     loadingActive = false;
+  }
+
+  function connectStream(chatId: string): void {
+    closeStream();
+    streamState = 'connecting';
+    streamError = null;
+    streamSubscription = openPmaTailEventSource(chatId, {
+      onEvent: (event) => {
+        if (activeChatId !== chatId) return;
+        streamState = 'connected';
+        streamLastEventAt = new Date().toISOString();
+        if (event.kind === 'progress' || event.kind === 'tail' || event.kind === 'state') {
+          progress = mapPmaRunProgress(event.payload);
+        }
+        if (event.kind === 'message' || event.kind === 'tail') {
+          void refreshActive(chatId, { quiet: true });
+        }
+      },
+      onError: () => {
+        if (activeChatId !== chatId) return;
+        streamState = 'interrupted';
+        streamError = 'Live PMA updates were interrupted. Polling continues in the background.';
+      }
+    });
+  }
+
+  function closeStream(): void {
+    streamSubscription?.close();
+    streamSubscription = null;
+    streamState = 'idle';
+  }
+
+  function retryStream(): void {
+    if (!activeChatId) return;
+    connectStream(activeChatId);
+    void refreshActive(activeChatId, { quiet: true });
   }
 
   async function createChat(): Promise<void> {
@@ -246,6 +299,13 @@
   function handlePaste(event: ClipboardEvent): void {
     const files = Array.from(event.clipboardData?.files ?? []).filter((file) => file.type.startsWith('image/'));
     if (files.length) addFiles(files, 'image');
+  }
+
+  function handleComposerKeydown(event: KeyboardEvent): void {
+    if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+      event.preventDefault();
+      void sendMessage();
+    }
   }
 
   async function ensureAttachmentsUploaded(): Promise<boolean> {
@@ -337,7 +397,29 @@
 </script>
 
 <section class="pma-layout" aria-label="PMA chat workspace">
-  <aside class="chat-list" aria-label="PMA chats">
+  <div class="pma-mobile-switch" role="tablist" aria-label="PMA chat panels">
+    <button
+      class:active={mobilePane === 'list'}
+      type="button"
+      role="tab"
+      aria-selected={mobilePane === 'list'}
+      onclick={() => (mobilePane = 'list')}
+    >
+      Chats
+    </button>
+    <button
+      class:active={mobilePane === 'chat'}
+      type="button"
+      role="tab"
+      aria-selected={mobilePane === 'chat'}
+      onclick={() => (mobilePane = 'chat')}
+      disabled={!activeChat}
+    >
+      Active
+    </button>
+  </div>
+
+  <aside class:hidden-mobile-pane={mobilePane !== 'list'} class="chat-list" aria-label="PMA chats">
     <div class="chat-list-header">
       <div class="section-heading">
         <p class="eyebrow">PMA chats</p>
@@ -368,11 +450,22 @@
     </div>
 
     {#if loadingChats}
-      <div class="state-panel">Loading PMA chats...</div>
+      <div class="state-panel loading-state">
+        <span class="state-icon" aria-hidden="true"></span>
+        <strong>Loading PMA chats</strong>
+        <p>Fetching managed threads and current run status.</p>
+      </div>
     {:else if chatError}
-      <div class="state-panel error">Could not load PMA chats. {chatError.message}</div>
+      <div class="state-panel error">
+        <strong>Could not load PMA chats</strong>
+        <p>{chatError.message}</p>
+        <button type="button" onclick={loadInitial}>Retry</button>
+      </div>
     {:else if filteredChats.length === 0}
-      <div class="state-panel">No PMA chats match this view.</div>
+      <div class="state-panel empty-state">
+        <strong>No PMA chats match this view</strong>
+        <p>Clear the search or choose a broader status filter.</p>
+      </div>
     {:else}
       <div class="chat-list-scroll">
         {#each filteredChats as chat (chat.id)}
@@ -403,7 +496,7 @@
     {/if}
   </aside>
 
-  <div class="active-chat">
+  <div class:hidden-mobile-pane={mobilePane !== 'chat'} class="active-chat">
     <div class="chat-header">
       <div>
         <p class="eyebrow">{activeChat?.repoId ?? 'Workspace'}</p>
@@ -452,15 +545,50 @@
       </div>
     </div>
 
+    {#if activeChat}
+      <div class={`stream-health ${streamState}`} role="status">
+        <span class="status-dot" aria-hidden="true"></span>
+        <span>
+          {#if streamState === 'connected'}
+            Live updates connected{streamLastEventAt ? ` · ${formatRelativeTime(streamLastEventAt)}` : ''}
+          {:else if streamState === 'connecting'}
+            Connecting live updates
+          {:else if streamState === 'interrupted'}
+            {streamError}
+          {:else}
+            Live updates idle
+          {/if}
+        </span>
+        {#if streamState === 'interrupted'}
+          <button type="button" onclick={retryStream}>Reconnect</button>
+        {/if}
+      </div>
+    {/if}
+
     <div class="message-stack" aria-live="polite">
       {#if loadingActive}
-        <div class="state-panel">Loading active chat...</div>
+        <div class="state-panel loading-state">
+          <span class="state-icon" aria-hidden="true"></span>
+          <strong>Loading active chat</strong>
+          <p>Collecting messages, tail events, and approval prompts.</p>
+        </div>
       {:else if activeError}
-        <div class="state-panel error">Could not load this chat. {activeError.message}</div>
+        <div class="state-panel error">
+          <strong>Could not load this chat</strong>
+          <p>{activeError.message}</p>
+          <button type="button" onclick={() => activeChatId && refreshActive(activeChatId)}>Retry</button>
+        </div>
       {:else if !activeChat}
-        <div class="state-panel">No PMA chat is selected.</div>
+        <div class="state-panel empty-state">
+          <strong>No PMA chat is selected</strong>
+          <p>Pick a conversation or create a new chat to start work.</p>
+          <button type="button" onclick={() => (mobilePane = 'list')}>Browse chats</button>
+        </div>
       {:else if activeCards.length === 0 && approvals.length === 0}
-        <div class="state-panel">This PMA chat has no visible messages yet.</div>
+        <div class="state-panel empty-state">
+          <strong>This chat is ready</strong>
+          <p>Send a message or attach files so PMA can start from current context.</p>
+        </div>
       {:else}
         {#each approvals as approval (approval.id)}
           <SensitiveApprovalCard {approval} onDecision={decideApproval} />
@@ -526,8 +654,8 @@
       />
       <div class="attachment-actions" aria-label="Attachment controls">
         <button class="icon-button" type="button" aria-label="Attach files" title="Attach files" onclick={() => fileInput?.click()}>+</button>
-        <button class="icon-button" type="button" aria-label="Attach images" title="Attach images" onclick={() => imageInput?.click()}>I</button>
-        <button class="icon-button" type="button" aria-label="Attach link" title="Attach link" onclick={addLink}>@</button>
+        <button class="icon-button" type="button" aria-label="Attach images" title="Attach images" onclick={() => imageInput?.click()}>img</button>
+        <button class="icon-button" type="button" aria-label="Attach link" title="Attach link" onclick={addLink}>lnk</button>
       </div>
       {#if pendingAttachments.length > 0}
         <div class="pending-attachments" aria-label="Pending attachments">
@@ -546,6 +674,7 @@
         bind:value={draft}
         disabled={!activeChat || sending}
         placeholder={activeChat ? 'Message PMA...' : 'Create or select a PMA chat'}
+        onkeydown={handleComposerKeydown}
       ></textarea>
       <button class="send-button" type="submit" disabled={!activeChat || (!draft.trim() && pendingAttachments.length === 0) || sending}>
         {sending ? 'Sending' : 'Send'}

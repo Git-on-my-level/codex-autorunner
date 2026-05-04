@@ -25,6 +25,37 @@ describe('API client error handling', () => {
     }
   });
 
+  it('replaces HTML error documents with a readable summary', async () => {
+    const fetcher = vi.fn(async () =>
+      new Response('<!doctype html><html><body><script>dev payload</script></body></html>', {
+        status: 404,
+        statusText: 'Not Found',
+        headers: { 'content-type': 'text/html' }
+      })
+    ) as unknown as typeof fetch;
+    const client = new PmaApiClient(fetcher);
+
+    const result = await client.getJson('/hub/pma/threads');
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.message).toBe('Server returned an HTML error page for request 404.');
+    }
+  });
+
+  it('truncates long text error responses before display', async () => {
+    const fetcher = vi.fn(async () => new Response('x'.repeat(260), { status: 500 })) as unknown as typeof fetch;
+    const client = new PmaApiClient(fetcher);
+
+    const result = await client.getJson('/hub/pma/threads');
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.message).toHaveLength(220);
+      expect(result.error.message.endsWith('...')).toBe(true);
+    }
+  });
+
   it('normalizes network failures', async () => {
     const error = normalizeApiError(new Error('socket closed'));
 

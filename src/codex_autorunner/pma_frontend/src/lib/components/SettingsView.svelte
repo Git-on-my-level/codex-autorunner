@@ -37,7 +37,13 @@
     if (!view) return;
     onSessionChange?.({ ...view.session, [key]: value });
   }
+
+  function handleWindowKeydown(event: KeyboardEvent): void {
+    if (event.key === 'Escape' && pendingAction) onCancelSensitiveAction?.();
+  }
 </script>
+
+<svelte:window onkeydown={handleWindowKeydown} />
 
 <section class="page-stack settings-page">
   <div class="section-heading detail-heading">

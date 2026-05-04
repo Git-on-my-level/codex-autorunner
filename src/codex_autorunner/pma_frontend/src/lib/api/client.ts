@@ -96,7 +96,7 @@ export async function parseApiErrorResponse(response: Response): Promise<ApiErro
   } catch {
     try {
       const text = await response.text();
-      if (text.trim()) message = text.trim();
+      if (text.trim()) message = readableErrorText(text.trim(), response.status);
     } catch {
       // Ignore secondary parse failures and keep the HTTP status message.
     }
@@ -119,6 +119,13 @@ export async function parseApiErrorResponse(response: Response): Promise<ApiErro
     message,
     details
   };
+}
+
+function readableErrorText(text: string, status: number): string {
+  if (/^\s*<!doctype html/i.test(text) || /^\s*<html[\s>]/i.test(text)) {
+    return `Server returned an HTML error page for request ${status}.`;
+  }
+  return text.length > 220 ? `${text.slice(0, 217)}...` : text;
 }
 
 export class PmaApiClient {

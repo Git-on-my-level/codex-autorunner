@@ -11,7 +11,13 @@
   const closeMobile = () => {
     mobileOpen = false;
   };
+
+  function handleWindowKeydown(event: KeyboardEvent): void {
+    if (event.key === 'Escape') closeMobile();
+  }
 </script>
+
+<svelte:window onkeydown={handleWindowKeydown} />
 
 <svelte:head>
   <title>PMA Hub</title>
@@ -69,6 +75,7 @@
         class="icon-button mobile-menu"
         type="button"
         aria-label="Open navigation"
+        aria-expanded={mobileOpen}
         title="Open navigation"
         onclick={() => (mobileOpen = true)}
       >
