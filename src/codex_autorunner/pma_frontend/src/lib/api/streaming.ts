@@ -1,3 +1,5 @@
+import { runtimeBasePath, withRuntimeBasePath } from '$lib/runtime/basePath';
+
 export type SseEvent<T = unknown> = {
   id: string | null;
   event: string;
@@ -65,10 +67,10 @@ export function normalizePmaTailStreamEvent(event: SseEvent<unknown>): PmaTailSt
 export function openPmaTailEventSource(
   managedThreadId: string,
   options: JsonStreamOptions,
-  basePath = ''
+  basePath = runtimeBasePath()
 ): StreamSubscription {
   const encoded = encodeURIComponent(managedThreadId);
-  const source = new EventSource(`${basePath}/hub/pma/threads/${encoded}/tail/events`, {
+  const source = new EventSource(withRuntimeBasePath(`/hub/pma/threads/${encoded}/tail/events`, basePath), {
     withCredentials: options.withCredentials
   });
   const handle = (message: MessageEvent) => {

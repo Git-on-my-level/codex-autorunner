@@ -1,6 +1,7 @@
 <script lang="ts">
   import { page } from '$app/state';
   import { primaryNav, navGroupLabels, isActiveRoute } from '$lib/navigation';
+  import { stripRuntimeBasePath, withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import type { Snippet } from 'svelte';
   import '../app.css';
 
@@ -26,7 +27,7 @@
 <div class:sidebar-collapsed={collapsed} class:mobile-open={mobileOpen} class="app-shell">
   <aside class="sidebar" aria-label="Primary navigation">
     <div class="brand-row">
-      <a class="brand-mark" href="/pma" onclick={closeMobile} aria-label="PMA Hub home">
+      <a class="brand-mark" href={href('/pma')} onclick={closeMobile} aria-label="PMA Hub home">
         <span class="brand-glyph">P</span>
         <span class="brand-copy">
           <span class="brand-title">PMA Hub</span>
@@ -50,10 +51,10 @@
           <span class="nav-group-label">{groupLabel}</span>
           {#each primaryNav.filter((item) => item.group === group) as item}
             <a
-              class:active={isActiveRoute(page.url.pathname, item.href)}
+              class:active={isActiveRoute(stripRuntimeBasePath(page.url.pathname), item.href)}
               class:indented={item.indent}
               class="nav-link"
-              href={item.href}
+              href={href(item.href)}
               onclick={closeMobile}
             >
               <span class="nav-initial" aria-hidden="true">{item.label.slice(0, 1)}</span>

@@ -1,9 +1,10 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
+  import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import { onMount } from 'svelte';
 
   onMount(() => {
-    void goto('/pma', { replaceState: true });
+    void goto(href('/pma'), { replaceState: true });
   });
 </script>
 

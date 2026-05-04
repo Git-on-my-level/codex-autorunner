@@ -4,6 +4,7 @@
     RepoWorktreeIndexViewModel
   } from '$lib/viewModels/repoWorktree';
   import { rowRelativeTime } from '$lib/viewModels/repoWorktree';
+  import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import { statusLabel } from '$lib/viewModels/pmaChat';
 
   let {
@@ -54,7 +55,7 @@
     <section class="page-panel workspace-index-panel">
       <div class="panel-heading-row">
         <h2>Current work</h2>
-        <a href="/pma">Open PMA</a>
+        <a href={href('/pma')}>Open PMA</a>
       </div>
       {#if index.rows.length === 0}
         <div class="state-panel empty-state compact-empty">
@@ -66,7 +67,7 @@
           {#each index.rows as row}
             <article class={`workspace-row ${row.status}`} class:has-children={row.childWorktrees.length > 0}>
               <div class="workspace-row-shell">
-                <a class="workspace-row-main" href={row.href}>
+                <a class="workspace-row-main" href={href(row.href)}>
                   <span class="status-pill {row.status}">{statusLabel(row.status)}</span>
                   <span>
                     <strong>{row.label}</strong>
@@ -76,13 +77,13 @@
                 <div class="workspace-row-meta">
                   <span>{row.activeRuns} runs</span>
                   <span>{row.openTickets} tickets</span>
-                  {#if row.repoHref}<a href={row.repoHref}>Parent repo</a>{/if}
+                  {#if row.repoHref}<a href={href(row.repoHref)}>Parent repo</a>{/if}
                 </div>
               </div>
               {#if row.childWorktrees.length > 0}
                 <div class="child-worktree-list" aria-label={`Worktrees owned by ${row.label}`}>
                   {#each row.childWorktrees as worktree}
-                    <a class={`child-worktree-row ${worktree.status}`} href={worktree.href}>
+                    <a class={`child-worktree-row ${worktree.status}`} href={href(worktree.href)}>
                       <span class="status-pill {worktree.status}">{statusLabel(worktree.status)}</span>
                       <span>
                         <strong>{worktree.label}</strong>
@@ -110,7 +111,7 @@
       </div>
       <div class="detail-actions">
         {#each detail.links.filter((link) => !link.secondary) as link}
-          <a href={link.href}>{link.label}</a>
+          <a href={href(link.href)}>{link.label}</a>
         {/each}
       </div>
     </div>
@@ -123,7 +124,7 @@
           <div>
             <dt>Base repo</dt>
             <dd>
-              {#if detail.baseRepoHref}<a href={detail.baseRepoHref}>{detail.baseRepoLabel}</a>{:else}{detail.baseRepoLabel ?? 'Unknown'}{/if}
+              {#if detail.baseRepoHref}<a href={href(detail.baseRepoHref)}>{detail.baseRepoLabel}</a>{:else}{detail.baseRepoLabel ?? 'Unknown'}{/if}
             </dd>
           </div>
         {/if}
@@ -136,7 +137,7 @@
       <section class="page-panel execution-panel wide">
         <div class="panel-heading-row">
           <h2>Current run</h2>
-          <a href={detail.ticketIndexHref}>{detail.ticketIndexLabel}</a>
+          <a href={href(detail.ticketIndexHref)}>{detail.ticketIndexLabel}</a>
         </div>
         {#if detail.currentRuns.length === 0 || !detail.hasActiveRun}
           <div class="state-panel empty-state compact-empty">
@@ -159,9 +160,9 @@
               <span style={`width: ${run.progress}%`}></span>
             </span>
             <div class="row-links">
-              {#if run.chatHref}<a href={run.chatHref}>PMA chat</a>{/if}
-              {#if run.ticketHref}<a href={run.ticketHref}>Ticket</a>{/if}
-              {#if run.logsHref}<a class="secondary-link" href={run.logsHref}>Debug logs</a>{/if}
+              {#if run.chatHref}<a href={href(run.chatHref)}>PMA chat</a>{/if}
+              {#if run.ticketHref}<a href={href(run.ticketHref)}>Ticket</a>{/if}
+              {#if run.logsHref}<a class="secondary-link" href={href(run.logsHref)}>Debug logs</a>{/if}
             </div>
           </article>
         {/each}
@@ -184,7 +185,7 @@
             <div class="child-worktree-list detail-child-worktrees">
               {#each detail.childWorktrees as worktree}
                 <article class={`child-worktree-row ${worktree.status}`}>
-                  <a href={worktree.href}>
+                  <a href={href(worktree.href)}>
                     <span class="status-pill {worktree.status}">{statusLabel(worktree.status)}</span>
                     <span>
                       <strong>{worktree.label}</strong>
@@ -195,7 +196,7 @@
                   </a>
                   <div class="workspace-row-meta">
                     <span>{worktree.activeRuns} runs</span>
-                    {#if worktree.ticketHref}<a href={worktree.ticketHref}>Current ticket</a>{/if}
+                    {#if worktree.ticketHref}<a href={href(worktree.ticketHref)}>Current ticket</a>{/if}
                   </div>
                 </article>
               {/each}
@@ -214,7 +215,7 @@
         {:else}
           <div class="compact-link-list">
             {#each detail.currentTickets as ticket}
-              <a href={ticket.href}>{ticket.title}<span>{statusLabel(ticket.status)}</span></a>
+              <a href={href(ticket.href)}>{ticket.title}<span>{statusLabel(ticket.status)}</span></a>
             {/each}
           </div>
         {/if}
@@ -230,7 +231,7 @@
         {:else}
           <div class="compact-link-list">
             {#each detail.nextTickets as ticket}
-              <a href={ticket.href}>{ticket.title}<span>{statusLabel(ticket.status)}</span></a>
+              <a href={href(ticket.href)}>{ticket.title}<span>{statusLabel(ticket.status)}</span></a>
             {/each}
           </div>
         {/if}
@@ -244,7 +245,7 @@
 
     <div class="secondary-actions">
       {#each detail.links.filter((link) => link.secondary) as link}
-        <a href={link.href}>{link.label}</a>
+        <a href={href(link.href)}>{link.label}</a>
       {/each}
     </div>
   </section>
@@ -259,7 +260,7 @@
   {:else}
     <div class="activity-list compact-activity-list">
       {#each items as item}
-        <a class="dashboard-row activity-row" href={item.href ?? '/pma'}>
+        <a class="dashboard-row activity-row" href={href(item.href ?? '/pma')}>
           <span class={`activity-kind ${item.kind}`}>{item.kind}</span>
           <span>
             <span class="row-title">{item.title}</span>

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import type { ContextspaceViewModel, ContextspaceDocKind } from '$lib/viewModels/contextspace';
 
   let {
@@ -46,8 +47,8 @@
         <p>{vm.description} {vm.presentCount} of {vm.docs.length} standard docs have content.</p>
       </div>
       <div class="detail-actions">
-        <a href={vm.openWorkspaceHref}>{vm.openWorkspaceLabel}</a>
-        <a href={vm.askPmaHref}>Ask PMA to update</a>
+        <a href={href(vm.openWorkspaceHref)}>{vm.openWorkspaceLabel}</a>
+        <a href={href(vm.askPmaHref)}>Ask PMA to update</a>
       </div>
     </div>
 
@@ -84,7 +85,7 @@
           <div class="state-panel contextspace-empty">
             <strong>{activeDoc.label} has no content</strong>
             <p>Ask PMA to refresh this {vm.workspaceKind} memory before starting work that depends on shared context.</p>
-            <a class="inline-link" href={vm.askPmaHref}>Ask PMA to update</a>
+            <a class="inline-link" href={href(vm.askPmaHref)}>Ask PMA to update</a>
           </div>
         {:else}
           <div class="markdown-body">

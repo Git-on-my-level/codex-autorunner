@@ -1,7 +1,11 @@
-import { describe, expect, it } from 'vitest';
-import { normalizePmaTailStreamEvent, parseJsonSseFrame, parseSseFrame } from './streaming';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { normalizePmaTailStreamEvent, openPmaTailEventSource, parseJsonSseFrame, parseSseFrame } from './streaming';
 
 describe('SSE helpers', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it('parses named SSE frames with ids and retry hints', () => {
     const parsed = parseSseFrame('id: 42\nevent: tail\nretry: 5000\ndata: {"summary":"Edited"}\n\n');
 
@@ -23,5 +27,22 @@ describe('SSE helpers', () => {
       lastEventId: '9',
       payload: { phase: 'testing' }
     });
+  });
+
+  it('opens PMA tail EventSource under the configured hub base path', () => {
+    const close = vi.fn();
+    const addEventListener = vi.fn();
+    const eventSource = vi.fn(function EventSourceMock() {
+      return { addEventListener, close };
+    });
+    vi.stubGlobal('EventSource', eventSource);
+
+    const subscription = openPmaTailEventSource('thread/1', { onEvent: vi.fn() }, '/car');
+
+    expect(eventSource).toHaveBeenCalledWith('/car/hub/pma/threads/thread%2F1/tail/events', {
+      withCredentials: undefined
+    });
+    subscription.close();
+    expect(close).toHaveBeenCalledOnce();
   });
 });

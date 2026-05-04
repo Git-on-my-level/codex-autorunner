@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import type { SurfaceArtifact } from '$lib/viewModels/domain';
   import { artifactCardView } from '$lib/viewModels/pmaChat';
 
@@ -13,7 +14,7 @@
   <strong>{artifact.title}</strong>
   <p>{artifact.summary ?? artifact.url ?? 'Surfaced PMA artifact.'}</p>
   {#if view.preview === 'image' && artifact.url}
-    <img class="artifact-image-preview" src={artifact.url} alt={artifact.title} loading="lazy" />
+    <img class="artifact-image-preview" src={href(artifact.url)} alt={artifact.title} loading="lazy" />
   {:else if view.preview === 'link' && artifact.url}
     <div class="artifact-url-preview">{artifact.url}</div>
   {:else if view.preview === 'file'}
@@ -21,7 +22,7 @@
   {/if}
   <div class="artifact-actions">
     {#if artifact.url && view.primaryAction}
-      <a href={artifact.url}>{view.primaryAction}</a>
+      <a href={href(artifact.url)}>{view.primaryAction}</a>
     {/if}
     <details>
       <summary>{view.detailLabel}</summary>

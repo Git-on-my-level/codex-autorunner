@@ -88,6 +88,30 @@ describe('API client error handling', () => {
     }
   });
 
+  it('prefixes API requests with the runtime hub base path when configured', async () => {
+    const fetcher = vi.fn(async () =>
+      Response.json({
+        threads: []
+      })
+    ) as unknown as typeof fetch;
+    const client = new PmaApiClient(fetcher, '/car');
+
+    const result = await client.pma.listChats();
+
+    expect(fetcher).toHaveBeenCalledWith('/car/hub/pma/threads', expect.any(Object));
+    expect(result.ok).toBe(true);
+  });
+
+  it('does not double-prefix already based request paths', async () => {
+    const fetcher = vi.fn(async () => Response.json({ ok: true })) as unknown as typeof fetch;
+    const client = new PmaApiClient(fetcher, '/car');
+
+    const result = await client.getJson('/car/hub/messages');
+
+    expect(fetcher).toHaveBeenCalledWith('/car/hub/messages', expect.any(Object));
+    expect(result.ok).toBe(true);
+  });
+
   it('expands PMA turn payloads into readable user and assistant messages', async () => {
     const fetcher = vi.fn(async () =>
       Response.json({

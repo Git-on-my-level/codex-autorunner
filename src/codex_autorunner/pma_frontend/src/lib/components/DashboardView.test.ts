@@ -1,10 +1,14 @@
 import { render } from 'svelte/server';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import DashboardView from './DashboardView.svelte';
 import { buildDashboardViewModel } from '$lib/viewModels/dashboard';
 import { mockArtifact, mockChatSummary, mockRepoSummary, mockRunProgress, mockTicketSummary, mockWorktreeSummary } from '$lib/viewModels/mockData';
 
 describe('DashboardView', () => {
+  afterEach(() => {
+    globalThis.__CAR_BASE_PATH__ = undefined;
+  });
+
   it('renders loading state', () => {
     const { body } = render(DashboardView, { props: { state: 'loading' } });
 
@@ -67,5 +71,23 @@ describe('DashboardView', () => {
     expect(body).toContain('Repos and worktree variants');
     expect(body).toContain('Recent activity');
     expect(body).toContain('Preview ready');
+  });
+
+  it('renders internal links under the injected hub base path', () => {
+    globalThis.__CAR_BASE_PATH__ = '/car';
+    const dashboard = buildDashboardViewModel({
+      summary: null,
+      runs: [mockRunProgress],
+      chats: [mockChatSummary],
+      approvals: [],
+      repos: [mockRepoSummary],
+      worktrees: [mockWorktreeSummary],
+      tickets: [mockTicketSummary]
+    });
+    const { body } = render(DashboardView, { props: { state: 'ready', dashboard } });
+
+    expect(body).toContain('href="/car/pma?chat=chat-1"');
+    expect(body).toContain('href="/car/repos/codex-autorunner"');
+    expect(body).toContain('href="/car/tickets/TICKET-110"');
   });
 });

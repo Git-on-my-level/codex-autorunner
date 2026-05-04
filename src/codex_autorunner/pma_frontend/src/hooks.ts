@@ -1,12 +1,9 @@
 import type { Reroute } from '@sveltejs/kit';
-
-declare global {
-  var __CAR_BASE_PATH__: string | undefined;
-}
+import { runtimeBasePath, stripRuntimeBasePath } from '$lib/runtime/basePath';
 
 export const reroute: Reroute = ({ url }) => {
-  const basePath = globalThis.__CAR_BASE_PATH__?.replace(/\/+$/, '');
+  const basePath = runtimeBasePath();
   if (!basePath) return;
-  if (url.pathname === basePath) return '/';
-  if (url.pathname.startsWith(`${basePath}/`)) return url.pathname.slice(basePath.length) || '/';
+  const pathname = stripRuntimeBasePath(url.pathname, basePath);
+  if (pathname !== url.pathname) return pathname;
 };

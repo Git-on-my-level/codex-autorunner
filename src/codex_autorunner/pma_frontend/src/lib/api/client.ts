@@ -23,6 +23,7 @@ import {
   type TicketSummary,
   type WorktreeSummary
 } from '$lib/viewModels/domain';
+import { runtimeBasePath, withRuntimeBasePath } from '$lib/runtime/basePath';
 
 export type ApiErrorKind = 'http' | 'network' | 'parse' | 'aborted';
 
@@ -132,7 +133,7 @@ function readableErrorText(text: string, status: number): string {
 export class PmaApiClient {
   constructor(
     private readonly fetcher: typeof fetch = fetch,
-    private readonly basePath = ''
+    private readonly basePath = runtimeBasePath()
   ) {}
 
   async requestJson<T>(path: string, options: RequestOptions = {}): Promise<ApiResult<T>> {
@@ -141,7 +142,7 @@ export class PmaApiClient {
     new Headers(options.headers).forEach((value, key) => headers.set(key, value));
 
     try {
-      const response = await this.fetcher(`${this.basePath}${path}`, {
+      const response = await this.fetcher(this.url(path), {
         ...options,
         body: options.body === undefined ? undefined : JSON.stringify(options.body),
         headers
@@ -176,7 +177,7 @@ export class PmaApiClient {
 
   async uploadForm<T>(path: string, body: FormData): Promise<ApiResult<T>> {
     try {
-      const response = await this.fetcher(`${this.basePath}${path}`, {
+      const response = await this.fetcher(this.url(path), {
         method: 'POST',
         body,
         headers: { accept: 'application/json' }
@@ -188,6 +189,10 @@ export class PmaApiClient {
     } catch (error) {
       return { ok: false, error: normalizeApiError(error) };
     }
+  }
+
+  url(path: string): string {
+    return withRuntimeBasePath(path, this.basePath);
   }
 
   pma = {

@@ -5,6 +5,7 @@
     TicketListViewModel
   } from '$lib/viewModels/ticket';
   import { filterTicketRows, rowRelativeTime } from '$lib/viewModels/ticket';
+  import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import { statusLabel } from '$lib/viewModels/pmaChat';
 
   let {
@@ -57,11 +58,11 @@
           class="chip"
           role="tab"
           aria-selected={selectedWorkspaceFilter === filter.id}
-          href={filter.id === 'all'
+          href={href(filter.id === 'all'
             ? '/tickets'
             : filter.id === 'unscoped'
               ? '/tickets?unscoped=1'
-              : `/tickets?${filter.id.startsWith('repo:') ? 'repo' : 'worktree'}=${encodeURIComponent(filter.id.split(':')[1] ?? '')}`}
+              : `/tickets?${filter.id.startsWith('repo:') ? 'repo' : 'worktree'}=${encodeURIComponent(filter.id.split(':')[1] ?? '')}`)}
         >
           {filter.label}
           <span>{filter.count}</span>
@@ -88,7 +89,7 @@
     <section class="page-panel ticket-list-panel">
       <div class="panel-heading-row">
         <h2>Cross-workspace ticket queue</h2>
-        <a href="/pma">Open PMA</a>
+        <a href={href('/pma')}>Open PMA</a>
       </div>
       {#if visibleRows.length === 0}
         <div class="state-panel empty-state compact-empty">
@@ -108,13 +109,13 @@
           </div>
           {#each visibleRows as row}
             <article class={`ticket-row ${row.status}`}>
-              <a class="ticket-row-title" href={row.href}>
+              <a class="ticket-row-title" href={href(row.href)}>
                 <strong>{row.numberLabel}</strong>
                 <span>{row.title}</span>
               </a>
               <span>
                 {#if row.workspaceHref}
-                  <a class="inline-link" href={row.workspaceHref}>{row.repoLabel}</a>
+                  <a class="inline-link" href={href(row.workspaceHref)}>{row.repoLabel}</a>
                 {:else}
                   {row.repoLabel}
                 {/if}
@@ -132,7 +133,7 @@
               <span>{rowRelativeTime(row)}</span>
               <span>
                 {#if row.chatHref}
-                  <a class="inline-link" href={row.chatHref}>PMA chat</a>
+                  <a class="inline-link" href={href(row.chatHref)}>PMA chat</a>
                 {:else}
                   <span class="muted">None</span>
                 {/if}
@@ -157,7 +158,7 @@
             {@const command = action.command}
             <button type="button" onclick={() => onCommand?.(command)}>{action.label}</button>
           {:else if action.href}
-            <a href={action.href}>{action.label}</a>
+            <a href={href(action.href)}>{action.label}</a>
           {/if}
         {/each}
       </div>
@@ -180,7 +181,7 @@
             <dt>Workspace scope</dt>
             <dd>
               {#if detail.workspaceHref}
-                <a href={detail.workspaceHref}>{detail.repoLabel}</a>
+                <a href={href(detail.workspaceHref)}>{detail.repoLabel}</a>
               {:else}
                 {detail.repoLabel}
               {/if}
@@ -230,7 +231,7 @@
           {:else}
             <div class="timeline-list">
               {#each detail.timeline as item}
-                <a class={`timeline-item ${item.status}`} href={item.href ?? detail.runHref ?? '/tickets'}>
+                <a class={`timeline-item ${item.status}`} href={href(item.href ?? detail.runHref ?? '/tickets')}>
                   <span class="status-pill {item.status}">{statusLabel(item.status)}</span>
                   <span>
                     <strong>{item.title}</strong>
@@ -252,7 +253,7 @@
           {:else}
             <div class="compact-activity-list">
               {#each detail.artifacts as artifact}
-                <a class="dashboard-row activity-row" href={artifact.href ?? detail.runHref ?? '/tickets'}>
+                <a class="dashboard-row activity-row" href={href(artifact.href ?? detail.runHref ?? '/tickets')}>
                   <span class={`activity-kind ${artifact.kind}`}>{artifact.kind}</span>
                   <span>
                     <span class="row-title">{artifact.title}</span>
@@ -267,7 +268,7 @@
         <section class="page-panel execution-panel">
           <h2>Linked chat</h2>
           {#if detail.chatHref}
-            <a class="dashboard-row compact-row" href={detail.chatHref}>
+            <a class="dashboard-row compact-row" href={href(detail.chatHref)}>
               <span>
                 <span class="row-title">PMA chat</span>
                 <span class="row-meta">Ticket-linked conversation</span>
@@ -286,7 +287,7 @@
 
     <div class="secondary-actions">
       {#each detail.actions.filter((action) => action.secondary) as action}
-        {#if action.href}<a href={action.href}>{action.label}</a>{/if}
+        {#if action.href}<a href={href(action.href)}>{action.label}</a>{/if}
       {/each}
     </div>
   </section>
