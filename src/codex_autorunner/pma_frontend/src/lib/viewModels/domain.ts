@@ -110,11 +110,23 @@ export type WorktreeSummary = {
 /** Ticket queue row. */
 export type TicketSummary = {
   id: string;
+  number: number | null;
   title: string;
   status: WorkStatus;
   repoId: string | null;
+  worktreeId: string | null;
+  path: string | null;
+  agentId: string | null;
+  chatKey: string | null;
   runId: string | null;
   updatedAt: string | null;
+  durationSeconds: number | null;
+  diffStats: {
+    insertions: number;
+    deletions: number;
+    filesChanged: number;
+  } | null;
+  errors: string[];
   raw: JsonRecord;
 };
 
@@ -286,17 +298,38 @@ export function mapWorktreeSummary(raw: JsonRecord): WorktreeSummary {
 
 export function mapTicketSummary(raw: JsonRecord): TicketSummary {
   const frontmatter = asRecord(raw.frontmatter);
+  const index = numberOrNull(raw.index);
+  const path = nullableString(raw.path);
   const id = stringValue(
-    frontmatter.ticket_id ?? raw.ticket_id ?? raw.id ?? raw.current_ticket ?? raw.path ?? raw.run_id ?? raw.index,
+    raw.id ?? frontmatter.ticket_id ?? raw.ticket_id ?? raw.current_ticket ?? path ?? raw.run_id ?? index,
     'unknown-ticket'
   );
+  const statusSource = raw.status ?? raw.state ?? raw.canonical_status;
+  const done = Boolean(frontmatter.done ?? raw.done);
+  const errors = stringArray(raw.errors);
+  const diffStats = asRecord(raw.diff_stats);
   return {
     id,
-    title: stringValue(frontmatter.title ?? raw.title ?? raw.summary ?? raw.current_ticket_title, id),
-    status: Boolean(frontmatter.done ?? raw.done) ? 'done' : normalizeStatus(raw.status ?? raw.state ?? raw.canonical_status),
-    repoId: nullableString(raw.repo_id),
+    number: index,
+    title: stringValue(frontmatter.title ?? raw.title ?? raw.summary ?? raw.current_ticket_title, index ? `Ticket ${index}` : id),
+    status: errors.length ? 'failed' : done ? 'done' : normalizeStatus(statusSource),
+    repoId: nullableString(raw.repo_id ?? frontmatter.repo_id),
+    worktreeId: nullableString(raw.worktree_id ?? raw.worktree_repo_id ?? frontmatter.worktree_id),
+    path,
+    agentId: nullableString(frontmatter.agent ?? raw.agent),
+    chatKey: nullableString(raw.chat_key ?? frontmatter.chat_key),
     runId: nullableString(raw.run_id),
-    updatedAt: dateString(raw.updated_at ?? raw.created_at ?? raw.last_activity_at),
+    updatedAt: dateString(raw.updated_at ?? raw.mtime ?? raw.created_at ?? raw.last_activity_at),
+    durationSeconds: numberOrNull(raw.duration_seconds),
+    diffStats:
+      Object.keys(diffStats).length > 0
+        ? {
+            insertions: numberOrNull(diffStats.insertions) ?? 0,
+            deletions: numberOrNull(diffStats.deletions) ?? 0,
+            filesChanged: numberOrNull(diffStats.files_changed ?? diffStats.filesChanged) ?? 0
+          }
+        : null,
+    errors,
     raw
   };
 }
@@ -410,5 +443,12 @@ function numberOrNull(value: unknown): number | null {
 }
 
 function dateString(value: unknown): string | null {
-  return typeof value === 'string' && value.trim() ? value : null;
+  if (typeof value === 'string' && value.trim()) return value;
+  if (typeof value === 'number' && Number.isFinite(value)) return new Date(value * 1000).toISOString();
+  return null;
+}
+
+function stringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
 }

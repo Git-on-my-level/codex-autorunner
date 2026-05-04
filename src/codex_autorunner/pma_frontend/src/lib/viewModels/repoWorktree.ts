@@ -279,7 +279,29 @@ function runToActivity(run: RepoWorktreeRunCard): RepoWorktreeArtifactRow {
 }
 
 function ticketsForIds(tickets: TicketSummary[], ids: Set<string>): RepoWorktreeTicketRow[] {
-  return [...ids].map((id) => tickets.find((ticket) => ticket.id === id) ?? { id, title: id, status: 'running' as WorkStatus, repoId: null, runId: null, updatedAt: null, raw: {} }).map(ticketToRow);
+  return [...ids]
+    .map((id) => tickets.find((ticket) => ticket.id === id) ?? fallbackTicketSummary(id))
+    .map(ticketToRow);
+}
+
+function fallbackTicketSummary(id: string): TicketSummary {
+  return {
+    id,
+    number: null,
+    title: id,
+    status: 'running',
+    repoId: null,
+    worktreeId: null,
+    path: null,
+    agentId: null,
+    chatKey: null,
+    runId: null,
+    updatedAt: null,
+    durationSeconds: null,
+    diffStats: null,
+    errors: [],
+    raw: {}
+  };
 }
 
 function buildContextLinks(kind: RepoWorktreeKind, id: string, artifacts: RepoWorktreeArtifactRow[]): RepoWorktreeLink[] {

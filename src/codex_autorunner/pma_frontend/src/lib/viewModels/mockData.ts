@@ -101,11 +101,19 @@ export const mockWorktreeSummary: WorktreeSummary = {
 
 export const mockTicketSummary: TicketSummary = {
   id: 'TICKET-110',
+  number: 110,
   title: 'Implement typed UI API client and view models',
   status: 'running',
   repoId: 'repo-1',
+  worktreeId: 'worktree-1',
+  path: '.codex-autorunner/tickets/TICKET-110.md',
+  agentId: 'codex',
+  chatKey: 'ticket:TICKET-110',
   runId: 'run-1',
   updatedAt: '2026-05-04T00:02:00Z',
+  durationSeconds: 120,
+  diffStats: { insertions: 80, deletions: 5, filesChanged: 4 },
+  errors: [],
   raw: {}
 };
 

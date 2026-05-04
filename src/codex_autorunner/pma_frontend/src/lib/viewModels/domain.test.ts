@@ -7,6 +7,7 @@ import {
   mapRepoSummary,
   mapSurfaceArtifact,
   mapTicketDetail,
+  mapTicketSummary,
   mapWorktreeSummary
 } from './domain';
 
@@ -75,6 +76,35 @@ describe('view model mappers', () => {
     expect(vm.status).toBe('waiting');
     expect(vm.artifacts).toHaveLength(1);
     expect(vm.artifacts[0].kind).toBe('final_report');
+  });
+
+  it('maps ticket list payloads into rich queue summaries', () => {
+    const vm = mapTicketSummary({
+      path: '.codex-autorunner/tickets/TICKET-170-ticket-list-and-detail-pages.md',
+      index: 170,
+      chat_key: 'ticket:tkt_pages',
+      frontmatter: {
+        ticket_id: 'tkt_pages',
+        title: 'Implement ticket pages',
+        agent: 'codex',
+        done: false
+      },
+      mtime: 1777852920,
+      diff_stats: { insertions: 12, deletions: 3, files_changed: 2 },
+      duration_seconds: 45
+    });
+
+    expect(vm).toMatchObject({
+      id: 'tkt_pages',
+      number: 170,
+      title: 'Implement ticket pages',
+      status: 'idle',
+      agentId: 'codex',
+      chatKey: 'ticket:tkt_pages',
+      durationSeconds: 45,
+      diffStats: { insertions: 12, deletions: 3, filesChanged: 2 }
+    });
+    expect(vm.updatedAt).toContain('2026');
   });
 
   it('maps contextspace documents', () => {
