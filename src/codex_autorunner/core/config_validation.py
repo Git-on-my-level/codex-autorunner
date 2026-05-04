@@ -5,7 +5,7 @@ from __future__ import annotations
 import dataclasses
 import ipaddress
 from pathlib import Path
-from typing import Any, Dict, Tuple, Type, Union, cast
+from typing import Any, Callable, Dict, Tuple, Type, Union, cast
 
 from .config_contract import (
     CONFIG_VERSION,
@@ -65,6 +65,46 @@ def is_loopback_host(host: str) -> bool:
 
 def _is_strict_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
+
+
+_RuleCheck = Callable[[Dict[str, Any], str, str], None]
+
+
+@dataclasses.dataclass(frozen=True)
+class _ConfigRule:
+    key: str
+    check: _RuleCheck
+
+    def apply(self, mapping: Dict[str, Any], *, path: str) -> None:
+        self.check(mapping, self.key, path)
+
+
+def _apply_config_rules(
+    mapping: Dict[str, Any], *, path: str, rules: tuple[_ConfigRule, ...]
+) -> None:
+    for rule in rules:
+        rule.apply(mapping, path=path)
+
+
+def _optional_type_rule(
+    key: str,
+    expected: Union[Type, Tuple[Type, ...]],
+    *,
+    allow_none: bool = False,
+) -> _ConfigRule:
+    def check(mapping: Dict[str, Any], rule_key: str, path: str) -> None:
+        _validate_optional_type(
+            mapping, rule_key, expected, path=path, allow_none=allow_none
+        )
+
+    return _ConfigRule(key, check)
+
+
+def _optional_int_ge_rule(key: str, min_value: int) -> _ConfigRule:
+    def check(mapping: Dict[str, Any], rule_key: str, path: str) -> None:
+        _validate_optional_int_ge(mapping, rule_key, min_value, path=path)
+
+    return _ConfigRule(key, check)
 
 
 def _validate_server_security(server: Dict[str, Any]) -> None:
@@ -1043,26 +1083,110 @@ def _validate_optional_int_ge(
                 raise ConfigError(f"{path}.{key} must be >= {min_value}")
 
 
+_FLOW_RETENTION_RULES = (
+    _ConfigRule(
+        "retention_days",
+        lambda mapping, key, path: _validate_positive_strict_int(
+            mapping, key, path=path
+        ),
+    ),
+    _ConfigRule(
+        "sweep_interval_seconds",
+        lambda mapping, key, path: _validate_positive_strict_int(
+            mapping, key, path=path
+        ),
+    ),
+)
+
+_HOUSEKEEPING_RULES = (
+    _optional_type_rule("enabled", bool),
+    _optional_type_rule("interval_seconds", int),
+    _optional_int_ge_rule("interval_seconds", 1),
+    _optional_type_rule("min_file_age_seconds", int),
+    _optional_int_ge_rule("min_file_age_seconds", 0),
+    _optional_type_rule("dry_run", bool),
+)
+
+_HOUSEKEEPING_RULE_FIELD_RULES = tuple(
+    rule
+    for key in (
+        "max_files",
+        "max_total_bytes",
+        "max_age_days",
+        "max_bytes",
+        "max_lines",
+    )
+    for rule in (_optional_type_rule(key, int), _optional_int_ge_rule(key, 0))
+)
+
+_PMA_ARCHIVE_RULES = (
+    _optional_type_rule("cleanup_require_archive", bool),
+    _optional_type_rule("cleanup_auto_delete_orphans", bool),
+    _optional_type_rule("worktree_archive_profile", str),
+)
+
+_PMA_STATE_CLEANUP_KEYS = (
+    "turn_idle_timeout_seconds",
+    "turn_timeout_seconds",
+    "filebox_inbox_max_age_days",
+    "filebox_outbox_max_age_days",
+    "worktree_archive_max_snapshots_per_repo",
+    "worktree_archive_max_age_days",
+    "worktree_archive_max_total_bytes",
+    "run_archive_max_entries",
+    "run_archive_max_age_days",
+    "run_archive_max_total_bytes",
+    "orchestration_compaction_max_hot_rows",
+    "orchestration_hot_history_retention_days",
+    "orchestration_cold_trace_retention_days",
+    "report_max_history_files",
+    "report_max_total_bytes",
+    "app_server_workspace_max_age_days",
+    "inbox_auto_dismiss_grace_seconds",
+)
+
+_PMA_STATE_CLEANUP_RULES = tuple(
+    rule
+    for key in _PMA_STATE_CLEANUP_KEYS
+    for rule in (
+        _optional_type_rule(key, int),
+        _optional_int_ge_rule(
+            key,
+            1 if key in {"turn_idle_timeout_seconds", "turn_timeout_seconds"} else 0,
+        ),
+    )
+)
+
+_STATIC_ASSETS_RULES = (
+    _optional_type_rule("cache_root", str, allow_none=True),
+    _optional_type_rule("max_cache_entries", int, allow_none=True),
+    _optional_int_ge_rule("max_cache_entries", 0),
+    _optional_type_rule("max_cache_age_days", int, allow_none=True),
+    _optional_int_ge_rule("max_cache_age_days", 0),
+)
+
+
+def _validate_positive_strict_int(
+    mapping: Dict[str, Any], key: str, *, path: str
+) -> None:
+    value = mapping.get(key)
+    if value is None:
+        return
+    if not _is_strict_int(value):
+        raise ConfigError(f"{path}.{key} must be an integer")
+    if value <= 0:
+        raise ConfigError(f"{path}.{key} must be > 0")
+
+
 def _validate_flow_retention_config(cfg: Dict[str, Any]) -> None:
     flow_retention = cfg.get("flow_retention")
     if flow_retention is None:
         return
     if not isinstance(flow_retention, dict):
         raise ConfigError("flow_retention must be a mapping")
-    retention_days = flow_retention.get("retention_days")
-    if retention_days is not None:
-        if not _is_strict_int(retention_days):
-            raise ConfigError("flow_retention.retention_days must be an integer")
-        if retention_days <= 0:
-            raise ConfigError("flow_retention.retention_days must be > 0")
-    sweep_interval_seconds = flow_retention.get("sweep_interval_seconds")
-    if sweep_interval_seconds is not None:
-        if not _is_strict_int(sweep_interval_seconds):
-            raise ConfigError(
-                "flow_retention.sweep_interval_seconds must be an integer"
-            )
-        if sweep_interval_seconds <= 0:
-            raise ConfigError("flow_retention.sweep_interval_seconds must be > 0")
+    _apply_config_rules(
+        flow_retention, path="flow_retention", rules=_FLOW_RETENTION_RULES
+    )
 
 
 def _validate_housekeeping_config(cfg: Dict[str, Any]) -> None:
@@ -1071,20 +1195,9 @@ def _validate_housekeeping_config(cfg: Dict[str, Any]) -> None:
         return
     if not isinstance(housekeeping_cfg, dict):
         raise ConfigError("housekeeping section must be a mapping if provided")
-    _validate_optional_type(housekeeping_cfg, "enabled", bool, path="housekeeping")
-    _validate_optional_type(
-        housekeeping_cfg, "interval_seconds", int, path="housekeeping"
+    _apply_config_rules(
+        housekeeping_cfg, path="housekeeping", rules=_HOUSEKEEPING_RULES
     )
-    _validate_optional_int_ge(
-        housekeeping_cfg, "interval_seconds", 1, path="housekeeping"
-    )
-    _validate_optional_type(
-        housekeeping_cfg, "min_file_age_seconds", int, path="housekeeping"
-    )
-    _validate_optional_int_ge(
-        housekeeping_cfg, "min_file_age_seconds", 0, path="housekeeping"
-    )
-    _validate_optional_type(housekeeping_cfg, "dry_run", bool, path="housekeeping")
     rules = housekeeping_cfg.get("rules")
     if rules is not None and not isinstance(rules, list):
         raise ConfigError("housekeeping.rules must be a list if provided")
@@ -1128,19 +1241,11 @@ def _validate_housekeeping_config(cfg: Dict[str, Any]) -> None:
             _validate_optional_type(
                 rule, "recursive", bool, path=f"housekeeping.rules[{idx}]"
             )
-            for key in (
-                "max_files",
-                "max_total_bytes",
-                "max_age_days",
-                "max_bytes",
-                "max_lines",
-            ):
-                _validate_optional_type(
-                    rule, key, int, path=f"housekeeping.rules[{idx}]"
-                )
-                _validate_optional_int_ge(
-                    rule, key, 0, path=f"housekeeping.rules[{idx}]"
-                )
+            _apply_config_rules(
+                rule,
+                path=f"housekeeping.rules[{idx}]",
+                rules=_HOUSEKEEPING_RULE_FIELD_RULES,
+            )
 
 
 def _validate_pma_config(cfg: Dict[str, Any]) -> None:
@@ -1149,9 +1254,7 @@ def _validate_pma_config(cfg: Dict[str, Any]) -> None:
         return
     if not isinstance(pma_cfg, dict):
         raise ConfigError("pma section must be a mapping if provided")
-    for key in ("cleanup_require_archive", "cleanup_auto_delete_orphans"):
-        _validate_optional_type(pma_cfg, key, bool, path="pma")
-    _validate_optional_type(pma_cfg, "worktree_archive_profile", str, path="pma")
+    _apply_config_rules(pma_cfg, path="pma", rules=_PMA_ARCHIVE_RULES)
     profile = pma_cfg.get("worktree_archive_profile")
     if isinstance(profile, str) and profile.strip().lower() not in {"portable", "full"}:
         raise ConfigError("pma.worktree_archive_profile must be 'portable' or 'full'")
@@ -1162,32 +1265,7 @@ def _validate_pma_config(cfg: Dict[str, Any]) -> None:
         if not _is_strict_int(tt):
             raise ConfigError(f"pma.{timeout_key} must be an integer if provided")
         _validate_optional_int_ge(pma_cfg, timeout_key, 1, path="pma")
-    for key in (
-        "turn_idle_timeout_seconds",
-        "turn_timeout_seconds",
-        "filebox_inbox_max_age_days",
-        "filebox_outbox_max_age_days",
-        "worktree_archive_max_snapshots_per_repo",
-        "worktree_archive_max_age_days",
-        "worktree_archive_max_total_bytes",
-        "run_archive_max_entries",
-        "run_archive_max_age_days",
-        "run_archive_max_total_bytes",
-        "orchestration_compaction_max_hot_rows",
-        "orchestration_hot_history_retention_days",
-        "orchestration_cold_trace_retention_days",
-        "report_max_history_files",
-        "report_max_total_bytes",
-        "app_server_workspace_max_age_days",
-        "inbox_auto_dismiss_grace_seconds",
-    ):
-        _validate_optional_type(pma_cfg, key, int, path="pma")
-        _validate_optional_int_ge(
-            pma_cfg,
-            key,
-            1 if key in {"turn_idle_timeout_seconds", "turn_timeout_seconds"} else 0,
-            path="pma",
-        )
+    _apply_config_rules(pma_cfg, path="pma", rules=_PMA_STATE_CLEANUP_RULES)
 
 
 def _validate_static_assets_config(cfg: Dict[str, Any], scope: str) -> None:
@@ -1196,32 +1274,8 @@ def _validate_static_assets_config(cfg: Dict[str, Any], scope: str) -> None:
         return
     if not isinstance(static_cfg, dict):
         raise ConfigError(f"{scope}.static_assets must be a mapping if provided")
-    _validate_optional_type(
-        static_cfg,
-        "cache_root",
-        str,
-        path=f"{scope}.static_assets",
-        allow_none=True,
-    )
-    _validate_optional_type(
-        static_cfg,
-        "max_cache_entries",
-        int,
-        path=f"{scope}.static_assets",
-        allow_none=True,
-    )
-    _validate_optional_int_ge(
-        static_cfg, "max_cache_entries", 0, path=f"{scope}.static_assets"
-    )
-    _validate_optional_type(
-        static_cfg,
-        "max_cache_age_days",
-        int,
-        path=f"{scope}.static_assets",
-        allow_none=True,
-    )
-    _validate_optional_int_ge(
-        static_cfg, "max_cache_age_days", 0, path=f"{scope}.static_assets"
+    _apply_config_rules(
+        static_cfg, path=f"{scope}.static_assets", rules=_STATIC_ASSETS_RULES
     )
 
 
