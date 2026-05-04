@@ -7,6 +7,7 @@ from .....core.flows import FlowStore
 from .....core.flows.models import FlowRunStatus
 from .....core.state_roots import resolve_repo_flows_db_path
 from .....manifest import load_manifest
+from ....chat.agents import DEFAULT_CHAT_AGENT_MODELS
 from ....chat.status_diagnostics import (
     StatusBlockContext,
     build_process_monitor_lines_for_root,
@@ -101,7 +102,8 @@ class WorkspaceStatusMixin:
                         if self._agent_supports_resume(agent)
                         else "unsupported"
                     ),
-                    model=record.model or "default",
+                    model=record.model
+                    or DEFAULT_CHAT_AGENT_MODELS.get(agent, "default"),
                     effort=effort_label,
                     approval_mode=record.approval_mode,
                     approval_policy=approval_policy or "default",

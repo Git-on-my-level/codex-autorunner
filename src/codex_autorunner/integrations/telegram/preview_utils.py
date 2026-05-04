@@ -463,13 +463,20 @@ def _format_resume_summary(
     workspace_path: Optional[str] = None,
     model: Optional[str] = None,
     effort: Optional[str] = None,
+    agent: Optional[str] = None,
 ) -> str:
+    from ..chat.agents import DEFAULT_CHAT_AGENT_MODELS
+
     user_preview, assistant_preview = _extract_thread_resume_parts(entry)
     return "\n".join(
         build_resumed_thread_lines(
             thread_id=thread_id,
             workspace_path=workspace_path,
-            model="default" if model is None else model,
+            model=(
+                model or DEFAULT_CHAT_AGENT_MODELS.get(agent, "default")
+                if model is None
+                else model
+            ),
             effort="default" if effort is None else effort,
             user_preview=user_preview,
             assistant_preview=assistant_preview,

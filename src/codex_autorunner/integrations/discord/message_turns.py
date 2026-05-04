@@ -78,6 +78,7 @@ from ...integrations.chat.models import ChatMessageEvent
 from ...integrations.chat.runtime_thread_errors import (
     sanitize_runtime_thread_error,
 )
+from ..chat.agents import DEFAULT_CHAT_AGENT_MODELS
 from ..chat.bound_chat_execution_metadata import merge_bound_chat_execution_metadata
 from ..chat.managed_thread_progress_projector import (
     ManagedThreadProgressProjector,
@@ -1805,7 +1806,7 @@ async def _run_discord_orchestrated_turn_for_message(
     tracker = TurnProgressTracker(
         started_at=time.monotonic(),
         agent=agent,
-        model=model_override or "default",
+        model=model_override or DEFAULT_CHAT_AGENT_MODELS.get(agent, "default"),
         label="working",
         max_actions=max_actions,
         max_output_chars=max_progress_len,

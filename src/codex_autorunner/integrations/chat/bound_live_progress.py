@@ -26,6 +26,7 @@ from ..telegram.adapter import TelegramBotClient
 from ..telegram.outbox import _outbox_key as telegram_outbox_key
 from ..telegram.state import OutboxRecord as TelegramOutboxRecord
 from ..telegram.state import TelegramStateStore, parse_topic_key
+from .agents import DEFAULT_CHAT_AGENT_MODELS
 from .managed_thread_progress_projector import ManagedThreadProgressProjector
 from .managed_thread_turns import (
     ManagedThreadExecutionHooks,
@@ -994,7 +995,7 @@ def build_bound_chat_live_progress_session(
     tracker = TurnProgressTracker(
         started_at=time.monotonic(),
         agent=agent,
-        model=model or "default",
+        model=model or DEFAULT_CHAT_AGENT_MODELS.get(agent, "default"),
         label="working",
         max_actions=25,
         max_output_chars=max_length,
