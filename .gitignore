@@ -20,6 +20,8 @@ __pycache__/
 .Python
 dist/
 lib/
+!src/codex_autorunner/pma_frontend/src/lib/
+!src/codex_autorunner/pma_frontend/src/lib/**
 include/
 bin/
 *.egg-info/

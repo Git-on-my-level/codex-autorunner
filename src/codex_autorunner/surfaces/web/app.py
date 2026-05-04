@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from typing import Optional, Protocol, cast
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.types import ASGIApp
 
@@ -71,6 +71,8 @@ from .services.pma import create_pma_application_container
 from .static_assets import (
     index_response_headers,
     render_index_html,
+    render_pma_index_html,
+    resolve_pma_static_dir,
 )
 
 __all__ = ["create_app", "create_hub_app", "create_repo_app"]
@@ -193,6 +195,16 @@ def create_hub_app(
     app.state.hub_static_assets = None
     app.state.orchestration_housekeeping = None
     app.mount("/static", static_files, name="static")
+    pma_static_dir, pma_static_context = resolve_pma_static_dir()
+    app.state.pma_static_dir = pma_static_dir
+    app.state.pma_static_assets_context = pma_static_context
+    pma_app_assets_dir = pma_static_dir / "_app"
+    if pma_app_assets_dir.exists():
+        app.mount(
+            "/_app",
+            CacheStaticFiles(directory=pma_app_assets_dir),
+            name="pma-app-assets",
+        )
     raw_config = getattr(context.config, "raw", {})
     pma_config = raw_config.get("pma", {}) if isinstance(raw_config, dict) else {}
     if isinstance(pma_config, dict) and pma_config.get("enabled"):
@@ -795,6 +807,11 @@ def create_hub_app(
                 static_context = getattr(app.state, "static_assets_context", None)
                 if static_context is not None:
                     static_context.close()
+                pma_static_context = getattr(
+                    app.state, "pma_static_assets_context", None
+                )
+                if pma_static_context is not None:
+                    pma_static_context.close()
                 stop_all = getattr(app.state, "pma_lane_worker_stop_all", None)
                 if stop_all is not None:
                     try:
@@ -843,8 +860,7 @@ def create_hub_app(
     app.include_router(build_hub_messages_routes(context))
     app.include_router(build_hub_repo_routes(context, mount_manager))
 
-    @app.get("/", include_in_schema=False)
-    def hub_index():
+    def _legacy_index_response():
         index_path = context.static_dir / "index.html"
         if not index_path.exists():
             raise HTTPException(
@@ -852,6 +868,33 @@ def create_hub_app(
             )
         html = render_index_html(context.static_dir, app.state.asset_version)
         return HTMLResponse(html, headers=index_response_headers())
+
+    def _pma_index_response():
+        index_path = pma_static_dir / "index.html"
+        if not index_path.exists():
+            raise HTTPException(
+                status_code=500,
+                detail="PMA Hub UI assets missing; run `pnpm pma:build`",
+            )
+        html = render_pma_index_html(pma_static_dir)
+        return HTMLResponse(html, headers=index_response_headers())
+
+    @app.get("/", include_in_schema=False)
+    def hub_index():
+        target = f"{context.base_path}/pma" if context.base_path else "/pma"
+        return RedirectResponse(target, status_code=307)
+
+    @app.get("/legacy", include_in_schema=False)
+    def legacy_hub_index():
+        return _legacy_index_response()
+
+    @app.get("/pma", include_in_schema=False)
+    @app.get("/dashboard", include_in_schema=False)
+    @app.get("/repos", include_in_schema=False)
+    @app.get("/tickets", include_in_schema=False)
+    @app.get("/settings", include_in_schema=False)
+    def pma_hub_index():
+        return _pma_index_response()
 
     app.include_router(build_system_routes())
 

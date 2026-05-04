@@ -1,0 +1,14 @@
+import adapter from '@sveltejs/adapter-static';
+
+const config = {
+  kit: {
+    adapter: adapter({
+      fallback: 'index.html',
+      pages: '../pma_static',
+      assets: '../pma_static'
+    }),
+    paths: {}
+  }
+};
+
+export default config;

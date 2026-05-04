@@ -34,9 +34,14 @@ class BasePathRouterMiddleware:
             known_prefixes
             or (
                 "/",
+                "/_app",
                 "/api",
                 "/hub",
+                "/pma",
+                "/dashboard",
                 "/repos",
+                "/tickets",
+                "/settings",
                 "/static",
                 "/health",
                 "/cat",
@@ -140,7 +145,7 @@ class AuthTokenMiddleware:
         self.app = app
         self.token = token
         self.base_path = normalize_base_path(base_path)
-        self.public_prefixes = ("/static", "/health", "/cat")
+        self.public_prefixes = ("/static", "/_app", "/health", "/cat")
 
     def __getattr__(self, name):
         return getattr(self.app, name)

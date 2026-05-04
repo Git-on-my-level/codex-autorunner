@@ -80,6 +80,7 @@ codex_autorunner = [
   "static/*.html",
   "static/vendor/**",
   "static/assets.json",
+  "pma_static/**",
 ]
 
 [tool.setuptools.exclude-package-data]

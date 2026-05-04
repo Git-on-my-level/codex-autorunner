@@ -1,0 +1,3 @@
+packages:
+  - .
+  - src/codex_autorunner/pma_frontend

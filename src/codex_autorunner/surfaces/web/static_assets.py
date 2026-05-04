@@ -106,6 +106,33 @@ def resolve_static_dir() -> tuple[Path, Optional[ExitStack]]:
     return fallback, None
 
 
+def resolve_pma_static_dir() -> tuple[Path, Optional[ExitStack]]:
+    """Locate the packaged PMA Hub SvelteKit static assets when built."""
+
+    static_root = resources.files("codex_autorunner").joinpath("pma_static")
+    if isinstance(static_root, Path):
+        fallback = Path(__file__).resolve().parent.parent / "pma_static"
+        if static_root.exists():
+            return static_root, None
+        return fallback, None
+
+    stack = ExitStack()
+    try:
+        static_path = stack.enter_context(resources.as_file(static_root))
+    except (
+        Exception
+    ):  # intentional: importlib.resources can raise varied errors across Python versions
+        stack.close()
+        fallback = Path(__file__).resolve().parent.parent / "pma_static"
+        return fallback, None
+    if static_path.exists():
+        return static_path, stack
+
+    stack.close()
+    fallback = Path(__file__).resolve().parent.parent / "pma_static"
+    return fallback, None
+
+
 def _iter_static_source_files(source_dir: Path) -> Iterable[Path]:
     try:
         for path in source_dir.rglob("*.ts"):
@@ -215,6 +242,11 @@ def render_index_html(static_dir: Path, version: Optional[str]) -> str:
     if version:
         text = text.replace(_ASSET_VERSION_TOKEN, version)
     return text
+
+
+def render_pma_index_html(static_dir: Path) -> str:
+    index_path = static_dir / "index.html"
+    return index_path.read_text(encoding="utf-8")
 
 
 def security_headers() -> dict[str, str]:

@@ -15,6 +15,11 @@
     "typecheck": "tsc -p tsconfig.json",
     "build": "tsc -p tsconfig.json",
     "postbuild": "node scripts/version-generated-imports.js && node scripts/add-static-banner.js && node scripts/generate-asset-manifest.mjs",
+    "pma:dev": "pnpm --filter @codex-autorunner/pma-hub dev",
+    "pma:build": "pnpm --filter @codex-autorunner/pma-hub build",
+    "pma:typecheck": "pnpm --filter @codex-autorunner/pma-hub typecheck",
+    "pma:lint": "pnpm --filter @codex-autorunner/pma-hub lint",
+    "pma:test": "pnpm --filter @codex-autorunner/pma-hub test",
     "test:dom": "node scripts/check_dom_structure.mjs",
     "test:markdown": "node --test tests/js/*.test.js"
   },
