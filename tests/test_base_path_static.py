@@ -54,5 +54,6 @@ def test_root_path_proxy_serves_static(_base_path_app) -> None:
 def test_hub_routes_under_base_path(_base_path_app) -> None:
     client = TestClient(_base_path_app)
     assert client.get("/car/hub/version").status_code == 200
+    assert client.get("/car/api/flows/runs?flow_type=ticket_flow").status_code == 200
     assert client.get("/car/repos/demo/api/version").status_code == 200
     assert client.get("/car/repos/demo/static/generated/app.js").status_code == 200

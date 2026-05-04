@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import base64
 import enum
 import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import time
 from contextlib import ExitStack
@@ -244,9 +246,31 @@ def render_index_html(static_dir: Path, version: Optional[str]) -> str:
     return text
 
 
-def render_pma_index_html(static_dir: Path) -> str:
+def render_pma_index_html(static_dir: Path, base_path: str = "") -> str:
     index_path = static_dir / "index.html"
-    return index_path.read_text(encoding="utf-8")
+    html = index_path.read_text(encoding="utf-8")
+    if base_path:
+        base_json = json.dumps(base_path.rstrip("/"))
+        html = html.replace(
+            "__sveltekit_",
+            f"globalThis.__CAR_BASE_PATH__ = {base_json};\n\n\t\t\t\t\t__sveltekit_",
+            1,
+        )
+    return html
+
+
+_INLINE_SCRIPT_RE = re.compile(r"<script(?:\s[^>]*)?>(.*?)</script>", re.DOTALL)
+
+
+def _inline_script_hashes(html: str) -> list[str]:
+    hashes: list[str] = []
+    for match in _INLINE_SCRIPT_RE.finditer(html):
+        script = match.group(1)
+        if not script.strip():
+            continue
+        digest = hashlib.sha256(script.encode("utf-8")).digest()
+        hashes.append(f"'sha256-{base64.b64encode(digest).decode('ascii')}'")
+    return hashes
 
 
 def security_headers() -> dict[str, str]:
@@ -274,6 +298,18 @@ def index_response_headers() -> dict[str, str]:
         "Expires": "0",
     }
     headers.update(security_headers())
+    return headers
+
+
+def pma_index_response_headers(static_dir: Path, base_path: str = "") -> dict[str, str]:
+    headers = index_response_headers()
+    html = render_pma_index_html(static_dir, base_path=base_path)
+    script_hashes = _inline_script_hashes(html)
+    if not script_hashes:
+        return headers
+    csp = headers["Content-Security-Policy"]
+    script_src = "script-src 'self' " + " ".join(script_hashes)
+    headers["Content-Security-Policy"] = csp.replace("script-src 'self'", script_src)
     return headers
 
 

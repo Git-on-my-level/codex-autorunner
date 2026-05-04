@@ -45,7 +45,12 @@ from ...housekeeping import (
 )
 from .app_builders import create_app, create_repo_app
 from .app_factory import CacheStaticFiles, resolve_allowed_hosts, resolve_auth_token
-from .app_state import ServerOverrides, apply_hub_context, build_hub_context
+from .app_state import (
+    ServerOverrides,
+    apply_hub_context,
+    build_app_context,
+    build_hub_context,
+)
 from .hub_routes import register_simple_hub_routes
 from .middleware import (
     AuthTokenMiddleware,
@@ -54,8 +59,10 @@ from .middleware import (
     RequestIdMiddleware,
     SecurityHeadersMiddleware,
 )
+from .routes.contextspace import build_contextspace_routes
 from .routes.feedback_reports import build_feedback_report_routes
 from .routes.filebox import build_hub_filebox_routes
+from .routes.flows import build_flow_routes
 from .routes.hub_control_plane import build_hub_control_plane_routes
 from .routes.hub_messages import build_hub_messages_routes
 from .routes.hub_repos import HubMountManager, build_hub_repo_routes
@@ -66,10 +73,12 @@ from .routes.pma_routes.managed_thread_runtime import (
     restart_managed_thread_queue_workers,
 )
 from .routes.scm_webhooks import build_scm_webhook_routes
+from .routes.settings import build_settings_routes
 from .routes.system import build_system_routes
 from .services.pma import create_pma_application_container
 from .static_assets import (
     index_response_headers,
+    pma_index_response_headers,
     render_index_html,
     render_pma_index_html,
     resolve_pma_static_dir,
@@ -199,6 +208,12 @@ def create_hub_app(
     context = build_hub_context(hub_root, base_path)
     app = FastAPI(redirect_slashes=False)
     apply_hub_context(app, context)
+    repo_context = build_app_context(
+        context.config.root, context.base_path, context.config
+    )
+    app.state.engine = repo_context.engine
+    app.state.manager = repo_context.manager
+    app.state.app_server_threads = repo_context.app_server_threads
     app.add_middleware(GZipMiddleware, minimum_size=500)
     static_files = CacheStaticFiles(directory=context.static_dir)
     app.state.static_files = static_files
@@ -867,6 +882,9 @@ def create_hub_app(
 
     register_simple_hub_routes(app, context)
 
+    app.include_router(build_contextspace_routes())
+    app.include_router(build_flow_routes())
+    app.include_router(build_settings_routes())
     app.include_router(build_hub_messages_routes(context))
     app.include_router(build_hub_repo_routes(context, mount_manager))
 
@@ -886,8 +904,10 @@ def create_hub_app(
                 status_code=500,
                 detail="PMA Hub UI assets missing; run `pnpm pma:build`",
             )
-        html = render_pma_index_html(pma_static_dir)
-        return HTMLResponse(html, headers=index_response_headers())
+        html = render_pma_index_html(pma_static_dir, base_path=context.base_path)
+        return HTMLResponse(
+            html, headers=pma_index_response_headers(pma_static_dir, context.base_path)
+        )
 
     @app.get("/", include_in_schema=False)
     def hub_index():

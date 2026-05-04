@@ -41,6 +41,19 @@ def test_pma_static_assets_are_served_separately_from_legacy_static(tmp_path):
     assert client.get("/legacy").status_code == 200
 
 
+def test_pma_index_csp_allows_sveltekit_bootstrap_without_weakening_legacy(tmp_path):
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    client = TestClient(create_hub_app(hub_root))
+
+    pma_csp = client.get("/pma").headers["Content-Security-Policy"]
+    legacy_csp = client.get("/legacy").headers["Content-Security-Policy"]
+
+    assert "script-src 'self' 'sha256-" in pma_csp
+    assert "'unsafe-inline'" not in pma_csp.split("script-src", 1)[1].split(";", 1)[0]
+    assert "script-src 'self';" in legacy_csp
+
+
 def test_pma_base_path_routes_redirect_and_serve_spa(tmp_path):
     hub_root = tmp_path / "hub"
     seed_hub_files(hub_root, force=True)
@@ -61,6 +74,7 @@ def test_pma_base_path_routes_redirect_and_serve_spa(tmp_path):
     response = client.get("/car/contextspace/local")
     assert response.status_code == 200
     assert "<title>PMA Hub</title>" in response.text
+    assert 'globalThis.__CAR_BASE_PATH__ = "/car";' in response.text
 
 
 def test_repo_mount_frontend_routes_are_legacy_gated(hub_env):
