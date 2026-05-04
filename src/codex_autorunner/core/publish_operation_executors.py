@@ -247,6 +247,40 @@ def _running_turn_blocking_queue(
     return running_turn
 
 
+def _log_scm_enqueue_managed_turn_queued(
+    store: PmaThreadStore,
+    *,
+    thread_target_id: str,
+    created: dict[str, Any],
+    tracking: Mapping[str, Any],
+    log_context: tuple[Any, ...],
+) -> None:
+    if not tracking or _normalize_optional_text(created.get("status")) != "queued":
+        return
+    blocking_turn = _running_turn_blocking_queue(
+        store,
+        thread_target_id=thread_target_id,
+        queued_turn_id=_require_text(
+            created.get("managed_turn_id"),
+            field_name="managed_turn_id",
+        ),
+    )
+    _LOGGER.info(
+        "scm.enqueue_managed_turn.queued "
+        "thread_target_id=%s managed_turn_id=%s "
+        "blocking_managed_turn_id=%s correlation_id=%s "
+        "binding_id=%s repo_slug=%s pr_number=%s",
+        thread_target_id,
+        created.get("managed_turn_id"),
+        (
+            _normalize_optional_text(blocking_turn.get("managed_turn_id"))
+            if blocking_turn is not None
+            else None
+        ),
+        *log_context,
+    )
+
+
 def _resolve_notify_message(
     *,
     operation: PublishOperation,
@@ -934,29 +968,13 @@ def build_enqueue_managed_turn_executor(
                 queue_payload=queue_payload,
                 force_queue=bool(tracking),
             )
-            if tracking and _normalize_optional_text(created.get("status")) == "queued":
-                blocking_turn = _running_turn_blocking_queue(
-                    store,
-                    thread_target_id=thread_target_id,
-                    queued_turn_id=_require_text(
-                        created.get("managed_turn_id"),
-                        field_name="managed_turn_id",
-                    ),
-                )
-                _LOGGER.info(
-                    "scm.enqueue_managed_turn.queued "
-                    "thread_target_id=%s managed_turn_id=%s "
-                    "blocking_managed_turn_id=%s correlation_id=%s "
-                    "binding_id=%s repo_slug=%s pr_number=%s",
-                    thread_target_id,
-                    created.get("managed_turn_id"),
-                    (
-                        _normalize_optional_text(blocking_turn.get("managed_turn_id"))
-                        if blocking_turn is not None
-                        else None
-                    ),
-                    *log_context,
-                )
+            _log_scm_enqueue_managed_turn_queued(
+                store,
+                thread_target_id=thread_target_id,
+                created=created,
+                tracking=tracking,
+                log_context=log_context,
+            )
         except ManagedThreadNotActiveError as exc:
             if not tracking:
                 raise
@@ -1015,29 +1033,13 @@ def build_enqueue_managed_turn_executor(
                 queue_payload=queue_payload,
                 force_queue=bool(tracking),
             )
-            if tracking and _normalize_optional_text(created.get("status")) == "queued":
-                blocking_turn = _running_turn_blocking_queue(
-                    store,
-                    thread_target_id=thread_target_id,
-                    queued_turn_id=_require_text(
-                        created.get("managed_turn_id"),
-                        field_name="managed_turn_id",
-                    ),
-                )
-                _LOGGER.info(
-                    "scm.enqueue_managed_turn.queued "
-                    "thread_target_id=%s managed_turn_id=%s "
-                    "blocking_managed_turn_id=%s correlation_id=%s "
-                    "binding_id=%s repo_slug=%s pr_number=%s",
-                    thread_target_id,
-                    created.get("managed_turn_id"),
-                    (
-                        _normalize_optional_text(blocking_turn.get("managed_turn_id"))
-                        if blocking_turn is not None
-                        else None
-                    ),
-                    *log_context,
-                )
+            _log_scm_enqueue_managed_turn_queued(
+                store,
+                thread_target_id=thread_target_id,
+                created=created,
+                tracking=tracking,
+                log_context=log_context,
+            )
             _LOGGER.info(
                 "scm.enqueue_managed_turn.rebound_thread "
                 "previous_thread_target_id=%s thread_target_id=%s "
