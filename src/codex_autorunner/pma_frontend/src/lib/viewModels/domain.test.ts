@@ -34,6 +34,33 @@ describe('view model mappers', () => {
     });
   });
 
+  it('derives readable ticket-flow chat summaries from managed thread payload fields', () => {
+    const vm = mapPmaChatSummary({
+      managed_thread_id: 'thread-ticket-flow',
+      name: 'ticket-flow:codex',
+      agent: 'codex',
+      status: 'running',
+      repo_id: 'codex-autorunner',
+      resource_kind: 'worktree',
+      resource_id: 'codex-autorunner--discord-5',
+      workspace_root: '/Users/dazheng/car-workspace/codex-autorunner--discord-5',
+      status_reason: 'managed_turn_running',
+      last_message_preview:
+        '<CAR_TICKET_FLOW_PROMPT><CAR_CURRENT_TICKET_FILE>PATH: .codex-autorunner/tickets/TICKET-330-pma-chat-managed-thread-readability.md</CAR_CURRENT_TICKET_FILE></CAR_TICKET_FLOW_PROMPT>',
+      updated_at: '2026-05-04T00:00:00Z'
+    });
+
+    expect(vm).toMatchObject({
+      id: 'thread-ticket-flow',
+      title: 'Ticket flow · TICKET-330-pma-chat-managed-thread-readability · worktree codex-autorunner--discord-5',
+      ticketId: 'TICKET-330-pma-chat-managed-thread-readability',
+      repoId: 'codex-autorunner',
+      worktreeId: 'codex-autorunner--discord-5',
+      status: 'running'
+    });
+    expect(vm.title).not.toBe('ticket-flow:codex');
+  });
+
   it('maps PMA tail/status payloads into run progress', () => {
     const vm = mapPmaRunProgress({
       managed_thread_id: 'thread-1',
@@ -98,6 +125,46 @@ describe('view model mappers', () => {
       'Done. Tests passed and the ticket is updated.'
     ]);
     expect(messages.map((message) => message.text)).not.toContain('No message text recorded');
+  });
+
+  it('suppresses CAR ticket-flow control prompts and renders a compact operational summary', () => {
+    const messages = mapPmaTurnMessages({
+      managed_thread_id: 'chat-1',
+      managed_turn_id: 'turn-ticket-flow',
+      status: 'running',
+      prompt_preview:
+        '<CAR_TICKET_FLOW_PROMPT><CAR_CURRENT_TICKET_FILE>PATH: .codex-autorunner/tickets/TICKET-330-pma-chat-managed-thread-readability.md</CAR_CURRENT_TICKET_FILE></CAR_TICKET_FLOW_PROMPT>',
+      workspace_root: '/Users/dazheng/car-workspace/codex-autorunner--discord-5',
+      started_at: '2026-05-04T00:00:00Z'
+    });
+
+    expect(messages).toMatchObject([
+      {
+        id: 'turn-ticket-flow-summary',
+        role: 'system',
+        chatId: 'chat-1'
+      }
+    ]);
+    expect(messages[0].text).toContain('PMA is running a CAR ticket-flow task.');
+    expect(messages[0].text).toContain('ticket TICKET-330-pma-chat-managed-thread-readability');
+    expect(messages[0].text).toContain('workspace codex-autorunner--discord-5');
+    expect(messages[0].text).not.toContain('<CAR_TICKET_FLOW_PROMPT>');
+  });
+
+  it('keeps assistant final responses visible when the prompt was a ticket-flow control envelope', () => {
+    const messages = mapPmaTurnMessages({
+      managed_thread_id: 'chat-1',
+      managed_turn_id: 'turn-ticket-flow-done',
+      status: 'completed',
+      prompt_preview:
+        '<CAR_TICKET_FLOW_PROMPT><CAR_CURRENT_TICKET_FILE>PATH: .codex-autorunner/tickets/TICKET-330-pma-chat-managed-thread-readability.md</CAR_CURRENT_TICKET_FILE></CAR_TICKET_FLOW_PROMPT>',
+      final_response: 'Done. PMA chat readability is improved.',
+      started_at: '2026-05-04T00:00:00Z',
+      finished_at: '2026-05-04T00:01:00Z'
+    });
+
+    expect(messages.map((message) => message.role)).toEqual(['assistant']);
+    expect(messages.map((message) => message.text)).toEqual(['Done. PMA chat readability is improved.']);
   });
 
   it('does not create empty chat messages for raw turn records', () => {

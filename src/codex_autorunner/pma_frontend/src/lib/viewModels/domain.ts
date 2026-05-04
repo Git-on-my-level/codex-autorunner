@@ -165,15 +165,19 @@ export function mapPmaChatSummary(raw: JsonRecord): PmaChatSummary {
   const id = stringValue(raw.thread_target_id ?? raw.managed_thread_id ?? raw.thread_id ?? raw.id, 'unknown-chat');
   const resourceKind = nullableString(raw.resource_kind);
   const resourceId = nullableString(raw.resource_id);
+  const repoId = nullableString(raw.repo_id) ?? (resourceKind === 'repo' ? resourceId : null);
+  const worktreeId =
+    nullableString(raw.worktree_repo_id ?? raw.worktree_id) ?? (resourceKind === 'worktree' ? resourceId : null);
+  const ticketId = ticketIdFromRaw(raw);
   return {
     id,
-    title: stringValue(raw.display_name ?? raw.name ?? raw.title, id),
+    title: readableThreadTitle(raw, id, ticketId),
     status,
     agentId: nullableString(raw.agent_id ?? raw.agent),
     model: nullableString(raw.model ?? latest.model),
-    repoId: nullableString(raw.repo_id) ?? (resourceKind === 'repo' ? resourceId : null),
-    worktreeId: nullableString(raw.worktree_repo_id ?? raw.worktree_id) ?? (resourceKind === 'worktree' ? resourceId : null),
-    ticketId: nullableString(raw.ticket_id ?? raw.current_ticket_id),
+    repoId,
+    worktreeId,
+    ticketId,
     progressPercent: numberOrNull(raw.progress_percent ?? raw.progress),
     updatedAt: dateString(raw.updated_at ?? raw.last_activity_at ?? latest.finished_at ?? latest.started_at),
     raw
@@ -203,6 +207,7 @@ export function mapPmaTurnMessages(raw: JsonRecord): PmaChatMessage[] {
   const finishedAt = dateString(raw.finished_at ?? raw.completed_at ?? raw.updated_at) ?? createdAt;
   const status = raw.status === undefined ? null : normalizeStatus(raw.status);
   const promptText = firstText(raw.prompt, raw.prompt_text, raw.message, raw.delivered_message, raw.prompt_preview);
+  const controlPromptSummary = summarizeControlPromptTurn(raw, promptText, status);
   const assistantText = firstText(
     raw.assistant_text,
     raw.output_text,
@@ -217,12 +222,25 @@ export function mapPmaTurnMessages(raw: JsonRecord): PmaChatMessage[] {
   );
   const messages: PmaChatMessage[] = [];
 
-  if (promptText) {
+  if (promptText && !controlPromptSummary) {
     messages.push({
       id: `${baseId}-user`,
       chatId,
       role: 'user',
       text: promptText,
+      createdAt,
+      status,
+      artifacts: [],
+      raw
+    });
+  }
+
+  if (controlPromptSummary && !assistantText) {
+    messages.push({
+      id: `${baseId}-summary`,
+      chatId,
+      role: 'system',
+      text: controlPromptSummary,
       createdAt,
       status,
       artifacts: [],
@@ -453,7 +471,8 @@ function normalizeRole(value: unknown): PmaChatMessage['role'] {
 
 function normalizeMessageText(raw: JsonRecord, role: PmaChatMessage['role']): string {
   if (role === 'user') {
-    return firstText(raw.text, raw.content, raw.message, raw.delivered_message, raw.prompt, raw.prompt_text, raw.prompt_preview);
+    const text = firstText(raw.text, raw.content, raw.message, raw.delivered_message, raw.prompt, raw.prompt_text, raw.prompt_preview);
+    return isCarTicketFlowControlPrompt(text) ? '' : text;
   }
   if (role === 'assistant') {
     return firstText(
@@ -473,6 +492,86 @@ function normalizeMessageText(raw: JsonRecord, role: PmaChatMessage['role']): st
     );
   }
   return firstText(raw.text, raw.content, raw.summary, raw.message);
+}
+
+function readableThreadTitle(raw: JsonRecord, fallback: string, ticketId: string | null): string {
+  const explicit = stringValue(raw.display_name ?? raw.name ?? raw.title, fallback);
+  if (!isGenericTicketFlowTitle(explicit) && !isCarTicketFlowControlPrompt(explicit)) return explicit;
+
+  const workspace = workspaceLabel(raw.workspace_root);
+  const repo = nullableString(raw.repo_id);
+  const resourceKind = nullableString(raw.resource_kind);
+  const resourceId = nullableString(raw.resource_id);
+  const resource =
+    resourceKind === 'worktree'
+      ? `worktree ${resourceId ?? workspace ?? repo ?? 'workspace'}`
+      : repo ?? resourceId ?? workspace;
+  const parts = ['Ticket flow'];
+  if (ticketId) parts.push(ticketId);
+  if (resource) parts.push(resource);
+  return parts.join(' · ');
+}
+
+function summarizeControlPromptTurn(
+  raw: JsonRecord,
+  promptText: string,
+  status: WorkStatus | null
+): string {
+  if (!isCarTicketFlowControlPrompt(promptText)) return '';
+  const ticketId = ticketIdFromRaw(raw);
+  const workspace = workspaceLabel(raw.workspace_root);
+  const statusText = status ? normalizeStatusText(status) : null;
+  const activity = dateString(raw.finished_at ?? raw.completed_at ?? raw.updated_at ?? raw.started_at ?? raw.created_at);
+  const parts = ['PMA is running a CAR ticket-flow task.'];
+  const details = [
+    ticketId ? `ticket ${ticketId}` : null,
+    workspace ? `workspace ${workspace}` : null,
+    statusText ? `status ${statusText}` : null,
+    activity ? `last activity ${activity}` : null
+  ].filter(Boolean);
+  if (details.length) parts.push(details.join(', ') + '.');
+  return parts.join(' ');
+}
+
+function isGenericTicketFlowTitle(value: string): boolean {
+  return /^ticket-flow(?::[\w.-]+)?$/i.test(value.trim());
+}
+
+function isCarTicketFlowControlPrompt(value: string): boolean {
+  const text = value.trim();
+  return text.startsWith('<CAR_TICKET_FLOW_PROMPT') || text.includes('<CAR_CURRENT_TICKET_FILE>');
+}
+
+function ticketIdFromRaw(raw: JsonRecord): string | null {
+  const direct = nullableString(raw.ticket_id ?? raw.current_ticket_id ?? raw.current_ticket);
+  const text = firstText(
+    raw.last_message_preview,
+    raw.prompt_preview,
+    raw.prompt,
+    raw.prompt_text,
+    raw.message,
+    raw.name,
+    raw.title
+  );
+  return extractTicketId(text) ?? direct;
+}
+
+function extractTicketId(value: string): string | null {
+  const ticketNumber = value.match(/\bTICKET-\d+[A-Za-z0-9_-]*\b/);
+  if (ticketNumber) return ticketNumber[0];
+  const frontmatterId = value.match(/\bticket_id:\s*["']?([A-Za-z0-9_.:-]+)["']?/);
+  return frontmatterId?.[1] ?? null;
+}
+
+function workspaceLabel(value: unknown): string | null {
+  const text = nullableString(value);
+  if (!text) return null;
+  const parts = text.split(/[\\/]/).filter(Boolean);
+  return parts.at(-1) ?? text;
+}
+
+function normalizeStatusText(status: WorkStatus): string {
+  return status.replace('_', ' ');
 }
 
 function normalizeArtifactKind(value: unknown): SurfaceArtifact['kind'] {
