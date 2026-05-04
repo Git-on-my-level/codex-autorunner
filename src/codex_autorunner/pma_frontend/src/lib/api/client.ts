@@ -289,11 +289,18 @@ export class PmaApiClient {
   };
 
   contextspace = {
-    listDocuments: async (): Promise<ApiResult<ContextspaceDocument[]>> =>
-      mapResult(await this.getJson<JsonRecord>('/api/contextspace'), (payload) =>
-        ['active_context', 'decisions', 'spec']
+    listDocuments: async (workspaceId?: string): Promise<ApiResult<ContextspaceDocument[]>> =>
+      mapResult(await this.getJson<JsonRecord>(contextspaceApiPath(workspaceId)), (payload) =>
+        ['active_context', 'spec', 'decisions']
           .filter((kind) => typeof payload[kind] === 'string')
-          .map((kind) => mapContextspaceDocument({ kind, name: kind, content: payload[kind] }))
+          .map((kind) =>
+            mapContextspaceDocument({
+              kind,
+              name: contextspaceFilename(kind),
+              content: payload[kind],
+              is_pinned: true
+            })
+          )
       ),
     updateDocument: async (kind: string, content: string): Promise<ApiResult<ContextspaceDocument[]>> =>
       mapResult(
@@ -346,6 +353,16 @@ function asArray(value: unknown): JsonRecord[] {
 
 function isWorktreeItem(item: JsonRecord): boolean {
   return item.kind === 'worktree' || typeof item.worktree_of === 'string' || typeof item.base_repo_id === 'string';
+}
+
+function contextspaceApiPath(workspaceId?: string): string {
+  const id = workspaceId?.trim();
+  if (!id || id === 'local') return '/api/contextspace';
+  return `/repos/${encodeURIComponent(id)}/api/contextspace`;
+}
+
+function contextspaceFilename(kind: string): string {
+  return `${kind}.md`;
 }
 
 export const pmaApi = new PmaApiClient();

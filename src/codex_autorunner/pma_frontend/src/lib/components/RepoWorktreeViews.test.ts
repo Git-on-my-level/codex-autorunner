@@ -49,6 +49,7 @@ describe('RepoWorktreeViews', () => {
     expect(body).toContain('PMA chat');
     expect(body).toContain('View tickets');
     expect(body).toContain('View contextspace');
+    expect(body).toContain('href="/contextspace/repo-1"');
     expect(body).toContain('Open preview');
     expect(body).toContain('Debug logs');
     expect(body).toContain('Surfaced artifacts');
@@ -72,6 +73,7 @@ describe('RepoWorktreeViews', () => {
     expect(body).toContain('No active ticket run is visible');
     expect(body).toContain('Next tickets');
     expect(body).toContain('View contextspace');
+    expect(body).toContain('href="/contextspace/repo-1"');
     expect(body).not.toContain('Terminal');
     expect(body).not.toContain('Analytics');
   });

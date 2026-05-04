@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { page } from '$app/state';
   import { onMount } from 'svelte';
   import SensitiveApprovalCard from '$lib/components/SensitiveApprovalCard.svelte';
   import SurfaceArtifactCard from '$lib/components/SurfaceArtifactCard.svelte';
@@ -75,6 +76,7 @@
   );
 
   onMount(() => {
+    draft = page.url.searchParams.get('draft') ?? draft;
     void loadInitial();
     const interval = window.setInterval(() => {
       if (activeChatId) void refreshActive(activeChatId, { quiet: true });

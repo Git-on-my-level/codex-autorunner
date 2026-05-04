@@ -72,4 +72,28 @@ describe('API client error handling', () => {
     );
     expect(result).toEqual({ ok: true, data: ['screen.png'] });
   });
+
+  it('maps workspace contextspace responses through pinned standard docs', async () => {
+    const fetcher = vi.fn(async () =>
+      Response.json({
+        active_context: '# Active',
+        spec: '',
+        decisions: '- Decision'
+      })
+    ) as unknown as typeof fetch;
+    const client = new PmaApiClient(fetcher);
+
+    const result = await client.contextspace.listDocuments('repo-1');
+
+    expect(fetcher).toHaveBeenCalledWith('/repos/repo-1/api/contextspace', expect.any(Object));
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.map((doc) => doc.name)).toEqual(['active_context.md', 'spec.md', 'decisions.md']);
+      expect(result.data[0]).toMatchObject({
+        id: 'active_context',
+        content: '# Active',
+        isPinned: true
+      });
+    }
+  });
 });
