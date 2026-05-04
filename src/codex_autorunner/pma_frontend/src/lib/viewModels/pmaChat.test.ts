@@ -3,6 +3,8 @@ import type { PmaChatMessage, PmaChatSummary, PmaRunProgress, SurfaceArtifact } 
 import {
   approvalActionUrl,
   artifactCardView,
+  buildManagedThreadCreatePayload,
+  buildManagedThreadMessagePayload,
   buildPmaCards,
   chooseActiveChatId,
   composeMessageWithAttachments,
@@ -135,6 +137,24 @@ describe('PMA chat view helpers', () => {
     expect(composeMessageWithAttachments('Review these', attachments)).toContain('Attachments:');
     expect(composeMessageWithAttachments('', attachments)).toContain('Image: screen.png');
     expect(removePendingAttachment(attachments, 'att-1')).toMatchObject([{ id: 'att-2' }]);
+  });
+
+  it('builds managed-thread create and send payloads that match backend constraints', () => {
+    expect(buildManagedThreadCreatePayload('codex')).toEqual({
+      agent: 'codex',
+      name: 'New PMA chat',
+      workspace_root: '.'
+    });
+    expect(buildManagedThreadMessagePayload('Continue', 'gpt-5.2', true)).toEqual({
+      message: 'Continue',
+      model: 'gpt-5.2',
+      busy_policy: 'queue'
+    });
+    expect(buildManagedThreadMessagePayload('Continue', '', false)).toEqual({
+      message: 'Continue',
+      model: undefined,
+      busy_policy: undefined
+    });
   });
 
   it('summarizes model selector loading, empty, error, and loaded states', () => {

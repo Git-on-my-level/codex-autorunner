@@ -42,6 +42,18 @@ export type PmaCard =
   | { kind: 'streaming'; id: string; progress: PmaRunProgress }
   | { kind: 'artifact'; id: string; artifact: SurfaceArtifact };
 
+export type ManagedThreadCreatePayload = {
+  agent?: string;
+  name: string;
+  workspace_root: string;
+};
+
+export type ManagedThreadMessagePayload = {
+  message: string;
+  model?: string;
+  busy_policy?: 'queue';
+};
+
 const activeStatuses: WorkStatus[] = ['running'];
 const waitingStatuses: WorkStatus[] = ['waiting', 'blocked'];
 const doneStatuses: WorkStatus[] = ['done', 'failed', 'idle'];
@@ -197,6 +209,29 @@ export function composeMessageWithAttachments(
   });
   if (!lines.length) return message;
   return [message, 'Attachments:', ...lines].filter(Boolean).join('\n');
+}
+
+export function buildManagedThreadCreatePayload(
+  agent: string,
+  name = 'New PMA chat'
+): ManagedThreadCreatePayload {
+  return {
+    agent: agent || undefined,
+    name,
+    workspace_root: '.'
+  };
+}
+
+export function buildManagedThreadMessagePayload(
+  message: string,
+  model: string,
+  isRunning: boolean
+): ManagedThreadMessagePayload {
+  return {
+    message,
+    model: model || undefined,
+    busy_policy: isRunning ? 'queue' : undefined
+  };
 }
 
 export function modelSelectorState(

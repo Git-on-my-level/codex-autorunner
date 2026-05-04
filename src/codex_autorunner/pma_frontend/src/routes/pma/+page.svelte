@@ -12,6 +12,8 @@
   } from '$lib/viewModels/domain';
   import {
     approvalActionUrl,
+    buildManagedThreadCreatePayload,
+    buildManagedThreadMessagePayload,
     buildPmaCards,
     chooseActiveChatId,
     composeMessageWithAttachments,
@@ -163,11 +165,7 @@
   async function createChat(): Promise<void> {
     creating = true;
     composeError = null;
-    const result = await pmaApi.pma.createChat({
-      agent: selectedAgent || undefined,
-      model: selectedModel || undefined,
-      name: 'New PMA chat'
-    });
+    const result = await pmaApi.pma.createChat(buildManagedThreadCreatePayload(selectedAgent));
     if (result.ok) {
       chats = [result.data, ...chats.filter((chat) => chat.id !== result.data.id)];
       await selectChat(result.data.id);
@@ -188,11 +186,10 @@
     }
     const attachmentsForMessage = pendingAttachments;
     const message = composeMessageWithAttachments(draft, attachmentsForMessage);
-    const result = await pmaApi.pma.sendMessage(activeChatId, {
-      message,
-      model: selectedModel || undefined,
-      busy_policy: activeChat?.status === 'running' ? 'queue' : undefined
-    });
+    const result = await pmaApi.pma.sendMessage(
+      activeChatId,
+      buildManagedThreadMessagePayload(message, selectedModel, activeChat?.status === 'running')
+    );
     if (result.ok) {
       draft = '';
       pendingAttachments = [];
@@ -201,7 +198,7 @@
         ...localMessageArtifacts,
         [result.data.id]: messageArtifacts
       };
-      messages = [...messages, { ...result.data, artifacts: [...result.data.artifacts, ...messageArtifacts] }];
+      messages = [...messages, result.data];
       await refreshActive(activeChatId, { quiet: true });
     } else {
       composeError = result.error;
