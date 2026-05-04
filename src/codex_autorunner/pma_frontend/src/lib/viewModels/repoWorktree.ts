@@ -133,8 +133,10 @@ export function buildRepoWorktreeDetailViewModel(
   const activeRunCards = runCards.filter((run) => ['running', 'waiting', 'blocked'].includes(run.status));
   const visibleRuns = activeRunCards.length ? activeRunCards : runCards.slice(0, 1);
   const currentTicketIds = new Set(visibleRuns.map((run) => run.ticketId).filter((ticketId): ticketId is string => Boolean(ticketId)));
-  const currentTickets = ticketsForIds(source.tickets, currentTicketIds);
-  const nextTickets = source.tickets
+  const scopedTickets = ticketsForResource(source.tickets, kind, id);
+  const ticketPool = scopedTickets.length ? scopedTickets : source.tickets.filter((ticket) => !ticketHasExplicitResource(ticket));
+  const currentTickets = ticketsForIds(ticketPool.length ? ticketPool : source.tickets, currentTicketIds);
+  const nextTickets = ticketPool
     .filter((ticket) => ticket.status !== 'done' && !currentTicketIds.has(ticket.id))
     .slice(0, 5)
     .map(ticketToRow);
@@ -284,6 +286,37 @@ function ticketsForIds(tickets: TicketSummary[], ids: Set<string>): RepoWorktree
     .map(ticketToRow);
 }
 
+function ticketsForResource(tickets: TicketSummary[], kind: RepoWorktreeKind, id: string): TicketSummary[] {
+  return tickets.filter((ticket) => ticketMatchesResource(ticket, kind, id));
+}
+
+function ticketMatchesResource(ticket: TicketSummary, kind: RepoWorktreeKind, id: string): boolean {
+  const raw = ticket.raw;
+  const frontmatter = asRecord(raw.frontmatter);
+  const repoAliases = [
+    ticket.repoId,
+    stringFromRaw(raw, ['repo_id', 'resource_id', 'base_repo_id']),
+    stringFromRaw(frontmatter, ['repo_id', 'resource_id', 'base_repo_id'])
+  ];
+  const worktreeAliases = [
+    ticket.worktreeId,
+    stringFromRaw(raw, ['worktree_id', 'worktree_repo_id']),
+    stringFromRaw(frontmatter, ['worktree_id', 'worktree_repo_id'])
+  ];
+  return kind === 'repo'
+    ? repoAliases.some((value) => value === id)
+    : worktreeAliases.some((value) => value === id) || repoAliases.some((value) => value === id);
+}
+
+function ticketHasExplicitResource(ticket: TicketSummary): boolean {
+  return Boolean(
+    ticket.repoId ||
+      ticket.worktreeId ||
+      stringFromRaw(ticket.raw, ['repo_id', 'resource_id', 'base_repo_id', 'worktree_id', 'worktree_repo_id']) ||
+      stringFromRaw(asRecord(ticket.raw.frontmatter), ['repo_id', 'resource_id', 'base_repo_id', 'worktree_id', 'worktree_repo_id'])
+  );
+}
+
 function fallbackTicketSummary(id: string): TicketSummary {
   return {
     id,
@@ -311,7 +344,7 @@ function buildContextLinks(kind: RepoWorktreeKind, id: string, artifacts: RepoWo
     { label: 'View tickets', href: '/tickets', secondary: false },
     { label: 'View contextspace', href: `/contextspace/${encodeURIComponent(id)}`, secondary: false },
     ...(preview?.href ? [{ label: 'Open preview', href: preview.href, secondary: false }] : []),
-    { label: kind === 'repo' ? 'Debug repo logs' : 'Debug worktree logs', href: '/tickets', secondary: true }
+    { label: 'Ticket diagnostics', href: '/tickets', secondary: true }
   ];
 }
 

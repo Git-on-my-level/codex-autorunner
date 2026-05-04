@@ -299,7 +299,7 @@ function ticketAliases(ticket: TicketSummary): Set<string> {
 
 function ticketAliasesFromRun(run: PmaRunProgress): string[] {
   return ['ticket_id', 'current_ticket_id', 'current_ticket', 'ticket_path']
-    .map((key) => stringFromRaw(run.raw, [key, `ticket_engine.${key}`]))
+    .map((key) => stringFromRaw(run.raw, [key, `ticket_engine.${key}`, `state.ticket_engine.${key}`, `state.${key}`]))
     .filter((value): value is string => Boolean(value))
     .map(normalizeAlias);
 }

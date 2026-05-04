@@ -915,6 +915,185 @@ select {
   font-size: var(--font-size-0);
 }
 
+.settings-page .section-heading p:last-child {
+  margin: var(--space-1) 0 0;
+  color: var(--color-ink-muted);
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-5);
+}
+
+.settings-panel {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.settings-panel .panel-heading-row button,
+.sensitive-action button {
+  min-height: 34px;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-2);
+  background: var(--color-accent);
+  color: white;
+  cursor: pointer;
+  font-weight: 720;
+}
+
+.settings-form-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.settings-form-grid label {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.settings-form-grid label span {
+  color: var(--color-ink-muted);
+  font-size: var(--font-size-0);
+  font-weight: 720;
+}
+
+.settings-form-grid input {
+  min-width: 0;
+  min-height: 38px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-2);
+  background: var(--color-surface);
+  color: var(--color-ink);
+}
+
+.settings-status-list {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+}
+
+.settings-status-list div,
+.agent-status-row,
+.sensitive-action {
+  min-width: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-2);
+  background: #fbfcfe;
+}
+
+.settings-status-list div {
+  display: grid;
+  grid-template-columns: minmax(130px, 0.45fr) minmax(0, 1fr);
+  gap: var(--space-3);
+}
+
+.settings-status-list dt {
+  color: var(--color-ink-muted);
+  font-size: var(--font-size-0);
+  font-weight: 720;
+}
+
+.settings-status-list dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.settings-status-list .ok dd {
+  color: var(--color-success);
+  font-weight: 720;
+}
+
+.settings-status-list .warning dd {
+  color: var(--color-warning);
+  font-weight: 720;
+}
+
+.agent-status-list,
+.sensitive-action-grid,
+.settings-approval-list {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.agent-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.agent-status-row strong,
+.agent-status-row span {
+  display: block;
+}
+
+.agent-status-row div > span,
+.sensitive-action span {
+  color: var(--color-ink-muted);
+  font-size: var(--font-size-0);
+}
+
+.sensitive-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.sensitive-action.unavailable {
+  color: var(--color-ink-muted);
+}
+
+.sensitive-action p {
+  margin: var(--space-1) 0;
+}
+
+.advanced-panel {
+  color: var(--color-ink);
+}
+
+.advanced-panel summary {
+  cursor: pointer;
+  font-weight: 720;
+}
+
+.advanced-panel[open] summary {
+  margin-bottom: var(--space-3);
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: var(--space-5);
+  background: rgb(23 32 46 / 0.38);
+}
+
+.approval-modal {
+  width: min(100%, 460px);
+  padding: var(--space-5);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-3);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-2);
+}
+
+.approval-modal h2 {
+  margin: var(--space-2) 0 0;
+}
+
+.approval-modal p {
+  margin: var(--space-2) 0 0;
+}
+
 .state-panel {
   padding: var(--space-4);
   border: 1px dashed var(--color-border);
@@ -1545,6 +1724,11 @@ textarea:disabled {
     grid-template-columns: repeat(2, minmax(120px, 1fr));
   }
 
+  .settings-grid,
+  .settings-form-grid {
+    grid-template-columns: 1fr;
+  }
+
   .run-row,
   .compact-row,
   .ticket-table-head,
@@ -1598,9 +1782,16 @@ textarea:disabled {
   .compact-definition,
   .detail-grid,
   .contextspace-layout,
+  .settings-status-list div,
   .ticket-detail-grid,
   .ticket-definition {
     grid-template-columns: 1fr;
+  }
+
+  .agent-status-row,
+  .sensitive-action {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .ticket-row-title {

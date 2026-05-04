@@ -61,6 +61,26 @@ describe('repo/worktree view models', () => {
     expect(vm.hasActiveRun).toBe(false);
     expect(vm.currentRuns).toHaveLength(0);
     expect(vm.nextTickets[0].title).toBe(mockTicketSummary.title);
-    expect(vm.links.find((link) => link.label.includes('Debug'))?.secondary).toBe(true);
+    expect(vm.links.find((link) => link.label === 'Ticket diagnostics')?.secondary).toBe(true);
+  });
+
+  it('scopes queued tickets to the selected repo when ticket ownership is known', () => {
+    const vm = buildRepoWorktreeDetailViewModel(
+      {
+        repos: [{ ...mockRepoSummary, id: 'repo-1', status: 'idle', activeRuns: 0 }],
+        worktrees: [],
+        runs: [],
+        chats: [],
+        tickets: [
+          { ...mockTicketSummary, id: 'ticket-a', title: 'Repo ticket', repoId: 'repo-1' },
+          { ...mockTicketSummary, id: 'ticket-b', title: 'Other repo ticket', repoId: 'repo-2' }
+        ],
+        artifacts: []
+      },
+      'repo',
+      'repo-1'
+    );
+
+    expect(vm.nextTickets.map((ticket) => ticket.title)).toEqual(['Repo ticket']);
   });
 });

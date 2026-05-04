@@ -83,4 +83,27 @@ Users can inspect tickets.
     expect(detail.actions.map((action) => action.label)).toContain('Continue run');
     expect(detail.actions.find((action) => action.label === 'Raw logs/debug')?.secondary).toBe(true);
   });
+
+  it('matches ticket runs from nested ticket engine state', () => {
+    const detail = buildTicketDetailViewModel(
+      mockTicketDetail,
+      {
+        tickets: [mockTicketSummary],
+        runs: [
+          {
+            ...mockRunProgress,
+            id: 'run-nested',
+            chatId: null,
+            raw: { state: { ticket_engine: { current_ticket_id: mockTicketSummary.id } } }
+          }
+        ],
+        chats: [],
+        artifacts: []
+      },
+      new Date('2026-01-01T00:00:00Z')
+    );
+
+    expect(detail.runHref).toBe('/api/flows/run-nested/status');
+    expect(detail.timeline.map((item) => item.id)).toContain('run-run-nested');
+  });
 });

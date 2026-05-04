@@ -60,8 +60,13 @@ export function buildContextspaceViewModel(
     eyebrow: workspaceKind === 'repo' ? 'Repo memory' : workspaceKind === 'worktree' ? 'Worktree memory' : 'Workspace memory',
     workspaceKind,
     openWorkspaceHref:
-      workspaceKind === 'worktree' ? `/worktrees/${encodeURIComponent(workspaceId)}` : `/repos/${encodeURIComponent(workspaceId)}`,
-    openWorkspaceLabel: workspaceKind === 'worktree' ? 'Open worktree' : 'Open repo',
+      workspaceKind === 'worktree'
+        ? `/worktrees/${encodeURIComponent(workspaceId)}`
+        : workspaceKind === 'repo'
+          ? `/repos/${encodeURIComponent(workspaceId)}`
+          : '/repos',
+    openWorkspaceLabel:
+      workspaceKind === 'worktree' ? 'Open worktree' : workspaceKind === 'repo' ? 'Open repo' : 'Open workspaces',
     askPmaHref: `/pma?draft=${encodeURIComponent(askPrompt)}`,
     docs: tabs,
     presentCount: tabs.filter((doc) => !doc.isMissing).length

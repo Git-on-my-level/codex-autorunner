@@ -38,6 +38,14 @@ describe('contextspace view models', () => {
     expect(vm.openWorkspaceLabel).toBe('Open worktree');
   });
 
+  it('links unknown or local contextspace back to the workspace index', () => {
+    const vm = buildContextspaceViewModel('local', [], [mockRepoSummary], [mockWorktreeSummary]);
+
+    expect(vm.workspaceKind).toBe('workspace');
+    expect(vm.openWorkspaceHref).toBe('/repos');
+    expect(vm.openWorkspaceLabel).toBe('Open workspaces');
+  });
+
   it('renders readable safe markdown html', () => {
     const html = renderMarkdownToHtml('# Title\n\n- **Decision**\n\n`code` <script>');
 
