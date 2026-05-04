@@ -161,7 +161,6 @@ from ...helpers import (
     _preview_from_text,
     _set_thread_summary,
     _with_conversation_id,
-    format_public_error,
 )
 from ...immediate_feedback_bridge import telegram_create_or_reuse_working_anchor
 from ...state import topic_key as build_topic_key
@@ -251,10 +250,6 @@ def _iter_exception_chain(exc: BaseException) -> list[BaseException]:
         seen.add(id(current))
         current = current.__cause__ or current.__context__
     return chain
-
-
-def _sanitize_error_detail(detail: str, *, limit: int = 200) -> str:
-    return format_public_error(detail, limit=limit)
 
 
 def _try_append_turn_journal(
