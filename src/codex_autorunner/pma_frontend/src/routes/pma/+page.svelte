@@ -1,11 +1,21 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import SensitiveApprovalCard from '$lib/components/SensitiveApprovalCard.svelte';
+  import SurfaceArtifactCard from '$lib/components/SurfaceArtifactCard.svelte';
   import { pmaApi, type ApiError, type JsonRecord } from '$lib/api/client';
-  import type { PmaChatMessage, PmaChatSummary, PmaRunProgress, SurfaceArtifact } from '$lib/viewModels/domain';
+  import type {
+    PmaChatMessage,
+    PmaChatSummary,
+    PmaRunProgress,
+    SensitiveApprovalRequest,
+    SurfaceArtifact
+  } from '$lib/viewModels/domain';
   import {
+    approvalActionUrl,
     buildPmaCards,
     chooseActiveChatId,
     composeMessageWithAttachments,
+    filterSensitiveCarApprovals,
     filterPmaChats,
     formatBytes,
     formatRelativeTime,
@@ -25,6 +35,7 @@
   let artifacts = $state<SurfaceArtifact[]>([]);
   let agents = $state<JsonRecord[]>([]);
   let models = $state<JsonRecord[]>([]);
+  let approvals = $state<SensitiveApprovalRequest[]>([]);
   let pendingAttachments = $state<PendingAttachment[]>([]);
   let localMessageArtifacts = $state<Record<string, SurfaceArtifact[]>>({});
   let activeChatId = $state<string | null>(null);
@@ -72,10 +83,11 @@
   async function loadInitial(): Promise<void> {
     loadingChats = true;
     chatError = null;
-    const [chatResult, artifactResult, agentResult] = await Promise.all([
+    const [chatResult, artifactResult, agentResult, approvalResult] = await Promise.all([
       pmaApi.pma.listChats(),
       pmaApi.pma.listFiles(),
-      pmaApi.pma.listAgents()
+      pmaApi.pma.listAgents(),
+      pmaApi.settings.listApprovals()
     ]);
 
     if (chatResult.ok) {
@@ -87,6 +99,7 @@
     }
 
     if (artifactResult.ok) artifacts = artifactResult.data;
+    if (approvalResult.ok) approvals = filterSensitiveCarApprovals(approvalResult.data);
     if (agentResult.ok) {
       agents = agentResult.data;
       selectedAgent =
@@ -96,6 +109,11 @@
       agentError = agentResult.error;
     }
     loadingChats = false;
+  }
+
+  async function refreshApprovals(): Promise<void> {
+    const result = await pmaApi.settings.listApprovals();
+    if (result.ok) approvals = filterSensitiveCarApprovals(result.data);
   }
 
   async function loadModels(agentId: string): Promise<void> {
@@ -138,6 +156,7 @@
     else if (statusResult.ok) progress = statusResult.data;
     else if (!options.quiet) activeError = tailResult.error;
 
+    void refreshApprovals();
     loadingActive = false;
   }
 
@@ -272,6 +291,37 @@
     };
   }
 
+  async function decideApproval(
+    approval: SensitiveApprovalRequest,
+    decision: 'approve' | 'decline'
+  ): Promise<void> {
+    composeError = null;
+    const url = approvalActionUrl(approval, decision);
+    if (!url) {
+      composeError = {
+        kind: 'parse',
+        status: null,
+        code: 'approval_route_missing',
+        message: 'This approval is visible, but the backend did not expose an approve/decline route.'
+      };
+      return;
+    }
+    const body =
+      url === approval.raw.decision_url || url === approval.raw.route
+        ? { decision, approval_id: approval.id }
+        : undefined;
+    const result = await pmaApi.requestJson<JsonRecord>(url, {
+      method: 'POST',
+      body
+    });
+    if (result.ok) {
+      approvals = approvals.filter((item) => item.id !== approval.id);
+      void refreshApprovals();
+    } else {
+      composeError = result.error;
+    }
+  }
+
   function agentLabel(agent: JsonRecord): string {
     return stringField(agent, 'label') ?? stringField(agent, 'name') ?? stringField(agent, 'id') ?? 'Agent';
   }
@@ -284,6 +334,7 @@
     const value = record?.[key];
     return typeof value === 'string' && value.trim() ? value : null;
   }
+
 </script>
 
 <section class="pma-layout" aria-label="PMA chat workspace">
@@ -409,9 +460,12 @@
         <div class="state-panel error">Could not load this chat. {activeError.message}</div>
       {:else if !activeChat}
         <div class="state-panel">No PMA chat is selected.</div>
-      {:else if activeCards.length === 0}
+      {:else if activeCards.length === 0 && approvals.length === 0}
         <div class="state-panel">This PMA chat has no visible messages yet.</div>
       {:else}
+        {#each approvals as approval (approval.id)}
+          <SensitiveApprovalCard {approval} onDecision={decideApproval} />
+        {/each}
         {#each activeCards as card (card.id)}
           {#if card.kind === 'message'}
             <article class={`message ${card.message.role === 'user' ? 'user' : 'assistant'}`}>
@@ -440,14 +494,7 @@
               </p>
             </article>
           {:else}
-            <article class="artifact-card">
-              <span class="artifact-type">{card.artifact.kind.replace('_', ' ')}</span>
-              <strong>{card.artifact.title}</strong>
-              <p>{card.artifact.summary ?? card.artifact.url ?? 'Surfaced PMA artifact.'}</p>
-              {#if card.artifact.url}
-                <a href={card.artifact.url}>Open artifact</a>
-              {/if}
-            </article>
+            <SurfaceArtifactCard artifact={card.artifact} />
           {/if}
         {/each}
       {/if}

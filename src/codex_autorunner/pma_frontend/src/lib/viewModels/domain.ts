@@ -54,7 +54,7 @@ export type SurfaceArtifact = {
     | 'file'
     | 'preview_url'
     | 'test_result'
-    | 'command_output'
+    | 'command_summary'
     | 'diff_summary'
     | 'link'
     | 'final_report'
@@ -344,14 +344,14 @@ function normalizeArtifactKind(value: unknown): SurfaceArtifact['kind'] {
   const text = String(value ?? '').trim().toLowerCase();
   if (text.includes('screenshot')) return 'screenshot';
   if (text.match(/\.(png|jpe?g|gif|webp|avif)$/) || text.includes('image')) return 'image';
-  if (text.includes('preview') || text.includes('url')) return 'preview_url';
+  if (text.includes('preview') || text.includes('preview_url')) return 'preview_url';
   if (text.includes('test')) return 'test_result';
-  if (text.includes('command')) return 'command_output';
+  if (text.includes('command') || text.includes('cmd')) return 'command_summary';
   if (text.includes('diff')) return 'diff_summary';
-  if (text.includes('report')) return 'final_report';
+  if (text.includes('report') || text.includes('final')) return 'final_report';
   if (text.includes('error') || text.includes('failed')) return 'error';
   if (text.includes('progress') || text.includes('turn_') || text.includes('tool_')) return 'progress';
-  if (text.startsWith('http')) return 'link';
+  if (text.startsWith('http') || text.includes('pull request') || text.includes('pr/') || text.includes('github')) return 'link';
   return 'file';
 }
 

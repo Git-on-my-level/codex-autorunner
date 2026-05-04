@@ -56,6 +56,9 @@ describe('view model mappers', () => {
       title: 'screenshot.png',
       url: '/file'
     });
+    expect(mapSurfaceArtifact({ event_type: 'command_completed', summary: 'pnpm test' }).kind).toBe('command_summary');
+    expect(mapSurfaceArtifact({ name: 'Preview URL', url: 'http://localhost:4173' }).kind).toBe('preview_url');
+    expect(mapSurfaceArtifact({ name: 'pull request', url: 'https://github.com/org/repo/pull/1' }).kind).toBe('link');
   });
 
   it('maps ticket dispatch history attachments into ticket details', () => {

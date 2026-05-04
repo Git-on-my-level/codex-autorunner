@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { PmaChatMessage, PmaChatSummary, PmaRunProgress, SurfaceArtifact } from './domain';
 import {
+  approvalActionUrl,
+  artifactCardView,
   buildPmaCards,
   chooseActiveChatId,
   composeMessageWithAttachments,
+  filterSensitiveCarApprovals,
   filterPmaChats,
   formatRelativeTime,
   modelSelectorState,
@@ -139,5 +142,65 @@ describe('PMA chat view helpers', () => {
     expect(modelSelectorState(false, null, 0)).toMatchObject({ state: 'empty', disabled: true });
     expect(modelSelectorState(false, 'Agent missing provider', 0)).toMatchObject({ state: 'error', disabled: true });
     expect(modelSelectorState(false, null, 2)).toMatchObject({ state: 'loaded', disabled: false });
+  });
+
+  it('defines high-signal artifact card views for all surfaced variants', () => {
+    const variants: SurfaceArtifact['kind'][] = [
+      'screenshot',
+      'image',
+      'file',
+      'preview_url',
+      'test_result',
+      'command_summary',
+      'diff_summary',
+      'link',
+      'final_report',
+      'error',
+      'progress'
+    ];
+
+    const views = variants.map((kind) => artifactCardView({ ...baseArtifact, kind, url: '/artifact' }));
+
+    expect(views.map((view) => view.label)).toEqual([
+      'Screenshot',
+      'Image',
+      'File',
+      'Preview URL',
+      'Test result',
+      'Command summary',
+      'Diff summary',
+      'PR / link',
+      'PMA final report',
+      'Error / blocker',
+      'Run event'
+    ]);
+    expect(views.every((view) => view.detailLabel)).toBe(true);
+  });
+
+  it('filters sensitive CAR approvals without treating normal run progress as approval UI', () => {
+    const approvals = filterSensitiveCarApprovals([
+      {
+        id: 'normal-command',
+        title: 'Command completed',
+        description: 'pnpm test passed',
+        risk: 'low',
+        action: 'command',
+        createdAt: null,
+        raw: {}
+      },
+      {
+        id: 'delete-worktree',
+        title: 'Delete worktree',
+        description: 'Remove repo worktree from disk',
+        risk: 'high',
+        action: 'delete_worktree',
+        createdAt: null,
+        raw: { approve_url: '/approve', decline_url: '/decline' }
+      }
+    ]);
+
+    expect(approvals).toMatchObject([{ id: 'delete-worktree' }]);
+    expect(approvalActionUrl(approvals[0], 'approve')).toBe('/approve');
+    expect(approvalActionUrl(approvals[0], 'decline')).toBe('/decline');
   });
 });

@@ -2,6 +2,7 @@ import type {
   PmaChatMessage,
   PmaChatSummary,
   PmaRunProgress,
+  SensitiveApprovalRequest,
   SurfaceArtifact,
   WorkStatus
 } from './domain';
@@ -24,6 +25,14 @@ export type ModelSelectorState = {
   state: 'loading' | 'empty' | 'error' | 'loaded';
   label: string;
   disabled: boolean;
+};
+
+export type ArtifactCardView = {
+  label: string;
+  tone: 'neutral' | 'media' | 'success' | 'warning' | 'danger' | 'link';
+  primaryAction: string | null;
+  preview: 'image' | 'link' | 'text' | 'file' | 'none';
+  detailLabel: string;
 };
 
 export type PmaCard =
@@ -205,6 +214,148 @@ export function modelSelectorState(
     return { state: 'empty', label: 'No models exposed', disabled: true };
   }
   return { state: 'loaded', label: 'Model', disabled: false };
+}
+
+export function artifactCardView(artifact: SurfaceArtifact): ArtifactCardView {
+  switch (artifact.kind) {
+    case 'screenshot':
+      return {
+        label: 'Screenshot',
+        tone: 'media',
+        primaryAction: artifact.url ? 'Open screenshot' : null,
+        preview: artifact.url ? 'image' : 'text',
+        detailLabel: 'Screenshot details'
+      };
+    case 'image':
+      return {
+        label: 'Image',
+        tone: 'media',
+        primaryAction: artifact.url ? 'Open image' : null,
+        preview: artifact.url ? 'image' : 'text',
+        detailLabel: 'Image details'
+      };
+    case 'file':
+      return {
+        label: 'File',
+        tone: 'neutral',
+        primaryAction: artifact.url ? 'Open file' : null,
+        preview: 'file',
+        detailLabel: 'File details'
+      };
+    case 'preview_url':
+      return {
+        label: 'Preview URL',
+        tone: 'link',
+        primaryAction: artifact.url ? 'Open preview' : null,
+        preview: 'link',
+        detailLabel: 'Preview details'
+      };
+    case 'test_result':
+      return {
+        label: 'Test result',
+        tone: artifact.summary?.toLowerCase().includes('fail') ? 'danger' : 'success',
+        primaryAction: artifact.url ? 'Open test output' : null,
+        preview: 'text',
+        detailLabel: 'Test details'
+      };
+    case 'command_summary':
+      return {
+        label: 'Command summary',
+        tone: 'neutral',
+        primaryAction: artifact.url ? 'Open command output' : null,
+        preview: 'text',
+        detailLabel: 'Command details'
+      };
+    case 'diff_summary':
+      return {
+        label: 'Diff summary',
+        tone: 'warning',
+        primaryAction: artifact.url ? 'Open diff' : null,
+        preview: 'text',
+        detailLabel: 'Diff details'
+      };
+    case 'link':
+      return {
+        label: 'PR / link',
+        tone: 'link',
+        primaryAction: artifact.url ? 'Open link' : null,
+        preview: 'link',
+        detailLabel: 'Link details'
+      };
+    case 'final_report':
+      return {
+        label: 'PMA final report',
+        tone: 'success',
+        primaryAction: artifact.url ? 'Open report' : null,
+        preview: 'text',
+        detailLabel: 'Report details'
+      };
+    case 'error':
+      return {
+        label: 'Error / blocker',
+        tone: 'danger',
+        primaryAction: artifact.url ? 'Open details' : null,
+        preview: 'text',
+        detailLabel: 'Blocker details'
+      };
+    case 'progress':
+      return {
+        label: 'Run event',
+        tone: 'neutral',
+        primaryAction: artifact.url ? 'Open event' : null,
+        preview: 'text',
+        detailLabel: 'Event details'
+      };
+  }
+}
+
+const sensitiveActionPattern =
+  /\b(config|secret|credential|delete|remove repo|delete repo|delete worktree|cleanup|clean slate|reset hub|reset runtime|destructive|force removal)\b/i;
+
+export function isSensitiveCarApproval(request: SensitiveApprovalRequest): boolean {
+  const haystack = [request.action, request.title, request.description].join(' ');
+  return sensitiveActionPattern.test(haystack);
+}
+
+export function filterSensitiveCarApprovals(
+  approvals: SensitiveApprovalRequest[]
+): SensitiveApprovalRequest[] {
+  return approvals.filter(isSensitiveCarApproval);
+}
+
+export function approvalScopeLabel(request: SensitiveApprovalRequest): string {
+  const raw = request.raw;
+  for (const key of ['target_scope', 'scope', 'repo_id', 'worktree_repo_id', 'resource_id']) {
+    const value = raw[key];
+    if (typeof value === 'string' && value.trim()) return value;
+  }
+  return request.action;
+}
+
+export function approvalActionUrl(
+  request: SensitiveApprovalRequest,
+  decision: 'approve' | 'decline'
+): string | null {
+  const raw = request.raw;
+  const directKeys =
+    decision === 'approve'
+      ? ['approve_url', 'approval_url', 'accept_url']
+      : ['decline_url', 'reject_url', 'deny_url'];
+  for (const key of directKeys) {
+    const value = raw[key];
+    if (typeof value === 'string' && value.trim()) return value;
+  }
+  const actions = raw.actions;
+  if (actions && typeof actions === 'object') {
+    const action = (actions as Record<string, unknown>)[decision] ?? (actions as Record<string, unknown>)[decision === 'approve' ? 'accept' : 'reject'];
+    if (typeof action === 'string' && action.trim()) return action;
+    if (action && typeof action === 'object') {
+      const url = (action as Record<string, unknown>).url;
+      if (typeof url === 'string' && url.trim()) return url;
+    }
+  }
+  const decisionUrl = raw.decision_url ?? raw.route;
+  return typeof decisionUrl === 'string' && decisionUrl.trim() ? decisionUrl : null;
 }
 
 function clampPercent(value: number): number {
