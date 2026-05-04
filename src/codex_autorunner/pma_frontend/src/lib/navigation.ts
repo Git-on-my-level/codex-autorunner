@@ -18,5 +18,8 @@ export function isActiveRoute(pathname: string, href: string): boolean {
   if (href === '/pma') {
     return pathname === '/' || pathname === '/pma' || pathname.startsWith('/pma/');
   }
+  if (href === '/contextspace/local') {
+    return pathname === href || pathname.startsWith('/contextspace/');
+  }
   return pathname === href || pathname.startsWith(`${href}/`);
 }

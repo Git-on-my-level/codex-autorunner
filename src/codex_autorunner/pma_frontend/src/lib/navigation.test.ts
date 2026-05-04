@@ -11,6 +11,7 @@ describe('PMA navigation', () => {
   it('matches active top-level routes', () => {
     expect(isActiveRoute('/pma/thread-1', '/pma')).toBe(true);
     expect(isActiveRoute('/tickets/123', '/tickets')).toBe(true);
+    expect(isActiveRoute('/contextspace/repo-1', '/contextspace/local')).toBe(true);
     expect(isActiveRoute('/settings', '/settings')).toBe(true);
     expect(isActiveRoute('/repos', '/tickets')).toBe(false);
   });

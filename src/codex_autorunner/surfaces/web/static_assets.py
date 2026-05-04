@@ -6,7 +6,6 @@ import hashlib
 import json
 import logging
 import os
-import re
 import shutil
 import time
 from contextlib import ExitStack
@@ -250,7 +249,10 @@ def render_pma_index_html(static_dir: Path, base_path: str = "") -> str:
     index_path = static_dir / "index.html"
     html = index_path.read_text(encoding="utf-8")
     if base_path:
-        base_json = json.dumps(base_path.rstrip("/"))
+        normalized_base_path = base_path.rstrip("/")
+        base_json = json.dumps(normalized_base_path)
+        html = html.replace('"/_app/', f'"{normalized_base_path}/_app/')
+        html = html.replace("'/_app/", f"'{normalized_base_path}/_app/")
         html = html.replace(
             "__sveltekit_",
             f"globalThis.__CAR_BASE_PATH__ = {base_json};\n\n\t\t\t\t\t__sveltekit_",
@@ -259,15 +261,42 @@ def render_pma_index_html(static_dir: Path, base_path: str = "") -> str:
     return html
 
 
-_INLINE_SCRIPT_RE = re.compile(
-    r"<script\b[^>]*>(.*?)</script\s*>", re.DOTALL | re.IGNORECASE
-)
+def _has_script_tag_boundary(html_lower: str, index: int, tag_prefix: str) -> bool:
+    boundary_index = index + len(tag_prefix)
+    if boundary_index >= len(html_lower):
+        return True
+    boundary = html_lower[boundary_index]
+    return not (boundary.isalnum() or boundary in {"-", "_", ":"})
+
+
+def _iter_inline_script_contents(html: str) -> Iterable[str]:
+    html_lower = html.lower()
+    position = 0
+    while True:
+        start = html_lower.find("<script", position)
+        if start < 0:
+            return
+        if not _has_script_tag_boundary(html_lower, start, "<script"):
+            position = start + 1
+            continue
+        script_start = html.find(">", start)
+        if script_start < 0:
+            return
+        end = html_lower.find("</script", script_start + 1)
+        while end >= 0 and not _has_script_tag_boundary(html_lower, end, "</script"):
+            end = html_lower.find("</script", end + 1)
+        if end < 0:
+            return
+        script_end = html.find(">", end)
+        if script_end < 0:
+            return
+        yield html[script_start + 1 : end]
+        position = script_end + 1
 
 
 def _inline_script_hashes(html: str) -> list[str]:
     hashes: list[str] = []
-    for match in _INLINE_SCRIPT_RE.finditer(html):
-        script = match.group(1)
+    for script in _iter_inline_script_contents(html):
         if not script.strip():
             continue
         digest = hashlib.sha256(script.encode("utf-8")).digest()

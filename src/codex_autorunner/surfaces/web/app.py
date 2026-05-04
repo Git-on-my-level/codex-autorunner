@@ -1,4 +1,5 @@
 import asyncio
+import html as html_lib
 import logging
 import sqlite3
 import threading
@@ -7,6 +8,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Optional, Protocol, cast
+from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -937,18 +939,21 @@ def create_hub_app(
 
     def legacy_repo_frontend_gate(repo_id: str, request: Request, *, legacy_tab: str):
         query = request.url.query
+        encoded_repo_id = quote(repo_id, safe="")
         legacy_target = (
-            f"{context.base_path}/legacy/repos/{repo_id}/{legacy_tab}"
+            f"{context.base_path}/legacy/repos/{encoded_repo_id}/{legacy_tab}"
             if context.base_path
-            else f"/legacy/repos/{repo_id}/{legacy_tab}"
+            else f"/legacy/repos/{encoded_repo_id}/{legacy_tab}"
         )
         if query:
             legacy_target = f"{legacy_target}?{query}"
         pma_target = (
-            f"{context.base_path}/repos/{repo_id}"
+            f"{context.base_path}/repos/{encoded_repo_id}"
             if context.base_path
-            else f"/repos/{repo_id}"
+            else f"/repos/{encoded_repo_id}"
         )
+        legacy_target_attr = html_lib.escape(legacy_target, quote=True)
+        pma_target_attr = html_lib.escape(pma_target, quote=True)
         html = f"""<!doctype html>
 <html lang="en">
   <head>
@@ -959,8 +964,8 @@ def create_hub_app(
     <main>
       <h1>Legacy/debug route</h1>
       <p>This old CAR UI route is retained for migration and debugging only.</p>
-      <p><a href="{pma_target}">Open the PMA Hub route</a></p>
-      <p><a href="{legacy_target}">Open this legacy screen</a></p>
+      <p><a href="{pma_target_attr}">Open the PMA Hub route</a></p>
+      <p><a href="{legacy_target_attr}">Open this legacy screen</a></p>
     </main>
   </body>
 </html>

@@ -5,7 +5,10 @@ from fastapi.testclient import TestClient
 
 from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.server import create_hub_app
-from codex_autorunner.surfaces.web.static_assets import _inline_script_hashes
+from codex_autorunner.surfaces.web.static_assets import (
+    _inline_script_hashes,
+    render_pma_index_html,
+)
 
 
 def _script_hash(script: str) -> str:
@@ -93,6 +96,9 @@ def test_pma_base_path_routes_redirect_and_serve_spa(tmp_path):
     assert response.status_code == 200
     assert "<title>PMA Hub</title>" in response.text
     assert 'globalThis.__CAR_BASE_PATH__ = "/car";' in response.text
+    assert 'href="/car/_app/immutable/entry/start.' in response.text
+    assert 'import("/car/_app/immutable/entry/start.' in response.text
+    assert '"/_app/' not in response.text
 
 
 def test_repo_mount_frontend_routes_are_legacy_gated(hub_env):
@@ -116,3 +122,48 @@ def test_repo_mount_frontend_routes_are_legacy_gated(hub_env):
     assert legacy_terminal.status_code == 200
     assert "Legacy/debug CAR UI" in legacy_terminal.text
     assert "<title>Codex Autorunner</title>" in legacy_terminal.text
+
+
+def test_pma_index_base_path_rewrites_asset_urls(tmp_path):
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    (static_dir / "index.html").write_text(
+        """
+<link href="/_app/immutable/entry/start.abc.js" rel="modulepreload">
+<script>
+  import("/_app/immutable/entry/start.abc.js");
+</script>
+""",
+        encoding="utf-8",
+    )
+
+    html = render_pma_index_html(static_dir, base_path="/car/")
+
+    assert 'href="/car/_app/immutable/entry/start.abc.js"' in html
+    assert 'import("/car/_app/immutable/entry/start.abc.js")' in html
+    assert '"/_app/' not in html
+
+
+def test_inline_script_hashes_match_malformed_end_tag_spacing():
+    assert _inline_script_hashes("<script>gamma()</script\t\n bar>") == [
+        _script_hash("gamma()")
+    ]
+
+
+def test_legacy_repo_gate_escapes_repo_and_query_derived_href_values(hub_env):
+    client = TestClient(create_hub_app(hub_env.hub_root), follow_redirects=False)
+    payload = "%22%3E%3Cimg%20src=x%20onerror=alert(1)%3E"
+
+    response = client.get(f"/repos/{payload}/terminal?next=%22%3E%3Cimg%20src=x%3E")
+
+    assert response.status_code == 200
+    assert (
+        'href="/repos/%22%3E%3Cimg%20src%3Dx%20onerror%3Dalert%281%29%3E"'
+        in response.text
+    )
+    assert (
+        'href="/legacy/repos/%22%3E%3Cimg%20src%3Dx%20onerror%3Dalert%281%29%3E/terminal'
+        in response.text
+    )
+    assert "<img src=x onerror=alert(1)>" not in response.text
+    assert 'next="><img src=x>' not in response.text
