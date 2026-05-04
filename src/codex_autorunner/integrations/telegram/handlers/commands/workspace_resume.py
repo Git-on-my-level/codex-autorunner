@@ -1066,6 +1066,7 @@ class WorkspaceResumeMixin:
             workspace_path=updated_record.workspace_path,
             model=updated_record.model,
             effort=updated_record.effort,
+            agent=updated_record.agent,
         )
         await self._finalize_selection(key, callback, message)
 
@@ -1302,5 +1303,6 @@ class WorkspaceResumeMixin:
             workspace_path=updated_record.workspace_path if updated_record else None,
             model=updated_record.model if updated_record else None,
             effort=updated_record.effort if updated_record else None,
+            agent=updated_record.agent if updated_record else None,
         )
         await self._finalize_selection(key, callback, message)

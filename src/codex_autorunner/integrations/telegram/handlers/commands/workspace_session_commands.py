@@ -13,6 +13,7 @@ from .....core.pma_context import clear_pma_prompt_state_sessions
 from .....core.state import now_iso
 from .....core.utils import canonicalize_path
 from ....app_server.client import CodexAppServerError
+from ....chat.agents import DEFAULT_CHAT_AGENT_MODELS
 from ....chat.constants import APP_SERVER_UNAVAILABLE_MESSAGE, TOPIC_NOT_BOUND_MESSAGE
 from ....chat.newt_support import (
     NewtSetupCommandsError,
@@ -648,7 +649,8 @@ class WorkspaceSessionCommandsMixin:
                         headline=f"Started new thread `{thread_id}`.",
                         workspace_path=record.workspace_path,
                         actor_label=self._effective_agent_label(record),
-                        model=record.model or "default",
+                        model=record.model
+                        or DEFAULT_CHAT_AGENT_MODELS.get(agent, "default"),
                         effort=effort_label,
                     ),
                 ]
@@ -970,7 +972,7 @@ class WorkspaceSessionCommandsMixin:
                 headline=f"Started new thread `{thread_id}`.",
                 workspace_path=str(workspace_root),
                 actor_label=self._effective_agent_label(record),
-                model=record.model or "default",
+                model=record.model or DEFAULT_CHAT_AGENT_MODELS.get(agent, "default"),
                 effort=effort_label,
             ),
         ]

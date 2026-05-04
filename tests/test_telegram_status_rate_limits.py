@@ -128,7 +128,7 @@ async def test_status_opencode_skips_rate_limits() -> None:
     assert "Active thread: none" in text
     assert "Agent: opencode" in text
     assert "Resume: supported" in text
-    assert "Model: default" in text
+    assert "Model: zai-coding-plan/glm-5.1" in text
     assert "Channel is bound." not in text
     assert "/car flow status" not in text
     assert "Limits:" not in handler._sent_messages[-1]
@@ -153,7 +153,7 @@ async def test_status_codex_includes_rate_limits() -> None:
     assert "Active thread: none" in text
     assert "Agent: codex" in text
     assert "Resume: supported" in text
-    assert "Model: default" in text
+    assert "Model: gpt-5.5" in text
     assert "Approval mode: yolo" in text
     assert "Sandbox policy: default" in text
     assert "Limits:" in text

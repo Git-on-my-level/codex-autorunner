@@ -9,7 +9,7 @@ from typing import Any, Literal, Optional, Tuple
 DEFAULT_CHAT_AGENT = "codex"
 DEFAULT_CHAT_AGENT_MODELS = MappingProxyType(
     {
-        "codex": "gpt-5.4",
+        "codex": "gpt-5.5",
         "opencode": "zai-coding-plan/glm-5.1",
     }
 )

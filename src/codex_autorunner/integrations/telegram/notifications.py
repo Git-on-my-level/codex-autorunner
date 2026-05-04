@@ -12,6 +12,7 @@ from ...core.ports.run_event import (
 )
 from ...core.state import now_iso
 from ...core.text_delta_coalescer import TextDeltaCoalescer
+from ..chat.agents import DEFAULT_CHAT_AGENT_MODELS
 from ..chat.managed_thread_progress import progress_item_id_for_log_line
 from ..chat.managed_thread_progress_projector import (
     ManagedThreadProgressProjector,
@@ -518,7 +519,7 @@ class TelegramNotificationHandlers:
         tracker = TurnProgressTracker(
             started_at=time.monotonic(),
             agent=agent,
-            model=model or "default",
+            model=model or DEFAULT_CHAT_AGENT_MODELS.get(agent, "default"),
             label=label,
             max_actions=self._config.progress_stream.max_actions,
             max_output_chars=self._config.progress_stream.max_output_chars,
