@@ -39,10 +39,18 @@ _LOGGER = logging.getLogger(__name__)
 _MANAGED_TURN_START_CONFIRMATION_TIMEOUT_SECONDS = 120
 _MANAGED_TURN_START_CONFIRMATION_INITIAL_RETRY_SECONDS = 5
 _MANAGED_TURN_START_CONFIRMATION_MAX_RETRY_SECONDS = 30
+_MANAGED_TURN_QUEUE_WAIT_RETRY_SECONDS = 30
+_MANAGED_TURN_QUEUE_WAIT_TIMEOUT_SECONDS = 30 * 60
+_MANAGED_TURN_QUEUE_WAIT_MAX_ATTEMPTS = (
+    _MANAGED_TURN_QUEUE_WAIT_TIMEOUT_SECONDS
+    + _MANAGED_TURN_QUEUE_WAIT_RETRY_SECONDS
+    - 1
+) // _MANAGED_TURN_QUEUE_WAIT_RETRY_SECONDS
 _MANAGED_TURN_START_CONFIRMATION_MAX_ATTEMPTS = 12
 # Counts notify_chat retries after enqueue succeeded; not incremented while
 # waiting for enqueue_managed_turn so backlog cannot exhaust the start window.
 _MANAGED_TURN_POST_ENQUEUE_WAIT_CYCLES_KEY = "_managed_turn_post_enqueue_wait_cycles"
+_MANAGED_TURN_QUEUE_WAIT_CYCLES_KEY = "_managed_turn_queue_wait_cycles"
 _RUNTIME_STARTED_AT_KEY = "runtime_started_at"
 
 
@@ -200,9 +208,18 @@ def _managed_turn_start_retry_seconds(operation: PublishOperation) -> float:
     return float(min(delay, _MANAGED_TURN_START_CONFIRMATION_MAX_RETRY_SECONDS))
 
 
+def _managed_turn_queue_wait_retry_seconds() -> float:
+    return float(_MANAGED_TURN_QUEUE_WAIT_RETRY_SECONDS)
+
+
 def _managed_turn_post_enqueue_wait_exhausted(dependency: Mapping[str, Any]) -> bool:
     cycles = _coerce_int(dependency.get(_MANAGED_TURN_POST_ENQUEUE_WAIT_CYCLES_KEY))
     return cycles >= _MANAGED_TURN_START_CONFIRMATION_MAX_ATTEMPTS - 1
+
+
+def _managed_turn_queue_wait_exhausted(dependency: Mapping[str, Any]) -> bool:
+    cycles = _coerce_int(dependency.get(_MANAGED_TURN_QUEUE_WAIT_CYCLES_KEY))
+    return cycles >= _MANAGED_TURN_QUEUE_WAIT_MAX_ATTEMPTS - 1
 
 
 def _bump_managed_turn_post_enqueue_wait_cycles(
@@ -220,12 +237,75 @@ def _bump_managed_turn_post_enqueue_wait_cycles(
     )
 
 
+def _bump_managed_turn_queue_wait_cycles(
+    journal: PublishJournalStore,
+    operation_id: str,
+    dependency: Mapping[str, Any],
+) -> None:
+    dep = dict(dependency)
+    dep[_MANAGED_TURN_QUEUE_WAIT_CYCLES_KEY] = (
+        _coerce_int(dep.get(_MANAGED_TURN_QUEUE_WAIT_CYCLES_KEY)) + 1
+    )
+    journal.patch_running_operation_payload(
+        operation_id,
+        {"managed_turn_dependency": dep},
+    )
+
+
 def _managed_turn_start_failure_message(
     failure_message: Optional[str],
     detail: str,
 ) -> str:
     base = failure_message or "Failed to wake the bound agent thread."
     return f"{base} {detail}".strip()
+
+
+def _running_turn_blocking_queue(
+    thread_store: PmaThreadStore,
+    *,
+    thread_target_id: str,
+    queued_turn_id: str,
+) -> Optional[dict[str, Any]]:
+    running_turn = thread_store.get_running_turn(thread_target_id)
+    if running_turn is None:
+        return None
+    if _normalize_optional_text(running_turn.get("managed_turn_id")) == queued_turn_id:
+        return None
+    return running_turn
+
+
+def _log_scm_enqueue_managed_turn_queued(
+    store: PmaThreadStore,
+    *,
+    thread_target_id: str,
+    created: dict[str, Any],
+    tracking: Mapping[str, Any],
+    log_context: tuple[Any, ...],
+) -> None:
+    if not tracking or _normalize_optional_text(created.get("status")) != "queued":
+        return
+    blocking_turn = _running_turn_blocking_queue(
+        store,
+        thread_target_id=thread_target_id,
+        queued_turn_id=_require_text(
+            created.get("managed_turn_id"),
+            field_name="managed_turn_id",
+        ),
+    )
+    _LOGGER.info(
+        "scm.enqueue_managed_turn.queued "
+        "thread_target_id=%s managed_turn_id=%s "
+        "blocking_managed_turn_id=%s correlation_id=%s "
+        "binding_id=%s repo_slug=%s pr_number=%s",
+        thread_target_id,
+        created.get("managed_turn_id"),
+        (
+            _normalize_optional_text(blocking_turn.get("managed_turn_id"))
+            if blocking_turn is not None
+            else None
+        ),
+        *log_context,
+    )
 
 
 def _resolve_notify_message(
@@ -317,6 +397,52 @@ def _resolve_notify_message(
     turn_status = _normalize_optional_text(turn.get("status")) or "unknown"
     metadata = _normalize_mapping(turn.get("metadata"))
     runtime_started_at = _normalize_optional_text(metadata.get(_RUNTIME_STARTED_AT_KEY))
+    if turn_status == "queued":
+        blocking_turn = _running_turn_blocking_queue(
+            thread_store,
+            thread_target_id=thread_target_id,
+            queued_turn_id=managed_turn_id,
+        )
+        if _managed_turn_queue_wait_exhausted(dependency):
+            detail = (
+                "The managed turn stayed queued and never reached the front of the "
+                "queue before timeout."
+            )
+            _LOGGER.warning(
+                "notify_chat timed out waiting for queued managed turn "
+                "thread_target_id=%s managed_turn_id=%s blocking_managed_turn_id=%s",
+                thread_target_id,
+                managed_turn_id,
+                (
+                    _normalize_optional_text(blocking_turn.get("managed_turn_id"))
+                    if blocking_turn is not None
+                    else None
+                ),
+            )
+            if failure_message is not None:
+                return (
+                    _managed_turn_start_failure_message(failure_message, detail),
+                    None,
+                )
+            raise TerminalPublishError("Managed turn stayed queued before timeout")
+        _LOGGER.info(
+            "notify_chat waiting for queued managed turn to reach front of queue "
+            "thread_target_id=%s managed_turn_id=%s blocking_managed_turn_id=%s",
+            thread_target_id,
+            managed_turn_id,
+            (
+                _normalize_optional_text(blocking_turn.get("managed_turn_id"))
+                if blocking_turn is not None
+                else None
+            ),
+        )
+        _bump_managed_turn_queue_wait_cycles(
+            journal, operation.operation_id, dependency
+        )
+        raise RetryablePublishError(
+            "Waiting for queued managed turn to reach front of queue",
+            retry_after_seconds=_managed_turn_queue_wait_retry_seconds(),
+        )
     if runtime_started_at is not None:
         return (
             _require_text(
@@ -894,6 +1020,13 @@ def build_enqueue_managed_turn_executor(
                 queue_payload=queue_payload,
                 force_queue=bool(tracking),
             )
+            _log_scm_enqueue_managed_turn_queued(
+                store,
+                thread_target_id=thread_target_id,
+                created=created,
+                tracking=tracking,
+                log_context=log_context,
+            )
         except ManagedThreadNotActiveError as exc:
             if not tracking:
                 raise
@@ -951,6 +1084,13 @@ def build_enqueue_managed_turn_executor(
                 metadata=request.metadata,
                 queue_payload=queue_payload,
                 force_queue=bool(tracking),
+            )
+            _log_scm_enqueue_managed_turn_queued(
+                store,
+                thread_target_id=thread_target_id,
+                created=created,
+                tracking=tracking,
+                log_context=log_context,
             )
             _LOGGER.info(
                 "scm.enqueue_managed_turn.rebound_thread "

@@ -373,6 +373,7 @@ def _operation_waiting_for_managed_turn_start(operation: PublishOperation) -> bo
         for phrase in (
             "Waiting for enqueue_managed_turn to finish",
             "Waiting for managed turn record to become visible",
+            "Waiting for queued managed turn to reach front of queue",
             "Waiting for managed turn start confirmation",
             "Managed turn has not confirmed runtime start",
         )
