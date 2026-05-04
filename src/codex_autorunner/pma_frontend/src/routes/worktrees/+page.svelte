@@ -1,16 +1,54 @@
 <script lang="ts">
-  import { routeViewModels } from '$lib/viewModels/routes';
+  import { onMount } from 'svelte';
+  import RepoWorktreeViews from '$lib/components/RepoWorktreeViews.svelte';
+  import { pmaApi, type ApiError } from '$lib/api/client';
+  import {
+    buildRepoWorktreeIndexViewModel,
+    type RepoWorktreeIndexViewModel
+  } from '$lib/viewModels/repoWorktree';
 
-  const vm = routeViewModels.worktrees;
+  let index = $state<RepoWorktreeIndexViewModel | null>(null);
+  let loading = $state(true);
+  let error = $state<ApiError | null>(null);
+
+  onMount(() => {
+    void loadWorktrees();
+  });
+
+  async function loadWorktrees(): Promise<void> {
+    loading = true;
+    error = null;
+    const [repos, worktrees, runs, chats, tickets] = await Promise.all([
+      pmaApi.hub.listRepos(),
+      pmaApi.hub.listWorktrees(),
+      pmaApi.ticketFlow.listRuns(),
+      pmaApi.pma.listChats(),
+      pmaApi.ticketFlow.listTickets()
+    ]);
+    const firstError = [repos, worktrees, runs, chats, tickets].find((result) => !result.ok);
+    if (firstError && !firstError.ok) {
+      error = firstError.error;
+      loading = false;
+      return;
+    }
+    index = buildRepoWorktreeIndexViewModel(
+      {
+        repos: repos.ok ? repos.data : [],
+        worktrees: worktrees.ok ? worktrees.data : [],
+        runs: runs.ok ? runs.data : [],
+        chats: chats.ok ? chats.data : [],
+        tickets: tickets.ok ? tickets.data : [],
+        artifacts: []
+      },
+      'worktree'
+    );
+    loading = false;
+  }
 </script>
 
-<section class="page-stack">
-  <div class="section-heading">
-    <p class="eyebrow">{vm.eyebrow}</p>
-    <h1>{vm.title}</h1>
-  </div>
-  <div class="page-panel">
-    <h2>{vm.panelTitle}</h2>
-    <p>{vm.description}</p>
-  </div>
-</section>
+<RepoWorktreeViews
+  state={loading ? 'loading' : error ? 'error' : 'ready'}
+  mode="index"
+  {index}
+  errorMessage={error?.message ?? null}
+/>

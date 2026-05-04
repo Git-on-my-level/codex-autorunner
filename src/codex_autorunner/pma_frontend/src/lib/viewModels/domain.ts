@@ -236,32 +236,50 @@ export function mapDashboardSummary(raw: JsonRecord): DashboardSummary {
 
 export function mapRepoSummary(raw: JsonRecord): RepoSummary {
   const id = stringValue(raw.id ?? raw.repo_id ?? raw.name, 'unknown-repo');
+  const ticketFlow = asRecord(raw.ticket_flow_display ?? raw.ticket_flow);
+  const runState = asRecord(raw.run_state);
+  const activeRuns = Boolean(ticketFlow.is_active ?? runState.is_active)
+    ? 1
+    : numberOrNull(raw.active_runs ?? raw.active_run_count) ?? 0;
+  const totalTickets = numberOrNull(ticketFlow.total_count);
+  const doneTickets = numberOrNull(ticketFlow.done_count);
   return {
     id,
     name: stringValue(raw.name ?? raw.display_name, id),
     path: nullableString(raw.path ?? raw.repo_root),
-    status: normalizeStatus(raw.status ?? raw.runtime_status),
-    defaultBranch: nullableString(raw.default_branch ?? raw.branch),
+    status: normalizeStatus(ticketFlow.status ?? runState.flow_status ?? raw.status ?? raw.runtime_status),
+    defaultBranch: nullableString(raw.default_branch ?? raw.branch ?? raw.current_branch),
     worktreeCount: numberOrNull(raw.worktree_count ?? raw.worktrees_count ?? asArray(raw.worktrees).length) ?? 0,
-    activeRuns: numberOrNull(raw.active_runs ?? raw.active_run_count) ?? 0,
-    openTickets: numberOrNull(raw.open_tickets ?? raw.open_ticket_count) ?? 0,
-    lastActivityAt: dateString(raw.last_activity_at ?? raw.updated_at),
+    activeRuns,
+    openTickets:
+      numberOrNull(raw.open_tickets ?? raw.open_ticket_count) ??
+      (totalTickets !== null && doneTickets !== null ? Math.max(0, totalTickets - doneTickets) : 0),
+    lastActivityAt: dateString(raw.last_activity_at ?? raw.updated_at ?? runState.last_event_at ?? raw.last_run_started_at),
     raw
   };
 }
 
 export function mapWorktreeSummary(raw: JsonRecord): WorktreeSummary {
   const id = stringValue(raw.worktree_id ?? raw.id ?? raw.repo_id ?? raw.name, 'unknown-worktree');
+  const ticketFlow = asRecord(raw.ticket_flow_display ?? raw.ticket_flow);
+  const runState = asRecord(raw.run_state);
+  const activeRuns = Boolean(ticketFlow.is_active ?? runState.is_active)
+    ? 1
+    : numberOrNull(raw.active_runs ?? raw.active_run_count) ?? 0;
+  const totalTickets = numberOrNull(ticketFlow.total_count);
+  const doneTickets = numberOrNull(ticketFlow.done_count);
   return {
     id,
-    repoId: nullableString(raw.base_repo_id ?? raw.repo_id ?? raw.parent_repo_id),
+    repoId: nullableString(raw.worktree_of ?? raw.base_repo_id ?? raw.parent_repo_id),
     name: stringValue(raw.name ?? raw.display_name ?? raw.branch, id),
     path: nullableString(raw.path ?? raw.workspace_root),
     branch: nullableString(raw.branch ?? raw.current_branch),
-    status: normalizeStatus(raw.status ?? raw.runtime_status),
-    activeRuns: numberOrNull(raw.active_runs ?? raw.active_run_count) ?? 0,
-    openTickets: numberOrNull(raw.open_tickets ?? raw.open_ticket_count) ?? 0,
-    lastActivityAt: dateString(raw.last_activity_at ?? raw.updated_at),
+    status: normalizeStatus(ticketFlow.status ?? runState.flow_status ?? raw.status ?? raw.runtime_status),
+    activeRuns,
+    openTickets:
+      numberOrNull(raw.open_tickets ?? raw.open_ticket_count) ??
+      (totalTickets !== null && doneTickets !== null ? Math.max(0, totalTickets - doneTickets) : 0),
+    lastActivityAt: dateString(raw.last_activity_at ?? raw.updated_at ?? runState.last_event_at ?? raw.last_run_started_at),
     raw
   };
 }

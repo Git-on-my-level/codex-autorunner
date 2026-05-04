@@ -4,8 +4,10 @@ import {
   mapDashboardSummary,
   mapPmaChatSummary,
   mapPmaRunProgress,
+  mapRepoSummary,
   mapSurfaceArtifact,
-  mapTicketDetail
+  mapTicketDetail,
+  mapWorktreeSummary
 } from './domain';
 
 describe('view model mappers', () => {
@@ -111,6 +113,57 @@ describe('view model mappers', () => {
     expect(vm.recentArtifacts[0]).toMatchObject({
       kind: 'final_report',
       title: 'result-report.md'
+    });
+  });
+
+  it('maps repo summaries from enriched hub repo payloads', () => {
+    const vm = mapRepoSummary({
+      id: 'base',
+      name: 'Base repo',
+      path: '/work/base',
+      current_branch: 'main',
+      ticket_flow_display: {
+        status: 'running',
+        is_active: true,
+        done_count: 2,
+        total_count: 5
+      },
+      run_state: { last_event_at: '2026-05-04T01:00:00Z' }
+    });
+
+    expect(vm).toMatchObject({
+      id: 'base',
+      name: 'Base repo',
+      status: 'running',
+      defaultBranch: 'main',
+      activeRuns: 1,
+      openTickets: 3,
+      lastActivityAt: '2026-05-04T01:00:00Z'
+    });
+  });
+
+  it('maps worktree summaries from enriched hub repo payloads', () => {
+    const vm = mapWorktreeSummary({
+      id: 'base--feature',
+      kind: 'worktree',
+      worktree_of: 'base',
+      path: '/work/base--feature',
+      branch: 'feature/current-run',
+      ticket_flow_display: {
+        status: 'paused',
+        is_active: true,
+        done_count: 1,
+        total_count: 2
+      }
+    });
+
+    expect(vm).toMatchObject({
+      id: 'base--feature',
+      repoId: 'base',
+      branch: 'feature/current-run',
+      status: 'waiting',
+      activeRuns: 1,
+      openTickets: 1
     });
   });
 });

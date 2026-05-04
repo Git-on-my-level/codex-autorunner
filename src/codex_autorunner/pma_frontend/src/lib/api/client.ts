@@ -246,11 +246,11 @@ export class PmaApiClient {
       ),
     listRepos: async (): Promise<ApiResult<RepoSummary[]>> =>
       mapResult(await this.getJson<JsonRecord>('/hub/repos'), (payload) =>
-        asArray(payload.repos ?? payload.items).map(mapRepoSummary)
+        asArray(payload.repos ?? payload.items).filter((item) => !isWorktreeItem(item)).map(mapRepoSummary)
       ),
     listWorktrees: async (): Promise<ApiResult<WorktreeSummary[]>> =>
       mapResult(await this.getJson<JsonRecord>('/hub/repos'), (payload) =>
-        asArray(payload.worktrees ?? payload.repos ?? payload.items).map(mapWorktreeSummary)
+        asArray(payload.worktrees ?? payload.repos ?? payload.items).filter(isWorktreeItem).map(mapWorktreeSummary)
       )
   };
 
@@ -327,6 +327,10 @@ function asRecord(value: unknown): JsonRecord {
 
 function asArray(value: unknown): JsonRecord[] {
   return Array.isArray(value) ? value.filter((item): item is JsonRecord => Boolean(item) && typeof item === 'object') : [];
+}
+
+function isWorktreeItem(item: JsonRecord): boolean {
+  return item.kind === 'worktree' || typeof item.worktree_of === 'string' || typeof item.base_repo_id === 'string';
 }
 
 export const pmaApi = new PmaApiClient();
