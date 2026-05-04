@@ -185,11 +185,23 @@ class TestIdleCpuSoakProfileParsing:
 
 
 class TestIdleCpuSoakProcessManagement:
+    def _proc_is_zombie(self, pid: int) -> bool:
+        path = Path("/proc") / str(pid) / "stat"
+        try:
+            fields = path.read_text(encoding="utf-8").split()
+        except OSError:
+            return False
+        return len(fields) > 2 and fields[2] == "Z"
+
     def _assert_pid_gone(self, pid: int) -> None:
-        for _ in range(50):
+        # Watchdog exits quickly but may remain as a zombie until init reaps it;
+        # os.kill(pid, 0) still succeeds for zombies on Linux.
+        for _ in range(150):
             try:
                 os.kill(pid, 0)
             except ProcessLookupError:
+                return
+            if self._proc_is_zombie(pid):
                 return
             time.sleep(0.1)
         raise AssertionError(f"process {pid} still running")

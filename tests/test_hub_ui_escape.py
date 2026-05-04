@@ -1,9 +1,15 @@
+import shutil
 import subprocess
 import textwrap
 from pathlib import Path
 
+import pytest
+
 
 def test_hub_ui_escapes_repo_fields():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node executable not on PATH (required for hub.js smoke import)")
     hub_js = Path("src/codex_autorunner/static/generated/hub.js").resolve()
     script = textwrap.dedent(
         f"""
@@ -133,4 +139,4 @@ def test_hub_ui_escapes_repo_fields():
         """
     )
 
-    subprocess.run(["node", "--input-type=module", "-e", script], check=True)
+    subprocess.run([node, "--input-type=module", "-e", script], check=True)
