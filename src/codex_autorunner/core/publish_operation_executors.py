@@ -40,10 +40,17 @@ _MANAGED_TURN_START_CONFIRMATION_TIMEOUT_SECONDS = 120
 _MANAGED_TURN_START_CONFIRMATION_INITIAL_RETRY_SECONDS = 5
 _MANAGED_TURN_START_CONFIRMATION_MAX_RETRY_SECONDS = 30
 _MANAGED_TURN_QUEUE_WAIT_RETRY_SECONDS = 30
+_MANAGED_TURN_QUEUE_WAIT_TIMEOUT_SECONDS = 30 * 60
+_MANAGED_TURN_QUEUE_WAIT_MAX_ATTEMPTS = (
+    _MANAGED_TURN_QUEUE_WAIT_TIMEOUT_SECONDS
+    + _MANAGED_TURN_QUEUE_WAIT_RETRY_SECONDS
+    - 1
+) // _MANAGED_TURN_QUEUE_WAIT_RETRY_SECONDS
 _MANAGED_TURN_START_CONFIRMATION_MAX_ATTEMPTS = 12
 # Counts notify_chat retries after enqueue succeeded; not incremented while
 # waiting for enqueue_managed_turn so backlog cannot exhaust the start window.
 _MANAGED_TURN_POST_ENQUEUE_WAIT_CYCLES_KEY = "_managed_turn_post_enqueue_wait_cycles"
+_MANAGED_TURN_QUEUE_WAIT_CYCLES_KEY = "_managed_turn_queue_wait_cycles"
 _RUNTIME_STARTED_AT_KEY = "runtime_started_at"
 
 
@@ -210,6 +217,11 @@ def _managed_turn_post_enqueue_wait_exhausted(dependency: Mapping[str, Any]) -> 
     return cycles >= _MANAGED_TURN_START_CONFIRMATION_MAX_ATTEMPTS - 1
 
 
+def _managed_turn_queue_wait_exhausted(dependency: Mapping[str, Any]) -> bool:
+    cycles = _coerce_int(dependency.get(_MANAGED_TURN_QUEUE_WAIT_CYCLES_KEY))
+    return cycles >= _MANAGED_TURN_QUEUE_WAIT_MAX_ATTEMPTS - 1
+
+
 def _bump_managed_turn_post_enqueue_wait_cycles(
     journal: PublishJournalStore,
     operation_id: str,
@@ -218,6 +230,21 @@ def _bump_managed_turn_post_enqueue_wait_cycles(
     dep = dict(dependency)
     dep[_MANAGED_TURN_POST_ENQUEUE_WAIT_CYCLES_KEY] = (
         _coerce_int(dep.get(_MANAGED_TURN_POST_ENQUEUE_WAIT_CYCLES_KEY)) + 1
+    )
+    journal.patch_running_operation_payload(
+        operation_id,
+        {"managed_turn_dependency": dep},
+    )
+
+
+def _bump_managed_turn_queue_wait_cycles(
+    journal: PublishJournalStore,
+    operation_id: str,
+    dependency: Mapping[str, Any],
+) -> None:
+    dep = dict(dependency)
+    dep[_MANAGED_TURN_QUEUE_WAIT_CYCLES_KEY] = (
+        _coerce_int(dep.get(_MANAGED_TURN_QUEUE_WAIT_CYCLES_KEY)) + 1
     )
     journal.patch_running_operation_payload(
         operation_id,
@@ -376,6 +403,28 @@ def _resolve_notify_message(
             thread_target_id=thread_target_id,
             queued_turn_id=managed_turn_id,
         )
+        if _managed_turn_queue_wait_exhausted(dependency):
+            detail = (
+                "The managed turn stayed queued and never reached the front of the "
+                "queue before timeout."
+            )
+            _LOGGER.warning(
+                "notify_chat timed out waiting for queued managed turn "
+                "thread_target_id=%s managed_turn_id=%s blocking_managed_turn_id=%s",
+                thread_target_id,
+                managed_turn_id,
+                (
+                    _normalize_optional_text(blocking_turn.get("managed_turn_id"))
+                    if blocking_turn is not None
+                    else None
+                ),
+            )
+            if failure_message is not None:
+                return (
+                    _managed_turn_start_failure_message(failure_message, detail),
+                    None,
+                )
+            raise TerminalPublishError("Managed turn stayed queued before timeout")
         _LOGGER.info(
             "notify_chat waiting for queued managed turn to reach front of queue "
             "thread_target_id=%s managed_turn_id=%s blocking_managed_turn_id=%s",
@@ -386,6 +435,9 @@ def _resolve_notify_message(
                 if blocking_turn is not None
                 else None
             ),
+        )
+        _bump_managed_turn_queue_wait_cycles(
+            journal, operation.operation_id, dependency
         )
         raise RetryablePublishError(
             "Waiting for queued managed turn to reach front of queue",
