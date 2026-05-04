@@ -1767,6 +1767,333 @@ def test_notify_chat_waits_for_managed_turn_start_confirmation(
     assert calls == ["Started the latest PR review batch for acme/widgets#42."]
 
 
+def test_notify_chat_does_not_exhaust_start_timer_while_turn_is_queued(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    hub_root, workspace_root, repo_id = _publish_hub(tmp_path)
+    thread_store = PmaThreadStore(hub_root)
+    thread = thread_store.create_thread("codex", workspace_root, repo_id=repo_id)
+    blocking_turn = thread_store.create_turn(
+        thread["managed_thread_id"], prompt="already running"
+    )
+    journal = PublishJournalStore(hub_root)
+    enqueue_operation, _ = journal.create_operation(
+        operation_key="enqueue:dep:queued",
+        operation_kind="enqueue_managed_turn",
+        payload={
+            "thread_target_id": thread["managed_thread_id"],
+            "message_text": "Handle the latest SCM review.",
+        },
+        next_attempt_at="2026-03-25T00:00:00Z",
+    )
+    notify_operation, _ = journal.create_operation(
+        operation_key="notify:dep:queued",
+        operation_kind="notify_chat",
+        payload={
+            "delivery": "primary_pma",
+            "repo_id": repo_id,
+            "message": "Started the latest PR review batch for acme/widgets#42.",
+            "managed_turn_dependency": {
+                "dependency_kind": "enqueue_managed_turn_started",
+                "operation_id": enqueue_operation.operation_id,
+                "thread_target_id": thread["managed_thread_id"],
+                "failure_message": "Failed to wake the bound agent thread for acme/widgets#42.",
+            },
+        },
+        next_attempt_at="2026-03-25T00:00:00Z",
+    )
+
+    calls: list[str] = []
+
+    async def _fake_notify_primary_pma_chat_for_repo(
+        *,
+        hub_root: Path,
+        repo_id: str | None,
+        message: str,
+        correlation_id: str,
+    ) -> dict[str, int]:
+        _ = (hub_root, repo_id, correlation_id)
+        calls.append(message)
+        return {"targets": 1, "published": 1}
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.publish_operation_executors.notify_primary_pma_chat_for_repo",
+        _fake_notify_primary_pma_chat_for_repo,
+    )
+
+    processor = PublishOperationProcessor(
+        journal,
+        executors=PublishExecutorRegistry(
+            {
+                "enqueue_managed_turn": build_enqueue_managed_turn_executor(
+                    hub_root=hub_root,
+                    thread_store=thread_store,
+                ),
+                "notify_chat": build_notify_chat_executor(
+                    hub_root=hub_root,
+                    thread_store=thread_store,
+                    journal_store=journal,
+                ),
+            }
+        ),
+        now_fn=_QueuedClock(*["2026-03-25T00:00:00Z"] * 20),
+    )
+
+    with caplog.at_level(
+        logging.INFO, logger="codex_autorunner.core.publish_operation_executors"
+    ):
+        first = processor.process_now(limit=10)
+        by_id = {operation.operation_id: operation for operation in first}
+        assert by_id[enqueue_operation.operation_id].state == "succeeded"
+        assert by_id[notify_operation.operation_id].state == "pending"
+        queued_turn_id = by_id[enqueue_operation.operation_id].response[
+            "managed_turn_id"
+        ]
+
+        for _ in range(14):
+            assert journal.update_pending_operation(
+                notify_operation.operation_id,
+                next_attempt_at="2026-03-25T00:00:00Z",
+            )
+            processed = processor.process_now(limit=10)
+            assert [operation.operation_id for operation in processed] == [
+                notify_operation.operation_id
+            ]
+            assert processed[0].state == "pending"
+            assert calls == []
+
+    queued_turn = thread_store.get_turn(thread["managed_thread_id"], queued_turn_id)
+    assert queued_turn is not None
+    assert queued_turn["status"] == "queued"
+    refreshed_notify = journal.get_operation(notify_operation.operation_id)
+    assert refreshed_notify is not None
+    dependency = refreshed_notify.payload["managed_turn_dependency"]
+    assert "_managed_turn_post_enqueue_wait_cycles" not in dependency
+    assert any(
+        "notify_chat waiting for queued managed turn to reach front of queue" in message
+        and blocking_turn["managed_turn_id"] in message
+        for message in caplog.messages
+    )
+
+
+def test_notify_chat_reports_failure_when_queued_turn_never_reaches_front(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    hub_root, workspace_root, repo_id = _publish_hub(tmp_path)
+    thread_store = PmaThreadStore(hub_root)
+    thread = thread_store.create_thread("codex", workspace_root, repo_id=repo_id)
+    blocking_turn = thread_store.create_turn(
+        thread["managed_thread_id"], prompt="already running"
+    )
+    journal = PublishJournalStore(hub_root)
+    enqueue_operation, _ = journal.create_operation(
+        operation_key="enqueue:dep:queued-timeout",
+        operation_kind="enqueue_managed_turn",
+        payload={
+            "thread_target_id": thread["managed_thread_id"],
+            "message_text": "Handle the latest SCM review.",
+        },
+        next_attempt_at="2026-03-25T00:00:00Z",
+    )
+    notify_operation, _ = journal.create_operation(
+        operation_key="notify:dep:queued-timeout",
+        operation_kind="notify_chat",
+        payload={
+            "delivery": "primary_pma",
+            "repo_id": repo_id,
+            "message": "Started the latest PR review batch for acme/widgets#42.",
+            "managed_turn_dependency": {
+                "dependency_kind": "enqueue_managed_turn_started",
+                "operation_id": enqueue_operation.operation_id,
+                "thread_target_id": thread["managed_thread_id"],
+                "failure_message": "Failed to wake the bound agent thread for acme/widgets#42.",
+            },
+        },
+        next_attempt_at="2026-03-25T00:00:00Z",
+    )
+
+    calls: list[str] = []
+
+    async def _fake_notify_primary_pma_chat_for_repo(
+        *,
+        hub_root: Path,
+        repo_id: str | None,
+        message: str,
+        correlation_id: str,
+    ) -> dict[str, int]:
+        _ = (hub_root, repo_id, correlation_id)
+        calls.append(message)
+        return {"targets": 1, "published": 1}
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.publish_operation_executors.notify_primary_pma_chat_for_repo",
+        _fake_notify_primary_pma_chat_for_repo,
+    )
+
+    processor = PublishOperationProcessor(
+        journal,
+        executors=PublishExecutorRegistry(
+            {
+                "enqueue_managed_turn": build_enqueue_managed_turn_executor(
+                    hub_root=hub_root,
+                    thread_store=thread_store,
+                ),
+                "notify_chat": build_notify_chat_executor(
+                    hub_root=hub_root,
+                    thread_store=thread_store,
+                    journal_store=journal,
+                ),
+            }
+        ),
+        now_fn=_QueuedClock(
+            "2026-03-25T00:00:00Z",
+            "2026-03-25T00:00:30Z",
+        ),
+    )
+
+    first = processor.process_now(limit=10)
+    by_id = {operation.operation_id: operation for operation in first}
+    assert by_id[enqueue_operation.operation_id].state == "succeeded"
+    assert by_id[notify_operation.operation_id].state == "pending"
+
+    refreshed_notify = journal.get_operation(notify_operation.operation_id)
+    assert refreshed_notify is not None
+    payload = dict(refreshed_notify.payload)
+    dependency = dict(payload["managed_turn_dependency"])
+    dependency["_managed_turn_queue_wait_cycles"] = 999
+    payload["managed_turn_dependency"] = dependency
+    assert journal.update_pending_operation(
+        notify_operation.operation_id,
+        payload=payload,
+        next_attempt_at="2026-03-25T00:00:00Z",
+    )
+
+    with caplog.at_level(
+        logging.WARNING, logger="codex_autorunner.core.publish_operation_executors"
+    ):
+        second = processor.process_now(limit=10)
+
+    assert [operation.operation_id for operation in second] == [
+        notify_operation.operation_id
+    ]
+    assert second[0].state == "succeeded"
+    assert calls == [
+        "Failed to wake the bound agent thread for acme/widgets#42. "
+        "The managed turn stayed queued and never reached the front of the queue before timeout."
+    ]
+    assert any(
+        "notify_chat timed out waiting for queued managed turn" in message
+        and blocking_turn["managed_turn_id"] in message
+        for message in caplog.messages
+    )
+
+
+def test_notify_chat_succeeds_after_queued_turn_reaches_front(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root, workspace_root, repo_id = _publish_hub(tmp_path)
+    thread_store = PmaThreadStore(hub_root)
+    thread = thread_store.create_thread("codex", workspace_root, repo_id=repo_id)
+    blocking_turn = thread_store.create_turn(
+        thread["managed_thread_id"], prompt="already running"
+    )
+    journal = PublishJournalStore(hub_root)
+    enqueue_operation, _ = journal.create_operation(
+        operation_key="enqueue:dep:queued-success",
+        operation_kind="enqueue_managed_turn",
+        payload={
+            "thread_target_id": thread["managed_thread_id"],
+            "message_text": "Handle the latest SCM review.",
+        },
+        next_attempt_at="2026-03-25T00:00:00Z",
+    )
+    notify_operation, _ = journal.create_operation(
+        operation_key="notify:dep:queued-success",
+        operation_kind="notify_chat",
+        payload={
+            "delivery": "primary_pma",
+            "repo_id": repo_id,
+            "message": "Started the latest PR review batch for acme/widgets#42.",
+            "managed_turn_dependency": {
+                "dependency_kind": "enqueue_managed_turn_started",
+                "operation_id": enqueue_operation.operation_id,
+                "thread_target_id": thread["managed_thread_id"],
+                "failure_message": "Failed to wake the bound agent thread for acme/widgets#42.",
+            },
+        },
+        next_attempt_at="2026-03-25T00:00:00Z",
+    )
+
+    calls: list[str] = []
+
+    async def _fake_notify_primary_pma_chat_for_repo(
+        *,
+        hub_root: Path,
+        repo_id: str | None,
+        message: str,
+        correlation_id: str,
+    ) -> dict[str, int]:
+        _ = (hub_root, repo_id, correlation_id)
+        calls.append(message)
+        return {"targets": 1, "published": 1}
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.publish_operation_executors.notify_primary_pma_chat_for_repo",
+        _fake_notify_primary_pma_chat_for_repo,
+    )
+    processor = PublishOperationProcessor(
+        journal,
+        executors=PublishExecutorRegistry(
+            {
+                "enqueue_managed_turn": build_enqueue_managed_turn_executor(
+                    hub_root=hub_root,
+                    thread_store=thread_store,
+                ),
+                "notify_chat": build_notify_chat_executor(
+                    hub_root=hub_root,
+                    thread_store=thread_store,
+                    journal_store=journal,
+                ),
+            }
+        ),
+        now_fn=_QueuedClock(
+            "2026-03-25T00:00:00Z",
+            "2026-03-25T00:00:30Z",
+            "2026-03-25T00:03:00Z",
+        ),
+    )
+
+    first = processor.process_now(limit=10)
+    by_id = {operation.operation_id: operation for operation in first}
+    assert by_id[notify_operation.operation_id].state == "pending"
+    queued_turn_id = by_id[enqueue_operation.operation_id].response["managed_turn_id"]
+
+    assert thread_store.mark_turn_finished(
+        blocking_turn["managed_turn_id"], status="ok"
+    )
+    claimed = thread_store.claim_next_queued_turn(thread["managed_thread_id"])
+    assert claimed is not None
+    claimed_execution, _payload = claimed
+    assert claimed_execution["managed_turn_id"] == queued_turn_id
+    thread_store.set_turn_backend_turn_id(queued_turn_id, "backend-turn-queued")
+    assert journal.update_pending_operation(
+        notify_operation.operation_id,
+        next_attempt_at="2026-03-25T00:00:00Z",
+    )
+
+    second = processor.process_now(limit=10)
+
+    assert [operation.operation_id for operation in second] == [
+        notify_operation.operation_id
+    ]
+    assert second[0].state == "succeeded"
+    assert calls == ["Started the latest PR review batch for acme/widgets#42."]
+
+
 def test_notify_chat_uses_enqueue_thread_target_id_for_bound_delivery(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

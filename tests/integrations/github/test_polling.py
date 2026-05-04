@@ -15,7 +15,7 @@ from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.pr_binding_runtime import upsert_pr_binding
-from codex_autorunner.core.pr_bindings import PrBindingStore
+from codex_autorunner.core.pr_bindings import PrBinding, PrBindingStore
 from codex_autorunner.core.publish_executor import PublishOperationProcessor
 from codex_autorunner.core.publish_journal import PublishJournalStore
 from codex_autorunner.core.publish_operation_executors import (
@@ -24,7 +24,10 @@ from codex_autorunner.core.publish_operation_executors import (
 )
 from codex_autorunner.core.scm_automation_service import ScmAutomationService
 from codex_autorunner.core.scm_events import ScmEventStore
-from codex_autorunner.core.scm_polling_watches import ScmPollingWatchStore
+from codex_autorunner.core.scm_polling_watches import (
+    ScmPollingWatch,
+    ScmPollingWatchStore,
+)
 from codex_autorunner.integrations.github.polling import (
     GitHubPollingConfig,
     GitHubScmPollingService,
@@ -398,6 +401,89 @@ def _read_outbox_records(db_path: Path) -> list[_SimpleOutboxRecord]:
         conn.close()
 
 
+def _polling_watch_for_binding(
+    tmp_path: Path,
+    binding,
+    *,
+    snapshot: dict[str, object] | None = None,
+):
+    return ScmPollingWatch(
+        watch_id="watch-1",
+        provider="github",
+        binding_id=binding.binding_id,
+        repo_slug=binding.repo_slug,
+        repo_id=binding.repo_id,
+        pr_number=binding.pr_number,
+        workspace_root=str((tmp_path / "repo").resolve()),
+        thread_target_id=binding.thread_target_id,
+        poll_interval_seconds=90,
+        state="active",
+        started_at="2026-03-30T00:00:00Z",
+        updated_at="2026-03-30T00:00:00Z",
+        next_poll_at="2026-03-30T00:00:00Z",
+        expires_at="2099-03-30T01:00:00Z",
+        last_polled_at=None,
+        last_error_text=None,
+        reaction_config={"enabled": True},
+        snapshot=snapshot or {},
+    )
+
+
+def _review_comment_payload(
+    comment_id: str,
+    *,
+    body: str = "Please address this inline comment.",
+    updated_at: str = "2026-03-30T00:04:00Z",
+) -> dict[str, object]:
+    return {
+        "action": "created",
+        "comment_id": comment_id,
+        "author_login": "reviewer",
+        "author_type": "User",
+        "issue_author_login": "pr-author",
+        "body": body,
+        "path": "src/codex_autorunner/integrations/github/polling.py",
+        "line": 196,
+        "updated_at": updated_at,
+    }
+
+
+def _emit_review_comment_snapshot(
+    tmp_path: Path,
+    *,
+    watch,
+    binding,
+    previous_snapshot: dict[str, object],
+    snapshot: dict[str, object],
+) -> int:
+    return emit_new_conditions(
+        event_store=ScmEventStore(tmp_path),
+        watch=watch,
+        binding=binding,
+        previous_snapshot=previous_snapshot,
+        snapshot=snapshot,
+        automation_service_factory=lambda: _AutomationServiceFake(tmp_path),
+        now_iso_fn=lambda: "2026-03-30T00:05:00Z",
+    )
+
+
+def _polling_test_binding(*, thread_target_id: str | None = "thread-123") -> PrBinding:
+    return PrBinding(
+        binding_id="binding-1",
+        provider="github",
+        repo_slug="acme/widgets",
+        repo_id="repo-1",
+        pr_number=17,
+        pr_state="open",
+        head_branch="feature/scm-polling",
+        base_branch="main",
+        thread_target_id=thread_target_id,
+        created_at="2026-03-29T00:00:00Z",
+        updated_at="2026-03-30T00:00:00Z",
+        closed_at=None,
+    )
+
+
 def _polling_config(
     *,
     profile: str | None = None,
@@ -448,6 +534,132 @@ def test_polling_config_defaults_to_30_minute_post_open_boost() -> None:
     assert config.discovery_include_manifest_repos is False
     assert config.discovery_terminal_thread_lookback_minutes == 24 * 60
     assert config.no_activity_tier == "cold"
+
+
+def test_emit_new_conditions_dedupes_review_comments_by_processed_comment_id(
+    tmp_path: Path,
+) -> None:
+    binding = _polling_test_binding()
+    watch = _polling_watch_for_binding(tmp_path, binding)
+    _AutomationServiceFake.ingested_events = []
+    _AutomationServiceFake.process_calls = 0
+
+    first_snapshot: dict[str, object] = {
+        "review_thread_comments": {"poll-a": _review_comment_payload("2844")}
+    }
+    first_emitted = _emit_review_comment_snapshot(
+        tmp_path,
+        watch=watch,
+        binding=binding,
+        previous_snapshot={"review_thread_comments": {}},
+        snapshot=first_snapshot,
+    )
+    second_snapshot: dict[str, object] = {
+        "review_thread_comments": {"poll-b": _review_comment_payload("2844")}
+    }
+    second_emitted = _emit_review_comment_snapshot(
+        tmp_path,
+        watch=watch,
+        binding=binding,
+        previous_snapshot=first_snapshot,
+        snapshot=second_snapshot,
+    )
+
+    assert first_emitted == 1
+    assert second_emitted == 0
+    assert [
+        (event_type, payload["comment_id"])
+        for event_type, payload, _config in _AutomationServiceFake.ingested_events
+    ] == [("pull_request_review_comment", "2844")]
+
+
+def test_emit_new_conditions_dispatches_only_new_comment_in_mixed_poll(
+    tmp_path: Path,
+) -> None:
+    binding = _polling_test_binding()
+    watch = _polling_watch_for_binding(tmp_path, binding)
+    _AutomationServiceFake.ingested_events = []
+    first_snapshot: dict[str, object] = {
+        "review_thread_comments": {"poll-a": _review_comment_payload("2844")}
+    }
+    assert (
+        _emit_review_comment_snapshot(
+            tmp_path,
+            watch=watch,
+            binding=binding,
+            previous_snapshot={"review_thread_comments": {}},
+            snapshot=first_snapshot,
+        )
+        == 1
+    )
+
+    second_snapshot: dict[str, object] = {
+        "review_thread_comments": {
+            "poll-b": _review_comment_payload("2844"),
+            "poll-c": _review_comment_payload("2845", body="New review feedback."),
+        }
+    }
+    assert (
+        _emit_review_comment_snapshot(
+            tmp_path,
+            watch=watch,
+            binding=binding,
+            previous_snapshot=first_snapshot,
+            snapshot=second_snapshot,
+        )
+        == 1
+    )
+
+    assert [
+        payload["comment_id"]
+        for _event_type, payload, _config in _AutomationServiceFake.ingested_events
+    ] == ["2844", "2845"]
+
+
+def test_emit_new_conditions_redelivers_edited_review_comment(
+    tmp_path: Path,
+) -> None:
+    binding = _polling_test_binding()
+    watch = _polling_watch_for_binding(tmp_path, binding)
+    _AutomationServiceFake.ingested_events = []
+    first_snapshot: dict[str, object] = {
+        "review_thread_comments": {"poll-a": _review_comment_payload("2844")}
+    }
+    assert (
+        _emit_review_comment_snapshot(
+            tmp_path,
+            watch=watch,
+            binding=binding,
+            previous_snapshot={"review_thread_comments": {}},
+            snapshot=first_snapshot,
+        )
+        == 1
+    )
+
+    second_snapshot: dict[str, object] = {
+        "review_thread_comments": {
+            "poll-b": _review_comment_payload(
+                "2844",
+                body="Edited review feedback.",
+                updated_at="2026-03-30T00:06:00Z",
+            )
+        }
+    }
+    assert (
+        _emit_review_comment_snapshot(
+            tmp_path,
+            watch=watch,
+            binding=binding,
+            previous_snapshot=first_snapshot,
+            snapshot=second_snapshot,
+        )
+        == 1
+    )
+
+    assert [
+        payload["body"]
+        for _event_type, payload, _config in _AutomationServiceFake.ingested_events
+    ] == ["Please address this inline comment.", "Edited review feedback."]
 
 
 @pytest.mark.parametrize(
