@@ -94,6 +94,7 @@ from tests.support.discord_turn_fakes import (
     _patch_harness,
     _patch_streaming_harness,
     _pma_interaction,
+    _SequencedDiscordFakeHarness,
 )
 
 pytestmark = pytest.mark.slow
@@ -6203,21 +6204,8 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     seed_hub_files(tmp_path, force=True)
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id="repo-1",
-    )
-    await store.update_agent_state(channel_id="channel-1", agent="codex")
-
-    rest = _FakeRest()
-    gateway = _FakeGateway(
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
         [
             (
                 "MESSAGE_CREATE",
@@ -6227,74 +6215,18 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
                 "MESSAGE_CREATE",
                 _message_create("second orchestration prompt", message_id="m-2"),
             ),
-        ]
-    )
-    service = DiscordBotService(
-        _config(tmp_path),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+        ],
+        repo_id="repo-1",
+        agent="codex",
     )
 
     first_started = asyncio.Event()
     release_first = asyncio.Event()
-
-    class _FakeHarness(_BaseDiscordFakeHarness):
-        def __init__(self) -> None:
-            self.turn_prompts: list[str] = []
-            self.turn_conversation_ids: list[str] = []
-
-        async def start_turn(
-            self,
-            workspace_root: Path,
-            conversation_id: str,
-            prompt: str,
-            model: Optional[str],
-            reasoning: Optional[str],
-            *,
-            approval_mode: Optional[str],
-            sandbox_policy: Optional[Any],
-            input_items: Optional[list[dict[str, Any]]] = None,
-        ) -> SimpleNamespace:
-            _ = (
-                workspace_root,
-                model,
-                reasoning,
-                approval_mode,
-                sandbox_policy,
-                input_items,
-            )
-            turn_id = f"backend-turn-{len(self.turn_prompts) + 1}"
-            self.turn_prompts.append(prompt)
-            self.turn_conversation_ids.append(conversation_id)
-            return SimpleNamespace(conversation_id=conversation_id, turn_id=turn_id)
-
-        async def wait_for_turn(
-            self,
-            workspace_root: Path,
-            conversation_id: str,
-            turn_id: Optional[str],
-            *,
-            timeout: Optional[float] = None,
-        ) -> SimpleNamespace:
-            _ = workspace_root, conversation_id, timeout
-            if turn_id == "backend-turn-1":
-                first_started.set()
-                await release_first.wait()
-                return SimpleNamespace(
-                    status="ok",
-                    assistant_text="first orchestration reply",
-                    errors=[],
-                )
-            return SimpleNamespace(
-                status="ok",
-                assistant_text="second orchestration reply",
-                errors=[],
-            )
-
-    harness = _FakeHarness()
+    harness = _SequencedDiscordFakeHarness(
+        replies=["first orchestration reply", "second orchestration reply"],
+        first_turn_started=first_started,
+        release_first_turn=release_first,
+    )
     _patch_harness(monkeypatch, harness)
 
     async def _release_later() -> None:
@@ -6351,25 +6283,8 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     seed_hub_files(tmp_path, force=True)
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id="repo-1",
-    )
-    await store.update_agent_state(
-        channel_id="channel-1",
-        agent="hermes",
-        agent_profile="m4-pma",
-    )
-
-    rest = _FakeRest()
-    gateway = _FakeGateway(
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
         [
             (
                 "MESSAGE_CREATE",
@@ -6379,23 +6294,23 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
                 "MESSAGE_CREATE",
                 _message_create("second hermes orchestration prompt", message_id="m-2"),
             ),
-        ]
-    )
-    service = DiscordBotService(
-        _config(tmp_path),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+        ],
+        repo_id="repo-1",
+        agent="hermes",
+        agent_profile="m4-pma",
     )
 
     first_started = asyncio.Event()
     release_first = asyncio.Event()
-
-    class _FakeHarness(_BaseDiscordFakeHarness):
-        display_name = "Hermes"
-        capabilities = frozenset(
+    harness = _SequencedDiscordFakeHarness(
+        replies=[
+            "first hermes orchestration reply",
+            "second hermes orchestration reply",
+        ],
+        turn_id_prefix="hermes-backend-turn",
+        conversation_id="hermes-backend-thread-1",
+        display_name="Hermes",
+        capabilities=frozenset(
             {
                 "durable_threads",
                 "message_turns",
@@ -6403,63 +6318,10 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
                 "event_streaming",
                 "approvals",
             }
-        )
-        _conversation_id = "hermes-backend-thread-1"
-
-        def __init__(self) -> None:
-            self.turn_prompts: list[str] = []
-            self.turn_conversation_ids: list[str] = []
-
-        async def start_turn(
-            self,
-            workspace_root: Path,
-            conversation_id: str,
-            prompt: str,
-            model: Optional[str],
-            reasoning: Optional[str],
-            *,
-            approval_mode: Optional[str],
-            sandbox_policy: Optional[Any],
-            input_items: Optional[list[dict[str, Any]]] = None,
-        ) -> SimpleNamespace:
-            _ = (
-                workspace_root,
-                conversation_id,
-                model,
-                reasoning,
-                approval_mode,
-                sandbox_policy,
-                input_items,
-            )
-            turn_id = f"hermes-backend-turn-{len(self.turn_prompts) + 1}"
-            self.turn_prompts.append(prompt)
-            self.turn_conversation_ids.append(conversation_id)
-            return SimpleNamespace(conversation_id=conversation_id, turn_id=turn_id)
-
-        async def wait_for_turn(
-            self,
-            workspace_root: Path,
-            conversation_id: str,
-            turn_id: Optional[str],
-            *,
-            timeout: Optional[float] = None,
-        ) -> SimpleNamespace:
-            _ = workspace_root, conversation_id, timeout
-            if turn_id == "hermes-backend-turn-1":
-                first_started.set()
-                await release_first.wait()
-                return SimpleNamespace(
-                    status="ok",
-                    assistant_text="first hermes orchestration reply",
-                    errors=[],
-                )
-            return SimpleNamespace(
-                status="ok",
-                assistant_text="second hermes orchestration reply",
-                errors=[],
-            )
-
-    harness = _FakeHarness()
+        ),
+        first_turn_started=first_started,
+        release_first_turn=release_first,
+    )
     hub_config = SimpleNamespace(
         agent_profiles=lambda agent_id: (
             {"m4-pma": SimpleNamespace(display_name="M4 PMA")}
@@ -6534,36 +6396,17 @@ async def test_pma_message_create_streams_progress_before_terminal_reply(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     seed_hub_files(tmp_path, force=True)
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id="repo-1",
-    )
-    await store.update_pma_state(channel_id="channel-1", pma_enabled=True)
-    await store.update_agent_state(channel_id="channel-1", agent="codex")
-
-    rest = _FakeRest()
-    gateway = _FakeGateway(
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
         [
             (
                 "MESSAGE_CREATE",
                 _message_create("stream this prompt", message_id="m-1"),
             ),
-        ]
-    )
-    service = DiscordBotService(
-        _config(tmp_path),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+        ],
+        repo_id="repo-1",
+        pma_enabled_state=True,
+        agent="codex",
     )
 
     stream_finished = asyncio.Event()
@@ -6665,22 +6508,8 @@ async def test_pma_message_create_routes_repeated_messages_through_managed_threa
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     seed_hub_files(tmp_path, force=True)
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id="repo-1",
-    )
-    await store.update_pma_state(channel_id="channel-1", pma_enabled=True)
-    await store.update_agent_state(channel_id="channel-1", agent="codex")
-
-    rest = _FakeRest()
-    gateway = _FakeGateway(
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
         [
             (
                 "MESSAGE_CREATE",
@@ -6690,75 +6519,19 @@ async def test_pma_message_create_routes_repeated_messages_through_managed_threa
                 "MESSAGE_CREATE",
                 _message_create("second orchestration prompt", message_id="m-2"),
             ),
-        ]
-    )
-    service = DiscordBotService(
-        _config(tmp_path),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+        ],
+        repo_id="repo-1",
+        pma_enabled_state=True,
+        agent="codex",
     )
 
     first_started = asyncio.Event()
     release_first = asyncio.Event()
-
-    class _FakeHarness(_BaseDiscordFakeHarness):
-        def __init__(self) -> None:
-            self.turn_prompts: list[str] = []
-            self.waited_turns: list[str] = []
-
-        async def start_turn(
-            self,
-            workspace_root: Path,
-            conversation_id: str,
-            prompt: str,
-            model: Optional[str],
-            reasoning: Optional[str],
-            *,
-            approval_mode: Optional[str],
-            sandbox_policy: Optional[Any],
-            input_items: Optional[list[dict[str, Any]]] = None,
-        ) -> SimpleNamespace:
-            _ = (
-                workspace_root,
-                model,
-                reasoning,
-                approval_mode,
-                sandbox_policy,
-                input_items,
-            )
-            turn_id = f"backend-turn-{len(self.turn_prompts) + 1}"
-            self.turn_prompts.append(prompt)
-            return SimpleNamespace(conversation_id=conversation_id, turn_id=turn_id)
-
-        async def wait_for_turn(
-            self,
-            workspace_root: Path,
-            conversation_id: str,
-            turn_id: Optional[str],
-            *,
-            timeout: Optional[float] = None,
-        ) -> SimpleNamespace:
-            _ = workspace_root, conversation_id, timeout
-            assert isinstance(turn_id, str)
-            self.waited_turns.append(turn_id)
-            if turn_id == "backend-turn-1":
-                first_started.set()
-                await release_first.wait()
-                return SimpleNamespace(
-                    status="ok",
-                    assistant_text="first orchestration reply",
-                    errors=[],
-                )
-            return SimpleNamespace(
-                status="ok",
-                assistant_text="second orchestration reply",
-                errors=[],
-            )
-
-    harness = _FakeHarness()
+    harness = _SequencedDiscordFakeHarness(
+        replies=["first orchestration reply", "second orchestration reply"],
+        first_turn_started=first_started,
+        release_first_turn=release_first,
+    )
     _patch_harness(monkeypatch, harness)
 
     async def _release_later() -> None:
@@ -6802,24 +6575,12 @@ async def test_pma_message_create_image_attachment_routes_through_managed_thread
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     seed_hub_files(tmp_path, force=True)
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id="repo-1",
-    )
-    await store.update_pma_state(channel_id="channel-1", pma_enabled=True)
-    await store.update_agent_state(channel_id="channel-1", agent="codex")
 
     attachment_url = "https://cdn.discordapp.com/attachments/pma-managed-image-1"
     rest = _FakeRest()
     rest.attachment_data_by_url[attachment_url] = b"png-bytes"
-    gateway = _FakeGateway(
+    service, rest, store, workspace = await _build_discord_service(
+        tmp_path,
         [
             (
                 "MESSAGE_CREATE",
@@ -6837,15 +6598,11 @@ async def test_pma_message_create_image_attachment_routes_through_managed_thread
                     ],
                 ),
             )
-        ]
-    )
-    service = DiscordBotService(
-        _config(tmp_path),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
+        ],
+        rest=rest,
+        repo_id="repo-1",
+        pma_enabled_state=True,
+        agent="codex",
     )
 
     captured_input_items: list[Optional[list[dict[str, Any]]]] = []

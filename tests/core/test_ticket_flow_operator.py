@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from codex_autorunner.core import ticket_flow_operator as operator_module
 from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.core.flows.store import FlowStore
@@ -157,6 +159,137 @@ def test_ticket_flow_operator_latest_dispatch_prefers_handoff_and_turn_summary(
     assert latest["dispatch"]["mode"] == "pause"
     assert latest["turn_summary_seq"] == 2
     assert latest["turn_summary"]["mode"] == "turn_summary"
+
+
+@pytest.mark.parametrize(
+    (
+        "record_status",
+        "latest_payload",
+        "latest_reply_seq",
+        "stale_resume_reason",
+        "expected_has_dispatch",
+        "expected_reason",
+    ),
+    [
+        (
+            FlowRunStatus.RUNNING,
+            {"seq": 1, "latest_seq": 1, "dispatch": {"mode": "pause"}},
+            0,
+            None,
+            True,
+            None,
+        ),
+        (
+            FlowRunStatus.PAUSED,
+            {"seq": 1, "latest_seq": 1, "dispatch": {"mode": "pause"}},
+            0,
+            None,
+            True,
+            None,
+        ),
+        (
+            FlowRunStatus.PAUSED,
+            {"seq": 1, "latest_seq": 2, "dispatch": {"mode": "pause"}},
+            0,
+            "Latest dispatch is stale; ticket flow resume preflight would fail",
+            False,
+            "Latest dispatch is stale; ticket flow resume preflight would fail",
+        ),
+        (
+            FlowRunStatus.PAUSED,
+            {"seq": 1, "latest_seq": 1, "dispatch": {"mode": "pause"}},
+            1,
+            None,
+            False,
+            "Latest dispatch already replied; run is still paused",
+        ),
+        (
+            FlowRunStatus.PAUSED,
+            {"seq": 1, "latest_seq": 1, "dispatch": {"mode": "notify"}},
+            0,
+            None,
+            False,
+            "Latest dispatch is informational and does not require reply",
+        ),
+        (
+            FlowRunStatus.PAUSED,
+            {"seq": 1, "latest_seq": 1, "dispatch": None, "errors": ["bad yaml"]},
+            0,
+            None,
+            False,
+            "Paused run has unreadable dispatch metadata",
+        ),
+        (
+            FlowRunStatus.PAUSED,
+            {},
+            0,
+            None,
+            False,
+            "Run is paused without an actionable dispatch",
+        ),
+    ],
+)
+def test_paused_dispatch_decision_table(
+    record_status: FlowRunStatus,
+    latest_payload: dict[str, object],
+    latest_reply_seq: int,
+    stale_resume_reason: str | None,
+    expected_has_dispatch: bool,
+    expected_reason: str | None,
+) -> None:
+    facts = operator_module._paused_dispatch_facts(
+        latest_payload,
+        latest_reply_seq=latest_reply_seq,
+    )
+    assert operator_module._resolve_paused_dispatch_decision(
+        record_status=record_status,
+        facts=facts,
+        latest_payload=latest_payload,
+        latest_reply_seq=latest_reply_seq,
+        stale_resume_reason=stale_resume_reason,
+    ) == (expected_has_dispatch, expected_reason)
+
+
+def test_paused_dispatch_state_runs_filesystem_preflight_only_for_stale_resume(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = 0
+
+    def fake_resume_invalid_reason(repo_root: Path) -> str:
+        nonlocal calls
+        calls += 1
+        return f"stale in {repo_root.name}"
+
+    monkeypatch.setattr(
+        operator_module,
+        "_paused_dispatch_resume_invalid_reason",
+        fake_resume_invalid_reason,
+    )
+
+    fresh = operator_module.resolve_paused_dispatch_state(
+        repo_root=tmp_path,
+        record_status=FlowRunStatus.PAUSED,
+        latest_payload={
+            "seq": 1,
+            "latest_seq": 1,
+            "dispatch": {"mode": "pause", "is_handoff": True},
+        },
+        latest_reply_seq=0,
+    )
+    stale = operator_module.resolve_paused_dispatch_state(
+        repo_root=tmp_path,
+        record_status=FlowRunStatus.PAUSED,
+        latest_payload={
+            "seq": 1,
+            "latest_seq": 2,
+            "dispatch": {"mode": "pause", "is_handoff": True},
+        },
+        latest_reply_seq=0,
+    )
+
+    assert fresh == (True, None)
+    assert stale == (False, f"stale in {tmp_path.name}")
+    assert calls == 1
 
 
 def test_ticket_flow_operator_marks_stale_paused_dispatch_when_no_tickets_remain(

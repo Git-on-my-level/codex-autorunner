@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from codex_autorunner.core import usage as usage_core
 from codex_autorunner.core.usage import (
     get_hub_usage_series_cached,
     get_hub_usage_summary_cached,
@@ -663,6 +664,37 @@ def test_opencode_fallback_detects_cumulative_semantics(tmp_path):
     opencode_meta = (summary.source_confidence or {}).get("opencode") or {}
     assert opencode_meta.get("source") == "session_estimated"
     assert opencode_meta.get("session_cumulative_files") == 1
+
+
+def test_opencode_session_usage_records_build_typed_delta_events():
+    fallback = datetime(2025, 12, 1, tzinfo=timezone.utc)
+    records = usage_core._normalize_opencode_session_usage_records(
+        {
+            "model": "gpt-5",
+            "provider": "openai",
+            "messages": [
+                {
+                    "timestamp": "2025-12-01T00:01:00Z",
+                    "turn_id": "turn-1",
+                    "usage": {"inputTokens": 6, "outputTokens": 4},
+                },
+                {
+                    "timestamp": "2025-12-01T00:02:00Z",
+                    "turn_id": "turn-2",
+                    "usage": {"inputTokens": 9, "outputTokens": 6},
+                },
+            ],
+        },
+        fallback,
+    )
+
+    events = usage_core._build_opencode_session_usage_events(records)
+
+    assert [record.turn_id for record in records] == ["turn-1", "turn-2"]
+    assert records[0].model == "openai:gpt-5"
+    assert [event.delta.total_tokens for event in events] == [10, 5]
+    assert [event.totals.total_tokens for event in events] == [10, 15]
+    assert [event.turn_id for event in events] == ["turn-1", "turn-2"]
 
 
 def test_opencode_summary_prefers_persisted_turn_usage(tmp_path):

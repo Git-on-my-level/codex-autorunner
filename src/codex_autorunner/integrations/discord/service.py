@@ -244,18 +244,10 @@ from .document_browser import (
     handle_ticket_select_component,
 )
 from .effects import (
-    DiscordAutocompleteEffect,
-    DiscordComponentResponseEffect,
-    DiscordComponentUpdateEffect,
-    DiscordDeferEffect,
     DiscordEffect,
     DiscordEffectServiceProxy,
     DiscordEffectSink,
-    DiscordFollowupEffect,
     DiscordHandlerResult,
-    DiscordModalEffect,
-    DiscordOriginalMessageEditEffect,
-    DiscordResponseEffect,
 )
 from .errors import DiscordAPIError, is_unknown_interaction_error
 from .flow_commands import (
@@ -308,10 +300,6 @@ from .interaction_registry import (
 from .interaction_scheduler import (
     schedule_ingressed_interaction as _schedule_ingressed_interaction,
 )
-from .interaction_session import (
-    DiscordInteractionSession,
-    InteractionSessionKind,
-)
 from .interactions import extract_interaction_id, extract_interaction_token
 from .managed_thread_delivery import deliver_discord_managed_thread_record
 from .managed_thread_routing import build_discord_thread_orchestration_service
@@ -348,7 +336,6 @@ from .pma_commands import (
 )
 from .rendering import (
     format_discord_message,
-    truncate_for_discord,
 )
 from .response_helpers import DiscordResponder
 from .rest import DISCORD_INTERACTION_CALLBACK_TIMEOUT_SECONDS, DiscordRestClient
@@ -399,6 +386,7 @@ from .service_normalization import (
     build_discord_queue_status_message,
     format_hub_flow_overview_line,
 )
+from .service_responses import DiscordInteractionResponseMixin
 from .state import DiscordStateStore, InteractionLedgerRecord, OutboxRecord
 from .workspace_commands import (
     handle_bind,
@@ -706,7 +694,7 @@ class _DiscordOpenCodeSupervisorAdapter:
         await _close_all_opencode_supervisors_impl(self._service)
 
 
-class DiscordBotService:
+class DiscordBotService(DiscordInteractionResponseMixin):
     def __init__(
         self,
         config: DiscordBotConfig,
@@ -4928,66 +4916,6 @@ class DiscordBotService:
     ) -> tuple[str, ...]:
         return normalize_discord_command_path(command_path)
 
-    def _interaction_session_kind(
-        self,
-        kind: InteractionKind | InteractionSessionKind | str | None,
-    ) -> InteractionSessionKind:
-        if isinstance(kind, InteractionSessionKind):
-            return kind
-        if isinstance(kind, InteractionKind):
-            return InteractionSessionKind(kind.value)
-        if isinstance(kind, str):
-            try:
-                return InteractionSessionKind(kind)
-            except ValueError:
-                return InteractionSessionKind.UNKNOWN
-        return InteractionSessionKind.UNKNOWN
-
-    def _ensure_interaction_session(
-        self,
-        interaction_id: str,
-        interaction_token: str,
-        *,
-        kind: InteractionKind | InteractionSessionKind | str | None = None,
-    ) -> DiscordInteractionSession:
-        return self._responder.start_session(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            kind=self._interaction_session_kind(kind),
-        )
-
-    def _get_interaction_session(
-        self,
-        interaction_token: str,
-    ) -> Optional[DiscordInteractionSession]:
-        return self._responder.get_session(interaction_token)
-
-    def interaction_has_initial_response(
-        self,
-        interaction_token: str,
-    ) -> bool:
-        session = self._get_interaction_session(interaction_token)
-        return bool(session and session.has_initial_response())
-
-    def interaction_is_deferred(
-        self,
-        interaction_token: str,
-    ) -> bool:
-        session = self._get_interaction_session(interaction_token)
-        return bool(session and session.is_deferred())
-
-    def _interaction_has_initial_response(
-        self,
-        interaction_token: str,
-    ) -> bool:
-        return self.interaction_has_initial_response(interaction_token)
-
-    def _interaction_is_deferred(
-        self,
-        interaction_token: str,
-    ) -> bool:
-        return self.interaction_is_deferred(interaction_token)
-
     async def _load_interaction_ack_mode(self, interaction_id: str) -> Optional[str]:
         record = await self._store.get_interaction(interaction_id)
         if record is None:
@@ -7677,352 +7605,6 @@ class DiscordBotService:
             interaction_token,
             channel_id=channel_id,
         )
-
-    async def respond_ephemeral(
-        self,
-        interaction_id: str,
-        interaction_token: str,
-        text: str,
-    ) -> None:
-        await self._apply_discord_effect(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            effect=DiscordResponseEffect(
-                text=text,
-                ephemeral=True,
-                prefer_followup=False,
-            ),
-        )
-
-    async def defer_ephemeral(
-        self,
-        *,
-        interaction_id: str,
-        interaction_token: str,
-    ) -> bool:
-        try:
-            await self._apply_discord_effect(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                effect=DiscordDeferEffect(mode="ephemeral"),
-            )
-        except Exception:
-            return False
-        return True
-
-    async def defer_component_update(
-        self,
-        *,
-        interaction_id: str,
-        interaction_token: str,
-    ) -> bool:
-        session = self._ensure_interaction_session(
-            interaction_id,
-            interaction_token,
-            kind=InteractionSessionKind.COMPONENT,
-        )
-        if session.has_initial_response():
-            return True
-        try:
-            await self._apply_discord_effect(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                effect=DiscordDeferEffect(mode="component_update"),
-            )
-        except Exception:
-            return False
-        return True
-
-    async def send_or_respond_ephemeral(
-        self,
-        *,
-        interaction_id: str,
-        interaction_token: str,
-        deferred: bool,
-        text: str,
-    ) -> None:
-        _ = deferred
-        await self._apply_discord_effect(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            effect=DiscordResponseEffect(
-                text=text,
-                ephemeral=True,
-                prefer_followup=True,
-            ),
-        )
-
-    async def send_or_respond_ephemeral_with_components(
-        self,
-        *,
-        interaction_id: str,
-        interaction_token: str,
-        deferred: bool,
-        text: str,
-        components: list[dict[str, Any]],
-    ) -> None:
-        _ = deferred
-        await self._apply_discord_effect(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            effect=DiscordResponseEffect(
-                text=text,
-                ephemeral=True,
-                components=components,
-                prefer_followup=True,
-            ),
-        )
-
-    async def send_or_update_component_message(
-        self,
-        *,
-        interaction_id: str,
-        interaction_token: str,
-        deferred: bool,
-        text: str,
-        components: Optional[list[dict[str, Any]]] = None,
-    ) -> None:
-        await self._apply_discord_effect(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            effect=DiscordComponentResponseEffect(
-                text=truncate_for_discord(
-                    text,
-                    max_len=max(int(self._config.max_message_length), 32),
-                ),
-                deferred=deferred,
-                components=components,
-            ),
-        )
-
-    async def respond_ephemeral_with_components(
-        self,
-        interaction_id: str,
-        interaction_token: str,
-        text: str,
-        components: list[dict[str, Any]],
-    ) -> None:
-        await self._apply_discord_effect(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            effect=DiscordResponseEffect(
-                text=text,
-                ephemeral=True,
-                components=components,
-                prefer_followup=False,
-            ),
-        )
-
-    async def respond_autocomplete(
-        self,
-        interaction_id: str,
-        interaction_token: str,
-        *,
-        choices: list[dict[str, str]],
-    ) -> None:
-        await self._apply_discord_effect(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            effect=DiscordAutocompleteEffect(choices=choices),
-        )
-
-    async def respond_modal(
-        self,
-        interaction_id: str,
-        interaction_token: str,
-        *,
-        kind: InteractionSessionKind,
-        custom_id: str,
-        title: str,
-        components: list[dict[str, Any]],
-    ) -> None:
-        await self._apply_discord_effect(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            effect=DiscordModalEffect(
-                kind=kind,
-                custom_id=custom_id,
-                title=title,
-                components=components,
-            ),
-        )
-
-    async def update_component_message(
-        self,
-        *,
-        interaction_id: str,
-        interaction_token: str,
-        text: str,
-        components: list[dict[str, Any]],
-    ) -> None:
-        await self._apply_discord_effect(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            effect=DiscordComponentUpdateEffect(text=text, components=components),
-        )
-
-    async def edit_original_component_message(
-        self,
-        *,
-        interaction_token: str,
-        text: str,
-        components: Optional[list[dict[str, Any]]] = None,
-    ) -> bool:
-        session = self._responder.get_session(interaction_token)
-        await self._apply_discord_effect(
-            interaction_id=session.interaction_id if session is not None else "",
-            interaction_token=interaction_token,
-            effect=DiscordOriginalMessageEditEffect(text=text, components=components),
-        )
-        return True
-
-    async def send_followup_ephemeral(
-        self,
-        *,
-        interaction_token: str,
-        content: str,
-        components: Optional[list[dict[str, Any]]] = None,
-    ) -> bool:
-        session = self._responder.get_session(interaction_token)
-        await self._apply_discord_effect(
-            interaction_id=session.interaction_id if session is not None else "",
-            interaction_token=interaction_token,
-            effect=DiscordFollowupEffect(
-                content=content,
-                ephemeral=True,
-                components=components,
-            ),
-        )
-        return True
-
-    async def respond_public(
-        self,
-        interaction_id: str,
-        interaction_token: str,
-        text: str,
-    ) -> None:
-        await self._apply_discord_effect(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            effect=DiscordResponseEffect(
-                text=text,
-                ephemeral=False,
-                prefer_followup=False,
-            ),
-        )
-
-    async def defer_public(
-        self,
-        *,
-        interaction_id: str,
-        interaction_token: str,
-    ) -> bool:
-        try:
-            await self._apply_discord_effect(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                effect=DiscordDeferEffect(mode="public"),
-            )
-        except Exception:
-            return False
-        return True
-
-    async def send_or_respond_public(
-        self,
-        *,
-        interaction_id: str,
-        interaction_token: str,
-        deferred: bool,
-        text: str,
-    ) -> None:
-        _ = deferred
-        await self._apply_discord_effect(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            effect=DiscordResponseEffect(
-                text=text,
-                ephemeral=False,
-                prefer_followup=True,
-            ),
-        )
-
-    async def send_or_respond_public_with_components(
-        self,
-        *,
-        interaction_id: str,
-        interaction_token: str,
-        deferred: bool,
-        text: str,
-        components: list[dict[str, Any]],
-    ) -> None:
-        _ = deferred
-        await self._apply_discord_effect(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            effect=DiscordResponseEffect(
-                text=text,
-                ephemeral=False,
-                components=components,
-                prefer_followup=True,
-            ),
-        )
-
-    async def respond_public_with_components(
-        self,
-        interaction_id: str,
-        interaction_token: str,
-        text: str,
-        components: list[dict[str, Any]],
-    ) -> None:
-        await self._apply_discord_effect(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            effect=DiscordResponseEffect(
-                text=text,
-                ephemeral=False,
-                components=components,
-                prefer_followup=False,
-            ),
-        )
-
-    async def send_followup_public(
-        self,
-        *,
-        interaction_token: str,
-        content: str,
-        components: Optional[list[dict[str, Any]]] = None,
-    ) -> bool:
-        session = self._responder.get_session(interaction_token)
-        await self._apply_discord_effect(
-            interaction_id=session.interaction_id if session is not None else "",
-            interaction_token=interaction_token,
-            effect=DiscordFollowupEffect(
-                content=content,
-                ephemeral=False,
-                components=components,
-            ),
-        )
-        return True
-
-    _respond_ephemeral = respond_ephemeral
-    _defer_ephemeral = defer_ephemeral
-    _defer_component_update = defer_component_update
-    _send_or_respond_ephemeral = send_or_respond_ephemeral
-    _send_or_respond_with_components_ephemeral = (
-        send_or_respond_ephemeral_with_components
-    )
-    _send_or_update_component_message = send_or_update_component_message
-    _respond_with_components = respond_ephemeral_with_components
-    _respond_autocomplete = respond_autocomplete
-    _update_component_message = update_component_message
-    _edit_original_component_message = edit_original_component_message
-    _send_followup_ephemeral = send_followup_ephemeral
-    _respond_public = respond_public
-    _defer_public = defer_public
-    _send_or_respond_public = send_or_respond_public
-    _send_or_respond_with_components_public = send_or_respond_public_with_components
-    _respond_with_components_public = respond_public_with_components
-    _send_followup_public = send_followup_public
 
     async def _handle_component_interaction_normalized(
         self,

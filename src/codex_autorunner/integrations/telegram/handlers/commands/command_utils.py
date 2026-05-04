@@ -12,6 +12,12 @@ from .....agents.opencode.supervisor import OpenCodeSupervisorError
 from ...helpers import format_public_error
 from ...payload_utils import extract_opencode_error_detail
 
+_GENERIC_TELEGRAM_ERRORS = {
+    "Telegram request failed",
+    "Telegram file download failed",
+    "Telegram API returned error",
+}
+
 
 def _format_exception_message(
     message: str,
@@ -50,7 +56,7 @@ def _build_opencode_exception_formatter(
 def _extract_error_detail_from_http_status(exc: httpx.HTTPStatusError) -> Optional[str]:
     try:
         payload = exc.response.json()
-    except (json.JSONDecodeError, ValueError):
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
         payload = None
     if isinstance(payload, dict):
         detail = extract_opencode_error_detail(payload)
@@ -90,7 +96,11 @@ def _format_opencode_exception(exc: Exception) -> Optional[str]:
         return f"OpenCode request failed (HTTP {exc.response.status_code})."
     if isinstance(exc, httpx.RequestError):
         return (
-            _format_exception_message("OpenCode request failed", exc)
+            _format_exception_message(
+                "OpenCode request failed",
+                exc,
+                use_parentheses=False,
+            )
             or "OpenCode request failed."
         )
     return None
@@ -118,6 +128,36 @@ def _format_httpx_exception(exc: Exception) -> Optional[str]:
             return format_public_error(detail)
         return "Request failed."
     return None
+
+
+def _iter_exception_chain(exc: BaseException) -> list[BaseException]:
+    chain: list[BaseException] = []
+    current: Optional[BaseException] = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        chain.append(current)
+        seen.add(id(current))
+        current = current.__cause__ or current.__context__
+    return chain
+
+
+def _format_telegram_download_error(exc: Exception) -> Optional[str]:
+    for current in _iter_exception_chain(exc):
+        if isinstance(current, Exception):
+            detail = _format_httpx_exception(current)
+            if detail:
+                return format_public_error(detail)
+            message = str(current).strip()
+            if message and message not in _GENERIC_TELEGRAM_ERRORS:
+                return format_public_error(message)
+    return None
+
+
+def _format_download_failure_response(kind: str, detail: Optional[str]) -> str:
+    base = f"Failed to download {kind}."
+    if detail:
+        return f"{base} Reason: {format_public_error(detail)}"
+    return base
 
 
 def _opencode_review_arguments(target: dict[str, Any]) -> str:

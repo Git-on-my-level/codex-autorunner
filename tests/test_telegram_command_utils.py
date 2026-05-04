@@ -11,8 +11,10 @@ from codex_autorunner.agents.opencode.supervisor import OpenCodeSupervisorError
 from codex_autorunner.integrations.github.context_injection import issue_only_link
 from codex_autorunner.integrations.telegram.constants import TELEGRAM_MAX_MESSAGE_LENGTH
 from codex_autorunner.integrations.telegram.handlers.commands.command_utils import (
+    _format_download_failure_response,
     _format_httpx_exception,
     _format_opencode_exception,
+    _format_telegram_download_error,
     _opencode_review_arguments,
 )
 from codex_autorunner.integrations.telegram.transport import TelegramMessageTransport
@@ -83,6 +85,39 @@ def test_format_opencode_exception_formats_protocol_error(
     exc: Exception, expected: str
 ) -> None:
     assert _format_opencode_exception(exc) == expected
+
+
+def test_format_opencode_exception_formats_request_error() -> None:
+    request = httpx.Request("GET", "https://example.com")
+    exc = httpx.ConnectError("connection refused", request=request)
+
+    assert (
+        _format_opencode_exception(exc) == "OpenCode request failed: connection refused"
+    )
+
+
+def test_format_telegram_download_error_uses_nested_http_detail() -> None:
+    request = httpx.Request("GET", "https://example.com/file")
+    response = httpx.Response(
+        503,
+        request=request,
+        json={"detail": "download backend unavailable"},
+    )
+    exc = RuntimeError("Telegram file download failed")
+    exc.__cause__ = httpx.HTTPStatusError(
+        "server error",
+        request=request,
+        response=response,
+    )
+
+    assert _format_telegram_download_error(exc) == "download backend unavailable"
+
+
+def test_format_download_failure_response_includes_detail() -> None:
+    assert (
+        _format_download_failure_response("file", "temporary outage")
+        == "Failed to download file. Reason: temporary outage"
+    )
 
 
 class _OverflowBotStub:

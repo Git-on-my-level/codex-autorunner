@@ -17,6 +17,18 @@ class NormalizedResponse:
 
 
 @dataclass(frozen=True)
+class NormalizedResponseResult:
+    result: Any
+    error_code: Any
+    error_message: Optional[str]
+    error_data: Any
+
+    @property
+    def is_error(self) -> bool:
+        return self.error_code is not None or self.error_message is not None
+
+
+@dataclass(frozen=True)
 class NormalizedServerRequest:
     method: str
     request_id: Any
@@ -68,6 +80,22 @@ def normalize_response(message: dict[str, Any]) -> Optional[NormalizedResponse]:
         request_id=req_id,
         error=error,
         result=result,
+    )
+
+
+def normalize_response_result(response: NormalizedResponse) -> NormalizedResponseResult:
+    if response.error is None:
+        return NormalizedResponseResult(
+            result=response.result,
+            error_code=None,
+            error_message=None,
+            error_data=None,
+        )
+    return NormalizedResponseResult(
+        result=None,
+        error_code=response.error.get("code"),
+        error_message=response.error.get("message") or "app-server error",
+        error_data=response.error.get("data"),
     )
 
 
@@ -522,10 +550,12 @@ class ResumeSnapshot:
 __all__ = [
     "NormalizedNotification",
     "NormalizedResponse",
+    "NormalizedResponseResult",
     "NormalizedServerRequest",
     "ResumeSnapshot",
     "extract_resume_snapshot",
     "normalize_notification",
     "normalize_response",
+    "normalize_response_result",
     "normalize_server_request",
 ]

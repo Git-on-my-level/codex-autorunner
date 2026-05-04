@@ -100,11 +100,22 @@ def _get_mounted_app(app: FastAPI, mount_path: str):
     return None
 
 
+def _default_hub_config() -> dict:
+    return json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+
+
+def _write_default_hub_config(hub_root: Path) -> None:
+    write_test_config(hub_root / CONFIG_FILENAME, _default_hub_config())
+
+
+def _make_basic_supervisor(hub_root: Path) -> HubSupervisor:
+    _write_default_hub_config(hub_root)
+    return HubSupervisor(load_hub_config(hub_root))
+
+
 def test_run_coroutine_uses_asyncio_run_without_running_loop(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor = _make_basic_supervisor(hub_root)
     try:
 
         async def _value() -> int:
@@ -119,9 +130,7 @@ def test_run_coroutine_uses_explicit_loop_when_running_loop_detected(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor = _make_basic_supervisor(hub_root)
 
     class _FakeLoop:
         def __init__(self) -> None:
@@ -205,7 +214,7 @@ def _seed_flow_run(repo_root: Path, run_id: str, status: FlowRunStatus) -> None:
 
 def test_scan_writes_hub_state(tmp_path: Path):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg = _default_hub_config()
     cfg_path = hub_root / CONFIG_FILENAME
     write_test_config(cfg_path, cfg)
     repo_dir = hub_root / "demo"
@@ -231,8 +240,7 @@ def test_list_repos_refreshes_after_startup_state_cache_ttl(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
     repo_dir = hub_root / "demo"
     (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
 
@@ -272,8 +280,7 @@ def test_list_repos_refreshes_after_startup_state_cache_ttl(
 
 def test_scan_writes_pma_threads_artifact(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
     repo_dir = hub_root / "demo"
     (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
     PmaThreadStore(hub_root).create_thread(
@@ -303,8 +310,7 @@ def test_list_repos_does_not_refresh_pma_threads_artifact(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
     repo_dir = hub_root / "demo"
     (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
 
@@ -329,8 +335,7 @@ def test_list_repos_does_not_refresh_pma_threads_artifact(
 
 def test_hub_repos_sections_filter_excludes_unrequested_fields(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
     repo_dir = hub_root / "demo"
     (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
 
@@ -347,8 +352,7 @@ def test_hub_repos_sections_filter_excludes_unrequested_fields(tmp_path: Path) -
 
 def test_hub_repos_freshness_only_uses_underlying_repo_counts(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
     repo_dir = hub_root / "demo"
     (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
 
@@ -365,7 +369,7 @@ def test_hub_repos_freshness_only_uses_underlying_repo_counts(tmp_path: Path) ->
 
 def test_locked_status_reported(tmp_path: Path):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg = _default_hub_config()
     cfg_path = hub_root / CONFIG_FILENAME
     write_test_config(cfg_path, cfg)
     repo_dir = hub_root / "demo"
@@ -389,7 +393,7 @@ def test_locked_status_reported(tmp_path: Path):
 
 def test_hub_api_lists_repos(tmp_path: Path):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg = _default_hub_config()
     cfg_path = hub_root / CONFIG_FILENAME
     write_test_config(cfg_path, cfg)
     repo_dir = hub_root / "demo"
@@ -407,10 +411,7 @@ def test_hub_api_lists_repos(tmp_path: Path):
 
 def test_hub_supervisor_can_create_list_and_remove_agent_workspaces(tmp_path: Path):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-
-    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor = _make_basic_supervisor(hub_root)
     workspace = supervisor.create_agent_workspace(
         workspace_id="zc-main",
         runtime="zeroclaw",
@@ -450,10 +451,7 @@ def test_get_agent_workspace_snapshot_refreshes_repo_listing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-
-    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor = _make_basic_supervisor(hub_root)
     supervisor.create_agent_workspace(
         workspace_id="zc-main",
         runtime="zeroclaw",
@@ -479,8 +477,7 @@ def test_agent_workspace_mutations_refresh_startup_cached_state(
     tmp_path: Path,
 ) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
     repo_dir = hub_root / "demo"
     (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
 
@@ -534,10 +531,7 @@ def test_agent_workspace_mutations_refresh_startup_cached_state(
 
 def test_hub_supervisor_rejects_unknown_agent_workspace_runtime(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-
-    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor = _make_basic_supervisor(hub_root)
 
     with pytest.raises(ValueError, match="Unknown agent workspace runtime"):
         supervisor.create_agent_workspace(
@@ -550,8 +544,7 @@ def test_hub_supervisor_blocks_agent_workspace_create_on_failed_preflight(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
 
     monkeypatch.setattr(
         hub_module,
@@ -578,10 +571,7 @@ def test_hub_supervisor_blocks_enabling_agent_workspace_on_failed_preflight(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-
-    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor = _make_basic_supervisor(hub_root)
     supervisor.create_agent_workspace(
         workspace_id="zc-main",
         runtime="zeroclaw",
@@ -603,10 +593,7 @@ def test_hub_supervisor_blocks_enabling_agent_workspace_on_failed_preflight(
 
 def test_hub_api_lists_agent_workspaces_as_typed_resources(tmp_path: Path):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-
-    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor = _make_basic_supervisor(hub_root)
     supervisor.create_agent_workspace(
         workspace_id="zc-main",
         runtime="zeroclaw",
@@ -631,8 +618,7 @@ def test_hub_repos_sections_use_fresh_agent_workspace_listing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
 
     class _Workspace:
         id = "fresh-ws"
@@ -665,8 +651,7 @@ def test_hub_agent_workspace_crud_routes_support_remove_and_delete(
     tmp_path: Path,
 ) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
 
     client = TestClient(create_hub_app(hub_root))
 
@@ -772,8 +757,7 @@ def test_hub_agent_workspace_crud_routes_support_remove_and_delete(
 
 def test_hub_agent_workspace_destination_route_accepts_mounts(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
 
     client = TestClient(create_hub_app(hub_root))
     create_resp = client.post(
@@ -842,8 +826,7 @@ def test_hub_agent_workspace_create_route_rejects_unknown_keys(
     tmp_path: Path,
 ) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
 
     client = TestClient(create_hub_app(hub_root))
     response = client.post(
@@ -865,8 +848,7 @@ def test_hub_agent_workspace_update_route_rejects_unknown_keys(
     tmp_path: Path,
 ) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
 
     client = TestClient(create_hub_app(hub_root))
     create_resp = client.post(
@@ -889,8 +871,7 @@ def test_hub_agent_workspace_job_routes_submit_expected_kinds(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
 
     app = create_hub_app(hub_root)
     submissions: list[dict[str, object]] = []
@@ -958,7 +939,7 @@ def test_hub_agent_workspace_job_routes_submit_expected_kinds(
 @pytest.mark.docker_managed_cleanup
 def test_hub_api_exposes_effective_destination_inherited_from_base(tmp_path: Path):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg = _default_hub_config()
     cfg_path = hub_root / CONFIG_FILENAME
     write_test_config(cfg_path, cfg)
 
@@ -997,7 +978,7 @@ def test_hub_api_exposes_effective_destination_inherited_from_base(tmp_path: Pat
 @pytest.mark.slow
 def test_hub_api_marks_chat_bound_worktrees(tmp_path: Path):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg = _default_hub_config()
     cfg_path = hub_root / CONFIG_FILENAME
     write_test_config(cfg_path, cfg)
 
@@ -1035,7 +1016,7 @@ def test_hub_api_marks_chat_bound_worktrees_without_thread_list_cap(
     tmp_path: Path, monkeypatch
 ):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg = _default_hub_config()
     cfg_path = hub_root / CONFIG_FILENAME
     write_test_config(cfg_path, cfg)
 
@@ -1083,7 +1064,7 @@ def test_hub_api_marks_chat_bound_worktrees_without_thread_list_cap(
 @pytest.mark.slow
 def test_hub_archive_state_endpoint_archives_and_resets_runtime_state(tmp_path: Path):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg = _default_hub_config()
     cfg_path = hub_root / CONFIG_FILENAME
     write_test_config(cfg_path, cfg)
 
@@ -1157,7 +1138,7 @@ def test_hub_archive_repo_state_endpoint_archives_and_resets_base_repo_runtime_s
     tmp_path: Path,
 ):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg = _default_hub_config()
     cfg_path = hub_root / CONFIG_FILENAME
     write_test_config(cfg_path, cfg)
 
@@ -1261,7 +1242,7 @@ def test_archive_repo_state_waits_for_runner_exit_before_archiving(
     monkeypatch: pytest.MonkeyPatch,
 ):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg = _default_hub_config()
     cfg_path = hub_root / CONFIG_FILENAME
     write_test_config(cfg_path, cfg)
 
@@ -1297,18 +1278,18 @@ def test_archive_repo_state_waits_for_runner_exit_before_archiving(
     monkeypatch.setattr(hub_module.time, "sleep", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(orch_module.time, "sleep", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
-        hub_module,
+        hub_topology_module,
         "read_lock_status",
         lambda _path: (
-            hub_module.LockStatus.LOCKED_ALIVE
+            LockStatus.LOCKED_ALIVE
             if fake_runner.reconcile_calls < 2
-            else hub_module.LockStatus.UNLOCKED
+            else LockStatus.UNLOCKED
         ),
     )
     monkeypatch.setattr(
         orch_module,
         "load_state",
-        lambda _path: hub_module.RunnerState(
+        lambda _path: RunnerState(
             last_run_id=None,
             status="running" if fake_runner.reconcile_calls < 2 else "idle",
             last_exit_code=None,
@@ -1351,8 +1332,7 @@ def test_hub_archive_repo_state_endpoint_archives_threads_when_state_is_clean(
     tmp_path: Path,
 ):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
 
     supervisor = HubSupervisor(
         load_hub_config(hub_root),
@@ -1403,7 +1383,7 @@ def test_hub_archive_repo_state_endpoint_archives_threads_when_state_is_clean(
 
 def test_hub_pin_parent_repo_endpoint_persists(tmp_path: Path):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg = _default_hub_config()
     cfg_path = hub_root / CONFIG_FILENAME
     write_test_config(cfg_path, cfg)
 
@@ -1431,8 +1411,7 @@ def test_hub_pin_parent_repo_endpoint_persists(tmp_path: Path):
 
 def test_hub_pin_parent_repo_rejects_unknown_keys(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
 
     app = create_hub_app(hub_root)
     repo_dir = Path(app.state.hub_supervisor.create_repo("demo").path)
@@ -1450,8 +1429,7 @@ def test_hub_api_cleanup_repo_threads_archives_only_unbound_threads(
     tmp_path: Path,
 ):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
     supervisor = HubSupervisor(
         load_hub_config(hub_root),
         backend_factory_builder=build_agent_backend_factory,
@@ -1506,8 +1484,7 @@ def test_hub_api_cleanup_repo_threads_archives_only_unbound_threads(
 
 def test_hub_repo_listing_includes_unbound_managed_thread_count(tmp_path: Path):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
     supervisor = HubSupervisor(
         load_hub_config(hub_root),
         backend_factory_builder=build_agent_backend_factory,
@@ -1538,8 +1515,7 @@ def test_hub_api_cleanup_all_repo_threads_archives_unbound_threads_and_reports_d
     tmp_path: Path,
 ):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
     supervisor = HubSupervisor(
         load_hub_config(hub_root),
         backend_factory_builder=build_agent_backend_factory,
@@ -1622,8 +1598,7 @@ def test_hub_supervisor_cleanup_all_dry_run_does_not_archive_threads(
     tmp_path: Path,
 ):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
     supervisor = HubSupervisor(
         load_hub_config(hub_root),
         backend_factory_builder=build_agent_backend_factory,
@@ -1650,8 +1625,7 @@ def test_hub_supervisor_cleanup_all_dry_run_does_not_archive_threads(
 
 def test_cleanup_all_archives_all_terminal_flow_statuses(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
     supervisor = HubSupervisor(
         load_hub_config(hub_root),
         backend_factory_builder=build_agent_backend_factory,
@@ -1710,8 +1684,7 @@ def test_cleanup_all_skips_worktree_when_binding_lookup_raises_runtime_error(
     tmp_path: Path, monkeypatch
 ):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
     supervisor = HubSupervisor(
         load_hub_config(hub_root),
         backend_factory_builder=build_agent_backend_factory,
@@ -1745,7 +1718,7 @@ def test_cleanup_all_repairs_legacy_worktree_entries_before_cleanup(
     tmp_path: Path,
 ) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg = _default_hub_config()
     cfg["pma"]["cleanup_require_archive"] = False
     write_test_config(hub_root / CONFIG_FILENAME, cfg)
     supervisor = HubSupervisor(
@@ -1783,7 +1756,7 @@ def test_cleanup_all_repairs_legacy_worktree_entries_before_cleanup(
 
 def test_cleanup_all_removes_missing_worktree_manifest_entries(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg = _default_hub_config()
     cfg["pma"]["cleanup_require_archive"] = False
     write_test_config(hub_root / CONFIG_FILENAME, cfg)
     supervisor = HubSupervisor(
@@ -1812,8 +1785,7 @@ def test_cleanup_all_removes_missing_worktree_manifest_entries(tmp_path: Path) -
 
 def test_hub_api_cleanup_all_preview_and_job(tmp_path: Path, monkeypatch):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
     supervisor = HubSupervisor(
         load_hub_config(hub_root),
         backend_factory_builder=build_agent_backend_factory,
@@ -1872,7 +1844,7 @@ def test_hub_api_cleanup_all_preview_and_job(tmp_path: Path, monkeypatch):
 @pytest.mark.slow
 def test_hub_pin_parent_repo_rejects_worktree(tmp_path: Path):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg = _default_hub_config()
     cfg_path = hub_root / CONFIG_FILENAME
     write_test_config(cfg_path, cfg)
 
@@ -1900,7 +1872,7 @@ def test_hub_pin_parent_repo_rejects_worktree(tmp_path: Path):
 def test_list_repos_thread_safety(tmp_path: Path):
     """Test that list_repos is thread-safe and doesn't return None or inconsistent state."""
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg = _default_hub_config()
     cfg_path = hub_root / CONFIG_FILENAME
     write_test_config(cfg_path, cfg)
 
@@ -1952,7 +1924,7 @@ def test_list_repos_thread_safety(tmp_path: Path):
 
 def test_hub_home_served_and_repo_mounted(tmp_path: Path):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg = _default_hub_config()
     cfg_path = hub_root / CONFIG_FILENAME
     write_test_config(cfg_path, cfg)
     repo_dir = hub_root / "demo"
@@ -1974,7 +1946,7 @@ def test_hub_home_served_and_repo_mounted(tmp_path: Path):
 
 def test_hub_mount_enters_repo_lifespan(tmp_path: Path):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg = _default_hub_config()
     cfg_path = hub_root / CONFIG_FILENAME
     write_test_config(cfg_path, cfg)
     repo_dir = hub_root / "demo"
@@ -1995,7 +1967,7 @@ def test_hub_mount_enters_repo_lifespan(tmp_path: Path):
 
 def test_hub_scan_starts_repo_lifespan(tmp_path: Path):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg = _default_hub_config()
     cfg_path = hub_root / CONFIG_FILENAME
     write_test_config(cfg_path, cfg)
 
@@ -2022,7 +1994,7 @@ def test_hub_scan_starts_repo_lifespan(tmp_path: Path):
 
 def test_hub_scan_unmounts_repo_and_exits_lifespan(tmp_path: Path):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg = _default_hub_config()
     cfg_path = hub_root / CONFIG_FILENAME
     write_test_config(cfg_path, cfg)
     repo_dir = hub_root / "demo"
@@ -2052,7 +2024,7 @@ def test_hub_scan_unmounts_repo_and_exits_lifespan(tmp_path: Path):
 @pytest.mark.slow
 def test_hub_create_repo_keeps_existing_mounts(tmp_path: Path):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg = _default_hub_config()
     cfg_path = hub_root / CONFIG_FILENAME
     write_test_config(cfg_path, cfg)
     repo_dir = hub_root / "alpha"
@@ -2072,7 +2044,7 @@ def test_hub_create_repo_keeps_existing_mounts(tmp_path: Path):
 
 def test_hub_init_endpoint_mounts_repo(tmp_path: Path):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg = _default_hub_config()
     cfg["hub"]["auto_init_missing"] = False
     cfg_path = hub_root / CONFIG_FILENAME
     write_test_config(cfg_path, cfg)
@@ -2100,7 +2072,7 @@ def test_hub_init_endpoint_mounts_repo(tmp_path: Path):
 @pytest.mark.slow
 def test_parallel_run_smoke(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg = _default_hub_config()
     cfg_path = hub_root / CONFIG_FILENAME
     write_test_config(cfg_path, cfg)
     repo_a = hub_root / "alpha"
@@ -2142,7 +2114,7 @@ def test_parallel_run_smoke(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
 
 def test_hub_clone_repo_endpoint(tmp_path: Path):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg = _default_hub_config()
     cfg_path = hub_root / CONFIG_FILENAME
     write_test_config(cfg_path, cfg)
 
@@ -2165,7 +2137,7 @@ def test_hub_clone_repo_endpoint(tmp_path: Path):
 
 def test_hub_create_repo_route_rejects_unknown_keys(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg = _default_hub_config()
     cfg_path = hub_root / CONFIG_FILENAME
     write_test_config(cfg_path, cfg)
 
@@ -2181,7 +2153,7 @@ def test_hub_create_repo_route_rejects_unknown_keys(tmp_path: Path) -> None:
 @pytest.mark.slow
 def test_hub_remove_repo_with_worktrees(tmp_path: Path):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg = _default_hub_config()
     cfg_path = hub_root / CONFIG_FILENAME
     write_test_config(cfg_path, cfg)
 
@@ -2228,8 +2200,7 @@ def test_hub_remove_repo_route_forwards_force_attestation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
 
     app = create_hub_app(hub_root)
     captured: dict[str, object] = {}
@@ -2276,8 +2247,7 @@ def test_hub_remove_repo_route_forwards_force_attestation(
 
 def test_hub_remove_repo_route_rejects_unknown_keys(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
 
     app = create_hub_app(hub_root)
     client = TestClient(app)
@@ -2293,8 +2263,7 @@ def test_hub_remove_repo_route_rejects_unknown_keys(tmp_path: Path) -> None:
 
 def test_hub_create_worktree_route_rejects_unknown_keys(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
 
     supervisor = HubSupervisor(
         load_hub_config(hub_root),
@@ -2325,8 +2294,7 @@ def test_hub_repo_job_routes_submit_expected_kinds(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
 
     repo_dir = hub_root / "demo#scan"
     (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
@@ -2390,8 +2358,7 @@ def test_hub_repo_job_routes_submit_expected_kinds(
 
 def test_sync_main_raises_when_local_default_diverges_from_origin(tmp_path: Path):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
 
     origin = tmp_path / "origin.git"
     origin.mkdir(parents=True, exist_ok=True)
@@ -2423,8 +2390,7 @@ def test_create_worktree_defaults_to_origin_default_branch_without_start_point(
     tmp_path: Path,
 ):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
 
     supervisor = HubSupervisor(
         load_hub_config(hub_root),
@@ -2456,8 +2422,7 @@ def test_create_worktree_fails_if_explicit_start_point_mismatches_existing_branc
     tmp_path: Path,
 ):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
 
     supervisor = HubSupervisor(
         load_hub_config(hub_root),
@@ -2483,8 +2448,7 @@ def test_create_worktree_fails_if_explicit_start_point_mismatches_existing_branc
 
 def test_create_worktree_runs_configured_setup_commands(tmp_path: Path):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
 
     supervisor = HubSupervisor(
         load_hub_config(hub_root),
@@ -2513,7 +2477,7 @@ def test_create_worktree_runs_configured_setup_commands(tmp_path: Path):
 
 def test_create_worktree_fails_setup_and_keeps_worktree(tmp_path: Path):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg = _default_hub_config()
     cfg["pma"]["cleanup_require_archive"] = False
     write_test_config(hub_root / CONFIG_FILENAME, cfg)
 
@@ -2555,8 +2519,7 @@ def test_run_setup_commands_for_workspace_runs_base_commands_for_worktree(
     tmp_path: Path,
 ):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
 
     supervisor = HubSupervisor(
         load_hub_config(hub_root),
@@ -2587,8 +2550,7 @@ def test_run_setup_commands_for_workspace_uses_resolved_repo_path_with_hint(
     tmp_path: Path,
 ):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
 
     supervisor = HubSupervisor(
         load_hub_config(hub_root),
@@ -2622,8 +2584,7 @@ def test_run_setup_commands_for_workspace_uses_resolved_repo_path_with_hint(
 
 def test_cleanup_worktree_with_archive_rejects_dirty_worktree(tmp_path: Path):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
 
     supervisor = HubSupervisor(
         load_hub_config(hub_root),
@@ -2652,7 +2613,7 @@ def test_cleanup_worktree_with_archive_rejects_dirty_worktree(tmp_path: Path):
 
 def test_cleanup_worktree_without_archive_allows_dirty_worktree(tmp_path: Path):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg = _default_hub_config()
     cfg["pma"]["cleanup_require_archive"] = False
     write_test_config(hub_root / CONFIG_FILENAME, cfg)
 
@@ -2679,7 +2640,7 @@ def test_cleanup_worktree_removes_car_managed_docker_container(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg = _default_hub_config()
     cfg["pma"]["cleanup_require_archive"] = False
     write_test_config(hub_root / CONFIG_FILENAME, cfg)
 
@@ -2753,7 +2714,7 @@ def test_cleanup_worktree_skips_explicit_docker_container_name(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg = _default_hub_config()
     cfg["pma"]["cleanup_require_archive"] = False
     write_test_config(hub_root / CONFIG_FILENAME, cfg)
 
@@ -2801,7 +2762,7 @@ def test_cleanup_worktree_continues_when_docker_cleanup_errors(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg = _default_hub_config()
     cfg["pma"]["cleanup_require_archive"] = False
     write_test_config(hub_root / CONFIG_FILENAME, cfg)
 
@@ -2867,7 +2828,7 @@ def test_hub_api_cleanup_worktree_returns_docker_cleanup_status(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg = _default_hub_config()
     cfg["pma"]["cleanup_require_archive"] = False
     write_test_config(hub_root / CONFIG_FILENAME, cfg)
 
@@ -2945,7 +2906,7 @@ def test_hub_api_cleanup_worktree_forwards_force_attestation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg = _default_hub_config()
     cfg["pma"]["cleanup_require_archive"] = False
     write_test_config(hub_root / CONFIG_FILENAME, cfg)
 
@@ -3011,8 +2972,7 @@ def test_hub_api_cleanup_worktree_forwards_force_attestation(
 
 def test_cleanup_worktree_allows_pma_only_bound_without_force(tmp_path: Path):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
 
     supervisor = HubSupervisor(
         load_hub_config(hub_root),
@@ -3041,8 +3001,7 @@ def test_cleanup_worktree_failure_keeps_bound_pma_threads_active(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
 
     supervisor = HubSupervisor(
         load_hub_config(hub_root),
@@ -3086,7 +3045,7 @@ def test_cleanup_worktree_removes_leftover_car_state_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg = _default_hub_config()
     cfg["pma"]["cleanup_require_archive"] = False
     write_test_config(hub_root / CONFIG_FILENAME, cfg)
 
@@ -3129,7 +3088,7 @@ def test_cleanup_worktree_removes_leftover_car_state_via_cwd_safe_subprocess(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg = _default_hub_config()
     cfg["pma"]["cleanup_require_archive"] = False
     write_test_config(hub_root / CONFIG_FILENAME, cfg)
 
@@ -3181,7 +3140,7 @@ def test_cleanup_worktree_removes_leftover_car_state_via_cwd_safe_subprocess(
 
 def test_cleanup_worktree_refreshes_topology_listing(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg = _default_hub_config()
     cfg["pma"]["cleanup_require_archive"] = False
     write_test_config(hub_root / CONFIG_FILENAME, cfg)
 
@@ -3209,7 +3168,7 @@ def test_cleanup_worktree_archives_pma_threads_before_manifest_removal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg = _default_hub_config()
     cfg["pma"]["cleanup_require_archive"] = False
     write_test_config(hub_root / CONFIG_FILENAME, cfg)
 
@@ -3255,8 +3214,7 @@ def test_cleanup_worktree_archives_pma_threads_before_manifest_removal(
 
 def test_archive_worktree_archives_bound_pma_threads(tmp_path: Path):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
 
     supervisor = HubSupervisor(
         load_hub_config(hub_root),
@@ -3292,8 +3250,7 @@ def test_archive_worktree_archives_bound_pma_threads(tmp_path: Path):
 
 def test_cleanup_worktree_allows_mixed_chat_bound_with_force(tmp_path: Path):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
 
     supervisor = HubSupervisor(
         load_hub_config(hub_root),
@@ -3329,8 +3286,7 @@ def test_cleanup_worktree_allows_mixed_chat_bound_with_force(tmp_path: Path):
 
 def test_cleanup_worktree_rejects_mixed_chat_bound_without_force(tmp_path: Path):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
 
     supervisor = HubSupervisor(
         load_hub_config(hub_root),
@@ -3364,8 +3320,7 @@ def test_cleanup_worktree_rejects_when_binding_lookup_fails_without_force(
     tmp_path: Path, monkeypatch
 ):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
 
     supervisor = HubSupervisor(
         load_hub_config(hub_root),
@@ -3401,8 +3356,7 @@ def test_cleanup_worktree_allows_force_when_binding_lookup_fails(
     tmp_path: Path, monkeypatch
 ):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
 
     supervisor = HubSupervisor(
         load_hub_config(hub_root),
@@ -3440,8 +3394,7 @@ def test_cleanup_worktree_allows_force_when_binding_lookup_fails(
 
 def test_cleanup_worktree_force_requires_attestation(tmp_path: Path):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
 
     supervisor = HubSupervisor(
         load_hub_config(hub_root),
@@ -3473,7 +3426,7 @@ def test_cleanup_worktree_force_requires_attestation(tmp_path: Path):
 @pytest.mark.slow
 def test_hub_api_marks_chat_bound_worktrees_from_discord_binding_db(tmp_path: Path):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg = _default_hub_config()
     cfg_path = hub_root / CONFIG_FILENAME
     write_test_config(cfg_path, cfg)
 
@@ -3507,7 +3460,7 @@ def test_hub_api_marks_chat_bound_worktrees_from_discord_binding_db(tmp_path: Pa
 
 def test_cleanup_worktree_rejects_discord_bound_worktree_without_force(tmp_path: Path):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg = _default_hub_config()
     cfg["pma"]["cleanup_require_archive"] = False
     write_test_config(hub_root / CONFIG_FILENAME, cfg)
 
@@ -3537,8 +3490,7 @@ def test_cleanup_worktree_rejects_discord_bound_worktree_without_force(tmp_path:
 
 def test_set_worktree_setup_commands_route_updates_manifest(tmp_path: Path):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
 
     supervisor = HubSupervisor(
         load_hub_config(hub_root),
@@ -3566,8 +3518,7 @@ def test_set_worktree_setup_commands_route_updates_manifest(tmp_path: Path):
 
 def test_set_worktree_setup_commands_route_accepts_legacy_array_payload(tmp_path: Path):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
 
     supervisor = HubSupervisor(
         load_hub_config(hub_root),
@@ -3590,8 +3541,7 @@ def test_set_worktree_setup_commands_route_accepts_legacy_array_payload(tmp_path
 
 def test_set_worktree_setup_commands_route_rejects_unknown_keys(tmp_path: Path):
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
 
     supervisor = HubSupervisor(
         load_hub_config(hub_root),
@@ -3625,8 +3575,7 @@ def test_create_repo_returns_authoritative_snapshot_after_refresh(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
     supervisor = _make_supervisor(hub_root)
 
     original_list_repos = supervisor.list_repos
@@ -3652,8 +3601,7 @@ def test_update_agent_workspace_returns_authoritative_snapshot_after_refresh(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
     supervisor = _make_supervisor(hub_root)
     supervisor.create_agent_workspace(
         workspace_id="zc-main",
@@ -3692,8 +3640,7 @@ def test_update_agent_workspace_returns_authoritative_snapshot_after_refresh(
 
 def test_stop_repo_delegates_to_orchestrator(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
     supervisor = _make_supervisor(hub_root)
     supervisor.create_repo("demo")
     _init_git_repo(supervisor.list_repos()[0].path)
@@ -3713,8 +3660,7 @@ def test_stop_repo_delegates_to_orchestrator(tmp_path: Path) -> None:
 
 def test_resume_repo_delegates_to_orchestrator(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
     supervisor = _make_supervisor(hub_root)
     supervisor.create_repo("demo")
     _init_git_repo(supervisor.list_repos()[0].path)
@@ -3734,8 +3680,7 @@ def test_resume_repo_delegates_to_orchestrator(tmp_path: Path) -> None:
 
 def test_kill_repo_delegates_to_orchestrator(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
     supervisor = _make_supervisor(hub_root)
     supervisor.create_repo("demo")
     _init_git_repo(supervisor.list_repos()[0].path)
@@ -3755,18 +3700,14 @@ def test_kill_repo_delegates_to_orchestrator(tmp_path: Path) -> None:
 
 def test_create_agent_workspace_rejects_empty_workspace_id(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor = _make_basic_supervisor(hub_root)
     with pytest.raises(ValueError, match="workspace_id is required"):
         supervisor.create_agent_workspace(workspace_id="  ", runtime="zeroclaw")
 
 
 def test_create_agent_workspace_rejects_empty_runtime(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor = _make_basic_supervisor(hub_root)
     with pytest.raises(ValueError, match="runtime is required"):
         supervisor.create_agent_workspace(workspace_id="zc-main", runtime="")
 
@@ -3775,9 +3716,7 @@ def test_create_agent_workspace_rejects_duplicate_with_different_runtime(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor = _make_basic_supervisor(hub_root)
     monkeypatch.setattr(
         hub_module,
         "known_agent_workspace_runtime_ids",
@@ -3794,27 +3733,21 @@ def test_create_agent_workspace_rejects_duplicate_with_different_runtime(
 
 def test_remove_agent_workspace_rejects_missing(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor = _make_basic_supervisor(hub_root)
     with pytest.raises(ValueError, match="not found"):
         supervisor.remove_agent_workspace("nope")
 
 
 def test_update_agent_workspace_rejects_missing(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor = _make_basic_supervisor(hub_root)
     with pytest.raises(ValueError, match="not found"):
         supervisor.update_agent_workspace("nope", enabled=True)
 
 
 def test_update_agent_workspace_rejects_empty_display_name(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor = _make_basic_supervisor(hub_root)
     supervisor.create_agent_workspace(
         workspace_id="zc-main", runtime="zeroclaw", enabled=False
     )
@@ -3824,17 +3757,14 @@ def test_update_agent_workspace_rejects_empty_display_name(tmp_path: Path) -> No
 
 def test_set_agent_workspace_destination_rejects_missing(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor = _make_basic_supervisor(hub_root)
     with pytest.raises(ValueError, match="not found"):
         supervisor.set_agent_workspace_destination("nope", {"kind": "local"})
 
 
 def test_set_parent_repo_pinned_rejects_missing_repo(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
     supervisor = _make_supervisor(hub_root)
     with pytest.raises(ValueError, match="not found"):
         supervisor.set_parent_repo_pinned("nope", True)
@@ -3842,8 +3772,7 @@ def test_set_parent_repo_pinned_rejects_missing_repo(tmp_path: Path) -> None:
 
 def test_sync_main_rejects_unknown_repo(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
     supervisor = _make_supervisor(hub_root)
     with pytest.raises(ValueError, match="not found"):
         supervisor.sync_main("nope")
@@ -3851,8 +3780,7 @@ def test_sync_main_rejects_unknown_repo(tmp_path: Path) -> None:
 
 def test_sync_main_rejects_missing_disk(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
     supervisor = _make_supervisor(hub_root)
     supervisor.create_repo("demo")
     shutil.rmtree(hub_root / "demo")
@@ -3862,8 +3790,7 @@ def test_sync_main_rejects_missing_disk(tmp_path: Path) -> None:
 
 def test_sync_main_rejects_non_git_repo(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
     supervisor = _make_supervisor(hub_root)
     snap = supervisor.create_repo("demo")
     shutil.rmtree(snap.path / ".git")
@@ -3873,8 +3800,7 @@ def test_sync_main_rejects_non_git_repo(tmp_path: Path) -> None:
 
 def test_sync_main_rejects_dirty_tree(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
     supervisor = _make_supervisor(hub_root)
     snap = supervisor.create_repo("demo")
     _init_git_repo(snap.path)
@@ -3886,8 +3812,7 @@ def test_sync_main_rejects_dirty_tree(tmp_path: Path) -> None:
 
 def test_set_worktree_setup_commands_rejects_unknown_repo(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
     supervisor = _make_supervisor(hub_root)
     with pytest.raises(ValueError, match="not found"):
         supervisor.set_worktree_setup_commands("nope", ["echo hi"])
@@ -3895,8 +3820,7 @@ def test_set_worktree_setup_commands_rejects_unknown_repo(tmp_path: Path) -> Non
 
 def test_set_worktree_setup_commands_rejects_non_base_repo(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
     supervisor = _make_supervisor(hub_root)
     base = supervisor.create_repo("base")
     _init_git_repo(base.path)
@@ -3925,8 +3849,7 @@ def test_set_worktree_setup_commands_rejects_non_base_repo(tmp_path: Path) -> No
 
 def test_check_repo_removal_rejects_unknown_repo(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
     supervisor = _make_supervisor(hub_root)
     with pytest.raises(ValueError, match="not found"):
         supervisor.check_repo_removal("nope")
@@ -3934,8 +3857,7 @@ def test_check_repo_removal_rejects_unknown_repo(tmp_path: Path) -> None:
 
 def test_archive_repo_state_rejects_unknown_repo(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
     supervisor = _make_supervisor(hub_root)
     with pytest.raises(ValueError, match="not found"):
         supervisor.archive_repo_state(repo_id="nope")
@@ -3943,8 +3865,7 @@ def test_archive_repo_state_rejects_unknown_repo(tmp_path: Path) -> None:
 
 def test_archive_repo_state_rejects_missing_path(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
     supervisor = _make_supervisor(hub_root)
     supervisor.create_repo("demo")
     shutil.rmtree(hub_root / "demo")
@@ -3954,8 +3875,7 @@ def test_archive_repo_state_rejects_missing_path(tmp_path: Path) -> None:
 
 def test_cleanup_repo_threads_rejects_unknown_repo(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
     supervisor = _make_supervisor(hub_root)
     with pytest.raises(ValueError, match="not found"):
         supervisor.cleanup_repo_threads(repo_id="nope")
@@ -3963,8 +3883,7 @@ def test_cleanup_repo_threads_rejects_unknown_repo(tmp_path: Path) -> None:
 
 def test_cleanup_repo_threads_rejects_missing_path(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    _write_default_hub_config(hub_root)
     supervisor = _make_supervisor(hub_root)
     supervisor.create_repo("demo")
     shutil.rmtree(hub_root / "demo")
@@ -3974,9 +3893,7 @@ def test_cleanup_repo_threads_rejects_missing_path(tmp_path: Path) -> None:
 
 def test_ensure_pma_automation_store_creates_store(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor = _make_basic_supervisor(hub_root)
     try:
         store = supervisor.ensure_pma_automation_store()
         assert store is not None
@@ -3987,9 +3904,7 @@ def test_ensure_pma_automation_store_creates_store(tmp_path: Path) -> None:
 
 def test_automation_store_aliases(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor = _make_basic_supervisor(hub_root)
     try:
         primary = supervisor.ensure_pma_automation_store()
         assert supervisor.ensure_automation_store() is primary
@@ -4003,9 +3918,7 @@ def test_automation_store_aliases(tmp_path: Path) -> None:
 
 def test_lifecycle_emitter_property(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor = _make_basic_supervisor(hub_root)
     try:
         emitter = supervisor.lifecycle_emitter
         assert emitter is not None
@@ -4016,9 +3929,7 @@ def test_lifecycle_emitter_property(tmp_path: Path) -> None:
 
 def test_lifecycle_store_property(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor = _make_basic_supervisor(hub_root)
     try:
         store = supervisor.lifecycle_store
         assert store is not None
@@ -4028,9 +3939,7 @@ def test_lifecycle_store_property(tmp_path: Path) -> None:
 
 def test_set_pma_lane_worker_starter(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor = _make_basic_supervisor(hub_root)
     try:
         started = []
         supervisor.set_pma_lane_worker_starter(lambda lane_id: started.append(lane_id))
@@ -4042,9 +3951,7 @@ def test_set_pma_lane_worker_starter(tmp_path: Path) -> None:
 
 def test_request_pma_lane_worker_start_uses_default_lane(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor = _make_basic_supervisor(hub_root)
     try:
         started = []
         supervisor.set_pma_lane_worker_starter(lambda lane_id: started.append(lane_id))
@@ -4062,9 +3969,7 @@ def test_request_pma_lane_worker_start_handles_starter_exception(
     tmp_path: Path,
 ) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor = _make_basic_supervisor(hub_root)
     try:
 
         def _boom(lane_id: str) -> None:
@@ -4080,9 +3985,7 @@ def test_process_pma_automation_timers_returns_zero_for_bad_limit(
     tmp_path: Path,
 ) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor = _make_basic_supervisor(hub_root)
     try:
         assert supervisor.process_pma_automation_timers(limit=0) == 0
         assert supervisor.process_pma_automation_timers(limit=-1) == 0
@@ -4094,9 +3997,7 @@ def test_process_pma_automation_timers_returns_zero_when_no_dequeue(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor = _make_basic_supervisor(hub_root)
     try:
         store = supervisor.ensure_pma_automation_store()
         monkeypatch.setattr(store, "dequeue_due_timers", None, raising=False)
@@ -4109,9 +4010,7 @@ def test_process_pma_automation_timers_processes_due_timers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor = _make_basic_supervisor(hub_root)
     try:
         store = supervisor.ensure_pma_automation_store()
         timers = [
@@ -4139,9 +4038,7 @@ def test_drain_pma_automation_wakeups_returns_zero_for_bad_limit(
     tmp_path: Path,
 ) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor = _make_basic_supervisor(hub_root)
     try:
         assert supervisor.drain_pma_automation_wakeups(limit=0) == 0
     finally:
@@ -4152,7 +4049,7 @@ def test_drain_pma_automation_wakeups_returns_zero_when_pma_disabled(
     tmp_path: Path,
 ) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg = _default_hub_config()
     cfg["pma"]["enabled"] = False
     write_test_config(hub_root / CONFIG_FILENAME, cfg)
     supervisor = HubSupervisor(load_hub_config(hub_root))
@@ -4166,9 +4063,7 @@ def test_drain_pma_automation_wakeups_processes_pending(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor = _make_basic_supervisor(hub_root)
     started_lanes = []
     supervisor.set_pma_lane_worker_starter(
         lambda lane_id: started_lanes.append(lane_id)
@@ -4194,7 +4089,11 @@ def test_drain_pma_automation_wakeups_processes_pending(
                 "idempotency_key": "timer:t1:2025-01-01T00:00:00Z",
             },
         ]
-        monkeypatch.setattr(store, "list_pending_wakeups", lambda limit=100: wakeups)
+        monkeypatch.setattr(
+            store,
+            "list_pending_wakeups",
+            lambda limit=100, **_kwargs: wakeups,
+        )
         monkeypatch.setattr(store, "mark_wakeup_dispatched", lambda wid: True)
         drained = supervisor.drain_pma_automation_wakeups()
         assert drained == 1
@@ -4205,9 +4104,7 @@ def test_drain_pma_automation_wakeups_processes_pending(
 
 def test_ensure_pma_safety_checker_creates_checker(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor = _make_basic_supervisor(hub_root)
     try:
         checker = supervisor.ensure_pma_safety_checker()
         assert checker is not None
@@ -4221,9 +4118,7 @@ def test_process_pma_automation_now_combines_timers_and_wakeups(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor = _make_basic_supervisor(hub_root)
     try:
         monkeypatch.setattr(supervisor, "process_pma_automation_timers", lambda **kw: 3)
         monkeypatch.setattr(supervisor, "drain_pma_automation_wakeups", lambda **kw: 5)
@@ -4237,9 +4132,7 @@ def test_process_pma_automation_now_skips_timers_when_disabled(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor = _make_basic_supervisor(hub_root)
     try:
         monkeypatch.setattr(supervisor, "drain_pma_automation_wakeups", lambda **kw: 2)
         result = supervisor.process_pma_automation_now(include_timers=False)
@@ -4250,9 +4143,7 @@ def test_process_pma_automation_now_skips_timers_when_disabled(
 
 def test_trigger_pma_from_lifecycle_event(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor = _make_basic_supervisor(hub_root)
     try:
         from codex_autorunner.core.lifecycle_events import (
             LifecycleEvent,
@@ -4278,9 +4169,7 @@ def test_process_lifecycle_events_drains_wakeups(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor = _make_basic_supervisor(hub_root)
     try:
         drained = []
         monkeypatch.setattr(
@@ -4303,9 +4192,7 @@ def test_process_lifecycle_events_handles_drain_exception(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor = _make_basic_supervisor(hub_root)
     try:
         monkeypatch.setattr(
             supervisor._lifecycle_orchestrator._lifecycle_event_processor,
@@ -4326,9 +4213,7 @@ def test_process_scm_automation_polls_returns_zeros_without_processor(
     tmp_path: Path,
 ) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor = _make_basic_supervisor(hub_root)
     try:
         result = supervisor.process_scm_automation_polls()
         assert result["due"] == 0
@@ -4341,9 +4226,7 @@ def test_process_scm_automation_polls_delegates_to_processor(
     tmp_path: Path,
 ) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor = _make_basic_supervisor(hub_root)
     try:
         supervisor._scm_poll_processor = lambda limit: {"due": 5, "polled": 3}
         result = supervisor.process_scm_automation_polls()
@@ -4357,9 +4240,7 @@ def test_process_scm_automation_polls_handles_exception(
     tmp_path: Path,
 ) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor = _make_basic_supervisor(hub_root)
     try:
         supervisor._scm_poll_processor = lambda limit: (_ for _ in ()).throw(
             RuntimeError("poll failed")
@@ -4373,9 +4254,7 @@ def test_process_scm_automation_polls_handles_exception(
 
 def test_build_pma_wakeup_message_timer_source(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor = _make_basic_supervisor(hub_root)
     try:
         msg = supervisor._build_pma_wakeup_message(
             {"source": "timer", "timer_id": "t1", "repo_id": "demo"}
@@ -4390,9 +4269,7 @@ def test_build_pma_wakeup_message_timer_source(tmp_path: Path) -> None:
 
 def test_build_pma_wakeup_message_non_timer(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor = _make_basic_supervisor(hub_root)
     try:
         msg = supervisor._build_pma_wakeup_message({"source": "lifecycle"})
         assert "suggested_next_action" in msg
@@ -4403,9 +4280,7 @@ def test_build_pma_wakeup_message_non_timer(tmp_path: Path) -> None:
 
 def test_build_lifecycle_retry_policy_defaults(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor = _make_basic_supervisor(hub_root)
     try:
         policy = supervisor._build_lifecycle_retry_policy()
         assert policy.max_attempts == 3
@@ -4417,7 +4292,7 @@ def test_build_lifecycle_retry_policy_defaults(tmp_path: Path) -> None:
 
 def test_build_lifecycle_retry_policy_custom(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg = _default_hub_config()
     cfg["pma"]["lifecycle_retry_max_attempts"] = 5
     cfg["pma"]["lifecycle_retry_initial_backoff_seconds"] = 10
     cfg["pma"]["lifecycle_retry_max_backoff_seconds"] = 600
@@ -4434,7 +4309,7 @@ def test_build_lifecycle_retry_policy_custom(tmp_path: Path) -> None:
 
 def test_build_lifecycle_retry_policy_clamps_max_to_initial(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg = _default_hub_config()
     cfg["pma"]["lifecycle_retry_initial_backoff_seconds"] = 500
     cfg["pma"]["lifecycle_retry_max_backoff_seconds"] = 100
     write_test_config(hub_root / CONFIG_FILENAME, cfg)
@@ -4448,9 +4323,7 @@ def test_build_lifecycle_retry_policy_clamps_max_to_initial(tmp_path: Path) -> N
 
 def test_build_pma_lifecycle_message(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor = _make_basic_supervisor(hub_root)
     try:
         from codex_autorunner.core.lifecycle_events import (
             LifecycleEvent,
@@ -4479,9 +4352,7 @@ def test_build_pma_lifecycle_message(tmp_path: Path) -> None:
 
 def test_pma_reactive_gate_allows_by_default(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor = _make_basic_supervisor(hub_root)
     try:
         from codex_autorunner.core.lifecycle_events import (
             LifecycleEvent,
@@ -4506,7 +4377,7 @@ def test_pma_reactive_gate_allows_by_default(tmp_path: Path) -> None:
 
 def test_pma_reactive_gate_blocks_disabled(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg = _default_hub_config()
     cfg["pma"]["reactive_enabled"] = False
     write_test_config(hub_root / CONFIG_FILENAME, cfg)
     supervisor = HubSupervisor(load_hub_config(hub_root))
@@ -4534,7 +4405,7 @@ def test_pma_reactive_gate_blocks_disabled(tmp_path: Path) -> None:
 
 def test_pma_reactive_gate_blocks_origin(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg = _default_hub_config()
     cfg["pma"]["reactive_origin_blocklist"] = ["blocked_bot"]
     write_test_config(hub_root / CONFIG_FILENAME, cfg)
     supervisor = HubSupervisor(load_hub_config(hub_root))
@@ -4562,7 +4433,7 @@ def test_pma_reactive_gate_blocks_origin(tmp_path: Path) -> None:
 
 def test_pma_reactive_gate_filters_event_types(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg = _default_hub_config()
     cfg["pma"]["reactive_event_types"] = ["dispatch_created"]
     write_test_config(hub_root / CONFIG_FILENAME, cfg)
     supervisor = HubSupervisor(load_hub_config(hub_root))
@@ -4604,7 +4475,7 @@ def test_repo_snapshot_to_dict_handles_non_relative_path() -> None:
         initialized=False,
         init_error=None,
         status=RepoStatus.MISSING,
-        lock_status=hub_module.LockStatus.UNLOCKED,
+        lock_status=LockStatus.UNLOCKED,
         last_run_id=None,
         last_run_started_at=None,
         last_run_finished_at=None,
@@ -4698,9 +4569,7 @@ def test_git_failure_detail() -> None:
 
 def test_get_agent_workspace_runtime_readiness_rejects_missing(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
-    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
-    write_test_config(hub_root / CONFIG_FILENAME, cfg)
-    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor = _make_basic_supervisor(hub_root)
     with pytest.raises(ValueError, match="not found"):
         supervisor.get_agent_workspace_runtime_readiness("nope")
 

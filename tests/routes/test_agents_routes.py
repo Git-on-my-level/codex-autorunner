@@ -6,8 +6,15 @@ from unittest.mock import MagicMock
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from codex_autorunner.agents.types import ModelCatalog, ModelSpec
 from codex_autorunner.integrations.chat.agents import ChatAgentProfileOption
 from codex_autorunner.surfaces.web.routes.agents import build_agents_routes
+from codex_autorunner.surfaces.web.routes.agents_helpers import (
+    normalize_path_agent_id,
+    parse_resume_after,
+    serialize_agent_profiles,
+    serialize_model_catalog,
+)
 
 _TEST_REPO_ROOT = "/workspace/test-repo"
 
@@ -35,16 +42,79 @@ def test_agent_models_route_rejects_blank_path_agent_segment() -> None:
     assert response.json() == {"detail": "Unknown agent"}
 
 
-def test_agent_turn_events_route_rejects_blank_path_agent_segment() -> None:
-    client = _build_client()
+def test_normalize_path_agent_id_rejects_blank_segment() -> None:
+    try:
+        normalize_path_agent_id(" ")
+    except ValueError as exc:
+        assert str(exc) == "Unknown agent"
+    else:
+        raise AssertionError("blank agent segment should be rejected")
 
-    response = client.get(
-        "/api/agents/%20/turns/turn-123/events",
-        params={"thread_id": "thread-123"},
+
+def test_parse_resume_after_prefers_query_param_over_last_event_id() -> None:
+    assert parse_resume_after(7, "9") == 7
+    assert parse_resume_after(None, "9") == 9
+    assert parse_resume_after(None, "not-an-int") is None
+    assert parse_resume_after(None, None) is None
+
+
+def test_serialize_model_catalog_projects_public_fields() -> None:
+    catalog = ModelCatalog(
+        default_model="gpt-test",
+        models=[
+            ModelSpec(
+                id="gpt-test",
+                display_name="GPT Test",
+                supports_reasoning=True,
+                reasoning_options=["low", "high"],
+            )
+        ],
     )
 
-    assert response.status_code == 404
-    assert response.json() == {"detail": "Unknown agent"}
+    assert serialize_model_catalog(catalog) == {
+        "default_model": "gpt-test",
+        "models": [
+            {
+                "id": "gpt-test",
+                "display_name": "GPT Test",
+                "supports_reasoning": True,
+                "reasoning_options": ["low", "high"],
+            }
+        ],
+    }
+
+
+def test_serialize_agent_profiles_merges_and_sorts_hermes_aliases() -> None:
+    profiles = serialize_agent_profiles(
+        {
+            "base": SimpleNamespace(display_name="Base"),
+            "plain": SimpleNamespace(display_name="  "),
+        },
+        "base",
+        hermes_profile_options=[
+            ChatAgentProfileOption(
+                agent="hermes",
+                profile="m4-pma",
+                runtime_agent="hermes-m4-pma",
+                description="Hermes M4 PMA",
+            ),
+            ChatAgentProfileOption(
+                agent="hermes",
+                profile="plain",
+                runtime_agent="hermes-plain",
+                description="Duplicate",
+            ),
+        ],
+    )
+
+    assert profiles == {
+        "default_profile": "base",
+        "profiles": [
+            {"id": "base", "display_name": "Base"},
+            {"id": "m4-pma", "display_name": "Hermes M4 PMA"},
+            {"id": "plain", "display_name": "plain"},
+        ],
+    }
 
 
 def test_agent_turn_events_route_preserves_resume_offset_for_codex() -> None:

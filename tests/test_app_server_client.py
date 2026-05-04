@@ -4,6 +4,7 @@ import logging
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -11,6 +12,7 @@ from codex_autorunner.integrations.app_server import client as app_server_client
 from codex_autorunner.integrations.app_server.client import (
     CodexAppServerClient,
     CodexAppServerDisconnected,
+    CodexAppServerResponseError,
 )
 from codex_autorunner.integrations.app_server.protocol_helpers import (
     _extract_agent_message_text,
@@ -40,12 +42,38 @@ def test_turn_stall_max_recovery_attempts_defaults_and_disable_override() -> Non
 
 
 @pytest.mark.anyio
-async def test_handshake_and_status(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("method", "params", "expected"),
+    [
+        pytest.param(
+            "fixture/status",
+            None,
+            {"initialized": True, "initializedNotification": True},
+            id="status-result",
+        ),
+        pytest.param(
+            "fixture/missing",
+            None,
+            CodexAppServerResponseError,
+            id="error-response",
+        ),
+    ],
+)
+async def test_request_response_status_and_error_cases(
+    tmp_path: Path,
+    method: str,
+    params: Any,
+    expected: Any,
+) -> None:
     client = CodexAppServerClient(fixture_command("basic"), cwd=tmp_path)
     try:
-        status = await client.request("fixture/status")
-        assert status["initialized"] is True
-        assert status["initializedNotification"] is True
+        if isinstance(expected, type):
+            with pytest.raises(expected):
+                await client.request(method, params)
+            return
+        response = await client.request(method, params)
+        for key, value in expected.items():
+            assert response[key] is value
     finally:
         await client.close()
 

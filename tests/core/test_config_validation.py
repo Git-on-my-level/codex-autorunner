@@ -16,6 +16,7 @@ from codex_autorunner.core.config_validation import (
     _validate_opencode_config,
     _validate_repo_config,
     _validate_server_security,
+    _validate_static_assets_config,
     _validate_telegram_bot_config,
     _validate_update_config,
     _validate_usage_config,
@@ -266,16 +267,34 @@ class TestValidateRepoConfigFlowRetention:
         with pytest.raises(ConfigError, match="flow_retention must be a mapping"):
             _validate_repo_config(cfg, root=tmp_path)
 
-    def test_rejects_non_positive_sweep_interval(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize(
+        ("key", "value", "message"),
+        (
+            ("retention_days", "7", "flow_retention.retention_days must be an integer"),
+            ("retention_days", 0, "flow_retention.retention_days must be > 0"),
+            (
+                "sweep_interval_seconds",
+                "60",
+                "flow_retention.sweep_interval_seconds must be an integer",
+            ),
+            (
+                "sweep_interval_seconds",
+                0,
+                "flow_retention.sweep_interval_seconds must be > 0",
+            ),
+        ),
+    )
+    def test_rejects_invalid_rule_value(
+        self, tmp_path: Path, key: str, value: object, message: str
+    ) -> None:
         cfg = _minimal_repo_config_for_flow_retention()
         cfg["flow_retention"] = {
             "retention_days": 7,
-            "sweep_interval_seconds": 0,
+            "sweep_interval_seconds": 60,
         }
+        cfg["flow_retention"][key] = value
 
-        with pytest.raises(
-            ConfigError, match="flow_retention.sweep_interval_seconds must be > 0"
-        ):
+        with pytest.raises(ConfigError, match=message):
             _validate_repo_config(cfg, root=tmp_path)
 
 
@@ -707,9 +726,23 @@ class TestValidateHousekeepingConfig:
             }
         )
 
-    def test_interval_seconds_must_be_positive(self) -> None:
-        with pytest.raises(ConfigError, match="must be > 0"):
-            _validate_housekeeping_config({"housekeeping": {"interval_seconds": 0}})
+    @pytest.mark.parametrize(
+        ("payload", "message"),
+        (
+            ({"interval_seconds": "60"}, "housekeeping.interval_seconds must be int"),
+            ({"interval_seconds": 0}, "housekeeping.interval_seconds must be > 0"),
+            (
+                {"min_file_age_seconds": -1},
+                "housekeeping.min_file_age_seconds must be >= 0",
+            ),
+            ({"dry_run": "yes"}, "housekeeping.dry_run must be bool"),
+        ),
+    )
+    def test_registered_scalar_rules_reject_invalid_values(
+        self, payload: dict[str, object], message: str
+    ) -> None:
+        with pytest.raises(ConfigError, match=message):
+            _validate_housekeeping_config({"housekeeping": payload})
 
     def test_rules_must_be_list(self) -> None:
         with pytest.raises(ConfigError, match="must be a list"):
@@ -736,6 +769,75 @@ class TestValidateHousekeepingConfig:
             _validate_housekeeping_config(
                 {"housekeeping": {"rules": [{"path": "../escape"}]}}
             )
+
+    @pytest.mark.parametrize(
+        ("key", "value", "message"),
+        (
+            ("max_files", "10", r"housekeeping.rules\[0\].max_files must be int"),
+            (
+                "max_total_bytes",
+                -1,
+                r"housekeeping.rules\[0\].max_total_bytes must be >= 0",
+            ),
+            ("max_age_days", -1, r"housekeeping.rules\[0\].max_age_days must be >= 0"),
+            ("max_bytes", -1, r"housekeeping.rules\[0\].max_bytes must be >= 0"),
+            ("max_lines", -1, r"housekeeping.rules\[0\].max_lines must be >= 0"),
+        ),
+    )
+    def test_registered_rule_field_rules_reject_invalid_values(
+        self, key: str, value: object, message: str
+    ) -> None:
+        with pytest.raises(ConfigError, match=message):
+            _validate_housekeeping_config({"housekeeping": {"rules": [{key: value}]}})
+
+
+class TestValidateStaticAssetsConfig:
+    def test_none_is_ok(self) -> None:
+        _validate_static_assets_config({}, scope="hub")
+
+    def test_non_mapping_raises(self) -> None:
+        with pytest.raises(ConfigError, match="must be a mapping"):
+            _validate_static_assets_config({"static_assets": "bad"}, scope="hub")
+
+    @pytest.mark.parametrize(
+        ("key", "value", "message"),
+        (
+            (
+                "cache_root",
+                42,
+                "hub.static_assets.cache_root must be str if provided",
+            ),
+            (
+                "max_cache_entries",
+                "10",
+                "hub.static_assets.max_cache_entries must be int if provided",
+            ),
+            (
+                "max_cache_entries",
+                -1,
+                "hub.static_assets.max_cache_entries must be >= 0",
+            ),
+            (
+                "max_cache_age_days",
+                "30",
+                "hub.static_assets.max_cache_age_days must be int if provided",
+            ),
+            (
+                "max_cache_age_days",
+                -1,
+                "hub.static_assets.max_cache_age_days must be >= 0",
+            ),
+        ),
+    )
+    def test_registered_rules_reject_invalid_values(
+        self, key: str, value: object, message: str
+    ) -> None:
+        with pytest.raises(ConfigError, match=message):
+            _validate_static_assets_config({"static_assets": {key: value}}, scope="hub")
+
+    @pytest.mark.parametrize("key", ("cache_root", "max_cache_age_days"))
+    def test_registered_rules_allow_null_for_nullable_fields(self, key: str) -> None:
+        _validate_static_assets_config({"static_assets": {key: None}}, scope="hub")
 
 
 class TestValidateCollaborationPolicyConfig:

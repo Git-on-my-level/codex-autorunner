@@ -8367,14 +8367,24 @@ async def test_component_flow_status_defers_publicly_before_flow_store_work(
 
 
 @pytest.mark.anyio
-async def test_car_update_starts_worker_with_explicit_target(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("target_value", "expected_update_target"),
+    [
+        pytest.param("all", "all", id="explicit-all-target"),
+        pytest.param("both", "all", id="legacy-both-alias"),
+    ],
+)
+async def test_car_update_starts_worker_for_target_variants(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    target_value: str,
+    expected_update_target: str,
 ) -> None:
     gateway = _FakeGateway(
         [
             _interaction(
                 name="update",
-                options=[{"type": 3, "name": "target", "value": "all"}],
+                options=[{"type": 3, "name": "target", "value": target_value}],
             )
         ]
     )
@@ -8395,7 +8405,7 @@ async def test_car_update_starts_worker_with_explicit_target(
 
     try:
         await service.run_forever()
-        assert observed["update_target"] == "all"
+        assert observed["update_target"] == expected_update_target
         assert observed["repo_ref"] == "main"
         assert "codex-autorunner.git" in observed["repo_url"]
         assert observed["notify_platform"] == "discord"
@@ -8404,7 +8414,7 @@ async def test_car_update_starts_worker_with_explicit_target(
         assert rest.interaction_responses[0]["payload"]["type"] == 5
         assert len(rest.followup_messages) == 1
         content = rest.followup_messages[0]["payload"]["content"].lower()
-        assert "preparing update (all)" in content
+        assert f"preparing update ({expected_update_target})" in content
     finally:
         await store.close()
 
@@ -8469,56 +8479,48 @@ async def test_car_init_defers_before_repo_seed(
 
 
 @pytest.mark.anyio
-async def test_car_update_accepts_legacy_both_target_alias(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    (
+        "gateway_factory",
+        "expected_deferred_type",
+        "response_payloads_attr",
+    ),
+    [
+        pytest.param(
+            lambda: _FakeGateway(
+                [
+                    _interaction(
+                        name="update",
+                        options=[{"type": 3, "name": "target", "value": "all"}],
+                    )
+                ]
+            ),
+            5,
+            "followup_messages",
+            id="slash-update",
+        ),
+        pytest.param(
+            lambda: _FakeGateway(
+                [
+                    _component_interaction(
+                        custom_id="update_target_select", values=["all"]
+                    )
+                ]
+            ),
+            6,
+            "edited_original_interaction_responses",
+            id="component-target-select",
+        ),
+    ],
+)
+async def test_car_update_prompts_for_confirmation_after_defer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    gateway_factory: Any,
+    expected_deferred_type: int,
+    response_payloads_attr: str,
 ) -> None:
-    gateway = _FakeGateway(
-        [
-            _interaction(
-                name="update",
-                options=[{"type": 3, "name": "target", "value": "both"}],
-            )
-        ]
-    )
-    service, rest, store = await _build_service(
-        tmp_path, gateway=gateway, init_store=True
-    )
-
-    observed: dict[str, Any] = {}
-
-    def _fake_spawn_update_process(**kwargs: Any) -> None:
-        observed.update(kwargs)
-
-    monkeypatch.setattr(
-        discord_update_service_module,
-        "_spawn_update_process",
-        _fake_spawn_update_process,
-    )
-
-    try:
-        await service.run_forever()
-        assert observed["update_target"] == "all"
-        assert len(rest.interaction_responses) == 1
-        assert rest.interaction_responses[0]["payload"]["type"] == 5
-        assert len(rest.followup_messages) == 1
-        content = rest.followup_messages[0]["payload"]["content"].lower()
-        assert "preparing update (all)" in content
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
-async def test_car_update_prompts_for_confirmation_when_sessions_active(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    gateway = _FakeGateway(
-        [
-            _interaction(
-                name="update",
-                options=[{"type": 3, "name": "target", "value": "all"}],
-            )
-        ]
-    )
+    gateway = gateway_factory()
     service, rest, store = await _build_service(
         tmp_path, gateway=gateway, init_store=True
     )
@@ -8549,63 +8551,14 @@ async def test_car_update_prompts_for_confirmation_when_sessions_active(
     try:
         await service.run_forever()
         assert spawned is False
-        assert observed["deferred_type"] == 5
+        assert observed["deferred_type"] == expected_deferred_type
         assert len(rest.interaction_responses) == 1
-        assert rest.interaction_responses[0]["payload"]["type"] == 5
-        assert len(rest.followup_messages) == 1
-        data = rest.followup_messages[0]["payload"]
-        assert "active codex session" in data["content"].lower()
-        components = data.get("components") or []
-        assert components
-        buttons = components[0]["components"]
-        assert buttons[0]["custom_id"] == "update_confirm:all"
-        assert buttons[1]["custom_id"] == "update_cancel:all"
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
-async def test_component_update_prompts_for_confirmation_after_defer(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    gateway = _FakeGateway(
-        [_component_interaction(custom_id="update_target_select", values=["all"])]
-    )
-    service, rest, store = await _build_service(
-        tmp_path, gateway=gateway, init_store=True
-    )
-
-    observed: dict[str, Any] = {}
-
-    def _active_update_session_count() -> int:
-        observed["deferred_type"] = (
-            rest.interaction_responses[0]["payload"]["type"]
-            if rest.interaction_responses
-            else None
+        assert (
+            rest.interaction_responses[0]["payload"]["type"] == expected_deferred_type
         )
-        return 1
-
-    service._active_update_session_count = _active_update_session_count  # type: ignore[method-assign]
-    spawned = False
-
-    def _fake_spawn_update_process(**_kwargs: Any) -> None:
-        nonlocal spawned
-        spawned = True
-
-    monkeypatch.setattr(
-        discord_update_service_module,
-        "_spawn_update_process",
-        _fake_spawn_update_process,
-    )
-
-    try:
-        await service.run_forever()
-        assert spawned is False
-        assert observed["deferred_type"] == 6
-        assert len(rest.interaction_responses) == 1
-        assert rest.interaction_responses[0]["payload"]["type"] == 6
-        assert len(rest.edited_original_interaction_responses) == 1
-        data = rest.edited_original_interaction_responses[0]["payload"]
+        response_payloads = getattr(rest, response_payloads_attr)
+        assert len(response_payloads) == 1
+        data = response_payloads[0]["payload"]
         assert "active codex session" in data["content"].lower()
         components = data.get("components") or []
         assert components

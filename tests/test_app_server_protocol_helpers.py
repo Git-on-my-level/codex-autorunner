@@ -2,6 +2,7 @@ from codex_autorunner.integrations.app_server.protocol_helpers import (
     normalize_approval_request,
     normalize_notification_envelope,
     normalize_response,
+    normalize_response_result,
 )
 from codex_autorunner.integrations.app_server.protocol_types import (
     ApprovalRequest,
@@ -22,6 +23,50 @@ def test_normalize_response_preserves_contract_shape() -> None:
     assert response.request_id == "7"
     assert response.result == {"ok": True}
     assert response.error == {"code": -32000, "message": "ignored when present"}
+
+
+def test_normalize_response_result_status_and_error_cases() -> None:
+    cases = [
+        (
+            {"id": "ok", "result": {"ok": True}},
+            False,
+            {"ok": True},
+            None,
+            None,
+        ),
+        (
+            {
+                "id": "failed",
+                "error": {
+                    "code": -32600,
+                    "message": "Invalid request",
+                    "data": {"field": "params"},
+                },
+            },
+            True,
+            None,
+            -32600,
+            "Invalid request",
+        ),
+        (
+            {"id": "failed", "error": {"code": -32603}},
+            True,
+            None,
+            -32603,
+            "app-server error",
+        ),
+    ]
+
+    for raw, is_error, result, error_code, error_message in cases:
+        response = normalize_response(raw)
+        assert response is not None
+
+        normalized = normalize_response_result(response)
+
+        assert normalized.is_error is is_error
+        assert normalized.result == result
+        assert normalized.error_code == error_code
+        assert normalized.error_message == error_message
 
 
 def test_normalize_approval_request_builds_typed_envelope() -> None:

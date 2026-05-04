@@ -48,6 +48,7 @@ from .protocol_helpers import (
     normalize_approval_request,
     normalize_notification_envelope,
     normalize_response,
+    normalize_response_result,
     normalize_user_input_request,
 )
 from .recovery import RecoveryConfig, TurnRecoveryCoordinator
@@ -941,6 +942,9 @@ class CodexAppServerClient:
             return
 
     async def _handle_message(self, message: Dict[str, Any]) -> None:
+        # Request lifecycle: _request_raw registers one pending future, this
+        # branch consumes exactly one transport response, normalizes the result,
+        # then resolves or fails the future outside the pending maps.
         if "id" in message and "method" not in message:
             await self._handle_response(message)
             return
@@ -976,10 +980,9 @@ class CodexAppServerClient:
             return
         if future.cancelled():
             return
-        if normalized.error is not None:
-            err = normalized.error
-            error_code = err.get("code")
-            if error_code == -32600:
+        result = normalize_response_result(normalized)
+        if result.is_error:
+            if result.error_code == -32600:
                 log_event(
                     self._logger,
                     logging.WARNING,
@@ -987,8 +990,8 @@ class CodexAppServerClient:
                     request_id=req_id,
                     request_id_type=type(req_id).__name__,
                     method=method,
-                    error_code=error_code,
-                    error_message=err.get("message"),
+                    error_code=result.error_code,
+                    error_message=result.error_message,
                 )
             log_event(
                 self._logger,
@@ -997,15 +1000,15 @@ class CodexAppServerClient:
                 request_id=req_id,
                 request_id_type=type(req_id).__name__,
                 method=method,
-                error_code=error_code,
-                error_message=err.get("message"),
+                error_code=result.error_code,
+                error_message=result.error_message,
             )
             future.set_exception(
                 CodexAppServerResponseError(
                     method=method,
-                    code=error_code,
-                    message=err.get("message") or "app-server error",
-                    data=err.get("data"),
+                    code=result.error_code,
+                    message=result.error_message or "app-server error",
+                    data=result.error_data,
                 )
             )
             return
@@ -1017,7 +1020,7 @@ class CodexAppServerClient:
             request_id_type=type(req_id).__name__,
             method=method,
         )
-        future.set_result(normalized.result)
+        future.set_result(result.result)
 
     async def _handle_server_request(self, message: Dict[str, Any]) -> None:
         approval = normalize_approval_request(message)
