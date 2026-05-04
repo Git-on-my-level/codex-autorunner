@@ -262,11 +262,11 @@ export class PmaApiClient {
     getRun: async (runId: string): Promise<ApiResult<PmaRunProgress>> =>
       mapResult(await this.getJson<JsonRecord>(`/api/flows/${encodeURIComponent(runId)}/status`), mapPmaRunProgress),
     listTickets: async (): Promise<ApiResult<TicketSummary[]>> =>
-      mapResult(await this.getJson<JsonRecord>('/api/ticket_flow/tickets'), (payload) =>
+      mapResult(await this.getJson<JsonRecord>('/api/flows/ticket_flow/tickets'), (payload) =>
         asArray(payload.tickets).map(mapTicketSummary)
       ),
     getTicket: async (index: number): Promise<ApiResult<TicketDetail>> =>
-      mapResult(await this.getJson<JsonRecord>(`/api/ticket_flow/tickets/${encodeURIComponent(index)}`), mapTicketDetail),
+      mapResult(await this.getJson<JsonRecord>(`/api/flows/ticket_flow/tickets/${encodeURIComponent(index)}`), mapTicketDetail),
     listArtifacts: async (runId: string): Promise<ApiResult<SurfaceArtifact[]>> =>
       mapResult(await this.getJson<JsonRecord>(`/api/flows/${encodeURIComponent(runId)}/dispatch_history`), (payload) =>
         asArray(payload.history).flatMap((entry) => asArray(entry.attachments)).map(mapSurfaceArtifact)

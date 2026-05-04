@@ -363,7 +363,9 @@ function normalizeRisk(value: unknown): SensitiveApprovalRequest['risk'] {
 }
 
 function countByStatus(items: JsonRecord[], statuses: WorkStatus[]): number {
-  return items.filter((item) => statuses.includes(normalizeStatus(item.status ?? item.state ?? item.runtime_status))).length;
+  return items.filter((item) =>
+    statuses.includes(normalizeStatus(item.status ?? item.state ?? item.runtime_status ?? item.lifecycle_status ?? item.turn_status))
+  ).length;
 }
 
 function asRecord(value: unknown): JsonRecord {

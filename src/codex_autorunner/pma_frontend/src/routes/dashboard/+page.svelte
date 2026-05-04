@@ -1,29 +1,55 @@
 <script lang="ts">
-  const summaries = [
-    ['Active runs', '2'],
-    ['Waiting for me', '0'],
-    ['Failed', '0'],
-    ['Open tickets', '12'],
-    ['Repos', '5'],
-    ['Worktrees', '8']
-  ];
+  import { onMount } from 'svelte';
+  import DashboardView from '$lib/components/DashboardView.svelte';
+  import { pmaApi, type ApiError } from '$lib/api/client';
+  import {
+    buildDashboardViewModel,
+    type DashboardViewModel
+  } from '$lib/viewModels/dashboard';
+
+  let dashboard = $state<DashboardViewModel | null>(null);
+  let loading = $state(true);
+  let error = $state<ApiError | null>(null);
+
+  onMount(() => {
+    void loadDashboard();
+  });
+
+  async function loadDashboard(): Promise<void> {
+    loading = true;
+    error = null;
+    const [summary, runs, chats, approvals, repos, worktrees, tickets] = await Promise.all([
+      pmaApi.hub.getDashboard(),
+      pmaApi.ticketFlow.listRuns(),
+      pmaApi.pma.listChats(),
+      pmaApi.settings.listApprovals(),
+      pmaApi.hub.listRepos(),
+      pmaApi.hub.listWorktrees(),
+      pmaApi.ticketFlow.listTickets()
+    ]);
+
+    const firstError = [summary, runs, chats, approvals, repos, worktrees, tickets].find((result) => !result.ok);
+    if (firstError && !firstError.ok) {
+      error = firstError.error;
+      loading = false;
+      return;
+    }
+
+    dashboard = buildDashboardViewModel({
+      summary: summary.ok ? summary.data : null,
+      runs: runs.ok ? runs.data : [],
+      chats: chats.ok ? chats.data : [],
+      approvals: approvals.ok ? approvals.data : [],
+      repos: repos.ok ? repos.data : [],
+      worktrees: worktrees.ok ? worktrees.data : [],
+      tickets: tickets.ok ? tickets.data : []
+    });
+    loading = false;
+  }
 </script>
 
-<section class="page-stack">
-  <div class="section-heading">
-    <p class="eyebrow">Overview</p>
-    <h1>Dashboard</h1>
-  </div>
-  <div class="summary-grid">
-    {#each summaries as [label, value]}
-      <article class="metric-card">
-        <span>{label}</span>
-        <strong>{value}</strong>
-      </article>
-    {/each}
-  </div>
-  <div class="page-panel">
-    <h2>Recent activity</h2>
-    <p>Operational summaries will link back into PMA rooms, repos, worktrees, and tickets.</p>
-  </div>
-</section>
+<DashboardView
+  state={loading ? 'loading' : error ? 'error' : 'ready'}
+  {dashboard}
+  errorMessage={error?.message ?? null}
+/>

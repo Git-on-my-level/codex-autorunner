@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   mapContextspaceDocument,
+  mapDashboardSummary,
   mapPmaChatSummary,
   mapPmaRunProgress,
   mapSurfaceArtifact,
@@ -87,6 +88,29 @@ describe('view model mappers', () => {
       name: 'spec.md',
       content: '# Spec',
       isPinned: true
+    });
+  });
+
+  it('maps dashboard summary payloads from hub messages sections', () => {
+    const vm = mapDashboardSummary({
+      items: [{ status: 'paused' }, { status: 'failed' }],
+      pma_threads: [{ lifecycle_status: 'active' }],
+      pma_files_detail: { inbox: [{ name: 'result-report.md', summary: 'Final report' }] },
+      repo_count: 3,
+      worktree_count: 5
+    });
+
+    expect(vm).toMatchObject({
+      activeRuns: 1,
+      waitingForUser: 1,
+      failedOrBlocked: 1,
+      openTickets: 2,
+      repos: 3,
+      worktrees: 5
+    });
+    expect(vm.recentArtifacts[0]).toMatchObject({
+      kind: 'final_report',
+      title: 'result-report.md'
     });
   });
 });
