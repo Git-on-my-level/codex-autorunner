@@ -309,9 +309,13 @@ export class PmaApiClient {
             })
           )
       ),
-    updateDocument: async (kind: string, content: string): Promise<ApiResult<ContextspaceDocument[]>> =>
+    updateDocument: async (
+      kind: string,
+      content: string,
+      workspaceId?: string
+    ): Promise<ApiResult<ContextspaceDocument[]>> =>
       mapResult(
-        await this.requestJson<JsonRecord>(`/api/contextspace/${encodeURIComponent(kind)}`, {
+        await this.requestJson<JsonRecord>(`${contextspaceApiPath(workspaceId)}/${encodeURIComponent(kind)}`, {
           method: 'PUT',
           body: { content }
         }),

@@ -127,4 +127,26 @@ describe('API client error handling', () => {
       });
     }
   });
+
+  it('updates contextspace documents on the same path prefix as listDocuments for a workspace', async () => {
+    const fetcher = vi.fn(async () =>
+      Response.json({
+        active_context: '# Updated',
+        spec: '',
+        decisions: ''
+      })
+    ) as unknown as typeof fetch;
+    const client = new PmaApiClient(fetcher);
+
+    const result = await client.contextspace.updateDocument('active_context', '# Updated', 'repo-1');
+
+    expect(fetcher).toHaveBeenCalledWith(
+      '/repos/repo-1/api/contextspace/active_context',
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({ content: '# Updated' })
+      })
+    );
+    expect(result.ok).toBe(true);
+  });
 });
