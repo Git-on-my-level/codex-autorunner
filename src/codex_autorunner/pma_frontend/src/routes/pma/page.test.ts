@@ -10,5 +10,9 @@ describe('/pma page', () => {
     expect(body).toContain('New chat');
     expect(body).toContain('Search chats, repos, tickets');
     expect(body).toContain('Message PMA');
+    expect(body).toContain('Attach files');
+    expect(body).toContain('Attach images');
+    expect(body).toContain('Attach link');
+    expect(body).toContain('PMA has full permission for normal coding work');
   });
 });

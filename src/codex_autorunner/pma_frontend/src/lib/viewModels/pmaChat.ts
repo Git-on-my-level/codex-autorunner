@@ -8,6 +8,24 @@ import type {
 
 export type PmaChatFilter = 'all' | 'active' | 'waiting' | 'done';
 
+export type PendingAttachmentKind = 'file' | 'image' | 'link';
+
+export type PendingAttachment = {
+  id: string;
+  kind: PendingAttachmentKind;
+  title: string;
+  sizeLabel: string | null;
+  url: string | null;
+  uploadedName: string | null;
+  uploadState: 'pending' | 'uploaded' | 'error';
+};
+
+export type ModelSelectorState = {
+  state: 'loading' | 'empty' | 'error' | 'loaded';
+  label: string;
+  disabled: boolean;
+};
+
 export type PmaCard =
   | { kind: 'message'; id: string; message: PmaChatMessage }
   | { kind: 'ticket'; id: string; title: string; summary: string | null; ticketId: string }
@@ -60,11 +78,18 @@ export function buildPmaCards(
   chat: PmaChatSummary | null,
   artifacts: SurfaceArtifact[]
 ): PmaCard[] {
-  const cards: PmaCard[] = messages.map((message) => ({
-    kind: 'message',
-    id: message.id,
-    message
-  }));
+  const cards: PmaCard[] = messages.flatMap((message) => [
+    {
+      kind: 'message' as const,
+      id: message.id,
+      message
+    },
+    ...message.artifacts.map((artifact) => ({
+      kind: 'artifact' as const,
+      id: `message-${message.id}-${artifact.id}`,
+      artifact
+    }))
+  ]);
 
   if (chat?.ticketId) {
     cards.push({
@@ -129,6 +154,57 @@ export function progressPercent(chat: PmaChatSummary, progress: PmaRunProgress |
 
 export function statusLabel(status: WorkStatus): string {
   return status.replace('_', ' ');
+}
+
+export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ['KB', 'MB', 'GB'];
+  let value = bytes / 1024;
+  let unit = units[0];
+  for (let index = 1; value >= 1024 && index < units.length; index += 1) {
+    value /= 1024;
+    unit = units[index];
+  }
+  return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${unit}`;
+}
+
+export function removePendingAttachment(
+  attachments: PendingAttachment[],
+  attachmentId: string
+): PendingAttachment[] {
+  return attachments.filter((attachment) => attachment.id !== attachmentId);
+}
+
+export function composeMessageWithAttachments(
+  draft: string,
+  attachments: PendingAttachment[]
+): string {
+  const message = draft.trim();
+  const lines = attachments.map((attachment) => {
+    const label = attachment.kind === 'image' ? 'Image' : attachment.kind === 'link' ? 'Link' : 'File';
+    const target = attachment.url || attachment.uploadedName || attachment.title;
+    return `- ${label}: ${attachment.title}${target && target !== attachment.title ? ` (${target})` : ''}`;
+  });
+  if (!lines.length) return message;
+  return [message, 'Attachments:', ...lines].filter(Boolean).join('\n');
+}
+
+export function modelSelectorState(
+  loading: boolean,
+  errorMessage: string | null,
+  modelCount: number
+): ModelSelectorState {
+  if (loading) {
+    return { state: 'loading', label: 'Loading models', disabled: true };
+  }
+  if (errorMessage) {
+    return { state: 'error', label: errorMessage, disabled: true };
+  }
+  if (modelCount === 0) {
+    return { state: 'empty', label: 'No models exposed', disabled: true };
+  }
+  return { state: 'loaded', label: 'Model', disabled: false };
 }
 
 function clampPercent(value: number): number {

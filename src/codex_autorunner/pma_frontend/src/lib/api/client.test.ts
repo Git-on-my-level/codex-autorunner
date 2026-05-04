@@ -56,4 +56,20 @@ describe('API client error handling', () => {
       });
     }
   });
+
+  it('uploads PMA inbox files with multipart form data', async () => {
+    const fetcher = vi.fn(async () => Response.json({ status: 'ok', saved: ['screen.png'] })) as unknown as typeof fetch;
+    const client = new PmaApiClient(fetcher);
+
+    const result = await client.pma.uploadInboxFile(new File(['png'], 'screen.png', { type: 'image/png' }));
+
+    expect(fetcher).toHaveBeenCalledWith(
+      '/hub/pma/files/inbox',
+      expect.objectContaining({
+        method: 'POST',
+        body: expect.any(FormData)
+      })
+    );
+    expect(result).toEqual({ ok: true, data: ['screen.png'] });
+  });
 });

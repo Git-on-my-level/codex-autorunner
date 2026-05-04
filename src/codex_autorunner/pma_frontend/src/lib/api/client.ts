@@ -166,6 +166,22 @@ export class PmaApiClient {
     return this.requestJson<T>(path);
   }
 
+  async uploadForm<T>(path: string, body: FormData): Promise<ApiResult<T>> {
+    try {
+      const response = await this.fetcher(`${this.basePath}${path}`, {
+        method: 'POST',
+        body,
+        headers: { accept: 'application/json' }
+      });
+      if (!response.ok) {
+        return { ok: false, error: await parseApiErrorResponse(response) };
+      }
+      return { ok: true, data: (await response.json()) as T };
+    } catch (error) {
+      return { ok: false, error: normalizeApiError(error) };
+    }
+  }
+
   pma = {
     listChats: async (): Promise<ApiResult<PmaChatSummary[]>> =>
       mapResult(await this.getJson<JsonRecord>('/hub/pma/threads'), (payload) =>
@@ -203,6 +219,13 @@ export class PmaApiClient {
       mapResult(await this.getJson<JsonRecord>('/hub/pma/files'), (payload) =>
         [...asArray(payload.inbox), ...asArray(payload.outbox)].map(mapSurfaceArtifact)
       ),
+    uploadInboxFile: async (file: File): Promise<ApiResult<string[]>> => {
+      const form = new FormData();
+      form.append('file', file, file.name);
+      return mapResult(await this.uploadForm<JsonRecord>('/hub/pma/files/inbox', form), (payload) =>
+        Array.isArray(payload.saved) ? payload.saved.filter((name): name is string => typeof name === 'string') : []
+      );
+    },
     listAgents: async (): Promise<ApiResult<JsonRecord[]>> =>
       mapResult(await this.getJson<JsonRecord>('/hub/pma/agents'), (payload) => asArray(payload.agents)),
     listAgentModels: async (agentId: string): Promise<ApiResult<JsonRecord[]>> =>

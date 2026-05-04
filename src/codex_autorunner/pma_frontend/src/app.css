@@ -501,6 +501,25 @@ a {
   gap: var(--space-2);
 }
 
+.selector-field {
+  display: grid;
+  gap: 3px;
+  min-width: 150px;
+}
+
+.selector-field span,
+.permission-note,
+.pending-attachment span,
+.pending-attachment em {
+  color: var(--color-ink-muted);
+  font-size: var(--font-size-0);
+}
+
+.selector-field.error span,
+.selector-field.empty span {
+  color: var(--color-warning);
+}
+
 select,
 textarea {
   border: 1px solid var(--color-border);
@@ -534,6 +553,10 @@ select {
   font-size: var(--font-size-0);
   font-weight: 720;
   opacity: 0.78;
+}
+
+.message p {
+  white-space: pre-wrap;
 }
 
 .message.user {
@@ -588,9 +611,60 @@ select {
 }
 
 .composer {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: var(--space-3);
   padding-top: var(--space-4);
   border-top: 1px solid var(--color-border);
+}
+
+.attachment-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.pending-attachments {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.pending-attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 100%;
+  min-height: 32px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-2);
+  background: #fbfcfe;
+}
+
+.pending-attachment.error {
+  border-color: #efb3b3;
+  background: #fff4f4;
+}
+
+.pending-attachment strong {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pending-attachment button {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: var(--radius-1);
+  background: var(--color-surface-muted);
+  color: var(--color-ink);
+  cursor: pointer;
 }
 
 textarea {
@@ -614,6 +688,10 @@ textarea:disabled {
 }
 
 .compose-error {
+  margin: var(--space-2) 0 0;
+}
+
+.permission-note {
   margin: var(--space-2) 0 0;
 }
 

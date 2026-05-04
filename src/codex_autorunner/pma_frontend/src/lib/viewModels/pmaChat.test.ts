@@ -3,9 +3,12 @@ import type { PmaChatMessage, PmaChatSummary, PmaRunProgress, SurfaceArtifact } 
 import {
   buildPmaCards,
   chooseActiveChatId,
+  composeMessageWithAttachments,
   filterPmaChats,
   formatRelativeTime,
+  modelSelectorState,
   progressPercent,
+  removePendingAttachment,
   summarizeFilterCounts
 } from './pmaChat';
 
@@ -80,10 +83,16 @@ describe('PMA chat view helpers', () => {
   });
 
   it('builds active chat cards for messages, tickets, compact progress, streaming, and artifacts', () => {
-    const cards = buildPmaCards([baseMessage], baseProgress, baseChat, [baseArtifact]);
+    const cards = buildPmaCards(
+      [{ ...baseMessage, artifacts: [{ ...baseArtifact, id: 'message-attachment' }] }],
+      baseProgress,
+      baseChat,
+      [baseArtifact]
+    );
 
     expect(cards.map((card) => card.kind)).toEqual([
       'message',
+      'artifact',
       'ticket',
       'progress',
       'streaming',
@@ -96,5 +105,39 @@ describe('PMA chat view helpers', () => {
     expect(progressPercent(baseChat, baseProgress)).toBe(64);
     expect(progressPercent({ ...baseChat, progressPercent: 41 }, baseProgress)).toBe(41);
     expect(formatRelativeTime('2026-05-04T00:00:00Z', new Date('2026-05-04T00:03:00Z'))).toBe('3m ago');
+  });
+
+  it('renders pending attachment message text and removes staged attachments', () => {
+    const attachments = [
+      {
+        id: 'att-1',
+        kind: 'image' as const,
+        title: 'screen.png',
+        sizeLabel: '8 KB',
+        url: '/hub/pma/files/inbox/screen.png',
+        uploadedName: 'screen.png',
+        uploadState: 'uploaded' as const
+      },
+      {
+        id: 'att-2',
+        kind: 'link' as const,
+        title: 'https://example.test/preview',
+        sizeLabel: null,
+        url: 'https://example.test/preview',
+        uploadedName: null,
+        uploadState: 'uploaded' as const
+      }
+    ];
+
+    expect(composeMessageWithAttachments('Review these', attachments)).toContain('Attachments:');
+    expect(composeMessageWithAttachments('', attachments)).toContain('Image: screen.png');
+    expect(removePendingAttachment(attachments, 'att-1')).toMatchObject([{ id: 'att-2' }]);
+  });
+
+  it('summarizes model selector loading, empty, error, and loaded states', () => {
+    expect(modelSelectorState(true, null, 0)).toMatchObject({ state: 'loading', disabled: true });
+    expect(modelSelectorState(false, null, 0)).toMatchObject({ state: 'empty', disabled: true });
+    expect(modelSelectorState(false, 'Agent missing provider', 0)).toMatchObject({ state: 'error', disabled: true });
+    expect(modelSelectorState(false, null, 2)).toMatchObject({ state: 'loaded', disabled: false });
   });
 });
