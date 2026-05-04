@@ -57,7 +57,10 @@
         <a href="/pma">Open PMA</a>
       </div>
       {#if index.rows.length === 0}
-        <p>No repos or worktrees are registered yet.</p>
+        <div class="state-panel empty-state compact-empty">
+          <strong>No repos registered</strong>
+          <p>Open PMA and point it at a workspace before queueing repo-scoped tickets.</p>
+        </div>
       {:else}
         <div class="workspace-row-list">
           {#each index.rows as row}
@@ -136,7 +139,10 @@
           <a href={detail.ticketIndexHref}>{detail.ticketIndexLabel}</a>
         </div>
         {#if detail.currentRuns.length === 0 || !detail.hasActiveRun}
-          <div class="state-panel">No active ticket run is visible for this {detail.kind === 'worktree' ? 'worktree' : 'repo'}.</div>
+          <div class="state-panel empty-state compact-empty">
+            <strong>No active run</strong>
+            <p>Use PMA or the ticket queue to start the next {detail.kind === 'worktree' ? 'worktree' : 'repo'} ticket.</p>
+          </div>
         {/if}
         {#each detail.currentRuns as run}
           <article class={`run-card ${run.status}`}>
@@ -168,9 +174,12 @@
 
       {#if detail.kind === 'repo'}
         <section class="page-panel execution-panel wide">
-          <h2>Child worktrees</h2>
-          {#if detail.childWorktrees.length === 0}
-            <p>No worktrees are registered for this repo.</p>
+        <h2>Child worktrees</h2>
+        {#if detail.childWorktrees.length === 0}
+            <div class="state-panel empty-state compact-empty">
+              <strong>No child worktrees</strong>
+              <p>Create a worktree when a ticket needs isolated repo state.</p>
+            </div>
           {:else}
             <div class="child-worktree-list detail-child-worktrees">
               {#each detail.childWorktrees as worktree}
@@ -198,7 +207,10 @@
       <section class="page-panel execution-panel">
         <h2>Workspace tickets</h2>
         {#if detail.currentTickets.length === 0}
-          <p>No current ticket is associated with the visible run.</p>
+          <div class="state-panel empty-state compact-empty">
+            <strong>No current ticket</strong>
+            <p>Active ticket links appear here once PMA starts repo-scoped work.</p>
+          </div>
         {:else}
           <div class="compact-link-list">
             {#each detail.currentTickets as ticket}
@@ -211,7 +223,10 @@
       <section class="page-panel execution-panel">
         <h2>Next workspace tickets</h2>
         {#if detail.nextTickets.length === 0}
-          <p>No next tickets are queued for this {detail.kind === 'worktree' ? 'worktree' : 'repo'}.</p>
+          <div class="state-panel empty-state compact-empty">
+            <strong>No queued tickets</strong>
+            <p>Add a ticket for this {detail.kind === 'worktree' ? 'worktree' : 'repo'} when there is follow-up work.</p>
+          </div>
         {:else}
           <div class="compact-link-list">
             {#each detail.nextTickets as ticket}
@@ -237,7 +252,10 @@
 
 {#snippet compactList(items: { id: string; title: string; summary: string; href: string | null; kind: string; createdAt: string | null }[], emptyText: string)}
   {#if items.length === 0}
-    <p>{emptyText}</p>
+    <div class="state-panel empty-state compact-empty">
+      <strong>No entries yet</strong>
+      <p>{emptyText}</p>
+    </div>
   {:else}
     <div class="activity-list compact-activity-list">
       {#each items as item}

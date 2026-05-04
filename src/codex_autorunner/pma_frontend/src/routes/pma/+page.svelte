@@ -657,9 +657,15 @@
         onchange={(event) => addFiles(event.currentTarget.files ?? [], 'image')}
       />
       <div class="attachment-actions" aria-label="Attachment controls">
-        <button class="icon-button" type="button" aria-label="Attach files" title="Attach files" onclick={() => fileInput?.click()}>+</button>
-        <button class="icon-button" type="button" aria-label="Attach images" title="Attach images" onclick={() => imageInput?.click()}>img</button>
-        <button class="icon-button" type="button" aria-label="Attach link" title="Attach link" onclick={addLink}>lnk</button>
+        <button class="icon-button attachment-button file" type="button" aria-label="Attach files" title="Attach files" onclick={() => fileInput?.click()}>
+          <span class="sr-only">Attach files</span>
+        </button>
+        <button class="icon-button attachment-button image" type="button" aria-label="Attach images" title="Attach images" onclick={() => imageInput?.click()}>
+          <span class="sr-only">Attach images</span>
+        </button>
+        <button class="icon-button attachment-button link" type="button" aria-label="Attach link" title="Attach link" onclick={addLink}>
+          <span class="sr-only">Attach link</span>
+        </button>
       </div>
       {#if pendingAttachments.length > 0}
         <div class="pending-attachments" aria-label="Pending attachments">

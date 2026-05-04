@@ -73,8 +73,8 @@ describe('RepoWorktreeViews', () => {
     );
     const { body } = render(RepoWorktreeViews, { props: { state: 'ready', mode: 'detail', detail } });
 
-    expect(body).toContain('No active ticket run is visible');
-    expect(body).toContain('No worktrees are registered for this repo.');
+    expect(body).toContain('No active run');
+    expect(body).toContain('Create a worktree when a ticket needs isolated repo state.');
     expect(body).toContain('Next workspace tickets');
     expect(body).toContain('View repo memory');
     expect(body).toContain('href="/contextspace/repo-1"');

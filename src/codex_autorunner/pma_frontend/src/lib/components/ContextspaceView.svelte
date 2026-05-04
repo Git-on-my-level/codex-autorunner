@@ -82,8 +82,8 @@
 
         {#if activeDoc.isMissing}
           <div class="state-panel contextspace-empty">
-            <strong>{activeDoc.label} is empty.</strong>
-            <p>Ask PMA to update this {vm.workspaceKind} contextspace when shared memory needs a refresh.</p>
+            <strong>{activeDoc.label} has no content</strong>
+            <p>Ask PMA to refresh this {vm.workspaceKind} memory before starting work that depends on shared context.</p>
             <a class="inline-link" href={vm.askPmaHref}>Ask PMA to update</a>
           </div>
         {:else}

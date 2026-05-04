@@ -34,7 +34,8 @@ describe('DashboardView', () => {
     expect(body).toContain('No active CAR work');
     expect(body).toContain('Open PMA');
     expect(body).toContain('View repos');
-    expect(body).toContain('No runs are currently active.');
+    expect(body).toContain('No active runs');
+    expect(body).toContain('Queue a ticket or send PMA a task to start work.');
   });
 
   it('renders populated dashboard sections and links', () => {

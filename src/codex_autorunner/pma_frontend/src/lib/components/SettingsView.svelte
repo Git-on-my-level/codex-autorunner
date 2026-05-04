@@ -140,7 +140,10 @@
         <span class="status-pill waiting">{view.approvals.length} pending</span>
       </div>
       {#if view.approvals.length === 0}
-        <p>No sensitive CAR approvals are waiting.</p>
+        <div class="state-panel empty-state compact-empty">
+          <strong>No approvals waiting</strong>
+          <p>Sensitive CAR requests will appear here when PMA needs an explicit decision.</p>
+        </div>
       {:else}
         <div class="settings-approval-list">
           {#each view.approvals as approval (approval.id)}
@@ -201,7 +204,10 @@
 
 {#snippet agentList(agents: SettingsAgentStatus[], emptyText: string)}
   {#if agents.length === 0}
-    <p>{emptyText}</p>
+    <div class="state-panel empty-state compact-empty">
+      <strong>No agents visible</strong>
+      <p>{emptyText}</p>
+    </div>
   {:else}
     <div class="agent-status-list">
       {#each agents as agent}

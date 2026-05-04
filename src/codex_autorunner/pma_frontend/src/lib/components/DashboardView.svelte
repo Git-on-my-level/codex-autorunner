@@ -35,9 +35,9 @@
     </div>
 
     {#if !dashboard.hasAnyData}
-      <div class="page-panel">
+      <div class="state-panel empty-state operational-empty">
         <h2>No active CAR work</h2>
-        <p>Add a repo, create tickets, or start a PMA chat to populate this operational summary.</p>
+        <p>Start from PMA or open the workspace queues; dashboard signals will fill in as runs, tickets, and artifacts appear.</p>
         <div class="dashboard-actions">
           <a href="/pma">Open PMA</a>
           <a href="/repos">View repos</a>
@@ -53,7 +53,10 @@
           <a href="/pma">PMA chats</a>
         </div>
         {#if dashboard.activeRuns.length === 0}
-          <p>No runs are currently active.</p>
+          <div class="state-panel empty-state compact-empty">
+            <strong>No active runs</strong>
+            <p>Queue a ticket or send PMA a task to start work.</p>
+          </div>
         {:else}
           <div class="dashboard-list">
             {#each dashboard.activeRuns as run}
@@ -86,7 +89,7 @@
           <h2>Waiting for me</h2>
           <a href="/settings">Approvals</a>
         </div>
-        {@render attentionList(dashboard.waitingForMe, 'No approvals, blockers, or unclear requirements are waiting.')}
+        {@render attentionList(dashboard.waitingForMe, 'No approvals or blockers are waiting.')}
       </section>
 
       <section id="failed-blocked" class="page-panel dashboard-panel">
@@ -103,7 +106,10 @@
           <a href="/repos">All repos</a>
         </div>
         {#if dashboard.repoWorktrees.length === 0}
-          <p>No repos or repo worktree variants are registered yet.</p>
+          <div class="state-panel empty-state compact-empty">
+            <strong>No repos registered</strong>
+            <p>Add or select a repo before assigning ticket work.</p>
+          </div>
         {:else}
           <div class="dashboard-list compact">
             {#each dashboard.repoWorktrees as item}
@@ -125,7 +131,10 @@
           <a href="/pma">Open PMA</a>
         </div>
         {#if dashboard.recentActivity.length === 0}
-          <p>No recent changes or surfaced artifacts are available.</p>
+          <div class="state-panel empty-state compact-empty">
+            <strong>No recent activity</strong>
+            <p>Completed PMA work, screenshots, previews, and test summaries will appear here.</p>
+          </div>
         {:else}
           <div class="dashboard-list activity-list">
             {#each dashboard.recentActivity as activity}
@@ -148,7 +157,10 @@
 
 {#snippet attentionList(rows: DashboardAttentionRow[], emptyText: string)}
   {#if rows.length === 0}
-    <p>{emptyText}</p>
+    <div class="state-panel empty-state compact-empty">
+      <strong>Clear</strong>
+      <p>{emptyText}</p>
+    </div>
   {:else}
     <div class="dashboard-list">
       {#each rows as row}

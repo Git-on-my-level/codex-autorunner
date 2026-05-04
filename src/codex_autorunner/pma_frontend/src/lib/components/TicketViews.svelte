@@ -91,7 +91,10 @@
         <a href="/pma">Open PMA</a>
       </div>
       {#if visibleRows.length === 0}
-        <div class="state-panel">No tickets match this status and workspace filter.</div>
+        <div class="state-panel empty-state compact-empty">
+          <strong>No tickets in this view</strong>
+          <p>Switch filters or ask PMA to create the next scoped ticket for the current CAR work.</p>
+        </div>
       {:else}
         <div class="ticket-table" role="table" aria-label="Ticket queue">
           <div class="ticket-table-head" role="row">
@@ -220,7 +223,10 @@
         <section class="page-panel execution-panel">
           <h2>Execution timeline</h2>
           {#if detail.timeline.length === 0}
-            <p>No execution timeline is available yet.</p>
+            <div class="state-panel empty-state compact-empty">
+              <strong>No run timeline</strong>
+              <p>Resume or bootstrap this ticket to record execution events.</p>
+            </div>
           {:else}
             <div class="timeline-list">
               {#each detail.timeline as item}
@@ -239,7 +245,10 @@
         <section class="page-panel execution-panel">
           <h2>Surfaced artifacts</h2>
           {#if detail.artifacts.length === 0}
-            <p>No surfaced artifacts are available yet.</p>
+            <div class="state-panel empty-state compact-empty">
+              <strong>No artifacts surfaced</strong>
+              <p>Screenshots, previews, files, and test summaries will appear after PMA work produces them.</p>
+            </div>
           {:else}
             <div class="compact-activity-list">
               {#each detail.artifacts as artifact}
@@ -266,7 +275,10 @@
               <span>Open</span>
             </a>
           {:else}
-            <p>No linked PMA chat is visible for this ticket.</p>
+            <div class="state-panel empty-state compact-empty">
+              <strong>No linked PMA chat</strong>
+              <p>Open PMA from the ticket queue when this ticket needs agent discussion.</p>
+            </div>
           {/if}
         </section>
       </aside>

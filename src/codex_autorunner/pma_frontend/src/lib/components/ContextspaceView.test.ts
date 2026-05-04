@@ -48,8 +48,8 @@ describe('ContextspaceView', () => {
 
     expect(body).toContain('0 of 3 standard docs have content');
     expect(body).toContain('active_context.md · missing');
-    expect(body).toContain('Active context is empty.');
-    expect(body).toContain('Ask PMA to update this repo contextspace');
+    expect(body).toContain('Active context has no content');
+    expect(body).toContain('Ask PMA to refresh this repo memory');
     expect(body).not.toContain('textarea');
   });
 
