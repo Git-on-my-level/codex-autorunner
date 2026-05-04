@@ -180,17 +180,69 @@ export function mapPmaChatSummary(raw: JsonRecord): PmaChatSummary {
 
 export function mapPmaChatMessage(raw: JsonRecord): PmaChatMessage {
   const id = stringValue(raw.managed_turn_id ?? raw.turn_id ?? raw.message_id ?? raw.id, 'unknown-message');
-  const text = stringValue(raw.text ?? raw.content ?? raw.prompt ?? raw.summary, '');
+  const role = normalizeRole(raw.role ?? raw.author ?? raw.request_kind);
+  const text = normalizeMessageText(raw, role);
   return {
     id,
     chatId: nullableString(raw.managed_thread_id ?? raw.thread_id ?? raw.chat_id),
-    role: normalizeRole(raw.role ?? raw.author ?? raw.request_kind),
+    role,
     text,
     createdAt: dateString(raw.created_at ?? raw.started_at ?? raw.timestamp),
     status: raw.status === undefined ? null : normalizeStatus(raw.status),
     artifacts: asArray(raw.artifacts ?? raw.attachments).map(mapSurfaceArtifact),
     raw
   };
+}
+
+export function mapPmaTurnMessages(raw: JsonRecord): PmaChatMessage[] {
+  const baseId = stringValue(raw.managed_turn_id ?? raw.turn_id ?? raw.message_id ?? raw.id, 'unknown-turn');
+  const chatId = nullableString(raw.managed_thread_id ?? raw.thread_id ?? raw.chat_id);
+  const createdAt = dateString(raw.created_at ?? raw.started_at ?? raw.timestamp);
+  const finishedAt = dateString(raw.finished_at ?? raw.completed_at ?? raw.updated_at) ?? createdAt;
+  const status = raw.status === undefined ? null : normalizeStatus(raw.status);
+  const promptText = firstText(raw.prompt, raw.prompt_text, raw.message, raw.delivered_message, raw.prompt_preview);
+  const assistantText = firstText(
+    raw.assistant_text,
+    raw.output_text,
+    raw.final_message,
+    raw.final_output,
+    raw.final_report,
+    raw.latest_assistant_text,
+    raw.assistant_preview,
+    raw.error
+  );
+  const messages: PmaChatMessage[] = [];
+
+  if (promptText) {
+    messages.push({
+      id: `${baseId}-user`,
+      chatId,
+      role: 'user',
+      text: promptText,
+      createdAt,
+      status,
+      artifacts: [],
+      raw
+    });
+  }
+
+  if (assistantText) {
+    messages.push({
+      id: `${baseId}-assistant`,
+      chatId,
+      role: 'assistant',
+      text: assistantText,
+      createdAt: finishedAt,
+      status,
+      artifacts: asArray(raw.artifacts ?? raw.attachments).map(mapSurfaceArtifact),
+      raw
+    });
+  }
+
+  if (messages.length) return messages;
+
+  const standalone = mapPmaChatMessage(raw);
+  return standalone.text || standalone.artifacts.length ? [standalone] : [];
 }
 
 export function mapPmaRunProgress(raw: JsonRecord): PmaRunProgress {
@@ -391,6 +443,28 @@ function normalizeRole(value: unknown): PmaChatMessage['role'] {
   return 'system';
 }
 
+function normalizeMessageText(raw: JsonRecord, role: PmaChatMessage['role']): string {
+  if (role === 'user') {
+    return firstText(raw.text, raw.content, raw.message, raw.delivered_message, raw.prompt, raw.prompt_text, raw.prompt_preview);
+  }
+  if (role === 'assistant') {
+    return firstText(
+      raw.text,
+      raw.content,
+      raw.assistant_text,
+      raw.output_text,
+      raw.final_message,
+      raw.final_output,
+      raw.final_report,
+      raw.latest_assistant_text,
+      raw.assistant_preview,
+      raw.summary,
+      raw.error
+    );
+  }
+  return firstText(raw.text, raw.content, raw.summary, raw.message);
+}
+
 function normalizeArtifactKind(value: unknown): SurfaceArtifact['kind'] {
   const text = String(value ?? '').trim().toLowerCase();
   if (text.includes('screenshot')) return 'screenshot';
@@ -432,6 +506,14 @@ function stringValue(value: unknown, fallback: string): string {
   if (typeof value === 'string' && value.trim()) return value;
   if (typeof value === 'number' && Number.isFinite(value)) return String(value);
   return fallback;
+}
+
+function firstText(...values: unknown[]): string {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value;
+    if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  }
+  return '';
 }
 
 function nullableString(value: unknown): string | null {

@@ -11,6 +11,7 @@ import {
   filterSensitiveCarApprovals,
   filterPmaChats,
   formatRelativeTime,
+  isPrimaryProgressArtifact,
   modelSelectorState,
   progressPercent,
   removePendingAttachment,
@@ -63,7 +64,7 @@ const baseProgress: PmaRunProgress = {
   idleSeconds: 2,
   lastEventId: 7,
   lastEventAt: '2026-05-04T00:00:30Z',
-  events: [baseArtifact],
+  events: [{ ...baseArtifact, kind: 'progress', raw: { event_type: 'tool_completed' } }],
   raw: {}
 };
 
@@ -114,6 +115,62 @@ describe('PMA chat view helpers', () => {
       'artifact',
       'artifact'
     ]);
+  });
+
+  it('skips empty message cards and suppresses debug-only lifecycle events from the transcript', () => {
+    const cards = buildPmaCards(
+      [{ ...baseMessage, id: 'empty-message', text: '' }],
+      {
+        ...baseProgress,
+        events: [
+          {
+            ...baseArtifact,
+            id: 'token-usage',
+            kind: 'progress',
+            title: 'Token usage updated',
+            raw: { event_type: 'token_usage' }
+          },
+          {
+            ...baseArtifact,
+            id: 'turn-completed',
+            kind: 'progress',
+            title: 'Turn completed',
+            raw: { event_type: 'turn_completed' }
+          },
+          {
+            ...baseArtifact,
+            id: 'assistant-update',
+            kind: 'progress',
+            title: 'Thinking',
+            raw: { event_type: 'assistant_update' }
+          }
+        ]
+      },
+      null,
+      []
+    );
+
+    expect(cards.some((card) => card.kind === 'message')).toBe(false);
+    expect(cards.filter((card) => card.kind === 'artifact').map((card) => card.id)).toEqual(['event-assistant-update']);
+  });
+
+  it('keeps raw progress classifications deterministic', () => {
+    expect(
+      isPrimaryProgressArtifact({
+        ...baseArtifact,
+        kind: 'progress',
+        title: 'Token usage updated',
+        raw: { event_type: 'token_usage' }
+      })
+    ).toBe(false);
+    expect(
+      isPrimaryProgressArtifact({
+        ...baseArtifact,
+        kind: 'progress',
+        title: 'status-check completed',
+        raw: { event_type: 'tool_completed' }
+      })
+    ).toBe(true);
   });
 
   it('derives compact progress and relative timestamps', () => {

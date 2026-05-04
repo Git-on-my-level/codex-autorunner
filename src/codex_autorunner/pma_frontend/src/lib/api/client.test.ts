@@ -88,6 +88,39 @@ describe('API client error handling', () => {
     }
   });
 
+  it('expands PMA turn payloads into readable user and assistant messages', async () => {
+    const fetcher = vi.fn(async () =>
+      Response.json({
+        turns: [
+          {
+            managed_thread_id: 'thread-1',
+            managed_turn_id: 'turn-1',
+            prompt_preview: 'What happened?',
+            assistant_preview: 'The run finished successfully.',
+            status: 'ok'
+          },
+          {
+            managed_thread_id: 'thread-1',
+            managed_turn_id: 'empty-turn',
+            status: 'ok'
+          }
+        ]
+      })
+    ) as unknown as typeof fetch;
+    const client = new PmaApiClient(fetcher);
+
+    const result = await client.pma.getMessages('thread-1');
+
+    expect(fetcher).toHaveBeenCalledWith('/hub/pma/threads/thread-1/turns', expect.any(Object));
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.map((message) => [message.role, message.text])).toEqual([
+        ['user', 'What happened?'],
+        ['assistant', 'The run finished successfully.']
+      ]);
+    }
+  });
+
   it('uploads PMA inbox files with multipart form data', async () => {
     const fetcher = vi.fn(async () => Response.json({ status: 'ok', saved: ['screen.png'] })) as unknown as typeof fetch;
     const client = new PmaApiClient(fetcher);

@@ -2,6 +2,7 @@ import {
   mapContextspaceDocument,
   mapDashboardSummary,
   mapPmaChatMessage,
+  mapPmaTurnMessages,
   mapPmaChatSummary,
   mapPmaRunProgress,
   mapRepoSummary,
@@ -216,7 +217,7 @@ export class PmaApiClient {
       ),
     getMessages: async (chatId: string): Promise<ApiResult<PmaChatMessage[]>> =>
       mapResult(await this.getJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}/turns`), (payload) =>
-        asArray(payload.turns ?? payload.messages).map(mapPmaChatMessage)
+        asArray(payload.turns ?? payload.messages).flatMap(mapPmaTurnMessages)
       ),
     getTail: async (chatId: string): Promise<ApiResult<PmaRunProgress>> =>
       mapResult(await this.getJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}/tail`), mapPmaRunProgress),

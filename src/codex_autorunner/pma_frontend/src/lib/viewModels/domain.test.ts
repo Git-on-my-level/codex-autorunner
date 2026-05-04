@@ -3,6 +3,7 @@ import {
   mapContextspaceDocument,
   mapDashboardSummary,
   mapPmaChatSummary,
+  mapPmaTurnMessages,
   mapPmaRunProgress,
   mapRepoSummary,
   mapSurfaceArtifact,
@@ -52,6 +53,44 @@ describe('view model mappers', () => {
       kind: 'progress',
       title: 'Tests passed'
     });
+  });
+
+  it('maps completed managed turns into readable user and PMA messages', () => {
+    const messages = mapPmaTurnMessages({
+      managed_thread_id: 'chat-1',
+      managed_turn_id: 'turn-1',
+      status: 'ok',
+      prompt_preview: 'Can you summarize this run?',
+      assistant_preview: 'The run completed and produced a final report.',
+      started_at: '2026-05-04T00:00:00Z',
+      finished_at: '2026-05-04T00:00:30Z'
+    });
+
+    expect(messages).toMatchObject([
+      {
+        id: 'turn-1-user',
+        role: 'user',
+        text: 'Can you summarize this run?',
+        chatId: 'chat-1'
+      },
+      {
+        id: 'turn-1-assistant',
+        role: 'assistant',
+        text: 'The run completed and produced a final report.',
+        chatId: 'chat-1'
+      }
+    ]);
+  });
+
+  it('does not create empty chat messages for raw turn records', () => {
+    expect(
+      mapPmaTurnMessages({
+        managed_thread_id: 'chat-1',
+        managed_turn_id: 'turn-empty',
+        status: 'ok',
+        started_at: '2026-05-04T00:00:00Z'
+      })
+    ).toEqual([]);
   });
 
   it('maps file and dispatch attachments into artifacts', () => {

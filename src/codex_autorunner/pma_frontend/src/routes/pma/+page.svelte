@@ -597,7 +597,7 @@
           {#if card.kind === 'message'}
             <article class={`message ${card.message.role === 'user' ? 'user' : 'assistant'}`}>
               <span>{card.message.role === 'user' ? 'You' : 'PMA'}</span>
-              <p>{card.message.text || 'No message text recorded.'}</p>
+              <p>{card.message.text}</p>
             </article>
           {:else if card.kind === 'ticket'}
             <article class="artifact-card ticket-card">
@@ -610,6 +610,10 @@
               <span class="artifact-type">Run progress</span>
               <strong>{statusLabel(card.progress.status)}{card.progress.phase ? ` · ${card.progress.phase}` : ''}</strong>
               <p>{card.progress.guidance ?? `Queue depth ${card.progress.queueDepth}. Last event ${formatRelativeTime(card.progress.lastEventAt)}.`}</p>
+              <details>
+                <summary>Debug details</summary>
+                <pre>{JSON.stringify(card.progress.raw, null, 2)}</pre>
+              </details>
             </article>
           {:else if card.kind === 'streaming'}
             <article class="artifact-card stream-card">

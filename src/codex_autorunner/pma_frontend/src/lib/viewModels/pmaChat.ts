@@ -104,18 +104,24 @@ export function buildPmaCards(
   chat: PmaChatSummary | null,
   artifacts: SurfaceArtifact[]
 ): PmaCard[] {
-  const cards: PmaCard[] = messages.flatMap((message) => [
-    {
-      kind: 'message' as const,
-      id: message.id,
-      message
-    },
-    ...message.artifacts.map((artifact) => ({
-      kind: 'artifact' as const,
-      id: `message-${message.id}-${artifact.id}`,
-      artifact
-    }))
-  ]);
+  const cards: PmaCard[] = messages.flatMap((message) => {
+    const messageCards: PmaCard[] = [];
+    if (message.text.trim()) {
+      messageCards.push({
+        kind: 'message' as const,
+        id: message.id,
+        message
+      });
+    }
+    messageCards.push(
+      ...message.artifacts.map((artifact) => ({
+        kind: 'artifact' as const,
+        id: `message-${message.id}-${artifact.id}`,
+        artifact
+      }))
+    );
+    return messageCards;
+  });
 
   if (chat?.ticketId) {
     cards.push({
@@ -140,7 +146,7 @@ export function buildPmaCards(
         progress
       });
     }
-    for (const event of progress.events.slice(-3)) {
+    for (const event of progress.events.filter(isPrimaryProgressArtifact).slice(-3)) {
       cards.push({ kind: 'artifact', id: `event-${event.id}`, artifact: event });
     }
   }
@@ -150,6 +156,17 @@ export function buildPmaCards(
   }
 
   return cards;
+}
+
+export function isPrimaryProgressArtifact(artifact: SurfaceArtifact): boolean {
+  const eventType = stringValue(artifact.raw.event_type ?? artifact.raw.type ?? artifact.raw.kind).toLowerCase();
+  const summary = [artifact.title, artifact.summary].filter(Boolean).join(' ').toLowerCase();
+  if (eventType.includes('token_usage') || summary === 'token usage updated') return false;
+  if (['turn_completed', 'prompt_completed', 'session_idle'].includes(eventType)) return false;
+  if (eventType === 'progress' && /^(turn completed|token usage updated)$/i.test(artifact.title)) return false;
+  return ['assistant_update', 'tool_started', 'tool_completed', 'tool_failed', 'turn_failed', 'turn_interrupted'].some(
+    (type) => eventType.includes(type)
+  );
 }
 
 export function formatRelativeTime(value: string | null, now = new Date()): string {
@@ -400,4 +417,10 @@ export function approvalActionUrl(
 
 function clampPercent(value: number): number {
   return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function stringValue(value: unknown): string {
+  if (typeof value === 'string' && value.trim()) return value;
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  return '';
 }
