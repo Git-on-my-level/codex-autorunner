@@ -241,17 +241,6 @@ class _TelegramTurnThreadContext:
     pma_thread_key: Optional[str]
 
 
-def _iter_exception_chain(exc: BaseException) -> list[BaseException]:
-    chain: list[BaseException] = []
-    current: Optional[BaseException] = exc
-    seen: set[int] = set()
-    while current is not None and id(current) not in seen:
-        chain.append(current)
-        seen.add(id(current))
-        current = current.__cause__ or current.__context__
-    return chain
-
-
 def _try_append_turn_journal(
     handlers: Any,
     *,

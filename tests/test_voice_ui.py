@@ -1,9 +1,15 @@
+import shutil
 import subprocess
 import textwrap
 from pathlib import Path
 
+import pytest
+
 
 def test_voice_ui_transcribe_flow_without_opt_in():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node executable not on PATH (required for voice.js smoke import)")
     voice_js = Path("src/codex_autorunner/static/generated/voice.js").resolve()
     script = textwrap.dedent(
         """
@@ -224,4 +230,4 @@ def test_voice_ui_transcribe_flow_without_opt_in():
         """
     ).replace("__VOICE_JS__", voice_js.as_posix())
 
-    subprocess.run(["node", "--input-type=module", "-e", script], check=True)
+    subprocess.run([node, "--input-type=module", "-e", script], check=True)

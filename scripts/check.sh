@@ -153,6 +153,17 @@ case "$LANE" in
     ;;
 esac
 
+# Local aggregate runs often omit Node/pnpm; CI always has them. Allow skipping
+# frontend/chat-apps portions unless explicitly forced.
+if [[ "${CODEX_CHECK_REQUIRE_NODE:-0}" != "1" ]] && [[ "$LANE" == "aggregate" ]]; then
+  if ! command -v node >/dev/null 2>&1; then
+    echo "Note: node not found on PATH; skipping web-ui and chat-apps checks for aggregate." >&2
+    echo "Install Node + pnpm or run with CODEX_CHECK_REQUIRE_NODE=1 to fail fast." >&2
+    RUN_WEB_UI=false
+    RUN_CHAT_APPS=false
+  fi
+fi
+
 # --- Always-on guardrails (non-negotiable safety checks) ---------------------
 echo "Checking staged .codex-autorunner paths..."
 "$PYTHON_BIN" scripts/check_no_codex_autorunner_staged.py
