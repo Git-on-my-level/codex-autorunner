@@ -106,8 +106,8 @@ export function buildRepoWorktreeIndexViewModel(
     ...(kind !== 'repo' ? source.worktrees.map(worktreeToIndexRow) : [])
   ].sort(byActiveThenRecent);
   return {
-    title: kind === 'worktree' ? 'Worktrees' : 'Repos',
-    eyebrow: 'Workspaces',
+    title: kind === 'worktree' ? 'Repo worktree variants' : 'Repos',
+    eyebrow: kind === 'worktree' ? 'Repo children' : 'Repo ownership',
     rows,
     activeCount: rows.filter((row) => row.status === 'running').length,
     waitingCount: rows.filter((row) => row.status === 'waiting' || row.status === 'blocked').length,
@@ -150,7 +150,7 @@ export function buildRepoWorktreeDetailViewModel(
     kind,
     id,
     title,
-    eyebrow: kind === 'repo' ? 'Repo current run' : 'Worktree current run',
+    eyebrow: kind === 'repo' ? 'Repo current run' : 'Repo worktree current run',
     branch,
     path,
     stateLabel: statusLabel(resource?.status ?? visibleRuns[0]?.status ?? 'idle'),
@@ -190,7 +190,7 @@ function worktreeToIndexRow(worktree: WorktreeSummary): RepoWorktreeIndexRow {
     id: worktree.id,
     kind: 'worktree',
     label: worktree.name,
-    detail: worktree.branch ? `Branch ${worktree.branch}` : 'Worktree',
+    detail: worktree.branch ? `Repo worktree variant · branch ${worktree.branch}` : 'Repo worktree variant',
     status: worktree.status,
     branch: worktree.branch,
     path: worktree.path,
@@ -341,8 +341,8 @@ function buildContextLinks(kind: RepoWorktreeKind, id: string, artifacts: RepoWo
   const preview = artifacts.find((artifact) => artifact.kind === 'preview_url' && artifact.href);
   return [
     { label: 'Open PMA chat', href: '/pma', secondary: false },
-    { label: 'View tickets', href: '/tickets', secondary: false },
-    { label: 'View contextspace', href: `/contextspace/${encodeURIComponent(id)}`, secondary: false },
+    { label: 'View workspace tickets', href: '/tickets', secondary: false },
+    { label: 'View workspace memory', href: `/contextspace/${encodeURIComponent(id)}`, secondary: false },
     ...(preview?.href ? [{ label: 'Open preview', href: preview.href, secondary: false }] : []),
     { label: 'Ticket diagnostics', href: '/tickets', secondary: true }
   ];

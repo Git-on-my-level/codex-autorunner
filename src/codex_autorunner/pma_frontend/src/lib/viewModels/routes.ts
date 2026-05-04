@@ -14,28 +14,28 @@ export const routeViewModels = {
       'Repo identity, worktrees, active runs, tickets, and surfaced PMA artifacts will appear here.'
   },
   worktrees: {
-    eyebrow: 'Workspaces',
-    title: 'Worktrees',
-    panelTitle: 'Worktree index',
+    eyebrow: 'Repo children',
+    title: 'Repo worktree variants',
+    panelTitle: 'Repo worktree index',
     description:
-      'Worktree status, branch, linked repo, active runs, ticket queue, and last activity will appear here.'
+      'Repo-owned worktree status, branch, parent repo, active runs, ticket queue, and last activity will appear here.'
   },
   worktreeDetail: {
-    eyebrow: 'Worktree',
-    title: 'Worktree detail',
-    panelTitle: 'Execution workspace',
+    eyebrow: 'Repo worktree',
+    title: 'Repo worktree detail',
+    panelTitle: 'Execution workspace variant',
     description:
       'Branch state, current PMA work, relevant tickets, previews, and recent artifacts will appear here.'
   },
   ticketDetail: {
-    eyebrow: 'Ticket',
-    title: 'Ticket detail',
+    eyebrow: 'Workspace ticket',
+    title: 'Workspace ticket detail',
     panelTitle: 'Ticket context',
     description:
       'Ticket state, PMA-created summaries, current run progress, and surfaced artifacts will appear here.'
   },
   contextspace: {
-    eyebrow: 'Contextspace',
+    eyebrow: 'Workspace contextspace',
     title: 'Workspace memory',
     panelTitle: 'Durable shared context',
     description:

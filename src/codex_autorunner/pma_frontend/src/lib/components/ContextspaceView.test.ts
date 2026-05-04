@@ -33,7 +33,7 @@ describe('ContextspaceView', () => {
     );
     const { body } = render(ContextspaceView, { props: { state: 'ready', vm } });
 
-    expect(body).toContain('codex-autorunner contextspace');
+    expect(body).toContain('Workspace memory: codex-autorunner');
     expect(body).toContain('active_context.md');
     expect(body).toContain('<h1>Active Context</h1>');
     expect(body).toContain('Copy');
@@ -48,7 +48,7 @@ describe('ContextspaceView', () => {
     expect(body).toContain('0 of 3 standard docs have content');
     expect(body).toContain('active_context.md · missing');
     expect(body).toContain('Active context is empty.');
-    expect(body).toContain('Ask PMA to update contextspace');
+    expect(body).toContain("Ask PMA to update this workspace's contextspace");
     expect(body).not.toContain('textarea');
   });
 });

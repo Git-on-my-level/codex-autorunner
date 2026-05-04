@@ -41,7 +41,7 @@
         <div class="dashboard-actions">
           <a href="/pma">Open PMA</a>
           <a href="/repos">View repos</a>
-          <a href="/tickets">View tickets</a>
+          <a href="/tickets">View workspace tickets</a>
         </div>
       </div>
     {/if}
@@ -92,18 +92,18 @@
       <section id="failed-blocked" class="page-panel dashboard-panel">
         <div class="panel-heading-row">
           <h2>Failed/blocked</h2>
-          <a href="/tickets">Tickets</a>
+          <a href="/tickets">Workspace tickets</a>
         </div>
         {@render attentionList(dashboard.failedOrBlocked, 'No failed or blocked work is visible.')}
       </section>
 
       <section class="page-panel dashboard-panel">
         <div class="panel-heading-row">
-          <h2>Repos and worktrees</h2>
+          <h2>Repos and worktree variants</h2>
           <a href="/repos">All repos</a>
         </div>
         {#if dashboard.repoWorktrees.length === 0}
-          <p>No repos or worktrees are registered yet.</p>
+          <p>No repos or repo worktree variants are registered yet.</p>
         {:else}
           <div class="dashboard-list compact">
             {#each dashboard.repoWorktrees as item}

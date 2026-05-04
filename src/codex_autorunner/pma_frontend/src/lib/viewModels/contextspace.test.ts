@@ -22,7 +22,8 @@ describe('contextspace view models', () => {
       [mockWorktreeSummary]
     );
 
-    expect(vm.title).toBe('codex-autorunner contextspace');
+    expect(vm.title).toBe('Workspace memory: codex-autorunner');
+    expect(vm.eyebrow).toBe('Repo-scoped contextspace');
     expect(vm.openWorkspaceHref).toBe('/repos/repo-1');
     expect(vm.askPmaHref).toContain('/pma?draft=');
     expect(vm.docs.map((doc) => doc.filename)).toEqual(['active_context.md', 'spec.md', 'decisions.md']);
@@ -35,7 +36,7 @@ describe('contextspace view models', () => {
 
     expect(vm.workspaceKind).toBe('worktree');
     expect(vm.openWorkspaceHref).toBe('/worktrees/worktree-1');
-    expect(vm.openWorkspaceLabel).toBe('Open worktree');
+    expect(vm.openWorkspaceLabel).toBe('Open worktree variant');
   });
 
   it('links unknown or local contextspace back to the workspace index', () => {
@@ -43,7 +44,7 @@ describe('contextspace view models', () => {
 
     expect(vm.workspaceKind).toBe('workspace');
     expect(vm.openWorkspaceHref).toBe('/repos');
-    expect(vm.openWorkspaceLabel).toBe('Open workspaces');
+    expect(vm.openWorkspaceLabel).toBe('Open workspace index');
   });
 
   it('renders readable safe markdown html', () => {

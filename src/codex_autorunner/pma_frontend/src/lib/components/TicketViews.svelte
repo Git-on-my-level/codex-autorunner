@@ -65,7 +65,7 @@
 
     <section class="page-panel ticket-list-panel">
       <div class="panel-heading-row">
-        <h2>Current ticket queue</h2>
+        <h2>Workspace ticket queue</h2>
         <a href="/pma">Open PMA</a>
       </div>
       {#if visibleRows.length === 0}
@@ -74,7 +74,7 @@
         <div class="ticket-table" role="table" aria-label="Ticket queue">
           <div class="ticket-table-head" role="row">
             <span>Ticket</span>
-            <span>Repo/worktree</span>
+            <span>Workspace scope</span>
             <span>Agent</span>
             <span>Status</span>
             <span>Run</span>
@@ -115,7 +115,7 @@
   <section class="page-stack ticket-page">
     <div class="section-heading detail-heading">
       <div>
-        <p class="eyebrow">Ticket detail</p>
+        <p class="eyebrow">Workspace ticket detail</p>
         <h1>{detail.title}</h1>
         <p>{detail.numberLabel} · {detail.repoLabel} · {statusLabel(detail.status)} · {detail.updatedLabel}</p>
       </div>
@@ -144,7 +144,7 @@
         <dl class="compact-definition ticket-definition">
           <div><dt>Number</dt><dd>{detail.numberLabel}</dd></div>
           <div><dt>Agent</dt><dd>{detail.agentLabel}</dd></div>
-          <div><dt>Workspace</dt><dd>{detail.repoLabel}</dd></div>
+          <div><dt>Workspace scope</dt><dd>{detail.repoLabel}</dd></div>
         </dl>
         {#if detail.goal}
           <section class="contract-section">

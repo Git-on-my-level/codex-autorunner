@@ -63,7 +63,7 @@ describe('DashboardView', () => {
     expect(body).toContain('href="/pma?chat=chat-1"');
     expect(body).toContain('href="/repos/codex-autorunner"');
     expect(body).toContain('href="/tickets/TICKET-110"');
-    expect(body).toContain('Repos and worktrees');
+    expect(body).toContain('Repos and worktree variants');
     expect(body).toContain('Recent activity');
     expect(body).toContain('Preview ready');
   });

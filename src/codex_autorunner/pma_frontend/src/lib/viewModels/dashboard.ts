@@ -114,7 +114,7 @@ export function buildDashboardViewModel(source: DashboardSourceData): DashboardV
       { label: 'Failed/blocked', value: failedRows.length, href: '#failed-blocked', tone: 'danger' },
       { label: 'Open tickets', value: openTickets.length || source.summary?.openTickets || 0, href: '/tickets', tone: 'neutral' },
       { label: 'Repos', value: source.repos.length || source.summary?.repos || 0, href: '/repos', tone: 'neutral' },
-      { label: 'Worktrees', value: source.worktrees.length || source.summary?.worktrees || 0, href: '/worktrees', tone: 'neutral' }
+      { label: 'Repo worktrees', value: source.worktrees.length || source.summary?.worktrees || 0, href: '/worktrees', tone: 'neutral' }
     ],
     activeRuns,
     waitingForMe: dedupeAttention(waitingRows).slice(0, 8),

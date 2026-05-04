@@ -28,6 +28,8 @@ describe('ticket view models', () => {
     });
 
     expect(vm.defaultFilter).toBe('needs_attention');
+    expect(vm.title).toBe('Workspace tickets');
+    expect(vm.eyebrow).toBe('Cross-workspace queue');
     expect(vm.rows[0]).toMatchObject({
       numberLabel: '#110',
       title: mockTicketSummary.title,

@@ -2,17 +2,26 @@ export type NavItem = {
   href: string;
   label: string;
   badge?: string;
+  group: 'primary' | 'support' | 'workspace' | 'system';
+  indent?: boolean;
 };
 
 export const primaryNav: NavItem[] = [
-  { href: '/pma', label: 'PMA', badge: 'Primary' },
-  { href: '/dashboard', label: 'Dashboard' },
-  { href: '/repos', label: 'Repos' },
-  { href: '/worktrees', label: 'Worktrees' },
-  { href: '/tickets', label: 'Tickets' },
-  { href: '/contextspace/local', label: 'Contextspace' },
-  { href: '/settings', label: 'Settings' }
+  { href: '/pma', label: 'PMA', badge: 'Primary', group: 'primary' },
+  { href: '/dashboard', label: 'Dashboard', group: 'support' },
+  { href: '/repos', label: 'Repos', group: 'support' },
+  { href: '/worktrees', label: 'Repo worktrees', group: 'support', indent: true },
+  { href: '/tickets', label: 'Workspace tickets', group: 'workspace' },
+  { href: '/contextspace/local', label: 'Workspace memory', group: 'workspace' },
+  { href: '/settings', label: 'Settings', group: 'system' }
 ];
+
+export const navGroupLabels: Record<NavItem['group'], string> = {
+  primary: 'Primary',
+  support: 'Repos',
+  workspace: 'Workspace indexes',
+  system: 'System'
+};
 
 export function isActiveRoute(pathname: string, href: string): boolean {
   if (href === '/pma') {

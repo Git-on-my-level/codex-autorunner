@@ -1,6 +1,6 @@
 <script lang="ts">
   import { page } from '$app/state';
-  import { primaryNav, isActiveRoute } from '$lib/navigation';
+  import { primaryNav, navGroupLabels, isActiveRoute } from '$lib/navigation';
   import type { Snippet } from 'svelte';
   import '../app.css';
 
@@ -45,19 +45,25 @@
     </div>
 
     <nav class="nav-list">
-      {#each primaryNav as item}
-        <a
-          class:active={isActiveRoute(page.url.pathname, item.href)}
-          class="nav-link"
-          href={item.href}
-          onclick={closeMobile}
-        >
-          <span class="nav-initial" aria-hidden="true">{item.label.slice(0, 1)}</span>
-          <span class="nav-label">{item.label}</span>
-          {#if item.badge}
-            <span class="nav-badge">{item.badge}</span>
-          {/if}
-        </a>
+      {#each Object.entries(navGroupLabels) as [group, groupLabel]}
+        <div class="nav-group" aria-label={groupLabel}>
+          <span class="nav-group-label">{groupLabel}</span>
+          {#each primaryNav.filter((item) => item.group === group) as item}
+            <a
+              class:active={isActiveRoute(page.url.pathname, item.href)}
+              class:indented={item.indent}
+              class="nav-link"
+              href={item.href}
+              onclick={closeMobile}
+            >
+              <span class="nav-initial" aria-hidden="true">{item.label.slice(0, 1)}</span>
+              <span class="nav-label">{item.label}</span>
+              {#if item.badge}
+                <span class="nav-badge">{item.badge}</span>
+              {/if}
+            </a>
+          {/each}
+        </div>
       {/each}
     </nav>
 

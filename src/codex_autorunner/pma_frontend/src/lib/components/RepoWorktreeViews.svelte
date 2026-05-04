@@ -66,13 +66,13 @@
                 <span class="status-pill {row.status}">{statusLabel(row.status)}</span>
                 <span>
                   <strong>{row.label}</strong>
-                  <span>{row.kind} · {row.detail} · {rowRelativeTime(row)}</span>
+                <span>{row.kind === 'worktree' ? 'repo child' : 'repo'} · {row.detail} · {rowRelativeTime(row)}</span>
                 </span>
               </a>
               <div class="workspace-row-meta">
                 <span>{row.activeRuns} runs</span>
                 <span>{row.openTickets} tickets</span>
-                {#if row.repoHref}<a href={row.repoHref}>Base repo</a>{/if}
+                {#if row.repoHref}<a href={row.repoHref}>Parent repo</a>{/if}
               </div>
             </article>
           {/each}
@@ -86,7 +86,7 @@
       <div>
         <p class="eyebrow">{detail.eyebrow}</p>
         <h1>{detail.title}</h1>
-        <p>{detail.kind} · {detail.stateLabel}{#if detail.branch} · {detail.branch}{/if}</p>
+        <p>{detail.kind === 'worktree' ? 'repo worktree variant' : 'repo'} · {detail.stateLabel}{#if detail.branch} · {detail.branch}{/if}</p>
       </div>
       <div class="detail-actions">
         {#each detail.links.filter((link) => !link.secondary) as link}
@@ -96,7 +96,7 @@
     </div>
 
     <section class="page-panel identity-panel">
-      <h2>Workspace</h2>
+      <h2>{detail.kind === 'worktree' ? 'Repo worktree' : 'Repo'} identity</h2>
       <dl class="compact-definition">
         <div><dt>ID</dt><dd>{detail.id}</dd></div>
         <div><dt>Branch</dt><dd>{detail.branch ?? 'Unknown'}</dd></div>
@@ -108,7 +108,7 @@
       <section class="page-panel execution-panel wide">
         <div class="panel-heading-row">
           <h2>Current run</h2>
-          <a href="/tickets">Tickets</a>
+          <a href="/tickets">Workspace tickets</a>
         </div>
         {#if detail.currentRuns.length === 0 || !detail.hasActiveRun}
           <div class="state-panel">No active ticket run is visible for this workspace.</div>
@@ -142,7 +142,7 @@
       </section>
 
       <section class="page-panel execution-panel">
-        <h2>Current tickets</h2>
+        <h2>Workspace tickets</h2>
         {#if detail.currentTickets.length === 0}
           <p>No current ticket is associated with the visible run.</p>
         {:else}
@@ -155,7 +155,7 @@
       </section>
 
       <section class="page-panel execution-panel">
-        <h2>Next tickets</h2>
+        <h2>Next workspace tickets</h2>
         {#if detail.nextTickets.length === 0}
           <p>No next tickets are queued.</p>
         {:else}

@@ -56,8 +56,13 @@ export function buildContextspaceViewModel(
 
   return {
     workspaceId,
-    title: `${title} contextspace`,
-    eyebrow: workspaceKind === 'repo' ? 'Repo memory' : workspaceKind === 'worktree' ? 'Worktree memory' : 'Workspace memory',
+    title: `Workspace memory: ${title}`,
+    eyebrow:
+      workspaceKind === 'repo'
+        ? 'Repo-scoped contextspace'
+        : workspaceKind === 'worktree'
+          ? 'Worktree-scoped contextspace'
+          : 'Workspace contextspace',
     workspaceKind,
     openWorkspaceHref:
       workspaceKind === 'worktree'
@@ -66,7 +71,7 @@ export function buildContextspaceViewModel(
           ? `/repos/${encodeURIComponent(workspaceId)}`
           : '/repos',
     openWorkspaceLabel:
-      workspaceKind === 'worktree' ? 'Open worktree' : workspaceKind === 'repo' ? 'Open repo' : 'Open workspaces',
+      workspaceKind === 'worktree' ? 'Open worktree variant' : workspaceKind === 'repo' ? 'Open repo' : 'Open workspace index',
     askPmaHref: `/pma?draft=${encodeURIComponent(askPrompt)}`,
     docs: tabs,
     presentCount: tabs.filter((doc) => !doc.isMissing).length

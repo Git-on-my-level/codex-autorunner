@@ -14,9 +14,33 @@ describe('repo/worktree view models', () => {
     });
 
     expect(vm.rows).toHaveLength(2);
+    expect(vm.title).toBe('Repos');
+    expect(vm.eyebrow).toBe('Repo ownership');
     expect(vm.activeCount).toBe(2);
     expect(vm.openTicketCount).toBe(4);
     expect(vm.rows[0]).toHaveProperty('href');
+  });
+
+  it('frames the worktree index as repo-owned variants', () => {
+    const vm = buildRepoWorktreeIndexViewModel(
+      {
+        repos: [mockRepoSummary],
+        worktrees: [mockWorktreeSummary],
+        runs: [],
+        chats: [],
+        tickets: [],
+        artifacts: []
+      },
+      'worktree'
+    );
+
+    expect(vm.title).toBe('Repo worktree variants');
+    expect(vm.eyebrow).toBe('Repo children');
+    expect(vm.rows[0]).toMatchObject({
+      href: '/worktrees/worktree-1',
+      repoHref: '/repos/repo-1'
+    });
+    expect(vm.rows[0].detail).toContain('Repo worktree variant');
   });
 
   it('builds active current-run detail with links and artifacts', () => {
@@ -40,6 +64,8 @@ describe('repo/worktree view models', () => {
       ticketHref: '/tickets/TICKET-110'
     });
     expect(vm.links.map((link) => link.label)).toContain('Open PMA chat');
+    expect(vm.links.map((link) => link.label)).toContain('View workspace tickets');
+    expect(vm.links.map((link) => link.label)).toContain('View workspace memory');
     expect(vm.links.map((link) => link.label)).toContain('Open preview');
     expect(vm.artifacts[0]).toMatchObject({ kind: 'preview_url' });
   });

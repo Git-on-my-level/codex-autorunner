@@ -16,7 +16,7 @@ describe('TicketViews', () => {
       props: { state: 'ready', mode: 'list', list, selectedFilter: 'active' }
     });
 
-    expect(body).toContain('Current ticket queue');
+    expect(body).toContain('Workspace ticket queue');
     expect(body).toContain('#110');
     expect(body).toContain('Implement typed UI API client and view models');
     expect(body).toContain('PMA chat');

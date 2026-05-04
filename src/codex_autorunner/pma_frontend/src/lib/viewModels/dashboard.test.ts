@@ -42,7 +42,7 @@ describe('dashboard view model', () => {
       ['Failed/blocked', 1],
       ['Open tickets', 2],
       ['Repos', 1],
-      ['Worktrees', 1]
+      ['Repo worktrees', 1]
     ]);
     expect(dashboard.activeRuns[0]).toMatchObject({
       title: 'Hub rewrite foundation',

@@ -52,7 +52,7 @@
     </div>
 
     <div class="contextspace-layout">
-      <aside class="page-panel contextspace-doc-list" aria-label="Contextspace documents">
+      <aside class="page-panel contextspace-doc-list" aria-label="Workspace contextspace documents">
         <h2>Documents</h2>
         <div class="doc-tab-list">
           {#each vm.docs as doc}
@@ -83,7 +83,7 @@
         {#if activeDoc.isMissing}
           <div class="state-panel contextspace-empty">
             <strong>{activeDoc.label} is empty.</strong>
-            <p>Ask PMA to update contextspace when the workspace needs refreshed shared memory.</p>
+            <p>Ask PMA to update this workspace's contextspace when shared memory needs a refresh.</p>
             <a class="inline-link" href={vm.askPmaHref}>Ask PMA to update</a>
           </div>
         {:else}

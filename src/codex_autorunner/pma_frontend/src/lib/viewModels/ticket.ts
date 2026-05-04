@@ -98,8 +98,8 @@ const filterLabels: Record<TicketFilter, string> = {
 export function buildTicketListViewModel(source: TicketSourceData): TicketListViewModel {
   const rows = source.tickets.map((ticket) => ticketToListRow(ticket, source)).sort(bySignalThenRecent);
   return {
-    title: 'Tickets',
-    eyebrow: 'Queue',
+    title: 'Workspace tickets',
+    eyebrow: 'Cross-workspace queue',
     defaultFilter: 'needs_attention',
     filters: (Object.keys(filterLabels) as TicketFilter[]).map((id) => ({
       id,
