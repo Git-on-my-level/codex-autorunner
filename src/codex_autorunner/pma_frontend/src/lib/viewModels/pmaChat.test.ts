@@ -87,6 +87,16 @@ describe('PMA chat view helpers', () => {
     expect(chooseActiveChatId([], 'missing')).toBeNull();
   });
 
+  it('prefers a requested linked chat when present', () => {
+    const chats: PmaChatSummary[] = [
+      baseChat,
+      { ...baseChat, id: 'chat-2', title: 'Linked conversation', status: 'waiting' }
+    ];
+
+    expect(chooseActiveChatId(chats, 'chat-1', 'chat-2')).toBe('chat-2');
+    expect(chooseActiveChatId(chats, 'chat-1', 'missing')).toBe('chat-1');
+  });
+
   it('builds active chat cards for messages, tickets, compact progress, streaming, and artifacts', () => {
     const cards = buildPmaCards(
       [{ ...baseMessage, artifacts: [{ ...baseArtifact, id: 'message-attachment' }] }],

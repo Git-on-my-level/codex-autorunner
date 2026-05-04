@@ -88,7 +88,12 @@ export function summarizeFilterCounts(chats: PmaChatSummary[]): Record<PmaChatFi
   };
 }
 
-export function chooseActiveChatId(chats: PmaChatSummary[], currentId: string | null): string | null {
+export function chooseActiveChatId(
+  chats: PmaChatSummary[],
+  currentId: string | null,
+  requestedId: string | null = null
+): string | null {
+  if (requestedId && chats.some((chat) => chat.id === requestedId)) return requestedId;
   if (currentId && chats.some((chat) => chat.id === currentId)) return currentId;
   return chats[0]?.id ?? null;
 }

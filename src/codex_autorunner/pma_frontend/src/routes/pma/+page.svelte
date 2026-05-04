@@ -107,7 +107,7 @@
 
     if (chatResult.ok) {
       chats = chatResult.data;
-      activeChatId = chooseActiveChatId(chatResult.data, activeChatId);
+      activeChatId = chooseActiveChatId(chatResult.data, activeChatId, page.url.searchParams.get('chat'));
       if (activeChatId) {
         mobilePane = 'chat';
         void refreshActive(activeChatId);
