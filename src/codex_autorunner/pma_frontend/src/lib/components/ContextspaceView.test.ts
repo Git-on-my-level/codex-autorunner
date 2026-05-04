@@ -1,7 +1,7 @@
 import { render } from 'svelte/server';
 import { describe, expect, it } from 'vitest';
 import ContextspaceView from './ContextspaceView.svelte';
-import { mockRepoSummary } from '$lib/viewModels/mockData';
+import { mockRepoSummary, mockWorktreeSummary } from '$lib/viewModels/mockData';
 import { buildContextspaceViewModel } from '$lib/viewModels/contextspace';
 
 describe('ContextspaceView', () => {
@@ -60,5 +60,16 @@ describe('ContextspaceView', () => {
     expect(body).toContain('Local workspace memory');
     expect(body).toContain('not a global contextspace');
     expect(body).toContain('Open workspace index');
+  });
+
+  it('renders worktree-scoped contextspace ownership labels', () => {
+    const vm = buildContextspaceViewModel('worktree-1', [], [mockRepoSummary], [mockWorktreeSummary]);
+    const { body } = render(ContextspaceView, { props: { state: 'ready', vm } });
+
+    expect(body).toContain('Workspace memory: discord-5');
+    expect(body).toContain('Worktree-scoped contextspace');
+    expect(body).toContain('Worktree memory is read from this worktree workspace contextspace.');
+    expect(body).toContain('Open worktree variant');
+    expect(body).toContain('Ask PMA to refresh this worktree memory');
   });
 });

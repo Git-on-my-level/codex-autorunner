@@ -82,6 +82,24 @@ describe('view model mappers', () => {
     ]);
   });
 
+  it('uses ordinary final response fields instead of falling back to empty transcript copy', () => {
+    const messages = mapPmaTurnMessages({
+      managed_thread_id: 'chat-1',
+      managed_turn_id: 'turn-final-response',
+      status: 'completed',
+      prompt: 'Finish the PMA ticket.',
+      final_response: 'Done. Tests passed and the ticket is updated.',
+      started_at: '2026-05-04T00:00:00Z',
+      finished_at: '2026-05-04T00:01:00Z'
+    });
+
+    expect(messages.map((message) => message.text)).toEqual([
+      'Finish the PMA ticket.',
+      'Done. Tests passed and the ticket is updated.'
+    ]);
+    expect(messages.map((message) => message.text)).not.toContain('No message text recorded');
+  });
+
   it('does not create empty chat messages for raw turn records', () => {
     expect(
       mapPmaTurnMessages({

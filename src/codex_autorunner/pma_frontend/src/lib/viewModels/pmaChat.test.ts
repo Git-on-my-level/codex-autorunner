@@ -154,6 +154,55 @@ describe('PMA chat view helpers', () => {
     expect(cards.filter((card) => card.kind === 'artifact').map((card) => card.id)).toEqual(['event-assistant-update']);
   });
 
+  it('keeps low-level PMA events out of primary transcript cards while preserving final responses', () => {
+    const cards = buildPmaCards(
+      [
+        {
+          ...baseMessage,
+          id: 'final-response',
+          status: 'done',
+          text: 'Done. The PMA smoke fixtures are now covered.'
+        }
+      ],
+      {
+        ...baseProgress,
+        status: 'done',
+        events: [
+          {
+            ...baseArtifact,
+            id: 'raw-token-delta',
+            kind: 'progress',
+            title: 'Raw token delta',
+            raw: { event_type: 'response.output_text.delta' }
+          },
+          {
+            ...baseArtifact,
+            id: 'low-level-lifecycle',
+            kind: 'progress',
+            title: 'Run loop tick',
+            raw: { event_type: 'thread.run.step.delta' }
+          },
+          {
+            ...baseArtifact,
+            id: 'thinking-summary',
+            kind: 'progress',
+            title: 'Thinking summary',
+            summary: 'Inspecting repo/worktree ownership.',
+            raw: { event_type: 'assistant_update' }
+          }
+        ]
+      },
+      null,
+      []
+    );
+
+    expect(cards.filter((card) => card.kind === 'message')).toHaveLength(1);
+    expect(cards.find((card) => card.kind === 'message')).toMatchObject({
+      message: { text: 'Done. The PMA smoke fixtures are now covered.' }
+    });
+    expect(cards.filter((card) => card.kind === 'artifact').map((card) => card.id)).toEqual(['event-thinking-summary']);
+  });
+
   it('keeps raw progress classifications deterministic', () => {
     expect(
       isPrimaryProgressArtifact({

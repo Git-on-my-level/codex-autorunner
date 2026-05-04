@@ -206,6 +206,8 @@ export function mapPmaTurnMessages(raw: JsonRecord): PmaChatMessage[] {
   const assistantText = firstText(
     raw.assistant_text,
     raw.output_text,
+    raw.final_response,
+    raw.response_text,
     raw.final_message,
     raw.final_output,
     raw.final_report,
@@ -459,6 +461,8 @@ function normalizeMessageText(raw: JsonRecord, role: PmaChatMessage['role']): st
       raw.content,
       raw.assistant_text,
       raw.output_text,
+      raw.final_response,
+      raw.response_text,
       raw.final_message,
       raw.final_output,
       raw.final_report,

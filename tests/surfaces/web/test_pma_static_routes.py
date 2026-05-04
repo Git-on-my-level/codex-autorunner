@@ -10,6 +10,20 @@ from codex_autorunner.surfaces.web.static_assets import (
     render_pma_index_html,
 )
 
+PMA_MANUAL_SCREENSHOT_ROUTES = (
+    "/pma",
+    "/dashboard",
+    "/repos",
+    "/repos/example",
+    "/worktrees",
+    "/worktrees/example",
+    "/tickets",
+    "/tickets/TICKET-100",
+    "/contextspace/local",
+    "/contextspace/example",
+    "/settings",
+)
+
 
 def _script_hash(script: str) -> str:
     digest = hashlib.sha256(script.encode("utf-8")).digest()
@@ -21,17 +35,25 @@ def test_pma_top_level_routes_serve_new_spa(tmp_path):
     seed_hub_files(hub_root, force=True)
     client = TestClient(create_hub_app(hub_root))
 
+    for path in PMA_MANUAL_SCREENSHOT_ROUTES:
+        response = client.get(path)
+        assert response.status_code == 200
+        assert "<title>PMA Hub</title>" in response.text
+        assert "/_app/immutable/entry/app." in response.text
+
+
+def test_pma_dynamic_spa_fallback_routes_with_runtime_ids(tmp_path):
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    client = TestClient(create_hub_app(hub_root))
+
     for path in (
-        "/pma",
-        "/dashboard",
-        "/repos",
-        "/repos/example",
-        "/worktrees",
-        "/worktrees/example",
-        "/tickets",
-        "/tickets/TICKET-100",
-        "/contextspace/local",
-        "/settings",
+        "/repos/repo.with.dots",
+        "/repos/codex-autorunner--discord-5/",
+        "/worktrees/base--ticket-290",
+        "/tickets/tkt_pma_ui_regression_fixtures_smoke_qa",
+        "/tickets/TICKET-290-pma-ui-regression-fixtures-and-smoke-qa",
+        "/contextspace/worktree-1",
     ):
         response = client.get(path)
         assert response.status_code == 200

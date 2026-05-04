@@ -61,6 +61,40 @@ describe('ticket view models', () => {
     expect(filterTicketRows(vm.rows, 'open', 'unscoped')).toHaveLength(1);
   });
 
+  it('labels repo-scoped and worktree-scoped tickets from explicit resource ownership', () => {
+    const vm = buildTicketListViewModel({
+      tickets: [
+        {
+          ...mockTicketSummary,
+          id: 'TICKET-201',
+          title: 'Repo-owned QA',
+          repoId: null,
+          worktreeId: null,
+          raw: { frontmatter: { resource_kind: 'repo', resource_id: 'repo-1' } }
+        },
+        {
+          ...mockTicketSummary,
+          id: 'TICKET-202',
+          title: 'Worktree-owned QA',
+          repoId: null,
+          worktreeId: null,
+          raw: { resource_kind: 'worktree', resource_id: 'worktree-1' }
+        }
+      ],
+      runs: [],
+      chats: [],
+      artifacts: []
+    });
+
+    expect(vm.rows.map((row) => row.repoLabel)).toEqual(['Repo: repo-1', 'Worktree: worktree-1']);
+    expect(vm.rows.map((row) => row.workspaceHref)).toEqual(['/repos/repo-1', '/worktrees/worktree-1']);
+    expect(vm.workspaceFilters.map((filter) => filter.id)).toEqual([
+      'all',
+      'repo:repo-1',
+      'worktree:worktree-1'
+    ]);
+  });
+
   it('parses ticket contract sections from markdown', () => {
     const sections = parseTicketContract(`Intro note
 

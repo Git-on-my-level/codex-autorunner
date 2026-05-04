@@ -29,6 +29,22 @@ describe('RepoWorktreeViews', () => {
     expect(body).not.toContain('Analytics');
   });
 
+  it('renders sparse repo index empty-state copy', () => {
+    const index = buildRepoWorktreeIndexViewModel({
+      repos: [],
+      worktrees: [],
+      runs: [],
+      chats: [],
+      tickets: [],
+      artifacts: []
+    });
+    const { body } = render(RepoWorktreeViews, { props: { state: 'ready', mode: 'index', index } });
+
+    expect(body).toContain('No repos registered');
+    expect(body).toContain('Open PMA and point it at a workspace before queueing repo-scoped tickets.');
+    expect(body).toContain('Open tickets');
+  });
+
   it('renders active-run detail with PMA, ticket, contextspace, preview, and secondary logs', () => {
     const detail = buildRepoWorktreeDetailViewModel(
       {

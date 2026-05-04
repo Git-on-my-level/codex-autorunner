@@ -27,6 +27,22 @@ describe('TicketViews', () => {
     expect(body).not.toContain('---');
   });
 
+  it('renders sparse ticket-list filter empty states', () => {
+    const list = buildTicketListViewModel({
+      tickets: [{ ...mockTicketSummary, status: 'done' }],
+      runs: [],
+      chats: [],
+      artifacts: []
+    });
+    const { body } = render(TicketViews, {
+      props: { state: 'ready', mode: 'list', list, selectedFilter: 'active' }
+    });
+
+    expect(body).toContain('No tickets in this view');
+    expect(body).toContain('Switch filters or ask PMA to create the next scoped ticket for the current CAR work.');
+    expect(body).toContain('Unscoped tickets are shown as current workspace fallback');
+  });
+
   it('renders ticket contract sections on detail pages', () => {
     const detail = buildTicketDetailViewModel(
       {
@@ -85,5 +101,32 @@ Users can browse tickets.
     expect(body).toContain('Retry run');
     expect(body).toContain('Raw logs/debug');
     expect(body).toContain('Surfaced artifacts');
+  });
+
+  it('renders sparse ticket-detail side panels without raw debug as primary content', () => {
+    const detail = buildTicketDetailViewModel(
+      {
+        ...mockTicketDetail,
+        chatKey: null,
+        runId: null,
+        body: '## Goal\nKeep sparse tickets readable.',
+        artifacts: []
+      },
+      {
+        tickets: [],
+        runs: [],
+        chats: [],
+        artifacts: []
+      }
+    );
+    const { body } = render(TicketViews, {
+      props: { state: 'ready', mode: 'detail', detail }
+    });
+
+    expect(body).toContain('No artifacts surfaced');
+    expect(body).toContain('Screenshots, previews, files, and test summaries will appear after PMA work produces them.');
+    expect(body).toContain('No linked PMA chat');
+    expect(body).toContain('Open PMA from the ticket queue when this ticket needs agent discussion.');
+    expect(body).not.toContain('Raw logs/debug');
   });
 });

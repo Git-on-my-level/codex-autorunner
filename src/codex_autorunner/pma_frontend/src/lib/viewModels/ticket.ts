@@ -396,8 +396,12 @@ function workspaceScope(ticket: TicketSummary): {
     ticket.worktreeId ??
     stringFromRaw(raw, ['worktree_id', 'worktree_repo_id']) ??
     stringFromRaw(frontmatter, ['worktree_id', 'worktree_repo_id']);
+  const resourceKind = stringFromRaw(raw, ['resource_kind']) ?? stringFromRaw(frontmatter, ['resource_kind']);
+  const resourceId = stringFromRaw(raw, ['resource_id']) ?? stringFromRaw(frontmatter, ['resource_id']);
   if (worktreeId) return { kind: 'worktree', id: worktreeId, label: `Worktree: ${worktreeId}` };
   if (repoId) return { kind: 'repo', id: repoId, label: `Repo: ${repoId}` };
+  if (resourceKind === 'worktree' && resourceId) return { kind: 'worktree', id: resourceId, label: `Worktree: ${resourceId}` };
+  if (resourceKind === 'repo' && resourceId) return { kind: 'repo', id: resourceId, label: `Repo: ${resourceId}` };
   return { kind: 'unscoped', id: null, label: 'Unscoped/current workspace fallback' };
 }
 

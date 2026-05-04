@@ -14,6 +14,7 @@ describe('repo/worktree view models', () => {
     });
 
     expect(vm.rows).toHaveLength(1);
+    expect(vm.rows.map((row) => row.id)).toEqual(['repo-1']);
     expect(vm.title).toBe('Repos');
     expect(vm.eyebrow).toBe('Repo ownership');
     expect(vm.activeCount).toBe(1);
@@ -27,6 +28,40 @@ describe('repo/worktree view models', () => {
           currentRunTitle: 'Hub rewrite foundation'
         }
       ]
+    });
+  });
+
+  it('keeps known child worktrees under their owning repo and only promotes orphan worktrees', () => {
+    const vm = buildRepoWorktreeIndexViewModel({
+      repos: [mockRepoSummary],
+      worktrees: [
+        mockWorktreeSummary,
+        {
+          ...mockWorktreeSummary,
+          id: 'orphan-worktree',
+          repoId: 'missing-repo',
+          name: 'orphan branch',
+          branch: 'detached-fixture',
+          activeRuns: 0,
+          openTickets: 0
+        }
+      ],
+      runs: [],
+      chats: [],
+      tickets: [],
+      artifacts: []
+    });
+
+    expect(vm.rows.map((row) => row.id)).toEqual(['repo-1', 'orphan-worktree']);
+    expect(vm.rows[0]).toMatchObject({
+      id: 'repo-1',
+      childWorktrees: [{ id: 'worktree-1' }]
+    });
+    expect(vm.rows[1]).toMatchObject({
+      id: 'orphan-worktree',
+      kind: 'worktree',
+      repoHref: '/repos/missing-repo',
+      childWorktrees: []
     });
   });
 
@@ -162,5 +197,25 @@ describe('repo/worktree view models', () => {
     );
 
     expect(vm.nextTickets.map((ticket) => ticket.title)).toEqual(['Repo ticket']);
+  });
+
+  it('does not use unscoped fallback tickets when scoped tickets exist for a workspace', () => {
+    const vm = buildRepoWorktreeDetailViewModel(
+      {
+        repos: [{ ...mockRepoSummary, id: 'repo-1', status: 'idle', activeRuns: 0 }],
+        worktrees: [],
+        runs: [],
+        chats: [],
+        tickets: [
+          { ...mockTicketSummary, id: 'ticket-scoped', title: 'Repo-owned ticket', repoId: 'repo-1', worktreeId: null },
+          { ...mockTicketSummary, id: 'ticket-unscoped', title: 'Fallback ticket', repoId: null, worktreeId: null, raw: {} }
+        ],
+        artifacts: []
+      },
+      'repo',
+      'repo-1'
+    );
+
+    expect(vm.nextTickets.map((ticket) => ticket.title)).toEqual(['Repo-owned ticket']);
   });
 });
