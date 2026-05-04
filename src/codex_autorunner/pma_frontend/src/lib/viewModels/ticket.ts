@@ -16,6 +16,10 @@ export type TicketListRow = {
   numberLabel: string;
   title: string;
   repoLabel: string;
+  workspaceKind: 'repo' | 'worktree' | 'unscoped';
+  workspaceId: string | null;
+  workspaceHref: string | null;
+  pathLabel: string | null;
   agentLabel: string;
   status: WorkStatus;
   currentRunState: WorkStatus | null;
@@ -28,8 +32,11 @@ export type TicketListRow = {
 export type TicketListViewModel = {
   title: string;
   eyebrow: string;
+  subtitle: string;
   defaultFilter: TicketFilter;
+  defaultWorkspaceFilter: string;
   filters: { id: TicketFilter; label: string; count: number }[];
+  workspaceFilters: { id: string; label: string; count: number }[];
   rows: TicketListRow[];
 };
 
@@ -72,6 +79,10 @@ export type TicketDetailViewModel = {
   title: string;
   status: WorkStatus;
   repoLabel: string;
+  workspaceKind: 'repo' | 'worktree' | 'unscoped';
+  workspaceId: string | null;
+  workspaceHref: string | null;
+  pathLabel: string | null;
   agentLabel: string;
   updatedLabel: string;
   goal: string | null;
@@ -98,20 +109,24 @@ const filterLabels: Record<TicketFilter, string> = {
 export function buildTicketListViewModel(source: TicketSourceData): TicketListViewModel {
   const rows = source.tickets.map((ticket) => ticketToListRow(ticket, source)).sort(bySignalThenRecent);
   return {
-    title: 'Workspace tickets',
-    eyebrow: 'Cross-workspace queue',
+    title: 'Tickets',
+    eyebrow: 'Cross-workspace ticket index',
+    subtitle:
+      'This index spans known repos and worktrees. Unscoped tickets are shown as current workspace fallback until ownership is available.',
     defaultFilter: 'needs_attention',
+    defaultWorkspaceFilter: 'all',
     filters: (Object.keys(filterLabels) as TicketFilter[]).map((id) => ({
       id,
       label: filterLabels[id],
       count: rows.filter((row) => rowMatchesFilter(row, id)).length
     })),
+    workspaceFilters: buildWorkspaceFilters(rows),
     rows
   };
 }
 
-export function filterTicketRows(rows: TicketListRow[], filter: TicketFilter): TicketListRow[] {
-  return rows.filter((row) => rowMatchesFilter(row, filter));
+export function filterTicketRows(rows: TicketListRow[], filter: TicketFilter, workspaceFilter = 'all'): TicketListRow[] {
+  return rows.filter((row) => rowMatchesFilter(row, filter) && rowMatchesWorkspaceFilter(row, workspaceFilter));
 }
 
 export function buildTicketDetailViewModel(
@@ -136,6 +151,10 @@ export function buildTicketDetailViewModel(
     title: detail.title,
     status: run?.status ?? detail.status,
     repoLabel: repoLabel(detail),
+    workspaceKind: workspaceScope(detail).kind,
+    workspaceId: workspaceScope(detail).id,
+    workspaceHref: workspaceHref(detail),
+    pathLabel: detail.path,
     agentLabel: detail.agentId ?? chat?.agentId ?? 'Unassigned',
     updatedLabel: formatRelativeTime(detail.updatedAt ?? run?.lastEventAt ?? null, now),
     goal,
@@ -159,12 +178,17 @@ function ticketToListRow(ticket: TicketSummary, source: TicketSourceData): Ticke
   const run = findTicketRun(ticket, source.runs);
   const chat = findTicketChat(ticket, source.chats, run);
   const status = run?.status ?? ticket.status;
+  const scope = workspaceScope(ticket);
   return {
     id: ticket.id,
     routeId: routeIdForTicket(ticket),
     numberLabel: ticketNumberLabel(ticket),
     title: ticket.title,
-    repoLabel: repoLabel(ticket),
+    repoLabel: scope.label,
+    workspaceKind: scope.kind,
+    workspaceId: scope.id,
+    workspaceHref: workspaceHref(ticket),
+    pathLabel: ticket.path,
     agentLabel: ticket.agentId ?? chat?.agentId ?? 'Unassigned',
     status: ticket.status,
     currentRunState: run?.status ?? chat?.status ?? null,
@@ -175,6 +199,21 @@ function ticketToListRow(ticket: TicketSummary, source: TicketSourceData): Ticke
   };
 }
 
+function buildWorkspaceFilters(rows: TicketListRow[]): { id: string; label: string; count: number }[] {
+  const filters = [{ id: 'all', label: 'All workspaces', count: rows.length }];
+  const scoped = new Map<string, { id: string; label: string; count: number }>();
+  for (const row of rows) {
+    const id = row.workspaceKind === 'unscoped' ? 'unscoped' : `${row.workspaceKind}:${row.workspaceId}`;
+    const label =
+      row.workspaceKind === 'unscoped'
+        ? 'Unscoped fallback'
+        : `${row.workspaceKind === 'repo' ? 'Repo' : 'Worktree'} ${row.workspaceId}`;
+    const current = scoped.get(id);
+    scoped.set(id, { id, label, count: (current?.count ?? 0) + 1 });
+  }
+  return [...filters, ...[...scoped.values()].sort((a, b) => a.label.localeCompare(b.label))];
+}
+
 function rowMatchesFilter(row: TicketListRow, filter: TicketFilter): boolean {
   const runState = row.currentRunState;
   if (filter === 'needs_attention') return row.needsAttention;
@@ -183,6 +222,12 @@ function rowMatchesFilter(row: TicketListRow, filter: TicketFilter): boolean {
   if (filter === 'failed') return row.status === 'failed' || runState === 'failed';
   if (filter === 'open') return row.status !== 'done';
   return row.status === 'done';
+}
+
+function rowMatchesWorkspaceFilter(row: TicketListRow, workspaceFilter: string): boolean {
+  if (workspaceFilter === 'all') return true;
+  if (workspaceFilter === 'unscoped') return row.workspaceKind === 'unscoped';
+  return `${row.workspaceKind}:${row.workspaceId}` === workspaceFilter;
 }
 
 function buildTimeline(detail: TicketDetail, run: PmaRunProgress | null, artifacts: SurfaceArtifact[]): TicketTimelineItem[] {
@@ -333,7 +378,34 @@ function ticketNumberLabel(ticket: TicketSummary): string {
 }
 
 function repoLabel(ticket: TicketSummary): string {
-  return ticket.worktreeId ?? ticket.repoId ?? stringFromRaw(ticket.raw, ['worktree', 'repo', 'path']) ?? 'Current workspace';
+  return workspaceScope(ticket).label;
+}
+
+function workspaceScope(ticket: TicketSummary): {
+  kind: 'repo' | 'worktree' | 'unscoped';
+  id: string | null;
+  label: string;
+} {
+  const raw = ticket.raw;
+  const frontmatter = asRecord(raw.frontmatter);
+  const repoId =
+    ticket.repoId ??
+    stringFromRaw(raw, ['repo_id', 'base_repo_id']) ??
+    stringFromRaw(frontmatter, ['repo_id', 'base_repo_id']);
+  const worktreeId =
+    ticket.worktreeId ??
+    stringFromRaw(raw, ['worktree_id', 'worktree_repo_id']) ??
+    stringFromRaw(frontmatter, ['worktree_id', 'worktree_repo_id']);
+  if (worktreeId) return { kind: 'worktree', id: worktreeId, label: `Worktree: ${worktreeId}` };
+  if (repoId) return { kind: 'repo', id: repoId, label: `Repo: ${repoId}` };
+  return { kind: 'unscoped', id: null, label: 'Unscoped/current workspace fallback' };
+}
+
+function workspaceHref(ticket: TicketSummary): string | null {
+  const scope = workspaceScope(ticket);
+  if (scope.kind === 'repo' && scope.id) return `/repos/${encodeURIComponent(scope.id)}`;
+  if (scope.kind === 'worktree' && scope.id) return `/worktrees/${encodeURIComponent(scope.id)}`;
+  return null;
 }
 
 function artifactToRow(artifact: SurfaceArtifact): TicketArtifactRow {
@@ -373,6 +445,10 @@ function stringFromRaw(raw: Record<string, unknown>, keys: string[]): string | n
     if (typeof value === 'number' && Number.isFinite(value)) return String(value);
   }
   return null;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
 function slug(value: string): string {

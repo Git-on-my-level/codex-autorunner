@@ -34,6 +34,7 @@ describe('ContextspaceView', () => {
     const { body } = render(ContextspaceView, { props: { state: 'ready', vm } });
 
     expect(body).toContain('Workspace memory: codex-autorunner');
+    expect(body).toContain('Repo memory is read from this repo workspace contextspace.');
     expect(body).toContain('active_context.md');
     expect(body).toContain('<h1>Active Context</h1>');
     expect(body).toContain('Copy');
@@ -48,7 +49,16 @@ describe('ContextspaceView', () => {
     expect(body).toContain('0 of 3 standard docs have content');
     expect(body).toContain('active_context.md · missing');
     expect(body).toContain('Active context is empty.');
-    expect(body).toContain("Ask PMA to update this workspace's contextspace");
+    expect(body).toContain('Ask PMA to update this repo contextspace');
     expect(body).not.toContain('textarea');
+  });
+
+  it('renders local contextspace as a local fallback, not global memory', () => {
+    const vm = buildContextspaceViewModel('local', [], [mockRepoSummary], []);
+    const { body } = render(ContextspaceView, { props: { state: 'ready', vm } });
+
+    expect(body).toContain('Local workspace memory');
+    expect(body).toContain('not a global contextspace');
+    expect(body).toContain('Open workspace index');
   });
 });

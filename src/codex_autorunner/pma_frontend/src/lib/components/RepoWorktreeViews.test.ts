@@ -48,8 +48,9 @@ describe('RepoWorktreeViews', () => {
     expect(body).toContain('Hub rewrite foundation');
     expect(body).toContain('codex');
     expect(body).toContain('PMA chat');
-    expect(body).toContain('View workspace tickets');
-    expect(body).toContain('View workspace memory');
+    expect(body).toContain('View repo tickets');
+    expect(body).toContain('href="/tickets?repo=repo-1"');
+    expect(body).toContain('View repo memory');
     expect(body).toContain('href="/contextspace/repo-1"');
     expect(body).toContain('Open preview');
     expect(body).toContain('Debug logs');
@@ -75,7 +76,7 @@ describe('RepoWorktreeViews', () => {
     expect(body).toContain('No active ticket run is visible');
     expect(body).toContain('No worktrees are registered for this repo.');
     expect(body).toContain('Next workspace tickets');
-    expect(body).toContain('View workspace memory');
+    expect(body).toContain('View repo memory');
     expect(body).toContain('href="/contextspace/repo-1"');
     expect(body).not.toContain('Terminal');
     expect(body).not.toContain('Analytics');

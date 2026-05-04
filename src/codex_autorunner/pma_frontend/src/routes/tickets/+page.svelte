@@ -10,6 +10,7 @@
 
   let list = $state<TicketListViewModel | null>(null);
   let selectedFilter = $state<TicketFilter>('needs_attention');
+  let selectedWorkspaceFilter = $state('all');
   let loading = $state(true);
   let error = $state<ApiError | null>(null);
 
@@ -38,7 +39,18 @@
       artifacts: []
     });
     selectedFilter = list.defaultFilter;
+    selectedWorkspaceFilter = workspaceFilterFromUrl() ?? list.defaultWorkspaceFilter;
     loading = false;
+  }
+
+  function workspaceFilterFromUrl(): string | null {
+    const params = new URL(window.location.href).searchParams;
+    const repo = params.get('repo');
+    const worktree = params.get('worktree');
+    if (worktree) return `worktree:${worktree}`;
+    if (repo) return `repo:${repo}`;
+    if (params.has('unscoped')) return 'unscoped';
+    return null;
   }
 </script>
 
@@ -47,6 +59,7 @@
   mode="list"
   {list}
   {selectedFilter}
+  {selectedWorkspaceFilter}
   onFilter={(filter) => (selectedFilter = filter)}
   errorMessage={error?.message ?? null}
 />

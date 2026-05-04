@@ -16,7 +16,8 @@ export type ContextspaceViewModel = {
   workspaceId: string;
   title: string;
   eyebrow: string;
-  workspaceKind: 'repo' | 'worktree' | 'workspace';
+  workspaceKind: 'repo' | 'worktree' | 'local' | 'workspace';
+  description: string;
   openWorkspaceHref: string;
   openWorkspaceLabel: string;
   askPmaHref: string;
@@ -38,7 +39,7 @@ export function buildContextspaceViewModel(
 ): ContextspaceViewModel {
   const repo = repos.find((candidate) => candidate.id === workspaceId) ?? null;
   const worktree = worktrees.find((candidate) => candidate.id === workspaceId) ?? null;
-  const workspaceKind = worktree ? 'worktree' : repo ? 'repo' : 'workspace';
+  const workspaceKind = workspaceId === 'local' ? 'local' : worktree ? 'worktree' : repo ? 'repo' : 'workspace';
   const title = worktree?.name ?? repo?.name ?? workspaceId;
   const docMap = new Map(docs.map((doc) => [normalizeDocKind(doc.kind || doc.id || doc.name), doc]));
   const tabs = DOC_ORDER.map((entry) => {
@@ -52,18 +53,28 @@ export function buildContextspaceViewModel(
       updatedAt: doc?.updatedAt ?? null
     };
   });
-  const askPrompt = `Please review and update the contextspace docs for workspace ${workspaceId}: active_context.md, spec.md, and decisions.md.`;
+  const askPrompt = `Please review and update the ${workspaceKind} contextspace docs for workspace ${workspaceId}: active_context.md, spec.md, and decisions.md.`;
 
   return {
     workspaceId,
-    title: `Workspace memory: ${title}`,
+    title: workspaceKind === 'local' ? 'Local workspace memory' : `Workspace memory: ${title}`,
     eyebrow:
       workspaceKind === 'repo'
         ? 'Repo-scoped contextspace'
         : workspaceKind === 'worktree'
           ? 'Worktree-scoped contextspace'
-          : 'Workspace contextspace',
+          : workspaceKind === 'local'
+            ? 'Local workspace memory'
+            : 'Unscoped workspace contextspace',
     workspaceKind,
+    description:
+      workspaceKind === 'repo'
+        ? 'Repo memory is read from this repo workspace contextspace.'
+        : workspaceKind === 'worktree'
+          ? 'Worktree memory is read from this worktree workspace contextspace.'
+          : workspaceKind === 'local'
+            ? 'Local memory is the current hub workspace fallback, not a global contextspace.'
+            : 'This workspace was not matched to a known repo or worktree; treat it as an unscoped fallback.',
     openWorkspaceHref:
       workspaceKind === 'worktree'
         ? `/worktrees/${encodeURIComponent(workspaceId)}`
@@ -71,7 +82,11 @@ export function buildContextspaceViewModel(
           ? `/repos/${encodeURIComponent(workspaceId)}`
           : '/repos',
     openWorkspaceLabel:
-      workspaceKind === 'worktree' ? 'Open worktree variant' : workspaceKind === 'repo' ? 'Open repo' : 'Open workspace index',
+      workspaceKind === 'worktree'
+        ? 'Open worktree variant'
+        : workspaceKind === 'repo'
+          ? 'Open repo'
+          : 'Open workspace index',
     askPmaHref: `/pma?draft=${encodeURIComponent(askPrompt)}`,
     docs: tabs,
     presentCount: tabs.filter((doc) => !doc.isMissing).length

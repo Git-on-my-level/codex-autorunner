@@ -16,7 +16,10 @@ describe('TicketViews', () => {
       props: { state: 'ready', mode: 'list', list, selectedFilter: 'active' }
     });
 
-    expect(body).toContain('Workspace ticket queue');
+    expect(body).toContain('Cross-workspace ticket queue');
+    expect(body).toContain('All workspaces');
+    expect(body).toContain('Worktree worktree-1');
+    expect(body).toContain('Worktree: worktree-1');
     expect(body).toContain('#110');
     expect(body).toContain('Implement typed UI API client and view models');
     expect(body).toContain('PMA chat');
@@ -54,6 +57,9 @@ Users can browse tickets.
     });
 
     expect(body).toContain('Ticket contract');
+    expect(body).toContain('Workspace scope');
+    expect(body).toContain('Worktree: worktree-1');
+    expect(body).toContain('href="/worktrees/worktree-1"');
     expect(body).toContain('Users can browse tickets.');
     expect(body).toContain('Render list');
     expect(body).toContain('Acceptance criteria');

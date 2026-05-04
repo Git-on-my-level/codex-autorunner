@@ -28,16 +28,37 @@ describe('ticket view models', () => {
     });
 
     expect(vm.defaultFilter).toBe('needs_attention');
-    expect(vm.title).toBe('Workspace tickets');
-    expect(vm.eyebrow).toBe('Cross-workspace queue');
+    expect(vm.title).toBe('Tickets');
+    expect(vm.eyebrow).toBe('Cross-workspace ticket index');
+    expect(vm.subtitle).toContain('Unscoped tickets');
     expect(vm.rows[0]).toMatchObject({
       numberLabel: '#110',
       title: mockTicketSummary.title,
+      repoLabel: 'Worktree: worktree-1',
       currentRunState: 'running',
       chatHref: '/pma?chat=chat-1'
     });
+    expect(vm.workspaceFilters.map((filter) => filter.id)).toContain('worktree:worktree-1');
     expect(filterTicketRows(vm.rows, 'active')).toHaveLength(1);
+    expect(filterTicketRows(vm.rows, 'active', 'worktree:worktree-1')).toHaveLength(1);
     expect(filterTicketRows(vm.rows, 'done_recent')).toHaveLength(1);
+  });
+
+  it('labels unscoped tickets honestly as current workspace fallback', () => {
+    const vm = buildTicketListViewModel({
+      tickets: [{ ...mockTicketSummary, repoId: null, worktreeId: null, raw: {} }],
+      runs: [],
+      chats: [],
+      artifacts: []
+    });
+
+    expect(vm.rows[0]).toMatchObject({
+      workspaceKind: 'unscoped',
+      repoLabel: 'Unscoped/current workspace fallback',
+      workspaceHref: null
+    });
+    expect(vm.workspaceFilters.map((filter) => filter.id)).toContain('unscoped');
+    expect(filterTicketRows(vm.rows, 'open', 'unscoped')).toHaveLength(1);
   });
 
   it('parses ticket contract sections from markdown', () => {
@@ -79,6 +100,8 @@ Users can inspect tickets.
     );
 
     expect(detail.goal).toContain('Users can inspect tickets');
+    expect(detail.repoLabel).toBe('Worktree: worktree-1');
+    expect(detail.workspaceHref).toBe('/worktrees/worktree-1');
     expect(detail.timeline.map((item) => item.title)).toContain('waiting');
     expect(detail.artifacts[0]).toMatchObject({ kind: 'preview_url' });
     expect(detail.actions.map((action) => action.label)).toContain('Open PMA chat');

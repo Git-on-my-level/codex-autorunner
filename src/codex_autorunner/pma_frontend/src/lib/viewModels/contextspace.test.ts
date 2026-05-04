@@ -24,6 +24,7 @@ describe('contextspace view models', () => {
 
     expect(vm.title).toBe('Workspace memory: codex-autorunner');
     expect(vm.eyebrow).toBe('Repo-scoped contextspace');
+    expect(vm.description).toContain('Repo memory');
     expect(vm.openWorkspaceHref).toBe('/repos/repo-1');
     expect(vm.askPmaHref).toContain('/pma?draft=');
     expect(vm.docs.map((doc) => doc.filename)).toEqual(['active_context.md', 'spec.md', 'decisions.md']);
@@ -35,6 +36,7 @@ describe('contextspace view models', () => {
     const vm = buildContextspaceViewModel('worktree-1', [], [mockRepoSummary], [mockWorktreeSummary]);
 
     expect(vm.workspaceKind).toBe('worktree');
+    expect(vm.description).toContain('Worktree memory');
     expect(vm.openWorkspaceHref).toBe('/worktrees/worktree-1');
     expect(vm.openWorkspaceLabel).toBe('Open worktree variant');
   });
@@ -42,7 +44,10 @@ describe('contextspace view models', () => {
   it('links unknown or local contextspace back to the workspace index', () => {
     const vm = buildContextspaceViewModel('local', [], [mockRepoSummary], [mockWorktreeSummary]);
 
-    expect(vm.workspaceKind).toBe('workspace');
+    expect(vm.workspaceKind).toBe('local');
+    expect(vm.title).toBe('Local workspace memory');
+    expect(vm.eyebrow).toBe('Local workspace memory');
+    expect(vm.description).toContain('not a global contextspace');
     expect(vm.openWorkspaceHref).toBe('/repos');
     expect(vm.openWorkspaceLabel).toBe('Open workspace index');
   });

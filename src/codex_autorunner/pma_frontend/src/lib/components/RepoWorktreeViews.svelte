@@ -133,7 +133,7 @@
       <section class="page-panel execution-panel wide">
         <div class="panel-heading-row">
           <h2>Current run</h2>
-          <a href="/tickets">Workspace tickets</a>
+          <a href={detail.ticketIndexHref}>{detail.ticketIndexLabel}</a>
         </div>
         {#if detail.currentRuns.length === 0 || !detail.hasActiveRun}
           <div class="state-panel">No active ticket run is visible for this {detail.kind === 'worktree' ? 'worktree' : 'repo'}.</div>

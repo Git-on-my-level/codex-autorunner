@@ -101,6 +101,8 @@ export type RepoWorktreeDetailViewModel = {
   nextTickets: RepoWorktreeTicketRow[];
   artifacts: RepoWorktreeArtifactRow[];
   links: RepoWorktreeLink[];
+  ticketIndexHref: string;
+  ticketIndexLabel: string;
   childWorktrees: RepoWorktreeChildRow[];
   baseRepoLabel: string | null;
   baseRepoHref: string | null;
@@ -195,6 +197,8 @@ export function buildRepoWorktreeDetailViewModel(
     nextTickets,
     artifacts: runArtifacts.slice(0, 6),
     links: buildContextLinks(kind, id, runArtifacts),
+    ticketIndexHref: scopedTicketHref(kind, id),
+    ticketIndexLabel: kind === 'repo' ? 'Repo tickets' : 'Worktree tickets',
     childWorktrees: childWorktreeSummaries.map((worktree) => worktreeToChildRow(worktree, source)),
     baseRepoLabel: baseRepo?.name ?? (kind === 'worktree' ? (resource as WorktreeSummary | null)?.repoId ?? null : null),
     baseRepoHref: kind === 'worktree' && (resource as WorktreeSummary | null)?.repoId ? `/repos/${encodeURIComponent((resource as WorktreeSummary).repoId as string)}` : null,
@@ -413,13 +417,18 @@ function fallbackTicketSummary(id: string): TicketSummary {
 
 function buildContextLinks(kind: RepoWorktreeKind, id: string, artifacts: RepoWorktreeArtifactRow[]): RepoWorktreeLink[] {
   const preview = artifacts.find((artifact) => artifact.kind === 'preview_url' && artifact.href);
+  const scopeLabel = kind === 'repo' ? 'repo' : 'worktree';
   return [
     { label: 'Open PMA chat', href: '/pma', secondary: false },
-    { label: 'View workspace tickets', href: '/tickets', secondary: false },
-    { label: 'View workspace memory', href: `/contextspace/${encodeURIComponent(id)}`, secondary: false },
+    { label: `View ${scopeLabel} tickets`, href: scopedTicketHref(kind, id), secondary: false },
+    { label: `View ${scopeLabel} memory`, href: `/contextspace/${encodeURIComponent(id)}`, secondary: false },
     ...(preview?.href ? [{ label: 'Open preview', href: preview.href, secondary: false }] : []),
-    { label: 'Ticket diagnostics', href: '/tickets', secondary: true }
+    { label: 'Cross-workspace ticket index', href: '/tickets', secondary: true }
   ];
+}
+
+function scopedTicketHref(kind: RepoWorktreeKind, id: string): string {
+  return `/tickets?${kind === 'repo' ? 'repo' : 'worktree'}=${encodeURIComponent(id)}`;
 }
 
 function runMatchesResource(run: PmaRunProgress, kind: RepoWorktreeKind, id: string): boolean {

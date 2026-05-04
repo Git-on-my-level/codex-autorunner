@@ -73,8 +73,10 @@ describe('repo/worktree view models', () => {
       ticketHref: '/tickets/TICKET-110'
     });
     expect(vm.links.map((link) => link.label)).toContain('Open PMA chat');
-    expect(vm.links.map((link) => link.label)).toContain('View workspace tickets');
-    expect(vm.links.map((link) => link.label)).toContain('View workspace memory');
+    expect(vm.links.map((link) => link.label)).toContain('View repo tickets');
+    expect(vm.links.find((link) => link.label === 'View repo tickets')?.href).toBe('/tickets?repo=repo-1');
+    expect(vm.links.map((link) => link.label)).toContain('View repo memory');
+    expect(vm.ticketIndexHref).toBe('/tickets?repo=repo-1');
     expect(vm.links.map((link) => link.label)).toContain('Open preview');
     expect(vm.artifacts[0]).toMatchObject({ kind: 'preview_url' });
     expect(vm.childWorktrees).toHaveLength(1);
@@ -101,6 +103,7 @@ describe('repo/worktree view models', () => {
     expect(vm.baseRepoLabel).toBe('codex-autorunner');
     expect(vm.baseRepoHref).toBe('/repos/repo-1');
     expect(vm.currentRuns[0].ticketHref).toBe('/tickets/TICKET-110');
+    expect(vm.links.find((link) => link.label === 'View worktree tickets')?.href).toBe('/tickets?worktree=worktree-1');
   });
 
   it('does not match repo-level records on worktree detail through the parent repo id', () => {
@@ -138,7 +141,7 @@ describe('repo/worktree view models', () => {
     expect(vm.hasActiveRun).toBe(false);
     expect(vm.currentRuns).toHaveLength(0);
     expect(vm.nextTickets[0].title).toBe(mockTicketSummary.title);
-    expect(vm.links.find((link) => link.label === 'Ticket diagnostics')?.secondary).toBe(true);
+    expect(vm.links.find((link) => link.label === 'Cross-workspace ticket index')?.secondary).toBe(true);
   });
 
   it('scopes queued tickets to the selected repo when ticket ownership is known', () => {

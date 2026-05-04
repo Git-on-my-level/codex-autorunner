@@ -13,6 +13,7 @@
     list = null,
     detail = null,
     selectedFilter = 'needs_attention',
+    selectedWorkspaceFilter = 'all',
     errorMessage = null,
     actionStatus = null,
     onFilter = undefined,
@@ -23,13 +24,14 @@
     list?: TicketListViewModel | null;
     detail?: TicketDetailViewModel | null;
     selectedFilter?: TicketFilter;
+    selectedWorkspaceFilter?: string;
     errorMessage?: string | null;
     actionStatus?: string | null;
     onFilter?: ((filter: TicketFilter) => void) | undefined;
     onCommand?: ((command: 'resume' | 'bootstrap') => void) | undefined;
   } = $props();
 
-  const visibleRows = $derived(list ? filterTicketRows(list.rows, selectedFilter) : []);
+  const visibleRows = $derived(list ? filterTicketRows(list.rows, selectedFilter, selectedWorkspaceFilter) : []);
 </script>
 
 {#if state === 'loading'}
@@ -45,6 +47,26 @@
     <div class="section-heading">
       <p class="eyebrow">{list.eyebrow}</p>
       <h1>{list.title}</h1>
+      <p>{list.subtitle}</p>
+    </div>
+
+    <div class="filter-row ticket-filter-row" role="tablist" aria-label="Workspace filters">
+      {#each list.workspaceFilters as filter}
+        <a
+          class:active={selectedWorkspaceFilter === filter.id}
+          class="chip"
+          role="tab"
+          aria-selected={selectedWorkspaceFilter === filter.id}
+          href={filter.id === 'all'
+            ? '/tickets'
+            : filter.id === 'unscoped'
+              ? '/tickets?unscoped=1'
+              : `/tickets?${filter.id.startsWith('repo:') ? 'repo' : 'worktree'}=${encodeURIComponent(filter.id.split(':')[1] ?? '')}`}
+        >
+          {filter.label}
+          <span>{filter.count}</span>
+        </a>
+      {/each}
     </div>
 
     <div class="filter-row ticket-filter-row" role="tablist" aria-label="Ticket filters">
@@ -65,11 +87,11 @@
 
     <section class="page-panel ticket-list-panel">
       <div class="panel-heading-row">
-        <h2>Workspace ticket queue</h2>
+        <h2>Cross-workspace ticket queue</h2>
         <a href="/pma">Open PMA</a>
       </div>
       {#if visibleRows.length === 0}
-        <div class="state-panel">No tickets match this filter.</div>
+        <div class="state-panel">No tickets match this status and workspace filter.</div>
       {:else}
         <div class="ticket-table" role="table" aria-label="Ticket queue">
           <div class="ticket-table-head" role="row">
@@ -87,7 +109,14 @@
                 <strong>{row.numberLabel}</strong>
                 <span>{row.title}</span>
               </a>
-              <span>{row.repoLabel}</span>
+              <span>
+                {#if row.workspaceHref}
+                  <a class="inline-link" href={row.workspaceHref}>{row.repoLabel}</a>
+                {:else}
+                  {row.repoLabel}
+                {/if}
+                {#if row.pathLabel}<small class="row-meta">{row.pathLabel}</small>{/if}
+              </span>
               <span>{row.agentLabel}</span>
               <span><span class="status-pill {row.status}">{statusLabel(row.status)}</span></span>
               <span>
@@ -144,7 +173,19 @@
         <dl class="compact-definition ticket-definition">
           <div><dt>Number</dt><dd>{detail.numberLabel}</dd></div>
           <div><dt>Agent</dt><dd>{detail.agentLabel}</dd></div>
-          <div><dt>Workspace scope</dt><dd>{detail.repoLabel}</dd></div>
+          <div>
+            <dt>Workspace scope</dt>
+            <dd>
+              {#if detail.workspaceHref}
+                <a href={detail.workspaceHref}>{detail.repoLabel}</a>
+              {:else}
+                {detail.repoLabel}
+              {/if}
+            </dd>
+          </div>
+          {#if detail.pathLabel}
+            <div><dt>Ticket path</dt><dd>{detail.pathLabel}</dd></div>
+          {/if}
         </dl>
         {#if detail.goal}
           <section class="contract-section">
