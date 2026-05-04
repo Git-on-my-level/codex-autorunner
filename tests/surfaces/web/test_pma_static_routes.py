@@ -1,7 +1,16 @@
+import base64
+import hashlib
+
 from fastapi.testclient import TestClient
 
 from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.server import create_hub_app
+from codex_autorunner.surfaces.web.static_assets import _inline_script_hashes
+
+
+def _script_hash(script: str) -> str:
+    digest = hashlib.sha256(script.encode("utf-8")).digest()
+    return f"'sha256-{base64.b64encode(digest).decode('ascii')}'"
 
 
 def test_pma_top_level_routes_serve_new_spa(tmp_path):
@@ -52,6 +61,15 @@ def test_pma_index_csp_allows_sveltekit_bootstrap_without_weakening_legacy(tmp_p
     assert "script-src 'self' 'sha256-" in pma_csp
     assert "'unsafe-inline'" not in pma_csp.split("script-src", 1)[1].split(";", 1)[0]
     assert "script-src 'self';" in legacy_csp
+
+
+def test_inline_script_hashes_match_mixed_case_script_tags():
+    assert _inline_script_hashes("<SCRIPT>alpha()</SCRIPT>") == [
+        _script_hash("alpha()")
+    ]
+    assert _inline_script_hashes('<ScRiPt type="module">beta()</sCrIpT>') == [
+        _script_hash("beta()")
+    ]
 
 
 def test_pma_base_path_routes_redirect_and_serve_spa(tmp_path):

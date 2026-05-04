@@ -259,7 +259,9 @@ def render_pma_index_html(static_dir: Path, base_path: str = "") -> str:
     return html
 
 
-_INLINE_SCRIPT_RE = re.compile(r"<script(?:\s[^>]*)?>(.*?)</script>", re.DOTALL)
+_INLINE_SCRIPT_RE = re.compile(
+    r"<script\b[^>]*>(.*?)</script\s*>", re.DOTALL | re.IGNORECASE
+)
 
 
 def _inline_script_hashes(html: str) -> list[str]:
