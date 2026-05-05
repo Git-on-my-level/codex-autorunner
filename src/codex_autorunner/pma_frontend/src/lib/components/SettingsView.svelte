@@ -75,7 +75,7 @@
           label: 'Update runtime preferences',
           description: 'Save PMA model and run-limit overrides for future autorunner work.',
           available: true,
-          reason: 'This writes session settings through /api/session/settings.'
+          reason: 'Requests explicit approval through /api/session/settings/approvals before writing /api/session/settings.'
         })}>Save preferences</button>
       </div>
       <div class="settings-form-grid">
@@ -200,7 +200,7 @@
       <div class="approval-actions">
         <button type="button" onclick={() => onCancelSensitiveAction?.()}>Cancel</button>
         <button class="danger-action" type="button" onclick={() => onConfirmSensitiveAction?.(pendingAction)}>
-          Approve change
+          Request approval
         </button>
       </div>
     </div>

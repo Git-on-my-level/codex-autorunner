@@ -43,7 +43,12 @@ describe('settings view model', () => {
     expect(view.pmaAgents).toMatchObject([{ id: 'hermes', modelStatus: 'available', modelCount: 1 }]);
     expect(view.codingAgents).toMatchObject([{ id: 'codex', modelStatus: 'unsupported' }]);
     expect(view.secrets[0]).toMatchObject({ value: 'Unavailable in PMA settings' });
-    expect(view.sensitiveActions.every((action) => action.available === false)).toBe(true);
+    expect(view.sensitiveActions.find((action) => action.id === 'modify-car-config')).toMatchObject({
+      available: true
+    });
+    expect(view.sensitiveActions.find((action) => action.id === 'manage-secrets')?.reason).toContain(
+      'Missing backend capability'
+    );
     expect(view.approvals).toHaveLength(1);
   });
 

@@ -30,7 +30,7 @@
       pmaApi.settings.getSession(),
       pmaApi.pma.listAgents(),
       pmaApi.pma.listFiles(),
-      pmaApi.settings.listApprovals()
+      pmaApi.settings.listSessionUpdateApprovals()
     ]);
 
     if (!session.ok && !agents.ok && !files.ok && !approvals.ok) {
@@ -69,21 +69,13 @@
   async function confirmSensitiveAction(action: SettingsSensitiveAction): Promise<void> {
     pendingAction = null;
     saveError = null;
-    if (action.id !== 'update-runtime-preferences' || !view) return;
-    const result = await pmaApi.settings.updateSession(buildSessionUpdatePayload(view.session));
+    if (!['update-runtime-preferences', 'modify-car-config'].includes(action.id) || !view) return;
+    const result = await pmaApi.settings.requestSessionUpdateApproval(buildSessionUpdatePayload(view.session));
     if (!result.ok) {
       saveError = result.error;
       return;
     }
-    view = buildSettingsViewModel({
-      session: result.data,
-      agents: [...view.pmaAgents, ...view.codingAgents].map((agent) => ({
-        id: agent.id,
-        name: agent.name,
-        capabilities: agent.capabilities
-      })),
-      approvals: view.approvals
-    });
+    view = { ...view, approvals: filterSensitiveCarApprovals([...view.approvals, result.data]) };
     await loadSettings();
   }
 

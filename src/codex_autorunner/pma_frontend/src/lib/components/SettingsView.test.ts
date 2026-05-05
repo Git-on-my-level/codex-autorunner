@@ -77,7 +77,7 @@ describe('settings page component', () => {
     expect(body).toContain('role="dialog"');
     expect(body).toContain('Sensitive settings approval');
     expect(body).toContain('Modify CAR config');
-    expect(body).toContain('Approve change');
+    expect(body).toContain('Request approval');
     expect(body).toContain('Cancel');
   });
 });

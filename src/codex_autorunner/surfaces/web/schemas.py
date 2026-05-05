@@ -385,6 +385,13 @@ class SessionSettingsRequest(Payload):
     runner_stop_after_runs: Optional[int] = None
 
 
+class SessionSettingsApprovalDecisionRequest(Payload):
+    model_config = ConfigDict(extra="forbid")
+
+    decision: Literal["approve", "decline"]
+    approval_id: Optional[str] = None
+
+
 class GithubIssueRequest(Payload):
     issue: str
 

@@ -63,43 +63,43 @@ const sensitiveActionCopy: SettingsSensitiveAction[] = [
     id: 'modify-car-config',
     label: 'Modify CAR config',
     description: 'Change persistent hub or repo CAR configuration.',
-    available: false,
-    reason: 'No wired PMA settings route is exposed yet.'
+    available: true,
+    reason: 'Runtime preferences are wired through /api/session/settings/approvals and /api/session/settings/approvals/{approval_id}/decision.'
   },
   {
     id: 'manage-secrets',
     label: 'Manage secrets',
     description: 'Add, rotate, or remove stored secret values.',
     available: false,
-    reason: 'Secret management is not exposed in the PMA settings API yet.'
+    reason: 'Missing backend capability: no /api/session/secrets approval request or decision route exists yet.'
   },
   {
     id: 'delete-repo-state',
     label: 'Delete repo/worktree state',
     description: 'Remove repo registrations, worktrees, or local workspace state.',
     available: false,
-    reason: 'Destructive state deletion is intentionally hidden until a dedicated route exists.'
+    reason: 'Missing backend capability: no approval-backed repo/worktree deletion route exists yet.'
   },
   {
     id: 'destructive-cleanup',
     label: 'Destructive cleanup',
     description: 'Delete generated runtime files, snapshots, or cached state.',
     available: false,
-    reason: 'Cleanup is unavailable from this simplified settings page.'
+    reason: 'Missing backend capability: no approval-backed cleanup route exists yet.'
   },
   {
     id: 'reset-hub-runtime',
     label: 'Reset hub/runtime state',
     description: 'Clear runtime state or reset the hub control plane.',
     available: false,
-    reason: 'Runtime reset is not wired in the PMA settings API.'
+    reason: 'Missing backend capability: no approval-backed hub/runtime reset route exists yet.'
   },
   {
     id: 'change-credentials',
     label: 'Change stored credentials',
     description: 'Update provider tokens, app credentials, or account-linked secrets.',
     available: false,
-    reason: 'Credential storage is not exposed through a safe settings route yet.'
+    reason: 'Missing backend capability: no approval-backed credential storage route exists yet.'
   }
 ];
 
