@@ -192,7 +192,8 @@ describe('API client error handling', () => {
         return Response.json({
           docs: [
             { name: 'AGENTS.md', exists: true, mtime: '2026-05-04T00:00:00Z' },
-            { name: 'active_context.md', exists: true }
+            { name: 'active_context.md', exists: true },
+            { name: 'scratch.md', exists: true }
           ]
         });
       }
@@ -208,6 +209,7 @@ describe('API client error handling', () => {
     expect(fetcher).toHaveBeenCalledWith('/hub/pma/docs', expect.any(Object));
     expect(fetcher).toHaveBeenCalledWith('/hub/pma/docs/AGENTS.md', expect.any(Object));
     expect(fetcher).toHaveBeenCalledWith('/hub/pma/docs/active_context.md', expect.any(Object));
+    expect(fetcher).not.toHaveBeenCalledWith('/hub/pma/docs/scratch.md', expect.any(Object));
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.data.map((doc) => [doc.name, doc.content])).toEqual([
@@ -215,6 +217,29 @@ describe('API client error handling', () => {
         ['active_context.md', 'Current PMA work']
       ]);
       expect(result.data[0].updatedAt).toBe('2026-05-04T00:00:00Z');
+    }
+  });
+
+  it('updates PMA docs through the hub docs endpoint', async () => {
+    const fetcher = vi.fn(async () => Response.json({ name: 'AGENTS.md', status: 'ok' })) as unknown as typeof fetch;
+    const client = new PmaApiClient(fetcher);
+
+    const result = await client.pma.updateDoc('AGENTS.md', '# Updated guidance');
+
+    expect(fetcher).toHaveBeenCalledWith(
+      '/hub/pma/docs/AGENTS.md',
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({ content: '# Updated guidance' })
+      })
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data).toMatchObject({
+        id: 'AGENTS.md',
+        name: 'AGENTS.md',
+        content: '# Updated guidance'
+      });
     }
   });
 
@@ -228,8 +253,15 @@ describe('API client error handling', () => {
     ) as unknown as typeof fetch;
     const client = new PmaApiClient(fetcher);
 
-    const result = await client.contextspace.updateDocument('active_context', '# Updated');
+    const result = await client.contextspace.updateDocument('repo-1', 'active_context', '# Updated');
 
+    expect(fetcher).toHaveBeenCalledWith(
+      '/repos/repo-1/api/contextspace/active_context',
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({ content: '# Updated' })
+      })
+    );
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.data.map((doc) => doc.name)).toEqual(['active_context.md', 'decisions.md', 'spec.md']);

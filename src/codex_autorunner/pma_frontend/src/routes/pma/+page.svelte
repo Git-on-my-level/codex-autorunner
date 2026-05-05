@@ -17,6 +17,7 @@
     approvalActionUrl,
     buildManagedThreadCreatePayload,
     buildManagedThreadMessagePayload,
+    buildPmaLiveActivity,
     buildPmaCards,
     chooseActiveChatId,
     composeMessageWithAttachments,
@@ -31,7 +32,8 @@
     summarizeFilterCounts,
     type PendingAttachment,
     type PmaCard,
-    type PmaChatFilter
+    type PmaChatFilter,
+    type PmaLiveActivity
   } from '$lib/viewModels/pmaChat';
 
   let chats = $state<PmaChatSummary[]>([]);
@@ -67,6 +69,7 @@
   let fileInput: HTMLInputElement | null = $state(null);
   let imageInput: HTMLInputElement | null = $state(null);
   let messageStack: HTMLDivElement | null = $state(null);
+  let pendingRefreshTimer: number | null = null;
   let lastScrolledChatId: string | null = null;
   let lastScrolledCardCount = 0;
 
@@ -80,6 +83,7 @@
     }))
   );
   const activeCards = $derived<PmaCard[]>(buildPmaCards(visibleMessages, progress, activeChat, artifacts));
+  const liveActivity = $derived<PmaLiveActivity | null>(buildPmaLiveActivity(progress));
   const modelState = $derived(modelSelectorState(loadingModels, modelError?.message ?? null, models.length));
   const agentStateLabel = $derived(
     agentError ? agentError.message : agents.length === 0 ? 'No PMA agents exposed' : 'PMA agent'
@@ -95,6 +99,7 @@
   });
 
   onDestroy(() => {
+    if (pendingRefreshTimer) window.clearTimeout(pendingRefreshTimer);
     closeStream();
   });
 
@@ -209,8 +214,12 @@
         if (event.kind === 'progress' || event.kind === 'tail' || event.kind === 'state') {
           progress = mapPmaRunProgress(event.payload);
         }
-        if (event.kind === 'message' || event.kind === 'tail') {
-          void refreshActive(chatId, { quiet: true });
+        if (event.kind === 'message') {
+          scheduleActiveRefresh(chatId, 250);
+          return;
+        }
+        if (progress?.status === 'done' || progress?.status === 'failed') {
+          scheduleActiveRefresh(chatId, 700);
         }
       },
       onError: () => {
@@ -219,6 +228,14 @@
         streamError = 'Live PMA updates were interrupted. Polling continues in the background.';
       }
     });
+  }
+
+  function scheduleActiveRefresh(chatId: string, delayMs = 600): void {
+    if (pendingRefreshTimer) window.clearTimeout(pendingRefreshTimer);
+    pendingRefreshTimer = window.setTimeout(() => {
+      pendingRefreshTimer = null;
+      if (activeChatId === chatId) void refreshActive(chatId, { quiet: true });
+    }, delayMs);
   }
 
   function closeStream(): void {
@@ -618,6 +635,30 @@
           <p>Send a message or attach files so PMA can start from current context.</p>
         </div>
       {:else}
+        {#if liveActivity && (liveActivity.state === 'running' || liveActivity.state === 'waiting' || liveActivity.state === 'blocked')}
+          <section class={`live-activity ${liveActivity.state}`} aria-label="PMA live activity">
+            <div class="live-activity-header">
+              <span class="live-pulse" aria-hidden="true"></span>
+              <div>
+                <strong>{liveActivity.title}</strong>
+                <p>{liveActivity.summary}</p>
+              </div>
+              {#if liveActivity.elapsedLabel}
+                <span class="live-activity-time">{liveActivity.elapsedLabel}</span>
+              {/if}
+            </div>
+            {#if liveActivity.steps.length > 0}
+              <ol class="live-step-list" aria-label="Recent PMA steps">
+                {#each liveActivity.steps as step (step.id)}
+                  <li>
+                    <span>{step.title}</span>
+                    {#if step.summary}<small>{step.summary}</small>{/if}
+                  </li>
+                {/each}
+              </ol>
+            {/if}
+          </section>
+        {/if}
         {#each approvals as approval (approval.id)}
           <SensitiveApprovalCard {approval} onDecision={decideApproval} />
         {/each}
@@ -632,25 +673,6 @@
               <span class="artifact-type">Ticket</span>
               <strong>{card.title}</strong>
               <p>{card.summary ?? 'PMA created or is managing this ticket.'}</p>
-            </article>
-          {:else if card.kind === 'progress'}
-            <article class="artifact-card progress-card">
-              <span class="artifact-type">Run progress</span>
-              <strong>{statusLabel(card.progress.status)}{card.progress.phase ? ` · ${card.progress.phase}` : ''}</strong>
-              <p>{card.progress.guidance ?? `Queue depth ${card.progress.queueDepth}. Last event ${formatRelativeTime(card.progress.lastEventAt)}.`}</p>
-              <details>
-                <summary>Debug details</summary>
-                <pre>{JSON.stringify(card.progress.raw, null, 2)}</pre>
-              </details>
-            </article>
-          {:else if card.kind === 'streaming'}
-            <article class="artifact-card stream-card">
-              <span class="artifact-type">Agent status</span>
-              <strong>{card.progress.status === 'running' ? 'Streaming' : 'Waiting'}</strong>
-              <p>
-                {card.progress.elapsedSeconds ?? 0}s elapsed
-                {card.progress.idleSeconds !== null ? `, ${card.progress.idleSeconds}s idle` : ''}
-              </p>
             </article>
           {:else}
             <SurfaceArtifactCard artifact={card.artifact} />

@@ -722,6 +722,93 @@ select {
   border-left-color: var(--color-warning);
 }
 
+.live-activity {
+  display: grid;
+  gap: var(--space-3);
+  max-width: 760px;
+  padding: var(--space-3);
+  border: 1px solid #dce4ee;
+  border-radius: var(--radius-3);
+  background: #fbfcfe;
+}
+
+.live-activity-header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.live-activity-header p {
+  margin: 3px 0 0;
+  color: var(--color-ink-muted);
+}
+
+.live-pulse {
+  width: 9px;
+  height: 9px;
+  margin-top: 8px;
+  border-radius: 999px;
+  background: var(--color-success);
+  box-shadow: 0 0 0 0 rgb(22 131 94 / .34);
+  animation: live-pulse 1.8s ease-out infinite;
+}
+
+.live-activity.waiting .live-pulse {
+  background: var(--color-warning);
+  box-shadow: 0 0 0 0 rgb(170 106 0 / .34);
+}
+
+.live-activity-time {
+  color: var(--color-ink-muted);
+  font-size: var(--font-size-0);
+  white-space: nowrap;
+}
+
+.live-step-list {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0 0 0 20px;
+  color: var(--color-ink-muted);
+}
+
+.live-step-list li {
+  padding-left: var(--space-1);
+}
+
+.live-step-list span {
+  display: block;
+  color: var(--color-ink);
+  font-weight: 720;
+}
+
+.live-step-list small {
+  display: block;
+  margin-top: 2px;
+  overflow: hidden;
+  color: var(--color-ink-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@keyframes live-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgb(22 131 94 / .34);
+  }
+  80%,
+  100% {
+    box-shadow: 0 0 0 9px rgb(22 131 94 / 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-pulse {
+    animation: none;
+  }
+}
+
 .artifact-type {
   display: inline-block;
   margin-bottom: var(--space-2);
@@ -1576,6 +1663,45 @@ textarea:disabled {
 
 .contextspace-empty p {
   margin-bottom: var(--space-3);
+}
+
+.markdown-edit-target.markdown-editable {
+  cursor: text;
+}
+
+.markdown-edit-target.markdown-editable:focus-visible {
+  outline: 3px solid rgb(34 102 210 / .32);
+  outline-offset: 3px;
+}
+
+.markdown-editor-shell {
+  display: grid;
+  gap: var(--space-2);
+  max-width: 820px;
+  margin-top: var(--space-5);
+}
+
+.markdown-editor {
+  width: 100%;
+  min-height: min(56dvh, 520px);
+  resize: vertical;
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-2);
+  background: var(--color-surface);
+  color: var(--color-ink);
+  line-height: 1.55;
+}
+
+.markdown-editor:focus {
+  border-color: #9dbdf2;
+  outline: 3px solid rgb(34 102 210 / .22);
+}
+
+.markdown-save-state {
+  color: var(--color-ink-muted);
+  font-size: var(--font-size-0);
+  font-weight: 720;
 }
 
 .markdown-body {

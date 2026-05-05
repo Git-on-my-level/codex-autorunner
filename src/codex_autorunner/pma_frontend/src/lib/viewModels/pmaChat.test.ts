@@ -6,6 +6,7 @@ import {
   buildManagedThreadCreatePayload,
   buildManagedThreadMessagePayload,
   buildPmaCards,
+  buildPmaLiveActivity,
   chooseActiveChatId,
   composeMessageWithAttachments,
   filterSensitiveCarApprovals,
@@ -98,7 +99,7 @@ describe('PMA chat view helpers', () => {
     expect(chooseActiveChatId(chats, 'chat-1', 'missing')).toBe('chat-1');
   });
 
-  it('builds active chat cards for messages, tickets, compact progress, streaming, and artifacts', () => {
+  it('builds active chat cards for durable transcript content and artifacts', () => {
     const cards = buildPmaCards(
       [{ ...baseMessage, artifacts: [{ ...baseArtifact, id: 'message-attachment' }] }],
       baseProgress,
@@ -110,11 +111,41 @@ describe('PMA chat view helpers', () => {
       'message',
       'artifact',
       'ticket',
-      'progress',
-      'streaming',
-      'artifact',
       'artifact'
     ]);
+  });
+
+  it('summarizes live progress separately from transcript cards', () => {
+    const live = buildPmaLiveActivity({
+      ...baseProgress,
+      elapsedSeconds: 125,
+      idleSeconds: 0,
+      events: [
+        {
+          ...baseArtifact,
+          id: 'token-usage',
+          kind: 'progress',
+          title: 'Token usage updated',
+          raw: { event_type: 'token_usage' }
+        },
+        {
+          ...baseArtifact,
+          id: 'tool-started',
+          kind: 'progress',
+          title: 'Running tests',
+          summary: 'pnpm test',
+          raw: { event_type: 'tool_started' }
+        }
+      ]
+    });
+
+    expect(live).toMatchObject({
+      state: 'running',
+      title: 'Working · testing',
+      summary: 'Running frontend checks.',
+      elapsedLabel: '2m 5s elapsed'
+    });
+    expect(live?.steps.map((step) => step.id)).toEqual(['tool-started']);
   });
 
   it('skips empty message cards and suppresses debug-only lifecycle events from the transcript', () => {
@@ -151,7 +182,7 @@ describe('PMA chat view helpers', () => {
     );
 
     expect(cards.some((card) => card.kind === 'message')).toBe(false);
-    expect(cards.filter((card) => card.kind === 'artifact').map((card) => card.id)).toEqual(['event-assistant-update']);
+    expect(cards.filter((card) => card.kind === 'artifact')).toHaveLength(0);
   });
 
   it('keeps low-level PMA events out of primary transcript cards while preserving final responses', () => {
@@ -200,7 +231,7 @@ describe('PMA chat view helpers', () => {
     expect(cards.find((card) => card.kind === 'message')).toMatchObject({
       message: { text: 'Done. The PMA smoke fixtures are now covered.' }
     });
-    expect(cards.filter((card) => card.kind === 'artifact').map((card) => card.id)).toEqual(['event-thinking-summary']);
+    expect(cards.filter((card) => card.kind === 'artifact')).toHaveLength(0);
   });
 
   it('keeps raw progress classifications deterministic', () => {

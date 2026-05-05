@@ -1,15 +1,18 @@
 <script lang="ts">
+  import EditableMarkdown from '$lib/components/EditableMarkdown.svelte';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import type { ContextspaceViewModel, ContextspaceDocKind } from '$lib/viewModels/contextspace';
 
   let {
     state: viewState,
     vm = null,
-    errorMessage = null
+    errorMessage = null,
+    onSaveDoc
   }: {
     state: 'loading' | 'error' | 'ready';
     vm?: ContextspaceViewModel | null;
     errorMessage?: string | null;
+    onSaveDoc?: (docId: string, content: string) => Promise<boolean> | boolean;
   } = $props();
 
   let activeDocId = $state<ContextspaceDocKind>('active_context');
@@ -81,17 +84,18 @@
           </button>
         </div>
 
-        {#if activeDoc.isMissing}
-          <div class="state-panel contextspace-empty">
-            <strong>{activeDoc.label} has no content</strong>
-            <p>Ask PMA to refresh this {vm.workspaceKind} memory before starting work that depends on shared context.</p>
-            <a class="inline-link" href={href(vm.askPmaHref)}>Ask PMA to update</a>
-          </div>
-        {:else}
-          <div class="markdown-body">
-            {@html activeDoc.html}
-          </div>
-        {/if}
+        <EditableMarkdown
+          docId={activeDoc.id}
+          content={activeDoc.content}
+          html={activeDoc.html}
+          isMissing={activeDoc.isMissing}
+          editable={!vm.isUnknown}
+          emptyTitle={`${activeDoc.label} has no content`}
+          emptyMessage={`Ask PMA to refresh this ${vm.workspaceKind} memory before starting work that depends on shared context.`}
+          emptyActionHref={href(vm.askPmaHref)}
+          emptyActionLabel="Ask PMA to update"
+          onSave={onSaveDoc}
+        />
       </article>
     </div>
   </section>

@@ -258,18 +258,35 @@ export class PmaApiClient {
           is_pinned: true
         })
       ),
+    updateDoc: async (name: string, content: string): Promise<ApiResult<ContextspaceDocument>> =>
+      mapResult(
+        await this.requestJson<JsonRecord>(`/hub/pma/docs/${encodeURIComponent(name)}`, {
+          method: 'PUT',
+          body: { content }
+        }),
+        (payload) =>
+          mapContextspaceDocument({
+            ...payload,
+            id: payload.name ?? name,
+            name: payload.name ?? name,
+            kind: payload.name ?? name,
+            content,
+            is_pinned: true
+          })
+      ),
     listDocsWithContent: async (): Promise<ApiResult<ContextspaceDocument[]>> => {
       const docs = await this.pma.listDocs();
       if (!docs.ok) return docs;
-      const hydrated = await Promise.all(docs.data.map((doc) => this.pma.getDoc(doc.name)));
+      const visibleDocs = docs.data.filter((doc) => isStandardPmaDoc(doc.name));
+      const hydrated = await Promise.all(visibleDocs.map((doc) => this.pma.getDoc(doc.name)));
       const firstError = hydrated.find((result) => !result.ok);
       if (firstError && !firstError.ok) return firstError;
       return {
         ok: true,
         data: hydrated.map((result, index) => ({
-          ...(result.ok ? result.data : docs.data[index]),
-          ...docs.data[index],
-          content: result.ok ? result.data.content : docs.data[index].content
+          ...(result.ok ? result.data : visibleDocs[index]),
+          ...visibleDocs[index],
+          content: result.ok ? result.data.content : visibleDocs[index].content
         }))
       };
     }
@@ -339,12 +356,22 @@ export class PmaApiClient {
             })
           )
       ),
-    updateDocument: async (kind: string, content: string): Promise<ApiResult<ContextspaceDocument[]>> =>
+    updateDocument: async (
+      workspaceIdOrKind: string | undefined,
+      kindOrContent: string,
+      maybeContent?: string
+    ): Promise<ApiResult<ContextspaceDocument[]>> =>
       mapResult(
-        await this.requestJson<JsonRecord>(`/api/contextspace/${encodeURIComponent(kind)}`, {
-          method: 'PUT',
-          body: { content }
-        }),
+        await this.requestJson<JsonRecord>(
+          contextspaceUpdateApiPath(
+            maybeContent === undefined ? undefined : workspaceIdOrKind,
+            maybeContent === undefined ? workspaceIdOrKind || '' : kindOrContent
+          ),
+          {
+            method: 'PUT',
+            body: { content: maybeContent === undefined ? kindOrContent : maybeContent }
+          }
+        ),
         (payload) =>
           ['active_context', 'decisions', 'spec']
             .filter((docKind) => typeof payload[docKind] === 'string')
@@ -405,8 +432,25 @@ function contextspaceApiPath(workspaceId?: string): string {
   return `/repos/${encodeURIComponent(id)}/api/contextspace`;
 }
 
+function contextspaceUpdateApiPath(workspaceId: string | undefined, kind: string): string {
+  const encodedKind = encodeURIComponent(kind);
+  const id = workspaceId?.trim();
+  if (!id) return `/api/contextspace/${encodedKind}`;
+  return `/repos/${encodeURIComponent(id)}/api/contextspace/${encodedKind}`;
+}
+
 function contextspaceFilename(kind: string): string {
   return `${kind}.md`;
+}
+
+function isStandardPmaDoc(name: string): boolean {
+  return (
+    name === 'AGENTS.md' ||
+    name === 'active_context.md' ||
+    name === 'context_log.md' ||
+    name === 'ABOUT_CAR.md' ||
+    name === 'prompt.md'
+  );
 }
 
 export const pmaApi = new PmaApiClient();

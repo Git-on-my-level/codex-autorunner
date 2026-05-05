@@ -37,6 +37,7 @@ describe('ContextspaceView', () => {
     expect(body).toContain('Repo memory is read from this repo workspace contextspace.');
     expect(body).toContain('active_context.md');
     expect(body).toContain('<h1>Active Context</h1>');
+    expect(body).toContain('markdown-edit-target');
     expect(body).toContain('Copy');
     expect(body).toContain('Open repo');
     expect(body).toContain('Ask PMA to update');

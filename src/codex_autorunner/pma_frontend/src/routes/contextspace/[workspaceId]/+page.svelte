@@ -48,10 +48,30 @@
     );
     loading = false;
   }
+
+  async function saveContextspaceDoc(docId: string, content: string): Promise<boolean> {
+    const docs = await pmaApi.contextspace.updateDocument(workspaceId, docId, content);
+    if (!docs.ok) {
+      error = docs.error;
+      return false;
+    }
+    const [repos, worktrees] = await Promise.all([
+      pmaApi.hub.listRepos(),
+      pmaApi.hub.listWorktrees()
+    ]);
+    vm = buildContextspaceViewModel(
+      workspaceId,
+      docs.data,
+      repos.ok ? repos.data : [],
+      worktrees.ok ? worktrees.data : []
+    );
+    return true;
+  }
 </script>
 
 <ContextspaceView
   state={loading ? 'loading' : error ? 'error' : 'ready'}
   {vm}
   errorMessage={error?.message ?? null}
+  onSaveDoc={saveContextspaceDoc}
 />

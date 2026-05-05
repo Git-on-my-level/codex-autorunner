@@ -38,9 +38,15 @@ export type ArtifactCardView = {
 export type PmaCard =
   | { kind: 'message'; id: string; message: PmaChatMessage }
   | { kind: 'ticket'; id: string; title: string; summary: string | null; ticketId: string }
-  | { kind: 'progress'; id: string; progress: PmaRunProgress }
-  | { kind: 'streaming'; id: string; progress: PmaRunProgress }
   | { kind: 'artifact'; id: string; artifact: SurfaceArtifact };
+
+export type PmaLiveActivity = {
+  state: WorkStatus;
+  title: string;
+  summary: string;
+  elapsedLabel: string | null;
+  steps: SurfaceArtifact[];
+};
 
 export type ManagedThreadCreatePayload = {
   agent?: string;
@@ -133,29 +139,43 @@ export function buildPmaCards(
     });
   }
 
-  if (progress) {
-    cards.push({
-      kind: 'progress',
-      id: `progress-${progress.id}`,
-      progress
-    });
-    if (progress.status === 'running' || progress.status === 'waiting') {
-      cards.push({
-        kind: 'streaming',
-        id: `streaming-${progress.id}`,
-        progress
-      });
-    }
-    for (const event of progress.events.filter(isPrimaryProgressArtifact).slice(-3)) {
-      cards.push({ kind: 'artifact', id: `event-${event.id}`, artifact: event });
-    }
-  }
-
   for (const artifact of artifacts.slice(0, 4)) {
     cards.push({ kind: 'artifact', id: `artifact-${artifact.id}`, artifact });
   }
 
   return cards;
+}
+
+export function buildPmaLiveActivity(progress: PmaRunProgress | null): PmaLiveActivity | null {
+  if (!progress) return null;
+  const steps = progress.events.filter(isPrimaryProgressArtifact).slice(-4);
+  const phase = progress.phase?.replace(/_/g, ' ') ?? null;
+  const status = progress.status;
+  const title =
+    status === 'running'
+      ? phase
+        ? `Working · ${phase}`
+        : 'Working'
+      : status === 'waiting'
+        ? phase
+          ? `Waiting · ${phase}`
+          : 'Waiting'
+        : status === 'failed'
+          ? 'Run failed'
+          : status === 'blocked'
+            ? 'Blocked'
+          : status === 'done'
+            ? 'Run complete'
+            : 'Idle';
+  const summary =
+    progress.guidance ??
+    (steps.length
+      ? steps.at(-1)?.summary ?? steps.at(-1)?.title ?? 'PMA is updating the workspace.'
+      : status === 'running'
+        ? 'PMA is streaming activity.'
+        : `Last update ${formatRelativeTime(progress.lastEventAt)}.`);
+  const elapsedLabel = formatElapsedProgress(progress.elapsedSeconds, progress.idleSeconds);
+  return { state: status, title, summary, elapsedLabel, steps };
 }
 
 export function isPrimaryProgressArtifact(artifact: SurfaceArtifact): boolean {
@@ -210,6 +230,23 @@ export function formatBytes(bytes: number): string {
     unit = units[index];
   }
   return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${unit}`;
+}
+
+function formatElapsedProgress(elapsedSeconds: number | null, idleSeconds: number | null): string | null {
+  const parts: string[] = [];
+  if (elapsedSeconds !== null) parts.push(`${formatDuration(elapsedSeconds)} elapsed`);
+  if (idleSeconds !== null && idleSeconds > 0) parts.push(`${formatDuration(idleSeconds)} idle`);
+  return parts.length ? parts.join(' · ') : null;
+}
+
+function formatDuration(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  if (minutes < 60) return remainder ? `${minutes}m ${remainder}s` : `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const minuteRemainder = minutes % 60;
+  return minuteRemainder ? `${hours}h ${minuteRemainder}m` : `${hours}h`;
 }
 
 export function removePendingAttachment(

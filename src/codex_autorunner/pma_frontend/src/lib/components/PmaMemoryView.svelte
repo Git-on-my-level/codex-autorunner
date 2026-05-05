@@ -1,14 +1,17 @@
 <script lang="ts">
+  import EditableMarkdown from '$lib/components/EditableMarkdown.svelte';
   import type { PmaMemoryViewModel } from '$lib/viewModels/pmaMemory';
 
   let {
     state: viewState,
     vm = null,
-    errorMessage = null
+    errorMessage = null,
+    onSaveDoc
   }: {
     state: 'loading' | 'error' | 'ready';
     vm?: PmaMemoryViewModel | null;
     errorMessage?: string | null;
+    onSaveDoc?: (docId: string, content: string) => Promise<boolean> | boolean;
   } = $props();
 
   let activeDocId = $state<string>('AGENTS.md');
@@ -76,16 +79,15 @@
           </button>
         </div>
 
-        {#if activeDoc.isMissing}
-          <div class="state-panel contextspace-empty">
-            <strong>{activeDoc.label} has no content</strong>
-            <p>PMA has not written content to this memory document yet.</p>
-          </div>
-        {:else}
-          <div class="markdown-body">
-            {@html activeDoc.html}
-          </div>
-        {/if}
+        <EditableMarkdown
+          docId={activeDoc.id}
+          content={activeDoc.content}
+          html={activeDoc.html}
+          isMissing={activeDoc.isMissing}
+          emptyTitle={`${activeDoc.label} has no content`}
+          emptyMessage="PMA has not written content to this memory document yet."
+          onSave={onSaveDoc}
+        />
       </article>
     </div>
   </section>

@@ -28,9 +28,10 @@ const PMA_DOC_LABELS: Record<string, string> = {
 };
 
 const PMA_DOC_ORDER = ['AGENTS.md', 'active_context.md', 'context_log.md', 'ABOUT_CAR.md', 'prompt.md'];
+const PMA_DOC_SET = new Set(PMA_DOC_ORDER);
 
 export function buildPmaMemoryViewModel(docs: ContextspaceDocument[]): PmaMemoryViewModel {
-  const orderedDocs = [...docs].sort((left, right) => {
+  const orderedDocs = docs.filter((doc) => PMA_DOC_SET.has(doc.name)).sort((left, right) => {
     const leftIndex = PMA_DOC_ORDER.indexOf(left.name);
     const rightIndex = PMA_DOC_ORDER.indexOf(right.name);
     const normalizedLeft = leftIndex === -1 ? Number.MAX_SAFE_INTEGER : leftIndex;
