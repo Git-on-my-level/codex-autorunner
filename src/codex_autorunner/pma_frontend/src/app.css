@@ -127,6 +127,7 @@ a {
 .brand-row,
 .topbar,
 .chat-header,
+.new-chat-controls,
 .selector-row,
 .filter-row,
 .composer {
@@ -490,8 +491,41 @@ a {
 }
 
 .chat-list-header {
+  align-items: stretch;
+  flex-direction: column;
   justify-content: space-between;
-  gap: var(--space-3);
+  gap: var(--space-2);
+}
+
+.new-chat-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  justify-content: stretch;
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+}
+
+.scope-field {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.scope-field select {
+  width: 100%;
+}
+
+.scope-field span,
+.selected-scope-note {
+  color: var(--color-ink-muted);
+  font-size: var(--font-size-0);
+}
+
+.selected-scope-note {
+  margin: var(--space-3) 0 0;
+  overflow-wrap: anywhere;
 }
 
 .filter-row {
@@ -2427,6 +2461,15 @@ textarea:disabled {
     align-items: flex-start;
     flex-wrap: wrap;
     justify-content: flex-start;
+  }
+
+  .new-chat-controls {
+    grid-template-columns: 1fr;
+    width: 100%;
+  }
+
+  .scope-field {
+    min-width: min(100%, 180px);
   }
 
   .chat-list-header h1 {

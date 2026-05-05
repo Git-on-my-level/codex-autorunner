@@ -16,6 +16,7 @@
   import {
     approvalActionUrl,
     buildManagedThreadCreatePayload,
+    buildPmaChatScopeOptions,
     buildManagedThreadMessagePayload,
     buildPmaLiveActivity,
     buildPmaCards,
@@ -25,7 +26,10 @@
     filterPmaChats,
     formatBytes,
     formatRelativeTime,
+    localPmaChatScopeOption,
     modelSelectorState,
+    pmaChatScopeLabel,
+    pmaChatScopeLabelFromChat,
     progressPercent,
     removePendingAttachment,
     statusLabel,
@@ -33,6 +37,7 @@
     type PendingAttachment,
     type PmaCard,
     type PmaChatFilter,
+    type PmaChatScopeOption,
     type PmaLiveActivity
   } from '$lib/viewModels/pmaChat';
 
@@ -42,12 +47,14 @@
   let artifacts = $state<SurfaceArtifact[]>([]);
   let agents = $state<JsonRecord[]>([]);
   let models = $state<JsonRecord[]>([]);
+  let scopeOptions = $state<PmaChatScopeOption[]>(buildPmaChatScopeOptions([], [], []));
   let approvals = $state<SensitiveApprovalRequest[]>([]);
   let pendingAttachments = $state<PendingAttachment[]>([]);
   let localMessageArtifacts = $state<Record<string, SurfaceArtifact[]>>({});
   let activeChatId = $state<string | null>(null);
   let selectedAgent = $state('codex');
   let selectedModel = $state('');
+  let selectedScopeId = $state('local');
   let filter = $state<PmaChatFilter>('all');
   let mobilePane = $state<'list' | 'chat'>('list');
   let search = $state('');
@@ -85,6 +92,9 @@
   const activeCards = $derived<PmaCard[]>(buildPmaCards(visibleMessages, progress, activeChat, artifacts));
   const liveActivity = $derived<PmaLiveActivity | null>(buildPmaLiveActivity(progress));
   const modelState = $derived(modelSelectorState(loadingModels, modelError?.message ?? null, models.length));
+  const selectedScope = $derived(scopeOptions.find((scope) => scope.id === selectedScopeId) ?? localPmaChatScopeOption());
+  const selectedScopeLabel = $derived(pmaChatScopeLabel(selectedScope));
+  const activeScopeLabel = $derived(pmaChatScopeLabelFromChat(activeChat));
   const agentStateLabel = $derived(
     agentError ? agentError.message : agents.length === 0 ? 'No PMA agents exposed' : 'PMA agent'
   );
@@ -119,11 +129,14 @@
   async function loadInitial(): Promise<void> {
     loadingChats = true;
     chatError = null;
-    const [chatResult, artifactResult, agentResult, approvalResult] = await Promise.all([
+    const [chatResult, artifactResult, agentResult, approvalResult, repoResult, worktreeResult, agentWorkspaceResult] = await Promise.all([
       pmaApi.pma.listChats(),
       pmaApi.pma.listFiles(),
       pmaApi.pma.listAgents(),
-      pmaApi.settings.listApprovals()
+      pmaApi.settings.listApprovals(),
+      pmaApi.hub.listRepos(),
+      pmaApi.hub.listWorktrees(),
+      pmaApi.hub.listAgentWorkspaces()
     ]);
 
     if (chatResult.ok) {
@@ -140,6 +153,12 @@
 
     if (artifactResult.ok) artifacts = artifactResult.data;
     if (approvalResult.ok) approvals = filterSensitiveCarApprovals(approvalResult.data);
+    scopeOptions = buildPmaChatScopeOptions(
+      repoResult.ok ? repoResult.data : [],
+      worktreeResult.ok ? worktreeResult.data : [],
+      agentWorkspaceResult.ok ? agentWorkspaceResult.data : []
+    );
+    if (!scopeOptions.some((scope) => scope.id === selectedScopeId)) selectedScopeId = 'local';
     if (agentResult.ok) {
       agents = agentResult.data;
       selectedAgent =
@@ -265,7 +284,8 @@
   async function createChat(): Promise<void> {
     creating = true;
     composeError = null;
-    const result = await pmaApi.pma.createChat(buildManagedThreadCreatePayload(selectedAgent));
+    const scopedAgent = selectedScope?.kind === 'agent_workspace' && selectedScope.agentId ? selectedScope.agentId : selectedAgent;
+    const result = await pmaApi.pma.createChat(buildManagedThreadCreatePayload(scopedAgent, selectedScope));
     if (result.ok) {
       chats = [result.data, ...chats.filter((chat) => chat.id !== result.data.id)];
       await selectChat(result.data.id);
@@ -470,10 +490,21 @@
         <p class="eyebrow">PMA chats</p>
         <h1>Conversations</h1>
       </div>
-      <button class="new-chat-button" type="button" onclick={createChat} disabled={creating}>
-        {creating ? 'Creating' : 'New chat'}
-      </button>
+      <div class="new-chat-controls">
+        <label class="scope-field">
+          <span>Scope</span>
+          <select aria-label="PMA chat scope" bind:value={selectedScopeId} disabled={creating}>
+            {#each scopeOptions as scope (scope.id)}
+              <option value={scope.id}>{scope.detail}: {scope.label}</option>
+            {/each}
+          </select>
+        </label>
+        <button class="new-chat-button" type="button" onclick={createChat} disabled={creating}>
+          {creating ? 'Creating' : 'New chat'}
+        </button>
+      </div>
     </div>
+    <p class="selected-scope-note">{selectedScopeLabel}</p>
 
     <label class="search-field">
       <span class="sr-only">Search PMA chats</span>
@@ -526,7 +557,7 @@
                 <span class={`status-pill ${chat.status}`}>{statusLabel(chat.status)}</span>
               </span>
               <span class="chat-meta-row">
-                {#if chat.repoId}<span>{chat.repoId}</span>{/if}
+                <span>{pmaChatScopeLabelFromChat(chat)}</span>
                 {#if chat.worktreeId}<span>{chat.worktreeId}</span>{/if}
                 {#if chat.ticketId}<span>{chat.ticketId}</span>{/if}
               </span>
@@ -544,7 +575,7 @@
   <div class:hidden-mobile-pane={mobilePane !== 'chat'} class="active-chat">
     <div class="chat-header">
       <div>
-        <p class="eyebrow">{activeChat?.repoId ?? 'Workspace'}</p>
+        <p class="eyebrow">{activeScopeLabel}</p>
         <h2>{activeChat?.title ?? 'PMA'}</h2>
         {#if activeChat}
           <p class="chat-header-subtitle">

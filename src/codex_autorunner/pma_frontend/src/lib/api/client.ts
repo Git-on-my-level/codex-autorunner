@@ -1,5 +1,6 @@
 import {
   mapContextspaceDocument,
+  mapAgentWorkspaceSummary,
   mapDashboardSummary,
   mapPmaChatMessage,
   mapPmaTurnMessages,
@@ -12,6 +13,7 @@ import {
   mapTicketSummary,
   mapWorktreeSummary,
   type ContextspaceDocument,
+  type AgentWorkspaceSummary,
   type DashboardSummary,
   type PmaChatMessage,
   type PmaChatSummary,
@@ -305,6 +307,10 @@ export class PmaApiClient {
     listWorktrees: async (): Promise<ApiResult<WorktreeSummary[]>> =>
       mapResult(await this.getJson<JsonRecord>('/hub/repos'), (payload) =>
         asArray(payload.worktrees ?? payload.repos ?? payload.items).filter(isWorktreeItem).map(mapWorktreeSummary)
+      ),
+    listAgentWorkspaces: async (): Promise<ApiResult<AgentWorkspaceSummary[]>> =>
+      mapResult(await this.getJson<JsonRecord>('/hub/agent-workspaces'), (payload) =>
+        asArray(payload.agent_workspaces ?? payload.workspaces ?? payload.items).map(mapAgentWorkspaceSummary)
       )
   };
 

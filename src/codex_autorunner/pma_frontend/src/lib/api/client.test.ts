@@ -102,6 +102,38 @@ describe('API client error handling', () => {
     expect(result.ok).toBe(true);
   });
 
+  it('maps agent workspace scopes from the hub control plane', async () => {
+    const fetcher = vi.fn(async () =>
+      Response.json({
+        agent_workspaces: [
+          {
+            id: 'codex-pma',
+            runtime: 'codex',
+            display_name: 'Codex PMA',
+            path: '/hub/.agent-workspaces/codex-pma',
+            enabled: true,
+            exists_on_disk: true,
+            resource_kind: 'agent_workspace'
+          }
+        ]
+      })
+    ) as unknown as typeof fetch;
+    const client = new PmaApiClient(fetcher);
+
+    const result = await client.hub.listAgentWorkspaces();
+
+    expect(fetcher).toHaveBeenCalledWith('/hub/agent-workspaces', expect.any(Object));
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data[0]).toMatchObject({
+        id: 'codex-pma',
+        runtime: 'codex',
+        name: 'Codex PMA',
+        resourceKind: 'agent_workspace'
+      });
+    }
+  });
+
   it('does not double-prefix already based request paths', async () => {
     const fetcher = vi.fn(async () => Response.json({ ok: true })) as unknown as typeof fetch;
     const client = new PmaApiClient(fetcher, '/car');

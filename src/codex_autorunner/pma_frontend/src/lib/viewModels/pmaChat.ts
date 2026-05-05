@@ -1,9 +1,12 @@
 import type {
+  AgentWorkspaceSummary,
   PmaChatMessage,
   PmaChatSummary,
   PmaRunProgress,
+  RepoSummary,
   SensitiveApprovalRequest,
   SurfaceArtifact,
+  WorktreeSummary,
   WorkStatus
 } from './domain';
 
@@ -51,8 +54,44 @@ export type PmaLiveActivity = {
 export type ManagedThreadCreatePayload = {
   agent?: string;
   name: string;
-  workspace_root: string;
+  workspace_root?: string;
+  resource_kind?: 'repo' | 'agent_workspace';
+  resource_id?: string;
 };
+
+export type PmaChatScopeOption =
+  | {
+      id: 'local';
+      kind: 'local';
+      label: string;
+      detail: string;
+      workspaceRoot: string;
+    }
+  | {
+      id: string;
+      kind: 'repo';
+      label: string;
+      detail: string;
+      resourceKind: 'repo';
+      resourceId: string;
+    }
+  | {
+      id: string;
+      kind: 'worktree';
+      label: string;
+      detail: string;
+      workspaceRoot: string;
+      resourceId: string;
+    }
+  | {
+      id: string;
+      kind: 'agent_workspace';
+      label: string;
+      detail: string;
+      resourceKind: 'agent_workspace';
+      resourceId: string;
+      agentId: string | null;
+    };
 
 export type ManagedThreadMessagePayload = {
   message: string;
@@ -79,7 +118,16 @@ export function filterPmaChats(
     })
     .filter((chat) => {
       if (!needle) return true;
-      return [chat.title, chat.repoId, chat.worktreeId, chat.ticketId, chat.agentId, chat.model]
+      return [
+        chat.title,
+        chat.repoId,
+        chat.worktreeId,
+        chat.ticketId,
+        chat.agentId,
+        chat.model,
+        chat.raw.resource_kind,
+        chat.raw.resource_id
+      ]
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(needle));
     });
@@ -272,13 +320,91 @@ export function composeMessageWithAttachments(
 
 export function buildManagedThreadCreatePayload(
   agent: string,
+  scope: PmaChatScopeOption = localPmaChatScopeOption(),
   name = 'New PMA chat'
 ): ManagedThreadCreatePayload {
-  return {
+  const base = {
     agent: agent || undefined,
-    name,
-    workspace_root: '.'
+    name
   };
+  if (scope.kind === 'repo' || scope.kind === 'agent_workspace') {
+    return {
+      ...base,
+      resource_kind: scope.resourceKind,
+      resource_id: scope.resourceId
+    };
+  }
+  return {
+    ...base,
+    workspace_root: scope.workspaceRoot
+  };
+}
+
+export function localPmaChatScopeOption(): PmaChatScopeOption {
+  return {
+    id: 'local',
+    kind: 'local',
+    label: 'Local hub',
+    detail: 'Current workspace',
+    workspaceRoot: '.'
+  };
+}
+
+export function buildPmaChatScopeOptions(
+  repos: RepoSummary[],
+  worktrees: WorktreeSummary[],
+  agentWorkspaces: AgentWorkspaceSummary[]
+): PmaChatScopeOption[] {
+  return [
+    localPmaChatScopeOption(),
+    ...repos.map((repo) => ({
+      id: `repo:${repo.id}`,
+      kind: 'repo' as const,
+      label: repo.name || repo.id,
+      detail: `Repo · ${repo.id}`,
+      resourceKind: 'repo' as const,
+      resourceId: repo.id
+    })),
+    ...worktrees
+      .filter((worktree) => Boolean(worktree.path))
+      .map((worktree) => ({
+        id: `worktree:${worktree.id}`,
+        kind: 'worktree' as const,
+        label: worktree.name || worktree.id,
+        detail: `Worktree · ${worktree.repoId ?? worktree.id}`,
+        workspaceRoot: worktree.path || '.',
+        resourceId: worktree.id
+      })),
+    ...agentWorkspaces.map((workspace) => ({
+      id: `agent_workspace:${workspace.id}`,
+      kind: 'agent_workspace' as const,
+      label: workspace.name || workspace.id,
+      detail: `Agent workspace · ${workspace.runtime || workspace.id}`,
+      resourceKind: 'agent_workspace' as const,
+      resourceId: workspace.id,
+      agentId: workspace.runtime || null
+    }))
+  ];
+}
+
+export function pmaChatScopeLabel(scope: PmaChatScopeOption | null): string {
+  if (!scope) return 'Workspace scope';
+  if (scope.kind === 'local') return 'Local hub · current workspace';
+  if (scope.kind === 'repo') return `Repo · ${scope.resourceId}`;
+  if (scope.kind === 'agent_workspace') return `Agent workspace · ${scope.resourceId}`;
+  return `Worktree · ${scope.resourceId}`;
+}
+
+export function pmaChatScopeLabelFromChat(chat: PmaChatSummary | null): string {
+  if (!chat) return 'Choose a scope before creating a chat';
+  const resourceKind = stringValue(chat.raw.resource_kind).toLowerCase();
+  const resourceId = stringValue(chat.raw.resource_id);
+  if (resourceKind === 'agent_workspace' && resourceId) return `Agent workspace · ${resourceId}`;
+  if (chat.worktreeId) return `Worktree · ${chat.worktreeId}`;
+  if (chat.repoId) return `Repo · ${chat.repoId}`;
+  const workspaceRoot = stringValue(chat.raw.workspace_root);
+  if (workspaceRoot && workspaceRoot !== '.') return `Workspace · ${workspaceRoot}`;
+  return 'Local hub · current workspace';
 }
 
 export function buildManagedThreadMessagePayload(

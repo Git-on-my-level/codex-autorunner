@@ -5,6 +5,7 @@ import {
   artifactCardView,
   buildManagedThreadCreatePayload,
   buildManagedThreadMessagePayload,
+  buildPmaChatScopeOptions,
   buildPmaCards,
   buildPmaLiveActivity,
   chooseActiveChatId,
@@ -14,6 +15,7 @@ import {
   formatRelativeTime,
   isPrimaryProgressArtifact,
   modelSelectorState,
+  pmaChatScopeLabelFromChat,
   progressPercent,
   removePendingAttachment,
   summarizeFilterCounts
@@ -257,6 +259,88 @@ describe('PMA chat view helpers', () => {
     expect(progressPercent(baseChat, baseProgress)).toBe(64);
     expect(progressPercent({ ...baseChat, progressPercent: 41 }, baseProgress)).toBe(41);
     expect(formatRelativeTime('2026-05-04T00:00:00Z', new Date('2026-05-04T00:03:00Z'))).toBe('3m ago');
+  });
+
+  it('builds managed thread creation payloads for local, repo, and worktree scopes', () => {
+    const [local, repo, worktree] = buildPmaChatScopeOptions(
+      [
+        {
+          id: 'repo-1',
+          name: 'Repo One',
+          path: '/hub/repo-1',
+          status: 'idle',
+          defaultBranch: 'main',
+          worktreeCount: 1,
+          activeRuns: 0,
+          openTickets: 0,
+          lastActivityAt: null,
+          raw: {}
+        }
+      ],
+      [
+        {
+          id: 'worktree-1',
+          repoId: 'repo-1',
+          name: 'Feature worktree',
+          path: '/hub/repo-1-pma',
+          branch: 'pma/feature',
+          status: 'idle',
+          activeRuns: 0,
+          openTickets: 0,
+          lastActivityAt: null,
+          raw: {}
+        }
+      ],
+      []
+    );
+
+    expect(buildManagedThreadCreatePayload('codex', local)).toEqual({
+      agent: 'codex',
+      name: 'New PMA chat',
+      workspace_root: '.'
+    });
+    expect(buildManagedThreadCreatePayload('codex', repo)).toEqual({
+      agent: 'codex',
+      name: 'New PMA chat',
+      resource_kind: 'repo',
+      resource_id: 'repo-1'
+    });
+    expect(buildManagedThreadCreatePayload('codex', worktree)).toEqual({
+      agent: 'codex',
+      name: 'New PMA chat',
+      workspace_root: '/hub/repo-1-pma'
+    });
+  });
+
+  it('builds managed thread creation payloads for backend-owned agent workspaces', () => {
+    const scopes = buildPmaChatScopeOptions([], [], [
+      {
+        id: 'codex-pma',
+        runtime: 'codex',
+        name: 'Codex PMA',
+        path: '/hub/.agent-workspaces/codex-pma',
+        enabled: true,
+        existsOnDisk: true,
+        resourceKind: 'agent_workspace',
+        raw: {}
+      }
+    ]);
+
+    expect(buildManagedThreadCreatePayload('codex', scopes[1])).toEqual({
+      agent: 'codex',
+      name: 'New PMA chat',
+      resource_kind: 'agent_workspace',
+      resource_id: 'codex-pma'
+    });
+  });
+
+  it('labels existing chat scopes from durable backend fields', () => {
+    expect(pmaChatScopeLabelFromChat({ ...baseChat, raw: { resource_kind: 'agent_workspace', resource_id: 'codex-pma' } })).toBe(
+      'Agent workspace · codex-pma'
+    );
+    expect(pmaChatScopeLabelFromChat({ ...baseChat, repoId: 'repo-1', worktreeId: null, raw: { resource_kind: 'repo', resource_id: 'repo-1' } })).toBe(
+      'Repo · repo-1'
+    );
   });
 
   it('renders pending attachment message text and removes staged attachments', () => {

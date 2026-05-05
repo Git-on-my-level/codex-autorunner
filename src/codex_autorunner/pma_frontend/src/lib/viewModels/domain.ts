@@ -107,6 +107,18 @@ export type WorktreeSummary = {
   raw: JsonRecord;
 };
 
+/** Agent-owned workspace exposed by the hub control plane. */
+export type AgentWorkspaceSummary = {
+  id: string;
+  runtime: string;
+  name: string;
+  path: string | null;
+  enabled: boolean;
+  existsOnDisk: boolean;
+  resourceKind: string;
+  raw: JsonRecord;
+};
+
 /** Ticket queue row. */
 export type TicketSummary = {
   id: string;
@@ -366,6 +378,20 @@ export function mapWorktreeSummary(raw: JsonRecord): WorktreeSummary {
       numberOrNull(raw.open_tickets ?? raw.open_ticket_count) ??
       (totalTickets !== null && doneTickets !== null ? Math.max(0, totalTickets - doneTickets) : 0),
     lastActivityAt: dateString(raw.last_activity_at ?? raw.updated_at ?? runState.last_event_at ?? raw.last_run_started_at),
+    raw
+  };
+}
+
+export function mapAgentWorkspaceSummary(raw: JsonRecord): AgentWorkspaceSummary {
+  const id = stringValue(raw.id ?? raw.workspace_id ?? raw.name, 'unknown-agent-workspace');
+  return {
+    id,
+    runtime: stringValue(raw.runtime ?? raw.agent ?? raw.agent_id, ''),
+    name: stringValue(raw.display_name ?? raw.name, id),
+    path: nullableString(raw.path ?? raw.workspace_root),
+    enabled: raw.enabled !== false,
+    existsOnDisk: raw.exists_on_disk !== false,
+    resourceKind: stringValue(raw.resource_kind, 'agent_workspace'),
     raw
   };
 }
