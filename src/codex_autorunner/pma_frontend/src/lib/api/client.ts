@@ -328,12 +328,31 @@ export class PmaApiClient {
       ),
     getRun: async (runId: string): Promise<ApiResult<PmaRunProgress>> =>
       mapResult(await this.getJson<JsonRecord>(`/api/flows/${encodeURIComponent(runId)}/status`), mapPmaRunProgress),
-    listTickets: async (): Promise<ApiResult<TicketSummary[]>> =>
-      mapResult(await this.getJson<JsonRecord>('/api/flows/ticket_flow/tickets'), (payload) =>
-        asArray(payload.tickets).map(mapTicketSummary)
-      ),
+    listTickets: async (owner?: { repo?: string; worktree?: string }): Promise<ApiResult<TicketSummary[]>> => {
+      const hubResult = await this.getJson<JsonRecord>(hubTicketPath(owner));
+      if (hubResult.ok || hubResult.error.status !== 404) {
+        return mapResult(hubResult, (payload) => asArray(payload.tickets).map(mapTicketSummary));
+      }
+      if (!owner) return this.listLegacyMountedTickets();
+      const legacyResult = await this.getJson<JsonRecord>(legacyTicketPath(owner));
+      return mapResult(legacyResult, (payload) =>
+        asArray(payload.tickets).map((ticket) => mapTicketSummary(ticketWithFallbackOwner(ticket, owner)))
+      );
+    },
     getTicket: async (index: number): Promise<ApiResult<TicketDetail>> =>
       mapResult(await this.getJson<JsonRecord>(`/api/flows/ticket_flow/tickets/${encodeURIComponent(index)}`), mapTicketDetail),
+    updateTicket: async (
+      index: number,
+      content: string,
+      owner?: { repo?: string; worktree?: string }
+    ): Promise<ApiResult<TicketDetail>> =>
+      mapResult(
+        await this.requestJson<JsonRecord>(`${legacyTicketPath(owner)}/${encodeURIComponent(index)}`, {
+          method: 'PUT',
+          body: { content }
+        }),
+        mapTicketDetail
+      ),
     listArtifacts: async (runId: string): Promise<ApiResult<SurfaceArtifact[]>> =>
       mapResult(await this.getJson<JsonRecord>(`/api/flows/${encodeURIComponent(runId)}/dispatch_history`), (payload) =>
         asArray(payload.history).flatMap((entry) => asArray(entry.attachments)).map(mapSurfaceArtifact)
@@ -354,6 +373,32 @@ export class PmaApiClient {
         mapPmaRunProgress
       )
   };
+
+  private async listLegacyMountedTickets(): Promise<ApiResult<TicketSummary[]>> {
+    const [repoResult, worktreeResult] = await Promise.all([this.hub.listRepos(), this.hub.listWorktrees()]);
+    if (!repoResult.ok && !worktreeResult.ok) {
+      const legacyResult = await this.getJson<JsonRecord>(legacyTicketPath());
+      return mapResult(legacyResult, (payload) => asArray(payload.tickets).map((ticket) => mapTicketSummary(ticketWithFallbackOwner(ticket))));
+    }
+    const owners = [
+      ...dataOr(repoResult, []).map((repo) => ({ repo: repo.id })),
+      ...dataOr(worktreeResult, []).map((worktree) => ({ worktree: worktree.id }))
+    ];
+    const results = await Promise.all(
+      owners.map(async (owner) => ({
+        owner,
+        result: await this.getJson<JsonRecord>(legacyTicketPath(owner))
+      }))
+    );
+    const failed = results.find(({ result }) => !result.ok && result.error.status !== 404);
+    if (failed && !failed.result.ok) return failed.result;
+    return {
+      ok: true,
+      data: results.flatMap(({ owner, result }) =>
+        result.ok ? asArray(result.data.tickets).map((ticket) => mapTicketSummary(ticketWithFallbackOwner(ticket, owner))) : []
+      )
+    };
+  }
 
   contextspace = {
     listDocuments: async (workspaceId?: string): Promise<ApiResult<ContextspaceDocument[]>> =>
@@ -477,6 +522,40 @@ function contextspaceUpdateApiPath(workspaceId: string | undefined, kind: string
   const id = workspaceId?.trim();
   if (!id) return `/api/contextspace/${encodedKind}`;
   return `/repos/${encodeURIComponent(id)}/api/contextspace/${encodedKind}`;
+}
+
+function hubTicketPath(owner?: { repo?: string; worktree?: string }): string {
+  const params = new URLSearchParams();
+  if (owner?.repo) params.set('repo', owner.repo);
+  if (owner?.worktree) params.set('worktree', owner.worktree);
+  const query = params.toString();
+  return query ? `/hub/tickets?${query}` : '/hub/tickets';
+}
+
+function legacyTicketPath(owner?: { repo?: string; worktree?: string }): string {
+  const workspaceId = owner?.repo ?? owner?.worktree;
+  if (workspaceId) return `/repos/${encodeURIComponent(workspaceId)}/api/flows/ticket_flow/tickets`;
+  return '/api/flows/ticket_flow/tickets';
+}
+
+function ticketWithFallbackOwner(ticket: JsonRecord, owner?: { repo?: string; worktree?: string }): JsonRecord {
+  if (owner?.repo) {
+    return {
+      ...ticket,
+      workspace_kind: ticket.workspace_kind ?? 'repo',
+      workspace_id: ticket.workspace_id ?? owner.repo,
+      repo_id: ticket.repo_id ?? owner.repo
+    };
+  }
+  if (owner?.worktree) {
+    return {
+      ...ticket,
+      workspace_kind: ticket.workspace_kind ?? 'worktree',
+      workspace_id: ticket.workspace_id ?? owner.worktree,
+      worktree_id: ticket.worktree_id ?? ticket.worktree_repo_id ?? owner.worktree
+    };
+  }
+  return ticket;
 }
 
 function contextspaceFilename(kind: string): string {

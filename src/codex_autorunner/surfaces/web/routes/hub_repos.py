@@ -30,6 +30,7 @@ from .hub_repo_routes import (
     build_hub_channel_router,
     build_hub_repo_crud_router,
     build_hub_repo_listing_router,
+    build_hub_ticket_router,
 )
 from .hub_repo_routes.cache_coordinator import HubCacheCoordinator
 
@@ -271,11 +272,13 @@ def build_hub_repo_routes(
     crud_router = build_hub_repo_crud_router(context, mount_manager, enricher)
     agent_workspace_router = build_hub_agent_workspace_router(context)
     channel_router = build_hub_channel_router(context)
+    ticket_router = build_hub_ticket_router(context)
     overlapping_pairs = (
         _route_method_path_pairs(listing_router)
         | _route_method_path_pairs(crud_router)
         | _route_method_path_pairs(agent_workspace_router)
         | _route_method_path_pairs(channel_router)
+        | _route_method_path_pairs(ticket_router)
     )
     _prune_overlapping_routes(router, overlapping_pairs)
 
@@ -283,5 +286,6 @@ def build_hub_repo_routes(
     router.include_router(crud_router)
     router.include_router(agent_workspace_router)
     router.include_router(channel_router)
+    router.include_router(ticket_router)
 
     return router

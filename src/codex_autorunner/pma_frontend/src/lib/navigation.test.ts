@@ -17,7 +17,7 @@ describe('PMA navigation', () => {
     expect(navGroupLabels.workspace).toBe('Workspace indexes');
     expect(primaryNav.map((item) => item.href)).not.toContain('/worktrees');
     expect(primaryNav.find((item) => item.href === '/tickets')).toMatchObject({
-      label: 'Workspace tickets',
+      label: 'All tickets',
       group: 'workspace'
     });
     expect(primaryNav.map((item) => item.href)).not.toContain('/contextspace/local');

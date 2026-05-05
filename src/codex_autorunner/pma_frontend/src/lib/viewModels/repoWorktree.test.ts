@@ -109,9 +109,9 @@ describe('repo/worktree view models', () => {
     });
     expect(vm.links.map((link) => link.label)).not.toContain('Open PMA chat');
     expect(vm.links.map((link) => link.label)).toContain('View repo tickets');
-    expect(vm.links.find((link) => link.label === 'View repo tickets')?.href).toBe('/tickets?repo=repo-1');
+    expect(vm.links.find((link) => link.label === 'View repo tickets')?.href).toBe('/repos/repo-1/tickets');
     expect(vm.links.map((link) => link.label)).toContain('View repo memory');
-    expect(vm.ticketIndexHref).toBe('/tickets?repo=repo-1');
+    expect(vm.ticketIndexHref).toBe('/repos/repo-1/tickets');
     expect(vm.links.map((link) => link.label)).toContain('Open preview');
     expect(vm.artifacts[0]).toMatchObject({ kind: 'preview_url' });
     expect(vm.childWorktrees).toHaveLength(1);
@@ -138,7 +138,7 @@ describe('repo/worktree view models', () => {
     expect(vm.baseRepoLabel).toBe('codex-autorunner');
     expect(vm.baseRepoHref).toBe('/repos/repo-1');
     expect(vm.currentRuns[0].ticketHref).toBe('/tickets/TICKET-110');
-    expect(vm.links.find((link) => link.label === 'View worktree tickets')?.href).toBe('/tickets?worktree=worktree-1');
+    expect(vm.links.find((link) => link.label === 'View worktree tickets')?.href).toBe('/worktrees/worktree-1/tickets');
   });
 
   it('does not match repo-level records on worktree detail through the parent repo id', () => {
@@ -148,7 +148,16 @@ describe('repo/worktree view models', () => {
         worktrees: [mockWorktreeSummary],
         runs: [{ ...mockRunProgress, raw: { repo_id: 'repo-1', current_ticket_id: 'TICKET-110' } }],
         chats: [{ ...mockChatSummary, repoId: 'repo-1', worktreeId: null }],
-        tickets: [{ ...mockTicketSummary, worktreeId: null, raw: { repo_id: 'repo-1' } }],
+        tickets: [
+          {
+            ...mockTicketSummary,
+            workspaceKind: 'repo',
+            workspaceId: 'repo-1',
+            workspacePath: mockRepoSummary.path,
+            worktreeId: null,
+            raw: { repo_id: 'repo-1' }
+          }
+        ],
         artifacts: []
       },
       'worktree',
@@ -217,6 +226,35 @@ describe('repo/worktree view models', () => {
     );
 
     expect(vm.nextTickets.map((ticket) => ticket.title)).toEqual(['Repo-owned ticket']);
+  });
+
+  it('keeps scoped queues empty instead of inheriting unscoped owner-repair tickets', () => {
+    const vm = buildRepoWorktreeDetailViewModel(
+      {
+        repos: [{ ...mockRepoSummary, id: 'repo-1', status: 'idle', activeRuns: 0 }],
+        worktrees: [],
+        runs: [],
+        chats: [],
+        tickets: [
+          {
+            ...mockTicketSummary,
+            id: 'ticket-unscoped',
+            title: 'Needs ownership repair',
+            workspaceKind: 'unscoped',
+            workspaceId: null,
+            repoId: null,
+            worktreeId: null,
+            raw: {}
+          }
+        ],
+        artifacts: []
+      },
+      'repo',
+      'repo-1'
+    );
+
+    expect(vm.currentTickets).toHaveLength(0);
+    expect(vm.nextTickets).toHaveLength(0);
   });
 
   it('renders unknown repo detail as missing instead of idle workspace state', () => {

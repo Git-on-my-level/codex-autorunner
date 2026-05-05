@@ -72,4 +72,12 @@ describe('contextspace view models', () => {
     expect(html).toContain('<code>code</code>');
     expect(html).toContain('&lt;script&gt;');
   });
+
+  it('renders safe markdown links without enabling script URLs', () => {
+    const html = renderMarkdownToHtml('[Ticket](/tmp/TICKET-001.md) [bad](javascript:alert(1))');
+
+    expect(html).toContain('<a href="/tmp/TICKET-001.md">Ticket</a>');
+    expect(html).not.toContain('javascript:alert');
+    expect(html).toContain('bad');
+  });
 });

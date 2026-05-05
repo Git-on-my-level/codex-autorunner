@@ -15,6 +15,7 @@ import {
   filterArtifactsForActiveChat,
   formatRelativeTime,
   isPrimaryProgressArtifact,
+  mergePmaActivityEvents,
   modelSelectorState,
   pmaChatScopeLabelFromChat,
   progressPercent,
@@ -250,6 +251,129 @@ describe('PMA chat view helpers', () => {
       message: { text: 'Done. The PMA smoke fixtures are now covered.' }
     });
     expect(cards.filter((card) => card.kind === 'artifact')).toHaveLength(0);
+  });
+
+  it('persists intermediate output and groups tool calls between user and final assistant messages', () => {
+    const cards = buildPmaCards(
+      [
+        { ...baseMessage, id: 'prompt', role: 'user', text: 'Create tickets' },
+        { ...baseMessage, id: 'final', role: 'assistant', text: 'Done.\n\n- [TICKET-001.md](/tmp/TICKET-001.md)' }
+      ],
+      baseProgress,
+      null,
+      [],
+      [
+        {
+          ...baseArtifact,
+          id: 'think-1',
+          kind: 'progress',
+          title: 'Thinking',
+          summary: 'Inspecting repo state.',
+          raw: { event_type: 'assistant_update' }
+        },
+        {
+          ...baseArtifact,
+          id: 'tool-1',
+          kind: 'progress',
+          title: 'tool: rg',
+          summary: 'tool: rg tickets',
+          raw: { event_type: 'tool_started', tool_name: 'rg tickets', tool_state: 'started' }
+        },
+        {
+          ...baseArtifact,
+          id: 'tool-2',
+          kind: 'progress',
+          title: 'tool: rg',
+          summary: 'tool: rg tickets',
+          raw: { event_type: 'tool_completed', tool_name: 'rg tickets', tool_state: 'completed' }
+        },
+        {
+          ...baseArtifact,
+          id: 'think-2',
+          kind: 'progress',
+          title: 'Thinking',
+          summary: 'Drafting ticket files.',
+          raw: { event_type: 'assistant_update' }
+        }
+      ]
+    );
+
+    expect(cards.map((card) => card.kind)).toEqual([
+      'message',
+      'intermediate',
+      'tool_group',
+      'intermediate',
+      'message'
+    ]);
+    expect(cards[2]).toMatchObject({
+      kind: 'tool_group',
+      tools: [
+        { title: 'rg tickets', state: 'started' },
+        { title: 'rg tickets', state: 'completed' }
+      ]
+    });
+  });
+
+  it('coalesces streamed assistant updates into one thought card', () => {
+    const cards = buildPmaCards([], baseProgress, null, [], [
+      {
+        ...baseArtifact,
+        id: 'think-1',
+        kind: 'progress',
+        title: 'The',
+        summary: 'The',
+        raw: { event_type: 'assistant_update' }
+      },
+      {
+        ...baseArtifact,
+        id: 'think-2',
+        kind: 'progress',
+        title: 'The user',
+        summary: 'The user',
+        raw: { event_type: 'assistant_update' }
+      },
+      {
+        ...baseArtifact,
+        id: 'think-3',
+        kind: 'progress',
+        title: 'Thinking delta',
+        summary: ' is asking',
+        raw: { event_type: 'assistant_update' }
+      }
+    ]);
+
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({
+      kind: 'intermediate',
+      title: 'Thinking',
+      text: 'The user is asking',
+      eventIds: ['think-1', 'think-2', 'think-3']
+    });
+  });
+
+  it('merges streamed activity events without dropping older transcript activity', () => {
+    const merged = mergePmaActivityEvents(
+      [
+        {
+          ...baseArtifact,
+          id: 'event-1',
+          kind: 'progress',
+          summary: 'First update.',
+          raw: { event_type: 'assistant_update' }
+        }
+      ],
+      [
+        {
+          ...baseArtifact,
+          id: 'event-2',
+          kind: 'progress',
+          summary: 'Second update.',
+          raw: { event_type: 'assistant_update' }
+        }
+      ]
+    );
+
+    expect(merged.map((event) => event.id)).toEqual(['event-1', 'event-2']);
   });
 
   it('keeps raw progress classifications deterministic', () => {

@@ -29,11 +29,12 @@ describe('ticket view models', () => {
       artifacts: []
     });
 
-    expect(vm.defaultFilter).toBe('needs_attention');
+    expect(vm.defaultFilter).toBe('open');
     expect(vm.title).toBe('Tickets');
-    expect(vm.eyebrow).toBe('Cross-workspace ticket index');
-    expect(vm.subtitle).toContain('Unscoped tickets');
-    expect(vm.rows[0]).toMatchObject({
+    expect(vm.eyebrow).toBe('All-ticket projection');
+    expect(vm.subtitle).toContain('Tickets without a registered owner');
+    const activeRow = vm.rows.find((row) => row.id === mockTicketSummary.id);
+    expect(activeRow).toMatchObject({
       numberLabel: '#110',
       title: mockTicketSummary.title,
       repoLabel: 'Worktree: worktree-1',
@@ -41,14 +42,24 @@ describe('ticket view models', () => {
       chatHref: '/pma?chat=chat-1'
     });
     expect(vm.workspaceFilters.map((filter) => filter.id)).toContain('worktree:worktree-1');
-    expect(filterTicketRows(vm.rows, 'active')).toHaveLength(1);
-    expect(filterTicketRows(vm.rows, 'active', 'worktree:worktree-1')).toHaveLength(1);
+    expect(filterTicketRows(vm.rows, 'active')).toHaveLength(2);
+    expect(filterTicketRows(vm.rows, 'active', 'worktree:worktree-1')).toHaveLength(2);
     expect(filterTicketRows(vm.rows, 'done_recent')).toHaveLength(1);
   });
 
   it('labels unscoped tickets honestly as current workspace fallback', () => {
     const vm = buildTicketListViewModel({
-      tickets: [{ ...mockTicketSummary, repoId: null, worktreeId: null, raw: {} }],
+      tickets: [
+        {
+          ...mockTicketSummary,
+          workspaceKind: 'unscoped',
+          workspaceId: null,
+          workspacePath: null,
+          repoId: null,
+          worktreeId: null,
+          raw: {}
+        }
+      ],
       runs: [],
       chats: [],
       artifacts: []
@@ -56,7 +67,7 @@ describe('ticket view models', () => {
 
     expect(vm.rows[0]).toMatchObject({
       workspaceKind: 'unscoped',
-      repoLabel: 'Unscoped/current workspace fallback',
+      repoLabel: 'Needs owner repair',
       workspaceHref: null
     });
     expect(vm.workspaceFilters.map((filter) => filter.id)).toContain('unscoped');
@@ -70,6 +81,9 @@ describe('ticket view models', () => {
           ...mockTicketSummary,
           id: 'TICKET-201',
           title: 'Repo-owned QA',
+          workspaceKind: 'unscoped',
+          workspaceId: null,
+          workspacePath: null,
           repoId: null,
           worktreeId: null,
           raw: { frontmatter: { resource_kind: 'repo', resource_id: 'repo-1' } }
@@ -78,6 +92,9 @@ describe('ticket view models', () => {
           ...mockTicketSummary,
           id: 'TICKET-202',
           title: 'Worktree-owned QA',
+          workspaceKind: 'unscoped',
+          workspaceId: null,
+          workspacePath: null,
           repoId: null,
           worktreeId: null,
           raw: { resource_kind: 'worktree', resource_id: 'worktree-1' }

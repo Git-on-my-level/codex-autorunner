@@ -125,9 +125,13 @@ export type TicketSummary = {
   number: number | null;
   title: string;
   status: WorkStatus;
+  workspaceKind: 'repo' | 'worktree' | 'unscoped';
+  workspaceId: string | null;
+  workspacePath: string | null;
   repoId: string | null;
   worktreeId: string | null;
   path: string | null;
+  ticketPath: string | null;
   agentId: string | null;
   chatKey: string | null;
   runId: string | null;
@@ -401,9 +405,11 @@ export function mapAgentWorkspaceSummary(raw: JsonRecord): AgentWorkspaceSummary
 export function mapTicketSummary(raw: JsonRecord): TicketSummary {
   const frontmatter = asRecord(raw.frontmatter);
   const index = numberOrNull(raw.index);
-  const path = nullableString(raw.path);
-  const resourceKind = nullableString(raw.resource_kind ?? frontmatter.resource_kind);
+  const path = nullableString(raw.ticket_path ?? raw.path);
+  const resourceKind = nullableString(raw.workspace_kind ?? raw.resource_kind ?? frontmatter.resource_kind);
   const resourceId = nullableString(raw.resource_id ?? frontmatter.resource_id);
+  const workspaceKind = resourceKind === 'repo' || resourceKind === 'worktree' ? resourceKind : 'unscoped';
+  const workspaceId = nullableString(raw.workspace_id) ?? (workspaceKind === 'unscoped' ? null : resourceId);
   const id = stringValue(
     raw.id ?? frontmatter.ticket_id ?? raw.ticket_id ?? raw.current_ticket ?? path ?? raw.run_id ?? index,
     'unknown-ticket'
@@ -417,11 +423,15 @@ export function mapTicketSummary(raw: JsonRecord): TicketSummary {
     number: index,
     title: stringValue(frontmatter.title ?? raw.title ?? raw.summary ?? raw.current_ticket_title, index ? `Ticket ${index}` : id),
     status: errors.length ? 'failed' : done ? 'done' : normalizeStatus(statusSource),
+    workspaceKind,
+    workspaceId,
+    workspacePath: nullableString(raw.workspace_path),
     repoId: nullableString(raw.repo_id ?? frontmatter.repo_id) ?? (resourceKind === 'repo' ? resourceId : null),
     worktreeId:
       nullableString(raw.worktree_id ?? raw.worktree_repo_id ?? frontmatter.worktree_id ?? frontmatter.worktree_repo_id) ??
       (resourceKind === 'worktree' ? resourceId : null),
     path,
+    ticketPath: path,
     agentId: nullableString(frontmatter.agent ?? raw.agent),
     chatKey: nullableString(raw.chat_key ?? frontmatter.chat_key),
     runId: nullableString(raw.run_id),

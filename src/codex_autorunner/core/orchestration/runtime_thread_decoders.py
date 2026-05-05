@@ -373,19 +373,26 @@ def _extract_opencode_reasoning_text(
             key = value
             break
 
+    delta_text = _event_extract_output_delta(params, include_part_text=False)
     full_text = part.get("text")
     if isinstance(full_text, str) and full_text:
         if key:
             state.reasoning_buffers[key] = full_text
+        if key and key.startswith("descendant-progress:"):
+            # Descendant progress events are synthetic snapshots. They also
+            # carry delta text for append-only stream consumers, but the
+            # normalized run notice should show the accumulated child progress.
+            return full_text
+        if delta_text:
+            return delta_text
         return full_text
 
-    delta_text = _event_extract_output_delta(params, include_part_text=False)
     if not delta_text:
         return ""
     if key:
         combined = f"{state.reasoning_buffers.get(key, '')}{delta_text}"
         state.reasoning_buffers[key] = combined
-        return combined
+        return delta_text
     return delta_text
 
 

@@ -40,8 +40,17 @@ export type ArtifactCardView = {
 
 export type PmaCard =
   | { kind: 'message'; id: string; message: PmaChatMessage }
+  | { kind: 'intermediate'; id: string; title: string; text: string; eventIds: string[] }
+  | { kind: 'tool_group'; id: string; tools: PmaToolCallCard[] }
   | { kind: 'ticket'; id: string; title: string; summary: string | null; ticketId: string }
   | { kind: 'artifact'; id: string; artifact: SurfaceArtifact };
+
+export type PmaToolCallCard = {
+  id: string;
+  title: string;
+  summary: string | null;
+  state: 'started' | 'completed' | 'failed' | 'unknown';
+};
 
 export type PmaLiveActivity = {
   state: WorkStatus;
@@ -157,9 +166,10 @@ export function buildPmaCards(
   messages: PmaChatMessage[],
   progress: PmaRunProgress | null,
   chat: PmaChatSummary | null,
-  artifacts: SurfaceArtifact[]
+  artifacts: SurfaceArtifact[],
+  activityEvents: SurfaceArtifact[] = []
 ): PmaCard[] {
-  const cards: PmaCard[] = messages.flatMap((message) => {
+  const messageCards: PmaCard[] = messages.flatMap((message) => {
     const messageCards: PmaCard[] = [];
     if (message.text.trim()) {
       messageCards.push({
@@ -177,6 +187,8 @@ export function buildPmaCards(
     );
     return messageCards;
   });
+  const activityCards = buildPmaActivityCards(activityEvents);
+  const cards = insertActivityCards(messageCards, activityCards);
 
   if (chat?.ticketId) {
     cards.push({
@@ -192,6 +204,75 @@ export function buildPmaCards(
     cards.push({ kind: 'artifact', id: `artifact-${artifact.id}`, artifact });
   }
 
+  return cards;
+}
+
+export function mergePmaActivityEvents(
+  existing: SurfaceArtifact[],
+  incoming: SurfaceArtifact[],
+  limit = 160
+): SurfaceArtifact[] {
+  if (!incoming.length) return existing;
+  const byId = new Map(existing.map((event) => [event.id, event]));
+  const ordered = [...existing];
+  for (const event of incoming) {
+    const current = byId.get(event.id);
+    if (current) {
+      const index = ordered.findIndex((item) => item.id === event.id);
+      if (index >= 0) ordered[index] = { ...current, ...event, raw: { ...current.raw, ...event.raw } };
+      byId.set(event.id, event);
+    } else {
+      ordered.push(event);
+      byId.set(event.id, event);
+    }
+  }
+  return ordered.slice(-limit);
+}
+
+export function buildPmaActivityCards(events: SurfaceArtifact[]): PmaCard[] {
+  const cards: PmaCard[] = [];
+  let toolGroup: PmaToolCallCard[] = [];
+
+  const flushToolGroup = () => {
+    if (!toolGroup.length) return;
+    cards.push({
+      kind: 'tool_group',
+      id: `tools-${toolGroup[0].id}-${toolGroup.at(-1)?.id ?? toolGroup[0].id}`,
+      tools: toolGroup
+    });
+    toolGroup = [];
+  };
+
+  for (const event of events) {
+    if (!isPrimaryProgressArtifact(event)) continue;
+    if (isToolActivityEvent(event)) {
+      toolGroup.push({
+        id: event.id,
+        title: toolDisplayTitle(event),
+        summary: event.summary,
+        state: toolState(event)
+      });
+      continue;
+    }
+
+    const text = assistantActivityText(event);
+    if (!text) continue;
+    flushToolGroup();
+    const previous = cards.at(-1);
+    if (previous?.kind === 'intermediate' && shouldMergeIntermediate(previous, event)) {
+      previous.text = mergeIntermediateText(previous.text, text);
+      previous.eventIds.push(event.id);
+      continue;
+    }
+    cards.push({
+      kind: 'intermediate',
+      id: `intermediate-${event.id}`,
+      title: intermediateTitle(event),
+      text,
+      eventIds: [event.id]
+    });
+  }
+  flushToolGroup();
   return cards;
 }
 
@@ -280,6 +361,81 @@ export function isPrimaryProgressArtifact(artifact: SurfaceArtifact): boolean {
   return ['assistant_update', 'tool_started', 'tool_completed', 'tool_failed', 'turn_failed', 'turn_interrupted'].some(
     (type) => eventType.includes(type)
   );
+}
+
+function insertActivityCards(messageCards: PmaCard[], activityCards: PmaCard[]): PmaCard[] {
+  if (!activityCards.length) return messageCards;
+  const lastAssistantIndex = messageCards.findLastIndex(
+    (card) => card.kind === 'message' && card.message.role === 'assistant'
+  );
+  if (lastAssistantIndex >= 0) {
+    return [
+      ...messageCards.slice(0, lastAssistantIndex),
+      ...activityCards,
+      ...messageCards.slice(lastAssistantIndex)
+    ];
+  }
+  return [...messageCards, ...activityCards];
+}
+
+function isToolActivityEvent(event: SurfaceArtifact): boolean {
+  const eventType = eventTypeValue(event);
+  return eventType.includes('tool_started') || eventType.includes('tool_completed') || eventType.includes('tool_failed');
+}
+
+function eventTypeValue(event: SurfaceArtifact): string {
+  return stringValue(event.raw.event_type ?? event.raw.type ?? event.raw.kind).toLowerCase();
+}
+
+function assistantActivityText(event: SurfaceArtifact): string {
+  const eventType = eventTypeValue(event);
+  if (!eventType.includes('assistant_update') && !eventType.includes('turn_failed') && !eventType.includes('turn_interrupted')) {
+    return '';
+  }
+  const rawSummary = event.summary ?? '';
+  const summary = rawSummary.trim();
+  if (summary && summary.toLowerCase() !== 'thinking') return rawSummary;
+  const title = event.title.trim();
+  if (title && title.toLowerCase() !== 'thinking' && title.toLowerCase() !== 'assistant update') return title;
+  return summary || title;
+}
+
+function intermediateTitle(event: SurfaceArtifact): string {
+  const eventType = eventTypeValue(event);
+  if (eventType.includes('turn_failed')) return 'Run failed';
+  if (eventType.includes('turn_interrupted')) return 'Interrupted';
+  if (eventType.includes('assistant_update')) return 'Thinking';
+  const title = event.title.trim();
+  if (title && title.toLowerCase() !== assistantActivityText(event).toLowerCase()) return title;
+  return 'PMA update';
+}
+
+function shouldMergeIntermediate(card: Extract<PmaCard, { kind: 'intermediate' }>, event: SurfaceArtifact): boolean {
+  const eventType = eventTypeValue(event);
+  return card.title === 'Thinking' && eventType.includes('assistant_update');
+}
+
+function mergeIntermediateText(current: string, incoming: string): string {
+  if (!current) return incoming;
+  if (!incoming) return current;
+  if (incoming === current) return current;
+  if (incoming.startsWith(current)) return incoming;
+  if (current.endsWith(incoming)) return current;
+  return `${current}${incoming}`;
+}
+
+function toolDisplayTitle(event: SurfaceArtifact): string {
+  return stringValue(event.raw.tool_name) || event.summary || event.title || 'Tool call';
+}
+
+function toolState(event: SurfaceArtifact): PmaToolCallCard['state'] {
+  const rawState = stringValue(event.raw.tool_state).toLowerCase();
+  if (rawState === 'started' || rawState === 'completed' || rawState === 'failed') return rawState;
+  const eventType = eventTypeValue(event);
+  if (eventType.includes('tool_started')) return 'started';
+  if (eventType.includes('tool_completed')) return 'completed';
+  if (eventType.includes('tool_failed')) return 'failed';
+  return 'unknown';
 }
 
 export function formatRelativeTime(value: string | null, now = new Date()): string {
@@ -482,15 +638,15 @@ export function modelSelectorState(
   modelCount: number
 ): ModelSelectorState {
   if (loading) {
-    return { state: 'loading', label: 'Loading models', disabled: true };
+    return { state: 'loading', label: 'loading', disabled: true };
   }
   if (errorMessage) {
     return { state: 'error', label: errorMessage, disabled: true };
   }
   if (modelCount === 0) {
-    return { state: 'empty', label: 'No models exposed', disabled: true };
+    return { state: 'empty', label: 'no models', disabled: true };
   }
-  return { state: 'loaded', label: 'Model', disabled: false };
+  return { state: 'loaded', label: 'model', disabled: false };
 }
 
 export function artifactCardView(artifact: SurfaceArtifact): ArtifactCardView {

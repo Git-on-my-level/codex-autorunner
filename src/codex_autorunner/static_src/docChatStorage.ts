@@ -23,6 +23,7 @@ type ChatMessage = {
   content: string;
   time: string;
   isFinal: boolean;
+  meta?: Record<string, unknown>;
 };
 
 interface StoredChat {

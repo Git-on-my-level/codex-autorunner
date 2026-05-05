@@ -61,6 +61,7 @@ export type RepoWorktreeTicketRow = {
   title: string;
   status: WorkStatus;
   href: string;
+  diffLabel: string | null;
 };
 
 export type RepoWorktreeArtifactRow = {
@@ -175,9 +176,8 @@ export function buildRepoWorktreeDetailViewModel(
   const visibleRuns = activeRunCards.length ? activeRunCards : runCards.slice(0, 1);
   const currentTicketIds = new Set(visibleRuns.map((run) => run.ticketId).filter((ticketId): ticketId is string => Boolean(ticketId)));
   const scopedTickets = ticketsForResource(source.tickets, kind, id);
-  const ticketPool = scopedTickets.length ? scopedTickets : source.tickets.filter((ticket) => !ticketHasExplicitResource(ticket));
-  const currentTickets = ticketsForIds(ticketPool.length ? ticketPool : source.tickets, currentTicketIds);
-  const nextTickets = ticketPool
+  const currentTickets = ticketsForIds(scopedTickets, currentTicketIds);
+  const nextTickets = scopedTickets
     .filter((ticket) => ticket.status !== 'done' && !currentTicketIds.has(ticket.id))
     .slice(0, 5)
     .map(ticketToRow);
@@ -304,7 +304,7 @@ function worktreeToChildRow(worktree: WorktreeSummary, source: RepoWorktreeSourc
     currentTicketId,
     lastActivityAt: worktree.lastActivityAt,
     href: `/worktrees/${encodeURIComponent(worktree.id)}`,
-    ticketHref: currentTicketId ? `/tickets/${encodeURIComponent(currentTicketId)}` : null
+    ticketHref: `/worktrees/${encodeURIComponent(worktree.id)}/tickets`
   };
 }
 
@@ -360,8 +360,20 @@ function ticketToRow(ticket: TicketSummary): RepoWorktreeTicketRow {
     id: ticket.id,
     title: ticket.title,
     status: ticket.status,
-    href: `/tickets/${encodeURIComponent(ticket.id)}`
+    href: ticketDetailHref(ticket),
+    diffLabel: ticketDiffLabel(ticket)
   };
+}
+
+function ticketDiffLabel(ticket: TicketSummary): string | null {
+  const stats = ticket.diffStats;
+  if (!stats) return null;
+  const parts = [
+    stats.insertions ? `+${stats.insertions}` : null,
+    stats.deletions ? `-${stats.deletions}` : null,
+    stats.filesChanged ? `${stats.filesChanged} files` : null
+  ].filter(Boolean);
+  return parts.length ? parts.join(' ') : null;
 }
 
 function artifactToRow(artifact: SurfaceArtifact): RepoWorktreeArtifactRow {
@@ -397,6 +409,7 @@ function ticketsForResource(tickets: TicketSummary[], kind: RepoWorktreeKind, id
 }
 
 function ticketMatchesResource(ticket: TicketSummary, kind: RepoWorktreeKind, id: string): boolean {
+  if (ticket.workspaceKind === kind && ticket.workspaceId === id) return true;
   const raw = ticket.raw;
   const frontmatter = asRecord(raw.frontmatter);
   const repoAliases = [
@@ -420,24 +433,19 @@ function ticketMatchesResource(ticket: TicketSummary, kind: RepoWorktreeKind, id
         (frontmatterResourceKind === 'worktree' && frontmatterResourceId === id);
 }
 
-function ticketHasExplicitResource(ticket: TicketSummary): boolean {
-  return Boolean(
-    ticket.repoId ||
-      ticket.worktreeId ||
-      stringFromRaw(ticket.raw, ['repo_id', 'resource_id', 'base_repo_id', 'worktree_id', 'worktree_repo_id']) ||
-      stringFromRaw(asRecord(ticket.raw.frontmatter), ['repo_id', 'resource_id', 'base_repo_id', 'worktree_id', 'worktree_repo_id'])
-  );
-}
-
 function fallbackTicketSummary(id: string): TicketSummary {
   return {
     id,
     number: null,
     title: id,
     status: 'running',
+    workspaceKind: 'unscoped',
+    workspaceId: null,
+    workspacePath: null,
     repoId: null,
     worktreeId: null,
     path: null,
+    ticketPath: null,
     agentId: null,
     chatKey: null,
     runId: null,
@@ -461,7 +469,17 @@ function buildContextLinks(kind: RepoWorktreeKind, id: string, artifacts: RepoWo
 }
 
 function scopedTicketHref(kind: RepoWorktreeKind, id: string): string {
-  return `/tickets?${kind === 'repo' ? 'repo' : 'worktree'}=${encodeURIComponent(id)}`;
+  return `/${kind === 'repo' ? 'repos' : 'worktrees'}/${encodeURIComponent(id)}/tickets`;
+}
+
+function ticketDetailHref(ticket: TicketSummary): string {
+  const base =
+    ticket.workspaceKind === 'repo' && ticket.workspaceId
+      ? `/repos/${encodeURIComponent(ticket.workspaceId)}/tickets`
+      : ticket.workspaceKind === 'worktree' && ticket.workspaceId
+        ? `/worktrees/${encodeURIComponent(ticket.workspaceId)}/tickets`
+        : '/tickets';
+  return `${base}/${encodeURIComponent(ticket.number ? String(ticket.number) : ticket.id)}`;
 }
 
 function runMatchesResource(run: PmaRunProgress, kind: RepoWorktreeKind, id: string): boolean {

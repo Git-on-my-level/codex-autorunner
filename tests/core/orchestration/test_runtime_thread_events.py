@@ -1019,7 +1019,7 @@ async def test_normalize_runtime_thread_raw_event_uses_part_type_memory_for_reas
     assert first[0].message == "thinking"
     assert len(second) == 1
     assert isinstance(second[0], RunNotice)
-    assert second[0].message == "thinking more"
+    assert second[0].message == " more"
     assert state.best_assistant_text() == ""
 
 

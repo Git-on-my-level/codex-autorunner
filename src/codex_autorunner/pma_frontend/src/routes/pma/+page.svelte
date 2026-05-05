@@ -5,7 +5,8 @@
   import SurfaceArtifactCard from '$lib/components/SurfaceArtifactCard.svelte';
   import { pmaApi, type ApiError, type JsonRecord } from '$lib/api/client';
   import { openPmaTailEventSource, type StreamSubscription } from '$lib/api/streaming';
-  import { mapPmaRunProgress } from '$lib/viewModels/domain';
+  import { mapPmaRunProgress, mapSurfaceArtifact } from '$lib/viewModels/domain';
+  import { renderMarkdownToHtml } from '$lib/viewModels/contextspace';
   import type {
     PmaChatMessage,
     PmaChatSummary,
@@ -27,6 +28,7 @@
     formatBytes,
     formatRelativeTime,
     localPmaChatScopeOption,
+    mergePmaActivityEvents,
     modelSelectorState,
     pmaChatScopeLabel,
     pmaChatScopeLabelFromChat,
@@ -44,6 +46,8 @@
   let chats = $state<PmaChatSummary[]>([]);
   let messages = $state<PmaChatMessage[]>([]);
   let progress = $state<PmaRunProgress | null>(null);
+  let activityEvents = $state<SurfaceArtifact[]>([]);
+  let activityRunId = $state<string | null>(null);
   let artifacts = $state<SurfaceArtifact[]>([]);
   let agents = $state<JsonRecord[]>([]);
   let models = $state<JsonRecord[]>([]);
@@ -91,14 +95,14 @@
       artifacts: [...message.artifacts, ...(localMessageArtifacts[message.id] ?? [])]
     }))
   );
-  const activeCards = $derived<PmaCard[]>(buildPmaCards(visibleMessages, progress, activeChat, artifacts));
+  const activeCards = $derived<PmaCard[]>(buildPmaCards(visibleMessages, progress, activeChat, artifacts, activityEvents));
   const liveActivity = $derived<PmaLiveActivity | null>(buildPmaLiveActivity(progress));
   const modelState = $derived(modelSelectorState(loadingModels, modelError?.message ?? null, models.length));
   const selectedScope = $derived(scopeOptions.find((scope) => scope.id === selectedScopeId) ?? localPmaChatScopeOption());
   const selectedScopeLabel = $derived(pmaChatScopeLabel(selectedScope));
   const activeScopeLabel = $derived(pmaChatScopeLabelFromChat(activeChat));
   const agentStateLabel = $derived(
-    agentError ? agentError.message : agents.length === 0 ? 'No PMA agents exposed' : 'PMA agent'
+    agentError ? agentError.message : agents.length === 0 ? 'no agent' : 'agent'
   );
 
   onMount(() => {
@@ -195,6 +199,7 @@
 
   async function selectChat(chatId: string): Promise<void> {
     activeChatId = chatId;
+    resetActivityEvents();
     mobilePane = 'chat';
     await refreshActive(chatId);
     connectStream(chatId);
@@ -215,8 +220,8 @@
     if (messageResult.ok) messages = messageResult.data;
     else if (!options.quiet) activeError = messageResult.error;
 
-    if (tailResult.ok) progress = tailResult.data;
-    else if (statusResult.ok) progress = statusResult.data;
+    if (tailResult.ok) updateProgress(tailResult.data);
+    else if (statusResult.ok) updateProgress(statusResult.data);
     else if (!options.quiet) activeError = tailResult.error;
 
     void refreshApprovals();
@@ -232,8 +237,11 @@
         if (activeChatId !== chatId) return;
         streamState = 'connected';
         streamLastEventAt = new Date().toISOString();
-        if (event.kind === 'progress' || event.kind === 'tail' || event.kind === 'state') {
-          progress = mapPmaRunProgress(event.payload);
+        if (event.kind === 'tail') {
+          activityEvents = mergePmaActivityEvents(activityEvents, [mapSurfaceArtifact(event.payload)]);
+        }
+        if (event.kind === 'progress' || event.kind === 'state') {
+          updateProgress(mapPmaRunProgress(event.payload));
         }
         if (event.kind === 'message') {
           scheduleActiveRefresh(chatId, 250);
@@ -263,6 +271,21 @@
     streamSubscription?.close();
     streamSubscription = null;
     streamState = 'idle';
+  }
+
+  function updateProgress(nextProgress: PmaRunProgress): void {
+    progress = nextProgress;
+    const nextRunId = nextProgress.id || activeChatId;
+    if (activityRunId !== nextRunId) {
+      activityRunId = nextRunId;
+      activityEvents = [];
+    }
+    activityEvents = mergePmaActivityEvents(activityEvents, nextProgress.events);
+  }
+
+  function resetActivityEvents(): void {
+    activityEvents = [];
+    activityRunId = null;
   }
 
   function retryStream(): void {
@@ -693,8 +716,36 @@
           {#if card.kind === 'message'}
             <article class={`message ${card.message.role === 'user' ? 'user' : 'assistant'}`}>
               <span>{card.message.role === 'user' ? 'You' : 'PMA'}</span>
-              <p>{card.message.text}</p>
+              <div class="message-markdown markdown-body">
+                {@html renderMarkdownToHtml(card.message.text)}
+              </div>
             </article>
+          {:else if card.kind === 'intermediate'}
+            <article class="intermediate-card" aria-label="PMA intermediate output">
+              <span class="artifact-type">PMA update</span>
+              <strong>{card.title}</strong>
+              <div class="message-markdown markdown-body">
+                {@html renderMarkdownToHtml(card.text)}
+              </div>
+            </article>
+          {:else if card.kind === 'tool_group'}
+            <details class="tool-call-bar">
+              <summary>
+                <span>Tool calls</span>
+                <strong>{card.tools.length} {card.tools.length === 1 ? 'tool call' : 'tool calls'}</strong>
+              </summary>
+              <ol>
+                {#each card.tools as tool (tool.id)}
+                  <li class={tool.state}>
+                    <span>{tool.state}</span>
+                    <strong>{tool.title}</strong>
+                    {#if tool.summary && tool.summary !== tool.title}
+                      <small>{tool.summary}</small>
+                    {/if}
+                  </li>
+                {/each}
+              </ol>
+            </details>
           {:else if card.kind === 'ticket'}
             <article class="artifact-card ticket-card">
               <span class="artifact-type">Ticket</span>

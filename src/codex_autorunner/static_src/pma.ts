@@ -812,6 +812,7 @@ async function finalizePMAResponse(
       steps,
       duration,
       tag: deliverySummary?.messageTag,
+      events: pmaChat.state.events.slice(-12),
     });
   }
   pmaChat.state.streamText = "";

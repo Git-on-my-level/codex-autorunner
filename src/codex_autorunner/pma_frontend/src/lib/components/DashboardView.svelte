@@ -50,7 +50,7 @@
         <h2>No active CAR work</h2>
         <p>Start from PMA or open the workspace queues; dashboard signals will fill in as runs, tickets, and artifacts appear.</p>
         <div class="dashboard-actions">
-          <a href={href('/tickets')}>View workspace tickets</a>
+          <a href={href('/tickets')}>View all tickets</a>
         </div>
       </div>
     {/if}
@@ -103,7 +103,7 @@
       <section id="failed-blocked" class="page-panel dashboard-panel">
         <div class="panel-heading-row">
           <h2>Failed/blocked</h2>
-          <a href={href('/tickets')}>Workspace tickets</a>
+          <a href={href('/tickets')}>All tickets</a>
         </div>
         {@render degradedIssues(failedIssues)}
         {@render attentionList(dashboard.failedOrBlocked, 'No failed or blocked work is visible.')}

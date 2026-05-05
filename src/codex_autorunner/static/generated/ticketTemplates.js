@@ -2,8 +2,8 @@
 /**
  * Ticket Templates - Template picker for creating tickets from templates
  */
-import { api, flash } from "./utils.js?v=be399e9b80baaceac895399d521c7e33ba6116a6282d86fe16aaac8dd380e544";
-import { openTicketEditor } from "./ticketEditor.js?v=be399e9b80baaceac895399d521c7e33ba6116a6282d86fe16aaac8dd380e544";
+import { api, flash } from "./utils.js?v=7fa8004f6840e214503b15a447aff6b141a7ad76cba89a9cf20138dbd2d88456";
+import { openTicketEditor } from "./ticketEditor.js?v=7fa8004f6840e214503b15a447aff6b141a7ad76cba89a9cf20138dbd2d88456";
 const TEMPLATE_HISTORY_KEY = "car:ticket-template-history";
 const MAX_HISTORY_ITEMS = 10;
 const FETCH_DEBOUNCE_MS = 500;

@@ -38,3 +38,22 @@ test("renders standalone code block", () => {
   assert.match(html, /code here/);
   assert.doesNotMatch(html, /@@CODEBLOCK_/);
 });
+
+test("renders loose markdown without blank lines", () => {
+  const html = renderMarkdown("**Sitrep**\n- first\n- second\n1. numbered");
+  assert.match(html, /<strong>Sitrep<\/strong>/);
+  assert.match(html, /<ul><li>first<\/li><li>second<\/li><\/ul>/);
+  assert.match(html, /<ol><li>numbered<\/li><\/ol>/);
+});
+
+test("renders unclosed fenced code as a code block", () => {
+  const html = renderMarkdown("```sh\nmake chat");
+  assert.match(html, /<pre class="md-code">/);
+  assert.match(html, /make chat/);
+  assert.doesNotMatch(html, /@@CODEBLOCK_/);
+});
+
+test("renders dangling inline code until line end", () => {
+  const html = renderMarkdown("state is `running");
+  assert.match(html, /<code>running<\/code>/);
+});

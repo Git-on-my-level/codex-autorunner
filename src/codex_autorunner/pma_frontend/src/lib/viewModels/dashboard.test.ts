@@ -30,7 +30,7 @@ describe('dashboard view model', () => {
       ],
       tickets: [
         mockTicketSummary,
-        { ...mockTicketSummary, id: 'TICKET-111', status: 'blocked', title: 'Blocked ticket' }
+        { ...mockTicketSummary, id: 'TICKET-111', number: 111, status: 'blocked', title: 'Blocked ticket' }
       ]
     });
 
@@ -52,7 +52,7 @@ describe('dashboard view model', () => {
     });
     expect(dashboard.failedOrBlocked[0]).toMatchObject({
       title: 'Blocked ticket',
-      primaryHref: '/tickets/TICKET-111'
+      primaryHref: '/worktrees/worktree-1/tickets/111'
     });
     expect(dashboard.recentActivity.some((activity) => activity.title === 'Preview ready')).toBe(true);
   });

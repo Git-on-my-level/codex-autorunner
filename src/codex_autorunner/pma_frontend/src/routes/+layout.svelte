@@ -10,7 +10,8 @@
   let mobileOpen = $state(false);
   const currentPath = $derived(stripRuntimeBasePath(page.url.pathname));
   const activeNavItem = $derived(primaryNav.find((item) => isActiveRoute(currentPath, item.href)) ?? primaryNav[0]);
-  const activeGroupLabel = $derived(navGroupLabels[activeNavItem.group]);
+  const activeGroupLabel = $derived(groupLabelForPath(currentPath, activeNavItem.group));
+  const topbarTitle = $derived(titleForPath(currentPath, activeNavItem.label));
 
   const closeMobile = () => {
     mobileOpen = false;
@@ -18,6 +19,20 @@
 
   function handleWindowKeydown(event: KeyboardEvent): void {
     if (event.key === 'Escape') closeMobile();
+  }
+
+  function titleForPath(path: string, fallback: string): string {
+    if (/^\/repos\/[^/]+\/tickets\/[^/]+/.test(path)) return 'Repo ticket';
+    if (/^\/repos\/[^/]+\/tickets/.test(path)) return 'Repo tickets';
+    if (/^\/worktrees\/[^/]+\/tickets\/[^/]+/.test(path)) return 'Worktree ticket';
+    if (/^\/worktrees\/[^/]+\/tickets/.test(path)) return 'Worktree tickets';
+    if (/^\/tickets\/[^/]+/.test(path)) return 'Ticket detail';
+    return fallback;
+  }
+
+  function groupLabelForPath(path: string, fallback: keyof typeof navGroupLabels): string {
+    if (path.startsWith('/worktrees/')) return navGroupLabels.support;
+    return navGroupLabels[fallback];
   }
 </script>
 
@@ -93,7 +108,7 @@
       </button>
       <div class="topbar-copy">
         <span class="topbar-eyebrow">{activeGroupLabel}</span>
-        <span class="topbar-title">{activeNavItem.label}</span>
+        <span class="topbar-title">{topbarTitle}</span>
       </div>
       <div class="hub-status" role="status">
         <span class="status-dot" aria-hidden="true"></span>

@@ -127,6 +127,19 @@ class _StubClient:
         self.question_rejections.append(request_id)
 
 
+def test_synthetic_descendant_reasoning_event_preserves_delta_text() -> None:
+    event = progress_synthesis_module.synthetic_descendant_reasoning_event(
+        session_id="child-session",
+        logical_id="stream-1",
+        text="The user is",
+        delta=" is",
+    )
+
+    properties = event["message"]["params"]["properties"]
+    assert properties["part"]["text"] == "The user is"
+    assert properties["delta"] == {"text": " is"}
+
+
 class _StubSupervisor:
     def __init__(
         self,

@@ -10,6 +10,21 @@ export type TicketSourceData = {
   artifacts: SurfaceArtifact[];
 };
 
+export type TicketEditPayload = {
+  title: string;
+  agent: string;
+  model: string;
+  reasoning: string;
+  done: boolean;
+  body: string;
+};
+
+export type TicketOwnerScope = {
+  kind: 'repo' | 'worktree';
+  id: string;
+  label?: string | null;
+} | null;
+
 export type TicketListRow = {
   id: string;
   routeId: string;
@@ -19,8 +34,11 @@ export type TicketListRow = {
   workspaceKind: 'repo' | 'worktree' | 'unscoped';
   workspaceId: string | null;
   workspaceHref: string | null;
+  ownerTicketHref: string | null;
   pathLabel: string | null;
   agentLabel: string;
+  modelLabel: string | null;
+  diffLabel: string | null;
   status: WorkStatus;
   currentRunState: WorkStatus | null;
   updatedAt: string | null;
@@ -33,6 +51,8 @@ export type TicketListViewModel = {
   title: string;
   eyebrow: string;
   subtitle: string;
+  queueTitle: string;
+  scopedOwner: TicketOwnerScope;
   defaultFilter: TicketFilter;
   defaultWorkspaceFilter: string;
   filters: { id: TicketFilter; label: string; count: number }[];
@@ -82,8 +102,14 @@ export type TicketDetailViewModel = {
   workspaceKind: 'repo' | 'worktree' | 'unscoped';
   workspaceId: string | null;
   workspaceHref: string | null;
+  ownerTicketListHref: string | null;
   pathLabel: string | null;
+  workspacePathLabel: string | null;
   agentLabel: string;
+  modelLabel: string | null;
+  reasoningLabel: string | null;
+  done: boolean;
+  frontmatter: Record<string, unknown>;
   updatedLabel: string;
   goal: string | null;
   contractSections: TicketContractSection[];
@@ -95,6 +121,9 @@ export type TicketDetailViewModel = {
   debugHref: string | null;
   actions: TicketAction[];
   rawBody: string;
+  sourceTickets: TicketListRow[];
+  previousTicketHref: string | null;
+  nextTicketHref: string | null;
 };
 
 const filterLabels: Record<TicketFilter, string> = {
@@ -106,14 +135,18 @@ const filterLabels: Record<TicketFilter, string> = {
   done_recent: 'Done/recent'
 };
 
-export function buildTicketListViewModel(source: TicketSourceData): TicketListViewModel {
+export function buildTicketListViewModel(source: TicketSourceData, owner: TicketOwnerScope = null): TicketListViewModel {
   const rows = source.tickets.map((ticket) => ticketToListRow(ticket, source)).sort(bySignalThenRecent);
+  const ownerLabel = owner?.label || owner?.id;
   return {
-    title: 'Tickets',
-    eyebrow: 'Cross-workspace ticket index',
-    subtitle:
-      'This index spans known repos and worktrees. Unscoped tickets are shown as current workspace fallback until ownership is available.',
-    defaultFilter: 'needs_attention',
+    title: owner ? `${ownerLabel} tickets` : 'Tickets',
+    eyebrow: owner ? `${owner.kind === 'repo' ? 'Repo' : 'Worktree'} ticket queue` : 'All-ticket projection',
+    subtitle: owner
+      ? 'This queue is read from this workspace’s .codex-autorunner/tickets directory.'
+      : 'This projection spans known repos and worktrees. Tickets without a registered owner are flagged for ownership repair.',
+    queueTitle: owner ? `${owner.kind === 'repo' ? 'Repo' : 'Worktree'} ticket queue` : 'All tickets',
+    scopedOwner: owner,
+    defaultFilter: 'open',
     defaultWorkspaceFilter: 'all',
     filters: (Object.keys(filterLabels) as TicketFilter[]).map((id) => ({
       id,
@@ -143,10 +176,14 @@ export function buildTicketDetailViewModel(
   const runHref = run ? `/api/flows/${encodeURIComponent(run.id)}/status` : detail.runId ? `/api/flows/${encodeURIComponent(detail.runId)}/status` : null;
   const debugHref = run ? `/api/flows/${encodeURIComponent(run.id)}/dispatch_history` : null;
   const chatHref = chat ? `/pma?chat=${encodeURIComponent(chat.id)}` : detail.chatKey ? `/pma?chat=${encodeURIComponent(detail.chatKey)}` : null;
+  const sourceTickets = source.tickets.map((ticket) => ticketToListRow(ticket, source)).sort(byTicketNumberThenTitle);
+  const routeId = routeIdForTicket(detail);
+  const selectedIndex = sourceTickets.findIndex((row) => row.routeId === routeId || row.id === detail.id);
+  const frontmatter = asRecord(detail.raw.frontmatter);
 
   return {
     id: detail.id,
-    routeId: routeIdForTicket(detail),
+    routeId,
     numberLabel: ticketNumberLabel(detail),
     title: detail.title,
     status: run?.status ?? detail.status,
@@ -154,8 +191,14 @@ export function buildTicketDetailViewModel(
     workspaceKind: workspaceScope(detail).kind,
     workspaceId: workspaceScope(detail).id,
     workspaceHref: workspaceHref(detail),
+    ownerTicketListHref: ownerTicketListHref(detail),
     pathLabel: detail.path,
+    workspacePathLabel: detail.workspacePath,
     agentLabel: detail.agentId ?? chat?.agentId ?? 'Unassigned',
+    modelLabel: stringFromRaw(frontmatter, ['model']),
+    reasoningLabel: stringFromRaw(frontmatter, ['reasoning']),
+    done: Boolean(frontmatter.done),
+    frontmatter,
     updatedLabel: formatRelativeTime(detail.updatedAt ?? run?.lastEventAt ?? null, now),
     goal,
     contractSections: sections,
@@ -166,18 +209,28 @@ export function buildTicketDetailViewModel(
     runHref,
     debugHref,
     actions: buildActions(chatHref, runHref, debugHref, run?.status ?? detail.status),
-    rawBody: detail.body
+    rawBody: detail.body,
+    sourceTickets,
+    previousTicketHref: selectedIndex > 0 ? sourceTickets[selectedIndex - 1].href : null,
+    nextTicketHref: selectedIndex >= 0 && selectedIndex < sourceTickets.length - 1 ? sourceTickets[selectedIndex + 1].href : null
   };
 }
 
 export function resolveTicketRouteId(tickets: TicketSummary[], routeId: string): TicketSummary | null {
+  return resolveTicketRouteMatches(tickets, routeId)[0] ?? null;
+}
+
+export function resolveTicketRouteMatches(tickets: TicketSummary[], routeId: string): TicketSummary[] {
   const decoded = decodeURIComponent(routeId);
   const normalized = decoded.toLowerCase();
-  return (
-    tickets.find((ticket) => ticket.number !== null && String(ticket.number) === decoded) ??
-    tickets.find((ticket) => ticket.id === decoded || ticket.path === decoded) ??
-    tickets.find((ticket) => ticket.path?.toLowerCase().endsWith(`ticket-${normalized.padStart(3, '0')}.md`)) ??
-    null
+  return tickets.filter(
+    (ticket) =>
+      (ticket.number !== null && String(ticket.number) === decoded) ||
+      ticket.id === decoded ||
+      ticket.path === decoded ||
+      ticket.ticketPath === decoded ||
+      Boolean(ticket.path?.toLowerCase().endsWith(`ticket-${normalized.padStart(3, '0')}.md`)) ||
+      Boolean(ticket.ticketPath?.toLowerCase().endsWith(`ticket-${normalized.padStart(3, '0')}.md`))
   );
 }
 
@@ -188,6 +241,16 @@ export function ticketDetailFromSummary(ticket: TicketSummary): TicketDetail {
     progress: null,
     artifacts: []
   };
+}
+
+export function buildTicketUpdateContent(detail: TicketDetailViewModel, payload: TicketEditPayload): string {
+  const frontmatter = { ...detail.frontmatter };
+  frontmatter.title = payload.title.trim() || detail.title;
+  frontmatter.agent = payload.agent.trim() || 'codex';
+  frontmatter.done = payload.done;
+  setOptional(frontmatter, 'model', payload.model.trim());
+  setOptional(frontmatter, 'reasoning', payload.reasoning.trim());
+  return `---\n${serializeFrontmatter(frontmatter)}---\n\n${payload.body.trimEnd()}\n`;
 }
 
 export function rowRelativeTime(row: { updatedAt?: string | null; createdAt?: string | null }, now = new Date()): string {
@@ -208,15 +271,36 @@ function ticketToListRow(ticket: TicketSummary, source: TicketSourceData): Ticke
     workspaceKind: scope.kind,
     workspaceId: scope.id,
     workspaceHref: workspaceHref(ticket),
+    ownerTicketHref: scopedTicketHref(ticket),
     pathLabel: ticket.path,
     agentLabel: ticket.agentId ?? chat?.agentId ?? 'Unassigned',
+    modelLabel: stringFromRaw(asRecord(ticket.raw.frontmatter), ['model']),
+    diffLabel: diffLabel(ticket),
     status: ticket.status,
     currentRunState: run?.status ?? chat?.status ?? null,
     updatedAt: ticket.updatedAt ?? run?.lastEventAt ?? chat?.updatedAt ?? null,
     chatHref: chat ? `/pma?chat=${encodeURIComponent(chat.id)}` : ticket.chatKey ? `/pma?chat=${encodeURIComponent(ticket.chatKey)}` : null,
-    href: `/tickets/${encodeURIComponent(routeIdForTicket(ticket))}`,
+    href: scopedTicketHref(ticket) ?? `/tickets/${encodeURIComponent(routeIdForTicket(ticket))}`,
     needsAttention: ticket.errors.length > 0 || ['waiting', 'failed', 'blocked'].includes(status)
   };
+}
+
+function byTicketNumberThenTitle(a: TicketListRow, b: TicketListRow): number {
+  const aNumber = Number(a.numberLabel.replace(/^#/, ''));
+  const bNumber = Number(b.numberLabel.replace(/^#/, ''));
+  if (Number.isFinite(aNumber) && Number.isFinite(bNumber) && aNumber !== bNumber) return aNumber - bNumber;
+  return a.title.localeCompare(b.title);
+}
+
+function diffLabel(ticket: TicketSummary): string | null {
+  const stats = ticket.diffStats;
+  if (!stats) return null;
+  const parts = [
+    stats.insertions ? `+${stats.insertions}` : null,
+    stats.deletions ? `-${stats.deletions}` : null,
+    stats.filesChanged ? `${stats.filesChanged} files` : null
+  ].filter(Boolean);
+  return parts.length ? parts.join(' ') : null;
 }
 
 function buildWorkspaceFilters(rows: TicketListRow[]): { id: string; label: string; count: number }[] {
@@ -358,7 +442,7 @@ function findTicketChat(ticket: TicketSummary, chats: PmaChatSummary[], run: Pma
 
 function ticketAliases(ticket: TicketSummary): Set<string> {
   return new Set(
-    [ticket.id, ticket.path, ticket.chatKey, ticket.number ? `TICKET-${String(ticket.number).padStart(3, '0')}.md` : null, ticket.number ? String(ticket.number) : null]
+    [ticket.id, ticket.path, ticket.ticketPath, ticket.chatKey, ticket.number ? `TICKET-${String(ticket.number).padStart(3, '0')}.md` : null, ticket.number ? String(ticket.number) : null]
       .filter(Boolean)
       .map((value) => normalizeAlias(String(value)))
   );
@@ -413,6 +497,12 @@ function workspaceScope(ticket: TicketSummary): {
   id: string | null;
   label: string;
 } {
+  if (ticket.workspaceKind === 'repo' && ticket.workspaceId) {
+    return { kind: 'repo', id: ticket.workspaceId, label: `Repo: ${ticket.workspaceId}` };
+  }
+  if (ticket.workspaceKind === 'worktree' && ticket.workspaceId) {
+    return { kind: 'worktree', id: ticket.workspaceId, label: `Worktree: ${ticket.workspaceId}` };
+  }
   const raw = ticket.raw;
   const frontmatter = asRecord(raw.frontmatter);
   const repoId =
@@ -429,7 +519,7 @@ function workspaceScope(ticket: TicketSummary): {
   if (repoId) return { kind: 'repo', id: repoId, label: `Repo: ${repoId}` };
   if (resourceKind === 'worktree' && resourceId) return { kind: 'worktree', id: resourceId, label: `Worktree: ${resourceId}` };
   if (resourceKind === 'repo' && resourceId) return { kind: 'repo', id: resourceId, label: `Repo: ${resourceId}` };
-  return { kind: 'unscoped', id: null, label: 'Unscoped/current workspace fallback' };
+  return { kind: 'unscoped', id: null, label: 'Needs owner repair' };
 }
 
 function workspaceHref(ticket: TicketSummary): string | null {
@@ -437,6 +527,18 @@ function workspaceHref(ticket: TicketSummary): string | null {
   if (scope.kind === 'repo' && scope.id) return `/repos/${encodeURIComponent(scope.id)}`;
   if (scope.kind === 'worktree' && scope.id) return `/worktrees/${encodeURIComponent(scope.id)}`;
   return null;
+}
+
+function ownerTicketListHref(ticket: TicketSummary): string | null {
+  const scope = workspaceScope(ticket);
+  if (scope.kind === 'repo' && scope.id) return `/repos/${encodeURIComponent(scope.id)}/tickets`;
+  if (scope.kind === 'worktree' && scope.id) return `/worktrees/${encodeURIComponent(scope.id)}/tickets`;
+  return null;
+}
+
+function scopedTicketHref(ticket: TicketSummary): string | null {
+  const base = ownerTicketListHref(ticket);
+  return base ? `${base}/${encodeURIComponent(routeIdForTicket(ticket))}` : null;
 }
 
 function artifactToRow(artifact: SurfaceArtifact): TicketArtifactRow {
@@ -476,6 +578,28 @@ function stringFromRaw(raw: Record<string, unknown>, keys: string[]): string | n
     if (typeof value === 'number' && Number.isFinite(value)) return String(value);
   }
   return null;
+}
+
+function setOptional(target: Record<string, unknown>, key: string, value: string): void {
+  if (value) target[key] = value;
+  else delete target[key];
+}
+
+function serializeFrontmatter(frontmatter: Record<string, unknown>): string {
+  const preferred = ['agent', 'done', 'ticket_id', 'title', 'goal', 'profile', 'model', 'reasoning'];
+  const keys = [
+    ...preferred.filter((key) => Object.prototype.hasOwnProperty.call(frontmatter, key)),
+    ...Object.keys(frontmatter).filter((key) => !preferred.includes(key)).sort()
+  ];
+  return keys.map((key) => `${key}: ${yamlScalar(frontmatter[key])}\n`).join('');
+}
+
+function yamlScalar(value: unknown): string {
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  if (value === null || value === undefined) return 'null';
+  if (Array.isArray(value) || typeof value === 'object') return JSON.stringify(value);
+  return JSON.stringify(String(value));
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

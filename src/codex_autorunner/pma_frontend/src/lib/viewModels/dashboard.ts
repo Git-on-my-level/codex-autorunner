@@ -202,7 +202,7 @@ function ticketToAttentionRow(ticket: TicketSummary): DashboardAttentionRow {
     status: ticket.status,
     kind: 'unclear',
     updatedAt: ticket.updatedAt,
-    primaryHref: ticketHref(ticket.id)
+    primaryHref: ticketHrefForTicket(ticket)
   };
 }
 
@@ -226,7 +226,7 @@ function ticketToFailureRow(ticket: TicketSummary): DashboardAttentionRow {
     status: ticket.status,
     kind: ticket.status === 'blocked' ? 'blocker' : 'failure',
     updatedAt: ticket.updatedAt,
-    primaryHref: ticketHref(ticket.id)
+    primaryHref: ticketHrefForTicket(ticket)
   };
 }
 
@@ -261,7 +261,7 @@ function buildRecentActivity(
     title: ticket.title,
     summary: `Ticket ${ticket.status}`,
     createdAt: ticket.updatedAt,
-    href: ticketHref(ticket.id),
+    href: ticketHrefForTicket(ticket),
     artifact: null
   }));
 
@@ -306,4 +306,15 @@ function worktreeHref(worktreeId: string): string {
 
 function ticketHref(ticketId: string): string {
   return `/tickets/${encodeURIComponent(ticketId)}`;
+}
+
+function ticketHrefForTicket(ticket: TicketSummary): string {
+  const routeId = ticket.number ? String(ticket.number) : ticket.id;
+  if (ticket.workspaceKind === 'repo' && ticket.workspaceId) {
+    return `/repos/${encodeURIComponent(ticket.workspaceId)}/tickets/${encodeURIComponent(routeId)}`;
+  }
+  if (ticket.workspaceKind === 'worktree' && ticket.workspaceId) {
+    return `/worktrees/${encodeURIComponent(ticket.workspaceId)}/tickets/${encodeURIComponent(routeId)}`;
+  }
+  return ticketHref(routeId);
 }

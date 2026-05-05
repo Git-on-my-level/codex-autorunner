@@ -175,6 +175,73 @@ test("streaming bubble content updates without full DOM rebuild", () => {
   assert.match(contentEl.innerHTML, /Hello world/, "streaming content should show updated text");
 });
 
+test("streaming bubble renders compact collapsible tool and thinking rows", () => {
+  const chat = createDocChat(makeConfig());
+  chat.setTarget("test");
+  chat.addUserMessage("Go");
+  chat.state.status = "running";
+  chat.state.events = [
+    {
+      id: "thinking-1",
+      title: "Thinking",
+      summary: "checking files",
+      detail: "",
+      kind: "thinking",
+      isSignificant: true,
+      time: Date.now(),
+      itemId: "thinking-1",
+      method: "message/part",
+    },
+    {
+      id: "tool-1",
+      title: "Tool",
+      summary: "exec_command",
+      detail: "rg markdown",
+      kind: "tool",
+      isSignificant: true,
+      time: Date.now(),
+      itemId: "tool-1",
+      method: "message/part",
+    },
+  ];
+  chat.state.totalEvents = 2;
+  chat.state.streamText = "Answer **now**";
+  chat.render();
+
+  const messagesEl = document.getElementById("test-chat-messages");
+  const rows = messagesEl.querySelectorAll(".chat-event-row");
+  assert.equal(rows.length, 2, "tool and thinking rows should render inline");
+  assert.match(rows[0].textContent, /Thinking/);
+  assert.match(rows[1].textContent, /Tool · exec_command/);
+  assert.match(messagesEl.innerHTML, /<strong>now<\/strong>/);
+});
+
+test("final assistant messages can retain compact event rows", () => {
+  const chat = createDocChat(makeConfig());
+  chat.setTarget("test");
+  chat.addAssistantMessage("Done", true, {
+    events: [
+      {
+        id: "tool-1",
+        title: "Tool",
+        summary: "exec_command",
+        detail: "pnpm run build",
+        kind: "tool",
+        isSignificant: true,
+        time: Date.now(),
+        itemId: "tool-1",
+        method: "message/part",
+      },
+    ],
+  });
+  chat.render();
+
+  const messagesEl = document.getElementById("test-chat-messages");
+  const row = messagesEl.querySelector(".chat-event-row");
+  assert.ok(row, "final message should include persisted event row");
+  assert.match(row.textContent, /Tool · exec_command/);
+});
+
 test("adding a new assistant message triggers correct rebuild", () => {
   const chat = createDocChat(makeConfig());
   chat.setTarget("test");

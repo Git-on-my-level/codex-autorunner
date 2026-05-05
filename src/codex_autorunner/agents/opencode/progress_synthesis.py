@@ -109,28 +109,35 @@ def synthetic_descendant_reasoning_event(
     session_id: str,
     logical_id: str,
     text: str,
+    delta: str | None = None,
 ) -> dict[str, Any]:
     synthetic_message_id = f"descendant-progress:{session_id}:{logical_id}:message"
     synthetic_part_id = f"descendant-progress:{session_id}:{logical_id}:part"
+    properties: dict[str, Any] = {
+        "messageID": synthetic_message_id,
+        "info": {
+            "id": synthetic_message_id,
+            "role": "assistant",
+        },
+        "part": {
+            "id": synthetic_part_id,
+            "type": "reasoning",
+            "text": text,
+            "messageID": synthetic_message_id,
+            "sessionID": session_id,
+        },
+    }
+    if delta:
+        # Keep both the accumulated snapshot and explicit delta. OpenCode part
+        # updates often carry snapshots, but downstream stream consumers need
+        # append-sized reasoning deltas to avoid duplicating growing prefixes.
+        properties["delta"] = {"text": delta}
     return wrap_runtime_raw_event(
         "message.part.updated",
         {
             "sessionID": session_id,
             "messageID": synthetic_message_id,
-            "properties": {
-                "messageID": synthetic_message_id,
-                "info": {
-                    "id": synthetic_message_id,
-                    "role": "assistant",
-                },
-                "part": {
-                    "id": synthetic_part_id,
-                    "type": "reasoning",
-                    "text": text,
-                    "messageID": synthetic_message_id,
-                    "sessionID": session_id,
-                },
-            },
+            "properties": properties,
         },
     )
 
@@ -383,7 +390,8 @@ class DescendantSessionTracker:
         if method in {"message.part.updated", "message.part.delta"}:
             part_type = _extract_part_type(payload, part_types=self.part_types)
             if part_type in {None, "", "text"}:
-                text = extract_delta_text(payload) or extract_completed_text(payload)
+                delta_text = extract_delta_text(payload)
+                text = delta_text or extract_completed_text(payload)
                 if not text:
                     return []
                 progress_key = (
@@ -399,6 +407,7 @@ class DescendantSessionTracker:
                         session_id=session_id,
                         logical_id=progress_key,
                         text=accumulated_text,
+                        delta=delta_text,
                     )
                 ]
             return [wrap_runtime_raw_event(method, payload)]
@@ -409,7 +418,8 @@ class DescendantSessionTracker:
             "message.completed",
             "item/agentMessage/delta",
         }:
-            text = extract_delta_text(payload) or extract_completed_text(payload)
+            delta_text = extract_delta_text(payload)
+            text = delta_text or extract_completed_text(payload)
             if not text:
                 return []
             progress_key = (
@@ -425,6 +435,7 @@ class DescendantSessionTracker:
                     session_id=session_id,
                     logical_id=progress_key,
                     text=accumulated_text,
+                    delta=delta_text,
                 )
             ]
 

@@ -16,7 +16,7 @@ describe('TicketViews', () => {
       props: { state: 'ready', mode: 'list', list, selectedFilter: 'active' }
     });
 
-    expect(body).toContain('Cross-workspace ticket queue');
+    expect(body).toContain('All tickets');
     expect(body).toContain('All workspaces');
     expect(body).toContain('Worktree worktree-1');
     expect(body).toContain('Worktree: worktree-1');
@@ -40,7 +40,7 @@ describe('TicketViews', () => {
 
     expect(body).toContain('No tickets in this view');
     expect(body).toContain('Switch filters or ask PMA to create the next scoped ticket for the current CAR work.');
-    expect(body).toContain('Unscoped tickets are shown as current workspace fallback');
+    expect(body).toContain('Tickets without a registered owner are flagged for ownership repair');
   });
 
   it('renders ticket contract sections on detail pages', () => {
@@ -73,9 +73,11 @@ Users can browse tickets.
     });
 
     expect(body).toContain('Ticket contract');
-    expect(body).toContain('Workspace scope');
+    expect(body).toContain('Owner');
     expect(body).toContain('Worktree: worktree-1');
     expect(body).toContain('href="/worktrees/worktree-1"');
+    expect(body).toContain('Back to worktree tickets');
+    expect(body).toContain('href="/worktrees/worktree-1/tickets"');
     expect(body).toContain('Users can browse tickets.');
     expect(body).toContain('Render list');
     expect(body).toContain('Acceptance criteria');

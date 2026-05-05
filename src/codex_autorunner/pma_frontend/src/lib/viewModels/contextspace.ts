@@ -167,7 +167,35 @@ export function renderMarkdownToHtml(markdown: string): string {
 }
 
 function renderInline(value: string): string {
-  return escapeHtml(value).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  const segments: string[] = [];
+  const linkPattern = /\[([^\]]+)\]\(([^)\s]+)\)/g;
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+  while ((match = linkPattern.exec(value))) {
+    segments.push(renderInlineWithoutLinks(value.slice(cursor, match.index)));
+    const label = renderInlineWithoutLinks(match[1]);
+    const href = safeMarkdownHref(match[2]);
+    segments.push(href ? `<a href="${escapeHtml(href)}">${label}</a>` : label);
+    cursor = match.index + match[0].length;
+  }
+  segments.push(renderInlineWithoutLinks(value.slice(cursor)));
+  return segments.join('');
+}
+
+function renderInlineWithoutLinks(value: string): string {
+  return escapeHtml(value)
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+}
+
+function safeMarkdownHref(value: string): string | null {
+  const href = value.trim();
+  if (!href) return null;
+  const lowered = href.toLowerCase();
+  if (lowered.startsWith('javascript:') || lowered.startsWith('data:') || lowered.startsWith('vbscript:')) {
+    return null;
+  }
+  return href;
 }
 
 function escapeHtml(value: string): string {

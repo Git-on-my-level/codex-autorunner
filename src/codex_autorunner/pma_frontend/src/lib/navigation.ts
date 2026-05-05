@@ -11,7 +11,7 @@ export const primaryNav: NavItem[] = [
   { href: '/pma-memory', label: 'PMA memory', group: 'primary' },
   { href: '/dashboard', label: 'Dashboard', group: 'support' },
   { href: '/repos', label: 'Repos', group: 'support' },
-  { href: '/tickets', label: 'Workspace tickets', group: 'workspace' },
+  { href: '/tickets', label: 'All tickets', group: 'workspace' },
   { href: '/settings', label: 'Settings', group: 'system' }
 ];
 

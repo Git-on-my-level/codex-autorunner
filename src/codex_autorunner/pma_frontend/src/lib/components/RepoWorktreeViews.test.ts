@@ -19,12 +19,12 @@ describe('RepoWorktreeViews', () => {
     });
     const { body } = render(RepoWorktreeViews, { props: { state: 'ready', mode: 'index', index } });
 
-    expect(body).toContain('Current work');
+    expect(body).toContain('Workspaces and worktrees connected to PMA.');
     expect(body).toContain('codex-autorunner');
     expect(body).toContain('discord-5');
     expect(body).toContain('href="/repos/repo-1"');
     expect(body).toContain('href="/worktrees/worktree-1"');
-    expect(body).toContain('repo · Default branch main · 1 worktree');
+    expect(body).toContain('Default branch main · 1 worktree');
     expect(body).not.toContain('Terminal');
     expect(body).not.toContain('Analytics');
   });
@@ -42,7 +42,7 @@ describe('RepoWorktreeViews', () => {
 
     expect(body).toContain('No repos registered');
     expect(body).toContain('Register a workspace before queueing repo-scoped tickets.');
-    expect(body).toContain('Open tickets');
+    expect(body).toContain('Tickets');
   });
 
   it('renders active-run detail with chat, ticket, contextspace, preview, and secondary logs', () => {
@@ -65,7 +65,7 @@ describe('RepoWorktreeViews', () => {
     expect(body).toContain('codex');
     expect(body).toContain('PMA chat');
     expect(body).toContain('View repo tickets');
-    expect(body).toContain('href="/tickets?repo=repo-1"');
+    expect(body).toContain('href="/repos/repo-1/tickets"');
     expect(body).toContain('View repo memory');
     expect(body).toContain('href="/contextspace/repo-1"');
     expect(body).toContain('Open preview');
@@ -92,7 +92,7 @@ describe('RepoWorktreeViews', () => {
 
     expect(body).toContain('No active run');
     expect(body).toContain('Create a worktree when a ticket needs isolated repo state.');
-    expect(body).toContain('Next workspace tickets');
+    expect(body).toContain('Repo ticket queue');
     expect(body).toContain('View repo memory');
     expect(body).toContain('href="/contextspace/repo-1"');
     expect(body).not.toContain('Terminal');

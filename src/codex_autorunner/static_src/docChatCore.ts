@@ -15,6 +15,7 @@ export interface ChatMessage {
     steps?: number;
     duration?: number;
     tag?: string;
+    events?: ChatEvent[];
   };
 }
 
@@ -27,6 +28,7 @@ export interface ChatEvent {
   time: number;
   itemId: string | null;
   method: string;
+  isSignificant?: boolean;
 }
 
 export interface ChatState {
@@ -408,6 +410,75 @@ export function createDocChat(config: ChatConfig): DocChatInstance {
     return /\[[^\]]+\]\([^)]+\)/.test(body);
   }
 
+  function compactEventRows(events: ChatEvent[], options: { expanded?: boolean } = {}): ChatEvent[] {
+    const rows = events.filter((evt) => {
+      if (evt.isSignificant === false) return false;
+      return ["thinking", "tool", "command", "file", "output", "error"].includes(evt.kind);
+    });
+    return options.expanded ? rows : rows.slice(-12);
+  }
+
+  function eventRowLabel(evt: ChatEvent): string {
+    if (evt.kind === "thinking") return "Thinking";
+    if (evt.kind === "tool") return evt.summary ? `Tool · ${evt.summary}` : "Tool call";
+    if (evt.kind === "command") return evt.summary ? `Command · ${evt.summary}` : "Command";
+    if (evt.kind === "file") return evt.summary ? `Files · ${evt.summary}` : "Files";
+    if (evt.kind === "output") return "Agent output";
+    if (evt.kind === "error") return "Error";
+    return evt.title || evt.kind || "Event";
+  }
+
+  function buildCompactEventTrace(events: ChatEvent[], options: { expanded?: boolean; running?: boolean } = {}): HTMLElement | null {
+    const rows = compactEventRows(events, { expanded: options.expanded });
+    if (!rows.length) return null;
+
+    const trace = document.createElement("div");
+    trace.className = "chat-event-trace";
+
+    for (const evt of rows) {
+      const row = document.createElement("details");
+      row.className = `chat-event-row chat-event-row-${evt.kind || "event"}`;
+      row.open = !!options.running && evt === rows[rows.length - 1] && evt.kind === "thinking";
+
+      const summary = document.createElement("summary");
+      summary.className = "chat-event-row-summary";
+
+      const label = document.createElement("span");
+      label.className = "chat-event-row-label";
+      label.textContent = eventRowLabel(evt);
+      summary.appendChild(label);
+
+      const time = document.createElement("span");
+      time.className = "chat-event-row-meta";
+      time.textContent = evt.time
+        ? new Date(evt.time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+        : "";
+      summary.appendChild(time);
+
+      row.appendChild(summary);
+
+      const body = document.createElement("div");
+      body.className = "chat-event-row-body";
+      const detailParts = [evt.detail, evt.summary && evt.kind !== "tool" ? evt.summary : ""]
+        .map((part) => (part || "").trim())
+        .filter(Boolean);
+      body.textContent = detailParts.join("\n\n") || evt.title || evt.method || "No details";
+      row.appendChild(body);
+
+      trace.appendChild(row);
+    }
+
+    return trace;
+  }
+
+  function appendMarkdownContent(root: HTMLElement, body: string): void {
+    const markdown = document.createElement("div");
+    markdown.className = "chat-message-markdown-body";
+    markdown.innerHTML = renderMarkdown(body);
+    decorateFileLinks(markdown);
+    root.appendChild(markdown);
+  }
+
   function buildMessageEl(msg: ChatMessage): HTMLElement {
     const wrapper = document.createElement("div");
     const roleClass = msg.role === "user" ? config.styling.messageUserClass : config.styling.messageAssistantClass;
@@ -430,8 +501,14 @@ export function createDocChat(config: ChatConfig): DocChatInstance {
     const shouldRenderMarkdown =
       msg.role === "assistant" || (msg.role === "user" && userMessageUsesMarkdownFeatures(msg.content));
     if (shouldRenderMarkdown) {
-      content.innerHTML = renderMarkdown(msg.content);
-      decorateFileLinks(content);
+      if (msg.role === "assistant" && msg.meta?.events?.length) {
+        const trace = buildCompactEventTrace(msg.meta.events);
+        if (trace) content.appendChild(trace);
+        appendMarkdownContent(content, msg.content);
+      } else {
+        content.innerHTML = renderMarkdown(msg.content);
+        decorateFileLinks(content);
+      }
     } else {
       content.textContent = msg.content;
     }
@@ -459,6 +536,80 @@ export function createDocChat(config: ChatConfig): DocChatInstance {
     return wrapper;
   }
 
+  function renderStreamingContent(content: HTMLElement): void {
+    content.innerHTML = "";
+
+    const trace = buildCompactEventTrace(state.events, {
+      expanded: state.eventsExpanded,
+      running: state.status === "running",
+    });
+    if (trace) {
+      content.appendChild(trace);
+    }
+
+    if (state.streamText) {
+      appendMarkdownContent(content, state.streamText);
+      return;
+    }
+
+    const stepCount = state.totalEvents || state.events.length;
+    const statusText = (state.statusText || "").trim();
+    const isNoiseEvent = (evt: ChatEvent): boolean => {
+      const title = (evt.title || "").toLowerCase();
+      const method = (evt.method || "").toLowerCase();
+      if (title === "delta") return true;
+      if (method.includes("delta")) return true;
+      return false;
+    };
+
+    const meaningfulEvents = state.events.filter((evt) => !isNoiseEvent(evt));
+    const lastMeaningful = meaningfulEvents[meaningfulEvents.length - 1];
+    const headline = lastMeaningful
+      ? (lastMeaningful.title || lastMeaningful.summary || statusText || "Working...")
+      : (statusText || "Thinking...");
+
+    const header = document.createElement("div");
+    header.className = "chat-thinking-inline";
+
+    const spinner = document.createElement("span");
+    spinner.className = "chat-thinking-spinner";
+    header.appendChild(spinner);
+
+    const headlineSpan = document.createElement("span");
+    headlineSpan.textContent = String(headline);
+    header.appendChild(headlineSpan);
+
+    if (stepCount > 0) {
+      const steps = document.createElement("span");
+      steps.className = "chat-thinking-steps";
+      steps.textContent = `(${stepCount} steps)`;
+      header.appendChild(steps);
+
+      if (state.contextUsagePercent !== null) {
+        const context = document.createElement("span");
+        context.className = "chat-thinking-steps";
+        context.textContent = ` · ctx left ${state.contextUsagePercent}%`;
+        header.appendChild(context);
+      }
+
+      if (compactEventRows(state.events, { expanded: true }).length > compactEventRows(state.events).length) {
+        const toggle = document.createElement("button");
+        toggle.type = "button";
+        toggle.className = "ghost sm chat-thinking-details-btn";
+        toggle.textContent = state.eventsExpanded ? "Hide details" : "Show details";
+        toggle.addEventListener("click", (e) => {
+          e.preventDefault();
+          state.eventsExpanded = !state.eventsExpanded;
+          _prevMessageSnapshot = "";
+          renderMessages();
+        });
+        header.appendChild(toggle);
+      }
+    }
+
+    content.appendChild(header);
+  }
+
   function buildStreamingEl(): HTMLElement {
     const streaming = document.createElement("div");
     streaming.className = [
@@ -477,98 +628,7 @@ export function createDocChat(config: ChatConfig): DocChatInstance {
 
     const content = document.createElement("div");
     content.className = `${config.styling.messageContentClass} messages-markdown`;
-
-    if (state.streamText) {
-      content.innerHTML = renderMarkdown(state.streamText);
-      decorateFileLinks(content);
-    } else {
-      const stepCount = state.totalEvents || state.events.length;
-      const statusText = (state.statusText || "").trim();
-      const isNoiseEvent = (evt: ChatEvent): boolean => {
-        const title = (evt.title || "").toLowerCase();
-        const method = (evt.method || "").toLowerCase();
-        if (title === "delta") return true;
-        if (method.includes("delta")) return true;
-        return false;
-      };
-
-      const meaningfulEvents = state.events.filter((evt) => !isNoiseEvent(evt));
-      const lastMeaningful = meaningfulEvents[meaningfulEvents.length - 1];
-      const headline = lastMeaningful
-        ? (lastMeaningful.title || lastMeaningful.summary || statusText || "Working...")
-        : (statusText || "Thinking...");
-
-      content.innerHTML = "";
-
-      const header = document.createElement("div");
-      header.className = "chat-thinking-inline";
-
-      const spinner = document.createElement("span");
-      spinner.className = "chat-thinking-spinner";
-      header.appendChild(spinner);
-
-      const headlineSpan = document.createElement("span");
-      headlineSpan.textContent = String(headline);
-      header.appendChild(headlineSpan);
-
-      if (stepCount > 0) {
-        const steps = document.createElement("span");
-        steps.className = "chat-thinking-steps";
-        steps.textContent = `(${stepCount} steps)`;
-        header.appendChild(steps);
-
-        if (state.contextUsagePercent !== null) {
-          const context = document.createElement("span");
-          context.className = "chat-thinking-steps";
-          context.textContent = ` · ctx left ${state.contextUsagePercent}%`;
-          header.appendChild(context);
-        }
-
-        if (meaningfulEvents.length > 2) {
-          const toggle = document.createElement("button");
-          toggle.type = "button";
-          toggle.className = "ghost sm chat-thinking-details-btn";
-          toggle.textContent = state.eventsExpanded ? "Hide details" : "Show details";
-          toggle.addEventListener("click", (e) => {
-            e.preventDefault();
-            state.eventsExpanded = !state.eventsExpanded;
-            _prevMessageSnapshot = "";
-            renderMessages();
-          });
-          header.appendChild(toggle);
-        }
-      }
-
-      content.appendChild(header);
-
-      const maxRecent = state.eventsExpanded
-        ? Math.min(meaningfulEvents.length, config.limits.eventVisible || 20)
-        : 3;
-      const recentEvents = meaningfulEvents.slice(-maxRecent);
-      if (recentEvents.length) {
-        const list = document.createElement("ul");
-        list.className = "chat-thinking-steps-list";
-        for (const evt of recentEvents) {
-          const li = document.createElement("li");
-
-          const title = document.createElement("span");
-          title.className = "chat-thinking-step-title";
-          title.textContent = (evt.title || evt.kind || evt.method || "step").trim();
-          li.appendChild(title);
-
-          const summaryText = (evt.summary || "").trim();
-          if (summaryText) {
-            const summary = document.createElement("span");
-            summary.className = "chat-thinking-step-summary";
-            summary.textContent = ` — ${summaryText}`;
-            li.appendChild(summary);
-          }
-
-          list.appendChild(li);
-        }
-        content.appendChild(list);
-      }
-    }
+    renderStreamingContent(content);
 
     streaming.appendChild(content);
 
@@ -625,8 +685,7 @@ export function createDocChat(config: ChatConfig): DocChatInstance {
         if (state.streamText && _streamingEl && messagesEl.contains(_streamingEl)) {
           const contentEl = _streamingEl.querySelector(`.${config.styling.messageContentClass}`) as HTMLElement | null;
           if (contentEl) {
-            contentEl.innerHTML = renderMarkdown(state.streamText);
-            decorateFileLinks(contentEl);
+            renderStreamingContent(contentEl);
           }
         } else {
           if (_streamingEl && messagesEl.contains(_streamingEl)) {

@@ -134,6 +134,89 @@ describe('API client error handling', () => {
     }
   });
 
+  it('falls back to the mounted repo ticket API when the hub ticket projection is unavailable', async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/hub/tickets?worktree=wt-1') {
+        return new Response(JSON.stringify({ detail: 'Not Found' }), {
+          status: 404,
+          statusText: 'Not Found',
+          headers: { 'content-type': 'application/json' }
+        });
+      }
+      if (url === '/repos/wt-1/api/flows/ticket_flow/tickets') {
+        return Response.json({
+          tickets: [
+            {
+              id: 'ticket-1',
+              index: 1,
+              path: '.codex-autorunner/tickets/TICKET-001.md',
+              frontmatter: { title: 'Fallback ticket' },
+              status: 'idle',
+              errors: []
+            }
+          ]
+        });
+      }
+      return new Response('unexpected request', { status: 500 });
+    }) as unknown as typeof fetch;
+    const client = new PmaApiClient(fetcher);
+
+    const result = await client.ticketFlow.listTickets({ worktree: 'wt-1' });
+
+    expect(fetcher).toHaveBeenNthCalledWith(1, '/hub/tickets?worktree=wt-1', expect.any(Object));
+    expect(fetcher).toHaveBeenNthCalledWith(2, '/repos/wt-1/api/flows/ticket_flow/tickets', expect.any(Object));
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data[0]).toMatchObject({
+        title: 'Fallback ticket',
+        workspaceKind: 'worktree',
+        workspaceId: 'wt-1',
+        worktreeId: 'wt-1'
+      });
+    }
+  });
+
+  it('aggregates mounted repo and worktree ticket APIs when the global hub ticket projection is unavailable', async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/hub/tickets') {
+        return new Response(JSON.stringify({ detail: 'Not Found' }), {
+          status: 404,
+          statusText: 'Not Found',
+          headers: { 'content-type': 'application/json' }
+        });
+      }
+      if (url === '/hub/repos') {
+        return Response.json({
+          repos: [
+            { id: 'repo-1', name: 'Repo 1' },
+            { id: 'wt-1', name: 'Worktree 1', kind: 'worktree', worktree_of: 'repo-1' }
+          ],
+          worktrees: [{ id: 'wt-1', name: 'Worktree 1', worktree_of: 'repo-1' }]
+        });
+      }
+      if (url === '/repos/repo-1/api/flows/ticket_flow/tickets') {
+        return Response.json({ tickets: [{ index: 1, frontmatter: { title: 'Repo ticket' }, status: 'idle', errors: [] }] });
+      }
+      if (url === '/repos/wt-1/api/flows/ticket_flow/tickets') {
+        return Response.json({ tickets: [{ index: 2, frontmatter: { title: 'Worktree ticket' }, status: 'idle', errors: [] }] });
+      }
+      return new Response('unexpected request', { status: 500 });
+    }) as unknown as typeof fetch;
+    const client = new PmaApiClient(fetcher);
+
+    const result = await client.ticketFlow.listTickets();
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.map((ticket) => [ticket.title, ticket.workspaceKind, ticket.workspaceId])).toEqual([
+        ['Repo ticket', 'repo', 'repo-1'],
+        ['Worktree ticket', 'worktree', 'wt-1']
+      ]);
+    }
+  });
+
   it('does not double-prefix already based request paths', async () => {
     const fetcher = vi.fn(async () => Response.json({ ok: true })) as unknown as typeof fetch;
     const client = new PmaApiClient(fetcher, '/car');
