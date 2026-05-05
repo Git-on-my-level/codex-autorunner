@@ -21,6 +21,13 @@ UI_QA_PORT ?= $(PORT)
 UI_QA_OUT ?= .codex-autorunner/render/ui_qa
 UI_QA_VIEWPORT ?= 1400x900
 UI_QA_READY_TIMEOUT ?= 120
+PMA_UI_SCREEN_MODE ?= fixture
+PMA_UI_SCREEN_OUT ?= .codex-autorunner/render/pma_ui_samples/latest
+PMA_UI_SCREEN_VIEWPORT ?= 1440x1000
+PMA_UI_SCREEN_HOST ?= $(HOST)
+PMA_UI_SCREEN_PORT ?= 0
+PMA_UI_SCREEN_HUB_ROOT ?= $(CAR_ROOT)
+PMA_UI_SCREEN_ARGS ?=
 HUB_HOST ?= 127.0.0.1
 HUB_PORT ?= 4517
 HUB_BASE_PATH ?= /car
@@ -36,7 +43,7 @@ PIPX_ROOT ?= $(HOME)/.local/pipx
 PIPX_VENV ?= $(PIPX_ROOT)/venvs/codex-autorunner
 PIPX_PYTHON ?= $(PIPX_VENV)/bin/python
 
-.PHONY: install dev hooks build pma-build test test-fast test-full test-chat-platform-contract test-chat-surface-lab test-managed-thread-cutover check check-full check-extended preflight-hub-startup format serve serve-dev serve-onboarding ui-qa-screens launchd-hub deadcode-baseline venv venv-dev setup npm-install car-artifacts lint-html dom-check frontend-check _inject-static-banners agent-compatibility-check agent-compatibility-refresh protocol-schemas-check protocol-schemas-refresh typecheck-strict perf-idle-cpu perf-chat-latency-budgets perf-chat-seeded-exploration
+.PHONY: install dev hooks build pma-build test test-fast test-full test-chat-platform-contract test-chat-surface-lab test-managed-thread-cutover check check-full check-extended preflight-hub-startup format serve serve-dev serve-onboarding ui-qa-screens pma-ui-screens launchd-hub deadcode-baseline venv venv-dev setup npm-install car-artifacts lint-html dom-check frontend-check _inject-static-banners agent-compatibility-check agent-compatibility-refresh protocol-schemas-check protocol-schemas-refresh typecheck-strict perf-idle-cpu perf-chat-latency-budgets perf-chat-seeded-exploration
 
 _inject-static-banners:
 	pnpm run postbuild
@@ -243,6 +250,16 @@ ui-qa-screens: build
 		--script "$$GEN" \
 		--out-dir '$(UI_QA_OUT)' \
 		--viewport '$(UI_QA_VIEWPORT)'
+
+pma-ui-screens: pma-build
+	$(PYTHON) scripts/pma_ui_screens.py \
+		--mode '$(PMA_UI_SCREEN_MODE)' \
+		--host '$(PMA_UI_SCREEN_HOST)' \
+		--port '$(PMA_UI_SCREEN_PORT)' \
+		--hub-root '$(PMA_UI_SCREEN_HUB_ROOT)' \
+		--out-dir '$(PMA_UI_SCREEN_OUT)' \
+		--viewport '$(PMA_UI_SCREEN_VIEWPORT)' \
+		$(PMA_UI_SCREEN_ARGS)
 
 launchd-hub:
 	@LABEL="$(LAUNCH_LABEL)" \

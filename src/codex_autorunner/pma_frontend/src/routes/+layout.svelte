@@ -8,6 +8,9 @@
   let { children }: { children: Snippet } = $props();
   let collapsed = $state(false);
   let mobileOpen = $state(false);
+  const currentPath = $derived(stripRuntimeBasePath(page.url.pathname));
+  const activeNavItem = $derived(primaryNav.find((item) => isActiveRoute(currentPath, item.href)) ?? primaryNav[0]);
+  const activeGroupLabel = $derived(navGroupLabels[activeNavItem.group]);
 
   const closeMobile = () => {
     mobileOpen = false;
@@ -89,8 +92,8 @@
         <span aria-hidden="true">≡</span>
       </button>
       <div class="topbar-copy">
-        <span class="topbar-eyebrow">PMA</span>
-        <span class="topbar-title">Chat-first control plane</span>
+        <span class="topbar-eyebrow">{activeGroupLabel}</span>
+        <span class="topbar-title">{activeNavItem.label}</span>
       </div>
       <div class="hub-status" role="status">
         <span class="status-dot" aria-hidden="true"></span>

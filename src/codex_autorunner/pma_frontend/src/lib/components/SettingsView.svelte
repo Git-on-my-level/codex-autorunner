@@ -153,18 +153,34 @@
       {/if}
       <div class="sensitive-action-grid">
         {#each view.sensitiveActions as action}
-          <article class={`sensitive-action ${action.available ? 'available' : 'unavailable'}`}>
-            <div>
-              <strong>{action.label}</strong>
-              <p>{action.description}</p>
-              <span>{action.available ? action.reason : `Unavailable: ${action.reason}`}</span>
-            </div>
-            {#if action.available}
+          {#if action.available}
+            <article class="sensitive-action available">
+              <div>
+                <strong>{action.label}</strong>
+                <p>{action.description}</p>
+                <span>{action.reason}</span>
+              </div>
               <button type="button" onclick={() => onRequestSensitiveAction?.(action)}>Review</button>
-            {/if}
-          </article>
+            </article>
+          {/if}
         {/each}
       </div>
+      <details class="advanced-panel">
+        <summary>Unavailable sensitive actions</summary>
+        <div class="sensitive-action-grid">
+          {#each view.sensitiveActions as action}
+            {#if !action.available}
+              <article class="sensitive-action unavailable">
+                <div>
+                  <strong>{action.label}</strong>
+                  <p>{action.description}</p>
+                  <span>Unavailable: {action.reason}</span>
+                </div>
+              </article>
+            {/if}
+          {/each}
+        </div>
+      </details>
     </section>
 
     <details class="page-panel settings-panel advanced-panel">
@@ -191,8 +207,8 @@
   </div>
 {/if}
 
-{#snippet statusList(items: SettingsStatusItem[])}
-  <dl class="settings-status-list">
+{#snippet statusList(items: SettingsStatusItem[], compact = false)}
+  <dl class:compact class="settings-status-list">
     {#each items as item}
       <div class={item.tone}>
         <dt>{item.label}</dt>
