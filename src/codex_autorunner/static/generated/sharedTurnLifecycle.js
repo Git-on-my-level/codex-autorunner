@@ -1,6 +1,6 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import * as turnResumeModule from "./turnResume.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
-import { streamTurnEvents } from "./fileChat.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
+import * as turnResumeModule from "./turnResume.js?v=be399e9b80baaceac895399d521c7e33ba6116a6282d86fe16aaac8dd380e544";
+import { streamTurnEvents } from "./fileChat.js?v=be399e9b80baaceac895399d521c7e33ba6116a6282d86fe16aaac8dd380e544";
 // Browsers can briefly combine a fresh module graph with one stale generated chunk
 // after a deploy or local rebuild. Namespace-import the recovery helpers so a stale
 // `turnResume.js` cannot crash PMA during ESM linking with a missing named export.

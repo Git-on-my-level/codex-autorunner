@@ -1,5 +1,5 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { clearChatHistory } from "./docChatStorage.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
+import { clearChatHistory } from "./docChatStorage.js?v=be399e9b80baaceac895399d521c7e33ba6116a6282d86fe16aaac8dd380e544";
 const DISMISS_KEY = "car-walkthrough-dismissed";
 const PMA_ONBOARDING_PRESET_KEY = "car-pma-pending-prompt";
 /** Must match ``pma.ts`` ``pmaConfig.storage`` + ``setTarget("pma")`` (``docChatStorage`` key = ``car.pma.pma``). */

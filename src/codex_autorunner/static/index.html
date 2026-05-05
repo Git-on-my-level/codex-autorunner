@@ -160,11 +160,13 @@
     <section class="pma-top-bar">
       <div class="pma-chat-controls-row">
         <div class="pma-chat-agent-controls">
-          <select id="pma-chat-agent-select" title="Agent"></select>
-          <select id="pma-chat-profile-select" title="Profile"></select>
-          <select id="pma-chat-model-select" title="Model"></select>
+          <label class="pma-control-label" for="pma-chat-agent-select" id="pma-chat-agent-select-label">Agent for new thread</label>
+          <select id="pma-chat-agent-select" title="Agent for new thread"></select>
+          <select id="pma-chat-profile-select" title="Profile for new thread"></select>
+          <label class="pma-control-label" for="pma-chat-model-select" id="pma-chat-model-select-label">Model for next message</label>
+          <select id="pma-chat-model-select" title="Model for next message"></select>
           <input class="agent-model-input hidden" id="pma-chat-model-input" placeholder="Manual model override"
-            spellcheck="false" title="Manual model override" type="text">
+            spellcheck="false" title="Manual model for next message" type="text">
           <select id="pma-chat-reasoning-select" title="Reasoning"></select>
           <div class="pma-view-toggle" role="tablist" aria-label="PMA view">
             <button class="pma-view-btn active" data-view="chat" role="tab" aria-selected="true" type="button">Chat</button>

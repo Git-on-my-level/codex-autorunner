@@ -1,11 +1,11 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { api, flash, statusPill } from "./utils.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
-import { saveToCache, loadFromCache } from "./cache.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
-import { registerAutoRefresh } from "./autoRefresh.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
-import { CONSTANTS } from "./constants.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
-import { preserveScroll } from "./preserve.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
-import { createSmartRefresh } from "./smartRefresh.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
-import { formatTokensCompact, usageSeriesSignature, renderUsageChart, setChartLoading, } from "./usageChart.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
+import { api, flash, statusPill } from "./utils.js?v=be399e9b80baaceac895399d521c7e33ba6116a6282d86fe16aaac8dd380e544";
+import { saveToCache, loadFromCache } from "./cache.js?v=be399e9b80baaceac895399d521c7e33ba6116a6282d86fe16aaac8dd380e544";
+import { registerAutoRefresh } from "./autoRefresh.js?v=be399e9b80baaceac895399d521c7e33ba6116a6282d86fe16aaac8dd380e544";
+import { CONSTANTS } from "./constants.js?v=be399e9b80baaceac895399d521c7e33ba6116a6282d86fe16aaac8dd380e544";
+import { preserveScroll } from "./preserve.js?v=be399e9b80baaceac895399d521c7e33ba6116a6282d86fe16aaac8dd380e544";
+import { createSmartRefresh } from "./smartRefresh.js?v=be399e9b80baaceac895399d521c7e33ba6116a6282d86fe16aaac8dd380e544";
+import { formatTokensCompact, usageSeriesSignature, renderUsageChart, setChartLoading, } from "./usageChart.js?v=be399e9b80baaceac895399d521c7e33ba6116a6282d86fe16aaac8dd380e544";
 const UPDATE_STATUS_SEEN_KEY = "car_update_status_seen";
 const ANALYTICS_SUMMARY_CACHE_KEY = "analytics-summary";
 const usageChartState = {

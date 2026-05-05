@@ -2,19 +2,19 @@
 /**
  * PMA (Project Management Agent) - Hub-level chat interface
  */
-import { api, resolvePath, getAuthToken, flash, escapeHtml } from "./utils.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
-import { createDocChat, } from "./docChatCore.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
-import { initChatPasteUpload } from "./chatUploads.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
-import { DEFAULT_FILEBOX_BOX, FILEBOX_BOXES, } from "./fileboxCatalog.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
-import * as agentControlsModule from "./agentControls.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
-import { createFileBoxWidget } from "./fileboxUi.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
-import { readEventStream, handleStreamEvent, } from "./streamUtils.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
-import { newClientTurnId as newFileChatTurnId } from "./fileChat.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
-import { initNotificationBell } from "./notificationBell.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
-import { registerAutoRefresh } from "./autoRefresh.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
-import { CONSTANTS } from "./constants.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
-import { createTurnEventsController, cancelActiveTurnAndWait, scheduleRecoveryRetry, createTurnRecoveryTracker, ACTIVE_TURN_RECOVERY_STALE_MESSAGE, } from "./sharedTurnLifecycle.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
-import { loadPendingTurn, savePendingTurn, clearPendingTurn, } from "./turnResume.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
+import { api, resolvePath, getAuthToken, flash, escapeHtml } from "./utils.js?v=be399e9b80baaceac895399d521c7e33ba6116a6282d86fe16aaac8dd380e544";
+import { createDocChat, } from "./docChatCore.js?v=be399e9b80baaceac895399d521c7e33ba6116a6282d86fe16aaac8dd380e544";
+import { initChatPasteUpload } from "./chatUploads.js?v=be399e9b80baaceac895399d521c7e33ba6116a6282d86fe16aaac8dd380e544";
+import { DEFAULT_FILEBOX_BOX, FILEBOX_BOXES, } from "./fileboxCatalog.js?v=be399e9b80baaceac895399d521c7e33ba6116a6282d86fe16aaac8dd380e544";
+import * as agentControlsModule from "./agentControls.js?v=be399e9b80baaceac895399d521c7e33ba6116a6282d86fe16aaac8dd380e544";
+import { createFileBoxWidget } from "./fileboxUi.js?v=be399e9b80baaceac895399d521c7e33ba6116a6282d86fe16aaac8dd380e544";
+import { readEventStream, handleStreamEvent, } from "./streamUtils.js?v=be399e9b80baaceac895399d521c7e33ba6116a6282d86fe16aaac8dd380e544";
+import { newClientTurnId as newFileChatTurnId } from "./fileChat.js?v=be399e9b80baaceac895399d521c7e33ba6116a6282d86fe16aaac8dd380e544";
+import { initNotificationBell } from "./notificationBell.js?v=be399e9b80baaceac895399d521c7e33ba6116a6282d86fe16aaac8dd380e544";
+import { registerAutoRefresh } from "./autoRefresh.js?v=be399e9b80baaceac895399d521c7e33ba6116a6282d86fe16aaac8dd380e544";
+import { CONSTANTS } from "./constants.js?v=be399e9b80baaceac895399d521c7e33ba6116a6282d86fe16aaac8dd380e544";
+import { createTurnEventsController, cancelActiveTurnAndWait, scheduleRecoveryRetry, createTurnRecoveryTracker, ACTIVE_TURN_RECOVERY_STALE_MESSAGE, } from "./sharedTurnLifecycle.js?v=be399e9b80baaceac895399d521c7e33ba6116a6282d86fe16aaac8dd380e544";
+import { loadPendingTurn, savePendingTurn, clearPendingTurn, } from "./turnResume.js?v=be399e9b80baaceac895399d521c7e33ba6116a6282d86fe16aaac8dd380e544";
 // PMA is often the first lazily loaded surface users open after a rebuild. Use a
 // namespace import so a stale cached `agentControls.js` cannot fail module linking
 // before PMA gets a chance to render recovery/onboarding UI.
@@ -50,6 +50,11 @@ function initAgentControls(config) {
 async function refreshAgentControls(request) {
     if (typeof agentControlsModule.refreshAgentControls === "function") {
         await agentControlsModule.refreshAgentControls(request);
+    }
+}
+async function setSelectedAgentProfile(agent, profile = "") {
+    if (typeof agentControlsModule.setSelectedAgentProfile === "function") {
+        await agentControlsModule.setSelectedAgentProfile(agent, profile);
     }
 }
 const pmaStyling = {
@@ -102,6 +107,8 @@ let latestPhase = null;
 let latestGuidance = null;
 let latestElapsed = null;
 let currentPMATurnToken = 0;
+let currentThreadAgent = null;
+let currentThreadProfile = null;
 function advancePMATurnToken() {
     currentPMATurnToken += 1;
     return currentPMATurnToken;
@@ -452,8 +459,10 @@ function getElements() {
         eventsToggle: document.getElementById("pma-chat-events-toggle"),
         messagesEl: document.getElementById("pma-chat-messages"),
         historyHeader: document.getElementById("pma-chat-history-header"),
+        agentSelectLabel: document.getElementById("pma-chat-agent-select-label"),
         agentSelect: document.getElementById("pma-chat-agent-select"),
         profileSelect: document.getElementById("pma-chat-profile-select"),
+        modelSelectLabel: document.getElementById("pma-chat-model-select-label"),
         modelSelect: document.getElementById("pma-chat-model-select"),
         modelInput: document.getElementById("pma-chat-model-input"),
         reasoningSelect: document.getElementById("pma-chat-reasoning-select"),
@@ -478,6 +487,72 @@ function getElements() {
         docsResetBtn: document.getElementById("pma-docs-reset"),
         docsSnapshotBtn: document.getElementById("pma-docs-snapshot"),
     };
+}
+function normalizeOptionalText(value) {
+    return typeof value === "string" ? value.trim() : "";
+}
+function resolvePMAAgentSemantics({ threadInfo, selectedAgent, selectedProfile, }) {
+    const threadId = normalizeOptionalText(threadInfo?.thread_id);
+    const currentAgent = normalizeOptionalText(threadInfo?.agent);
+    const currentProfile = normalizeOptionalText(threadInfo?.profile ?? threadInfo?.agent_profile);
+    const hasExistingThread = Boolean(threadId && currentAgent);
+    const normalizedSelectedAgent = normalizeOptionalText(selectedAgent);
+    const normalizedSelectedProfile = normalizeOptionalText(selectedProfile);
+    return {
+        hasExistingThread,
+        currentAgent,
+        currentProfile,
+        selectedAgent: normalizedSelectedAgent,
+        selectedProfile: normalizedSelectedProfile,
+        agentForNextMessage: hasExistingThread
+            ? currentAgent
+            : normalizedSelectedAgent,
+        profileForNextMessage: hasExistingThread
+            ? currentProfile
+            : normalizedSelectedProfile,
+        agentSelectorLabel: "Agent for new thread",
+        modelSelectorLabel: "Model for next message",
+    };
+}
+function applyPMAAgentSemantics(semantics) {
+    const elements = getElements();
+    if (elements.agentSelectLabel) {
+        elements.agentSelectLabel.textContent = semantics.agentSelectorLabel;
+    }
+    if (elements.modelSelectLabel) {
+        elements.modelSelectLabel.textContent = semantics.modelSelectorLabel;
+    }
+    if (elements.agentSelect) {
+        elements.agentSelect.disabled = semantics.hasExistingThread;
+        elements.agentSelect.title = semantics.hasExistingThread
+            ? "Current thread agent is locked; start a new thread to choose another agent"
+            : "Agent for new thread";
+    }
+    if (elements.profileSelect) {
+        if (!elements.profileSelect.classList.contains("hidden")) {
+            elements.profileSelect.disabled = semantics.hasExistingThread;
+        }
+        elements.profileSelect.title = semantics.hasExistingThread
+            ? "Current thread profile is locked; start a new thread to choose another profile"
+            : "Profile for new thread";
+    }
+    if (elements.modelSelect) {
+        elements.modelSelect.title = semantics.modelSelectorLabel;
+    }
+    if (elements.modelInput) {
+        elements.modelInput.title = "Manual model for next message";
+        elements.modelInput.placeholder = "Manual model for next message";
+    }
+    if (elements.threadInfoAgent) {
+        elements.threadInfoAgent.title = semantics.hasExistingThread
+            ? "Current thread agent is locked"
+            : "";
+    }
+    if (elements.newThreadBtn) {
+        elements.newThreadBtn.title = semantics.hasExistingThread
+            ? "Clear the current chat; choose the agent before the first new message"
+            : "Start a new chat using the selected new-thread agent";
+    }
 }
 function escapeMarkdownLinkText(text) {
     // Keep this ES2019-compatible (no String.prototype.replaceAll).
@@ -794,9 +869,33 @@ async function loadPMAThreadInfo() {
         const last = payload.last_result || {};
         const info = (payload.active && current.thread_id) ? current : last;
         if (!info || !info.thread_id) {
+            currentThreadAgent = null;
+            currentThreadProfile = null;
+            applyPMAAgentSemantics(resolvePMAAgentSemantics({
+                threadInfo: null,
+                selectedAgent: elements.agentSelect?.value || getSelectedAgent(),
+                selectedProfile: elements.profileSelect?.value || getSelectedProfile(),
+            }));
             elements.threadInfo.classList.add("hidden");
             return;
         }
+        const semantics = resolvePMAAgentSemantics({
+            threadInfo: info,
+            selectedAgent: elements.agentSelect?.value || getSelectedAgent(),
+            selectedProfile: elements.profileSelect?.value || getSelectedProfile(),
+        });
+        currentThreadAgent = semantics.hasExistingThread
+            ? semantics.currentAgent
+            : null;
+        currentThreadProfile = semantics.hasExistingThread
+            ? semantics.currentProfile
+            : null;
+        if (semantics.hasExistingThread &&
+            (semantics.selectedAgent !== semantics.currentAgent ||
+                semantics.selectedProfile !== semantics.currentProfile)) {
+            await setSelectedAgentProfile(semantics.currentAgent, semantics.currentProfile);
+        }
+        applyPMAAgentSemantics(semantics);
         let queuePending = 0;
         let queuedItems = [];
         try {
@@ -811,7 +910,10 @@ async function loadPMAThreadInfo() {
         }
         const turnStatus = String(info.status || (payload.active ? "running" : (last.status || "idle")));
         if (elements.threadInfoAgent) {
-            elements.threadInfoAgent.textContent = String(info.agent || "unknown");
+            const lockedAgent = String(info.agent || "unknown");
+            elements.threadInfoAgent.textContent = semantics.hasExistingThread
+                ? `${lockedAgent} (locked)`
+                : lockedAgent;
         }
         if (elements.threadInfoThreadId) {
             const threadId = String(info.thread_id || "");
@@ -948,8 +1050,21 @@ async function sendMessage() {
     latestElapsed = null;
     elements.input.value = "";
     elements.input.style.height = "auto";
-    const agent = elements.agentSelect?.value || getSelectedAgent();
-    const profile = elements.profileSelect?.value || getSelectedProfile(agent);
+    const selectedAgent = elements.agentSelect?.value || getSelectedAgent();
+    const selectedProfile = elements.profileSelect?.value || getSelectedProfile(selectedAgent);
+    const semantics = resolvePMAAgentSemantics({
+        threadInfo: currentThreadAgent
+            ? {
+                thread_id: "current",
+                agent: currentThreadAgent,
+                profile: currentThreadProfile || "",
+            }
+            : null,
+        selectedAgent,
+        selectedProfile,
+    });
+    const agent = semantics.agentForNextMessage;
+    const profile = semantics.profileForNextMessage;
     const model = elements.modelSelect?.value || getSelectedModel(agent);
     const reasoning = elements.reasoningSelect?.value || getSelectedReasoning(agent);
     const clientTurnId = newFileChatTurnId("pma");
@@ -1338,11 +1453,21 @@ function resetThread() {
         pmaChat.render();
         pmaChat.renderMessages();
     }
+    currentThreadAgent = null;
+    currentThreadProfile = null;
+    const elements = getElements();
+    applyPMAAgentSemantics(resolvePMAAgentSemantics({
+        threadInfo: null,
+        selectedAgent: elements.agentSelect?.value || getSelectedAgent(),
+        selectedProfile: elements.profileSelect?.value || getSelectedProfile(),
+    }));
     flash("Thread reset", "info");
 }
 async function startNewThreadOnServer() {
     const elements = getElements();
-    const rawAgent = (elements.agentSelect?.value || getSelectedAgent() || "").trim().toLowerCase();
+    const rawAgent = (elements.agentSelect?.value ||
+        getSelectedAgent() ||
+        "").trim().toLowerCase();
     const selectedAgent = rawAgent || undefined;
     const selectedProfile = elements.profileSelect?.value || getSelectedProfile(rawAgent);
     await api("/hub/pma/new", {
@@ -1352,6 +1477,12 @@ async function startNewThreadOnServer() {
             profile: selectedProfile || undefined,
             lane_id: DEFAULT_PMA_LANE_ID,
         },
+    });
+}
+async function clearCurrentThreadOnServer() {
+    await api("/hub/pma/reset", {
+        method: "POST",
+        body: {},
     });
 }
 function attachHandlers() {
@@ -1392,6 +1523,7 @@ function attachHandlers() {
     if (elements.newThreadBtn) {
         elements.newThreadBtn.addEventListener("click", () => {
             void (async () => {
+                const hadExistingThread = Boolean(currentThreadAgent);
                 await cancelRequest({
                     clearPending: true,
                     interruptServer: true,
@@ -1399,7 +1531,12 @@ function attachHandlers() {
                     statusText: "Cancelled (new thread)",
                 });
                 try {
-                    await startNewThreadOnServer();
+                    if (hadExistingThread) {
+                        await clearCurrentThreadOnServer();
+                    }
+                    else {
+                        await startNewThreadOnServer();
+                    }
                 }
                 catch (err) {
                     flash("Failed to start new session", "error");
@@ -1521,8 +1658,10 @@ function attachHandlers() {
     }
 }
 const __pmaTest = {
+    applyPMAAgentSemantics,
     buildOutboxAttachmentSummary,
     parsePendingPromptPreset,
+    resolvePMAAgentSemantics,
     shouldAppendAsyncOutboxSummary,
 };
 export { __pmaTest, drainPendingPrompt, initPMA };

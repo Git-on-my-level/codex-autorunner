@@ -90,6 +90,15 @@ async function refreshAgentControls(
   }
 }
 
+async function setSelectedAgentProfile(
+  agent: string,
+  profile = ""
+): Promise<void> {
+  if (typeof agentControlsModule.setSelectedAgentProfile === "function") {
+    await agentControlsModule.setSelectedAgentProfile(agent, profile);
+  }
+}
+
 const pmaStyling: ChatStyling = {
   eventClass: "chat-event",
   eventTitleClass: "chat-event-title",
@@ -171,10 +180,23 @@ let latestPhase: string | null = null;
 let latestGuidance: string | null = null;
 let latestElapsed: number | null = null;
 let currentPMATurnToken = 0;
+let currentThreadAgent: string | null = null;
+let currentThreadProfile: string | null = null;
 type PMAView = "chat" | "memory";
 type PendingPromptPreset = {
   assistantIntro: string;
   prompt: string;
+};
+type PMAAgentSemantics = {
+  hasExistingThread: boolean;
+  currentAgent: string;
+  currentProfile: string;
+  selectedAgent: string;
+  selectedProfile: string;
+  agentForNextMessage: string;
+  profileForNextMessage: string;
+  agentSelectorLabel: string;
+  modelSelectorLabel: string;
 };
 
 function advancePMATurnToken(): number {
@@ -564,8 +586,10 @@ function getElements() {
     eventsToggle: document.getElementById("pma-chat-events-toggle") as HTMLButtonElement | null,
     messagesEl: document.getElementById("pma-chat-messages"),
     historyHeader: document.getElementById("pma-chat-history-header"),
+    agentSelectLabel: document.getElementById("pma-chat-agent-select-label"),
     agentSelect: document.getElementById("pma-chat-agent-select") as HTMLSelectElement | null,
     profileSelect: document.getElementById("pma-chat-profile-select") as HTMLSelectElement | null,
+    modelSelectLabel: document.getElementById("pma-chat-model-select-label"),
     modelSelect: document.getElementById("pma-chat-model-select") as HTMLSelectElement | null,
     modelInput: document.getElementById("pma-chat-model-input") as HTMLInputElement | null,
     reasoningSelect: document.getElementById("pma-chat-reasoning-select") as HTMLSelectElement | null,
@@ -590,6 +614,85 @@ function getElements() {
     docsResetBtn: document.getElementById("pma-docs-reset") as HTMLButtonElement | null,
     docsSnapshotBtn: document.getElementById("pma-docs-snapshot") as HTMLButtonElement | null,
   };
+}
+
+function normalizeOptionalText(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function resolvePMAAgentSemantics({
+  threadInfo,
+  selectedAgent,
+  selectedProfile,
+}: {
+  threadInfo?: Record<string, unknown> | null;
+  selectedAgent?: string | null;
+  selectedProfile?: string | null;
+}): PMAAgentSemantics {
+  const threadId = normalizeOptionalText(threadInfo?.thread_id);
+  const currentAgent = normalizeOptionalText(threadInfo?.agent);
+  const currentProfile = normalizeOptionalText(
+    threadInfo?.profile ?? threadInfo?.agent_profile
+  );
+  const hasExistingThread = Boolean(threadId && currentAgent);
+  const normalizedSelectedAgent = normalizeOptionalText(selectedAgent);
+  const normalizedSelectedProfile = normalizeOptionalText(selectedProfile);
+  return {
+    hasExistingThread,
+    currentAgent,
+    currentProfile,
+    selectedAgent: normalizedSelectedAgent,
+    selectedProfile: normalizedSelectedProfile,
+    agentForNextMessage: hasExistingThread
+      ? currentAgent
+      : normalizedSelectedAgent,
+    profileForNextMessage: hasExistingThread
+      ? currentProfile
+      : normalizedSelectedProfile,
+    agentSelectorLabel: "Agent for new thread",
+    modelSelectorLabel: "Model for next message",
+  };
+}
+
+function applyPMAAgentSemantics(semantics: PMAAgentSemantics): void {
+  const elements = getElements();
+  if (elements.agentSelectLabel) {
+    elements.agentSelectLabel.textContent = semantics.agentSelectorLabel;
+  }
+  if (elements.modelSelectLabel) {
+    elements.modelSelectLabel.textContent = semantics.modelSelectorLabel;
+  }
+  if (elements.agentSelect) {
+    elements.agentSelect.disabled = semantics.hasExistingThread;
+    elements.agentSelect.title = semantics.hasExistingThread
+      ? "Current thread agent is locked; start a new thread to choose another agent"
+      : "Agent for new thread";
+  }
+  if (elements.profileSelect) {
+    if (!elements.profileSelect.classList.contains("hidden")) {
+      elements.profileSelect.disabled = semantics.hasExistingThread;
+    }
+    elements.profileSelect.title = semantics.hasExistingThread
+      ? "Current thread profile is locked; start a new thread to choose another profile"
+      : "Profile for new thread";
+  }
+  if (elements.modelSelect) {
+    elements.modelSelect.title = semantics.modelSelectorLabel;
+  }
+  if (elements.modelInput) {
+    elements.modelInput.title = "Manual model for next message";
+    elements.modelInput.placeholder = "Manual model for next message";
+  }
+  if (elements.threadInfoAgent) {
+    elements.threadInfoAgent.title = semantics.hasExistingThread
+      ? "Current thread agent is locked"
+      : "";
+  }
+  if (elements.newThreadBtn) {
+    elements.newThreadBtn.title = semantics.hasExistingThread
+      ? "Clear the current chat; choose the agent before the first new message"
+      : "Start a new chat using the selected new-thread agent";
+  }
 }
 
 function escapeMarkdownLinkText(text: string): string {
@@ -949,9 +1052,38 @@ async function loadPMAThreadInfo(): Promise<void> {
     const info = (payload.active && current.thread_id) ? current : last;
 
     if (!info || !info.thread_id) {
+      currentThreadAgent = null;
+      currentThreadProfile = null;
+      applyPMAAgentSemantics(
+        resolvePMAAgentSemantics({
+          threadInfo: null,
+          selectedAgent: elements.agentSelect?.value || getSelectedAgent(),
+          selectedProfile: elements.profileSelect?.value || getSelectedProfile(),
+        })
+      );
       elements.threadInfo.classList.add("hidden");
       return;
     }
+
+    const semantics = resolvePMAAgentSemantics({
+      threadInfo: info,
+      selectedAgent: elements.agentSelect?.value || getSelectedAgent(),
+      selectedProfile: elements.profileSelect?.value || getSelectedProfile(),
+    });
+    currentThreadAgent = semantics.hasExistingThread
+      ? semantics.currentAgent
+      : null;
+    currentThreadProfile = semantics.hasExistingThread
+      ? semantics.currentProfile
+      : null;
+    if (
+      semantics.hasExistingThread &&
+      (semantics.selectedAgent !== semantics.currentAgent ||
+        semantics.selectedProfile !== semantics.currentProfile)
+    ) {
+      await setSelectedAgentProfile(semantics.currentAgent, semantics.currentProfile);
+    }
+    applyPMAAgentSemantics(semantics);
 
     let queuePending = 0;
     let queuedItems: PMAQueueItem[] = [];
@@ -972,7 +1104,10 @@ async function loadPMAThreadInfo(): Promise<void> {
     );
 
     if (elements.threadInfoAgent) {
-      elements.threadInfoAgent.textContent = String(info.agent || "unknown");
+      const lockedAgent = String(info.agent || "unknown");
+      elements.threadInfoAgent.textContent = semantics.hasExistingThread
+        ? `${lockedAgent} (locked)`
+        : lockedAgent;
     }
     if (elements.threadInfoThreadId) {
       const threadId = String(info.thread_id || "");
@@ -1122,8 +1257,22 @@ async function sendMessage(): Promise<void> {
   elements.input.value = "";
   elements.input.style.height = "auto";
 
-  const agent = elements.agentSelect?.value || getSelectedAgent();
-  const profile = elements.profileSelect?.value || getSelectedProfile(agent);
+  const selectedAgent = elements.agentSelect?.value || getSelectedAgent();
+  const selectedProfile =
+    elements.profileSelect?.value || getSelectedProfile(selectedAgent);
+  const semantics = resolvePMAAgentSemantics({
+    threadInfo: currentThreadAgent
+      ? {
+          thread_id: "current",
+          agent: currentThreadAgent,
+          profile: currentThreadProfile || "",
+        }
+      : null,
+    selectedAgent,
+    selectedProfile,
+  });
+  const agent = semantics.agentForNextMessage;
+  const profile = semantics.profileForNextMessage;
   const model = elements.modelSelect?.value || getSelectedModel(agent);
   const reasoning = elements.reasoningSelect?.value || getSelectedReasoning(agent);
   const clientTurnId = newFileChatTurnId("pma");
@@ -1551,12 +1700,26 @@ function resetThread(): void {
     pmaChat.render();
     pmaChat.renderMessages();
   }
+  currentThreadAgent = null;
+  currentThreadProfile = null;
+  const elements = getElements();
+  applyPMAAgentSemantics(
+    resolvePMAAgentSemantics({
+      threadInfo: null,
+      selectedAgent: elements.agentSelect?.value || getSelectedAgent(),
+      selectedProfile: elements.profileSelect?.value || getSelectedProfile(),
+    })
+  );
   flash("Thread reset", "info");
 }
 
 async function startNewThreadOnServer(): Promise<void> {
   const elements = getElements();
-  const rawAgent = (elements.agentSelect?.value || getSelectedAgent() || "").trim().toLowerCase();
+  const rawAgent = (
+    elements.agentSelect?.value ||
+    getSelectedAgent() ||
+    ""
+  ).trim().toLowerCase();
   const selectedAgent = rawAgent || undefined;
   const selectedProfile = elements.profileSelect?.value || getSelectedProfile(rawAgent);
   await api("/hub/pma/new", {
@@ -1566,6 +1729,13 @@ async function startNewThreadOnServer(): Promise<void> {
       profile: selectedProfile || undefined,
       lane_id: DEFAULT_PMA_LANE_ID,
     },
+  });
+}
+
+async function clearCurrentThreadOnServer(): Promise<void> {
+  await api("/hub/pma/reset", {
+    method: "POST",
+    body: {},
   });
 }
 
@@ -1608,6 +1778,7 @@ function attachHandlers(): void {
   if (elements.newThreadBtn) {
     elements.newThreadBtn.addEventListener("click", () => {
       void (async () => {
+        const hadExistingThread = Boolean(currentThreadAgent);
         await cancelRequest({
           clearPending: true,
           interruptServer: true,
@@ -1615,7 +1786,11 @@ function attachHandlers(): void {
           statusText: "Cancelled (new thread)",
         });
         try {
-          await startNewThreadOnServer();
+          if (hadExistingThread) {
+            await clearCurrentThreadOnServer();
+          } else {
+            await startNewThreadOnServer();
+          }
         } catch (err) {
           flash("Failed to start new session", "error");
           return;
@@ -1748,8 +1923,10 @@ function attachHandlers(): void {
 }
 
 const __pmaTest = {
+  applyPMAAgentSemantics,
   buildOutboxAttachmentSummary,
   parsePendingPromptPreset,
+  resolvePMAAgentSemantics,
   shouldAppendAsyncOutboxSummary,
 };
 

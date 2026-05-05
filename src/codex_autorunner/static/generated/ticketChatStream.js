@@ -2,10 +2,10 @@
 /**
  * Ticket Chat Stream - handles SSE streaming for ticket chat
  */
-import { resolvePath, getAuthToken } from "./utils.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
-import { ticketChatState, renderTicketChat, clearTicketEvents, addUserMessage, addAssistantMessage, applyTicketChatResult, } from "./ticketChatActions.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
-import { applyTicketEvent, renderTicketEvents, renderTicketMessages } from "./ticketChatEvents.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
-import { readEventStream, handleStreamEvent } from "./streamUtils.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
+import { resolvePath, getAuthToken } from "./utils.js?v=be399e9b80baaceac895399d521c7e33ba6116a6282d86fe16aaac8dd380e544";
+import { ticketChatState, renderTicketChat, clearTicketEvents, addUserMessage, addAssistantMessage, applyTicketChatResult, } from "./ticketChatActions.js?v=be399e9b80baaceac895399d521c7e33ba6116a6282d86fe16aaac8dd380e544";
+import { applyTicketEvent, renderTicketEvents, renderTicketMessages } from "./ticketChatEvents.js?v=be399e9b80baaceac895399d521c7e33ba6116a6282d86fe16aaac8dd380e544";
+import { readEventStream, handleStreamEvent } from "./streamUtils.js?v=be399e9b80baaceac895399d521c7e33ba6116a6282d86fe16aaac8dd380e544";
 export async function performTicketChatRequest(ticketIndex, message, signal, options = {}) {
     // Clear events from previous request and add user message to history
     clearTicketEvents();

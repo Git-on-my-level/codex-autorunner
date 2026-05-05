@@ -1,5 +1,5 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { HUB_BASE } from "./env.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
+import { HUB_BASE } from "./env.js?v=be399e9b80baaceac895399d521c7e33ba6116a6282d86fe16aaac8dd380e544";
 export function nonPmaChatBoundThreadCount(repo) {
     if (repo.non_pma_chat_bound_thread_count != null) {
         return Math.max(0, Number(repo.non_pma_chat_bound_thread_count || 0));

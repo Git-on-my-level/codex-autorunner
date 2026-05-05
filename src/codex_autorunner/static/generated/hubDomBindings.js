@@ -1,12 +1,12 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { api, flash, inputModal, confirmModal } from "./utils.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
-import { normalizePinnedParentRepoIds, isCleanupBlockedByChatBinding, unboundManagedThreadCount, saveHubOpenPanel, saveHubViewPrefs, hubViewPrefs, loadHubViewPrefs, loadHubOpenPanel, } from "./hubFilters.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
-import { initNotificationBell } from "./notificationBell.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
-import { importVersionedModule } from "./assetLoader.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
-import { renderReposWithScroll } from "./hubRepoCards.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
-import { getHubData, getHubChannelEntries, getPinnedParentRepoIds, setPinnedParentRepoIds, } from "./hubActions.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
-import { refreshHub, triggerHubScan, loadHubUsage } from "./hubRefresh.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
-import { openRepoSettingsModal, promptAndSetRepoDestination, promptAndSetAgentWorkspaceDestination, handleCleanupAll, showCreateRepoModal, showCreateAgentWorkspaceModal, hideCreateRepoModal, hideCreateAgentWorkspaceModal, handleCreateRepoSubmit, handleCreateAgentWorkspaceSubmit, initHubSettings, } from "./hubModals.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
+import { api, flash, inputModal, confirmModal } from "./utils.js?v=be399e9b80baaceac895399d521c7e33ba6116a6282d86fe16aaac8dd380e544";
+import { normalizePinnedParentRepoIds, isCleanupBlockedByChatBinding, unboundManagedThreadCount, saveHubOpenPanel, saveHubViewPrefs, hubViewPrefs, loadHubViewPrefs, loadHubOpenPanel, } from "./hubFilters.js?v=be399e9b80baaceac895399d521c7e33ba6116a6282d86fe16aaac8dd380e544";
+import { initNotificationBell } from "./notificationBell.js?v=be399e9b80baaceac895399d521c7e33ba6116a6282d86fe16aaac8dd380e544";
+import { importVersionedModule } from "./assetLoader.js?v=be399e9b80baaceac895399d521c7e33ba6116a6282d86fe16aaac8dd380e544";
+import { renderReposWithScroll } from "./hubRepoCards.js?v=be399e9b80baaceac895399d521c7e33ba6116a6282d86fe16aaac8dd380e544";
+import { getHubData, getHubChannelEntries, getPinnedParentRepoIds, setPinnedParentRepoIds, } from "./hubActions.js?v=be399e9b80baaceac895399d521c7e33ba6116a6282d86fe16aaac8dd380e544";
+import { refreshHub, triggerHubScan, loadHubUsage } from "./hubRefresh.js?v=be399e9b80baaceac895399d521c7e33ba6116a6282d86fe16aaac8dd380e544";
+import { openRepoSettingsModal, promptAndSetRepoDestination, promptAndSetAgentWorkspaceDestination, handleCleanupAll, showCreateRepoModal, showCreateAgentWorkspaceModal, hideCreateRepoModal, hideCreateAgentWorkspaceModal, handleCreateRepoSubmit, handleCreateAgentWorkspaceSubmit, initHubSettings, } from "./hubModals.js?v=be399e9b80baaceac895399d521c7e33ba6116a6282d86fe16aaac8dd380e544";
 const hubRepoSearchInput = document.getElementById("hub-repo-search");
 const hubFlowFilterEl = document.getElementById("hub-flow-filter");
 const hubSortOrderEl = document.getElementById("hub-sort-order");

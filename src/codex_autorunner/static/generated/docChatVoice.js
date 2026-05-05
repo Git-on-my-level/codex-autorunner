@@ -2,8 +2,8 @@
 /**
  * Generic voice helper for doc/ticket chats.
  */
-import { flash } from "./utils.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
-import { initVoiceInput } from "./voice.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
+import { flash } from "./utils.js?v=be399e9b80baaceac895399d521c7e33ba6116a6282d86fe16aaac8dd380e544";
+import { initVoiceInput } from "./voice.js?v=be399e9b80baaceac895399d521c7e33ba6116a6282d86fe16aaac8dd380e544";
 const VOICE_TRANSCRIPT_DISCLAIMER_TEXT = "Note: the text above was transcribed from voice input and may contain transcription errors.";
 function wrapInjectedContext(text) {
     return `<injected context>\n${text}\n</injected context>`;

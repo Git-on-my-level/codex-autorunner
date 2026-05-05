@@ -1,7 +1,7 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { flash } from "./utils.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
-import { initVoiceInput } from "./voice.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
-import { safeFocus, persistTextInputDraft, setTextInputEnabled, } from "./terminalTextInput.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
+import { flash } from "./utils.js?v=be399e9b80baaceac895399d521c7e33ba6116a6282d86fe16aaac8dd380e544";
+import { initVoiceInput } from "./voice.js?v=be399e9b80baaceac895399d521c7e33ba6116a6282d86fe16aaac8dd380e544";
+import { safeFocus, persistTextInputDraft, setTextInputEnabled, } from "./terminalTextInput.js?v=be399e9b80baaceac895399d521c7e33ba6116a6282d86fe16aaac8dd380e544";
 const textEncoder = new TextEncoder();
 const VOICE_TRANSCRIPT_DISCLAIMER_TEXT = (typeof CONSTANTS !== "undefined" && CONSTANTS.PROMPTS?.VOICE_TRANSCRIPT_DISCLAIMER) ||
     "Note: transcribed from user voice. If confusing or possibly inaccurate and you cannot infer the intention please clarify before proceeding.";
@@ -14,7 +14,7 @@ function wrapInjectedContextIfNeeded(text) {
         return text;
     return INJECTED_CONTEXT_TAG_RE.test(text) ? text : wrapInjectedContext(text);
 }
-import { CONSTANTS } from "./constants.js?v=62070ab22f9201700f4cbe1ce8b08b2a7cf7419dd93d9677cdfc7ba5c9537a14";
+import { CONSTANTS } from "./constants.js?v=be399e9b80baaceac895399d521c7e33ba6116a6282d86fe16aaac8dd380e544";
 export function createVoiceState() {
     return {
         textVoiceBtn: null,

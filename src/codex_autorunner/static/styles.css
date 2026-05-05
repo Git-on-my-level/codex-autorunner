@@ -13162,6 +13162,13 @@ button.filebox-delete:hover {
   flex-wrap: wrap;
 }
 
+.pma-control-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
 .pma-chat-agent-controls select,
 .pma-chat-agent-controls .agent-model-input {
   height: 26px;
@@ -13941,6 +13948,10 @@ button.filebox-delete:hover {
 
   .pma-chat-agent-controls {
     gap: 4px;
+  }
+
+  .pma-control-label {
+    font-size: 9px;
   }
 
   .pma-chat-agent-controls select,
