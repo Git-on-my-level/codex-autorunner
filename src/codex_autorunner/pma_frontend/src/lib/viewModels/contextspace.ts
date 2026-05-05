@@ -16,7 +16,7 @@ export type ContextspaceViewModel = {
   workspaceId: string;
   title: string;
   eyebrow: string;
-  workspaceKind: 'repo' | 'worktree' | 'local' | 'unknown';
+  workspaceKind: 'repo' | 'worktree' | 'unknown';
   isUnknown: boolean;
   description: string;
   openWorkspaceHref: string;
@@ -40,7 +40,7 @@ export function buildContextspaceViewModel(
 ): ContextspaceViewModel {
   const repo = repos.find((candidate) => candidate.id === workspaceId) ?? null;
   const worktree = worktrees.find((candidate) => candidate.id === workspaceId) ?? null;
-  const workspaceKind = workspaceId === 'local' ? 'local' : worktree ? 'worktree' : repo ? 'repo' : 'unknown';
+  const workspaceKind = worktree ? 'worktree' : repo ? 'repo' : 'unknown';
   const title = worktree?.name ?? repo?.name ?? workspaceId;
   const docMap = new Map(docs.map((doc) => [normalizeDocKind(doc.kind || doc.id || doc.name), doc]));
   const tabs = DOC_ORDER.map((entry) => {
@@ -58,15 +58,13 @@ export function buildContextspaceViewModel(
 
   return {
     workspaceId,
-    title: workspaceKind === 'local' ? 'Local workspace memory' : `Workspace memory: ${title}`,
+    title: `Workspace memory: ${title}`,
     eyebrow:
       workspaceKind === 'repo'
         ? 'Repo-scoped contextspace'
         : workspaceKind === 'worktree'
           ? 'Worktree-scoped contextspace'
-          : workspaceKind === 'local'
-            ? 'Local workspace memory'
-            : 'Unknown workspace contextspace',
+          : 'Unknown workspace contextspace',
     workspaceKind,
     isUnknown: workspaceKind === 'unknown',
     description:
@@ -74,9 +72,7 @@ export function buildContextspaceViewModel(
         ? 'Repo memory is read from this repo workspace contextspace.'
         : workspaceKind === 'worktree'
           ? 'Worktree memory is read from this worktree workspace contextspace.'
-          : workspaceKind === 'local'
-            ? 'Local memory is the current hub workspace fallback, not a global contextspace.'
-            : 'This workspace id was not matched to a known repo or worktree, so scoped contextspace was not loaded.',
+          : 'This workspace id was not matched to a known repo or worktree, so scoped contextspace was not loaded.',
     openWorkspaceHref:
       workspaceKind === 'worktree'
         ? `/worktrees/${encodeURIComponent(workspaceId)}`

@@ -38,6 +38,7 @@ class BasePathRouterMiddleware:
                 "/api",
                 "/hub",
                 "/pma",
+                "/pma-memory",
                 "/dashboard",
                 "/repos",
                 "/worktrees",

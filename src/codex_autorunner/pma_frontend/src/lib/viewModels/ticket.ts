@@ -294,7 +294,9 @@ function buildTimeline(detail: TicketDetail, run: PmaRunProgress | null, artifac
 }
 
 function buildActions(chatHref: string | null, runHref: string | null, debugHref: string | null, status: WorkStatus): TicketAction[] {
-  const actions: TicketAction[] = [{ label: chatHref ? 'Open PMA chat' : 'Ask PMA', href: chatHref ?? '/pma', secondary: false, command: null }];
+  const actions: TicketAction[] = chatHref
+    ? [{ label: 'Open PMA chat', href: chatHref, secondary: false, command: null }]
+    : [];
   if (runHref) actions.push({ label: 'Open run', href: runHref, secondary: false, command: null });
   if (status === 'waiting' || status === 'blocked') actions.push({ label: 'Continue run', href: null, secondary: false, command: 'resume' });
   if (status === 'failed') actions.push({ label: 'Retry run', href: null, secondary: false, command: 'bootstrap' });

@@ -40,8 +40,6 @@
         <h2>No active CAR work</h2>
         <p>Start from PMA or open the workspace queues; dashboard signals will fill in as runs, tickets, and artifacts appear.</p>
         <div class="dashboard-actions">
-          <a href={href('/pma')}>Open PMA</a>
-          <a href={href('/repos')}>View repos</a>
           <a href={href('/tickets')}>View workspace tickets</a>
         </div>
       </div>
@@ -51,7 +49,6 @@
       <section id="active-runs" class="page-panel dashboard-panel wide">
         <div class="panel-heading-row">
           <h2>Active runs</h2>
-          <a href={href('/pma')}>PMA chats</a>
         </div>
         {#if dashboard.activeRuns.length === 0}
           <div class="state-panel empty-state compact-empty">
@@ -74,8 +71,6 @@
                   </span>
                 </a>
                 <div class="row-links">
-                  {#if run.repoHref}<a href={href(run.repoHref)}>Repo</a>{/if}
-                  {#if run.worktreeHref}<a href={href(run.worktreeHref)}>Worktree</a>{/if}
                   {#if run.ticketHref}<a href={href(run.ticketHref)}>Ticket</a>{/if}
                   {#if run.chatHref}<a href={href(run.chatHref)}>Chat</a>{/if}
                 </div>
@@ -101,35 +96,9 @@
         {@render attentionList(dashboard.failedOrBlocked, 'No failed or blocked work is visible.')}
       </section>
 
-      <section class="page-panel dashboard-panel">
-        <div class="panel-heading-row">
-          <h2>Repos and worktree variants</h2>
-          <a href={href('/repos')}>All repos</a>
-        </div>
-        {#if dashboard.repoWorktrees.length === 0}
-          <div class="state-panel empty-state compact-empty">
-            <strong>No repos registered</strong>
-            <p>Add or select a repo before assigning ticket work.</p>
-          </div>
-        {:else}
-          <div class="dashboard-list compact">
-            {#each dashboard.repoWorktrees as item}
-              <a class="dashboard-row compact-row" href={href(item.href)}>
-                <span>
-                  <span class="row-title">{item.label}</span>
-                  <span class="row-meta">{item.detail} · {statusLabel(item.status)} · {dashboardRowMeta(item)}</span>
-                </span>
-                <span class="row-counts">{item.activeRuns} runs · {item.openTickets} tickets</span>
-              </a>
-            {/each}
-          </div>
-        {/if}
-      </section>
-
       <section class="page-panel dashboard-panel wide">
         <div class="panel-heading-row">
           <h2>Recent activity</h2>
-          <a href={href('/pma')}>Open PMA</a>
         </div>
         {#if dashboard.recentActivity.length === 0}
           <div class="state-panel empty-state compact-empty">

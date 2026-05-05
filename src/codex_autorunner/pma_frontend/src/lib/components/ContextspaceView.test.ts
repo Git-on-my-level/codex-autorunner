@@ -53,15 +53,6 @@ describe('ContextspaceView', () => {
     expect(body).not.toContain('textarea');
   });
 
-  it('renders local contextspace as a local fallback, not global memory', () => {
-    const vm = buildContextspaceViewModel('local', [], [mockRepoSummary], []);
-    const { body } = render(ContextspaceView, { props: { state: 'ready', vm } });
-
-    expect(body).toContain('Local workspace memory');
-    expect(body).toContain('not a global contextspace');
-    expect(body).toContain('Open workspace index');
-  });
-
   it('renders worktree-scoped contextspace ownership labels', () => {
     const vm = buildContextspaceViewModel('worktree-1', [], [mockRepoSummary], [mockWorktreeSummary]);
     const { body } = render(ContextspaceView, { props: { state: 'ready', vm } });

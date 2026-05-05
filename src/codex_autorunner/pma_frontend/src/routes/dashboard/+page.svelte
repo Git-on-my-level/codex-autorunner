@@ -18,17 +18,15 @@
   async function loadDashboard(): Promise<void> {
     loading = true;
     error = null;
-    const [summary, runs, chats, approvals, repos, worktrees, tickets] = await Promise.all([
+    const [summary, runs, chats, approvals, tickets] = await Promise.all([
       pmaApi.hub.getDashboard(),
       pmaApi.ticketFlow.listRuns(),
       pmaApi.pma.listChats(),
       pmaApi.settings.listApprovals(),
-      pmaApi.hub.listRepos(),
-      pmaApi.hub.listWorktrees(),
       pmaApi.ticketFlow.listTickets()
     ]);
 
-    const firstError = [summary, runs, chats, approvals, repos, worktrees, tickets].find((result) => !result.ok);
+    const firstError = [summary, runs, chats, approvals, tickets].find((result) => !result.ok);
     if (firstError && !firstError.ok) {
       error = firstError.error;
       loading = false;
@@ -40,8 +38,6 @@
       runs: runs.ok ? runs.data : [],
       chats: chats.ok ? chats.data : [],
       approvals: approvals.ok ? approvals.data : [],
-      repos: repos.ok ? repos.data : [],
-      worktrees: worktrees.ok ? worktrees.data : [],
       tickets: tickets.ok ? tickets.data : []
     });
     loading = false;

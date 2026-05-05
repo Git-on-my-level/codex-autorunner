@@ -27,7 +27,6 @@
     const repoList = repos.ok ? repos.data : [];
     const worktreeList = worktrees.ok ? worktrees.data : [];
     const isKnownWorkspace =
-      workspaceId === 'local' ||
       repoList.some((repo) => repo.id === workspaceId) ||
       worktreeList.some((worktree) => worktree.id === workspaceId);
     if (!isKnownWorkspace) {

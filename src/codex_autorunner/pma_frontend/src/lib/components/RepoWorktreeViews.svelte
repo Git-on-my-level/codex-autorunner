@@ -55,12 +55,11 @@
     <section class="page-panel workspace-index-panel">
       <div class="panel-heading-row">
         <h2>Current work</h2>
-        <a href={href('/pma')}>Open PMA</a>
       </div>
       {#if index.rows.length === 0}
         <div class="state-panel empty-state compact-empty">
           <strong>No repos registered</strong>
-          <p>Open PMA and point it at a workspace before queueing repo-scoped tickets.</p>
+          <p>Register a workspace before queueing repo-scoped tickets.</p>
         </div>
       {:else}
         <div class="workspace-row-list">

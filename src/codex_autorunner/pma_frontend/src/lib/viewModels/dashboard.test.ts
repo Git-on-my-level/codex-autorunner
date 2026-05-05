@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mockArtifact, mockChatSummary, mockRepoSummary, mockRunProgress, mockTicketSummary, mockWorktreeSummary } from './mockData';
+import { mockArtifact, mockChatSummary, mockRunProgress, mockTicketSummary } from './mockData';
 import { buildDashboardViewModel } from './dashboard';
 
 describe('dashboard view model', () => {
@@ -28,8 +28,6 @@ describe('dashboard view model', () => {
           raw: {}
         }
       ],
-      repos: [mockRepoSummary],
-      worktrees: [mockWorktreeSummary],
       tickets: [
         mockTicketSummary,
         { ...mockTicketSummary, id: 'TICKET-111', status: 'blocked', title: 'Blocked ticket' }
@@ -40,9 +38,7 @@ describe('dashboard view model', () => {
       ['Active runs', 1],
       ['Waiting for me', 1],
       ['Failed/blocked', 1],
-      ['Open tickets', 2],
-      ['Repos', 1],
-      ['Repo worktrees', 1]
+      ['Open tickets', 2]
     ]);
     expect(dashboard.activeRuns[0]).toMatchObject({
       title: 'Hub rewrite foundation',
@@ -58,7 +54,6 @@ describe('dashboard view model', () => {
       title: 'Blocked ticket',
       primaryHref: '/tickets/TICKET-111'
     });
-    expect(dashboard.repoWorktrees).toHaveLength(2);
     expect(dashboard.recentActivity.some((activity) => activity.title === 'Preview ready')).toBe(true);
   });
 
@@ -68,8 +63,6 @@ describe('dashboard view model', () => {
       runs: [],
       chats: [],
       approvals: [],
-      repos: [],
-      worktrees: [],
       tickets: []
     });
 

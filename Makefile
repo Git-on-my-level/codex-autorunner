@@ -24,6 +24,8 @@ UI_QA_READY_TIMEOUT ?= 120
 HUB_HOST ?= 127.0.0.1
 HUB_PORT ?= 4517
 HUB_BASE_PATH ?= /car
+# Local source checkouts are not initialized hubs. `make serve` and `make serve-dev`
+# use this hub root so config/state resolve from a real `.codex-autorunner/` tree.
 CAR_ROOT ?= $(HOME)/car-workspace
 LAUNCH_AGENT ?= $(HOME)/Library/LaunchAgents/com.codex.autorunner.plist
 LAUNCH_LABEL ?= com.codex.autorunner
@@ -34,13 +36,16 @@ PIPX_ROOT ?= $(HOME)/.local/pipx
 PIPX_VENV ?= $(PIPX_ROOT)/venvs/codex-autorunner
 PIPX_PYTHON ?= $(PIPX_VENV)/bin/python
 
-.PHONY: install dev hooks build test test-fast test-full test-chat-platform-contract test-chat-surface-lab test-managed-thread-cutover check check-full check-extended preflight-hub-startup format serve serve-dev serve-onboarding ui-qa-screens launchd-hub deadcode-baseline venv venv-dev setup npm-install car-artifacts lint-html dom-check frontend-check _inject-static-banners agent-compatibility-check agent-compatibility-refresh protocol-schemas-check protocol-schemas-refresh typecheck-strict perf-idle-cpu perf-chat-latency-budgets perf-chat-seeded-exploration
+.PHONY: install dev hooks build pma-build test test-fast test-full test-chat-platform-contract test-chat-surface-lab test-managed-thread-cutover check check-full check-extended preflight-hub-startup format serve serve-dev serve-onboarding ui-qa-screens launchd-hub deadcode-baseline venv venv-dev setup npm-install car-artifacts lint-html dom-check frontend-check _inject-static-banners agent-compatibility-check agent-compatibility-refresh protocol-schemas-check protocol-schemas-refresh typecheck-strict perf-idle-cpu perf-chat-latency-budgets perf-chat-seeded-exploration
 
 _inject-static-banners:
 	pnpm run postbuild
 
 build: npm-install
 	pnpm build
+
+pma-build: npm-install
+	pnpm pma:build
 
 install:
 	$(PYTHON) -m pip install .
@@ -186,21 +191,21 @@ format:
 deadcode-baseline:
 	$(PYTHON) scripts/deadcode.py --update-baseline
 
-serve: build
+serve: build pma-build
 	@PORT_PID=$$(lsof -t -nP -iTCP:$(PORT) -sTCP:LISTEN 2>/dev/null | head -n 1); \
 	if [ -n "$$PORT_PID" ]; then \
 		echo "Port $(PORT) is already in use by PID $$PORT_PID. Stop the existing server before running \`make serve\`." >&2; \
 		lsof -nP -iTCP:$(PORT) -sTCP:LISTEN >&2 || true; \
 		exit 1; \
 	fi
-	$(PYTHON) -m codex_autorunner.cli serve --host $(HOST) --port $(PORT)
+	$(PYTHON) -m codex_autorunner.cli hub serve --path "$(CAR_ROOT)" --host $(HOST) --port $(PORT)
 
-serve-dev: venv-dev
-	CAR_DEV_INCLUDE_ROOT_REPO=1 $(VENV_PYTHON) -m uvicorn codex_autorunner.server:create_hub_app --factory --reload --host $(HOST) --port $(PORT) --reload-dir src --reload-include '*.py' --reload-include '*.js' --reload-include '*.css' --reload-include '*.html' --reload-include '*.json' --reload-exclude '**/worktrees/**' --reload-exclude '**/.codex-autorunner/**' --reload-exclude '.codex-autorunner/**' --timeout-graceful-shutdown 1
+serve-dev: venv-dev pma-build
+	cd "$(CAR_ROOT)" && CAR_DEV_INCLUDE_ROOT_REPO=1 "$(PYTHON_ABS)" -m uvicorn codex_autorunner.server:create_hub_app --factory --reload --host $(HOST) --port $(PORT) --reload-dir "$(CURDIR)/src" --reload-include '*.py' --reload-include '*.js' --reload-include '*.css' --reload-include '*.html' --reload-include '*.json' --reload-exclude '**/worktrees/**' --reload-exclude '**/.codex-autorunner/**' --reload-exclude '.codex-autorunner/**' --timeout-graceful-shutdown 1
 
 # Hub initialized with `car init --mode hub` in a new temp directory (no repos, clean manifest).
 # Prints URLs for real-server onboarding and optional client-mocked PMA (see `static_src/walkthrough.ts` `?carOnboarding=1`).
-serve-onboarding: build
+serve-onboarding: build pma-build
 	@set -e; \
 	PORT_PID=$$(lsof -t -nP -iTCP:$(ONBOARDING_PORT) -sTCP:LISTEN 2>/dev/null | head -n 1); \
 	if [ -n "$$PORT_PID" ]; then \

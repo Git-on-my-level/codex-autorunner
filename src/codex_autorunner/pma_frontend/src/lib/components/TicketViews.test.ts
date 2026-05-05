@@ -126,7 +126,7 @@ Users can browse tickets.
     expect(body).toContain('No artifacts surfaced');
     expect(body).toContain('Screenshots, previews, files, and test summaries will appear after PMA work produces them.');
     expect(body).toContain('No linked PMA chat');
-    expect(body).toContain('Open PMA from the ticket queue when this ticket needs agent discussion.');
+    expect(body).toContain('A ticket-linked conversation appears here after PMA starts discussing this ticket.');
     expect(body).not.toContain('Raw logs/debug');
   });
 });

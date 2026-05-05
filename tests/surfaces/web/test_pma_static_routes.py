@@ -12,6 +12,7 @@ from codex_autorunner.surfaces.web.static_assets import (
 
 PMA_MANUAL_SCREENSHOT_ROUTES = (
     "/pma",
+    "/pma-memory",
     "/dashboard",
     "/repos",
     "/repos/example",
@@ -19,7 +20,6 @@ PMA_MANUAL_SCREENSHOT_ROUTES = (
     "/worktrees/example",
     "/tickets",
     "/tickets/TICKET-100",
-    "/contextspace/local",
     "/contextspace/example",
     "/settings",
 )
@@ -106,15 +106,11 @@ def test_pma_base_path_routes_redirect_and_serve_spa(tmp_path):
 
     assert client.get("/").headers["location"] == "/car/"
     assert client.get("/pma").headers["location"] == "/car/pma"
+    assert client.get("/pma-memory").headers["location"] == "/car/pma-memory"
     assert (
         client.get("/worktrees/example").headers["location"] == "/car/worktrees/example"
     )
-    assert (
-        client.get("/contextspace/local").headers["location"]
-        == "/car/contextspace/local"
-    )
-
-    response = client.get("/car/contextspace/local")
+    response = client.get("/car/pma-memory")
     assert response.status_code == 200
     assert "<title>PMA Hub</title>" in response.text
     assert 'globalThis.__CAR_BASE_PATH__ = "/car";' in response.text

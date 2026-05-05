@@ -107,7 +107,7 @@ describe('repo/worktree view models', () => {
       agentId: 'codex',
       ticketHref: '/tickets/TICKET-110'
     });
-    expect(vm.links.map((link) => link.label)).toContain('Open PMA chat');
+    expect(vm.links.map((link) => link.label)).not.toContain('Open PMA chat');
     expect(vm.links.map((link) => link.label)).toContain('View repo tickets');
     expect(vm.links.find((link) => link.label === 'View repo tickets')?.href).toBe('/tickets?repo=repo-1');
     expect(vm.links.map((link) => link.label)).toContain('View repo memory');

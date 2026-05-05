@@ -2,7 +2,7 @@ import { render } from 'svelte/server';
 import { afterEach, describe, expect, it } from 'vitest';
 import DashboardView from './DashboardView.svelte';
 import { buildDashboardViewModel } from '$lib/viewModels/dashboard';
-import { mockArtifact, mockChatSummary, mockRepoSummary, mockRunProgress, mockTicketSummary, mockWorktreeSummary } from '$lib/viewModels/mockData';
+import { mockArtifact, mockChatSummary, mockRunProgress, mockTicketSummary } from '$lib/viewModels/mockData';
 
 describe('DashboardView', () => {
   afterEach(() => {
@@ -29,17 +29,15 @@ describe('DashboardView', () => {
       runs: [],
       chats: [],
       approvals: [],
-      repos: [],
-      worktrees: [],
       tickets: []
     });
     const { body } = render(DashboardView, { props: { state: 'ready', dashboard } });
 
     expect(body).toContain('No active CAR work');
-    expect(body).toContain('Open PMA');
-    expect(body).toContain('View repos');
+    expect(body).not.toContain('Open PMA');
     expect(body).toContain('No active runs');
     expect(body).toContain('Queue a ticket or send PMA a task to start work.');
+    expect(body).not.toContain('View repos');
   });
 
   it('renders populated dashboard sections and links', () => {
@@ -57,8 +55,6 @@ describe('DashboardView', () => {
       runs: [mockRunProgress],
       chats: [mockChatSummary],
       approvals: [],
-      repos: [mockRepoSummary],
-      worktrees: [mockWorktreeSummary],
       tickets: [mockTicketSummary]
     });
     const { body } = render(DashboardView, { props: { state: 'ready', dashboard } });
@@ -66,9 +62,9 @@ describe('DashboardView', () => {
     expect(body).toContain('Active runs');
     expect(body).toContain('Hub rewrite foundation');
     expect(body).toContain('href="/pma?chat=chat-1"');
-    expect(body).toContain('href="/repos/codex-autorunner"');
     expect(body).toContain('href="/tickets/TICKET-110"');
-    expect(body).toContain('Repos and worktree variants');
+    expect(body).not.toContain('Repos and worktree variants');
+    expect(body).not.toContain('Repo worktrees');
     expect(body).toContain('Recent activity');
     expect(body).toContain('Preview ready');
   });
@@ -80,14 +76,11 @@ describe('DashboardView', () => {
       runs: [mockRunProgress],
       chats: [mockChatSummary],
       approvals: [],
-      repos: [mockRepoSummary],
-      worktrees: [mockWorktreeSummary],
       tickets: [mockTicketSummary]
     });
     const { body } = render(DashboardView, { props: { state: 'ready', dashboard } });
 
     expect(body).toContain('href="/car/pma?chat=chat-1"');
-    expect(body).toContain('href="/car/repos/codex-autorunner"');
     expect(body).toContain('href="/car/tickets/TICKET-110"');
   });
 });

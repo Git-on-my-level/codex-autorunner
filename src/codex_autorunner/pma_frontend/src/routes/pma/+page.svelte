@@ -1,6 +1,6 @@
 <script lang="ts">
   import { page } from '$app/state';
-  import { onDestroy, onMount } from 'svelte';
+  import { onDestroy, onMount, tick } from 'svelte';
   import SensitiveApprovalCard from '$lib/components/SensitiveApprovalCard.svelte';
   import SurfaceArtifactCard from '$lib/components/SurfaceArtifactCard.svelte';
   import { pmaApi, type ApiError, type JsonRecord } from '$lib/api/client';
@@ -66,6 +66,9 @@
   let streamSubscription: StreamSubscription | null = null;
   let fileInput: HTMLInputElement | null = $state(null);
   let imageInput: HTMLInputElement | null = $state(null);
+  let messageStack: HTMLDivElement | null = $state(null);
+  let lastScrolledChatId: string | null = null;
+  let lastScrolledCardCount = 0;
 
   const activeChat = $derived(chats.find((chat) => chat.id === activeChatId) ?? null);
   const filteredChats = $derived(filterPmaChats(chats, filter, search));
@@ -93,6 +96,19 @@
 
   onDestroy(() => {
     closeStream();
+  });
+
+  $effect(() => {
+    const cardCount = activeCards.length + approvals.length;
+    const chatChanged = activeChatId !== lastScrolledChatId;
+    const cardCountChanged = cardCount !== lastScrolledCardCount;
+
+    if (!activeChat || loadingActive || (!chatChanged && !cardCountChanged)) return;
+
+    const shouldFollowLatest = chatChanged || isMessageStackNearBottom();
+    lastScrolledChatId = activeChatId;
+    lastScrolledCardCount = cardCount;
+    if (shouldFollowLatest) void scrollMessagesToBottom();
   });
 
   async function loadInitial(): Promise<void> {
@@ -215,6 +231,18 @@
     if (!activeChatId) return;
     connectStream(activeChatId);
     void refreshActive(activeChatId, { quiet: true });
+  }
+
+  function isMessageStackNearBottom(): boolean {
+    if (!messageStack) return true;
+    const distanceFromBottom = messageStack.scrollHeight - messageStack.scrollTop - messageStack.clientHeight;
+    return distanceFromBottom < 80;
+  }
+
+  async function scrollMessagesToBottom(): Promise<void> {
+    await tick();
+    if (!messageStack) return;
+    messageStack.scrollTop = messageStack.scrollHeight;
   }
 
   async function createChat(): Promise<void> {
@@ -565,7 +593,7 @@
       </div>
     {/if}
 
-    <div class="message-stack" aria-live="polite">
+    <div bind:this={messageStack} class="message-stack" aria-live="polite">
       {#if loadingActive}
         <div class="state-panel loading-state">
           <span class="state-icon" aria-hidden="true"></span>
@@ -658,12 +686,27 @@
       />
       <div class="attachment-actions" aria-label="Attachment controls">
         <button class="icon-button attachment-button file" type="button" aria-label="Attach files" title="Attach files" onclick={() => fileInput?.click()}>
+          <svg class="attachment-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7z" />
+            <path d="M14 2v5h5" />
+            <path d="M9 13h6" />
+            <path d="M9 17h4" />
+          </svg>
           <span class="sr-only">Attach files</span>
         </button>
         <button class="icon-button attachment-button image" type="button" aria-label="Attach images" title="Attach images" onclick={() => imageInput?.click()}>
+          <svg class="attachment-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="3" y="5" width="18" height="14" rx="2" />
+            <circle cx="8.5" cy="10" r="1.5" />
+            <path d="m21 16-5-5L5 19" />
+          </svg>
           <span class="sr-only">Attach images</span>
         </button>
         <button class="icon-button attachment-button link" type="button" aria-label="Attach link" title="Attach link" onclick={addLink}>
+          <svg class="attachment-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M10 13a5 5 0 0 0 7.1.1l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1" />
+            <path d="M14 11a5 5 0 0 0-7.1-.1l-2 2a5 5 0 0 0 7.1 7.1l1.1-1.1" />
+          </svg>
           <span class="sr-only">Attach link</span>
         </button>
       </div>

@@ -298,6 +298,7 @@ a {
   align-content: start;
   grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
   gap: var(--space-4);
+  height: calc(100dvh - 96px);
   min-height: calc(100vh - 96px);
 }
 
@@ -540,9 +541,10 @@ a {
 }
 
 .active-chat {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  display: flex;
+  flex-direction: column;
   min-width: 0;
+  min-height: 0;
 }
 
 .chat-header {
@@ -595,11 +597,20 @@ select {
 }
 
 .message-stack {
-  display: grid;
-  align-content: start;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
   gap: var(--space-3);
+  min-height: 0;
   padding: var(--space-4) 0;
   overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.message-stack::before {
+  content: "";
+  flex: 0 0 auto;
+  margin-top: auto;
 }
 
 .stream-health {
@@ -1345,65 +1356,18 @@ select {
 }
 
 .attachment-button {
-  position: relative;
+  color: var(--color-text);
 }
 
-.attachment-button::before,
-.attachment-button::after {
-  content: "";
-  position: absolute;
-  display: block;
-}
-
-.attachment-button.file::before {
-  width: 13px;
-  height: 16px;
-  border: 2px solid currentColor;
-  border-radius: 2px;
-}
-
-.attachment-button.file::after {
-  top: 10px;
-  right: 10px;
-  width: 6px;
-  height: 6px;
-  border-top: 2px solid currentColor;
-  border-right: 2px solid currentColor;
-}
-
-.attachment-button.image::before {
-  width: 17px;
-  height: 14px;
-  border: 2px solid currentColor;
-  border-radius: 2px;
-}
-
-.attachment-button.image::after {
-  left: 11px;
-  bottom: 10px;
-  width: 12px;
-  height: 8px;
-  border-left: 2px solid currentColor;
-  border-bottom: 2px solid currentColor;
-  transform: rotate(-45deg);
-}
-
-.attachment-button.link::before {
-  left: 9px;
-  width: 12px;
-  height: 7px;
-  border: 2px solid currentColor;
-  border-radius: 999px;
-  transform: rotate(-35deg);
-}
-
-.attachment-button.link::after {
-  right: 9px;
-  width: 12px;
-  height: 7px;
-  border: 2px solid currentColor;
-  border-radius: 999px;
-  transform: rotate(-35deg);
+.attachment-icon {
+  width: 24px;
+  height: 24px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+  pointer-events: none;
 }
 
 .pending-attachments {

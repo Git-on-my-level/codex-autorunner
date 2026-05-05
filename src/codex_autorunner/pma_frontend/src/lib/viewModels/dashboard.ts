@@ -2,12 +2,10 @@ import type {
   DashboardSummary,
   PmaChatSummary,
   PmaRunProgress,
-  RepoSummary,
   SensitiveApprovalRequest,
   SurfaceArtifact,
   TicketSummary,
   WorkStatus,
-  WorktreeSummary
 } from './domain';
 import { formatRelativeTime, progressPercent } from './pmaChat';
 
@@ -46,17 +44,6 @@ export type DashboardAttentionRow = {
   primaryHref: string;
 };
 
-export type DashboardRepoWorktreeRow = {
-  id: string;
-  label: string;
-  detail: string;
-  status: WorkStatus;
-  activeRuns: number;
-  openTickets: number;
-  updatedAt: string | null;
-  href: string;
-};
-
 export type DashboardActivityRow = {
   id: string;
   title: string;
@@ -71,7 +58,6 @@ export type DashboardViewModel = {
   activeRuns: DashboardRunRow[];
   waitingForMe: DashboardAttentionRow[];
   failedOrBlocked: DashboardAttentionRow[];
-  repoWorktrees: DashboardRepoWorktreeRow[];
   recentActivity: DashboardActivityRow[];
   hasAnyData: boolean;
 };
@@ -81,8 +67,6 @@ export type DashboardSourceData = {
   runs: PmaRunProgress[];
   chats: PmaChatSummary[];
   approvals: SensitiveApprovalRequest[];
-  repos: RepoSummary[];
-  worktrees: WorktreeSummary[];
   tickets: TicketSummary[];
 };
 
@@ -101,10 +85,6 @@ export function buildDashboardViewModel(source: DashboardSourceData): DashboardV
       .filter((ticket) => ticket.status === 'failed' || ticket.status === 'blocked')
       .map(ticketToFailureRow)
   ];
-  const repoWorktrees = [
-    ...source.repos.map(repoToRow),
-    ...source.worktrees.map(worktreeToRow)
-  ].sort(byRecentThenLabel);
   const recentActivity = buildRecentActivity(source, runRows, openTickets);
 
   return {
@@ -113,20 +93,15 @@ export function buildDashboardViewModel(source: DashboardSourceData): DashboardV
       { label: 'Waiting for me', value: waitingRows.length, href: '#waiting-for-me', tone: 'waiting' },
       { label: 'Failed/blocked', value: failedRows.length, href: '#failed-blocked', tone: 'danger' },
       { label: 'Open tickets', value: openTickets.length || source.summary?.openTickets || 0, href: '/tickets', tone: 'neutral' },
-      { label: 'Repos', value: source.repos.length || source.summary?.repos || 0, href: '/repos', tone: 'neutral' },
-      { label: 'Repo worktrees', value: source.worktrees.length || source.summary?.worktrees || 0, href: '/worktrees', tone: 'neutral' }
     ],
     activeRuns,
     waitingForMe: dedupeAttention(waitingRows).slice(0, 8),
     failedOrBlocked: dedupeAttention(failedRows).slice(0, 8),
-    repoWorktrees: repoWorktrees.slice(0, 10),
     recentActivity: recentActivity.slice(0, 8),
     hasAnyData:
       runRows.length > 0 ||
       source.chats.length > 0 ||
       source.approvals.length > 0 ||
-      source.repos.length > 0 ||
-      source.worktrees.length > 0 ||
       source.tickets.length > 0 ||
       (source.summary?.recentArtifacts.length ?? 0) > 0
   };
@@ -255,32 +230,6 @@ function ticketToFailureRow(ticket: TicketSummary): DashboardAttentionRow {
   };
 }
 
-function repoToRow(repo: RepoSummary): DashboardRepoWorktreeRow {
-  return {
-    id: `repo:${repo.id}`,
-    label: repo.name,
-    detail: repo.defaultBranch ? `Repo · ${repo.defaultBranch}` : 'Repo',
-    status: repo.status,
-    activeRuns: repo.activeRuns,
-    openTickets: repo.openTickets,
-    updatedAt: repo.lastActivityAt,
-    href: repoHref(repo.id)
-  };
-}
-
-function worktreeToRow(worktree: WorktreeSummary): DashboardRepoWorktreeRow {
-  return {
-    id: `worktree:${worktree.id}`,
-    label: worktree.name,
-    detail: worktree.branch ? `Worktree · ${worktree.branch}` : 'Worktree',
-    status: worktree.status,
-    activeRuns: worktree.activeRuns,
-    openTickets: worktree.openTickets,
-    updatedAt: worktree.lastActivityAt,
-    href: worktreeHref(worktree.id)
-  };
-}
-
 function buildRecentActivity(
   source: DashboardSourceData,
   runRows: DashboardRunRow[],
@@ -337,10 +286,6 @@ function byRecentThenTitle<T extends { title?: string; label?: string; updatedAt
   const rightTime = Date.parse(right.updatedAt ?? right.createdAt ?? '') || 0;
   if (leftTime !== rightTime) return rightTime - leftTime;
   return String(left.title ?? left.label ?? '').localeCompare(String(right.title ?? right.label ?? ''));
-}
-
-function byRecentThenLabel(left: DashboardRepoWorktreeRow, right: DashboardRepoWorktreeRow): number {
-  return byRecentThenTitle(left, right);
 }
 
 function stringFromRaw(raw: Record<string, unknown>, keys: string[]): string | null {

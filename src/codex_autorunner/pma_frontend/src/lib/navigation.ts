@@ -8,10 +8,10 @@ export type NavItem = {
 
 export const primaryNav: NavItem[] = [
   { href: '/pma', label: 'PMA', badge: 'Primary', group: 'primary' },
+  { href: '/pma-memory', label: 'PMA memory', group: 'primary' },
   { href: '/dashboard', label: 'Dashboard', group: 'support' },
   { href: '/repos', label: 'Repos', group: 'support' },
   { href: '/tickets', label: 'Workspace tickets', group: 'workspace' },
-  { href: '/contextspace/local', label: 'Workspace memory', group: 'workspace' },
   { href: '/settings', label: 'Settings', group: 'system' }
 ];
 
@@ -25,9 +25,6 @@ export const navGroupLabels: Record<NavItem['group'], string> = {
 export function isActiveRoute(pathname: string, href: string): boolean {
   if (href === '/pma') {
     return pathname === '/' || pathname === '/pma' || pathname.startsWith('/pma/');
-  }
-  if (href === '/contextspace/local') {
-    return pathname === href || pathname.startsWith('/contextspace/');
   }
   return pathname === href || pathname.startsWith(`${href}/`);
 }

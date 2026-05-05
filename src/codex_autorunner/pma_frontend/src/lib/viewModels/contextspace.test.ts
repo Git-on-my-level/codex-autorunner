@@ -41,13 +41,13 @@ describe('contextspace view models', () => {
     expect(vm.openWorkspaceLabel).toBe('Open worktree variant');
   });
 
-  it('links unknown or local contextspace back to the workspace index', () => {
+  it('treats local contextspace as unsupported in the PMA hub', () => {
     const vm = buildContextspaceViewModel('local', [], [mockRepoSummary], [mockWorktreeSummary]);
 
-    expect(vm.workspaceKind).toBe('local');
-    expect(vm.title).toBe('Local workspace memory');
-    expect(vm.eyebrow).toBe('Local workspace memory');
-    expect(vm.description).toContain('not a global contextspace');
+    expect(vm.workspaceKind).toBe('unknown');
+    expect(vm.title).toBe('Workspace memory: local');
+    expect(vm.eyebrow).toBe('Unknown workspace contextspace');
+    expect(vm.description).toContain('scoped contextspace was not loaded');
     expect(vm.openWorkspaceHref).toBe('/repos');
     expect(vm.openWorkspaceLabel).toBe('Open workspace index');
   });

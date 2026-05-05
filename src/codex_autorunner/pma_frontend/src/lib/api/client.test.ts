@@ -185,6 +185,39 @@ describe('API client error handling', () => {
     }
   });
 
+  it('hydrates PMA docs with their document content', async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/hub/pma/docs') {
+        return Response.json({
+          docs: [
+            { name: 'AGENTS.md', exists: true, mtime: '2026-05-04T00:00:00Z' },
+            { name: 'active_context.md', exists: true }
+          ]
+        });
+      }
+      if (url === '/hub/pma/docs/AGENTS.md') {
+        return Response.json({ name: 'AGENTS.md', content: '# Guidance' });
+      }
+      return Response.json({ name: 'active_context.md', content: 'Current PMA work' });
+    }) as unknown as typeof fetch;
+    const client = new PmaApiClient(fetcher);
+
+    const result = await client.pma.listDocsWithContent();
+
+    expect(fetcher).toHaveBeenCalledWith('/hub/pma/docs', expect.any(Object));
+    expect(fetcher).toHaveBeenCalledWith('/hub/pma/docs/AGENTS.md', expect.any(Object));
+    expect(fetcher).toHaveBeenCalledWith('/hub/pma/docs/active_context.md', expect.any(Object));
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.map((doc) => [doc.name, doc.content])).toEqual([
+        ['AGENTS.md', '# Guidance'],
+        ['active_context.md', 'Current PMA work']
+      ]);
+      expect(result.data[0].updatedAt).toBe('2026-05-04T00:00:00Z');
+    }
+  });
+
   it('maps updateDocument responses like listDocuments (filename + pinned)', async () => {
     const fetcher = vi.fn(async () =>
       Response.json({

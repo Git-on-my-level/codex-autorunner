@@ -921,6 +921,7 @@ def create_hub_app(
         return _legacy_index_response()
 
     @app.get("/pma", include_in_schema=False)
+    @app.get("/pma-memory", include_in_schema=False)
     @app.get("/dashboard", include_in_schema=False)
     @app.get("/repos", include_in_schema=False)
     @app.get("/repos/{repo_id}", include_in_schema=False)

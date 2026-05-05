@@ -89,7 +89,6 @@
     <section class="page-panel ticket-list-panel">
       <div class="panel-heading-row">
         <h2>Cross-workspace ticket queue</h2>
-        <a href={href('/pma')}>Open PMA</a>
       </div>
       {#if visibleRows.length === 0}
         <div class="state-panel empty-state compact-empty">
@@ -278,7 +277,7 @@
           {:else}
             <div class="state-panel empty-state compact-empty">
               <strong>No linked PMA chat</strong>
-              <p>Open PMA from the ticket queue when this ticket needs agent discussion.</p>
+              <p>A ticket-linked conversation appears here after PMA starts discussing this ticket.</p>
             </div>
           {/if}
         </section>

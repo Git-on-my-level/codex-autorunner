@@ -453,7 +453,6 @@ function buildContextLinks(kind: RepoWorktreeKind, id: string, artifacts: RepoWo
   const preview = artifacts.find((artifact) => artifact.kind === 'preview_url' && artifact.href);
   const scopeLabel = kind === 'repo' ? 'repo' : 'worktree';
   return [
-    { label: 'Open PMA chat', href: '/pma', secondary: false },
     { label: `View ${scopeLabel} tickets`, href: scopedTicketHref(kind, id), secondary: false },
     { label: `View ${scopeLabel} memory`, href: `/contextspace/${encodeURIComponent(id)}`, secondary: false },
     ...(preview?.href ? [{ label: 'Open preview', href: preview.href, secondary: false }] : []),

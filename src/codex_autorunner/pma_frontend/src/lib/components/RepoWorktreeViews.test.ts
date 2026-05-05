@@ -41,11 +41,11 @@ describe('RepoWorktreeViews', () => {
     const { body } = render(RepoWorktreeViews, { props: { state: 'ready', mode: 'index', index } });
 
     expect(body).toContain('No repos registered');
-    expect(body).toContain('Open PMA and point it at a workspace before queueing repo-scoped tickets.');
+    expect(body).toContain('Register a workspace before queueing repo-scoped tickets.');
     expect(body).toContain('Open tickets');
   });
 
-  it('renders active-run detail with PMA, ticket, contextspace, preview, and secondary logs', () => {
+  it('renders active-run detail with chat, ticket, contextspace, preview, and secondary logs', () => {
     const detail = buildRepoWorktreeDetailViewModel(
       {
         repos: [mockRepoSummary],
@@ -72,6 +72,7 @@ describe('RepoWorktreeViews', () => {
     expect(body).toContain('Debug logs');
     expect(body).toContain('Surfaced artifacts');
     expect(body).toContain('Child worktrees');
+    expect(body).not.toContain('Open PMA chat');
   });
 
   it('renders a no-active-run state without primary terminal or analytics content', () => {

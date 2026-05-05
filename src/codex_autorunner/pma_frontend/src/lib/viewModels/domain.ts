@@ -431,7 +431,7 @@ export function mapContextspaceDocument(raw: JsonRecord): ContextspaceDocument {
     name,
     kind,
     content: stringValue(raw.content ?? raw.text, ''),
-    updatedAt: dateString(raw.updated_at ?? raw.modified_at),
+    updatedAt: dateString(raw.updated_at ?? raw.modified_at ?? raw.mtime),
     isPinned: Boolean(raw.is_pinned ?? raw.pinned),
     raw
   };

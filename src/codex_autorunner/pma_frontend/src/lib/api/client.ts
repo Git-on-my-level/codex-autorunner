@@ -248,7 +248,31 @@ export class PmaApiClient {
     listDocs: async (): Promise<ApiResult<ContextspaceDocument[]>> =>
       mapResult(await this.getJson<JsonRecord>('/hub/pma/docs'), (payload) =>
         asArray(payload.docs ?? payload.documents).map(mapContextspaceDocument)
-      )
+      ),
+    getDoc: async (name: string): Promise<ApiResult<ContextspaceDocument>> =>
+      mapResult(await this.getJson<JsonRecord>(`/hub/pma/docs/${encodeURIComponent(name)}`), (payload) =>
+        mapContextspaceDocument({
+          ...payload,
+          id: payload.name ?? name,
+          kind: payload.name ?? name,
+          is_pinned: true
+        })
+      ),
+    listDocsWithContent: async (): Promise<ApiResult<ContextspaceDocument[]>> => {
+      const docs = await this.pma.listDocs();
+      if (!docs.ok) return docs;
+      const hydrated = await Promise.all(docs.data.map((doc) => this.pma.getDoc(doc.name)));
+      const firstError = hydrated.find((result) => !result.ok);
+      if (firstError && !firstError.ok) return firstError;
+      return {
+        ok: true,
+        data: hydrated.map((result, index) => ({
+          ...(result.ok ? result.data : docs.data[index]),
+          ...docs.data[index],
+          content: result.ok ? result.data.content : docs.data[index].content
+        }))
+      };
+    }
   };
 
   hub = {
@@ -377,7 +401,7 @@ function isWorktreeItem(item: JsonRecord): boolean {
 
 function contextspaceApiPath(workspaceId?: string): string {
   const id = workspaceId?.trim();
-  if (!id || id === 'local') return '/api/contextspace';
+  if (!id) return '/repos/__missing_workspace__/api/contextspace';
   return `/repos/${encodeURIComponent(id)}/api/contextspace`;
 }
 
