@@ -23,7 +23,8 @@ UI_QA_VIEWPORT ?= 1400x900
 UI_QA_READY_TIMEOUT ?= 120
 PMA_UI_SCREEN_MODE ?= fixture
 PMA_UI_SCREEN_OUT ?= .codex-autorunner/render/pma_ui_samples/latest
-PMA_UI_SCREEN_VIEWPORT ?= 1440x1000
+PMA_UI_SCREEN_VIEWPORT ?=
+PMA_UI_SCREEN_VIEWPORTS ?= $(if $(PMA_UI_SCREEN_VIEWPORT),$(PMA_UI_SCREEN_VIEWPORT),1440x1000 390x844)
 PMA_UI_SCREEN_HOST ?= $(HOST)
 PMA_UI_SCREEN_PORT ?= 0
 PMA_UI_SCREEN_HUB_ROOT ?= $(CAR_ROOT)
@@ -252,13 +253,17 @@ ui-qa-screens: build
 		--viewport '$(UI_QA_VIEWPORT)'
 
 pma-ui-screens: pma-build
+	@set --; \
+	for viewport in $(PMA_UI_SCREEN_VIEWPORTS); do \
+		set -- "$$@" --viewport "$$viewport"; \
+	done; \
 	$(PYTHON) scripts/pma_ui_screens.py \
 		--mode '$(PMA_UI_SCREEN_MODE)' \
 		--host '$(PMA_UI_SCREEN_HOST)' \
 		--port '$(PMA_UI_SCREEN_PORT)' \
 		--hub-root '$(PMA_UI_SCREEN_HUB_ROOT)' \
 		--out-dir '$(PMA_UI_SCREEN_OUT)' \
-		--viewport '$(PMA_UI_SCREEN_VIEWPORT)' \
+		"$$@" \
 		$(PMA_UI_SCREEN_ARGS)
 
 launchd-hub:

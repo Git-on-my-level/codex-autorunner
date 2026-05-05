@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import socket
 import sys
@@ -102,9 +103,14 @@ ticket_id: "tkt_pma_live_hub_smoke_fixture"
 agent: "codex"
 done: false
 title: "PMA live hub smoke fixture"
+repo_id: "smoke-repo"
+worktree_id: "smoke-repo--review"
 ---
 ## Goal
 Fixture ticket used by `scripts/pma_live_hub_smoke.py`.
+
+## Evidence
+- Exercises repo cards, worktree detail pages, ticket detail pages, and PMA artifacts.
 """,
         encoding="utf-8",
     )
@@ -131,9 +137,25 @@ def seed_smoke_hub(evidence_dir: Path) -> Path:
     seed_repo_files(repo_root, git_required=False)
     write_fixture_ticket(repo_root)
 
+    worktree_id = "smoke-repo--review"
+    worktree_root = hub_root / "worktrees" / worktree_id
+    worktree_root.mkdir(parents=True)
+    (worktree_root / ".git").mkdir()
+    seed_repo_files(worktree_root, git_required=False)
+    write_fixture_ticket(worktree_root)
+
     hub_config = load_hub_config(hub_root)
     manifest = load_manifest(hub_config.manifest_path, hub_root)
     manifest.ensure_repo(hub_root, repo_root, repo_id=repo_id, display_name=repo_id)
+    manifest.ensure_repo(
+        hub_root,
+        worktree_root,
+        repo_id=worktree_id,
+        display_name="Review worktree",
+        kind="worktree",
+        worktree_of=repo_id,
+        branch="review/pma-screens",
+    )
     save_manifest(hub_config.manifest_path, manifest, hub_root)
 
     store = PmaThreadStore(hub_root)
@@ -141,6 +163,8 @@ def seed_smoke_hub(evidence_dir: Path) -> Path:
         "codex",
         repo_root.resolve(),
         repo_id=repo_id,
+        resource_kind="repo",
+        resource_id=repo_id,
         name="Ticket flow readability fixture",
         metadata={"ticket_id": "TICKET-350-smoke-fixture"},
     )
@@ -160,6 +184,38 @@ def seed_smoke_hub(evidence_dir: Path) -> Path:
         },
     )
     store.mark_turn_finished(str(turn["managed_turn_id"]), status="ok")
+    worktree_thread = store.create_thread(
+        "codex",
+        worktree_root.resolve(),
+        repo_id=repo_id,
+        resource_kind="worktree",
+        resource_id=worktree_id,
+        name="Review worktree fixture",
+        metadata={"ticket_id": "TICKET-350-smoke-fixture"},
+    )
+    worktree_turn = store.create_turn(
+        str(worktree_thread["managed_thread_id"]),
+        prompt="Capture degraded-state visual QA for the review worktree.",
+        metadata={
+            "ticket_id": "TICKET-350-smoke-fixture",
+            "artifacts": [
+                {
+                    "id": "fixture-error-summary",
+                    "kind": "error",
+                    "title": "Fixture degraded state",
+                    "summary": "Synthetic stale request marker for visual QA.",
+                }
+            ],
+        },
+    )
+    store.mark_turn_finished(str(worktree_turn["managed_turn_id"]), status="failed")
+    return hub_root
+
+
+def server_working_directory(hub_root: Path) -> Path:
+    fixture_repo = hub_root / "worktrees" / "smoke-repo"
+    if (fixture_repo / ".git").exists():
+        return fixture_repo
     return hub_root
 
 
@@ -312,6 +368,8 @@ def main() -> int:
     hub_root = seed_smoke_hub(evidence_dir)
     port = args.port or find_free_port(args.host)
     base_url = f"http://{args.host}:{port}"
+    original_cwd = Path.cwd()
+    os.chdir(server_working_directory(hub_root))
     server, thread = start_server(hub_root, args.host, port)
     evidence: dict[str, Any] = {
         "base_url": base_url,
@@ -355,6 +413,7 @@ def main() -> int:
         )
         server.should_exit = True
         thread.join(timeout=5)
+        os.chdir(original_cwd)
         print(f"PMA live hub smoke evidence: {evidence_dir}")
 
 

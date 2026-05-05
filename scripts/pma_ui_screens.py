@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import socket
 import sys
@@ -31,15 +32,19 @@ DEFAULT_OUT_DIR = (
 DEFAULT_OUTBOX_DIR = REPO_ROOT / ".codex-autorunner" / "filebox" / "outbox"
 
 DEFAULT_ROUTES: tuple[tuple[str, str], ...] = (
-    ("dashboard", "/dashboard"),
     ("pma-chat", "/pma"),
-    ("pma-memory", "/pma-memory"),
+    ("dashboard", "/dashboard"),
     ("repos", "/repos"),
+    ("repo-detail", "/repos/smoke-repo"),
+    ("worktree-detail", "/worktrees/smoke-repo--review"),
     ("tickets", "/tickets"),
+    ("ticket-detail", "/tickets/350"),
     ("worktrees", "/worktrees"),
     ("contextspace", "/contextspace/local"),
     ("settings", "/settings"),
 )
+
+DEFAULT_VIEWPORTS: tuple[tuple[int, int], ...] = ((1440, 1000), (390, 844))
 
 PRIMARY_LOADING_MARKERS = (
     "Opening PMA...",
@@ -118,8 +123,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--viewport",
-        default="1440x1000",
-        help="Viewport in WIDTHxHEIGHT format. Default: 1440x1000.",
+        action="append",
+        default=[],
+        help=(
+            "Viewport in WIDTHxHEIGHT format. Repeatable. Default: "
+            "1440x1000 and 390x844."
+        ),
     )
     parser.add_argument(
         "--wait-ms",
@@ -163,6 +172,16 @@ def parse_viewport(raw: str) -> tuple[int, int]:
     if width < 320 or height < 320:
         raise ValueError("viewport width and height must be at least 320")
     return width, height
+
+
+def parse_viewports(raw_viewports: list[str]) -> list[tuple[int, int]]:
+    if not raw_viewports:
+        return list(DEFAULT_VIEWPORTS)
+    return [parse_viewport(raw) for raw in raw_viewports]
+
+
+def viewport_label(viewport: tuple[int, int]) -> str:
+    return f"{viewport[0]}x{viewport[1]}"
 
 
 def parse_routes(raw_routes: list[str]) -> list[CaptureRoute]:
@@ -235,6 +254,13 @@ def seed_fixture_hub(out_dir: Path) -> Path:
     return seed_smoke_hub(out_dir)
 
 
+def server_working_directory(hub_root: Path) -> Path:
+    fixture_repo = hub_root / "worktrees" / "smoke-repo"
+    if (fixture_repo / ".git").exists():
+        return fixture_repo
+    return hub_root
+
+
 def normalize_base_path(raw: str) -> str:
     value = raw.strip()
     if not value or value == "/":
@@ -272,7 +298,8 @@ def capture_screenshots(
     console_errors: list[str] = []
     page_errors: list[str] = []
     failed_requests: list[str] = []
-    out_dir.mkdir(parents=True, exist_ok=True)
+    screenshots_dir = out_dir / viewport_label(viewport)
+    screenshots_dir.mkdir(parents=True, exist_ok=True)
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=not headed)
@@ -291,9 +318,12 @@ def capture_screenshots(
 
         for item in routes:
             url = route_url(base_url, base_path, item.path)
-            screenshot_path = out_dir / f"{item.name}.png"
+            screenshot_path = screenshots_dir / f"{item.name}.png"
             errors: list[str] = []
-            print(f"capturing {item.name}: {url}", flush=True)
+            print(
+                f"capturing {viewport_label(viewport)} {item.name}: {url}",
+                flush=True,
+            )
             page.goto(
                 url, wait_until="domcontentloaded", timeout=timeout_seconds * 1000
             )
@@ -320,6 +350,7 @@ def capture_screenshots(
                     "name": item.name,
                     "path": item.path,
                     "url": url,
+                    "viewport": {"width": viewport[0], "height": viewport[1]},
                     "screenshot": str(screenshot_path),
                     "size_bytes": screenshot_path.stat().st_size,
                     "errors": errors,
@@ -358,7 +389,7 @@ def copy_to_outbox(captures: list[dict[str, Any]], outbox_dir: Path) -> list[str
 def main() -> int:
     args = parse_args()
     try:
-        viewport = parse_viewport(args.viewport)
+        viewports = parse_viewports(args.viewport)
         routes = parse_routes(args.route)
     except ValueError as exc:
         print(f"pma-ui-screens: {exc}", file=sys.stderr)
@@ -373,6 +404,7 @@ def main() -> int:
     server = None
     thread = None
     hub_root: Path | None = None
+    original_cwd: Path | None = None
     if args.mode == "url":
         if not args.base_url:
             print(
@@ -394,6 +426,8 @@ def main() -> int:
                 return 2
         port = args.port or find_free_port(args.host)
         base_url = f"http://{args.host}:{port}"
+        original_cwd = Path.cwd()
+        os.chdir(server_working_directory(hub_root))
         server, thread = start_server(hub_root, args.host, port, base_path or "/")
 
     evidence: dict[str, Any] = {
@@ -403,36 +437,62 @@ def main() -> int:
         "base_path": base_path,
         "hub_root": str(hub_root) if hub_root is not None else None,
         "out_dir": str(out_dir),
-        "viewport": {"width": viewport[0], "height": viewport[1]},
+        "viewports": [
+            {"width": viewport[0], "height": viewport[1]} for viewport in viewports
+        ],
         "full_page": not args.viewport_only,
         "captures": [],
+        "diagnostics": {
+            "console_errors": [],
+            "page_errors": [],
+            "failed_requests": [],
+        },
         "outbox": [],
     }
     status = 0
     try:
         if args.mode != "url":
             wait_for_server(base_url, base_path, args.timeout_seconds)
-        captures = capture_screenshots(
-            base_url=base_url,
-            base_path=base_path,
-            out_dir=out_dir,
-            routes=routes,
-            viewport=viewport,
-            wait_ms=args.wait_ms,
-            timeout_seconds=args.timeout_seconds,
-            headed=args.headed,
-            full_page=not args.viewport_only,
-        )
+        captures: list[dict[str, Any]] = []
+        diagnostics = evidence["diagnostics"]
+        for viewport in viewports:
+            viewport_captures = capture_screenshots(
+                base_url=base_url,
+                base_path=base_path,
+                out_dir=out_dir,
+                routes=routes,
+                viewport=viewport,
+                wait_ms=args.wait_ms,
+                timeout_seconds=args.timeout_seconds,
+                headed=args.headed,
+                full_page=not args.viewport_only,
+            )
+            viewport_diagnostics = viewport_captures[-1] if viewport_captures else {}
+            diagnostics["console_errors"].extend(
+                viewport_diagnostics.get("console_errors", [])
+            )
+            diagnostics["page_errors"].extend(viewport_diagnostics.get("page_errors", []))
+            diagnostics["failed_requests"].extend(
+                viewport_diagnostics.get("failed_requests", [])
+            )
+            captures.extend(
+                capture
+                for capture in viewport_captures
+                if capture.get("name") != "__browser_diagnostics__"
+            )
         evidence["captures"] = captures
         failures = [
             f"{capture['name']}: {'; '.join(capture['errors'])}"
             for capture in captures
             if capture.get("errors")
         ]
-        diagnostics = captures[-1] if captures else {}
         failures.extend(
             f"browser page error: {error}"
             for error in diagnostics.get("page_errors", [])
+        )
+        failures.extend(
+            f"browser failed request: {url}"
+            for url in diagnostics.get("failed_requests", [])
         )
         if failures:
             evidence["status"] = "failed"
@@ -452,6 +512,8 @@ def main() -> int:
             server.should_exit = True
         if thread is not None:
             thread.join(timeout=5)
+        if original_cwd is not None:
+            os.chdir(original_cwd)
 
     print(f"PMA UI screenshots: {out_dir}")
     if evidence["outbox"]:

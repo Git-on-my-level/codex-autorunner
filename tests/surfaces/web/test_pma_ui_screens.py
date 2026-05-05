@@ -28,7 +28,9 @@ def test_default_routes_cover_primary_pma_pages() -> None:
     mod = _load_module()
     routes = mod.parse_routes([])
     assert [(route.name, route.path) for route in routes] == list(mod.DEFAULT_ROUTES)
-    assert ("pma-memory", "/pma-memory") in mod.DEFAULT_ROUTES
+    assert ("repo-detail", "/repos/smoke-repo") in mod.DEFAULT_ROUTES
+    assert ("worktree-detail", "/worktrees/smoke-repo--review") in mod.DEFAULT_ROUTES
+    assert ("ticket-detail", "/tickets/350") in mod.DEFAULT_ROUTES
     assert ("contextspace", "/contextspace/local") in mod.DEFAULT_ROUTES
 
 
@@ -54,6 +56,8 @@ def test_viewport_parsing() -> None:
     mod = _load_module()
     assert mod.parse_viewport("1440x1000") == (1440, 1000)
     assert mod.parse_viewport("390X844") == (390, 844)
+    assert mod.parse_viewports([]) == [(1440, 1000), (390, 844)]
+    assert mod.parse_viewports(["1280x720"]) == [(1280, 720)]
 
 
 @pytest.mark.parametrize("raw", ["1440", "widextall", "100x100"])
