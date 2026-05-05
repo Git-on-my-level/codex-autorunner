@@ -52,6 +52,18 @@ describe('contextspace view models', () => {
     expect(vm.openWorkspaceLabel).toBe('Open workspace index');
   });
 
+  it('marks unknown workspace ids without pretending they are unscoped contextspace', () => {
+    const vm = buildContextspaceViewModel('missing-workspace', [], [mockRepoSummary], [mockWorktreeSummary]);
+
+    expect(vm.workspaceKind).toBe('unknown');
+    expect(vm.isUnknown).toBe(true);
+    expect(vm.eyebrow).toBe('Unknown workspace contextspace');
+    expect(vm.description).toContain('scoped contextspace was not loaded');
+    expect(vm.openWorkspaceHref).toBe('/repos');
+    expect(vm.openWorkspaceLabel).toBe('Open workspace index');
+    expect(vm.presentCount).toBe(0);
+  });
+
   it('renders readable safe markdown html', () => {
     const html = renderMarkdownToHtml('# Title\n\n- **Decision**\n\n`code` <script>');
 

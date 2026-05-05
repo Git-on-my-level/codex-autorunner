@@ -72,4 +72,16 @@ describe('ContextspaceView', () => {
     expect(body).toContain('Open worktree variant');
     expect(body).toContain('Ask PMA to refresh this worktree memory');
   });
+
+  it('renders unknown workspace contextspace without dead workspace links', () => {
+    const vm = buildContextspaceViewModel('missing-workspace', [], [mockRepoSummary], [mockWorktreeSummary]);
+    const { body } = render(ContextspaceView, { props: { state: 'ready', vm } });
+
+    expect(body).toContain('Unknown workspace contextspace');
+    expect(body).toContain('scoped contextspace was not loaded');
+    expect(body).toContain('href="/repos"');
+    expect(body).toContain('Open workspace index');
+    expect(body).not.toContain('href="/repos/missing-workspace"');
+    expect(body).not.toContain('href="/worktrees/missing-workspace"');
+  });
 });

@@ -20,11 +20,22 @@
   async function loadContextspace(): Promise<void> {
     loading = true;
     error = null;
-    const [docs, repos, worktrees] = await Promise.all([
-      pmaApi.contextspace.listDocuments(workspaceId),
+    const [repos, worktrees] = await Promise.all([
       pmaApi.hub.listRepos(),
       pmaApi.hub.listWorktrees()
     ]);
+    const repoList = repos.ok ? repos.data : [];
+    const worktreeList = worktrees.ok ? worktrees.data : [];
+    const isKnownWorkspace =
+      workspaceId === 'local' ||
+      repoList.some((repo) => repo.id === workspaceId) ||
+      worktreeList.some((worktree) => worktree.id === workspaceId);
+    if (!isKnownWorkspace) {
+      vm = buildContextspaceViewModel(workspaceId, [], repoList, worktreeList);
+      loading = false;
+      return;
+    }
+    const docs = await pmaApi.contextspace.listDocuments(workspaceId);
     if (!docs.ok) {
       error = docs.error;
       loading = false;
@@ -33,8 +44,8 @@
     vm = buildContextspaceViewModel(
       workspaceId,
       docs.data,
-      repos.ok ? repos.data : [],
-      worktrees.ok ? worktrees.data : []
+      repoList,
+      worktreeList
     );
     loading = false;
   }

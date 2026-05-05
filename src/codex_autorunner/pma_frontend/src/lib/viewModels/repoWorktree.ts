@@ -90,6 +90,7 @@ export type RepoWorktreeIndexViewModel = {
 export type RepoWorktreeDetailViewModel = {
   kind: RepoWorktreeKind;
   id: string;
+  isMissing: boolean;
   title: string;
   eyebrow: string;
   branch: string | null;
@@ -107,6 +108,8 @@ export type RepoWorktreeDetailViewModel = {
   baseRepoLabel: string | null;
   baseRepoHref: string | null;
   hasActiveRun: boolean;
+  missingIndexHref: string;
+  missingIndexLabel: string;
 };
 
 export type RepoWorktreeSourceData = {
@@ -156,6 +159,7 @@ export function buildRepoWorktreeDetailViewModel(
     kind === 'repo'
       ? source.repos.find((repo) => repo.id === id) ?? null
       : source.worktrees.find((worktree) => worktree.id === id) ?? null;
+  if (!resource) return missingDetailViewModel(kind, id);
   const title = resource?.name ?? id;
   const branch = kind === 'repo' ? (resource as RepoSummary | null)?.defaultBranch ?? null : (resource as WorktreeSummary | null)?.branch ?? null;
   const path = resource?.path ?? null;
@@ -186,6 +190,7 @@ export function buildRepoWorktreeDetailViewModel(
   return {
     kind,
     id,
+    isMissing: false,
     title,
     eyebrow: kind === 'repo' ? 'Repo current run' : 'Repo worktree current run',
     branch,
@@ -202,7 +207,36 @@ export function buildRepoWorktreeDetailViewModel(
     childWorktrees: childWorktreeSummaries.map((worktree) => worktreeToChildRow(worktree, source)),
     baseRepoLabel: baseRepo?.name ?? (kind === 'worktree' ? (resource as WorktreeSummary | null)?.repoId ?? null : null),
     baseRepoHref: kind === 'worktree' && (resource as WorktreeSummary | null)?.repoId ? `/repos/${encodeURIComponent((resource as WorktreeSummary).repoId as string)}` : null,
-    hasActiveRun: activeRunCards.length > 0
+    hasActiveRun: activeRunCards.length > 0,
+    missingIndexHref: kind === 'repo' ? '/repos' : '/worktrees',
+    missingIndexLabel: kind === 'repo' ? 'Back to repos' : 'Back to worktrees'
+  };
+}
+
+function missingDetailViewModel(kind: RepoWorktreeKind, id: string): RepoWorktreeDetailViewModel {
+  return {
+    kind,
+    id,
+    isMissing: true,
+    title: kind === 'repo' ? 'Repo not found' : 'Worktree not found',
+    eyebrow: kind === 'repo' ? 'Missing repo' : 'Missing worktree',
+    branch: null,
+    path: null,
+    stateLabel: 'Missing',
+    currentRuns: [],
+    activity: [],
+    currentTickets: [],
+    nextTickets: [],
+    artifacts: [],
+    links: [{ label: kind === 'repo' ? 'Back to repos' : 'Back to worktrees', href: kind === 'repo' ? '/repos' : '/worktrees', secondary: false }],
+    ticketIndexHref: '/tickets',
+    ticketIndexLabel: 'Cross-workspace tickets',
+    childWorktrees: [],
+    baseRepoLabel: null,
+    baseRepoHref: null,
+    hasActiveRun: false,
+    missingIndexHref: kind === 'repo' ? '/repos' : '/worktrees',
+    missingIndexLabel: kind === 'repo' ? 'Back to repos' : 'Back to worktrees'
   };
 }
 

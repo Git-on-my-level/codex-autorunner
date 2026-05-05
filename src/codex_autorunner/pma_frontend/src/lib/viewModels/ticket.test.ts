@@ -4,7 +4,9 @@ import {
   buildTicketDetailViewModel,
   buildTicketListViewModel,
   filterTicketRows,
-  parseTicketContract
+  parseTicketContract,
+  resolveTicketRouteId,
+  ticketDetailFromSummary
 } from './ticket';
 
 describe('ticket view models', () => {
@@ -164,5 +166,25 @@ Users can inspect tickets.
 
     expect(detail.runHref).toBe('/api/flows/run-nested/status');
     expect(detail.timeline.map((item) => item.id)).toContain('run-run-nested');
+  });
+
+  it('resolves ticket detail route ids emitted by the ticket list', () => {
+    const nonIndexed = {
+      ...mockTicketSummary,
+      id: 'tkt_non_indexed',
+      number: null,
+      path: '.codex-autorunner/tickets/manual-ticket.md',
+      raw: { body: 'Manual ticket body' }
+    };
+    const tickets = [mockTicketSummary, nonIndexed];
+
+    expect(resolveTicketRouteId(tickets, '110')?.id).toBe(mockTicketSummary.id);
+    expect(resolveTicketRouteId(tickets, 'tkt_non_indexed')?.id).toBe('tkt_non_indexed');
+    expect(resolveTicketRouteId(tickets, encodeURIComponent('.codex-autorunner/tickets/manual-ticket.md'))?.id).toBe('tkt_non_indexed');
+    expect(ticketDetailFromSummary(nonIndexed)).toMatchObject({
+      id: 'tkt_non_indexed',
+      number: null,
+      body: 'Manual ticket body'
+    });
   });
 });

@@ -103,6 +103,26 @@
   </section>
 {:else if mode === 'detail' && detail}
   <section class="page-stack repo-worktree-page">
+    {#if detail.isMissing}
+      <div class="section-heading detail-heading">
+        <div>
+          <p class="eyebrow">{detail.eyebrow}</p>
+          <h1>{detail.title}</h1>
+          <p>The route id <code>{detail.id}</code> does not match a known {detail.kind} in the current hub inventory.</p>
+        </div>
+        <div class="detail-actions">
+          <a href={href(detail.missingIndexHref)}>{detail.missingIndexLabel}</a>
+        </div>
+      </div>
+
+      <section class="page-panel identity-panel">
+        <h2>Unknown workspace</h2>
+        <div class="state-panel empty-state compact-empty">
+          <strong>No matching {detail.kind}</strong>
+          <p>Refresh the workspace inventory or choose a known {detail.kind} from the index before opening scoped tickets, runs, or contextspace.</p>
+        </div>
+      </section>
+    {:else}
     <div class="section-heading detail-heading">
       <div>
         <p class="eyebrow">{detail.eyebrow}</p>
@@ -248,6 +268,7 @@
         <a href={href(link.href)}>{link.label}</a>
       {/each}
     </div>
+    {/if}
   </section>
 {/if}
 

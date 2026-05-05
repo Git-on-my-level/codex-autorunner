@@ -218,4 +218,53 @@ describe('repo/worktree view models', () => {
 
     expect(vm.nextTickets.map((ticket) => ticket.title)).toEqual(['Repo-owned ticket']);
   });
+
+  it('renders unknown repo detail as missing instead of idle workspace state', () => {
+    const vm = buildRepoWorktreeDetailViewModel(
+      {
+        repos: [mockRepoSummary],
+        worktrees: [mockWorktreeSummary],
+        runs: [{ ...mockRunProgress, raw: { repo_id: 'missing-repo', current_ticket_id: 'TICKET-999' } }],
+        chats: [{ ...mockChatSummary, repoId: 'missing-repo' }],
+        tickets: [{ ...mockTicketSummary, repoId: 'missing-repo', worktreeId: null }],
+        artifacts: [mockArtifact]
+      },
+      'repo',
+      'missing-repo'
+    );
+
+    expect(vm).toMatchObject({
+      isMissing: true,
+      title: 'Repo not found',
+      stateLabel: 'Missing',
+      missingIndexHref: '/repos'
+    });
+    expect(vm.currentRuns).toHaveLength(0);
+    expect(vm.nextTickets).toHaveLength(0);
+    expect(vm.links).toEqual([{ label: 'Back to repos', href: '/repos', secondary: false }]);
+  });
+
+  it('renders unknown worktree detail as missing instead of linking to scoped panels', () => {
+    const vm = buildRepoWorktreeDetailViewModel(
+      {
+        repos: [mockRepoSummary],
+        worktrees: [mockWorktreeSummary],
+        runs: [],
+        chats: [],
+        tickets: [],
+        artifacts: []
+      },
+      'worktree',
+      'missing-worktree'
+    );
+
+    expect(vm).toMatchObject({
+      isMissing: true,
+      title: 'Worktree not found',
+      stateLabel: 'Missing',
+      missingIndexHref: '/worktrees',
+      ticketIndexHref: '/tickets'
+    });
+    expect(vm.baseRepoHref).toBeNull();
+  });
 });

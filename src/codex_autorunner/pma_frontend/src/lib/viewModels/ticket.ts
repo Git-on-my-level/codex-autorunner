@@ -170,6 +170,26 @@ export function buildTicketDetailViewModel(
   };
 }
 
+export function resolveTicketRouteId(tickets: TicketSummary[], routeId: string): TicketSummary | null {
+  const decoded = decodeURIComponent(routeId);
+  const normalized = decoded.toLowerCase();
+  return (
+    tickets.find((ticket) => ticket.number !== null && String(ticket.number) === decoded) ??
+    tickets.find((ticket) => ticket.id === decoded || ticket.path === decoded) ??
+    tickets.find((ticket) => ticket.path?.toLowerCase().endsWith(`ticket-${normalized.padStart(3, '0')}.md`)) ??
+    null
+  );
+}
+
+export function ticketDetailFromSummary(ticket: TicketSummary): TicketDetail {
+  return {
+    ...ticket,
+    body: bodyFromTicketSummary(ticket),
+    progress: null,
+    artifacts: []
+  };
+}
+
 export function rowRelativeTime(row: { updatedAt?: string | null; createdAt?: string | null }, now = new Date()): string {
   return formatRelativeTime(row.updatedAt ?? row.createdAt ?? null, now);
 }
@@ -371,6 +391,11 @@ function syntheticChat(ticket: TicketDetail, run: PmaRunProgress): PmaChatSummar
 
 function routeIdForTicket(ticket: TicketSummary): string {
   return ticket.number ? String(ticket.number) : ticket.id;
+}
+
+function bodyFromTicketSummary(ticket: TicketSummary): string {
+  const rawBody = ticket.raw.body ?? ticket.raw.content ?? ticket.raw.markdown;
+  return typeof rawBody === 'string' ? rawBody : '';
 }
 
 function ticketNumberLabel(ticket: TicketSummary): string {

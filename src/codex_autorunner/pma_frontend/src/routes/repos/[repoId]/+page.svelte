@@ -49,6 +49,11 @@
       artifacts: [] as SurfaceArtifact[]
     };
     const baseDetail = buildRepoWorktreeDetailViewModel(baseSource, 'repo', repoId);
+    if (baseDetail.isMissing) {
+      detail = baseDetail;
+      loading = false;
+      return;
+    }
     const artifactResults = await Promise.all(
       baseDetail.currentRuns.filter((run) => run.logsHref).map((run) => pmaApi.ticketFlow.listArtifacts(run.id))
     );

@@ -97,4 +97,27 @@ describe('RepoWorktreeViews', () => {
     expect(body).not.toContain('Terminal');
     expect(body).not.toContain('Analytics');
   });
+
+  it('renders unknown detail as an explicit missing-resource state', () => {
+    const detail = buildRepoWorktreeDetailViewModel(
+      {
+        repos: [mockRepoSummary],
+        worktrees: [mockWorktreeSummary],
+        runs: [],
+        chats: [],
+        tickets: [],
+        artifacts: []
+      },
+      'repo',
+      'missing-repo'
+    );
+    const { body } = render(RepoWorktreeViews, { props: { state: 'ready', mode: 'detail', detail } });
+
+    expect(body).toContain('Repo not found');
+    expect(body).toContain('does not match a known repo');
+    expect(body).toContain('href="/repos"');
+    expect(body).toContain('Back to repos');
+    expect(body).not.toContain('No active run');
+    expect(body).not.toContain('href="/contextspace/missing-repo"');
+  });
 });
