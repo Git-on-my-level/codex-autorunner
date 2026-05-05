@@ -20,6 +20,7 @@
     "pma:typecheck": "pnpm --filter @codex-autorunner/pma-hub typecheck",
     "pma:lint": "pnpm --filter @codex-autorunner/pma-hub lint",
     "pma:test": "pnpm --filter @codex-autorunner/pma-hub test",
+    "pma:smoke:hub": ".venv/bin/python scripts/pma_live_hub_smoke.py",
     "test:dom": "node scripts/check_dom_structure.mjs",
     "test:markdown": "node --test tests/js/*.test.js"
   },
