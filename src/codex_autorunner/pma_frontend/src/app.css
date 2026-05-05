@@ -1645,6 +1645,13 @@ textarea:hover {
   background: #fcfdff;
 }
 
+.degraded-state {
+  border-style: solid;
+  border-color: #d9c99a;
+  background: #fffaf0;
+  color: #6b521d;
+}
+
 .compact-empty {
   gap: var(--space-1);
   padding: var(--space-3);

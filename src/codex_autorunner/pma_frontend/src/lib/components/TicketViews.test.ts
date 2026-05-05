@@ -24,7 +24,7 @@ describe('TicketViews', () => {
     expect(body).toContain('Implement typed UI API client and view models');
     expect(body).toContain('PMA chat');
     expect(body).toContain('running');
-    expect(body).not.toContain('---');
+    expect(body).not.toContain('title:');
   });
 
   it('renders sparse ticket-list filter empty states', () => {

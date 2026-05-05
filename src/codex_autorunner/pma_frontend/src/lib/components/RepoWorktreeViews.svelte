@@ -6,20 +6,29 @@
   import { rowRelativeTime } from '$lib/viewModels/repoWorktree';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import { statusLabel } from '$lib/viewModels/pmaChat';
+  import type { PartialPageIssue } from '$lib/api/client';
 
   let {
     state,
     mode,
     index = null,
     detail = null,
-    errorMessage = null
+    errorMessage = null,
+    sectionIssues = [],
+    onRetry = undefined
   }: {
     state: 'loading' | 'error' | 'ready';
     mode: 'index' | 'detail';
     index?: RepoWorktreeIndexViewModel | null;
     detail?: RepoWorktreeDetailViewModel | null;
     errorMessage?: string | null;
+    sectionIssues?: PartialPageIssue[];
+    onRetry?: (() => void) | undefined;
   } = $props();
+
+  const currentRunIssues = $derived(sectionIssues.filter((issue) => issue.id === 'current_run'));
+  const ticketIssues = $derived(sectionIssues.filter((issue) => issue.id === 'tickets'));
+  const artifactIssues = $derived(sectionIssues.filter((issue) => issue.id === 'artifacts'));
 </script>
 
 {#if state === 'loading'}
@@ -56,6 +65,8 @@
       <div class="panel-heading-row">
         <h2>Current work</h2>
       </div>
+      {@render degradedIssues(currentRunIssues)}
+      {@render degradedIssues(ticketIssues)}
       {#if index.rows.length === 0}
         <div class="state-panel empty-state compact-empty">
           <strong>No repos registered</strong>
@@ -158,6 +169,7 @@
           <h2>Current run</h2>
           <a href={href(detail.ticketIndexHref)}>{detail.ticketIndexLabel}</a>
         </div>
+        {@render degradedIssues(currentRunIssues)}
         {#if detail.currentRuns.length === 0 || !detail.hasActiveRun}
           <div class="state-panel empty-state compact-empty">
             <strong>No active run</strong>
@@ -226,6 +238,7 @@
 
       <section class="page-panel execution-panel">
         <h2>Workspace tickets</h2>
+        {@render degradedIssues(ticketIssues)}
         {#if detail.currentTickets.length === 0}
           <div class="state-panel empty-state compact-empty">
             <strong>No current ticket</strong>
@@ -242,6 +255,7 @@
 
       <section class="page-panel execution-panel">
         <h2>Next workspace tickets</h2>
+        {@render degradedIssues(ticketIssues)}
         {#if detail.nextTickets.length === 0}
           <div class="state-panel empty-state compact-empty">
             <strong>No queued tickets</strong>
@@ -258,6 +272,7 @@
 
       <section class="page-panel execution-panel wide">
         <h2>Surfaced artifacts</h2>
+        {@render degradedIssues(artifactIssues)}
         {@render compactList(detail.artifacts, 'No surfaced artifacts are available yet.')}
       </section>
     </div>
@@ -290,4 +305,14 @@
       {/each}
     </div>
   {/if}
+{/snippet}
+
+{#snippet degradedIssues(issues: PartialPageIssue[])}
+  {#each issues as issue}
+    <div class="state-panel degraded-state">
+      <strong>{issue.title}</strong>
+      <p>{issue.message}</p>
+      {#if onRetry}<button type="button" onclick={() => onRetry?.()}>{issue.retryLabel}</button>{/if}
+    </div>
+  {/each}
 {/snippet}

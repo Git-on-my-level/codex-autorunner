@@ -47,6 +47,13 @@ export type Loadable<T> =
   | { state: 'ready'; data: T; error?: undefined }
   | { state: 'error'; data?: T; error: ApiError };
 
+export type PartialPageIssue = {
+  id: string;
+  title: string;
+  message: string;
+  retryLabel: string;
+};
+
 export type JsonRecord = Record<string, unknown>;
 
 export type RequestOptions = Omit<RequestInit, 'body'> & {
@@ -418,6 +425,24 @@ export function mapResult<T, U>(result: ApiResult<T>, mapper: (data: T) => U): A
       }
     };
   }
+}
+
+export function dataOr<T>(result: ApiResult<T>, fallback: T): T {
+  return result.ok ? result.data : fallback;
+}
+
+export function partialPageIssue(
+  id: string,
+  title: string,
+  error: ApiError,
+  retryLabel = 'Retry'
+): PartialPageIssue {
+  return {
+    id,
+    title,
+    message: error.message,
+    retryLabel
+  };
 }
 
 function asRecord(value: unknown): JsonRecord {

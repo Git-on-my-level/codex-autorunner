@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { PmaApiClient, normalizeApiError } from './client';
+import { PmaApiClient, dataOr, normalizeApiError, partialPageIssue } from './client';
 
 describe('API client error handling', () => {
   it('normalizes HTTP JSON errors into displayable errors', async () => {
@@ -273,6 +273,22 @@ describe('API client error handling', () => {
         content: '# Updated guidance'
       });
     }
+  });
+
+  it('keeps partial page loads renderable when a secondary API result fails', () => {
+    const failedRuns = {
+      ok: false,
+      error: normalizeApiError(new Error('runs endpoint offline'))
+    } as const;
+    const fallbackRuns: unknown[] = [];
+
+    expect(dataOr(failedRuns, fallbackRuns)).toBe(fallbackRuns);
+    expect(partialPageIssue('active_runs', 'Active runs unavailable', failedRuns.error)).toEqual({
+      id: 'active_runs',
+      title: 'Active runs unavailable',
+      message: 'runs endpoint offline',
+      retryLabel: 'Retry'
+    });
   });
 
   it('maps updateDocument responses like listDocuments (filename + pinned)', async () => {

@@ -69,6 +69,36 @@ describe('DashboardView', () => {
     expect(body).toContain('Preview ready');
   });
 
+  it('renders a degraded secondary section with a retry affordance', () => {
+    const dashboard = buildDashboardViewModel({
+      summary: null,
+      runs: [mockRunProgress],
+      chats: [],
+      approvals: [],
+      tickets: []
+    });
+    const { body } = render(DashboardView, {
+      props: {
+        state: 'ready',
+        dashboard,
+        sectionIssues: [
+          {
+            id: 'waiting_for_me',
+            title: 'Approvals unavailable',
+            message: 'automation endpoint returned 503',
+            retryLabel: 'Retry'
+          }
+        ],
+        onRetry: () => {}
+      }
+    });
+
+    expect(body).toContain('Approvals unavailable');
+    expect(body).toContain('automation endpoint returned 503');
+    expect(body).toContain('<button type="button">Retry</button>');
+    expect(body).toContain('Active runs');
+  });
+
   it('renders internal links under the injected hub base path', () => {
     globalThis.__CAR_BASE_PATH__ = '/car';
     const dashboard = buildDashboardViewModel({

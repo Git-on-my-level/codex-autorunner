@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import TicketViews from '$lib/components/TicketViews.svelte';
-  import { pmaApi, type ApiError } from '$lib/api/client';
+  import { dataOr, partialPageIssue, pmaApi, type ApiError, type PartialPageIssue } from '$lib/api/client';
   import {
     buildTicketListViewModel,
     type TicketFilter,
@@ -13,6 +13,7 @@
   let selectedWorkspaceFilter = $state('all');
   let loading = $state(true);
   let error = $state<ApiError | null>(null);
+  let sectionIssues = $state<PartialPageIssue[]>([]);
 
   onMount(() => {
     void loadTickets();
@@ -21,21 +22,25 @@
   async function loadTickets(): Promise<void> {
     loading = true;
     error = null;
+    sectionIssues = [];
     const [tickets, runs, chats] = await Promise.all([
       pmaApi.ticketFlow.listTickets(),
       pmaApi.ticketFlow.listRuns(),
       pmaApi.pma.listChats()
     ]);
-    const firstError = [tickets, runs, chats].find((result) => !result.ok);
-    if (firstError && !firstError.ok) {
-      error = firstError.error;
+    if (!tickets.ok) {
+      error = tickets.error;
       loading = false;
       return;
     }
+    sectionIssues = [
+      !runs.ok ? partialPageIssue('timeline', 'Run state unavailable', runs.error) : null,
+      !chats.ok ? partialPageIssue('linked_chat', 'PMA chats unavailable', chats.error) : null
+    ].filter((issue): issue is PartialPageIssue => Boolean(issue));
     list = buildTicketListViewModel({
-      tickets: tickets.ok ? tickets.data : [],
-      runs: runs.ok ? runs.data : [],
-      chats: chats.ok ? chats.data : [],
+      tickets: tickets.data,
+      runs: dataOr(runs, []),
+      chats: dataOr(chats, []),
       artifacts: []
     });
     selectedFilter = list.defaultFilter;
@@ -60,6 +65,8 @@
   {list}
   {selectedFilter}
   {selectedWorkspaceFilter}
+  {sectionIssues}
+  onRetry={loadTickets}
   onFilter={(filter) => (selectedFilter = filter)}
   errorMessage={error?.message ?? null}
 />

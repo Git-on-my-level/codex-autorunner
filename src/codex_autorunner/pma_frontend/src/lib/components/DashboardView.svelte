@@ -3,16 +3,26 @@
   import { dashboardRowMeta } from '$lib/viewModels/dashboard';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import { statusLabel } from '$lib/viewModels/pmaChat';
+  import type { PartialPageIssue } from '$lib/api/client';
 
   let {
     state,
     dashboard = null,
-    errorMessage = null
+    errorMessage = null,
+    sectionIssues = [],
+    onRetry = undefined
   }: {
     state: 'loading' | 'error' | 'ready';
     dashboard?: DashboardViewModel | null;
     errorMessage?: string | null;
+    sectionIssues?: PartialPageIssue[];
+    onRetry?: (() => void) | undefined;
   } = $props();
+
+  const activeRunIssues = $derived(sectionIssues.filter((issue) => issue.id === 'active_runs'));
+  const waitingIssues = $derived(sectionIssues.filter((issue) => issue.id === 'waiting_for_me'));
+  const failedIssues = $derived(sectionIssues.filter((issue) => issue.id === 'tickets'));
+  const activityIssues = $derived(sectionIssues.filter((issue) => issue.id === 'recent_activity'));
 </script>
 
 <section class="page-stack dashboard-page">
@@ -50,6 +60,7 @@
         <div class="panel-heading-row">
           <h2>Active runs</h2>
         </div>
+        {@render degradedIssues(activeRunIssues)}
         {#if dashboard.activeRuns.length === 0}
           <div class="state-panel empty-state compact-empty">
             <strong>No active runs</strong>
@@ -85,6 +96,7 @@
           <h2>Waiting for me</h2>
           <a href={href('/settings')}>Approvals</a>
         </div>
+        {@render degradedIssues(waitingIssues)}
         {@render attentionList(dashboard.waitingForMe, 'No approvals or blockers are waiting.')}
       </section>
 
@@ -93,6 +105,7 @@
           <h2>Failed/blocked</h2>
           <a href={href('/tickets')}>Workspace tickets</a>
         </div>
+        {@render degradedIssues(failedIssues)}
         {@render attentionList(dashboard.failedOrBlocked, 'No failed or blocked work is visible.')}
       </section>
 
@@ -100,6 +113,7 @@
         <div class="panel-heading-row">
           <h2>Recent activity</h2>
         </div>
+        {@render degradedIssues(activityIssues)}
         {#if dashboard.recentActivity.length === 0}
           <div class="state-panel empty-state compact-empty">
             <strong>No recent activity</strong>
@@ -141,4 +155,14 @@
       {/each}
     </div>
   {/if}
+{/snippet}
+
+{#snippet degradedIssues(issues: PartialPageIssue[])}
+  {#each issues as issue}
+    <div class="state-panel degraded-state">
+      <strong>{issue.title}</strong>
+      <p>{issue.message}</p>
+      {#if onRetry}<button type="button" onclick={() => onRetry?.()}>{issue.retryLabel}</button>{/if}
+    </div>
+  {/each}
 {/snippet}

@@ -7,6 +7,7 @@
   import { filterTicketRows, rowRelativeTime } from '$lib/viewModels/ticket';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import { statusLabel } from '$lib/viewModels/pmaChat';
+  import type { PartialPageIssue } from '$lib/api/client';
 
   let {
     state,
@@ -17,7 +18,9 @@
     selectedWorkspaceFilter = 'all',
     errorMessage = null,
     actionStatus = null,
+    sectionIssues = [],
     onFilter = undefined,
+    onRetry = undefined,
     onCommand = undefined
   }: {
     state: 'loading' | 'error' | 'ready';
@@ -28,11 +31,17 @@
     selectedWorkspaceFilter?: string;
     errorMessage?: string | null;
     actionStatus?: string | null;
+    sectionIssues?: PartialPageIssue[];
     onFilter?: ((filter: TicketFilter) => void) | undefined;
+    onRetry?: (() => void) | undefined;
     onCommand?: ((command: 'resume' | 'bootstrap') => void) | undefined;
   } = $props();
 
   const visibleRows = $derived(list ? filterTicketRows(list.rows, selectedFilter, selectedWorkspaceFilter) : []);
+  const contractIssues = $derived(sectionIssues.filter((issue) => issue.id === 'ticket_contract'));
+  const timelineIssues = $derived(sectionIssues.filter((issue) => issue.id === 'timeline'));
+  const artifactIssues = $derived(sectionIssues.filter((issue) => issue.id === 'artifacts'));
+  const chatIssues = $derived(sectionIssues.filter((issue) => issue.id === 'linked_chat'));
 </script>
 
 {#if state === 'loading'}
@@ -90,6 +99,8 @@
       <div class="panel-heading-row">
         <h2>Cross-workspace ticket queue</h2>
       </div>
+      {@render degradedIssues(timelineIssues)}
+      {@render degradedIssues(chatIssues)}
       {#if visibleRows.length === 0}
         <div class="state-panel empty-state compact-empty">
           <strong>No tickets in this view</strong>
@@ -173,6 +184,7 @@
           <h2>Ticket contract</h2>
           <span class="status-pill {detail.status}">{statusLabel(detail.status)}</span>
         </div>
+        {@render degradedIssues(contractIssues)}
         <dl class="compact-definition ticket-definition">
           <div><dt>Number</dt><dd>{detail.numberLabel}</dd></div>
           <div><dt>Agent</dt><dd>{detail.agentLabel}</dd></div>
@@ -222,6 +234,7 @@
 
         <section class="page-panel execution-panel">
           <h2>Execution timeline</h2>
+          {@render degradedIssues(timelineIssues)}
           {#if detail.timeline.length === 0}
             <div class="state-panel empty-state compact-empty">
               <strong>No run timeline</strong>
@@ -244,6 +257,7 @@
 
         <section class="page-panel execution-panel">
           <h2>Surfaced artifacts</h2>
+          {@render degradedIssues(artifactIssues)}
           {#if detail.artifacts.length === 0}
             <div class="state-panel empty-state compact-empty">
               <strong>No artifacts surfaced</strong>
@@ -266,6 +280,7 @@
 
         <section class="page-panel execution-panel">
           <h2>Linked chat</h2>
+          {@render degradedIssues(chatIssues)}
           {#if detail.chatHref}
             <a class="dashboard-row compact-row" href={href(detail.chatHref)}>
               <span>
@@ -291,3 +306,13 @@
     </div>
   </section>
 {/if}
+
+{#snippet degradedIssues(issues: PartialPageIssue[])}
+  {#each issues as issue}
+    <div class="state-panel degraded-state">
+      <strong>{issue.title}</strong>
+      <p>{issue.message}</p>
+      {#if onRetry}<button type="button" onclick={() => onRetry?.()}>{issue.retryLabel}</button>{/if}
+    </div>
+  {/each}
+{/snippet}

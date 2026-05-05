@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import RepoWorktreeViews from '$lib/components/RepoWorktreeViews.svelte';
-  import { pmaApi, type ApiError } from '$lib/api/client';
+  import { dataOr, partialPageIssue, pmaApi, type ApiError, type PartialPageIssue } from '$lib/api/client';
   import {
     buildRepoWorktreeIndexViewModel,
     type RepoWorktreeIndexViewModel
@@ -10,6 +10,7 @@
   let index = $state<RepoWorktreeIndexViewModel | null>(null);
   let loading = $state(true);
   let error = $state<ApiError | null>(null);
+  let sectionIssues = $state<PartialPageIssue[]>([]);
 
   onMount(() => {
     void loadRepos();
@@ -18,6 +19,7 @@
   async function loadRepos(): Promise<void> {
     loading = true;
     error = null;
+    sectionIssues = [];
     const [repos, worktrees, runs, chats, tickets] = await Promise.all([
       pmaApi.hub.listRepos(),
       pmaApi.hub.listWorktrees(),
@@ -25,18 +27,23 @@
       pmaApi.pma.listChats(),
       pmaApi.ticketFlow.listTickets()
     ]);
-    const firstError = [repos, worktrees, runs, chats, tickets].find((result) => !result.ok);
-    if (firstError && !firstError.ok) {
-      error = firstError.error;
+    const primaryError = !repos.ok ? repos.error : !worktrees.ok ? worktrees.error : null;
+    if (primaryError) {
+      error = primaryError;
       loading = false;
       return;
     }
+    sectionIssues = [
+      !runs.ok ? partialPageIssue('current_run', 'Active runs unavailable', runs.error) : null,
+      !chats.ok ? partialPageIssue('current_run', 'PMA chats unavailable', chats.error) : null,
+      !tickets.ok ? partialPageIssue('tickets', 'Ticket queue unavailable', tickets.error) : null
+    ].filter((issue): issue is PartialPageIssue => Boolean(issue));
     index = buildRepoWorktreeIndexViewModel({
-      repos: repos.ok ? repos.data : [],
-      worktrees: worktrees.ok ? worktrees.data : [],
-      runs: runs.ok ? runs.data : [],
-      chats: chats.ok ? chats.data : [],
-      tickets: tickets.ok ? tickets.data : [],
+      repos: dataOr(repos, []),
+      worktrees: dataOr(worktrees, []),
+      runs: dataOr(runs, []),
+      chats: dataOr(chats, []),
+      tickets: dataOr(tickets, []),
       artifacts: []
     });
     loading = false;
@@ -47,5 +54,7 @@
   state={loading ? 'loading' : error ? 'error' : 'ready'}
   mode="index"
   {index}
+  {sectionIssues}
+  onRetry={loadRepos}
   errorMessage={error?.message ?? null}
 />
