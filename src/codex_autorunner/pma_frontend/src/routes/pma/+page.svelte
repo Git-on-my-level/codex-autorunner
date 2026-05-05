@@ -51,6 +51,8 @@
   let approvals = $state<SensitiveApprovalRequest[]>([]);
   let pendingAttachments = $state<PendingAttachment[]>([]);
   let localMessageArtifacts = $state<Record<string, SurfaceArtifact[]>>({});
+  let linkDialogOpen = $state(false);
+  let linkDraft = $state('');
   let activeChatId = $state<string | null>(null);
   let selectedAgent = $state('codex');
   let selectedModel = $state('');
@@ -308,16 +310,11 @@
     const message = composeMessageWithAttachments(draft, attachmentsForMessage);
     const result = await pmaApi.pma.sendMessage(
       activeChatId,
-      buildManagedThreadMessagePayload(message, selectedModel, activeChat?.status === 'running')
+      buildManagedThreadMessagePayload(message, selectedModel, activeChat?.status === 'running', attachmentsForMessage)
     );
     if (result.ok) {
       draft = '';
       pendingAttachments = [];
-      const messageArtifacts = attachmentsForMessage.map(surfaceArtifactFromAttachment);
-      localMessageArtifacts = {
-        ...localMessageArtifacts,
-        [result.data.id]: messageArtifacts
-      };
       messages = [...messages, result.data];
       await refreshActive(activeChatId, { quiet: true });
     } else {
@@ -340,9 +337,19 @@
     pendingAttachments = [...pendingAttachments, ...next];
   }
 
+  function openLinkDialog(): void {
+    linkDraft = '';
+    linkDialogOpen = true;
+  }
+
+  function cancelLinkDialog(): void {
+    linkDialogOpen = false;
+    linkDraft = '';
+  }
+
   function addLink(): void {
-    const href = window.prompt('Attach link');
-    if (!href?.trim()) return;
+    const href = linkDraft.trim();
+    if (!href) return;
     pendingAttachments = [
       ...pendingAttachments,
       {
@@ -355,6 +362,7 @@
         uploadState: 'uploaded'
       }
     ];
+    cancelLinkDialog();
   }
 
   function removeAttachment(attachmentId: string): void {
@@ -401,18 +409,6 @@
     }
     pendingAttachments = uploaded;
     return true;
-  }
-
-  function surfaceArtifactFromAttachment(attachment: PendingAttachment): SurfaceArtifact {
-    return {
-      id: attachment.uploadedName ?? attachment.id,
-      kind: attachment.kind === 'image' ? 'image' : attachment.kind === 'link' ? 'link' : 'file',
-      title: attachment.title,
-      summary: attachment.sizeLabel,
-      url: attachment.url,
-      createdAt: new Date().toISOString(),
-      raw: attachment
-    };
   }
 
   async function decideApproval(
@@ -755,7 +751,7 @@
           </svg>
           <span class="sr-only">Attach images</span>
         </button>
-        <button class="icon-button attachment-button link" type="button" aria-label="Attach link" title="Attach link" onclick={addLink}>
+        <button class="icon-button attachment-button link" type="button" aria-label="Attach link" title="Attach link" onclick={openLinkDialog}>
           <svg class="attachment-icon" viewBox="0 0 24 24" aria-hidden="true">
             <path d="M10 13a5 5 0 0 0 7.1.1l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1" />
             <path d="M14 11a5 5 0 0 0-7.1-.1l-2 2a5 5 0 0 0 7.1 7.1l1.1-1.1" />
@@ -786,6 +782,41 @@
         {sending ? 'Sending' : 'Send'}
       </button>
     </form>
+    {#if linkDialogOpen}
+      <div class="modal-backdrop" role="presentation" onclick={cancelLinkDialog}>
+        <div
+          class="approval-modal link-attachment-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="pma-link-attachment-title"
+          tabindex="-1"
+          onclick={(event) => event.stopPropagation()}
+          onkeydown={(event) => event.stopPropagation()}
+        >
+          <span class="artifact-type">Attachment</span>
+          <h2 id="pma-link-attachment-title">Attach link</h2>
+          <label class="link-attachment-field">
+            <span>URL</span>
+            <input
+              bind:value={linkDraft}
+              type="url"
+              placeholder="https://example.com"
+              onkeydown={(event) => {
+                if (event.key === 'Escape') cancelLinkDialog();
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  addLink();
+                }
+              }}
+            />
+          </label>
+          <div class="modal-actions">
+            <button type="button" class="secondary-link" onclick={cancelLinkDialog}>Cancel</button>
+            <button type="button" class="send-button" disabled={!linkDraft.trim()} onclick={addLink}>Attach</button>
+          </div>
+        </div>
+      </div>
+    {/if}
     <p class="permission-note">PMA has full permission for normal coding work. Sensitive CAR operations require approval.</p>
     {#if composeError}
       <p class="compose-error">{composeError.message}</p>

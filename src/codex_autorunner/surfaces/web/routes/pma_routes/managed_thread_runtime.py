@@ -891,6 +891,11 @@ def build_managed_thread_runtime_routes(
                     {
                         "runtime_prompt": options.execution_prompt,
                         "execution_error_message": MANAGED_THREAD_PUBLIC_EXECUTION_ERROR,
+                        **(
+                            {"attachments": options.delivery_payload["attachments"]}
+                            if options.delivery_payload.get("attachments")
+                            else {}
+                        ),
                     },
                     origin_kind="pma_web",
                     progress_targets=progress_targets,

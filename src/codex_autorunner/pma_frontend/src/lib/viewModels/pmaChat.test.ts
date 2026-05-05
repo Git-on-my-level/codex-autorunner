@@ -12,6 +12,7 @@ import {
   composeMessageWithAttachments,
   filterSensitiveCarApprovals,
   filterPmaChats,
+  filterArtifactsForActiveChat,
   formatRelativeTime,
   isPrimaryProgressArtifact,
   modelSelectorState,
@@ -101,12 +102,15 @@ describe('PMA chat view helpers', () => {
     expect(chooseActiveChatId(chats, 'chat-1', 'missing')).toBe('chat-1');
   });
 
-  it('builds active chat cards for durable transcript content and artifacts', () => {
+  it('builds active chat cards for durable transcript content and scoped artifacts', () => {
     const cards = buildPmaCards(
       [{ ...baseMessage, artifacts: [{ ...baseArtifact, id: 'message-attachment' }] }],
       baseProgress,
       baseChat,
-      [baseArtifact]
+      [
+        { ...baseArtifact, id: 'scoped-artifact', raw: { managed_thread_id: 'chat-1' } },
+        { ...baseArtifact, id: 'global-artifact', raw: {} }
+      ]
     );
 
     expect(cards.map((card) => card.kind)).toEqual([
@@ -114,6 +118,18 @@ describe('PMA chat view helpers', () => {
       'artifact',
       'ticket',
       'artifact'
+    ]);
+    expect(cards.at(-1)).toMatchObject({ artifact: { id: 'scoped-artifact' } });
+  });
+
+  it('filters active-chat artifacts by durable associations', () => {
+    const scoped = { ...baseArtifact, id: 'turn-file', raw: { managed_thread_id: 'chat-1' } };
+    const repoScoped = { ...baseArtifact, id: 'repo-file', raw: { repo_id: 'repo-1' } };
+    const unrelated = { ...baseArtifact, id: 'unrelated-file', raw: { managed_thread_id: 'chat-2' } };
+
+    expect(filterArtifactsForActiveChat([scoped, repoScoped, unrelated], baseChat, baseProgress).map((item) => item.id)).toEqual([
+      'turn-file',
+      'repo-file'
     ]);
   });
 
@@ -376,13 +392,26 @@ describe('PMA chat view helpers', () => {
       name: 'New PMA chat',
       workspace_root: '.'
     });
-    expect(buildManagedThreadMessagePayload('Continue', 'gpt-5.2', true)).toEqual({
+    const attachments = [
+      {
+        id: 'att-1',
+        kind: 'file' as const,
+        title: 'report.md',
+        sizeLabel: '1 KB',
+        url: '/hub/pma/files/inbox/report.md',
+        uploadedName: 'report.md',
+        uploadState: 'uploaded' as const
+      }
+    ];
+    expect(buildManagedThreadMessagePayload('Continue', 'gpt-5.2', true, attachments)).toEqual({
       message: 'Continue',
+      attachments,
       model: 'gpt-5.2',
       busy_policy: 'queue'
     });
     expect(buildManagedThreadMessagePayload('Continue', '', false)).toEqual({
       message: 'Continue',
+      attachments: undefined,
       model: undefined,
       busy_policy: undefined
     });

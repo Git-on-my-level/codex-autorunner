@@ -127,6 +127,35 @@ describe('view model mappers', () => {
     expect(messages.map((message) => message.text)).not.toContain('No message text recorded');
   });
 
+  it('maps durable turn attachments onto the user message after reload', () => {
+    const messages = mapPmaTurnMessages({
+      managed_thread_id: 'chat-1',
+      managed_turn_id: 'turn-with-attachments',
+      status: 'ok',
+      prompt: 'Review the attached screenshot.',
+      assistant_text: 'The screenshot shows the PMA composer.',
+      attachments: [
+        {
+          id: 'screen',
+          kind: 'image',
+          title: 'screen.png',
+          url: '/hub/pma/files/inbox/screen.png'
+        }
+      ]
+    });
+
+    expect(messages[0]).toMatchObject({
+      id: 'turn-with-attachments-user',
+      role: 'user',
+      artifacts: [{ id: 'screen', kind: 'image', title: 'screen.png' }]
+    });
+    expect(messages[1]).toMatchObject({
+      id: 'turn-with-attachments-assistant',
+      role: 'assistant',
+      artifacts: []
+    });
+  });
+
   it('suppresses CAR ticket-flow control prompts and renders a compact operational summary', () => {
     const messages = mapPmaTurnMessages({
       managed_thread_id: 'chat-1',
@@ -186,6 +215,7 @@ describe('view model mappers', () => {
     });
     expect(mapSurfaceArtifact({ event_type: 'command_completed', summary: 'pnpm test' }).kind).toBe('command_summary');
     expect(mapSurfaceArtifact({ name: 'Preview URL', url: 'http://localhost:4173' }).kind).toBe('preview_url');
+    expect(mapSurfaceArtifact({ kind: 'link', title: 'Fixture preview', url: 'https://example.test' }).kind).toBe('link');
     expect(mapSurfaceArtifact({ name: 'pull request', url: 'https://github.com/org/repo/pull/1' }).kind).toBe('link');
   });
 

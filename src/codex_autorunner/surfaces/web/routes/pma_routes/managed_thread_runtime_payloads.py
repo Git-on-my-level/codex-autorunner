@@ -51,6 +51,45 @@ class ManagedThreadMessageOptions:
     delivery_payload: dict[str, Any]
 
 
+def normalize_managed_thread_attachments(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    attachments: list[dict[str, Any]] = []
+    for index, item in enumerate(value):
+        if not isinstance(item, dict):
+            continue
+        title = normalize_optional_text(
+            item.get("title") or item.get("name") or item.get("uploadedName")
+        )
+        url = normalize_optional_text(item.get("url") or item.get("href"))
+        uploaded_name = normalize_optional_text(
+            item.get("uploadedName") or item.get("uploaded_name") or item.get("name")
+        )
+        if title is None and url is None and uploaded_name is None:
+            continue
+        kind = (normalize_optional_text(item.get("kind")) or "file").lower()
+        if kind not in {"file", "image", "link"}:
+            kind = "file"
+        attachment: dict[str, Any] = {
+            "id": normalize_optional_text(item.get("id")) or f"attachment-{index + 1}",
+            "kind": kind,
+            "title": title or uploaded_name or url or f"Attachment {index + 1}",
+        }
+        if url is not None:
+            attachment["url"] = url
+        if uploaded_name is not None:
+            attachment["uploaded_name"] = uploaded_name
+            attachment["uploadedName"] = uploaded_name
+        size_label = normalize_optional_text(
+            item.get("sizeLabel") or item.get("size_label")
+        )
+        if size_label is not None:
+            attachment["size_label"] = size_label
+            attachment["sizeLabel"] = size_label
+        attachments.append(attachment)
+    return attachments
+
+
 def get_pma_route_config(request: Request) -> dict[str, Any]:
     raw = getattr(request.app.state.config, "raw", {})
     return shared_pma_config_from_raw(raw)
@@ -204,6 +243,7 @@ def resolve_managed_thread_message_options(
     notify_lane = followup_policy.lane_id
     notify_once = followup_policy.notify_once
     defer_execution = bool(payload.defer_execution)
+    attachments = normalize_managed_thread_attachments(payload.attachments)
     model = normalize_optional_text(payload.model) or defaults.get("model")
     reasoning = normalize_optional_text(payload.reasoning) or defaults.get("reasoning")
     compact_seed = normalize_optional_text(thread.get("compact_seed"))
@@ -238,6 +278,10 @@ def resolve_managed_thread_message_options(
         context_bundle=context_bundle,
     )
 
+    delivery_payload: dict[str, Any] = {"delivered_message": message}
+    if attachments:
+        delivery_payload["attachments"] = attachments
+
     return ManagedThreadMessageOptions(
         busy_policy=busy_policy,
         message=message,
@@ -255,7 +299,7 @@ def resolve_managed_thread_message_options(
         sandbox_policy=sandbox_policy,
         live_backend_thread_id=live_backend_thread_id,
         execution_prompt=execution_prompt,
-        delivery_payload={"delivered_message": message},
+        delivery_payload=delivery_payload,
     )
 
 

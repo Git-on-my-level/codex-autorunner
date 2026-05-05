@@ -979,6 +979,7 @@ class PmaManagedThreadMessageRequest(Payload):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     message: str
+    attachments: list[dict[str, Any]] = Field(default_factory=list)
     busy_policy: Optional[Literal["queue", "interrupt", "reject"]] = Field(
         default=None, validation_alias=AliasChoices("busy_policy", "busyPolicy")
     )

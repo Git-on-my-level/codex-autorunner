@@ -152,6 +152,79 @@ def test_send_message_persists_turns_and_reuses_backend_thread(hub_env) -> None:
     assert transcript["content"].strip() == "assistant-output-1"
 
 
+def test_send_message_round_trips_structured_attachments(hub_env) -> None:
+    _enable_pma(
+        hub_env.hub_root,
+        reactive_enabled=False,
+        managed_thread_terminal_followup_default=False,
+    )
+    app = create_hub_app(hub_env.hub_root)
+
+    fake_client = FakeClient(sequential=True)
+    fake_supervisor = FakeSupervisor(fake_client)
+
+    attachments = [
+        {
+            "id": "att-1",
+            "kind": "image",
+            "title": "screen.png",
+            "url": "/hub/pma/files/inbox/screen.png",
+            "uploadedName": "screen.png",
+            "sizeLabel": "8 KB",
+        },
+        {
+            "id": "att-2",
+            "kind": "link",
+            "title": "Preview",
+            "url": "https://example.test/preview",
+        },
+    ]
+
+    with TestClient(app) as client:
+        app.state.app_server_supervisor = fake_supervisor
+        app.state.app_server_events = object()
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", **_repo_owner(hub_env)},
+        )
+        assert create_resp.status_code == 200
+        managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+        send_resp = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/messages",
+            json={"message": "review attached assets", "attachments": attachments},
+        )
+        assert send_resp.status_code == 200
+        payload = send_resp.json()
+        assert payload["attachments"][0]["title"] == "screen.png"
+
+        messages_resp = client.get(
+            f"/hub/pma/threads/{managed_thread_id}/turns",
+        )
+        assert messages_resp.status_code == 200
+
+    turns = messages_resp.json()["turns"]
+    assert turns[0]["prompt"] == "review attached assets"
+    assert turns[0]["attachments"] == [
+        {
+            "id": "att-1",
+            "kind": "image",
+            "title": "screen.png",
+            "url": "/hub/pma/files/inbox/screen.png",
+            "uploaded_name": "screen.png",
+            "uploadedName": "screen.png",
+            "size_label": "8 KB",
+            "sizeLabel": "8 KB",
+        },
+        {
+            "id": "att-2",
+            "kind": "link",
+            "title": "Preview",
+            "url": "https://example.test/preview",
+        },
+    ]
+
+
 def test_pma_transcript_store_redacts_known_secret_patterns(hub_env) -> None:
     secret = "sk-" + ("a" * 24)
     pointer = PmaTranscriptStore(hub_env.hub_root).write_transcript(

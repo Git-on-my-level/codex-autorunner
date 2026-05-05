@@ -232,6 +232,8 @@ export function mapPmaTurnMessages(raw: JsonRecord): PmaChatMessage[] {
     raw.assistant_preview,
     raw.error
   );
+  const attachments = asArray(raw.attachments).map(mapSurfaceArtifact);
+  const assistantArtifacts = asArray(raw.artifacts).map(mapSurfaceArtifact);
   const messages: PmaChatMessage[] = [];
 
   if (promptText && !controlPromptSummary) {
@@ -242,7 +244,7 @@ export function mapPmaTurnMessages(raw: JsonRecord): PmaChatMessage[] {
       text: promptText,
       createdAt,
       status,
-      artifacts: [],
+      artifacts: attachments,
       raw
     });
   }
@@ -268,7 +270,7 @@ export function mapPmaTurnMessages(raw: JsonRecord): PmaChatMessage[] {
       text: assistantText,
       createdAt: finishedAt,
       status,
-      artifacts: asArray(raw.artifacts ?? raw.attachments).map(mapSurfaceArtifact),
+      artifacts: assistantArtifacts,
       raw
     });
   }
@@ -611,6 +613,7 @@ function normalizeArtifactKind(value: unknown): SurfaceArtifact['kind'] {
   if (text.includes('report') || text.includes('final')) return 'final_report';
   if (text.includes('error') || text.includes('failed')) return 'error';
   if (text.includes('progress') || text.includes('turn_') || text.includes('tool_')) return 'progress';
+  if (text === 'link') return 'link';
   if (text.startsWith('http') || text.includes('pull request') || text.includes('pr/') || text.includes('github')) return 'link';
   return 'file';
 }

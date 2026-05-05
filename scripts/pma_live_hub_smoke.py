@@ -146,8 +146,18 @@ def seed_smoke_hub(evidence_dir: Path) -> Path:
     )
     turn = store.create_turn(
         str(thread["managed_thread_id"]),
-        prompt=CONTROL_PROMPT,
-        metadata={"ticket_id": "TICKET-350-smoke-fixture"},
+        prompt="Review the attached fixture preview before continuing.",
+        metadata={
+            "ticket_id": "TICKET-350-smoke-fixture",
+            "attachments": [
+                {
+                    "id": "fixture-preview-link",
+                    "kind": "link",
+                    "title": "Fixture preview",
+                    "url": "https://example.test/pma-fixture-preview",
+                }
+            ],
+        },
     )
     store.mark_turn_finished(str(turn["managed_turn_id"]), status="ok")
     return hub_root

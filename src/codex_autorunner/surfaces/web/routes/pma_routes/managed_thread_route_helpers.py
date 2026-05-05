@@ -711,12 +711,22 @@ def resolve_owner_scoped_query(
 
 
 def serialize_managed_thread_turn_summary(turn: dict[str, Any]) -> dict[str, Any]:
+    metadata = turn.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+    attachments = metadata.get("attachments")
+    if not isinstance(attachments, list):
+        attachments = []
     return {
         "managed_turn_id": turn.get("managed_turn_id"),
+        "managed_thread_id": turn.get("managed_thread_id"),
         "request_kind": turn.get("request_kind"),
         "status": turn.get("status"),
+        "prompt": turn.get("prompt") or "",
         "prompt_preview": _truncate_text(turn.get("prompt") or "", 120),
         "assistant_preview": _truncate_text(turn.get("assistant_text") or "", 120),
+        "assistant_text": turn.get("assistant_text") or "",
+        "attachments": [item for item in attachments if isinstance(item, dict)],
         "started_at": turn.get("started_at"),
         "finished_at": turn.get("finished_at"),
         "error": turn.get("error"),

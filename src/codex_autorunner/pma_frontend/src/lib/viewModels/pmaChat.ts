@@ -95,6 +95,7 @@ export type PmaChatScopeOption =
 
 export type ManagedThreadMessagePayload = {
   message: string;
+  attachments?: PendingAttachment[];
   model?: string;
   busy_policy?: 'queue';
 };
@@ -187,11 +188,55 @@ export function buildPmaCards(
     });
   }
 
-  for (const artifact of artifacts.slice(0, 4)) {
+  for (const artifact of filterArtifactsForActiveChat(artifacts, chat, progress).slice(0, 4)) {
     cards.push({ kind: 'artifact', id: `artifact-${artifact.id}`, artifact });
   }
 
   return cards;
+}
+
+export function filterArtifactsForActiveChat(
+  artifacts: SurfaceArtifact[],
+  chat: PmaChatSummary | null,
+  progress: PmaRunProgress | null
+): SurfaceArtifact[] {
+  if (!chat) return [];
+  const durableIds = new Set(
+    [
+      chat.id,
+      chat.ticketId,
+      chat.repoId,
+      chat.worktreeId,
+      progress?.chatId,
+      progress?.id,
+      stringValue(chat.raw.thread_target_id),
+      stringValue(chat.raw.managed_thread_id),
+      stringValue(chat.raw.thread_id),
+      stringValue(chat.raw.resource_id),
+      stringValue(chat.raw.last_execution_id),
+      stringValue(chat.raw.last_run_id)
+    ].filter(Boolean)
+  );
+  if (durableIds.size === 0) return [];
+  const durableKeys = [
+    'managed_thread_id',
+    'thread_target_id',
+    'thread_id',
+    'chat_id',
+    'managed_turn_id',
+    'turn_id',
+    'execution_id',
+    'run_id',
+    'ticket_id',
+    'repo_id',
+    'worktree_id',
+    'worktree_repo_id',
+    'resource_id',
+    'filebox_origin_id'
+  ];
+  return artifacts.filter((artifact) =>
+    durableKeys.some((key) => durableIds.has(stringValue(artifact.raw[key])))
+  );
 }
 
 export function buildPmaLiveActivity(progress: PmaRunProgress | null): PmaLiveActivity | null {
@@ -410,10 +455,22 @@ export function pmaChatScopeLabelFromChat(chat: PmaChatSummary | null): string {
 export function buildManagedThreadMessagePayload(
   message: string,
   model: string,
-  isRunning: boolean
+  isRunning: boolean,
+  attachments: PendingAttachment[] = []
 ): ManagedThreadMessagePayload {
   return {
     message,
+    attachments: attachments.length
+      ? attachments.map((attachment) => ({
+          id: attachment.id,
+          kind: attachment.kind,
+          title: attachment.title,
+          sizeLabel: attachment.sizeLabel,
+          url: attachment.url,
+          uploadedName: attachment.uploadedName,
+          uploadState: attachment.uploadState
+        }))
+      : undefined,
     model: model || undefined,
     busy_policy: isRunning ? 'queue' : undefined
   };
