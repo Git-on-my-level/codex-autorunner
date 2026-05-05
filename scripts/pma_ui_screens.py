@@ -380,7 +380,11 @@ def copy_to_outbox(captures: list[dict[str, Any]], outbox_dir: Path) -> list[str
         source = Path(str(screenshot))
         if source.suffix.lower() != ".png" or not source.is_file():
             continue
-        destination = outbox_dir / source.name
+        viewport = source.parent.name
+        destination_name = (
+            f"{viewport}-{source.name}" if "x" in viewport else source.name
+        )
+        destination = outbox_dir / destination_name
         shutil.copy2(source, destination)
         copied.append(str(destination))
     return copied
@@ -396,6 +400,7 @@ def main() -> int:
         return 2
 
     out_dir = args.out_dir.resolve()
+    outbox_dir = args.outbox_dir.expanduser().resolve()
     if out_dir.exists() and not args.no_clean:
         shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -501,7 +506,7 @@ def main() -> int:
         else:
             evidence["status"] = "passed"
         if args.outbox:
-            copied = copy_to_outbox(captures, args.outbox_dir.resolve())
+            copied = copy_to_outbox(captures, outbox_dir)
             evidence["outbox"] = copied
     finally:
         (out_dir / "manifest.json").write_text(

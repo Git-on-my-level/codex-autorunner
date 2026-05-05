@@ -107,7 +107,10 @@ def _build_managed_thread_orchestration_service(
 
 def _build_managed_thread_orchestration_service_for_app(
     app: Any,
+    *,
+    thread_store: Any = None,
 ) -> Any:
+    _ = thread_store
     return _build_managed_thread_orchestration_service(
         _managed_thread_request_for_app(app)
     )
@@ -504,7 +507,9 @@ async def _deliver_managed_thread_execution_result(
         thread_store.update_thread_after_turn(
             managed_thread_id,
             last_turn_id=managed_turn_id,
-            last_message_preview=_truncate_text(finalized_result.assistant_text, 120),
+            last_message_preview=normalize_optional_text(
+                current_thread_row.get("last_message_preview")
+            ),
         )
         workspace_root_text = normalize_optional_text(
             current_thread_row.get("workspace_root")

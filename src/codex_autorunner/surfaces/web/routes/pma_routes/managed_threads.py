@@ -142,20 +142,31 @@ def build_managed_thread_orchestration_service(request: Request):
             profile,
             context=context.agent_context,
         )
-        runtime_agent_id = resolution.runtime_agent_id
-        runtime_profile = resolution.runtime_profile
-        cache_key = (runtime_agent_id, runtime_profile or "")
+        use_logical_profile_descriptor = (
+            profile is not None and resolution.logical_agent_id == agent_id
+        )
+        descriptor_agent_id = (
+            resolution.logical_agent_id
+            if use_logical_profile_descriptor
+            else resolution.runtime_agent_id
+        )
+        descriptor_profile = (
+            resolution.logical_profile
+            if use_logical_profile_descriptor
+            else resolution.runtime_profile
+        )
+        cache_key = (descriptor_agent_id, descriptor_profile or "")
         cached = cache.get(cache_key)
         if cached is not None:
             return cached
-        descriptor = descriptors.get(runtime_agent_id)
+        descriptor = descriptors.get(descriptor_agent_id)
         if descriptor is None:
-            raise KeyError(f"Unknown agent definition '{runtime_agent_id}'")
+            raise KeyError(f"Unknown agent definition '{descriptor_agent_id}'")
         harness = descriptor.make_harness(
             wrap_requested_agent_context(
                 context.agent_context,
-                agent_id=runtime_agent_id,
-                profile=runtime_profile,
+                agent_id=resolution.logical_agent_id,
+                profile=resolution.logical_profile,
             )
         )
         cache[cache_key] = harness

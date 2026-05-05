@@ -85,6 +85,7 @@ from ...core.orchestration.runtime_threads import (
     begin_next_queued_runtime_thread_execution,
     begin_runtime_thread_execution,
 )
+from ...core.pma_transcripts import PmaTranscriptStore
 from ..github.managed_thread_pr_binding import self_claim_and_arm_pr_binding
 from .execution_event_journal import make_chat_execution_journal_notice
 from .managed_thread_delivery import ManagedThreadDeliveryAdapter
@@ -1524,6 +1525,62 @@ async def _record_thread_activity_via_hub(
     )
 
 
+async def _write_transcript_best_effort(
+    hub_client: Any,
+    *,
+    state_root: Path,
+    turn_id: str,
+    metadata: dict[str, Any],
+    assistant_text: str,
+) -> Optional[str]:
+    if hub_client is not None:
+        return await _write_transcript_via_hub(
+            hub_client,
+            turn_id=turn_id,
+            metadata=metadata,
+            assistant_text=assistant_text,
+        )
+    PmaTranscriptStore(state_root).write_transcript(
+        turn_id=turn_id,
+        metadata=metadata,
+        assistant_text=assistant_text,
+    )
+    return turn_id
+
+
+async def _record_thread_activity_best_effort(
+    orchestration_service: Any,
+    hub_client: Any,
+    *,
+    thread_target_id: str,
+    execution_id: str,
+    message_preview: str,
+) -> None:
+    if hub_client is not None:
+        await _record_thread_activity_via_hub(
+            hub_client,
+            thread_target_id=thread_target_id,
+            execution_id=execution_id,
+            message_preview=message_preview,
+        )
+        return
+    record_thread_activity = getattr(
+        orchestration_service,
+        "record_thread_activity",
+        None,
+    )
+    if not callable(record_thread_activity):
+        thread_store = getattr(orchestration_service, "thread_store", None)
+        record_thread_activity = getattr(thread_store, "record_thread_activity", None)
+    if not callable(record_thread_activity):
+        raise RuntimeError("Thread activity recorder unavailable")
+    record_thread_activity(
+        thread_target_id,
+        execution_id=execution_id,
+        message_preview=message_preview,
+    )
+
+
 async def _best_effort_hub_call(
     awaitable: Awaitable[Any],
     *,
@@ -1536,6 +1593,9 @@ async def _best_effort_hub_call(
 ) -> Any:
     try:
         if require_hub_client and hub_client is None:
+            close = getattr(awaitable, "close", None)
+            if callable(close):
+                close()
             raise RuntimeError("Hub control-plane client unavailable")
         return await awaitable
     except asyncio.CancelledError:
@@ -2001,7 +2061,6 @@ async def finalize_managed_thread_execution(
     runtime_event_state: Optional[RuntimeThreadRunEventState] = None,
     on_progress_event: Optional[ProgressEventHandler] = None,
 ) -> ManagedThreadFinalizationResult:
-    _ = state_root
     managed_thread_id = started.thread.thread_target_id
     managed_turn_id = started.execution.execution_id
     resolved_hub_client = _resolve_hub_control_plane_client(
@@ -2791,6 +2850,8 @@ async def finalize_managed_thread_execution(
             "managed_thread_id": managed_thread_id,
             "managed_turn_id": managed_turn_id,
             "repo_id": finalized_thread_metadata.get("repo_id"),
+            "resource_kind": finalized_thread_metadata.get("resource_kind"),
+            "resource_id": finalized_thread_metadata.get("resource_id"),
             "workspace_root": str(
                 finalized_thread_metadata.get("workspace_root")
                 or started.workspace_root
@@ -2812,8 +2873,9 @@ async def finalize_managed_thread_execution(
             )
         transcript_metadata.update(dict(surface.metadata))
         transcript_turn_id = await _best_effort_hub_call(
-            _write_transcript_via_hub(
+            _write_transcript_best_effort(
                 resolved_hub_client,
+                state_root=state_root,
                 turn_id=managed_turn_id,
                 metadata=transcript_metadata,
                 assistant_text=resolved_assistant_text,
@@ -2830,8 +2892,6 @@ async def finalize_managed_thread_execution(
                 "assistant_chars": len(resolved_assistant_text),
                 **runtime_trace_fields(event_state),
             },
-            hub_client=resolved_hub_client,
-            require_hub_client=True,
         )
         finalized_execution: Any = None
         execution_record_failed = False
@@ -2950,8 +3010,10 @@ async def finalize_managed_thread_execution(
                 **runtime_trace_fields(event_state),
             )
             return ManagedThreadFinalizationResult(
-                status="error",
-                assistant_text="",
+                status="interrupted" if finalized_status == "interrupted" else "error",
+                assistant_text=(
+                    resolved_assistant_text if finalized_status == "interrupted" else ""
+                ),
                 error=detail,
                 managed_thread_id=managed_thread_id,
                 managed_turn_id=managed_turn_id,
@@ -2985,7 +3047,8 @@ async def finalize_managed_thread_execution(
         )
         # Hub control-plane: thread activity record (best-effort, ok outcomes only).
         await _best_effort_hub_call(
-            _record_thread_activity_via_hub(
+            _record_thread_activity_best_effort(
+                orchestration_service,
                 resolved_hub_client,
                 thread_target_id=managed_thread_id,
                 execution_id=managed_turn_id,
@@ -2999,8 +3062,6 @@ async def finalize_managed_thread_execution(
                 backend_turn_id=outcome.backend_turn_id or started.execution.backend_id,
                 surface=surface,
             ),
-            hub_client=resolved_hub_client,
-            require_hub_client=True,
         )
         return ManagedThreadFinalizationResult(
             status="ok",

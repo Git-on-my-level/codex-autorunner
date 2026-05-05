@@ -305,17 +305,23 @@ class PmaThreadExecutionStore(ThreadExecutionStore):
         metadata: Optional[dict[str, Any]] = None,
         queue_payload: Optional[dict[str, Any]] = None,
     ) -> ExecutionRecord:
-        created = self._store.create_turn(
-            thread_target_id,
-            prompt=prompt,
-            request_kind=request_kind,
-            busy_policy=busy_policy,
-            model=model,
-            reasoning=reasoning,
-            client_turn_id=client_request_id,
-            metadata=metadata,
-            queue_payload=queue_payload,
-        )
+        create_kwargs: dict[str, Any] = {
+            "prompt": prompt,
+            "request_kind": request_kind,
+            "busy_policy": busy_policy,
+            "model": model,
+            "reasoning": reasoning,
+            "client_turn_id": client_request_id,
+            "metadata": metadata,
+            "queue_payload": queue_payload,
+        }
+        try:
+            created = self._store.create_turn(thread_target_id, **create_kwargs)
+        except TypeError as exc:
+            if "metadata" not in str(exc):
+                raise
+            create_kwargs.pop("metadata", None)
+            created = self._store.create_turn(thread_target_id, **create_kwargs)
         return _execution_record_from_store_row(created)
 
     def get_execution(
