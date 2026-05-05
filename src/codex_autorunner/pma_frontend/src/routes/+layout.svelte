@@ -41,7 +41,7 @@
         title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
         onclick={() => (collapsed = !collapsed)}
       >
-        <span aria-hidden="true">{collapsed ? '>' : '<'}</span>
+        <span aria-hidden="true">{collapsed ? '›' : '‹'}</span>
       </button>
     </div>
 
@@ -86,7 +86,7 @@
         title="Open navigation"
         onclick={() => (mobileOpen = true)}
       >
-        <span aria-hidden="true">=</span>
+        <span aria-hidden="true">≡</span>
       </button>
       <div class="topbar-copy">
         <span class="topbar-eyebrow">PMA</span>
