@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import html as html_lib
 import logging
 from collections.abc import Callable, Iterable
 from contextlib import AbstractAsyncContextManager
@@ -49,6 +50,8 @@ async def _send_redirect(send, location: str) -> None:
 
 
 async def _send_legacy_debug_page(send, *, location: str, legacy_location: str) -> None:
+    location_attr = html_lib.escape(location, quote=True)
+    legacy_location_attr = html_lib.escape(legacy_location, quote=True)
     body = f"""<!doctype html>
 <html lang="en">
   <head>
@@ -59,8 +62,8 @@ async def _send_legacy_debug_page(send, *, location: str, legacy_location: str) 
     <main>
       <h1>Legacy/debug route</h1>
       <p>This old CAR UI route is retained for migration and debugging only.</p>
-      <p><a href="{location}">Open the PMA Hub route</a></p>
-      <p><a href="{legacy_location}">Open this legacy screen</a></p>
+      <p><a href="{location_attr}">Open the PMA Hub route</a></p>
+      <p><a href="{legacy_location_attr}">Open this legacy screen</a></p>
     </main>
   </body>
 </html>

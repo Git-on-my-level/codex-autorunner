@@ -5,6 +5,9 @@ from fastapi.testclient import TestClient
 
 from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.server import create_hub_app
+from codex_autorunner.surfaces.web.routes.hub_repo_routes.mount_manager import (
+    _LazyRepoApp,
+)
 from codex_autorunner.surfaces.web.static_assets import (
     _inline_script_hashes,
     render_pma_index_html,
@@ -185,3 +188,49 @@ def test_legacy_repo_gate_escapes_repo_and_query_derived_href_values(hub_env):
     )
     assert "<img src=x onerror=alert(1)>" not in response.text
     assert 'next="><img src=x>' not in response.text
+
+
+async def test_legacy_repo_mount_debug_page_escapes_deep_path_query_href_values(
+    hub_env,
+):
+    repo_id = hub_env.repo_id
+    sent = []
+
+    async def send(message):
+        sent.append(message)
+
+    async def receive():
+        raise AssertionError("legacy debug page should not read request body")
+
+    def build_repo_app(_repo_path):
+        raise AssertionError("legacy debug page should not build the repo app")
+
+    app = _LazyRepoApp(
+        prefix=repo_id,
+        repo_path=hub_env.repo_root,
+        build_repo_app=build_repo_app,
+        logger=None,
+        hub_started=lambda: False,
+    )
+
+    await app(
+        {
+            "type": "http",
+            "path": "/terminal/subpath",
+            "root_path": f"/repos/{repo_id}",
+            "query_string": b'next="><img src=x>',
+        },
+        receive,
+        send,
+    )
+
+    assert sent[0]["status"] == 200
+    body = sent[1]["body"].decode("utf-8")
+    assert "Legacy/debug route" in body
+    assert f'href="/repos/{repo_id}"' in body
+    assert (
+        f'href="/repos/{repo_id}/terminal/subpath?next=&quot;&gt;&lt;img src=x&gt;'
+        f'&amp;legacy=1"'
+    ) in body
+    assert 'next="><img src=x>' not in body
+    assert "<img src=x>" not in body
