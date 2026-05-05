@@ -324,7 +324,14 @@ export class PmaApiClient {
         (payload) =>
           ['active_context', 'decisions', 'spec']
             .filter((docKind) => typeof payload[docKind] === 'string')
-            .map((docKind) => mapContextspaceDocument({ kind: docKind, name: docKind, content: payload[docKind] }))
+            .map((docKind) =>
+              mapContextspaceDocument({
+                kind: docKind,
+                name: contextspaceFilename(docKind),
+                content: payload[docKind],
+                is_pinned: true
+              })
+            )
       )
   };
 

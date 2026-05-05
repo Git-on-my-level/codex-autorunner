@@ -184,4 +184,27 @@ describe('API client error handling', () => {
       });
     }
   });
+
+  it('maps updateDocument responses like listDocuments (filename + pinned)', async () => {
+    const fetcher = vi.fn(async () =>
+      Response.json({
+        active_context: '# Updated',
+        spec: '',
+        decisions: '- Decision'
+      })
+    ) as unknown as typeof fetch;
+    const client = new PmaApiClient(fetcher);
+
+    const result = await client.contextspace.updateDocument('active_context', '# Updated');
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.map((doc) => doc.name)).toEqual(['active_context.md', 'decisions.md', 'spec.md']);
+      expect(result.data[0]).toMatchObject({
+        id: 'active_context',
+        content: '# Updated',
+        isPinned: true
+      });
+    }
+  });
 });
