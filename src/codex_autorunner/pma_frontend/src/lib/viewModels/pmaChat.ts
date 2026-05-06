@@ -3,6 +3,7 @@ import type {
   PmaChatMessage,
   PmaChatSummary,
   PmaRunProgress,
+  PmaTimelineItem,
   RepoSummary,
   SensitiveApprovalRequest,
   SurfaceArtifact,
@@ -58,6 +59,13 @@ export type PmaLiveActivity = {
   summary: string;
   elapsedLabel: string | null;
   steps: SurfaceArtifact[];
+};
+
+export type PmaStatusBar = {
+  state: WorkStatus;
+  phase: string;
+  elapsedLabel: string;
+  queueDepthLabel: string;
 };
 
 export type ManagedThreadCreatePayload = {
@@ -164,32 +172,11 @@ export function chooseActiveChatId(
 }
 
 export function buildPmaCards(
-  messages: PmaChatMessage[],
-  progress: PmaRunProgress | null,
+  timeline: PmaTimelineItem[],
   chat: PmaChatSummary | null,
-  artifacts: SurfaceArtifact[],
-  activityEvents: SurfaceArtifact[] = []
+  artifacts: SurfaceArtifact[]
 ): PmaCard[] {
-  const messageCards: PmaCard[] = messages.flatMap((message) => {
-    const messageCards: PmaCard[] = [];
-    if (message.text.trim()) {
-      messageCards.push({
-        kind: 'message' as const,
-        id: message.id,
-        message
-      });
-    }
-    messageCards.push(
-      ...message.artifacts.map((artifact) => ({
-        kind: 'artifact' as const,
-        id: `message-${message.id}-${artifact.id}`,
-        artifact
-      }))
-    );
-    return messageCards;
-  });
-  const activityCards = buildPmaActivityCards(activityEvents);
-  const cards = insertActivityCards(messageCards, activityCards);
+  const cards: PmaCard[] = timeline.flatMap(timelineItemToCard);
 
   if (chat?.ticketId) {
     cards.push({
@@ -201,11 +188,53 @@ export function buildPmaCards(
     });
   }
 
-  for (const artifact of filterArtifactsForActiveChat(artifacts, chat, progress).slice(0, 4)) {
+  for (const artifact of filterArtifactsForActiveChat(artifacts, chat, null).slice(0, 4)) {
     cards.push({ kind: 'artifact', id: `artifact-${artifact.id}`, artifact });
   }
 
   return cards;
+}
+
+export function reconcilePmaTimeline(
+  existing: PmaTimelineItem[],
+  incoming: PmaTimelineItem[],
+  limit = 500
+): PmaTimelineItem[] {
+  if (!incoming.length) return existing;
+  const byId = new Map(existing.map((item) => [item.id, item]));
+  for (const item of incoming) {
+    byId.set(item.id, { ...byId.get(item.id), ...item, payload: { ...byId.get(item.id)?.payload, ...item.payload } });
+  }
+  return [...byId.values()]
+    .sort(compareTimelineItems)
+    .slice(-limit);
+}
+
+export function optimisticUserTimelineItemFromSend(
+  raw: Record<string, unknown>,
+  fallbackText: string,
+  fallbackChatId: string
+): PmaTimelineItem | null {
+  const turnId = stringValue(raw.managed_turn_id);
+  const text = stringValue(raw.delivered_message) || stringValue(raw.prompt) || fallbackText;
+  if (!turnId || !text.trim()) return null;
+  const chatId = stringValue(raw.managed_thread_id) || fallbackChatId;
+  const timestamp = new Date().toISOString();
+  return {
+    id: `turn:${turnId}:user`,
+    kind: 'user_message',
+    orderKey: `optimistic|${timestamp}|turn:${turnId}:user`,
+    timestamp,
+    chatId,
+    turnId,
+    status: normalizeWorkStatus(raw.execution_state ?? raw.status),
+    payload: {
+      text,
+      text_preview: text.slice(0, 240),
+      attachments: Array.isArray(raw.attachments) ? raw.attachments : []
+    },
+    raw: { optimistic: true, ...raw }
+  };
 }
 
 export function mergePmaActivityEvents(
@@ -353,6 +382,19 @@ export function buildPmaLiveActivity(progress: PmaRunProgress | null): PmaLiveAc
   return { state: status, title, summary, elapsedLabel, steps };
 }
 
+export function buildPmaStatusBar(progress: PmaRunProgress | null, chat: PmaChatSummary | null): PmaStatusBar | null {
+  if (!progress && !chat) return null;
+  const state = progress?.status ?? chat?.status ?? 'idle';
+  return {
+    state,
+    phase: progress?.phase?.replace(/_/g, ' ') || statusLabel(state),
+    elapsedLabel: progress?.elapsedSeconds === null || progress?.elapsedSeconds === undefined
+      ? 'elapsed n/a'
+      : `${formatDuration(progress.elapsedSeconds)} elapsed`,
+    queueDepthLabel: `queue ${progress?.queueDepth ?? 0}`
+  };
+}
+
 export function isPrimaryProgressArtifact(artifact: SurfaceArtifact): boolean {
   const eventType = stringValue(artifact.raw.event_type ?? artifact.raw.type ?? artifact.raw.kind).toLowerCase();
   const summary = [artifact.title, artifact.summary].filter(Boolean).join(' ').toLowerCase();
@@ -362,21 +404,6 @@ export function isPrimaryProgressArtifact(artifact: SurfaceArtifact): boolean {
   return ['assistant_update', 'tool_started', 'tool_completed', 'tool_failed', 'turn_failed', 'turn_interrupted'].some(
     (type) => eventType.includes(type)
   );
-}
-
-function insertActivityCards(messageCards: PmaCard[], activityCards: PmaCard[]): PmaCard[] {
-  if (!activityCards.length) return messageCards;
-  const lastAssistantIndex = messageCards.findLastIndex(
-    (card) => card.kind === 'message' && card.message.role === 'assistant'
-  );
-  if (lastAssistantIndex >= 0) {
-    return [
-      ...messageCards.slice(0, lastAssistantIndex),
-      ...activityCards,
-      ...messageCards.slice(lastAssistantIndex)
-    ];
-  }
-  return [...messageCards, ...activityCards];
 }
 
 function isToolActivityEvent(event: SurfaceArtifact): boolean {
@@ -437,6 +464,104 @@ function toolState(event: SurfaceArtifact): PmaToolCallCard['state'] {
   if (eventType.includes('tool_completed')) return 'completed';
   if (eventType.includes('tool_failed')) return 'failed';
   return 'unknown';
+}
+
+function timelineItemToCard(item: PmaTimelineItem): PmaCard[] {
+  if (item.kind === 'user_message' || item.kind === 'assistant_message') {
+    const text = stringValue(item.payload.text);
+    if (!text.trim()) return [];
+    const attachments = asRecordArray(item.payload.attachments).map(mapTimelineArtifact);
+    return [
+      {
+        kind: 'message',
+        id: item.id,
+        message: {
+          id: item.id,
+          chatId: item.chatId,
+          role: item.kind === 'user_message' ? 'user' : 'assistant',
+          text,
+          createdAt: item.timestamp,
+          status: item.status,
+          artifacts: attachments,
+          raw: item.raw
+        }
+      },
+      ...attachments.map((artifact) => ({ kind: 'artifact' as const, id: `${item.id}:artifact:${artifact.id}`, artifact }))
+    ];
+  }
+  if (item.kind === 'intermediate') {
+    const text = stringValue(item.payload.text);
+    if (!text.trim()) return [];
+    return [{ kind: 'intermediate', id: item.id, title: intermediateTimelineTitle(item), text, eventIds: [item.id] }];
+  }
+  if (item.kind === 'tool_group') {
+    return [{ kind: 'tool_group', id: item.id, tools: [toolCardFromTimeline(item)] }];
+  }
+  if (item.kind === 'artifact') {
+    return [{ kind: 'artifact', id: item.id, artifact: mapTimelineArtifact(item.payload) }];
+  }
+  return [];
+}
+
+function toolCardFromTimeline(item: PmaTimelineItem): PmaToolCallCard {
+  const result = asRecord(item.payload.result);
+  const call = asRecord(item.payload.call);
+  const rawState = stringValue(result.status ?? item.raw.status ?? item.status).toLowerCase();
+  const state: PmaToolCallCard['state'] =
+    rawState.includes('fail') || rawState === 'error'
+      ? 'failed'
+      : result && Object.keys(result).length > 0
+        ? 'completed'
+        : 'started';
+  const title = stringValue(item.payload.tool_name) || stringValue(call.tool_name) || 'Tool call';
+  const summary = stringValue(result.summary) || stringValue(call.summary) || null;
+  return { id: item.id, title, summary, state };
+}
+
+function intermediateTimelineTitle(item: PmaTimelineItem): string {
+  const kind = stringValue(item.payload.intermediate_kind).replace(/_/g, ' ');
+  return kind || 'PMA update';
+}
+
+function mapTimelineArtifact(raw: Record<string, unknown>): SurfaceArtifact {
+  return {
+    id: stringValue(raw.id ?? raw.artifact_id ?? raw.name ?? raw.url) || 'artifact',
+    kind: 'file',
+    title: stringValue(raw.title ?? raw.name ?? raw.url) || 'Artifact',
+    summary: stringValue(raw.summary ?? raw.description) || null,
+    url: stringValue(raw.url ?? raw.href) || null,
+    createdAt: stringValue(raw.created_at ?? raw.modified_at) || null,
+    raw
+  };
+}
+
+function compareTimelineItems(left: PmaTimelineItem, right: PmaTimelineItem): number {
+  return timelineSortKey(left).localeCompare(timelineSortKey(right));
+}
+
+function timelineSortKey(item: PmaTimelineItem): string {
+  return item.orderKey || `${item.timestamp ?? ''}|${item.id}`;
+}
+
+function normalizeWorkStatus(value: unknown): WorkStatus | null {
+  const text = String(value ?? '').trim().toLowerCase();
+  if (text === 'running') return 'running';
+  if (['waiting', 'queued', 'pending'].includes(text)) return 'waiting';
+  if (['ok', 'done', 'complete', 'completed'].includes(text)) return 'done';
+  if (['failed', 'error'].includes(text)) return 'failed';
+  if (text === 'blocked') return 'blocked';
+  if (text === 'idle') return 'idle';
+  return null;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function asRecordArray(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
+    : [];
 }
 
 export function formatRelativeTime(value: string | null, now = new Date()): string {

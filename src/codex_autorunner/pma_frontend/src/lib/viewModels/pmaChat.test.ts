@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { PmaChatMessage, PmaChatSummary, PmaRunProgress, SurfaceArtifact } from './domain';
+import type { PmaChatSummary, PmaRunProgress, PmaTimelineItem, SurfaceArtifact } from './domain';
 import {
   approvalActionUrl,
   artifactCardView,
@@ -8,6 +8,7 @@ import {
   buildPmaChatScopeOptions,
   buildPmaCards,
   buildPmaLiveActivity,
+  buildPmaStatusBar,
   chooseActiveChatId,
   composeMessageWithAttachments,
   filterSensitiveCarApprovals,
@@ -17,8 +18,10 @@ import {
   isPrimaryProgressArtifact,
   mergePmaActivityEvents,
   modelSelectorState,
+  optimisticUserTimelineItemFromSend,
   pmaChatScopeLabelFromChat,
   progressPercent,
+  reconcilePmaTimeline,
   removePendingAttachment,
   summarizeFilterCounts
 } from './pmaChat';
@@ -37,17 +40,6 @@ const baseChat: PmaChatSummary = {
   raw: {}
 };
 
-const baseMessage: PmaChatMessage = {
-  id: 'msg-1',
-  chatId: 'chat-1',
-  role: 'assistant',
-  text: 'Created a PMA ticket and started the run.',
-  createdAt: '2026-05-04T00:00:10Z',
-  status: 'running',
-  artifacts: [],
-  raw: {}
-};
-
 const baseArtifact: SurfaceArtifact = {
   id: 'artifact-1',
   kind: 'test_result',
@@ -57,6 +49,25 @@ const baseArtifact: SurfaceArtifact = {
   createdAt: '2026-05-04T00:00:30Z',
   raw: {}
 };
+
+function timelineItem(
+  id: string,
+  kind: PmaTimelineItem['kind'],
+  payload: Record<string, unknown>,
+  order = id
+): PmaTimelineItem {
+  return {
+    id,
+    kind,
+    orderKey: order,
+    timestamp: '2026-05-04T00:00:10Z',
+    chatId: 'chat-1',
+    turnId: id.split(':')[1] ?? null,
+    status: 'running',
+    payload,
+    raw: { item_id: id, kind, payload }
+  };
+}
 
 const baseProgress: PmaRunProgress = {
   id: 'run-1',
@@ -105,8 +116,12 @@ describe('PMA chat view helpers', () => {
 
   it('builds active chat cards for durable transcript content and scoped artifacts', () => {
     const cards = buildPmaCards(
-      [{ ...baseMessage, artifacts: [{ ...baseArtifact, id: 'message-attachment' }] }],
-      baseProgress,
+      [
+        timelineItem('turn:one:assistant', 'assistant_message', {
+          text: 'Created a PMA ticket and started the run.',
+          attachments: [{ id: 'message-attachment', title: 'Attachment' }]
+        })
+      ],
       baseChat,
       [
         { ...baseArtifact, id: 'scoped-artifact', raw: { managed_thread_id: 'chat-1' } },
@@ -167,35 +182,21 @@ describe('PMA chat view helpers', () => {
     expect(live?.steps.map((step) => step.id)).toEqual(['tool-started']);
   });
 
+  it('builds a thin status bar from backend status fields', () => {
+    expect(buildPmaStatusBar({ ...baseProgress, elapsedSeconds: 125, queueDepth: 2 }, baseChat)).toEqual({
+      state: 'running',
+      phase: 'testing',
+      elapsedLabel: '2m 5s elapsed',
+      queueDepthLabel: 'queue 2'
+    });
+  });
+
   it('skips empty message cards and suppresses debug-only lifecycle events from the transcript', () => {
     const cards = buildPmaCards(
-      [{ ...baseMessage, id: 'empty-message', text: '' }],
-      {
-        ...baseProgress,
-        events: [
-          {
-            ...baseArtifact,
-            id: 'token-usage',
-            kind: 'progress',
-            title: 'Token usage updated',
-            raw: { event_type: 'token_usage' }
-          },
-          {
-            ...baseArtifact,
-            id: 'turn-completed',
-            kind: 'progress',
-            title: 'Turn completed',
-            raw: { event_type: 'turn_completed' }
-          },
-          {
-            ...baseArtifact,
-            id: 'assistant-update',
-            kind: 'progress',
-            title: 'Thinking',
-            raw: { event_type: 'assistant_update' }
-          }
-        ]
-      },
+      [
+        timelineItem('turn:empty:user', 'user_message', { text: '' }),
+        timelineItem('turn:empty:status:running', 'status', { status: 'running' })
+      ],
       null,
       []
     );
@@ -207,41 +208,11 @@ describe('PMA chat view helpers', () => {
   it('keeps low-level PMA events out of primary transcript cards while preserving final responses', () => {
     const cards = buildPmaCards(
       [
-        {
-          ...baseMessage,
-          id: 'final-response',
-          status: 'done',
+        timelineItem('turn:final:assistant', 'assistant_message', {
           text: 'Done. The PMA smoke fixtures are now covered.'
-        }
+        }),
+        timelineItem('turn:final:status:ok', 'status', { status: 'ok' })
       ],
-      {
-        ...baseProgress,
-        status: 'done',
-        events: [
-          {
-            ...baseArtifact,
-            id: 'raw-token-delta',
-            kind: 'progress',
-            title: 'Raw token delta',
-            raw: { event_type: 'response.output_text.delta' }
-          },
-          {
-            ...baseArtifact,
-            id: 'low-level-lifecycle',
-            kind: 'progress',
-            title: 'Run loop tick',
-            raw: { event_type: 'thread.run.step.delta' }
-          },
-          {
-            ...baseArtifact,
-            id: 'thinking-summary',
-            kind: 'progress',
-            title: 'Thinking summary',
-            summary: 'Inspecting repo/worktree ownership.',
-            raw: { event_type: 'assistant_update' }
-          }
-        ]
-      },
       null,
       []
     );
@@ -256,46 +227,14 @@ describe('PMA chat view helpers', () => {
   it('persists intermediate output and groups tool calls between user and final assistant messages', () => {
     const cards = buildPmaCards(
       [
-        { ...baseMessage, id: 'prompt', role: 'user', text: 'Create tickets' },
-        { ...baseMessage, id: 'final', role: 'assistant', text: 'Done.\n\n- [TICKET-001.md](/tmp/TICKET-001.md)' }
+        timelineItem('turn:one:user', 'user_message', { text: 'Create tickets' }, '001'),
+        timelineItem('turn:one:intermediate:think-1', 'intermediate', { intermediate_kind: 'thinking', text: 'Inspecting repo state.' }, '002'),
+        timelineItem('turn:one:tool:1:rg', 'tool_group', { tool_name: 'rg tickets', call: { summary: 'rg tickets' } }, '003'),
+        timelineItem('turn:one:intermediate:think-2', 'intermediate', { intermediate_kind: 'thinking', text: 'Drafting ticket files.' }, '004'),
+        timelineItem('turn:one:assistant', 'assistant_message', { text: 'Done.\n\n- [TICKET-001.md](/tmp/TICKET-001.md)' }, '005')
       ],
-      baseProgress,
       null,
-      [],
-      [
-        {
-          ...baseArtifact,
-          id: 'think-1',
-          kind: 'progress',
-          title: 'Thinking',
-          summary: 'Inspecting repo state.',
-          raw: { event_type: 'assistant_update' }
-        },
-        {
-          ...baseArtifact,
-          id: 'tool-1',
-          kind: 'progress',
-          title: 'tool: rg',
-          summary: 'tool: rg tickets',
-          raw: { event_type: 'tool_started', tool_name: 'rg tickets', tool_state: 'started' }
-        },
-        {
-          ...baseArtifact,
-          id: 'tool-2',
-          kind: 'progress',
-          title: 'tool: rg',
-          summary: 'tool: rg tickets',
-          raw: { event_type: 'tool_completed', tool_name: 'rg tickets', tool_state: 'completed' }
-        },
-        {
-          ...baseArtifact,
-          id: 'think-2',
-          kind: 'progress',
-          title: 'Thinking',
-          summary: 'Drafting ticket files.',
-          raw: { event_type: 'assistant_update' }
-        }
-      ]
+      []
     );
 
     expect(cards.map((card) => card.kind)).toEqual([
@@ -307,48 +246,34 @@ describe('PMA chat view helpers', () => {
     ]);
     expect(cards[2]).toMatchObject({
       kind: 'tool_group',
-      tools: [
-        { title: 'rg tickets', state: 'started' },
-        { title: 'rg tickets', state: 'completed' }
-      ]
+      tools: [{ title: 'rg tickets', state: 'started' }]
     });
   });
 
-  it('coalesces streamed assistant updates into one thought card', () => {
-    const cards = buildPmaCards([], baseProgress, null, [], [
+  it('reconciles optimistic sends with backend timeline IDs in order', () => {
+    const optimistic = optimisticUserTimelineItemFromSend(
       {
-        ...baseArtifact,
-        id: 'think-1',
-        kind: 'progress',
-        title: 'The',
-        summary: 'The',
-        raw: { event_type: 'assistant_update' }
+        managed_thread_id: 'chat-1',
+        managed_turn_id: 'turn-2',
+        delivered_message: 'queued second',
+        execution_state: 'queued'
       },
-      {
-        ...baseArtifact,
-        id: 'think-2',
-        kind: 'progress',
-        title: 'The user',
-        summary: 'The user',
-        raw: { event_type: 'assistant_update' }
-      },
-      {
-        ...baseArtifact,
-        id: 'think-3',
-        kind: 'progress',
-        title: 'Thinking delta',
-        summary: ' is asking',
-        raw: { event_type: 'assistant_update' }
-      }
-    ]);
+      'fallback',
+      'chat-1'
+    );
+    expect(optimistic).not.toBeNull();
 
-    expect(cards).toHaveLength(1);
-    expect(cards[0]).toMatchObject({
-      kind: 'intermediate',
-      title: 'Thinking',
-      text: 'The user is asking',
-      eventIds: ['think-1', 'think-2', 'think-3']
-    });
+    const merged = reconcilePmaTimeline(
+      [
+        timelineItem('turn:turn-1:user', 'user_message', { text: 'first' }, '001'),
+        optimistic!
+      ],
+      [
+        timelineItem('turn:turn-2:user', 'user_message', { text: 'queued second' }, '002')
+      ]
+    );
+
+    expect(merged.map((item) => item.id)).toEqual(['turn:turn-1:user', 'turn:turn-2:user']);
   });
 
   it('merges streamed activity events without dropping older transcript activity', () => {

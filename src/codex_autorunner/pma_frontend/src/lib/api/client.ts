@@ -3,6 +3,7 @@ import {
   mapAgentWorkspaceSummary,
   mapDashboardSummary,
   mapPmaChatMessage,
+  mapPmaTimelineItem,
   mapPmaTurnMessages,
   mapPmaChatSummary,
   mapPmaRunProgress,
@@ -18,6 +19,7 @@ import {
   type PmaChatMessage,
   type PmaChatSummary,
   type PmaRunProgress,
+  type PmaTimelineItem,
   type RepoSummary,
   type SensitiveApprovalRequest,
   type SurfaceArtifact,
@@ -233,6 +235,10 @@ export class PmaApiClient {
       mapResult(await this.getJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}/turns`), (payload) =>
         asArray(payload.turns ?? payload.messages).flatMap(mapPmaTurnMessages)
       ),
+    getTimeline: async (chatId: string): Promise<ApiResult<PmaTimelineItem[]>> =>
+      mapResult(await this.getJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}/timeline`), (payload) =>
+        asArray(payload.items).map(mapPmaTimelineItem)
+      ),
     getTail: async (chatId: string): Promise<ApiResult<PmaRunProgress>> =>
       mapResult(await this.getJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}/tail`), mapPmaRunProgress),
     getStatus: async (chatId: string): Promise<ApiResult<PmaRunProgress>> =>
@@ -322,8 +328,8 @@ export class PmaApiClient {
   };
 
   ticketFlow = {
-    listRuns: async (): Promise<ApiResult<PmaRunProgress[]>> =>
-      mapResult(await this.getJson<JsonRecord[]>('/api/flows/runs?flow_type=ticket_flow'), (payload) =>
+    listRuns: async (owner?: { repo?: string; worktree?: string }): Promise<ApiResult<PmaRunProgress[]>> =>
+      mapResult(await this.getJson<JsonRecord[]>(flowRunsPath(owner)), (payload) =>
         payload.map(mapPmaRunProgress)
       ),
     getRun: async (runId: string): Promise<ApiResult<PmaRunProgress>> =>
@@ -353,8 +359,33 @@ export class PmaApiClient {
         }),
         mapTicketDetail
       ),
-    listArtifacts: async (runId: string): Promise<ApiResult<SurfaceArtifact[]>> =>
-      mapResult(await this.getJson<JsonRecord>(`/api/flows/${encodeURIComponent(runId)}/dispatch_history`), (payload) =>
+    createTicket: async (
+      body: { agent?: string; title?: string; goal?: string; body?: string; profile?: string },
+      owner?: { repo?: string; worktree?: string }
+    ): Promise<ApiResult<TicketDetail>> =>
+      mapResult(
+        await this.requestJson<JsonRecord>(legacyTicketPath(owner), {
+          method: 'POST',
+          body
+        }),
+        mapTicketDetail
+      ),
+    reorderTicket: async (
+      sourceIndex: number,
+      destinationIndex: number,
+      placeAfter: boolean,
+      owner?: { repo?: string; worktree?: string }
+    ): Promise<ApiResult<JsonRecord>> =>
+      this.requestJson<JsonRecord>(`${legacyTicketPath(owner)}/reorder`, {
+        method: 'POST',
+        body: {
+          source_index: sourceIndex,
+          destination_index: destinationIndex,
+          place_after: placeAfter
+        }
+      }),
+    listArtifacts: async (runId: string, owner?: { repo?: string; worktree?: string }): Promise<ApiResult<SurfaceArtifact[]>> =>
+      mapResult(await this.getJson<JsonRecord>(flowRunPath(runId, 'dispatch_history', owner)), (payload) =>
         asArray(payload.history).flatMap((entry) => asArray(entry.attachments)).map(mapSurfaceArtifact)
       ),
     resumeRun: async (runId: string): Promise<ApiResult<PmaRunProgress>> =>
@@ -536,6 +567,18 @@ function legacyTicketPath(owner?: { repo?: string; worktree?: string }): string 
   const workspaceId = owner?.repo ?? owner?.worktree;
   if (workspaceId) return `/repos/${encodeURIComponent(workspaceId)}/api/flows/ticket_flow/tickets`;
   return '/api/flows/ticket_flow/tickets';
+}
+
+function flowRunsPath(owner?: { repo?: string; worktree?: string }): string {
+  const workspaceId = owner?.repo ?? owner?.worktree;
+  const path = workspaceId ? `/repos/${encodeURIComponent(workspaceId)}/api/flows/runs` : '/api/flows/runs';
+  return `${path}?flow_type=ticket_flow`;
+}
+
+function flowRunPath(runId: string, suffix: string, owner?: { repo?: string; worktree?: string }): string {
+  const workspaceId = owner?.repo ?? owner?.worktree;
+  const basePath = workspaceId ? `/repos/${encodeURIComponent(workspaceId)}/api/flows` : '/api/flows';
+  return `${basePath}/${encodeURIComponent(runId)}/${suffix}`;
 }
 
 function ticketWithFallbackOwner(ticket: JsonRecord, owner?: { repo?: string; worktree?: string }): JsonRecord {

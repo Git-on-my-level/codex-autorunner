@@ -217,6 +217,58 @@ describe('API client error handling', () => {
     }
   });
 
+  it('fetches ticket-flow runs through mounted repo and worktree routes when scoped', async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/repos/repo-1/api/flows/runs?flow_type=ticket_flow') {
+        return Response.json([{ run_id: 'repo-run', status: 'running' }]);
+      }
+      if (url === '/repos/wt-1/api/flows/runs?flow_type=ticket_flow') {
+        return Response.json([{ run_id: 'worktree-run', status: 'waiting' }]);
+      }
+      return new Response('unexpected request', { status: 500 });
+    }) as unknown as typeof fetch;
+    const client = new PmaApiClient(fetcher);
+
+    const repoRuns = await client.ticketFlow.listRuns({ repo: 'repo-1' });
+    const worktreeRuns = await client.ticketFlow.listRuns({ worktree: 'wt-1' });
+
+    expect(fetcher).toHaveBeenNthCalledWith(1, '/repos/repo-1/api/flows/runs?flow_type=ticket_flow', expect.any(Object));
+    expect(fetcher).toHaveBeenNthCalledWith(2, '/repos/wt-1/api/flows/runs?flow_type=ticket_flow', expect.any(Object));
+    expect(repoRuns.ok && repoRuns.data[0].id).toBe('repo-run');
+    expect(worktreeRuns.ok && worktreeRuns.data[0].id).toBe('worktree-run');
+  });
+
+  it('creates and reorders scoped tickets through mounted workspace APIs', async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/repos/repo-1/api/flows/ticket_flow/tickets') {
+        return Response.json({ index: 3, frontmatter: { title: 'Created' }, body: '## Goal\nShip it.' });
+      }
+      if (url === '/repos/repo-1/api/flows/ticket_flow/tickets/reorder') {
+        return Response.json({ status: 'ok' });
+      }
+      return new Response('unexpected request', { status: 500 });
+    }) as unknown as typeof fetch;
+    const client = new PmaApiClient(fetcher);
+
+    const created = await client.ticketFlow.createTicket({ title: 'Created', body: '## Goal\nShip it.' }, { repo: 'repo-1' });
+    const reordered = await client.ticketFlow.reorderTicket(3, 1, false, { repo: 'repo-1' });
+
+    expect(fetcher).toHaveBeenNthCalledWith(
+      1,
+      '/repos/repo-1/api/flows/ticket_flow/tickets',
+      expect.objectContaining({ method: 'POST' })
+    );
+    expect(fetcher).toHaveBeenNthCalledWith(
+      2,
+      '/repos/repo-1/api/flows/ticket_flow/tickets/reorder',
+      expect.objectContaining({ method: 'POST' })
+    );
+    expect(created.ok && created.data.title).toBe('Created');
+    expect(reordered.ok).toBe(true);
+  });
+
   it('does not double-prefix already based request paths', async () => {
     const fetcher = vi.fn(async () => Response.json({ ok: true })) as unknown as typeof fetch;
     const client = new PmaApiClient(fetcher, '/car');
@@ -257,6 +309,39 @@ describe('API client error handling', () => {
         ['user', 'What happened?'],
         ['assistant', 'The run finished successfully.']
       ]);
+    }
+  });
+
+  it('maps PMA canonical timeline payloads with stable item IDs', async () => {
+    const fetcher = vi.fn(async () =>
+      Response.json({
+        contract_version: 'managed_thread_timeline.v1',
+        items: [
+          {
+            item_id: 'turn:turn-1:user',
+            kind: 'user_message',
+            order_key: '001',
+            managed_thread_id: 'thread-1',
+            managed_turn_id: 'turn-1',
+            status: 'queued',
+            payload: { text: 'first queued message' }
+          }
+        ]
+      })
+    ) as unknown as typeof fetch;
+    const client = new PmaApiClient(fetcher);
+
+    const result = await client.pma.getTimeline('thread-1');
+
+    expect(fetcher).toHaveBeenCalledWith('/hub/pma/threads/thread-1/timeline', expect.any(Object));
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data[0]).toMatchObject({
+        id: 'turn:turn-1:user',
+        kind: 'user_message',
+        orderKey: '001',
+        payload: { text: 'first queued message' }
+      });
     }
   });
 

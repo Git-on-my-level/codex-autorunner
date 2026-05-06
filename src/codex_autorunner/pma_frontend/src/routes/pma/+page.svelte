@@ -5,12 +5,12 @@
   import SurfaceArtifactCard from '$lib/components/SurfaceArtifactCard.svelte';
   import { pmaApi, type ApiError, type JsonRecord } from '$lib/api/client';
   import { openPmaTailEventSource, type StreamSubscription } from '$lib/api/streaming';
-  import { mapPmaRunProgress, mapSurfaceArtifact } from '$lib/viewModels/domain';
+  import { mapPmaRunProgress } from '$lib/viewModels/domain';
   import { renderMarkdownToHtml } from '$lib/viewModels/contextspace';
   import type {
-    PmaChatMessage,
     PmaChatSummary,
     PmaRunProgress,
+    PmaTimelineItem,
     SensitiveApprovalRequest,
     SurfaceArtifact
   } from '$lib/viewModels/domain';
@@ -19,8 +19,8 @@
     buildManagedThreadCreatePayload,
     buildPmaChatScopeOptions,
     buildManagedThreadMessagePayload,
-    buildPmaLiveActivity,
     buildPmaCards,
+    buildPmaStatusBar,
     chooseActiveChatId,
     composeMessageWithAttachments,
     filterSensitiveCarApprovals,
@@ -28,33 +28,30 @@
     formatBytes,
     formatRelativeTime,
     localPmaChatScopeOption,
-    mergePmaActivityEvents,
     modelSelectorState,
+    optimisticUserTimelineItemFromSend,
     pmaChatScopeLabel,
     pmaChatScopeLabelFromChat,
     progressPercent,
+    reconcilePmaTimeline,
     removePendingAttachment,
     statusLabel,
     summarizeFilterCounts,
     type PendingAttachment,
     type PmaCard,
     type PmaChatFilter,
-    type PmaChatScopeOption,
-    type PmaLiveActivity
+    type PmaChatScopeOption
   } from '$lib/viewModels/pmaChat';
 
   let chats = $state<PmaChatSummary[]>([]);
-  let messages = $state<PmaChatMessage[]>([]);
+  let timeline = $state<PmaTimelineItem[]>([]);
   let progress = $state<PmaRunProgress | null>(null);
-  let activityEvents = $state<SurfaceArtifact[]>([]);
-  let activityRunId = $state<string | null>(null);
   let artifacts = $state<SurfaceArtifact[]>([]);
   let agents = $state<JsonRecord[]>([]);
   let models = $state<JsonRecord[]>([]);
   let scopeOptions = $state<PmaChatScopeOption[]>(buildPmaChatScopeOptions([], [], []));
   let approvals = $state<SensitiveApprovalRequest[]>([]);
   let pendingAttachments = $state<PendingAttachment[]>([]);
-  let localMessageArtifacts = $state<Record<string, SurfaceArtifact[]>>({});
   let linkDialogOpen = $state(false);
   let linkDraft = $state('');
   let activeChatId = $state<string | null>(null);
@@ -89,14 +86,8 @@
   const activeChat = $derived(chats.find((chat) => chat.id === activeChatId) ?? null);
   const filteredChats = $derived(filterPmaChats(chats, filter, search));
   const filterCounts = $derived(summarizeFilterCounts(chats));
-  const visibleMessages = $derived<PmaChatMessage[]>(
-    messages.map((message) => ({
-      ...message,
-      artifacts: [...message.artifacts, ...(localMessageArtifacts[message.id] ?? [])]
-    }))
-  );
-  const activeCards = $derived<PmaCard[]>(buildPmaCards(visibleMessages, progress, activeChat, artifacts, activityEvents));
-  const liveActivity = $derived<PmaLiveActivity | null>(buildPmaLiveActivity(progress));
+  const activeCards = $derived<PmaCard[]>(buildPmaCards(timeline, activeChat, artifacts));
+  const statusBar = $derived(buildPmaStatusBar(progress, activeChat));
   const modelState = $derived(modelSelectorState(loadingModels, modelError?.message ?? null, models.length));
   const selectedScope = $derived(scopeOptions.find((scope) => scope.id === selectedScopeId) ?? localPmaChatScopeOption());
   const selectedScopeLabel = $derived(pmaChatScopeLabel(selectedScope));
@@ -109,7 +100,7 @@
     draft = page.url.searchParams.get('draft') ?? draft;
     void loadInitial();
     const interval = window.setInterval(() => {
-      if (activeChatId) void refreshActive(activeChatId, { quiet: true });
+    if (activeChatId) void refreshActive(activeChatId, { quiet: true });
     }, 7000);
     return () => window.clearInterval(interval);
   });
@@ -204,7 +195,8 @@
 
   async function selectChat(chatId: string): Promise<void> {
     activeChatId = chatId;
-    resetActivityEvents();
+    timeline = [];
+    progress = null;
     mobilePane = 'chat';
     syncSelectorsToActiveChat();
     await refreshActive(chatId);
@@ -217,13 +209,13 @@
       activeError = null;
     }
     const [messageResult, tailResult, statusResult] = await Promise.all([
-      pmaApi.pma.getMessages(chatId),
+      pmaApi.pma.getTimeline(chatId),
       pmaApi.pma.getTail(chatId),
       pmaApi.pma.getStatus(chatId)
     ]);
 
     if (activeChatId !== chatId) return;
-    if (messageResult.ok) messages = messageResult.data;
+    if (messageResult.ok) timeline = reconcilePmaTimeline(timeline, messageResult.data);
     else if (!options.quiet) activeError = messageResult.error;
 
     if (tailResult.ok) updateProgress(tailResult.data);
@@ -243,9 +235,7 @@
         if (activeChatId !== chatId) return;
         streamState = 'connected';
         streamLastEventAt = new Date().toISOString();
-        if (event.kind === 'tail') {
-          activityEvents = mergePmaActivityEvents(activityEvents, [mapSurfaceArtifact(event.payload)]);
-        }
+        if (event.kind === 'tail') scheduleActiveRefresh(chatId, 350);
         if (event.kind === 'progress' || event.kind === 'state') {
           const nextProgress = mapPmaRunProgress(event.payload);
           updateProgress(nextProgress);
@@ -312,17 +302,6 @@
 
   function updateProgress(nextProgress: PmaRunProgress): void {
     progress = nextProgress;
-    const nextRunId = nextProgress.id || activeChatId;
-    if (activityRunId !== nextRunId) {
-      activityRunId = nextRunId;
-      activityEvents = [];
-    }
-    activityEvents = mergePmaActivityEvents(activityEvents, nextProgress.events);
-  }
-
-  function resetActivityEvents(): void {
-    activityEvents = [];
-    activityRunId = null;
   }
 
   function retryStream(): void {
@@ -409,7 +388,8 @@
     if (result.ok) {
       draft = '';
       pendingAttachments = [];
-      messages = [...messages, result.data];
+      const optimisticItem = optimisticUserTimelineItemFromSend(result.data.raw, message, targetChatId);
+      if (optimisticItem) timeline = reconcilePmaTimeline(timeline, [optimisticItem]);
       await refreshActive(targetChatId, { quiet: true });
     } else {
       composeError = result.error;
@@ -756,7 +736,7 @@
         <div class="state-panel loading-state">
           <span class="state-icon" aria-hidden="true"></span>
           <strong>Loading active chat</strong>
-          <p>Collecting messages, tail events, and approval prompts.</p>
+          <p>Collecting timeline, status, and approval prompts.</p>
         </div>
       {:else if activeError}
         <div class="state-panel error">
@@ -770,34 +750,19 @@
           <p>Pick a conversation or create a new chat to start work.</p>
           <button type="button" onclick={() => (mobilePane = 'list')}>Browse chats</button>
         </div>
-      {:else if activeCards.length === 0 && approvals.length === 0}
+      {:else if activeCards.length === 0 && approvals.length === 0 && !statusBar}
         <div class="state-panel empty-state">
           <strong>This chat is ready</strong>
           <p>Send a message or attach files so PMA can start from current context.</p>
         </div>
       {:else}
-        {#if liveActivity && (liveActivity.state === 'running' || liveActivity.state === 'waiting' || liveActivity.state === 'blocked')}
-          <section class={`live-activity ${liveActivity.state}`} aria-label="PMA live activity">
-            <div class="live-activity-header">
-              <span class="live-pulse" aria-hidden="true"></span>
-              <div>
-                <strong>{liveActivity.title}</strong>
-                <p>{liveActivity.summary}</p>
-              </div>
-              {#if liveActivity.elapsedLabel}
-                <span class="live-activity-time">{liveActivity.elapsedLabel}</span>
-              {/if}
-            </div>
-            {#if liveActivity.steps.length > 0}
-              <ol class="live-step-list" aria-label="Recent PMA steps">
-                {#each liveActivity.steps as step (step.id)}
-                  <li>
-                    <span>{step.title}</span>
-                    {#if step.summary}<small>{step.summary}</small>{/if}
-                  </li>
-                {/each}
-              </ol>
-            {/if}
+        {#if statusBar}
+          <section class={`pma-status-bar ${statusBar.state}`} aria-label="PMA turn status">
+            <span class="status-dot" aria-hidden="true"></span>
+            <strong>{statusLabel(statusBar.state)}</strong>
+            <span>{statusBar.phase}</span>
+            <span>{statusBar.elapsedLabel}</span>
+            <span>{statusBar.queueDepthLabel}</span>
           </section>
         {/if}
         {#each approvals as approval (approval.id)}

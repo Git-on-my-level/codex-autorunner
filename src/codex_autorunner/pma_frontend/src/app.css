@@ -1311,6 +1311,45 @@ textarea:hover {
   border-left-color: var(--color-warning);
 }
 
+.pma-status-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 760px;
+  min-height: 30px;
+  padding: 4px var(--space-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 8px;
+  background: var(--color-surface-sunken);
+  color: var(--color-ink-muted);
+  font-size: var(--font-size-0);
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.pma-status-bar strong {
+  color: var(--color-ink);
+  font-size: var(--font-size-0);
+  font-weight: 650;
+}
+
+.pma-status-bar span:not(.status-dot) {
+  min-width: max-content;
+}
+
+.pma-status-bar.running .status-dot {
+  background: var(--color-success);
+}
+
+.pma-status-bar.waiting .status-dot,
+.pma-status-bar.blocked .status-dot {
+  background: var(--color-warning);
+}
+
+.pma-status-bar.failed .status-dot {
+  background: var(--color-danger);
+}
+
 .live-activity {
   display: grid;
   gap: var(--space-3);

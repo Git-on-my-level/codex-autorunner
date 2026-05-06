@@ -29,6 +29,29 @@ export type PmaChatMessage = {
   raw: JsonRecord;
 };
 
+export type PmaTimelineItemKind =
+  | 'user_message'
+  | 'assistant_message'
+  | 'intermediate'
+  | 'tool_group'
+  | 'status'
+  | 'approval'
+  | 'artifact'
+  | 'delivery_state';
+
+/** Backend-owned PMA chat timeline item with stable reconciliation identity. */
+export type PmaTimelineItem = {
+  id: string;
+  kind: PmaTimelineItemKind;
+  orderKey: string;
+  timestamp: string | null;
+  chatId: string | null;
+  turnId: string | null;
+  status: WorkStatus | null;
+  payload: JsonRecord;
+  raw: JsonRecord;
+};
+
 /** Compact run/tail/status state for chat, dashboard, repo, and ticket surfaces. */
 export type PmaRunProgress = {
   id: string;
@@ -285,6 +308,21 @@ export function mapPmaTurnMessages(raw: JsonRecord): PmaChatMessage[] {
   return standalone.text || standalone.artifacts.length ? [standalone] : [];
 }
 
+export function mapPmaTimelineItem(raw: JsonRecord): PmaTimelineItem {
+  const payload = asRecord(raw.payload);
+  return {
+    id: stringValue(raw.item_id ?? raw.id, 'timeline-item'),
+    kind: normalizeTimelineKind(raw.kind),
+    orderKey: stringValue(raw.order_key ?? raw.item_id ?? raw.id, ''),
+    timestamp: dateString(raw.timestamp),
+    chatId: nullableString(raw.managed_thread_id ?? raw.thread_id ?? raw.chat_id),
+    turnId: nullableString(raw.managed_turn_id ?? raw.turn_id),
+    status: raw.status === undefined || raw.status === null ? null : normalizeStatus(raw.status),
+    payload,
+    raw
+  };
+}
+
 export function mapPmaRunProgress(raw: JsonRecord): PmaRunProgress {
   const snapshot = asRecord(raw.snapshot ?? raw.progress);
   const source = Object.keys(snapshot).length ? { ...raw, ...snapshot } : raw;
@@ -505,6 +543,19 @@ function normalizeRole(value: unknown): PmaChatMessage['role'] {
   if (['assistant', 'pma', 'agent'].includes(text)) return 'assistant';
   if (text === 'tool') return 'tool';
   return 'system';
+}
+
+function normalizeTimelineKind(value: unknown): PmaTimelineItemKind {
+  const text = String(value ?? '').trim().toLowerCase();
+  if (text === 'user_message') return 'user_message';
+  if (text === 'assistant_message') return 'assistant_message';
+  if (text === 'intermediate') return 'intermediate';
+  if (text === 'tool_group') return 'tool_group';
+  if (text === 'status') return 'status';
+  if (text === 'approval') return 'approval';
+  if (text === 'artifact') return 'artifact';
+  if (text === 'delivery_state') return 'delivery_state';
+  return 'intermediate';
 }
 
 function normalizeMessageText(raw: JsonRecord, role: PmaChatMessage['role']): string {
