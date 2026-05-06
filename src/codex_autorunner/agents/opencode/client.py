@@ -394,6 +394,22 @@ class OpenCodeClient:
     async def get_session(self, session_id: str) -> Any:
         return await self._request("GET", f"/session/{session_id}", expect_json=True)
 
+    async def update_session(
+        self,
+        session_id: str,
+        *,
+        title: Optional[str] = None,
+    ) -> Any:
+        payload: dict[str, Any] = {}
+        if title is not None:
+            payload["title"] = title
+        return await self._request(
+            "PATCH",
+            f"/session/{session_id}",
+            json_body=payload,
+            expect_json=True,
+        )
+
     async def list_messages(
         self,
         session_id: str,

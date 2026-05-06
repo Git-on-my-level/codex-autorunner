@@ -361,8 +361,9 @@
   .memory-reader-v2 :global(.markdown-body),
   .memory-reader-v2 :global(.markdown-editor-shell) {
     margin: 0;
+    width: 100%;
     padding: var(--space-5) var(--space-6) var(--space-6);
-    max-width: 760px;
+    max-width: none;
     flex: 1 1 auto;
     min-height: 0;
     overflow: auto;

@@ -44,6 +44,8 @@ FIXTURE_PATH = Path(__file__).resolve().parents[2] / "fixtures" / "fake_acp_serv
 @dataclass
 class _FakeConversation:
     id: str
+    title: Optional[str] = None
+    summary: Optional[str] = None
 
 
 @dataclass
@@ -58,7 +60,11 @@ class _FakeHarness:
         ["durable_threads", "message_turns", "interrupt", "review"]
     )
     next_conversation_id: str = "backend-conversation-1"
+    next_conversation_title: Optional[str] = None
+    next_conversation_summary: Optional[str] = None
     resumed_conversation_id: Optional[str] = None
+    resumed_conversation_title: Optional[str] = None
+    resumed_conversation_summary: Optional[str] = None
     resume_conversation_error: Optional[Exception] = None
     backend_runtime_instance_id_value: Optional[str] = None
     next_turn_id: str = "backend-turn-1"
@@ -71,6 +77,9 @@ class _FakeHarness:
         default_factory=list
     )
     resume_conversation_calls: list[tuple[Path, str]] = field(default_factory=list)
+    set_conversation_title_calls: list[tuple[Path, str, str]] = field(
+        default_factory=list
+    )
     start_turn_calls: list[dict[str, Any]] = field(default_factory=list)
     start_review_calls: list[dict[str, Any]] = field(default_factory=list)
     interrupt_calls: list[tuple[Path, str, Optional[str]]] = field(default_factory=list)
@@ -103,7 +112,11 @@ class _FakeHarness:
         self, workspace_root: Path, title: Optional[str] = None
     ) -> _FakeConversation:
         self.new_conversation_calls.append((workspace_root, title))
-        return _FakeConversation(id=self.next_conversation_id)
+        return _FakeConversation(
+            id=self.next_conversation_id,
+            title=self.next_conversation_title,
+            summary=self.next_conversation_summary,
+        )
 
     async def resume_conversation(
         self, workspace_root: Path, conversation_id: str
@@ -111,7 +124,18 @@ class _FakeHarness:
         self.resume_conversation_calls.append((workspace_root, conversation_id))
         if self.resume_conversation_error is not None:
             raise self.resume_conversation_error
-        return _FakeConversation(id=self.resumed_conversation_id or conversation_id)
+        return _FakeConversation(
+            id=self.resumed_conversation_id or conversation_id,
+            title=self.resumed_conversation_title,
+            summary=self.resumed_conversation_summary,
+        )
+
+    async def set_conversation_title(
+        self, workspace_root: Path, conversation_id: str, title: str
+    ) -> None:
+        self.set_conversation_title_calls.append(
+            (workspace_root, conversation_id, title)
+        )
 
     async def backend_runtime_instance_id(self, workspace_root: Path) -> Optional[str]:
         _ = workspace_root
@@ -439,6 +463,74 @@ async def test_send_message_creates_conversation_and_execution(tmp_path: Path) -
     assert binding.backend_thread_id == "backend-conversation-1"
     assert refreshed_thread.last_execution_id == execution.execution_id
     assert refreshed_thread.last_message_preview == "Ship it"
+
+
+async def test_send_message_promotes_first_message_to_car_owned_title(
+    tmp_path: Path,
+) -> None:
+    harness = _FakeHarness()
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target(
+        "codex",
+        workspace_root,
+        display_name="New PMA chat",
+    )
+
+    await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="Compare chat title sources",
+        )
+    )
+
+    refreshed_thread = service.get_thread_target(thread.thread_target_id)
+
+    assert refreshed_thread is not None
+    assert refreshed_thread.display_name == "Compare chat title sources"
+    assert harness.set_conversation_title_calls == [
+        (workspace_root, "backend-conversation-1", "Compare chat title sources")
+    ]
+
+
+async def test_provider_title_updates_generic_car_title_and_metadata(
+    tmp_path: Path,
+) -> None:
+    harness = _FakeHarness(
+        next_conversation_title="Native Codex title",
+        next_conversation_summary="Provider summary",
+    )
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target(
+        "codex",
+        workspace_root,
+        display_name="New PMA chat",
+    )
+
+    await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="A lower priority first message",
+        )
+    )
+
+    refreshed_thread = service.get_thread_target(thread.thread_target_id)
+
+    assert refreshed_thread is not None
+    assert refreshed_thread.display_name == "Native Codex title"
+    raw_thread = service.thread_store._store.get_thread(  # type: ignore[attr-defined]
+        thread.thread_target_id
+    )
+    assert raw_thread is not None
+    assert raw_thread["metadata"]["provider_conversation_title"] == "Native Codex title"
+    assert raw_thread["metadata"]["provider_conversation_summary"] == (
+        "Provider summary"
+    )
 
 
 async def test_send_message_tolerates_retryable_thread_activity_hub_failure(
@@ -772,7 +864,7 @@ async def test_send_message_retries_with_fresh_conversation_when_existing_bindin
         "backend-existing-1",
         "backend-fresh-2",
     ]
-    assert harness.new_conversation_calls == [(workspace_root, None)]
+    assert harness.new_conversation_calls == [(workspace_root, "hello again")]
     assert refreshed_thread is not None
     binding = _thread_runtime_binding(service, thread.thread_target_id)
     assert binding is not None
@@ -868,7 +960,7 @@ async def test_send_message_retries_with_fresh_conversation_when_start_turn_hits
         "backend-existing-1",
         "backend-fresh-2",
     ]
-    assert harness.new_conversation_calls == [(workspace_root, None)]
+    assert harness.new_conversation_calls == [(workspace_root, "hello again")]
     assert refreshed_thread is not None
     binding = _thread_runtime_binding(service, thread.thread_target_id)
     assert binding is not None
@@ -935,7 +1027,7 @@ async def test_send_review_retries_with_fresh_conversation_when_existing_binding
         "backend-existing-1",
         "backend-fresh-2",
     ]
-    assert harness.new_conversation_calls == [(workspace_root, None)]
+    assert harness.new_conversation_calls == [(workspace_root, "review this")]
     assert refreshed_thread is not None
     binding = _thread_runtime_binding(service, thread.thread_target_id)
     assert binding is not None
@@ -1047,7 +1139,7 @@ async def test_send_message_rehydrates_from_transcripts_after_runtime_binding_re
     prompt = harness.start_turn_calls[0]["prompt"]
     assert next_execution.status == "running"
     assert harness.resume_conversation_calls == []
-    assert harness.new_conversation_calls == [(workspace_root, None)]
+    assert harness.new_conversation_calls == [(workspace_root, "first question")]
     assert "Recovered durable conversation state" in prompt
     assert "first question" in prompt
     assert "first answer" in prompt
@@ -1106,7 +1198,7 @@ async def test_start_next_queued_execution_starts_fresh_after_runtime_binding_re
     assert next_execution is not None
     assert next_execution.status == "running"
     assert harness.resume_conversation_calls == []
-    assert harness.new_conversation_calls == [(workspace_root, None)]
+    assert harness.new_conversation_calls == [(workspace_root, "second")]
     assert harness.start_turn_calls[0]["conversation_id"] == "backend-fresh-2"
 
 

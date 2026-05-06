@@ -64,6 +64,34 @@ def test_create_list_get_thread(tmp_path: Path) -> None:
     assert normalized_listed[0]["managed_thread_id"] == created["managed_thread_id"]
 
 
+def test_update_thread_title_only_replaces_generic_titles(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    store = PmaThreadStore(tmp_path / "hub")
+    generic = store.create_thread("codex", workspace_root, name="New PMA chat")
+    explicit = store.create_thread("codex", workspace_root, name="Release notes")
+
+    updated_generic = store.update_thread_title(
+        generic["managed_thread_id"],
+        "Compare chat title sources",
+        metadata={"provider_conversation_summary": "native summary"},
+    )
+    updated_explicit = store.update_thread_title(
+        explicit["managed_thread_id"],
+        "Provider title",
+        metadata={"car_title_source": "message_preview"},
+    )
+
+    assert updated_generic is not None
+    assert updated_generic["name"] == "Compare chat title sources"
+    assert updated_generic["metadata"]["provider_conversation_summary"] == (
+        "native summary"
+    )
+    assert updated_explicit is not None
+    assert updated_explicit["name"] == "Release notes"
+    assert "car_title_source" not in updated_explicit["metadata"]
+
+
 def test_prepare_runs_legacy_backfill_before_marking_prepared(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

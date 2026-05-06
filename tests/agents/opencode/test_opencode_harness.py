@@ -45,6 +45,9 @@ class _StubClient:
         self.question_replies: list[tuple[str, list[list[str]]]] = []
         self.question_rejections: list[str] = []
         self.prompt_calls: list[dict[str, object]] = []
+        self.create_session_calls: list[dict[str, object]] = []
+        self.update_session_calls: list[dict[str, object]] = []
+        self.sessions_response: Any = []
         self.get_session_calls: list[str] = []
         self.session_responses: dict[str, Any] = {}
         self.list_messages_calls: list[str] = []
@@ -77,6 +80,25 @@ class _StubClient:
             yield event
         if self._stream_error is not None:
             raise self._stream_error
+
+    async def create_session(
+        self,
+        *,
+        title: str | None = None,
+        directory: str | None = None,
+    ) -> dict[str, Any]:
+        self.create_session_calls.append({"title": title, "directory": directory})
+        return {"id": "session-1", "title": title}
+
+    async def list_sessions(self, directory: str | None = None) -> Any:
+        _ = directory
+        return self.sessions_response
+
+    async def update_session(
+        self, session_id: str, *, title: str | None = None
+    ) -> dict[str, Any]:
+        self.update_session_calls.append({"session_id": session_id, "title": title})
+        return {"id": session_id, "title": title}
 
     async def prompt_async(self, session_id: str, **kwargs: object) -> dict[str, str]:
         self.prompt_calls.append({"session_id": session_id, **kwargs})
@@ -198,6 +220,56 @@ async def test_opencode_harness_reports_capabilities_from_contract() -> None:
     assert harness_supports_event_streaming(harness) is True
     assert harness.supports("approvals") is False
     assert report.capabilities == harness.capabilities
+
+
+@pytest.mark.asyncio
+async def test_opencode_harness_surfaces_session_titles() -> None:
+    client = _StubClient([])
+    client.session_responses["session-1"] = {
+        "id": "session-1",
+        "title": "Resumed title",
+        "summary": "resumed summary",
+    }
+    client.sessions_response = {
+        "data": [
+            {
+                "id": "session-1",
+                "title": "Compare chat title sources",
+                "summary": "summary",
+            }
+        ]
+    }
+    harness = OpenCodeHarness(_StubSupervisor(client))
+
+    conversations = await harness.list_conversations(Path("."))
+    resumed = await harness.resume_conversation(Path("."), "session-1")
+
+    assert conversations[0].title == "Compare chat title sources"
+    assert conversations[0].summary == "summary"
+    assert resumed.id == "session-1"
+    assert resumed.title == "Resumed title"
+    assert resumed.summary == "resumed summary"
+
+
+@pytest.mark.asyncio
+async def test_opencode_harness_sets_session_title() -> None:
+    client = _StubClient([])
+    harness = OpenCodeHarness(_StubSupervisor(client))
+
+    conversation = await harness.new_conversation(
+        Path("."),
+        title="Compare chat title sources",
+    )
+    await harness.set_conversation_title(
+        Path("."),
+        conversation.id,
+        "Compare chat title sources",
+    )
+
+    assert conversation.title == "Compare chat title sources"
+    assert client.update_session_calls == [
+        {"session_id": "session-1", "title": "Compare chat title sources"}
+    ]
 
 
 @pytest.mark.asyncio

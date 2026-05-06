@@ -150,6 +150,7 @@
       activeChatId = chooseActiveChatId(chatResult.data, activeChatId, page.url.searchParams.get('chat'));
       if (activeChatId) {
         mobilePane = 'chat';
+        syncSelectorsToActiveChat();
         void refreshActive(activeChatId);
         connectStream(activeChatId);
       }
@@ -167,9 +168,11 @@
     if (!scopeOptions.some((scope) => scope.id === selectedScopeId)) selectedScopeId = 'local';
     if (agentResult.ok) {
       agents = agentResult.data;
-      selectedAgent =
-        stringField(agentResult.data[0], 'id') ?? stringField(agentResult.data[0], 'agent') ?? selectedAgent;
-      void loadModels(selectedAgent);
+      if (!activeChat?.agentId) {
+        selectedAgent =
+          stringField(agentResult.data[0], 'id') ?? stringField(agentResult.data[0], 'agent') ?? selectedAgent;
+      }
+      void loadModels(selectedAgent, selectedModel);
     } else {
       agentError = agentResult.error;
     }
@@ -181,7 +184,7 @@
     if (result.ok) approvals = filterSensitiveCarApprovals(result.data);
   }
 
-  async function loadModels(agentId: string): Promise<void> {
+  async function loadModels(agentId: string, preferredModel = ''): Promise<void> {
     loadingModels = true;
     modelError = null;
     const result = await pmaApi.pma.listAgentModels(agentId);
@@ -193,7 +196,9 @@
       return;
     }
     models = result.data;
-    selectedModel = stringField(result.data[0], 'id') ?? stringField(result.data[0], 'model') ?? '';
+    selectedModel = preferredModel && modelExists(result.data, preferredModel)
+      ? preferredModel
+      : stringField(result.data[0], 'id') ?? stringField(result.data[0], 'model') ?? '';
     loadingModels = false;
   }
 
@@ -201,6 +206,7 @@
     activeChatId = chatId;
     resetActivityEvents();
     mobilePane = 'chat';
+    syncSelectorsToActiveChat();
     await refreshActive(chatId);
     connectStream(chatId);
   }
@@ -241,7 +247,13 @@
           activityEvents = mergePmaActivityEvents(activityEvents, [mapSurfaceArtifact(event.payload)]);
         }
         if (event.kind === 'progress' || event.kind === 'state') {
-          updateProgress(mapPmaRunProgress(event.payload));
+          const nextProgress = mapPmaRunProgress(event.payload);
+          updateProgress(nextProgress);
+          if (shouldEndStream(event.kind, nextProgress)) {
+            scheduleActiveRefresh(chatId, 700);
+            closeStream();
+            return;
+          }
         }
         if (event.kind === 'message') {
           scheduleActiveRefresh(chatId, 250);
@@ -253,10 +265,35 @@
       },
       onError: () => {
         if (activeChatId !== chatId) return;
+        if (progress && shouldEndStream('progress', progress)) {
+          closeStream();
+          return;
+        }
         streamState = 'interrupted';
         streamError = 'Live PMA updates were interrupted. Polling continues in the background.';
       }
     });
+  }
+
+  function shouldEndStream(kind: 'state' | 'progress', value: PmaRunProgress): boolean {
+    return isTerminalProgress(value) || (kind === 'state' && isNonRunningState(value.raw));
+  }
+
+  function isTerminalProgress(value: PmaRunProgress): boolean {
+    return value.status === 'done' || value.status === 'failed' || isTerminalRawStatus(value.raw);
+  }
+
+  function isTerminalRawStatus(raw: JsonRecord): boolean {
+    const source = typeof raw.snapshot === 'object' && raw.snapshot ? raw.snapshot as JsonRecord : raw;
+    const status = String(source.turn_status ?? source.status ?? source.activity ?? '').trim().toLowerCase();
+    return ['ok', 'done', 'complete', 'completed', 'error', 'failed', 'interrupted'].includes(status);
+  }
+
+  function isNonRunningState(raw: JsonRecord): boolean {
+    const source = typeof raw.snapshot === 'object' && raw.snapshot ? raw.snapshot as JsonRecord : raw;
+    const status = String(source.turn_status ?? source.status ?? '').trim().toLowerCase();
+    const activity = String(source.activity ?? '').trim().toLowerCase();
+    return Boolean(status || activity) && status !== 'running' && activity !== 'running';
   }
 
   function scheduleActiveRefresh(chatId: string, delayMs = 600): void {
@@ -292,6 +329,34 @@
     if (!activeChatId) return;
     connectStream(activeChatId);
     void refreshActive(activeChatId, { quiet: true });
+  }
+
+  function syncSelectorsToActiveChat(): void {
+    const chat = chats.find((item) => item.id === activeChatId);
+    if (!chat?.agentId) return;
+    selectedAgent = chat.agentId;
+    void loadModels(chat.agentId, chat.model ?? selectedModel);
+  }
+
+  function handleAgentChange(): void {
+    void loadModels(selectedAgent);
+  }
+
+  async function ensureChatForSelectedAgent(): Promise<string | null> {
+    if (!activeChat?.agentId || activeChat.agentId === selectedAgent) return activeChatId;
+    const scopedAgent = selectedScope?.kind === 'agent_workspace' && selectedScope.agentId ? selectedScope.agentId : selectedAgent;
+    const result = await pmaApi.pma.createChat(buildManagedThreadCreatePayload(scopedAgent, selectedScope));
+    if (!result.ok) {
+      composeError = result.error;
+      return null;
+    }
+    chats = [result.data, ...chats.filter((chat) => chat.id !== result.data.id)];
+    await selectChat(result.data.id);
+    return result.data.id;
+  }
+
+  function modelExists(catalog: JsonRecord[], model: string): boolean {
+    return catalog.some((entry) => (stringField(entry, 'id') ?? stringField(entry, 'model') ?? modelLabel(entry)) === model);
   }
 
   function isMessageStackNearBottom(): boolean {
@@ -331,15 +396,21 @@
     }
     const attachmentsForMessage = pendingAttachments;
     const message = composeMessageWithAttachments(draft, attachmentsForMessage);
+    const targetChatId = await ensureChatForSelectedAgent();
+    if (!targetChatId) {
+      sending = false;
+      return;
+    }
+    const targetIsRunning = targetChatId === activeChatId && activeChat?.status === 'running';
     const result = await pmaApi.pma.sendMessage(
-      activeChatId,
-      buildManagedThreadMessagePayload(message, selectedModel, activeChat?.status === 'running', attachmentsForMessage)
+      targetChatId,
+      buildManagedThreadMessagePayload(message, selectedModel, targetIsRunning, attachmentsForMessage)
     );
     if (result.ok) {
       draft = '';
       pendingAttachments = [];
       messages = [...messages, result.data];
-      await refreshActive(activeChatId, { quiet: true });
+      await refreshActive(targetChatId, { quiet: true });
     } else {
       composeError = result.error;
     }
@@ -630,7 +701,7 @@
             aria-label="PMA agent"
             bind:value={selectedAgent}
             disabled={agents.length === 0}
-            onchange={() => loadModels(selectedAgent)}
+            onchange={handleAgentChange}
           >
           {#if agents.length === 0}
             <option value={selectedAgent}>{agentError ? 'Unavailable' : 'Configured agent'}</option>

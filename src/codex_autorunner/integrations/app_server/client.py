@@ -397,6 +397,12 @@ class CodexAppServerClient:
         params.update(kwargs)
         return await self.request("thread/archive", params)
 
+    async def thread_name_set(self, thread_id: str, name: str) -> Any:
+        return await self.request(
+            "thread/name/set",
+            {"threadId": thread_id, "name": name},
+        )
+
     async def model_list(self, **kwargs: Any) -> Any:
         params = kwargs if kwargs else {}
         return await self.request("model/list", params)

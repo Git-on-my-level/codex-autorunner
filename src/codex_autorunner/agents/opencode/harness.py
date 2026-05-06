@@ -71,6 +71,14 @@ _logger = logging.getLogger(__name__)
 _GLOB_META_RE = re.compile(r"[*?\[\]{}]")
 
 
+def _first_text_field(entry: dict[str, Any], keys: tuple[str, ...]) -> Optional[str]:
+    for key in keys:
+        value = entry.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
 @dataclass
 class _PendingTurnConfig:
     model_payload: Optional[dict[str, str]]
@@ -532,7 +540,14 @@ class OpenCodeHarness(AgentHarness):
                 raise ValueError("OpenCode did not return a session id")
             if reserved_workspace is not None:
                 self._reserved_conversations[session_id] = reserved_workspace
-            return ConversationRef(agent=AgentId("opencode"), id=session_id)
+            conversation = self._conversation_ref_from_session(
+                result,
+                fallback_id=session_id,
+                fallback_title=title,
+            )
+            if conversation is None:
+                raise ValueError("OpenCode did not return a session id")
+            return conversation
         except (
             RuntimeError,
             OSError,
@@ -556,11 +571,9 @@ class OpenCodeHarness(AgentHarness):
             sessions = [entry for entry in result if isinstance(entry, dict)]
         conversations: list[ConversationRef] = []
         for entry in sessions:
-            session_id = extract_session_id(entry) or entry.get("id")
-            if isinstance(session_id, str) and session_id:
-                conversations.append(
-                    ConversationRef(agent=AgentId("opencode"), id=session_id)
-                )
+            conversation = self._conversation_ref_from_session(entry)
+            if conversation is not None:
+                conversations.append(conversation)
         return conversations
 
     async def resume_conversation(
@@ -588,7 +601,50 @@ class OpenCodeHarness(AgentHarness):
         session_id = extract_session_id(result) or conversation_id
         if reserved_workspace is not None:
             self._reserved_conversations[session_id] = reserved_workspace
-        return ConversationRef(agent=AgentId("opencode"), id=session_id)
+        conversation = self._conversation_ref_from_session(
+            result,
+            fallback_id=session_id,
+        )
+        if conversation is None:
+            raise ValueError("OpenCode did not return a session id")
+        return conversation
+
+    def _conversation_ref_from_session(
+        self,
+        session: Any,
+        *,
+        fallback_id: Optional[str] = None,
+        fallback_title: Optional[str] = None,
+    ) -> Optional[ConversationRef]:
+        entry = session if isinstance(session, dict) else {}
+        session_id = extract_session_id(entry) or entry.get("id") or fallback_id
+        if not isinstance(session_id, str) or not session_id:
+            return None
+        title = _first_text_field(
+            entry,
+            ("title", "name", "displayName", "summary"),
+        )
+        return ConversationRef(
+            agent=AgentId("opencode"),
+            id=session_id,
+            title=title or fallback_title,
+            summary=_first_text_field(
+                entry,
+                ("summary", "description", "subtitle"),
+            ),
+        )
+
+    async def set_conversation_title(
+        self, workspace_root: Path, conversation_id: str, title: str
+    ) -> None:
+        client = await self._supervisor.get_client(workspace_root)
+        updater = getattr(client, "update_session", None)
+        if not callable(updater):
+            return
+        try:
+            await updater(conversation_id, title=title)
+        except Exception:  # best-effort compatibility with older OpenCode servers
+            _logger.debug("Failed to set OpenCode session title", exc_info=True)
 
     async def start_turn(
         self,

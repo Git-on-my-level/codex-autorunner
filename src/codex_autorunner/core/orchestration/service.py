@@ -47,6 +47,7 @@ from .models import (
 )
 from .recovery_lifecycle import BusyInterruptFailedError, _ThreadRecoveryHelper
 from .runtime_bindings import RuntimeThreadBinding
+from .thread_titles import choose_owned_thread_title
 from .threads import SurfaceThreadMessageRequest, ThreadControlRequest
 
 MessagePreviewLimit = 120
@@ -448,6 +449,34 @@ class PmaThreadExecutionStore(ThreadExecutionStore):
             last_turn_id=execution_id,
             last_message_preview=message_preview,
         )
+        self.update_thread_title(
+            thread_target_id,
+            choose_owned_thread_title(None, message_preview=message_preview),
+            metadata={"car_title_source": "message_preview"},
+        )
+
+    def update_thread_title(
+        self,
+        thread_target_id: str,
+        title: Optional[str],
+        *,
+        metadata: Optional[dict[str, Any]] = None,
+        only_if_generic: bool = True,
+    ) -> Optional[ThreadTarget]:
+        updater = getattr(self._store, "update_thread_title", None)
+        if not callable(updater):
+            if metadata:
+                self._store.update_thread_metadata(thread_target_id, metadata)
+            return self.get_thread_target(thread_target_id)
+        updated = updater(
+            thread_target_id,
+            title,
+            metadata=metadata,
+            only_if_generic=only_if_generic,
+        )
+        if updated is None:
+            return None
+        return _thread_target_from_store_row(updated)
 
 
 @dataclass

@@ -100,6 +100,14 @@ def _select_display_name(model_id: str, display_name_raw: Any) -> str:
     return display_name_raw
 
 
+def _first_text_field(entry: dict[str, Any], keys: tuple[str, ...]) -> Optional[str]:
+    for key in keys:
+        value = entry.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
 class CodexHarness(AgentHarness):
     agent_id: AgentId = AgentId("codex")
     display_name = "Codex"
@@ -180,7 +188,17 @@ class CodexHarness(AgentHarness):
         thread_id = result.get("id")
         if not isinstance(thread_id, str) or not thread_id:
             raise ValueError("Codex app-server did not return a thread id")
-        return ConversationRef(agent=self.agent_id, id=thread_id)
+        if title:
+            await self.set_conversation_title(workspace_root, thread_id, title)
+            result = dict(result)
+            result["name"] = title
+        conversation = self._conversation_ref_from_thread_entry(
+            result,
+            fallback_id=thread_id,
+        )
+        if conversation is None:
+            raise ValueError("Codex app-server did not return a thread id")
+        return conversation
 
     async def list_conversations(self, workspace_root: Path) -> list[ConversationRef]:
         client = await self._supervisor.get_client(workspace_root)
@@ -188,9 +206,9 @@ class CodexHarness(AgentHarness):
         entries = _coerce_entries(result, ("threads", "data", "items", "results"))
         conversations: list[ConversationRef] = []
         for entry in entries:
-            thread_id = entry.get("id")
-            if isinstance(thread_id, str) and thread_id:
-                conversations.append(ConversationRef(agent=self.agent_id, id=thread_id))
+            conversation = self._conversation_ref_from_thread_entry(entry)
+            if conversation is not None:
+                conversations.append(conversation)
         return conversations
 
     async def resume_conversation(
@@ -213,7 +231,47 @@ class CodexHarness(AgentHarness):
             candidate = result.get("id")
             if isinstance(candidate, str) and candidate:
                 thread_id = candidate
+            conversation = self._conversation_ref_from_thread_entry(
+                result,
+                fallback_id=thread_id,
+            )
+            if conversation is not None:
+                return conversation
         return ConversationRef(agent=self.agent_id, id=thread_id)
+
+    def _conversation_ref_from_thread_entry(
+        self,
+        entry: dict[str, Any],
+        *,
+        fallback_id: Optional[str] = None,
+    ) -> Optional[ConversationRef]:
+        thread_id = entry.get("id") or entry.get("threadId") or fallback_id
+        if not isinstance(thread_id, str) or not thread_id:
+            return None
+        return ConversationRef(
+            agent=self.agent_id,
+            id=thread_id,
+            title=_first_text_field(
+                entry,
+                ("name", "title", "thread_name", "displayName", "preview"),
+            ),
+            summary=_first_text_field(
+                entry,
+                ("summary", "description", "subtitle"),
+            ),
+        )
+
+    async def set_conversation_title(
+        self, workspace_root: Path, conversation_id: str, title: str
+    ) -> None:
+        client = await self._supervisor.get_client(workspace_root)
+        setter = getattr(client, "thread_name_set", None)
+        if not callable(setter):
+            return
+        try:
+            await setter(conversation_id, title)
+        except Exception:  # best-effort compatibility with older Codex app servers
+            logger.debug("Failed to set Codex thread title", exc_info=True)
 
     async def start_turn(
         self,

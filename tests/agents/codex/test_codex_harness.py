@@ -129,6 +129,53 @@ async def test_codex_harness_resume_conversation_ignores_missing_thread_failures
 
 
 @pytest.mark.asyncio
+async def test_codex_harness_surfaces_native_thread_titles() -> None:
+    class _Client:
+        async def thread_list(self) -> dict[str, Any]:
+            return {
+                "threads": [
+                    {
+                        "id": "thread-1",
+                        "name": "Compare chat title sources",
+                        "summary": "summary",
+                    }
+                ]
+            }
+
+    harness = CodexHarness(supervisor=_Supervisor(_Client()), events=object())  # type: ignore[arg-type]
+
+    conversations = await harness.list_conversations(Path("."))
+
+    assert conversations[0].id == "thread-1"
+    assert conversations[0].title == "Compare chat title sources"
+    assert conversations[0].summary == "summary"
+
+
+@pytest.mark.asyncio
+async def test_codex_harness_sets_native_thread_title_after_create() -> None:
+    class _Client:
+        def __init__(self) -> None:
+            self.name_set_calls: list[tuple[str, str]] = []
+
+        async def thread_start(self, _workspace: str) -> dict[str, Any]:
+            return {"id": "thread-1"}
+
+        async def thread_name_set(self, thread_id: str, name: str) -> None:
+            self.name_set_calls.append((thread_id, name))
+
+    client = _Client()
+    harness = CodexHarness(supervisor=_Supervisor(client), events=object())  # type: ignore[arg-type]
+
+    conversation = await harness.new_conversation(
+        Path("."),
+        title="Compare chat title sources",
+    )
+
+    assert conversation.title == "Compare chat title sources"
+    assert client.name_set_calls == [("thread-1", "Compare chat title sources")]
+
+
+@pytest.mark.asyncio
 async def test_codex_harness_resume_conversation_propagates_non_missing_failures() -> (
     None
 ):

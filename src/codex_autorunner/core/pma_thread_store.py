@@ -20,6 +20,11 @@ from .orchestration.runtime_bindings import (
     get_runtime_thread_binding,
     set_runtime_thread_binding,
 )
+from .orchestration.thread_titles import (
+    choose_owned_thread_title,
+    is_generic_thread_title,
+    normalize_thread_title,
+)
 from .pma_thread_store_bootstrap import (
     PMA_THREADS_DB_FILENAME,
     PmaThreadStoreBootstrap,
@@ -578,6 +583,79 @@ class PmaThreadStore:
                      WHERE thread_target_id = ?
                     """,
                     (
+                        _json_dumps(updated_metadata),
+                        changed_at,
+                        managed_thread_id,
+                    ),
+                )
+            return self._fetch_thread(conn, managed_thread_id)
+
+    def update_thread_title(
+        self,
+        managed_thread_id: str,
+        title: Optional[str],
+        *,
+        metadata: Optional[dict[str, Any]] = None,
+        only_if_generic: bool = True,
+    ) -> Optional[dict[str, Any]]:
+        metadata_patch = _sanitize_thread_metadata(metadata or {})
+        with self._write_conn() as conn:
+            thread = self._fetch_thread(conn, managed_thread_id)
+            if thread is None:
+                return None
+            current_title = _coerce_text(
+                thread.get("display_name") or thread.get("name")
+            )
+            current_metadata = _sanitize_thread_metadata(
+                dict(thread.get("metadata") or {})
+            )
+            current_title_source = _coerce_text(
+                current_metadata.get("car_title_source")
+            )
+            incoming_title = normalize_thread_title(title)
+            may_replace_preview_title = (
+                current_title_source == "message_preview"
+                and incoming_title is not None
+                and not is_generic_thread_title(incoming_title)
+            )
+            next_title = (
+                incoming_title
+                if may_replace_preview_title
+                else choose_owned_thread_title(
+                    current_title,
+                    provider_title=title,
+                )
+            )
+            should_update_title = (
+                next_title is not None
+                and next_title != current_title
+                and (
+                    not only_if_generic
+                    or is_generic_thread_title(current_title)
+                    or may_replace_preview_title
+                )
+            )
+            if not should_update_title and "car_title_source" in metadata_patch:
+                metadata_patch = dict(metadata_patch)
+                metadata_patch.pop("car_title_source", None)
+            updated_metadata = dict(current_metadata)
+            updated_metadata.update(metadata_patch)
+            should_update_metadata = updated_metadata != current_metadata
+            if not should_update_title and not should_update_metadata:
+                return thread
+            changed_at = now_iso()
+            with conn:
+                conn.execute(
+                    """
+                    UPDATE orch_thread_targets
+                       SET display_name = CASE WHEN ? THEN ? ELSE display_name END,
+                           metadata_json = ?,
+                           updated_at = ?
+                     WHERE thread_target_id = ?
+                    """,
+                    (
+                        1 if should_update_title else 0,
+                        next_title,
                         _json_dumps(updated_metadata),
                         changed_at,
                         managed_thread_id,
