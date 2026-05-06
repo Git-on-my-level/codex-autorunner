@@ -1,0 +1,226 @@
+import {
+  dataOr,
+  partialPageIssue,
+  type ApiError,
+  type ApiResult,
+  type JsonRecord,
+  type PartialPageIssue,
+  type RequestOptions
+} from '$lib/api/client';
+import type { PmaChatSummary, PmaRunProgress, SurfaceArtifact, TicketSummary } from '$lib/viewModels/domain';
+import {
+  buildTicketListViewModel,
+  type TicketListViewModel,
+  type TicketOwnerScope
+} from '$lib/viewModels/ticket';
+import { rememberTickets } from '$lib/viewModels/ticketCache';
+
+export type ScopedTicketQueueKind = 'repo' | 'worktree';
+export type ScopedTicketQueueCommand = 'start' | 'stop' | 'restart';
+export type ScopedTicketQueueOwner = { repo: string } | { worktree: string };
+
+export type ScopedTicketQueueConfig = {
+  kind: ScopedTicketQueueKind;
+  resourceId: string;
+  apiBasePath: string;
+  displayLabel: string;
+};
+
+export type ScopedTicketQueueLoadResult =
+  | {
+      ok: true;
+      list: TicketListViewModel;
+      sectionIssues: PartialPageIssue[];
+    }
+  | {
+      ok: false;
+      error: ApiError;
+    };
+
+export type ScopedTicketQueueCommandRequest = {
+  path: string;
+  options: RequestOptions;
+};
+
+export type ScopedTicketQueueCommandPlan = {
+  requests: ScopedTicketQueueCommandRequest[];
+};
+
+export type ScopedTicketQueueCommandResult = {
+  status: string | null;
+  shouldReload: boolean;
+};
+
+type ScopedTicketQueueApi = {
+  requestJson<T>(path: string, options?: RequestOptions): Promise<ApiResult<T>>;
+  ticketFlow: {
+    listTickets(owner: ScopedTicketQueueOwner): Promise<ApiResult<TicketSummary[]>>;
+    listRuns(owner: ScopedTicketQueueOwner): Promise<ApiResult<PmaRunProgress[]>>;
+    createTicket(
+      body: { agent?: string; title?: string; goal?: string; body?: string; profile?: string },
+      owner: ScopedTicketQueueOwner
+    ): Promise<ApiResult<unknown>>;
+    reorderTicket(
+      sourceIndex: number,
+      destinationIndex: number,
+      placeAfter: boolean,
+      owner: ScopedTicketQueueOwner
+    ): Promise<ApiResult<JsonRecord>>;
+  };
+  pma: {
+    listChats(): Promise<ApiResult<PmaChatSummary[]>>;
+  };
+};
+
+export function scopedTicketQueueOwner(config: Pick<ScopedTicketQueueConfig, 'kind' | 'resourceId'>): ScopedTicketQueueOwner {
+  return config.kind === 'repo' ? { repo: config.resourceId } : { worktree: config.resourceId };
+}
+
+export function scopedTicketQueueScope(config: Pick<ScopedTicketQueueConfig, 'kind' | 'resourceId'>): Exclude<TicketOwnerScope, null> {
+  return { kind: config.kind, id: config.resourceId };
+}
+
+export async function loadScopedTicketQueue(
+  api: ScopedTicketQueueApi,
+  config: ScopedTicketQueueConfig,
+  onTicketsLoaded?: (list: TicketListViewModel) => void
+): Promise<ScopedTicketQueueLoadResult> {
+  const owner = scopedTicketQueueOwner(config);
+  const tickets = await api.ticketFlow.listTickets(owner);
+  if (!tickets.ok) return { ok: false, error: tickets.error };
+
+  rememberTickets(owner, tickets.data);
+  const scope = scopedTicketQueueScope(config);
+  onTicketsLoaded?.(buildScopedTicketList(tickets.data, [], [], scope));
+  const [runs, chats] = await Promise.all([api.ticketFlow.listRuns(owner), api.pma.listChats()]);
+  return {
+    ok: true,
+    list: buildScopedTicketList(tickets.data, dataOr(runs, []), dataOr(chats, []), scope),
+    sectionIssues: [
+      !runs.ok ? partialPageIssue('timeline', 'Run state unavailable', runs.error) : null,
+      !chats.ok ? partialPageIssue('linked_chat', 'PMA chats unavailable', chats.error) : null
+    ].filter((issue): issue is PartialPageIssue => Boolean(issue))
+  };
+}
+
+export async function createScopedTicket(
+  api: ScopedTicketQueueApi,
+  config: ScopedTicketQueueConfig,
+  payload: { title: string; body: string }
+): Promise<{ ok: boolean; status: string }> {
+  const result = await api.ticketFlow.createTicket(
+    { agent: 'codex', title: payload.title, body: payload.body },
+    scopedTicketQueueOwner(config)
+  );
+  return { ok: result.ok, status: result.ok ? 'Ticket created.' : result.error.message };
+}
+
+export async function reorderScopedTicket(
+  api: ScopedTicketQueueApi,
+  config: ScopedTicketQueueConfig,
+  sourceRouteId: string,
+  destinationRouteId: string,
+  placeAfter: boolean
+): Promise<{ ok: boolean; status: string }> {
+  const sourceIndex = Number(sourceRouteId);
+  const destinationIndex = Number(destinationRouteId);
+  if (!Number.isInteger(sourceIndex) || !Number.isInteger(destinationIndex)) {
+    return { ok: false, status: 'Only numbered tickets can be reordered.' };
+  }
+  const result = await api.ticketFlow.reorderTicket(
+    sourceIndex,
+    destinationIndex,
+    placeAfter,
+    scopedTicketQueueOwner(config)
+  );
+  return { ok: result.ok, status: result.ok ? 'Ticket order updated.' : result.error.message };
+}
+
+export function scopedTicketActionStatus(
+  action: 'create' | 'reorder' | ScopedTicketQueueCommand,
+  config: Pick<ScopedTicketQueueConfig, 'displayLabel'>
+): string {
+  switch (action) {
+    case 'create':
+      return `Creating ${config.displayLabel} ticket...`;
+    case 'reorder':
+      return `Reordering ${config.displayLabel} tickets...`;
+    case 'start':
+      return `Starting ${config.displayLabel} ticket flow...`;
+    case 'stop':
+      return `Stopping ${config.displayLabel} ticket flow...`;
+    case 'restart':
+      return `Restarting ${config.displayLabel} ticket flow...`;
+  }
+}
+
+export function scopedTicketMissingRunStatus(config: Pick<ScopedTicketQueueConfig, 'displayLabel'>): string {
+  return `No ${config.displayLabel} ticket flow run found.`;
+}
+
+export function buildScopedTicketQueueCommandPlan(
+  command: ScopedTicketQueueCommand,
+  config: Pick<ScopedTicketQueueConfig, 'apiBasePath'>,
+  runId: string | null
+): ScopedTicketQueueCommandPlan | null {
+  if ((command === 'stop' || command === 'restart') && !runId) return null;
+  if (command === 'start') {
+    return {
+      requests: [{ path: `${config.apiBasePath}/ticket_flow/bootstrap`, options: { method: 'POST', body: {} } }]
+    };
+  }
+  const stopRequest = {
+    path: `${config.apiBasePath}/${encodeURIComponent(runId!)}/stop`,
+    options: { method: 'POST' }
+  };
+  if (command === 'stop') return { requests: [stopRequest] };
+  return {
+    requests: [
+      stopRequest,
+      {
+        path: `${config.apiBasePath}/ticket_flow/bootstrap`,
+        options: { method: 'POST', body: { metadata: { force_new: true } } }
+      }
+    ]
+  };
+}
+
+export async function runScopedTicketQueueCommand(
+  api: Pick<ScopedTicketQueueApi, 'requestJson'>,
+  config: ScopedTicketQueueConfig,
+  command: ScopedTicketQueueCommand,
+  runId: string | null,
+  confirmRestart: () => boolean
+): Promise<ScopedTicketQueueCommandResult> {
+  if ((command === 'stop' || command === 'restart') && !runId) {
+    return { status: scopedTicketMissingRunStatus(config), shouldReload: false };
+  }
+  if (command === 'restart' && !confirmRestart()) {
+    return { status: null, shouldReload: false };
+  }
+  const plan = buildScopedTicketQueueCommandPlan(command, config, runId);
+  if (!plan) return { status: scopedTicketMissingRunStatus(config), shouldReload: false };
+
+  for (const request of plan.requests) {
+    const result = await api.requestJson<JsonRecord>(request.path, request.options);
+    if (!result.ok) return { status: result.error.message, shouldReload: true };
+  }
+  return { status: 'Ticket flow command accepted.', shouldReload: true };
+}
+
+function buildScopedTicketList(
+  tickets: TicketSummary[],
+  runs: PmaRunProgress[],
+  chats: PmaChatSummary[],
+  scope: Exclude<TicketOwnerScope, null>
+): TicketListViewModel {
+  return buildTicketListViewModel(
+    {
+      tickets,
+      runs,
+      chats,
+      artifacts: [] as SurfaceArtifact[]
+    },
+    scope
+  );
+}
