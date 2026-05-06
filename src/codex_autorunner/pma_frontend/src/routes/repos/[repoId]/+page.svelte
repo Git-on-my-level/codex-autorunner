@@ -32,9 +32,9 @@
     const [repos, worktrees, runs, chats, tickets] = await Promise.all([
       pmaApi.hub.listRepos(),
       pmaApi.hub.listWorktrees(),
-      pmaApi.ticketFlow.listRuns(),
+      pmaApi.ticketFlow.listRuns({ repo: repoId }),
       pmaApi.pma.listChats(),
-      pmaApi.ticketFlow.listTickets()
+      pmaApi.ticketFlow.listTickets({ repo: repoId })
     ]);
     const primaryError = !repos.ok ? repos.error : !worktrees.ok ? worktrees.error : null;
     if (primaryError) {
@@ -63,7 +63,7 @@
       return;
     }
     const artifactResults = await Promise.all(
-      baseDetail.currentRuns.filter((run) => run.logsHref).map((run) => pmaApi.ticketFlow.listArtifacts(run.id))
+      baseDetail.currentRuns.filter((run) => run.logsHref).map((run) => pmaApi.ticketFlow.listArtifacts(run.id, { repo: repoId }))
     );
     const artifactIssues = artifactResults
       .filter((result): result is { ok: false; error: ApiError } => !result.ok)

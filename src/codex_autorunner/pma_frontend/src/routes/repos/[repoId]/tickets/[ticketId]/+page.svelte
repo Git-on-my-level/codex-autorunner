@@ -71,13 +71,13 @@
     detail = buildTicketDetailViewModel(ticketDetail, { tickets: ticketList, runs: [], chats: [], artifacts: [] });
     sectionIssues = [];
     loading = false;
-    const [runs, chats] = await Promise.all([pmaApi.ticketFlow.listRuns(), pmaApi.pma.listChats()]);
+    const [runs, chats] = await Promise.all([pmaApi.ticketFlow.listRuns({ repo: ownerId }), pmaApi.pma.listChats()]);
     const baseIssues = [
       !runs.ok ? partialPageIssue('timeline', 'Run state unavailable', runs.error) : null,
       !chats.ok ? partialPageIssue('linked_chat', 'PMA chats unavailable', chats.error) : null
     ].filter((issue): issue is PartialPageIssue => Boolean(issue));
     if (!isCurrentRequest()) return;
-    await renderTicketDetail(ticketDetail, ticketList, dataOr(runs, []), dataOr(chats, []), baseIssues, isCurrentRequest);
+    await renderTicketDetail(ticketDetail, ticketList, dataOr(runs, []), dataOr(chats, []), baseIssues, ownerId, isCurrentRequest);
   }
 
   function renderCachedTicket(ticketList: TicketSummary[], ownerId: string, routeTicketId: string): void {
@@ -99,6 +99,7 @@
     runs: PmaRunProgress[],
     chats: PmaChatSummary[],
     baseIssues: PartialPageIssue[],
+    ownerId: string,
     isCurrentRequest = () => true
   ): Promise<void> {
     if (!isCurrentRequest()) return;
@@ -108,7 +109,7 @@
     detail = baseDetail;
     sectionIssues = baseIssues;
     loading = false;
-    const artifactResult = currentRunId ? await pmaApi.ticketFlow.listArtifacts(currentRunId) : null;
+    const artifactResult = currentRunId ? await pmaApi.ticketFlow.listArtifacts(currentRunId, { repo: ownerId }) : null;
     if (!isCurrentRequest()) return;
     sectionIssues = artifactResult && !artifactResult.ok
       ? [...baseIssues, partialPageIssue('artifacts', 'Surfaced artifacts unavailable', artifactResult.error)]

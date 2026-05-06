@@ -40,7 +40,7 @@
     );
     selectedFilter = 'open';
     loading = false;
-    const [runs, chats] = await Promise.all([pmaApi.ticketFlow.listRuns(), pmaApi.pma.listChats()]);
+    const [runs, chats] = await Promise.all([pmaApi.ticketFlow.listRuns({ repo: repoId }), pmaApi.pma.listChats()]);
     sectionIssues = [
       !runs.ok ? partialPageIssue('timeline', 'Run state unavailable', runs.error) : null,
       !chats.ok ? partialPageIssue('linked_chat', 'PMA chats unavailable', chats.error) : null
@@ -56,6 +56,28 @@
     );
     selectedFilter = 'open';
     loading = false;
+  }
+
+  async function createTicket(payload: { title: string; body: string }): Promise<boolean> {
+    actionStatus = 'Creating repo ticket...';
+    const result = await pmaApi.ticketFlow.createTicket({ agent: 'codex', title: payload.title, body: payload.body }, { repo: repoId });
+    actionStatus = result.ok ? 'Ticket created.' : result.error.message;
+    if (result.ok) await loadTickets();
+    return result.ok;
+  }
+
+  async function reorderTicket(sourceRouteId: string, destinationRouteId: string, placeAfter: boolean): Promise<boolean> {
+    const sourceIndex = Number(sourceRouteId);
+    const destinationIndex = Number(destinationRouteId);
+    if (!Number.isInteger(sourceIndex) || !Number.isInteger(destinationIndex)) {
+      actionStatus = 'Only numbered tickets can be reordered.';
+      return false;
+    }
+    actionStatus = 'Reordering repo tickets...';
+    const result = await pmaApi.ticketFlow.reorderTicket(sourceIndex, destinationIndex, placeAfter, { repo: repoId });
+    actionStatus = result.ok ? 'Ticket order updated.' : result.error.message;
+    if (result.ok) await loadTickets();
+    return result.ok;
   }
 
   async function runQueueCommand(command: 'start' | 'stop' | 'restart'): Promise<void> {
@@ -101,5 +123,7 @@
   onRetry={loadTickets}
   onFilter={(filter) => (selectedFilter = filter)}
   onQueueCommand={runQueueCommand}
+  onCreateTicket={createTicket}
+  onReorderTicket={reorderTicket}
   errorMessage={error?.message ?? null}
 />

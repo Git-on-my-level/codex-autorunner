@@ -43,6 +43,63 @@ describe('TicketViews', () => {
     expect(body).toContain('Tickets without a registered owner are flagged for ownership repair');
   });
 
+  it('renders scoped queue status, create, reorder, and row affordances', () => {
+    const list = buildTicketListViewModel(
+      {
+        tickets: [
+          {
+            ...mockTicketSummary,
+            workspaceKind: 'repo',
+            workspaceId: 'repo-1',
+            repoId: 'repo-1',
+            worktreeId: null,
+            raw: { body: 'Implement the current ticket body preview.' }
+          },
+          {
+            ...mockTicketSummary,
+            id: 'TICKET-111',
+            number: 111,
+            title: 'Follow-up polish',
+            status: 'waiting',
+            path: '.codex-autorunner/tickets/TICKET-111.md',
+            ticketPath: '.codex-autorunner/tickets/TICKET-111.md',
+            workspaceKind: 'repo',
+            workspaceId: 'repo-1',
+            repoId: 'repo-1',
+            worktreeId: null,
+            raw: {}
+          }
+        ],
+        runs: [{ ...mockRunProgress, raw: { repo_id: 'repo-1', current_ticket: '.codex-autorunner/tickets/TICKET-110.md', turn_count: 4 } }],
+        chats: [{ ...mockChatSummary, repoId: 'repo-1', worktreeId: null }],
+        artifacts: []
+      },
+      { kind: 'repo', id: 'repo-1' }
+    );
+
+    const { body } = render(TicketViews, {
+      props: {
+        state: 'ready',
+        mode: 'list',
+        list,
+        selectedFilter: 'open',
+        onCreateTicket: async () => true,
+        onReorderTicket: async () => true
+      }
+    });
+
+    expect(body).toContain('Ticket flow controls');
+    expect(body).toContain('Done/total');
+    expect(body).toContain('4');
+    expect(body).toContain('Create ticket');
+    expect(body).toContain('working-badge');
+    expect(body).toContain('Implement the current ticket body preview.');
+    expect(body).toContain('+80 -5 4 files');
+    expect(body).toContain('2m 0s');
+    expect(body).toContain('Move #110 down');
+    expect(body).not.toContain('All workspaces');
+  });
+
   it('renders ticket contract sections on detail pages', () => {
     const detail = buildTicketDetailViewModel(
       {

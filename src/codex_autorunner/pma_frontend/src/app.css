@@ -1800,11 +1800,30 @@ textarea:hover {
   background: var(--color-surface-muted);
 }
 
+.workspace-ticket-row.waiting,
+.workspace-ticket-row.blocked {
+  border-left: 4px solid var(--color-warning);
+}
+
+.workspace-ticket-row.failed {
+  border-left: 4px solid var(--color-danger);
+}
+
+.workspace-ticket-row.current {
+  border-color: color-mix(in srgb, var(--color-success) 48%, var(--color-border-subtle));
+  background: color-mix(in srgb, var(--color-success) 7%, var(--color-surface));
+}
+
+.workspace-ticket-row.done {
+  opacity: 0.68;
+}
+
 .workspace-ticket-row > span:first-child {
   min-width: 0;
   display: flex;
   align-items: baseline;
   gap: var(--space-2);
+  flex-wrap: wrap;
 }
 
 .workspace-ticket-row strong {
@@ -2517,6 +2536,85 @@ textarea:disabled {
   padding: 0 var(--space-2);
 }
 
+.ticket-flow-strip {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid var(--color-border-subtle);
+  border-left: 4px solid var(--color-border-strong);
+  border-radius: 8px;
+  background: var(--color-surface);
+}
+
+.ticket-flow-strip.active {
+  border-left-color: var(--color-success);
+}
+
+.ticket-flow-strip.waiting {
+  border-left-color: var(--color-warning);
+}
+
+.ticket-flow-strip.blocked,
+.ticket-flow-strip.failed {
+  border-left-color: var(--color-danger);
+}
+
+.ticket-flow-strip > div {
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  border-right: 1px solid var(--color-border-subtle);
+}
+
+.ticket-flow-strip > div:last-child {
+  border-right: 0;
+}
+
+.ticket-flow-strip span,
+.ticket-flow-strip strong,
+.ticket-flow-strip a {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ticket-flow-strip span {
+  color: var(--color-ink-muted);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.ticket-flow-strip strong,
+.ticket-flow-strip a {
+  margin-top: 2px;
+  color: var(--color-ink);
+  font-size: var(--font-size-0);
+  font-weight: 650;
+}
+
+.ticket-flow-strip a {
+  color: var(--color-accent);
+}
+
+.ticket-create-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 0.8fr) minmax(180px, 1fr) auto;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.ticket-create-row input {
+  min-width: 0;
+  min-height: 32px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 6px;
+  background: var(--color-surface);
+  color: var(--color-ink);
+}
+
 .contextspace-layout {
   display: grid;
   grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
@@ -2896,7 +2994,7 @@ textarea:disabled {
 .ticket-table-head,
 .ticket-row {
   display: grid;
-  grid-template-columns: minmax(180px, 1.7fr) minmax(110px, 0.9fr) minmax(68px, 0.65fr) minmax(72px, 0.65fr) minmax(68px, 0.65fr) minmax(72px, 0.65fr) minmax(64px, 0.65fr);
+  grid-template-columns: minmax(180px, 1.7fr) minmax(110px, 0.9fr) minmax(68px, 0.65fr) minmax(72px, 0.65fr) minmax(68px, 0.65fr) minmax(72px, 0.65fr) minmax(72px, 0.65fr) minmax(64px, 0.65fr);
   align-items: center;
   gap: var(--space-2);
 }
@@ -2931,6 +3029,15 @@ textarea:disabled {
   border-left: 4px solid var(--color-danger);
 }
 
+.ticket-row.current {
+  border-color: color-mix(in srgb, var(--color-success) 48%, var(--color-border-subtle));
+  background: color-mix(in srgb, var(--color-success) 7%, var(--color-surface));
+}
+
+.ticket-row.done {
+  opacity: 0.68;
+}
+
 .ticket-row-title {
   display: grid;
   grid-template-columns: 54px minmax(0, 1fr);
@@ -2949,6 +3056,55 @@ textarea:disabled {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.ticket-row-title small,
+.workspace-ticket-row small {
+  display: block;
+  min-width: 0;
+  margin-top: 2px;
+  overflow: hidden;
+  color: var(--color-ink-muted);
+  font-size: 11px;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.working-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
+  margin-left: var(--space-2);
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--color-success);
+  color: white;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 720;
+  vertical-align: middle;
+}
+
+.row-move-actions {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.row-move-actions button {
+  min-height: 24px;
+  padding: 0 6px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 5px;
+  background: var(--color-surface);
+  color: var(--color-ink-muted);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.row-move-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .ticket-detail-grid {
@@ -3558,6 +3714,14 @@ textarea:disabled {
     grid-template-columns: 1fr;
   }
 
+  .ticket-flow-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ticket-flow-strip .flow-reason {
+    grid-column: 1 / -1;
+  }
+
   .chat-list {
     width: 100%;
     max-width: 100%;
@@ -3669,6 +3833,7 @@ textarea:disabled {
 
   .settings-grid,
   .settings-form-grid,
+  .ticket-create-row,
   .detail-grid,
   .ticket-workspace-grid,
   .ticket-detail-grid,

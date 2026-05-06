@@ -1,5 +1,12 @@
 import type { PmaChatSummary, PmaRunProgress, SurfaceArtifact, TicketDetail, TicketSummary, WorkStatus } from './domain';
 import { formatRelativeTime, progressPercent, statusLabel } from './pmaChat';
+import {
+  aliasesOverlap,
+  buildTicketFlowStatusViewModel,
+  ticketAliases,
+  ticketAliasesFromRun,
+  type TicketFlowStatusViewModel
+} from './ticketFlowStatus';
 
 export type TicketFilter = 'needs_attention' | 'active' | 'waiting' | 'failed' | 'open' | 'done_recent';
 
@@ -39,6 +46,8 @@ export type TicketListRow = {
   agentLabel: string;
   modelLabel: string | null;
   diffLabel: string | null;
+  durationLabel: string | null;
+  bodyPreview: string | null;
   status: WorkStatus;
   currentRunState: WorkStatus | null;
   currentRunId: string | null;
@@ -46,6 +55,7 @@ export type TicketListRow = {
   chatHref: string | null;
   href: string;
   needsAttention: boolean;
+  isCurrent: boolean;
 };
 
 export type TicketQueueRun = {
@@ -64,6 +74,7 @@ export type TicketListViewModel = {
   filters: { id: TicketFilter; label: string; count: number }[];
   workspaceFilters: { id: string; label: string; count: number }[];
   queueRun: TicketQueueRun | null;
+  flowStatus: TicketFlowStatusViewModel;
   rows: TicketListRow[];
 };
 
@@ -146,6 +157,8 @@ export function buildTicketListViewModel(source: TicketSourceData, owner: Ticket
   const rows = source.tickets.map((ticket) => ticketToListRow(ticket, source)).sort(owner ? byTicketNumberThenTitle : bySignalThenRecent);
   const ownerLabel = owner?.label || owner?.id;
   const queueRun = owner ? findQueueRun(source.runs, owner) ?? findQueueRunFromRows(rows) : null;
+  const flowStatus = buildTicketFlowStatusViewModel(source.tickets, source.runs, owner);
+  const rowsWithCurrent = rows.map((row) => ({ ...row, isCurrent: row.id === flowStatus.currentTicketId || row.routeId === flowStatus.currentTicketId }));
   return {
     title: owner ? `${ownerLabel} tickets` : 'Tickets',
     eyebrow: owner ? `${owner.kind === 'repo' ? 'Repo' : 'Worktree'} ticket queue` : 'All-ticket projection',
@@ -159,11 +172,12 @@ export function buildTicketListViewModel(source: TicketSourceData, owner: Ticket
     filters: (Object.keys(filterLabels) as TicketFilter[]).map((id) => ({
       id,
       label: filterLabels[id],
-      count: rows.filter((row) => rowMatchesFilter(row, id)).length
+      count: rowsWithCurrent.filter((row) => rowMatchesFilter(row, id)).length
     })),
-    workspaceFilters: buildWorkspaceFilters(rows),
+    workspaceFilters: buildWorkspaceFilters(rowsWithCurrent),
     queueRun,
-    rows
+    flowStatus,
+    rows: rowsWithCurrent
   };
 }
 
@@ -231,16 +245,8 @@ export function resolveTicketRouteId(tickets: TicketSummary[], routeId: string):
 
 export function resolveTicketRouteMatches(tickets: TicketSummary[], routeId: string): TicketSummary[] {
   const decoded = decodeURIComponent(routeId);
-  const normalized = decoded.toLowerCase();
-  return tickets.filter(
-    (ticket) =>
-      (ticket.number !== null && String(ticket.number) === decoded) ||
-      ticket.id === decoded ||
-      ticket.path === decoded ||
-      ticket.ticketPath === decoded ||
-      Boolean(ticket.path?.toLowerCase().endsWith(`ticket-${normalized.padStart(3, '0')}.md`)) ||
-      Boolean(ticket.ticketPath?.toLowerCase().endsWith(`ticket-${normalized.padStart(3, '0')}.md`))
-  );
+  const routeAliases = new Set([decoded, decoded.replace(/\.md$/i, ''), numericTicketAlias(decoded)].filter((value): value is string => Boolean(value)).flatMap((value) => [normalizeAlias(value), normalizeAlias(`${value}.md`)]));
+  return tickets.filter((ticket) => aliasesOverlap(ticketAliases(ticket), routeAliases));
 }
 
 export function ticketDetailFromSummary(ticket: TicketSummary): TicketDetail {
@@ -285,13 +291,16 @@ function ticketToListRow(ticket: TicketSummary, source: TicketSourceData): Ticke
     agentLabel: ticket.agentId ?? chat?.agentId ?? 'Unassigned',
     modelLabel: stringFromRaw(asRecord(ticket.raw.frontmatter), ['model']),
     diffLabel: diffLabel(ticket),
+    durationLabel: formatDuration(ticket.durationSeconds),
+    bodyPreview: bodyPreview(ticket),
     status: ticket.status,
     currentRunState: run?.status ?? chat?.status ?? null,
     currentRunId: run?.id ?? null,
     updatedAt: ticket.updatedAt ?? run?.lastEventAt ?? chat?.updatedAt ?? null,
     chatHref: chat ? `/pma?chat=${encodeURIComponent(chat.id)}` : ticket.chatKey ? `/pma?chat=${encodeURIComponent(ticket.chatKey)}` : null,
     href: scopedTicketHref(ticket) ?? `/tickets/${encodeURIComponent(routeIdForTicket(ticket))}`,
-    needsAttention: ticket.errors.length > 0 || ['waiting', 'failed', 'blocked'].includes(status)
+    needsAttention: ticket.errors.length > 0 || ['waiting', 'failed', 'blocked'].includes(status),
+    isCurrent: false
   };
 }
 
@@ -343,6 +352,20 @@ function diffLabel(ticket: TicketSummary): string | null {
     stats.filesChanged ? `${stats.filesChanged} files` : null
   ].filter(Boolean);
   return parts.length ? parts.join(' ') : null;
+}
+
+function formatDuration(seconds: number | null): string | null {
+  if (seconds === null) return null;
+  const safeSeconds = Math.max(0, Math.round(seconds));
+  const minutes = Math.floor(safeSeconds / 60);
+  const remainingSeconds = safeSeconds % 60;
+  return minutes ? `${minutes}m ${remainingSeconds}s` : `${remainingSeconds}s`;
+}
+
+function bodyPreview(ticket: TicketSummary): string | null {
+  const body = bodyFromTicketSummary(ticket).replace(/\s+/g, ' ').trim();
+  if (!body) return null;
+  return body.length > 120 ? `${body.slice(0, 117)}...` : body;
 }
 
 function buildWorkspaceFilters(rows: TicketListRow[]): { id: string; label: string; count: number }[] {
@@ -465,7 +488,7 @@ function finishSection(section: TicketContractSection): TicketContractSection {
 
 function findTicketRun(ticket: TicketSummary, runs: PmaRunProgress[]): PmaRunProgress | null {
   const aliases = ticketAliases(ticket);
-  return runs.find((run) => ticketAliasesFromRun(run).some((alias) => aliases.has(alias))) ?? null;
+  return runs.find((run) => aliasesOverlap(aliases, ticketAliasesFromRun(run))) ?? null;
 }
 
 function findTicketChat(ticket: TicketSummary, chats: PmaChatSummary[], run: PmaRunProgress | null): PmaChatSummary | null {
@@ -482,23 +505,12 @@ function findTicketChat(ticket: TicketSummary, chats: PmaChatSummary[], run: Pma
   }) ?? null;
 }
 
-function ticketAliases(ticket: TicketSummary): Set<string> {
-  return new Set(
-    [ticket.id, ticket.path, ticket.ticketPath, ticket.chatKey, ticket.number ? `TICKET-${String(ticket.number).padStart(3, '0')}.md` : null, ticket.number ? String(ticket.number) : null]
-      .filter(Boolean)
-      .map((value) => normalizeAlias(String(value)))
-  );
-}
-
-function ticketAliasesFromRun(run: PmaRunProgress): string[] {
-  return ['ticket_id', 'current_ticket_id', 'current_ticket', 'ticket_path']
-    .map((key) => stringFromRaw(run.raw, [key, `ticket_engine.${key}`, `state.ticket_engine.${key}`, `state.${key}`]))
-    .filter((value): value is string => Boolean(value))
-    .map(normalizeAlias);
-}
-
 function normalizeAlias(value: string): string {
-  return value.trim().toLowerCase().replace(/^.*\/(ticket-\d+.*\.md)$/i, '$1');
+  return value.trim().replace(/\\/g, '/').toLowerCase().replace(/^.*\/(ticket-\d+.*(?:\.md)?)$/i, '$1');
+}
+
+function numericTicketAlias(value: string): string | null {
+  return /^\d+$/.test(value) ? `TICKET-${value.padStart(3, '0')}` : null;
 }
 
 function syntheticChat(ticket: TicketDetail, run: PmaRunProgress): PmaChatSummary {

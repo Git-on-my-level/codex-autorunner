@@ -235,6 +235,26 @@
       </dl>
     </section>
 
+    <section class={`ticket-flow-strip ${detail.flowStatus.signal}`} aria-label="Ticket flow status">
+      <div>
+        <span>Status</span>
+        <strong>{detail.flowStatus.statusLabel}</strong>
+      </div>
+      <div>
+        <span>Current ticket</span>
+        {#if detail.flowStatus.currentTicketHref}
+          <a href={href(detail.flowStatus.currentTicketHref)}>{detail.flowStatus.currentTicketLabel}</a>
+        {:else}
+          <strong>{detail.flowStatus.currentTicketLabel}</strong>
+        {/if}
+      </div>
+      <div><span>Turns</span><strong>{detail.flowStatus.turnsLabel}</strong></div>
+      <div><span>Elapsed</span><strong>{detail.flowStatus.elapsedLabel}</strong></div>
+      <div><span>Done/total</span><strong>{detail.flowStatus.progressLabel}</strong></div>
+      <div><span>Last activity</span><strong>{detail.flowStatus.lastActivityLabel}</strong></div>
+      <div class="flow-reason"><span>Reason</span><strong>{detail.flowStatus.reasonLabel}</strong></div>
+    </section>
+
     <div class="detail-grid">
       <section class="page-panel execution-panel wide">
         <div class="panel-heading-row">
@@ -285,10 +305,13 @@
         {:else}
           <div class="workspace-ticket-list">
             {#each queueTickets as ticket}
-              <a class={`workspace-ticket-row ${ticket.status}`} href={href(ticket.href)}>
+              <a class={`workspace-ticket-row ${ticket.status}`} class:current={ticket.isCurrent} class:done={ticket.status === 'done'} href={href(ticket.href)}>
                 <span>
                   <strong>{ticket.title}</strong>
+                  {#if ticket.isCurrent}<em class="working-badge">Working</em>{/if}
                   {#if ticket.diffLabel}<em>{ticket.diffLabel}</em>{/if}
+                  {#if ticket.durationLabel}<em>{ticket.durationLabel}</em>{/if}
+                  {#if ticket.bodyPreview}<small>{ticket.bodyPreview}</small>{/if}
                 </span>
                 <span class="status-pill {ticket.status}">{statusLabel(ticket.status)}</span>
               </a>

@@ -27,6 +27,8 @@
     onRetry = undefined,
     onCommand = undefined,
     onQueueCommand = undefined,
+    onCreateTicket = undefined,
+    onReorderTicket = undefined,
     onSave = undefined
   }: {
     state: 'loading' | 'error' | 'ready';
@@ -43,6 +45,8 @@
     onRetry?: (() => void) | undefined;
     onCommand?: ((command: 'resume' | 'bootstrap') => void) | undefined;
     onQueueCommand?: ((command: 'start' | 'stop' | 'restart') => void) | undefined;
+    onCreateTicket?: ((payload: TicketCreatePayload) => boolean | Promise<boolean>) | undefined;
+    onReorderTicket?: ((sourceRouteId: string, destinationRouteId: string, placeAfter: boolean) => boolean | Promise<boolean>) | undefined;
     onSave?: ((payload: TicketEditPayload) => boolean | Promise<boolean>) | undefined;
   } = $props();
 
@@ -64,6 +68,11 @@
     body: string;
   };
 
+  type TicketCreatePayload = {
+    title: string;
+    body: string;
+  };
+
   let editTicketId = $state<string | null>(null);
   let editTitle = $state('');
   let editAgent = $state('');
@@ -73,6 +82,8 @@
   let editBody = $state('');
   let settingsSaveTimer: ReturnType<typeof setTimeout> | null = null;
   let queueOpen = $state(false);
+  let createTitle = $state('');
+  let createBody = $state('');
   const ticketMarkdownContent = $derived(detail && editTicketId === detail.id ? editBody : detail?.rawBody ?? '');
 
   onDestroy(() => {
@@ -111,6 +122,20 @@
   async function saveMarkdown(_docId: string, content: string): Promise<boolean> {
     editBody = content;
     return Boolean(await onSave?.({ title: editTitle, agent: editAgent, model: editModel, reasoning: editReasoning, done: editDone, body: content }));
+  }
+
+  async function createTicket(): Promise<void> {
+    if (!createTitle.trim()) return;
+    const ok = await onCreateTicket?.({ title: createTitle, body: createBody });
+    if (ok) {
+      createTitle = '';
+      createBody = '';
+    }
+  }
+
+  function routeNumber(routeId: string): number | null {
+    const value = Number(routeId);
+    return Number.isInteger(value) ? value : null;
   }
 </script>
 
@@ -184,6 +209,32 @@
           </div>
         {/if}
       </div>
+      <section class={`ticket-flow-strip ${list.flowStatus.signal}`} aria-label="Ticket flow status">
+        <div>
+          <span>Status</span>
+          <strong>{list.flowStatus.statusLabel}</strong>
+        </div>
+        <div>
+          <span>Current ticket</span>
+          {#if list.flowStatus.currentTicketHref}
+            <a href={href(list.flowStatus.currentTicketHref)}>{list.flowStatus.currentTicketLabel}</a>
+          {:else}
+            <strong>{list.flowStatus.currentTicketLabel}</strong>
+          {/if}
+        </div>
+        <div><span>Turns</span><strong>{list.flowStatus.turnsLabel}</strong></div>
+        <div><span>Elapsed</span><strong>{list.flowStatus.elapsedLabel}</strong></div>
+        <div><span>Done/total</span><strong>{list.flowStatus.progressLabel}</strong></div>
+        <div><span>Last activity</span><strong>{list.flowStatus.lastActivityLabel}</strong></div>
+        <div class="flow-reason"><span>Reason</span><strong>{list.flowStatus.reasonLabel}</strong></div>
+      </section>
+      {#if list.scopedOwner && onCreateTicket}
+        <form class="ticket-create-row" onsubmit={(event) => { event.preventDefault(); void createTicket(); }}>
+          <input bind:value={createTitle} placeholder="New ticket title" aria-label="New ticket title" />
+          <input bind:value={createBody} placeholder="Body preview or goal" aria-label="New ticket body" />
+          <button type="submit" class="ghost-button" disabled={!createTitle.trim()}>Create ticket</button>
+        </form>
+      {/if}
       {@render degradedIssues(timelineIssues)}
       {@render degradedIssues(chatIssues)}
       {#if visibleRows.length === 0}
@@ -199,14 +250,19 @@
             <span>Agent</span>
             <span>Status</span>
             <span>Run</span>
+            <span>Move</span>
             <span>Updated</span>
             <span>Chat</span>
           </div>
-          {#each visibleRows as row}
-            <article class={`ticket-row ${row.status}`}>
+          {#each visibleRows as row, index}
+            <article class={`ticket-row ${row.status}`} class:current={row.isCurrent} class:done={row.status === 'done'}>
               <a class="ticket-row-title" href={href(row.href)} data-sveltekit-preload-data="tap">
                 <strong>{row.numberLabel}</strong>
-                <span>{row.title}</span>
+                <span>
+                  {row.title}
+                  {#if row.isCurrent}<em class="working-badge">Working</em>{/if}
+                  {#if row.bodyPreview}<small>{row.bodyPreview}</small>{/if}
+                </span>
               </a>
               <span>
                 {#if row.workspaceHref}
@@ -217,13 +273,21 @@
                 {#if row.pathLabel}<small class="row-meta">{row.pathLabel}</small>{/if}
               </span>
               <span>{row.agentLabel}</span>
-              <span><span class="status-pill {row.status}">{statusLabel(row.status)}</span></span>
+              <span>
+                <span class="status-pill {row.status}">{statusLabel(row.status)}</span>
+                {#if row.diffLabel}<small class="row-meta">{row.diffLabel}</small>{/if}
+                {#if row.durationLabel}<small class="row-meta">{row.durationLabel}</small>{/if}
+              </span>
               <span>
                 {#if row.currentRunState}
                   <span class="status-pill {row.currentRunState}">{statusLabel(row.currentRunState)}</span>
                 {:else}
                   <span class="muted">No run</span>
                 {/if}
+              </span>
+              <span class="row-move-actions">
+                <button type="button" aria-label={`Move ${row.numberLabel} up`} disabled={!onReorderTicket || routeNumber(row.routeId) === null || index === 0 || routeNumber(visibleRows[index - 1].routeId) === null} onclick={() => onReorderTicket?.(row.routeId, visibleRows[index - 1].routeId, false)}>Up</button>
+                <button type="button" aria-label={`Move ${row.numberLabel} down`} disabled={!onReorderTicket || routeNumber(row.routeId) === null || index >= visibleRows.length - 1 || routeNumber(visibleRows[index + 1].routeId) === null} onclick={() => onReorderTicket?.(row.routeId, visibleRows[index + 1].routeId, true)}>Down</button>
               </span>
               <span>{rowRelativeTime(row)}</span>
               <span>

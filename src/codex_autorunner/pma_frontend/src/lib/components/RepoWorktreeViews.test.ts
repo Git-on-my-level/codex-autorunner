@@ -75,6 +75,31 @@ describe('RepoWorktreeViews', () => {
     expect(body).not.toContain('Open PMA chat');
   });
 
+  it('renders worktree detail ticket-flow strip and current queue row affordances', () => {
+    const detail = buildRepoWorktreeDetailViewModel(
+      {
+        repos: [mockRepoSummary],
+        worktrees: [mockWorktreeSummary],
+        runs: [{ ...mockRunProgress, raw: { worktree_id: 'worktree-1', current_ticket: 'TICKET-110.md', turn_count: 3 } }],
+        chats: [{ ...mockChatSummary, worktreeId: 'worktree-1' }],
+        tickets: [{ ...mockTicketSummary, raw: { body: 'Scoped worktree body preview.' } }],
+        artifacts: [mockArtifact]
+      },
+      'worktree',
+      'worktree-1'
+    );
+    const { body } = render(RepoWorktreeViews, { props: { state: 'ready', mode: 'detail', detail } });
+
+    expect(body).toContain('Ticket flow status');
+    expect(body).toContain('Done/total');
+    expect(body).toContain('#110 Implement typed UI API client and view models');
+    expect(body).toContain('workspace-ticket-row running');
+    expect(body).toContain('working-badge');
+    expect(body).toContain('Scoped worktree body preview.');
+    expect(body).toContain('+80 -5 4 files');
+    expect(body).toContain('2m 0s');
+  });
+
   it('renders a no-active-run state without primary terminal or analytics content', () => {
     const detail = buildRepoWorktreeDetailViewModel(
       {

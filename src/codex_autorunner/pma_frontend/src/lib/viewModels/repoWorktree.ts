@@ -8,6 +8,13 @@ import type {
   WorktreeSummary
 } from './domain';
 import { formatRelativeTime, progressPercent, statusLabel } from './pmaChat';
+import {
+  aliasesOverlap,
+  buildTicketFlowStatusViewModel,
+  ticketAliases,
+  ticketAliasesFromRun,
+  type TicketFlowStatusViewModel
+} from './ticketFlowStatus';
 
 export type RepoWorktreeKind = 'repo' | 'worktree';
 
@@ -62,6 +69,9 @@ export type RepoWorktreeTicketRow = {
   status: WorkStatus;
   href: string;
   diffLabel: string | null;
+  durationLabel: string | null;
+  bodyPreview: string | null;
+  isCurrent: boolean;
 };
 
 export type RepoWorktreeArtifactRow = {
@@ -98,6 +108,7 @@ export type RepoWorktreeDetailViewModel = {
   path: string | null;
   stateLabel: string;
   currentRuns: RepoWorktreeRunCard[];
+  flowStatus: TicketFlowStatusViewModel;
   activity: RepoWorktreeArtifactRow[];
   currentTickets: RepoWorktreeTicketRow[];
   nextTickets: RepoWorktreeTicketRow[];
@@ -176,11 +187,12 @@ export function buildRepoWorktreeDetailViewModel(
   const visibleRuns = activeRunCards.length ? activeRunCards : runCards.slice(0, 1);
   const currentTicketIds = new Set(visibleRuns.map((run) => run.ticketId).filter((ticketId): ticketId is string => Boolean(ticketId)));
   const scopedTickets = ticketsForResource(source.tickets, kind, id);
-  const currentTickets = ticketsForIds(scopedTickets, currentTicketIds);
+  const flowStatus = buildTicketFlowStatusViewModel(scopedTickets, relatedRuns, { kind, id });
+  const currentTickets = ticketsForIds(scopedTickets, currentTicketIds, flowStatus.currentTicketId);
   const nextTickets = scopedTickets
     .filter((ticket) => ticket.status !== 'done' && !currentTicketIds.has(ticket.id))
     .slice(0, 5)
-    .map(ticketToRow);
+    .map((ticket) => ticketToRow(ticket, flowStatus.currentTicketId));
   const runArtifacts = [...source.artifacts, ...relatedRuns.flatMap((run) => run.events)].map(artifactToRow);
   const activity = [
     ...relatedRuns.flatMap((run) => run.events).map(artifactToRow),
@@ -197,6 +209,7 @@ export function buildRepoWorktreeDetailViewModel(
     path,
     stateLabel: statusLabel(resource?.status ?? visibleRuns[0]?.status ?? 'idle'),
     currentRuns: visibleRuns,
+    flowStatus,
     activity,
     currentTickets,
     nextTickets,
@@ -224,6 +237,7 @@ function missingDetailViewModel(kind: RepoWorktreeKind, id: string): RepoWorktre
     path: null,
     stateLabel: 'Missing',
     currentRuns: [],
+    flowStatus: buildTicketFlowStatusViewModel([], []),
     activity: [],
     currentTickets: [],
     nextTickets: [],
@@ -322,7 +336,11 @@ function mergeRunCards(runs: PmaRunProgress[], chats: PmaChatSummary[]): RepoWor
 }
 
 function runToCard(run: PmaRunProgress, chat: PmaChatSummary | null): RepoWorktreeRunCard {
-  const ticketId = stringFromRaw(run.raw, ['ticket_id', 'current_ticket_id', 'current_ticket']) ?? chat?.ticketId ?? null;
+  const ticketId =
+    stringFromRaw(run.raw, ['ticket_id', 'current_ticket_id', 'current_ticket', 'ticket_path', 'current_ticket_path']) ??
+    [...ticketAliasesFromRun(run)][0] ??
+    chat?.ticketId ??
+    null;
   const title = chat?.title ?? stringFromRaw(run.raw, ['title', 'current_ticket_title', 'name']) ?? ticketId ?? run.id;
   return {
     id: run.id,
@@ -355,13 +373,16 @@ function chatToCard(chat: PmaChatSummary): RepoWorktreeRunCard {
   };
 }
 
-function ticketToRow(ticket: TicketSummary): RepoWorktreeTicketRow {
+function ticketToRow(ticket: TicketSummary, currentTicketId: string | null = null): RepoWorktreeTicketRow {
   return {
     id: ticket.id,
     title: ticket.title,
     status: ticket.status,
     href: ticketDetailHref(ticket),
-    diffLabel: ticketDiffLabel(ticket)
+    diffLabel: ticketDiffLabel(ticket),
+    durationLabel: formatDuration(ticket.durationSeconds),
+    bodyPreview: bodyPreview(ticket),
+    isCurrent: ticket.id === currentTicketId || (ticket.number !== null && String(ticket.number) === currentTicketId)
   };
 }
 
@@ -374,6 +395,22 @@ function ticketDiffLabel(ticket: TicketSummary): string | null {
     stats.filesChanged ? `${stats.filesChanged} files` : null
   ].filter(Boolean);
   return parts.length ? parts.join(' ') : null;
+}
+
+function formatDuration(seconds: number | null): string | null {
+  if (seconds === null) return null;
+  const safeSeconds = Math.max(0, Math.round(seconds));
+  const minutes = Math.floor(safeSeconds / 60);
+  const remainingSeconds = safeSeconds % 60;
+  return minutes ? `${minutes}m ${remainingSeconds}s` : `${remainingSeconds}s`;
+}
+
+function bodyPreview(ticket: TicketSummary): string | null {
+  const rawBody = ticket.raw.body ?? ticket.raw.content ?? ticket.raw.markdown;
+  if (typeof rawBody !== 'string') return null;
+  const body = rawBody.replace(/\s+/g, ' ').trim();
+  if (!body) return null;
+  return body.length > 110 ? `${body.slice(0, 107)}...` : body;
 }
 
 function artifactToRow(artifact: SurfaceArtifact): RepoWorktreeArtifactRow {
@@ -398,10 +435,13 @@ function runToActivity(run: RepoWorktreeRunCard): RepoWorktreeArtifactRow {
   };
 }
 
-function ticketsForIds(tickets: TicketSummary[], ids: Set<string>): RepoWorktreeTicketRow[] {
+function ticketsForIds(tickets: TicketSummary[], ids: Set<string>, currentTicketId: string | null): RepoWorktreeTicketRow[] {
   return [...ids]
-    .map((id) => tickets.find((ticket) => ticket.id === id) ?? fallbackTicketSummary(id))
-    .map(ticketToRow);
+    .map((id) => {
+      const aliases = new Set([id.toLowerCase()]);
+      return tickets.find((ticket) => ticket.id === id || aliasesOverlap(ticketAliases(ticket), aliases)) ?? fallbackTicketSummary(id);
+    })
+    .map((ticket) => ticketToRow(ticket, currentTicketId));
 }
 
 function ticketsForResource(tickets: TicketSummary[], kind: RepoWorktreeKind, id: string): TicketSummary[] {
