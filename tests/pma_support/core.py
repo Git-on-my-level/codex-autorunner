@@ -453,6 +453,44 @@ def test_pma_thread_status_includes_queued_turns(hub_env) -> None:
     assert payload["queued_turns"][0]["prompt_preview"] == "second"
 
 
+def test_pma_thread_create_defaults_to_hub_context(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", "name": "Hub PMA"},
+        )
+
+    assert create_resp.status_code == 200
+    thread = create_resp.json()["thread"]
+    assert thread["workspace_root"] == str(hub_env.hub_root.resolve())
+    assert thread.get("repo_id") is None
+    assert thread.get("resource_kind") is None
+    assert thread.get("resource_id") is None
+
+
+def test_pma_thread_create_local_workspace_root_defaults_to_hub_context(
+    hub_env,
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", "workspace_root": "."},
+        )
+
+    assert create_resp.status_code == 200
+    thread = create_resp.json()["thread"]
+    assert thread["workspace_root"] == str(hub_env.hub_root.resolve())
+    assert thread.get("repo_id") is None
+    assert thread.get("resource_kind") is None
+    assert thread.get("resource_id") is None
+
+
 def test_pma_chat_rejects_oversize_message(hub_env) -> None:
     _enable_pma(hub_env.hub_root, max_text_chars=5)
     app = create_hub_app(hub_env.hub_root)

@@ -3,6 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Optional, cast
 
+from ..chat.pma_context_selection import (
+    PmaContextSelection,
+    PmaContextSelectionError,
+    resolve_pma_context_selection,
+)
 from ..chat.session_messages import (
     build_fresh_session_started_lines,
     build_thread_detail_lines,
@@ -72,6 +77,21 @@ def _render_fresh_mode_status(
     return format_discord_message("\n".join(lines))
 
 
+def _resolve_discord_pma_context(
+    service: Any,
+    *,
+    repo_id: Optional[str],
+) -> PmaContextSelection:
+    return resolve_pma_context_selection(
+        hub_root=Path(service._config.root),
+        repo_id=repo_id,
+        repos=[
+            {"id": listed_repo_id, "path": listed_path}
+            for listed_repo_id, listed_path in service._list_manifest_repos()
+        ],
+    )
+
+
 async def _clear_seed_and_respond(
     service: Any,
     interaction_id: str,
@@ -136,6 +156,7 @@ async def handle_pma_on_switch(
     *,
     channel_id: str,
     guild_id: Optional[str],
+    repo_id: Optional[str] = None,
 ) -> None:
     binding = await service._store.get_binding(channel_id=channel_id)
     if binding is not None and binding.get("pma_enabled", False):
@@ -149,6 +170,16 @@ async def handle_pma_on_switch(
     prev_workspace, prev_repo_id, prev_resource_kind, prev_resource_id = (
         _previous_binding_fields(binding)
     )
+    try:
+        pma_context = _resolve_discord_pma_context(service, repo_id=repo_id)
+    except PmaContextSelectionError as exc:
+        await service.respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            format_discord_message(f"Could not enable PMA mode: {exc}"),
+        )
+        return
+
     if binding is None:
         await service._store.upsert_binding(
             channel_id=channel_id,
@@ -158,6 +189,7 @@ async def handle_pma_on_switch(
             resource_kind=None,
             resource_id=None,
         )
+
     await service._store.update_pma_state(
         channel_id=channel_id,
         pma_enabled=True,
@@ -181,13 +213,19 @@ async def handle_pma_on_switch(
             text="PMA mode enabled, but the channel binding could not be loaded.",
         )
         return
-    workspace_root = Path(service._config.root).resolve()
+    pma_binding = {
+        **binding,
+        "workspace_path": str(pma_context.workspace_root),
+        "repo_id": pma_context.repo_id,
+        "resource_kind": pma_context.resource_kind,
+        "resource_id": pma_context.resource_id,
+    }
     try:
         had_previous, thread_id = await _reset_thread_for_mode(
             service,
             channel_id=channel_id,
-            binding=binding,
-            workspace_root=workspace_root,
+            binding=pma_binding,
+            workspace_root=pma_context.workspace_root,
             pma_enabled=True,
         )
     except (RuntimeError, OSError, ValueError, TypeError):
@@ -204,10 +242,18 @@ async def handle_pma_on_switch(
             text="PMA mode enabled, but starting a fresh PMA session failed.",
         )
         return
+    await service._store.upsert_binding(
+        channel_id=channel_id,
+        guild_id=guild_id,
+        workspace_path=str(pma_context.workspace_root),
+        repo_id=pma_context.repo_id,
+        resource_kind=pma_context.resource_kind,
+        resource_id=pma_context.resource_id,
+    )
     prefix_lines = (
-        ("PMA mode enabled. Previous binding saved.",)
+        (f"PMA mode enabled ({pma_context.scope_label}). Previous binding saved.",)
         if prev_workspace
-        else ("PMA mode enabled.",)
+        else (f"PMA mode enabled ({pma_context.scope_label}).",)
     )
     await _clear_seed_and_respond(
         service,
@@ -217,7 +263,7 @@ async def handle_pma_on_switch(
         text=_render_fresh_mode_status(
             service,
             binding,
-            workspace_root=workspace_root,
+            workspace_root=pma_context.workspace_root,
             thread_id=thread_id,
             pma_enabled=True,
             had_previous=had_previous,

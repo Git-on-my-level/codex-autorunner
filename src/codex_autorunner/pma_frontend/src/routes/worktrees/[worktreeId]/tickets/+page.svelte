@@ -12,6 +12,7 @@
   let loading = $state(true);
   let error = $state<ApiError | null>(null);
   let sectionIssues = $state<PartialPageIssue[]>([]);
+  let actionStatus = $state<string | null>(null);
 
   onMount(() => {
     void loadTickets();
@@ -56,6 +57,39 @@
     selectedFilter = 'open';
     loading = false;
   }
+
+  async function runQueueCommand(command: 'start' | 'stop' | 'restart'): Promise<void> {
+    const runId = list?.queueRun?.id ?? null;
+    actionStatus = command === 'start' ? 'Starting worktree ticket flow...' : command === 'stop' ? 'Stopping worktree ticket flow...' : 'Restarting worktree ticket flow...';
+    if ((command === 'stop' || command === 'restart') && !runId) {
+      actionStatus = 'No worktree ticket flow run found.';
+      return;
+    }
+    // Worktree runtime APIs are mounted as workspace apps under /repos/{workspaceId};
+    // /worktrees/{id} is the PMA shell route.
+    const basePath = `/repos/${encodeURIComponent(worktreeId)}/api/flows`;
+    if (command === 'restart' && !window.confirm('Restart ticket flow? This will stop the current run and start a new one.')) {
+      actionStatus = null;
+      return;
+    }
+    const result =
+      command === 'stop'
+        ? await pmaApi.requestJson(`${basePath}/${encodeURIComponent(runId!)}/stop`, { method: 'POST' })
+        : command === 'restart'
+          ? await restartQueueRun(basePath, runId!)
+          : await pmaApi.requestJson(`${basePath}/ticket_flow/bootstrap`, { method: 'POST', body: {} });
+    actionStatus = result.ok ? 'Ticket flow command accepted.' : result.error.message;
+    await loadTickets();
+  }
+
+  async function restartQueueRun(basePath: string, runId: string) {
+    const stopResult = await pmaApi.requestJson(`${basePath}/${encodeURIComponent(runId)}/stop`, { method: 'POST' });
+    if (!stopResult.ok) return stopResult;
+    return pmaApi.requestJson(`${basePath}/ticket_flow/bootstrap`, {
+      method: 'POST',
+      body: { metadata: { force_new: true } }
+    });
+  }
 </script>
 
 <TicketViews
@@ -64,8 +98,10 @@
   {list}
   {selectedFilter}
   selectedWorkspaceFilter="all"
+  {actionStatus}
   {sectionIssues}
   onRetry={loadTickets}
   onFilter={(filter) => (selectedFilter = filter)}
+  onQueueCommand={runQueueCommand}
   errorMessage={error?.message ?? null}
 />

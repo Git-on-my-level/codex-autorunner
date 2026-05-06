@@ -72,8 +72,8 @@ Users can browse tickets.
       props: { state: 'ready', mode: 'detail', detail }
     });
 
-    expect(body).toContain('Ticket contract');
-    expect(body).toContain('Owner');
+    expect(body).toContain('Ticket settings');
+    expect(body).toContain('Agent');
     expect(body).toContain('Worktree: worktree-1');
     expect(body).toContain('href="/worktrees/worktree-1"');
     expect(body).toContain('Back to worktree tickets');

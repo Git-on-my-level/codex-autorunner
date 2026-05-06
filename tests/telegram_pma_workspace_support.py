@@ -2237,10 +2237,43 @@ async def test_pma_on_enables_mode(tmp_path: Path) -> None:
     await handler._handle_pma(message, "on", _RuntimeStub())
 
     assert record.pma_enabled is True
+    assert record.workspace_path is None
+    assert record.repo_id is None
     assert (
         handler.sent[-1]
-        == "PMA mode enabled. Use /pma off to exit. Previous binding saved."
+        == "PMA mode enabled (hub). Use /pma off to exit. Previous binding saved."
     )
+
+
+@pytest.mark.anyio
+async def test_pma_on_with_repo_uses_explicit_repo_context(tmp_path: Path) -> None:
+    from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
+    from codex_autorunner.core.config import load_hub_config
+    from codex_autorunner.manifest import load_manifest, save_manifest
+
+    hub_root = tmp_path / "hub"
+    repo = hub_root / "worktrees" / "repo-1"
+    seed_hub_files(hub_root, force=True)
+    repo.mkdir(parents=True)
+    seed_repo_files(repo, git_required=False)
+    hub_config = load_hub_config(hub_root)
+    manifest = load_manifest(hub_config.manifest_path, hub_root)
+    manifest.ensure_repo(hub_root, repo, repo_id="repo-1", display_name="repo-1")
+    save_manifest(hub_config.manifest_path, manifest, hub_root)
+
+    record = TelegramTopicRecord(pma_enabled=False)
+    handler = _PmaTargetsHandler(hub_root=hub_root, record=record)
+    handler._manifest_path = hub_config.manifest_path
+    message = _make_pma_message(chat_id=-1001, thread_id=55)
+
+    await handler._handle_pma(message, "on --repo repo-1", _RuntimeStub())
+
+    assert record.pma_enabled is True
+    assert record.workspace_path == str(repo.resolve())
+    assert record.repo_id == "repo-1"
+    assert record.resource_kind == "repo"
+    assert record.resource_id == "repo-1"
+    assert handler.sent[-1] == "PMA mode enabled (repo repo-1). Use /pma off to exit."
 
 
 @pytest.mark.anyio
@@ -2321,7 +2354,7 @@ async def test_pma_targets_subcommand_uses_usage_text(tmp_path: Path) -> None:
 
     await handler._handle_pma(message, "targets", _RuntimeStub())
 
-    assert handler.sent[-1] == "Usage:\n/pma [on|off|status]"
+    assert handler.sent[-1] == "Usage:\n/pma [on|off|status]\n/pma on --repo <repo_id>"
 
 
 @pytest.mark.anyio

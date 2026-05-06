@@ -10,8 +10,7 @@
   let mobileOpen = $state(false);
   const currentPath = $derived(stripRuntimeBasePath(page.url.pathname));
   const activeNavItem = $derived(primaryNav.find((item) => isActiveRoute(currentPath, item.href)) ?? primaryNav[0]);
-  const activeGroupLabel = $derived(groupLabelForPath(currentPath, activeNavItem.group));
-  const topbarTitle = $derived(titleForPath(currentPath, activeNavItem.label));
+  const breadcrumbs = $derived(breadcrumbsForPath(currentPath, activeNavItem.label, activeNavItem.group));
 
   const closeMobile = () => {
     mobileOpen = false;
@@ -21,18 +20,49 @@
     if (event.key === 'Escape') closeMobile();
   }
 
-  function titleForPath(path: string, fallback: string): string {
-    if (/^\/repos\/[^/]+\/tickets\/[^/]+/.test(path)) return 'Repo ticket';
-    if (/^\/repos\/[^/]+\/tickets/.test(path)) return 'Repo tickets';
-    if (/^\/worktrees\/[^/]+\/tickets\/[^/]+/.test(path)) return 'Worktree ticket';
-    if (/^\/worktrees\/[^/]+\/tickets/.test(path)) return 'Worktree tickets';
-    if (/^\/tickets\/[^/]+/.test(path)) return 'Ticket detail';
-    return fallback;
-  }
-
-  function groupLabelForPath(path: string, fallback: keyof typeof navGroupLabels): string {
-    if (path.startsWith('/worktrees/')) return navGroupLabels.support;
-    return navGroupLabels[fallback];
+  function breadcrumbsForPath(path: string, fallback: string, fallbackGroup: keyof typeof navGroupLabels): { label: string; href: string | null }[] {
+    const repoTicket = path.match(/^\/repos\/([^/]+)\/tickets\/([^/]+)/);
+    if (repoTicket) {
+      const repoId = decodeURIComponent(repoTicket[1]);
+      const ticketId = decodeURIComponent(repoTicket[2]);
+      return [
+        { label: 'Repos', href: '/repos' },
+        { label: repoId, href: `/repos/${encodeURIComponent(repoId)}` },
+        { label: 'Tickets', href: `/repos/${encodeURIComponent(repoId)}/tickets` },
+        { label: `#${ticketId}`, href: null }
+      ];
+    }
+    const repoTickets = path.match(/^\/repos\/([^/]+)\/tickets/);
+    if (repoTickets) {
+      const repoId = decodeURIComponent(repoTickets[1]);
+      return [
+        { label: 'Repos', href: '/repos' },
+        { label: repoId, href: `/repos/${encodeURIComponent(repoId)}` },
+        { label: 'Tickets', href: null }
+      ];
+    }
+    const worktreeTicket = path.match(/^\/worktrees\/([^/]+)\/tickets\/([^/]+)/);
+    if (worktreeTicket) {
+      const worktreeId = decodeURIComponent(worktreeTicket[1]);
+      const ticketId = decodeURIComponent(worktreeTicket[2]);
+      return [
+        { label: 'Worktrees', href: '/worktrees' },
+        { label: worktreeId, href: `/worktrees/${encodeURIComponent(worktreeId)}` },
+        { label: 'Tickets', href: `/worktrees/${encodeURIComponent(worktreeId)}/tickets` },
+        { label: `#${ticketId}`, href: null }
+      ];
+    }
+    const worktreeTickets = path.match(/^\/worktrees\/([^/]+)\/tickets/);
+    if (worktreeTickets) {
+      const worktreeId = decodeURIComponent(worktreeTickets[1]);
+      return [
+        { label: 'Worktrees', href: '/worktrees' },
+        { label: worktreeId, href: `/worktrees/${encodeURIComponent(worktreeId)}` },
+        { label: 'Tickets', href: null }
+      ];
+    }
+    if (/^\/tickets\/[^/]+/.test(path)) return [{ label: 'All tickets', href: '/tickets' }, { label: 'Ticket detail', href: null }];
+    return [{ label: path.startsWith('/worktrees/') ? navGroupLabels.support : navGroupLabels[fallbackGroup], href: null }, { label: fallback, href: null }];
   }
 </script>
 
@@ -106,10 +136,15 @@
       >
         <span aria-hidden="true">≡</span>
       </button>
-      <div class="topbar-copy">
-        <span class="topbar-eyebrow">{activeGroupLabel}</span>
-        <span class="topbar-title">{topbarTitle}</span>
-      </div>
+      <nav class="topbar-copy" aria-label="Breadcrumb">
+        {#each breadcrumbs as crumb, index}
+          {#if crumb.href && index < breadcrumbs.length - 1}
+            <a class="topbar-crumb" href={href(crumb.href)}>{crumb.label}</a>
+          {:else}
+            <span class="topbar-crumb current">{crumb.label}</span>
+          {/if}
+        {/each}
+      </nav>
       <div class="hub-status" role="status">
         <span class="status-dot" aria-hidden="true"></span>
         <span>Hub ready</span>

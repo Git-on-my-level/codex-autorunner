@@ -25,6 +25,7 @@ from ....core.update import (
 )
 from ....core.update_paths import resolve_update_paths
 from ....core.update_targets import get_update_target_label
+from ....manifest import load_manifest
 from ...app_server.client import CodexAppServerError
 from ...chat.chat_ux_telemetry import (
     ChatUxMilestone,
@@ -47,6 +48,10 @@ from ...chat.media import (
 from ...chat.picker_filter import (
     filter_picker_items,
     find_exact_picker_item,
+)
+from ...chat.pma_context_selection import (
+    PmaContextSelectionError,
+    resolve_pma_context_selection,
 )
 from ...chat.session_messages import (
     format_update_started_message,
@@ -1491,7 +1496,9 @@ class TelegramCommandHandlers(
             if record is None:
                 return "PMA mode: disabled\nCurrent workspace: unbound"
             if record.pma_enabled:
-                return "PMA mode: enabled"
+                if record.repo_id:
+                    return f"PMA mode: repo {record.repo_id}"
+                return "PMA mode: hub"
             workspace = record.workspace_path or "unbound"
             return f"PMA mode: disabled\nCurrent workspace: {workspace}"
 
@@ -1520,6 +1527,21 @@ class TelegramCommandHandlers(
 
         argv = self._parse_command_args(args)
         action = argv[0].lower() if argv else ""
+        explicit_repo_id = None
+        if action in ("on", "enable", "true"):
+            tail = list(argv[1:])
+            if len(tail) == 1 and not tail[0].startswith("-"):
+                explicit_repo_id = tail[0]
+            elif len(tail) == 2 and tail[0] == "--repo":
+                explicit_repo_id = tail[1]
+            elif tail:
+                await self._send_message(
+                    message.chat_id,
+                    self._pma_usage(),
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
 
         key = await self._resolve_topic_key(message.chat_id, message.thread_id)
         record = await self._router.get_topic(key)
@@ -1573,6 +1595,44 @@ class TelegramCommandHandlers(
 
         previous_binding_workspace = record.workspace_path if record else None
         restored_workspace = record.pma_prev_workspace_path if record else None
+        pma_workspace_path = None
+        pma_repo_id = None
+        pma_resource_kind = None
+        pma_resource_id = None
+        if enabled:
+            repos: list[dict[str, object]] = []
+            if explicit_repo_id and self._manifest_path and self._hub_root:
+                try:
+                    manifest = load_manifest(self._manifest_path, self._hub_root)
+                    repos = [
+                        {"id": repo.id, "path": self._hub_root / repo.path}
+                        for repo in manifest.repos
+                        if repo.enabled
+                    ]
+                except (OSError, ValueError):
+                    self._logger.debug(
+                        "telegram.pma.resolve_context.manifest_failed",
+                        exc_info=True,
+                    )
+            try:
+                pma_context = resolve_pma_context_selection(
+                    hub_root=self._hub_root,
+                    repo_id=explicit_repo_id,
+                    repos=repos,
+                )
+            except PmaContextSelectionError as exc:
+                await self._send_message(
+                    message.chat_id,
+                    f"Could not enable PMA mode: {exc}",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            if pma_context.repo_id is not None:
+                pma_workspace_path = str(pma_context.workspace_root)
+                pma_repo_id = pma_context.repo_id
+                pma_resource_kind = pma_context.resource_kind
+                pma_resource_id = pma_context.resource_id
 
         if record is None:
             record = await self._router.ensure_topic(message.chat_id, message.thread_id)
@@ -1587,11 +1647,13 @@ class TelegramCommandHandlers(
                 record.pma_prev_workspace_path = record.workspace_path
                 record.pma_prev_workspace_id = record.workspace_id
                 record.pma_prev_active_thread_id = record.active_thread_id
-                # Mutual exclusion: PMA mode implies Hub context, so unbind specific repo.
-                record.workspace_path = None
-                record.repo_id = None
-                record.resource_kind = None
-                record.resource_id = None
+                # PMA defaults to Hub context. Repo PMA is only set by an
+                # explicit `/pma on --repo <id>` request, never inherited from
+                # the topic's normal repo binding.
+                record.workspace_path = pma_workspace_path
+                record.repo_id = pma_repo_id
+                record.resource_kind = pma_resource_kind
+                record.resource_id = pma_resource_id
                 record.workspace_id = None
                 record.active_thread_id = None
             else:
@@ -1618,10 +1680,11 @@ class TelegramCommandHandlers(
         )
 
         if enabled:
+            scope_label = f"repo {pma_repo_id}" if pma_repo_id else "hub"
             text = (
-                "PMA mode enabled. Use /pma off to exit. Previous binding saved."
+                f"PMA mode enabled ({scope_label}). Use /pma off to exit. Previous binding saved."
                 if previous_binding_workspace
-                else "PMA mode enabled. Use /pma off to exit."
+                else f"PMA mode enabled ({scope_label}). Use /pma off to exit."
             )
         else:
             if restored_workspace:
@@ -1640,6 +1703,7 @@ class TelegramCommandHandlers(
             [
                 "Usage:",
                 "/pma [on|off|status]",
+                "/pma on --repo <repo_id>",
             ]
         )
 

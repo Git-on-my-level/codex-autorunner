@@ -32,6 +32,7 @@ async def handle_pma_command(
             interaction_token,
             channel_id=channel_id,
             guild_id=guild_id,
+            options=options,
         )
         return
     if subcommand == "off":
@@ -67,7 +68,6 @@ async def handle_pma_command_from_normalized(
     command_path: tuple[str, ...],
     options: dict[str, Any],
 ) -> None:
-    _ = options
     subcommand = command_path[1] if len(command_path) > 1 else "status"
     if subcommand not in ("on", "off", "status"):
         await service.respond_ephemeral(
@@ -83,6 +83,7 @@ async def handle_pma_command_from_normalized(
         channel_id=channel_id,
         guild_id=guild_id,
         command_path=command_path,
+        options=options,
     )
 
 
@@ -93,6 +94,7 @@ async def handle_pma_on(
     *,
     channel_id: str,
     guild_id: Optional[str],
+    options: Optional[dict[str, Any]] = None,
 ) -> None:
     await handle_pma_on_switch(
         service,
@@ -100,6 +102,7 @@ async def handle_pma_on(
         interaction_token,
         channel_id=channel_id,
         guild_id=guild_id,
+        repo_id=(options or {}).get("repo"),
     )
 
 
@@ -129,7 +132,12 @@ async def handle_pma_status(
     if binding is None:
         text = "PMA mode: disabled\nCurrent workspace: unbound"
     elif binding.get("pma_enabled", False):
-        text = "PMA mode: enabled"
+        repo_id = binding.get("repo_id")
+        text = (
+            f"PMA mode: repo {repo_id}"
+            if isinstance(repo_id, str) and repo_id.strip()
+            else "PMA mode: hub"
+        )
         root = getattr(getattr(service, "_config", None), "root", None)
         if root is not None:
             process_lines = build_process_monitor_lines_for_root(

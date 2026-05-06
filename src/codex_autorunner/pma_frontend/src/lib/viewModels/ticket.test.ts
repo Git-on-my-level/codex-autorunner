@@ -114,6 +114,42 @@ describe('ticket view models', () => {
     ]);
   });
 
+  it('keeps scoped ticket queues in ticket order while exposing the owner run', () => {
+    const vm = buildTicketListViewModel(
+      {
+        tickets: [
+          {
+            ...mockTicketSummary,
+            id: 'TICKET-002',
+            number: 2,
+            title: 'Waiting follow-up',
+            status: 'waiting',
+            workspaceKind: 'repo',
+            workspaceId: 'repo-1',
+            raw: {}
+          },
+          {
+            ...mockTicketSummary,
+            id: 'TICKET-001',
+            number: 1,
+            title: 'First ticket',
+            status: 'idle',
+            workspaceKind: 'repo',
+            workspaceId: 'repo-1',
+            raw: {}
+          }
+        ],
+        runs: [{ ...mockRunProgress, id: 'run-repo-1', raw: { resource_kind: 'repo', resource_id: 'repo-1' } }],
+        chats: [],
+        artifacts: []
+      },
+      { kind: 'repo', id: 'repo-1' }
+    );
+
+    expect(vm.rows.map((row) => row.numberLabel)).toEqual(['#1', '#2']);
+    expect(vm.queueRun).toMatchObject({ id: 'run-repo-1', status: 'running' });
+  });
+
   it('parses ticket contract sections from markdown', () => {
     const sections = parseTicketContract(`Intro note
 

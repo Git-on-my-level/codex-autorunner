@@ -137,10 +137,14 @@ def _config(
 def _pma_interaction(
     *,
     subcommand: str,
+    repo: str | None = None,
     user_id: str = "user-1",
     interaction_id: str = "inter-1",
     interaction_token: str = "token-1",
 ) -> dict[str, Any]:
+    options: list[dict[str, Any]] = []
+    if repo is not None:
+        options.append({"type": 3, "name": "repo", "value": repo})
     return {
         "id": interaction_id,
         "token": interaction_token,
@@ -149,7 +153,7 @@ def _pma_interaction(
         "member": {"user": {"id": user_id}},
         "data": {
             "name": "pma",
-            "options": [{"type": 1, "name": subcommand, "options": []}],
+            "options": [{"type": 1, "name": subcommand, "options": options}],
         },
     }
 
@@ -309,7 +313,7 @@ async def test_pma_on_enables_pma_mode(tmp_path: Path) -> None:
         assert len(rest.interaction_responses) == 1
         payload = rest.interaction_responses[0]["payload"]
         content = payload["data"]["content"]
-        assert "PMA mode enabled. Previous binding saved." in content
+        assert "PMA mode enabled (hub). Previous binding saved." in content
         assert "Started a fresh PMA session for `codex`" in content
         assert f"Directory: {_escaped_markdown_path(tmp_path)}" in content
         assert "Agent: codex" in content
@@ -320,6 +324,81 @@ async def test_pma_on_enables_pma_mode(tmp_path: Path) -> None:
         assert binding.get("pma_enabled") is True
         assert binding.get("pma_prev_workspace_path") == str(workspace)
         assert binding.get("pma_prev_repo_id") == "repo-1"
+        assert binding.get("workspace_path") == str(tmp_path)
+        assert binding.get("repo_id") is None
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_pma_on_with_repo_uses_explicit_repo_context(tmp_path: Path) -> None:
+    from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
+    from codex_autorunner.core.config import load_hub_config
+    from codex_autorunner.manifest import load_manifest, save_manifest
+
+    seed_hub_files(tmp_path, force=True)
+    repo_root = tmp_path / "worktrees" / "repo-1"
+    repo_root.mkdir(parents=True)
+    seed_repo_files(repo_root, git_required=False)
+    hub_config = load_hub_config(tmp_path)
+    manifest = load_manifest(hub_config.manifest_path, tmp_path)
+    manifest.ensure_repo(tmp_path, repo_root, repo_id="repo-1", display_name="repo-1")
+    save_manifest(hub_config.manifest_path, manifest, tmp_path)
+
+    store = DiscordStateStore(tmp_path / ".codex-autorunner" / "discord_state.sqlite3")
+    await store.initialize()
+
+    rest = _FakeRest()
+    gateway = _FakeGateway([_pma_interaction(subcommand="on", repo="repo-1")])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+        manifest_path=hub_config.manifest_path,
+    )
+
+    try:
+        await service.run_forever()
+        content = rest.interaction_responses[0]["payload"]["data"]["content"]
+        assert "PMA mode enabled (repo repo-1)." in content
+        assert f"Directory: {_escaped_markdown_path(repo_root)}" in content
+
+        binding = await store.get_binding(channel_id="channel-1")
+        assert binding is not None
+        assert binding.get("pma_enabled") is True
+        assert binding.get("workspace_path") == str(repo_root.resolve())
+        assert binding.get("repo_id") == "repo-1"
+        assert binding.get("resource_kind") == "repo"
+        assert binding.get("resource_id") == "repo-1"
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_pma_on_with_unknown_repo_does_not_create_binding(tmp_path: Path) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+
+    rest = _FakeRest()
+    gateway = _FakeGateway([_pma_interaction(subcommand="on", repo="missing")])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        content = rest.interaction_responses[0]["payload"]["data"]["content"]
+        assert "Could not enable PMA mode: Repo not found: missing" in content
+        binding = await store.get_binding(channel_id="channel-1")
+        assert binding is None
     finally:
         await store.close()
 
@@ -430,7 +509,7 @@ async def test_pma_on_unbound_channel_auto_binds_for_pma(tmp_path: Path) -> None
         assert len(rest.interaction_responses) == 1
         payload = rest.interaction_responses[0]["payload"]
         content = payload["data"]["content"]
-        assert "PMA mode enabled." in content
+        assert "PMA mode enabled (hub)." in content
         assert "Started a fresh PMA session for `codex`" in content
         assert f"Directory: {_escaped_markdown_path(tmp_path)}" in content
         assert "Thread: `" in content
@@ -478,7 +557,7 @@ async def test_pma_off_after_unbound_pma_on_returns_to_unbound(tmp_path: Path) -
         assert len(rest.interaction_responses) == 2
         on_payload = rest.interaction_responses[0]["payload"]["data"]["content"]
         off_payload = rest.interaction_responses[1]["payload"]["data"]["content"]
-        assert "PMA mode enabled." in on_payload
+        assert "PMA mode enabled (hub)." in on_payload
         assert "Started a fresh PMA session for `codex`" in on_payload
         assert "PMA mode disabled" in off_payload
         assert "No saved workspace binding was available" in off_payload
@@ -560,7 +639,7 @@ async def test_pma_status_includes_process_summary_when_warning(
     try:
         await service.run_forever()
         content = rest.interaction_responses[0]["payload"]["data"]["content"]
-        assert "PMA mode: enabled" in content
+        assert "PMA mode: repo repo-1" in content
         assert "Process monitor: warning" in content
         assert "tp95 14" in content
     finally:
@@ -642,10 +721,13 @@ async def test_pma_command_registration_includes_pma_commands() -> None:
     assert "pma" in command_names
 
     pma_cmd = next(cmd for cmd in commands if cmd["name"] == "pma")
-    subcommand_names = {opt["name"] for opt in pma_cmd.get("options", [])}
+    subcommands = {opt["name"]: opt for opt in pma_cmd.get("options", [])}
+    subcommand_names = set(subcommands)
     assert "on" in subcommand_names
     assert "off" in subcommand_names
     assert "status" in subcommand_names
+    pma_on_options = {opt["name"] for opt in subcommands["on"].get("options", [])}
+    assert "repo" in pma_on_options
     assert "targets" not in subcommand_names
     assert "target" not in subcommand_names
 

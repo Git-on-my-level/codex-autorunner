@@ -26,6 +26,7 @@
     onFilter = undefined,
     onRetry = undefined,
     onCommand = undefined,
+    onQueueCommand = undefined,
     onSave = undefined
   }: {
     state: 'loading' | 'error' | 'ready';
@@ -41,10 +42,14 @@
     onFilter?: ((filter: TicketFilter) => void) | undefined;
     onRetry?: (() => void) | undefined;
     onCommand?: ((command: 'resume' | 'bootstrap') => void) | undefined;
+    onQueueCommand?: ((command: 'start' | 'stop' | 'restart') => void) | undefined;
     onSave?: ((payload: TicketEditPayload) => boolean | Promise<boolean>) | undefined;
   } = $props();
 
   const visibleRows = $derived(list ? filterTicketRows(list.rows, selectedFilter, selectedWorkspaceFilter) : []);
+  const queueBusy = $derived(Boolean(list?.queueRun?.status === 'running'));
+  const canStopQueue = $derived(Boolean(list?.queueRun?.id && ['running', 'waiting', 'blocked', 'failed'].includes(list.queueRun.status)));
+  const canRestartQueue = $derived(Boolean(list?.queueRun?.id && visibleRows.length > 0));
   const contractIssues = $derived(sectionIssues.filter((issue) => issue.id === 'ticket_contract'));
   const timelineIssues = $derived(sectionIssues.filter((issue) => issue.id === 'timeline'));
   const artifactIssues = $derived(sectionIssues.filter((issue) => issue.id === 'artifacts'));
@@ -67,11 +72,16 @@
   let editDone = $state(false);
   let editBody = $state('');
   let settingsSaveTimer: ReturnType<typeof setTimeout> | null = null;
+  let queueOpen = $state(false);
   const ticketMarkdownContent = $derived(detail && editTicketId === detail.id ? editBody : detail?.rawBody ?? '');
 
   onDestroy(() => {
     if (settingsSaveTimer) clearTimeout(settingsSaveTimer);
   });
+
+  function closeQueue(): void {
+    queueOpen = false;
+  }
 
   $effect(() => {
     if (!detail || editTicketId === detail.id) return;
@@ -157,9 +167,22 @@
       {/each}
     </div>
 
+    {#if actionStatus}
+      <div class="state-panel">{actionStatus}</div>
+    {/if}
+
     <section class="page-panel ticket-list-panel">
       <div class="panel-heading-row">
         <h2>{list.queueTitle}</h2>
+        {#if list.scopedOwner}
+          <div class="queue-actions" aria-label="Ticket flow controls">
+            <button type="button" class="ghost-button" disabled={queueBusy} onclick={() => onQueueCommand?.('start')}>
+              {queueBusy ? 'Running' : 'Start'}
+            </button>
+            <button type="button" class="ghost-button" disabled={!canStopQueue} onclick={() => onQueueCommand?.('stop')}>Stop</button>
+            <button type="button" class="ghost-button" disabled={!canRestartQueue} onclick={() => onQueueCommand?.('restart')}>Restart</button>
+          </div>
+        {/if}
       </div>
       {@render degradedIssues(timelineIssues)}
       {@render degradedIssues(chatIssues)}
@@ -217,33 +240,74 @@
     </section>
   </section>
 {:else if mode === 'detail' && detail}
-  <section class="page-stack ticket-page">
-    <div class="section-heading detail-heading">
-      <div>
-        <p class="eyebrow">{detail.workspaceKind === 'repo' ? 'Repo ticket detail' : detail.workspaceKind === 'worktree' ? 'Worktree ticket detail' : 'Ticket detail'}</p>
-        <h1>{detail.title}</h1>
-        <p>{detail.numberLabel} · {detail.repoLabel} · {detail.pathLabel ?? 'ticket path unknown'} · {statusLabel(detail.status)} · {detail.updatedLabel}</p>
-      </div>
-      <div class="detail-actions">
-        {#if detail.previousTicketHref}
-          <a class="secondary-link" href={href(detail.previousTicketHref)}>Previous ticket</a>
-        {/if}
-        {#if detail.nextTicketHref}
-          <a class="secondary-link" href={href(detail.nextTicketHref)}>Next ticket</a>
-        {/if}
-        {#if detail.ownerTicketListHref}
-          <a class="secondary-link" href={href(detail.ownerTicketListHref)}>Back to {detail.workspaceKind} tickets</a>
-        {/if}
-        {#each detail.actions.filter((action) => !action.secondary) as action}
-          {#if action.command}
-            {@const command = action.command}
-            <button type="button" onclick={() => onCommand?.(command)}>{action.label}</button>
-          {:else if action.href}
-            <a href={href(action.href)}>{action.label}</a>
+  {@const ownerLabelKind = detail.workspaceKind === 'repo' ? 'repo' : detail.workspaceKind === 'worktree' ? 'worktree' : 'workspace'}
+  {@const queueLabel = detail.workspaceKind === 'repo' ? 'Repo tickets' : detail.workspaceKind === 'worktree' ? 'Worktree tickets' : 'Tickets'}
+  {@const primaryActions = detail.actions.filter((action) => !action.secondary)}
+  <section class="page-stack ticket-page ticket-detail-page">
+    <header class="ticket-hero">
+      <div class="ticket-hero-top">
+        <nav class="ticket-breadcrumb" aria-label="Ticket breadcrumb">
+          <p class="eyebrow">{detail.workspaceKind === 'repo' ? 'Repo ticket' : detail.workspaceKind === 'worktree' ? 'Worktree ticket' : 'Ticket'}</p>
+          {#if detail.workspaceHref}
+            <a class="ticket-breadcrumb-link" href={href(detail.workspaceHref)}>{detail.repoLabel}</a>
+          {:else}
+            <span class="ticket-breadcrumb-link">{detail.repoLabel}</span>
           {/if}
-        {/each}
+        </nav>
+        <div class="ticket-hero-controls">
+          {#if detail.sourceTickets.length > 0}
+            <button
+              type="button"
+              class="ghost-button"
+              aria-expanded={queueOpen}
+              aria-controls="ticket-queue-drawer"
+              onclick={() => (queueOpen = !queueOpen)}
+            >
+              <span aria-hidden="true">☰</span> Queue
+              <span class="muted">({detail.sourceTickets.length})</span>
+            </button>
+          {/if}
+          {#if detail.previousTicketHref}
+            <a class="ghost-button" href={href(detail.previousTicketHref)} aria-label="Previous ticket">‹ Prev</a>
+          {/if}
+          {#if detail.nextTicketHref}
+            <a class="ghost-button" href={href(detail.nextTicketHref)} aria-label="Next ticket">Next ›</a>
+          {/if}
+        </div>
       </div>
-    </div>
+
+      <h1 class="ticket-hero-title">{detail.title}</h1>
+
+      <div class="ticket-hero-meta" aria-label="Ticket metadata">
+        <span class="status-pill {detail.status}">{statusLabel(detail.status)}</span>
+        <span class="meta-chip" title="Ticket number"><span class="meta-chip-key">#</span>{detail.numberLabel.replace(/^#/, '')}</span>
+        <span class="meta-chip" title="Agent"><span class="meta-chip-key">Agent</span>{detail.agentLabel}</span>
+        {#if detail.modelLabel}
+          <span class="meta-chip" title="Model"><span class="meta-chip-key">Model</span>{detail.modelLabel}</span>
+        {/if}
+        {#if detail.reasoningLabel}
+          <span class="meta-chip" title="Reasoning"><span class="meta-chip-key">Reasoning</span>{detail.reasoningLabel}</span>
+        {/if}
+        <span class="meta-chip" title="Updated"><span class="meta-chip-key">Updated</span>{detail.updatedLabel}</span>
+        <span class="meta-chip" title="Progress"><span class="meta-chip-key">Progress</span>{detail.progressPercent}%</span>
+        {#if detail.pathLabel}
+          <span class="meta-chip meta-chip-path" title={detail.pathLabel}><span class="meta-chip-key">Path</span>{detail.pathLabel}</span>
+        {/if}
+      </div>
+
+      {#if primaryActions.length > 0}
+        <div class="ticket-hero-actions">
+          {#each primaryActions as action}
+            {#if action.command}
+              {@const command = action.command}
+              <button type="button" class="primary-button" onclick={() => onCommand?.(command)}>{action.label}</button>
+            {:else if action.href}
+              <a class="primary-button" href={href(action.href)}>{action.label}</a>
+            {/if}
+          {/each}
+        </div>
+      {/if}
+    </header>
 
     {#if actionStatus}
       <div class="state-panel">{actionStatus}</div>
@@ -252,66 +316,15 @@
       <div class="state-panel">{saveStatus}</div>
     {/if}
 
-    <div class="ticket-workspace-grid">
-      <aside class="page-panel ticket-navigator-panel">
-        <div class="panel-heading-row">
-          <h2>{detail.workspaceKind === 'repo' ? 'Repo tickets' : detail.workspaceKind === 'worktree' ? 'Worktree tickets' : 'Tickets'}</h2>
-          {#if detail.ownerTicketListHref}<a href={href(detail.ownerTicketListHref)}>Queue</a>{/if}
-        </div>
-        <div class="ticket-nav-list">
-          {#each detail.sourceTickets as row}
-            <a
-              class={`ticket-nav-row ${row.status}`}
-              class:active={row.routeId === detail.routeId || row.id === detail.id}
-              href={href(row.href)}
-              data-sveltekit-preload-data="tap"
-            >
-              <span>
-                <strong>{row.numberLabel}</strong>
-                <span>{row.title}</span>
-              </span>
-              <span>
-                <em>{statusLabel(row.status)}</em>
-                {#if row.diffLabel}<em class="diff-label">{row.diffLabel}</em>{/if}
-              </span>
-            </a>
-          {/each}
-        </div>
-      </aside>
+    {@render degradedIssues(contractIssues)}
 
-      <div class="ticket-detail-grid">
-      <section class="page-panel ticket-contract-panel">
-        <div class="panel-heading-row">
-          <h2>Ticket contract</h2>
-          <span class="status-pill {detail.status}">{statusLabel(detail.status)}</span>
-        </div>
-        {@render degradedIssues(contractIssues)}
-        <dl class="compact-definition ticket-definition">
-          <div><dt>Number</dt><dd>{detail.numberLabel}</dd></div>
-          <div><dt>Agent</dt><dd>{detail.agentLabel}</dd></div>
-          {#if detail.modelLabel}<div><dt>Model</dt><dd>{detail.modelLabel}</dd></div>{/if}
-          {#if detail.reasoningLabel}<div><dt>Reasoning</dt><dd>{detail.reasoningLabel}</dd></div>{/if}
-          <div>
-            <dt>Owner</dt>
-            <dd>
-              {#if detail.workspaceHref}
-                <a href={href(detail.workspaceHref)}>{detail.repoLabel}</a>
-              {:else}
-                {detail.repoLabel}
-              {/if}
-            </dd>
-          </div>
-          {#if detail.pathLabel}
-            <div><dt>Ticket path</dt><dd>{detail.pathLabel}</dd></div>
-          {/if}
-          {#if detail.workspacePathLabel}
-            <div><dt>Workspace path</dt><dd>{detail.workspacePathLabel}</dd></div>
-          {/if}
-        </dl>
-        <section class="ticket-editor-panel">
-          <div class="panel-heading-row">
-            <h3>Ticket settings</h3>
-          </div>
+    <div class="ticket-detail-layout">
+      <main class="ticket-main-column">
+        <details class="ticket-settings-disclosure">
+          <summary>
+            <span>Ticket settings</span>
+            <span class="muted">Title, agent, model, reasoning, done</span>
+          </summary>
           <div class="ticket-edit-grid">
             <label>
               <span>Title</span>
@@ -347,12 +360,12 @@
               <span>Done</span>
             </label>
           </div>
-        </section>
-        <section class="ticket-markdown-panel">
-          <div class="panel-heading-row">
-            <h3>Ticket markdown</h3>
-            <span class="muted">Click to edit</span>
-          </div>
+          {#if detail.workspacePathLabel}
+            <p class="ticket-settings-foot muted">Workspace path: <code>{detail.workspacePathLabel}</code></p>
+          {/if}
+        </details>
+
+        <article class="ticket-markdown-card">
           <EditableMarkdown
             docId={detail.id}
             content={ticketMarkdownContent}
@@ -363,10 +376,10 @@
             editable={Boolean(onSave)}
             onSave={saveMarkdown}
           />
-        </section>
-      </section>
+        </article>
+      </main>
 
-      <aside class="ticket-side">
+      <aside class="ticket-sidebar">
         <section class="page-panel execution-panel">
           <h2>Progress</h2>
           <span class="progress-track" aria-label={`${detail.progressPercent} percent complete`}>
@@ -441,13 +454,53 @@
         </section>
       </aside>
     </div>
-    </div>
 
     <div class="secondary-actions">
+      {#if detail.ownerTicketListHref}
+        <a href={href(detail.ownerTicketListHref)}>Back to {ownerLabelKind} tickets</a>
+      {/if}
       {#each detail.actions.filter((action) => action.secondary) as action}
         {#if action.href}<a href={href(action.href)}>{action.label}</a>{/if}
       {/each}
     </div>
+
+    {#if queueOpen}
+      <div
+        class="ticket-queue-overlay"
+        role="presentation"
+        onclick={closeQueue}
+        onkeydown={(event) => event.key === 'Escape' && closeQueue()}
+      ></div>
+      <aside id="ticket-queue-drawer" class="ticket-queue-drawer page-panel" aria-label={`${queueLabel} queue`}>
+        <div class="panel-heading-row">
+          <h2>{queueLabel}</h2>
+          <button type="button" class="ghost-button" onclick={closeQueue} aria-label="Close queue">Close</button>
+        </div>
+        <div class="ticket-nav-list">
+          {#each detail.sourceTickets as row}
+            <a
+              class={`ticket-nav-row ${row.status}`}
+              class:active={row.routeId === detail.routeId || row.id === detail.id}
+              href={href(row.href)}
+              data-sveltekit-preload-data="tap"
+              onclick={closeQueue}
+            >
+              <span>
+                <strong>{row.numberLabel}</strong>
+                <span>{row.title}</span>
+              </span>
+              <span>
+                <em>{statusLabel(row.status)}</em>
+                {#if row.diffLabel}<em class="diff-label">{row.diffLabel}</em>{/if}
+              </span>
+            </a>
+          {/each}
+        </div>
+        {#if detail.ownerTicketListHref}
+          <a class="ticket-queue-footer-link" href={href(detail.ownerTicketListHref)}>View full queue →</a>
+        {/if}
+      </aside>
+    {/if}
   </section>
 {/if}
 

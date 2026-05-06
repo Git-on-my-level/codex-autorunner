@@ -7569,6 +7569,7 @@ class DiscordBotService(DiscordInteractionResponseMixin):
         *,
         channel_id: str,
         guild_id: Optional[str],
+        options: Optional[dict[str, Any]] = None,
     ) -> None:
         await self._run_effectful_handler(
             handle_pma_on,
@@ -7576,6 +7577,7 @@ class DiscordBotService(DiscordInteractionResponseMixin):
             interaction_token,
             channel_id=channel_id,
             guild_id=guild_id,
+            options=options,
         )
 
     async def _handle_pma_off(

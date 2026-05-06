@@ -41,10 +41,16 @@ export type TicketListRow = {
   diffLabel: string | null;
   status: WorkStatus;
   currentRunState: WorkStatus | null;
+  currentRunId: string | null;
   updatedAt: string | null;
   chatHref: string | null;
   href: string;
   needsAttention: boolean;
+};
+
+export type TicketQueueRun = {
+  id: string;
+  status: WorkStatus;
 };
 
 export type TicketListViewModel = {
@@ -57,6 +63,7 @@ export type TicketListViewModel = {
   defaultWorkspaceFilter: string;
   filters: { id: TicketFilter; label: string; count: number }[];
   workspaceFilters: { id: string; label: string; count: number }[];
+  queueRun: TicketQueueRun | null;
   rows: TicketListRow[];
 };
 
@@ -136,8 +143,9 @@ const filterLabels: Record<TicketFilter, string> = {
 };
 
 export function buildTicketListViewModel(source: TicketSourceData, owner: TicketOwnerScope = null): TicketListViewModel {
-  const rows = source.tickets.map((ticket) => ticketToListRow(ticket, source)).sort(bySignalThenRecent);
+  const rows = source.tickets.map((ticket) => ticketToListRow(ticket, source)).sort(owner ? byTicketNumberThenTitle : bySignalThenRecent);
   const ownerLabel = owner?.label || owner?.id;
+  const queueRun = owner ? findQueueRun(source.runs, owner) ?? findQueueRunFromRows(rows) : null;
   return {
     title: owner ? `${ownerLabel} tickets` : 'Tickets',
     eyebrow: owner ? `${owner.kind === 'repo' ? 'Repo' : 'Worktree'} ticket queue` : 'All-ticket projection',
@@ -154,6 +162,7 @@ export function buildTicketListViewModel(source: TicketSourceData, owner: Ticket
       count: rows.filter((row) => rowMatchesFilter(row, id)).length
     })),
     workspaceFilters: buildWorkspaceFilters(rows),
+    queueRun,
     rows
   };
 }
@@ -278,11 +287,44 @@ function ticketToListRow(ticket: TicketSummary, source: TicketSourceData): Ticke
     diffLabel: diffLabel(ticket),
     status: ticket.status,
     currentRunState: run?.status ?? chat?.status ?? null,
+    currentRunId: run?.id ?? null,
     updatedAt: ticket.updatedAt ?? run?.lastEventAt ?? chat?.updatedAt ?? null,
     chatHref: chat ? `/pma?chat=${encodeURIComponent(chat.id)}` : ticket.chatKey ? `/pma?chat=${encodeURIComponent(ticket.chatKey)}` : null,
     href: scopedTicketHref(ticket) ?? `/tickets/${encodeURIComponent(routeIdForTicket(ticket))}`,
     needsAttention: ticket.errors.length > 0 || ['waiting', 'failed', 'blocked'].includes(status)
   };
+}
+
+function findQueueRun(runs: PmaRunProgress[], owner: Exclude<TicketOwnerScope, null>): TicketQueueRun | null {
+  const matchingRuns = runs.filter((run) => runMatchesOwner(run, owner));
+  return (
+    matchingRuns.find((run) => run.status === 'running') ??
+    matchingRuns.find((run) => run.status === 'waiting' || run.status === 'blocked') ??
+    matchingRuns[0] ??
+    null
+  );
+}
+
+function findQueueRunFromRows(rows: TicketListRow[]): TicketQueueRun | null {
+  const rowRuns = rows
+    .filter((row): row is TicketListRow & { currentRunId: string; currentRunState: WorkStatus } => Boolean(row.currentRunId && row.currentRunState))
+    .map((row) => ({ id: row.currentRunId, status: row.currentRunState }));
+  return (
+    rowRuns.find((run) => run.status === 'running') ??
+    rowRuns.find((run) => run.status === 'waiting' || run.status === 'blocked') ??
+    rowRuns[0] ??
+    null
+  );
+}
+
+function runMatchesOwner(run: PmaRunProgress, owner: Exclude<TicketOwnerScope, null>): boolean {
+  const raw = run.raw;
+  const resourceKind = stringFromRaw(raw, ['resource_kind', 'state.resource_kind', 'input_data.resource_kind']);
+  const resourceId = stringFromRaw(raw, ['resource_id', 'state.resource_id', 'input_data.resource_id']);
+  const repoId = stringFromRaw(raw, ['repo_id', 'base_repo_id', 'state.repo_id', 'state.base_repo_id', 'input_data.repo_id', 'input_data.base_repo_id']);
+  const worktreeId = stringFromRaw(raw, ['worktree_id', 'worktree_repo_id', 'state.worktree_id', 'state.worktree_repo_id', 'input_data.worktree_id', 'input_data.worktree_repo_id']);
+  if (owner.kind === 'repo') return resourceId === owner.id || repoId === owner.id || (resourceKind === 'repo' && resourceId === owner.id);
+  return resourceId === owner.id || worktreeId === owner.id || (resourceKind === 'worktree' && resourceId === owner.id);
 }
 
 function byTicketNumberThenTitle(a: TicketListRow, b: TicketListRow): number {

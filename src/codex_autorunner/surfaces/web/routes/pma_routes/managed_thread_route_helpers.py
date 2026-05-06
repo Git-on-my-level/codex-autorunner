@@ -21,6 +21,11 @@ from .....core.orchestration import ActiveWorkSummary
 from .....core.orchestration.models import Binding, ThreadTarget
 from .....core.text_utils import _truncate_text
 from .....integrations.chat.approval_modes import normalize_approval_mode
+from .....integrations.chat.pma_context_selection import (
+    PmaContextSelectionError,
+    normalize_pma_resource_owner,
+    resolve_pma_context_selection,
+)
 from ...schemas import PmaManagedThreadCreateRequest
 from ...services.pma import get_pma_request_context
 from ...services.pma.managed_thread_followup import (
@@ -29,8 +34,8 @@ from ...services.pma.managed_thread_followup import (
 )
 from .automation_adapter import normalize_optional_text
 
-_DRIVE_PREFIX_RE = re.compile(r"^[A-Za-z]:")
 _logger = logging.getLogger(__name__)
+_DRIVE_PREFIX_RE = re.compile(r"^[A-Za-z]:")
 
 
 @dataclass(frozen=True)
@@ -77,6 +82,17 @@ def _is_within_root(path: Path, root: Path) -> bool:
     return is_within_allowed_root(path, allowed_roots=[root], resolve=True)
 
 
+def _resolve_repo_snapshot(request: Request, repo_id: str) -> Any:
+    supervisor = get_pma_request_context(request).hub_supervisor
+    if supervisor is None:
+        raise HTTPException(status_code=500, detail="Hub supervisor unavailable")
+    for snapshot in supervisor.list_repos():
+        if getattr(snapshot, "id", None) != repo_id:
+            continue
+        return snapshot
+    raise HTTPException(status_code=404, detail=f"Repo not found: {repo_id}")
+
+
 def _normalize_workspace_root_input(workspace_root: str) -> PurePosixPath:
     cleaned = (workspace_root or "").strip()
     if not cleaned:
@@ -87,27 +103,6 @@ def _normalize_workspace_root_input(workspace_root: str) -> PurePosixPath:
     if ".." in normalized.parts:
         raise HTTPException(status_code=400, detail="workspace_root is invalid")
     return normalized
-
-
-def _resolve_workspace_from_repo_id(request: Request, repo_id: str) -> Path:
-    snapshot = _resolve_repo_snapshot(request, repo_id)
-    repo_path = getattr(snapshot, "path", None)
-    if isinstance(repo_path, str):
-        repo_path = Path(repo_path)
-    if isinstance(repo_path, Path):
-        return repo_path.absolute()
-    raise HTTPException(status_code=404, detail=f"Repo not found: {repo_id}")
-
-
-def _resolve_repo_snapshot(request: Request, repo_id: str) -> Any:
-    supervisor = get_pma_request_context(request).hub_supervisor
-    if supervisor is None:
-        raise HTTPException(status_code=500, detail="Hub supervisor unavailable")
-    for snapshot in supervisor.list_repos():
-        if getattr(snapshot, "id", None) != repo_id:
-            continue
-        return snapshot
-    raise HTTPException(status_code=404, detail=f"Repo not found: {repo_id}")
 
 
 def _slugify_worktree_branch_component(value: Any) -> str:
@@ -129,78 +124,19 @@ def _build_managed_thread_worktree_branch_name(
     )
 
 
-def _resolve_workspace_from_resource_owner(
-    request: Request,
-    *,
-    resource_kind: str,
-    resource_id: str,
-) -> tuple[Path, Optional[str], Optional[str]]:
-    supervisor = get_pma_request_context(request).hub_supervisor
-    if supervisor is None:
-        raise HTTPException(status_code=500, detail="Hub supervisor unavailable")
-    if resource_kind == "repo":
-        return _resolve_workspace_from_repo_id(request, resource_id), resource_id, None
-    if resource_kind == "agent_workspace":
-        for snapshot in supervisor.list_agent_workspaces():
-            if getattr(snapshot, "id", None) != resource_id:
-                continue
-            workspace_path = getattr(snapshot, "path", None)
-            if isinstance(workspace_path, str):
-                workspace_path = Path(workspace_path)
-            if isinstance(workspace_path, Path):
-                runtime = getattr(snapshot, "runtime", None)
-                normalized_runtime = (
-                    str(runtime).strip().lower()
-                    if isinstance(runtime, str) and runtime.strip()
-                    else None
-                )
-                return workspace_path.absolute(), None, normalized_runtime
-        raise HTTPException(
-            status_code=404,
-            detail=f"Agent workspace not found: {resource_id}",
-        )
-    raise HTTPException(status_code=400, detail="resource_kind is invalid")
-
-
-def _resolve_workspace_from_input(hub_root: Path, workspace_root: str) -> Path:
-    normalized = _normalize_workspace_root_input(workspace_root)
-    hub_root_resolved = hub_root.absolute()
-    workspace = Path(normalized)
-    if not workspace.is_absolute():
-        workspace = (hub_root_resolved / workspace).absolute()
-    else:
-        workspace = workspace.absolute()
-    if not _is_within_root(workspace, hub_root):
-        raise HTTPException(status_code=400, detail="workspace_root is invalid")
-    return workspace
-
-
 def _normalize_resource_owner(
     *,
     resource_kind: Optional[str],
     resource_id: Optional[str],
 ) -> tuple[Optional[str], Optional[str], Optional[str]]:
-    normalized_resource_kind = normalize_optional_text(resource_kind)
-    normalized_resource_id = normalize_optional_text(resource_id)
-    if normalized_resource_id and normalized_resource_kind is None:
-        raise HTTPException(
-            status_code=400,
-            detail="resource_kind is required when resource_id is provided",
+    try:
+        owner = normalize_pma_resource_owner(
+            resource_kind=resource_kind,
+            resource_id=resource_id,
         )
-    if normalized_resource_kind and normalized_resource_id is None:
-        raise HTTPException(
-            status_code=400,
-            detail="resource_id is required when resource_kind is provided",
-        )
-    if normalized_resource_kind not in {None, "repo", "agent_workspace"}:
-        raise HTTPException(
-            status_code=400,
-            detail="resource_kind must be one of: repo, agent_workspace",
-        )
-    normalized_repo_id = (
-        normalized_resource_id if normalized_resource_kind == "repo" else None
-    )
-    return normalized_resource_kind, normalized_resource_id, normalized_repo_id
+    except PmaContextSelectionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return owner.resource_kind, owner.resource_id, owner.repo_id
 
 
 def _build_operator_status_fields(
@@ -500,11 +436,28 @@ def resolve_managed_thread_create_resolution(
     agent_id = (
         runtime_resolution.logical_agent_id if runtime_resolution is not None else None
     )
-    resource_kind, resource_id, resolved_repo_id = _normalize_resource_owner(
-        resource_kind=payload.resource_kind,
-        resource_id=payload.resource_id,
+    supervisor = context.hub_supervisor
+    repos = supervisor.list_repos() if supervisor is not None else ()
+    agent_workspaces = (
+        supervisor.list_agent_workspaces() if supervisor is not None else ()
     )
-    workspace_root = normalize_optional_text(payload.workspace_root)
+    try:
+        pma_context = resolve_pma_context_selection(
+            hub_root=hub_root,
+            workspace_root=payload.workspace_root,
+            resource_kind=payload.resource_kind,
+            resource_id=payload.resource_id,
+            repo_id=payload.repo_id,
+            repos=repos,
+            agent_workspaces=agent_workspaces,
+        )
+    except PmaContextSelectionError as exc:
+        detail = str(exc)
+        status_code = 404 if "not found" in detail.lower() else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+    resource_kind = pma_context.resource_kind
+    resource_id = pma_context.resource_id
+    resolved_repo_id = pma_context.repo_id
     followup_policy = resolve_managed_thread_followup_policy(
         payload,
         # Terminal follow-up defaults now apply when the thread is used, not at
@@ -512,35 +465,10 @@ def resolve_managed_thread_create_resolution(
         default_terminal_followup=False,
     )
 
-    owner_present = resource_kind is not None and resource_id is not None
-    if owner_present == bool(workspace_root):
-        raise HTTPException(
-            status_code=400,
-            detail="Exactly one of resource owner or workspace_root is required",
-        )
-
-    resolved_runtime: Optional[str] = None
-    if owner_present:
-        assert resource_kind is not None
-        assert resource_id is not None
-        resolved_workspace, resolved_repo_id, resolved_runtime = (
-            _resolve_workspace_from_resource_owner(
-                request,
-                resource_kind=resource_kind,
-                resource_id=resource_id,
-            )
-        )
-        if not _is_within_root(resolved_workspace, hub_root):
-            raise HTTPException(
-                status_code=400, detail="Resolved resource path is invalid"
-            )
-    else:
-        if workspace_root is None:
-            raise HTTPException(
-                status_code=400,
-                detail="workspace_root is required when resource owner is omitted",
-            )
-        resolved_workspace = _resolve_workspace_from_input(hub_root, workspace_root)
+    resolved_workspace = pma_context.workspace_root
+    if not _is_within_root(resolved_workspace, hub_root):
+        raise HTTPException(status_code=400, detail="Resolved resource path is invalid")
+    resolved_runtime = pma_context.runtime
 
     if resource_kind == "agent_workspace":
         if resolved_runtime is None:
@@ -581,7 +509,7 @@ def resolve_managed_thread_create_resolution(
     )
     context_profile = normalize_car_context_profile(
         payload.context_profile,
-        default=default_managed_thread_context_profile(resource_kind=resource_kind),
+        default=pma_context.context_profile,
     )
     if context_profile is None:
         raise HTTPException(status_code=400, detail="context_profile is invalid")
@@ -782,6 +710,7 @@ __all__ = [
     "_attach_latest_execution_fields",
     "_load_chat_binding_metadata_by_thread",
     "_normalize_resource_owner",
+    "_normalize_workspace_root_input",
     "_serialize_managed_thread",
     "_serialize_thread_target",
     "provision_managed_thread_workspace",

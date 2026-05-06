@@ -88,6 +88,15 @@ def _boolean_option(
     }
 
 
+def _pma_on_options(_context: Any = None) -> list[dict[str, Any]]:
+    return [
+        _string_option(
+            "repo",
+            "Optional repo id for explicit repo-context PMA; omitted means hub context",
+        )
+    ]
+
+
 async def _dispatch_service_method(
     service: Any,
     route: Any,
@@ -248,6 +257,7 @@ async def _handle_pma_route(
         method_name=method_name,
         include_channel_id=True,
         include_guild_id=route.canonical_path == ("pma", "on"),
+        include_options=route.canonical_path == ("pma", "on"),
     )
 
 
