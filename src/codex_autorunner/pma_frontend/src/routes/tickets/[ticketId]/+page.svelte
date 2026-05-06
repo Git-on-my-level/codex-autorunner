@@ -24,9 +24,10 @@
   let saveStatus = $state<string | null>(null);
   let currentRunId = $state<string | null>(null);
   let refreshTimer: ReturnType<typeof setInterval> | null = null;
+  // SvelteKit reuses this page while only route params change; slow refreshes must not repaint a previous ticket.
+  let detailRequestSeq = 0;
 
   onMount(() => {
-    void loadTicketDetail();
     refreshTimer = setInterval(() => void loadTicketDetail(false), 10000);
   });
 
@@ -34,42 +35,53 @@
     if (refreshTimer) clearInterval(refreshTimer);
   });
 
-  async function loadTicketDetail(showLoading = true): Promise<void> {
+  $effect(() => {
+    const routeTicketId = ticketId;
+    actionStatus = null;
+    saveStatus = null;
+    void loadTicketDetail(true, routeTicketId);
+  });
+
+  async function loadTicketDetail(showLoading = true, routeTicketId = ticketId): Promise<void> {
+    const requestSeq = ++detailRequestSeq;
+    const isCurrentRequest = () => requestSeq === detailRequestSeq && routeTicketId === ticketId;
     if (showLoading) loading = true;
     error = null;
     sectionIssues = [];
     const cachedList = cachedTickets(undefined);
-    if (showLoading && cachedList) renderCachedTicket(cachedList);
+    if (showLoading && cachedList) renderCachedTicket(cachedList, routeTicketId);
     const tickets = await pmaApi.ticketFlow.listTickets();
+    if (!isCurrentRequest()) return;
     const ticketList = dataOr(tickets, []);
     if (tickets.ok) rememberTickets(undefined, ticketList);
-    const matches = tickets.ok ? resolveTicketRouteMatches(ticketList, ticketId) : [];
+    const matches = tickets.ok ? resolveTicketRouteMatches(ticketList, routeTicketId) : [];
     if (matches.length > 1) {
       error = {
         kind: 'http',
         status: 409,
         code: 'ticket_route_ambiguous',
-        message: `Ticket ${ticketId} exists in multiple workspaces. Open it from a repo or worktree ticket queue.`
+        message: `Ticket ${routeTicketId} exists in multiple workspaces. Open it from a repo or worktree ticket queue.`
       };
       loading = false;
       return;
     }
-    const selected = matches[0] ?? (tickets.ok ? resolveTicketRouteId(ticketList, ticketId) : null);
+    const selected = matches[0] ?? (tickets.ok ? resolveTicketRouteId(ticketList, routeTicketId) : null);
     if (!selected) {
-      const numericRouteId = Number(ticketId);
+      const numericRouteId = Number(routeTicketId);
       if (!Number.isInteger(numericRouteId) || numericRouteId < 0) {
         error = tickets.ok
           ? {
               kind: 'http',
               status: 404,
               code: 'ticket_not_found',
-              message: `Ticket ${ticketId} was not found.`
+              message: `Ticket ${routeTicketId} was not found.`
             }
           : tickets.error;
         loading = false;
         return;
       }
       const directTicket = await pmaApi.ticketFlow.getTicket(numericRouteId);
+      if (!isCurrentRequest()) return;
       if (!directTicket.ok) {
         error = tickets.ok ? directTicket.error : tickets.error;
         loading = false;
@@ -83,7 +95,8 @@
         !runs.ok ? partialPageIssue('timeline', 'Run state unavailable', runs.error) : null,
         !chats.ok ? partialPageIssue('linked_chat', 'PMA chats unavailable', chats.error) : null
       ].filter((issue): issue is PartialPageIssue => Boolean(issue));
-      await renderTicketDetail(directTicket.data, ticketList, dataOr(runs, []), dataOr(chats, []), baseIssues);
+      if (!isCurrentRequest()) return;
+      await renderTicketDetail(directTicket.data, ticketList, dataOr(runs, []), dataOr(chats, []), baseIssues, isCurrentRequest);
       return;
     }
 
@@ -96,11 +109,13 @@
       !runs.ok ? partialPageIssue('timeline', 'Run state unavailable', runs.error) : null,
       !chats.ok ? partialPageIssue('linked_chat', 'PMA chats unavailable', chats.error) : null
     ].filter((issue): issue is PartialPageIssue => Boolean(issue));
-    await renderTicketDetail(ticketDetail, ticketList, dataOr(runs, []), dataOr(chats, []), baseIssues);
+    if (!isCurrentRequest()) return;
+    await renderTicketDetail(ticketDetail, ticketList, dataOr(runs, []), dataOr(chats, []), baseIssues, isCurrentRequest);
   }
 
-  function renderCachedTicket(ticketList: TicketSummary[]): void {
-    const matches = resolveTicketRouteMatches(ticketList, ticketId);
+  function renderCachedTicket(ticketList: TicketSummary[], routeTicketId: string): void {
+    if (routeTicketId !== ticketId) return;
+    const matches = resolveTicketRouteMatches(ticketList, routeTicketId);
     if (matches.length !== 1) return;
     detail = buildTicketDetailViewModel(ticketDetailFromSummary(matches[0]), {
       tickets: ticketList,
@@ -116,8 +131,10 @@
     ticketList: TicketSummary[],
     runs: PmaRunProgress[],
     chats: PmaChatSummary[],
-    baseIssues: PartialPageIssue[]
+    baseIssues: PartialPageIssue[],
+    isCurrentRequest = () => true
   ): Promise<void> {
+    if (!isCurrentRequest()) return;
     const baseSource = {
       tickets: ticketList,
       runs,
@@ -130,6 +147,7 @@
     sectionIssues = baseIssues;
     loading = false;
     const artifactResult = currentRunId ? await pmaApi.ticketFlow.listArtifacts(currentRunId) : null;
+    if (!isCurrentRequest()) return;
     sectionIssues = artifactResult && !artifactResult.ok
       ? [...baseIssues, partialPageIssue('artifacts', 'Surfaced artifacts unavailable', artifactResult.error)]
       : baseIssues;
@@ -150,12 +168,12 @@
     await loadTicketDetail(false);
   }
 
-  async function saveTicket(payload: TicketEditPayload): Promise<void> {
-    if (!detail) return;
+  async function saveTicket(payload: TicketEditPayload): Promise<boolean> {
+    if (!detail) return false;
     const ticketNumber = Number(detail.routeId);
     if (!Number.isInteger(ticketNumber)) {
       saveStatus = 'This ticket cannot be edited until it has a numeric TICKET index.';
-      return;
+      return false;
     }
     saveStatus = 'Saving ticket...';
     const owner = detail.workspaceKind === 'repo' && detail.workspaceId
@@ -166,6 +184,7 @@
     const result = await pmaApi.ticketFlow.updateTicket(ticketNumber, buildTicketUpdateContent(detail, payload), owner);
     saveStatus = result.ok ? 'Ticket saved.' : result.error.message;
     if (result.ok) await loadTicketDetail(false);
+    return result.ok;
   }
 </script>
 

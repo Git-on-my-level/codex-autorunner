@@ -103,15 +103,23 @@
 
 <style>
   .pma-memory-page {
-    gap: var(--space-3);
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+    width: 100%;
+    gap: var(--space-2);
+    overflow: hidden;
   }
 
   .memory-hero {
     display: flex;
     align-items: baseline;
     justify-content: space-between;
-    gap: var(--space-5);
+    gap: var(--space-4);
     padding: 0 2px;
+    flex: 0 0 auto;
   }
 
   .memory-hero-copy {
@@ -124,7 +132,7 @@
 
   .memory-hero h1 {
     margin: 0;
-    font-size: var(--font-size-4);
+    font-size: var(--font-size-3);
     font-weight: 650;
     letter-spacing: -0.018em;
     line-height: 1.2;
@@ -133,7 +141,7 @@
   .memory-hero-sub {
     margin: 0;
     color: var(--color-ink-muted);
-    font-size: var(--font-size-1);
+    font-size: var(--font-size-0);
     line-height: 1.4;
     max-width: 64ch;
   }
@@ -153,7 +161,7 @@
     display: flex;
     align-items: baseline;
     gap: 6px;
-    padding: 2px var(--space-3);
+    padding: 1px var(--space-2);
   }
 
   .memory-hero-stats dt {
@@ -188,19 +196,24 @@
   /* Tabs — Linear-style segmented pills */
   .memory-tabs-v2 {
     display: flex;
+    align-items: center;
+    align-content: flex-start;
     flex-wrap: wrap;
     gap: 2px;
-    padding: 4px;
+    padding: 3px;
     border: 1px solid var(--color-border-subtle);
     border-radius: 10px;
     background: var(--color-surface);
+    flex: 0 0 auto;
   }
 
   .memory-tabs-v2 button {
     display: inline-flex;
     align-items: center;
+    flex: 0 0 auto;
     gap: 8px;
-    padding: 6px 10px;
+    min-height: 26px;
+    padding: 4px 9px;
     border: 1px solid transparent;
     border-radius: 7px;
     background: transparent;
@@ -253,6 +266,10 @@
 
   /* Reader */
   .memory-reader-v2 {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
     padding: 0;
     overflow: hidden;
   }
@@ -262,7 +279,8 @@
     align-items: center;
     justify-content: space-between;
     gap: var(--space-3);
-    padding: var(--space-3) var(--space-5);
+    flex: 0 0 auto;
+    padding: var(--space-2) var(--space-4);
     border-bottom: 1px solid var(--color-border-subtle);
     background: linear-gradient(180deg, var(--color-surface), var(--color-surface-sunken));
   }
@@ -317,7 +335,7 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    height: 28px;
+    height: 26px;
     padding: 0 10px;
     border: 1px solid var(--color-border);
     border-radius: 6px;
@@ -345,6 +363,9 @@
     margin: 0;
     padding: var(--space-5) var(--space-6) var(--space-6);
     max-width: 760px;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
   }
 
   .memory-reader-v2 :global(.markdown-body) {

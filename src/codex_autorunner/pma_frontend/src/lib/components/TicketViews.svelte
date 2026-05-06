@@ -1,10 +1,13 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte';
   import type {
     TicketDetailViewModel,
     TicketFilter,
     TicketListViewModel
   } from '$lib/viewModels/ticket';
+  import EditableMarkdown from '$lib/components/EditableMarkdown.svelte';
   import { filterTicketRows, rowRelativeTime } from '$lib/viewModels/ticket';
+  import { renderMarkdownToHtml } from '$lib/viewModels/markdown';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import { statusLabel } from '$lib/viewModels/pmaChat';
   import type { PartialPageIssue } from '$lib/api/client';
@@ -38,7 +41,7 @@
     onFilter?: ((filter: TicketFilter) => void) | undefined;
     onRetry?: (() => void) | undefined;
     onCommand?: ((command: 'resume' | 'bootstrap') => void) | undefined;
-    onSave?: ((payload: TicketEditPayload) => void | Promise<void>) | undefined;
+    onSave?: ((payload: TicketEditPayload) => boolean | Promise<boolean>) | undefined;
   } = $props();
 
   const visibleRows = $derived(list ? filterTicketRows(list.rows, selectedFilter, selectedWorkspaceFilter) : []);
@@ -63,6 +66,12 @@
   let editReasoning = $state('');
   let editDone = $state(false);
   let editBody = $state('');
+  let settingsSaveTimer: ReturnType<typeof setTimeout> | null = null;
+  const ticketMarkdownContent = $derived(detail && editTicketId === detail.id ? editBody : detail?.rawBody ?? '');
+
+  onDestroy(() => {
+    if (settingsSaveTimer) clearTimeout(settingsSaveTimer);
+  });
 
   $effect(() => {
     if (!detail || editTicketId === detail.id) return;
@@ -75,8 +84,23 @@
     editBody = detail.rawBody;
   });
 
-  function submitEdit(): void {
-    void onSave?.({ title: editTitle, agent: editAgent, model: editModel, reasoning: editReasoning, done: editDone, body: editBody });
+  function scheduleSettingsSave(delay = 450): void {
+    if (!onSave) return;
+    if (settingsSaveTimer) clearTimeout(settingsSaveTimer);
+    settingsSaveTimer = setTimeout(() => {
+      settingsSaveTimer = null;
+      void saveSettings();
+    }, delay);
+  }
+
+  async function saveSettings(): Promise<boolean> {
+    if (!onSave) return false;
+    return Boolean(await onSave({ title: editTitle, agent: editAgent, model: editModel, reasoning: editReasoning, done: editDone, body: editBody }));
+  }
+
+  async function saveMarkdown(_docId: string, content: string): Promise<boolean> {
+    editBody = content;
+    return Boolean(await onSave?.({ title: editTitle, agent: editAgent, model: editModel, reasoning: editReasoning, done: editDone, body: content }));
   }
 </script>
 
@@ -286,17 +310,16 @@
         </dl>
         <section class="ticket-editor-panel">
           <div class="panel-heading-row">
-            <h3>Edit ticket</h3>
-            <button type="button" onclick={submitEdit} disabled={!onSave}>Save</button>
+            <h3>Ticket settings</h3>
           </div>
           <div class="ticket-edit-grid">
             <label>
               <span>Title</span>
-              <input bind:value={editTitle} />
+              <input bind:value={editTitle} oninput={() => scheduleSettingsSave()} />
             </label>
             <label>
               <span>Agent</span>
-              <select bind:value={editAgent}>
+              <select bind:value={editAgent} onchange={() => scheduleSettingsSave(0)}>
                 {#if editAgent && !['codex', 'claude', 'cursor'].includes(editAgent)}
                   <option value={editAgent}>{editAgent}</option>
                 {/if}
@@ -307,11 +330,11 @@
             </label>
             <label>
               <span>Model</span>
-              <input bind:value={editModel} placeholder="default" />
+              <input bind:value={editModel} placeholder="default" oninput={() => scheduleSettingsSave()} />
             </label>
             <label>
               <span>Reasoning</span>
-              <select bind:value={editReasoning}>
+              <select bind:value={editReasoning} onchange={() => scheduleSettingsSave(0)}>
                 <option value="">default</option>
                 <option value="low">low</option>
                 <option value="medium">medium</option>
@@ -320,31 +343,27 @@
               </select>
             </label>
             <label class="checkbox-row">
-              <input type="checkbox" bind:checked={editDone} />
+              <input type="checkbox" bind:checked={editDone} onchange={() => scheduleSettingsSave(0)} />
               <span>Done</span>
             </label>
           </div>
-          <textarea bind:value={editBody} rows="16" spellcheck="false"></textarea>
         </section>
-        {#if detail.goal}
-          <section class="contract-section">
-            <h3>Goal</h3>
-            <p>{detail.goal}</p>
-          </section>
-        {/if}
-        {#each detail.contractSections as section}
-          <section class="contract-section">
-            <h3>{section.title}</h3>
-            {#if section.body}<p>{section.body}</p>{/if}
-            {#if section.items.length}
-              <ul>
-                {#each section.items as item}
-                  <li>{item}</li>
-                {/each}
-              </ul>
-            {/if}
-          </section>
-        {/each}
+        <section class="ticket-markdown-panel">
+          <div class="panel-heading-row">
+            <h3>Ticket markdown</h3>
+            <span class="muted">Click to edit</span>
+          </div>
+          <EditableMarkdown
+            docId={detail.id}
+            content={ticketMarkdownContent}
+            html={renderMarkdownToHtml(ticketMarkdownContent)}
+            isMissing={!ticketMarkdownContent.trim()}
+            emptyTitle="No ticket markdown"
+            emptyMessage="Add the ticket goal, tasks, acceptance criteria, or notes."
+            editable={Boolean(onSave)}
+            onSave={saveMarkdown}
+          />
+        </section>
       </section>
 
       <aside class="ticket-side">

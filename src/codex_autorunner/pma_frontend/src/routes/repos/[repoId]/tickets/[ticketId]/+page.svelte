@@ -24,9 +24,10 @@
   let saveStatus = $state<string | null>(null);
   let currentRunId = $state<string | null>(null);
   let refreshTimer: ReturnType<typeof setInterval> | null = null;
+  // SvelteKit reuses this page while only route params change; slow refreshes must not repaint a previous ticket.
+  let detailRequestSeq = 0;
 
   onMount(() => {
-    void loadTicketDetail();
     refreshTimer = setInterval(() => void loadTicketDetail(false), 10000);
   });
 
@@ -34,19 +35,34 @@
     if (refreshTimer) clearInterval(refreshTimer);
   });
 
-  async function loadTicketDetail(showLoading = true): Promise<void> {
+  $effect(() => {
+    const ownerId = repoId;
+    const routeTicketId = ticketId;
+    actionStatus = null;
+    saveStatus = null;
+    void loadTicketDetail(true, ownerId, routeTicketId);
+  });
+
+  async function loadTicketDetail(
+    showLoading = true,
+    ownerId = repoId,
+    routeTicketId = ticketId
+  ): Promise<void> {
+    const requestSeq = ++detailRequestSeq;
+    const isCurrentRequest = () => requestSeq === detailRequestSeq && ownerId === repoId && routeTicketId === ticketId;
     if (showLoading) loading = true;
     error = null;
     sectionIssues = [];
-    const cachedList = cachedTickets({ repo: repoId });
-    if (showLoading && cachedList) renderCachedTicket(cachedList);
-    const tickets = await pmaApi.ticketFlow.listTickets({ repo: repoId });
+    const cachedList = cachedTickets({ repo: ownerId });
+    if (showLoading && cachedList) renderCachedTicket(cachedList, ownerId, routeTicketId);
+    const tickets = await pmaApi.ticketFlow.listTickets({ repo: ownerId });
+    if (!isCurrentRequest()) return;
     const ticketList = dataOr(tickets, []);
-    if (tickets.ok) rememberTickets({ repo: repoId }, ticketList);
-    const selected = tickets.ok ? resolveTicketRouteId(ticketList, ticketId) : null;
+    if (tickets.ok) rememberTickets({ repo: ownerId }, ticketList);
+    const selected = tickets.ok ? resolveTicketRouteId(ticketList, routeTicketId) : null;
     if (!selected) {
       error = tickets.ok
-        ? { kind: 'http', status: 404, code: 'ticket_not_found', message: `Ticket ${ticketId} was not found in repo ${repoId}.` }
+        ? { kind: 'http', status: 404, code: 'ticket_not_found', message: `Ticket ${routeTicketId} was not found in repo ${ownerId}.` }
         : tickets.error;
       loading = false;
       return;
@@ -60,11 +76,13 @@
       !runs.ok ? partialPageIssue('timeline', 'Run state unavailable', runs.error) : null,
       !chats.ok ? partialPageIssue('linked_chat', 'PMA chats unavailable', chats.error) : null
     ].filter((issue): issue is PartialPageIssue => Boolean(issue));
-    await renderTicketDetail(ticketDetail, ticketList, dataOr(runs, []), dataOr(chats, []), baseIssues);
+    if (!isCurrentRequest()) return;
+    await renderTicketDetail(ticketDetail, ticketList, dataOr(runs, []), dataOr(chats, []), baseIssues, isCurrentRequest);
   }
 
-  function renderCachedTicket(ticketList: TicketSummary[]): void {
-    const selected = resolveTicketRouteId(ticketList, ticketId);
+  function renderCachedTicket(ticketList: TicketSummary[], ownerId: string, routeTicketId: string): void {
+    if (ownerId !== repoId || routeTicketId !== ticketId) return;
+    const selected = resolveTicketRouteId(ticketList, routeTicketId);
     if (!selected) return;
     detail = buildTicketDetailViewModel(ticketDetailFromSummary(selected), {
       tickets: ticketList,
@@ -80,8 +98,10 @@
     ticketList: TicketSummary[],
     runs: PmaRunProgress[],
     chats: PmaChatSummary[],
-    baseIssues: PartialPageIssue[]
+    baseIssues: PartialPageIssue[],
+    isCurrentRequest = () => true
   ): Promise<void> {
+    if (!isCurrentRequest()) return;
     const baseSource = { tickets: ticketList, runs, chats, artifacts: [] as SurfaceArtifact[] };
     const baseDetail = buildTicketDetailViewModel(ticketDetail, baseSource);
     currentRunId = baseDetail.runHref?.match(/\/api\/flows\/([^/]+)\/status/)?.[1] ?? null;
@@ -89,6 +109,7 @@
     sectionIssues = baseIssues;
     loading = false;
     const artifactResult = currentRunId ? await pmaApi.ticketFlow.listArtifacts(currentRunId) : null;
+    if (!isCurrentRequest()) return;
     sectionIssues = artifactResult && !artifactResult.ok
       ? [...baseIssues, partialPageIssue('artifacts', 'Surfaced artifacts unavailable', artifactResult.error)]
       : baseIssues;
@@ -110,17 +131,18 @@
     await loadTicketDetail(false);
   }
 
-  async function saveTicket(payload: TicketEditPayload): Promise<void> {
-    if (!detail) return;
+  async function saveTicket(payload: TicketEditPayload): Promise<boolean> {
+    if (!detail) return false;
     const ticketNumber = Number(detail.routeId);
     if (!Number.isInteger(ticketNumber)) {
       saveStatus = 'This ticket cannot be edited until it has a numeric TICKET index.';
-      return;
+      return false;
     }
     saveStatus = 'Saving ticket...';
     const result = await pmaApi.ticketFlow.updateTicket(ticketNumber, buildTicketUpdateContent(detail, payload), { repo: repoId });
     saveStatus = result.ok ? 'Ticket saved.' : result.error.message;
     if (result.ok) await loadTicketDetail(false);
+    return result.ok;
   }
 </script>
 

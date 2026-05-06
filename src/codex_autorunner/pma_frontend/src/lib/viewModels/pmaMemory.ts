@@ -21,13 +21,10 @@ export type PmaMemoryViewModel = {
 
 const PMA_DOC_LABELS: Record<string, string> = {
   'AGENTS.md': 'Durable guidance',
-  'active_context.md': 'Active context',
-  'context_log.md': 'Context log',
-  'ABOUT_CAR.md': 'Ops guide',
-  'prompt.md': 'Prompt'
+  'active_context.md': 'Active context'
 };
 
-const PMA_DOC_ORDER = ['AGENTS.md', 'active_context.md', 'context_log.md', 'ABOUT_CAR.md', 'prompt.md'];
+const PMA_DOC_ORDER = ['AGENTS.md', 'active_context.md'];
 const PMA_DOC_SET = new Set(PMA_DOC_ORDER);
 
 export function buildPmaMemoryViewModel(docs: ContextspaceDocument[]): PmaMemoryViewModel {

@@ -116,7 +116,7 @@
       </div>
     </header>
 
-    <main class="content-shell">
+    <main class={`content-shell ${currentPath === '/pma-memory' ? 'pinned-doc-content' : ''}`}>
       {@render children()}
     </main>
   </div>
