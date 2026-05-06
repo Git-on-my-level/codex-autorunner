@@ -17,9 +17,8 @@ describe('TicketViews', () => {
     });
 
     expect(body).toContain('All tickets');
-    expect(body).toContain('All workspaces');
-    expect(body).toContain('Worktree worktree-1');
-    expect(body).toContain('Worktree: worktree-1');
+    expect(body).toContain('All-ticket projection');
+    expect(body).toContain('known repos and worktrees');
     expect(body).toContain('#110');
     expect(body).toContain('Implement typed UI API client and view models');
     expect(body).toContain('PMA chat');
@@ -89,9 +88,9 @@ describe('TicketViews', () => {
     });
 
     expect(body).toContain('Ticket flow controls');
-    expect(body).toContain('Done/total');
+    expect(body).toContain('0/2 done');
     expect(body).toContain('4');
-    expect(body).toContain('Create ticket');
+    expect(body).toContain('+ New ticket');
     expect(body).toContain('working-badge');
     expect(body).toContain('Implement the current ticket body preview.');
     expect(body).toContain('+80 -5 4 files');

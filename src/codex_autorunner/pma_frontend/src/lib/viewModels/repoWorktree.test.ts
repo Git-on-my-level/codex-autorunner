@@ -105,7 +105,7 @@ describe('repo/worktree view models', () => {
     expect(vm.currentRuns[0]).toMatchObject({
       title: 'Hub rewrite foundation',
       agentId: 'codex',
-      ticketHref: '/tickets/TICKET-110'
+      ticketHref: '/repos/repo-1/tickets/TICKET-110'
     });
     expect(vm.links.map((link) => link.label)).not.toContain('Open PMA chat');
     expect(vm.links.map((link) => link.label)).toContain('View repo tickets');
@@ -137,7 +137,7 @@ describe('repo/worktree view models', () => {
 
     expect(vm.baseRepoLabel).toBe('codex-autorunner');
     expect(vm.baseRepoHref).toBe('/repos/repo-1');
-    expect(vm.currentRuns[0].ticketHref).toBe('/tickets/TICKET-110');
+    expect(vm.currentRuns[0].ticketHref).toBe('/worktrees/worktree-1/tickets/TICKET-110');
     expect(vm.links.find((link) => link.label === 'View worktree tickets')?.href).toBe('/worktrees/worktree-1/tickets');
   });
 
@@ -185,7 +185,10 @@ describe('repo/worktree view models', () => {
     expect(vm.hasActiveRun).toBe(false);
     expect(vm.currentRuns).toHaveLength(0);
     expect(vm.nextTickets[0].title).toBe(mockTicketSummary.title);
-    expect(vm.links.find((link) => link.label === 'Cross-workspace ticket index')?.secondary).toBe(true);
+    expect(vm.links.find((link) => link.label === 'View repo tickets')).toMatchObject({
+      href: '/repos/repo-1/tickets',
+      secondary: false
+    });
   });
 
   it('scopes queued tickets to the selected repo when ticket ownership is known', () => {
@@ -301,7 +304,7 @@ describe('repo/worktree view models', () => {
       title: 'Worktree not found',
       stateLabel: 'Missing',
       missingIndexHref: '/worktrees',
-      ticketIndexHref: '/tickets'
+      ticketIndexHref: '/worktrees'
     });
     expect(vm.baseRepoHref).toBeNull();
   });

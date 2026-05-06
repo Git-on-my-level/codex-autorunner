@@ -82,6 +82,8 @@
   let editBody = $state('');
   let settingsSaveTimer: ReturnType<typeof setTimeout> | null = null;
   let queueOpen = $state(false);
+  let createOpen = $state(false);
+  let queueMenuOpen = $state(false);
   let createTitle = $state('');
   let createBody = $state('');
   const ticketMarkdownContent = $derived(detail && editTicketId === detail.id ? editBody : detail?.rawBody ?? '');
@@ -130,6 +132,7 @@
     if (ok) {
       createTitle = '';
       createBody = '';
+      createOpen = false;
     }
   }
 
@@ -155,27 +158,6 @@
       <p>{list.subtitle}</p>
     </div>
 
-    {#if !list.scopedOwner}
-      <div class="filter-row ticket-filter-row" role="tablist" aria-label="Workspace filters">
-        {#each list.workspaceFilters as filter}
-          <a
-            class:active={selectedWorkspaceFilter === filter.id}
-            class="chip"
-            role="tab"
-            aria-selected={selectedWorkspaceFilter === filter.id}
-            href={href(filter.id === 'all'
-              ? '/tickets'
-              : filter.id === 'unscoped'
-                ? '/tickets?unscoped=1'
-                : `/tickets?${filter.id.startsWith('repo:') ? 'repo' : 'worktree'}=${encodeURIComponent(filter.id.split(':')[1] ?? '')}`)}
-          >
-            {filter.label}
-            <span>{filter.count}</span>
-          </a>
-        {/each}
-      </div>
-    {/if}
-
     <div class="filter-row ticket-filter-row" role="tablist" aria-label="Ticket filters">
       {#each list.filters as filter}
         <button
@@ -199,36 +181,63 @@
     <section class="page-panel ticket-list-panel">
       <div class="panel-heading-row">
         <h2>{list.queueTitle}</h2>
-        {#if list.scopedOwner}
-          <div class="queue-actions" aria-label="Ticket flow controls">
-            <button type="button" class="ghost-button" disabled={queueBusy} onclick={() => onQueueCommand?.('start')}>
-              {queueBusy ? 'Running' : 'Start'}
+        <div class="queue-heading-actions">
+          {#if list.scopedOwner && onCreateTicket}
+            <button type="button" class="ghost-button" onclick={() => (createOpen = !createOpen)} aria-expanded={createOpen}>
+              {createOpen ? 'Cancel' : '+ New ticket'}
             </button>
-            <button type="button" class="ghost-button" disabled={!canStopQueue} onclick={() => onQueueCommand?.('stop')}>Stop</button>
-            <button type="button" class="ghost-button" disabled={!canRestartQueue} onclick={() => onQueueCommand?.('restart')}>Restart</button>
-          </div>
-        {/if}
-      </div>
-      <section class={`ticket-flow-strip ${list.flowStatus.signal}`} aria-label="Ticket flow status">
-        <div>
-          <span>Status</span>
-          <strong>{list.flowStatus.statusLabel}</strong>
+          {/if}
+          {#if list.scopedOwner}
+            <div class="queue-menu-wrapper">
+              <button
+                type="button"
+                class="ghost-button queue-menu-button"
+                aria-haspopup="menu"
+                aria-expanded={queueMenuOpen}
+                aria-label="Ticket flow controls"
+                onclick={() => (queueMenuOpen = !queueMenuOpen)}
+              >
+                <span aria-hidden="true">⋯</span>
+              </button>
+              {#if queueMenuOpen}
+                <div class="queue-menu" role="menu">
+                  <button type="button" role="menuitem" disabled={queueBusy} onclick={() => { queueMenuOpen = false; onQueueCommand?.('start'); }}>
+                    {queueBusy ? 'Running' : 'Start queue'}
+                  </button>
+                  <button type="button" role="menuitem" disabled={!canStopQueue} onclick={() => { queueMenuOpen = false; onQueueCommand?.('stop'); }}>Stop queue</button>
+                  <button type="button" role="menuitem" disabled={!canRestartQueue} onclick={() => { queueMenuOpen = false; onQueueCommand?.('restart'); }}>Restart queue</button>
+                </div>
+              {/if}
+            </div>
+          {/if}
         </div>
-        <div>
-          <span>Current ticket</span>
+      </div>
+      <p class={`ticket-flow-line ${list.flowStatus.signal}`} aria-label="Ticket flow status">
+        <span class="status-pill {list.flowStatus.signal}">{list.flowStatus.statusLabel}</span>
+        <span class="flow-line-meta">{list.flowStatus.progressLabel} done</span>
+        {#if list.flowStatus.turnsLabel !== 'Unknown'}
+          <span class="flow-line-meta">{list.flowStatus.turnsLabel} turns</span>
+        {/if}
+        {#if list.flowStatus.elapsedLabel !== 'Unknown'}
+          <span class="flow-line-meta">{list.flowStatus.elapsedLabel}</span>
+        {/if}
+        {#if list.flowStatus.lastActivityLabel && list.flowStatus.lastActivityLabel !== 'No activity yet'}
+          <span class="flow-line-meta">last activity {list.flowStatus.lastActivityLabel}</span>
+        {/if}
+        <span class="flow-line-divider" aria-hidden="true">·</span>
+        <span class="flow-line-current">
+          Current:
           {#if list.flowStatus.currentTicketHref}
             <a href={href(list.flowStatus.currentTicketHref)}>{list.flowStatus.currentTicketLabel}</a>
           {:else}
-            <strong>{list.flowStatus.currentTicketLabel}</strong>
+            {list.flowStatus.currentTicketLabel}
           {/if}
-        </div>
-        <div><span>Turns</span><strong>{list.flowStatus.turnsLabel}</strong></div>
-        <div><span>Elapsed</span><strong>{list.flowStatus.elapsedLabel}</strong></div>
-        <div><span>Done/total</span><strong>{list.flowStatus.progressLabel}</strong></div>
-        <div><span>Last activity</span><strong>{list.flowStatus.lastActivityLabel}</strong></div>
-        <div class="flow-reason"><span>Reason</span><strong>{list.flowStatus.reasonLabel}</strong></div>
-      </section>
-      {#if list.scopedOwner && onCreateTicket}
+        </span>
+        {#if list.flowStatus.reasonLabel && list.flowStatus.reasonLabel !== 'No reason reported'}
+          <span class="flow-line-meta flow-line-reason">— {list.flowStatus.reasonLabel}</span>
+        {/if}
+      </p>
+      {#if list.scopedOwner && onCreateTicket && createOpen}
         <form class="ticket-create-row" onsubmit={(event) => { event.preventDefault(); void createTicket(); }}>
           <input bind:value={createTitle} placeholder="New ticket title" aria-label="New ticket title" />
           <input bind:value={createBody} placeholder="Body preview or goal" aria-label="New ticket body" />
@@ -246,7 +255,6 @@
         <div class="ticket-table" role="table" aria-label="Ticket queue">
           <div class="ticket-table-head" role="row">
             <span>Ticket</span>
-            <span>Workspace scope</span>
             <span>Agent</span>
             <span>Status</span>
             <span>Run</span>
@@ -261,17 +269,10 @@
                 <span>
                   {row.title}
                   {#if row.isCurrent}<em class="working-badge">Working</em>{/if}
+                  {#if row.workspaceKind === 'unscoped'}<em class="working-badge needs-repair" title="Needs owner repair">Needs owner repair</em>{/if}
                   {#if row.bodyPreview}<small>{row.bodyPreview}</small>{/if}
                 </span>
               </a>
-              <span>
-                {#if row.workspaceHref}
-                  <a class="inline-link" href={href(row.workspaceHref)}>{row.repoLabel}</a>
-                {:else}
-                  {row.repoLabel}
-                {/if}
-                {#if row.pathLabel}<small class="row-meta">{row.pathLabel}</small>{/if}
-              </span>
               <span>{row.agentLabel}</span>
               <span>
                 <span class="status-pill {row.status}">{statusLabel(row.status)}</span>
@@ -463,7 +464,7 @@
           {:else}
             <div class="timeline-list">
               {#each detail.timeline as item}
-                <a class={`timeline-item ${item.status}`} href={href(item.href ?? detail.runHref ?? '/tickets')}>
+                <a class={`timeline-item ${item.status}`} href={href(item.href ?? detail.runHref ?? '/dashboard')}>
                   <span class="status-pill {item.status}">{statusLabel(item.status)}</span>
                   <span>
                     <strong>{item.title}</strong>
@@ -486,7 +487,7 @@
           {:else}
             <div class="compact-activity-list">
               {#each detail.artifacts as artifact}
-                <a class="dashboard-row activity-row" href={href(artifact.href ?? detail.runHref ?? '/tickets')}>
+                <a class="dashboard-row activity-row" href={href(artifact.href ?? detail.runHref ?? '/dashboard')}>
                   <span class={`activity-kind ${artifact.kind}`}>{artifact.kind}</span>
                   <span>
                     <span class="row-title">{artifact.title}</span>

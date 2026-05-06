@@ -2,23 +2,22 @@ export type NavItem = {
   href: string;
   label: string;
   badge?: string;
-  group: 'primary' | 'support' | 'workspace' | 'system';
+  group: 'primary' | 'support' | 'system';
   indent?: boolean;
 };
 
+/** Top-level hub links. Exact path matches drive default breadcrumbs; see `$lib/breadcrumbs.ts`. */
 export const primaryNav: NavItem[] = [
   { href: '/pma', label: 'PMA', badge: 'Primary', group: 'primary' },
   { href: '/pma-memory', label: 'PMA memory', group: 'primary' },
   { href: '/dashboard', label: 'Dashboard', group: 'support' },
   { href: '/repos', label: 'Repos', group: 'support' },
-  { href: '/tickets', label: 'All tickets', group: 'workspace' },
   { href: '/settings', label: 'Settings', group: 'system' }
 ];
 
 export const navGroupLabels: Record<NavItem['group'], string> = {
   primary: 'Primary',
   support: 'Repos',
-  workspace: 'Workspace indexes',
   system: 'System'
 };
 

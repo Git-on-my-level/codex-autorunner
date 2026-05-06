@@ -110,10 +110,46 @@
       <section id="failed-blocked" class="page-panel dashboard-panel">
         <div class="panel-heading-row">
           <h2>Failed/blocked</h2>
-          <a href={href('/tickets')}>All tickets</a>
+          <a href={href('/repos')}>All repos</a>
         </div>
         {@render degradedIssues(failedIssues)}
         {@render attentionList(dashboard.failedOrBlocked, 'No failed or blocked work is visible.')}
+      </section>
+
+      <section id="queues" class="page-panel dashboard-panel wide">
+        <div class="panel-heading-row">
+          <h2>Queues</h2>
+          <a href={href('/repos')}>All repos</a>
+        </div>
+        {#if dashboard.queues.length === 0}
+          <div class="state-panel empty-state compact-empty">
+            <strong>No queues yet</strong>
+            <p>Repo and worktree ticket queues appear here once work is registered.</p>
+          </div>
+        {:else}
+          <div class="dashboard-list queue-list">
+            {#each dashboard.queues as queue}
+              <a class={`dashboard-row queue-row status-${queue.flowStatus.signal}`} href={href(queue.href)}>
+                <span class="row-main">
+                  <span class="row-title">
+                    <span class={`status-pill ${queue.flowStatus.signal}`}>{queue.flowStatus.statusLabel}</span>
+                    <strong>{queue.label}</strong>
+                    <small class="row-id">{queue.kind}</small>
+                  </span>
+                  <span class="row-meta">
+                    {queue.doneCount}/{queue.totalCount} done
+                    {#if queue.flowStatus.currentTicketLabel && queue.flowStatus.currentTicketLabel !== 'None'}
+                      · current: {queue.flowStatus.currentTicketLabel}
+                    {/if}
+                    {#if queue.flowStatus.reasonLabel && queue.flowStatus.reasonLabel !== 'No reason reported'}
+                      · {queue.flowStatus.reasonLabel}
+                    {/if}
+                  </span>
+                </span>
+              </a>
+            {/each}
+          </div>
+        {/if}
       </section>
 
       <section class="page-panel dashboard-panel wide">

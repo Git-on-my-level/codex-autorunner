@@ -298,7 +298,7 @@ function ticketToListRow(ticket: TicketSummary, source: TicketSourceData): Ticke
     currentRunId: run?.id ?? null,
     updatedAt: ticket.updatedAt ?? run?.lastEventAt ?? chat?.updatedAt ?? null,
     chatHref: chat ? `/pma?chat=${encodeURIComponent(chat.id)}` : ticket.chatKey ? `/pma?chat=${encodeURIComponent(ticket.chatKey)}` : null,
-    href: scopedTicketHref(ticket) ?? `/tickets/${encodeURIComponent(routeIdForTicket(ticket))}`,
+    href: scopedTicketHref(ticket) ?? '/dashboard',
     needsAttention: ticket.errors.length > 0 || ['waiting', 'failed', 'blocked'].includes(status),
     isCurrent: false
   };

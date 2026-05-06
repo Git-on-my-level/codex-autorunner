@@ -2,12 +2,15 @@ import type {
   DashboardSummary,
   PmaChatSummary,
   PmaRunProgress,
+  RepoSummary,
   SensitiveApprovalRequest,
   SurfaceArtifact,
   TicketSummary,
   WorkStatus,
+  WorktreeSummary
 } from './domain';
 import { formatRelativeTime, progressPercent } from './pmaChat';
+import { buildTicketFlowStatusViewModel, type TicketFlowStatusViewModel } from './ticketFlowStatus';
 
 export type DashboardMetric = {
   label: string;
@@ -53,11 +56,23 @@ export type DashboardActivityRow = {
   artifact: SurfaceArtifact | null;
 };
 
+export type DashboardQueueRow = {
+  id: string;
+  kind: 'repo' | 'worktree';
+  label: string;
+  href: string;
+  flowStatus: TicketFlowStatusViewModel;
+  doneCount: number;
+  totalCount: number;
+  hasOpen: boolean;
+};
+
 export type DashboardViewModel = {
   metrics: DashboardMetric[];
   activeRuns: DashboardRunRow[];
   waitingForMe: DashboardAttentionRow[];
   failedOrBlocked: DashboardAttentionRow[];
+  queues: DashboardQueueRow[];
   recentActivity: DashboardActivityRow[];
   hasAnyData: boolean;
 };
@@ -68,6 +83,8 @@ export type DashboardSourceData = {
   chats: PmaChatSummary[];
   approvals: SensitiveApprovalRequest[];
   tickets: TicketSummary[];
+  repos?: RepoSummary[];
+  worktrees?: WorktreeSummary[];
 };
 
 export function buildDashboardViewModel(source: DashboardSourceData): DashboardViewModel {
@@ -86,17 +103,19 @@ export function buildDashboardViewModel(source: DashboardSourceData): DashboardV
       .map(ticketToFailureRow)
   ];
   const recentActivity = buildRecentActivity(source, runRows, openTickets);
+  const queues = buildQueueRows(source);
 
   return {
     metrics: [
       { label: 'Active runs', value: activeRuns.length, href: '#active-runs', tone: 'active' },
       { label: 'Waiting for me', value: waitingRows.length, href: '#waiting-for-me', tone: 'waiting' },
       { label: 'Failed/blocked', value: failedRows.length, href: '#failed-blocked', tone: 'danger' },
-      { label: 'Open tickets', value: openTickets.length || source.summary?.openTickets || 0, href: '/tickets', tone: 'neutral' },
+      { label: 'Open tickets', value: openTickets.length || source.summary?.openTickets || 0, href: '#queues', tone: 'neutral' },
     ],
     activeRuns,
     waitingForMe: dedupeAttention(waitingRows).slice(0, 8),
     failedOrBlocked: dedupeAttention(failedRows).slice(0, 8),
+    queues,
     recentActivity: recentActivity.slice(0, 8),
     hasAnyData:
       runRows.length > 0 ||
@@ -142,10 +161,10 @@ function runProgressToRow(run: PmaRunProgress, chat: PmaChatSummary | null): Das
     worktreeId,
     ticketId,
     chatId,
-    primaryHref: chatId ? `/pma?chat=${encodeURIComponent(chatId)}` : ticketId ? ticketHref(ticketId) : '/tickets',
+    primaryHref: chatId ? `/pma?chat=${encodeURIComponent(chatId)}` : ticketId ? ticketHref(ticketId, repoId, worktreeId) : '/dashboard',
     repoHref: repoId ? repoHref(repoId) : null,
     worktreeHref: worktreeId ? worktreeHref(worktreeId) : null,
-    ticketHref: ticketId ? ticketHref(ticketId) : null,
+    ticketHref: ticketId ? ticketHref(ticketId, repoId, worktreeId) : null,
     chatHref: chatId ? `/pma?chat=${encodeURIComponent(chatId)}` : null
   };
 }
@@ -165,7 +184,7 @@ function chatToRunRow(chat: PmaChatSummary): DashboardRunRow {
     primaryHref: `/pma?chat=${encodeURIComponent(chat.id)}`,
     repoHref: chat.repoId ? repoHref(chat.repoId) : null,
     worktreeHref: chat.worktreeId ? worktreeHref(chat.worktreeId) : null,
-    ticketHref: chat.ticketId ? ticketHref(chat.ticketId) : null,
+    ticketHref: chat.ticketId ? ticketHref(chat.ticketId, chat.repoId, chat.worktreeId) : null,
     chatHref: `/pma?chat=${encodeURIComponent(chat.id)}`
   };
 }
@@ -228,6 +247,66 @@ function ticketToFailureRow(ticket: TicketSummary): DashboardAttentionRow {
     updatedAt: ticket.updatedAt,
     primaryHref: ticketHrefForTicket(ticket)
   };
+}
+
+function buildQueueRows(source: DashboardSourceData): DashboardQueueRow[] {
+  const repos = source.repos ?? [];
+  const worktrees = source.worktrees ?? [];
+  const rows: DashboardQueueRow[] = [];
+  for (const repo of repos) {
+    rows.push(buildQueueRow(repo.id, repo.name ?? repo.id, 'repo', source));
+  }
+  for (const worktree of worktrees) {
+    rows.push(buildQueueRow(worktree.id, worktree.name ?? worktree.id, 'worktree', source));
+  }
+  return rows
+    .filter((row) => row.totalCount > 0 || row.flowStatus.signal !== 'idle')
+    .sort((a, b) => {
+      const signalDelta = signalRank(a.flowStatus.signal) - signalRank(b.flowStatus.signal);
+      if (signalDelta !== 0) return signalDelta;
+      const openDelta = Number(b.hasOpen) - Number(a.hasOpen);
+      if (openDelta !== 0) return openDelta;
+      return a.label.localeCompare(b.label);
+    });
+}
+
+function buildQueueRow(
+  id: string,
+  label: string,
+  kind: 'repo' | 'worktree',
+  source: DashboardSourceData
+): DashboardQueueRow {
+  const flowStatus = buildTicketFlowStatusViewModel(source.tickets, source.runs, { kind, id });
+  const [doneStr, totalStr] = flowStatus.progressLabel.split('/');
+  const doneCount = Number(doneStr) || 0;
+  const totalCount = Number(totalStr) || 0;
+  return {
+    id,
+    kind,
+    label,
+    href: `/${kind === 'repo' ? 'repos' : 'worktrees'}/${encodeURIComponent(id)}/tickets`,
+    flowStatus,
+    doneCount,
+    totalCount,
+    hasOpen: totalCount > doneCount
+  };
+}
+
+function signalRank(signal: TicketFlowStatusViewModel['signal']): number {
+  switch (signal) {
+    case 'failed':
+      return 0;
+    case 'blocked':
+      return 1;
+    case 'waiting':
+      return 2;
+    case 'active':
+      return 3;
+    case 'idle':
+      return 4;
+    default:
+      return 5;
+  }
 }
 
 function buildRecentActivity(
@@ -304,8 +383,10 @@ function worktreeHref(worktreeId: string): string {
   return `/worktrees/${encodeURIComponent(worktreeId)}`;
 }
 
-function ticketHref(ticketId: string): string {
-  return `/tickets/${encodeURIComponent(ticketId)}`;
+function ticketHref(ticketId: string, repoId: string | null, worktreeId: string | null): string {
+  if (worktreeId) return `/worktrees/${encodeURIComponent(worktreeId)}/tickets/${encodeURIComponent(ticketId)}`;
+  if (repoId) return `/repos/${encodeURIComponent(repoId)}/tickets/${encodeURIComponent(ticketId)}`;
+  return '/dashboard';
 }
 
 function ticketHrefForTicket(ticket: TicketSummary): string {
@@ -316,5 +397,5 @@ function ticketHrefForTicket(ticket: TicketSummary): string {
   if (ticket.workspaceKind === 'worktree' && ticket.workspaceId) {
     return `/worktrees/${encodeURIComponent(ticket.workspaceId)}/tickets/${encodeURIComponent(routeId)}`;
   }
-  return ticketHref(routeId);
+  return ticketHref(routeId, ticket.repoId, ticket.worktreeId);
 }

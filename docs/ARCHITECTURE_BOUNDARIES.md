@@ -89,6 +89,8 @@ Surfaces → Adapters → Control Plane → Engine
 
 Ordinary Telegram and Discord chat turns have one lifecycle authority:
 orchestration-managed thread targets in hub `orchestration.sqlite3`.
+See `docs/architecture/unified-chat-ownership.md` for the full cross-surface
+timeline, binding, adapter, and delivery-ledger contract.
 
 - Shared ingress decides whether an inbound message targets a paused flow or a
   managed thread.

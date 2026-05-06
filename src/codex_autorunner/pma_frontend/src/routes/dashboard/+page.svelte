@@ -20,12 +20,14 @@
     loading = true;
     error = null;
     sectionIssues = [];
-    const [summary, runs, chats, approvals, tickets] = await Promise.all([
+    const [summary, runs, chats, approvals, tickets, repos, worktrees] = await Promise.all([
       pmaApi.hub.getDashboard(),
       pmaApi.ticketFlow.listRuns(),
       pmaApi.pma.listChats(),
       pmaApi.settings.listApprovals(),
-      pmaApi.ticketFlow.listTickets()
+      pmaApi.ticketFlow.listTickets(),
+      pmaApi.hub.listRepos(),
+      pmaApi.hub.listWorktrees()
     ]);
 
     const results = [summary, runs, chats, approvals, tickets];
@@ -49,7 +51,9 @@
       runs: dataOr(runs, []),
       chats: dataOr(chats, []),
       approvals: dataOr(approvals, []),
-      tickets: dataOr(tickets, [])
+      tickets: dataOr(tickets, []),
+      repos: dataOr(repos, []),
+      worktrees: dataOr(worktrees, [])
     });
     loading = false;
   }

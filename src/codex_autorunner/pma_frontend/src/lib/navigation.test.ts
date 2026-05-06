@@ -14,12 +14,8 @@ describe('PMA navigation', () => {
 
   it('frames worktrees and durable docs under repo/workspace ownership', () => {
     expect(navGroupLabels.support).toBe('Repos');
-    expect(navGroupLabels.workspace).toBe('Workspace indexes');
     expect(primaryNav.map((item) => item.href)).not.toContain('/worktrees');
-    expect(primaryNav.find((item) => item.href === '/tickets')).toMatchObject({
-      label: 'All tickets',
-      group: 'workspace'
-    });
+    expect(primaryNav.map((item) => item.href)).not.toContain('/tickets');
     expect(primaryNav.map((item) => item.href)).not.toContain('/contextspace/local');
   });
 
@@ -27,8 +23,8 @@ describe('PMA navigation', () => {
     expect(isActiveRoute('/pma/thread-1', '/pma')).toBe(true);
     expect(isActiveRoute('/pma-memory', '/pma')).toBe(false);
     expect(isActiveRoute('/pma-memory', '/pma-memory')).toBe(true);
-    expect(isActiveRoute('/tickets/123', '/tickets')).toBe(true);
+    expect(isActiveRoute('/repos/abc', '/repos')).toBe(true);
     expect(isActiveRoute('/settings', '/settings')).toBe(true);
-    expect(isActiveRoute('/repos', '/tickets')).toBe(false);
+    expect(isActiveRoute('/repos', '/dashboard')).toBe(false);
   });
 });

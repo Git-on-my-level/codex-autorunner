@@ -28,20 +28,40 @@ export function buildTicketFlowStatusViewModel(
 ): TicketFlowStatusViewModel {
   const scopedTickets = owner ? tickets.filter((ticket) => ticketMatchesOwner(ticket, owner)) : tickets;
   const scopedRuns = owner ? runs.filter((run) => runMatchesOwner(run, owner)) : runs;
-  const run = selectPrimaryRun(scopedRuns);
+  const activeRun = selectPrimaryRun(scopedRuns);
+  const recentRun = activeRun ?? mostRecentRun(scopedRuns);
+  const run = activeRun ?? recentRun;
   const currentTicket = run ? findTicketForRun(scopedTickets, run) : scopedTickets.find((ticket) => ticket.status !== 'done') ?? null;
   const doneCount = scopedTickets.filter((ticket) => ticket.status === 'done').length;
   const totalCount = scopedTickets.length;
-  const status = run?.status ?? currentTicket?.status ?? (doneCount > 0 && doneCount === totalCount ? 'done' : 'idle');
-  const lastActivityAt = run?.lastEventAt ?? currentTicket?.updatedAt ?? mostRecent(scopedTickets.map((ticket) => ticket.updatedAt));
+  const status = activeRun?.status ?? currentTicket?.status ?? (doneCount > 0 && doneCount === totalCount ? 'done' : 'idle');
+  const lastActivityAt =
+    run?.lastEventAt ??
+    currentTicket?.updatedAt ??
+    mostRecent(scopedTickets.map((ticket) => ticket.updatedAt)) ??
+    mostRecent(scopedRuns.flatMap((entry) => [entry.lastEventAt, dateFromRaw(entry.raw, ['finished_at', 'started_at', 'created_at'])]));
+  const turns = numberFromRaw(run?.raw, [
+    'turn_count',
+    'turns',
+    'iteration',
+    'iteration_count',
+    'state.turn_count',
+    'state.ticket_engine.ticket_turns',
+    'state.ticket_engine.total_turns',
+    'ticket_engine.ticket_turns',
+    'ticket_engine.total_turns'
+  ]);
+  const elapsed =
+    run?.elapsedSeconds ??
+    numberFromRaw(run?.raw, ['elapsed_seconds', 'duration_seconds', 'state.elapsed_seconds']);
   return {
     status,
     statusLabel: statusLabel(status),
     currentTicketLabel: currentTicket ? ticketDisplayLabel(currentTicket) : 'None',
     currentTicketHref: currentTicket ? ticketDetailHref(currentTicket) : null,
     currentTicketId: currentTicket?.id ?? null,
-    turnsLabel: formatCount(numberFromRaw(run?.raw, ['turn_count', 'turns', 'iteration', 'iteration_count', 'state.turn_count'])),
-    elapsedLabel: formatElapsed(run?.elapsedSeconds ?? numberFromRaw(run?.raw, ['elapsed_seconds', 'duration_seconds', 'state.elapsed_seconds'])),
+    turnsLabel: formatCount(turns),
+    elapsedLabel: formatElapsed(elapsed),
     progressLabel: `${doneCount}/${totalCount}`,
     lastActivityLabel: formatRelativeTime(lastActivityAt, now),
     reasonLabel: reasonFromRun(run) ?? reasonFromTickets(scopedTickets) ?? 'No reason reported',
@@ -104,9 +124,39 @@ function selectPrimaryRun(runs: PmaRunProgress[]): PmaRunProgress | null {
   return (
     runs.find((run) => run.status === 'running') ??
     runs.find((run) => run.status === 'waiting' || run.status === 'blocked' || run.status === 'failed') ??
-    [...runs].sort((left, right) => (Date.parse(right.lastEventAt ?? '') || 0) - (Date.parse(left.lastEventAt ?? '') || 0))[0] ??
     null
   );
+}
+
+function mostRecentRun(runs: PmaRunProgress[]): PmaRunProgress | null {
+  return (
+    [...runs].sort(
+      (left, right) =>
+        (runRecencyTimestamp(right) || 0) - (runRecencyTimestamp(left) || 0)
+    )[0] ?? null
+  );
+}
+
+function runRecencyTimestamp(run: PmaRunProgress): number {
+  const candidates = [
+    run.lastEventAt,
+    dateFromRaw(run.raw, ['finished_at', 'started_at', 'created_at'])
+  ];
+  for (const value of candidates) {
+    if (!value) continue;
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return 0;
+}
+
+function dateFromRaw(raw: Record<string, unknown> | undefined, keys: string[]): string | null {
+  if (!raw) return null;
+  for (const key of keys) {
+    const value = rawValue(raw, key);
+    if (typeof value === 'string' && value.trim()) return value;
+  }
+  return null;
 }
 
 function findTicketForRun(tickets: TicketSummary[], run: PmaRunProgress): TicketSummary | null {
@@ -137,13 +187,13 @@ function ticketDisplayLabel(ticket: TicketSummary): string {
 
 function ticketDetailHref(ticket: TicketSummary): string {
   const routeId = ticket.number ? String(ticket.number) : ticket.id;
-  const base =
-    ticket.workspaceKind === 'repo' && ticket.workspaceId
-      ? `/repos/${encodeURIComponent(ticket.workspaceId)}/tickets`
-      : ticket.workspaceKind === 'worktree' && ticket.workspaceId
-        ? `/worktrees/${encodeURIComponent(ticket.workspaceId)}/tickets`
-        : '/tickets';
-  return `${base}/${encodeURIComponent(routeId)}`;
+  if (ticket.workspaceKind === 'repo' && ticket.workspaceId) {
+    return `/repos/${encodeURIComponent(ticket.workspaceId)}/tickets/${encodeURIComponent(routeId)}`;
+  }
+  if (ticket.workspaceKind === 'worktree' && ticket.workspaceId) {
+    return `/worktrees/${encodeURIComponent(ticket.workspaceId)}/tickets/${encodeURIComponent(routeId)}`;
+  }
+  return '/dashboard';
 }
 
 function reasonFromRun(run: PmaRunProgress | null): string | null {

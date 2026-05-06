@@ -239,75 +239,6 @@ export function mapPmaChatMessage(raw: JsonRecord): PmaChatMessage {
   };
 }
 
-export function mapPmaTurnMessages(raw: JsonRecord): PmaChatMessage[] {
-  const baseId = stringValue(raw.managed_turn_id ?? raw.turn_id ?? raw.message_id ?? raw.id, 'unknown-turn');
-  const chatId = nullableString(raw.managed_thread_id ?? raw.thread_id ?? raw.chat_id);
-  const createdAt = dateString(raw.created_at ?? raw.started_at ?? raw.timestamp);
-  const finishedAt = dateString(raw.finished_at ?? raw.completed_at ?? raw.updated_at) ?? createdAt;
-  const status = raw.status === undefined ? null : normalizeStatus(raw.status);
-  const promptText = firstText(raw.prompt, raw.prompt_text, raw.message, raw.delivered_message, raw.prompt_preview);
-  const controlPromptSummary = summarizeControlPromptTurn(raw, promptText, status);
-  const assistantText = firstText(
-    raw.assistant_text,
-    raw.output_text,
-    raw.final_response,
-    raw.response_text,
-    raw.final_message,
-    raw.final_output,
-    raw.final_report,
-    raw.latest_assistant_text,
-    raw.assistant_preview,
-    raw.error
-  );
-  const attachments = asArray(raw.attachments).map(mapSurfaceArtifact);
-  const assistantArtifacts = asArray(raw.artifacts).map(mapSurfaceArtifact);
-  const messages: PmaChatMessage[] = [];
-
-  if (promptText && !controlPromptSummary) {
-    messages.push({
-      id: `${baseId}-user`,
-      chatId,
-      role: 'user',
-      text: promptText,
-      createdAt,
-      status,
-      artifacts: attachments,
-      raw
-    });
-  }
-
-  if (controlPromptSummary && !assistantText) {
-    messages.push({
-      id: `${baseId}-summary`,
-      chatId,
-      role: 'system',
-      text: controlPromptSummary,
-      createdAt,
-      status,
-      artifacts: [],
-      raw
-    });
-  }
-
-  if (assistantText) {
-    messages.push({
-      id: `${baseId}-assistant`,
-      chatId,
-      role: 'assistant',
-      text: assistantText,
-      createdAt: finishedAt,
-      status,
-      artifacts: assistantArtifacts,
-      raw
-    });
-  }
-
-  if (messages.length) return messages;
-
-  const standalone = mapPmaChatMessage(raw);
-  return standalone.text || standalone.artifacts.length ? [standalone] : [];
-}
-
 export function mapPmaTimelineItem(raw: JsonRecord): PmaTimelineItem {
   const payload = asRecord(raw.payload);
   return {
@@ -334,10 +265,17 @@ export function mapPmaRunProgress(raw: JsonRecord): PmaRunProgress {
     phase: nullableString(source.phase),
     guidance: nullableString(source.guidance),
     queueDepth: numberOrNull(source.queue_depth) ?? 0,
-    elapsedSeconds: numberOrNull(source.elapsed_seconds),
+    elapsedSeconds: numberOrNull(source.elapsed_seconds ?? source.duration_seconds),
     idleSeconds: numberOrNull(source.idle_seconds),
     lastEventId: numberOrNull(source.last_event_id),
-    lastEventAt: dateString(source.last_event_at ?? source.last_activity_at),
+    lastEventAt: dateString(
+      source.last_event_at ??
+        source.last_activity_at ??
+        source.effective_last_activity_at ??
+        source.finished_at ??
+        source.started_at ??
+        source.created_at
+    ),
     events: asArray(source.events ?? source.lifecycle_events).map(mapSurfaceArtifact),
     raw
   };
@@ -638,27 +576,6 @@ function firstUserMessageExcerpt(raw: JsonRecord): string | null {
   return truncated;
 }
 
-function summarizeControlPromptTurn(
-  raw: JsonRecord,
-  promptText: string,
-  status: WorkStatus | null
-): string {
-  if (!isCarTicketFlowControlPrompt(promptText)) return '';
-  const ticketId = ticketIdFromRaw(raw);
-  const workspace = workspaceLabel(raw.workspace_root);
-  const statusText = status ? normalizeStatusText(status) : null;
-  const activity = dateString(raw.finished_at ?? raw.completed_at ?? raw.updated_at ?? raw.started_at ?? raw.created_at);
-  const parts = ['PMA is running a CAR ticket-flow task.'];
-  const details = [
-    ticketId ? `ticket ${ticketId}` : null,
-    workspace ? `workspace ${workspace}` : null,
-    statusText ? `status ${statusText}` : null,
-    activity ? `last activity ${activity}` : null
-  ].filter(Boolean);
-  if (details.length) parts.push(details.join(', ') + '.');
-  return parts.join(' ');
-}
-
 function isGenericTicketFlowTitle(value: string): boolean {
   return /^ticket-flow(?::[\w.-]+)?$/i.test(value.trim());
 }
@@ -694,10 +611,6 @@ function workspaceLabel(value: unknown): string | null {
   if (!text) return null;
   const parts = text.split(/[\\/]/).filter(Boolean);
   return parts.at(-1) ?? text;
-}
-
-function normalizeStatusText(status: WorkStatus): string {
-  return status.replace('_', ' ');
 }
 
 function normalizeArtifactKind(value: unknown): SurfaceArtifact['kind'] {

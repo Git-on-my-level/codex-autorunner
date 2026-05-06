@@ -722,10 +722,9 @@ def test_create_managed_thread_rejects_missing_or_both_inputs(hub_env) -> None:
             },
         )
 
-    assert missing.status_code == 400
-    assert "Exactly one of resource owner or workspace_root is required" in (
-        missing.json().get("detail") or ""
-    )
+    assert missing.status_code == 200
+    assert missing.json()["thread"]["resource_kind"] is None
+    assert missing.json()["thread"]["workspace_root"] == str(hub_env.hub_root.resolve())
     assert both.status_code == 400
     assert "Exactly one of resource owner or workspace_root is required" in (
         both.json().get("detail") or ""

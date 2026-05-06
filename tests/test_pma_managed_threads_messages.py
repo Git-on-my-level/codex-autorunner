@@ -40,6 +40,16 @@ from tests.pma_support.managed_threads import (
 pytestmark = pytest.mark.slow
 
 
+def _stub_ready_zeroclaw_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "codex_autorunner.core.hub.probe_agent_workspace_runtime",
+        lambda _config, _workspace: {
+            "status": "ready",
+            "message": "ZeroClaw runtime is ready",
+        },
+    )
+
+
 def test_send_message_persists_turns_and_reuses_backend_thread(hub_env) -> None:
     _enable_pma(
         hub_env.hub_root,
@@ -1021,12 +1031,15 @@ def test_send_message_notifies_automation_on_failure(hub_env) -> None:
     assert str(transition.get("timestamp"))
 
 
-def test_send_message_defaults_agent_from_agent_workspace_runtime(hub_env) -> None:
+def test_send_message_defaults_agent_from_agent_workspace_runtime(
+    hub_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
     _enable_pma(
         hub_env.hub_root,
         reactive_enabled=False,
         managed_thread_terminal_followup_default=False,
     )
+    _stub_ready_zeroclaw_runtime(monkeypatch)
     app = create_hub_app(hub_env.hub_root)
     workspace = app.state.hub_supervisor.create_agent_workspace(
         workspace_id="zc-main",
@@ -1111,9 +1124,10 @@ def test_send_message_defaults_agent_from_agent_workspace_runtime(hub_env) -> No
 
 
 def test_zeroclaw_managed_threads_keep_compaction_seed_without_pma_discoverability(
-    hub_env,
+    hub_env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _enable_pma(hub_env.hub_root)
+    _stub_ready_zeroclaw_runtime(monkeypatch)
     app = create_hub_app(hub_env.hub_root)
     workspace = app.state.hub_supervisor.create_agent_workspace(
         workspace_id="zc-main",
@@ -1159,9 +1173,10 @@ def test_zeroclaw_managed_threads_keep_compaction_seed_without_pma_discoverabili
 
 @pytest.mark.anyio
 async def test_agent_workspace_threads_run_in_parallel_without_workspace_wide_queueing(
-    hub_env,
+    hub_env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _enable_pma(hub_env.hub_root)
+    _stub_ready_zeroclaw_runtime(monkeypatch)
     app = create_hub_app(hub_env.hub_root)
     workspace = app.state.hub_supervisor.create_agent_workspace(
         workspace_id="zc-main",

@@ -4,7 +4,6 @@ import {
   mapDashboardSummary,
   mapPmaChatMessage,
   mapPmaTimelineItem,
-  mapPmaTurnMessages,
   mapPmaChatSummary,
   mapPmaRunProgress,
   mapRepoSummary,
@@ -230,10 +229,6 @@ export class PmaApiClient {
           body
         }),
         (payload) => mapPmaChatMessage(asRecord(payload.message ?? payload.turn ?? payload))
-      ),
-    getMessages: async (chatId: string): Promise<ApiResult<PmaChatMessage[]>> =>
-      mapResult(await this.getJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}/turns`), (payload) =>
-        asArray(payload.turns ?? payload.messages).flatMap(mapPmaTurnMessages)
       ),
     getTimeline: async (chatId: string): Promise<ApiResult<PmaTimelineItem[]>> =>
       mapResult(await this.getJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}/timeline`), (payload) =>

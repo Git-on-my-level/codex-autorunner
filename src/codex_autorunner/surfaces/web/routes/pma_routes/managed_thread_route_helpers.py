@@ -421,6 +421,19 @@ def resolve_managed_thread_create_resolution(
 ) -> ManagedThreadCreateResolution:
     context = get_pma_request_context(request)
     hub_root = context.hub_root
+    workspace_text = normalize_optional_text(payload.workspace_root)
+    owner = normalize_pma_resource_owner(
+        resource_kind=payload.resource_kind,
+        resource_id=payload.resource_id,
+        repo_id=payload.repo_id,
+    )
+    if workspace_text is not None and owner.resource_kind is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="Exactly one of resource owner or workspace_root is required",
+        )
+    if workspace_text is not None and workspace_text != ".":
+        _normalize_workspace_root_input(workspace_text)
     raw_agent_id = normalize_optional_text(payload.agent)
     raw_profile = normalize_optional_text(payload.profile)
     if raw_agent_id is not None:

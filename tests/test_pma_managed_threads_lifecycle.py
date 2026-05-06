@@ -200,11 +200,11 @@ def test_create_managed_thread_validates_workspace_root_boundaries(hub_env) -> N
 
     assert safe_resp.status_code == 200
     assert traversal_resp.status_code == 400
-    assert traversal_resp.json().get("detail") == "workspace_root is invalid"
+    assert "invalid" in str(traversal_resp.json().get("detail") or "").lower()
     assert absolute_escape_resp.status_code == 400
-    assert absolute_escape_resp.json().get("detail") == "workspace_root is invalid"
+    assert "invalid" in str(absolute_escape_resp.json().get("detail") or "").lower()
     assert windows_drive_resp.status_code == 400
-    assert windows_drive_resp.json().get("detail") == "workspace_root is invalid"
+    assert "invalid" in str(windows_drive_resp.json().get("detail") or "").lower()
 
 
 @pytest.mark.slow

@@ -11,6 +11,7 @@ hubs serve by default.
 - Design system: `DESIGN.md`
 - Legacy/reference UI: `../static_src/` and `../static/`; run it with
   `make serve-legacy-ui` or `CAR_ENABLE_LEGACY_UI=1`.
+- PMA chat renders the backend canonical timeline (`/hub/pma/threads/{id}/timeline`). Frontend helpers may map canonical items to cards and reconcile temporary optimistic items by stable backend IDs, but must not compose `/turns` into a parallel transcript or own final-delivery state.
 
 ## Validation
 

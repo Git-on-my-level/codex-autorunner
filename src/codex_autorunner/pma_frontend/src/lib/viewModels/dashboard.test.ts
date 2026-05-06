@@ -43,7 +43,7 @@ describe('dashboard view model', () => {
     expect(dashboard.activeRuns[0]).toMatchObject({
       title: 'Hub rewrite foundation',
       primaryHref: '/pma?chat=chat-1',
-      ticketHref: '/tickets/TICKET-110',
+      ticketHref: '/repos/codex-autorunner/tickets/TICKET-110',
       repoHref: '/repos/codex-autorunner'
     });
     expect(dashboard.waitingForMe[0]).toMatchObject({

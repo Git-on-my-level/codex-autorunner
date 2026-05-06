@@ -62,7 +62,7 @@ describe('DashboardView', () => {
     expect(body).toContain('Active runs');
     expect(body).toContain('Hub rewrite foundation');
     expect(body).toContain('href="/pma?chat=chat-1"');
-    expect(body).toContain('href="/tickets/TICKET-110"');
+    expect(body).toContain('href="/repos/codex-autorunner/tickets/TICKET-110"');
     expect(body).not.toContain('Repos and worktree variants');
     expect(body).not.toContain('Repo worktrees');
     expect(body).toContain('Recent activity');
@@ -111,6 +111,6 @@ describe('DashboardView', () => {
     const { body } = render(DashboardView, { props: { state: 'ready', dashboard } });
 
     expect(body).toContain('href="/car/pma?chat=chat-1"');
-    expect(body).toContain('href="/car/tickets/TICKET-110"');
+    expect(body).toContain('href="/car/repos/codex-autorunner/tickets/TICKET-110"');
   });
 });

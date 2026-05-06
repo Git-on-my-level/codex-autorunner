@@ -1834,7 +1834,8 @@ textarea:hover {
   font-weight: 560;
 }
 
-.workspace-ticket-row em {
+/* Meta chips (diff, duration). Exclude .working-badge: it uses white on green and lost to this rule's specificity. */
+.workspace-ticket-row em:not(.working-badge) {
   color: var(--color-success);
   font-size: 11px;
   font-style: normal;
@@ -2598,6 +2599,102 @@ textarea:disabled {
   color: var(--color-accent);
 }
 
+.ticket-flow-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border-subtle);
+  border-left: 4px solid var(--color-border-strong);
+  border-radius: 8px;
+  background: var(--color-surface);
+  font-size: var(--font-size-0);
+  color: var(--color-ink);
+}
+
+.ticket-flow-line.active { border-left-color: var(--color-success); }
+.ticket-flow-line.waiting { border-left-color: var(--color-warning); }
+.ticket-flow-line.blocked,
+.ticket-flow-line.failed { border-left-color: var(--color-danger); }
+
+.ticket-flow-line .flow-line-meta {
+  color: var(--color-ink-muted);
+  font-size: var(--font-size-0);
+}
+
+.ticket-flow-line .flow-line-divider {
+  color: var(--color-border-strong);
+  margin: 0 2px;
+}
+
+.ticket-flow-line .flow-line-current { font-weight: 600; }
+
+.ticket-flow-line .flow-line-current a {
+  color: var(--color-accent);
+  font-weight: 600;
+}
+
+.ticket-flow-line .flow-line-reason { font-style: italic; }
+
+.queue-heading-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.queue-menu-wrapper {
+  position: relative;
+}
+
+.queue-menu-button {
+  min-height: 28px;
+  min-width: 32px;
+  padding: 0 var(--space-2);
+  font-weight: 700;
+}
+
+.queue-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 160px;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 6px;
+  background: var(--color-surface);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.08);
+}
+
+.queue-menu button {
+  text-align: left;
+  padding: 6px var(--space-2);
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--color-ink);
+  font: inherit;
+  cursor: pointer;
+}
+
+.queue-menu button:hover:not(:disabled) {
+  background: var(--color-surface-sunken);
+}
+
+.queue-menu button:disabled {
+  color: var(--color-ink-muted);
+  cursor: not-allowed;
+}
+
+.working-badge.needs-repair {
+  background: color-mix(in srgb, var(--color-warning) 18%, var(--color-surface));
+  color: var(--color-warning);
+}
+
 .ticket-create-row {
   display: grid;
   grid-template-columns: minmax(160px, 0.8fr) minmax(180px, 1fr) auto;
@@ -2994,7 +3091,7 @@ textarea:disabled {
 .ticket-table-head,
 .ticket-row {
   display: grid;
-  grid-template-columns: minmax(180px, 1.7fr) minmax(110px, 0.9fr) minmax(68px, 0.65fr) minmax(72px, 0.65fr) minmax(68px, 0.65fr) minmax(72px, 0.65fr) minmax(72px, 0.65fr) minmax(64px, 0.65fr);
+  grid-template-columns: minmax(220px, 2.2fr) minmax(68px, 0.65fr) minmax(72px, 0.7fr) minmax(68px, 0.65fr) minmax(72px, 0.65fr) minmax(72px, 0.7fr) minmax(64px, 0.65fr);
   align-items: center;
   gap: var(--space-2);
 }

@@ -182,7 +182,7 @@ export function buildRepoWorktreeDetailViewModel(
       : null;
   const relatedRuns = source.runs.filter((run) => runMatchesResource(run, kind, id));
   const relatedChats = source.chats.filter((chat) => chatMatchesResource(chat, kind, id));
-  const runCards = mergeRunCards(relatedRuns, relatedChats);
+  const runCards = mergeRunCards(relatedRuns, relatedChats, kind, id);
   const activeRunCards = runCards.filter((run) => ['running', 'waiting', 'blocked'].includes(run.status));
   const visibleRuns = activeRunCards.length ? activeRunCards : runCards.slice(0, 1);
   const currentTicketIds = new Set(visibleRuns.map((run) => run.ticketId).filter((ticketId): ticketId is string => Boolean(ticketId)));
@@ -243,8 +243,8 @@ function missingDetailViewModel(kind: RepoWorktreeKind, id: string): RepoWorktre
     nextTickets: [],
     artifacts: [],
     links: [{ label: kind === 'repo' ? 'Back to repos' : 'Back to worktrees', href: kind === 'repo' ? '/repos' : '/worktrees', secondary: false }],
-    ticketIndexHref: '/tickets',
-    ticketIndexLabel: 'Cross-workspace tickets',
+    ticketIndexHref: kind === 'repo' ? '/repos' : '/worktrees',
+    ticketIndexLabel: kind === 'repo' ? 'Back to repos' : 'Back to worktrees',
     childWorktrees: [],
     baseRepoLabel: null,
     baseRepoHref: null,
@@ -302,7 +302,9 @@ function worktreeToIndexRow(worktree: WorktreeSummary, _source: RepoWorktreeSour
 function worktreeToChildRow(worktree: WorktreeSummary, source: RepoWorktreeSourceData): RepoWorktreeChildRow {
   const run = mergeRunCards(
     source.runs.filter((candidate) => runMatchesResource(candidate, 'worktree', worktree.id)),
-    source.chats.filter((candidate) => chatMatchesResource(candidate, 'worktree', worktree.id))
+    source.chats.filter((candidate) => chatMatchesResource(candidate, 'worktree', worktree.id)),
+    'worktree',
+    worktree.id
   )[0];
   const tickets = ticketsForResource(source.tickets, 'worktree', worktree.id).filter((ticket) => ticket.status !== 'done');
   const currentTicketId = run?.ticketId ?? tickets[0]?.id ?? null;
@@ -322,20 +324,34 @@ function worktreeToChildRow(worktree: WorktreeSummary, source: RepoWorktreeSourc
   };
 }
 
-function mergeRunCards(runs: PmaRunProgress[], chats: PmaChatSummary[]): RepoWorktreeRunCard[] {
+function mergeRunCards(
+  runs: PmaRunProgress[],
+  chats: PmaChatSummary[],
+  scopeKind: RepoWorktreeKind,
+  scopeId: string
+): RepoWorktreeRunCard[] {
   const cards = new Map<string, RepoWorktreeRunCard>();
   for (const run of runs) {
     const chat = run.chatId ? chats.find((candidate) => candidate.id === run.chatId) ?? null : null;
-    cards.set(`run:${run.id}`, runToCard(run, chat));
+    cards.set(`run:${run.id}`, runToCard(run, chat, scopeKind, scopeId));
   }
   for (const chat of chats) {
     if ([...cards.values()].some((card) => card.chatHref === `/pma?chat=${encodeURIComponent(chat.id)}`)) continue;
-    cards.set(`chat:${chat.id}`, chatToCard(chat));
+    cards.set(`chat:${chat.id}`, chatToCard(chat, scopeKind, scopeId));
   }
   return [...cards.values()].sort(byRunRecent);
 }
 
-function runToCard(run: PmaRunProgress, chat: PmaChatSummary | null): RepoWorktreeRunCard {
+function scopedTicketDetail(scopeKind: RepoWorktreeKind, scopeId: string, ticketId: string): string {
+  return `/${scopeKind === 'repo' ? 'repos' : 'worktrees'}/${encodeURIComponent(scopeId)}/tickets/${encodeURIComponent(ticketId)}`;
+}
+
+function runToCard(
+  run: PmaRunProgress,
+  chat: PmaChatSummary | null,
+  scopeKind: RepoWorktreeKind,
+  scopeId: string
+): RepoWorktreeRunCard {
   const ticketId =
     stringFromRaw(run.raw, ['ticket_id', 'current_ticket_id', 'current_ticket', 'ticket_path', 'current_ticket_path']) ??
     [...ticketAliasesFromRun(run)][0] ??
@@ -352,12 +368,12 @@ function runToCard(run: PmaRunProgress, chat: PmaChatSummary | null): RepoWorktr
     updatedAt: run.lastEventAt ?? chat?.updatedAt ?? null,
     ticketId,
     chatHref: run.chatId ? `/pma?chat=${encodeURIComponent(run.chatId)}` : chat ? `/pma?chat=${encodeURIComponent(chat.id)}` : null,
-    ticketHref: ticketId ? `/tickets/${encodeURIComponent(ticketId)}` : null,
+    ticketHref: ticketId ? scopedTicketDetail(scopeKind, scopeId, ticketId) : null,
     logsHref: `/api/flows/${encodeURIComponent(run.id)}/dispatch_history`
   };
 }
 
-function chatToCard(chat: PmaChatSummary): RepoWorktreeRunCard {
+function chatToCard(chat: PmaChatSummary, scopeKind: RepoWorktreeKind, scopeId: string): RepoWorktreeRunCard {
   return {
     id: chat.id,
     title: chat.title,
@@ -368,7 +384,7 @@ function chatToCard(chat: PmaChatSummary): RepoWorktreeRunCard {
     updatedAt: chat.updatedAt,
     ticketId: chat.ticketId,
     chatHref: `/pma?chat=${encodeURIComponent(chat.id)}`,
-    ticketHref: chat.ticketId ? `/tickets/${encodeURIComponent(chat.ticketId)}` : null,
+    ticketHref: chat.ticketId ? scopedTicketDetail(scopeKind, scopeId, chat.ticketId) : null,
     logsHref: null
   };
 }
@@ -503,8 +519,7 @@ function buildContextLinks(kind: RepoWorktreeKind, id: string, artifacts: RepoWo
   return [
     { label: `View ${scopeLabel} tickets`, href: scopedTicketHref(kind, id), secondary: false },
     { label: `View ${scopeLabel} memory`, href: `/contextspace/${encodeURIComponent(id)}`, secondary: false },
-    ...(preview?.href ? [{ label: 'Open preview', href: preview.href, secondary: false }] : []),
-    { label: 'Cross-workspace ticket index', href: '/tickets', secondary: true }
+    ...(preview?.href ? [{ label: 'Open preview', href: preview.href, secondary: false }] : [])
   ];
 }
 
@@ -518,8 +533,8 @@ function ticketDetailHref(ticket: TicketSummary): string {
       ? `/repos/${encodeURIComponent(ticket.workspaceId)}/tickets`
       : ticket.workspaceKind === 'worktree' && ticket.workspaceId
         ? `/worktrees/${encodeURIComponent(ticket.workspaceId)}/tickets`
-        : '/tickets';
-  return `${base}/${encodeURIComponent(ticket.number ? String(ticket.number) : ticket.id)}`;
+        : '/dashboard';
+  return base === '/dashboard' ? base : `${base}/${encodeURIComponent(ticket.number ? String(ticket.number) : ticket.id)}`;
 }
 
 function runMatchesResource(run: PmaRunProgress, kind: RepoWorktreeKind, id: string): boolean {

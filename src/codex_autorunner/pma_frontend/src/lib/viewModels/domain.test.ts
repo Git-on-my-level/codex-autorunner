@@ -3,7 +3,6 @@ import {
   mapContextspaceDocument,
   mapDashboardSummary,
   mapPmaChatSummary,
-  mapPmaTurnMessages,
   mapPmaRunProgress,
   mapRepoSummary,
   mapSurfaceArtifact,
@@ -80,131 +79,6 @@ describe('view model mappers', () => {
       kind: 'progress',
       title: 'Tests passed'
     });
-  });
-
-  it('maps completed managed turns into readable user and PMA messages', () => {
-    const messages = mapPmaTurnMessages({
-      managed_thread_id: 'chat-1',
-      managed_turn_id: 'turn-1',
-      status: 'ok',
-      prompt_preview: 'Can you summarize this run?',
-      assistant_preview: 'The run completed and produced a final report.',
-      started_at: '2026-05-04T00:00:00Z',
-      finished_at: '2026-05-04T00:00:30Z'
-    });
-
-    expect(messages).toMatchObject([
-      {
-        id: 'turn-1-user',
-        role: 'user',
-        text: 'Can you summarize this run?',
-        chatId: 'chat-1'
-      },
-      {
-        id: 'turn-1-assistant',
-        role: 'assistant',
-        text: 'The run completed and produced a final report.',
-        chatId: 'chat-1'
-      }
-    ]);
-  });
-
-  it('uses ordinary final response fields instead of falling back to empty transcript copy', () => {
-    const messages = mapPmaTurnMessages({
-      managed_thread_id: 'chat-1',
-      managed_turn_id: 'turn-final-response',
-      status: 'completed',
-      prompt: 'Finish the PMA ticket.',
-      final_response: 'Done. Tests passed and the ticket is updated.',
-      started_at: '2026-05-04T00:00:00Z',
-      finished_at: '2026-05-04T00:01:00Z'
-    });
-
-    expect(messages.map((message) => message.text)).toEqual([
-      'Finish the PMA ticket.',
-      'Done. Tests passed and the ticket is updated.'
-    ]);
-    expect(messages.map((message) => message.text)).not.toContain('No message text recorded');
-  });
-
-  it('maps durable turn attachments onto the user message after reload', () => {
-    const messages = mapPmaTurnMessages({
-      managed_thread_id: 'chat-1',
-      managed_turn_id: 'turn-with-attachments',
-      status: 'ok',
-      prompt: 'Review the attached screenshot.',
-      assistant_text: 'The screenshot shows the PMA composer.',
-      attachments: [
-        {
-          id: 'screen',
-          kind: 'image',
-          title: 'screen.png',
-          url: '/hub/pma/files/inbox/screen.png'
-        }
-      ]
-    });
-
-    expect(messages[0]).toMatchObject({
-      id: 'turn-with-attachments-user',
-      role: 'user',
-      artifacts: [{ id: 'screen', kind: 'image', title: 'screen.png' }]
-    });
-    expect(messages[1]).toMatchObject({
-      id: 'turn-with-attachments-assistant',
-      role: 'assistant',
-      artifacts: []
-    });
-  });
-
-  it('suppresses CAR ticket-flow control prompts and renders a compact operational summary', () => {
-    const messages = mapPmaTurnMessages({
-      managed_thread_id: 'chat-1',
-      managed_turn_id: 'turn-ticket-flow',
-      status: 'running',
-      prompt_preview:
-        '<CAR_TICKET_FLOW_PROMPT><CAR_CURRENT_TICKET_FILE>PATH: .codex-autorunner/tickets/TICKET-330-pma-chat-managed-thread-readability.md</CAR_CURRENT_TICKET_FILE></CAR_TICKET_FLOW_PROMPT>',
-      workspace_root: '/Users/dazheng/car-workspace/codex-autorunner--discord-5',
-      started_at: '2026-05-04T00:00:00Z'
-    });
-
-    expect(messages).toMatchObject([
-      {
-        id: 'turn-ticket-flow-summary',
-        role: 'system',
-        chatId: 'chat-1'
-      }
-    ]);
-    expect(messages[0].text).toContain('PMA is running a CAR ticket-flow task.');
-    expect(messages[0].text).toContain('ticket TICKET-330-pma-chat-managed-thread-readability');
-    expect(messages[0].text).toContain('workspace codex-autorunner--discord-5');
-    expect(messages[0].text).not.toContain('<CAR_TICKET_FLOW_PROMPT>');
-  });
-
-  it('keeps assistant final responses visible when the prompt was a ticket-flow control envelope', () => {
-    const messages = mapPmaTurnMessages({
-      managed_thread_id: 'chat-1',
-      managed_turn_id: 'turn-ticket-flow-done',
-      status: 'completed',
-      prompt_preview:
-        '<CAR_TICKET_FLOW_PROMPT><CAR_CURRENT_TICKET_FILE>PATH: .codex-autorunner/tickets/TICKET-330-pma-chat-managed-thread-readability.md</CAR_CURRENT_TICKET_FILE></CAR_TICKET_FLOW_PROMPT>',
-      final_response: 'Done. PMA chat readability is improved.',
-      started_at: '2026-05-04T00:00:00Z',
-      finished_at: '2026-05-04T00:01:00Z'
-    });
-
-    expect(messages.map((message) => message.role)).toEqual(['assistant']);
-    expect(messages.map((message) => message.text)).toEqual(['Done. PMA chat readability is improved.']);
-  });
-
-  it('does not create empty chat messages for raw turn records', () => {
-    expect(
-      mapPmaTurnMessages({
-        managed_thread_id: 'chat-1',
-        managed_turn_id: 'turn-empty',
-        status: 'ok',
-        started_at: '2026-05-04T00:00:00Z'
-      })
-    ).toEqual([]);
   });
 
   it('maps file and dispatch attachments into artifacts', () => {

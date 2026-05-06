@@ -1,5 +1,6 @@
 <script lang="ts">
   import { page } from '$app/state';
+  import { breadcrumbsForPath } from '$lib/breadcrumbs';
   import { primaryNav, navGroupLabels, isActiveRoute } from '$lib/navigation';
   import { stripRuntimeBasePath, withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import type { Snippet } from 'svelte';
@@ -9,8 +10,7 @@
   let collapsed = $state(false);
   let mobileOpen = $state(false);
   const currentPath = $derived(stripRuntimeBasePath(page.url.pathname));
-  const activeNavItem = $derived(primaryNav.find((item) => isActiveRoute(currentPath, item.href)) ?? primaryNav[0]);
-  const breadcrumbs = $derived(breadcrumbsForPath(currentPath, activeNavItem.label, activeNavItem.group));
+  const breadcrumbs = $derived(breadcrumbsForPath(currentPath));
 
   const closeMobile = () => {
     mobileOpen = false;
@@ -18,51 +18,6 @@
 
   function handleWindowKeydown(event: KeyboardEvent): void {
     if (event.key === 'Escape') closeMobile();
-  }
-
-  function breadcrumbsForPath(path: string, fallback: string, fallbackGroup: keyof typeof navGroupLabels): { label: string; href: string | null }[] {
-    const repoTicket = path.match(/^\/repos\/([^/]+)\/tickets\/([^/]+)/);
-    if (repoTicket) {
-      const repoId = decodeURIComponent(repoTicket[1]);
-      const ticketId = decodeURIComponent(repoTicket[2]);
-      return [
-        { label: 'Repos', href: '/repos' },
-        { label: repoId, href: `/repos/${encodeURIComponent(repoId)}` },
-        { label: 'Tickets', href: `/repos/${encodeURIComponent(repoId)}/tickets` },
-        { label: `#${ticketId}`, href: null }
-      ];
-    }
-    const repoTickets = path.match(/^\/repos\/([^/]+)\/tickets/);
-    if (repoTickets) {
-      const repoId = decodeURIComponent(repoTickets[1]);
-      return [
-        { label: 'Repos', href: '/repos' },
-        { label: repoId, href: `/repos/${encodeURIComponent(repoId)}` },
-        { label: 'Tickets', href: null }
-      ];
-    }
-    const worktreeTicket = path.match(/^\/worktrees\/([^/]+)\/tickets\/([^/]+)/);
-    if (worktreeTicket) {
-      const worktreeId = decodeURIComponent(worktreeTicket[1]);
-      const ticketId = decodeURIComponent(worktreeTicket[2]);
-      return [
-        { label: 'Worktrees', href: '/worktrees' },
-        { label: worktreeId, href: `/worktrees/${encodeURIComponent(worktreeId)}` },
-        { label: 'Tickets', href: `/worktrees/${encodeURIComponent(worktreeId)}/tickets` },
-        { label: `#${ticketId}`, href: null }
-      ];
-    }
-    const worktreeTickets = path.match(/^\/worktrees\/([^/]+)\/tickets/);
-    if (worktreeTickets) {
-      const worktreeId = decodeURIComponent(worktreeTickets[1]);
-      return [
-        { label: 'Worktrees', href: '/worktrees' },
-        { label: worktreeId, href: `/worktrees/${encodeURIComponent(worktreeId)}` },
-        { label: 'Tickets', href: null }
-      ];
-    }
-    if (/^\/tickets\/[^/]+/.test(path)) return [{ label: 'All tickets', href: '/tickets' }, { label: 'Ticket detail', href: null }];
-    return [{ label: path.startsWith('/worktrees/') ? navGroupLabels.support : navGroupLabels[fallbackGroup], href: null }, { label: fallback, href: null }];
   }
 </script>
 

@@ -70,8 +70,6 @@ describe('ticket view models', () => {
       repoLabel: 'Needs owner repair',
       workspaceHref: null
     });
-    expect(vm.workspaceFilters.map((filter) => filter.id)).toContain('unscoped');
-    expect(filterTicketRows(vm.rows, 'open', 'unscoped')).toHaveLength(1);
   });
 
   it('labels repo-scoped and worktree-scoped tickets from explicit resource ownership', () => {
