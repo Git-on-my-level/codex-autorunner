@@ -150,6 +150,13 @@ def test_running_timeline_projects_progress_tool_group_and_approval(
     assert "intermediate" in _kinds(payload)
     assert "tool_group" in _kinds(payload)
     assert "approval" in _kinds(payload)
+    assert _kinds(payload) == [
+        "user_message",
+        "status",
+        "intermediate",
+        "tool_group",
+        "approval",
+    ]
     assert {item["item_id"] for item in payload["items"]} >= {
         f"turn:{turn_id}:user",
         f"turn:{turn_id}:status:running",

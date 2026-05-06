@@ -178,7 +178,38 @@ def _append_timeline_event_items(
     entries: list[dict[str, Any]],
     sequence: int,
 ) -> int:
-    tool_groups: dict[str, dict[str, Any]] = {}
+    tool_group: Optional[dict[str, Any]] = None
+
+    def flush_tool_group() -> None:
+        # Timeline ordering is the contract; do not let grouped tool events drift
+        # past later approvals, notices, or output items.
+        nonlocal sequence, tool_group
+        if tool_group is None:
+            return
+        item_id = (
+            f"turn:{managed_turn_id}:tool:"
+            f"{tool_group.get('first_index')}:{tool_group.get('tool_name')}"
+        )
+        timestamp = _normalize_optional_text(tool_group.get("timestamp"))
+        items.append(
+            ManagedThreadTimelineItem(
+                item_id=item_id,
+                kind="tool_group",
+                order_key=_order_key(timestamp, sequence, item_id),
+                timestamp=timestamp,
+                managed_thread_id=managed_thread_id,
+                managed_turn_id=managed_turn_id,
+                status=str(tool_group.get("status") or "running"),
+                payload={
+                    "tool_name": tool_group.get("tool_name"),
+                    "call": tool_group.get("call"),
+                    "result": tool_group.get("result"),
+                },
+            )
+        )
+        sequence += 1
+        tool_group = None
+
     for fallback, entry in enumerate(entries, start=1):
         event_type = str(entry.get("event_type") or "")
         event = _event_payload(entry)
@@ -188,37 +219,33 @@ def _append_timeline_event_items(
 
         if event_type in {"tool_call", "tool_result"}:
             tool_name = str(event.get("tool_name") or "unknown")
-            group_key = f"{managed_turn_id}:{tool_name}:{event_index}"
-            if event_type == "tool_result":
-                matching_key = next(
-                    (
-                        key
-                        for key, value in reversed(list(tool_groups.items()))
-                        if value.get("tool_name") == tool_name
-                        and value.get("result") is None
-                    ),
-                    None,
-                )
-                group_key = matching_key or group_key
-            group = tool_groups.setdefault(
-                group_key,
-                {
+            if event_type == "tool_call":
+                flush_tool_group()
+                tool_group = {
                     "tool_name": tool_name,
                     "first_index": event_index,
                     "timestamp": timestamp,
-                    "call": None,
+                    "call": event,
                     "result": None,
                     "status": "running",
-                },
-            )
-            if event_type == "tool_call":
-                group["call"] = event
-                group["timestamp"] = group.get("timestamp") or timestamp
+                }
             else:
-                group["result"] = event
-                group["status"] = str(event.get("status") or "completed")
+                if tool_group is None or tool_group.get("tool_name") != tool_name:
+                    flush_tool_group()
+                    tool_group = {
+                        "tool_name": tool_name,
+                        "first_index": event_index,
+                        "timestamp": timestamp,
+                        "call": None,
+                        "result": None,
+                        "status": "running",
+                    }
+                tool_group["result"] = event
+                tool_group["status"] = str(event.get("status") or "completed")
+                flush_tool_group()
             continue
 
+        flush_tool_group()
         if event_type == "approval_requested":
             request_id = str(event.get("request_id") or event_stable_id)
             item_id = f"turn:{managed_turn_id}:approval:{request_id}"
@@ -280,36 +307,7 @@ def _append_timeline_event_items(
             )
             sequence += 1
 
-    for group in sorted(
-        tool_groups.values(),
-        key=lambda value: (
-            str(value.get("timestamp") or ""),
-            int(value.get("first_index") or 0),
-            str(value.get("tool_name") or ""),
-        ),
-    ):
-        item_id = (
-            f"turn:{managed_turn_id}:tool:"
-            f"{group.get('first_index')}:{group.get('tool_name')}"
-        )
-        timestamp = _normalize_optional_text(group.get("timestamp"))
-        items.append(
-            ManagedThreadTimelineItem(
-                item_id=item_id,
-                kind="tool_group",
-                order_key=_order_key(timestamp, sequence, item_id),
-                timestamp=timestamp,
-                managed_thread_id=managed_thread_id,
-                managed_turn_id=managed_turn_id,
-                status=str(group.get("status") or "running"),
-                payload={
-                    "tool_name": group.get("tool_name"),
-                    "call": group.get("call"),
-                    "result": group.get("result"),
-                },
-            )
-        )
-        sequence += 1
+    flush_tool_group()
     return sequence
 
 
