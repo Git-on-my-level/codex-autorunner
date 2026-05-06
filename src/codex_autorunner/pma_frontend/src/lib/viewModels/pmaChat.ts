@@ -16,6 +16,29 @@ export type PmaChatFilter = 'all' | 'active' | 'waiting' | 'done';
 
 export type PendingAttachmentKind = 'file' | 'image' | 'link';
 
+export type DocumentFileIntentKind =
+  | 'browse_source'
+  | 'select_item'
+  | 'attach_uploaded_file'
+  | 'reference_path'
+  | 'include_link'
+  | 'remove_pending_attachment'
+  | 'clear_pending_attachments';
+
+export type DocumentFileIntentPayload = {
+  intent: DocumentFileIntentKind;
+  source?: 'tickets' | 'contextspace' | 'filebox' | 'workspace' | 'upload' | 'link';
+  id?: string;
+  kind?: PendingAttachmentKind;
+  title?: string;
+  path?: string;
+  url?: string | null;
+  uploadedName?: string | null;
+  sizeLabel?: string | null;
+  uploadState?: PendingAttachment['uploadState'];
+  metadata?: Record<string, unknown>;
+};
+
 export type PendingAttachment = {
   id: string;
   kind: PendingAttachmentKind;
@@ -127,7 +150,7 @@ export type PmaChatScopeOption =
 
 export type ManagedThreadMessagePayload = {
   message: string;
-  attachments?: PendingAttachment[];
+  attachments?: DocumentFileIntentPayload[];
   model?: string;
   busy_policy?: 'queue';
 };
@@ -630,6 +653,21 @@ export function removePendingAttachment(
   return attachments.filter((attachment) => attachment.id !== attachmentId);
 }
 
+export function pendingAttachmentToIntent(attachment: PendingAttachment): DocumentFileIntentPayload {
+  const intent = attachment.kind === 'link' ? 'include_link' : 'attach_uploaded_file';
+  return {
+    intent,
+    source: attachment.kind === 'link' ? 'link' : 'upload',
+    id: attachment.id,
+    kind: attachment.kind,
+    title: attachment.title,
+    sizeLabel: attachment.sizeLabel,
+    url: attachment.url,
+    uploadedName: attachment.uploadedName,
+    uploadState: attachment.uploadState
+  };
+}
+
 export function composeMessageWithAttachments(
   draft: string,
   attachments: PendingAttachment[]
@@ -743,17 +781,7 @@ export function buildManagedThreadMessagePayload(
 ): ManagedThreadMessagePayload {
   return {
     message,
-    attachments: attachments.length
-      ? attachments.map((attachment) => ({
-          id: attachment.id,
-          kind: attachment.kind,
-          title: attachment.title,
-          sizeLabel: attachment.sizeLabel,
-          url: attachment.url,
-          uploadedName: attachment.uploadedName,
-          uploadState: attachment.uploadState
-        }))
-      : undefined,
+    attachments: attachments.length ? attachments.map(pendingAttachmentToIntent) : undefined,
     model: model || undefined,
     busy_policy: isRunning ? 'queue' : undefined
   };

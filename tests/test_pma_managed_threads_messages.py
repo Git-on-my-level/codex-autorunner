@@ -217,22 +217,68 @@ def test_send_message_round_trips_structured_attachments(hub_env) -> None:
     assert turns[0]["prompt"] == "review attached assets"
     assert turns[0]["attachments"] == [
         {
+            "intent": "attach_uploaded_file",
+            "source": "upload",
             "id": "att-1",
             "kind": "image",
             "title": "screen.png",
             "url": "/hub/pma/files/inbox/screen.png",
+            "metadata": {
+                "uploaded_name": "screen.png",
+                "uploadedName": "screen.png",
+                "kind": "image",
+            },
             "uploaded_name": "screen.png",
             "uploadedName": "screen.png",
             "size_label": "8 KB",
             "sizeLabel": "8 KB",
         },
         {
+            "intent": "include_link",
+            "source": "link",
             "id": "att-2",
             "kind": "link",
             "title": "Preview",
             "url": "https://example.test/preview",
+            "metadata": {"kind": "link"},
         },
     ]
+
+
+def test_send_message_rejects_invalid_attachment_path(hub_env) -> None:
+    _enable_pma(
+        hub_env.hub_root,
+        reactive_enabled=False,
+        managed_thread_terminal_followup_default=False,
+    )
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        app.state.app_server_supervisor = FakeSupervisor(FakeClient())
+        app.state.app_server_events = object()
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", **_repo_owner(hub_env)},
+        )
+        assert create_resp.status_code == 200
+        managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+        send_resp = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/messages",
+            json={
+                "message": "review this path",
+                "attachments": [
+                    {
+                        "intent": "reference_path",
+                        "id": "bad",
+                        "path": "../outside.md",
+                    }
+                ],
+            },
+        )
+
+    assert send_resp.status_code == 400
+    assert "Invalid path" in send_resp.json()["detail"]
 
 
 def test_pma_transcript_store_redacts_known_secret_patterns(hub_env) -> None:

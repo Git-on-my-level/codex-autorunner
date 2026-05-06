@@ -14,6 +14,7 @@ from ..contextspace.paths import (
 from ..tickets.files import list_ticket_paths, read_ticket_frontmatter, safe_relpath
 from ..tickets.lint import parse_ticket_index
 from ..tickets.snapshot import list_ticket_snapshots
+from .document_file_intents import DocumentFileIntent, document_reference_intent
 
 DocumentBrowserSource = Literal["tickets", "contextspace"]
 
@@ -42,6 +43,7 @@ class DocumentBrowserDocument:
     rel_path: str
     content: str
     exists: bool
+    intent: DocumentFileIntent
 
 
 def normalize_document_browser_source(value: str) -> DocumentBrowserSource:
@@ -182,6 +184,12 @@ def _read_ticket_document(
             rel_path=rel_path,
             content=content,
             exists=path.exists(),
+            intent=document_reference_intent(
+                source="tickets",
+                document_id=target_id,
+                title=display_title,
+                rel_path=rel_path,
+            ),
         )
     return None
 
@@ -208,6 +216,12 @@ def _read_contextspace_document(
         rel_path=rel_path,
         content=content,
         exists=exists,
+        intent=document_reference_intent(
+            source="contextspace",
+            document_id=kind,
+            title=entry.label,
+            rel_path=rel_path,
+        ),
     )
 
 

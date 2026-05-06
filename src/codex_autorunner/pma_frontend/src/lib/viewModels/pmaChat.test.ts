@@ -510,7 +510,19 @@ describe('PMA chat view helpers', () => {
     ];
     expect(buildManagedThreadMessagePayload('Continue', 'gpt-5.2', true, attachments)).toEqual({
       message: 'Continue',
-      attachments,
+      attachments: [
+        {
+          intent: 'attach_uploaded_file',
+          source: 'upload',
+          id: 'att-1',
+          kind: 'file',
+          title: 'report.md',
+          sizeLabel: '1 KB',
+          url: '/hub/pma/files/inbox/report.md',
+          uploadedName: 'report.md',
+          uploadState: 'uploaded'
+        }
+      ],
       model: 'gpt-5.2',
       busy_policy: 'queue'
     });

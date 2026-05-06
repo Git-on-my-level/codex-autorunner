@@ -13,6 +13,7 @@ from .....core.car_context import (
     normalize_car_context_profile,
     render_injected_car_context,
 )
+from .....core.document_file_intents import normalize_document_file_intents
 from .....core.orchestration.runtime_threads import (
     RUNTIME_THREAD_INTERRUPTED_ERROR,
     RUNTIME_THREAD_TIMEOUT_ERROR,
@@ -52,42 +53,10 @@ class ManagedThreadMessageOptions:
 
 
 def normalize_managed_thread_attachments(value: Any) -> list[dict[str, Any]]:
-    if not isinstance(value, list):
-        return []
-    attachments: list[dict[str, Any]] = []
-    for index, item in enumerate(value):
-        if not isinstance(item, dict):
-            continue
-        title = normalize_optional_text(
-            item.get("title") or item.get("name") or item.get("uploadedName")
-        )
-        url = normalize_optional_text(item.get("url") or item.get("href"))
-        uploaded_name = normalize_optional_text(
-            item.get("uploadedName") or item.get("uploaded_name") or item.get("name")
-        )
-        if title is None and url is None and uploaded_name is None:
-            continue
-        kind = (normalize_optional_text(item.get("kind")) or "file").lower()
-        if kind not in {"file", "image", "link"}:
-            kind = "file"
-        attachment: dict[str, Any] = {
-            "id": normalize_optional_text(item.get("id")) or f"attachment-{index + 1}",
-            "kind": kind,
-            "title": title or uploaded_name or url or f"Attachment {index + 1}",
-        }
-        if url is not None:
-            attachment["url"] = url
-        if uploaded_name is not None:
-            attachment["uploaded_name"] = uploaded_name
-            attachment["uploadedName"] = uploaded_name
-        size_label = normalize_optional_text(
-            item.get("sizeLabel") or item.get("size_label")
-        )
-        if size_label is not None:
-            attachment["size_label"] = size_label
-            attachment["sizeLabel"] = size_label
-        attachments.append(attachment)
-    return attachments
+    try:
+        return normalize_document_file_intents(value)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def get_pma_route_config(request: Request) -> dict[str, Any]:
