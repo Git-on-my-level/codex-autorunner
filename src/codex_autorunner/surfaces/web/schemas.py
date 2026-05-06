@@ -393,6 +393,13 @@ class SessionSettingsApprovalDecisionRequest(Payload):
     approval_id: Optional[str] = None
 
 
+class InteractionPromptResponseRequest(Payload):
+    model_config = ConfigDict(extra="forbid")
+
+    actor_user_id: Optional[str] = None
+    response: Dict[str, Any]
+
+
 class GithubIssueRequest(Payload):
     issue: str
 
@@ -443,6 +450,7 @@ __all__ = [
     "HubDestinationMountRequest",
     "HubDestinationSetRequest",
     "HubJobResponse",
+    "InteractionPromptResponseRequest",
     "HubMessageSnapshotResponse",
     "HubMessagesFreshnessResponse",
     "HubMessagesResponse",

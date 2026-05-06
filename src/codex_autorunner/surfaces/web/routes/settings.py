@@ -5,14 +5,19 @@ Session settings routes for autorunner overrides.
 import hashlib
 import json
 import time
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 
+from ....core.interaction_inbox import (
+    InteractionInboxError,
+    InteractionInboxStore,
+    InteractionOption,
+    InteractionPrompt,
+    default_interaction_inbox_path,
+)
 from ....core.state import RunnerState, load_state, save_state, state_lock
 from ....core.time_utils import now_iso
-from ....core.utils import atomic_write
 from ..schemas import (
     SessionSettingsApprovalDecisionRequest,
     SessionSettingsRequest,
@@ -25,28 +30,9 @@ ALLOWED_SANDBOX_MODES = {"dangerFullAccess", "workspaceWrite"}
 APPROVAL_KIND = "session_settings_update"
 
 
-def _approval_store_path(state_path: Path) -> Path:
-    return state_path.parent / "session_settings_approvals.json"
-
-
-def _load_approvals(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return []
-    approvals = payload.get("approvals") if isinstance(payload, dict) else None
-    if not isinstance(approvals, list):
-        return []
-    return [item for item in approvals if isinstance(item, dict)]
-
-
-def _save_approvals(path: Path, approvals: list[dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write(
-        path,
-        json.dumps({"approvals": approvals}, indent=2, sort_keys=True) + "\n",
+def _interaction_store(request: Request) -> InteractionInboxStore:
+    return InteractionInboxStore(
+        default_interaction_inbox_path(request.app.state.engine.state_path)
     )
 
 
@@ -247,6 +233,64 @@ def _approval_from_update(request: Request, updates: dict[str, Any]) -> dict[str
     }
 
 
+def _prompt_from_approval(approval: dict[str, Any]) -> InteractionPrompt:
+    return InteractionPrompt(
+        id=str(approval["id"]),
+        kind="approval",
+        title=str(approval.get("title") or "Approval requested"),
+        message=str(approval.get("description") or approval.get("summary") or ""),
+        owner={"kind": "session", "id": "settings"},
+        target_scope={"kind": "session_settings", "key": "session settings"},
+        options=(
+            InteractionOption(id="approve", label="Approve"),
+            InteractionOption(id="decline", label="Decline"),
+        ),
+        source={
+            "surface": "web",
+            "kind": APPROVAL_KIND,
+            "route": approval.get("route"),
+        },
+        metadata={"session_settings_approval": approval},
+        created_at=str(approval.get("created_at") or now_iso()),
+    )
+
+
+def _approval_from_prompt(prompt: Any) -> dict[str, Any]:
+    approval = (prompt.metadata or {}).get("session_settings_approval")
+    if isinstance(approval, dict):
+        copied = dict(approval)
+    else:
+        copied = {
+            "id": prompt.id,
+            "approval_id": prompt.id,
+            "item_type": "sensitive_car_approval",
+            "action": "modify_car_config",
+            "title": prompt.title,
+            "summary": prompt.title,
+            "description": prompt.message,
+            "scope": "session settings",
+            "target_scope": "session settings",
+            "created_at": prompt.created_at,
+            "decision_url": f"/api/session/settings/approvals/{prompt.id}/decision",
+            "route": f"/api/session/settings/approvals/{prompt.id}/decision",
+            "payload": {},
+        }
+    copied["status"] = prompt.status
+    copied["interaction_prompt_id"] = prompt.id
+    return copied
+
+
+def _interaction_http_error(exc: InteractionInboxError) -> HTTPException:
+    status = {
+        "not_found": 404,
+        "already_answered": 404,
+        "expired": 409,
+        "unauthorized_actor": 403,
+        "invalid_response": 400,
+    }.get(exc.code, 400)
+    return HTTPException(status_code=status, detail=exc.message)
+
+
 def build_settings_routes() -> APIRouter:
     router = APIRouter()
 
@@ -262,12 +306,14 @@ def build_settings_routes() -> APIRouter:
 
     @router.get("/api/session/settings/approvals")
     def list_session_settings_approvals(request: Request):
-        path = _approval_store_path(request.app.state.engine.state_path)
+        prompts = _interaction_store(request).list_prompts(
+            statuses=["pending"], kind="approval"
+        )
         return {
             "approvals": [
-                approval
-                for approval in _load_approvals(path)
-                if approval.get("status") == "pending"
+                _approval_from_prompt(prompt)
+                for prompt in prompts
+                if prompt.source.get("kind") == APPROVAL_KIND
             ]
         }
 
@@ -275,18 +321,10 @@ def build_settings_routes() -> APIRouter:
     def request_session_settings_approval(
         request: Request, payload: SessionSettingsRequest
     ):
-        path = _approval_store_path(request.app.state.engine.state_path)
         approval = _approval_from_update(
             request, payload.model_dump(exclude_unset=True)
         )
-        with state_lock(request.app.state.engine.state_path):
-            approvals = [
-                item
-                for item in _load_approvals(path)
-                if item.get("status") == "pending"
-            ]
-            approvals.append(approval)
-            _save_approvals(path, approvals)
+        _interaction_store(request).upsert_prompt(_prompt_from_approval(approval))
         return approval
 
     @router.post("/api/session/settings/approvals/{approval_id}/decision")
@@ -297,33 +335,29 @@ def build_settings_routes() -> APIRouter:
     ):
         if payload.approval_id is not None and payload.approval_id != approval_id:
             raise HTTPException(status_code=400, detail="approval_id mismatch")
-        path = _approval_store_path(request.app.state.engine.state_path)
-        with state_lock(request.app.state.engine.state_path):
-            approvals = _load_approvals(path)
-            approval = next(
-                (
-                    item
-                    for item in approvals
-                    if item.get("id") == approval_id and item.get("status") == "pending"
-                ),
-                None,
+        store = _interaction_store(request)
+        prompt = store.get_prompt(approval_id)
+        if prompt is None or prompt.status != "pending":
+            raise HTTPException(status_code=404, detail="Approval not found")
+        approval = _approval_from_prompt(prompt)
+        try:
+            decided_prompt = store.respond(
+                approval_id,
+                actor_user_id=None,
+                response={"decision": payload.decision},
             )
-            if approval is None:
-                raise HTTPException(status_code=404, detail="Approval not found")
-            if payload.decision == "decline":
-                remaining = [
-                    item for item in approvals if item.get("id") != approval_id
-                ]
-                _save_approvals(path, remaining)
-                return {"status": "declined", "approval_id": approval_id}
+        except InteractionInboxError as exc:
+            raise _interaction_http_error(exc) from exc
+        if payload.decision == "decline":
+            return {"status": "declined", "approval_id": approval_id}
         updates = approval.get("payload")
         if not isinstance(updates, dict):
             raise HTTPException(status_code=500, detail="Approval payload is invalid")
         applied = _apply_session_settings_update(request, updates)
-        with state_lock(request.app.state.engine.state_path):
-            approvals = _load_approvals(path)
-            remaining = [item for item in approvals if item.get("id") != approval_id]
-            _save_approvals(path, remaining)
+        if decided_prompt.status != "answered":
+            raise HTTPException(
+                status_code=500, detail="Approval decision was not saved"
+            )
         return {"status": "approved", "approval_id": approval_id, "settings": applied}
 
     return router

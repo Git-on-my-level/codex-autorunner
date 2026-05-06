@@ -29,6 +29,7 @@ from .contextspace import build_contextspace_routes
 from .file_chat import build_file_chat_routes
 from .filebox import build_filebox_routes
 from .flows import build_flow_routes
+from .interactions import build_interaction_routes
 from .messages import build_messages_routes
 from .repos import build_repos_routes
 from .review import build_review_routes
@@ -63,6 +64,7 @@ def build_repo_router(static_dir: Path) -> APIRouter:
     router.include_router(build_flow_routes())
     router.include_router(build_filebox_routes())
     router.include_router(build_file_chat_routes())
+    router.include_router(build_interaction_routes())
     router.include_router(build_messages_routes())
     router.include_router(build_repos_routes())
     router.include_router(build_review_routes())

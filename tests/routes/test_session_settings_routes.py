@@ -167,6 +167,10 @@ def test_session_settings_approval_request_and_approve(_settings_env) -> None:
     listed = client.get("/api/session/settings/approvals")
     assert listed.status_code == 200
     assert [item["id"] for item in listed.json()["approvals"]] == [approval["id"]]
+    inbox = client.get("/api/interactions/prompts")
+    assert inbox.status_code == 200
+    assert [item["id"] for item in inbox.json()["prompts"]] == [approval["id"]]
+    assert inbox.json()["prompts"][0]["kind"] == "approval"
 
     decided = client.post(
         approval["decision_url"],
