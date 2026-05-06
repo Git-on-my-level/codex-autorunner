@@ -16,6 +16,9 @@ from .....agents.registry import (
 from .....core.chat_bindings import active_chat_binding_metadata_by_thread
 from .....core.orchestration import build_harness_backed_orchestration_service
 from .....core.orchestration.catalog import RuntimeAgentDescriptor
+from .....core.orchestration.managed_thread_timeline import (
+    build_managed_thread_timeline,
+)
 from .....core.orchestration.turn_timeline import list_turn_timeline
 from .....core.pma_automation_store import PmaAutomationThreadNotFoundError
 from .....core.text_utils import _truncate_text
@@ -829,6 +832,29 @@ def build_managed_thread_crud_routes(
         return {
             "turns": [serialize_managed_thread_turn_summary(turn) for turn in turns]
         }
+
+    @router.get("/threads/{managed_thread_id}/timeline")
+    def get_managed_thread_timeline(
+        managed_thread_id: str,
+        request: Request,
+        limit: int = 500,
+    ) -> dict[str, Any]:
+        if limit <= 0:
+            raise HTTPException(status_code=400, detail="limit must be greater than 0")
+
+        context = get_pma_request_context(request)
+        store = context.thread_store()
+        try:
+            return build_managed_thread_timeline(
+                context.hub_root,
+                thread_store=store,
+                managed_thread_id=managed_thread_id,
+                limit=limit,
+            )
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=404, detail="Managed thread not found"
+            ) from exc
 
     @router.get("/threads/{managed_thread_id}/queue")
     def list_managed_thread_queue(

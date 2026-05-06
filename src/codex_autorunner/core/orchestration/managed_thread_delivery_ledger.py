@@ -268,6 +268,30 @@ class SQLiteManagedThreadDeliveryLedger:
             ).fetchall()
         return [_record_from_row(row) for row in rows]
 
+    def list_records_for_managed_thread(
+        self,
+        managed_thread_id: str,
+        *,
+        limit: int = 500,
+    ) -> list[ManagedThreadDeliveryRecord]:
+        normalized_thread_id = str(managed_thread_id or "").strip()
+        if not normalized_thread_id or limit <= 0:
+            return []
+        with open_orchestration_sqlite(
+            self._hub_root, durable=self._durable, migrate=True
+        ) as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                  FROM orch_managed_thread_deliveries
+                 WHERE managed_thread_id = ?
+                 ORDER BY created_at ASC, delivery_id ASC
+                 LIMIT ?
+                """,
+                (normalized_thread_id, max(1, int(limit))),
+            ).fetchall()
+        return [_record_from_row(row) for row in rows]
+
     def _upsert_record(self, record: ManagedThreadDeliveryRecord) -> None:
         with open_orchestration_sqlite(
             self._hub_root, durable=self._durable, migrate=True
