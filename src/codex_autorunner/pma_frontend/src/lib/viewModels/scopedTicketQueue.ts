@@ -10,6 +10,7 @@ import {
 import type { PmaChatSummary, PmaRunProgress, SurfaceArtifact, TicketSummary } from '$lib/viewModels/domain';
 import {
   buildTicketListViewModel,
+  type SurfaceActionManifest,
   type TicketListViewModel,
   type TicketOwnerScope
 } from '$lib/viewModels/ticket';
@@ -92,15 +93,38 @@ export async function loadScopedTicketQueue(
   rememberTickets(owner, tickets.data);
   const scope = scopedTicketQueueScope(config);
   onTicketsLoaded?.(buildScopedTicketList(tickets.data, [], [], scope));
-  const [runs, chats] = await Promise.all([api.ticketFlow.listRuns(owner), api.pma.listChats()]);
+  const [runs, chats, actionManifest] = await Promise.all([
+    api.ticketFlow.listRuns(owner),
+    api.pma.listChats(),
+    loadScopedActionManifest(api, config)
+  ]);
   return {
     ok: true,
-    list: buildScopedTicketList(tickets.data, dataOr(runs, []), dataOr(chats, []), scope),
+    list: buildScopedTicketList(
+      tickets.data,
+      dataOr(runs, []),
+      dataOr(chats, []),
+      scope,
+      dataOr(actionManifest, null)
+    ),
     sectionIssues: [
       !runs.ok ? partialPageIssue('timeline', 'Run state unavailable', runs.error) : null,
-      !chats.ok ? partialPageIssue('linked_chat', 'PMA chats unavailable', chats.error) : null
+      !chats.ok ? partialPageIssue('linked_chat', 'PMA chats unavailable', chats.error) : null,
+      !actionManifest.ok ? partialPageIssue('action_manifest', 'Action manifest unavailable', actionManifest.error) : null
     ].filter((issue): issue is PartialPageIssue => Boolean(issue))
   };
+}
+
+async function loadScopedActionManifest(
+  api: Pick<ScopedTicketQueueApi, 'requestJson'>,
+  config: ScopedTicketQueueConfig
+): Promise<ApiResult<SurfaceActionManifest | null>> {
+  const params = new URLSearchParams({
+    ui_kind: 'pma_web',
+    resource_kind: config.kind,
+    resource_id: config.resourceId
+  });
+  return api.requestJson<SurfaceActionManifest>(`${config.apiBasePath}/ticket_flow/action-manifest?${params.toString()}`);
 }
 
 export async function createScopedTicket(
@@ -212,7 +236,8 @@ function buildScopedTicketList(
   tickets: TicketSummary[],
   runs: PmaRunProgress[],
   chats: PmaChatSummary[],
-  scope: Exclude<TicketOwnerScope, null>
+  scope: Exclude<TicketOwnerScope, null>,
+  actionManifest: SurfaceActionManifest | null = null
 ): TicketListViewModel {
   return buildTicketListViewModel(
     {
@@ -221,6 +246,7 @@ function buildScopedTicketList(
       chats,
       artifacts: [] as SurfaceArtifact[]
     },
-    scope
+    scope,
+    actionManifest
   );
 }

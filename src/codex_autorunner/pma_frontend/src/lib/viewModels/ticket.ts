@@ -71,6 +71,19 @@ export type TicketQueueAction = {
   disabledReason: string | null;
 };
 
+export type SurfaceActionManifestAction = {
+  action_id?: string;
+  label?: string;
+  enabled?: boolean;
+  disabled_reason?: string | null;
+  requires_confirmation?: boolean;
+  tone?: string;
+};
+
+export type SurfaceActionManifest = {
+  actions?: SurfaceActionManifestAction[];
+};
+
 export type TicketListViewModel = {
   title: string;
   eyebrow: string;
@@ -162,7 +175,11 @@ const filterLabels: Record<TicketFilter, string> = {
   done_recent: 'Done/recent'
 };
 
-export function buildTicketListViewModel(source: TicketSourceData, owner: TicketOwnerScope = null): TicketListViewModel {
+export function buildTicketListViewModel(
+  source: TicketSourceData,
+  owner: TicketOwnerScope = null,
+  actionManifest: SurfaceActionManifest | null = null
+): TicketListViewModel {
   const rows = source.tickets.map((ticket) => ticketToListRow(ticket, source)).sort(owner ? byTicketNumberThenTitle : bySignalThenRecent);
   const ownerLabel = owner?.label || owner?.id;
   const queueRun = owner ? findQueueRun(source.runs, owner) ?? findQueueRunFromRows(rows) : null;
@@ -185,7 +202,7 @@ export function buildTicketListViewModel(source: TicketSourceData, owner: Ticket
     })),
     workspaceFilters: buildWorkspaceFilters(rowsWithCurrent),
     queueRun,
-    queueActions: buildQueueActions(queueRun, source.runs, rowsWithCurrent),
+    queueActions: buildQueueActions(queueRun, source.runs, rowsWithCurrent, actionManifest),
     flowStatus,
     rows: rowsWithCurrent
   };
@@ -336,7 +353,14 @@ function findQueueRunFromRows(rows: TicketListRow[]): TicketQueueRun | null {
   );
 }
 
-function buildQueueActions(queueRun: TicketQueueRun | null, runs: PmaRunProgress[], rows: TicketListRow[]): TicketQueueAction[] {
+function buildQueueActions(
+  queueRun: TicketQueueRun | null,
+  runs: PmaRunProgress[],
+  rows: TicketListRow[],
+  actionManifest: SurfaceActionManifest | null
+): TicketQueueAction[] {
+  const manifestActions = actionsFromManifest(actionManifest);
+  if (manifestActions.length > 0) return orderQueueActions(manifestActions);
   const run = queueRun ? runs.find((candidate) => candidate.id === queueRun.id) ?? null : null;
   const rawActions = Array.isArray(run?.raw.action_policy) ? run.raw.action_policy : [];
   const projected = rawActions
@@ -366,6 +390,26 @@ function buildQueueActions(queueRun: TicketQueueRun | null, runs: PmaRunProgress
       disabledReason: 'No restartable flow run'
     }
   ];
+}
+
+function actionsFromManifest(manifest: SurfaceActionManifest | null): TicketQueueAction[] {
+  const rawActions = Array.isArray(manifest?.actions) ? manifest.actions : [];
+  return rawActions
+    .map(queueActionFromManifest)
+    .filter((action): action is TicketQueueAction => action !== null);
+}
+
+function queueActionFromManifest(action: SurfaceActionManifestAction): TicketQueueAction | null {
+  const rawId = typeof action.action_id === 'string' ? action.action_id : '';
+  const name = rawId.replace(/^ticket_flow\./, '');
+  if (name !== 'start' && name !== 'stop' && name !== 'restart') return null;
+  return {
+    action: name,
+    enabled: action.enabled === true,
+    label: typeof action.label === 'string' && action.label.trim() ? action.label : name,
+    requiresConfirmation: action.requires_confirmation === true,
+    disabledReason: typeof action.disabled_reason === 'string' && action.disabled_reason.trim() ? action.disabled_reason : null
+  };
 }
 
 function queueActionFromPolicy(value: unknown): TicketQueueAction | null {

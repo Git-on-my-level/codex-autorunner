@@ -130,6 +130,31 @@ describe('TicketViews', () => {
     ]);
   });
 
+  it('builds queue controls from backend action manifest data', () => {
+    const list = buildTicketListViewModel(
+      {
+        tickets: [{ ...mockTicketSummary, workspaceKind: 'repo', workspaceId: 'repo-1', repoId: 'repo-1', worktreeId: null }],
+        runs: [{ ...mockRunProgress, id: 'run-policy', raw: { repo_id: 'repo-1' } }],
+        chats: [],
+        artifacts: []
+      },
+      { kind: 'repo', id: 'repo-1' },
+      {
+        actions: [
+          { action_id: 'ticket_flow.start', enabled: false, label: 'Start queue', disabled_reason: 'Ticket flow is already active' },
+          { action_id: 'ticket_flow.stop', enabled: true, label: 'Stop', disabled_reason: null },
+          { action_id: 'ticket_flow.restart', enabled: false, label: 'Restart', requires_confirmation: true, disabled_reason: 'No restartable flow run' }
+        ]
+      }
+    );
+
+    expect(list.queueActions).toEqual([
+      { action: 'start', enabled: false, label: 'Start queue', requiresConfirmation: false, disabledReason: 'Ticket flow is already active' },
+      { action: 'stop', enabled: true, label: 'Stop', requiresConfirmation: false, disabledReason: null },
+      { action: 'restart', enabled: false, label: 'Restart', requiresConfirmation: true, disabledReason: 'No restartable flow run' }
+    ]);
+  });
+
   it('renders ticket contract sections on detail pages', () => {
     const detail = buildTicketDetailViewModel(
       {

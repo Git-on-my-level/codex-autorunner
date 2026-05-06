@@ -73,6 +73,10 @@ from ....flows.ticket_flow.runtime_helpers import (
     seed_bootstrap_ticket_if_needed,
 )
 from ....integrations.agents.build_agent_pool import build_agent_pool
+from ....integrations.chat.surface_action_manifest import (
+    SurfaceActionManifestContext,
+    build_surface_action_manifest,
+)
 from ....integrations.github.service import GitHubError, GitHubService
 from ....tickets import DEFAULT_MAX_TOTAL_TURNS
 from ....tickets.bulk import (
@@ -353,6 +357,16 @@ def _get_flow_record(repo_root: Path, run_id: str) -> FlowRunRecord:
 
 
 _active_or_paused_run = select_active_or_paused_run
+
+
+def _ticket_dir_has_open_tickets(ticket_dir: Path) -> bool:
+    for path in list_ticket_paths(ticket_dir):
+        ticket, errors = read_ticket(path)
+        if errors or ticket is None:
+            continue
+        if ticket.frontmatter.done is not True:
+            return True
+    return False
 
 
 def _coerce_ticket_diff_ref(value: object) -> Optional[str]:
@@ -1017,6 +1031,47 @@ def build_flow_routes() -> APIRouter:
             github_available=result.github_available,
             repo=result.repo_slug,
         )
+
+    @router.get("/ticket_flow/action-manifest")
+    async def get_ticket_flow_action_manifest(
+        request: Request,
+        ui_kind: str = "pma_web",
+        resource_kind: Optional[str] = None,
+        resource_id: Optional[str] = None,
+    ):
+        repo_root = find_repo_root()
+        records = _safe_list_flow_runs(
+            repo_root, flow_type="ticket_flow", recover_stuck=True
+        )
+        run = _active_or_paused_run(records) or (records[0] if records else None)
+        worker_health = check_worker_health(repo_root, run.id) if run else None
+        manifest = build_surface_action_manifest(
+            SurfaceActionManifestContext(
+                surface_kind="web",
+                ui_kind="pma_web" if ui_kind == "pma_web" else "generic",
+                target_kind="ticket_flow",
+                workspace_id=resource_id,
+                run_id=run.id if run else None,
+                resource_kind=resource_kind,
+                resource_id=resource_id,
+                lifecycle_state=run.status.value if run else None,
+                worker_health_status=(
+                    worker_health.status if worker_health is not None else None
+                ),
+                archive_mode=(
+                    resolve_ticket_flow_archive_mode(run) if run else "blocked"
+                ),
+                has_run=run is not None,
+                has_open_tickets=_ticket_dir_has_open_tickets(
+                    repo_root / ".codex-autorunner" / "tickets"
+                ),
+                capabilities=frozenset({"ticket_flow"}),
+                route_prefix=str(request.url.path).removesuffix(
+                    "/ticket_flow/action-manifest"
+                ),
+            )
+        )
+        return manifest.to_dict()
 
     @router.post("/ticket_flow/seed-issue")
     async def seed_issue(request: SeedIssueRequest):
