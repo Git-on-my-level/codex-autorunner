@@ -172,7 +172,7 @@
         selectedAgent =
           stringField(agentResult.data[0], 'id') ?? stringField(agentResult.data[0], 'agent') ?? selectedAgent;
       }
-      void loadModels(selectedAgent, selectedModel);
+      void loadModels(selectedAgent, activeChat?.model ?? selectedModel);
     } else {
       agentError = agentResult.error;
     }
@@ -345,7 +345,7 @@
   async function ensureChatForSelectedAgent(): Promise<string | null> {
     if (!activeChat?.agentId || activeChat.agentId === selectedAgent) return activeChatId;
     const scopedAgent = selectedScope?.kind === 'agent_workspace' && selectedScope.agentId ? selectedScope.agentId : selectedAgent;
-    const result = await pmaApi.pma.createChat(buildManagedThreadCreatePayload(scopedAgent, selectedScope));
+    const result = await pmaApi.pma.createChat(buildManagedThreadCreatePayload(scopedAgent, selectedScope, 'New PMA chat', selectedModel));
     if (!result.ok) {
       composeError = result.error;
       return null;
@@ -375,7 +375,7 @@
     creating = true;
     composeError = null;
     const scopedAgent = selectedScope?.kind === 'agent_workspace' && selectedScope.agentId ? selectedScope.agentId : selectedAgent;
-    const result = await pmaApi.pma.createChat(buildManagedThreadCreatePayload(scopedAgent, selectedScope));
+    const result = await pmaApi.pma.createChat(buildManagedThreadCreatePayload(scopedAgent, selectedScope, 'New PMA chat', selectedModel));
     if (result.ok) {
       chats = [result.data, ...chats.filter((chat) => chat.id !== result.data.id)];
       await selectChat(result.data.id);

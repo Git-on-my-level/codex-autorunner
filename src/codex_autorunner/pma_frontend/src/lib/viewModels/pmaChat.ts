@@ -62,6 +62,7 @@ export type PmaLiveActivity = {
 
 export type ManagedThreadCreatePayload = {
   agent?: string;
+  model?: string;
   name: string;
   workspace_root?: string;
   resource_kind?: 'repo' | 'agent_workspace';
@@ -522,12 +523,14 @@ export function composeMessageWithAttachments(
 export function buildManagedThreadCreatePayload(
   agent: string,
   scope: PmaChatScopeOption = localPmaChatScopeOption(),
-  name = 'New PMA chat'
+  name = 'New PMA chat',
+  model = ''
 ): ManagedThreadCreatePayload {
-  const base = {
+  const base: Pick<ManagedThreadCreatePayload, 'agent' | 'name' | 'model'> = {
     agent: agent || undefined,
     name
   };
+  if (model) base.model = model;
   if (scope.kind === 'repo' || scope.kind === 'agent_workspace') {
     return {
       ...base,

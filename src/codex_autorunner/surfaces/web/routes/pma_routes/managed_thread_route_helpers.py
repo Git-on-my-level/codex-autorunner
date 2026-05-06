@@ -367,6 +367,7 @@ def _serialize_thread_target(
         "resource_id": thread.resource_id,
         "workspace_root": thread.workspace_root,
         "name": thread.display_name,
+        "model": normalize_optional_text(getattr(thread, "model", None)),
         "backend_thread_id": thread.backend_thread_id,
         "lifecycle_status": thread.lifecycle_status,
         "normalized_status": thread.status,
@@ -589,6 +590,9 @@ def resolve_managed_thread_create_resolution(
         "context_profile": context_profile,
         "approval_mode": approval_mode,
     }
+    preferred_model = normalize_optional_text(payload.model)
+    if preferred_model is not None:
+        metadata["model"] = preferred_model
     if requested_profile is not None:
         metadata["agent_profile"] = requested_profile
 

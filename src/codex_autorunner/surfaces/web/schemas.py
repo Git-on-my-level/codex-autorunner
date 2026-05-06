@@ -312,6 +312,7 @@ class PmaManagedThreadCreateRequest(Payload):
     )
     workspace_root: Optional[str] = None
     name: Optional[str] = None
+    model: Optional[str] = None
     notify_on: Optional[Literal["terminal"]] = Field(
         default=None, validation_alias=AliasChoices("notify_on", "notifyOn")
     )

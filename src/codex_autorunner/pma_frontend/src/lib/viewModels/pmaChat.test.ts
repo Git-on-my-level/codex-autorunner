@@ -450,6 +450,12 @@ describe('PMA chat view helpers', () => {
       name: 'New PMA chat',
       workspace_root: '/hub/repo-1-pma'
     });
+    expect(buildManagedThreadCreatePayload('opencode', local, 'New PMA chat', 'zai/glm')).toEqual({
+      agent: 'opencode',
+      model: 'zai/glm',
+      name: 'New PMA chat',
+      workspace_root: '.'
+    });
   });
 
   it('builds managed thread creation payloads for backend-owned agent workspaces', () => {

@@ -96,6 +96,7 @@ class ThreadTarget:
     resource_id: Optional[str] = None
     workspace_root: Optional[str] = None
     display_name: Optional[str] = None
+    model: Optional[str] = None
     status: Optional[str] = None
     lifecycle_status: Optional[str] = None
     status_reason: Optional[str] = None
@@ -153,6 +154,7 @@ class ThreadTarget:
             display_name=_normalize_optional_text(
                 data.get("name") or data.get("display_name")
             ),
+            model=_normalize_optional_text(data.get("model") or metadata.get("model")),
             status=_normalize_optional_text(
                 data.get("normalized_status") or data.get("status")
             ),
@@ -201,6 +203,7 @@ class ThreadTarget:
             "workspace_root": self.workspace_root,
             "name": self.display_name,
             "display_name": self.display_name,
+            "model": self.model,
             "status": self.status,
             "lifecycle_status": self.lifecycle_status,
             "status_reason": self.status_reason,
