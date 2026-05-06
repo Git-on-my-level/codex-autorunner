@@ -13,6 +13,7 @@ from .....agents.base import (
     harness_progress_event_stream,
     harness_supports_event_streaming,
 )
+from .....core.orchestration.progress_projection import ProgressProjectionState
 from .....core.orchestration.runtime_thread_events import (
     RuntimeThreadRunEventState,
 )
@@ -314,6 +315,7 @@ async def _build_managed_thread_tail_snapshot(
             ):  # intentional: dynamic harness method - exception types depend on backend
                 raw_events = []
             state = RuntimeThreadRunEventState()
+            projection_state = ProgressProjectionState()
             event_id_start = int(resume_after or 0)
             for raw_event in raw_events:
                 if isinstance(raw_event, dict):
@@ -330,6 +332,7 @@ async def _build_managed_thread_tail_snapshot(
                     level=level,
                     event_id_start=event_id_start,
                     since_ms=since_ms,
+                    projection_state=projection_state,
                 )
                 for entry in serialized_entries:
                     tail_events.append(entry)
@@ -694,6 +697,7 @@ def build_managed_thread_tail_routes(
 
             workspace_path = Path(workspace_root) if workspace_root else Path(".")
             state = RuntimeThreadRunEventState()
+            projection_state = ProgressProjectionState()
             initial_last_event_id = int(snapshot.get("last_event_id") or 0)
             last_event_id = initial_last_event_id
             async for raw_event in harness_progress_event_stream(
@@ -716,6 +720,7 @@ def build_managed_thread_tail_routes(
                     level=normalized_level,
                     event_id_start=last_event_id,
                     since_ms=since_ms,
+                    projection_state=projection_state,
                 )
                 for serialized_entry in serialized_entries:
                     entry_id = int(serialized_entry.get("event_id") or 0)

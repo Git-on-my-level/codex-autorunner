@@ -292,8 +292,12 @@ export function mapPmaRunProgress(raw: JsonRecord): PmaRunProgress {
 }
 
 export function mapSurfaceArtifact(raw: JsonRecord): SurfaceArtifact {
-  const id = stringValue(raw.id ?? raw.artifact_id ?? raw.name ?? raw.event_id ?? raw.rel_path, 'artifact');
-  const title = stringValue(raw.title ?? raw.name ?? raw.summary ?? raw.event_type ?? raw.item_type, id);
+  const progressItem = asRecord(raw.progress_item);
+  const id = stringValue(
+    raw.id ?? raw.artifact_id ?? raw.name ?? progressItem.item_id ?? raw.event_id ?? raw.rel_path,
+    'artifact'
+  );
+  const title = stringValue(progressItem.title ?? raw.title ?? raw.name ?? raw.summary ?? raw.event_type ?? raw.item_type, id);
   return {
     id,
     kind: normalizeArtifactKind(raw.kind ?? raw.type ?? raw.item_type ?? raw.event_type ?? raw.name ?? raw.rel_path ?? raw.url),

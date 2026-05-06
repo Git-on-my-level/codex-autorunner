@@ -3,8 +3,22 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
 
+from ..ports.run_event import (
+    ApprovalRequested,
+    OutputDelta,
+    RunEvent,
+    RunNotice,
+    ToolCall,
+    ToolResult,
+)
 from ..text_utils import _truncate_text
 from .managed_thread_delivery_ledger import SQLiteManagedThreadDeliveryLedger
+from .progress_projection import (
+    ProgressProjectionInput,
+    ProgressProjectionItem,
+    ProgressProjectionState,
+    reduce_progress_event,
+)
 from .turn_timeline import list_turn_timeline
 
 TIMELINE_CONTRACT_VERSION = "managed_thread_timeline.v1"
@@ -79,6 +93,70 @@ def _event_index(entry: dict[str, Any], fallback: int) -> int:
         return int(str(raw))
     except (TypeError, ValueError):
         return fallback
+
+
+def _progress_item_for_entry(
+    entry: dict[str, Any],
+    *,
+    event_index: int,
+    timestamp: Optional[str],
+    state: ProgressProjectionState,
+) -> Optional[ProgressProjectionItem]:
+    if timestamp is None:
+        return None
+    event_type = str(entry.get("event_type") or "")
+    event = _event_payload(entry)
+    run_event: Optional[RunEvent] = None
+    if event_type == "output_delta":
+        run_event = OutputDelta(
+            timestamp=timestamp,
+            content=str(event.get("content") or ""),
+            delta_type=str(event.get("delta_type") or "text"),
+        )
+    elif event_type == "run_notice":
+        data = event.get("data")
+        run_event = RunNotice(
+            timestamp=timestamp,
+            kind=str(event.get("kind") or ""),
+            message=str(event.get("message") or ""),
+            data=dict(data) if isinstance(data, dict) else {},
+        )
+    elif event_type == "tool_call":
+        tool_input = event.get("tool_input")
+        run_event = ToolCall(
+            timestamp=timestamp,
+            tool_name=str(event.get("tool_name") or ""),
+            tool_input=dict(tool_input) if isinstance(tool_input, dict) else {},
+        )
+    elif event_type == "tool_result":
+        run_event = ToolResult(
+            timestamp=timestamp,
+            tool_name=str(event.get("tool_name") or ""),
+            status=str(event.get("status") or ""),
+            result=event.get("result"),
+            error=event.get("error"),
+        )
+    elif event_type == "approval_requested":
+        context = event.get("context")
+        run_event = ApprovalRequested(
+            timestamp=timestamp,
+            request_id=str(event.get("request_id") or ""),
+            description=str(event.get("description") or ""),
+            context=dict(context) if isinstance(context, dict) else {},
+        )
+    if run_event is None:
+        return None
+    item = reduce_progress_event(
+        state,
+        ProgressProjectionInput(
+            event_id=event_index,
+            timestamp=timestamp,
+            event=run_event,
+        ),
+    )
+    if item is None or item.hidden:
+        return None
+    return item
 
 
 def _assistant_text_from_timeline(entries: Iterable[dict[str, Any]]) -> Optional[str]:
@@ -179,6 +257,7 @@ def _append_timeline_event_items(
     sequence: int,
 ) -> int:
     tool_group: Optional[dict[str, Any]] = None
+    projection_state = ProgressProjectionState()
 
     def flush_tool_group() -> None:
         # Timeline ordering is the contract; do not let grouped tool events drift
@@ -204,6 +283,11 @@ def _append_timeline_event_items(
                     "tool_name": tool_group.get("tool_name"),
                     "call": tool_group.get("call"),
                     "result": tool_group.get("result"),
+                    "progress_items": [
+                        item
+                        for item in tool_group.get("progress_items", [])
+                        if isinstance(item, dict)
+                    ],
                 },
             )
         )
@@ -216,6 +300,12 @@ def _append_timeline_event_items(
         event_index = _event_index(entry, fallback)
         timestamp = _event_timestamp(entry)
         event_stable_id = str(entry.get("event_id") or f"{event_index:04d}")
+        progress_item = _progress_item_for_entry(
+            entry,
+            event_index=event_index,
+            timestamp=timestamp,
+            state=projection_state,
+        )
 
         if event_type in {"tool_call", "tool_result"}:
             tool_name = str(event.get("tool_name") or "unknown")
@@ -228,6 +318,9 @@ def _append_timeline_event_items(
                     "call": event,
                     "result": None,
                     "status": "running",
+                    "progress_items": (
+                        [progress_item.to_dict()] if progress_item is not None else []
+                    ),
                 }
             else:
                 if tool_group is None or tool_group.get("tool_name") != tool_name:
@@ -239,9 +332,14 @@ def _append_timeline_event_items(
                         "call": None,
                         "result": None,
                         "status": "running",
+                        "progress_items": [],
                     }
                 tool_group["result"] = event
                 tool_group["status"] = str(event.get("status") or "completed")
+                if progress_item is not None:
+                    tool_group.setdefault("progress_items", []).append(
+                        progress_item.to_dict()
+                    )
                 flush_tool_group()
             continue
 
@@ -258,7 +356,14 @@ def _append_timeline_event_items(
                     managed_thread_id=managed_thread_id,
                     managed_turn_id=managed_turn_id,
                     status=str(entry.get("status") or "recorded"),
-                    payload=event,
+                    payload={
+                        **event,
+                        "progress_item": (
+                            progress_item.to_dict()
+                            if progress_item is not None
+                            else None
+                        ),
+                    },
                 )
             )
             sequence += 1
@@ -280,6 +385,11 @@ def _append_timeline_event_items(
                         "text": event.get("message") or "",
                         "event_type": event_type,
                         "event": event,
+                        "progress_item": (
+                            progress_item.to_dict()
+                            if progress_item is not None
+                            else None
+                        ),
                     },
                 )
             )
@@ -302,6 +412,11 @@ def _append_timeline_event_items(
                         "text": event.get("content") or "",
                         "event_type": event_type,
                         "event": event,
+                        "progress_item": (
+                            progress_item.to_dict()
+                            if progress_item is not None
+                            else None
+                        ),
                     },
                 )
             )

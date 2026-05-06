@@ -11,6 +11,13 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from .....core.managed_thread_status import derive_managed_thread_operator_status
+from .....core.orchestration.progress_projection import (
+    ProgressProjectionInput,
+    ProgressProjectionItem,
+    ProgressProjectionState,
+    project_progress_events,
+    reduce_progress_event,
+)
 from .....core.orchestration.runtime_thread_events import (
     RuntimeThreadRunEventState,
     normalize_runtime_thread_raw_event,
@@ -220,78 +227,64 @@ def _tail_event_from_run_event(
     *,
     event_id: int,
     received_at: str,
+    projection_state: ProgressProjectionState | None = None,
 ) -> dict[str, Any] | None:
-    tool_name: str | None = None
-    tool_state: str | None = None
-    event_type = "progress"
-    summary = ""
-    if isinstance(run_event, OutputDelta):
-        normalized_text = (run_event.content or "").strip()
-        if normalized_text.startswith("🤔"):
-            event_type = "assistant_update"
-            summary = "Thinking"
-        elif normalized_text.startswith("⏳"):
-            event_type = "tool_started"
-            tool_name = _truncate_tool_name(normalized_text.lstrip("⏳").strip())
-            tool_state = "started"
-            summary = tool_name or "Tool started"
-        elif normalized_text.startswith("✅"):
-            event_type = "tool_completed"
-            tool_name = _truncate_tool_name(normalized_text.lstrip("✅").strip())
-            tool_state = "completed"
-            summary = tool_name or "Tool completed"
-        elif normalized_text.startswith("❌"):
-            event_type = "tool_failed"
-            tool_name = _truncate_tool_name(normalized_text.lstrip("❌").strip())
-            tool_state = "failed"
-            summary = tool_name or "Tool failed"
-        else:
-            event_type = "assistant_update"
-            summary = run_event.content or "Assistant update"
-    elif isinstance(run_event, ToolCall):
-        event_type = "tool_started"
-        tool_name = _truncate_tool_name(run_event.tool_name)
-        tool_state = "started"
-        summary = f"tool: {tool_name or 'unknown'}"
-    elif isinstance(run_event, ToolResult):
-        event_type = "tool_failed" if run_event.status == "error" else "tool_completed"
-        tool_name = _truncate_tool_name(run_event.tool_name)
-        tool_state = "failed" if run_event.status == "error" else "completed"
-        summary = f"tool: {tool_name or 'unknown'}"
-    elif isinstance(run_event, ApprovalRequested):
-        event_type = "progress"
-        summary = run_event.description or "Approval requested"
-    elif isinstance(run_event, TokenUsage):
-        event_type = "progress"
-        summary = "Token usage updated"
-    elif isinstance(run_event, RunNotice):
-        event_type = "assistant_update" if run_event.kind == "thinking" else "progress"
-        summary = run_event.message or run_event.kind.replace("_", " ").title()
-    elif isinstance(run_event, Completed):
-        event_type = "turn_completed"
-        summary = run_event.final_message or "Turn completed"
-    elif isinstance(run_event, Failed):
-        detail = run_event.error_message or "Turn failed"
-        lowered = detail.lower()
-        if "interrupt" in lowered or "cancel" in lowered or "abort" in lowered:
-            event_type = "turn_interrupted"
-            summary = "Turn interrupted"
-        else:
-            event_type = "turn_failed"
-            summary = detail
-    else:
+    state = projection_state or ProgressProjectionState()
+    item = reduce_progress_event(
+        state,
+        ProgressProjectionInput(
+            event_id=event_id,
+            timestamp=received_at,
+            event=run_event,
+        ),
+    )
+    if item is None or item.hidden:
         return None
+    return _tail_event_from_progress_item(item, received_at=received_at)
 
-    summary = truncate_text(redact_text(summary), 220)
+
+def _tail_event_type_from_progress_item(item: ProgressProjectionItem) -> str:
+    if item.kind == "tool":
+        return {
+            "started": "tool_started",
+            "completed": "tool_completed",
+            "failed": "tool_failed",
+        }.get(item.state, "tool_started")
+    if item.kind == "turn_failed":
+        return "turn_failed"
+    if item.kind == "turn_interrupted":
+        return "turn_interrupted"
+    if item.kind == "turn_completed":
+        return "turn_completed"
+    if item.kind == "assistant_update":
+        return "assistant_update"
+    return "progress"
+
+
+def _tail_event_from_progress_item(
+    item: ProgressProjectionItem,
+    *,
+    received_at: str,
+) -> dict[str, Any]:
+    event_id = item.event_ids[-1] if item.event_ids else 0
+    event_type = _tail_event_type_from_progress_item(item)
     return {
         "event_id": event_id,
         "event_type": event_type,
-        "summary": summary,
-        "lines": [summary] if summary else [],
+        "summary": item.summary or item.title,
+        "title": item.title,
+        "lines": [item.summary or item.title] if item.summary or item.title else [],
         "received_at_ms": None,
         "received_at": received_at,
-        "tool_name": tool_name,
-        "tool_state": tool_state,
+        "tool_name": item.tool_name,
+        "tool_state": item.state if item.kind == "tool" else None,
+        "progress_item": item.to_dict(),
+        "progress_item_id": item.item_id,
+        "progress_kind": item.kind,
+        "progress_state": item.state,
+        "progress_group_id": item.group_id,
+        "progress_group_kind": item.group_kind,
+        "progress_event_ids": list(item.event_ids),
     }
 
 
@@ -718,6 +711,9 @@ def _serialize_persisted_timeline_tail_events(
     serialized: list[dict[str, Any]] = []
     last_activity_at: Optional[str] = None
     min_event_id = int(resume_after or 0)
+    projection_inputs: list[ProgressProjectionInput] = []
+    raw_entries_by_event_id: dict[int, dict[str, Any]] = {}
+    timestamps_by_event_id: dict[int, str] = {}
     for entry in timeline_entries:
         if not isinstance(entry, dict):
             continue
@@ -734,15 +730,21 @@ def _serialize_persisted_timeline_tail_events(
         run_event = _run_event_from_timeline_entry(entry)
         if run_event is None:
             continue
-        payload = _tail_event_from_run_event(
-            run_event,
-            event_id=event_id,
-            received_at=timestamp,
+        projection_inputs.append(
+            ProgressProjectionInput(
+                event_id=event_id,
+                timestamp=timestamp,
+                event=run_event,
+            )
         )
-        if payload is None:
-            continue
+        raw_entries_by_event_id[event_id] = entry
+        timestamps_by_event_id[event_id] = timestamp
+    for item in project_progress_events(projection_inputs):
+        event_id = item.event_ids[-1] if item.event_ids else 0
+        timestamp = timestamps_by_event_id.get(event_id) or item.timestamp
+        payload = _tail_event_from_progress_item(item, received_at=timestamp)
         if level == "debug":
-            payload["raw"] = _redact_nested(entry)
+            payload["raw"] = _redact_nested(raw_entries_by_event_id.get(event_id) or {})
         serialized.append(payload)
         last_activity_at = timestamp
     return serialized, last_activity_at
@@ -755,6 +757,7 @@ async def _serialize_runtime_raw_tail_events(
     level: str,
     event_id_start: int,
     since_ms: Optional[int] = None,
+    projection_state: ProgressProjectionState | None = None,
 ) -> list[dict[str, Any]]:
     received_at_ms = 0
     received_at = datetime.now(timezone.utc).isoformat()
@@ -795,6 +798,7 @@ async def _serialize_runtime_raw_tail_events(
             run_event,
             event_id=event_id_for_payload,
             received_at=received_at,
+            projection_state=projection_state,
         )
         if payload is None:
             continue

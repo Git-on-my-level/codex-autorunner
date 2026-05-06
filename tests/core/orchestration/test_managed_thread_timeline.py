@@ -162,6 +162,13 @@ def test_running_timeline_projects_progress_tool_group_and_approval(
         f"turn:{turn_id}:status:running",
         f"turn:{turn_id}:approval:approval-1",
     }
+    tool = next(item for item in payload["items"] if item["kind"] == "tool_group")
+    assert [p["state"] for p in tool["payload"]["progress_items"]] == [
+        "started",
+        "completed",
+    ]
+    approval = next(item for item in payload["items"] if item["kind"] == "approval")
+    assert approval["payload"]["progress_item"]["kind"] == "approval"
 
 
 def test_queued_user_messages_remain_distinct_and_ordered_while_running(

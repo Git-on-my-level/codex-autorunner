@@ -54,6 +54,19 @@ export type PmaToolCallCard = {
   state: 'started' | 'completed' | 'failed' | 'unknown';
 };
 
+type CanonicalProgressItem = {
+  item_id?: string;
+  kind?: string;
+  state?: string;
+  title?: string;
+  summary?: string | null;
+  event_ids?: unknown;
+  group_id?: string | null;
+  group_kind?: string | null;
+  tool_name?: string | null;
+  hidden?: boolean;
+};
+
 export type PmaLiveActivity = {
   state: WorkStatus;
   title: string;
@@ -280,7 +293,7 @@ export function buildPmaActivityCards(events: SurfaceArtifact[]): PmaCard[] {
       toolGroup.push({
         id: event.id,
         title: toolDisplayTitle(event),
-        summary: event.summary,
+        summary: stringValue(canonicalProgressItem(event)?.summary) || event.summary,
         state: toolState(event)
       });
       continue;
@@ -397,51 +410,50 @@ export function buildPmaStatusBar(progress: PmaRunProgress | null, chat: PmaChat
 }
 
 export function isPrimaryProgressArtifact(artifact: SurfaceArtifact): boolean {
-  const eventType = stringValue(artifact.raw.event_type ?? artifact.raw.type ?? artifact.raw.kind).toLowerCase();
-  const summary = [artifact.title, artifact.summary].filter(Boolean).join(' ').toLowerCase();
-  if (eventType.includes('token_usage') || summary === 'token usage updated') return false;
-  if (['turn_completed', 'prompt_completed', 'session_idle'].includes(eventType)) return false;
-  if (eventType === 'progress' && /^(turn completed|token usage updated)$/i.test(artifact.title)) return false;
-  return ['assistant_update', 'tool_started', 'tool_completed', 'tool_failed', 'turn_failed', 'turn_interrupted'].some(
-    (type) => eventType.includes(type)
+  const item = canonicalProgressItem(artifact);
+  if (!item || item.hidden === true) return false;
+  return ['assistant_update', 'tool', 'notice', 'approval', 'turn_failed', 'turn_interrupted'].includes(
+    stringValue(item.kind)
   );
 }
 
 function isToolActivityEvent(event: SurfaceArtifact): boolean {
-  const eventType = eventTypeValue(event);
-  return eventType.includes('tool_started') || eventType.includes('tool_completed') || eventType.includes('tool_failed');
+  return canonicalProgressItem(event)?.kind === 'tool';
 }
 
-function eventTypeValue(event: SurfaceArtifact): string {
-  return stringValue(event.raw.event_type ?? event.raw.type ?? event.raw.kind).toLowerCase();
+function canonicalProgressItem(event: SurfaceArtifact): CanonicalProgressItem | null {
+  const item = asRecord(event.raw.progress_item);
+  if (!Object.keys(item).length) return null;
+  return item as CanonicalProgressItem;
 }
 
 function assistantActivityText(event: SurfaceArtifact): string {
-  const eventType = eventTypeValue(event);
-  if (!eventType.includes('assistant_update') && !eventType.includes('turn_failed') && !eventType.includes('turn_interrupted')) {
+  const item = canonicalProgressItem(event);
+  const kind = stringValue(item?.kind);
+  if (!['assistant_update', 'notice', 'approval', 'turn_failed', 'turn_interrupted'].includes(kind)) {
     return '';
   }
-  const rawSummary = event.summary ?? '';
+  const rawSummary = stringValue(item?.summary) || event.summary || '';
   const summary = rawSummary.trim();
   if (summary && summary.toLowerCase() !== 'thinking') return rawSummary;
-  const title = event.title.trim();
+  const title = (stringValue(item?.title) || event.title).trim();
   if (title && title.toLowerCase() !== 'thinking' && title.toLowerCase() !== 'assistant update') return title;
   return summary || title;
 }
 
 function intermediateTitle(event: SurfaceArtifact): string {
-  const eventType = eventTypeValue(event);
-  if (eventType.includes('turn_failed')) return 'Run failed';
-  if (eventType.includes('turn_interrupted')) return 'Interrupted';
-  if (eventType.includes('assistant_update')) return 'Thinking';
-  const title = event.title.trim();
+  const item = canonicalProgressItem(event);
+  const kind = stringValue(item?.kind);
+  if (kind === 'turn_failed') return 'Run failed';
+  if (kind === 'turn_interrupted') return 'Interrupted';
+  if (kind === 'assistant_update') return 'Thinking';
+  const title = (stringValue(item?.title) || event.title).trim();
   if (title && title.toLowerCase() !== assistantActivityText(event).toLowerCase()) return title;
   return 'PMA update';
 }
 
 function shouldMergeIntermediate(card: Extract<PmaCard, { kind: 'intermediate' }>, event: SurfaceArtifact): boolean {
-  const eventType = eventTypeValue(event);
-  return card.title === 'Thinking' && eventType.includes('assistant_update');
+  return card.title === 'Thinking' && canonicalProgressItem(event)?.kind === 'assistant_update';
 }
 
 function mergeIntermediateText(current: string, incoming: string): string {
@@ -454,16 +466,13 @@ function mergeIntermediateText(current: string, incoming: string): string {
 }
 
 function toolDisplayTitle(event: SurfaceArtifact): string {
-  return stringValue(event.raw.tool_name) || event.summary || event.title || 'Tool call';
+  const item = canonicalProgressItem(event);
+  return stringValue(item?.tool_name) || stringValue(item?.title) || event.summary || event.title || 'Tool call';
 }
 
 function toolState(event: SurfaceArtifact): PmaToolCallCard['state'] {
-  const rawState = stringValue(event.raw.tool_state).toLowerCase();
+  const rawState = stringValue(canonicalProgressItem(event)?.state).toLowerCase();
   if (rawState === 'started' || rawState === 'completed' || rawState === 'failed') return rawState;
-  const eventType = eventTypeValue(event);
-  if (eventType.includes('tool_started')) return 'started';
-  if (eventType.includes('tool_completed')) return 'completed';
-  if (eventType.includes('tool_failed')) return 'failed';
   return 'unknown';
 }
 

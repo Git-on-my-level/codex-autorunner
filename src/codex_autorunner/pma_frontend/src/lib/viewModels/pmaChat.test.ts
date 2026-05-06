@@ -85,7 +85,13 @@ const baseProgress: PmaRunProgress = {
   idleSeconds: 2,
   lastEventId: 7,
   lastEventAt: '2026-05-04T00:00:30Z',
-  events: [{ ...baseArtifact, kind: 'progress', raw: { event_type: 'tool_completed' } }],
+  events: [
+    {
+      ...baseArtifact,
+      kind: 'progress',
+      raw: { progress_item: { kind: 'tool', state: 'completed', title: 'Frontend checks' } }
+    }
+  ],
   raw: {}
 };
 
@@ -165,7 +171,7 @@ describe('PMA chat view helpers', () => {
           id: 'token-usage',
           kind: 'progress',
           title: 'Token usage updated',
-          raw: { event_type: 'token_usage' }
+          raw: { progress_item: { kind: 'hidden', hidden: true, title: 'Token usage updated' } }
         },
         {
           ...baseArtifact,
@@ -173,7 +179,7 @@ describe('PMA chat view helpers', () => {
           kind: 'progress',
           title: 'Running tests',
           summary: 'pnpm test',
-          raw: { event_type: 'tool_started' }
+          raw: { progress_item: { kind: 'tool', state: 'started', title: 'Running tests', summary: 'pnpm test' } }
         }
       ]
     });
@@ -328,7 +334,7 @@ describe('PMA chat view helpers', () => {
           id: 'event-1',
           kind: 'progress',
           summary: 'First update.',
-          raw: { event_type: 'assistant_update' }
+          raw: { progress_item: { kind: 'assistant_update', state: 'running', title: 'Thinking', summary: 'First update.' } }
         }
       ],
       [
@@ -337,7 +343,7 @@ describe('PMA chat view helpers', () => {
           id: 'event-2',
           kind: 'progress',
           summary: 'Second update.',
-          raw: { event_type: 'assistant_update' }
+          raw: { progress_item: { kind: 'assistant_update', state: 'running', title: 'Thinking', summary: 'Second update.' } }
         }
       ]
     );
@@ -345,13 +351,13 @@ describe('PMA chat view helpers', () => {
     expect(merged.map((event) => event.id)).toEqual(['event-1', 'event-2']);
   });
 
-  it('keeps raw progress classifications deterministic', () => {
+  it('uses backend-owned progress item visibility for primary progress', () => {
     expect(
       isPrimaryProgressArtifact({
         ...baseArtifact,
         kind: 'progress',
         title: 'Token usage updated',
-        raw: { event_type: 'token_usage' }
+        raw: { progress_item: { kind: 'hidden', hidden: true, title: 'Token usage updated' } }
       })
     ).toBe(false);
     expect(
@@ -359,7 +365,7 @@ describe('PMA chat view helpers', () => {
         ...baseArtifact,
         kind: 'progress',
         title: 'status-check completed',
-        raw: { event_type: 'tool_completed' }
+        raw: { progress_item: { kind: 'tool', state: 'completed', title: 'status-check' } }
       })
     ).toBe(true);
   });
