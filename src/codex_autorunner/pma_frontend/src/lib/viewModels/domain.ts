@@ -57,6 +57,11 @@ export type PmaRunProgress = {
   id: string;
   chatId: string | null;
   status: WorkStatus;
+  workStatus: string | null;
+  operatorStatus: string | null;
+  terminal: boolean;
+  streamShouldClose: boolean;
+  streamCloseReason: string | null;
   phase: string | null;
   guidance: string | null;
   queueDepth: number;
@@ -262,6 +267,11 @@ export function mapPmaRunProgress(raw: JsonRecord): PmaRunProgress {
     id,
     chatId: nullableString(source.managed_thread_id ?? source.thread_id),
     status: normalizeStatus(source.turn_status ?? source.status ?? source.activity),
+    workStatus: nullableString(source.work_status),
+    operatorStatus: nullableString(source.operator_status),
+    terminal: source.terminal === true,
+    streamShouldClose: source.stream_should_close === true,
+    streamCloseReason: nullableString(source.stream_close_reason),
     phase: nullableString(source.phase),
     guidance: nullableString(source.guidance),
     queueDepth: numberOrNull(source.queue_depth) ?? 0,

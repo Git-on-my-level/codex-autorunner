@@ -266,24 +266,7 @@
   }
 
   function shouldEndStream(kind: 'state' | 'progress', value: PmaRunProgress): boolean {
-    return isTerminalProgress(value) || (kind === 'state' && isNonRunningState(value.raw));
-  }
-
-  function isTerminalProgress(value: PmaRunProgress): boolean {
-    return value.status === 'done' || value.status === 'failed' || isTerminalRawStatus(value.raw);
-  }
-
-  function isTerminalRawStatus(raw: JsonRecord): boolean {
-    const source = typeof raw.snapshot === 'object' && raw.snapshot ? raw.snapshot as JsonRecord : raw;
-    const status = String(source.turn_status ?? source.status ?? source.activity ?? '').trim().toLowerCase();
-    return ['ok', 'done', 'complete', 'completed', 'error', 'failed', 'interrupted'].includes(status);
-  }
-
-  function isNonRunningState(raw: JsonRecord): boolean {
-    const source = typeof raw.snapshot === 'object' && raw.snapshot ? raw.snapshot as JsonRecord : raw;
-    const status = String(source.turn_status ?? source.status ?? '').trim().toLowerCase();
-    const activity = String(source.activity ?? '').trim().toLowerCase();
-    return Boolean(status || activity) && status !== 'running' && activity !== 'running';
+    return value.streamShouldClose || (kind === 'progress' && value.terminal);
   }
 
   function scheduleActiveRefresh(chatId: string, delayMs = 600): void {

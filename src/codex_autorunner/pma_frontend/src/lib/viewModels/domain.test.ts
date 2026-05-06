@@ -65,6 +65,11 @@ describe('view model mappers', () => {
       managed_thread_id: 'thread-1',
       managed_turn_id: 'turn-1',
       turn_status: 'running',
+      work_status: 'running',
+      operator_status: 'running',
+      terminal: false,
+      stream_should_close: false,
+      stream_close_reason: null,
       phase: 'editing',
       queue_depth: 2,
       last_event_id: 7,
@@ -73,6 +78,9 @@ describe('view model mappers', () => {
 
     expect(vm.id).toBe('turn-1');
     expect(vm.status).toBe('running');
+    expect(vm.streamShouldClose).toBe(false);
+    expect(vm.terminal).toBe(false);
+    expect(vm.workStatus).toBe('running');
     expect(vm.queueDepth).toBe(2);
     expect(vm.events[0]).toMatchObject({
       id: '7',

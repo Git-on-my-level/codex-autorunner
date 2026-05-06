@@ -46,6 +46,18 @@ class TestManagedThreadStatusShape:
         assert "latest_assistant_text" in payload
         assert "latest_output_excerpt" in payload
         assert "stream_available" in payload
+        assert "work_status" in payload
+        assert "terminal" in payload
+        assert "stream_should_close" in payload
+        assert "stream_close_reason" in payload
+        assert payload["stream_lifecycle"] == {
+            "work_status": payload["work_status"],
+            "operator_status": payload["operator_status"],
+            "terminal": payload["terminal"],
+            "stream_should_close": payload["stream_should_close"],
+            "stream_close_reason": payload["stream_close_reason"],
+            "stream_available": payload["stream_available"],
+        }
         assert "active_turn_diagnostics" in payload
 
         turn = payload["turn"]
@@ -195,6 +207,18 @@ class TestManagedThreadTailShape:
         assert "events" in payload
         assert "last_event_id" in payload
         assert "lifecycle_events" in payload
+        assert payload["work_status"] == "idle"
+        assert payload["terminal"] is False
+        assert payload["stream_should_close"] is True
+        assert payload["stream_close_reason"] == "no_running_turn"
+        assert payload["stream_lifecycle"] == {
+            "work_status": payload["work_status"],
+            "operator_status": payload["operator_status"],
+            "terminal": payload["terminal"],
+            "stream_should_close": payload["stream_should_close"],
+            "stream_close_reason": payload["stream_close_reason"],
+            "stream_available": payload["stream_available"],
+        }
 
     def test_tail_endpoint_returns_404_for_missing_thread(self, hub_env) -> None:
         _enable_pma(hub_env.hub_root)

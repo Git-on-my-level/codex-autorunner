@@ -10,6 +10,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from .....core.managed_thread_status import derive_managed_thread_operator_status
 from .....core.orchestration.runtime_thread_events import (
     RuntimeThreadRunEventState,
     normalize_runtime_thread_raw_event,
@@ -469,6 +470,100 @@ def _derive_progress_phase(
     )
 
 
+_TURN_STATUS_ALIASES = {
+    "active": "running",
+    "in_progress": "running",
+    "progress": "running",
+    "pending": "queued",
+    "done": "ok",
+    "complete": "ok",
+    "completed": "ok",
+    "errored": "error",
+    "cancelled": "interrupted",
+    "canceled": "interrupted",
+    "interrupt": "interrupted",
+    "aborted": "interrupted",
+}
+_TERMINAL_TURN_STATUSES = {"ok", "error", "failed", "interrupted"}
+
+
+def _normalize_turn_lifecycle_status(value: Any) -> str | None:
+    text = normalize_optional_text(value)
+    if text is None:
+        return None
+    lowered = text.lower()
+    return _TURN_STATUS_ALIASES.get(lowered, lowered)
+
+
+def build_managed_thread_stream_lifecycle(
+    *,
+    managed_turn_id: Any,
+    turn_status: Any,
+    thread_status: Any,
+    lifecycle_status: Any,
+    operator_status: Any = None,
+    stream_available: bool,
+    queue_depth: int = 0,
+) -> dict[str, Any]:
+    """Project normalized managed-thread status into the PMA stream contract."""
+
+    normalized_turn_status = _normalize_turn_lifecycle_status(turn_status)
+    normalized_thread_status = normalize_optional_text(thread_status)
+    if normalized_thread_status is not None:
+        normalized_thread_status = normalized_thread_status.lower()
+    normalized_lifecycle_status = normalize_optional_text(lifecycle_status)
+    if normalized_lifecycle_status is not None:
+        normalized_lifecycle_status = normalized_lifecycle_status.lower()
+    resolved_operator_status = normalize_optional_text(operator_status)
+    if resolved_operator_status is None:
+        resolved_operator_status = derive_managed_thread_operator_status(
+            normalized_status=normalized_thread_status,
+            lifecycle_status=normalized_lifecycle_status,
+        )
+
+    has_turn = normalize_optional_text(managed_turn_id) is not None
+    has_queue = int(queue_depth or 0) > 0
+    turn_is_active = normalized_turn_status in {"running", "queued"}
+    terminal = normalized_turn_status in _TERMINAL_TURN_STATUSES or bool(
+        not turn_is_active
+        and normalized_thread_status
+        in {"completed", "failed", "interrupted", "archived"}
+        and not has_queue
+    )
+
+    if normalized_turn_status in {"running", "queued"}:
+        work_status = normalized_turn_status
+    elif normalized_turn_status in _TERMINAL_TURN_STATUSES:
+        work_status = normalized_turn_status
+    elif has_queue:
+        work_status = "queued"
+    elif normalized_thread_status in {"running", "completed", "failed", "interrupted"}:
+        work_status = normalized_thread_status
+    else:
+        work_status = "idle"
+
+    stream_should_close = False
+    stream_close_reason: str | None = None
+    if terminal:
+        stream_should_close = True
+        stream_close_reason = f"terminal:{work_status}"
+    elif not has_turn:
+        stream_should_close = True
+        stream_close_reason = "no_running_turn"
+    elif normalized_turn_status == "queued":
+        stream_should_close = True
+        stream_close_reason = "queued"
+
+    return {
+        "work_status": work_status,
+        "operator_status": resolved_operator_status,
+        "terminal": terminal,
+        "stream_should_close": stream_should_close,
+        "stream_close_reason": stream_close_reason,
+        "stream_available": bool(stream_available),
+    }
+
+
 def _redacted_prompt_preview(value: Any) -> str:
     text = str(value or "")
     if not text:
@@ -733,6 +828,15 @@ def build_managed_thread_status_response(
     queue_depth: int,
 ) -> dict[str, Any]:
     turn_status = str(snapshot.get("turn_status") or "")
+    lifecycle = build_managed_thread_stream_lifecycle(
+        managed_turn_id=snapshot.get("managed_turn_id"),
+        turn_status=snapshot.get("turn_status"),
+        thread_status=serialized_thread.get("status"),
+        lifecycle_status=serialized_thread.get("lifecycle_status"),
+        operator_status=serialized_thread.get("operator_status"),
+        stream_available=bool(snapshot.get("stream_available")),
+        queue_depth=queue_depth,
+    )
     return {
         "managed_thread_id": managed_thread_id,
         "thread": serialized_thread,
@@ -741,7 +845,7 @@ def build_managed_thread_status_response(
             and turn_status == "running"
         ),
         "status": str(serialized_thread.get("status") or ""),
-        "operator_status": str(serialized_thread.get("operator_status") or ""),
+        "operator_status": lifecycle["operator_status"],
         "is_reusable": bool(serialized_thread.get("is_reusable")),
         "status_reason": normalize_optional_text(serialized_thread.get("status_reason"))
         or "",
@@ -780,12 +884,18 @@ def build_managed_thread_status_response(
         "latest_assistant_text": serialized_thread.get("latest_assistant_text"),
         "latest_output_excerpt": serialized_thread.get("latest_output_excerpt"),
         "stream_available": bool(snapshot.get("stream_available")),
+        "work_status": lifecycle["work_status"],
+        "terminal": lifecycle["terminal"],
+        "stream_should_close": lifecycle["stream_should_close"],
+        "stream_close_reason": lifecycle["stream_close_reason"],
+        "stream_lifecycle": lifecycle,
         "active_turn_diagnostics": snapshot.get("active_turn_diagnostics"),
     }
 
 
 __all__ = [
     "build_managed_thread_status_response",
+    "build_managed_thread_stream_lifecycle",
     "coerce_dict",
     "iso_from_event_ms",
     "parse_iso_datetime",

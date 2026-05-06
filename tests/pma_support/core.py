@@ -2455,12 +2455,20 @@ def test_pma_managed_thread_status_and_tail_use_orchestration_service(
         status_payload["latest_output_excerpt"] == "assistant output from orchestration"
     )
     assert status_payload["stream_available"] is False
+    assert status_payload["work_status"] == "ok"
+    assert status_payload["terminal"] is True
+    assert status_payload["stream_should_close"] is True
+    assert status_payload["stream_close_reason"] == "terminal:ok"
 
     tail_payload = tail_resp.json()
     assert tail_payload["managed_thread_id"] == "thread-1"
     assert tail_payload["managed_turn_id"] == "turn-1"
     assert tail_payload["turn_status"] == "ok"
     assert tail_payload["backend_turn_id"] == "backend-turn-1"
+    assert tail_payload["work_status"] == "ok"
+    assert tail_payload["terminal"] is True
+    assert tail_payload["stream_should_close"] is True
+    assert tail_payload["stream_close_reason"] == "terminal:ok"
 
     assert fake_service.calls[:4] == [
         ("get_thread_target", "thread-1"),
