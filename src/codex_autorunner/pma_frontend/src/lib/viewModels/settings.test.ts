@@ -2,6 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { buildSessionUpdatePayload, buildSettingsViewModel } from './settings';
 
 describe('settings view model', () => {
+  const projection = (agent_id: string, allowed: boolean, reason: string | null = null) => ({
+    agent_id,
+    actions: {
+      list_models: { allowed, missing_capabilities: allowed ? [] : ['model_listing'], reason }
+    }
+  });
+
   it('groups settings sections around wired status and unavailable sensitive controls', () => {
     const view = buildSettingsViewModel({
       session: {
@@ -11,8 +18,13 @@ describe('settings view model', () => {
         autorunner_sandbox_mode: 'dangerFullAccess'
       },
       agents: [
-        { id: 'hermes', name: 'Hermes', capabilities: ['durable_threads', 'model_listing'] },
-        { id: 'codex', name: 'Codex', capabilities: ['message_turns'] }
+        { id: 'hermes', name: 'Hermes', capabilities: ['durable_threads', 'model_listing'], capability_projection: projection('hermes', true) },
+        {
+          id: 'codex',
+          name: 'Codex',
+          capabilities: ['message_turns'],
+          capability_projection: projection('codex', false, 'Cannot list models; missing capability: model_listing')
+        }
       ],
       modelCatalogs: {
         hermes: [{ id: 'gpt-5.4' }]

@@ -163,7 +163,11 @@ def test_list_agents_returns_capabilities() -> None:
         assert "id" in agent
         assert "name" in agent
         assert "capabilities" in agent
+        assert "capability_projection" in agent
         assert isinstance(agent["capabilities"], list)
+        assert agent["capability_projection"]["actions"]["list_models"]["allowed"] == (
+            "model_listing" in agent["capabilities"]
+        )
 
 
 def test_list_agents_includes_expected_capabilities() -> None:

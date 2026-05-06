@@ -92,7 +92,7 @@ async def interrupt_managed_thread_via_orchestration(
     notify_transition: Any,
 ) -> dict[str, Any]:
     from .....agents.registry import get_available_agents
-    from .....core.orchestration.catalog import map_agent_capabilities
+    from .....core.agent_capability_projection import project_thread_capabilities
 
     hub_root = request.app.state.config.root
     store = PmaThreadStore(hub_root)
@@ -105,13 +105,18 @@ async def interrupt_managed_thread_via_orchestration(
         available = get_available_agents(request.app.state)
         descriptor = available.get(agent)
         if descriptor is not None:
-            capabilities = map_agent_capabilities(descriptor.capabilities)
-            if "interrupt" not in capabilities:
+            gate = project_thread_capabilities(
+                thread_id=managed_thread_id,
+                agent_id=agent,
+                capabilities=descriptor.capabilities,
+                has_running_turn=True,
+            ).gate("interrupt_thread")
+            if not gate.allowed:
                 raise HTTPException(
                     status_code=403,
                     detail=(
-                        f"Agent '{agent}' does not support interrupt "
-                        "(missing capability: interrupt)"
+                        f"Agent '{agent}' does not support interrupt"
+                        + (f" ({gate.reason})" if gate.reason else "")
                     ),
                 )
 

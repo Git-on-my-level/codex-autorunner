@@ -5,6 +5,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 
 from .....agents.registry import get_agent_descriptor, get_available_agents
+from .....core.agent_capability_projection import project_agent_capabilities
 from .....core.orchestration.catalog import map_agent_capabilities
 from ...services.pma import get_pma_request_context
 from ..agents import (
@@ -44,6 +45,10 @@ def build_pma_meta_routes(
             "name": descriptor.name,
             "capabilities": sorted(map_agent_capabilities(descriptor.capabilities)),
         }
+        agent_payload["capability_projection"] = project_agent_capabilities(
+            descriptor.id,
+            agent_payload["capabilities"],
+        ).to_dict()
         agent_profiles = _serialize_agent_profiles(request, "hermes")
         if agent_profiles.get("profiles") or agent_profiles.get("default_profile"):
             agent_payload.update(agent_profiles)
@@ -203,10 +208,17 @@ def build_pma_meta_routes(
         descriptor = get_agent_descriptor(agent_id, context.agent_context)
         if descriptor is None:
             raise HTTPException(status_code=404, detail="Unknown agent")
-        if "model_listing" not in descriptor.capabilities:
+        model_gate = project_agent_capabilities(
+            agent_id,
+            descriptor.capabilities,
+        ).gate("list_models")
+        if not model_gate.allowed:
             raise HTTPException(
                 status_code=400,
-                detail=f"Agent '{agent_id}' does not support capability 'model_listing'",
+                detail=(
+                    f"Agent '{agent_id}' does not support capability 'model_listing'"
+                    + (f" ({model_gate.reason})" if model_gate.reason else "")
+                ),
             )
         try:
             harness = descriptor.make_harness(context.agent_context)

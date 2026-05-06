@@ -100,3 +100,8 @@ def test_pma_thread_action_manifest_route_shape(monkeypatch) -> None:
     assert interrupt["action_id"] == "managed_thread.interrupt"
     assert interrupt["enabled"] is True
     assert interrupt["command_id"] == "car.interrupt"
+    assert payload["capability_projection"]["actions"]["interrupt_thread"] == {
+        "allowed": True,
+        "missing_capabilities": [],
+        "reason": None,
+    }

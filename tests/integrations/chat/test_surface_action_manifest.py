@@ -103,4 +103,8 @@ def test_manifest_disables_unsupported_capabilities() -> None:
 
     start = _action(manifest, "ticket_flow.start")
     assert start.enabled is False
-    assert start.disabled_reason == "Unsupported capability: ticket_flow"
+    assert start.missing_capabilities == ("ticket_flow",)
+    assert (
+        start.disabled_reason
+        == "Cannot car.flow.start; missing capability: ticket_flow"
+    )

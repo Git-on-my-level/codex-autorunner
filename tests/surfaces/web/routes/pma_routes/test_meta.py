@@ -70,6 +70,9 @@ def test_pma_agents_includes_hermes_when_available(monkeypatch) -> None:
         assert "interrupt" in hermes_caps
         assert "event_streaming" in hermes_caps
         assert "model_listing" not in hermes_caps
+        assert agents["hermes"]["capability_projection"]["actions"]["list_models"][
+            "missing_capabilities"
+        ] == ["model_listing"]
 
 
 def test_pma_models_endpoint_returns_capability_error_for_hermes(monkeypatch) -> None:

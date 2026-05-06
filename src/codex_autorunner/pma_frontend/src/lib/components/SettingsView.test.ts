@@ -3,6 +3,13 @@ import { describe, expect, it } from 'vitest';
 import SettingsView from './SettingsView.svelte';
 import { buildSettingsViewModel, type SettingsSensitiveAction } from '$lib/viewModels/settings';
 
+const projection = (agent_id: string, allowed: boolean, reason: string | null = null) => ({
+  agent_id,
+  actions: {
+    list_models: { allowed, missing_capabilities: allowed ? [] : ['model_listing'], reason }
+  }
+});
+
 const view = buildSettingsViewModel({
   session: {
     autorunner_model_override: 'gpt-5.4',
@@ -11,8 +18,13 @@ const view = buildSettingsViewModel({
     autorunner_sandbox_mode: 'dangerFullAccess'
   },
   agents: [
-    { id: 'hermes', name: 'Hermes', capabilities: ['durable_threads', 'model_listing'] },
-    { id: 'codex', name: 'Codex', capabilities: ['message_turns'] }
+    { id: 'hermes', name: 'Hermes', capabilities: ['durable_threads', 'model_listing'], capability_projection: projection('hermes', true) },
+    {
+      id: 'codex',
+      name: 'Codex',
+      capabilities: ['message_turns'],
+      capability_projection: projection('codex', false, 'Model listing unsupported')
+    }
   ],
   modelCatalogs: {
     hermes: [{ id: 'gpt-5.4' }]

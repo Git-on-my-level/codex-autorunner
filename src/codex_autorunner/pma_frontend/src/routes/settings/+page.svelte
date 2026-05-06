@@ -45,8 +45,7 @@
     await Promise.all(
       agentRows.map(async (agent) => {
         const agentId = stringField(agent, 'id');
-        const capabilities = arrayField(agent, 'capabilities');
-        if (!agentId || !capabilities.includes('model_listing')) return;
+        if (!agentId || !capabilityAllowed(agent, 'list_models')) return;
         const result = await pmaApi.pma.listAgentModels(agentId);
         modelCatalogs[agentId] = result.ok ? result.data : null;
       })
@@ -108,9 +107,13 @@
     return typeof value === 'string' && value.trim() ? value : null;
   }
 
-  function arrayField(record: JsonRecord, key: string): string[] {
-    const value = record[key];
-    return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+  function capabilityAllowed(record: JsonRecord, action: string): boolean {
+    const projection = record.capability_projection;
+    if (!projection || typeof projection !== 'object') return false;
+    const actions = (projection as JsonRecord).actions;
+    if (!actions || typeof actions !== 'object') return false;
+    const result = (actions as JsonRecord)[action];
+    return Boolean(result && typeof result === 'object' && (result as JsonRecord).allowed === true);
   }
 </script>
 

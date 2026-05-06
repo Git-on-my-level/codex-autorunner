@@ -5,6 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal, Optional
 
+from ...core.agent_capability_projection import (
+    CapabilityGateResult,
+    build_capability_gate,
+    project_thread_capabilities,
+)
 from ...core.flows import FlowActionPolicySnapshot, build_flow_action_policy
 from .action_ux_contract import (
     ChatActionUxContractEntry,
@@ -54,6 +59,7 @@ class SurfaceActionManifestAction:
     method: str
     route: str
     payload_schema: dict[str, Any]
+    missing_capabilities: tuple[str, ...] = ()
     command_id: Optional[str] = None
     ux_contract_id: Optional[str] = None
 
@@ -64,6 +70,7 @@ class SurfaceActionManifestAction:
             "description": self.description,
             "enabled": self.enabled,
             "disabled_reason": self.disabled_reason,
+            "missing_capabilities": list(self.missing_capabilities),
             "requires_confirmation": self.requires_confirmation,
             "priority": self.priority,
             "tone": self.tone,
@@ -171,7 +178,7 @@ def _ticket_flow_actions(
         ux = (
             discord_slash_command_ux_contract_for_id(command_id) if command_id else None
         )
-        enabled, disabled_reason = _apply_capabilities(
+        gate = _apply_capabilities(
             descriptor.enabled,
             descriptor.disabled_reason,
             command,
@@ -184,8 +191,9 @@ def _ticket_flow_actions(
                 description=_FLOW_DESCRIPTIONS.get(
                     descriptor.action, f"{descriptor.label}."
                 ),
-                enabled=enabled,
-                disabled_reason=disabled_reason,
+                enabled=gate.allowed,
+                disabled_reason=gate.reason,
+                missing_capabilities=gate.missing_capabilities,
                 requires_confirmation=descriptor.requires_confirmation,
                 priority=_priority_for_ux(ux),
                 tone=descriptor.tone,
@@ -203,24 +211,28 @@ def _managed_thread_actions(
     context: SurfaceActionManifestContext,
 ) -> list[SurfaceActionManifestAction]:
     is_running = (context.lifecycle_state or "").strip().lower() == "running"
-    command = _command_contract_for_id("car.interrupt")
     ux = discord_slash_command_ux_contract_for_id("car.interrupt")
-    enabled, disabled_reason = _apply_capabilities(
-        is_running,
-        None if is_running else "Managed thread has no active turn",
-        command,
-        context.capabilities,
+    projection = project_thread_capabilities(
+        thread_id=context.thread_id,
+        agent_id="",
+        capabilities=context.capabilities,
+        has_running_turn=is_running,
     )
+    gate = projection.gate("interrupt_thread")
     if context.thread_id is None:
-        enabled = False
-        disabled_reason = "Managed thread id is required"
+        gate = CapabilityGateResult(
+            allowed=False,
+            missing_capabilities=gate.missing_capabilities,
+            reason="Managed thread id is required",
+        )
     return [
         SurfaceActionManifestAction(
             action_id="managed_thread.interrupt",
             label="Interrupt",
             description="Interrupt the active managed-thread turn.",
-            enabled=enabled,
-            disabled_reason=disabled_reason,
+            enabled=gate.allowed,
+            disabled_reason=gate.reason,
+            missing_capabilities=gate.missing_capabilities,
             requires_confirmation=True,
             priority=_priority_for_ux(ux),
             tone="danger",
@@ -278,12 +290,14 @@ def _apply_capabilities(
     disabled_reason: Optional[str],
     command: Optional[CommandContractEntry],
     capabilities: frozenset[str],
-) -> tuple[bool, Optional[str]]:
+) -> CapabilityGateResult:
     required = command.required_capabilities if command else ()
-    missing = [capability for capability in required if capability not in capabilities]
-    if missing:
-        return False, f"Unsupported capability: {', '.join(missing)}"
-    return enabled, disabled_reason
+    return build_capability_gate(
+        capabilities=capabilities,
+        required_capabilities=required,
+        action_label=command.id if command else "use this action",
+        unavailable_reason=None if enabled else disabled_reason,
+    )
 
 
 def _priority_for_ux(ux: Optional[ChatActionUxContractEntry]) -> str:

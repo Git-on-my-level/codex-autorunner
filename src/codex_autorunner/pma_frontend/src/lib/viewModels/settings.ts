@@ -214,8 +214,8 @@ function mapAgentStatus(agent: JsonRecord, modelCatalogs: Record<string, JsonRec
   const id = stringValue(agent.id) || 'agent';
   const capabilities = stringArray(agent.capabilities);
   const models = modelCatalogs[id] ?? null;
-  const supportsModelListing = capabilities.includes('model_listing');
-  const modelStatus = supportsModelListing ? (models ? 'available' : 'unavailable') : 'unsupported';
+  const modelGate = capabilityGate(agent, 'list_models');
+  const modelStatus = modelGate.allowed ? (models ? 'available' : 'unavailable') : 'unsupported';
   const modelCount = models?.length ?? 0;
   return {
     id,
@@ -228,9 +228,19 @@ function mapAgentStatus(agent: JsonRecord, modelCatalogs: Record<string, JsonRec
       modelStatus === 'available'
         ? `${modelCount} models`
         : modelStatus === 'unsupported'
-          ? 'Model listing unsupported'
+          ? modelGate.reason || 'Model listing unsupported'
           : 'Model listing unavailable',
     providerLabel: providerLabel(agent)
+  };
+}
+
+function capabilityGate(agent: JsonRecord, action: string): { allowed: boolean; reason: string | null } {
+  const projection = recordValue(agent.capability_projection);
+  const actions = recordValue(projection.actions);
+  const gate = recordValue(actions[action]);
+  return {
+    allowed: gate.allowed === true,
+    reason: stringValue(gate.reason) || null
   };
 }
 
@@ -265,6 +275,10 @@ function numberString(value: unknown): string {
 
 function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0) : [];
+}
+
+function recordValue(value: unknown): JsonRecord {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as JsonRecord) : {};
 }
 
 function blankToNull(value: string): string | null {

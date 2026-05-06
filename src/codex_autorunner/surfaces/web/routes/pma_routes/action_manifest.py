@@ -5,6 +5,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 
 from .....agents.registry import get_available_agents
+from .....core.agent_capability_projection import project_thread_capabilities
 from .....core.orchestration.catalog import map_agent_capabilities
 from .....integrations.chat.surface_action_manifest import (
     SurfaceActionManifestContext,
@@ -13,8 +14,12 @@ from .....integrations.chat.surface_action_manifest import (
 from ...services.pma import get_pma_request_context
 
 
+def _thread_agent_id(thread: dict[str, Any]) -> str:
+    return str(thread.get("agent") or thread.get("agent_id") or "").strip().lower()
+
+
 def _thread_capabilities(request: Request, thread: dict[str, Any]) -> frozenset[str]:
-    agent = str(thread.get("agent") or thread.get("agent_id") or "").strip().lower()
+    agent = _thread_agent_id(thread)
     if not agent:
         return frozenset()
     descriptor = get_available_agents(request.app.state).get(agent)
@@ -34,6 +39,13 @@ def build_action_manifest_routes(router: APIRouter) -> None:
             raise HTTPException(status_code=404, detail="Managed thread not found")
         running_turn = store.get_running_turn(managed_thread_id)
         lifecycle_state = "running" if running_turn is not None else "idle"
+        capabilities = _thread_capabilities(request, thread)
+        capability_projection = project_thread_capabilities(
+            thread_id=managed_thread_id,
+            agent_id=_thread_agent_id(thread),
+            capabilities=capabilities,
+            has_running_turn=running_turn is not None,
+        )
         manifest = build_surface_action_manifest(
             SurfaceActionManifestContext(
                 surface_kind="web",
@@ -44,10 +56,12 @@ def build_action_manifest_routes(router: APIRouter) -> None:
                 resource_kind=str(thread.get("resource_kind") or "") or None,
                 resource_id=str(thread.get("resource_id") or "") or None,
                 lifecycle_state=lifecycle_state,
-                capabilities=_thread_capabilities(request, thread),
+                capabilities=capabilities,
             )
         )
-        return manifest.to_dict()
+        payload = manifest.to_dict()
+        payload["capability_projection"] = capability_projection.to_dict()
+        return payload
 
 
 __all__ = ["build_action_manifest_routes"]
