@@ -12,6 +12,12 @@ import httpx
 from ...core.config import ConfigError, load_repo_config
 from ...core.flows import FlowStore
 from ...core.flows.archive_helpers import flow_run_archive_root
+from ..chat.outbox_kernel import (
+    ChatOutboxKernel,
+    OutboxAttemptResult,
+    coalesce_latest_records,
+    parse_next_attempt_at,
+)
 from .rendering import DISCORD_MAX_MESSAGE_LENGTH, chunk_discord_message
 from .state import ChannelBinding, DiscordStateStore, OutboxRecord
 
@@ -29,14 +35,7 @@ DeliveredCallback = Callable[[OutboxRecord, Optional[str]], Awaitable[None]]
 
 
 def _parse_next_attempt_at(next_at_str: Optional[str]) -> Optional[datetime]:
-    if not isinstance(next_at_str, str) or not next_at_str:
-        return None
-    try:
-        return datetime.strptime(next_at_str, "%Y-%m-%dT%H:%M:%SZ").replace(
-            tzinfo=timezone.utc
-        )
-    except (TypeError, ValueError):
-        return None
+    return parse_next_attempt_at(next_at_str)
 
 
 def _extract_retry_after_seconds(exc: Exception) -> Optional[float]:
@@ -57,33 +56,12 @@ def _extract_retry_after_seconds(exc: Exception) -> Optional[float]:
 
 
 def _coalesce_latest_records(records: list[OutboxRecord]) -> list[OutboxRecord]:
-    if not records:
-        return []
-
-    operation_id_groups: dict[str, OutboxRecord] = {}
-    ungrouped: list[OutboxRecord] = []
-
-    for record in records:
-        if record.operation_id is not None:
-            key = record.operation_id
-            existing = operation_id_groups.get(key)
-            if existing is None or record.created_at >= existing.created_at:
-                operation_id_groups[key] = record
-        else:
-            ungrouped.append(record)
-
-    coalesced: list[OutboxRecord] = []
-    seen_ids: set[str] = set()
-    for record in operation_id_groups.values():
-        if record.record_id not in seen_ids:
-            coalesced.append(record)
-            seen_ids.add(record.record_id)
-    for record in ungrouped:
-        if record.record_id not in seen_ids:
-            coalesced.append(record)
-            seen_ids.add(record.record_id)
-
-    return coalesced
+    return coalesce_latest_records(
+        records,
+        coalesce_key=lambda record: (
+            f"op:{record.operation_id}" if record.operation_id is not None else None
+        ),
+    )
 
 
 def _discord_chunk_start_index(payload_json: dict[str, Any]) -> int:
@@ -166,12 +144,27 @@ class DiscordOutboxManager:
         self._immediate_retry_delays = immediate_retry_delays
         self._now = now_fn or (lambda: datetime.now(timezone.utc))
         self._sleep = sleep_fn
-        self._inflight: set[str] = set()
-        self._lock: Optional[asyncio.Lock] = None
+        self._kernel: ChatOutboxKernel[OutboxRecord, str] = ChatOutboxKernel(
+            store,
+            deliver=self._deliver_record,
+            cleanup_delivered=self._mark_records_delivered,
+            drop_exhausted=self._drop_exhausted,
+            coalesce_key=lambda record: (
+                f"op:{record.operation_id}" if record.operation_id is not None else None
+            ),
+            inflight_key=self._inflight_key,
+            logger=logger,
+            max_attempts=self._max_attempts,
+            immediate_retry_delays=self._immediate_retry_delays,
+            now_fn=self._now,
+            sleep_fn=self._sleep,
+            on_delivered=on_delivered,
+            before_attempt=self._drop_stale_terminal_notification,
+            callback_failed_event="discord.outbox.delivery_callback_failed",
+        )
 
     def start(self) -> None:
-        self._inflight = set()
-        self._lock = asyncio.Lock()
+        self._kernel.start()
 
     async def run_loop(self) -> None:
         while True:
@@ -188,79 +181,15 @@ class DiscordOutboxManager:
                 self._logger.warning("discord.outbox.flush_failed: %s", exc)
 
     async def send_with_outbox(self, record: OutboxRecord) -> bool:
-        await self._store.enqueue_outbox(record)
-        immediate_delays_iter = iter(self._immediate_retry_delays)
-        while True:
-            current = await self._store.get_outbox(record.record_id)
-            if current is None:
-                return False
-            if current.attempts >= self._max_attempts:
-                await self._drop_exhausted(current)
-                return False
-
-            next_at = _parse_next_attempt_at(current.next_attempt_at)
-            if next_at is not None:
-                sleep_duration = (next_at - self._now()).total_seconds()
-                if sleep_duration > 0.01:
-                    await self._sleep(sleep_duration)
-
-            if await self._attempt_send(current):
-                return True
-
-            current = await self._store.get_outbox(record.record_id)
-            if current is None:
-                return False
-            if current.attempts >= self._max_attempts:
-                await self._drop_exhausted(current)
-                return False
-
-            next_at = _parse_next_attempt_at(current.next_attempt_at)
-            if next_at is not None:
-                continue
-
-            try:
-                delay = next(immediate_delays_iter)
-            except StopIteration:
-                return False
-            if delay > 0:
-                await self._sleep(delay)
+        return await self._kernel.enqueue_and_retry(record)
 
     async def _flush(self, records: list[OutboxRecord]) -> None:
-        now = self._now()
-        pending: list[OutboxRecord] = []
-        exhausted: list[OutboxRecord] = []
-        for record in records:
-            if record.attempts >= self._max_attempts:
-                exhausted.append(record)
-                continue
-            pending.append(record)
-
-        for record in exhausted:
-            await self._drop_exhausted(record)
-
-        coalesced = _coalesce_latest_records(pending)
-        for record in coalesced:
-            next_at = _parse_next_attempt_at(record.next_attempt_at)
-            if next_at is not None and now < next_at:
-                continue
-            await self._attempt_send(record)
+        await self._kernel.flush(records)
 
     async def _attempt_send(self, record: OutboxRecord) -> bool:
-        current = await self._store.get_outbox(record.record_id)
-        if current is None:
-            return False
-        if current.attempts >= self._max_attempts:
-            await self._drop_exhausted(current)
-            return False
-        if await self._should_drop_terminal_notification(current):
-            await self._store.mark_outbox_delivered(current.record_id)
-            self._logger.info(
-                "discord.outbox.dropped_stale_terminal record_id=%s",
-                current.record_id,
-            )
-            return False
-        if not await self._mark_inflight(self._inflight_key(current)):
-            return False
+        return await self._kernel.attempt_send(record)
+
+    async def _deliver_record(self, current: OutboxRecord) -> OutboxAttemptResult[str]:
         try:
             delivered_message_id: Optional[str] = None
             failure_payload_json = current.payload_json
@@ -328,7 +257,7 @@ class DiscordOutboxManager:
                         ),
                         retry_after_seconds=None,
                     )
-                    return False
+                    return OutboxAttemptResult(delivered=False)
                 await self._delete_message(current.channel_id, current.message_id)
             elif current.operation == "edit":
                 if (
@@ -344,7 +273,7 @@ class DiscordOutboxManager:
                         ),
                         retry_after_seconds=None,
                     )
-                    return False
+                    return OutboxAttemptResult(delivered=False)
                 await self._edit_message(
                     current.channel_id,
                     current.message_id,
@@ -356,7 +285,7 @@ class DiscordOutboxManager:
                     error=f"Unsupported Discord outbox operation: {current.operation}",
                     retry_after_seconds=None,
                 )
-                return False
+                return OutboxAttemptResult(delivered=False)
         except Exception as exc:  # retry boundary
             retry_after = _extract_retry_after_seconds(exc)
             await self._store.record_outbox_failure(
@@ -372,21 +301,18 @@ class DiscordOutboxManager:
                 retry_after,
                 exc,
             )
-            return False
-        finally:
-            await self._clear_inflight(self._inflight_key(current))
-
-        if self._on_delivered is not None:
-            try:
-                await self._on_delivered(current, delivered_message_id)
-            except Exception:  # callback must not disrupt delivery
-                self._logger.warning(
-                    "discord.outbox.delivery_callback_failed record_id=%s",
-                    current.record_id,
-                    exc_info=True,
-                )
-        await self._mark_records_delivered(current)
+            return OutboxAttemptResult(delivered=False)
         self._logger.info("discord.outbox.delivered record_id=%s", current.record_id)
+        return OutboxAttemptResult(delivered=True, delivered_id=delivered_message_id)
+
+    async def _drop_stale_terminal_notification(self, record: OutboxRecord) -> bool:
+        if not await self._should_drop_terminal_notification(record):
+            return False
+        await self._store.mark_outbox_delivered(record.record_id)
+        self._logger.info(
+            "discord.outbox.dropped_stale_terminal record_id=%s",
+            record.record_id,
+        )
         return True
 
     async def _drop_exhausted(self, record: OutboxRecord) -> None:
@@ -447,21 +373,6 @@ class DiscordOutboxManager:
                 return store.get_flow_run(run_id) is None
         except (sqlite3.Error, OSError):
             return False
-
-    async def _mark_inflight(self, key: str) -> bool:
-        if self._lock is None:
-            self._lock = asyncio.Lock()
-        async with self._lock:
-            if key in self._inflight:
-                return False
-            self._inflight.add(key)
-            return True
-
-    async def _clear_inflight(self, key: str) -> None:
-        if self._lock is None:
-            return
-        async with self._lock:
-            self._inflight.discard(key)
 
     def _inflight_key(self, record: OutboxRecord) -> str:
         if record.operation_id is not None:

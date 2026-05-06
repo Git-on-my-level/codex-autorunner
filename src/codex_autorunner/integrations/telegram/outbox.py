@@ -10,6 +10,12 @@ from typing import Any, Awaitable, Callable, Optional
 from ...core.logging_utils import log_event
 from ...core.request_context import reset_conversation_id, set_conversation_id
 from ...core.state import now_iso
+from ..chat.outbox_kernel import (
+    ChatOutboxKernel,
+    OutboxAttemptResult,
+    coalesce_latest_records,
+    parse_next_attempt_at,
+)
 from .adapter import TelegramAPIError
 from .constants import (
     OUTBOX_IMMEDIATE_RETRY_DELAYS,
@@ -59,43 +65,22 @@ def _should_delete_placeholder_on_delivery(record: OutboxRecord) -> bool:
 
 
 def _parse_next_attempt_at(next_at_str: Optional[str]) -> Optional[datetime]:
-    if not next_at_str:
-        return None
-    try:
-        return datetime.strptime(next_at_str, "%Y-%m-%dT%H:%M:%SZ").replace(
-            tzinfo=timezone.utc
-        )
-    except (ValueError, TypeError):
-        return None
+    return parse_next_attempt_at(next_at_str)
 
 
 def _coalesce_telegram_latest_records(
     records: list[OutboxRecord],
 ) -> dict[str, OutboxRecord]:
-    if not records:
-        return {}
+    return {
+        _coalesce_key(record) or f"_unkeyed:{record.record_id}": record
+        for record in coalesce_latest_records(records, coalesce_key=_coalesce_key)
+    }
 
-    coalesced: dict[str, OutboxRecord] = {}
-    unkeyed: list[OutboxRecord] = []
 
-    for record in records:
-        if record.operation_id is not None:
-            op_key = f"op:{record.operation_id}"
-            existing = coalesced.get(op_key)
-            if existing is None or record.created_at >= existing.created_at:
-                coalesced[op_key] = record
-        elif record.outbox_key is not None:
-            existing = coalesced.get(record.outbox_key)
-            if existing is None or record.created_at >= existing.created_at:
-                coalesced[record.outbox_key] = record
-        else:
-            unkeyed.append(record)
-
-    for record in unkeyed:
-        unique_key = f"_unkeyed:{record.record_id}"
-        coalesced[unique_key] = record
-
-    return coalesced
+def _coalesce_key(record: OutboxRecord) -> Optional[str]:
+    if record.operation_id is not None:
+        return f"op:{record.operation_id}"
+    return record.outbox_key
 
 
 class TelegramOutboxManager:
@@ -115,14 +100,24 @@ class TelegramOutboxManager:
         self._delete_message = delete_message
         self._on_delivered = on_delivered
         self._logger = logger
-        self._inflight: set[str] = set()
-        self._inflight_outbox_keys: set[str] = set()
-        self._lock: Optional[asyncio.Lock] = None
+        self._kernel: ChatOutboxKernel[OutboxRecord, int] = ChatOutboxKernel(
+            store,
+            deliver=self._deliver_record,
+            cleanup_delivered=self._cleanup_delivered,
+            drop_exhausted=self._drop_exhausted,
+            coalesce_key=_coalesce_key,
+            inflight_key=self._inflight_key,
+            logger=logger,
+            max_attempts=OUTBOX_MAX_ATTEMPTS,
+            immediate_retry_delays=tuple(OUTBOX_IMMEDIATE_RETRY_DELAYS),
+            on_delivered=on_delivered,
+            drop_direct_exhausted=False,
+            drop_all_flush_exhausted_before_coalesce=False,
+            callback_failed_event="telegram.outbox.delivery_callback_failed",
+        )
 
     def start(self) -> None:
-        self._inflight = set()
-        self._inflight_outbox_keys = set()
-        self._lock = asyncio.Lock()
+        self._kernel.start()
 
     async def restore(self) -> None:
         records = await self._store.list_outbox()
@@ -206,114 +201,66 @@ class TelegramOutboxManager:
             message_id=record.message_id,
             conversation_id=conversation_id,
         )
-        immediate_delays_iter = iter(OUTBOX_IMMEDIATE_RETRY_DELAYS)
-        immediate_delays_exhausted = False
-        while True:
-            current = await self._store.get_outbox(record.record_id)
-            if current is None:
-                return False
-            next_at = _parse_next_attempt_at(current.next_attempt_at)
-            if next_at is not None:
-                now = datetime.now(timezone.utc)
-                sleep_duration = (next_at - now).total_seconds()
-                if sleep_duration > 0.01:
-                    await asyncio.sleep(sleep_duration)
-            if await self._attempt_send(current):
-                return True
-            current = await self._store.get_outbox(record.record_id)
-            if current is None:
-                return False
-            if current.attempts >= OUTBOX_MAX_ATTEMPTS:
-                return False
-            next_at = _parse_next_attempt_at(current.next_attempt_at)
-            if next_at is not None:
-                now = datetime.now(timezone.utc)
-                sleep_duration = (next_at - now).total_seconds()
-                if sleep_duration > 0.01:
-                    await asyncio.sleep(sleep_duration)
-                continue
-            if immediate_delays_exhausted:
-                break
-            try:
-                delay = next(immediate_delays_iter)
-            except StopIteration:
-                immediate_delays_exhausted = True
-                has_next = await self._store.get_outbox(record.record_id)
-                if has_next is not None and has_next.next_attempt_at is None:
-                    break
-                continue
-            if delay > 0:
-                await asyncio.sleep(delay)
-        return False
+        return await self._kernel.enqueue_and_retry(record)
 
     async def _flush(self, records: list[OutboxRecord]) -> None:
-        now = datetime.now(timezone.utc)
-        coalesced_ready = _coalesce_telegram_latest_records(records)
-
-        for record in coalesced_ready.values():
-            next_at = _parse_next_attempt_at(record.next_attempt_at)
-            if next_at is not None and now < next_at:
-                continue
-            await self._process_record(record)
+        await self._kernel.flush(records)
 
     async def _process_record(self, record: OutboxRecord) -> None:
+        await self._kernel.attempt_send(record)
+
+    async def _drop_exhausted(self, record: OutboxRecord) -> None:
         with self._conversation_context(record.chat_id, record.thread_id):
             conversation_id = None
             try:
                 conversation_id = topic_key(record.chat_id, record.thread_id)
             except TypeError:
                 self._logger.debug("outbox.process: topic_key failed", exc_info=True)
-            if record.attempts >= OUTBOX_MAX_ATTEMPTS:
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "telegram.outbox.gave_up",
-                    record_id=record.record_id,
-                    chat_id=record.chat_id,
-                    thread_id=record.thread_id,
-                    message_id=record.message_id,
-                    attempts=record.attempts,
-                    conversation_id=conversation_id,
-                )
-                if self._on_delivered is not None:
-                    try:
-                        await self._on_delivered(record, None)
-                    except (
-                        Exception
-                    ):  # intentional: user-supplied callback must not break give-up cleanup
-                        log_event(
-                            self._logger,
-                            logging.WARNING,
-                            "telegram.outbox.give_up_callback_failed",
-                            record_id=record.record_id,
-                            chat_id=record.chat_id,
-                            thread_id=record.thread_id,
-                            conversation_id=conversation_id,
-                        )
-                if record.outbox_key:
-                    records = await self._store.list_outbox()
-                    for r in records:
-                        if r.outbox_key == record.outbox_key:
-                            await self._store.delete_outbox(r.record_id)
-                else:
-                    await self._store.delete_outbox(record.record_id)
-                if record.placeholder_message_id is not None:
-                    await self._edit_message_text(
-                        record.chat_id,
-                        record.placeholder_message_id,
-                        "Delivery failed after retries. Please resend.",
-                        message_thread_id=record.thread_id,
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.outbox.gave_up",
+                record_id=record.record_id,
+                chat_id=record.chat_id,
+                thread_id=record.thread_id,
+                message_id=record.message_id,
+                attempts=record.attempts,
+                conversation_id=conversation_id,
+            )
+            if self._on_delivered is not None:
+                try:
+                    await self._on_delivered(record, None)
+                except (
+                    Exception
+                ):  # intentional: user-supplied callback must not break give-up cleanup
+                    log_event(
+                        self._logger,
+                        logging.WARNING,
+                        "telegram.outbox.give_up_callback_failed",
+                        record_id=record.record_id,
+                        chat_id=record.chat_id,
+                        thread_id=record.thread_id,
+                        conversation_id=conversation_id,
                     )
-                return
-            await self._attempt_send(record)
+            if record.outbox_key:
+                records = await self._store.list_outbox()
+                for r in records:
+                    if r.outbox_key == record.outbox_key:
+                        await self._store.delete_outbox(r.record_id)
+            else:
+                await self._store.delete_outbox(record.record_id)
+            if record.placeholder_message_id is not None:
+                await self._edit_message_text(
+                    record.chat_id,
+                    record.placeholder_message_id,
+                    "Delivery failed after retries. Please resend.",
+                    message_thread_id=record.thread_id,
+                )
 
     async def _attempt_send(self, record: OutboxRecord) -> bool:
-        current = await self._store.get_outbox(record.record_id)
-        if current is None:
-            return False
-        record = current
-        if not await self._mark_inflight(self._inflight_key(record)):
-            return False
+        return await self._kernel.attempt_send(record)
+
+    async def _deliver_record(self, record: OutboxRecord) -> OutboxAttemptResult[int]:
         conversation_id = None
         try:
             conversation_id = topic_key(record.chat_id, record.thread_id)
@@ -408,47 +355,7 @@ class TelegramOutboxManager:
                     exc=exc,
                     conversation_id=conversation_id,
                 )
-                return False
-            finally:
-                await self._clear_inflight(self._inflight_key(record))
-            if self._on_delivered is not None:
-                try:
-                    await self._on_delivered(record, delivered_message_id)
-                except (
-                    Exception
-                ):  # intentional: user-supplied callback must not break delivery
-                    log_event(
-                        self._logger,
-                        logging.WARNING,
-                        "telegram.outbox.delivery_callback_failed",
-                        record_id=record.record_id,
-                        chat_id=record.chat_id,
-                        thread_id=record.thread_id,
-                    )
-            if record.outbox_key or record.operation_id:
-                records = await self._store.list_outbox()
-                for r in records:
-                    same_key = (
-                        record.outbox_key is not None
-                        and r.outbox_key == record.outbox_key
-                    )
-                    same_op = (
-                        record.operation_id is not None
-                        and r.operation_id == record.operation_id
-                    )
-                    if (same_key or same_op) and r.created_at <= record.created_at:
-                        await self._store.delete_outbox(r.record_id)
-            else:
-                await self._store.delete_outbox(record.record_id)
-            if (
-                record.placeholder_message_id is not None
-                and _should_delete_placeholder_on_delivery(record)
-            ):
-                await self._delete_message(
-                    record.chat_id,
-                    record.placeholder_message_id,
-                    record.thread_id,
-                )
+                return OutboxAttemptResult(delivered=False)
             log_event(
                 self._logger,
                 logging.INFO,
@@ -459,22 +366,35 @@ class TelegramOutboxManager:
                 message_id=record.message_id,
                 conversation_id=conversation_id,
             )
-            return True
+            return OutboxAttemptResult(
+                delivered=True,
+                delivered_id=delivered_message_id,
+            )
 
-    async def _mark_inflight(self, key: str) -> bool:
-        if self._lock is None:
-            self._lock = asyncio.Lock()
-        async with self._lock:
-            if key in self._inflight_outbox_keys:
-                return False
-            self._inflight_outbox_keys.add(key)
-            return True
-
-    async def _clear_inflight(self, key: str) -> None:
-        if self._lock is None:
-            return
-        async with self._lock:
-            self._inflight_outbox_keys.discard(key)
+    async def _cleanup_delivered(self, record: OutboxRecord) -> None:
+        if record.outbox_key or record.operation_id:
+            records = await self._store.list_outbox()
+            for r in records:
+                same_key = (
+                    record.outbox_key is not None and r.outbox_key == record.outbox_key
+                )
+                same_op = (
+                    record.operation_id is not None
+                    and r.operation_id == record.operation_id
+                )
+                if (same_key or same_op) and r.created_at <= record.created_at:
+                    await self._store.delete_outbox(r.record_id)
+        else:
+            await self._store.delete_outbox(record.record_id)
+        if (
+            record.placeholder_message_id is not None
+            and _should_delete_placeholder_on_delivery(record)
+        ):
+            await self._delete_message(
+                record.chat_id,
+                record.placeholder_message_id,
+                record.thread_id,
+            )
 
     def _inflight_key(self, record: OutboxRecord) -> str:
         if record.operation_id is not None:
