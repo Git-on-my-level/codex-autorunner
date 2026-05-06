@@ -15,7 +15,6 @@ from ...core.flows.archive_helpers import flow_run_archive_root
 from ..chat.outbox_kernel import (
     ChatOutboxKernel,
     OutboxAttemptResult,
-    coalesce_latest_records,
     parse_next_attempt_at,
 )
 from .rendering import DISCORD_MAX_MESSAGE_LENGTH, chunk_discord_message
@@ -53,15 +52,6 @@ def _extract_retry_after_seconds(exc: Exception) -> Optional[float]:
                     pass
         current = current.__cause__ or current.__context__
     return None
-
-
-def _coalesce_latest_records(records: list[OutboxRecord]) -> list[OutboxRecord]:
-    return coalesce_latest_records(
-        records,
-        coalesce_key=lambda record: (
-            f"op:{record.operation_id}" if record.operation_id is not None else None
-        ),
-    )
 
 
 def _discord_chunk_start_index(payload_json: dict[str, Any]) -> int:
