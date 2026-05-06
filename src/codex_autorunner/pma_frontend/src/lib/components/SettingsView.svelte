@@ -8,10 +8,13 @@
   } from '$lib/viewModels/settings';
   import type { SensitiveApprovalRequest } from '$lib/viewModels/domain';
   import SensitiveApprovalCard from './SensitiveApprovalCard.svelte';
+  import PageHero from './PageHero.svelte';
+  import { untrack } from 'svelte';
 
   let {
-    state,
+    state: viewState,
     view = null,
+    sessionBaselineEpoch = 0,
     errorMessage = null,
     saveError = null,
     pendingAction = null,
@@ -31,11 +34,41 @@
     onConfirmSensitiveAction?: (action: SettingsSensitiveAction) => void;
     onCancelSensitiveAction?: () => void;
     onApprovalDecision?: (approval: SensitiveApprovalRequest, decision: 'approve' | 'decline') => void;
+    sessionBaselineEpoch?: number;
   } = $props();
+
+  let savedSession: SettingsSessionState | null = $state(null);
+
+  $effect(() => {
+    sessionBaselineEpoch;
+    const snapshot = untrack(() => view);
+    if (snapshot) savedSession = { ...snapshot.session };
+  });
+
+  const sessionDirty = $derived.by(() => {
+    if (!view || !savedSession) return false;
+    const baseline = savedSession;
+    return (
+      view.session.modelOverride !== baseline.modelOverride ||
+      view.session.effortOverride !== baseline.effortOverride ||
+      view.session.stopAfterRuns !== baseline.stopAfterRuns
+    );
+  });
 
   function patchSession(key: keyof SettingsSessionState, value: string): void {
     if (!view) return;
     onSessionChange?.({ ...view.session, [key]: value });
+  }
+
+  function requestSavePreferences(): void {
+    if (!view) return;
+    onRequestSensitiveAction?.({
+      id: 'update-runtime-preferences',
+      label: 'Update runtime preferences',
+      description: 'Save PMA model and run-limit overrides for future autorunner work.',
+      available: true,
+      reason: 'Requests explicit approval through /api/session/settings/approvals before writing /api/session/settings.'
+    });
   }
 
   function handleWindowKeydown(event: KeyboardEvent): void {
@@ -46,38 +79,38 @@
 <svelte:window onkeydown={handleWindowKeydown} />
 
 <section class="page-stack settings-page">
-  <div class="section-heading detail-heading">
-    <div>
-      <p class="eyebrow">Local mode</p>
-      <h1>Settings</h1>
-      <p>Operational hub status, agent/model readiness, attachments, and sensitive CAR actions.</p>
-    </div>
-  </div>
+  <PageHero
+    title="Settings"
+    subtitle="Hub status, agent readiness, attachments, and sensitive CAR actions."
+  >
+    {#snippet stats()}
+      {#if view}
+        <dl class="hero-stats" aria-label="Settings summary">
+          <div>
+            <dd>{view.hub.find((item) => item.label.toLowerCase().includes('mode'))?.value ?? 'Local'}</dd>
+            <dt>Hub mode</dt>
+          </div>
+          <div class={view.approvals.length > 0 ? 'waiting' : 'neutral'}>
+            <dd>{view.approvals.length}</dd>
+            <dt>Pending approvals</dt>
+          </div>
+        </dl>
+      {/if}
+    {/snippet}
+  </PageHero>
 
-  {#if state === 'loading'}
+  {#if viewState === 'loading'}
     <div class="state-panel">Loading settings...</div>
-  {:else if state === 'error'}
+  {:else if viewState === 'error'}
     <div class="state-panel error">Could not load settings. {errorMessage}</div>
   {:else if view}
-    <section class="page-panel settings-panel">
-      <div class="panel-heading-row">
-        <h2>Hub</h2>
-        <span class="status-pill idle">Local</span>
-      </div>
+    <section class="settings-section">
+      <h2 class="settings-section-title">Hub</h2>
       {@render statusList(view.hub)}
     </section>
 
-    <section class="page-panel settings-panel">
-      <div class="panel-heading-row">
-        <h2>PMA agent/model</h2>
-        <button type="button" onclick={() => onRequestSensitiveAction?.({
-          id: 'update-runtime-preferences',
-          label: 'Update runtime preferences',
-          description: 'Save PMA model and run-limit overrides for future autorunner work.',
-          available: true,
-          reason: 'Requests explicit approval through /api/session/settings/approvals before writing /api/session/settings.'
-        })}>Save preferences</button>
-      </div>
+    <section class="settings-section">
+      <h2 class="settings-section-title">PMA agent &amp; model</h2>
       <div class="settings-form-grid">
         <label>
           <span>Model override</span>
@@ -105,39 +138,50 @@
           />
         </label>
       </div>
+      <div class="settings-form-footer">
+        <p class="permission-note">PMA has full permission for normal coding work. Sensitive CAR operations require approval.</p>
+        <button
+          type="button"
+          class="ghost-button"
+          class:dirty={sessionDirty}
+          disabled={!sessionDirty}
+          onclick={requestSavePreferences}
+        >
+          {sessionDirty ? 'Save preferences' : 'Saved'}
+        </button>
+      </div>
       {#if saveError}
         <p class="compose-error">{saveError}</p>
       {/if}
-      <p class="permission-note">PMA has full permission for normal coding work. Sensitive CAR operations require approval.</p>
+      <h3 class="settings-subtitle">PMA-capable agents</h3>
       {@render agentList(view.pmaAgents, 'No PMA-capable agents are visible from the server.')}
-    </section>
-
-    <section class="page-panel settings-panel">
-      <h2>Coding agents</h2>
+      <h3 class="settings-subtitle">Coding agents</h3>
       {@render agentList(view.codingAgents, 'No additional coding agents are visible from the server.')}
     </section>
 
     <div class="settings-grid">
-      <section class="page-panel settings-panel">
-        <h2>Integrations</h2>
+      <section class="settings-section">
+        <h2 class="settings-section-title">Integrations</h2>
         {@render statusList(view.integrations)}
       </section>
 
-      <section class="page-panel settings-panel">
-        <h2>Filebox/attachments</h2>
+      <section class="settings-section">
+        <h2 class="settings-section-title">Attachments</h2>
         {@render statusList(view.filebox)}
       </section>
 
-      <section class="page-panel settings-panel">
-        <h2>Secrets</h2>
+      <section class="settings-section">
+        <h2 class="settings-section-title">Secrets</h2>
         {@render statusList(view.secrets)}
       </section>
     </div>
 
-    <section class="page-panel settings-panel">
-      <div class="panel-heading-row">
-        <h2>Sensitive CAR actions</h2>
-        <span class="status-pill waiting">{view.approvals.length} pending</span>
+    <section class="settings-section">
+      <div class="settings-section-head">
+        <h2 class="settings-section-title">Sensitive CAR actions</h2>
+        {#if view.approvals.length > 0}
+          <span class="status-pill waiting">{view.approvals.length} pending</span>
+        {/if}
       </div>
       {#if view.approvals.length === 0}
         <div class="state-panel empty-state compact-empty">
@@ -183,8 +227,8 @@
       </details>
     </section>
 
-    <details class="page-panel settings-panel advanced-panel">
-      <summary>Advanced/debug</summary>
+    <details class="settings-section advanced-panel">
+      <summary>Advanced / debug</summary>
       {@render statusList(view.advanced)}
     </details>
   {/if}

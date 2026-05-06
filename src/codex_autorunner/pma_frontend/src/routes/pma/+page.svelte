@@ -506,8 +506,7 @@
   <aside class:hidden-mobile-pane={mobilePane !== 'list'} class="chat-list" aria-label="PMA chats">
     <div class="chat-list-header">
       <div class="section-heading">
-        <p class="eyebrow">PMA chats</p>
-        <h1>Conversations</h1>
+        <h2>Conversations</h2>
       </div>
       <div class="new-chat-controls">
         <label class="scope-field">
@@ -566,7 +565,7 @@
         {#each filteredChats as chat (chat.id)}
           <button
             class:active={chat.id === activeChatId}
-            class="chat-card"
+            class={`chat-card status-${chat.status}`}
             type="button"
             onclick={() => selectChat(chat.id)}
           >
@@ -576,14 +575,28 @@
                 <span class={`status-pill ${chat.status}`}>{statusLabel(chat.status)}</span>
               </span>
               <span class="chat-meta-row">
-                <span>{pmaChatScopeLabelFromChat(chat)}</span>
-                {#if chat.worktreeId}<span>{chat.worktreeId}</span>{/if}
-                {#if chat.ticketId}<span>{chat.ticketId}</span>{/if}
+                <span class="chat-id-tag">#{chat.id.slice(0, 6)}</span>
+                <span class="chat-meta-dot" aria-hidden="true">·</span>
+                <span class="chat-scope">{pmaChatScopeLabelFromChat(chat)}</span>
+                {#if chat.worktreeId}
+                  <span class="chat-meta-dot" aria-hidden="true">·</span>
+                  <span>{chat.worktreeId}</span>
+                {/if}
+                {#if chat.ticketId}
+                  <span class="chat-meta-dot" aria-hidden="true">·</span>
+                  <code>{chat.ticketId}</code>
+                {/if}
+                {#if chat.model}
+                  <span class="chat-meta-dot" aria-hidden="true">·</span>
+                  <span class="chat-model">{chat.model}</span>
+                {/if}
               </span>
-              <span class="progress-track" aria-label={`${progressPercent(chat)} percent complete`}>
-                <span style={`width: ${progressPercent(chat)}%`}></span>
+              <span class="chat-card-footer">
+                <span class={`progress-track status-${chat.status}`} aria-label={`${progressPercent(chat)} percent complete`}>
+                  <span style={`width: ${progressPercent(chat)}%`}></span>
+                </span>
+                <span class="updated-at">{formatRelativeTime(chat.updatedAt)}</span>
               </span>
-              <span class="updated-at">{formatRelativeTime(chat.updatedAt)}</span>
             </span>
           </button>
         {/each}
@@ -593,13 +606,20 @@
 
   <div class:hidden-mobile-pane={mobilePane !== 'chat'} class="active-chat">
     <div class="chat-header">
-      <div>
-        <p class="eyebrow">{activeScopeLabel}</p>
-        <h2>{activeChat?.title ?? 'PMA'}</h2>
+      <div class="chat-header-copy">
+        <h1>{activeChat?.title ?? 'PMA'}</h1>
         {#if activeChat}
           <p class="chat-header-subtitle">
+            <span class={`status-dot status-${activeChat.status}`} aria-hidden="true"></span>
             {statusLabel(activeChat.status)}
-            {#if activeChat.ticketId} · {activeChat.ticketId}{/if}
+            <span class="chat-meta-dot" aria-hidden="true">·</span>
+            <span class="chat-header-scope">{activeScopeLabel}</span>
+            {#if activeChat.ticketId}
+              <span class="chat-meta-dot" aria-hidden="true">·</span>
+              <code>{activeChat.ticketId}</code>
+            {/if}
+            <span class="chat-meta-dot" aria-hidden="true">·</span>
+            <span class="chat-header-id">#{activeChat.id.slice(0, 6)}</span>
           </p>
         {/if}
       </div>

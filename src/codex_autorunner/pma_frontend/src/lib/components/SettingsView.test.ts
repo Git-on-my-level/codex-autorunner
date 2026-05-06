@@ -35,12 +35,12 @@ describe('settings page component', () => {
     const { body } = render(SettingsView, { props: { state: 'ready', view } });
 
     expect(body).toContain('Hub');
-    expect(body).toContain('PMA agent/model');
+    expect(body).toContain('PMA agent');
     expect(body).toContain('Coding agents');
     expect(body).toContain('Integrations');
-    expect(body).toContain('Filebox/attachments');
+    expect(body).toContain('Attachments');
     expect(body).toContain('Secrets');
-    expect(body).toContain('Advanced/debug');
+    expect(body).toContain('Advanced');
     expect(body).toContain('Hermes');
     expect(body).toContain('1 models');
     expect(body).toContain('Model listing unsupported');

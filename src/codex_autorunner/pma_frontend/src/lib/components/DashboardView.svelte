@@ -4,6 +4,7 @@
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import { statusLabel } from '$lib/viewModels/pmaChat';
   import type { PartialPageIssue } from '$lib/api/client';
+  import PageHero from './PageHero.svelte';
 
   let {
     state,
@@ -26,32 +27,33 @@
 </script>
 
 <section class="page-stack dashboard-page">
-  <div class="section-heading">
-    <p class="eyebrow">Overview</p>
-    <h1>Dashboard</h1>
-  </div>
+  <PageHero
+    title="Dashboard"
+    subtitle="Active CAR work, approvals, and recent activity at a glance."
+  >
+    {#snippet stats()}
+      {#if dashboard}
+        <dl class="hero-stats" aria-label="Dashboard summary">
+          {#each dashboard.metrics as metric}
+            <a class={metric.value > 0 ? metric.tone : 'neutral'} href={href(metric.href)}>
+              <dd>{metric.value}</dd>
+              <dt>{metric.label}</dt>
+            </a>
+          {/each}
+        </dl>
+      {/if}
+    {/snippet}
+  </PageHero>
 
   {#if state === 'loading'}
     <div class="state-panel dashboard-state">Loading dashboard...</div>
   {:else if state === 'error'}
     <div class="state-panel error dashboard-state">Could not load dashboard. {errorMessage}</div>
   {:else if dashboard}
-    <div class="summary-grid">
-      {#each dashboard.metrics as metric}
-        <a class={`metric-card ${metric.tone}`} href={href(metric.href)}>
-          <span>{metric.label}</span>
-          <strong>{metric.value}</strong>
-        </a>
-      {/each}
-    </div>
-
     {#if !dashboard.hasAnyData}
       <div class="state-panel empty-state operational-empty">
         <h2>No active CAR work</h2>
         <p>Start from PMA or open the workspace queues; dashboard signals will fill in as runs, tickets, and artifacts appear.</p>
-        <div class="dashboard-actions">
-          <a href={href('/tickets')}>View all tickets</a>
-        </div>
       </div>
     {/if}
 
@@ -69,15 +71,20 @@
         {:else}
           <div class="dashboard-list">
             {#each dashboard.activeRuns as run}
-              <article class="dashboard-row run-row">
+              <article class={`dashboard-row run-row status-${run.status}`}>
                 <a class="row-main" href={href(run.primaryHref)}>
-                  <span class="row-title">{run.title}</span>
+                  <span class="row-title">
+                    {run.title}
+                    <small class="row-id">#{run.id.slice(0, 6)}</small>
+                  </span>
                   <span class="row-meta">
+                    <span class={`status-dot status-${run.status}`} aria-hidden="true"></span>
                     {statusLabel(run.status)}
                     {#if run.phase} · {run.phase}{/if}
+                    {#if run.ticketId} · <code>{run.ticketId}</code>{/if}
                     · {dashboardRowMeta(run)}
                   </span>
-                  <span class="progress-track" aria-label={`${run.progress} percent complete`}>
+                  <span class={`progress-track status-${run.status}`} aria-label={`${run.progress} percent complete`}>
                     <span style={`width: ${run.progress}%`}></span>
                   </span>
                 </a>
@@ -123,10 +130,12 @@
           <div class="dashboard-list activity-list">
             {#each dashboard.recentActivity as activity}
               <a class="dashboard-row activity-row" href={href(activity.href)}>
-                <span class={`activity-kind ${activity.artifact?.kind ?? 'progress'}`}>
-                  {activity.artifact?.kind ?? 'activity'}
-                </span>
-                <span>
+                {#if activity.artifact?.kind}
+                  <span class={`activity-kind ${activity.artifact.kind}`}>
+                    {activity.artifact.kind}
+                  </span>
+                {/if}
+                <span class="activity-body">
                   <span class="row-title">{activity.title}</span>
                   <span class="row-meta">{activity.summary} · {dashboardRowMeta({ updatedAt: activity.createdAt })}</span>
                 </span>

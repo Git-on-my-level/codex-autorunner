@@ -33,6 +33,14 @@ Reference implementations:
   KPI strip, repo cards, nested worktree tree.
 - `src/lib/components/PmaMemoryView.svelte` — header, segmented tabs,
   reader card with sunken header bar.
+- `src/lib/components/SettingsView.svelte` — long config page using flat
+  `.settings-section` blocks separated by hairline dividers, no nested
+  panel chrome. Use this pattern for any page whose primary job is to
+  show many small settings groups.
+
+When picking a reference, prefer the structural one (one of the three
+above) over a leaf component. Layout patterns proliferate; copy a known
+good shape rather than inventing a new one.
 
 ## Tokens
 
@@ -103,14 +111,9 @@ this structure:
 
 ```svelte
 <section class="page-stack <page-name>-page">
-  <header class="<page-name>-hero">
-    <div class="<page-name>-hero-copy">
-      <h1>{title}</h1>
-      <p class="<page-name>-hero-sub">{one-line description}</p>
-    </div>
-    <!-- Optional inline KPI strip on the right -->
-    <dl class="<page-name>-hero-stats">…</dl>
-  </header>
+  <PageHero title="…" subtitle="…">
+    {#snippet stats()}<dl class="hero-stats">…</dl>{/snippet}
+  </PageHero>
 
   <!-- Degraded/partial-page issue banners (use the snippet pattern) -->
 
@@ -118,42 +121,40 @@ this structure:
 </section>
 ```
 
-Hard rules for headers:
+Use the shared `PageHero` component for the title + subtitle + optional
+right-aligned KPI strip. **Don't reach for a hand-rolled `.section-heading`
+with `<p class="eyebrow">`.** The eyebrow shape is the most common way
+this design system gets violated; if you can't express the page using
+`PageHero`, that's a signal to extend `PageHero`, not to fork.
+
+Hard rules for hero headers:
 
 - **One row, baseline-aligned.** Title and stats sit on the same baseline
-  on desktop. On `max-width: 760px` they stack vertically.
-- **No background fill, no border.** The header is bare type on the page
-  background. Save chrome for content cards.
+  on desktop. Below `760px`, the stats wrap underneath.
+- **No background fill, no border on the hero itself.** The header is
+  bare type on the page background. Save chrome for content cards.
 - **Subtitle is one line.** If you need more, you're solving the wrong
   problem — push detail into the cards or a separate help affordance.
-- **No eyebrow text** ("REPO OWNERSHIP", "PMA WORKSPACE DOCS"). The
-  topbar breadcrumb already tells the user where they are.
+- **No eyebrow text** ("REPO OWNERSHIP", "OVERVIEW", "LOCAL MODE"). The
+  topbar breadcrumb already tells the user where they are. If a page is
+  ambiguous without an eyebrow, fix the breadcrumb or the title — don't
+  paper over it.
 
-Drop an inline KPI strip when there are 1–4 small numbers worth promoting:
+### Inline KPI strip (`.hero-stats`)
 
-```css
-.hero-stats {
-  display: flex; padding: 4px;
-  border: 1px solid var(--color-border-subtle);
-  border-radius: 8px; background: var(--color-surface);
-}
-.hero-stats > div {
-  display: flex; align-items: baseline; gap: 6px;
-  padding: 2px var(--space-3);
-  border-right: 1px solid var(--color-border-subtle);
-}
-.hero-stats > div:last-child { border-right: 0; }
-.hero-stats dt { font-size: 11px; color: var(--color-ink-muted); }
-.hero-stats dd {
-  font-size: var(--font-size-2); font-weight: 650;
-  font-variant-numeric: tabular-nums;
-}
-```
+Drop a `.hero-stats` `<dl>` into the hero `stats` snippet when there are
+1–4 small numbers worth promoting. Tokens are wired in `app.css`; do not
+duplicate them per page.
 
-When a number is "interesting" (active runs > 0, waiting > 0, missing
-docs), tint both the value and the label with the matching semantic color
-(`--color-success`, `--color-warning`, `--color-danger`). Don't tint the
-zero state.
+- Each entry is `<dd>{value}</dd><dt>{label}</dt>`. Value first because it
+  is the load-bearing element; label below in muted ink.
+- When a number is "interesting" (active runs > 0, pending approvals > 0,
+  missing docs), tint both value and label with the matching semantic
+  color (`--color-success`, `--color-warning`, `--color-danger`). **Never
+  tint the zero state** — a green "0" reads as success when it's really
+  "nothing to celebrate yet."
+- Stats can be `<a>` anchors when clicking should jump to the relevant
+  section; they pick up hover background automatically.
 
 ## Cards
 
@@ -249,6 +250,30 @@ rail rather than a flat indented list:
 See `.worktree-list` / `.worktree-card` in `RepoWorktreeViews.svelte` for
 the complete pattern.
 
+## Identity and disambiguation
+
+Lists frequently contain rows whose human-facing names collide ("New PMA
+chat" × 4, "Untitled ticket" × 8, default workspace names). Names alone
+are not addresses. **A row must always carry one stable, scannable
+identifier in addition to its name** so that a user can refer to "the
+third one" or correlate with logs.
+
+The canonical identifier is a short id chip:
+
+```
+<span class="chat-id-tag">#a1b2c3</span>
+```
+
+- 6 mono characters of the resource's stable id.
+- Lives in the meta row of the card, never in the title.
+- Renders even when the name is unique — consistency beats cleverness, and
+  it gives users a copyable handle.
+
+This pattern applies anywhere the system might surface a default-named
+resource: chats, runs, tickets, drafts, scratch repos. Backend should
+also try to give resources meaningful names (first-message excerpt, repo
+slug, etc.); the id chip is the floor, not the ceiling.
+
 ## Status communication
 
 Pick one and only one of these per element. Never combine more than two:
@@ -260,8 +285,37 @@ Pick one and only one of these per element. Never combine more than two:
 | Colored dot on a child row | Compact tree/list rows where a pill would be too loud |
 | Tinted count chip (`is-active`, `is-tickets`) | Highlight a meaningful nonzero number |
 | Tinted hero KPI | Page-level summary |
+| Thin tinted progress bar | Long-running work where remaining time matters more than discrete state |
 
 Never use color alone for state. Always pair with a label or icon.
+
+### Status dots — two scales
+
+Status dots come in two sizes; pick the one that matches the surrounding
+density.
+
+| Variant | Size | Halo | Use |
+| --- | --- | --- | --- |
+| Nested row dot | 6px | 3px surface halo | Tree/connector rows where the dot punches through a rail |
+| Inline meta dot | 6px | none | Row meta lines, header subtitles, anywhere the dot lives in a flowing text run |
+
+Both share the same `--color-*` semantic palette via `.status-dot.status-<status>`.
+Never invent intermediate sizes; if the scale doesn't fit, you're using
+the wrong mechanism.
+
+### Progress indicators
+
+Use `.progress-track` for any long-running, indeterminate-but-bounded
+work. The default is intentionally subtle:
+
+- 2px tall, full width, neutral surface track.
+- Fill color comes from a `status-<status>` modifier on the track itself
+  (`status-running` → success, `status-waiting` → warning, etc.).
+- **Never use `--color-accent` (brand purple) for the fill.** Purple in
+  this system means "click me / active selection," not "in progress." A
+  thick purple bar reads as a CTA, not a status indicator.
+- Pair the bar with a textual percent or step label nearby. The bar alone
+  is not enough — many runs sit at 64% indefinitely.
 
 ## Tabs
 
@@ -280,18 +334,42 @@ Use the segmented-pill pattern (see `.memory-tabs-v2` in `PmaMemoryView`):
 
 ## Buttons
 
-Three variants, no more:
+Three variants, no more. Pick deliberately — every extra primary button
+on a page is a vote against the one that actually matters.
 
-1. **Primary action** (`.send-button`, `.new-chat-button`,
-   `.detail-actions a`): accent fill, white text, weight 550, soft
-   accent shadow. One per surface.
-2. **Secondary / ghost** (e.g. `.memory-copy-button`): 1px border, surface
-   background, ink-soft text, hover strengthens border and switches to
-   `--color-surface-muted`. Use for inline actions inside a card header.
+1. **Primary action** (`.send-button`, `.new-chat-button`): accent fill,
+   white text, weight 550, soft accent shadow. **One per surface.** If
+   you find yourself adding a second, ask whether it should be a ghost
+   button or an icon button.
+2. **Secondary / ghost** (`.ghost-button`, `.memory-copy-button`): 1px
+   border, surface background, ink-soft text. Hover strengthens border
+   and switches to `--color-surface-muted`. Use for inline actions inside
+   a card header, or for any action that should not compete with the
+   page's primary CTA.
 3. **Icon button** (`.icon-button`): 30×30px, transparent until hover,
    ink-faint icon. Use only when an inline label would clutter the row.
+   Always `aria-label`.
 
 Heights: 28–34px depending on density. Inputs match button heights.
+
+### Dirty-state buttons (form save)
+
+Form save buttons should not exist as a permanently-loud primary CTA next
+to a settings panel header. Instead:
+
+- Render as `.ghost-button` by default. Disabled, label reads "Saved" or
+  similar terminal verb.
+- When the form becomes dirty (any field differs from the last saved
+  snapshot), add a `.dirty` modifier: accent border + accent text, still
+  ghost-shaped. Label switches to the action ("Save preferences").
+- After a successful save, snapshot the new values and return to disabled
+  ghost — the button announces stability rather than demanding clicks.
+
+This pattern keeps the page calm at rest and unambiguous when there's
+work to commit. It applies to settings, profile, preferences, and any
+other "I'm editing in place, hit save when done" surface. **Don't use it
+for transactional actions** (Send message, Create chat, Approve) — those
+stay as solid primary buttons because the action is the point.
 
 ## Empty / loading / error states
 
@@ -326,6 +404,32 @@ Heights: 28–34px depending on density. Inputs match button heights.
   `prefers-reduced-motion` (the global block in `app.css` neutralizes
   most transitions; verify yours by setting Reduce Motion).
 - Tab order follows visual order. Don't reorder with `tabindex`.
+- **Heading hierarchy.** Every page has exactly one `<h1>`, supplied by
+  `PageHero`. Section titles are `<h2>`, subheads inside a section are
+  `<h3>`. Don't skip a level for visual reasons; restyle the level
+  instead. A page with no `<h1>` (e.g. a chat surface where the active
+  thread title is the most prominent text) must still emit an `<h1>` —
+  promote the existing heading or add a visually-styled `<h1>` rather
+  than a visually-hidden one.
+
+## Browser baseline
+
+This app targets the latest two versions of evergreen browsers (Chrome,
+Edge, Firefox, Safari). The following modern CSS features are explicitly
+allowed and used in `app.css`:
+
+- `color-mix(in srgb, …)` — for status-tinted backgrounds derived from
+  semantic tokens. Use when you need a token-relative color but a
+  pre-baked `-soft` variant doesn't exist. Don't introduce a new token
+  for a one-off tint.
+- `:has(...)` — for parent selectors that depend on child presence (e.g.
+  flipping a grid template when a row contains a chip).
+- `:where()`, `:is()`, logical properties (`margin-inline`,
+  `padding-block`), `dvh`/`svh` units, `gap` on flex.
+
+When a feature is too new for the baseline (e.g. CSS nesting at the time
+of writing), add a comment in `app.css` calling out the polyfill or
+fallback path. Don't silently rely on it.
 
 ## Svelte and code conventions
 
@@ -361,14 +465,31 @@ Don't:
 - Wrap a list in a panel that has its own H2 if the page already has a
   hero. Pick one heading per slice of content.
 - Stack borders inside borders (panel border + card border + inner row
-  border). Always remove one of them.
+  border). Always remove one of them. Long config pages should use the
+  flat `.settings-section` pattern (hairline dividers between sections)
+  rather than panel-in-panel.
 - Use brand purple (`--color-accent`) for non-action affordances. Purple
-  means "click me" or "active selection". A green dot means running, a
-  yellow dot means waiting — purple does not mean "info".
+  means "click me" or "active selection." A green dot means running, a
+  yellow dot means waiting — purple does not mean "info" or "in
+  progress." This applies to progress bars, status indicators, "live"
+  badges, and any other non-interactive affordance.
 - Invent new shadows, radii, or grey values. If the token doesn't exist,
   add it to `:root` in `app.css` with a justification, then use it.
 - Use uppercase eyebrows on every page. They were a phase. Drop them.
-- Render zero counts in a loud color, or pluralize "1 runs".
+  If you find yourself writing `<p class="eyebrow">`, that's the signal
+  to use `PageHero` instead.
+- Render a page heading as `<h2>` with no `<h1>` above it. Either promote
+  to `<h1>` or supply one via `PageHero`. Don't add visually-hidden
+  headings to satisfy a linter — the page hierarchy should match what the
+  user sees.
+- Render zero counts in a loud color, or pluralize "1 runs."
+- Treat the human-facing name as a unique identifier. Always pair
+  default-named or collision-prone resources with a `#shortid` chip.
+- Add a permanent loud primary CTA to a settings or preferences surface.
+  Use the dirty-state ghost pattern instead.
+- Build new layout primitives by copying CSS into a component's `<style>`
+  block when the same shape exists in `app.css` or as a shared component.
+  Promote the pattern, then use it.
 
 ## Build
 

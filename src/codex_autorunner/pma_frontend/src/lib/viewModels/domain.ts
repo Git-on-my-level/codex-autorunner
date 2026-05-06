@@ -534,7 +534,16 @@ function normalizeMessageText(raw: JsonRecord, role: PmaChatMessage['role']): st
 
 function readableThreadTitle(raw: JsonRecord, fallback: string, ticketId: string | null): string {
   const explicit = stringValue(raw.display_name ?? raw.name ?? raw.title, fallback);
-  if (!isGenericTicketFlowTitle(explicit) && !isCarTicketFlowControlPrompt(explicit)) return explicit;
+  if (
+    !isGenericChatTitle(explicit) &&
+    !isGenericTicketFlowTitle(explicit) &&
+    !isCarTicketFlowControlPrompt(explicit)
+  ) {
+    return explicit;
+  }
+
+  const firstMessageExcerpt = firstUserMessageExcerpt(raw);
+  if (firstMessageExcerpt) return firstMessageExcerpt;
 
   const workspace = workspaceLabel(raw.workspace_root);
   const repo = nullableString(raw.repo_id);
@@ -544,10 +553,38 @@ function readableThreadTitle(raw: JsonRecord, fallback: string, ticketId: string
     resourceKind === 'worktree'
       ? `worktree ${resourceId ?? workspace ?? repo ?? 'workspace'}`
       : repo ?? resourceId ?? workspace;
+
+  if (isGenericChatTitle(explicit) && !ticketId && !isCarTicketFlowControlPrompt(explicit)) {
+    return resource ? `Chat · ${resource}` : explicit;
+  }
+
   const parts = ['Ticket flow'];
   if (ticketId) parts.push(ticketId);
   if (resource) parts.push(resource);
   return parts.join(' · ');
+}
+
+function isGenericChatTitle(value: string): boolean {
+  const text = value.trim().toLowerCase();
+  return text === 'new pma chat' || text === 'new chat' || text === 'untitled chat' || text === '';
+}
+
+function firstUserMessageExcerpt(raw: JsonRecord): string | null {
+  const candidate = firstText(
+    raw.first_message_excerpt,
+    raw.first_user_message,
+    raw.last_user_message,
+    raw.last_message_preview,
+    raw.prompt_preview
+  );
+  if (!candidate) return null;
+  const trimmed = candidate.trim();
+  if (!trimmed) return null;
+  if (isCarTicketFlowControlPrompt(trimmed)) return null;
+  const oneLine = trimmed.split(/\r?\n/)[0]?.trim() ?? '';
+  if (!oneLine) return null;
+  const truncated = oneLine.length > 60 ? `${oneLine.slice(0, 57)}…` : oneLine;
+  return truncated;
 }
 
 function summarizeControlPromptTurn(

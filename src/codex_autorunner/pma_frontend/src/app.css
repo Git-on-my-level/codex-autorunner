@@ -494,6 +494,7 @@ a {
 }
 
 .section-heading h1,
+.chat-header h1,
 .chat-header h2,
 .page-panel h2 {
   margin: 0;
@@ -515,7 +516,9 @@ a {
   overflow-wrap: anywhere;
 }
 
-.chat-list-header .section-heading h1 {
+.chat-list-header .section-heading h1,
+.chat-list-header .section-heading h2 {
+  margin: 0;
   font-size: var(--font-size-2);
   font-weight: 600;
 }
@@ -801,18 +804,25 @@ a {
 
 .progress-track {
   display: block;
-  height: 5px;
+  height: 2px;
   overflow: hidden;
   border-radius: 999px;
-  background: var(--color-surface-muted);
+  background: rgb(15 15 20 / 0.06);
 }
 
 .progress-track span {
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: var(--color-accent);
+  background: var(--color-ink-faint);
+  transition: width var(--transition-base) var(--ease-out);
 }
+
+.progress-track.status-running span { background: var(--color-success); }
+.progress-track.status-waiting span { background: var(--color-warning); }
+.progress-track.status-failed span,
+.progress-track.status-blocked span { background: var(--color-danger); }
+.progress-track.status-done span { background: var(--color-ink-faint); }
 
 .chat-card p,
 .message p,
@@ -873,25 +883,39 @@ a {
   border-bottom: 1px solid var(--color-border-subtle);
 }
 
+.chat-header h1,
 .chat-header h2 {
   font-size: var(--font-size-3);
   font-weight: 600;
   letter-spacing: -0.012em;
 }
 
-.chat-header .eyebrow {
-  margin-bottom: 2px;
-  color: var(--color-ink-faint);
-  font-weight: 500;
-  letter-spacing: 0;
-  text-transform: none;
-  font-size: 11px;
+.chat-header-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
 }
 
 .chat-header-subtitle {
-  margin: 2px 0 0;
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
   font-size: 11px;
+  color: var(--color-ink-muted);
+}
+
+.chat-header-subtitle code,
+.chat-header-id {
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px;
   color: var(--color-ink-faint);
+}
+
+.chat-header-scope {
+  color: var(--color-ink-soft);
 }
 
 .selector-field select {
@@ -1003,9 +1027,13 @@ textarea:hover {
 }
 
 .stream-health.interrupted {
-  border-color: #efd59b;
-  background: #fffaf0;
-  color: var(--color-warning);
+  margin-top: var(--space-3);
+  padding: 6px var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--color-warning) 30%, var(--color-border-subtle));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-warning) 6%, var(--color-surface));
+  color: var(--color-ink-soft);
+  font-size: var(--font-size-0);
 }
 
 .stream-health.interrupted .status-dot {
@@ -1014,16 +1042,23 @@ textarea:hover {
 
 .stream-health button,
 .state-panel button {
-  min-height: 30px;
+  min-height: 26px;
   margin-left: auto;
   padding: 0 var(--space-3);
-  border: 1px solid currentColor;
-  border-radius: var(--radius-2);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
   background: var(--color-surface);
-  color: inherit;
+  color: var(--color-ink-soft);
   cursor: pointer;
   font-size: var(--font-size-0);
-  font-weight: 720;
+  font-weight: 550;
+  transition: border-color var(--transition-fast), background-color var(--transition-fast);
+}
+
+.stream-health button:hover,
+.state-panel button:hover {
+  border-color: var(--color-border-strong);
+  background: var(--color-surface-muted);
 }
 
 .message,
@@ -1045,11 +1080,12 @@ textarea:hover {
 
 .message.assistant span {
   font-size: 10px;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.04em;
   color: var(--color-ink-faint);
-  font-weight: 600;
-  margin-bottom: 4px;
-  opacity: 1;
+  font-weight: 550;
+  text-transform: none;
+  margin-bottom: 2px;
+  opacity: 0.85;
 }
 
 .message span {
@@ -1098,12 +1134,14 @@ textarea:hover {
 
 .message.user {
   align-self: flex-end;
-  max-width: 620px;
-  padding: var(--space-2) var(--space-4);
-  background: var(--color-accent-soft);
+  max-width: 560px;
+  padding: 6px var(--space-3);
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-border-subtle);
   color: var(--color-ink);
-  border-radius: 14px 14px 4px 14px;
+  border-radius: 10px 10px 2px 10px;
   margin-left: auto;
+  font-size: var(--font-size-1);
 }
 
 .message.user span {
@@ -3197,7 +3235,8 @@ textarea:disabled {
     min-width: min(100%, 180px);
   }
 
-  .chat-list-header h1 {
+  .chat-list-header h1,
+  .chat-list-header h2 {
     font-size: var(--font-size-4);
   }
 
@@ -3396,3 +3435,290 @@ textarea:disabled {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ==========================================================================
+   Hero KPI strip (consumed via the PageHero `stats` snippet).
+   The hero shell itself is owned by PageHero.svelte — only the stats list
+   lives here because it's shared by every page that opts into KPIs.
+   ========================================================================== */
+.hero-stats {
+  display: flex;
+  align-items: stretch;
+  margin: 0;
+  padding: 4px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 8px;
+  background: var(--color-surface);
+}
+
+.hero-stats > a,
+.hero-stats > div {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 4px var(--space-3);
+  border-right: 1px solid var(--color-border-subtle);
+  color: inherit;
+  text-decoration: none;
+  transition: background-color var(--transition-fast);
+  border-radius: 4px;
+}
+
+.hero-stats > a:hover {
+  background: var(--color-surface-muted);
+}
+
+.hero-stats > :last-child {
+  border-right: 0;
+}
+
+.hero-stats dt {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-ink-muted);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.hero-stats dd {
+  margin: 0;
+  font-size: var(--font-size-3);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.012em;
+  line-height: 1;
+}
+
+.hero-stats .active dd { color: var(--color-success); }
+.hero-stats .waiting dd { color: var(--color-warning); }
+.hero-stats .danger dd { color: var(--color-danger); }
+
+/* Settings — flatter sections, no panel-in-panel borders */
+.settings-section {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4) 0;
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.settings-section:first-of-type {
+  border-top: 0;
+  padding-top: var(--space-2);
+}
+
+.settings-section-title {
+  margin: 0;
+  font-size: var(--font-size-2);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.settings-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.settings-subtitle {
+  margin: var(--space-3) 0 0;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-ink-muted);
+}
+
+.settings-form-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.settings-form-footer .permission-note {
+  margin: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ghost-button {
+  min-height: 28px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-surface);
+  color: var(--color-ink-muted);
+  cursor: pointer;
+  font-size: var(--font-size-0);
+  font-weight: 550;
+  transition: border-color var(--transition-fast), color var(--transition-fast),
+              background-color var(--transition-fast);
+}
+
+.ghost-button:hover:not(:disabled) {
+  border-color: var(--color-border-strong);
+  color: var(--color-ink);
+}
+
+.ghost-button.dirty {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.ghost-button.dirty:hover:not(:disabled) {
+  background: var(--color-accent-soft);
+}
+
+/* Activity-kind chip — only render when there's a real artifact kind.
+   Hide the leftover defaults so neutral rows read clean. */
+.activity-kind {
+  min-width: 0;
+  min-height: 22px;
+  padding: 0 8px;
+  font-size: 10px;
+  font-weight: 550;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.activity-kind.activity,
+.activity-kind.progress {
+  display: none;
+}
+
+/* Activity row — let the body breathe when no chip is present */
+.activity-row {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.activity-row:has(.activity-kind:not([hidden])) {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.activity-body {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+/* Run row — id + colored status dot in meta */
+.row-id {
+  margin-left: 6px;
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--color-ink-faint);
+  letter-spacing: 0;
+}
+
+.row-meta {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.row-meta code {
+  font-size: 10.5px;
+  color: var(--color-ink-muted);
+}
+
+.row-meta .status-dot {
+  width: 6px;
+  height: 6px;
+  box-shadow: none;
+  margin-right: 2px;
+}
+
+.status-dot.status-running { background: var(--color-success); }
+.status-dot.status-waiting { background: var(--color-warning); }
+.status-dot.status-failed,
+.status-dot.status-blocked { background: var(--color-danger); }
+.status-dot.status-done { background: var(--color-ink-faint); }
+.status-dot.status-idle { background: var(--color-ink-faint); }
+
+/* Tighten run-row layout so progress bar sits under the meta line cleanly */
+.run-row .row-main {
+  display: grid;
+  gap: 4px;
+}
+
+/* Chat list card — id chip + scope + model + relative time */
+.chat-card .progress-track {
+  display: block;
+  height: 2px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.chat-card .updated-at {
+  display: inline-block;
+  font-size: 10.5px;
+  color: var(--color-ink-faint);
+  font-variant-numeric: tabular-nums;
+  margin-left: var(--space-2);
+}
+
+.chat-card-footer {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: 4px;
+}
+
+.chat-id-tag {
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  font-weight: 550;
+  color: var(--color-ink-muted);
+  padding: 1px 5px;
+  background: var(--color-surface-muted);
+  border-radius: 4px;
+}
+
+.chat-meta-dot {
+  color: var(--color-ink-faint);
+  opacity: 0.55;
+}
+
+.chat-scope,
+.chat-model {
+  color: var(--color-ink-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.chat-model {
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px;
+}
+
+.chat-card .chat-meta-row code {
+  font-size: 10.5px;
+  color: var(--color-ink-muted);
+}
+
+/* Status pill softening — Linear-y subtle fills */
+.chat-card.status-running .chat-title-row strong::before,
+.chat-card.status-waiting .chat-title-row strong::before,
+.chat-card.status-failed .chat-title-row strong::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  margin-right: 6px;
+  vertical-align: middle;
+  transform: translateY(-1px);
+}
+
+.chat-card.status-running .chat-title-row strong::before { background: var(--color-success); }
+.chat-card.status-waiting .chat-title-row strong::before { background: var(--color-warning); }
+.chat-card.status-failed .chat-title-row strong::before,
+.chat-card.status-blocked .chat-title-row strong::before { background: var(--color-danger); }

@@ -13,6 +13,7 @@
   import { approvalActionUrl, filterSensitiveCarApprovals } from '$lib/viewModels/pmaChat';
 
   let view = $state<SettingsViewModel | null>(null);
+  let sessionBaselineEpoch = $state(0);
   let loading = $state(true);
   let error = $state<ApiError | null>(null);
   let saveError = $state<ApiError | null>(null);
@@ -58,6 +59,7 @@
       fileArtifacts: files.ok ? files.data : [],
       approvals: approvals.ok ? approvals.data : []
     });
+    sessionBaselineEpoch += 1;
     loading = false;
   }
 
@@ -114,6 +116,7 @@
 
 <SettingsView
   state={loading ? 'loading' : error ? 'error' : 'ready'}
+  {sessionBaselineEpoch}
   {view}
   errorMessage={error?.message ?? null}
   saveError={saveError?.message ?? null}
