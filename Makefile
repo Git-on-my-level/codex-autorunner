@@ -44,16 +44,21 @@ PIPX_ROOT ?= $(HOME)/.local/pipx
 PIPX_VENV ?= $(PIPX_ROOT)/venvs/codex-autorunner
 PIPX_PYTHON ?= $(PIPX_VENV)/bin/python
 
-.PHONY: install dev hooks build pma-build test test-fast test-full test-chat-platform-contract test-chat-surface-lab test-managed-thread-cutover check check-full check-extended preflight-hub-startup format serve serve-dev serve-onboarding ui-qa-screens pma-ui-screens launchd-hub deadcode-baseline venv venv-dev setup npm-install car-artifacts lint-html dom-check frontend-check _inject-static-banners agent-compatibility-check agent-compatibility-refresh protocol-schemas-check protocol-schemas-refresh typecheck-strict perf-idle-cpu perf-chat-latency-budgets perf-chat-seeded-exploration
+.PHONY: install dev hooks build pma-build legacy-ui-build legacy-ui-check test test-fast test-full test-chat-platform-contract test-chat-surface-lab test-managed-thread-cutover check check-full check-extended preflight-hub-startup format serve serve-dev serve-legacy-ui serve-onboarding ui-qa-screens pma-ui-screens launchd-hub deadcode-baseline venv venv-dev setup npm-install car-artifacts lint-html dom-check frontend-check _inject-static-banners agent-compatibility-check agent-compatibility-refresh protocol-schemas-check protocol-schemas-refresh typecheck-strict perf-idle-cpu perf-chat-latency-budgets perf-chat-seeded-exploration
 
 _inject-static-banners:
-	pnpm run postbuild
+	pnpm legacy:postbuild
 
-build: npm-install
-	pnpm build
+build: pma-build
 
 pma-build: npm-install
 	pnpm pma:build
+
+legacy-ui-build: npm-install
+	pnpm legacy:build
+
+legacy-ui-check: legacy-ui-build frontend-check
+	pnpm legacy:test
 
 install:
 	$(PYTHON) -m pip install .
@@ -153,11 +158,6 @@ check:
 
 check-full:
 	./scripts/check.sh --full
-	@if [ -d node_modules ]; then \
-		pnpm lint:html && pnpm test:dom; \
-	else \
-		echo "Skipping frontend checks (node_modules missing). Run 'make npm-install' first." >&2; \
-	fi
 
 check-extended: check-full
 	$(MAKE) test-chat-platform-contract PYTHON="$(PYTHON)"
@@ -199,7 +199,7 @@ format:
 deadcode-baseline:
 	$(PYTHON) scripts/deadcode.py --update-baseline
 
-serve: build pma-build
+serve: pma-build
 	@PORT_PID=$$(lsof -t -nP -iTCP:$(PORT) -sTCP:LISTEN 2>/dev/null | head -n 1); \
 	if [ -n "$$PORT_PID" ]; then \
 		echo "Port $(PORT) is already in use by PID $$PORT_PID. Stop the existing server before running \`make serve\`." >&2; \
@@ -211,9 +211,18 @@ serve: build pma-build
 serve-dev: venv-dev pma-build
 	cd "$(CAR_ROOT)" && CAR_DEV_INCLUDE_ROOT_REPO=1 "$(PYTHON_ABS)" -m uvicorn codex_autorunner.server:create_hub_app --factory --reload --host $(HOST) --port $(PORT) --reload-dir "$(CURDIR)/src" --reload-include '*.py' --reload-include '*.js' --reload-include '*.css' --reload-include '*.html' --reload-include '*.json' --reload-exclude '**/worktrees/**' --reload-exclude '**/.codex-autorunner/**' --reload-exclude '.codex-autorunner/**' --timeout-graceful-shutdown 1
 
+serve-legacy-ui: legacy-ui-build
+	@PORT_PID=$$(lsof -t -nP -iTCP:$(PORT) -sTCP:LISTEN 2>/dev/null | head -n 1); \
+	if [ -n "$$PORT_PID" ]; then \
+		echo "Port $(PORT) is already in use by PID $$PORT_PID. Stop the existing server before running \`make serve-legacy-ui\`." >&2; \
+		lsof -nP -iTCP:$(PORT) -sTCP:LISTEN >&2 || true; \
+		exit 1; \
+	fi
+	CAR_ENABLE_LEGACY_UI=1 $(PYTHON) -m codex_autorunner.cli hub serve --path "$(CAR_ROOT)" --host $(HOST) --port $(PORT)
+
 # Hub initialized with `car init --mode hub` in a new temp directory (no repos, clean manifest).
 # Prints URLs for real-server onboarding and optional client-mocked PMA (see `static_src/walkthrough.ts` `?carOnboarding=1`).
-serve-onboarding: build pma-build
+serve-onboarding: pma-build
 	@set -e; \
 	PORT_PID=$$(lsof -t -nP -iTCP:$(ONBOARDING_PORT) -sTCP:LISTEN 2>/dev/null | head -n 1); \
 	if [ -n "$$PORT_PID" ]; then \
@@ -236,9 +245,9 @@ serve-onboarding: build pma-build
 	cd "$$ROOT" && exec "$(PYTHON_ABS)" -m codex_autorunner.cli serve --host $(ONBOARDING_HOST) --port $(ONBOARDING_PORT)
 
 # Playwright full-page: all hub ui-mock states (see generate_manifest) plus each repo tab under /repos/{id}/?tab=... when a repo is available.
-# Requires: pip install '.[browser]' and `python -m playwright install chromium` (and `pnpm build` for uiMock order from generated JS).
+# Requires: pip install '.[browser]' and `python -m playwright install chromium` (and `make legacy-ui-build` for uiMock order from generated JS).
 # If no repo is in .codex-autorunner/manifest.yml, set UI_QA_REPO_ID. Output directory: $(UI_QA_OUT) (see .gitignore).
-ui-qa-screens: build
+ui-qa-screens: legacy-ui-build
 	@mkdir -p $(UI_QA_OUT)
 	@set -e; \
 	UI_QA_HUB_ROOT='$(CURDIR)'; export UI_QA_HUB_ROOT; \

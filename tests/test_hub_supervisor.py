@@ -1939,8 +1939,7 @@ def test_hub_home_served_and_repo_mounted(tmp_path: Path):
     assert pma_resp.status_code == 200
     assert b"<title>PMA Hub</title>" in pma_resp.content
     legacy_resp = client.get("/legacy")
-    assert legacy_resp.status_code == 200
-    assert b'id="hub-shell"' in legacy_resp.content
+    assert legacy_resp.status_code == 404
 
     # Hub repo lifespans start in a background task; scan mounts repos and starts
     # lifespans so the repo runtime creates state without racing GET / alone.

@@ -1616,12 +1616,12 @@ if [[ -z "${HEALTH_PATH}" ]]; then
   if [[ -n "${base_path}" ]]; then
     HEALTH_PATH="${base_path}/health"
     if [[ -z "${HEALTH_STATIC_PATH}" ]]; then
-      HEALTH_STATIC_PATH="${base_path}/static/generated/app.js"
+      HEALTH_STATIC_PATH="${base_path}/_app/version.json"
     fi
   else
     HEALTH_PATH="/health"
     if [[ -z "${HEALTH_STATIC_PATH}" ]]; then
-      HEALTH_STATIC_PATH="/static/generated/app.js"
+      HEALTH_STATIC_PATH="/_app/version.json"
     fi
   fi
 fi

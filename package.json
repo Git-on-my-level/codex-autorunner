@@ -11,10 +11,12 @@
     "lint:js": "eslint \"src/codex_autorunner/static/generated/**/*.js\" \"src/codex_autorunner/static/vendor/**/*.js\"",
     "lint:ts": "eslint \"src/codex_autorunner/static_src/**/*.ts\"",
     "lint:html": "html-validate \"src/codex_autorunner/static/index.html\"",
-    "lint": "eslint \"src/codex_autorunner/static_src/**/*.ts\"",
-    "typecheck": "tsc -p tsconfig.json",
-    "build": "tsc -p tsconfig.json",
-    "postbuild": "node scripts/version-generated-imports.js && node scripts/add-static-banner.js && node scripts/generate-asset-manifest.mjs",
+    "lint": "pnpm pma:lint",
+    "typecheck": "pnpm pma:typecheck",
+    "build": "pnpm pma:build",
+    "legacy:postbuild": "node scripts/version-generated-imports.js && node scripts/add-static-banner.js && node scripts/generate-asset-manifest.mjs",
+    "legacy:build": "tsc -p tsconfig.json && pnpm legacy:postbuild",
+    "legacy:test": "node --test tests/js/*.test.js",
     "pma:dev": "pnpm --filter @codex-autorunner/pma-hub dev",
     "pma:build": "pnpm --filter @codex-autorunner/pma-hub build",
     "pma:typecheck": "pnpm --filter @codex-autorunner/pma-hub typecheck",
@@ -22,7 +24,7 @@
     "pma:test": "pnpm --filter @codex-autorunner/pma-hub test",
     "pma:smoke:hub": ".venv/bin/python scripts/pma_live_hub_smoke.py",
     "test:dom": "node scripts/check_dom_structure.mjs",
-    "test:markdown": "node --test tests/js/*.test.js"
+    "test:markdown": "pnpm legacy:test"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

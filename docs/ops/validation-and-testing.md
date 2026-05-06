@@ -11,7 +11,7 @@ Validation is split into lanes so that small, scoped changes don't trigger the f
 | Lane | Scope | What it runs |
 |------|-------|-------------|
 | `core` | Backend/logic | Python lint, typecheck, core pytest, dead-code check |
-| `web-ui` | Frontend/UI | Core checks + ESLint, `pnpm run build`, JS tests, asset manifest check |
+| `web-ui` | Frontend/UI | Core checks + PMA frontend lint, `pnpm run build`, PMA frontend tests, `pma_static` drift check |
 | `chat-apps` | Chat integrations | Core checks + deterministic chat-surface lab suite (`make test-chat-surface-lab`) |
 | `aggregate` | Full validation | All lane checks combined |
 

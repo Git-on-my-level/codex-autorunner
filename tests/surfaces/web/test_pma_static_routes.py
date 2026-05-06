@@ -74,7 +74,7 @@ def test_pma_dynamic_spa_fallback_routes_with_runtime_ids(tmp_path):
         assert "/_app/immutable/entry/app." in response.text
 
 
-def test_pma_static_assets_are_served_separately_from_legacy_static(tmp_path):
+def test_pma_static_assets_are_served_without_legacy_static_by_default(tmp_path):
     hub_root = tmp_path / "hub"
     seed_hub_files(hub_root, force=True)
     client = TestClient(create_hub_app(hub_root))
@@ -85,19 +85,33 @@ def test_pma_static_assets_are_served_separately_from_legacy_static(tmp_path):
 
     assert asset_response.status_code == 200
     assert "max-age=31536000" in asset_response.headers.get("Cache-Control", "")
-    assert client.get("/legacy").status_code == 200
+    assert client.get("/legacy").status_code == 404
+    assert client.get("/static/generated/app.js").status_code == 404
 
 
-def test_pma_index_csp_allows_sveltekit_bootstrap_without_weakening_legacy(tmp_path):
+def test_pma_index_csp_allows_sveltekit_bootstrap(tmp_path):
     hub_root = tmp_path / "hub"
     seed_hub_files(hub_root, force=True)
     client = TestClient(create_hub_app(hub_root))
 
     pma_csp = client.get("/pma").headers["Content-Security-Policy"]
-    legacy_csp = client.get("/legacy").headers["Content-Security-Policy"]
 
     assert "script-src 'self' 'sha256-" in pma_csp
     assert "'unsafe-inline'" not in pma_csp.split("script-src", 1)[1].split(";", 1)[0]
+
+
+def test_legacy_hub_ui_is_env_opt_in(tmp_path, monkeypatch):
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    monkeypatch.setenv("CAR_ENABLE_LEGACY_UI", "1")
+    client = TestClient(create_hub_app(hub_root))
+
+    legacy_response = client.get("/legacy")
+    legacy_csp = legacy_response.headers["Content-Security-Policy"]
+
+    assert legacy_response.status_code == 200
+    assert "<title>Codex Autorunner</title>" in legacy_response.text
+    assert client.get("/static/generated/app.js").status_code == 200
     assert "script-src 'self';" in legacy_csp
 
 
@@ -132,7 +146,7 @@ def test_pma_base_path_routes_redirect_and_serve_spa(tmp_path):
     assert '"/_app/' not in response.text
 
 
-def test_repo_mount_frontend_routes_are_legacy_gated(hub_env):
+def test_repo_mount_frontend_routes_redirect_to_pma_by_default(hub_env):
     client = TestClient(create_hub_app(hub_env.hub_root), follow_redirects=False)
     repo_id = hub_env.repo_id
 
@@ -143,6 +157,19 @@ def test_repo_mount_frontend_routes_are_legacy_gated(hub_env):
     repo_root = client.get(f"/repos/{repo_id}/")
     assert repo_root.status_code == 200
     assert "<title>PMA Hub</title>" in repo_root.text
+
+    legacy_prompt = client.get(f"/repos/{repo_id}/terminal")
+    assert legacy_prompt.status_code == 307
+    assert legacy_prompt.headers["location"] == f"/repos/{repo_id}"
+
+    legacy_terminal = client.get(f"/legacy/repos/{repo_id}/terminal")
+    assert legacy_terminal.status_code == 404
+
+
+def test_repo_mount_legacy_reference_routes_are_env_opt_in(hub_env, monkeypatch):
+    monkeypatch.setenv("CAR_ENABLE_LEGACY_UI", "1")
+    client = TestClient(create_hub_app(hub_env.hub_root), follow_redirects=False)
+    repo_id = hub_env.repo_id
 
     legacy_prompt = client.get(f"/repos/{repo_id}/terminal")
     assert legacy_prompt.status_code == 200
@@ -181,7 +208,10 @@ def test_inline_script_hashes_match_malformed_end_tag_spacing():
     ]
 
 
-def test_legacy_repo_gate_escapes_repo_and_query_derived_href_values(hub_env):
+def test_legacy_repo_gate_escapes_repo_and_query_derived_href_values(
+    hub_env, monkeypatch
+):
+    monkeypatch.setenv("CAR_ENABLE_LEGACY_UI", "1")
     client = TestClient(create_hub_app(hub_env.hub_root), follow_redirects=False)
     payload = "%22%3E%3Cimg%20src=x%20onerror=alert(1)%3E"
 
@@ -221,6 +251,7 @@ async def test_legacy_repo_mount_debug_page_escapes_deep_path_query_href_values(
         build_repo_app=build_repo_app,
         logger=None,
         hub_started=lambda: False,
+        legacy_ui_enabled=True,
     )
 
     await app(

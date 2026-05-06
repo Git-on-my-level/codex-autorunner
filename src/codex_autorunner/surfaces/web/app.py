@@ -1,6 +1,7 @@
 import asyncio
 import html as html_lib
 import logging
+import os
 import sqlite3
 import threading
 import time
@@ -102,6 +103,11 @@ _LEGACY_REPO_FRONTEND_TABS = {
     "terminal",
     "settings",
 }
+_LEGACY_UI_ENV = "CAR_ENABLE_LEGACY_UI"
+
+
+def _legacy_ui_enabled() -> bool:
+    return os.getenv(_LEGACY_UI_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 class _IdlePrunable(Protocol):
@@ -210,6 +216,7 @@ def create_hub_app(
     context = build_hub_context(hub_root, base_path)
     app = FastAPI(redirect_slashes=False)
     apply_hub_context(app, context)
+    legacy_ui_enabled = _legacy_ui_enabled()
     repo_context = build_app_context(
         context.config.root, context.base_path, context.config
     )
@@ -222,7 +229,8 @@ def create_hub_app(
     app.state.static_assets_lock = threading.Lock()
     app.state.hub_static_assets = None
     app.state.orchestration_housekeeping = None
-    app.mount("/static", static_files, name="static")
+    if legacy_ui_enabled:
+        app.mount("/static", static_files, name="legacy-static")
     pma_static_dir, pma_static_context = resolve_pma_static_dir()
     app.state.pma_static_dir = pma_static_dir
     app.state.pma_static_assets_context = pma_static_context
@@ -277,6 +285,7 @@ def create_hub_app(
             server_overrides=repo_server_overrides,
             hub_config=context.config,
         ),
+        legacy_ui_enabled=legacy_ui_enabled,
     )
 
     # Mount lightweight placeholders immediately so repo URLs remain routable
@@ -916,9 +925,11 @@ def create_hub_app(
         target = f"{context.base_path}/pma" if context.base_path else "/pma"
         return RedirectResponse(target, status_code=307)
 
-    @app.get("/legacy", include_in_schema=False)
-    def legacy_hub_index():
-        return _legacy_index_response()
+    if legacy_ui_enabled:
+
+        @app.get("/legacy", include_in_schema=False)
+        def legacy_hub_index():
+            return _legacy_index_response()
 
     @app.get("/pma", include_in_schema=False)
     @app.get("/pma-memory", include_in_schema=False)
@@ -949,6 +960,13 @@ def create_hub_app(
     def legacy_repo_frontend_gate(repo_id: str, request: Request, *, legacy_tab: str):
         query = request.url.query
         encoded_repo_id = quote(repo_id, safe="")
+        pma_target = (
+            f"{context.base_path}/repos/{encoded_repo_id}"
+            if context.base_path
+            else f"/repos/{encoded_repo_id}"
+        )
+        if not legacy_ui_enabled:
+            return RedirectResponse(pma_target, status_code=307)
         legacy_target = (
             f"{context.base_path}/legacy/repos/{encoded_repo_id}/{legacy_tab}"
             if context.base_path
@@ -956,11 +974,6 @@ def create_hub_app(
         )
         if query:
             legacy_target = f"{legacy_target}?{query}"
-        pma_target = (
-            f"{context.base_path}/repos/{encoded_repo_id}"
-            if context.base_path
-            else f"/repos/{encoded_repo_id}"
-        )
         legacy_target_attr = html_lib.escape(legacy_target, quote=True)
         pma_target_attr = html_lib.escape(pma_target, quote=True)
         html = f"""<!doctype html>

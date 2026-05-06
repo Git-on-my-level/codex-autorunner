@@ -183,7 +183,7 @@ def warn_on_stale_static_assets(static_dir: Path, logger: logging.Logger) -> Non
     safe_log(
         logger,
         logging.WARNING,
-        "Static assets appear stale; run `pnpm run build`. Newer sources: %s%s",
+        "Legacy UI static assets appear stale; run `make legacy-ui-build`. Newer sources: %s%s",
         preview,
         suffix,
     )

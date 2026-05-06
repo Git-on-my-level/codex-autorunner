@@ -91,12 +91,14 @@ class _LazyRepoApp:
         build_repo_app: Callable[[Path], ASGIApp],
         logger: logging.Logger,
         hub_started: Callable[[], bool],
+        legacy_ui_enabled: bool = False,
     ) -> None:
         self.prefix = prefix
         self.repo_path = repo_path
         self._build_repo_app = build_repo_app
         self._logger = logger
         self._hub_started = hub_started
+        self._legacy_ui_enabled = legacy_ui_enabled
         self._build_lock: Optional[asyncio.Lock] = None
         self._sub_app: Optional[ASGIApp] = None
         self._lifespan: Optional[AbstractAsyncContextManager[Any]] = None
@@ -179,6 +181,14 @@ class _LazyRepoApp:
                 return
             if (
                 not legacy_mount
+                and not self._legacy_ui_enabled
+                and tab in _LEGACY_FRONTEND_TABS
+            ):
+                await _send_redirect(send, pma_repo_location)
+                return
+            if (
+                not legacy_mount
+                and self._legacy_ui_enabled
                 and tab in _LEGACY_FRONTEND_TABS
                 and not _is_legacy_frontend_opt_in(query_string)
             ):
@@ -230,10 +240,13 @@ class HubMountManager:
         app: FastAPI,
         context: HubAppContext,
         build_repo_app: Callable[[Path], ASGIApp],
+        *,
+        legacy_ui_enabled: bool = False,
     ) -> None:
         self.app = app
         self.context = context
         self._build_repo_app = build_repo_app
+        self._legacy_ui_enabled = legacy_ui_enabled
 
         self._mounted_repos: set[str] = set()
         self._mount_errors: dict[str, str] = {}
@@ -362,6 +375,7 @@ class HubMountManager:
                 build_repo_app=self._build_repo_app,
                 logger=self.app.state.logger,
                 hub_started=lambda: bool(getattr(self.app.state, "hub_started", False)),
+                legacy_ui_enabled=self._legacy_ui_enabled,
             )
         except ConfigError as exc:
             self._mount_errors[prefix] = str(exc)
@@ -396,7 +410,8 @@ class HubMountManager:
             return False
 
         self.app.mount(self._mount_path(prefix), sub_app)
-        self.app.mount(f"/legacy/repos/{prefix}", sub_app)
+        if self._legacy_ui_enabled:
+            self.app.mount(f"/legacy/repos/{prefix}", sub_app)
         self._mounted_repos.add(prefix)
         self._repo_apps[prefix] = sub_app
         if prefix not in self._mount_order:

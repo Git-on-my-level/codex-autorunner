@@ -1,6 +1,8 @@
 # Static Assets - Agent Guide
 
-This directory holds the web UI shell and generated assets.
+This directory holds the legacy/debug CAR UI shell and generated assets. The
+default hub UI is the Svelte PMA Hub in `../pma_frontend/`, built into
+`../pma_static/`.
 
 ## Route Here When
 
@@ -16,6 +18,6 @@ This directory holds the web UI shell and generated assets.
 
 ## Validation
 
-- Run `pnpm run build` after TS changes.
+- Run `make legacy-ui-build` after TS changes.
 - Run `make frontend-check` after HTML/CSS changes.
 - If static assets fail to load or refresh, continue in `../surfaces/web/AGENTS.md`.

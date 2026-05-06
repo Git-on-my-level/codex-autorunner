@@ -7,7 +7,8 @@ interface and how to secure it.
 ## Scope and threat model
 
 - The web server exposes a FastAPI HTTP API and the PMA Hub web UI. Legacy
-  terminal/debug UI surfaces can still be exposed for migration and debugging.
+  terminal/debug UI surfaces are opt-in with `CAR_ENABLE_LEGACY_UI=1` for
+  migration, reference, and benchmarking.
 - The UI/API can run code and modify files in bound workspaces.
 - There is no built-in multi-user auth or per-endpoint role separation.
 
@@ -36,9 +37,8 @@ The following endpoints remain public so health checks and static assets work:
 - `/` (UI shell)
 - `/pma`, `/dashboard`, `/repos`, `/worktrees`, `/tickets`, `/contextspace/*`,
   and `/settings` (PMA Hub shell)
-- `/static/*`
 - `/_app/*`
-- `/legacy` (legacy/debug shell)
+- `/static/*` and `/legacy` only when `CAR_ENABLE_LEGACY_UI=1`
 - `/health`
 - `/cat/*`
 

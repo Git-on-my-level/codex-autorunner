@@ -40,6 +40,8 @@ _LANE_PREFIXES: dict[ScopedValidationLane, tuple[str, ...]] = {
         "tests/tickets",
     ),
     "web-ui": (
+        "src/codex_autorunner/pma_frontend",
+        "src/codex_autorunner/pma_static",
         "src/codex_autorunner/static",
         "src/codex_autorunner/static_src",
         "src/codex_autorunner/surfaces/web",
