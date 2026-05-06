@@ -63,6 +63,14 @@ export type TicketQueueRun = {
   status: WorkStatus;
 };
 
+export type TicketQueueAction = {
+  action: 'start' | 'stop' | 'restart';
+  enabled: boolean;
+  label: string;
+  requiresConfirmation: boolean;
+  disabledReason: string | null;
+};
+
 export type TicketListViewModel = {
   title: string;
   eyebrow: string;
@@ -74,6 +82,7 @@ export type TicketListViewModel = {
   filters: { id: TicketFilter; label: string; count: number }[];
   workspaceFilters: { id: string; label: string; count: number }[];
   queueRun: TicketQueueRun | null;
+  queueActions: TicketQueueAction[];
   flowStatus: TicketFlowStatusViewModel;
   rows: TicketListRow[];
 };
@@ -176,6 +185,7 @@ export function buildTicketListViewModel(source: TicketSourceData, owner: Ticket
     })),
     workspaceFilters: buildWorkspaceFilters(rowsWithCurrent),
     queueRun,
+    queueActions: buildQueueActions(queueRun, source.runs, rowsWithCurrent),
     flowStatus,
     rows: rowsWithCurrent
   };
@@ -324,6 +334,60 @@ function findQueueRunFromRows(rows: TicketListRow[]): TicketQueueRun | null {
     rowRuns[0] ??
     null
   );
+}
+
+function buildQueueActions(queueRun: TicketQueueRun | null, runs: PmaRunProgress[], rows: TicketListRow[]): TicketQueueAction[] {
+  const run = queueRun ? runs.find((candidate) => candidate.id === queueRun.id) ?? null : null;
+  const rawActions = Array.isArray(run?.raw.action_policy) ? run.raw.action_policy : [];
+  const projected = rawActions
+    .map(queueActionFromPolicy)
+    .filter((action): action is TicketQueueAction => action !== null);
+  if (projected.length > 0) return orderQueueActions(projected);
+  return [
+    {
+      action: 'start',
+      enabled: !queueRun && rows.some((row) => row.status !== 'done'),
+      label: 'Start queue',
+      requiresConfirmation: false,
+      disabledReason: queueRun ? 'Ticket flow is already active' : 'No open tickets'
+    },
+    {
+      action: 'stop',
+      enabled: false,
+      label: 'Stop queue',
+      requiresConfirmation: false,
+      disabledReason: 'No active flow run'
+    },
+    {
+      action: 'restart',
+      enabled: false,
+      label: 'Restart queue',
+      requiresConfirmation: true,
+      disabledReason: 'No restartable flow run'
+    }
+  ];
+}
+
+function queueActionFromPolicy(value: unknown): TicketQueueAction | null {
+  const action = asRecord(value);
+  const visibility = asRecord(action.surface_visibility);
+  if (visibility.queue !== true) return null;
+  const name = stringFromRaw(action, ['action']);
+  if (name !== 'start' && name !== 'stop' && name !== 'restart') return null;
+  return {
+    action: name,
+    enabled: action.enabled === true,
+    label: stringFromRaw(action, ['label']) ?? name,
+    requiresConfirmation: action.requires_confirmation === true,
+    disabledReason: stringFromRaw(action, ['disabled_reason'])
+  };
+}
+
+function orderQueueActions(actions: TicketQueueAction[]): TicketQueueAction[] {
+  const byAction = new Map(actions.map((action) => [action.action, action]));
+  return (['start', 'stop', 'restart'] as const)
+    .map((action) => byAction.get(action))
+    .filter((action): action is TicketQueueAction => Boolean(action));
 }
 
 function runMatchesOwner(run: PmaRunProgress, owner: Exclude<TicketOwnerScope, null>): boolean {

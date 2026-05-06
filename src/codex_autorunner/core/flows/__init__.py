@@ -1,3 +1,10 @@
+from .action_policy import (
+    FlowActionDescriptor,
+    FlowActionPolicySnapshot,
+    build_flow_action_policy,
+    build_flow_action_policy_payload,
+    flow_action_descriptors_for_surface,
+)
 from .archive_helpers import archive_flow_run_artifacts
 from .catalog import (
     FLOW_ACTION_NAMES,
@@ -40,6 +47,8 @@ __all__ = [
     "FLOW_ACTION_SPECS",
     "FLOW_ACTION_TOKENS",
     "FLOW_ACTIONS_WITH_RUN_PICKER",
+    "FlowActionDescriptor",
+    "FlowActionPolicySnapshot",
     "FlowActionSpec",
     "FlowArtifact",
     "FlowController",
@@ -55,7 +64,10 @@ __all__ = [
     "StepOutcome",
     "TicketFlowDispatchSnapshot",
     "archive_flow_run_artifacts",
+    "build_flow_action_policy",
+    "build_flow_action_policy_payload",
     "flow_action_label",
+    "flow_action_descriptors_for_surface",
     "flow_action_spec",
     "flow_action_summary",
     "flow_duration_seconds",

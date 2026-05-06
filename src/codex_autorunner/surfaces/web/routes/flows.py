@@ -23,6 +23,7 @@ from ....core.file_chat_keys import (
     ticket_stable_id,
 )
 from ....core.flows import (
+    FlowActionPolicySnapshot,
     FlowController,
     FlowDefinition,
     FlowEventType,
@@ -30,6 +31,7 @@ from ....core.flows import (
     FlowRunStatus,
     FlowStore,
     archive_flow_run_artifacts,
+    build_flow_action_policy_payload,
     flow_run_duration_seconds,
     parse_flow_timestamp,
 )
@@ -43,6 +45,7 @@ from ....core.flows.ux_helpers import (
     build_flow_status_snapshot,
     ensure_worker,
     issue_md_path,
+    resolve_ticket_flow_archive_mode,
     seed_issue_from_github,
     seed_issue_from_text,
 )
@@ -538,6 +541,7 @@ class FlowStatusResponse(BaseModel):
     active_tool: Optional[Dict[str, Any]] = None
     freshness: Optional[Dict[str, Any]] = None
     worker_health: Optional[FlowWorkerHealthResponse] = None
+    action_policy: list[Dict[str, Any]] = Field(default_factory=list)
 
     @classmethod
     def from_record(
@@ -660,6 +664,30 @@ def _build_flow_status_response(
         freshness=snapshot.get("freshness"),
     )
     resp.ticket_progress = snapshot.get("ticket_progress")
+    ticket_progress = snapshot.get("ticket_progress")
+    total_tickets = (
+        ticket_progress.get("total") if isinstance(ticket_progress, dict) else None
+    )
+    done_tickets = (
+        ticket_progress.get("done") if isinstance(ticket_progress, dict) else None
+    )
+    has_open_tickets = (
+        isinstance(total_tickets, int)
+        and isinstance(done_tickets, int)
+        and total_tickets > done_tickets
+    )
+    worker_health = snapshot.get("worker_health")
+    resp.action_policy = build_flow_action_policy_payload(
+        FlowActionPolicySnapshot(
+            status=record.status,
+            worker_health_status=(
+                worker_health.status if worker_health is not None else None
+            ),
+            archive_mode=resolve_ticket_flow_archive_mode(record),
+            has_run=True,
+            has_open_tickets=has_open_tickets,
+        )
+    )
     if lite:
         resp.state = _build_lite_flow_state(record, snapshot, resp.status)
     elif snapshot.get("state") is not None:

@@ -51,9 +51,7 @@
   } = $props();
 
   const visibleRows = $derived(list ? filterTicketRows(list.rows, selectedFilter, selectedWorkspaceFilter) : []);
-  const queueBusy = $derived(Boolean(list?.queueRun?.status === 'running'));
-  const canStopQueue = $derived(Boolean(list?.queueRun?.id && ['running', 'waiting', 'blocked', 'failed'].includes(list.queueRun.status)));
-  const canRestartQueue = $derived(Boolean(list?.queueRun?.id && visibleRows.length > 0));
+  const queueActions = $derived(list?.queueActions ?? []);
   const contractIssues = $derived(sectionIssues.filter((issue) => issue.id === 'ticket_contract'));
   const timelineIssues = $derived(sectionIssues.filter((issue) => issue.id === 'timeline'));
   const artifactIssues = $derived(sectionIssues.filter((issue) => issue.id === 'artifacts'));
@@ -140,6 +138,18 @@
     const value = Number(routeId);
     return Number.isInteger(value) ? value : null;
   }
+
+  function queueActionLabel(action: 'start' | 'stop' | 'restart'): string {
+    return queueActions.find((candidate) => candidate.action === action)?.label ?? (action === 'start' ? 'Start queue' : action === 'stop' ? 'Stop queue' : 'Restart queue');
+  }
+
+  function queueActionEnabled(action: 'start' | 'stop' | 'restart'): boolean {
+    return queueActions.find((candidate) => candidate.action === action)?.enabled === true;
+  }
+
+  function queueActionReason(action: 'start' | 'stop' | 'restart'): string | null {
+    return queueActions.find((candidate) => candidate.action === action)?.disabledReason ?? null;
+  }
 </script>
 
 {#if viewState === 'loading'}
@@ -201,11 +211,9 @@
               </button>
               {#if queueMenuOpen}
                 <div class="queue-menu" role="menu">
-                  <button type="button" role="menuitem" disabled={queueBusy} onclick={() => { queueMenuOpen = false; onQueueCommand?.('start'); }}>
-                    {queueBusy ? 'Running' : 'Start queue'}
-                  </button>
-                  <button type="button" role="menuitem" disabled={!canStopQueue} onclick={() => { queueMenuOpen = false; onQueueCommand?.('stop'); }}>Stop queue</button>
-                  <button type="button" role="menuitem" disabled={!canRestartQueue} onclick={() => { queueMenuOpen = false; onQueueCommand?.('restart'); }}>Restart queue</button>
+                  <button type="button" role="menuitem" disabled={!queueActionEnabled('start')} title={queueActionReason('start')} onclick={() => { queueMenuOpen = false; onQueueCommand?.('start'); }}>{queueActionLabel('start')}</button>
+                  <button type="button" role="menuitem" disabled={!queueActionEnabled('stop')} title={queueActionReason('stop')} onclick={() => { queueMenuOpen = false; onQueueCommand?.('stop'); }}>{queueActionLabel('stop')}</button>
+                  <button type="button" role="menuitem" disabled={!queueActionEnabled('restart')} title={queueActionReason('restart')} onclick={() => { queueMenuOpen = false; onQueueCommand?.('restart'); }}>{queueActionLabel('restart')}</button>
                 </div>
               {/if}
             </div>

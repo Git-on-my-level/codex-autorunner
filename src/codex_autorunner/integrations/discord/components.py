@@ -2,6 +2,11 @@ from __future__ import annotations
 
 from typing import Any, Optional, Sequence
 
+from ...core.flows.action_policy import (
+    FlowActionPolicySnapshot,
+    build_flow_action_policy,
+    flow_action_descriptors_for_surface,
+)
 from ...core.update_targets import (
     UpdateTargetDefinition,
     all_update_target_definitions,
@@ -258,76 +263,49 @@ def build_flow_status_buttons(
     status: str,
     *,
     include_refresh: bool = True,
+    worker_health_status: Optional[str] = None,
+    archive_mode: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    buttons: list[dict[str, Any]] = []
-
-    if status == "paused":
-        buttons.append(
-            build_button(
-                "Resume",
-                f"flow:{run_id}:resume",
-                style=DISCORD_BUTTON_STYLE_SUCCESS,
-            )
+    archive_mode = archive_mode or (
+        "ready"
+        if status in {"completed", "stopped", "failed", "superseded"}
+        else "confirm" if status in {"paused", "stopping"} else "blocked"
+    )
+    descriptors = build_flow_action_policy(
+        FlowActionPolicySnapshot(
+            status=status,
+            worker_health_status=worker_health_status,
+            archive_mode=archive_mode,
+            has_run=bool(run_id),
         )
-        buttons.append(
-            build_button(
-                "Restart",
-                f"flow:{run_id}:restart",
-                style=DISCORD_BUTTON_STYLE_SECONDARY,
-            )
+    )
+    flow_actions = [
+        descriptor
+        for descriptor in flow_action_descriptors_for_surface(
+            descriptors, "flow_status", enabled_only=True
         )
-        rows.append(build_action_row(buttons))
-        buttons = []
-        buttons.append(
+        if include_refresh or descriptor.action != "refresh"
+    ]
+    style_map = {
+        "success": DISCORD_BUTTON_STYLE_SUCCESS,
+        "danger": DISCORD_BUTTON_STYLE_DANGER,
+        "primary": DISCORD_BUTTON_STYLE_PRIMARY,
+        "secondary": DISCORD_BUTTON_STYLE_SECONDARY,
+        "warning": DISCORD_BUTTON_STYLE_SECONDARY,
+    }
+    chunk_size = 2 if status == "paused" else 5
+    for start in range(0, len(flow_actions), chunk_size):
+        buttons = [
             build_button(
-                "Archive",
-                f"flow:{run_id}:archive",
-                style=DISCORD_BUTTON_STYLE_SECONDARY,
+                descriptor.label,
+                f"flow:{run_id}:{descriptor.action}",
+                style=style_map.get(descriptor.style, DISCORD_BUTTON_STYLE_SECONDARY),
             )
-        )
-    elif status in {"completed", "stopped", "failed"}:
-        buttons.append(
-            build_button(
-                "Restart",
-                f"flow:{run_id}:restart",
-                style=DISCORD_BUTTON_STYLE_SECONDARY,
-            )
-        )
-        buttons.append(
-            build_button(
-                "Archive",
-                f"flow:{run_id}:archive",
-                style=DISCORD_BUTTON_STYLE_SECONDARY,
-            )
-        )
-        if include_refresh:
-            buttons.append(
-                build_button(
-                    "Refresh",
-                    f"flow:{run_id}:refresh",
-                    style=DISCORD_BUTTON_STYLE_SECONDARY,
-                )
-            )
-    else:
-        if include_refresh:
-            buttons.append(
-                build_button(
-                    "Stop",
-                    f"flow:{run_id}:stop",
-                    style=DISCORD_BUTTON_STYLE_DANGER,
-                )
-            )
-            buttons.append(
-                build_button(
-                    "Refresh",
-                    f"flow:{run_id}:refresh",
-                    style=DISCORD_BUTTON_STYLE_SECONDARY,
-                )
-            )
-
-    if buttons:
-        rows.append(build_action_row(buttons))
+            for descriptor in flow_actions[start : start + chunk_size]
+        ]
+        if buttons:
+            rows.append(build_action_row(buttons))
 
     return rows
 

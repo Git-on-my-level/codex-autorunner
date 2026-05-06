@@ -10,7 +10,10 @@ from .....core.coercion import coerce_int
 from .....core.config import ConfigError, load_repo_config
 from .....core.flows import (
     FLOW_ACTION_TOKENS,
+    FlowActionPolicySnapshot,
     FlowStore,
+    build_flow_action_policy,
+    flow_action_descriptors_for_surface,
     flow_duration_seconds,
     flow_help_lines,
     flow_run_duration_seconds,
@@ -1028,77 +1031,32 @@ class FlowCommands(TelegramCommandSupportMixin):
                     return encode_flow_callback(action, run_id)
                 raise
 
-        rows: list[list[InlineButton]] = []
-        if status == FlowRunStatus.PAUSED:
-            rows.append(
-                [
-                    InlineButton(
-                        "Resume",
-                        _flow_callback_data("resume"),
-                    ),
-                ]
+        descriptors = build_flow_action_policy(
+            FlowActionPolicySnapshot(
+                status=status,
+                worker_health_status=health.status,
+                archive_mode=resolve_ticket_flow_archive_mode(record),
+                has_run=True,
             )
-            rows.append(
-                [
-                    InlineButton(
-                        "Archive",
-                        _flow_callback_data("archive"),
-                    )
-                ]
+        )
+        surface_descriptors = flow_action_descriptors_for_surface(
+            descriptors, "flow_status", enabled_only=True
+        )
+        if any(descriptor.action == "recover" for descriptor in surface_descriptors):
+            surface_descriptors = [
+                descriptor
+                for descriptor in surface_descriptors
+                if descriptor.action != "stop"
+            ]
+        buttons = [
+            InlineButton(
+                descriptor.label,
+                _flow_callback_data(descriptor.action),
             )
-        elif status.is_terminal():
-            rows.append(
-                [
-                    InlineButton(
-                        "Archive",
-                        _flow_callback_data("archive"),
-                    ),
-                ]
-            )
-            rows.append(
-                [
-                    InlineButton(
-                        "Refresh",
-                        _flow_callback_data("refresh"),
-                    )
-                ]
-            )
-        else:
-            if health.status in {"dead", "mismatch", "invalid", "absent"}:
-                rows.append(
-                    [
-                        InlineButton(
-                            "Recover",
-                            _flow_callback_data("recover"),
-                        ),
-                        InlineButton(
-                            "Refresh",
-                            _flow_callback_data("refresh"),
-                        ),
-                    ]
-                )
-            elif status == FlowRunStatus.RUNNING:
-                rows.append(
-                    [
-                        InlineButton(
-                            "Stop",
-                            _flow_callback_data("stop"),
-                        ),
-                        InlineButton(
-                            "Refresh",
-                            _flow_callback_data("refresh"),
-                        ),
-                    ]
-                )
-            else:
-                rows.append(
-                    [
-                        InlineButton(
-                            "Refresh",
-                            _flow_callback_data("refresh"),
-                        )
-                    ]
-                )
+            for descriptor in surface_descriptors
+            if descriptor.action != "restart"
+        ]
+        rows = [buttons[start : start + 2] for start in range(0, len(buttons), 2)]
         return build_inline_keyboard(rows) if rows else None
 
     def _build_flow_status_card(
