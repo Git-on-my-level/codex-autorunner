@@ -6753,8 +6753,9 @@ async def test_discord_managed_thread_queue_worker_sends_placeholder_for_empty_r
         *,
         hooks: object = None,
         runtime_event_state: object = None,
+        record_finalization_failure: bool = True,
     ) -> dict[str, object]:
-        _ = self, hooks, runtime_event_state
+        _ = self, hooks, runtime_event_state, record_finalization_failure
         assert started is queued_started
         return {
             "status": "ok",
@@ -6870,8 +6871,9 @@ async def test_discord_managed_thread_queue_worker_formats_local_file_links(
         *,
         hooks: object = None,
         runtime_event_state: object = None,
+        record_finalization_failure: bool = True,
     ) -> dict[str, object]:
-        _ = self, hooks, runtime_event_state
+        _ = self, hooks, runtime_event_state, record_finalization_failure
         assert started is queued_started
         return {
             "status": "ok",

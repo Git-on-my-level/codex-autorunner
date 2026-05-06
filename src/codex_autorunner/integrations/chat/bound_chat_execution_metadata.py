@@ -3,7 +3,10 @@ from __future__ import annotations
 from typing import Any, Mapping, Optional, Sequence
 
 _BOUND_CHAT_EXECUTION_KEY = "bound_chat_execution"
-_SUPPORTED_SURFACE_KINDS = frozenset({"discord", "telegram"})
+_SUPPORTED_SURFACE_KINDS = frozenset({"web", "discord", "telegram"})
+_SURFACE_KIND_ALIASES = {
+    "pma_web": "web",
+}
 
 
 def _normalize_optional_text(value: Any) -> Optional[str]:
@@ -18,6 +21,7 @@ def _normalize_surface_kind(value: Any) -> Optional[str]:
     if normalized is None:
         return None
     lowered = normalized.lower()
+    lowered = _SURFACE_KIND_ALIASES.get(lowered, lowered)
     if lowered not in _SUPPORTED_SURFACE_KINDS:
         return None
     return lowered

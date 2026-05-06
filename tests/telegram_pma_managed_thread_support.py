@@ -993,8 +993,9 @@ async def test_managed_thread_queue_worker_wraps_execution_with_typing_indicator
         *,
         hooks: object = None,
         runtime_event_state: object = None,
+        record_finalization_failure: bool = True,
     ) -> dict[str, object]:
-        _ = self, hooks, runtime_event_state
+        _ = self, hooks, runtime_event_state, record_finalization_failure
         assert started is queued_started
         events.append("finalize")
         return {

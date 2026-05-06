@@ -40,12 +40,23 @@ def create_thread_target_with_profile_fallback(
         )
     definition = get_definition(agent_id)
     if definition is None:
+        profile_agent_id = f"{agent_id}-{agent_profile}"
+        try:
+            definition = get_definition(profile_agent_id)
+        except AttributeError:
+            descriptors = getattr(catalog, "descriptors", None)
+            if not isinstance(descriptors, dict) or profile_agent_id not in descriptors:
+                raise
+            definition = descriptors[profile_agent_id]
+    if definition is None:
         raise (
             key_error
             if key_error is not None
             else KeyError(f"Unknown agent definition '{agent_id}'")
         )
-    if "durable_threads" not in getattr(definition, "capabilities", frozenset()):
+    if hasattr(definition, "capabilities") and (
+        "durable_threads" not in definition.capabilities
+    ):
         raise ValueError(
             f"Agent definition '{agent_id}' does not support durable_threads"
         )

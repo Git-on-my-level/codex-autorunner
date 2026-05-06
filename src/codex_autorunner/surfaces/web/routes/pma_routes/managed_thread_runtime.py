@@ -435,7 +435,7 @@ def _build_pma_managed_thread_coordinator(
         state_root=request.app.state.config.root,
         surface=ManagedThreadSurfaceInfo(
             log_label="PMA",
-            surface_kind="pma_web",
+            surface_kind="web",
             surface_key=managed_thread_id,
         ),
         errors=_pma_finalization_errors(request),
@@ -654,14 +654,14 @@ def _build_pma_queue_delivery_hooks(
 ) -> ManagedThreadDurableDeliveryHooks:
     surface = ManagedThreadSurfaceInfo(
         log_label="PMA",
-        surface_kind="pma_web",
+        surface_kind="web",
         surface_key=managed_thread_id,
     )
 
     class _PmaQueueDeliveryAdapter:
         @property
         def adapter_key(self) -> str:
-            return "pma_web"
+            return "web"
 
         async def deliver_managed_thread_record(
             self, record: Any, *, claim: Any
@@ -902,7 +902,9 @@ def build_managed_thread_runtime_routes(
                             else {}
                         ),
                     },
-                    origin_kind="pma_web",
+                    origin_kind="surface",
+                    origin_surface_kind="web",
+                    origin_surface_key=managed_thread_id,
                     progress_targets=progress_targets,
                 ),
             )

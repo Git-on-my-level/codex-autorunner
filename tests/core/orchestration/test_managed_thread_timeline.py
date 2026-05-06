@@ -287,3 +287,78 @@ def test_timeline_includes_delivery_state_items(tmp_path: Path) -> None:
     assert len(delivery) == 1
     assert delivery[0]["item_id"] == "delivery:delivery-1"
     assert delivery[0]["payload"]["state"] == "pending"
+
+
+def test_timeline_projects_equivalent_delivery_state_for_chat_surfaces(
+    tmp_path: Path,
+) -> None:
+    hub_root, store, thread_id = _store(tmp_path)
+    turn = store.create_turn(thread_id, prompt="deliver everywhere")
+    turn_id = str(turn["managed_turn_id"])
+    assert store.mark_turn_finished(turn_id, status="ok", assistant_text="done")
+    ledger = SQLiteManagedThreadDeliveryLedger(hub_root, durable=False)
+    for surface_kind, surface_key in (
+        ("web", thread_id),
+        ("discord", "channel-1"),
+        ("telegram", "chat-1:55"),
+    ):
+        ledger.register_intent(
+            ManagedThreadDeliveryIntent(
+                delivery_id=f"delivery-{surface_kind}",
+                managed_thread_id=thread_id,
+                managed_turn_id=turn_id,
+                idempotency_key=build_managed_thread_delivery_idempotency_key(
+                    managed_thread_id=thread_id,
+                    managed_turn_id=turn_id,
+                    surface_kind=surface_kind,
+                    surface_key=surface_key,
+                ),
+                target=ManagedThreadDeliveryTarget(
+                    surface_kind=surface_kind,
+                    adapter_key=surface_kind,
+                    surface_key=surface_key,
+                ),
+                envelope=ManagedThreadDeliveryEnvelope(
+                    envelope_version="managed_thread_delivery.v1",
+                    final_status="ok",
+                    assistant_text="done",
+                ),
+            )
+        )
+
+    payload = build_managed_thread_timeline(
+        hub_root,
+        thread_store=store,
+        managed_thread_id=thread_id,
+    )
+
+    deliveries = {
+        item["payload"]["surface_kind"]: item
+        for item in payload["items"]
+        if item["kind"] == "delivery_state"
+    }
+    assert set(deliveries) == {"web", "discord", "telegram"}
+    assert {
+        surface_kind: {
+            "managed_turn_id": item["managed_turn_id"],
+            "state": item["payload"]["state"],
+            "final_status": item["payload"]["final_status"],
+        }
+        for surface_kind, item in deliveries.items()
+    } == {
+        "web": {
+            "managed_turn_id": turn_id,
+            "state": "pending",
+            "final_status": "ok",
+        },
+        "discord": {
+            "managed_turn_id": turn_id,
+            "state": "pending",
+            "final_status": "ok",
+        },
+        "telegram": {
+            "managed_turn_id": turn_id,
+            "state": "pending",
+            "final_status": "ok",
+        },
+    }

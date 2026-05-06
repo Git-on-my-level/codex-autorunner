@@ -1567,7 +1567,11 @@ def test_managed_thread_message_route_persists_pma_bound_chat_execution_metadata
 
     assert response.status_code == 200
     assert captured["request"].metadata["bound_chat_execution"] == {
-        "origin": {"kind": "pma_web"},
+        "origin": {
+            "kind": "surface",
+            "surface_kind": "web",
+            "surface_key": managed_thread_id,
+        },
         "progress_targets": [
             {"surface_kind": "discord", "surface_key": "channel-1"},
             {"surface_kind": "telegram", "surface_key": "100:200"},
@@ -1703,7 +1707,11 @@ def test_managed_thread_message_route_uses_binding_targets_for_queued_pma_execut
 
     assert response.status_code == 200
     assert captured["request"].metadata["bound_chat_execution"] == {
-        "origin": {"kind": "pma_web"},
+        "origin": {
+            "kind": "surface",
+            "surface_kind": "web",
+            "surface_key": managed_thread_id,
+        },
         "progress_targets": [
             {"surface_kind": "telegram", "surface_key": "100:200"},
         ],
