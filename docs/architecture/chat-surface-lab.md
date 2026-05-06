@@ -4,9 +4,9 @@ This document records the repo-local contract for the chat-surface lab
 initiative described in `.codex-autorunner/contextspace/spec.md`.
 
 The lab is a test-only architecture. It exists to give CAR one deterministic,
-headless, artifact-backed way to exercise Telegram, Discord, and future chat
-surfaces without relying on live platform accounts or screenshot-only manual
-verification.
+headless, artifact-backed way to exercise Telegram, Discord, PMA web, and future
+chat surfaces without relying on live platform accounts or screenshot-only
+manual verification.
 
 This document is intentionally aligned with the surrounding repo architecture:
 
@@ -15,6 +15,9 @@ This document is intentionally aligned with the surrounding repo architecture:
 - lab-only contracts, scenario models, and artifact shapes live under
   `tests/chat_surface_lab/`
 - reusable surface fixtures stay in `tests/chat_surface_harness/`
+- PMA web parity is driven through FastAPI test-client routes first, with route
+  responses projected into the same normalized transcript and evidence artifact
+  contract used by chat adapters
 - current high-signal end-to-end regressions continue to live in
   `tests/chat_surface_integration/` until later tickets migrate or wrap them
 
@@ -26,6 +29,8 @@ does not change Telegram, Discord, Hermes, or other runtime behavior.
 The chat-surface lab covers test infrastructure for:
 
 - driving the real Telegram and Discord service entrypoints
+- driving PMA web API routes for managed-thread timeline, progress/status,
+  action availability, pending interaction, and delivery-state projections
 - expressing backend-neutral scenario inputs
 - capturing normalized transcript and timeline outputs
 - declaring artifact bundles that later tickets will write
@@ -64,8 +69,8 @@ them to the test package layout.
 ### Preserve real surface entrypoints
 
 The lab must continue to drive the existing `TelegramBotService` and
-`DiscordBotService` seams rather than introducing a parallel fake business
-stack.
+`DiscordBotService` seams, and PMA web should use FastAPI route seams, rather
+than introducing a parallel fake business stack.
 
 ### Keep backend fixtures transport-neutral
 
@@ -157,6 +162,10 @@ Phase intent for those modules:
   Defines the stable artifact inventory that later runners and renderers will
   write to disk.
 
+PMA web parity adds `web_pma_simulator.py` as a route-backed adapter. It is not
+a separate harness family; it converts PMA web API state into the same
+normalized transcript and artifact contract that Discord and Telegram use.
+
 The package should stay importable at every phase, even while modules are still
 contract-first placeholders.
 
@@ -189,6 +198,11 @@ Later tickets should adopt the package in this order:
 
 The migration rule is intentionally conservative: foundation first, behavior
 unchanged until the lab contracts are ready to absorb real callers.
+
+Future UI surfaces should follow the PMA web pattern: add a surface target,
+drive real backend routes or service seams, and project canonical timeline,
+progress/status, available actions, pending interactions, and final delivery
+state into the common artifact bundle.
 
 ## Boundary Check
 

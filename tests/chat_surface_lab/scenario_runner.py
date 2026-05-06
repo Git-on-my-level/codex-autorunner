@@ -51,6 +51,11 @@ from tests.chat_surface_lab.transcript_models import (
     TranscriptEventKind,
     TranscriptTimeline,
 )
+from tests.chat_surface_lab.web_pma_simulator import (
+    WebPmaSurfaceSimulator,
+    build_web_pma_simulator,
+    close_web_pma_simulator,
+)
 
 SCENARIO_CORPUS_ROOT = Path(__file__).resolve().parent / "scenarios"
 _LATENCY_BUDGETS_MS = {entry.id: entry.max_ms for entry in CHAT_UX_LATENCY_BUDGETS}
@@ -165,7 +170,7 @@ class ScenarioRunResult:
 class _SurfaceRunContext:
     surface: SurfaceKind
     runtime: HermesFixtureRuntime
-    harness: DiscordSurfaceHarness | TelegramSurfaceHarness
+    harness: DiscordSurfaceHarness | TelegramSurfaceHarness | WebPmaSurfaceSimulator
     rest_client: Optional[FakeDiscordRest] = None
     bot_client: Optional[FakeTelegramBot] = None
     active_task: Optional[asyncio.Task[Any]] = None
@@ -385,7 +390,14 @@ class ChatSurfaceScenarioRunner:
                 task.cancel()
                 with contextlib.suppress(Exception):
                     await task
-            await context.harness.close()
+            if context.surface == SurfaceKind.WEB_PMA:
+                assert isinstance(context.harness, WebPmaSurfaceSimulator)
+                close_web_pma_simulator(context.harness)
+            else:
+                assert isinstance(
+                    context.harness, (DiscordSurfaceHarness, TelegramSurfaceHarness)
+                )
+                await context.harness.close()
             await runtime.close()
             while timeout_restorers:
                 restore = timeout_restorers.pop()
@@ -397,13 +409,15 @@ class ChatSurfaceScenarioRunner:
         scenario: ScenarioDefinition,
         surface: SurfaceKind,
         output_dir: Path,
-    ) -> DiscordSurfaceHarness | TelegramSurfaceHarness:
+    ) -> DiscordSurfaceHarness | TelegramSurfaceHarness | WebPmaSurfaceSimulator:
         timeout_seconds = scenario.harness_timeouts.get(surface, 8.0)
         harness_root = output_dir / "harness_root"
         if surface == SurfaceKind.DISCORD:
             return DiscordSurfaceHarness(harness_root, timeout_seconds=timeout_seconds)
         if surface == SurfaceKind.TELEGRAM:
             return TelegramSurfaceHarness(harness_root, timeout_seconds=timeout_seconds)
+        if surface == SurfaceKind.WEB_PMA:
+            return build_web_pma_simulator(harness_root)
         raise NotImplementedError(f"unsupported surface: {surface.value}")
 
     async def _setup_harness(
@@ -412,6 +426,11 @@ class ChatSurfaceScenarioRunner:
         context: _SurfaceRunContext,
         scenario: ScenarioDefinition,
     ) -> None:
+        if context.surface == SurfaceKind.WEB_PMA:
+            return
+        assert isinstance(
+            context.harness, (DiscordSurfaceHarness, TelegramSurfaceHarness)
+        )
         await context.harness.setup(
             agent="hermes",
             approval_mode=scenario.approval_mode,
@@ -425,6 +444,10 @@ class ChatSurfaceScenarioRunner:
         context: _SurfaceRunContext,
     ) -> Optional[str]:
         if context.thread_target_id:
+            return context.thread_target_id
+        if context.surface == SurfaceKind.WEB_PMA:
+            assert isinstance(context.harness, WebPmaSurfaceSimulator)
+            context.thread_target_id = context.harness.managed_thread_id
             return context.thread_target_id
         if context.surface == SurfaceKind.DISCORD:
             assert isinstance(context.harness, DiscordSurfaceHarness)
@@ -446,6 +469,8 @@ class ChatSurfaceScenarioRunner:
         return thread_target_id
 
     async def _await_surface_settled(self, context: _SurfaceRunContext) -> None:
+        if context.surface == SurfaceKind.WEB_PMA:
+            return
         if context.surface == SurfaceKind.DISCORD:
             assert isinstance(context.harness, DiscordSurfaceHarness)
             service = context.harness.service
@@ -473,7 +498,11 @@ class ChatSurfaceScenarioRunner:
     def _refresh_surface_result_metadata(
         self,
         context: _SurfaceRunContext,
-    ) -> FakeDiscordRest | FakeTelegramBot | None:
+    ) -> FakeDiscordRest | FakeTelegramBot | WebPmaSurfaceSimulator | None:
+        if context.surface == SurfaceKind.WEB_PMA:
+            assert isinstance(context.harness, WebPmaSurfaceSimulator)
+            context.harness.refresh_api_projection()
+            return context.harness
         if context.surface == SurfaceKind.DISCORD:
             assert isinstance(context.harness, DiscordSurfaceHarness)
             rest = context.harness.rest
@@ -511,6 +540,8 @@ class ChatSurfaceScenarioRunner:
             for fault in scenario.faults
             if not fault.surfaces or context.surface in fault.surfaces
         ]
+        if context.surface == SurfaceKind.WEB_PMA:
+            return
         if context.surface == SurfaceKind.DISCORD:
             fail_delete_ids: set[str] = set()
             fail_unknown_edit_ids: set[str] = set()
@@ -569,6 +600,25 @@ class ChatSurfaceScenarioRunner:
             text = str(action.payload.get("text") or "").strip()
             if not text:
                 raise AssertionError("send_message requires payload.text")
+            if context.surface == SurfaceKind.WEB_PMA:
+                assert isinstance(context.harness, WebPmaSurfaceSimulator)
+                if context.harness.managed_thread_id is None:
+                    context.harness.create_thread(
+                        agent=str(action.payload.get("agent") or "hermes")
+                    )
+                context.harness.send_message(
+                    message=text,
+                    wait_for_confirmation=bool(
+                        action.payload.get("wait_for_confirmation", True)
+                    ),
+                    busy_policy=self._normalize_optional_text(
+                        action.payload.get("busy_policy")
+                    ),
+                )
+                context.thread_target_id = context.harness.managed_thread_id
+                context.execution_id = context.harness.managed_turn_id
+                context.result = context.harness
+                return
             if context.surface == SurfaceKind.DISCORD:
                 assert isinstance(context.harness, DiscordSurfaceHarness)
                 attachments = _build_discord_attachment_payloads(
@@ -596,6 +646,8 @@ class ChatSurfaceScenarioRunner:
             text = str(action.payload.get("text") or "").strip()
             if not text:
                 raise AssertionError("start_message requires payload.text")
+            if context.surface == SurfaceKind.WEB_PMA:
+                raise AssertionError("web_pma does not support start_message")
             task_id = self._normalize_optional_text(action.payload.get("task_id"))
             task_key = task_id or "active"
             if context.surface == SurfaceKind.DISCORD:
@@ -657,6 +709,8 @@ class ChatSurfaceScenarioRunner:
             text = str(action.payload.get("text") or "").strip()
             if not text:
                 raise AssertionError("submit_active_message requires payload.text")
+            if context.surface == SurfaceKind.WEB_PMA:
+                raise AssertionError("web_pma does not support submit_active_message")
             if context.surface == SurfaceKind.DISCORD:
                 assert isinstance(context.harness, DiscordSurfaceHarness)
                 attachments = _build_discord_attachment_payloads(
@@ -685,6 +739,8 @@ class ChatSurfaceScenarioRunner:
             text = str(action.payload.get("text") or "").strip()
             if not text:
                 raise AssertionError("start_active_message requires payload.text")
+            if context.surface == SurfaceKind.WEB_PMA:
+                raise AssertionError("web_pma does not support start_active_message")
             task_id = self._normalize_optional_text(action.payload.get("task_id"))
             task_key = task_id or "active"
             if context.surface == SurfaceKind.DISCORD:
@@ -935,6 +991,40 @@ class ChatSurfaceScenarioRunner:
             context.surface_metadata["subscription_deduped"] = payload.get("deduped")
             return
 
+        if action.kind == "create_web_pma_thread":
+            if context.surface != SurfaceKind.WEB_PMA:
+                return
+            assert isinstance(context.harness, WebPmaSurfaceSimulator)
+            context.harness.create_thread(
+                agent=str(action.payload.get("agent") or "hermes"),
+                name=self._normalize_optional_text(action.payload.get("name")),
+            )
+            context.thread_target_id = context.harness.managed_thread_id
+            context.result = context.harness
+            return
+
+        if action.kind == "seed_web_pma_approval":
+            if context.surface != SurfaceKind.WEB_PMA:
+                return
+            assert isinstance(context.harness, WebPmaSurfaceSimulator)
+            context.harness.seed_approval_request(
+                request_id=str(action.payload.get("request_id") or "approval-1"),
+                description=str(
+                    action.payload.get("description") or "Approve PMA web action"
+                ),
+                command=str(action.payload.get("command") or "pytest -q"),
+            )
+            context.result = context.harness
+            return
+
+        if action.kind == "refresh_web_pma_projection":
+            if context.surface != SurfaceKind.WEB_PMA:
+                return
+            assert isinstance(context.harness, WebPmaSurfaceSimulator)
+            context.harness.refresh_api_projection()
+            context.result = context.harness
+            return
+
         if action.kind == "emit_automation_transition":
             store = PmaAutomationStore(context.harness.root)
             payload = dict(action.payload)
@@ -1098,12 +1188,16 @@ class ChatSurfaceScenarioRunner:
                 raise AssertionError(
                     "stop_active_thread requires thread_target_id from wait_for_running_execution"
                 )
+            if context.surface == SurfaceKind.WEB_PMA:
+                return
             await context.harness.orchestration_service().stop_thread(
                 context.thread_target_id
             )
             return
 
         if action.kind == "interrupt_active_turn":
+            if context.surface == SurfaceKind.WEB_PMA:
+                return
             if context.surface == SurfaceKind.DISCORD:
                 assert isinstance(context.harness, DiscordSurfaceHarness)
                 if context.thread_target_id is None or context.execution_id is None:
