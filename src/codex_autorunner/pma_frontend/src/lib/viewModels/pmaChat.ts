@@ -10,6 +10,7 @@ import type {
   WorktreeSummary,
   WorkStatus
 } from './domain';
+import { normalizeOptionalWorkStatus } from './domain';
 
 export type PmaChatFilter = 'all' | 'active' | 'waiting' | 'done';
 
@@ -227,7 +228,7 @@ export function optimisticUserTimelineItemFromSend(
     timestamp,
     chatId,
     turnId,
-    status: normalizeWorkStatus(raw.execution_state ?? raw.status),
+    status: normalizeOptionalWorkStatus(raw.execution_state ?? raw.status),
     payload: {
       text,
       text_preview: text.slice(0, 240),
@@ -541,17 +542,6 @@ function compareTimelineItems(left: PmaTimelineItem, right: PmaTimelineItem): nu
 
 function timelineSortKey(item: PmaTimelineItem): string {
   return item.orderKey || `${item.timestamp ?? ''}|${item.id}`;
-}
-
-function normalizeWorkStatus(value: unknown): WorkStatus | null {
-  const text = String(value ?? '').trim().toLowerCase();
-  if (text === 'running') return 'running';
-  if (['waiting', 'queued', 'pending'].includes(text)) return 'waiting';
-  if (['ok', 'done', 'complete', 'completed'].includes(text)) return 'done';
-  if (['failed', 'error'].includes(text)) return 'failed';
-  if (text === 'blocked') return 'blocked';
-  if (text === 'idle') return 'idle';
-  return null;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

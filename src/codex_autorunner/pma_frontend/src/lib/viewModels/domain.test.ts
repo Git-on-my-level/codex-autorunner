@@ -8,10 +8,42 @@ import {
   mapSurfaceArtifact,
   mapTicketDetail,
   mapTicketSummary,
-  mapWorktreeSummary
+  mapWorktreeSummary,
+  normalizeOptionalWorkStatus,
+  normalizeWorkStatus
 } from './domain';
 
 describe('view model mappers', () => {
+  it('normalizes backend work-status aliases through one canonical mapper', () => {
+    const cases: Array<[unknown, ReturnType<typeof normalizeWorkStatus>]> = [
+      ['running', 'running'],
+      ['active', 'running'],
+      ['in_progress', 'running'],
+      ['queued', 'waiting'],
+      ['pending', 'waiting'],
+      ['ok', 'done'],
+      ['completed', 'done'],
+      ['error', 'failed'],
+      ['interrupted', 'done'],
+      ['stalled', 'blocked'],
+      ['unexpected-status', 'idle'],
+      ['', 'idle'],
+      [null, 'idle']
+    ];
+
+    for (const [raw, expected] of cases) {
+      expect(normalizeWorkStatus(raw)).toBe(expected);
+    }
+  });
+
+  it('keeps nullable status fields explicit without owning a second alias table', () => {
+    expect(normalizeOptionalWorkStatus(undefined)).toBeNull();
+    expect(normalizeOptionalWorkStatus(null)).toBeNull();
+    expect(normalizeOptionalWorkStatus('')).toBeNull();
+    expect(normalizeOptionalWorkStatus('active')).toBe('running');
+    expect(normalizeOptionalWorkStatus('unknown-status')).toBe('idle');
+  });
+
   it('maps managed thread payloads into chat summaries', () => {
     const vm = mapPmaChatSummary({
       thread_target_id: 'thread-1',

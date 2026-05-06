@@ -281,6 +281,45 @@ describe('PMA chat view helpers', () => {
     expect(merged.map((item) => item.id)).toEqual(['turn:turn-1:user', 'turn:turn-2:user']);
   });
 
+  it('normalizes optimistic send status through the canonical optional work-status mapper', () => {
+    expect(
+      optimisticUserTimelineItemFromSend(
+        {
+          managed_thread_id: 'chat-1',
+          managed_turn_id: 'turn-active',
+          delivered_message: 'active work',
+          execution_state: 'active'
+        },
+        'fallback',
+        'chat-1'
+      )?.status
+    ).toBe('running');
+    expect(
+      optimisticUserTimelineItemFromSend(
+        {
+          managed_thread_id: 'chat-1',
+          managed_turn_id: 'turn-unknown',
+          delivered_message: 'unknown work',
+          execution_state: 'unknown-status'
+        },
+        'fallback',
+        'chat-1'
+      )?.status
+    ).toBe('idle');
+    expect(
+      optimisticUserTimelineItemFromSend(
+        {
+          managed_thread_id: 'chat-1',
+          managed_turn_id: 'turn-empty',
+          delivered_message: 'empty work',
+          execution_state: ''
+        },
+        'fallback',
+        'chat-1'
+      )?.status
+    ).toBeNull();
+  });
+
   it('merges streamed activity events without dropping older transcript activity', () => {
     const merged = mergePmaActivityEvents(
       [

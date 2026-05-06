@@ -205,7 +205,7 @@ export type SensitiveApprovalRequest = {
 
 export function mapPmaChatSummary(raw: JsonRecord): PmaChatSummary {
   const latest = asRecord(raw.latest_execution ?? raw.latest_turn ?? raw.turn);
-  const status = normalizeStatus(raw.lifecycle_status ?? raw.runtime_status ?? raw.status ?? latest.status);
+  const status = normalizeWorkStatus(raw.lifecycle_status ?? raw.runtime_status ?? raw.status ?? latest.status);
   const id = stringValue(raw.thread_target_id ?? raw.managed_thread_id ?? raw.thread_id ?? raw.id, 'unknown-chat');
   const resourceKind = nullableString(raw.resource_kind);
   const resourceId = nullableString(raw.resource_id);
@@ -238,7 +238,7 @@ export function mapPmaChatMessage(raw: JsonRecord): PmaChatMessage {
     role,
     text,
     createdAt: dateString(raw.created_at ?? raw.started_at ?? raw.timestamp),
-    status: raw.status === undefined ? null : normalizeStatus(raw.status),
+    status: normalizeOptionalWorkStatus(raw.status),
     artifacts: asArray(raw.artifacts ?? raw.attachments).map(mapSurfaceArtifact),
     raw
   };
@@ -253,7 +253,7 @@ export function mapPmaTimelineItem(raw: JsonRecord): PmaTimelineItem {
     timestamp: dateString(raw.timestamp),
     chatId: nullableString(raw.managed_thread_id ?? raw.thread_id ?? raw.chat_id),
     turnId: nullableString(raw.managed_turn_id ?? raw.turn_id),
-    status: raw.status === undefined || raw.status === null ? null : normalizeStatus(raw.status),
+    status: normalizeOptionalWorkStatus(raw.status),
     payload,
     raw
   };
@@ -266,7 +266,7 @@ export function mapPmaRunProgress(raw: JsonRecord): PmaRunProgress {
   return {
     id,
     chatId: nullableString(source.managed_thread_id ?? source.thread_id),
-    status: normalizeStatus(source.turn_status ?? source.status ?? source.activity),
+    status: normalizeWorkStatus(source.turn_status ?? source.status ?? source.activity),
     workStatus: nullableString(source.work_status),
     operatorStatus: nullableString(source.operator_status),
     terminal: source.terminal === true,
@@ -337,7 +337,7 @@ export function mapRepoSummary(raw: JsonRecord): RepoSummary {
     id,
     name: stringValue(raw.name ?? raw.display_name, id),
     path: nullableString(raw.path ?? raw.repo_root),
-    status: normalizeStatus(ticketFlow.status ?? runState.flow_status ?? raw.status ?? raw.runtime_status),
+    status: normalizeWorkStatus(ticketFlow.status ?? runState.flow_status ?? raw.status ?? raw.runtime_status),
     defaultBranch: nullableString(raw.default_branch ?? raw.branch ?? raw.current_branch),
     worktreeCount: numberOrNull(raw.worktree_count ?? raw.worktrees_count ?? asArray(raw.worktrees).length) ?? 0,
     activeRuns,
@@ -364,7 +364,7 @@ export function mapWorktreeSummary(raw: JsonRecord): WorktreeSummary {
     name: stringValue(raw.name ?? raw.display_name ?? raw.branch, id),
     path: nullableString(raw.path ?? raw.workspace_root),
     branch: nullableString(raw.branch ?? raw.current_branch),
-    status: normalizeStatus(ticketFlow.status ?? runState.flow_status ?? raw.status ?? raw.runtime_status),
+    status: normalizeWorkStatus(ticketFlow.status ?? runState.flow_status ?? raw.status ?? raw.runtime_status),
     activeRuns,
     openTickets:
       numberOrNull(raw.open_tickets ?? raw.open_ticket_count) ??
@@ -408,7 +408,7 @@ export function mapTicketSummary(raw: JsonRecord): TicketSummary {
     id,
     number: index,
     title: stringValue(frontmatter.title ?? raw.title ?? raw.summary ?? raw.current_ticket_title, index ? `Ticket ${index}` : id),
-    status: errors.length ? 'failed' : done ? 'done' : normalizeStatus(statusSource),
+    status: errors.length ? 'failed' : done ? 'done' : normalizeWorkStatus(statusSource),
     workspaceKind,
     workspaceId,
     workspacePath: nullableString(raw.workspace_path),
@@ -475,14 +475,21 @@ export function mapSensitiveApprovalRequest(raw: JsonRecord): SensitiveApprovalR
   };
 }
 
-function normalizeStatus(value: unknown): WorkStatus {
+export function normalizeWorkStatus(value: unknown): WorkStatus {
   const text = String(value ?? '').trim().toLowerCase();
   if (['running', 'active', 'in_progress', 'progress'].includes(text)) return 'running';
   if (['waiting', 'paused', 'needs_user', 'queued', 'pending'].includes(text)) return 'waiting';
-  if (['ok', 'done', 'complete', 'completed', 'idle'].includes(text)) return text === 'idle' ? 'idle' : 'done';
+  if (['ok', 'done', 'complete', 'completed', 'interrupted', 'cancelled', 'canceled', 'aborted'].includes(text)) return 'done';
+  if (text === 'idle') return 'idle';
   if (['failed', 'error', 'errored'].includes(text)) return 'failed';
   if (['blocked', 'stalled'].includes(text)) return 'blocked';
   return 'idle';
+}
+
+export function normalizeOptionalWorkStatus(value: unknown): WorkStatus | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value === 'string' && !value.trim()) return null;
+  return normalizeWorkStatus(value);
 }
 
 function normalizeRole(value: unknown): PmaChatMessage['role'] {
@@ -648,7 +655,7 @@ function normalizeRisk(value: unknown): SensitiveApprovalRequest['risk'] {
 
 function countByStatus(items: JsonRecord[], statuses: WorkStatus[]): number {
   return items.filter((item) =>
-    statuses.includes(normalizeStatus(item.status ?? item.state ?? item.runtime_status ?? item.lifecycle_status ?? item.turn_status))
+    statuses.includes(normalizeWorkStatus(item.status ?? item.state ?? item.runtime_status ?? item.lifecycle_status ?? item.turn_status))
   ).length;
 }
 
