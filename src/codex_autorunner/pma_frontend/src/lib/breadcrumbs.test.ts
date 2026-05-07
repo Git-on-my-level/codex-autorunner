@@ -21,10 +21,16 @@ describe('breadcrumbsForPath', () => {
       { label: '#42', href: null }
     ]);
 
-    expect(breadcrumbsForPath('/worktrees')).toEqual([{ label: 'Worktrees', href: null }]);
-    expect(breadcrumbsForPath('/worktrees/wt-1')).toEqual([
-      { label: 'Worktrees', href: '/worktrees' },
+    expect(breadcrumbsForPath('/repos/r/worktrees/wt-1')).toEqual([
+      { label: 'Repos', href: '/repos' },
+      { label: 'r', href: '/repos/r' },
       { label: 'wt-1', href: null }
+    ]);
+    expect(breadcrumbsForPath('/repos/r/worktrees/wt-1/memory')).toEqual([
+      { label: 'Repos', href: '/repos' },
+      { label: 'r', href: '/repos/r' },
+      { label: 'wt-1', href: '/repos/r/worktrees/wt-1' },
+      { label: 'Memory', href: null }
     ]);
   });
 
@@ -34,9 +40,26 @@ describe('breadcrumbsForPath', () => {
   });
 
   it('handles contextspace routes', () => {
-    expect(breadcrumbsForPath('/contextspace/codex-autorunner')).toEqual([
-      { label: 'Contextspace', href: null },
-      { label: 'codex-autorunner', href: null }
+    expect(breadcrumbsForPath('/repos/codex-autorunner/memory')).toEqual([
+      { label: 'Repos', href: '/repos' },
+      { label: 'codex-autorunner', href: '/repos/codex-autorunner' },
+      { label: 'Memory', href: null }
+    ]);
+  });
+
+  it('covers hub, ticket, chat filter, and agent workspace scope URLs', () => {
+    expect(breadcrumbsForPath('/hub')).toEqual([{ label: 'Hub', href: null }]);
+    expect(breadcrumbsForPath('/repos/r/worktrees/wt-1/tickets/42')).toEqual([
+      { label: 'Repos', href: '/repos' },
+      { label: 'r', href: '/repos/r' },
+      { label: 'wt-1', href: '/repos/r/worktrees/wt-1' },
+      { label: 'Tickets', href: '/repos/r/worktrees/wt-1/tickets' },
+      { label: '#42', href: null }
+    ]);
+    expect(breadcrumbsForPath('/chats')).toEqual([{ label: 'Chats', href: null }]);
+    expect(breadcrumbsForPath('/agent-workspaces/codex-pma')).toEqual([
+      { label: 'Agent workspaces', href: '/agent-workspaces' },
+      { label: 'codex-pma', href: null }
     ]);
   });
 

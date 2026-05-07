@@ -37,7 +37,7 @@ describe('contextspace view models', () => {
 
     expect(vm.workspaceKind).toBe('worktree');
     expect(vm.description).toContain('Worktree memory');
-    expect(vm.openWorkspaceHref).toBe('/worktrees/worktree-1');
+    expect(vm.openWorkspaceHref).toBe('/repos/repo-1/worktrees/worktree-1');
     expect(vm.openWorkspaceLabel).toBe('Open worktree variant');
   });
 

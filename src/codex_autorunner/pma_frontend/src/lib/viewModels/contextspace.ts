@@ -1,5 +1,6 @@
 import type { ContextspaceDocument, RepoSummary, WorktreeSummary } from './domain';
 import { renderMarkdownToHtml } from './markdown';
+import { repoRoute, worktreeRoute } from './routes';
 export { renderMarkdownToHtml } from './markdown';
 
 export type ContextspaceDocKind = 'active_context' | 'spec' | 'decisions';
@@ -43,6 +44,12 @@ export function buildContextspaceViewModel(
   const repo = repos.find((candidate) => candidate.id === workspaceId) ?? null;
   const worktree = worktrees.find((candidate) => candidate.id === workspaceId) ?? null;
   const workspaceKind = worktree ? 'worktree' : repo ? 'repo' : 'unknown';
+  const workspaceHref =
+    workspaceKind === 'worktree'
+      ? worktreeRoute(workspaceId, worktree?.repoId ?? null)
+      : workspaceKind === 'repo'
+        ? repoRoute(workspaceId)
+        : '/repos';
   const title = worktree?.name ?? repo?.name ?? workspaceId;
   const docMap = new Map(docs.map((doc) => [normalizeDocKind(doc.kind || doc.id || doc.name), doc]));
   const tabs = DOC_ORDER.map((entry) => {
@@ -75,12 +82,7 @@ export function buildContextspaceViewModel(
         : workspaceKind === 'worktree'
           ? 'Worktree memory is read from this worktree workspace contextspace.'
           : 'This workspace id was not matched to a known repo or worktree, so scoped contextspace was not loaded.',
-    openWorkspaceHref:
-      workspaceKind === 'worktree'
-        ? `/worktrees/${encodeURIComponent(workspaceId)}`
-        : workspaceKind === 'repo'
-          ? `/repos/${encodeURIComponent(workspaceId)}`
-          : '/repos',
+    openWorkspaceHref: workspaceHref,
     openWorkspaceLabel:
       workspaceKind === 'worktree'
         ? 'Open worktree variant'

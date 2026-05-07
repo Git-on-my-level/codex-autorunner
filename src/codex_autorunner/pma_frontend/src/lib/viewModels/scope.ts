@@ -1,3 +1,5 @@
+import { agentWorkspaceRoute, repoMemoryRoute, repoRoute, repoTicketRoute, worktreeMemoryRoute, worktreeRoute, worktreeTicketRoute } from './routes';
+
 export type ScopeKind = 'hub' | 'repo' | 'worktree' | 'agent_workspace' | 'filesystem';
 
 export type ScopeRef =
@@ -180,11 +182,11 @@ export function scopeRoute(scope: ScopeRef): string | null {
     case 'hub':
       return '/chats';
     case 'repo':
-      return `/repos/${encodeURIComponent(scope.id)}`;
+      return repoRoute(scope.id);
     case 'worktree':
-      return `/worktrees/${encodeURIComponent(scope.id)}`;
+      return worktreeRoute(scope.id, scope.parentRepoId ?? null);
     case 'agent_workspace':
-      return null;
+      return agentWorkspaceRoute(scope.id);
     case 'filesystem':
       return null;
   }
@@ -193,9 +195,9 @@ export function scopeRoute(scope: ScopeRef): string | null {
 export function scopeTicketRoute(scope: ScopeRef): string | null {
   switch (scope.kind) {
     case 'repo':
-      return `/repos/${encodeURIComponent(scope.id)}/tickets`;
+      return repoTicketRoute(scope.id);
     case 'worktree':
-      return `/worktrees/${encodeURIComponent(scope.id)}/tickets`;
+      return worktreeTicketRoute(scope.id, scope.parentRepoId ?? null);
     default:
       return null;
   }
@@ -204,9 +206,9 @@ export function scopeTicketRoute(scope: ScopeRef): string | null {
 export function scopeMemoryRoute(scope: ScopeRef): string | null {
   switch (scope.kind) {
     case 'repo':
-      return `/contextspace/${encodeURIComponent(scope.id)}`;
+      return repoMemoryRoute(scope.id);
     case 'worktree':
-      return `/contextspace/${encodeURIComponent(scope.id)}`;
+      return worktreeMemoryRoute(scope.id, scope.parentRepoId ?? null);
     default:
       return null;
   }

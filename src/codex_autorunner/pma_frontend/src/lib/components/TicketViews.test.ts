@@ -186,9 +186,9 @@ Users can browse tickets.
     expect(body).toContain('Ticket settings');
     expect(body).toContain('Agent');
     expect(body).toContain('Worktree: worktree-1');
-    expect(body).toContain('href="/worktrees/worktree-1"');
+    expect(body).toContain('href="/repos/repo-1/worktrees/worktree-1"');
     expect(body).toContain('Back to worktree tickets');
-    expect(body).toContain('href="/worktrees/worktree-1/tickets"');
+    expect(body).toContain('href="/repos/repo-1/worktrees/worktree-1/tickets"');
     expect(body).toContain('Users can browse tickets.');
     expect(body).toContain('Render list');
     expect(body).toContain('Acceptance criteria');

@@ -42,3 +42,35 @@ export const routeViewModels = {
       'Spec, decisions, active context, and PMA-maintained workspace notes will appear here.'
   }
 } satisfies Record<string, FoundationRouteViewModel>;
+
+export function repoRoute(repoId: string): string {
+  return `/repos/${encodeURIComponent(repoId)}`;
+}
+
+export function repoTicketRoute(repoId: string, ticketId?: string): string {
+  const base = `${repoRoute(repoId)}/tickets`;
+  return ticketId ? `${base}/${encodeURIComponent(ticketId)}` : base;
+}
+
+export function repoMemoryRoute(repoId: string): string {
+  return `${repoRoute(repoId)}/memory`;
+}
+
+export function worktreeRoute(worktreeId: string, parentRepoId: string | null = null): string {
+  const encodedWorktree = encodeURIComponent(worktreeId);
+  if (!parentRepoId) return `/worktrees/${encodedWorktree}`;
+  return `${repoRoute(parentRepoId)}/worktrees/${encodedWorktree}`;
+}
+
+export function worktreeTicketRoute(worktreeId: string, parentRepoId: string | null = null, ticketId?: string): string {
+  const base = `${worktreeRoute(worktreeId, parentRepoId)}/tickets`;
+  return ticketId ? `${base}/${encodeURIComponent(ticketId)}` : base;
+}
+
+export function worktreeMemoryRoute(worktreeId: string, parentRepoId: string | null = null): string {
+  return `${worktreeRoute(worktreeId, parentRepoId)}/memory`;
+}
+
+export function agentWorkspaceRoute(workspaceId: string): string {
+  return `/agent-workspaces/${encodeURIComponent(workspaceId)}`;
+}

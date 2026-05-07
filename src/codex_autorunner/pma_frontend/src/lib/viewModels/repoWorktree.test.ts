@@ -27,7 +27,7 @@ describe('repo/worktree view models', () => {
       signalActive: 1,
       childWorktrees: [
         {
-          href: '/worktrees/worktree-1',
+          href: '/repos/repo-1/worktrees/worktree-1',
           currentTicketId: 'TICKET-110',
           currentRunTitle: 'Hub rewrite foundation'
         }
@@ -93,7 +93,7 @@ describe('repo/worktree view models', () => {
     expect(vm.title).toBe('Secondary worktree index');
     expect(vm.eyebrow).toBe('Repo-owned variants');
     expect(vm.rows[0]).toMatchObject({
-      href: '/worktrees/worktree-1',
+      href: '/repos/repo-1/worktrees/worktree-1',
       repoHref: '/repos/repo-1',
       chatNewHref: '/chats?new=repo:repo-1',
       signalWaiting: 0,
@@ -133,7 +133,7 @@ describe('repo/worktree view models', () => {
     expect(vm.artifacts[0]).toMatchObject({ kind: 'preview_url' });
     expect(vm.childWorktrees).toHaveLength(1);
     expect(vm.childWorktrees[0]).toMatchObject({
-      href: '/worktrees/worktree-1',
+      href: '/repos/repo-1/worktrees/worktree-1',
       currentTicketId: 'TICKET-110'
     });
   });
@@ -154,8 +154,8 @@ describe('repo/worktree view models', () => {
 
     expect(vm.baseRepoLabel).toBe('codex-autorunner');
     expect(vm.baseRepoHref).toBe('/repos/repo-1');
-    expect(vm.currentRuns[0].ticketHref).toBe('/worktrees/worktree-1/tickets/TICKET-110');
-    expect(vm.links.find((link) => link.label === 'View worktree tickets')?.href).toBe('/worktrees/worktree-1/tickets');
+    expect(vm.currentRuns[0].ticketHref).toBe('/repos/repo-1/worktrees/worktree-1/tickets/TICKET-110');
+    expect(vm.links.find((link) => link.label === 'View worktree tickets')?.href).toBe('/repos/repo-1/worktrees/worktree-1/tickets');
   });
 
   it('does not match repo-level records on worktree detail through the parent repo id', () => {

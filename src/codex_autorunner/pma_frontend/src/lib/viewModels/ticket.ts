@@ -1,5 +1,6 @@
 import type { PmaChatSummary, PmaRunProgress, SurfaceArtifact, TicketDetail, TicketSummary, WorkStatus } from './domain';
 import { formatRelativeTime, progressPercent, statusLabel } from './pmaChat';
+import { repoRoute, repoTicketRoute, worktreeRoute, worktreeTicketRoute } from './routes';
 import {
   aliasesOverlap,
   buildTicketFlowStatusViewModel,
@@ -657,18 +658,20 @@ function repoLabel(ticket: TicketSummary): string {
 function workspaceScope(ticket: TicketSummary): {
   kind: 'repo' | 'worktree' | 'unscoped';
   id: string | null;
+  parentRepoId: string | null;
   label: string;
 } {
+  const parentRepoId = ticket.repoId ?? stringFromRaw(ticket.raw, ['repo_id', 'base_repo_id']) ?? stringFromRaw(asRecord(ticket.raw.frontmatter), ['repo_id', 'base_repo_id']);
   if (ticket.workspaceKind === 'repo' && ticket.workspaceId) {
-    return { kind: 'repo', id: ticket.workspaceId, label: `Repo: ${ticket.workspaceId}` };
+    return { kind: 'repo', id: ticket.workspaceId, parentRepoId: null, label: `Repo: ${ticket.workspaceId}` };
   }
   if (ticket.workspaceKind === 'worktree' && ticket.workspaceId) {
-    return { kind: 'worktree', id: ticket.workspaceId, label: `Worktree: ${ticket.workspaceId}` };
+    return { kind: 'worktree', id: ticket.workspaceId, parentRepoId, label: `Worktree: ${ticket.workspaceId}` };
   }
   const raw = ticket.raw;
   const frontmatter = asRecord(raw.frontmatter);
   const repoId =
-    ticket.repoId ??
+    parentRepoId ??
     stringFromRaw(raw, ['repo_id', 'base_repo_id']) ??
     stringFromRaw(frontmatter, ['repo_id', 'base_repo_id']);
   const worktreeId =
@@ -677,24 +680,24 @@ function workspaceScope(ticket: TicketSummary): {
     stringFromRaw(frontmatter, ['worktree_id', 'worktree_repo_id']);
   const resourceKind = stringFromRaw(raw, ['resource_kind']) ?? stringFromRaw(frontmatter, ['resource_kind']);
   const resourceId = stringFromRaw(raw, ['resource_id']) ?? stringFromRaw(frontmatter, ['resource_id']);
-  if (worktreeId) return { kind: 'worktree', id: worktreeId, label: `Worktree: ${worktreeId}` };
-  if (repoId) return { kind: 'repo', id: repoId, label: `Repo: ${repoId}` };
-  if (resourceKind === 'worktree' && resourceId) return { kind: 'worktree', id: resourceId, label: `Worktree: ${resourceId}` };
-  if (resourceKind === 'repo' && resourceId) return { kind: 'repo', id: resourceId, label: `Repo: ${resourceId}` };
-  return { kind: 'unscoped', id: null, label: 'Needs owner repair' };
+  if (worktreeId) return { kind: 'worktree', id: worktreeId, parentRepoId: repoId, label: `Worktree: ${worktreeId}` };
+  if (repoId) return { kind: 'repo', id: repoId, parentRepoId: null, label: `Repo: ${repoId}` };
+  if (resourceKind === 'worktree' && resourceId) return { kind: 'worktree', id: resourceId, parentRepoId: repoId, label: `Worktree: ${resourceId}` };
+  if (resourceKind === 'repo' && resourceId) return { kind: 'repo', id: resourceId, parentRepoId: null, label: `Repo: ${resourceId}` };
+  return { kind: 'unscoped', id: null, parentRepoId: null, label: 'Needs owner repair' };
 }
 
 function workspaceHref(ticket: TicketSummary): string | null {
   const scope = workspaceScope(ticket);
-  if (scope.kind === 'repo' && scope.id) return `/repos/${encodeURIComponent(scope.id)}`;
-  if (scope.kind === 'worktree' && scope.id) return `/worktrees/${encodeURIComponent(scope.id)}`;
+  if (scope.kind === 'repo' && scope.id) return repoRoute(scope.id);
+  if (scope.kind === 'worktree' && scope.id) return worktreeRoute(scope.id, scope.parentRepoId);
   return null;
 }
 
 function ownerTicketListHref(ticket: TicketSummary): string | null {
   const scope = workspaceScope(ticket);
-  if (scope.kind === 'repo' && scope.id) return `/repos/${encodeURIComponent(scope.id)}/tickets`;
-  if (scope.kind === 'worktree' && scope.id) return `/worktrees/${encodeURIComponent(scope.id)}/tickets`;
+  if (scope.kind === 'repo' && scope.id) return repoTicketRoute(scope.id);
+  if (scope.kind === 'worktree' && scope.id) return worktreeTicketRoute(scope.id, scope.parentRepoId);
   return null;
 }
 

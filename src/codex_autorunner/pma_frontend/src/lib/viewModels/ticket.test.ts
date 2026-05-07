@@ -188,7 +188,7 @@ Users can inspect tickets.
 
     expect(detail.goal).toContain('Users can inspect tickets');
     expect(detail.repoLabel).toBe('Worktree: worktree-1');
-    expect(detail.workspaceHref).toBe('/worktrees/worktree-1');
+    expect(detail.workspaceHref).toBe('/repos/repo-1/worktrees/worktree-1');
     expect(detail.timeline.map((item) => item.title)).toContain('waiting');
     expect(detail.artifacts[0]).toMatchObject({ kind: 'preview_url' });
     expect(detail.actions.map((action) => action.label)).toContain('Open PMA chat');

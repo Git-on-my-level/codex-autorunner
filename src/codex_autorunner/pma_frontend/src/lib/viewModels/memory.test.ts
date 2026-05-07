@@ -15,7 +15,7 @@ describe('buildMemoryViewModel', () => {
     expect(vm.title).toBe('Memory: my-repo');
     expect(vm.eyebrow).toBe('Repo memory');
     expect(vm.workspaceHref).toBe('/repos/my-repo');
-    expect(vm.memoryHref).toBe('/contextspace/my-repo');
+    expect(vm.memoryHref).toBe('/repos/my-repo/memory');
     expect(vm.docs).toHaveLength(3);
     expect(vm.presentCount).toBe(2);
     expect(vm.docs[0].filename).toBe('AGENTS.md');
@@ -31,7 +31,7 @@ describe('buildMemoryViewModel', () => {
     expect(vm.scope).toEqual({ kind: 'worktree', id: 'wt-1', parentRepoId: 'base' });
     expect(vm.title).toBe('Memory: wt-1');
     expect(vm.eyebrow).toBe('Worktree memory');
-    expect(vm.workspaceHref).toBe('/worktrees/wt-1');
+    expect(vm.workspaceHref).toBe('/repos/base/worktrees/wt-1');
   });
 
   it('builds view model for hub scope', () => {

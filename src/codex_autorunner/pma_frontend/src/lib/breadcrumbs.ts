@@ -28,6 +28,75 @@ function normalizePath(pathname: string): string {
 /** Longest / most specific patterns first. */
 const STRUCTURED_ROUTES: StructuredRoute[] = [
   {
+    description: 'Repo-owned worktree ticket detail',
+    pattern: /^\/repos\/([^/]+)\/worktrees\/([^/]+)\/tickets\/([^/]+)$/,
+    toCrumbs: (m) => {
+      const repoId = decodeURIComponent(m[1]);
+      const worktreeId = decodeURIComponent(m[2]);
+      const ticketId = decodeURIComponent(m[3]);
+      return [
+        { label: 'Repos', href: '/repos' },
+        { label: repoId, href: `/repos/${encodeURIComponent(repoId)}` },
+        { label: worktreeId, href: `/repos/${encodeURIComponent(repoId)}/worktrees/${encodeURIComponent(worktreeId)}` },
+        { label: 'Tickets', href: `/repos/${encodeURIComponent(repoId)}/worktrees/${encodeURIComponent(worktreeId)}/tickets` },
+        { label: ticketId.match(/^\d+$/) ? `#${ticketId}` : ticketId, href: null }
+      ];
+    }
+  },
+  {
+    description: 'Repo-owned worktree ticket queue',
+    pattern: /^\/repos\/([^/]+)\/worktrees\/([^/]+)\/tickets$/,
+    toCrumbs: (m) => {
+      const repoId = decodeURIComponent(m[1]);
+      const worktreeId = decodeURIComponent(m[2]);
+      return [
+        { label: 'Repos', href: '/repos' },
+        { label: repoId, href: `/repos/${encodeURIComponent(repoId)}` },
+        { label: worktreeId, href: `/repos/${encodeURIComponent(repoId)}/worktrees/${encodeURIComponent(worktreeId)}` },
+        { label: 'Tickets', href: null }
+      ];
+    }
+  },
+  {
+    description: 'Repo-owned worktree memory',
+    pattern: /^\/repos\/([^/]+)\/worktrees\/([^/]+)\/memory$/,
+    toCrumbs: (m) => {
+      const repoId = decodeURIComponent(m[1]);
+      const worktreeId = decodeURIComponent(m[2]);
+      return [
+        { label: 'Repos', href: '/repos' },
+        { label: repoId, href: `/repos/${encodeURIComponent(repoId)}` },
+        { label: worktreeId, href: `/repos/${encodeURIComponent(repoId)}/worktrees/${encodeURIComponent(worktreeId)}` },
+        { label: 'Memory', href: null }
+      ];
+    }
+  },
+  {
+    description: 'Repo-owned worktree overview',
+    pattern: /^\/repos\/([^/]+)\/worktrees\/([^/]+)$/,
+    toCrumbs: (m) => {
+      const repoId = decodeURIComponent(m[1]);
+      const worktreeId = decodeURIComponent(m[2]);
+      return [
+        { label: 'Repos', href: '/repos' },
+        { label: repoId, href: `/repos/${encodeURIComponent(repoId)}` },
+        { label: worktreeId, href: null }
+      ];
+    }
+  },
+  {
+    description: 'Repo memory',
+    pattern: /^\/repos\/([^/]+)\/memory$/,
+    toCrumbs: (m) => {
+      const repoId = decodeURIComponent(m[1]);
+      return [
+        { label: 'Repos', href: '/repos' },
+        { label: repoId, href: `/repos/${encodeURIComponent(repoId)}` },
+        { label: 'Memory', href: null }
+      ];
+    }
+  },
+  {
     description: 'Repo-scoped ticket detail',
     pattern: /^\/repos\/([^/]+)\/tickets\/([^/]+)$/,
     toCrumbs: (m) => {
@@ -112,6 +181,27 @@ const STRUCTURED_ROUTES: StructuredRoute[] = [
       const workspaceId = decodeURIComponent(m[1]);
       return [{ label: 'Contextspace', href: null }, { label: workspaceId, href: null }];
     }
+  },
+  {
+    description: 'Agent workspace detail',
+    pattern: /^\/agent-workspaces\/([^/]+)$/,
+    toCrumbs: (m) => {
+      const workspaceId = decodeURIComponent(m[1]);
+      return [
+        { label: 'Agent workspaces', href: '/agent-workspaces' },
+        { label: workspaceId, href: null }
+      ];
+    }
+  },
+  {
+    description: 'Agent workspace index',
+    pattern: /^\/agent-workspaces$/,
+    toCrumbs: () => [{ label: 'Agent workspaces', href: null }]
+  },
+  {
+    description: 'Hub compatibility route',
+    pattern: /^\/hub$/,
+    toCrumbs: () => [{ label: 'Hub', href: null }]
   }
 ];
 

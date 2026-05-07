@@ -47,7 +47,7 @@ describe('scoped ticket queue helpers', () => {
     expect(scopeToTicketOwner(worktreeScope)).toEqual({ worktree: 'wt-1' });
     expect(scopeToTicketOwnerScope(worktreeScope)).toEqual({ kind: 'worktree', id: 'wt-1' });
     expect(ticketScopeUrn(worktreeScope)).toBe('worktree:repo 1/wt-1');
-    expect(ticketScopeHref(worktreeScope)).toBe('/worktrees/wt-1/tickets');
+    expect(ticketScopeHref(worktreeScope)).toBe('/repos/repo%201/worktrees/wt-1/tickets');
   });
 
   it('does not map non-ticket scopes into ticket queue owners', () => {

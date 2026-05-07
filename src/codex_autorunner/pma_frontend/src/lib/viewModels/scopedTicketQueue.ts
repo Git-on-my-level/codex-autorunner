@@ -22,12 +22,11 @@ export type ScopedTicketQueueKind = 'repo' | 'worktree';
 
 export function scopeToTicketQueueConfig(scope: ScopeRef): ScopedTicketQueueConfig | null {
   if (scope.kind !== 'repo' && scope.kind !== 'worktree') return null;
-  const routeBase = scopeRoute(scope);
-  if (!routeBase) return null;
+  if (!scopeRoute(scope)) return null;
   return {
     kind: scope.kind,
     resourceId: scope.id,
-    apiBasePath: `${routeBase}/api/flows`,
+    apiBasePath: `/repos/${encodeURIComponent(scope.id)}/api/flows`,
     displayLabel: scopeLabel(scope)
   };
 }

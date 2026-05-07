@@ -23,7 +23,7 @@ describe('RepoWorktreeViews', () => {
     expect(body).toContain('codex-autorunner');
     expect(body).toContain('discord-5');
     expect(body).toContain('href="/repos/repo-1"');
-    expect(body).toContain('href="/worktrees/worktree-1"');
+    expect(body).toContain('href="/repos/repo-1/worktrees/worktree-1"');
     expect(body).toContain('Default branch main · 1 worktree');
     expect(body).not.toContain('Terminal');
     expect(body).not.toContain('Analytics');
@@ -67,7 +67,7 @@ describe('RepoWorktreeViews', () => {
     expect(body).toContain('View repo tickets');
     expect(body).toContain('href="/repos/repo-1/tickets"');
     expect(body).toContain('View repo memory');
-    expect(body).toContain('href="/contextspace/repo-1"');
+    expect(body).toContain('href="/repos/repo-1/memory"');
     expect(body).toContain('Open preview');
     expect(body).toContain('Debug logs');
     expect(body).toContain('Surfaced artifacts');
@@ -119,7 +119,7 @@ describe('RepoWorktreeViews', () => {
     expect(body).toContain('Create a worktree when a ticket needs isolated repo state.');
     expect(body).toContain('Repo ticket queue');
     expect(body).toContain('View repo memory');
-    expect(body).toContain('href="/contextspace/repo-1"');
+    expect(body).toContain('href="/repos/repo-1/memory"');
     expect(body).not.toContain('Terminal');
     expect(body).not.toContain('Analytics');
   });

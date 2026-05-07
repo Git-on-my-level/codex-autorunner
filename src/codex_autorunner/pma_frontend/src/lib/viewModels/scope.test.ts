@@ -209,11 +209,11 @@ describe('scopeRoute', () => {
   });
 
   it('routes worktree', () => {
-    expect(scopeRoute({ kind: 'worktree', id: 'wt-1', parentRepoId: 'r1' })).toBe('/worktrees/wt-1');
+    expect(scopeRoute({ kind: 'worktree', id: 'wt-1', parentRepoId: 'r1' })).toBe('/repos/r1/worktrees/wt-1');
   });
 
-  it('routes agent_workspace as null', () => {
-    expect(scopeRoute({ kind: 'agent_workspace', id: 'ws-1' })).toBeNull();
+  it('routes agent_workspace scopes', () => {
+    expect(scopeRoute({ kind: 'agent_workspace', id: 'ws-1' })).toBe('/agent-workspaces/ws-1');
   });
 
   it('routes filesystem as null', () => {
@@ -231,7 +231,7 @@ describe('scopeTicketRoute', () => {
   });
 
   it('generates worktree ticket route', () => {
-    expect(scopeTicketRoute({ kind: 'worktree', id: 'wt-1', parentRepoId: 'r1' })).toBe('/worktrees/wt-1/tickets');
+    expect(scopeTicketRoute({ kind: 'worktree', id: 'wt-1', parentRepoId: 'r1' })).toBe('/repos/r1/worktrees/wt-1/tickets');
   });
 
   it('returns null for hub', () => {
@@ -241,11 +241,11 @@ describe('scopeTicketRoute', () => {
 
 describe('scopeMemoryRoute', () => {
   it('generates repo memory route', () => {
-    expect(scopeMemoryRoute({ kind: 'repo', id: 'my-repo' })).toBe('/contextspace/my-repo');
+    expect(scopeMemoryRoute({ kind: 'repo', id: 'my-repo' })).toBe('/repos/my-repo/memory');
   });
 
   it('generates worktree memory route', () => {
-    expect(scopeMemoryRoute({ kind: 'worktree', id: 'wt-1', parentRepoId: 'r1' })).toBe('/contextspace/wt-1');
+    expect(scopeMemoryRoute({ kind: 'worktree', id: 'wt-1', parentRepoId: 'r1' })).toBe('/repos/r1/worktrees/wt-1/memory');
   });
 
   it('returns null for hub', () => {
@@ -269,7 +269,7 @@ describe('scopeBreadcrumbs', () => {
   it('builds worktree breadcrumb chain', () => {
     const crumbs = scopeBreadcrumbs({ kind: 'worktree', id: 'wt-1', parentRepoId: 'base' });
     expect(crumbs).toEqual([
-      { label: 'wt-1', href: '/worktrees/wt-1' },
+      { label: 'wt-1', href: '/repos/base/worktrees/wt-1' },
       { label: 'base', href: '/repos/base' },
       { label: 'Hub', href: null }
     ]);
