@@ -19,12 +19,20 @@ export type MemoryViewModel = {
   description: string;
   workspaceHref: string | null;
   memoryHref: string | null;
+  askPmaHref: string | null;
   docs: MemoryDocumentTab[];
   presentCount: number;
 };
 
-const DOC_ORDER = ['AGENTS.md', 'active_context.md', 'context_log.md'];
-const DOC_SET = new Set(DOC_ORDER);
+const PMA_DOC_ORDER = ['AGENTS.md', 'active_context.md', 'context_log.md'];
+const CONTEXTSPACE_DOC_ORDER = ['active_context.md', 'spec.md', 'decisions.md'];
+
+function docOrderForScope(scope: ScopeRef): string[] {
+  if (scope.kind === 'repo' || scope.kind === 'worktree') {
+    return CONTEXTSPACE_DOC_ORDER;
+  }
+  return PMA_DOC_ORDER;
+}
 
 export function buildMemoryViewModel(
   scope: ScopeRef,
@@ -32,26 +40,19 @@ export function buildMemoryViewModel(
   _repos: RepoSummary[] = [],
   _worktrees: WorktreeSummary[] = []
 ): MemoryViewModel {
-  const orderedDocs = docs
-    .filter((doc) => DOC_SET.has(doc.name))
-    .sort((left, right) => {
-      const leftIndex = DOC_ORDER.indexOf(left.name);
-      const rightIndex = DOC_ORDER.indexOf(right.name);
-      const normalizedLeft = leftIndex === -1 ? Number.MAX_SAFE_INTEGER : leftIndex;
-      const normalizedRight = rightIndex === -1 ? Number.MAX_SAFE_INTEGER : rightIndex;
-      if (normalizedLeft !== normalizedRight) return normalizedLeft - normalizedRight;
-      return left.name.localeCompare(right.name);
-    });
+  const docOrder = docOrderForScope(scope);
+  const docMap = new Map(docs.map((doc) => [doc.name, doc]));
 
-  const tabs = orderedDocs.map((doc) => {
-    const content = doc.content ?? '';
+  const tabs = docOrder.map((filename) => {
+    const doc = docMap.get(filename);
+    const content = doc?.content ?? '';
     return {
-      id: doc.id || doc.name,
-      filename: doc.name,
+      id: doc?.id || filename,
+      filename,
       content,
       html: renderMarkdownToHtml(content),
       isMissing: !content.trim(),
-      updatedAt: doc.updatedAt
+      updatedAt: doc?.updatedAt ?? null
     };
   });
 
@@ -62,12 +63,16 @@ export function buildMemoryViewModel(
 
   let description: string;
   if (scope.kind === 'repo') {
-    description = `Repo memory is read from this repo's .codex-autorunner/pma/docs directory and provides durable PMA guidance and working context.`;
+    description = `Repo memory is read from this repo's .codex-autorunner/contextspace directory and provides durable shared context.`;
   } else if (scope.kind === 'worktree') {
-    description = `Worktree memory is read from this worktree's .codex-autorunner/pma/docs directory and provides durable PMA guidance and working context.`;
+    description = `Worktree memory is read from this worktree's .codex-autorunner/contextspace directory and provides durable shared context.`;
   } else {
-    description = `PMA memory docs for ${label}.`;
+    description = `PMA memory is read from .codex-autorunner/pma/docs and provides durable PMA guidance and working context.`;
   }
+
+  const scopeKind = scope.kind === 'hub' ? 'PMA' : scope.kind;
+  const askPrompt = `Please review and update the ${scopeKind} memory docs for ${shortLabel}.`;
+  const askPmaHref = `/chats?draft=${encodeURIComponent(askPrompt)}`;
 
   return {
     scope,
@@ -76,9 +81,10 @@ export function buildMemoryViewModel(
     description,
     workspaceHref,
     memoryHref,
+    askPmaHref,
     docs: tabs,
     presentCount: tabs.filter((doc) => !doc.isMissing).length
   };
 }
 
-export { DOC_ORDER, DOC_SET };
+export { PMA_DOC_ORDER, CONTEXTSPACE_DOC_ORDER };

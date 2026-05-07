@@ -3,7 +3,7 @@
   import { page } from '$app/state';
   import { onDestroy, onMount, tick } from 'svelte';
   import MasterDetail from '$lib/components/MasterDetail.svelte';
-  import PmaMemoryView from '$lib/components/PmaMemoryView.svelte';
+  import MemoryRail from '$lib/components/MemoryRail.svelte';
   import ScopeChip, { type ScopeChipNavItem } from '$lib/components/ScopeChip.svelte';
   import SurfaceArtifactCard from '$lib/components/SurfaceArtifactCard.svelte';
   import { pmaApi, type ApiError, type JsonRecord } from '$lib/api/client';
@@ -32,7 +32,6 @@
     modelSelectorState,
     optimisticUserTimelineItemFromSend,
     PMA_CHAT_FILTER_ORDER,
-    PMA_MEMORY_LIST_ID,
     pmaChatHeaderScopeLine,
     pmaChatScopeLabelFromChat,
     progressPercent,
@@ -46,7 +45,6 @@
     type PmaChatFilter,
     type PmaChatScopeOption
   } from '$lib/viewModels/pmaChat';
-  import { buildPmaMemoryViewModel, type PmaMemoryViewModel } from '$lib/viewModels/pmaMemory';
   import { repoAccent, repoInitials } from '$lib/viewModels/repoIdentity';
   import { agentWorkspaceRoute, repoRoute, worktreeRoute } from '$lib/viewModels/routes';
 
@@ -88,12 +86,11 @@
   let pendingRefreshTimer: number | null = null;
   let lastScrolledChatId: string | null = null;
   let lastScrolledCardCount = 0;
-  let memoryVm = $state<PmaMemoryViewModel | null>(null);
-  let memoryLoading = $state(false);
-  let memoryError = $state<ApiError | null>(null);
+  let memoryOpen = $state(false);
+  const hubScope = { kind: 'hub' as const };
 
   const activeChat = $derived(
-    activeChatId && activeChatId !== PMA_MEMORY_LIST_ID
+    activeChatId
       ? chats.find((chat) => chat.id === activeChatId) ?? null
       : null
   );
@@ -152,7 +149,7 @@
     draft = page.url.searchParams.get('draft') ?? draft;
     void loadInitial();
     const interval = window.setInterval(() => {
-      if (activeChatId && activeChatId !== PMA_MEMORY_LIST_ID) void refreshActive(activeChatId, { quiet: true });
+      if (activeChatId) void refreshActive(activeChatId, { quiet: true });
     }, 7000);
     return () => window.clearInterval(interval);
   });
@@ -197,17 +194,21 @@
       chats = chatResult.data;
       const requestedChat = page.url.searchParams.get('chat');
       const requestedDetail = requestedDetailFromUrl();
-      activeChatId = requestedDetail === PMA_MEMORY_LIST_ID
-        ? PMA_MEMORY_LIST_ID
-        : chooseActiveChatId(chatResult.data, activeChatId, requestedChat);
-      if (activeChatId && activeChatId !== PMA_MEMORY_LIST_ID) {
+      if (requestedDetail === 'memory') {
+        memoryOpen = true;
+        const fallbackChat = chooseActiveChatId(chatResult.data, null, null);
+        if (fallbackChat) {
+          activeChatId = fallbackChat;
+          syncSelectorsToActiveChat();
+        }
+      } else {
+        activeChatId = chooseActiveChatId(chatResult.data, activeChatId, requestedChat);
+      }
+      if (activeChatId) {
         detailMode = 'detail';
         syncSelectorsToActiveChat();
         void refreshActive(activeChatId);
         connectStream(activeChatId);
-      } else if (activeChatId === PMA_MEMORY_LIST_ID) {
-        detailMode = 'detail';
-        void loadMemoryDocs();
       }
     } else {
       chatError = chatResult.error;
@@ -256,51 +257,6 @@
     void goto(href(`/chats${query ? `?${query}` : ''}`), { replaceState: true });
   }
 
-  async function selectPinnedMemory(): Promise<void> {
-    activeChatId = PMA_MEMORY_LIST_ID;
-    closeStream();
-    timeline = [];
-    progress = null;
-    detailMode = 'detail';
-    activeError = null;
-    await syncDetailUrl(PMA_MEMORY_LIST_ID);
-    await loadMemoryDocs();
-  }
-
-  async function loadMemoryDocs(): Promise<void> {
-    memoryLoading = true;
-    memoryError = null;
-    const docs = await pmaApi.pma.listDocsWithContent();
-    if (!docs.ok) {
-      memoryError = docs.error;
-      memoryVm = null;
-      memoryLoading = false;
-      return;
-    }
-    memoryVm = buildPmaMemoryViewModel(docs.data);
-    memoryLoading = false;
-  }
-
-  async function savePmaDoc(docId: string, content: string): Promise<boolean> {
-    const saved = await pmaApi.pma.updateDoc(docId, content);
-    if (!saved.ok) {
-      memoryError = saved.error;
-      return false;
-    }
-    const docs =
-      memoryVm?.docs.map((doc) => ({
-        id: doc.id,
-        name: doc.filename,
-        kind: doc.filename,
-        content: doc.id === docId ? content : doc.content,
-        updatedAt: doc.updatedAt,
-        isPinned: true,
-        raw: {}
-      })) ?? [];
-    memoryVm = buildPmaMemoryViewModel(docs);
-    return true;
-  }
-
   async function loadModels(agentId: string, preferredModel = ''): Promise<void> {
     loadingModels = true;
     modelError = null;
@@ -332,29 +288,19 @@
 
   function requestedDetailFromUrl(): string | null {
     const detail = page.url.searchParams.get('detail');
-    if (detail === 'memory') return PMA_MEMORY_LIST_ID;
+    if (detail === 'memory') return 'memory';
     if (detail?.startsWith('chat:')) return detail.slice('chat:'.length);
     return page.url.searchParams.get('chat');
   }
 
   async function activateDetailFromUrl(detailId: string): Promise<void> {
-    if (detailId === activeChatId) return;
-    if (detailId === PMA_MEMORY_LIST_ID) {
-      await selectPinnedMemoryWithoutUrl();
+    if (detailId === 'memory') {
+      memoryOpen = true;
       return;
     }
+    if (detailId === activeChatId) return;
     if (!chats.some((chat) => chat.id === detailId)) return;
     await selectChatWithoutUrl(detailId);
-  }
-
-  async function selectPinnedMemoryWithoutUrl(): Promise<void> {
-    activeChatId = PMA_MEMORY_LIST_ID;
-    closeStream();
-    timeline = [];
-    progress = null;
-    detailMode = 'detail';
-    activeError = null;
-    await loadMemoryDocs();
   }
 
   async function selectChatWithoutUrl(chatId: string): Promise<void> {
@@ -370,13 +316,9 @@
   async function syncDetailUrl(detailId: string): Promise<void> {
     const params = new URLSearchParams(page.url.searchParams);
     params.delete('draft');
-    if (detailId === PMA_MEMORY_LIST_ID) {
-      params.set('detail', 'memory');
-      params.delete('chat');
-    } else {
-      params.set('detail', `chat:${detailId}`);
-      params.set('chat', detailId);
-    }
+    params.set('detail', `chat:${detailId}`);
+    params.set('chat', detailId);
+    if (memoryOpen) params.set('memory', '1');
     const query = params.toString();
     await goto(href(`/chats${query ? `?${query}` : ''}`), { keepFocus: true, noScroll: true });
   }
@@ -683,7 +625,7 @@
 
 <MasterDetail
   label="Chats workspace"
-  selected={Boolean(activeChat || activeChatId === PMA_MEMORY_LIST_ID)}
+  selected={Boolean(activeChat)}
   mode={detailMode}
   listLabel="Chats"
   detailLabel="Detail"
@@ -736,26 +678,6 @@
     </div>
 
     <div class="chat-list-scroll">
-      <button
-        class:active={activeChatId === PMA_MEMORY_LIST_ID}
-        class="chat-card pinned-memory-card"
-        type="button"
-        onclick={() => selectPinnedMemory()}
-      >
-        <span class="chat-row-glyph pma-glyph" aria-hidden="true">P</span>
-        <span class="chat-card-main">
-          <span class="chat-title-row">
-            <strong>PMA Memory</strong>
-            <span class="chat-title-trailing">
-              <span class="pinned-chip">Pinned</span>
-            </span>
-          </span>
-          <span class="chat-meta-row">
-            <span class="chat-scope">Workspace docs · .codex-autorunner/pma/docs</span>
-          </span>
-        </span>
-      </button>
-
       {#if loadingChats}
         <div class="state-panel loading-state">
           <span class="state-icon" aria-hidden="true"></span>
@@ -837,24 +759,6 @@
 
   {#snippet detail()}
   <div class="active-chat">
-    {#if activeChatId === PMA_MEMORY_LIST_ID}
-      <div class="memory-chat-pane">
-        <div class="chat-header">
-          <div class="chat-header-copy">
-            <h1>PMA Memory</h1>
-            <p class="chat-header-subtitle">Pinned workspace docs</p>
-          </div>
-        </div>
-        <div class="chats-memory-host">
-          <PmaMemoryView
-            state={memoryLoading ? 'loading' : memoryError ? 'error' : 'ready'}
-            vm={memoryVm}
-            errorMessage={memoryError?.message ?? null}
-            onSaveDoc={savePmaDoc}
-          />
-        </div>
-      </div>
-    {:else}
     <div class="chat-header">
       <div class="chat-header-copy">
         <h1>{activeChat?.title ?? 'Chats'}</h1>
@@ -874,6 +778,21 @@
         {/if}
       </div>
       <div class="selector-row">
+        <button
+          class={`memory-toggle-button ${memoryOpen ? 'is-open' : ''}`}
+          type="button"
+          onclick={() => (memoryOpen = !memoryOpen)}
+          aria-label={memoryOpen ? 'Close memory panel' : 'Open memory panel'}
+          title={memoryOpen ? 'Close memory' : 'Open memory'}
+        >
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+            <rect x="2" y="2" width="12" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.2" />
+            <line x1="5" y1="5" x2="11" y2="5" stroke="currentColor" stroke-width="1" stroke-linecap="round" />
+            <line x1="5" y1="8" x2="11" y2="8" stroke="currentColor" stroke-width="1" stroke-linecap="round" />
+            <line x1="5" y1="11" x2="9" y2="11" stroke="currentColor" stroke-width="1" stroke-linecap="round" />
+          </svg>
+          <span>Memory</span>
+        </button>
         <label class="selector-field">
           <span>{agentStateLabel}</span>
           <select
@@ -941,7 +860,7 @@
         <div class="state-panel error">
           <strong>Could not load this chat</strong>
           <p>{activeError.message}</p>
-          <button type="button" onclick={() => activeChatId && activeChatId !== PMA_MEMORY_LIST_ID && refreshActive(activeChatId)}>Retry</button>
+          <button type="button" onclick={() => activeChatId && refreshActive(activeChatId)}>Retry</button>
         </div>
       {:else if !activeChat}
         <div class="state-panel empty-state">
@@ -1124,7 +1043,7 @@
     {#if composeError}
       <p class="compose-error">{composeError.message}</p>
     {/if}
-    {/if}
   </div>
+  <MemoryRail open={memoryOpen} scope={hubScope} onClose={() => (memoryOpen = false)} />
   {/snippet}
 </MasterDetail>

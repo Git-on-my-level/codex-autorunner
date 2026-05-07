@@ -1,76 +1,75 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import ContextspaceView from '$lib/components/ContextspaceView.svelte';
+  import MemoryView from '$lib/components/MemoryView.svelte';
   import { pmaApi, type ApiError } from '$lib/api/client';
-  import {
-    buildContextspaceViewModel,
-    type ContextspaceViewModel
-  } from '$lib/viewModels/contextspace';
+  import { buildMemoryViewModel, type MemoryViewModel } from '$lib/viewModels/memory';
+  import type { ScopeRef } from '$lib/viewModels/scope';
 
-  let { workspaceId }: { workspaceId: string } = $props();
-  let vm = $state<ContextspaceViewModel | null>(null);
+  let {
+    scope,
+    workspaceId
+  }: {
+    scope?: ScopeRef;
+    workspaceId?: string;
+  } = $props();
+
+  let vm = $state<MemoryViewModel | null>(null);
   let loading = $state(true);
   let error = $state<ApiError | null>(null);
 
   onMount(() => {
-    void loadContextspace();
+    void loadMemory();
   });
 
-  async function loadContextspace(): Promise<void> {
-    loading = true;
-    error = null;
+  async function resolveScope(): Promise<ScopeRef> {
+    if (scope) return scope;
+    if (!workspaceId) return { kind: 'hub' };
     const [repos, worktrees] = await Promise.all([
       pmaApi.hub.listRepos(),
       pmaApi.hub.listWorktrees()
     ]);
     const repoList = repos.ok ? repos.data : [];
     const worktreeList = worktrees.ok ? worktrees.data : [];
-    const isKnownWorkspace =
-      repoList.some((repo) => repo.id === workspaceId) ||
-      worktreeList.some((worktree) => worktree.id === workspaceId);
-    if (!isKnownWorkspace) {
-      vm = buildContextspaceViewModel(workspaceId, [], repoList, worktreeList);
-      loading = false;
-      return;
-    }
-    const docs = await pmaApi.contextspace.listDocuments(workspaceId);
+    const repo = repoList.find((r) => r.id === workspaceId);
+    if (repo) return { kind: 'repo', id: repo.id };
+    const worktree = worktreeList.find((w) => w.id === workspaceId);
+    if (worktree) return { kind: 'worktree', id: worktree.id, parentRepoId: worktree.repoId ?? '' };
+    return { kind: 'repo', id: workspaceId };
+  }
+
+  async function loadMemory(): Promise<void> {
+    loading = true;
+    error = null;
+    const resolvedScope = await resolveScope();
+    const docs = await pmaApi.memory.listDocs(resolvedScope);
     if (!docs.ok) {
       error = docs.error;
+      vm = null;
       loading = false;
       return;
     }
-    vm = buildContextspaceViewModel(
-      workspaceId,
-      docs.data,
-      repoList,
-      worktreeList
-    );
+    vm = buildMemoryViewModel(resolvedScope, docs.data);
     loading = false;
   }
 
-  async function saveContextspaceDoc(docId: string, content: string): Promise<boolean> {
-    const docs = await pmaApi.contextspace.updateDocument(workspaceId, docId, content);
-    if (!docs.ok) {
-      error = docs.error;
+  async function saveDoc(docId: string, content: string): Promise<boolean> {
+    if (!vm) return false;
+    const result = await pmaApi.memory.saveDoc(vm.scope, docId, content);
+    if (!result.ok) {
+      error = result.error;
       return false;
     }
-    const [repos, worktrees] = await Promise.all([
-      pmaApi.hub.listRepos(),
-      pmaApi.hub.listWorktrees()
-    ]);
-    vm = buildContextspaceViewModel(
-      workspaceId,
-      docs.data,
-      repos.ok ? repos.data : [],
-      worktrees.ok ? worktrees.data : []
-    );
+    const docs = await pmaApi.memory.listDocs(vm.scope);
+    if (docs.ok) {
+      vm = buildMemoryViewModel(vm.scope, docs.data);
+    }
     return true;
   }
 </script>
 
-<ContextspaceView
+<MemoryView
   state={loading ? 'loading' : error ? 'error' : 'ready'}
   {vm}
   errorMessage={error?.message ?? null}
-  onSaveDoc={saveContextspaceDoc}
+  onSaveDoc={saveDoc}
 />

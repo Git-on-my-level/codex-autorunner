@@ -2,7 +2,11 @@
   import { page } from '$app/state';
   import ScopedMemoryPage from '$lib/components/ScopedMemoryPage.svelte';
 
-  const workspaceId = $derived(page.params.worktreeId ?? 'unknown-worktree');
+  const scope = $derived({
+    kind: 'worktree' as const,
+    id: page.params.worktreeId ?? 'unknown-worktree',
+    parentRepoId: page.params.repoId ?? ''
+  });
 </script>
 
-<ScopedMemoryPage {workspaceId} />
+<ScopedMemoryPage {scope} />
