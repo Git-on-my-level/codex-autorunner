@@ -34,7 +34,7 @@ from .runtime_thread_decoders import (
     build_default_decoder_registry,
 )
 from .runtime_threads import RUNTIME_THREAD_TIMEOUT_ERROR, RuntimeThreadOutcome
-from .stream_text_merge import merge_assistant_stream_text
+from .stream_text_merge import AssistantOutputState, AssistantTextAccumulator
 
 _logger = logging.getLogger(__name__)
 
@@ -56,19 +56,32 @@ DIRECT_RUN_EVENT_TYPES = (
     Started,
 )
 
+RawTimelineEvent = Any
+TimelineEvent = RunEvent
+RawTimelineHistory = list[RawTimelineEvent]
+TimelineHistory = list[TimelineEvent]
+
 
 @dataclass
 class RuntimeEventDriver:
-    """Canonical reducer for raw runtime payloads into normalized run events."""
+    """Keeps append-only timeline history separate from reduced assistant output."""
 
     state: RuntimeThreadRunEventState = field(
         default_factory=lambda: RuntimeThreadRunEventState()
     )
-    raw_events: list[Any] = field(default_factory=list)
-    run_events: list[RunEvent] = field(default_factory=list)
-    assistant_parts: list[str] = field(default_factory=list)
+    raw_events: RawTimelineHistory = field(default_factory=list)
+    run_events: TimelineHistory = field(default_factory=list)
+    assistant_output: AssistantOutputState = field(default_factory=AssistantOutputState)
+    timeline_assistant_chunks: list[str] = field(default_factory=list)
     log_lines: list[str] = field(default_factory=list)
     token_usage: Optional[dict[str, Any]] = None
+
+    def __post_init__(self) -> None:
+        if not self.assistant_output.text and self.state.best_assistant_text():
+            self.assistant_output = AssistantOutputState(
+                stream_text=self.state.assistant_stream_text,
+                final_text=self.state.assistant_message_text,
+            )
 
     async def consume_raw_event(
         self,
@@ -108,10 +121,13 @@ class RuntimeEventDriver:
         self._record_run_events([event])
 
     def best_assistant_text(self) -> str:
-        assistant_text = self.state.best_assistant_text()
-        if isinstance(assistant_text, str) and assistant_text.strip():
-            return assistant_text
-        return "".join(self.assistant_parts).strip()
+        return self.assistant_output.text
+
+    @property
+    def assistant_parts(self) -> list[str]:
+        """Append-only assistant output timeline chunks, not final output state."""
+
+        return self.timeline_assistant_chunks
 
     def merged_raw_events(self, raw_events: Iterable[Any]) -> list[Any]:
         return merge_runtime_thread_raw_events(
@@ -129,11 +145,17 @@ class RuntimeEventDriver:
                     RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
                     RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
                 }:
-                    self.assistant_parts.append(event.content)
+                    self.timeline_assistant_chunks.append(event.content)
+                    if event.delta_type == RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM:
+                        self.assistant_output.note_stream_snapshot(event.content)
+                    else:
+                        self.assistant_output.note_final_message(event.content)
                     continue
                 if event.delta_type == RUN_EVENT_DELTA_TYPE_LOG_LINE:
                     self.log_lines.append(event.content)
                     continue
+            if isinstance(event, Completed) and isinstance(event.final_message, str):
+                self.assistant_output.note_final_message(event.final_message)
             if isinstance(event, TokenUsage) and isinstance(event.usage, dict):
                 self.token_usage = dict(event.usage)
 
@@ -285,6 +307,12 @@ def runtime_trace_fields(
     }
 
 
+def terminal_evidence_trace_fields(
+    outcome: RuntimeThreadOutcome,
+) -> dict[str, Any]:
+    return dict(outcome.terminal_evidence)
+
+
 def completion_source_from_outcome(
     outcome: RuntimeThreadOutcome,
     *,
@@ -308,6 +336,12 @@ def merge_runtime_thread_raw_events(
     return merge_runtime_raw_events(streamed_raw_events, result_raw_events)
 
 
+def _merge_pending_stream_text(current: str, incoming: str) -> str:
+    accumulator = AssistantTextAccumulator(stream_text=current)
+    accumulator.merge_snapshot(incoming)
+    return accumulator.stream_text
+
+
 @dataclass
 class RuntimeThreadRunEventState:
     reasoning_buffers: dict[str, str] = field(default_factory=dict)
@@ -325,22 +359,29 @@ class RuntimeThreadRunEventState:
     opencode_part_types: dict[str, str] = field(default_factory=dict)
     opencode_tool_status: dict[str, str] = field(default_factory=dict)
     opencode_patch_hashes: set[str] = field(default_factory=set)
+    _assistant_text: AssistantOutputState = field(
+        default_factory=AssistantOutputState,
+        init=False,
+        repr=False,
+    )
+
+    def __post_init__(self) -> None:
+        self._assistant_text = AssistantOutputState(
+            stream_text=self.assistant_stream_text,
+            final_text=self.assistant_message_text,
+        )
 
     def note_stream_text(self, text: str) -> None:
-        if isinstance(text, str) and text:
-            self.assistant_stream_text = merge_assistant_stream_text(
-                self.assistant_stream_text,
-                text,
-            )
+        self._assistant_text.note_stream_snapshot(text)
+        self.assistant_stream_text = self._assistant_text.stream_text
 
     def note_message_text(self, text: str) -> None:
         if isinstance(text, str) and text.strip():
-            self.assistant_message_text = text
+            self._assistant_text.note_final_message(text)
+            self.assistant_message_text = self._assistant_text.final_text
 
     def best_assistant_text(self) -> str:
-        if self.assistant_message_text.strip():
-            return self.assistant_message_text
-        return self.assistant_stream_text
+        return self._assistant_text.text
 
     def note_runtime_progress(
         self,
@@ -413,7 +454,7 @@ class RuntimeThreadRunEventState:
                         delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
                     )
                 ]
-            self.pending_stream_no_id = merge_assistant_stream_text(
+            self.pending_stream_no_id = _merge_pending_stream_text(
                 self.pending_stream_no_id,
                 text,
             )
@@ -430,7 +471,7 @@ class RuntimeThreadRunEventState:
                     delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
                 )
             ]
-        self.pending_stream_by_message[message_id] = merge_assistant_stream_text(
+        self.pending_stream_by_message[message_id] = _merge_pending_stream_text(
             self.pending_stream_by_message.get(message_id, ""),
             text,
         )
@@ -696,6 +737,10 @@ def _load_json_object(raw: str) -> dict[str, Any]:
 __all__ = [
     "RuntimeEventDriver",
     "RuntimeThreadRunEventState",
+    "RawTimelineEvent",
+    "RawTimelineHistory",
+    "TimelineEvent",
+    "TimelineHistory",
     "decode_runtime_raw_messages",
     "merge_runtime_thread_raw_events",
     "normalize_runtime_thread_message",
@@ -711,6 +756,7 @@ __all__ = [
     "note_run_event_state",
     "normalize_runtime_progress_event",
     "runtime_trace_fields",
+    "terminal_evidence_trace_fields",
     "completion_source_from_outcome",
     "DECODE_FAILURE_REASON_MALFORMED_JSON",
     "DECODE_FAILURE_REASON_REGISTRY_MISS",

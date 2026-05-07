@@ -93,6 +93,7 @@ from .....integrations.chat.execution_event_journal import (
 from .....integrations.chat.managed_thread_delivery_support import (
     ManagedThreadDeliveryCleanupContext,
     ManagedThreadDeliverySendResult,
+    managed_thread_terminal_delivery_send_key,
 )
 from .....integrations.chat.managed_thread_direct_delivery import (
     record_managed_thread_direct_delivery,
@@ -845,12 +846,28 @@ def _build_telegram_success_delivery(
         transport_target = dict(record.target.transport_target or {})
         target_chat_id = int(transport_target.get("chat_id") or chat_id)
         target_thread_id = transport_target.get("thread_id", thread_id)
-        await handlers._send_message(
-            target_chat_id,
-            render_managed_thread_delivery_record_text(record),
-            thread_id=target_thread_id,
-            reply_to=None,
-        )
+        text = render_managed_thread_delivery_record_text(record)
+        send_with_outbox = getattr(handlers, "_send_message_with_outbox", None)
+        if callable(send_with_outbox):
+            delivered = await _send_telegram_terminal_message_with_outbox(
+                send_with_outbox,
+                target_chat_id,
+                text,
+                thread_id=target_thread_id,
+                record=record,
+                status="ok",
+            )
+            if not delivered:
+                return ManagedThreadDeliverySendResult(
+                    error="telegram_terminal_send_deferred"
+                )
+        else:
+            await handlers._send_message(
+                target_chat_id,
+                text,
+                thread_id=target_thread_id,
+                reply_to=None,
+            )
         return ManagedThreadDeliverySendResult()
 
     return _send_success
@@ -870,15 +887,70 @@ def _build_telegram_failure_delivery(
         transport_target = dict(record.target.transport_target or {})
         target_chat_id = int(transport_target.get("chat_id") or chat_id)
         target_thread_id = transport_target.get("thread_id", thread_id)
-        await handlers._send_message(
-            target_chat_id,
-            f"Turn failed: {record.envelope.error_text or public_execution_error}",
-            thread_id=target_thread_id,
-            reply_to=None,
-        )
+        text = f"Turn failed: {record.envelope.error_text or public_execution_error}"
+        send_with_outbox = getattr(handlers, "_send_message_with_outbox", None)
+        if callable(send_with_outbox):
+            delivered = await _send_telegram_terminal_message_with_outbox(
+                send_with_outbox,
+                target_chat_id,
+                text,
+                thread_id=target_thread_id,
+                record=record,
+                status="error",
+            )
+            if not delivered:
+                return ManagedThreadDeliverySendResult(
+                    error="telegram_terminal_error_send_deferred"
+                )
+        else:
+            await handlers._send_message(
+                target_chat_id,
+                text,
+                thread_id=target_thread_id,
+                reply_to=None,
+            )
         return ManagedThreadDeliverySendResult()
 
     return _send_failure
+
+
+async def _send_telegram_terminal_message_with_outbox(
+    send_with_outbox: Any,
+    chat_id: int,
+    text: str,
+    *,
+    thread_id: Optional[int],
+    record: Any,
+    status: str,
+) -> bool:
+    record_key = managed_thread_terminal_delivery_send_key(
+        record, suffix=f"telegram:{status}"
+    )
+    try:
+        return await send_with_outbox(
+            chat_id,
+            text,
+            thread_id=thread_id,
+            reply_to=None,
+            record_id=record_key,
+            outbox_key=record.idempotency_key,
+            delivery_metadata={
+                "managed_thread_delivery_id": record.delivery_id,
+                "managed_thread_delivery_idempotency_key": record.idempotency_key,
+                "managed_thread_id": record.managed_thread_id,
+                "managed_turn_id": record.managed_turn_id,
+                "terminal_status": status,
+            },
+        )
+    except TypeError as exc:
+        if "record_id" not in str(exc) and "outbox_key" not in str(exc):
+            raise
+        return await send_with_outbox(
+            chat_id,
+            text,
+            thread_id=thread_id,
+            reply_to=None,
+        )
 
 
 def _build_telegram_delivery_cleanup(handlers: Any, *, topic_key: str) -> Any:

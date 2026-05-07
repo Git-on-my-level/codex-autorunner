@@ -364,7 +364,9 @@ async def test_discord_adapter_safe_send_false_leaves_record_replayable(
     assert record is not None
     assert record.state is ManagedThreadDeliveryState.RETRY_SCHEDULED
     assert record.next_attempt_at is not None
-    assert record.last_error == "discord_send_deferred:discord-queued:thread-1:turn-1"
+    assert record.last_error == (
+        f"discord_send_deferred:{record.idempotency_key}:discord-queued"
+    )
     assert service.sent_messages == []
 
 
@@ -583,6 +585,32 @@ async def test_discord_adapter_delivered_record_is_terminal(
     engine = delivery.engine
     re_claim = engine.claim_delivery(record.delivery_id)
     assert re_claim is None
+
+
+@pytest.mark.anyio
+async def test_discord_second_handoff_after_delivered_does_not_resend(
+    tmp_path: Path,
+) -> None:
+    service = _DiscordServiceStub(state_root=tmp_path)
+    delivery = _build_hooks(tmp_path, service=service)
+    finalized = _finalized_ok()
+
+    first = await handoff_managed_thread_final_delivery(
+        finalized,
+        delivery=delivery,
+        logger=logging.getLogger("test"),
+    )
+    second = await handoff_managed_thread_final_delivery(
+        finalized,
+        delivery=delivery,
+        logger=logging.getLogger("test"),
+    )
+
+    assert first is not None
+    assert second is not None
+    assert first.delivery_id == second.delivery_id
+    assert second.state is ManagedThreadDeliveryState.DELIVERED
+    assert len(service.sent_messages) == 1
 
 
 @pytest.mark.anyio

@@ -75,6 +75,7 @@ from ...core.orchestration.runtime_thread_events import (
     raw_event_method,
     recover_post_completion_outcome,
     runtime_trace_fields,
+    terminal_evidence_trace_fields,
     terminal_run_event_from_outcome,
 )
 from ...core.orchestration.runtime_threads import (
@@ -2733,6 +2734,7 @@ async def finalize_managed_thread_execution(
             ),
             original_error=outcome.error,
             **runtime_trace_fields(event_state),
+            **terminal_evidence_trace_fields(outcome),
         )
         timeline_events.append(
             make_chat_execution_journal_notice(
@@ -3044,6 +3046,7 @@ async def finalize_managed_thread_execution(
             fresh_backend_session_started=fresh_backend_session_started,
             fresh_backend_session_reason=fresh_backend_session_reason,
             **runtime_trace_fields(event_state),
+            **terminal_evidence_trace_fields(outcome),
         )
         # Hub control-plane: thread activity record (best-effort, ok outcomes only).
         await _best_effort_hub_call(
@@ -3129,6 +3132,7 @@ async def finalize_managed_thread_execution(
             fresh_backend_session_started=fresh_backend_session_started,
             fresh_backend_session_reason=fresh_backend_session_reason,
             **runtime_trace_fields(event_state),
+            **terminal_evidence_trace_fields(outcome),
         )
         return ManagedThreadFinalizationResult(
             status="interrupted",
@@ -3210,6 +3214,7 @@ async def finalize_managed_thread_execution(
         fresh_backend_session_started=fresh_backend_session_started,
         fresh_backend_session_reason=fresh_backend_session_reason,
         **runtime_trace_fields(event_state),
+        **terminal_evidence_trace_fields(outcome),
     )
     return ManagedThreadFinalizationResult(
         status="error",

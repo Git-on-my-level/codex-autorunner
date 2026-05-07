@@ -107,6 +107,71 @@ async def test_fresh_conversation_uses_rebuild_prompt_for_base_prompt_injection(
     assert prompts_seen == ["DELTA_PROMPT\n\nCORE PMA FROM PROMPT_MD\n\n"]
 
 
+@pytest.mark.asyncio
+async def test_execute_harness_turn_recovers_empty_result_from_streamed_timeline(
+    tmp_path: Path,
+) -> None:
+    event_stream_started = asyncio.Event()
+    wait_can_finish = asyncio.Event()
+
+    class Harness:
+        def supports(self, capability: str) -> bool:
+            return capability in {
+                "durable_threads",
+                "message_turns",
+                "event_streaming",
+            }
+
+        async def ensure_ready(self, _repo_root: Path) -> None:
+            return None
+
+        async def new_conversation(self, _repo_root: Path, title: str = ""):
+            _ = title
+            return SimpleNamespace(id="fresh-conv")
+
+        async def start_turn(
+            self, _repo_root: Path, conversation_id: str, prompt: str, *args, **kwargs
+        ):
+            _ = prompt, args, kwargs
+            return _HarnessTurnStub(conversation_id, "turn-fresh")
+
+        async def stream_events(
+            self, _repo_root: Path, conversation_id: str, turn_id: str
+        ):
+            _ = conversation_id, turn_id
+            yield {
+                "message": {
+                    "method": "item/agentMessage/delta",
+                    "params": {"delta": "streamed fallback"},
+                }
+            }
+            event_stream_started.set()
+            await wait_can_finish.wait()
+
+        async def wait_for_turn(
+            self, _repo_root: Path, conversation_id: str, turn_id: str, timeout=None
+        ):
+            _ = conversation_id, turn_id, timeout
+            await event_stream_started.wait()
+            wait_can_finish.set()
+            return SimpleNamespace(
+                status="ok",
+                assistant_text="",
+                raw_events=[],
+                errors=[],
+            )
+
+    result = await execute_harness_turn(
+        Harness(),
+        tmp_path,
+        "DELTA_PROMPT",
+        asyncio.Event(),
+    )
+
+    assert result["status"] == "ok"
+    assert result["message"] == "streamed fallback"
+
+
 def test_resolve_pma_session_key_isolates_automation_from_interactive_pma() -> None:
     interactive = resolve_pma_session_key(
         "hermes",

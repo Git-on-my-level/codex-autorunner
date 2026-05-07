@@ -10,6 +10,9 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable, Mapping, Optional, Sequence
 
 from ...core.acp_lifecycle import (
+    active_turn_matches as _active_turn_matches,
+)
+from ...core.acp_lifecycle import (
     should_close_turn_buffer as _should_close_acp_turn_buffer,
 )
 from ...core.config import HubConfig, RepoConfig
@@ -114,6 +117,7 @@ class _HermesTurnState:
     last_event_method: Optional[str] = None
     last_session_update_kind: Optional[str] = None
     last_progress_at: Optional[str] = None
+    closed: bool = False
 
 
 class HermesSupervisor:
@@ -508,6 +512,14 @@ class HermesSupervisor:
             raise
         await self._sync_prompt_snapshot_into_event_buffer(workspace_root, state)
         await state.event_buffer.close()
+        async with self._lock:
+            state.closed = True
+            if _active_turn_matches(
+                active_turns=self._session_turns,
+                session_id=(workspace, session_id),
+                turn_id=resolved_turn_id,
+            ):
+                self._session_turns.pop((workspace, session_id), None)
         errors = [result.error_message] if result.error_message else []
         raw_events = state.event_buffer.snapshot()
         log_event(
@@ -626,8 +638,17 @@ class HermesSupervisor:
         workspace = _workspace_key(workspace_root)
         async with self._lock:
             tracked_turn_id = self._session_turns.get((workspace, session_id))
-        if tracked_turn_id:
-            return tracked_turn_id
+            tracked_state = (
+                self._turn_states.get((workspace, tracked_turn_id))
+                if tracked_turn_id
+                else None
+            )
+            if (
+                tracked_turn_id is not None
+                and tracked_state is not None
+                and not tracked_state.closed
+            ):
+                return tracked_turn_id
         raise HermesSupervisorError(
             f"No active Hermes turn tracked for session '{session_id}'"
         )

@@ -1,0 +1,627 @@
+[
+  {
+    "name": "strict_deltas",
+    "actions": [
+      {
+        "kind": "raw_event",
+        "raw": {
+          "method": "session/update",
+          "params": {
+            "sessionId": "session-1",
+            "turnId": "turn-current",
+            "update": {
+              "sessionUpdate": "agent_message_chunk",
+              "content": "Hel"
+            }
+          }
+        }
+      },
+      {
+        "kind": "raw_event",
+        "raw": {
+          "method": "session/update",
+          "params": {
+            "sessionId": "session-1",
+            "turnId": "turn-current",
+            "update": {
+              "sessionUpdate": "agent_message_chunk",
+              "content": "lo"
+            }
+          }
+        }
+      },
+      {
+        "kind": "raw_event",
+        "raw": {
+          "method": "token/usage",
+          "params": {
+            "usage": {
+              "inputTokens": 12,
+              "outputTokens": 5,
+              "totalTokens": 17
+            }
+          }
+        }
+      },
+      {
+        "kind": "raw_event",
+        "raw": {
+          "method": "prompt/completed",
+          "params": {
+            "sessionId": "session-1",
+            "turnId": "turn-current",
+            "status": "completed",
+            "finalOutput": "Hello"
+          }
+        }
+      },
+      {
+        "kind": "transport_return",
+        "status": "ok",
+        "assistant_text": "Hello",
+        "errors": []
+      }
+    ],
+    "expected": {
+      "status": "ok",
+      "assistant_text": "Hello",
+      "terminal_source": "prompt/completed",
+      "completion_source": "prompt_return",
+      "token_usage": {
+        "inputTokens": 12,
+        "outputTokens": 5,
+        "totalTokens": 17
+      },
+      "delivery_allowed": true,
+      "assistant_timeline": [
+        "Hel",
+        "lo",
+        "Hello"
+      ],
+      "run_event_types": [
+        "OutputDelta",
+        "OutputDelta",
+        "TokenUsage",
+        "OutputDelta"
+      ],
+      "commentary": []
+    }
+  },
+  {
+    "name": "cumulative_chunks",
+    "actions": [
+      {
+        "kind": "raw_event",
+        "raw": {
+          "method": "session/update",
+          "params": {
+            "sessionId": "session-1",
+            "turnId": "turn-current",
+            "update": {
+              "sessionUpdate": "agent_message_chunk",
+              "content": "Hel"
+            }
+          }
+        }
+      },
+      {
+        "kind": "raw_event",
+        "raw": {
+          "method": "session/update",
+          "params": {
+            "sessionId": "session-1",
+            "turnId": "turn-current",
+            "update": {
+              "sessionUpdate": "agent_message_chunk",
+              "content": "Hello"
+            }
+          }
+        }
+      },
+      {
+        "kind": "raw_event",
+        "raw": {
+          "method": "session.status",
+          "params": {
+            "sessionId": "session-1",
+            "turnId": "turn-current",
+            "status": {
+              "type": "idle"
+            }
+          }
+        }
+      },
+      {
+        "kind": "transport_return",
+        "status": "ok",
+        "assistant_text": "Hello",
+        "errors": []
+      }
+    ],
+    "expected": {
+      "status": "ok",
+      "assistant_text": "Hello",
+      "terminal_source": "session.status",
+      "completion_source": "prompt_return",
+      "token_usage": null,
+      "delivery_allowed": true,
+      "assistant_timeline": [
+        "Hel",
+        "Hello"
+      ],
+      "run_event_types": [
+        "OutputDelta",
+        "OutputDelta"
+      ],
+      "commentary": []
+    }
+  },
+  {
+    "name": "duplicate_chunks",
+    "actions": [
+      {
+        "kind": "raw_event",
+        "raw": {
+          "method": "session/update",
+          "params": {
+            "sessionId": "session-1",
+            "turnId": "turn-current",
+            "update": {
+              "sessionUpdate": "agent_message_chunk",
+              "content": "Hello"
+            }
+          }
+        }
+      },
+      {
+        "kind": "raw_event",
+        "raw": {
+          "method": "session/update",
+          "params": {
+            "sessionId": "session-1",
+            "turnId": "turn-current",
+            "update": {
+              "sessionUpdate": "agent_message_chunk",
+              "content": "Hello"
+            }
+          }
+        }
+      },
+      {
+        "kind": "transport_return",
+        "status": "ok",
+        "assistant_text": "Hello",
+        "errors": []
+      }
+    ],
+    "expected": {
+      "status": "ok",
+      "assistant_text": "Hello",
+      "terminal_source": "prompt_return",
+      "completion_source": "prompt_return",
+      "token_usage": null,
+      "delivery_allowed": true,
+      "assistant_timeline": [
+        "Hello",
+        "Hello"
+      ],
+      "run_event_types": [
+        "OutputDelta",
+        "OutputDelta"
+      ],
+      "commentary": []
+    }
+  },
+  {
+    "name": "terminal_before_request_return",
+    "actions": [
+      {
+        "kind": "raw_event",
+        "raw": {
+          "method": "session/update",
+          "params": {
+            "sessionId": "session-1",
+            "turnId": "turn-current",
+            "update": {
+              "sessionUpdate": "agent_message_chunk",
+              "content": "fixture"
+            }
+          }
+        }
+      },
+      {
+        "kind": "raw_event",
+        "raw": {
+          "method": "prompt/completed",
+          "params": {
+            "sessionId": "session-1",
+            "turnId": "turn-current",
+            "status": "completed",
+            "finalOutput": "fixture reply"
+          }
+        }
+      },
+      {
+        "kind": "transport_return",
+        "status": "ok",
+        "assistant_text": "fixture reply",
+        "errors": []
+      }
+    ],
+    "expected": {
+      "status": "ok",
+      "assistant_text": "fixture reply",
+      "terminal_source": "prompt/completed",
+      "completion_source": "prompt_return",
+      "token_usage": null,
+      "delivery_allowed": true,
+      "assistant_timeline": [
+        "fixture",
+        "fixture reply"
+      ],
+      "run_event_types": [
+        "OutputDelta",
+        "OutputDelta"
+      ],
+      "commentary": []
+    }
+  },
+  {
+    "name": "request_return_before_terminal",
+    "actions": [
+      {
+        "kind": "transport_return",
+        "status": "ok",
+        "assistant_text": "fixture reply",
+        "errors": []
+      },
+      {
+        "kind": "raw_event",
+        "raw": {
+          "method": "prompt/completed",
+          "params": {
+            "sessionId": "session-1",
+            "turnId": "turn-current",
+            "status": "completed",
+            "finalOutput": "fixture reply"
+          }
+        }
+      }
+    ],
+    "expected": {
+      "status": "ok",
+      "assistant_text": "fixture reply",
+      "terminal_source": "prompt/completed",
+      "completion_source": "prompt_return",
+      "token_usage": null,
+      "delivery_allowed": true,
+      "assistant_timeline": [
+        "fixture reply"
+      ],
+      "run_event_types": [
+        "OutputDelta"
+      ],
+      "commentary": []
+    }
+  },
+  {
+    "name": "idle_before_request_return",
+    "actions": [
+      {
+        "kind": "raw_event",
+        "raw": {
+          "method": "session/update",
+          "params": {
+            "sessionId": "session-1",
+            "turnId": "turn-current",
+            "update": {
+              "sessionUpdate": "agent_message_chunk",
+              "content": "idle reply"
+            }
+          }
+        }
+      },
+      {
+        "kind": "raw_event",
+        "raw": {
+          "method": "session.status",
+          "params": {
+            "sessionId": "session-1",
+            "turnId": "turn-current",
+            "status": {
+              "type": "idle"
+            }
+          }
+        }
+      }
+    ],
+    "expected": {
+      "status": "ok",
+      "assistant_text": "idle reply",
+      "terminal_source": "session.status",
+      "completion_source": "stream_terminal_event",
+      "token_usage": null,
+      "delivery_allowed": true,
+      "assistant_timeline": [
+        "idle reply"
+      ],
+      "run_event_types": [
+        "OutputDelta"
+      ],
+      "commentary": []
+    }
+  },
+  {
+    "name": "missing_turn_id_mapped_to_active_turn",
+    "actions": [
+      {
+        "kind": "raw_event",
+        "raw": {
+          "method": "session/update",
+          "params": {
+            "sessionId": "session-1",
+            "update": {
+              "sessionUpdate": "agent_message_chunk",
+              "content": "mapped reply"
+            }
+          }
+        }
+      },
+      {
+        "kind": "raw_event",
+        "raw": {
+          "method": "prompt/completed",
+          "params": {
+            "sessionId": "session-1",
+            "status": "completed",
+            "finalOutput": "mapped reply"
+          }
+        }
+      }
+    ],
+    "expected": {
+      "status": "ok",
+      "assistant_text": "mapped reply",
+      "terminal_source": "prompt/completed",
+      "completion_source": "stream_terminal_event",
+      "token_usage": null,
+      "delivery_allowed": true,
+      "assistant_timeline": [
+        "mapped reply",
+        "mapped reply"
+      ],
+      "run_event_types": [
+        "OutputDelta",
+        "OutputDelta"
+      ],
+      "commentary": [],
+      "mapped_turn_id": "turn-current"
+    }
+  },
+  {
+    "name": "previous_turn_and_current_turn_identical_final_text",
+    "actions": [
+      {
+        "kind": "raw_event",
+        "raw": {
+          "method": "prompt/completed",
+          "params": {
+            "sessionId": "session-1",
+            "turnId": "turn-previous",
+            "status": "completed",
+            "finalOutput": "same final"
+          }
+        }
+      },
+      {
+        "kind": "raw_event",
+        "raw": {
+          "method": "session/update",
+          "params": {
+            "sessionId": "session-1",
+            "turnId": "turn-current",
+            "update": {
+              "sessionUpdate": "agent_message_chunk",
+              "content": "same"
+            }
+          }
+        }
+      },
+      {
+        "kind": "raw_event",
+        "raw": {
+          "method": "prompt/completed",
+          "params": {
+            "sessionId": "session-1",
+            "turnId": "turn-current",
+            "status": "completed",
+            "finalOutput": "same final"
+          }
+        }
+      }
+    ],
+    "expected": {
+      "status": "ok",
+      "assistant_text": "same final",
+      "terminal_source": "prompt/completed",
+      "completion_source": "stream_terminal_event",
+      "token_usage": null,
+      "delivery_allowed": true,
+      "assistant_timeline": [
+        "same final",
+        "same",
+        "same final"
+      ],
+      "run_event_types": [
+        "OutputDelta",
+        "OutputDelta",
+        "OutputDelta"
+      ],
+      "commentary": []
+    }
+  },
+  {
+    "name": "commentary_mixed_with_final_text",
+    "actions": [
+      {
+        "kind": "raw_event",
+        "raw": {
+          "method": "session/update",
+          "params": {
+            "sessionId": "session-1",
+            "turnId": "turn-current",
+            "update": {
+              "sessionUpdate": "agent_message_chunk",
+              "phase": "commentary",
+              "alreadyStreamed": true,
+              "content": "draft plan"
+            }
+          }
+        }
+      },
+      {
+        "kind": "raw_event",
+        "raw": {
+          "method": "session/update",
+          "params": {
+            "sessionId": "session-1",
+            "turnId": "turn-current",
+            "update": {
+              "sessionUpdate": "agent_message_chunk",
+              "content": "final"
+            }
+          }
+        }
+      },
+      {
+        "kind": "raw_event",
+        "raw": {
+          "method": "prompt/completed",
+          "params": {
+            "sessionId": "session-1",
+            "turnId": "turn-current",
+            "status": "completed",
+            "finalOutput": "final answer"
+          }
+        }
+      }
+    ],
+    "expected": {
+      "status": "ok",
+      "assistant_text": "final answer",
+      "terminal_source": "prompt/completed",
+      "completion_source": "stream_terminal_event",
+      "token_usage": null,
+      "delivery_allowed": true,
+      "assistant_timeline": [
+        "final",
+        "final answer"
+      ],
+      "run_event_types": [
+        "RunNotice",
+        "OutputDelta",
+        "OutputDelta"
+      ],
+      "commentary": [
+        "draft plan"
+      ]
+    }
+  },
+  {
+    "name": "failed_transport_after_successful_terminal_event",
+    "actions": [
+      {
+        "kind": "raw_event",
+        "raw": {
+          "method": "prompt/completed",
+          "params": {
+            "sessionId": "session-1",
+            "turnId": "turn-current",
+            "status": "completed",
+            "finalOutput": "done despite transport"
+          }
+        }
+      },
+      {
+        "kind": "transport_return",
+        "status": "failed",
+        "assistant_text": "",
+        "errors": [
+          "transport disconnected after completion"
+        ]
+      }
+    ],
+    "expected": {
+      "status": "ok",
+      "assistant_text": "done despite transport",
+      "terminal_source": "prompt/completed",
+      "completion_source": "reconciled_failure",
+      "token_usage": null,
+      "delivery_allowed": true,
+      "assistant_timeline": [
+        "done despite transport"
+      ],
+      "run_event_types": [
+        "OutputDelta"
+      ],
+      "commentary": []
+    }
+  },
+  {
+    "name": "timeout_with_partial_output",
+    "actions": [
+      {
+        "kind": "raw_event",
+        "raw": {
+          "method": "session/update",
+          "params": {
+            "sessionId": "session-1",
+            "turnId": "turn-current",
+            "update": {
+              "sessionUpdate": "agent_message_chunk",
+              "content": "partial output"
+            }
+          }
+        }
+      },
+      {
+        "kind": "raw_event",
+        "raw": {
+          "method": "session/update",
+          "params": {
+            "sessionId": "session-1",
+            "turnId": "turn-current",
+            "update": {
+              "sessionUpdate": "usage_update",
+              "usage": {
+                "totalTokens": 11
+              }
+            }
+          }
+        }
+      },
+      {
+        "kind": "timeout",
+        "error": "Runtime thread timed out"
+      }
+    ],
+    "expected": {
+      "status": "error",
+      "assistant_text": "",
+      "terminal_source": "timeout",
+      "completion_source": "timeout",
+      "token_usage": {
+        "totalTokens": 11
+      },
+      "delivery_allowed": false,
+      "assistant_timeline": [
+        "partial output"
+      ],
+      "run_event_types": [
+        "OutputDelta",
+        "TokenUsage"
+      ],
+      "commentary": []
+    }
+  }
+]
