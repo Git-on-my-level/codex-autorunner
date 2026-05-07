@@ -415,8 +415,6 @@ async def execute_harness_turn(
     timeline_events, timeline_state = await timeline_from_raw_events(merged_raw_events)
 
     assistant_text = str(getattr(turn_result, "assistant_text", "") or "").strip()
-    if not assistant_text:
-        assistant_text = timeline_state.best_assistant_text().strip()
 
     status = str(getattr(turn_result, "status", "") or "").strip().lower()
     errors = tuple(getattr(turn_result, "errors", ()) or ())

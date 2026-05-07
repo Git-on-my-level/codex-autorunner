@@ -22,7 +22,7 @@ from .runtime_state_events import (
     normalize_runtime_state_events,
     normalize_transport_returned,
 )
-from .stream_text_merge import AssistantTextAccumulator
+from .stream_text_merge import AssistantOutputState
 
 RuntimeThreadOutcomeStatus = Literal["ok", "error", "interrupted"]
 RuntimeThreadCompletionSource = Literal[
@@ -322,25 +322,25 @@ class RuntimeTurnTerminalStateMachine:
         repr=False,
     )
     _terminal_signal_event: asyncio.Event = field(init=False, repr=False)
-    _assistant_text: AssistantTextAccumulator = field(
-        default_factory=AssistantTextAccumulator,
+    _assistant_text: AssistantOutputState = field(
+        default_factory=AssistantOutputState,
         init=False,
         repr=False,
     )
 
     def __post_init__(self) -> None:
         self._terminal_signal_event = asyncio.Event()
-        self._assistant_text = AssistantTextAccumulator(
+        self._assistant_text = AssistantOutputState(
             stream_text=self.last_assistant_text,
         )
 
     def _note_assistant_stream_text(self, text: str) -> None:
-        self._assistant_text.merge_snapshot(text)
+        self._assistant_text.note_stream_snapshot(text)
         self.last_assistant_text = self._assistant_text.text
 
     def _note_assistant_message_text(self, text: str) -> None:
         if isinstance(text, str) and text.strip():
-            self._assistant_text.replace_final(text)
+            self._assistant_text.note_final_message(text)
             self.last_assistant_text = self._assistant_text.text
 
     def terminal_signal_waiter(self) -> asyncio.Event:

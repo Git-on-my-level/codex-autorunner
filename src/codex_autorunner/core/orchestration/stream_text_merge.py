@@ -50,3 +50,17 @@ class AssistantTextAccumulator:
         if self.final_text.strip():
             return self.final_text
         return self.stream_text
+
+
+@dataclass
+class AssistantOutputState(AssistantTextAccumulator):
+    """Reduced assistant output state, distinct from append-only timelines."""
+
+    def note_stream_delta(self, text: str) -> str:
+        return self.append_delta(text)
+
+    def note_stream_snapshot(self, text: str) -> str:
+        return self.merge_snapshot(text)
+
+    def note_final_message(self, text: str) -> str:
+        return self.replace_final(text)

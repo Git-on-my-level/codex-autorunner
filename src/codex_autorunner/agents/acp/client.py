@@ -32,7 +32,7 @@ from ...core.acp_lifecycle import (
     should_map_missing_turn_id as _should_map_missing_turn_id,
 )
 from ...core.logging_utils import log_event
-from ...core.orchestration.stream_text_merge import AssistantTextAccumulator
+from ...core.orchestration.stream_text_merge import AssistantOutputState
 from ...core.text_utils import _normalize_optional_text
 from .errors import (
     ACPError,
@@ -136,22 +136,22 @@ class _PromptState:
     last_session_update_part_types: tuple[str, ...] = ()
     last_session_update_text_length: Optional[int] = None
     last_session_update_at: Optional[float] = None
-    _assistant_text: AssistantTextAccumulator = field(
-        default_factory=AssistantTextAccumulator,
+    _assistant_text: AssistantOutputState = field(
+        default_factory=AssistantOutputState,
         init=False,
         repr=False,
     )
 
     def __post_init__(self) -> None:
-        self._assistant_text = AssistantTextAccumulator(stream_text=self.final_output)
+        self._assistant_text = AssistantOutputState(stream_text=self.final_output)
 
     def note_output_delta(self, text: str) -> None:
-        self._assistant_text.merge_snapshot(text)
+        self._assistant_text.note_stream_snapshot(text)
         self.final_output = self._assistant_text.text
 
     def note_assistant_message(self, text: str) -> None:
         if isinstance(text, str) and text:
-            self._assistant_text.replace_final(text)
+            self._assistant_text.note_final_message(text)
             self.final_output = self._assistant_text.text
 
 

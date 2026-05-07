@@ -6,6 +6,7 @@ from codex_autorunner.core.orchestration.runtime_thread_events import (
     DECODE_FAILURE_REASON_EMPTY_METHOD,
     DECODE_FAILURE_REASON_REGISTRY_MISS,
     DECODE_FAILURE_REASON_UNSUPPORTED_SHAPE,
+    RuntimeEventDriver,
     RuntimeThreadRunEventState,
     completion_source_from_outcome,
     decode_runtime_raw_messages,
@@ -22,6 +23,7 @@ from codex_autorunner.core.orchestration.runtime_thread_events import (
 )
 from codex_autorunner.core.orchestration.runtime_threads import RuntimeThreadOutcome
 from codex_autorunner.core.ports.run_event import (
+    RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
     ApprovalRequested,
     Completed,
     Failed,
@@ -32,6 +34,32 @@ from codex_autorunner.core.ports.run_event import (
     ToolResult,
 )
 from codex_autorunner.core.sse import format_sse
+
+
+async def test_runtime_event_driver_keeps_timeline_chunks_and_reduced_output_separate() -> (
+    None
+):
+    driver = RuntimeEventDriver()
+
+    first_chunk = OutputDelta(
+        timestamp="2026-05-07T00:00:00Z",
+        content="Hel",
+        delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+    )
+    cumulative_chunk = OutputDelta(
+        timestamp="2026-05-07T00:00:01Z",
+        content="Hello",
+        delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+    )
+
+    await driver.consume_raw_event(first_chunk)
+    await driver.consume_raw_event(cumulative_chunk)
+
+    assert driver.raw_events == [first_chunk, cumulative_chunk]
+    assert driver.run_events == [first_chunk, cumulative_chunk]
+    assert driver.assistant_parts == ["Hel", "Hello"]
+    assert "".join(driver.assistant_parts) == "HelHello"
+    assert driver.best_assistant_text() == "Hello"
 
 
 async def test_normalize_runtime_thread_raw_event_shared_lifecycle_corpus() -> None:
