@@ -34,7 +34,7 @@ from .runtime_thread_decoders import (
     build_default_decoder_registry,
 )
 from .runtime_threads import RUNTIME_THREAD_TIMEOUT_ERROR, RuntimeThreadOutcome
-from .stream_text_merge import merge_assistant_stream_text
+from .stream_text_merge import AssistantTextAccumulator
 
 _logger = logging.getLogger(__name__)
 
@@ -308,6 +308,12 @@ def merge_runtime_thread_raw_events(
     return merge_runtime_raw_events(streamed_raw_events, result_raw_events)
 
 
+def _merge_pending_stream_text(current: str, incoming: str) -> str:
+    accumulator = AssistantTextAccumulator(stream_text=current)
+    accumulator.merge_snapshot(incoming)
+    return accumulator.stream_text
+
+
 @dataclass
 class RuntimeThreadRunEventState:
     reasoning_buffers: dict[str, str] = field(default_factory=dict)
@@ -325,22 +331,29 @@ class RuntimeThreadRunEventState:
     opencode_part_types: dict[str, str] = field(default_factory=dict)
     opencode_tool_status: dict[str, str] = field(default_factory=dict)
     opencode_patch_hashes: set[str] = field(default_factory=set)
+    _assistant_text: AssistantTextAccumulator = field(
+        default_factory=AssistantTextAccumulator,
+        init=False,
+        repr=False,
+    )
+
+    def __post_init__(self) -> None:
+        self._assistant_text = AssistantTextAccumulator(
+            stream_text=self.assistant_stream_text,
+            final_text=self.assistant_message_text,
+        )
 
     def note_stream_text(self, text: str) -> None:
-        if isinstance(text, str) and text:
-            self.assistant_stream_text = merge_assistant_stream_text(
-                self.assistant_stream_text,
-                text,
-            )
+        self._assistant_text.merge_snapshot(text)
+        self.assistant_stream_text = self._assistant_text.stream_text
 
     def note_message_text(self, text: str) -> None:
         if isinstance(text, str) and text.strip():
-            self.assistant_message_text = text
+            self._assistant_text.replace_final(text)
+            self.assistant_message_text = self._assistant_text.final_text
 
     def best_assistant_text(self) -> str:
-        if self.assistant_message_text.strip():
-            return self.assistant_message_text
-        return self.assistant_stream_text
+        return self._assistant_text.text
 
     def note_runtime_progress(
         self,
@@ -413,7 +426,7 @@ class RuntimeThreadRunEventState:
                         delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
                     )
                 ]
-            self.pending_stream_no_id = merge_assistant_stream_text(
+            self.pending_stream_no_id = _merge_pending_stream_text(
                 self.pending_stream_no_id,
                 text,
             )
@@ -430,7 +443,7 @@ class RuntimeThreadRunEventState:
                     delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
                 )
             ]
-        self.pending_stream_by_message[message_id] = merge_assistant_stream_text(
+        self.pending_stream_by_message[message_id] = _merge_pending_stream_text(
             self.pending_stream_by_message.get(message_id, ""),
             text,
         )

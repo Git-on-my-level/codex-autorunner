@@ -32,7 +32,7 @@ from ...core.acp_lifecycle import (
     should_map_missing_turn_id as _should_map_missing_turn_id,
 )
 from ...core.logging_utils import log_event
-from ...core.orchestration.stream_text_merge import merge_assistant_stream_text
+from ...core.orchestration.stream_text_merge import AssistantTextAccumulator
 from ...core.text_utils import _normalize_optional_text
 from .errors import (
     ACPError,
@@ -136,6 +136,23 @@ class _PromptState:
     last_session_update_part_types: tuple[str, ...] = ()
     last_session_update_text_length: Optional[int] = None
     last_session_update_at: Optional[float] = None
+    _assistant_text: AssistantTextAccumulator = field(
+        default_factory=AssistantTextAccumulator,
+        init=False,
+        repr=False,
+    )
+
+    def __post_init__(self) -> None:
+        self._assistant_text = AssistantTextAccumulator(stream_text=self.final_output)
+
+    def note_output_delta(self, text: str) -> None:
+        self._assistant_text.merge_snapshot(text)
+        self.final_output = self._assistant_text.text
+
+    def note_assistant_message(self, text: str) -> None:
+        if isinstance(text, str) and text:
+            self._assistant_text.replace_final(text)
+            self.final_output = self._assistant_text.text
 
 
 def _text_excerpt(value: Any, *, limit: int = 120) -> Optional[str]:
@@ -1057,12 +1074,9 @@ class ACPClient:
         self._note_prompt_trace_event(state, event)
         state.events.append(event)
         if isinstance(event, ACPOutputDeltaEvent):
-            state.final_output = merge_assistant_stream_text(
-                state.final_output,
-                event.delta,
-            )
+            state.note_output_delta(event.delta)
         elif isinstance(event, ACPMessageEvent) and event.message:
-            state.final_output = event.message
+            state.note_assistant_message(event.message)
         await state.queue.put(event)
         if not isinstance(event, ACPTurnTerminalEvent):
             return
@@ -1080,7 +1094,7 @@ class ACPClient:
         self._note_prompt_trace_event(state, event)
         state.events.append(event)
         if event.final_output:
-            state.final_output = event.final_output
+            state.note_assistant_message(event.final_output)
         await state.queue.put(event)
         await self._finalize_prompt_with_event(
             state,

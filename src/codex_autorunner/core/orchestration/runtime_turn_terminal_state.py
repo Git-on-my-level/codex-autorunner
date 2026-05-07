@@ -30,7 +30,7 @@ from .codex_item_normalizers import (
     merge_runtime_raw_events as _merge_runtime_raw_events,
 )
 from .execution_history import ExecutionCheckpoint, ExecutionCheckpointSignal
-from .stream_text_merge import merge_assistant_stream_text
+from .stream_text_merge import AssistantTextAccumulator
 
 RuntimeThreadOutcomeStatus = Literal["ok", "error", "interrupted"]
 RuntimeThreadCompletionSource = Literal[
@@ -108,9 +108,26 @@ class RuntimeTurnTerminalStateMachine:
         repr=False,
     )
     _terminal_signal_event: asyncio.Event = field(init=False, repr=False)
+    _assistant_text: AssistantTextAccumulator = field(
+        default_factory=AssistantTextAccumulator,
+        init=False,
+        repr=False,
+    )
 
     def __post_init__(self) -> None:
         self._terminal_signal_event = asyncio.Event()
+        self._assistant_text = AssistantTextAccumulator(
+            stream_text=self.last_assistant_text,
+        )
+
+    def _note_assistant_stream_text(self, text: str) -> None:
+        self._assistant_text.merge_snapshot(text)
+        self.last_assistant_text = self._assistant_text.text
+
+    def _note_assistant_message_text(self, text: str) -> None:
+        if isinstance(text, str) and text.strip():
+            self._assistant_text.replace_final(text)
+            self.last_assistant_text = self._assistant_text.text
 
     def terminal_signal_waiter(self) -> asyncio.Event:
         return self._terminal_signal_event
@@ -126,12 +143,9 @@ class RuntimeTurnTerminalStateMachine:
         if inspection.runtime_method:
             self.last_runtime_method = inspection.runtime_method
         if inspection.assistant_stream_text:
-            self.last_assistant_text = merge_assistant_stream_text(
-                self.last_assistant_text,
-                inspection.assistant_stream_text,
-            )
+            self._note_assistant_stream_text(inspection.assistant_stream_text)
         if inspection.assistant_message_text:
-            self.last_assistant_text = inspection.assistant_message_text
+            self._note_assistant_message_text(inspection.assistant_message_text)
         if inspection.failure_message:
             self.failure_cause = inspection.failure_message
         if inspection.token_usage:
@@ -155,7 +169,7 @@ class RuntimeTurnTerminalStateMachine:
         )
         assistant_text = str(getattr(result, "assistant_text", "") or "")
         if assistant_text.strip():
-            self.last_assistant_text = assistant_text
+            self._note_assistant_message_text(assistant_text)
         merged_raw_events = _merge_runtime_raw_events(
             self.raw_events,
             list(getattr(result, "raw_events", ()) or ()),
@@ -166,12 +180,9 @@ class RuntimeTurnTerminalStateMachine:
             for raw_event in new_events:
                 inspection = _inspect_raw_event(raw_event, timestamp=event_timestamp)
                 if inspection.assistant_stream_text:
-                    self.last_assistant_text = merge_assistant_stream_text(
-                        self.last_assistant_text,
-                        inspection.assistant_stream_text,
-                    )
+                    self._note_assistant_stream_text(inspection.assistant_stream_text)
                 if inspection.assistant_message_text:
-                    self.last_assistant_text = inspection.assistant_message_text
+                    self._note_assistant_message_text(inspection.assistant_message_text)
                 if inspection.failure_message:
                     self.failure_cause = inspection.failure_message
                 if inspection.token_usage:
