@@ -32,6 +32,12 @@ export type RepoWorktreeIndexRow = {
   href: string;
   repoHref: string | null;
   childWorktrees: RepoWorktreeChildRow[];
+  /** PMA chats + ticket-flow runs scoped to this row (runs tied to an already-counted chat are skipped). */
+  signalWaiting: number;
+  signalFailed: number;
+  signalActive: number;
+  /** Deep-link into chats with the new-chat scope picker preset. */
+  chatNewHref: string;
 };
 
 export type RepoWorktreeChildRow = {
@@ -141,17 +147,26 @@ export function buildRepoWorktreeIndexViewModel(
   const orphanWorktrees = source.worktrees.filter((worktree) => !worktree.repoId || !repoIds.has(worktree.repoId));
   const rows =
     kind === 'worktree'
-      ? source.worktrees.map((worktree) => worktreeToIndexRow(worktree, source))
+      ? source.worktrees
+          .map((worktree) => enrichIndexRowSignals(worktreeToIndexRow(worktree, source), source))
+          .sort(bySignalsThenActiveThenRecent)
       : [
           ...source.repos.map((repo) =>
-            repoToIndexRow(
-              repo,
-              source.worktrees.filter((worktree) => worktree.repoId === repo.id),
+            enrichIndexRowSignals(
+              repoToIndexRow(
+                repo,
+                source.worktrees.filter((worktree) => worktree.repoId === repo.id),
+                source
+              ),
               source
             )
           ),
-          ...(kind === 'all' ? orphanWorktrees.map((worktree) => worktreeToIndexRow(worktree, source)) : [])
-        ].sort(byActiveThenRecent);
+          ...(kind === 'all'
+            ? orphanWorktrees.map((worktree) =>
+                enrichIndexRowSignals(worktreeToIndexRow(worktree, source), source)
+              )
+            : [])
+        ].sort(bySignalsThenActiveThenRecent);
   return {
     title: kind === 'worktree' ? 'Secondary worktree index' : 'Repos',
     eyebrow: kind === 'worktree' ? 'Repo-owned variants' : 'Repo ownership',
@@ -277,7 +292,11 @@ function repoToIndexRow(repo: RepoSummary, worktrees: WorktreeSummary[], source:
     lastActivityAt: mostRecent([repo.lastActivityAt, ...childWorktrees.map((worktree) => worktree.lastActivityAt)]),
     href: `/repos/${encodeURIComponent(repo.id)}`,
     repoHref: null,
-    childWorktrees
+    childWorktrees,
+    signalWaiting: 0,
+    signalFailed: 0,
+    signalActive: 0,
+    chatNewHref: `/chats?new=repo:${encodeURIComponent(repo.id)}`
   };
 }
 
@@ -295,7 +314,13 @@ function worktreeToIndexRow(worktree: WorktreeSummary, _source: RepoWorktreeSour
     lastActivityAt: worktree.lastActivityAt,
     href: `/worktrees/${encodeURIComponent(worktree.id)}`,
     repoHref: worktree.repoId ? `/repos/${encodeURIComponent(worktree.repoId)}` : null,
-    childWorktrees: []
+    childWorktrees: [],
+    signalWaiting: 0,
+    signalFailed: 0,
+    signalActive: 0,
+    chatNewHref: worktree.repoId
+      ? `/chats?new=repo:${encodeURIComponent(worktree.repoId)}`
+      : `/chats?new=worktree:${encodeURIComponent(worktree.id)}`
   };
 }
 
@@ -336,7 +361,7 @@ function mergeRunCards(
     cards.set(`run:${run.id}`, runToCard(run, chat, scopeKind, scopeId));
   }
   for (const chat of chats) {
-    if ([...cards.values()].some((card) => card.chatHref === `/pma?chat=${encodeURIComponent(chat.id)}`)) continue;
+    if ([...cards.values()].some((card) => card.chatHref === `/chats?chat=${encodeURIComponent(chat.id)}`)) continue;
     cards.set(`chat:${chat.id}`, chatToCard(chat, scopeKind, scopeId));
   }
   return [...cards.values()].sort(byRunRecent);
@@ -367,7 +392,7 @@ function runToCard(
     progress: chat ? progressPercent(chat, run) : run.status === 'running' ? 64 : run.status === 'waiting' ? 28 : run.status === 'done' ? 100 : 0,
     updatedAt: run.lastEventAt ?? chat?.updatedAt ?? null,
     ticketId,
-    chatHref: run.chatId ? `/pma?chat=${encodeURIComponent(run.chatId)}` : chat ? `/pma?chat=${encodeURIComponent(chat.id)}` : null,
+    chatHref: run.chatId ? `/chats?chat=${encodeURIComponent(run.chatId)}` : chat ? `/chats?chat=${encodeURIComponent(chat.id)}` : null,
     ticketHref: ticketId ? scopedTicketDetail(scopeKind, scopeId, ticketId) : null,
     logsHref: `/api/flows/${encodeURIComponent(run.id)}/dispatch_history`
   };
@@ -383,7 +408,7 @@ function chatToCard(chat: PmaChatSummary, scopeKind: RepoWorktreeKind, scopeId: 
     progress: progressPercent(chat),
     updatedAt: chat.updatedAt,
     ticketId: chat.ticketId,
-    chatHref: `/pma?chat=${encodeURIComponent(chat.id)}`,
+    chatHref: `/chats?chat=${encodeURIComponent(chat.id)}`,
     ticketHref: chat.ticketId ? scopedTicketDetail(scopeKind, scopeId, chat.ticketId) : null,
     logsHref: null
   };
@@ -533,8 +558,8 @@ function ticketDetailHref(ticket: TicketSummary): string {
       ? `/repos/${encodeURIComponent(ticket.workspaceId)}/tickets`
       : ticket.workspaceKind === 'worktree' && ticket.workspaceId
         ? `/worktrees/${encodeURIComponent(ticket.workspaceId)}/tickets`
-        : '/dashboard';
-  return base === '/dashboard' ? base : `${base}/${encodeURIComponent(ticket.number ? String(ticket.number) : ticket.id)}`;
+        : '/chats';
+  return base === '/chats' ? base : `${base}/${encodeURIComponent(ticket.number ? String(ticket.number) : ticket.id)}`;
 }
 
 function runMatchesResource(run: PmaRunProgress, kind: RepoWorktreeKind, id: string): boolean {
@@ -564,6 +589,55 @@ function stringFromRaw(raw: Record<string, unknown>, keys: string[]): string | n
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function indexRowSignalPriority(row: RepoWorktreeIndexRow): number {
+  let priority = 0;
+  if (row.signalFailed > 0) priority += 8;
+  if (row.signalWaiting > 0) priority += 4;
+  if (row.signalActive > 0) priority += 2;
+  return priority;
+}
+
+function bySignalsThenActiveThenRecent(left: RepoWorktreeIndexRow, right: RepoWorktreeIndexRow): number {
+  const leftP = indexRowSignalPriority(left);
+  const rightP = indexRowSignalPriority(right);
+  if (leftP !== rightP) return rightP - leftP;
+  return byActiveThenRecent(left, right);
+}
+
+function enrichIndexRowSignals(row: RepoWorktreeIndexRow, source: RepoWorktreeSourceData): RepoWorktreeIndexRow {
+  const childIds = row.childWorktrees.map((child) => child.id);
+  const scopedChats = source.chats.filter((chat) =>
+    row.kind === 'repo'
+      ? chat.repoId === row.id || (chat.worktreeId ? childIds.includes(chat.worktreeId) : false)
+      : chat.worktreeId === row.id
+  );
+  const scopedRuns = source.runs.filter((run) =>
+    row.kind === 'repo'
+      ? runMatchesResource(run, 'repo', row.id) || childIds.some((wid) => runMatchesResource(run, 'worktree', wid))
+      : runMatchesResource(run, 'worktree', row.id)
+  );
+  const chatIds = new Set(scopedChats.map((chat) => chat.id));
+  let waiting = 0;
+  let failed = 0;
+  let active = 0;
+  const bumpStatus = (status: WorkStatus) => {
+    if (status === 'waiting' || status === 'blocked') waiting += 1;
+    else if (status === 'failed') failed += 1;
+    else if (status === 'running') active += 1;
+  };
+  for (const chat of scopedChats) bumpStatus(chat.status);
+  for (const run of scopedRuns) {
+    if (run.chatId && chatIds.has(run.chatId)) continue;
+    bumpStatus(run.status);
+  }
+  return {
+    ...row,
+    signalWaiting: waiting,
+    signalFailed: failed,
+    signalActive: active
+  };
 }
 
 function byActiveThenRecent(left: RepoWorktreeIndexRow, right: RepoWorktreeIndexRow): number {

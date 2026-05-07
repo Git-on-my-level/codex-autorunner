@@ -87,7 +87,7 @@ export function buildContextspaceViewModel(
         : workspaceKind === 'repo'
           ? 'Open repo'
           : 'Open workspace index',
-    askPmaHref: `/pma?draft=${encodeURIComponent(askPrompt)}`,
+    askPmaHref: `/chats?draft=${encodeURIComponent(askPrompt)}`,
     docs: tabs,
     presentCount: tabs.filter((doc) => !doc.isMissing).length
   };

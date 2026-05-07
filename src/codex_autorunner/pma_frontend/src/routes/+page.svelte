@@ -4,10 +4,10 @@
   import { onMount } from 'svelte';
 
   onMount(() => {
-    void goto(href('/pma'), { replaceState: true });
+    void goto(href('/chats'), { replaceState: true });
   });
 </script>
 
 <section class="page-panel">
-  <p>Opening PMA...</p>
+  <p>Opening Chats...</p>
 </section>

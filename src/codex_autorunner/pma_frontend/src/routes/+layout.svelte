@@ -1,7 +1,7 @@
 <script lang="ts">
   import { page } from '$app/state';
   import { breadcrumbsForPath } from '$lib/breadcrumbs';
-  import { primaryNav, navGroupLabels, isActiveRoute } from '$lib/navigation';
+  import { primaryNav, isActiveRoute } from '$lib/navigation';
   import { stripRuntimeBasePath, withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import type { Snippet } from 'svelte';
   import '../app.css';
@@ -30,11 +30,11 @@
 <div class:sidebar-collapsed={collapsed} class:mobile-open={mobileOpen} class="app-shell">
   <aside class="sidebar" aria-label="Primary navigation">
     <div class="brand-row">
-      <a class="brand-mark" href={href('/pma')} onclick={closeMobile} aria-label="PMA Hub home">
+      <a class="brand-mark" href={href('/chats')} onclick={closeMobile} aria-label="PMA Hub home">
         <span class="brand-glyph">P</span>
         <span class="brand-copy">
           <span class="brand-title">PMA Hub</span>
-          <span class="brand-subtitle">Local workspace</span>
+          <span class="brand-subtitle">Chats</span>
         </span>
       </a>
       <button
@@ -49,26 +49,19 @@
     </div>
 
     <nav class="nav-list">
-      {#each Object.entries(navGroupLabels) as [group, groupLabel]}
-        <div class="nav-group" aria-label={groupLabel}>
-          <span class="nav-group-label">{groupLabel}</span>
-          {#each primaryNav.filter((item) => item.group === group) as item}
-            <a
-              class:active={isActiveRoute(stripRuntimeBasePath(page.url.pathname), item.href)}
-              class:indented={item.indent}
-              class="nav-link"
-              href={href(item.href)}
-              onclick={closeMobile}
-            >
-              <span class="nav-initial" aria-hidden="true">{item.label.slice(0, 1)}</span>
-              <span class="nav-label">{item.label}</span>
-              {#if item.badge}
-                <span class="nav-badge">{item.badge}</span>
-              {/if}
-            </a>
-          {/each}
-        </div>
-      {/each}
+      <div class="nav-group" aria-label="Navigation">
+        {#each primaryNav as item}
+          <a
+            class:active={isActiveRoute(stripRuntimeBasePath(page.url.pathname), item.href)}
+            class="nav-link"
+            href={href(item.href)}
+            onclick={closeMobile}
+          >
+            <span class="nav-initial" aria-hidden="true">{item.label.slice(0, 1)}</span>
+            <span class="nav-label">{item.label}</span>
+          </a>
+        {/each}
+      </div>
     </nav>
 
     <div class="sidebar-footer">
@@ -106,7 +99,7 @@
       </div>
     </header>
 
-    <main class={`content-shell ${currentPath === '/pma-memory' ? 'pinned-doc-content' : ''}`}>
+    <main class="content-shell">
       {@render children()}
     </main>
   </div>

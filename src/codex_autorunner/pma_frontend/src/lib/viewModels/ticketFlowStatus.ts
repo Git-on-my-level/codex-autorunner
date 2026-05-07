@@ -193,7 +193,7 @@ function ticketDetailHref(ticket: TicketSummary): string {
   if (ticket.workspaceKind === 'worktree' && ticket.workspaceId) {
     return `/worktrees/${encodeURIComponent(ticket.workspaceId)}/tickets/${encodeURIComponent(routeId)}`;
   }
-  return '/dashboard';
+  return '/chats';
 }
 
 function reasonFromRun(run: PmaRunProgress | null): string | null {

@@ -924,7 +924,7 @@ def create_hub_app(
 
     @app.get("/", include_in_schema=False)
     def hub_index():
-        target = f"{context.base_path}/pma" if context.base_path else "/pma"
+        target = f"{context.base_path}/chats" if context.base_path else "/chats"
         return RedirectResponse(target, status_code=307)
 
     if legacy_ui_enabled:
@@ -933,9 +933,7 @@ def create_hub_app(
         def legacy_hub_index():
             return _legacy_index_response()
 
-    @app.get("/pma", include_in_schema=False)
-    @app.get("/pma-memory", include_in_schema=False)
-    @app.get("/dashboard", include_in_schema=False)
+    @app.get("/chats", include_in_schema=False)
     @app.get("/repos", include_in_schema=False)
     @app.get("/repos/{repo_id}", include_in_schema=False)
     @app.get("/repos/{repo_id}/tickets", include_in_schema=False)

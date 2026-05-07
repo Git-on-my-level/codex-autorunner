@@ -8,6 +8,7 @@
   import { statusLabel } from '$lib/viewModels/pmaChat';
   import type { PartialPageIssue } from '$lib/api/client';
   import PageHero from './PageHero.svelte';
+  import { repoAccent, repoInitials } from '$lib/viewModels/repoIdentity';
 
   let {
     state,
@@ -31,34 +32,6 @@
   const ticketIssues = $derived(sectionIssues.filter((issue) => issue.id === 'tickets'));
   const artifactIssues = $derived(sectionIssues.filter((issue) => issue.id === 'artifacts'));
   const queueTickets = $derived(detail ? [...detail.currentTickets, ...detail.nextTickets] : []);
-
-  function repoInitials(label: string): string {
-    if (!label) return '·';
-    const cleaned = label.replace(/[_\-./]+/g, ' ').trim();
-    const words = cleaned.split(/\s+/).filter(Boolean);
-    if (words.length === 0) return label.slice(0, 1).toUpperCase();
-    if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
-    return (words[0][0] + words[1][0]).toUpperCase();
-  }
-
-  // Deterministic accent color per repo based on label hash.
-  function repoAccent(label: string): string {
-    const palette = [
-      '#5b5fc7', // indigo
-      '#117a4d', // green
-      '#9a5b00', // amber
-      '#b42424', // red
-      '#0f7285', // teal
-      '#7a3fb8', // violet
-      '#1f6fda', // blue
-      '#c0497d'  // pink
-    ];
-    let hash = 0;
-    for (let i = 0; i < label.length; i++) {
-      hash = (hash * 31 + label.charCodeAt(i)) >>> 0;
-    }
-    return palette[hash % palette.length];
-  }
 </script>
 
 {#if state === 'loading'}
@@ -136,6 +109,16 @@
               </div>
               <span class="repo-chevron" aria-hidden="true">→</span>
             </a>
+            <div class="repo-row-toolbar">
+              <div class="repo-signal-pills" aria-label="Scoped PMA chats and runs">
+                {#if row.signalWaiting > 0}<span class="signal-pill waiting">{row.signalWaiting} waiting</span>{/if}
+                {#if row.signalFailed > 0}<span class="signal-pill failed">{row.signalFailed} failed</span>{/if}
+                {#if row.signalActive > 0}<span class="signal-pill active">{row.signalActive} active</span>{/if}
+              </div>
+              <a class="repo-chat-action" href={href(row.chatNewHref)}>
+                {row.kind === 'repo' ? 'Chat with this repo' : 'Open scoped chat'}
+              </a>
+            </div>
 
             {#if row.childWorktrees.length > 0}
               <ul class="worktree-list" role="list" aria-label={`Worktrees owned by ${row.label}`}>
@@ -209,6 +192,9 @@
       subtitle={`${detail.kind === 'worktree' ? 'repo worktree variant' : 'repo'} · ${detail.stateLabel}${detail.branch ? ' · ' + detail.branch : ''}`}
     >
       {#snippet actions()}
+        {#if detail.kind === 'repo'}
+          <a class="hero-action" href={href(`/chats?new=repo:${encodeURIComponent(detail.id)}`)}>Chat with this repo</a>
+        {/if}
         {#each detail.links.filter((link) => !link.secondary) as link}
           <a class="hero-action" href={href(link.href)}>{link.label}</a>
         {/each}
@@ -376,7 +362,7 @@
   {:else}
     <div class="activity-list compact-activity-list">
       {#each items as item}
-        <a class="dashboard-row activity-row" href={href(item.href ?? '/pma')}>
+        <a class="dashboard-row activity-row" href={href(item.href ?? '/chats')}>
           <span class={`activity-kind ${item.kind}`}>{item.kind}</span>
           <span>
             <span class="row-title">{item.title}</span>
@@ -513,6 +499,66 @@
     padding: var(--space-4) var(--space-5);
     color: var(--color-ink);
     text-decoration: none;
+  }
+
+  .repo-row-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-5) var(--space-3);
+    border-top: 1px solid var(--color-border-subtle);
+    background: var(--color-surface-muted);
+  }
+
+  .repo-signal-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .signal-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border-subtle);
+  }
+
+  .signal-pill.waiting {
+    color: var(--color-warning);
+    border-color: color-mix(in srgb, var(--color-warning) 35%, var(--color-border));
+  }
+
+  .signal-pill.failed {
+    color: var(--color-danger);
+    border-color: color-mix(in srgb, var(--color-danger) 35%, var(--color-border));
+  }
+
+  .signal-pill.active {
+    color: var(--color-success);
+    border-color: color-mix(in srgb, var(--color-success) 35%, var(--color-border));
+  }
+
+  .repo-chat-action {
+    flex-shrink: 0;
+    padding: 6px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--color-border-strong);
+    background: var(--color-surface);
+    font-size: var(--font-size-1);
+    font-weight: 600;
+    color: var(--color-accent);
+    text-decoration: none;
+  }
+
+  .repo-chat-action:hover {
+    border-color: var(--color-accent);
+    background: var(--color-accent-soft);
   }
 
   .repo-avatar {

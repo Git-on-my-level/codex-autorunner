@@ -33,7 +33,7 @@ DEFAULT_EVIDENCE_DIR = (
 )
 
 SMOKE_ROUTES = (
-    ("/car/pma", ("PMA chats", "Ticket flow readability fixture")),
+    ("/car/chats", ("Chats", "PMA Memory")),
     ("/car/repos", ("Current work", "smoke-repo")),
     ("/car/tickets", ("Cross-workspace ticket queue", "Tickets")),
     ("/car/contextspace/local", ("Documents", "active_context.md")),
@@ -316,7 +316,7 @@ def run_browser_smoke(
                 errors.append(f"missing expected text: {', '.join(missing)}")
             if loading:
                 errors.append(f"still showing primary loading text: {', '.join(loading)}")
-            if route == "/car/pma" and "<CAR_TICKET_FLOW_PROMPT>" in text:
+            if route == "/car/chats" and "<CAR_TICKET_FLOW_PROMPT>" in text:
                 errors.append("raw CAR_TICKET_FLOW_PROMPT is visible in PMA chat")
 
             screenshot_name = route.strip("/").replace("/", "__") + ".png"

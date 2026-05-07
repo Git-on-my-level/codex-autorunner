@@ -29,10 +29,8 @@ describe('breadcrumbsForPath', () => {
   });
 
   it('uses primary nav labels for exact top-level routes (no active-route guessing)', () => {
-    expect(breadcrumbsForPath('/pma')).toEqual([{ label: 'PMA', href: null }]);
-    expect(breadcrumbsForPath('/dashboard')).toEqual([{ label: 'Dashboard', href: null }]);
+    expect(breadcrumbsForPath('/chats')).toEqual([{ label: 'Chats', href: null }]);
     expect(breadcrumbsForPath('/settings')).toEqual([{ label: 'Settings', href: null }]);
-    expect(breadcrumbsForPath('/pma-memory')).toEqual([{ label: 'PMA memory', href: null }]);
   });
 
   it('handles contextspace routes', () => {
@@ -42,14 +40,25 @@ describe('breadcrumbsForPath', () => {
     ]);
   });
 
-  it('treats / as PMA home', () => {
-    expect(breadcrumbsForPath('/')).toEqual([{ label: 'PMA', href: null }]);
+  it('treats / as Chats home', () => {
+    expect(breadcrumbsForPath('/')).toEqual([{ label: 'Chats', href: null }]);
   });
 
-  it('falls back for unknown paths without pretending they are PMA', () => {
+  it('falls back for unknown paths with Chats as parent crumb', () => {
     expect(breadcrumbsForPath('/future/feature')).toEqual([
-      { label: 'PMA Hub', href: '/pma' },
+      { label: 'Chats', href: '/chats' },
       { label: 'feature', href: null }
+    ]);
+  });
+
+  it('does not expose removed hub routes as named crumbs', () => {
+    expect(breadcrumbsForPath('/dashboard')).toEqual([
+      { label: 'Chats', href: '/chats' },
+      { label: 'dashboard', href: null }
+    ]);
+    expect(breadcrumbsForPath('/pma-memory')).toEqual([
+      { label: 'Chats', href: '/chats' },
+      { label: 'pma-memory', href: null }
     ]);
   });
 });

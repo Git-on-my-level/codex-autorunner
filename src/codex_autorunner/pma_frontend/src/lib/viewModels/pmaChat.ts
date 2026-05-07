@@ -13,6 +13,11 @@ import { normalizeOptionalWorkStatus } from './domain';
 
 export type PmaChatFilter = 'all' | 'active' | 'waiting' | 'done';
 
+/** Synthetic list selection id for pinned PMA Memory in the chats sidebar. */
+export const PMA_MEMORY_LIST_ID = '__memory__';
+
+export const PMA_CHAT_FILTER_ORDER: PmaChatFilter[] = ['all', 'waiting', 'active', 'done'];
+
 export type PendingAttachmentKind = 'file' | 'image' | 'link';
 
 export type DocumentFileIntentKind =
@@ -186,6 +191,19 @@ export function filterPmaChats(
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(needle));
     });
+}
+
+/** Waiting/blocked chats first (operator inbox), then most recently updated. */
+export function sortChatsWaitingFirst(chats: PmaChatSummary[]): PmaChatSummary[] {
+  const waitingRank = (status: WorkStatus) =>
+    status === 'waiting' || status === 'blocked' ? 0 : 1;
+  return [...chats].sort((left, right) => {
+    const rankDiff = waitingRank(left.status) - waitingRank(right.status);
+    if (rankDiff !== 0) return rankDiff;
+    const leftTime = Date.parse(left.updatedAt ?? '') || 0;
+    const rightTime = Date.parse(right.updatedAt ?? '') || 0;
+    return rightTime - leftTime;
+  });
 }
 
 export function summarizeFilterCounts(chats: PmaChatSummary[]): Record<PmaChatFilter, number> {
@@ -770,6 +788,28 @@ export function pmaChatScopeLabelFromChat(chat: PmaChatSummary | null): string {
   const workspaceRoot = stringValue(chat.raw.workspace_root);
   if (workspaceRoot && workspaceRoot !== '.') return `Workspace · ${workspaceRoot}`;
   return 'Local hub · current workspace';
+}
+
+/** One-line scope for the active chat header (`PMA - global` vs repo naming). */
+export function pmaChatHeaderScopeLine(
+  chat: PmaChatSummary | null,
+  repoLabel?: (repoId: string) => string | null
+): string {
+  if (!chat) return '';
+  const resourceKind = stringValue(chat.raw.resource_kind).toLowerCase();
+  const resourceId = stringValue(chat.raw.resource_id);
+  if (resourceKind === 'agent_workspace' && resourceId) return `Agent workspace - ${resourceId}`;
+  if (chat.worktreeId) {
+    const repoId = chat.repoId ?? '';
+    const repoName = repoId ? repoLabel?.(repoId) ?? repoId : '';
+    const branch = repoName ? `${repoName} - ${chat.worktreeId}` : chat.worktreeId;
+    return `Repo - ${branch}`;
+  }
+  if (chat.repoId) {
+    const repoName = repoLabel?.(chat.repoId) ?? chat.repoId;
+    return `Repo - ${repoName}`;
+  }
+  return 'PMA - global';
 }
 
 export function buildManagedThreadMessagePayload(

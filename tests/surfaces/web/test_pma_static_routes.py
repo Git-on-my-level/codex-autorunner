@@ -14,9 +14,7 @@ from codex_autorunner.surfaces.web.static_assets import (
 )
 
 PMA_MANUAL_SCREENSHOT_ROUTES = (
-    "/pma",
-    "/pma-memory",
-    "/dashboard",
+    "/chats",
     "/repos",
     "/repos/example",
     "/repos/example/tickets",
@@ -79,7 +77,7 @@ def test_pma_static_assets_are_served_without_legacy_static_by_default(tmp_path)
     seed_hub_files(hub_root, force=True)
     client = TestClient(create_hub_app(hub_root))
 
-    page = client.get("/pma")
+    page = client.get("/chats")
     asset_path = page.text.split('href="/_app/', 1)[1].split('"', 1)[0]
     asset_response = client.get(f"/_app/{asset_path}")
 
@@ -94,7 +92,7 @@ def test_pma_index_csp_allows_sveltekit_bootstrap(tmp_path):
     seed_hub_files(hub_root, force=True)
     client = TestClient(create_hub_app(hub_root))
 
-    pma_csp = client.get("/pma").headers["Content-Security-Policy"]
+    pma_csp = client.get("/chats").headers["Content-Security-Policy"]
 
     assert "script-src 'self' 'sha256-" in pma_csp
     assert "'unsafe-inline'" not in pma_csp.split("script-src", 1)[1].split(";", 1)[0]
@@ -124,6 +122,16 @@ def test_inline_script_hashes_match_mixed_case_script_tags():
     ]
 
 
+def test_removed_pma_hub_routes_are_not_registered(tmp_path):
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    client = TestClient(create_hub_app(hub_root))
+
+    assert client.get("/pma").status_code == 404
+    assert client.get("/pma-memory").status_code == 404
+    assert client.get("/dashboard").status_code == 404
+
+
 def test_pma_base_path_routes_redirect_and_serve_spa(tmp_path):
     hub_root = tmp_path / "hub"
     seed_hub_files(hub_root, force=True)
@@ -132,12 +140,11 @@ def test_pma_base_path_routes_redirect_and_serve_spa(tmp_path):
     )
 
     assert client.get("/").headers["location"] == "/car/"
-    assert client.get("/pma").headers["location"] == "/car/pma"
-    assert client.get("/pma-memory").headers["location"] == "/car/pma-memory"
+    assert client.get("/chats").headers["location"] == "/car/chats"
     assert (
         client.get("/worktrees/example").headers["location"] == "/car/worktrees/example"
     )
-    response = client.get("/car/pma-memory")
+    response = client.get("/car/chats")
     assert response.status_code == 200
     assert "<title>PMA Hub</title>" in response.text
     assert 'globalThis.__CAR_BASE_PATH__ = "/car";' in response.text

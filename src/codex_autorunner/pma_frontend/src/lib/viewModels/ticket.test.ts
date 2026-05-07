@@ -39,7 +39,7 @@ describe('ticket view models', () => {
       title: mockTicketSummary.title,
       repoLabel: 'Worktree: worktree-1',
       currentRunState: 'running',
-      chatHref: '/pma?chat=chat-1'
+      chatHref: '/chats?chat=chat-1'
     });
     expect(vm.workspaceFilters.map((filter) => filter.id)).toContain('worktree:worktree-1');
     expect(filterTicketRows(vm.rows, 'active')).toHaveLength(2);

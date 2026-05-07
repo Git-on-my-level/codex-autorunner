@@ -32,7 +32,7 @@ DEFAULT_OUT_DIR = (
 DEFAULT_OUTBOX_DIR = REPO_ROOT / ".codex-autorunner" / "filebox" / "outbox"
 
 DEFAULT_ROUTES: tuple[tuple[str, str], ...] = (
-    ("pma-chat", "/pma"),
+    ("pma-chat", "/chats"),
     ("dashboard", "/dashboard"),
     ("repos", "/repos"),
     ("repo-detail", "/repos/smoke-repo"),

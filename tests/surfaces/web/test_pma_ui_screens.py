@@ -36,15 +36,15 @@ def test_default_routes_cover_primary_pma_pages() -> None:
 
 def test_custom_route_parsing() -> None:
     mod = _load_module()
-    routes = mod.parse_routes(["chat=/pma", "ticket-detail=/tickets/example"])
+    routes = mod.parse_routes(["chat=/chats", "ticket-detail=/tickets/example"])
     assert [(route.name, route.path) for route in routes] == [
-        ("chat", "/pma"),
+        ("chat", "/chats"),
         ("ticket-detail", "/tickets/example"),
     ]
 
 
 @pytest.mark.parametrize(
-    "raw", ["missing-equals", "=/pma", "bad/name=/pma", "chat=pma"]
+    "raw", ["missing-equals", "=/chats", "bad/name=/chats", "chat=chats"]
 )
 def test_custom_route_validation(raw: str) -> None:
     mod = _load_module()
@@ -84,6 +84,6 @@ def test_base_path_normalization(raw: str, expected: str) -> None:
 def test_route_url_joins_origin_base_path_and_route() -> None:
     mod = _load_module()
     assert (
-        mod.route_url("http://127.0.0.1:4173/", "/car", "/pma")
-        == "http://127.0.0.1:4173/car/pma"
+        mod.route_url("http://127.0.0.1:4173/", "/car", "/chats")
+        == "http://127.0.0.1:4173/car/chats"
     )

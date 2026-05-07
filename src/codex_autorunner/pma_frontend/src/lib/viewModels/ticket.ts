@@ -225,7 +225,7 @@ export function buildTicketDetailViewModel(
   const progress = run ? progressPercent(chat ?? syntheticChat(detail, run), run) : detail.status === 'done' ? 100 : 0;
   const runHref = run ? `/api/flows/${encodeURIComponent(run.id)}/status` : detail.runId ? `/api/flows/${encodeURIComponent(detail.runId)}/status` : null;
   const debugHref = run ? `/api/flows/${encodeURIComponent(run.id)}/dispatch_history` : null;
-  const chatHref = chat ? `/pma?chat=${encodeURIComponent(chat.id)}` : detail.chatKey ? `/pma?chat=${encodeURIComponent(detail.chatKey)}` : null;
+  const chatHref = chat ? `/chats?chat=${encodeURIComponent(chat.id)}` : detail.chatKey ? `/chats?chat=${encodeURIComponent(detail.chatKey)}` : null;
   const sourceTickets = source.tickets.map((ticket) => ticketToListRow(ticket, source)).sort(byTicketNumberThenTitle);
   const routeId = routeIdForTicket(detail);
   const selectedIndex = sourceTickets.findIndex((row) => row.routeId === routeId || row.id === detail.id);
@@ -324,8 +324,8 @@ function ticketToListRow(ticket: TicketSummary, source: TicketSourceData): Ticke
     currentRunState: run?.status ?? chat?.status ?? null,
     currentRunId: run?.id ?? null,
     updatedAt: ticket.updatedAt ?? run?.lastEventAt ?? chat?.updatedAt ?? null,
-    chatHref: chat ? `/pma?chat=${encodeURIComponent(chat.id)}` : ticket.chatKey ? `/pma?chat=${encodeURIComponent(ticket.chatKey)}` : null,
-    href: scopedTicketHref(ticket) ?? '/dashboard',
+    chatHref: chat ? `/chats?chat=${encodeURIComponent(chat.id)}` : ticket.chatKey ? `/chats?chat=${encodeURIComponent(ticket.chatKey)}` : null,
+    href: scopedTicketHref(ticket) ?? '/chats',
     needsAttention: ticket.errors.length > 0 || ['waiting', 'failed', 'blocked'].includes(status),
     isCurrent: false
   };

@@ -21,6 +21,10 @@ describe('repo/worktree view models', () => {
     expect(vm.openTicketCount).toBe(4);
     expect(vm.rows[0]).toMatchObject({
       href: '/repos/repo-1',
+      chatNewHref: '/chats?new=repo:repo-1',
+      signalWaiting: 0,
+      signalFailed: 0,
+      signalActive: 1,
       childWorktrees: [
         {
           href: '/worktrees/worktree-1',
@@ -55,12 +59,20 @@ describe('repo/worktree view models', () => {
     expect(vm.rows.map((row) => row.id)).toEqual(['repo-1', 'orphan-worktree']);
     expect(vm.rows[0]).toMatchObject({
       id: 'repo-1',
+      chatNewHref: '/chats?new=repo:repo-1',
+      signalWaiting: 0,
+      signalFailed: 0,
+      signalActive: 0,
       childWorktrees: [{ id: 'worktree-1' }]
     });
     expect(vm.rows[1]).toMatchObject({
       id: 'orphan-worktree',
       kind: 'worktree',
       repoHref: '/repos/missing-repo',
+      chatNewHref: '/chats?new=repo:missing-repo',
+      signalWaiting: 0,
+      signalFailed: 0,
+      signalActive: 0,
       childWorktrees: []
     });
   });
@@ -82,7 +94,11 @@ describe('repo/worktree view models', () => {
     expect(vm.eyebrow).toBe('Repo-owned variants');
     expect(vm.rows[0]).toMatchObject({
       href: '/worktrees/worktree-1',
-      repoHref: '/repos/repo-1'
+      repoHref: '/repos/repo-1',
+      chatNewHref: '/chats?new=repo:repo-1',
+      signalWaiting: 0,
+      signalFailed: 0,
+      signalActive: 0
     });
     expect(vm.rows[0].detail).toContain('Repo worktree variant');
   });
@@ -105,7 +121,8 @@ describe('repo/worktree view models', () => {
     expect(vm.currentRuns[0]).toMatchObject({
       title: 'Hub rewrite foundation',
       agentId: 'codex',
-      ticketHref: '/repos/repo-1/tickets/TICKET-110'
+      ticketHref: '/repos/repo-1/tickets/TICKET-110',
+      chatHref: '/chats?chat=chat-1'
     });
     expect(vm.links.map((link) => link.label)).not.toContain('Open PMA chat');
     expect(vm.links.map((link) => link.label)).toContain('View repo tickets');

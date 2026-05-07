@@ -133,7 +133,7 @@ function fallbackCrumbs(normalizedPath: string): Breadcrumb[] {
   const segments = normalizedPath.split('/').filter(Boolean);
   const tail = segments.length ? decodeURIComponent(segments[segments.length - 1] ?? '') : normalizedPath;
   return [
-    { label: 'PMA Hub', href: '/pma' },
+    { label: 'Chats', href: '/chats' },
     { label: tail || 'Page', href: null }
   ];
 }
@@ -145,7 +145,7 @@ export function breadcrumbsForPath(pathname: string): Breadcrumb[] {
   const path = normalizePath(pathname);
 
   if (path === '/') {
-    return [{ label: 'PMA', href: null }];
+    return [{ label: 'Chats', href: null }];
   }
 
   const structured = matchStructured(path);

@@ -17,10 +17,12 @@ import {
   mergePmaActivityEvents,
   modelSelectorState,
   optimisticUserTimelineItemFromSend,
+  pmaChatHeaderScopeLine,
   pmaChatScopeLabelFromChat,
   progressPercent,
   reconcilePmaTimeline,
   removePendingAttachment,
+  sortChatsWaitingFirst,
   summarizeFilterCounts
 } from './pmaChat';
 
@@ -105,6 +107,24 @@ describe('PMA chat view helpers', () => {
     expect(filterPmaChats(chats, 'waiting', 'billing')).toMatchObject([{ id: 'chat-2' }]);
     expect(filterPmaChats(chats, 'done', 'ticket-099')).toMatchObject([{ id: 'chat-3' }]);
     expect(summarizeFilterCounts(chats)).toEqual({ all: 3, active: 1, waiting: 1, done: 1 });
+  });
+
+  it('sorts waiting chats ahead of others then by recent updates', () => {
+    const chats: PmaChatSummary[] = [
+      { ...baseChat, id: 'a', status: 'running', updatedAt: '2026-05-04T03:00:00Z' },
+      { ...baseChat, id: 'b', status: 'waiting', updatedAt: '2026-05-04T01:00:00Z' },
+      { ...baseChat, id: 'c', status: 'waiting', updatedAt: '2026-05-04T02:00:00Z' }
+    ];
+    expect(sortChatsWaitingFirst(chats).map((chat) => chat.id)).toEqual(['c', 'b', 'a']);
+  });
+
+  it('formats header scope lines for PMA global, repo, and worktree chats', () => {
+    expect(pmaChatHeaderScopeLine(null)).toBe('');
+    expect(pmaChatHeaderScopeLine({ ...baseChat, repoId: null, worktreeId: null })).toBe('PMA - global');
+    expect(pmaChatHeaderScopeLine({ ...baseChat, repoId: 'repo-1', worktreeId: null }, () => 'My Repo')).toBe('Repo - My Repo');
+    expect(
+      pmaChatHeaderScopeLine({ ...baseChat, repoId: 'repo-1', worktreeId: 'wt-9' }, () => 'My Repo')
+    ).toBe('Repo - My Repo - wt-9');
   });
 
   it('keeps the selected chat when still present and falls back otherwise', () => {

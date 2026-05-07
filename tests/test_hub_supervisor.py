@@ -1934,8 +1934,8 @@ def test_hub_home_served_and_repo_mounted(tmp_path: Path):
     client = TestClient(app)
     resp = client.get("/", follow_redirects=False)
     assert resp.status_code == 307
-    assert resp.headers["location"] == "/pma"
-    pma_resp = client.get("/pma")
+    assert resp.headers["location"] == "/chats"
+    pma_resp = client.get("/chats")
     assert pma_resp.status_code == 200
     assert b"<title>PMA Hub</title>" in pma_resp.content
     legacy_resp = client.get("/legacy")

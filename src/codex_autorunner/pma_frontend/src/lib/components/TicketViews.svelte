@@ -468,7 +468,7 @@
           {:else}
             <div class="timeline-list">
               {#each detail.timeline as item}
-                <a class={`timeline-item ${item.status}`} href={href(item.href ?? detail.runHref ?? '/dashboard')}>
+                <a class={`timeline-item ${item.status}`} href={href(item.href ?? detail.runHref ?? '/chats')}>
                   <span class="status-pill {item.status}">{statusLabel(item.status)}</span>
                   <span>
                     <strong>{item.title}</strong>
@@ -491,7 +491,7 @@
           {:else}
             <div class="compact-activity-list">
               {#each detail.artifacts as artifact}
-                <a class="dashboard-row activity-row" href={href(artifact.href ?? detail.runHref ?? '/dashboard')}>
+                <a class="dashboard-row activity-row" href={href(artifact.href ?? detail.runHref ?? '/chats')}>
                   <span class={`activity-kind ${artifact.kind}`}>{artifact.kind}</span>
                   <span>
                     <span class="row-title">{artifact.title}</span>

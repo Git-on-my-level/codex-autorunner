@@ -16,7 +16,7 @@ export const mockArtifact: SurfaceArtifact = {
   kind: 'preview_url',
   title: 'Preview ready',
   summary: 'Local preview is available.',
-  url: 'http://127.0.0.1:5173/pma',
+  url: 'http://127.0.0.1:5173/chats',
   createdAt: '2026-05-04T00:00:00Z',
   raw: {}
 };

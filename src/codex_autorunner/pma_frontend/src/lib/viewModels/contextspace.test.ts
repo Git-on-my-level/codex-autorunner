@@ -26,7 +26,7 @@ describe('contextspace view models', () => {
     expect(vm.eyebrow).toBe('Repo-scoped contextspace');
     expect(vm.description).toContain('Repo memory');
     expect(vm.openWorkspaceHref).toBe('/repos/repo-1');
-    expect(vm.askPmaHref).toContain('/pma?draft=');
+    expect(vm.askPmaHref).toContain('/chats?draft=');
     expect(vm.docs.map((doc) => doc.filename)).toEqual(['active_context.md', 'spec.md', 'decisions.md']);
     expect(vm.docs[0]).toMatchObject({ id: 'active_context', isMissing: true });
     expect(vm.presentCount).toBe(2);

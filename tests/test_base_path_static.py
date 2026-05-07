@@ -25,7 +25,7 @@ def _base_path_app(tmp_path_factory):
 
 def test_pma_static_assets_served_with_base_path(_base_path_app) -> None:
     client = TestClient(_base_path_app)
-    res = client.get("/car/pma")
+    res = client.get("/car/chats")
     assert res.status_code == 200
     asset_path = res.text.split('href="/car/_app/', 1)[1].split('"', 1)[0]
     asset_res = client.get(f"/car/_app/{asset_path}")
