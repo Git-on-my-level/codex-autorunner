@@ -51,6 +51,64 @@ class RuntimeThreadTerminalSignal:
 
 
 @dataclass(frozen=True)
+class TerminalEvidence:
+    """Inputs to the terminal-outcome precedence reducer.
+
+    Precedence table:
+    - Explicit timeout wins and never delivers partial assistant text.
+    - Explicit interrupt wins unless a successful transport return is already
+      durably recorded for this turn.
+    - Failed transport with no successful terminal evidence is an error.
+    - Successful terminal evidence plus assistant text can recover
+      transport-layer failures.
+    - Idle/status terminal evidence is a terminal signal only; it can release
+      already observed assistant text, but cannot synthesize assistant text.
+    """
+
+    transport_status: str
+    transport_errors: tuple[str, ...]
+    transport_returned: bool
+    assistant_text: str
+    failure_cause: Optional[str]
+    terminal_signals: tuple[RuntimeThreadTerminalSignal, ...]
+    explicit_interrupt: bool = False
+    explicit_timeout: bool = False
+    transport_exception: Optional[str] = None
+    execution_error_message: str = ""
+
+
+@dataclass(frozen=True)
+class TerminalEvidenceDecision:
+    status: RuntimeThreadOutcomeStatus
+    assistant_text: str
+    error: Optional[str]
+    completion_source: RuntimeThreadCompletionSource
+    reason: str
+
+    def evidence_fields(self, evidence: TerminalEvidence) -> dict[str, Any]:
+        latest_terminal = _latest_terminal_signal(evidence.terminal_signals)
+        return {
+            "terminal_evidence_reason": self.reason,
+            "terminal_evidence_transport_status": evidence.transport_status or None,
+            "terminal_evidence_transport_returned": evidence.transport_returned,
+            "terminal_evidence_transport_error_count": len(evidence.transport_errors),
+            "terminal_evidence_terminal_signal_count": len(evidence.terminal_signals),
+            "terminal_evidence_latest_terminal_source": (
+                latest_terminal.source if latest_terminal is not None else None
+            ),
+            "terminal_evidence_latest_terminal_status": (
+                latest_terminal.status if latest_terminal is not None else None
+            ),
+            "terminal_evidence_assistant_chars": len(evidence.assistant_text),
+            "terminal_evidence_explicit_interrupt": evidence.explicit_interrupt,
+            "terminal_evidence_explicit_timeout": evidence.explicit_timeout,
+            "terminal_evidence_transport_exception": (
+                bool(evidence.transport_exception)
+            ),
+        }
+
+
+@dataclass(frozen=True)
 class RuntimeThreadOutcome:
     """Collected outcome of one runtime-thread execution before persistence."""
 
@@ -65,6 +123,180 @@ class RuntimeThreadOutcome:
     transport_request_return_timestamp: Optional[str] = None
     last_progress_timestamp: Optional[str] = None
     failure_cause: Optional[str] = None
+    terminal_evidence: dict[str, Any] = field(default_factory=dict)
+
+
+def reduce_terminal_evidence(evidence: TerminalEvidence) -> TerminalEvidenceDecision:
+    """Resolve terminal evidence into one user-visible outcome.
+
+    This is the only policy function that decides precedence between streamed
+    terminal signals, prompt/request return status, explicit interrupt records,
+    timeout/stall probes, and transport exceptions.
+    """
+
+    status = evidence.transport_status
+    assistant_text = evidence.assistant_text
+    detail = (
+        next(iter(evidence.transport_errors), "")
+        or evidence.transport_exception
+        or evidence.failure_cause
+        or None
+    )
+    successful_transport = status in _SUCCESSFUL_COMPLETION_STATUSES
+    interrupted_transport = status in _INTERRUPTED_COMPLETION_STATUSES
+    failed_transport = (
+        bool(status) and not successful_transport and not interrupted_transport
+    )
+    successful_terminal = _saw_successful_terminal_signal(evidence.terminal_signals)
+    latest_terminal = _latest_terminal_signal(evidence.terminal_signals)
+    has_assistant_text = bool(assistant_text.strip())
+
+    if evidence.explicit_timeout:
+        return TerminalEvidenceDecision(
+            status="error",
+            assistant_text="",
+            error=detail or evidence.execution_error_message,
+            completion_source="timeout",
+            reason="explicit_timeout",
+        )
+
+    if evidence.explicit_interrupt and not successful_transport:
+        return TerminalEvidenceDecision(
+            status="interrupted",
+            assistant_text="",
+            error=detail or _DEFAULT_INTERRUPTED_ERROR,
+            completion_source="interrupt",
+            reason="explicit_interrupt",
+        )
+
+    if evidence.transport_exception:
+        if successful_terminal and has_assistant_text:
+            return TerminalEvidenceDecision(
+                status="ok",
+                assistant_text=assistant_text,
+                error=None,
+                completion_source="reconciled_failure",
+                reason="terminal_success_recovered_transport_exception",
+            )
+        return TerminalEvidenceDecision(
+            status="error",
+            assistant_text="",
+            error=detail or evidence.execution_error_message,
+            completion_source="transport_error",
+            reason="transport_exception_without_terminal_success",
+        )
+
+    if not evidence.transport_returned:
+        if latest_terminal is not None and latest_terminal.status == "ok":
+            return TerminalEvidenceDecision(
+                status="ok",
+                assistant_text=assistant_text,
+                error=None,
+                completion_source="stream_terminal_event",
+                reason="stream_terminal_success",
+            )
+        if latest_terminal is not None and latest_terminal.status == "interrupted":
+            return TerminalEvidenceDecision(
+                status="interrupted",
+                assistant_text="",
+                error=detail or _DEFAULT_INTERRUPTED_ERROR,
+                completion_source="stream_terminal_event",
+                reason="stream_terminal_interrupted",
+            )
+        return TerminalEvidenceDecision(
+            status="error",
+            assistant_text="",
+            error=detail or evidence.execution_error_message,
+            completion_source="stream_terminal_event",
+            reason="stream_terminal_error",
+        )
+
+    if evidence.transport_errors:
+        if interrupted_transport:
+            return TerminalEvidenceDecision(
+                status="interrupted",
+                assistant_text="",
+                error=detail or _DEFAULT_INTERRUPTED_ERROR,
+                completion_source="prompt_return",
+                reason="transport_interrupted",
+            )
+        if successful_terminal and has_assistant_text:
+            return TerminalEvidenceDecision(
+                status="ok",
+                assistant_text=assistant_text,
+                error=None if successful_transport else detail or None,
+                completion_source=(
+                    "reconciled_failure"
+                    if not successful_transport
+                    else "prompt_return"
+                ),
+                reason=(
+                    "terminal_success_recovered_failed_transport"
+                    if not successful_transport
+                    else "successful_transport_with_terminal_success"
+                ),
+            )
+        if failed_transport:
+            return TerminalEvidenceDecision(
+                status="error",
+                assistant_text="",
+                error=detail or evidence.execution_error_message,
+                completion_source="prompt_return",
+                reason="failed_transport_without_terminal_success",
+            )
+        if has_assistant_text:
+            return TerminalEvidenceDecision(
+                status="ok",
+                assistant_text=assistant_text,
+                error=detail or None,
+                completion_source="prompt_return",
+                reason="successful_transport_with_assistant_text",
+            )
+        return TerminalEvidenceDecision(
+            status="error",
+            assistant_text="",
+            error=detail or evidence.execution_error_message,
+            completion_source="prompt_return",
+            reason="transport_errors_without_assistant_text",
+        )
+
+    if interrupted_transport:
+        return TerminalEvidenceDecision(
+            status="interrupted",
+            assistant_text="",
+            error=evidence.failure_cause,
+            completion_source="interrupt",
+            reason="transport_interrupted",
+        )
+    if failed_transport:
+        return TerminalEvidenceDecision(
+            status="error",
+            assistant_text="",
+            error=detail or evidence.execution_error_message,
+            completion_source="prompt_return",
+            reason="failed_transport",
+        )
+    return TerminalEvidenceDecision(
+        status="ok",
+        assistant_text=assistant_text,
+        error=None,
+        completion_source="prompt_return",
+        reason="successful_transport",
+    )
+
+
+def _saw_successful_terminal_signal(
+    signals: tuple[RuntimeThreadTerminalSignal, ...],
+) -> bool:
+    return any(signal.status == "ok" for signal in signals)
+
+
+def _latest_terminal_signal(
+    signals: tuple[RuntimeThreadTerminalSignal, ...],
+) -> Optional[RuntimeThreadTerminalSignal]:
+    if not signals:
+        return None
+    return signals[-1]
 
 
 @dataclass
@@ -213,11 +445,11 @@ class RuntimeTurnTerminalStateMachine:
                 timestamp=timestamp,
             )
         )
-        return self._build_outcome(
-            status="error",
-            assistant_text="",
-            error=error,
-            completion_source="timeout",
+        return self._build_outcome_from_evidence(
+            self._terminal_evidence(
+                explicit_timeout=True,
+                execution_error_message=error,
+            )
         )
 
     def build_interrupted_outcome(self, error: str) -> RuntimeThreadOutcome:
@@ -230,11 +462,11 @@ class RuntimeTurnTerminalStateMachine:
                 timestamp=timestamp,
             )
         )
-        return self._build_outcome(
-            status="interrupted",
-            assistant_text="",
-            error=error,
-            completion_source="interrupt",
+        return self._build_outcome_from_evidence(
+            self._terminal_evidence(
+                explicit_interrupt=True,
+                execution_error_message=error,
+            )
         )
 
     def build_transport_exception_outcome(
@@ -242,122 +474,56 @@ class RuntimeTurnTerminalStateMachine:
         error: str,
     ) -> RuntimeThreadOutcome:
         self.failure_cause = error
-        if self._saw_successful_terminal_signal() and self.last_assistant_text.strip():
-            return self._build_outcome(
-                status="ok",
-                assistant_text=self.last_assistant_text,
-                error=None,
-                completion_source="reconciled_failure",
+        return self._build_outcome_from_evidence(
+            self._terminal_evidence(
+                transport_exception=error,
+                execution_error_message=error,
             )
-        return self._build_outcome(
-            status="error",
-            assistant_text="",
-            error=error,
-            completion_source="transport_error",
         )
 
     def build_outcome(self, execution_error_message: str) -> RuntimeThreadOutcome:
-        status = self.transport_status or ""
-        assistant_text = self.last_assistant_text
-        detail = next(iter(self.transport_errors), "") or self.failure_cause or None
-        successful_transport = status in _SUCCESSFUL_COMPLETION_STATUSES
-        interrupted_transport = status in _INTERRUPTED_COMPLETION_STATUSES
-        failed_transport = (
-            bool(status) and not successful_transport and not interrupted_transport
+        return self._build_outcome_from_evidence(
+            self._terminal_evidence(execution_error_message=execution_error_message)
         )
-        successful_terminal = self._saw_successful_terminal_signal()
-        latest_terminal = self._latest_terminal_signal()
 
-        if self.transport_request_return_timestamp is None:
-            if latest_terminal is not None and latest_terminal.status == "ok":
-                return self._build_outcome(
-                    status="ok",
-                    assistant_text=assistant_text,
-                    error=None,
-                    completion_source="stream_terminal_event",
-                )
-            if latest_terminal is not None and latest_terminal.status == "interrupted":
-                return self._build_outcome(
-                    status="interrupted",
-                    assistant_text="",
-                    error=detail or _DEFAULT_INTERRUPTED_ERROR,
-                    completion_source="stream_terminal_event",
-                )
-            return self._build_outcome(
-                status="error",
-                assistant_text="",
-                error=detail or execution_error_message,
-                completion_source="stream_terminal_event",
-            )
+    def _terminal_evidence(
+        self,
+        *,
+        explicit_interrupt: bool = False,
+        explicit_timeout: bool = False,
+        transport_exception: Optional[str] = None,
+        execution_error_message: str = "",
+    ) -> TerminalEvidence:
+        return TerminalEvidence(
+            transport_status=self.transport_status or "",
+            transport_errors=tuple(self.transport_errors),
+            transport_returned=self.transport_request_return_timestamp is not None,
+            assistant_text=self.last_assistant_text,
+            failure_cause=self.failure_cause,
+            terminal_signals=tuple(self.terminal_signals),
+            explicit_interrupt=explicit_interrupt,
+            explicit_timeout=explicit_timeout,
+            transport_exception=transport_exception,
+            execution_error_message=execution_error_message,
+        )
 
-        if self.transport_errors:
-            if interrupted_transport:
-                return self._build_outcome(
-                    status="interrupted",
-                    assistant_text="",
-                    error=detail or _DEFAULT_INTERRUPTED_ERROR,
-                    completion_source="prompt_return",
-                )
-            if successful_terminal and assistant_text.strip():
-                return self._build_outcome(
-                    status="ok",
-                    assistant_text=assistant_text,
-                    error=None if successful_transport else detail or None,
-                    completion_source=(
-                        "reconciled_failure"
-                        if not successful_transport
-                        else "prompt_return"
-                    ),
-                )
-            if failed_transport:
-                return self._build_outcome(
-                    status="error",
-                    assistant_text="",
-                    error=detail or execution_error_message,
-                    completion_source="prompt_return",
-                )
-            if assistant_text.strip():
-                return self._build_outcome(
-                    status="ok",
-                    assistant_text=assistant_text,
-                    error=detail or None,
-                    completion_source="prompt_return",
-                )
-            return self._build_outcome(
-                status="error",
-                assistant_text="",
-                error=detail or execution_error_message,
-                completion_source="prompt_return",
-            )
-
-        if interrupted_transport:
-            return self._build_outcome(
-                status="interrupted",
-                assistant_text="",
-                error=self.failure_cause,
-                completion_source="interrupt",
-            )
-        if failed_transport:
-            return self._build_outcome(
-                status="error",
-                assistant_text="",
-                error=detail or execution_error_message,
-                completion_source="prompt_return",
-            )
+    def _build_outcome_from_evidence(
+        self, evidence: TerminalEvidence
+    ) -> RuntimeThreadOutcome:
+        decision = reduce_terminal_evidence(evidence)
         return self._build_outcome(
-            status="ok",
-            assistant_text=assistant_text,
-            error=None,
-            completion_source="prompt_return",
+            status=decision.status,
+            assistant_text=decision.assistant_text,
+            error=decision.error,
+            completion_source=decision.completion_source,
+            terminal_evidence=decision.evidence_fields(evidence),
         )
 
     def _saw_successful_terminal_signal(self) -> bool:
-        return any(signal.status == "ok" for signal in self.terminal_signals)
+        return _saw_successful_terminal_signal(tuple(self.terminal_signals))
 
     def _latest_terminal_signal(self) -> Optional[RuntimeThreadTerminalSignal]:
-        if not self.terminal_signals:
-            return None
-        return self.terminal_signals[-1]
+        return _latest_terminal_signal(tuple(self.terminal_signals))
 
     def _note_terminal_signal(self, signal: RuntimeThreadTerminalSignal) -> None:
         key = (signal.source, signal.status)
@@ -374,6 +540,7 @@ class RuntimeTurnTerminalStateMachine:
         assistant_text: str,
         error: Optional[str],
         completion_source: RuntimeThreadCompletionSource,
+        terminal_evidence: Optional[dict[str, Any]] = None,
     ) -> RuntimeThreadOutcome:
         return RuntimeThreadOutcome(
             status=status,
@@ -387,6 +554,7 @@ class RuntimeTurnTerminalStateMachine:
             transport_request_return_timestamp=self.transport_request_return_timestamp,
             last_progress_timestamp=self.last_progress_timestamp,
             failure_cause=self.failure_cause,
+            terminal_evidence=dict(terminal_evidence or {}),
         )
 
     def build_checkpoint(
@@ -456,4 +624,7 @@ __all__ = [
     "RuntimeThreadOutcomeStatus",
     "RuntimeThreadTerminalSignal",
     "RuntimeTurnTerminalStateMachine",
+    "TerminalEvidence",
+    "TerminalEvidenceDecision",
+    "reduce_terminal_evidence",
 ]

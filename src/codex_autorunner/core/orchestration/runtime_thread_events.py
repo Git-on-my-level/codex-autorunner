@@ -285,6 +285,12 @@ def runtime_trace_fields(
     }
 
 
+def terminal_evidence_trace_fields(
+    outcome: RuntimeThreadOutcome,
+) -> dict[str, Any]:
+    return dict(outcome.terminal_evidence)
+
+
 def completion_source_from_outcome(
     outcome: RuntimeThreadOutcome,
     *,
@@ -724,6 +730,7 @@ __all__ = [
     "note_run_event_state",
     "normalize_runtime_progress_event",
     "runtime_trace_fields",
+    "terminal_evidence_trace_fields",
     "completion_source_from_outcome",
     "DECODE_FAILURE_REASON_MALFORMED_JSON",
     "DECODE_FAILURE_REASON_REGISTRY_MISS",
