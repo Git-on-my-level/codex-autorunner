@@ -2,20 +2,28 @@ from __future__ import annotations
 
 import logging
 import uuid
-from dataclasses import dataclass
 from typing import Any, Optional
 
 from fastapi import HTTPException
 
-from .....core.managed_thread_identity import pma_automation_key, pma_base_key
 from .....core.orchestration import (
     SurfaceThreadMessageRequest,
     build_surface_orchestration_ingress,
 )
+from .....core.pma.queue_prompts import (
+    PmaExecutionOrigin as PmaExecutionOrigin,
+)
+from .....core.pma.queue_prompts import (
+    PmaQueuePromptInputs,
+    build_queue_execution_prompt,
+    resolve_pma_execution_origin,
+)
+from .....core.pma.queue_prompts import (
+    resolve_pma_session_key as resolve_pma_session_key,
+)
 from .....core.pma_audit import PmaActionType
 from .....core.pma_context import (
     build_hub_snapshot,
-    format_pma_prompt,
     load_pma_prompt,
 )
 from .....core.pma_origin import PmaOriginContext, extract_pma_origin_metadata
@@ -33,29 +41,9 @@ from .runtime_state import PmaRuntimeState
 logger = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True)
-class PmaExecutionOrigin:
-    session_key: str
-    backend_thread_id: Optional[str] = None
-
-
 def _get_pma_config(request: Any) -> dict[str, Any]:
     context = get_pma_request_context(request)
     return pma_config_from_raw(context.raw_config)
-
-
-def resolve_pma_session_key(
-    agent_id: str,
-    profile: Optional[str],
-    *,
-    automation_trigger: bool,
-    pma_origin: Optional[PmaOriginContext] = None,
-) -> str:
-    if automation_trigger and pma_origin and pma_origin.thread_id:
-        return pma_base_key(agent_id, profile)
-    if automation_trigger:
-        return pma_automation_key(agent_id, profile)
-    return pma_base_key(agent_id, profile)
 
 
 def _resolve_profile_with_stale_pma_origin_fallback(
@@ -102,36 +90,6 @@ def _resolve_profile_with_stale_pma_origin_fallback(
                 default_profile=default_profile,
             )
         raise
-
-
-def resolve_pma_execution_origin(
-    agent_id: str,
-    profile: Optional[str],
-    *,
-    automation_trigger: bool,
-    wake_up: Optional[dict[str, Any]],
-) -> PmaExecutionOrigin:
-    pma_origin = extract_pma_origin_metadata(
-        wake_up.get("metadata") if isinstance(wake_up, dict) else None
-    )
-    should_resume_origin = (
-        automation_trigger
-        and pma_origin is not None
-        and pma_origin.thread_id is not None
-        and (pma_origin.agent is None or pma_origin.agent == agent_id)
-        and (pma_origin.profile is None or pma_origin.profile == profile)
-    )
-    if not should_resume_origin:
-        pma_origin = None
-    return PmaExecutionOrigin(
-        session_key=resolve_pma_session_key(
-            agent_id,
-            profile,
-            automation_trigger=automation_trigger,
-            pma_origin=pma_origin,
-        ),
-        backend_thread_id=pma_origin.thread_id if pma_origin else None,
-    )
 
 
 async def execute_queue_item(
@@ -325,23 +283,21 @@ async def execute_queue_item(
         prompt_state_key = execution_origin.session_key
 
         async def _rebuild_prompt(force_full_base_prompt: bool) -> str:
-            built = format_pma_prompt(
-                prompt_base,
-                snapshot,
-                message,
-                hub_root=hub_root,
-                prompt_state_key=prompt_state_key,
+            built = build_queue_execution_prompt(
+                PmaQueuePromptInputs(
+                    prompt_base=prompt_base,
+                    snapshot=snapshot,
+                    message=message,
+                    hub_root=hub_root,
+                    prompt_state_key=prompt_state_key,
+                    github_context_injector=github_context_injector,
+                    logger=logger,
+                ),
                 force_full_base_prompt=force_full_base_prompt,
             )
-            injected, _ = await github_context_injector(
-                prompt_text=built,
-                link_source_text=message,
-                workspace_root=hub_root,
-                logger=logger,
-                event_prefix="web.pma.github_context",
-                allow_cross_repo=True,
-            )
-            return injected
+            if isinstance(built, str):
+                return built
+            return await built
 
         prompt = await _rebuild_prompt(False)
     except (
