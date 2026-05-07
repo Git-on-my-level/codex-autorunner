@@ -95,6 +95,7 @@ def test_pma_cli_thread_spawn_help_shows_json_option():
     output = result.stdout
     assert "--json" in output, "PMA thread spawn should support --json"
     assert "--notify-on" in output, "PMA thread spawn should support --notify-on"
+    assert "--scope" in output, "PMA thread spawn should support --scope"
 
 
 def test_pma_cli_thread_list_help_shows_json_option():
@@ -104,6 +105,27 @@ def test_pma_cli_thread_list_help_shows_json_option():
     output = result.stdout
     assert "--json" in output, "PMA thread list should support --json"
     assert "--ndjson" in output, "PMA thread list should support --ndjson"
+    assert "--scope" in output, "PMA thread list should support --scope"
+
+
+def test_pma_cli_thread_spawn_scope_conflicts_with_legacy():
+    runner = CliRunner()
+    result = runner.invoke(
+        pma_app,
+        ["thread", "spawn", "--scope", "repo:my-repo", "--repo", "my-repo"],
+    )
+    assert result.exit_code != 0
+    assert "--scope cannot be combined" in (result.output + str(result.exception or ""))
+
+
+def test_pma_cli_thread_list_scope_conflicts_with_legacy():
+    runner = CliRunner()
+    result = runner.invoke(
+        pma_app,
+        ["thread", "list", "--scope", "repo:my-repo", "--repo", "my-repo"],
+    )
+    assert result.exit_code != 0
+    assert "--scope cannot be combined" in (result.output + str(result.exception or ""))
 
 
 def test_pma_cli_thread_send_help_shows_json_option():

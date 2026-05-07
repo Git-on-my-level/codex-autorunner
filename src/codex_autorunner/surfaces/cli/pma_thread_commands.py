@@ -74,6 +74,9 @@ from .pma_control_plane import (
     normalize_resource_owner_options as _normalize_resource_owner_options,
 )
 from .pma_control_plane import (
+    normalize_scope_urn_to_owner_fields as _normalize_scope_urn_to_owner_fields,
+)
+from .pma_control_plane import (
     recover_managed_thread_send_timeout as _recover_managed_thread_send_timeout,
 )
 from .pma_control_plane import (
@@ -809,6 +812,11 @@ def pma_thread_spawn(
     agent: Optional[str] = typer.Option(
         None, "--agent", help="Thread agent to use (codex|opencode|hermes|zeroclaw)"
     ),
+    scope: Optional[str] = typer.Option(
+        None,
+        "--scope",
+        help="Canonical scope URN (e.g. repo:<id>, filesystem:<path>)",
+    ),
     repo_id: Optional[str] = typer.Option(
         None, "--repo", help="Hub repo id for the target workspace"
     ),
@@ -863,16 +871,35 @@ def pma_thread_spawn(
 ):
     """Create a managed PMA thread."""
     normalized_agent = _normalize_agent_option(agent)
-    (
-        normalized_resource_kind,
-        normalized_resource_id,
-        normalized_workspace_root,
-    ) = _normalize_resource_owner_options(
-        repo_id=repo_id,
-        resource_kind=resource_kind,
-        resource_id=resource_id,
-        workspace_root=workspace_root,
+    scope_resource_kind, scope_resource_id, scope_workspace_root = (
+        _normalize_scope_urn_to_owner_fields(scope)
     )
+    legacy_present = any(
+        v is not None for v in (repo_id, resource_kind, resource_id, workspace_root)
+    )
+    if scope_resource_kind is not None and legacy_present:
+        typer.echo(
+            "--scope cannot be combined with --repo/--resource-kind/--resource-id/--workspace-root",
+            err=True,
+        )
+        raise typer.Exit(code=1) from None
+    if scope_resource_kind is not None or scope_workspace_root is not None:
+        (
+            normalized_resource_kind,
+            normalized_resource_id,
+            normalized_workspace_root,
+        ) = (scope_resource_kind, scope_resource_id, scope_workspace_root)
+    else:
+        (
+            normalized_resource_kind,
+            normalized_resource_id,
+            normalized_workspace_root,
+        ) = _normalize_resource_owner_options(
+            repo_id=repo_id,
+            resource_kind=resource_kind,
+            resource_id=resource_id,
+            workspace_root=workspace_root,
+        )
     owner_present = (
         normalized_resource_kind is not None and normalized_resource_id is not None
     )
@@ -982,6 +1009,11 @@ def pma_thread_spawn(
 def pma_thread_list(
     agent: Optional[str] = typer.Option(None, "--agent", help="Filter by agent"),
     status: Optional[str] = typer.Option(None, "--status", help="Filter by status"),
+    scope: Optional[str] = typer.Option(
+        None,
+        "--scope",
+        help="Canonical scope URN to filter by (e.g. repo:<id>)",
+    ),
     repo_id: Optional[str] = typer.Option(None, "--repo", help="Filter by repo id"),
     resource_kind: Optional[str] = typer.Option(
         None, "--resource-kind", help="Filter by managed resource kind"
@@ -1004,22 +1036,33 @@ def pma_thread_list(
         )
 
     hub_root = _resolve_hub_path(path)
-    (
-        normalized_resource_kind,
-        normalized_resource_id,
-        _normalized_workspace_root,
-    ) = _normalize_resource_owner_options(
-        repo_id=repo_id,
-        resource_kind=resource_kind,
-        resource_id=resource_id,
+    scope_resource_kind, scope_resource_id, _scope_workspace_root = (
+        _normalize_scope_urn_to_owner_fields(scope)
     )
+    legacy_present = any(v is not None for v in (repo_id, resource_kind, resource_id))
+    if scope_resource_kind is not None and legacy_present:
+        typer.echo(
+            "--scope cannot be combined with --repo/--resource-kind/--resource-id",
+            err=True,
+        )
+        raise typer.Exit(code=1) from None
+    if scope_resource_kind is None:
+        (
+            scope_resource_kind,
+            scope_resource_id,
+            _scope_workspace_root,
+        ) = _normalize_resource_owner_options(
+            repo_id=repo_id,
+            resource_kind=resource_kind,
+            resource_id=resource_id,
+        )
     params = {
         key: value
         for key, value in {
             "agent": agent,
             "status": status,
-            "resource_kind": normalized_resource_kind,
-            "resource_id": normalized_resource_id,
+            "resource_kind": scope_resource_kind,
+            "resource_id": scope_resource_id,
             "limit": limit,
         }.items()
         if value is not None

@@ -19,6 +19,7 @@ import typer
 from ...agents.registry import get_registered_agents
 from ...core.config import load_hub_config
 from ...core.config_contract import ConfigError
+from ...core.domain.scope_urn import ScopeUrnError, parse_scope_urn
 from ...core.text_utils import _redacted_prompt_preview_for_match
 
 logger = logging.getLogger(__name__)
@@ -260,6 +261,40 @@ def normalize_resource_owner_options(
         normalized_resource_id,
         normalized_workspace_root,
     )
+
+
+def normalize_scope_urn_to_owner_fields(
+    scope_urn: Optional[str],
+) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    if not scope_urn or not scope_urn.strip():
+        return None, None, None
+    try:
+        parsed = parse_scope_urn(scope_urn.strip())
+    except ScopeUrnError as exc:
+        typer.echo(f"Invalid --scope URN: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    kind = parsed["kind"]
+    scope_id = parsed.get("id")
+    if kind == "hub":
+        return None, None, None
+    if kind == "filesystem":
+        return None, None, scope_id
+    if kind in {"repo", "agent_workspace"}:
+        if not scope_id:
+            typer.echo(f"--scope URN '{scope_urn}' requires an id", err=True)
+            raise typer.Exit(code=1) from None
+        return kind, scope_id, None
+    if kind == "worktree":
+        parent_repo_id = parsed.get("parent_repo_id")
+        if not scope_id or not parent_repo_id:
+            typer.echo(
+                f"--scope URN '{scope_urn}' requires parent_repo_id and id",
+                err=True,
+            )
+            raise typer.Exit(code=1) from None
+        return "worktree", scope_id, None
+    typer.echo(f"--scope URN has unsupported kind '{kind}'", err=True)
+    raise typer.Exit(code=1) from None
 
 
 def format_resource_owner_label(item: dict[str, Any]) -> str:

@@ -47,6 +47,7 @@ from ...integrations.app_server.env import build_app_server_env
 from ...integrations.app_server.event_buffer import AppServerEventBuffer
 from ...integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from ...tickets.replies import resolve_reply_paths
+from ..acp_remote import build_acp_remote_surface_port
 from ..discord import build_discord_surface_port
 from ..telegram import build_telegram_surface_port
 from .hub_jobs import HubJobManager
@@ -604,6 +605,9 @@ def build_app_context(
     surface_port_registry.register(
         "telegram", build_telegram_surface_port(logger=logger)
     )
+    surface_port_registry.register(
+        "acp_remote", build_acp_remote_surface_port(logger=logger)
+    )
     return AppContext(
         base_path=normalized_base,
         env=env,
@@ -818,6 +822,9 @@ def build_hub_context(
     )
     hub_surface_port_registry.register(
         "telegram", build_telegram_surface_port(logger=logger)
+    )
+    hub_surface_port_registry.register(
+        "acp_remote", build_acp_remote_surface_port(logger=logger)
     )
     return HubAppContext(
         base_path=normalized_base,
