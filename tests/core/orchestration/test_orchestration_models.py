@@ -3,12 +3,15 @@ from __future__ import annotations
 import pytest
 
 from codex_autorunner.agents.types import AgentId
+from codex_autorunner.core.domain.refs import AgentRef, ScopeRef, SurfaceRef
 from codex_autorunner.core.orchestration import (
     AgentDefinition,
+    BackendBinding,
     Binding,
     ExecutionRecord,
     FlowTarget,
     MessageRequest,
+    Thread,
     ThreadTarget,
 )
 
@@ -107,6 +110,50 @@ def test_thread_target_preserves_agent_workspace_owner() -> None:
     assert target.resource_kind == "agent_workspace"
     assert target.resource_id == "zc-main"
     assert target.repo_id is None
+
+
+def test_thread_model_preserves_canonical_refs_and_legacy_aliases() -> None:
+    thread = Thread(
+        id="thread-1",
+        scope=ScopeRef(kind="repo", id="repo-1"),
+        surface=SurfaceRef(kind="discord", key="guild:channel"),
+        agent=AgentRef(agent_id="codex", profile="pma"),
+        backend_binding=BackendBinding(
+            backend_thread_id="backend-1",
+            backend_runtime_instance_id="runtime-1",
+        ),
+        display_name="Backlog",
+    )
+
+    payload = thread.to_dict()
+
+    assert payload["managed_thread_id"] == "thread-1"
+    assert payload["thread_target_id"] == "thread-1"
+    assert payload["scope_urn"] == "repo:repo-1"
+    assert payload["surface_urn"] == "discord:guild%3Achannel"
+    assert payload["agent"] == "codex"
+    assert payload["agent_ref"] == {"agent_id": "codex", "profile": "pma"}
+    assert payload["backend_thread_id"] == "backend-1"
+    assert payload["backend_runtime_instance_id"] == "runtime-1"
+    assert payload["status"] == "idle"
+    assert payload["normalized_status"] == "idle"
+
+
+def test_thread_model_hydrates_from_legacy_owner_fields() -> None:
+    thread = Thread.from_mapping(
+        {
+            "managed_thread_id": "thread-1",
+            "agent": "codex",
+            "repo_id": "repo-1",
+            "surface_urn": "discord:guild%3Achannel",
+            "name": "Backlog",
+            "normalized_status": "running",
+        }
+    )
+
+    assert thread.scope == ScopeRef(kind="repo", id="repo-1")
+    assert thread.surface == SurfaceRef(kind="discord", key="guild:channel")
+    assert thread.runtime_status == "running"
 
 
 def test_binding_requires_thread_target_id() -> None:

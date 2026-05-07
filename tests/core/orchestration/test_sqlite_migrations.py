@@ -185,6 +185,126 @@ def test_apply_orchestration_migrations_is_idempotent_at_latest_version(
     assert int(second_run_count["count"] or 0) == 1
 
 
+def test_apply_orchestration_migrations_backfills_thread_projection_columns(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "orchestration.sqlite3"
+
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE orch_schema_migrations (
+                version INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                applied_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE orch_migration_runs (
+                run_id TEXT PRIMARY KEY,
+                from_version INTEGER NOT NULL,
+                target_version INTEGER NOT NULL,
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                status TEXT NOT NULL,
+                error_text TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE orch_thread_targets (
+                thread_target_id TEXT PRIMARY KEY,
+                agent_id TEXT NOT NULL,
+                backend_thread_id TEXT,
+                repo_id TEXT,
+                resource_kind TEXT,
+                resource_id TEXT,
+                workspace_root TEXT,
+                display_name TEXT,
+                lifecycle_status TEXT,
+                runtime_status TEXT,
+                status_reason TEXT,
+                status_turn_id TEXT,
+                last_execution_id TEXT,
+                last_message_preview TEXT,
+                compact_seed TEXT,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                status_updated_at TEXT,
+                status_terminal INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE orch_bindings (
+                binding_id TEXT PRIMARY KEY,
+                surface_kind TEXT NOT NULL,
+                surface_key TEXT NOT NULL,
+                target_kind TEXT NOT NULL,
+                target_id TEXT NOT NULL,
+                agent_id TEXT,
+                repo_id TEXT,
+                resource_kind TEXT,
+                resource_id TEXT,
+                mode TEXT,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                disabled_at TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO orch_thread_targets (
+                thread_target_id, agent_id, backend_thread_id, repo_id,
+                resource_kind, resource_id, workspace_root, created_at, updated_at
+            ) VALUES (
+                'thread-1', 'codex', 'backend-1', 'repo-1',
+                'repo', 'repo-1', '/tmp/repo', '2026-04-06T00:00:00Z',
+                '2026-04-06T00:00:00Z'
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO orch_bindings (
+                binding_id, surface_kind, surface_key, target_kind, target_id,
+                created_at, updated_at
+            ) VALUES (
+                'binding-1', 'discord', 'guild:channel:thread', 'thread',
+                'thread-1', '2026-04-06T00:00:00Z', '2026-04-06T00:00:00Z'
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO orch_schema_migrations (version, name, applied_at)
+            VALUES (27, 'enforce_active_queue_item_idempotency', '2026-04-06T00:00:00Z')
+            """
+        )
+
+        version_after = apply_orchestration_migrations(conn)
+        row = conn.execute(
+            """
+            SELECT scope_urn, surface_urn, backend_binding_json
+              FROM orch_thread_targets
+             WHERE thread_target_id = 'thread-1'
+            """
+        ).fetchone()
+
+    assert version_after == ORCHESTRATION_SCHEMA_VERSION
+    assert row is not None
+    assert row["scope_urn"] == "repo:repo-1"
+    assert row["surface_urn"] == "discord:guild:channel:thread"
+    assert '"backend_thread_id":"backend-1"' in row["backend_binding_json"]
+
+
 def test_ensure_column_ignores_duplicate_column_races(monkeypatch) -> None:
     class FakeConn:
         def execute(self, sql: str):

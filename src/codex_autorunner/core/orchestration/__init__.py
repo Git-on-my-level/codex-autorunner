@@ -77,11 +77,13 @@ from .migrations import (
 )
 from .models import (
     AgentDefinition,
+    BackendBinding,
     Binding,
     ExecutionRecord,
     FlowTarget,
     MessageRequest,
     MessageRequestKind,
+    Thread,
     ThreadStopOutcome,
     ThreadTarget,
 )
@@ -144,6 +146,7 @@ __all__ = [
     "ActiveWorkSummary",
     "AgentDefinition",
     "AgentDefinitionCatalog",
+    "BackendBinding",
     "Binding",
     "ChatOperationDuplicateAction",
     "ChatOperationRecoveryAction",
@@ -180,6 +183,7 @@ __all__ = [
     "SQLiteManagedThreadDeliveryLedger",
     "SurfaceThreadMessageRequest",
     "ThreadExecutionStore",
+    "Thread",
     "ThreadStopOutcome",
     "ThreadTarget",
     "WorkspaceRuntimeAcquisition",

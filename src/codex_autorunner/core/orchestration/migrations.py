@@ -9,7 +9,7 @@ from ..sqlite_utils import table_columns, table_exists
 from ..time_utils import now_iso
 from .models import OrchestrationTableDefinition
 
-ORCHESTRATION_SCHEMA_VERSION = 27
+ORCHESTRATION_SCHEMA_VERSION = 28
 
 
 @dataclass(frozen=True)
@@ -1403,6 +1403,96 @@ def _apply_v27(conn: sqlite3.Connection) -> None:
     )
 
 
+def _apply_v28(conn: sqlite3.Connection) -> None:
+    _ensure_column(conn, "orch_thread_targets", "scope_urn", "scope_urn TEXT")
+    _ensure_column(conn, "orch_thread_targets", "surface_urn", "surface_urn TEXT")
+    _ensure_column(
+        conn,
+        "orch_thread_targets",
+        "backend_binding_json",
+        "backend_binding_json TEXT NOT NULL DEFAULT '{}'",
+    )
+    if not table_exists(conn, "orch_thread_targets"):
+        return
+    columns = _table_columns(conn, "orch_thread_targets")
+    if {
+        "scope_urn",
+        "resource_kind",
+        "resource_id",
+        "repo_id",
+        "workspace_root",
+    }.issubset(columns):
+        conn.execute(
+            """
+            UPDATE orch_thread_targets
+               SET scope_urn = CASE
+                       WHEN NULLIF(TRIM(COALESCE(scope_urn, '')), '') IS NOT NULL
+                           THEN scope_urn
+                       WHEN NULLIF(TRIM(COALESCE(resource_kind, '')), '') = 'repo'
+                            AND NULLIF(TRIM(COALESCE(resource_id, '')), '') IS NOT NULL
+                           THEN 'repo:' || TRIM(resource_id)
+                       WHEN NULLIF(TRIM(COALESCE(resource_kind, '')), '') = 'agent_workspace'
+                            AND NULLIF(TRIM(COALESCE(resource_id, '')), '') IS NOT NULL
+                           THEN 'agent_workspace:' || TRIM(resource_id)
+                       WHEN NULLIF(TRIM(COALESCE(repo_id, '')), '') IS NOT NULL
+                           THEN 'repo:' || TRIM(repo_id)
+                       WHEN NULLIF(TRIM(COALESCE(workspace_root, '')), '') IS NOT NULL
+                           THEN 'filesystem:' || TRIM(workspace_root)
+                       ELSE scope_urn
+                   END
+             WHERE NULLIF(TRIM(COALESCE(scope_urn, '')), '') IS NULL
+            """
+        )
+    if {"backend_binding_json", "backend_thread_id"}.issubset(columns):
+        conn.execute(
+            """
+            UPDATE orch_thread_targets
+               SET backend_binding_json =
+                   '{"backend_thread_id":"' || REPLACE(backend_thread_id, '"', '\\"') || '"}'
+             WHERE NULLIF(TRIM(COALESCE(backend_binding_json, '{}')), '{}') IS NULL
+               AND NULLIF(TRIM(COALESCE(backend_thread_id, '')), '') IS NOT NULL
+            """
+        )
+    if table_exists(conn, "orch_bindings") and {
+        "surface_urn",
+        "thread_target_id",
+    }.issubset(columns):
+        conn.execute(
+            """
+            UPDATE orch_thread_targets
+               SET surface_urn = (
+                       SELECT b.surface_kind || ':' || b.surface_key
+                         FROM orch_bindings AS b
+                        WHERE b.target_kind = 'thread'
+                          AND b.target_id = orch_thread_targets.thread_target_id
+                          AND b.disabled_at IS NULL
+                        ORDER BY b.updated_at DESC, b.created_at DESC, b.binding_id DESC
+                        LIMIT 1
+                   )
+             WHERE NULLIF(TRIM(COALESCE(surface_urn, '')), '') IS NULL
+               AND EXISTS (
+                       SELECT 1
+                         FROM orch_bindings AS b
+                        WHERE b.target_kind = 'thread'
+                          AND b.target_id = orch_thread_targets.thread_target_id
+                          AND b.disabled_at IS NULL
+                   )
+            """
+        )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_thread_targets_scope_updated
+            ON orch_thread_targets(scope_urn, updated_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_thread_targets_surface_updated
+            ON orch_thread_targets(surface_urn, updated_at)
+        """
+    )
+
+
 _MIGRATIONS = (
     _MigrationStep(1, "create_core_orchestration_schema", _apply_v1),
     _MigrationStep(2, "add_binding_and_flow_projection_scaffolding", _apply_v2),
@@ -1443,6 +1533,7 @@ _MIGRATIONS = (
     _MigrationStep(25, "extend_publish_dedupe_index_for_effect_applied", _apply_v25),
     _MigrationStep(26, "add_operation_flags", _apply_v26),
     _MigrationStep(27, "enforce_active_queue_item_idempotency", _apply_v27),
+    _MigrationStep(28, "add_thread_canonical_projection_columns", _apply_v28),
 )
 
 

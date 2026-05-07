@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from typing import Any, Mapping, Optional
+from urllib.parse import quote, unquote
 
 from .scope_urn import (
     format_scope_urn,
@@ -118,11 +119,28 @@ class SurfaceRef:
     kind: str
     key: str
 
+    def to_urn(self) -> str:
+        return f"{self.kind}:{quote(self.key, safe='')}"
+
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     @classmethod
+    def from_urn(cls, urn: str) -> "SurfaceRef":
+        if not isinstance(urn, str) or ":" not in urn:
+            raise ValueError("SurfaceRef URN requires '<kind>:<key>'")
+        kind, key = urn.split(":", 1)
+        if not kind:
+            raise ValueError("SurfaceRef URN requires a kind")
+        if not key:
+            raise ValueError("SurfaceRef URN requires a key")
+        return cls(kind=kind, key=unquote(key))
+
+    @classmethod
     def from_mapping(cls, data: Mapping[str, Any]) -> "SurfaceRef":
+        urn = data.get("urn") or data.get("surface_urn")
+        if isinstance(urn, str):
+            return cls.from_urn(urn)
         kind = data.get("surface_kind") or data.get("kind")
         key = data.get("surface_key") or data.get("key")
         if not isinstance(kind, str):

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Iterator, Optional
 
 from .config import load_hub_config
+from .domain.refs import AgentRef, ScopeRef, SurfaceRef
 from .freshness import resolve_stale_threshold_seconds
 from .managed_thread_status import (
     ManagedThreadStatusReason,
@@ -13,7 +14,11 @@ from .managed_thread_status import (
     build_managed_thread_status_snapshot,
     transition_managed_thread_status,
 )
-from .orchestration.models import normalize_resource_owner_fields
+from .orchestration.models import (
+    BackendBinding,
+    normalize_resource_owner_fields,
+    owner_fields_from_scope_ref,
+)
 from .orchestration.runtime_bindings import (
     RuntimeThreadBinding,
     clear_runtime_thread_binding,
@@ -61,6 +66,7 @@ from .pma_thread_store_rows import (
 from .pma_thread_store_rows import (
     workspace_head_branch as _workspace_head_branch,
 )
+from .ports.thread_store import ThreadRecord, ThreadStatus
 from .text_utils import _json_dumps, _json_loads_object
 from .time_utils import now_iso
 
@@ -105,6 +111,30 @@ def _resolve_stale_running_threshold_seconds(
 
 def _thread_row_to_record(row: Any) -> dict[str, Any]:
     return PmaThreadRecord.from_orchestration_row(row).to_dict()
+
+
+def _thread_row_to_thread(row: Any) -> Any:
+    return PmaThreadRecord.from_orchestration_row(row).to_thread()
+
+
+def _thread_model_to_port_record(thread: Any) -> ThreadRecord:
+    payload = thread.to_dict()
+    return ThreadRecord(
+        thread_id=thread.id,
+        scope=thread.scope,
+        agent=thread.agent,
+        surface=thread.surface,
+        backend_binding=thread.backend_binding.to_dict(),
+        status=(
+            ThreadStatus(thread.lifecycle_status)
+            if thread.lifecycle_status in ThreadStatus._value2member_map_
+            else ThreadStatus.ACTIVE
+        ),
+        display_name=thread.display_name or "",
+        last_turn_id=thread.last_execution_id,
+        last_execution_id=thread.last_execution_id,
+        metadata=payload,
+    )
 
 
 def _execution_row_to_record(row: Any) -> dict[str, Any]:
@@ -296,9 +326,12 @@ class PmaThreadStore:
 
     def create_thread(
         self,
-        agent: str,
-        workspace_root: Path,
+        agent: str | AgentRef,
+        workspace_root: Optional[Path] = None,
         *,
+        scope: Optional[ScopeRef] = None,
+        surface: Optional[SurfaceRef] = None,
+        backend_binding: Optional[BackendBinding] = None,
         repo_id: Optional[str] = None,
         resource_kind: Optional[str] = None,
         resource_id: Optional[str] = None,
@@ -308,6 +341,47 @@ class PmaThreadStore:
     ) -> dict[str, Any]:
         managed_thread_id = str(uuid.uuid4())
         now = now_iso()
+        resolved_agent = agent.agent_id if isinstance(agent, AgentRef) else agent
+        incoming_metadata = dict(metadata or {})
+        if isinstance(agent, AgentRef) and agent.profile is not None:
+            incoming_metadata.setdefault("agent_profile", agent.profile)
+        if backend_binding is not None:
+            if backend_thread_id is not None:
+                raise ValueError(
+                    "backend_binding and backend_thread_id cannot both be provided"
+                )
+            backend_thread_id = backend_binding.backend_thread_id
+            if backend_binding.backend_runtime_instance_id is not None:
+                incoming_metadata.setdefault(
+                    _BACKEND_RUNTIME_INSTANCE_ID_KEY,
+                    backend_binding.backend_runtime_instance_id,
+                )
+        if scope is not None:
+            if (
+                repo_id is not None
+                or resource_kind is not None
+                or resource_id is not None
+            ):
+                raise ValueError(
+                    "scope cannot be combined with repo_id/resource_kind/resource_id"
+                )
+            scope_repo_id, scope_resource_kind, scope_resource_id, scope_workspace = (
+                owner_fields_from_scope_ref(scope)
+            )
+            repo_id = scope_repo_id
+            resource_kind = scope_resource_kind
+            resource_id = scope_resource_id
+            if scope_workspace is not None:
+                if (
+                    workspace_root is not None
+                    and str(workspace_root) != scope_workspace
+                ):
+                    raise ValueError(
+                        "filesystem scope path must match workspace_root when both are provided"
+                    )
+                workspace_root = Path(scope_workspace)
+        if workspace_root is None:
+            raise ValueError("workspace_root is required for managed PMA threads")
         workspace = workspace_root
         if not workspace.is_absolute():
             raise ValueError("workspace_root must be absolute")
@@ -320,13 +394,28 @@ class PmaThreadStore:
         )
         normalized_backend_thread_id = _coerce_text(backend_thread_id)
         metadata_payload = _enrich_thread_metadata_for_workspace(
-            metadata,
+            incoming_metadata,
             workspace_root=workspace,
         )
         backend_runtime_instance_id = _coerce_text(
-            (metadata or {}).get(_BACKEND_RUNTIME_INSTANCE_ID_KEY)
-            if isinstance(metadata, dict)
-            else None
+            incoming_metadata.get(_BACKEND_RUNTIME_INSTANCE_ID_KEY)
+        )
+        normalized_scope_urn = (
+            scope.to_urn()
+            if scope is not None
+            else ScopeRef(kind="filesystem", path=str(workspace)).to_urn()
+        )
+        if scope is None and normalized_resource_kind in {"repo", "agent_workspace"}:
+            normalized_scope_urn = ScopeRef(
+                kind=normalized_resource_kind,
+                id=normalized_resource_id,
+            ).to_urn()
+        normalized_surface_urn = surface.to_urn() if surface is not None else None
+        backend_binding_json = _json_dumps(
+            BackendBinding(
+                backend_thread_id=normalized_backend_thread_id,
+                backend_runtime_instance_id=backend_runtime_instance_id,
+            ).to_dict()
         )
 
         snapshot = build_managed_thread_status_snapshot(
@@ -345,6 +434,9 @@ class PmaThreadStore:
                         resource_kind,
                         resource_id,
                         workspace_root,
+                        scope_urn,
+                        surface_urn,
+                        backend_binding_json,
                         display_name,
                         lifecycle_status,
                         runtime_status,
@@ -358,16 +450,19 @@ class PmaThreadStore:
                         updated_at,
                         status_updated_at,
                         status_terminal
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         managed_thread_id,
-                        agent,
+                        resolved_agent,
                         normalized_backend_thread_id,
                         normalized_repo_id,
                         normalized_resource_kind,
                         normalized_resource_id,
                         str(workspace),
+                        normalized_scope_urn,
+                        normalized_surface_urn,
+                        backend_binding_json,
                         name,
                         "active",
                         snapshot.status,
@@ -394,6 +489,73 @@ class PmaThreadStore:
         if created is None:
             raise RuntimeError("Failed to create managed PMA thread")
         return created
+
+    def get_thread_model(self, managed_thread_id: str) -> Optional[Any]:
+        with self._read_conn() as conn:
+            row = conn.execute(
+                """
+                SELECT *
+                  FROM orch_thread_targets
+                 WHERE thread_target_id = ?
+                """,
+                (managed_thread_id,),
+            ).fetchone()
+        return _thread_row_to_thread(row) if row is not None else None
+
+    async def create(self, record: ThreadRecord) -> ThreadRecord:
+        workspace_root = record.metadata.get("workspace_root")
+        if record.scope.kind == "filesystem":
+            workspace_root = record.scope.path
+        if not isinstance(workspace_root, str):
+            raise ValueError("ThreadRecord metadata requires workspace_root")
+        created = self.create_thread(
+            record.agent,
+            Path(workspace_root),
+            scope=record.scope,
+            surface=record.surface,
+            backend_binding=BackendBinding.from_mapping(record.backend_binding),
+            name=record.display_name or None,
+            metadata=record.metadata,
+        )
+        thread = self.get_thread_model(created["managed_thread_id"])
+        if thread is None:
+            raise RuntimeError("Failed to hydrate created thread")
+        return _thread_model_to_port_record(thread)
+
+    async def get(self, thread_id: str) -> Optional[ThreadRecord]:
+        thread = self.get_thread_model(thread_id)
+        return _thread_model_to_port_record(thread) if thread is not None else None
+
+    async def list_by_scope(self, scope: ScopeRef) -> list[ThreadRecord]:
+        if scope.kind == "repo":
+            rows = self.list_threads(repo_id=scope.id)
+        elif scope.kind == "agent_workspace":
+            rows = self.list_threads(resource_kind=scope.kind, resource_id=scope.id)
+        else:
+            rows = self.list_threads()
+        records: list[ThreadRecord] = []
+        for row in rows:
+            thread = self.get_thread_model(str(row["managed_thread_id"]))
+            if thread is not None and thread.scope == scope:
+                records.append(_thread_model_to_port_record(thread))
+        return records
+
+    async def update_status(
+        self, thread_id: str, status: ThreadStatus
+    ) -> Optional[ThreadRecord]:
+        if status == ThreadStatus.ARCHIVED:
+            self.archive_thread(thread_id)
+        elif status in {ThreadStatus.ACTIVE, ThreadStatus.IDLE, ThreadStatus.PENDING}:
+            self.activate_thread(thread_id)
+        else:
+            pass
+        if self.get_thread(thread_id) is None:
+            return None
+        model = self.get_thread_model(thread_id)
+        return _thread_model_to_port_record(model) if model is not None else None
+
+    async def delete(self, thread_id: str) -> bool:
+        return await self.update_status(thread_id, ThreadStatus.ARCHIVED) is not None
 
     def get_thread(self, managed_thread_id: str) -> Optional[dict[str, Any]]:
         with self._read_conn() as conn:
@@ -536,12 +698,19 @@ class PmaThreadStore:
                     """
                     UPDATE orch_thread_targets
                        SET backend_thread_id = ?,
+                           backend_binding_json = ?,
                            metadata_json = ?,
                            updated_at = ?
                      WHERE thread_target_id = ?
                     """,
                     (
                         normalized_backend_thread_id,
+                        _json_dumps(
+                            BackendBinding(
+                                backend_thread_id=normalized_backend_thread_id,
+                                backend_runtime_instance_id=resolved_runtime_instance_id,
+                            ).to_dict()
+                        ),
                         _json_dumps(metadata),
                         now_iso(),
                         managed_thread_id,

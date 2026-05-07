@@ -6,8 +6,10 @@ from pathlib import Path
 
 import pytest
 
+from codex_autorunner.core.domain.refs import AgentRef, ScopeRef, SurfaceRef
 from codex_autorunner.core.orchestration import ColdTraceStore
 from codex_autorunner.core.orchestration.execution_history import ExecutionCheckpoint
+from codex_autorunner.core.orchestration.models import BackendBinding
 from codex_autorunner.core.orchestration.runtime_bindings import (
     clear_runtime_thread_binding,
 )
@@ -192,6 +194,68 @@ def test_backend_thread_binding_is_shared_across_store_instances(
     assert binding.backend_runtime_instance_id == "runtime-1"
     assert "backend_thread_id" not in fetched
     assert "backend_runtime_instance_id" not in fetched
+
+
+def test_create_thread_accepts_canonical_refs_and_persists_projection_columns(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+
+    store = PmaThreadStore(hub_root)
+    created = store.create_thread(
+        AgentRef(agent_id="codex", profile="pma"),
+        workspace_root,
+        scope=ScopeRef(kind="repo", id="repo-123"),
+        surface=SurfaceRef(kind="discord", key="guild:channel:thread"),
+        backend_binding=BackendBinding(
+            backend_thread_id="backend-1",
+            backend_runtime_instance_id="runtime-1",
+        ),
+    )
+
+    with open_orchestration_sqlite(hub_root, durable=False) as conn:
+        row = conn.execute(
+            """
+            SELECT scope_urn, surface_urn, backend_binding_json, repo_id,
+                   resource_kind, resource_id, metadata_json
+              FROM orch_thread_targets
+             WHERE thread_target_id = ?
+            """,
+            (created["managed_thread_id"],),
+        ).fetchone()
+
+    assert row is not None
+    assert row["scope_urn"] == "repo:repo-123"
+    assert row["surface_urn"] == "discord:guild%3Achannel%3Athread"
+    assert row["repo_id"] == "repo-123"
+    assert row["resource_kind"] == "repo"
+    assert row["resource_id"] == "repo-123"
+    assert '"backend_thread_id":"backend-1"' in row["backend_binding_json"]
+
+    thread = store.get_thread_model(created["managed_thread_id"])
+    assert thread is not None
+    assert thread.scope == ScopeRef(kind="repo", id="repo-123")
+    assert thread.surface == SurfaceRef(kind="discord", key="guild:channel:thread")
+    assert thread.agent == AgentRef(agent_id="codex", profile="pma")
+    assert thread.backend_binding.backend_thread_id == "backend-1"
+    assert thread.backend_binding.backend_runtime_instance_id == "runtime-1"
+
+
+def test_create_thread_rejects_mixed_canonical_and_legacy_owner(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+
+    with pytest.raises(ValueError, match="scope cannot be combined"):
+        PmaThreadStore(tmp_path / "hub").create_thread(
+            "codex",
+            workspace_root,
+            scope=ScopeRef(kind="repo", id="repo-123"),
+            repo_id="repo-456",
+        )
 
 
 def test_backend_thread_binding_can_be_cleared_across_restart(tmp_path: Path) -> None:

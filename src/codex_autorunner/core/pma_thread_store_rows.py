@@ -7,9 +7,12 @@ from typing import Any, Mapping, Optional, Sequence
 from .git_utils import git_branch
 from .managed_thread_status import ManagedThreadStatusSnapshot
 from .orchestration.models import (
+    BackendBinding,
     ExecutionRecord,
+    Thread,
     ThreadTarget,
     normalize_resource_owner_fields,
+    scope_ref_from_owner_fields,
 )
 from .text_utils import _json_loads_object
 
@@ -254,6 +257,9 @@ class PmaThreadRecord:
     resource_kind: Optional[str]
     resource_id: Optional[str]
     workspace_root: str
+    scope_urn: Optional[str]
+    surface_urn: Optional[str]
+    backend_binding: dict[str, Any]
     name: Optional[str]
     lifecycle_status: str
     normalized_status: str
@@ -277,6 +283,23 @@ class PmaThreadRecord:
         metadata = dict(raw_metadata) if isinstance(raw_metadata, dict) else {}
         if not metadata and "metadata_json" in record:
             metadata = _json_loads_object(record.get("metadata_json"))
+        backend_binding = {}
+        raw_backend_binding = record.get("backend_binding")
+        if isinstance(raw_backend_binding, dict):
+            backend_binding = dict(raw_backend_binding)
+        elif "backend_binding_json" in record:
+            backend_binding = _json_loads_object(record.get("backend_binding_json"))
+        backend_thread_id = coerce_text(
+            record.get("backend_thread_id") or backend_binding.get("backend_thread_id")
+        )
+        if backend_thread_id is not None:
+            backend_binding["backend_thread_id"] = backend_thread_id
+        backend_runtime_instance_id = coerce_text(
+            record.get("backend_runtime_instance_id")
+            or backend_binding.get("backend_runtime_instance_id")
+        )
+        if backend_runtime_instance_id is not None:
+            backend_binding["backend_runtime_instance_id"] = backend_runtime_instance_id
         resource_kind, resource_id, repo_id = normalize_resource_owner_fields(
             resource_kind=record.get("resource_kind"),
             resource_id=record.get("resource_id"),
@@ -296,6 +319,9 @@ class PmaThreadRecord:
             resource_kind=resource_kind,
             resource_id=resource_id,
             workspace_root=workspace_root,
+            scope_urn=coerce_text(record.get("scope_urn")),
+            surface_urn=coerce_text(record.get("surface_urn")),
+            backend_binding=backend_binding,
             name=coerce_text(record.get("name") or record.get("display_name")),
             lifecycle_status=lifecycle_status,
             normalized_status=snapshot.status,
@@ -321,6 +347,11 @@ class PmaThreadRecord:
             if "metadata_json" in row.keys()
             else {}
         )
+        backend_binding = (
+            _json_loads_object(row["backend_binding_json"])
+            if "backend_binding_json" in row.keys()
+            else {}
+        )
         resource_kind, resource_id, repo_id = normalize_resource_owner_fields(
             resource_kind=row["resource_kind"],
             resource_id=row["resource_id"],
@@ -334,6 +365,11 @@ class PmaThreadRecord:
                 "resource_kind": resource_kind,
                 "resource_id": resource_id,
                 "workspace_root": row["workspace_root"],
+                "scope_urn": row["scope_urn"] if "scope_urn" in row.keys() else None,
+                "surface_urn": (
+                    row["surface_urn"] if "surface_urn" in row.keys() else None
+                ),
+                "backend_binding": backend_binding,
                 "name": row["display_name"],
                 "status": row["lifecycle_status"] or "active",
                 "normalized_status": row["runtime_status"] or "idle",
@@ -373,6 +409,29 @@ class PmaThreadRecord:
             created_at=self.created_at,
             updated_at=self.updated_at,
             compact_seed=self.compact_seed,
+        )
+
+    def to_thread(self) -> Thread:
+        scope = scope_ref_from_owner_fields(
+            scope_urn=self.scope_urn,
+            resource_kind=self.resource_kind,
+            resource_id=self.resource_id,
+            repo_id=self.repo_id,
+            workspace_root=self.workspace_root,
+        )
+        return Thread.from_mapping(
+            {
+                **self.to_dict(),
+                "id": self.managed_thread_id,
+                "scope": scope,
+                "agent_id": self.agent,
+                "backend_binding": BackendBinding.from_mapping(self.backend_binding),
+                "display_name": self.name,
+                "runtime_status": self.normalized_status,
+                "status_reason": self.status_reason_code,
+                "status_changed_at": self.status_updated_at,
+                "last_execution_id": self.last_turn_id,
+            }
         )
 
 
