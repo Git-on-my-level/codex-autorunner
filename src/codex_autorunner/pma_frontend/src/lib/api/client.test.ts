@@ -177,6 +177,26 @@ describe('API client error handling', () => {
     }
   });
 
+  it('formats scoped hub ticket query parameters with URLSearchParams encoding', async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/hub/tickets?repo=repo+with+spaces%2Fand%25symbols') {
+        return Response.json({ tickets: [] });
+      }
+      if (url === '/hub/tickets?worktree=wt+with+spaces%2Fand%25symbols') {
+        return Response.json({ tickets: [] });
+      }
+      return new Response('unexpected request', { status: 500 });
+    }) as unknown as typeof fetch;
+    const client = new PmaApiClient(fetcher);
+
+    await client.ticketFlow.listTickets({ repo: 'repo with spaces/and%symbols' });
+    await client.ticketFlow.listTickets({ worktree: 'wt with spaces/and%symbols' });
+
+    expect(fetcher).toHaveBeenNthCalledWith(1, '/hub/tickets?repo=repo+with+spaces%2Fand%25symbols', expect.any(Object));
+    expect(fetcher).toHaveBeenNthCalledWith(2, '/hub/tickets?worktree=wt+with+spaces%2Fand%25symbols', expect.any(Object));
+  });
+
   it('aggregates mounted repo and worktree ticket APIs when the global hub ticket projection is unavailable', async () => {
     const fetcher = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);

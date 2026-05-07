@@ -67,6 +67,15 @@ describe('parseScopeUrn', () => {
     expect(scope).toEqual({ kind: 'filesystem', path: '/Users/dev/project' });
   });
 
+  it('rejects filesystem URNs with malformed percent escapes like the backend parser', () => {
+    expect(() => parseScopeUrn('filesystem:%2FUsers%2Gproject')).toThrow(ScopeUrnParseError);
+    expect(() => parseScopeUrn('filesystem:%2FUsers%')).toThrow(ScopeUrnParseError);
+  });
+
+  it('decodes filesystem URNs with replacement for invalid UTF-8 byte sequences like the backend parser', () => {
+    expect(parseScopeUrn('filesystem:%E0%A4')).toEqual({ kind: 'filesystem', path: '�' });
+  });
+
   it('round-trips hub', () => {
     expect(formatScopeUrn(parseScopeUrn('hub'))).toBe('hub');
   });
@@ -169,6 +178,11 @@ describe('scopeLabel', () => {
   it('labels filesystem with basename', () => {
     expect(scopeLabel({ kind: 'filesystem', path: '/Users/dev/project' })).toBe('project');
   });
+
+  it('labels filesystem roots without dropping the path', () => {
+    expect(scopeLabel({ kind: 'filesystem', path: '/' })).toBe('/');
+    expect(scopeShortLabel({ kind: 'filesystem', path: '/' })).toBe('/');
+  });
 });
 
 describe('scopeShortLabel', () => {
@@ -260,6 +274,12 @@ describe('scopeBreadcrumbs', () => {
       { label: 'Hub', href: null }
     ]);
   });
+
+  it('builds non-routable filesystem breadcrumbs without inventing a hub parent', () => {
+    expect(scopeBreadcrumbs({ kind: 'filesystem', path: '/Users/dev/project' })).toEqual([
+      { label: 'project', href: null }
+    ]);
+  });
 });
 
 describe('scopeAncestors', () => {
@@ -329,6 +349,10 @@ describe('scopeFromApiPayload', () => {
     });
   });
 
+  it('does not preserve incomplete worktree resource ownership from API payloads', () => {
+    expect(scopeFromApiPayload({ resource_kind: 'worktree', resource_id: 'wt-1' })).toEqual({ kind: 'hub' });
+  });
+
   it('extracts agent_workspace', () => {
     expect(scopeFromApiPayload({ resource_kind: 'agent_workspace', resource_id: 'ws-1' })).toEqual({
       kind: 'agent_workspace',
@@ -370,6 +394,19 @@ describe('scopeFromTicket', () => {
       id: 'wt-1',
       parentRepoId: 'base'
     });
+  });
+
+  it('extracts worktree parent repo from legacy ticket frontmatter', () => {
+    expect(scopeFromTicket({ worktree_id: 'wt-1', frontmatter: { base_repo_id: 'base' } })).toEqual({
+      kind: 'worktree',
+      id: 'wt-1',
+      parentRepoId: 'base'
+    });
+  });
+
+  it('does not preserve incomplete worktree ownership from tickets', () => {
+    expect(scopeFromTicket({ workspace_kind: 'worktree', workspace_id: 'wt-1' })).toEqual({ kind: 'hub' });
+    expect(scopeFromTicket({ worktree_id: 'wt-1' })).toEqual({ kind: 'hub' });
   });
 
   it('falls back to hub', () => {

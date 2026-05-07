@@ -5,6 +5,11 @@ import {
   scopedTicketActionStatus,
   scopedTicketMissingRunStatus,
   scopedTicketQueueOwner,
+  scopeToTicketOwner,
+  scopeToTicketOwnerScope,
+  scopeToTicketQueueConfig,
+  ticketScopeHref,
+  ticketScopeUrn,
   type ScopedTicketQueueConfig
 } from './scopedTicketQueue';
 
@@ -26,6 +31,30 @@ describe('scoped ticket queue helpers', () => {
   it('maps scope kinds to ticket API owners', () => {
     expect(scopedTicketQueueOwner(repoConfig)).toEqual({ repo: 'repo 1' });
     expect(scopedTicketQueueOwner(worktreeConfig)).toEqual({ worktree: 'wt-1' });
+  });
+
+  it('maps ScopeRef values to scoped ticket queue config and owner shapes', () => {
+    const repoScope = { kind: 'repo' as const, id: 'repo 1' };
+    const worktreeScope = { kind: 'worktree' as const, id: 'wt-1', parentRepoId: 'repo 1' };
+
+    expect(scopeToTicketQueueConfig(repoScope)).toEqual({
+      kind: 'repo',
+      resourceId: 'repo 1',
+      apiBasePath: '/repos/repo%201/api/flows',
+      displayLabel: 'Repo: repo 1'
+    });
+    expect(scopeToTicketOwner(repoScope)).toEqual({ repo: 'repo 1' });
+    expect(scopeToTicketOwner(worktreeScope)).toEqual({ worktree: 'wt-1' });
+    expect(scopeToTicketOwnerScope(worktreeScope)).toEqual({ kind: 'worktree', id: 'wt-1' });
+    expect(ticketScopeUrn(worktreeScope)).toBe('worktree:repo 1/wt-1');
+    expect(ticketScopeHref(worktreeScope)).toBe('/worktrees/wt-1/tickets');
+  });
+
+  it('does not map non-ticket scopes into ticket queue owners', () => {
+    expect(scopeToTicketQueueConfig({ kind: 'hub' })).toBeNull();
+    expect(scopeToTicketOwner({ kind: 'filesystem', path: '/tmp/project' })).toBeNull();
+    expect(scopeToTicketOwnerScope({ kind: 'agent_workspace', id: 'codex' })).toBeNull();
+    expect(ticketScopeHref({ kind: 'hub' })).toBeNull();
   });
 
   it('builds start, stop, and restart command requests', () => {

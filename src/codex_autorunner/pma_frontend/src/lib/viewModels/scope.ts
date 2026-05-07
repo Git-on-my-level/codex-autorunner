@@ -80,7 +80,8 @@ export function parseScopeUrn(urn: string): ScopeRef {
 
   if (kind === 'filesystem') {
     if (!path) throw new ScopeUrnParseError(urn, 'filesystem scope requires a path');
-    const decoded = decodeURIComponent(path);
+    validatePercentEscapes(path, urn);
+    const decoded = decodePercentEncoded(path);
     if (!decoded) throw new ScopeUrnParseError(urn, 'filesystem scope requires a path');
     return { kind: 'filesystem', path: decoded };
   }
@@ -245,7 +246,8 @@ export function scopeFromTicket(raw: Record<string, unknown>): ScopeRef {
     const repoId =
       stringField(raw, 'repo_id', 'base_repo_id') ??
       stringField(frontmatter, 'repo_id', 'base_repo_id');
-    return { kind: 'worktree', id: workspaceId, parentRepoId: repoId ?? '' };
+    if (repoId) return { kind: 'worktree', id: workspaceId, parentRepoId: repoId };
+    return { kind: 'hub' };
   }
 
   const worktreeId = stringField(raw, 'worktree_id', 'worktree_repo_id');
@@ -253,8 +255,9 @@ export function scopeFromTicket(raw: Record<string, unknown>): ScopeRef {
     const frontmatter = asRecord(raw.frontmatter);
     const repoId =
       stringField(raw, 'repo_id', 'base_repo_id') ??
-      stringField(frontmatter, 'worktree_id', 'worktree_repo_id');
-    return { kind: 'worktree', id: worktreeId, parentRepoId: repoId ?? '' };
+      stringField(frontmatter, 'repo_id', 'base_repo_id');
+    if (repoId) return { kind: 'worktree', id: worktreeId, parentRepoId: repoId };
+    return { kind: 'hub' };
   }
 
   const repoId = stringField(raw, 'repo_id', 'base_repo_id');
@@ -317,6 +320,37 @@ function stringField(raw: Record<string, unknown>, ...keys: string[]): string | 
     if (typeof value === 'string' && value.trim()) return value;
   }
   return null;
+}
+
+function validatePercentEscapes(value: string, urn: string): void {
+  let percentPos = value.indexOf('%');
+  while (percentPos >= 0) {
+    const escape = value.slice(percentPos + 1, percentPos + 3);
+    if (escape.length !== 2 || !/^[0-9a-fA-F]{2}$/.test(escape)) {
+      throw new ScopeUrnParseError(urn, 'filesystem path has invalid escape');
+    }
+    percentPos = value.indexOf('%', percentPos + 1);
+  }
+}
+
+function decodePercentEncoded(value: string): string {
+  const decoder = new TextDecoder('utf-8');
+  let decoded = '';
+  for (let index = 0; index < value.length; ) {
+    if (value[index] !== '%') {
+      decoded += value[index];
+      index += 1;
+      continue;
+    }
+
+    const bytes: number[] = [];
+    while (value[index] === '%') {
+      bytes.push(Number.parseInt(value.slice(index + 1, index + 3), 16));
+      index += 3;
+    }
+    decoded += decoder.decode(new Uint8Array(bytes));
+  }
+  return decoded;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
