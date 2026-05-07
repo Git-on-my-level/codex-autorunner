@@ -56,6 +56,7 @@ from .models import (
     NotificationRecordResponse,
     NotificationReplyTargetLookupRequest,
     PmaSnapshotResponse,
+    PreviousCompletedExecutionLookupRequest,
     QueueDepthRequest,
     QueueDepthResponse,
     QueuedExecutionListRequest,
@@ -531,6 +532,15 @@ class HubSharedStateService:
         self, request: LatestExecutionLookupRequest
     ) -> ExecutionResponse:
         execution = self._execution_store.get_latest_execution(request.thread_target_id)
+        return ExecutionResponse(execution=_execution_from_record(execution))
+
+    def get_previous_completed_execution(
+        self, request: PreviousCompletedExecutionLookupRequest
+    ) -> ExecutionResponse:
+        execution = self._execution_store.get_previous_completed_execution(
+            request.thread_target_id,
+            exclude_execution_id=request.exclude_execution_id,
+        )
         return ExecutionResponse(execution=_execution_from_record(execution))
 
     def list_queued_executions(

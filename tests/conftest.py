@@ -247,6 +247,9 @@ def _stub_surface_startup_handshakes_for_non_handshake_tests(
         async def get_latest_execution(self, request):
             return self._service.get_latest_execution(request)
 
+        async def get_previous_completed_execution(self, request):
+            return self._service.get_previous_completed_execution(request)
+
         async def list_queued_executions(self, request):
             return self._service.list_queued_executions(request)
 

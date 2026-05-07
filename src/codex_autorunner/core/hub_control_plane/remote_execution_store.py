@@ -29,6 +29,7 @@ from .models import (
     ExecutionPromoteRequest,
     ExecutionResultRecordRequest,
     LatestExecutionLookupRequest,
+    PreviousCompletedExecutionLookupRequest,
     QueueDepthRequest,
     QueuedExecutionListRequest,
     RunningExecutionLookupRequest,
@@ -394,6 +395,23 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
             operation="get_latest_execution",
             action=lambda client: client.get_latest_execution(
                 LatestExecutionLookupRequest(thread_target_id=thread_target_id)
+            ),
+        )
+        return response.execution
+
+    def get_previous_completed_execution(
+        self,
+        thread_target_id: str,
+        *,
+        exclude_execution_id: Optional[str] = None,
+    ) -> Optional[ExecutionRecord]:
+        response = self._run(
+            operation="get_previous_completed_execution",
+            action=lambda client: client.get_previous_completed_execution(
+                PreviousCompletedExecutionLookupRequest(
+                    thread_target_id=thread_target_id,
+                    exclude_execution_id=exclude_execution_id,
+                )
             ),
         )
         return response.execution

@@ -180,6 +180,10 @@ class _FakeHubClient:
         self.calls.append(("get_latest_execution", request))
         return self.execution_response
 
+    async def get_previous_completed_execution(self, request):
+        self.calls.append(("get_previous_completed_execution", request))
+        return self.execution_response
+
     async def list_queued_executions(self, request):
         self.calls.append(("list_queued_executions", request))
         return self.execution_list_response
@@ -284,6 +288,10 @@ def test_remote_execution_store_delegates_to_hub_client_for_thread_and_execution
     running_execution = store.get_running_execution("thread-1")
     running_thread_ids = store.list_thread_ids_with_running_executions(limit=None)
     latest_execution = store.get_latest_execution("thread-1")
+    previous_execution = store.get_previous_completed_execution(
+        "thread-1",
+        exclude_execution_id="exec-2",
+    )
     queued_executions = store.list_queued_executions("thread-1", limit=5)
     queue_depth = store.get_queue_depth("thread-1")
     cancelled = store.cancel_queued_execution("thread-1", "exec-2")
@@ -319,6 +327,7 @@ def test_remote_execution_store_delegates_to_hub_client_for_thread_and_execution
     assert running_execution == expected_execution
     assert running_thread_ids == ["thread-a", "thread-b"]
     assert latest_execution == expected_execution
+    assert previous_execution == expected_execution
     assert queued_executions == list(client.execution_list_response.executions)
     assert queue_depth == 2
     assert cancelled is True
@@ -345,6 +354,7 @@ def test_remote_execution_store_delegates_to_hub_client_for_thread_and_execution
         "get_running_execution",
         "list_thread_target_ids_with_running_executions",
         "get_latest_execution",
+        "get_previous_completed_execution",
         "list_queued_executions",
         "get_queue_depth",
         "cancel_queued_execution",
@@ -391,7 +401,13 @@ def test_remote_execution_store_delegates_to_hub_client_for_thread_and_execution
         "backend_runtime_instance_id": "runtime-2",
     }
 
-    record_result_request = client.calls[17][1]
+    previous_completed_request = client.calls[11][1]
+    assert previous_completed_request.to_dict() == {
+        "thread_target_id": "thread-1",
+        "exclude_execution_id": "exec-2",
+    }
+
+    record_result_request = client.calls[18][1]
     assert record_result_request.to_dict() == {
         "thread_target_id": "thread-1",
         "execution_id": "exec-1",
@@ -402,7 +418,7 @@ def test_remote_execution_store_delegates_to_hub_client_for_thread_and_execution
         "transcript_turn_id": "transcript-1",
     }
 
-    record_activity_request = client.calls[20][1]
+    record_activity_request = client.calls[21][1]
     assert record_activity_request.to_dict() == {
         "thread_target_id": "thread-1",
         "execution_id": "exec-1",

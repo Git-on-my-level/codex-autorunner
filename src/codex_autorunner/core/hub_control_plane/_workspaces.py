@@ -85,7 +85,7 @@ class TranscriptHistoryRequest:
                 data.get("target_id"),
                 field_name="target_id",
             ),
-            limit=max(1, coerce_int(data.get("limit", 10), field_name="limit")),
+            limit=max(0, coerce_int(data.get("limit", 10), field_name="limit")),
         )
 
     def to_dict(self) -> dict[str, Any]:

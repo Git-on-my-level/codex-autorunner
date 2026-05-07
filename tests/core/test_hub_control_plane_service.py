@@ -21,12 +21,14 @@ from codex_autorunner.core.hub_control_plane import (
     HubSharedStateService,
     LatestExecutionLookupRequest,
     NotificationReplyTargetLookupRequest,
+    PreviousCompletedExecutionLookupRequest,
     QueueDepthRequest,
     QueuedExecutionListRequest,
     RunningExecutionLookupRequest,
     SurfaceBindingListRequest,
     SurfaceBindingUpsertRequest,
     ThreadTargetListRequest,
+    TranscriptHistoryRequest,
     TranscriptWriteRequest,
     WorkspaceSetupCommandRequest,
     serialize_run_event,
@@ -374,6 +376,24 @@ def test_shared_state_service_persists_timeline_transcript_and_cold_trace(
             }
         )
     )
+    service.write_transcript(
+        TranscriptWriteRequest.from_mapping(
+            {
+                "turn_id": "exec-2",
+                "metadata": {"managed_thread_id": thread_target_id},
+                "assistant_text": "done again",
+            }
+        )
+    )
+    transcript_history = service.get_transcript_history(
+        TranscriptHistoryRequest.from_mapping(
+            {
+                "target_kind": "thread_target",
+                "target_id": thread_target_id,
+                "limit": 0,
+            }
+        )
+    )
 
     checkpoint = ColdTraceStore(tmp_path / "hub").load_checkpoint("exec-1")
     manifest = ColdTraceStore(tmp_path / "hub").get_manifest("exec-1")
@@ -388,6 +408,7 @@ def test_shared_state_service_persists_timeline_transcript_and_cold_trace(
     assert transcript_result.turn_id == "exec-1"
     assert transcript is not None
     assert transcript["content"] == "done"
+    assert len(transcript_history.entries) == 2
 
 
 def test_shared_state_service_execution_lifecycle_delegates_to_thread_store(
@@ -469,6 +490,14 @@ def test_shared_state_service_execution_lifecycle_delegates_to_thread_store(
             }
         )
     )
+    previous_completed = service.get_previous_completed_execution(
+        PreviousCompletedExecutionLookupRequest.from_mapping(
+            {
+                "thread_target_id": thread_target_id,
+                "exclude_execution_id": second.execution.execution_id,
+            }
+        )
+    )
     claimed = service.claim_next_queued_execution(
         ExecutionClaimNextRequest.from_mapping({"thread_target_id": thread_target_id})
     )
@@ -491,6 +520,8 @@ def test_shared_state_service_execution_lifecycle_delegates_to_thread_store(
 
     assert finished.execution is not None
     assert finished.execution.status == "ok"
+    assert previous_completed.execution is not None
+    assert previous_completed.execution.execution_id == first.execution.execution_id
     assert lookup.execution is not None
     assert lookup.execution.backend_id == "backend-1"
     assert claimed.execution is not None

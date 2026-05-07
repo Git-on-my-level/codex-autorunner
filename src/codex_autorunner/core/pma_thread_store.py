@@ -1088,6 +1088,37 @@ class PmaThreadStore:
             return None
         return _execution_row_to_record(row)
 
+    def get_previous_completed_turn(
+        self,
+        managed_thread_id: str,
+        *,
+        exclude_turn_id: Optional[str] = None,
+    ) -> Optional[dict[str, Any]]:
+        normalized_excluded = _coerce_text(exclude_turn_id)
+        params: list[Any] = [managed_thread_id]
+        exclusion_sql = ""
+        if normalized_excluded is not None:
+            exclusion_sql = "AND execution_id != ?"
+            params.append(normalized_excluded)
+        with self._read_conn() as conn:
+            row = conn.execute(
+                f"""
+                SELECT *
+                  FROM orch_thread_executions
+                 WHERE thread_target_id = ?
+                   AND status = 'ok'
+                   AND COALESCE(assistant_text, '') != ''
+                   {exclusion_sql}
+                 ORDER BY COALESCE(finished_at, started_at, created_at) DESC,
+                          rowid DESC
+                 LIMIT 1
+                """,
+                tuple(params),
+            ).fetchone()
+        if row is None:
+            return None
+        return _execution_row_to_record(row)
+
     def get_turn_by_client_turn_id(
         self, managed_thread_id: str, client_turn_id: str
     ) -> Optional[dict[str, Any]]:

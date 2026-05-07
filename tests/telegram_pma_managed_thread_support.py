@@ -334,6 +334,9 @@ class _InProcessHubControlPlaneClient:
     async def get_latest_execution(self, request: Any) -> Any:
         return self._service.get_latest_execution(request)
 
+    async def get_previous_completed_execution(self, request: Any) -> Any:
+        return self._service.get_previous_completed_execution(request)
+
     async def list_queued_executions(self, request: Any) -> Any:
         return self._service.list_queued_executions(request)
 

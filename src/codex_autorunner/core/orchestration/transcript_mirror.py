@@ -274,20 +274,26 @@ class TranscriptMirrorStore:
         target_id: str,
         limit: int = 10,
     ) -> list[dict[str, Any]]:
-        if limit <= 0:
+        if limit < 0:
             return []
+        limit_sql = "" if limit == 0 else "LIMIT ?"
+        params: tuple[Any, ...] = (
+            (target_kind, target_id)
+            if limit == 0
+            else (target_kind, target_id, int(limit))
+        )
         try:
             with open_orchestration_sqlite(self._hub_root, migrate=False) as conn:
                 rows = conn.execute(
-                    """
+                    f"""
                     SELECT transcript_mirror_id, metadata_json, text_content, text_preview
                       FROM orch_transcript_mirrors
                      WHERE target_kind = ?
                        AND target_id = ?
                      ORDER BY created_at DESC, transcript_mirror_id DESC
-                     LIMIT ?
+                     {limit_sql}
                     """,
-                    (target_kind, target_id, int(limit)),
+                    params,
                 ).fetchall()
         except sqlite3.OperationalError as exc:
             if "no such table" not in str(exc).lower():

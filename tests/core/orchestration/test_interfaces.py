@@ -117,6 +117,15 @@ class _FakeStore:
     def get_latest_execution(self, thread_target_id: str) -> Optional[ExecutionRecord]:
         return self.execution
 
+    def get_previous_completed_execution(
+        self,
+        thread_target_id: str,
+        *,
+        exclude_execution_id: Optional[str] = None,
+    ) -> Optional[ExecutionRecord]:
+        _ = thread_target_id, exclude_execution_id
+        return self.execution
+
     def list_queued_executions(
         self, thread_target_id: str, *, limit: int = 200
     ) -> list[ExecutionRecord]:
@@ -425,6 +434,15 @@ class _FakeService:
         return self.store.execution
 
     def get_latest_execution(self, thread_target_id: str) -> Optional[ExecutionRecord]:
+        return self.store.execution
+
+    def get_previous_completed_execution(
+        self,
+        thread_target_id: str,
+        *,
+        exclude_execution_id: Optional[str] = None,
+    ) -> Optional[ExecutionRecord]:
+        _ = thread_target_id, exclude_execution_id
         return self.store.execution
 
     def list_queued_executions(

@@ -37,7 +37,7 @@ import asyncio
 import contextlib
 import inspect
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Literal, Mapping, Optional, Protocol
 
@@ -50,6 +50,7 @@ from ...core.hub_control_plane import (
     ExecutionColdTraceFinalizeRequest,
     ExecutionTimelinePersistRequest,
     ThreadActivityRecordRequest,
+    TranscriptHistoryRequest,
     TranscriptWriteRequest,
     serialize_run_event,
 )
@@ -734,6 +735,208 @@ def managed_thread_session_metadata(
         fresh_backend_session_reason,
         fresh_backend_session_started,
     )
+
+
+def _normalized_non_whitespace(value: str) -> str:
+    return "".join(ch for ch in value if not ch.isspace())
+
+
+def _whitespace_insensitive_prefix_end(value: str, prefix: str) -> Optional[int]:
+    value_index = 0
+    prefix_index = 0
+    prefix_non_ws = 0
+    value_length = len(value)
+    prefix_length = len(prefix)
+    while prefix_index < prefix_length:
+        prefix_char = prefix[prefix_index]
+        if prefix_char.isspace():
+            prefix_index += 1
+            continue
+        while value_index < value_length and value[value_index].isspace():
+            value_index += 1
+        if value_index >= value_length or value[value_index] != prefix_char:
+            return None
+        value_index += 1
+        prefix_index += 1
+        prefix_non_ws += 1
+    if prefix_non_ws == 0:
+        return None
+    return value_index
+
+
+def trim_cumulative_assistant_text(
+    assistant_text: str,
+    previous_assistant_text: str,
+) -> str:
+    """Return only this turn's text when a runtime repeats prior final output.
+
+    Hermes ACP can emit ``prompt/completed.finalOutput`` as the whole session's
+    assistant transcript. Managed chat surfaces need the final answer for the
+    current durable turn, so trim a prior completed answer only when it is a
+    clear prefix. Whitespace-insensitive matching covers markdown/stream joins
+    that collapse paragraph boundaries while still requiring the previous text's
+    non-whitespace characters to match exactly.
+    """
+
+    current = str(assistant_text or "")
+    previous = str(previous_assistant_text or "")
+    if not current.strip() or not previous.strip():
+        return current
+    if len(_normalized_non_whitespace(previous)) < 80:
+        return current
+    if current == previous:
+        return current
+    if current.startswith(previous):
+        return current[len(previous) :].lstrip()
+    current_lstrip = current.lstrip()
+    previous_stripped = previous.strip()
+    if current_lstrip.startswith(previous_stripped):
+        leading = len(current) - len(current_lstrip)
+        return current[leading + len(previous_stripped) :].lstrip()
+    prefix_end = _whitespace_insensitive_prefix_end(current, previous)
+    if prefix_end is None:
+        return current
+    trimmed = current[prefix_end:].lstrip()
+    return trimmed or current
+
+
+def trim_cumulative_assistant_text_from_candidates(
+    assistant_text: str,
+    prior_assistant_texts: list[str],
+) -> tuple[str, str]:
+    current = str(assistant_text or "")
+    for candidate in prior_assistant_texts:
+        trimmed = trim_cumulative_assistant_text(current, candidate)
+        if trimmed != current:
+            return trimmed, candidate
+    return current, ""
+
+
+def _previous_completed_assistant_text(
+    orchestration_service: Any,
+    *,
+    managed_thread_id: str,
+    managed_turn_id: str,
+) -> str:
+    getter = getattr(orchestration_service, "get_previous_completed_execution", None)
+    if not callable(getter):
+        return ""
+    try:
+        previous = getter(
+            managed_thread_id,
+            exclude_execution_id=managed_turn_id,
+        )
+    except (RuntimeError, TypeError, ValueError, AttributeError, OSError):
+        return ""
+    if previous is None:
+        return ""
+    return str(getattr(previous, "output_text", "") or "")
+
+
+def _assistant_text_from_transcript_content(content: str) -> str:
+    text = str(content or "").strip()
+    marker = "\n\nAssistant:\n"
+    if marker in text:
+        return text.rsplit(marker, 1)[-1].strip()
+    return text
+
+
+def _assistant_text_extends_prefix(assistant_text: str, prefix: str) -> bool:
+    current = str(assistant_text or "")
+    previous = str(prefix or "")
+    if not current.strip() or not previous.strip():
+        return False
+    if current == previous:
+        return True
+    if current.startswith(previous):
+        return True
+    current_lstrip = current.lstrip()
+    previous_stripped = previous.strip()
+    if current_lstrip.startswith(previous_stripped):
+        return True
+    return _whitespace_insensitive_prefix_end(current, previous) is not None
+
+
+def build_assistant_transcript_prefix(entries: list[Mapping[str, Any]]) -> str:
+    prefix = ""
+    for entry in entries:
+        entry_turn_id = str(
+            entry.get("managed_turn_id") or entry.get("turn_id") or ""
+        ).strip()
+        if not entry_turn_id:
+            continue
+        assistant_text = _assistant_text_from_transcript_content(
+            str(entry.get("content") or "")
+        )
+        if not assistant_text.strip():
+            continue
+        if _assistant_text_extends_prefix(assistant_text, prefix):
+            prefix = assistant_text
+        else:
+            prefix += assistant_text
+    return prefix
+
+
+async def _assistant_transcript_text_from_hub(
+    hub_client: Any | None,
+    *,
+    managed_thread_id: str,
+    managed_turn_id: str,
+) -> str:
+    if hub_client is None:
+        return ""
+    getter = getattr(hub_client, "get_transcript_history", None)
+    if not callable(getter):
+        return ""
+    try:
+        response = await getter(
+            TranscriptHistoryRequest(
+                target_kind="thread_target",
+                target_id=managed_thread_id,
+                limit=0,
+            )
+        )
+    except (RuntimeError, TypeError, ValueError, AttributeError, OSError):
+        return ""
+    entries = getattr(response, "entries", ())
+    if not isinstance(entries, (list, tuple)):
+        return ""
+    transcript_entries: list[Mapping[str, Any]] = []
+    for entry in reversed(entries):
+        if not isinstance(entry, Mapping):
+            continue
+        entry_turn_id = str(
+            entry.get("managed_turn_id") or entry.get("turn_id") or ""
+        ).strip()
+        if entry_turn_id == managed_turn_id:
+            continue
+        transcript_entries.append(entry)
+    return build_assistant_transcript_prefix(transcript_entries)
+
+
+async def _prior_assistant_text_candidates(
+    orchestration_service: Any,
+    *,
+    hub_client: Any | None,
+    managed_thread_id: str,
+    managed_turn_id: str,
+) -> list[str]:
+    candidates: list[str] = []
+    transcript_text = await _assistant_transcript_text_from_hub(
+        hub_client,
+        managed_thread_id=managed_thread_id,
+        managed_turn_id=managed_turn_id,
+    )
+    if transcript_text:
+        candidates.append(transcript_text)
+    previous_text = _previous_completed_assistant_text(
+        orchestration_service,
+        managed_thread_id=managed_thread_id,
+        managed_turn_id=managed_turn_id,
+    )
+    if previous_text and previous_text not in candidates:
+        candidates.append(previous_text)
+    return candidates
 
 
 def render_managed_thread_response_text(
@@ -2696,6 +2899,47 @@ async def finalize_managed_thread_execution(
             )
         )
         outcome = recovered_outcome
+
+    if outcome.status == "ok":
+        prior_assistant_candidates = await _prior_assistant_text_candidates(
+            orchestration_service,
+            hub_client=resolved_hub_client,
+            managed_thread_id=managed_thread_id,
+            managed_turn_id=managed_turn_id,
+        )
+        (
+            normalized_assistant_text,
+            matched_prior_assistant_text,
+        ) = trim_cumulative_assistant_text_from_candidates(
+            outcome.assistant_text,
+            prior_assistant_candidates,
+        )
+        if normalized_assistant_text != outcome.assistant_text:
+            log_event(
+                logger,
+                logging.WARNING,
+                "chat.managed_thread.cumulative_assistant_text_trimmed",
+                **_managed_thread_trace_fields(
+                    managed_thread_id=managed_thread_id,
+                    managed_turn_id=managed_turn_id,
+                    backend_thread_id=current_backend_thread_id or None,
+                    backend_turn_id=outcome.backend_turn_id
+                    or started.execution.backend_id,
+                    surface=surface,
+                ),
+                original_assistant_chars=len(outcome.assistant_text),
+                previous_assistant_chars=len(matched_prior_assistant_text),
+                trimmed_assistant_chars=len(normalized_assistant_text),
+                prior_assistant_candidate_count=len(prior_assistant_candidates),
+                **runtime_trace_fields(event_state),
+                **terminal_evidence_trace_fields(outcome),
+            )
+            outcome = replace(
+                outcome,
+                assistant_text=normalized_assistant_text,
+                terminal_evidence=dict(outcome.terminal_evidence)
+                | {"assistant_text_trimmed_from_cumulative": True},
+            )
 
     terminal_event = terminal_run_event_from_outcome(outcome, event_state)
     timeline_events.append(terminal_event)

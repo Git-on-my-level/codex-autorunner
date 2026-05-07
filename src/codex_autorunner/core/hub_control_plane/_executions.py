@@ -161,6 +161,32 @@ class LatestExecutionLookupRequest:
 
 
 @dataclass(frozen=True)
+class PreviousCompletedExecutionLookupRequest:
+    thread_target_id: str
+    exclude_execution_id: Optional[str] = None
+
+    @classmethod
+    def from_mapping(
+        cls, data: Mapping[str, Any]
+    ) -> "PreviousCompletedExecutionLookupRequest":
+        return cls(
+            thread_target_id=normalize_required_text(
+                data.get("thread_target_id"),
+                field_name="thread_target_id",
+            ),
+            exclude_execution_id=normalize_optional_text(
+                data.get("exclude_execution_id")
+            ),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "thread_target_id": self.thread_target_id,
+            "exclude_execution_id": self.exclude_execution_id,
+        }
+
+
+@dataclass(frozen=True)
 class QueuedExecutionListRequest:
     thread_target_id: str
     limit: int = 200
@@ -704,6 +730,7 @@ __all__ = [
     "ExecutionTimelinePersistRequest",
     "ExecutionTimelinePersistResponse",
     "LatestExecutionLookupRequest",
+    "PreviousCompletedExecutionLookupRequest",
     "QueueDepthRequest",
     "QueueDepthResponse",
     "QueuedExecutionListRequest",

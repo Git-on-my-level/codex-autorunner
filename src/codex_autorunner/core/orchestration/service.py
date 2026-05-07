@@ -326,6 +326,23 @@ class PmaThreadExecutionStore(ThreadExecutionStore):
             return None
         return _execution_record_from_store_row(record)
 
+    def get_previous_completed_execution(
+        self,
+        thread_target_id: str,
+        *,
+        exclude_execution_id: Optional[str] = None,
+    ) -> Optional[ExecutionRecord]:
+        getter = getattr(self._store, "get_previous_completed_turn", None)
+        if not callable(getter):
+            return None
+        record = getter(
+            thread_target_id,
+            exclude_turn_id=exclude_execution_id,
+        )
+        if record is None:
+            return None
+        return _execution_record_from_store_row(record)
+
     def get_running_execution(self, thread_target_id: str) -> Optional[ExecutionRecord]:
         record = self._store.get_running_turn(thread_target_id)
         if record is None:
@@ -1296,6 +1313,17 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         self, thread_target_id: str, execution_id: str
     ) -> Optional[ExecutionRecord]:
         return self.thread_store.get_execution(thread_target_id, execution_id)
+
+    def get_previous_completed_execution(
+        self,
+        thread_target_id: str,
+        *,
+        exclude_execution_id: Optional[str] = None,
+    ) -> Optional[ExecutionRecord]:
+        return self.thread_store.get_previous_completed_execution(
+            thread_target_id,
+            exclude_execution_id=exclude_execution_id,
+        )
 
     def get_running_execution(self, thread_target_id: str) -> Optional[ExecutionRecord]:
         return self.thread_store.get_running_execution(thread_target_id)

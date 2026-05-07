@@ -214,6 +214,13 @@ class ThreadExecutionStore(Protocol):
         self, thread_target_id: str, execution_id: str
     ) -> Optional[ExecutionRecord]: ...
 
+    def get_previous_completed_execution(
+        self,
+        thread_target_id: str,
+        *,
+        exclude_execution_id: Optional[str] = None,
+    ) -> Optional[ExecutionRecord]: ...
+
     def get_running_execution(
         self, thread_target_id: str
     ) -> Optional[ExecutionRecord]: ...
