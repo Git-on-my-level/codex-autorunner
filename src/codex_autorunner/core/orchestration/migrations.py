@@ -1404,6 +1404,7 @@ def _apply_v27(conn: sqlite3.Connection) -> None:
 
 
 def _apply_v28(conn: sqlite3.Connection) -> None:
+    _ensure_resource_owner_columns(conn, "orch_thread_targets")
     _ensure_column(conn, "orch_thread_targets", "scope_urn", "scope_urn TEXT")
     _ensure_column(conn, "orch_thread_targets", "surface_urn", "surface_urn TEXT")
     _ensure_column(

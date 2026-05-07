@@ -243,6 +243,72 @@ def test_create_thread_accepts_canonical_refs_and_persists_projection_columns(
     assert thread.backend_binding.backend_runtime_instance_id == "runtime-1"
 
 
+def test_create_thread_writes_canonical_non_repo_owner_without_repo_projection(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+
+    store = PmaThreadStore(hub_root)
+    created = store.create_thread(
+        "codex",
+        workspace_root,
+        scope=ScopeRef(kind="agent_workspace", id="zc-main"),
+    )
+
+    with open_orchestration_sqlite(hub_root, durable=False) as conn:
+        row = conn.execute(
+            """
+            SELECT repo_id, resource_kind, resource_id, scope_urn
+              FROM orch_thread_targets
+             WHERE thread_target_id = ?
+            """,
+            (created["managed_thread_id"],),
+        ).fetchone()
+
+    assert row is not None
+    assert row["repo_id"] is None
+    assert row["resource_kind"] == "agent_workspace"
+    assert row["resource_id"] == "zc-main"
+    assert row["scope_urn"] == "agent_workspace:zc-main"
+    assert store.list_threads(resource_kind="agent_workspace", resource_id="zc-main")
+    assert store.list_threads(repo_id="zc-main") == []
+
+
+def test_create_thread_preserves_worktree_scope_on_read_model(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    worktree_scope = ScopeRef(
+        kind="worktree",
+        parent_repo_id="repo-123",
+        id="repo-123--feature",
+    )
+
+    store = PmaThreadStore(hub_root)
+    created = store.create_thread("codex", workspace_root, scope=worktree_scope)
+
+    with open_orchestration_sqlite(hub_root, durable=False) as conn:
+        row = conn.execute(
+            """
+            SELECT repo_id, resource_kind, resource_id, scope_urn
+              FROM orch_thread_targets
+             WHERE thread_target_id = ?
+            """,
+            (created["managed_thread_id"],),
+        ).fetchone()
+
+    assert row is not None
+    assert row["repo_id"] is None
+    assert row["resource_kind"] == "worktree"
+    assert row["resource_id"] == "repo-123--feature"
+    assert row["scope_urn"] == "worktree:repo-123/repo-123--feature"
+    thread = store.get_thread_model(created["managed_thread_id"])
+    assert thread is not None
+    assert thread.scope == worktree_scope
+
+
 def test_create_thread_rejects_mixed_canonical_and_legacy_owner(
     tmp_path: Path,
 ) -> None:
