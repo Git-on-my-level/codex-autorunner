@@ -17,6 +17,15 @@ Use this directory as the router for frontend and web-ui validation.
 - Web route/service changes: run `python -m pytest -q tests/surfaces/web ...`
 - Static asset loading, caching, or auth/base-path changes: include the matching root web-ui tests
 
+## Frontend-Backend Contract Tests
+
+- `tests/contracts/`: Python contract tests for scope, memory, surface, and ticket stores
+- `tests/contracts/surface/test_fake_surface_e2e.py`: fake-surface E2E journey (create chat, send message, open memory, link ticket)
+- `src/codex_autorunner/pma_frontend/src/lib/viewModels/frontendContracts.test.ts`: TypeScript contract tests verifying frontend scope URN, labels, query formatting, and memory rendering match backend domain contracts
+- Run contracts: `python -m pytest -q tests/contracts/`
+- Run frontend contracts: `pnpm pma:test`
+- The E2E tests are fast (<10s) and run in every local check; no slow-test split is needed.
+
 ## Validation Lane
 
 - These paths all map to the `web-ui` validation lane in `src/codex_autorunner/core/validation_lanes.py`.
