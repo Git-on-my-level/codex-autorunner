@@ -1,8 +1,11 @@
 <script lang="ts">
   import { page } from '$app/state';
+  import { goto } from '$app/navigation';
   import { breadcrumbsForPath } from '$lib/breadcrumbs';
   import { primaryNav, isActiveRoute } from '$lib/navigation';
   import { stripRuntimeBasePath, withRuntimeBasePath as href } from '$lib/runtime/basePath';
+  import { Palette, createPaletteStore, scopeSource } from '$lib/palette';
+  import { onDestroy } from 'svelte';
   import type { Snippet } from 'svelte';
   import '../app.css';
 
@@ -12,12 +15,30 @@
   const currentPath = $derived(stripRuntimeBasePath(page.url.pathname));
   const breadcrumbs = $derived(breadcrumbsForPath(currentPath));
 
+  const paletteStore = createPaletteStore(
+    [scopeSource([], [])],
+    {
+      toggleSidebar: () => (collapsed = !collapsed),
+      goBack: () => window.history.back()
+    },
+    (path) => void goto(href(path))
+  );
+
+  onDestroy(() => paletteStore.destroy());
+
   const closeMobile = () => {
     mobileOpen = false;
   };
 
   function handleWindowKeydown(event: KeyboardEvent): void {
-    if (event.key === 'Escape') closeMobile();
+    if (event.key === 'Escape') {
+      if (paletteStore.open) {
+        paletteStore.closePalette();
+        return;
+      }
+      closeMobile();
+    }
+    if (paletteStore.handleKeydown(event)) return;
   }
 </script>
 
@@ -104,3 +125,5 @@
     </main>
   </div>
 </div>
+
+<Palette store={paletteStore} />
