@@ -14,9 +14,43 @@ import {
   type TicketListViewModel,
   type TicketOwnerScope
 } from '$lib/viewModels/ticket';
+import type { ScopeRef } from '$lib/viewModels/scope';
+import { formatScopeUrn, scopeLabel, scopeRoute, scopeTicketRoute } from '$lib/viewModels/scope';
 import { rememberTickets } from '$lib/viewModels/ticketCache';
 
 export type ScopedTicketQueueKind = 'repo' | 'worktree';
+
+export function scopeToTicketQueueConfig(scope: ScopeRef): ScopedTicketQueueConfig | null {
+  if (scope.kind !== 'repo' && scope.kind !== 'worktree') return null;
+  const routeBase = scopeRoute(scope);
+  if (!routeBase) return null;
+  return {
+    kind: scope.kind,
+    resourceId: scope.id,
+    apiBasePath: `${routeBase}/api/flows`,
+    displayLabel: scopeLabel(scope)
+  };
+}
+
+export function scopeToTicketOwner(scope: ScopeRef): ScopedTicketQueueOwner | null {
+  if (scope.kind === 'repo') return { repo: scope.id };
+  if (scope.kind === 'worktree') return { worktree: scope.id };
+  return null;
+}
+
+export function scopeToTicketOwnerScope(scope: ScopeRef): TicketOwnerScope {
+  if (scope.kind === 'repo') return { kind: 'repo', id: scope.id };
+  if (scope.kind === 'worktree') return { kind: 'worktree', id: scope.id };
+  return null;
+}
+
+export function ticketScopeUrn(scope: ScopeRef): string {
+  return formatScopeUrn(scope);
+}
+
+export function ticketScopeHref(scope: ScopeRef): string | null {
+  return scopeTicketRoute(scope);
+}
 export type ScopedTicketQueueCommand = 'start' | 'stop' | 'restart';
 export type ScopedTicketQueueOwner = { repo: string } | { worktree: string };
 
