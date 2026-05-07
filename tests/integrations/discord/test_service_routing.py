@@ -584,10 +584,14 @@ async def test_discord_managed_thread_delivery_uses_unique_record_ids_per_chunk(
         logger=logging.getLogger("test"),
     )
 
-    assert [message["record_id"] for message in sent_messages] == [
-        "discord-queued:thread-1:turn-1:chunk:1",
-        "discord-queued:thread-1:turn-1:chunk:2",
-    ]
+    record_ids = [message["record_id"] for message in sent_messages]
+    assert len(set(record_ids)) == 2
+    assert all(
+        isinstance(record_id, str)
+        and record_id.startswith("managed-delivery:")
+        and record_id.endswith(f":discord-queued:chunk:{index}")
+        for index, record_id in enumerate(record_ids, start=1)
+    )
     assert [message["payload"] for message in sent_messages] == [
         {"content": expected_chunks[0]},
         {"content": expected_chunks[1]},

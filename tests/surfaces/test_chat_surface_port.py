@@ -13,6 +13,7 @@ from codex_autorunner.integrations.chat.adapter import (
 )
 from codex_autorunner.integrations.chat.capabilities import ChatCapabilities
 from codex_autorunner.integrations.chat.models import (
+    ChatAttachment,
     ChatMessageEvent,
     ChatMessageRef,
     ChatThreadRef,
@@ -107,6 +108,41 @@ def test_chat_event_maps_to_canonical_engine_message_command() -> None:
     assert command.payload["surface_key"] == "100:200"
     assert command.payload["prompt_text"] == "hello PMA"
     assert command.payload["from_user_id"] == "42"
+
+
+def test_chat_event_preserves_attachment_metadata_in_engine_payload() -> None:
+    thread = ChatThreadRef(platform="discord", chat_id="100", thread_id="200")
+    event = ChatMessageEvent(
+        update_id="u-attachment",
+        thread=thread,
+        message=ChatMessageRef(thread=thread, message_id="m-attachment"),
+        from_user_id="42",
+        text="see attached",
+        attachments=(
+            ChatAttachment(
+                kind="image",
+                file_id="att-1",
+                file_name="photo.png",
+                mime_type="image/png",
+                size_bytes=1234,
+                source_url="https://cdn.discordapp.com/attachments/photo.png",
+            ),
+        ),
+    )
+
+    command = engine_command_from_chat_event(event)
+
+    assert command.target == SurfaceRef(kind="discord", key="100:200")
+    assert command.payload["attachments"] == [
+        {
+            "kind": "image",
+            "file_id": "att-1",
+            "file_name": "photo.png",
+            "mime_type": "image/png",
+            "size_bytes": 1234,
+            "source_url": "https://cdn.discordapp.com/attachments/photo.png",
+        }
+    ]
 
 
 def test_inbound_event_carries_engine_command_for_ingress() -> None:

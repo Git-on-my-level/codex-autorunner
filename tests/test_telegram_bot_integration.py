@@ -295,6 +295,22 @@ class FakeBot:
         return True
 
 
+async def _wait_for_bot_text(
+    fake_bot: FakeBot,
+    expected: str,
+    *,
+    timeout_seconds: float = 2.0,
+) -> None:
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_seconds
+    while loop.time() < deadline:
+        if any(expected in str(msg.get("text", "")) for msg in fake_bot.messages):
+            return
+        await asyncio.sleep(0.01)
+    texts = [str(msg.get("text", "")) for msg in fake_bot.messages]
+    raise AssertionError(f"Did not observe bot text {expected!r}; messages={texts!r}")
+
+
 @pytest.mark.anyio
 async def test_begin_typing_indicator_rolls_back_when_spawn_fails(
     tmp_path: Path,
@@ -447,6 +463,8 @@ async def test_normal_message_runs_turn(tmp_path: Path) -> None:
         runtime = service._router.runtime_for(key)
         message = build_message("hello", message_id=11)
         await service._handle_normal_message(message, runtime)
+        await _drain_spawned_tasks(service)
+        await _wait_for_bot_text(fake_bot, "fixture reply")
     finally:
         await service._app_server_supervisor.close_all()
     assert any("Bound to" in msg["text"] for msg in fake_bot.messages)
@@ -622,6 +640,7 @@ async def test_mentions_only_topic_requires_invocation_before_turn_starts(
             )
         )
         await _drain_spawned_tasks(service)
+        await _wait_for_bot_text(fake_bot, "fixture reply")
     finally:
         await service._app_server_supervisor.close_all()
     assert before == after_plain_text
@@ -646,6 +665,7 @@ async def test_private_chat_stays_easy_with_mentions_trigger(tmp_path: Path) -> 
         await service._handle_bind(bind_message, str(repo))
         await service._handle_message_inner(dm_message)
         await _drain_spawned_tasks(service)
+        await _wait_for_bot_text(fake_bot, "fixture reply")
     finally:
         await service._app_server_supervisor.close_all()
     assert any("fixture reply" in msg["text"] for msg in fake_bot.messages)
