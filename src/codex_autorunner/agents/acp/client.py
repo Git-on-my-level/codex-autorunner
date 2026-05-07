@@ -35,9 +35,6 @@ from ...core.acp_lifecycle import (
     session_update_content_summary as _session_update_content_summary,
 )
 from ...core.acp_lifecycle import (
-    should_map_missing_turn_id as _shared_should_map_missing_turn_id,
-)
-from ...core.acp_lifecycle import (
     should_register_server_turn_alias as _should_register_server_turn_alias,
 )
 from ...core.logging_utils import log_event
@@ -113,10 +110,6 @@ _ACP_STDOUT_NOISE_PREFIXES = (
 )
 _ACP_STDOUT_BRACKETED_STATUS_RE = re.compile(r"^\[[^\]\s]{1,32}\]\s+(?![\[{])\S")
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
-
-
-def _should_map_missing_turn_id(method: str, params: dict[str, Any]) -> bool:
-    return _shared_should_map_missing_turn_id(method, params)
 
 
 @dataclass(frozen=True)

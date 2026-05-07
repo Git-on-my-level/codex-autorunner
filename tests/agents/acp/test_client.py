@@ -30,8 +30,6 @@ from codex_autorunner.agents.acp.protocol import (
 )
 from codex_autorunner.core.acp_lifecycle import (
     _IDLE_TERMINAL_METHODS,
-    _SESSION_TURN_ID_FALLBACK_METHODS,
-    _TERMINAL_METHODS,
 )
 from codex_autorunner.core.acp_lifecycle import (
     classify_prompt_response_status as _classify_prompt_response_status,
@@ -41,9 +39,6 @@ from codex_autorunner.core.acp_lifecycle import (
 )
 from codex_autorunner.core.acp_lifecycle import (
     prompt_terminal_method_for_status as _prompt_terminal_method_for_status,
-)
-from codex_autorunner.core.acp_lifecycle import (
-    should_map_missing_turn_id as _shared_should_map_missing_turn_id,
 )
 
 FIXTURE_PATH = Path(__file__).resolve().parents[2] / "fixtures" / "fake_acp_server.py"
@@ -1003,34 +998,6 @@ def test_extract_session_capabilities_from_various_payloads() -> None:
 
 
 class TestClientLifecycleDelegation:
-    def test_client_imports_shared_turn_id_fallback(self) -> None:
-        from codex_autorunner.agents.acp.client import (
-            _should_map_missing_turn_id,
-        )
-
-        for method in _SESSION_TURN_ID_FALLBACK_METHODS:
-            assert _should_map_missing_turn_id(method, {})
-
-    def test_client_fallback_matches_shared_lifecycle(self) -> None:
-        from codex_autorunner.agents.acp.client import (
-            _should_map_missing_turn_id,
-        )
-
-        for method in _TERMINAL_METHODS:
-            assert _should_map_missing_turn_id(
-                method, {}
-            ) == _shared_should_map_missing_turn_id(method, {})
-
-        for method in (
-            "prompt/started",
-            "turn/started",
-            "permission/requested",
-            "token/usage",
-        ):
-            assert _should_map_missing_turn_id(
-                method, {}
-            ) == _shared_should_map_missing_turn_id(method, {})
-
     def test_client_idle_terminal_not_mapped_without_active_turn(self) -> None:
         client = ACPClient(fixture_command("official"))
         for method in _IDLE_TERMINAL_METHODS:
