@@ -158,8 +158,11 @@ class _PromptState:
     def __post_init__(self) -> None:
         self._assistant_text = AssistantOutputState(stream_text=self.final_output)
 
-    def note_output_delta(self, text: str) -> None:
-        self._assistant_text.note_stream_snapshot(text)
+    def note_output_delta(self, text: str, *, merge_snapshot: bool = False) -> None:
+        if merge_snapshot:
+            self._assistant_text.note_stream_snapshot(text)
+        else:
+            self._assistant_text.note_stream_delta(text)
         self.final_output = self._assistant_text.text
 
     def note_assistant_message(self, text: str) -> None:
@@ -1124,7 +1127,10 @@ class ACPClient:
         self._note_prompt_trace_event(state, event)
         state.events.append(event)
         if isinstance(event, ACPOutputDeltaEvent):
-            state.note_output_delta(event.delta)
+            state.note_output_delta(
+                event.delta,
+                merge_snapshot=event.method == "session/update",
+            )
         elif isinstance(event, ACPMessageEvent) and event.message:
             state.note_assistant_message(event.message)
         await state.queue.put(event)
