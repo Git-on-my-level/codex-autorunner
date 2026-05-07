@@ -1,9 +1,12 @@
 import base64
 import hashlib
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from codex_autorunner.bootstrap import seed_hub_files
+from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
+from codex_autorunner.core.config import load_hub_config
+from codex_autorunner.manifest import load_manifest, save_manifest
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.routes.hub_repo_routes.mount_manager import (
     _LazyRepoApp,
@@ -28,6 +31,31 @@ PMA_MANUAL_SCREENSHOT_ROUTES = (
 def _script_hash(script: str) -> str:
     digest = hashlib.sha256(script.encode("utf-8")).digest()
     return f"'sha256-{base64.b64encode(digest).decode('ascii')}'"
+
+
+def _seed_manifest_worktree(hub_root: Path, *, base_id: str, worktree_id: str) -> Path:
+    base_root = hub_root / base_id
+    worktree_root = hub_root / "worktrees" / worktree_id
+    seed_repo_files(base_root, force=True, git_required=False)
+    seed_repo_files(worktree_root, force=True, git_required=False)
+    hub_config = load_hub_config(hub_root)
+    manifest = load_manifest(hub_config.manifest_path, hub_root)
+    manifest.ensure_repo(
+        hub_root,
+        base_root,
+        repo_id=base_id,
+        kind="base",
+    )
+    manifest.ensure_repo(
+        hub_root,
+        worktree_root,
+        repo_id=worktree_id,
+        kind="worktree",
+        worktree_of=base_id,
+        branch="feature/test",
+    )
+    save_manifest(hub_config.manifest_path, manifest, hub_root)
+    return worktree_root
 
 
 def test_pma_top_level_routes_serve_new_spa(tmp_path):
@@ -65,6 +93,7 @@ def test_pma_dynamic_spa_fallback_routes_with_runtime_ids(tmp_path):
 def test_removed_legacy_frontend_routes_redirect_permanently(tmp_path):
     hub_root = tmp_path / "hub"
     seed_hub_files(hub_root, force=True)
+    _seed_manifest_worktree(hub_root, base_id="base", worktree_id="base--ticket-290")
     client = TestClient(create_hub_app(hub_root), follow_redirects=False)
 
     worktrees = client.get("/worktrees")
@@ -74,9 +103,70 @@ def test_removed_legacy_frontend_routes_redirect_permanently(tmp_path):
     assert worktrees.status_code == 308
     assert worktrees.headers["location"] == "/repos"
     assert worktree.status_code == 308
-    assert worktree.headers["location"] == "/repos/base--ticket-290/tickets/TICKET-100"
+    assert (
+        worktree.headers["location"]
+        == "/repos/base/worktrees/base--ticket-290/tickets/TICKET-100"
+    )
     assert contextspace.status_code == 308
     assert contextspace.headers["location"] == "/repos/base--ticket-290/contextspace"
+
+
+def test_scope_frontend_routes_cover_hub_repo_and_parent_scoped_worktree(tmp_path):
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    _seed_manifest_worktree(hub_root, base_id="base", worktree_id="base--review")
+    client = TestClient(create_hub_app(hub_root), follow_redirects=False)
+
+    cases = (
+        "/chats",
+        "/repos/base",
+        "/repos/base/worktrees/base--review",
+        "/repos/base/worktrees/base--review/tickets/TICKET-100",
+    )
+    for path in cases:
+        response = client.get(path)
+        assert response.status_code == 200
+        assert "<title>PMA Hub</title>" in response.text
+
+
+def test_worktree_frontend_route_rejects_missing_parent_scope(tmp_path):
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    _seed_manifest_worktree(hub_root, base_id="base", worktree_id="base--review")
+    client = TestClient(create_hub_app(hub_root), follow_redirects=False)
+
+    missing = client.get("/worktrees/missing-worktree")
+    mismatched = client.get("/repos/other/worktrees/base--review")
+
+    assert missing.status_code == 404
+    assert missing.json()["detail"] == "Worktree not found: missing-worktree"
+    assert mismatched.status_code == 404
+    assert (
+        mismatched.json()["detail"]
+        == "Worktree not found in repo scope: other/base--review"
+    )
+
+
+def test_worktree_frontend_route_rejects_orphaned_manifest_worktree(tmp_path):
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    worktree_root = hub_root / "worktrees" / "orphan"
+    seed_repo_files(worktree_root, force=True, git_required=False)
+    hub_config = load_hub_config(hub_root)
+    manifest = load_manifest(hub_config.manifest_path, hub_root)
+    manifest.ensure_repo(
+        hub_root,
+        worktree_root,
+        repo_id="orphan",
+        kind="worktree",
+    )
+    save_manifest(hub_config.manifest_path, manifest, hub_root)
+    client = TestClient(create_hub_app(hub_root), follow_redirects=False)
+
+    response = client.get("/worktrees/orphan")
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Worktree route requires parent repo scope"
 
 
 def test_pma_static_assets_are_served_without_legacy_static_by_default(tmp_path):

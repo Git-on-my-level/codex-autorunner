@@ -946,6 +946,33 @@ def create_hub_app(
     def pma_hub_index():
         return _pma_index_response()
 
+    def _resolve_worktree_parent_repo_id(worktree_id: str) -> str:
+        for snapshot in context.supervisor.list_repos():
+            if getattr(snapshot, "id", None) != worktree_id:
+                continue
+            if getattr(snapshot, "kind", None) != "worktree":
+                raise HTTPException(
+                    status_code=404, detail=f"Worktree not found: {worktree_id}"
+                )
+            parent_repo_id = str(getattr(snapshot, "worktree_of", "") or "").strip()
+            if not parent_repo_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Worktree route requires parent repo scope",
+                )
+            return parent_repo_id
+        raise HTTPException(
+            status_code=404, detail=f"Worktree not found: {worktree_id}"
+        )
+
+    def _require_worktree_scope(repo_id: str, worktree_id: str) -> None:
+        parent_repo_id = _resolve_worktree_parent_repo_id(worktree_id)
+        if parent_repo_id != repo_id:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Worktree not found in repo scope: {repo_id}/{worktree_id}",
+            )
+
     @app.get("/worktrees", include_in_schema=False)
     def legacy_worktrees_index_redirect():
         target = f"{context.base_path}/repos" if context.base_path else "/repos"
@@ -954,12 +981,14 @@ def create_hub_app(
     @app.get("/worktrees/{worktree_id}", include_in_schema=False)
     @app.get("/worktrees/{worktree_id}/{rest:path}", include_in_schema=False)
     def legacy_worktree_redirect(worktree_id: str, rest: str = ""):
+        parent_repo_id = _resolve_worktree_parent_repo_id(worktree_id)
+        encoded_parent_repo_id = quote(parent_repo_id, safe="")
         encoded_worktree_id = quote(worktree_id, safe="")
         suffix = f"/{rest}" if rest else ""
         target = (
-            f"{context.base_path}/repos/{encoded_worktree_id}{suffix}"
+            f"{context.base_path}/repos/{encoded_parent_repo_id}/worktrees/{encoded_worktree_id}{suffix}"
             if context.base_path
-            else f"/repos/{encoded_worktree_id}{suffix}"
+            else f"/repos/{encoded_parent_repo_id}/worktrees/{encoded_worktree_id}{suffix}"
         )
         return RedirectResponse(target, status_code=308)
 
@@ -975,6 +1004,28 @@ def create_hub_app(
 
     @app.get("/repos/{repo_id}/", include_in_schema=False)
     def pma_repo_index_slash(repo_id: str):
+        return _pma_index_response()
+
+    @app.get("/repos/{repo_id}/worktrees/{worktree_id}", include_in_schema=False)
+    @app.get("/repos/{repo_id}/worktrees/{worktree_id}/", include_in_schema=False)
+    @app.get(
+        "/repos/{repo_id}/worktrees/{worktree_id}/tickets",
+        include_in_schema=False,
+    )
+    @app.get(
+        "/repos/{repo_id}/worktrees/{worktree_id}/tickets/",
+        include_in_schema=False,
+    )
+    @app.get(
+        "/repos/{repo_id}/worktrees/{worktree_id}/tickets/{ticket_id}",
+        include_in_schema=False,
+    )
+    @app.get(
+        "/repos/{repo_id}/worktrees/{worktree_id}/tickets/{ticket_id}/",
+        include_in_schema=False,
+    )
+    def pma_worktree_index(repo_id: str, worktree_id: str):
+        _require_worktree_scope(repo_id, worktree_id)
         return _pma_index_response()
 
     def legacy_repo_frontend_gate(repo_id: str, request: Request, *, legacy_tab: str):
