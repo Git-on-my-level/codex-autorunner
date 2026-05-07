@@ -1,12 +1,15 @@
 <script lang="ts">
+  import { goto } from '$app/navigation';
   import { page } from '$app/state';
   import { onDestroy, onMount } from 'svelte';
   import RepoWorktreeViews from '$lib/components/RepoWorktreeViews.svelte';
   import { dataOr, partialPageIssue, pmaApi, type ApiError, type PartialPageIssue } from '$lib/api/client';
+  import { stripRuntimeBasePath, withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import {
     buildRepoWorktreeDetailViewModel,
     type RepoWorktreeDetailViewModel
   } from '$lib/viewModels/repoWorktree';
+  import { legacyWorktreeRedirectPath } from '$lib/viewModels/routes';
   import type { SurfaceArtifact } from '$lib/viewModels/domain';
 
   const worktreeId = $derived(page.params.worktreeId ?? 'unknown-worktree');
@@ -42,6 +45,13 @@
       loading = false;
       return;
     }
+    const worktreeList = dataOr(worktrees, []);
+    const matchedWorktree = worktreeList.find((worktree) => worktree.id === worktreeId);
+    const redirectTo = legacyWorktreeRedirectPath(stripRuntimeBasePath(page.url.pathname), worktreeId, matchedWorktree?.repoId ?? null);
+    if (redirectTo) {
+      await goto(href(redirectTo), { replaceState: true });
+      return;
+    }
     const baseIssues = [
       !runs.ok ? partialPageIssue('current_run', 'Active runs unavailable', runs.error) : null,
       !chats.ok ? partialPageIssue('current_run', 'PMA chats unavailable', chats.error) : null,
@@ -49,7 +59,7 @@
     ].filter((issue): issue is PartialPageIssue => Boolean(issue));
     const baseSource = {
       repos: dataOr(repos, []),
-      worktrees: dataOr(worktrees, []),
+      worktrees: worktreeList,
       runs: dataOr(runs, []),
       chats: dataOr(chats, []),
       tickets: dataOr(tickets, []),

@@ -1,8 +1,10 @@
 <script lang="ts">
+  import { goto } from '$app/navigation';
   import { page } from '$app/state';
   import { onMount } from 'svelte';
   import TicketViews from '$lib/components/TicketViews.svelte';
   import { pmaApi, type ApiError, type PartialPageIssue } from '$lib/api/client';
+  import { stripRuntimeBasePath, withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import {
     createScopedTicket,
     loadScopedTicketQueue,
@@ -11,6 +13,7 @@
     scopedTicketActionStatus,
     type ScopedTicketQueueConfig
   } from '$lib/viewModels/scopedTicketQueue';
+  import { legacyWorktreeRedirectPath } from '$lib/viewModels/routes';
   import type { TicketFilter, TicketListViewModel } from '$lib/viewModels/ticket';
 
   const worktreeId = $derived(page.params.worktreeId ?? 'unknown-worktree');
@@ -37,6 +40,18 @@
     loading = true;
     error = null;
     sectionIssues = [];
+    const worktrees = await pmaApi.hub.listWorktrees();
+    if (!worktrees.ok) {
+      error = worktrees.error;
+      loading = false;
+      return;
+    }
+    const matchedWorktree = worktrees.data.find((worktree) => worktree.id === worktreeId);
+    const redirectTo = legacyWorktreeRedirectPath(stripRuntimeBasePath(page.url.pathname), worktreeId, matchedWorktree?.repoId ?? null);
+    if (redirectTo) {
+      await goto(href(redirectTo), { replaceState: true });
+      return;
+    }
     const result = await loadScopedTicketQueue(pmaApi, queueConfig, (initialList) => {
       list = initialList;
       selectedFilter = 'open';

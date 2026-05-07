@@ -74,3 +74,16 @@ export function worktreeMemoryRoute(worktreeId: string, parentRepoId: string | n
 export function agentWorkspaceRoute(workspaceId: string): string {
   return `/agent-workspaces/${encodeURIComponent(workspaceId)}`;
 }
+
+export function legacyWorktreeRedirectPath(pathname: string, worktreeId: string, parentRepoId: string | null): string | null {
+  if (!parentRepoId) return null;
+  const expectedPrefix = `/worktrees/${encodeURIComponent(worktreeId)}`;
+  if (pathname !== expectedPrefix && !pathname.startsWith(`${expectedPrefix}/`)) return null;
+  const suffix = pathname.slice(expectedPrefix.length);
+  if (suffix === '') return worktreeRoute(worktreeId, parentRepoId);
+  if (suffix === '/tickets') return worktreeTicketRoute(worktreeId, parentRepoId);
+  const ticketMatch = suffix.match(/^\/tickets\/([^/]+)$/);
+  if (ticketMatch) return worktreeTicketRoute(worktreeId, parentRepoId, decodeURIComponent(ticketMatch[1]));
+  if (suffix === '/memory') return worktreeMemoryRoute(worktreeId, parentRepoId);
+  return null;
+}

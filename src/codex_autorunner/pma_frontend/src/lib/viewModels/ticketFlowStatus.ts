@@ -1,5 +1,6 @@
 import type { PmaRunProgress, TicketSummary, WorkStatus } from './domain';
 import { formatRelativeTime, statusLabel } from './pmaChat';
+import { repoTicketRoute, worktreeTicketRoute } from './routes';
 
 export type TicketFlowStatusViewModel = {
   status: WorkStatus;
@@ -188,10 +189,10 @@ function ticketDisplayLabel(ticket: TicketSummary): string {
 function ticketDetailHref(ticket: TicketSummary): string {
   const routeId = ticket.number ? String(ticket.number) : ticket.id;
   if (ticket.workspaceKind === 'repo' && ticket.workspaceId) {
-    return `/repos/${encodeURIComponent(ticket.workspaceId)}/tickets/${encodeURIComponent(routeId)}`;
+    return repoTicketRoute(ticket.workspaceId, routeId);
   }
   if (ticket.workspaceKind === 'worktree' && ticket.workspaceId) {
-    return `/worktrees/${encodeURIComponent(ticket.workspaceId)}/tickets/${encodeURIComponent(routeId)}`;
+    return worktreeTicketRoute(ticket.workspaceId, ticket.repoId, routeId);
   }
   return '/chats';
 }

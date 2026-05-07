@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   agentWorkspaceRoute,
+  legacyWorktreeRedirectPath,
   repoMemoryRoute,
   repoRoute,
   repoTicketRoute,
@@ -28,5 +29,20 @@ describe('scope-nested frontend routes', () => {
   it('keeps flat worktree URLs only as parentless compatibility fallbacks', () => {
     expect(worktreeRoute('orphan')).toBe('/worktrees/orphan');
     expect(worktreeTicketRoute('orphan')).toBe('/worktrees/orphan/tickets');
+  });
+
+  it('redirects removed flat worktree routes to parent repo nested routes when parent is known', () => {
+    expect(legacyWorktreeRedirectPath('/worktrees/wt-1', 'wt-1', 'repo-1')).toBe('/repos/repo-1/worktrees/wt-1');
+    expect(legacyWorktreeRedirectPath('/worktrees/wt-1/tickets', 'wt-1', 'repo-1')).toBe('/repos/repo-1/worktrees/wt-1/tickets');
+    expect(legacyWorktreeRedirectPath('/worktrees/wt-1/tickets/TICKET-027', 'wt-1', 'repo-1')).toBe(
+      '/repos/repo-1/worktrees/wt-1/tickets/TICKET-027'
+    );
+    expect(legacyWorktreeRedirectPath('/worktrees/wt-1/memory', 'wt-1', 'repo-1')).toBe('/repos/repo-1/worktrees/wt-1/memory');
+  });
+
+  it('does not redirect nested, unknown, or parentless worktree routes', () => {
+    expect(legacyWorktreeRedirectPath('/repos/repo-1/worktrees/wt-1', 'wt-1', 'repo-1')).toBeNull();
+    expect(legacyWorktreeRedirectPath('/worktrees/wt-2', 'wt-1', 'repo-1')).toBeNull();
+    expect(legacyWorktreeRedirectPath('/worktrees/wt-1', 'wt-1', null)).toBeNull();
   });
 });

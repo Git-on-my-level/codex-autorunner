@@ -1,8 +1,10 @@
 <script lang="ts">
+  import { goto } from '$app/navigation';
   import { page } from '$app/state';
   import { onDestroy, onMount } from 'svelte';
   import TicketViews from '$lib/components/TicketViews.svelte';
   import { dataOr, partialPageIssue, pmaApi, type ApiError, type PartialPageIssue } from '$lib/api/client';
+  import { stripRuntimeBasePath, withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import {
     buildTicketUpdateContent,
     buildTicketDetailViewModel,
@@ -11,6 +13,7 @@
     type TicketDetailViewModel,
     type TicketEditPayload
   } from '$lib/viewModels/ticket';
+  import { legacyWorktreeRedirectPath } from '$lib/viewModels/routes';
   import type { PmaChatSummary, PmaRunProgress, SurfaceArtifact, TicketDetail, TicketSummary } from '$lib/viewModels/domain';
   import { cachedTickets, rememberTickets } from '$lib/viewModels/ticketCache';
 
@@ -55,8 +58,19 @@
     sectionIssues = [];
     const cachedList = cachedTickets({ worktree: ownerId });
     if (showLoading && cachedList) renderCachedTicket(cachedList, ownerId, routeTicketId);
-    const tickets = await pmaApi.ticketFlow.listTickets({ worktree: ownerId });
+    const [tickets, worktrees] = await Promise.all([pmaApi.ticketFlow.listTickets({ worktree: ownerId }), pmaApi.hub.listWorktrees()]);
     if (!isCurrentRequest()) return;
+    if (!worktrees.ok) {
+      error = worktrees.error;
+      loading = false;
+      return;
+    }
+    const matchedWorktree = worktrees.data.find((worktree) => worktree.id === ownerId);
+    const redirectTo = legacyWorktreeRedirectPath(stripRuntimeBasePath(page.url.pathname), ownerId, matchedWorktree?.repoId ?? null);
+    if (redirectTo) {
+      await goto(href(redirectTo), { replaceState: true });
+      return;
+    }
     const ticketList = dataOr(tickets, []);
     if (tickets.ok) rememberTickets({ worktree: ownerId }, ticketList);
     const selected = tickets.ok ? resolveTicketRouteId(ticketList, routeTicketId) : null;
