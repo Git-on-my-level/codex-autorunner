@@ -89,6 +89,9 @@ class TelegramMessageTransport:
         placeholder_id: Optional[int] = None,
         delete_placeholder_on_delivery: bool = True,
         overflow_mode_override: Optional[str] = None,
+        record_id: Optional[str] = None,
+        outbox_key: Optional[str] = None,
+        delivery_metadata: Optional[dict[str, Any]] = None,
     ) -> bool:
         operation: Optional[str] = None
         operation_id = self._current_chat_operation_id()
@@ -104,7 +107,11 @@ class TelegramMessageTransport:
                 delivery_state="pending",
             )
         record = OutboxRecord(
-            record_id=secrets.token_hex(8),
+            record_id=(
+                str(record_id).strip()
+                if isinstance(record_id, str) and record_id.strip()
+                else secrets.token_hex(8)
+            ),
             chat_id=chat_id,
             thread_id=thread_id,
             reply_to_message_id=reply_to,
@@ -113,7 +120,15 @@ class TelegramMessageTransport:
             created_at=now_iso(),
             operation=operation,
             operation_id=operation_id,
+            outbox_key=(
+                str(outbox_key).strip()
+                if isinstance(outbox_key, str) and outbox_key.strip()
+                else None
+            ),
             overflow_mode_override=overflow_mode_override,
+            delivery_metadata=(
+                dict(delivery_metadata) if isinstance(delivery_metadata, dict) else None
+            ),
         )
         return await self._outbox_manager.send_message_with_outbox(record)
 

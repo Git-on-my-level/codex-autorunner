@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 
 def merge_assistant_stream_text(current: str, incoming: str) -> str:
     """Merge overlapping streamed assistant chunks without duplicating prefixes."""
@@ -16,3 +18,49 @@ def merge_assistant_stream_text(current: str, incoming: str) -> str:
         if current[-overlap:] == incoming[:overlap]:
             return f"{current}{incoming[overlap:]}"
     return f"{current}{incoming}"
+
+
+@dataclass
+class AssistantTextAccumulator:
+    """Shared assistant text reducer for stream and terminal message text."""
+
+    stream_text: str = ""
+    final_text: str = ""
+
+    def append_delta(self, text: str) -> str:
+        """Record a strict append-only stream delta."""
+        if isinstance(text, str) and text:
+            self.stream_text = f"{self.stream_text}{text}"
+        return self.text
+
+    def merge_snapshot(self, text: str) -> str:
+        """Record a stream chunk that may be cumulative or overlap prior chunks."""
+        if isinstance(text, str) and text:
+            self.stream_text = merge_assistant_stream_text(self.stream_text, text)
+        return self.text
+
+    def replace_final(self, text: str) -> str:
+        """Record the canonical terminal assistant message."""
+        if isinstance(text, str):
+            self.final_text = text
+        return self.text
+
+    @property
+    def text(self) -> str:
+        if self.final_text.strip():
+            return self.final_text
+        return self.stream_text
+
+
+@dataclass
+class AssistantOutputState(AssistantTextAccumulator):
+    """Reduced assistant output state, distinct from append-only timelines."""
+
+    def note_stream_delta(self, text: str) -> str:
+        return self.append_delta(text)
+
+    def note_stream_snapshot(self, text: str) -> str:
+        return self.merge_snapshot(text)
+
+    def note_final_message(self, text: str) -> str:
+        return self.replace_final(text)

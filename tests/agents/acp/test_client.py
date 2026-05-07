@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 from tests.acp_lifecycle_corpus import load_acp_lifecycle_corpus
+from tests.runtime_lifecycle_sequences import load_runtime_lifecycle_sequences
 
 from codex_autorunner.agents.acp import (
     ACPClient,
@@ -15,6 +16,7 @@ from codex_autorunner.agents.acp import (
     ACPMissingSessionError,
     ACPPermissionRequestEvent,
 )
+from codex_autorunner.agents.acp.client import _PromptState
 from codex_autorunner.agents.acp.errors import (
     ACPProcessCrashedError,
     ACPProtocolError,
@@ -29,8 +31,6 @@ from codex_autorunner.agents.acp.protocol import (
 )
 from codex_autorunner.core.acp_lifecycle import (
     _IDLE_TERMINAL_METHODS,
-    _SESSION_TURN_ID_FALLBACK_METHODS,
-    _TERMINAL_METHODS,
 )
 from codex_autorunner.core.acp_lifecycle import (
     classify_prompt_response_status as _classify_prompt_response_status,
@@ -41,9 +41,6 @@ from codex_autorunner.core.acp_lifecycle import (
 from codex_autorunner.core.acp_lifecycle import (
     prompt_terminal_method_for_status as _prompt_terminal_method_for_status,
 )
-from codex_autorunner.core.acp_lifecycle import (
-    should_map_missing_turn_id as _shared_should_map_missing_turn_id,
-)
 
 FIXTURE_PATH = Path(__file__).resolve().parents[2] / "fixtures" / "fake_acp_server.py"
 pytestmark = pytest.mark.slow
@@ -53,11 +50,33 @@ def fixture_command(scenario: str) -> list[str]:
     return [sys.executable, "-u", str(FIXTURE_PATH), "--scenario", scenario]
 
 
+def test_prompt_state_strict_deltas_append_without_overlap_merge() -> None:
+    state = _PromptState(session_id="session-1", turn_id="turn-1")
+
+    state.note_output_delta("Hel")
+    state.note_output_delta("lo")
+    state.note_output_delta("ha")
+    state.note_output_delta("ha")
+
+    assert state.final_output == "Hellohaha"
+
+
+def test_prompt_state_session_update_snapshots_merge_without_duplication() -> None:
+    state = _PromptState(session_id="session-1", turn_id="turn-1")
+
+    state.note_output_delta("fixture", merge_snapshot=True)
+    state.note_output_delta("fixture reply", merge_snapshot=True)
+
+    assert state.final_output == "fixture reply"
+
+
 @pytest.mark.parametrize(("method"), ("session/update", "session/request_permission"))
-def test_client_maps_session_scoped_official_events_without_turn_id(
+@pytest.mark.asyncio
+async def test_client_maps_session_scoped_official_events_without_turn_id(
     method: str,
 ) -> None:
     client = ACPClient(fixture_command("official"))
+    client._ensure_prompt_state("session-1", "turn-2")
     client._session_active_turns["session-1"] = "turn-2"
 
     message = client._message_with_mapped_turn_id(
@@ -73,15 +92,34 @@ def test_client_maps_session_scoped_official_events_without_turn_id(
     assert message["params"]["turnId"] == "turn-2"
 
 
+@pytest.mark.asyncio
+async def test_client_does_not_map_missing_turn_id_to_closed_active_turn() -> None:
+    client = ACPClient(fixture_command("official"))
+    state = client._ensure_prompt_state("session-1", "turn-closed")
+    state.closed = True
+    client._session_active_turns["session-1"] = "turn-closed"
+
+    message = client._message_with_mapped_turn_id(
+        {
+            "method": "session.status",
+            "params": {"sessionId": "session-1", "status": {"type": "idle"}},
+        }
+    )
+
+    assert message.get("params", {}).get("turnId") is None
+
+
 @pytest.mark.parametrize(
     ("case"),
     load_acp_lifecycle_corpus(),
     ids=[case["name"] for case in load_acp_lifecycle_corpus()],
 )
-def test_client_maps_shared_lifecycle_fixtures_without_turn_id(
+@pytest.mark.asyncio
+async def test_client_maps_shared_lifecycle_fixtures_without_turn_id(
     case: dict[str, object],
 ) -> None:
     client = ACPClient(fixture_command("official"))
+    client._ensure_prompt_state("session-1", "turn-2")
     client._session_active_turns["session-1"] = "turn-2"
     message = dict(case["raw"])  # type: ignore[index]
     expected = dict(case["expected"])  # type: ignore[index]
@@ -90,6 +128,29 @@ def test_client_maps_shared_lifecycle_fixtures_without_turn_id(
 
     expected_turn_id = "turn-2" if expected["uses_turn_id_fallback"] else None
     assert mapped.get("params", {}).get("turnId") == expected_turn_id
+
+
+@pytest.mark.asyncio
+async def test_client_turn_id_mapping_references_runtime_sequence_corpus() -> None:
+    client = ACPClient(fixture_command("official"))
+    client._ensure_prompt_state("session-1", "turn-current")
+    client._session_active_turns["session-1"] = "turn-current"
+
+    mapped_cases = [
+        case
+        for case in load_runtime_lifecycle_sequences()
+        if dict(case.get("expected") or {}).get("mapped_turn_id")
+    ]
+    assert mapped_cases
+
+    for case in mapped_cases:
+        expected_turn_id = str(dict(case["expected"])["mapped_turn_id"])
+        for action_obj in case["actions"]:
+            action = dict(action_obj)
+            if action.get("kind") != "raw_event":
+                continue
+            mapped = client._message_with_mapped_turn_id(dict(action["raw"]))
+            assert mapped.get("params", {}).get("turnId") == expected_turn_id
 
 
 @pytest.mark.asyncio
@@ -120,6 +181,34 @@ async def test_client_infers_server_turn_alias_from_inflight_prompt_event() -> N
         request_task.cancel()
         with suppress(asyncio.CancelledError):
             await request_task
+
+
+@pytest.mark.asyncio
+async def test_client_rejects_server_turn_alias_for_closed_prompt() -> None:
+    client = ACPClient(fixture_command("official"))
+    state = client._ensure_prompt_state("session-1", "turn-1")
+    state.closed = True
+
+    await client._register_prompt_turn_alias(state, "server-turn-1")
+
+    assert "server-turn-1" not in client._prompts
+
+
+@pytest.mark.asyncio
+async def test_client_late_request_failure_cannot_clear_newer_active_turn() -> None:
+    client = ACPClient(fixture_command("official"))
+    old_state = client._ensure_prompt_state("session-1", "turn-old")
+    client._ensure_prompt_state("session-1", "turn-new")
+    client._session_active_turns["session-1"] = "turn-new"
+
+    async def fail_request(_method: str, _params: dict[str, object]) -> object:
+        raise ACPProtocolError("late failure")
+
+    client.request = fail_request  # type: ignore[method-assign]
+
+    await client._run_official_prompt_request(old_state, prompt="old")
+
+    assert client._session_active_turns["session-1"] == "turn-new"
 
 
 @pytest.mark.asyncio
@@ -276,6 +365,31 @@ async def test_client_official_prompt_hang_tracks_last_session_update_state(
 
 
 @pytest.mark.asyncio
+async def test_client_merges_cumulative_stream_chunks_without_duplication(
+    tmp_path: Path,
+) -> None:
+    client = ACPClient(
+        fixture_command("official_cumulative_stream_chunks"),
+        cwd=tmp_path,
+    )
+    try:
+        created = await client.create_session(cwd=str(tmp_path))
+        handle = await client.start_prompt(created.session_id, "Reply with exactly OK.")
+
+        result = await asyncio.wait_for(handle.wait(), timeout=0.4)
+
+        assert result.status == "completed"
+        assert result.final_output == "fixture reply"
+        assert [
+            getattr(event, "delta", None)
+            for event in handle.snapshot_events()
+            if event.kind == "output_delta"
+        ] == ["fixture", "fixture reply"]
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
 async def test_client_can_recover_official_prompt_hang_with_synthetic_completion(
     tmp_path: Path,
 ) -> None:
@@ -411,6 +525,34 @@ async def test_client_official_session_status_idle_can_complete_before_request_r
             "session/update",
             "session/update",
             "session.status",
+        ]
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_client_idle_without_output_does_not_replay_previous_turn_text(
+    tmp_path: Path,
+) -> None:
+    client = ACPClient(
+        fixture_command("official_second_prompt_idle_without_output"),
+        cwd=tmp_path,
+    )
+    try:
+        created = await client.create_session(cwd=str(tmp_path))
+        first = await client.start_prompt(created.session_id, "first")
+        first_result = await asyncio.wait_for(first.wait(), timeout=1.0)
+
+        second = await client.start_prompt(created.session_id, "second")
+        second_result = await asyncio.wait_for(second.wait(), timeout=1.0)
+
+        assert first_result.final_output == "fixture reply"
+        assert second_result.status == "completed"
+        assert second_result.final_output == ""
+        assert [event.kind for event in second.snapshot_events()] == [
+            "turn_started",
+            "progress",
+            "turn_terminal",
         ]
     finally:
         await client.close()
@@ -877,34 +1019,6 @@ def test_extract_session_capabilities_from_various_payloads() -> None:
 
 
 class TestClientLifecycleDelegation:
-    def test_client_imports_shared_turn_id_fallback(self) -> None:
-        from codex_autorunner.agents.acp.client import (
-            _should_map_missing_turn_id,
-        )
-
-        for method in _SESSION_TURN_ID_FALLBACK_METHODS:
-            assert _should_map_missing_turn_id(method, {})
-
-    def test_client_fallback_matches_shared_lifecycle(self) -> None:
-        from codex_autorunner.agents.acp.client import (
-            _should_map_missing_turn_id,
-        )
-
-        for method in _TERMINAL_METHODS:
-            assert _should_map_missing_turn_id(
-                method, {}
-            ) == _shared_should_map_missing_turn_id(method, {})
-
-        for method in (
-            "prompt/started",
-            "turn/started",
-            "permission/requested",
-            "token/usage",
-        ):
-            assert _should_map_missing_turn_id(
-                method, {}
-            ) == _shared_should_map_missing_turn_id(method, {})
-
     def test_client_idle_terminal_not_mapped_without_active_turn(self) -> None:
         client = ACPClient(fixture_command("official"))
         for method in _IDLE_TERMINAL_METHODS:
@@ -918,11 +1032,13 @@ class TestClientLifecycleDelegation:
         load_acp_lifecycle_corpus(),
         ids=[case["name"] for case in load_acp_lifecycle_corpus()],
     )
-    def test_client_turn_id_mapping_consistent_with_shared_lifecycle(
+    @pytest.mark.asyncio
+    async def test_client_turn_id_mapping_consistent_with_shared_lifecycle(
         self,
         case: dict[str, object],
     ) -> None:
         client = ACPClient(fixture_command("official"))
+        client._ensure_prompt_state("session-1", "turn-active")
         client._session_active_turns["session-1"] = "turn-active"
         raw = dict(case["raw"])
         expected = dict(case["expected"])

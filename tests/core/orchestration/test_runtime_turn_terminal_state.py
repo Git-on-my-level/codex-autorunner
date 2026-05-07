@@ -1,12 +1,145 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Literal, Optional, cast
 
 from tests.acp_lifecycle_corpus import load_acp_lifecycle_corpus
 
-from codex_autorunner.core.orchestration.runtime_turn_terminal_state import (
-    RuntimeTurnTerminalStateMachine,
+from codex_autorunner.core.orchestration.runtime_state_events import (
+    AssistantDelta,
+    AssistantMessage,
+    FailureSignal,
+    TerminalSignal,
+    TokenUsage,
+    normalize_runtime_state_events,
 )
+from codex_autorunner.core.orchestration.runtime_turn_terminal_state import (
+    RuntimeThreadTerminalSignal,
+    RuntimeTurnTerminalStateMachine,
+    TerminalEvidence,
+    reduce_terminal_evidence,
+)
+
+
+def _terminal_signal(
+    status: str,
+    *,
+    source: str = "turn/completed",
+) -> RuntimeThreadTerminalSignal:
+    return RuntimeThreadTerminalSignal(
+        source=source,
+        status=cast(Literal["ok", "error", "interrupted"], status),
+        timestamp="2026-01-01T00:00:00Z",
+    )
+
+
+def _evidence(**overrides: object) -> TerminalEvidence:
+    values: dict[str, object] = {
+        "transport_status": "",
+        "transport_errors": (),
+        "transport_returned": False,
+        "assistant_text": "",
+        "failure_cause": None,
+        "terminal_signals": (),
+        "execution_error_message": "Managed thread execution failed",
+    }
+    values.update(overrides)
+    return TerminalEvidence(
+        transport_status=cast(str, values["transport_status"]),
+        transport_errors=cast(tuple[str, ...], values["transport_errors"]),
+        transport_returned=cast(bool, values["transport_returned"]),
+        assistant_text=cast(str, values["assistant_text"]),
+        failure_cause=cast(Optional[str], values["failure_cause"]),
+        terminal_signals=cast(
+            tuple[RuntimeThreadTerminalSignal, ...], values["terminal_signals"]
+        ),
+        explicit_interrupt=cast(bool, values.get("explicit_interrupt", False)),
+        explicit_timeout=cast(bool, values.get("explicit_timeout", False)),
+        transport_exception=cast(Optional[str], values.get("transport_exception")),
+        execution_error_message=cast(str, values["execution_error_message"]),
+    )
+
+
+def test_terminal_evidence_precedence_combinations() -> None:
+    cases = [
+        (
+            "timeout drops partial text",
+            _evidence(
+                explicit_timeout=True,
+                assistant_text="partial",
+                failure_cause="Runtime thread timed out",
+            ),
+            ("error", "", "Runtime thread timed out", "timeout"),
+        ),
+        (
+            "interrupt beats streamed success",
+            _evidence(
+                explicit_interrupt=True,
+                assistant_text="done",
+                terminal_signals=(_terminal_signal("ok"),),
+                failure_cause="Runtime thread interrupted",
+            ),
+            ("interrupted", "", "Runtime thread interrupted", "interrupt"),
+        ),
+        (
+            "durable transport success beats later interrupt request",
+            _evidence(
+                explicit_interrupt=True,
+                transport_returned=True,
+                transport_status="ok",
+                assistant_text="done",
+            ),
+            ("ok", "done", None, "prompt_return"),
+        ),
+        (
+            "failed transport without terminal success is error",
+            _evidence(
+                transport_returned=True,
+                transport_status="failed",
+                transport_errors=("permission denied",),
+                assistant_text="partial",
+            ),
+            ("error", "", "permission denied", "prompt_return"),
+        ),
+        (
+            "terminal success and text recover failed transport",
+            _evidence(
+                transport_returned=True,
+                transport_status="failed",
+                transport_errors=("connection reset",),
+                assistant_text="final answer",
+                terminal_signals=(_terminal_signal("ok"),),
+            ),
+            ("ok", "final answer", "connection reset", "reconciled_failure"),
+        ),
+        (
+            "transport exception recovers from terminal success and text",
+            _evidence(
+                transport_exception="socket closed",
+                assistant_text="final answer",
+                terminal_signals=(_terminal_signal("ok"),),
+            ),
+            ("ok", "final answer", None, "reconciled_failure"),
+        ),
+        (
+            "idle status alone cannot synthesize assistant text",
+            _evidence(
+                terminal_signals=(_terminal_signal("ok", source="session.status"),),
+            ),
+            ("ok", "", None, "stream_terminal_event"),
+        ),
+    ]
+
+    for label, evidence, expected in cases:
+        decision = reduce_terminal_evidence(evidence)
+
+        assert (
+            decision.status,
+            decision.assistant_text,
+            decision.error,
+            decision.completion_source,
+        ) == expected, label
+        assert decision.evidence_fields(evidence)["terminal_evidence_reason"]
 
 
 def test_runtime_turn_terminal_state_machine_shared_lifecycle_corpus() -> None:
@@ -171,3 +304,50 @@ def test_runtime_turn_terminal_state_machine_ignores_prompt_output_commentary_fo
     )
 
     assert state.last_assistant_text == ""
+
+
+def test_runtime_turn_terminal_state_machine_reduces_semantic_events() -> None:
+    state = RuntimeTurnTerminalStateMachine(
+        backend_thread_id="thread-1",
+        backend_turn_id="turn-1",
+    )
+
+    state.note_state_event(AssistantDelta(text="hel", source="semantic"))
+    state.note_state_event(AssistantDelta(text="hello", source="semantic"))
+    state.note_state_event(
+        AssistantMessage(text="hello final", source="semantic", message_id="msg-1")
+    )
+    state.note_state_event(
+        TokenUsage(usage={"input": 3, "output": 5}, source="semantic")
+    )
+    state.note_state_event(FailureSignal(error="late warning", source="semantic"))
+    state.note_state_event(
+        TerminalSignal(status="ok", source="semantic", final_text="hello final")
+    )
+
+    assert state.last_assistant_text == "hello final"
+    assert state.token_usage == {"input": 3, "output": 5}
+    assert state.failure_cause == "late warning"
+    assert len(state.terminal_signals) == 1
+    assert state.terminal_signals[0].source == "semantic"
+    assert state.terminal_signals[0].status == "ok"
+
+
+def test_unknown_raw_event_remains_observable_without_terminal_mutation() -> None:
+    state = RuntimeTurnTerminalStateMachine(
+        backend_thread_id="thread-1",
+        backend_turn_id="turn-1",
+    )
+    raw = {"method": "vendor/unknown", "params": {"text": "ignore me"}}
+
+    assert normalize_runtime_state_events(raw) == []
+
+    state.note_raw_event(raw, timestamp="2026-01-01T00:00:00Z")
+
+    assert state.raw_events == [raw]
+    assert state.last_progress_timestamp == "2026-01-01T00:00:00Z"
+    assert state.last_runtime_method is None
+    assert state.last_assistant_text == ""
+    assert state.failure_cause is None
+    assert state.token_usage is None
+    assert state.terminal_signals == []

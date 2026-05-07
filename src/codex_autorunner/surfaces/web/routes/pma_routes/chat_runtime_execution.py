@@ -416,7 +416,7 @@ async def execute_harness_turn(
 
     assistant_text = str(getattr(turn_result, "assistant_text", "") or "").strip()
     if not assistant_text:
-        assistant_text = timeline_state.best_assistant_text().strip()
+        assistant_text = str(timeline_state.best_assistant_text() or "").strip()
 
     status = str(getattr(turn_result, "status", "") or "").strip().lower()
     errors = tuple(getattr(turn_result, "errors", ()) or ())

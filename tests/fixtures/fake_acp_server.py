@@ -332,6 +332,8 @@ class FakeACPServer:
         if self._scenario == "official_second_prompt_hang_with_persisted_completion":
             # Match persisted session-store text so streaming chunks and recovery agree.
             reply_content = {"type": "text", "text": "identical fixture output"}
+        if self._scenario == "official_cumulative_stream_chunks":
+            reply_content = {"type": "text", "text": "fixture"}
         if self._scenario == "official_content_parts":
             thought_content = [
                 {"type": "text", "text": "thinking"},
@@ -434,6 +436,20 @@ class FakeACPServer:
                 {"stopReason": "cancelled", "userMessageId": turn_id},
             )
             return
+        if self._scenario == "official_second_prompt_idle_without_output":
+            prompt_count = self._official_prompt_counts.get(session_id, 0) + 1
+            self._official_prompt_counts[session_id] = prompt_count
+            if prompt_count >= 2:
+                self.send(
+                    {
+                        "method": "session.status",
+                        "params": {
+                            "sessionId": session_id,
+                            "status": {"type": "idle"},
+                        },
+                    }
+                )
+                return
         # Keep official fixture pacing short so queue-visible / interrupt lab
         # scenarios exercise orchestration behavior instead of burning most of
         # the latency budget inside fixture sleeps under xdist load.
@@ -450,6 +466,19 @@ class FakeACPServer:
                 },
             }
         )
+        if self._scenario == "official_cumulative_stream_chunks":
+            self.send(
+                {
+                    "method": "session/update",
+                    "params": {
+                        "sessionId": session_id,
+                        "update": {
+                            "sessionUpdate": "agent_message_chunk",
+                            "content": {"type": "text", "text": "fixture reply"},
+                        },
+                    },
+                }
+            )
         if self._scenario == "official_token_usage":
             self.send(
                 {

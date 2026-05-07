@@ -83,6 +83,7 @@ from ..chat.managed_thread_delivery_support import (
     ManagedThreadDeliveryCleanupContext,
     ManagedThreadDeliverySendResult,
     deliver_managed_thread_terminal_record,
+    managed_thread_terminal_delivery_send_key,
 )
 from ..chat.managed_thread_delivery_worker import (
     ManagedThreadDeliveryWorker,
@@ -560,25 +561,84 @@ class TelegramBotService(
                 async def _send_success(
                     _context: ManagedThreadDeliveryCleanupContext,
                 ) -> ManagedThreadDeliverySendResult:
-                    await service._send_message(
-                        target_chat_id,
-                        render_managed_thread_delivery_record_text(record),
-                        thread_id=target_thread_id,
-                        reply_to=None,
+                    text = render_managed_thread_delivery_record_text(record)
+                    send_with_outbox = getattr(
+                        service, "_send_message_with_outbox", None
                     )
+                    if callable(send_with_outbox):
+                        delivered = await send_with_outbox(
+                            target_chat_id,
+                            text,
+                            thread_id=target_thread_id,
+                            reply_to=None,
+                            record_id=managed_thread_terminal_delivery_send_key(
+                                record, suffix="telegram:ok"
+                            ),
+                            outbox_key=record.idempotency_key,
+                            delivery_metadata={
+                                "managed_thread_delivery_id": record.delivery_id,
+                                "managed_thread_delivery_idempotency_key": (
+                                    record.idempotency_key
+                                ),
+                                "managed_thread_id": record.managed_thread_id,
+                                "managed_turn_id": record.managed_turn_id,
+                                "terminal_status": "ok",
+                            },
+                        )
+                        if not delivered:
+                            return ManagedThreadDeliverySendResult(
+                                error="telegram_terminal_send_deferred"
+                            )
+                    else:
+                        await service._send_message(
+                            target_chat_id,
+                            text,
+                            thread_id=target_thread_id,
+                            reply_to=None,
+                        )
                     return ManagedThreadDeliverySendResult()
 
                 async def _send_failure(
                     _context: ManagedThreadDeliveryCleanupContext,
                 ) -> ManagedThreadDeliverySendResult:
-                    await service._send_message(
-                        target_chat_id,
-                        (
-                            f"Turn failed: {record.envelope.error_text or 'execution error'}"
-                        ),
-                        thread_id=target_thread_id,
-                        reply_to=None,
+                    text = (
+                        f"Turn failed: "
+                        f"{record.envelope.error_text or 'execution error'}"
                     )
+                    send_with_outbox = getattr(
+                        service, "_send_message_with_outbox", None
+                    )
+                    if callable(send_with_outbox):
+                        delivered = await send_with_outbox(
+                            target_chat_id,
+                            text,
+                            thread_id=target_thread_id,
+                            reply_to=None,
+                            record_id=managed_thread_terminal_delivery_send_key(
+                                record, suffix="telegram:error"
+                            ),
+                            outbox_key=record.idempotency_key,
+                            delivery_metadata={
+                                "managed_thread_delivery_id": record.delivery_id,
+                                "managed_thread_delivery_idempotency_key": (
+                                    record.idempotency_key
+                                ),
+                                "managed_thread_id": record.managed_thread_id,
+                                "managed_turn_id": record.managed_turn_id,
+                                "terminal_status": "error",
+                            },
+                        )
+                        if not delivered:
+                            return ManagedThreadDeliverySendResult(
+                                error="telegram_terminal_error_send_deferred"
+                            )
+                    else:
+                        await service._send_message(
+                            target_chat_id,
+                            text,
+                            thread_id=target_thread_id,
+                            reply_to=None,
+                        )
                     return ManagedThreadDeliverySendResult()
 
                 async def _cleanup(
