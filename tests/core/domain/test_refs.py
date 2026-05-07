@@ -36,6 +36,11 @@ class TestScopeRef:
         assert s.kind == "agent_workspace"
         assert s.id == "ws1"
 
+    def test_filesystem(self) -> None:
+        s = ScopeRef(kind="filesystem", path="/tmp/car repo")
+        assert s.kind == "filesystem"
+        assert s.path == "/tmp/car repo"
+
     def test_hub_with_id_raises(self) -> None:
         with pytest.raises(ScopeRefError, match="must not have an id"):
             ScopeRef(kind="hub", id="x")
@@ -51,6 +56,10 @@ class TestScopeRef:
     def test_repo_with_parent_raises(self) -> None:
         with pytest.raises(ScopeRefError, match="must not have a parent_repo_id"):
             ScopeRef(kind="repo", id="r1", parent_repo_id="x")
+
+    def test_repo_with_path_raises(self) -> None:
+        with pytest.raises(ScopeRefError, match="must not have a path"):
+            ScopeRef(kind="repo", id="r1", path="/tmp/repo")
 
     def test_worktree_missing_id_raises(self) -> None:
         with pytest.raises(ScopeRefError, match="requires an id"):
@@ -68,6 +77,14 @@ class TestScopeRef:
         with pytest.raises(ScopeRefError, match="must not have a parent_repo_id"):
             ScopeRef(kind="agent_workspace", id="ws1", parent_repo_id="x")
 
+    def test_filesystem_missing_path_raises(self) -> None:
+        with pytest.raises(ScopeRefError, match="requires a path"):
+            ScopeRef(kind="filesystem")
+
+    def test_filesystem_with_id_raises(self) -> None:
+        with pytest.raises(ScopeRefError, match="must not have an id"):
+            ScopeRef(kind="filesystem", id="fs1", path="/tmp/repo")
+
     def test_unknown_kind_raises(self) -> None:
         with pytest.raises(ScopeRefError, match="Unknown scope kind"):
             ScopeRef(kind="planet", id="earth")
@@ -79,7 +96,12 @@ class TestScopeRef:
 
     def test_to_dict(self) -> None:
         s = ScopeRef(kind="repo", id="r1")
-        assert s.to_dict() == {"kind": "repo", "id": "r1", "parent_repo_id": None}
+        assert s.to_dict() == {
+            "kind": "repo",
+            "id": "r1",
+            "parent_repo_id": None,
+            "path": None,
+        }
 
     def test_to_urn(self) -> None:
         assert ScopeRef(kind="hub").to_urn() == "hub"
@@ -91,6 +113,10 @@ class TestScopeRef:
         assert (
             ScopeRef(kind="agent_workspace", id="ws1").to_urn() == "agent_workspace:ws1"
         )
+        assert (
+            ScopeRef(kind="filesystem", path="/tmp/car repo").to_urn()
+            == "filesystem:%2Ftmp%2Fcar%20repo"
+        )
 
     def test_from_urn(self) -> None:
         assert ScopeRef.from_urn("hub") == ScopeRef(kind="hub")
@@ -100,6 +126,9 @@ class TestScopeRef:
         )
         assert ScopeRef.from_urn("agent_workspace:ws1") == ScopeRef(
             kind="agent_workspace", id="ws1"
+        )
+        assert ScopeRef.from_urn("filesystem:%2Ftmp%2Fcar%20repo") == ScopeRef(
+            kind="filesystem", path="/tmp/car repo"
         )
 
     def test_from_mapping_with_urn(self) -> None:
@@ -113,6 +142,14 @@ class TestScopeRef:
     def test_from_mapping_with_repo_id_fallback(self) -> None:
         s = ScopeRef.from_mapping({"repo_id": "r1"})
         assert s == ScopeRef(kind="repo", id="r1")
+
+    def test_from_mapping_with_workspace_root_fallback(self) -> None:
+        s = ScopeRef.from_mapping({"workspace_root": "/tmp/repo"})
+        assert s == ScopeRef(kind="filesystem", path="/tmp/repo")
+
+    def test_from_mapping_with_filesystem_kind_and_workspace_root(self) -> None:
+        s = ScopeRef.from_mapping({"kind": "filesystem", "workspace_root": "/tmp/repo"})
+        assert s == ScopeRef(kind="filesystem", path="/tmp/repo")
 
     def test_from_mapping_missing_fields_raises(self) -> None:
         with pytest.raises(ScopeRefError, match="requires kind or repo_id"):
@@ -233,7 +270,12 @@ class TestMemoryRef:
         m = MemoryRef(scope=scope, key="transcript")
         d = m.to_dict()
         assert d == {
-            "scope": {"kind": "repo", "id": "r1", "parent_repo_id": None},
+            "scope": {
+                "kind": "repo",
+                "id": "r1",
+                "parent_repo_id": None,
+                "path": None,
+            },
             "key": "transcript",
         }
 
@@ -265,7 +307,12 @@ class TestTicketRef:
         t = TicketRef(scope=scope, ticket_id="TICKET-042")
         d = t.to_dict()
         assert d == {
-            "scope": {"kind": "repo", "id": "r1", "parent_repo_id": None},
+            "scope": {
+                "kind": "repo",
+                "id": "r1",
+                "parent_repo_id": None,
+                "path": None,
+            },
             "ticket_id": "TICKET-042",
         }
 

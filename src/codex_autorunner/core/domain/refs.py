@@ -20,6 +20,7 @@ class ScopeRef:
     kind: str
     id: Optional[str] = None
     parent_repo_id: Optional[str] = None
+    path: Optional[str] = None
 
     def __post_init__(self) -> None:
         if self.kind == "hub":
@@ -27,16 +28,22 @@ class ScopeRef:
                 raise ScopeRefError("hub scope must not have an id")
             if self.parent_repo_id is not None:
                 raise ScopeRefError("hub scope must not have a parent_repo_id")
+            if self.path is not None:
+                raise ScopeRefError("hub scope must not have a path")
         elif self.kind == "repo":
             if not self.id:
                 raise ScopeRefError("repo scope requires an id")
             if self.parent_repo_id is not None:
                 raise ScopeRefError("repo scope must not have a parent_repo_id")
+            if self.path is not None:
+                raise ScopeRefError("repo scope must not have a path")
         elif self.kind == "worktree":
             if not self.id:
                 raise ScopeRefError("worktree scope requires an id")
             if not self.parent_repo_id:
                 raise ScopeRefError("worktree scope requires a parent_repo_id")
+            if self.path is not None:
+                raise ScopeRefError("worktree scope must not have a path")
         elif self.kind == "agent_workspace":
             if not self.id:
                 raise ScopeRefError("agent_workspace scope requires an id")
@@ -44,12 +51,22 @@ class ScopeRef:
                 raise ScopeRefError(
                     "agent_workspace scope must not have a parent_repo_id"
                 )
+            if self.path is not None:
+                raise ScopeRefError("agent_workspace scope must not have a path")
+        elif self.kind == "filesystem":
+            if self.id is not None:
+                raise ScopeRefError("filesystem scope must not have an id")
+            if self.parent_repo_id is not None:
+                raise ScopeRefError("filesystem scope must not have a parent_repo_id")
+            if not self.path:
+                raise ScopeRefError("filesystem scope requires a path")
         else:
             raise ScopeRefError(f"Unknown scope kind: {self.kind}")
 
     def to_urn(self) -> str:
+        id = self.path if self.kind == "filesystem" else self.id
         return format_scope_urn(
-            kind=self.kind, id=self.id, parent_repo_id=self.parent_repo_id
+            kind=self.kind, id=id, parent_repo_id=self.parent_repo_id
         )
 
     @classmethod
@@ -57,9 +74,12 @@ class ScopeRef:
         parts = parse_scope_urn(urn)
         kind = parts["kind"]
         assert isinstance(kind, str)
+        id = parts["id"]
+        if kind == "filesystem":
+            return cls(kind=kind, path=id)
         return cls(
             kind=kind,
-            id=parts["id"],
+            id=id,
             parent_repo_id=parts["parent_repo_id"],
         )
 
@@ -76,11 +96,18 @@ class ScopeRef:
             repo_id = data.get("repo_id")
             if isinstance(repo_id, str):
                 return cls(kind="repo", id=repo_id)
+            workspace_root = data.get("workspace_root")
+            if isinstance(workspace_root, str):
+                return cls(kind="filesystem", path=workspace_root)
             raise ScopeRefError("ScopeRef requires kind or repo_id")
+        path = data.get("path")
+        if not isinstance(path, str):
+            path = data.get("workspace_root")
         return cls(
             kind=kind,
             id=data.get("id"),
             parent_repo_id=data.get("parent_repo_id"),
+            path=path,
         )
 
 

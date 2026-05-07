@@ -20,6 +20,10 @@ class TestParentScope:
         p = parent_scope(ScopeRef(kind="agent_workspace", id="ws1"))
         assert p == ScopeRef(kind="hub")
 
+    def test_filesystem_parent_is_hub(self) -> None:
+        p = parent_scope(ScopeRef(kind="filesystem", path="/tmp/repo"))
+        assert p == ScopeRef(kind="hub")
+
 
 class TestScopeChain:
     def test_hub_chain_is_just_hub(self) -> None:
@@ -48,6 +52,13 @@ class TestScopeChain:
             ScopeRef(kind="hub"),
         )
 
+    def test_filesystem_chain(self) -> None:
+        chain = scope_chain(ScopeRef(kind="filesystem", path="/tmp/repo"))
+        assert chain == (
+            ScopeRef(kind="filesystem", path="/tmp/repo"),
+            ScopeRef(kind="hub"),
+        )
+
     def test_chain_starts_with_input_scope(self) -> None:
         scope = ScopeRef(kind="repo", id="abc")
         chain = scope_chain(scope)
@@ -59,6 +70,7 @@ class TestScopeChain:
             {"kind": "repo", "id": "r1"},
             {"kind": "worktree", "id": "wt1", "parent_repo_id": "r1"},
             {"kind": "agent_workspace", "id": "ws1"},
+            {"kind": "filesystem", "path": "/tmp/repo"},
         ]:
             chain = scope_chain(ScopeRef(**kind_args))
             assert chain[-1] == ScopeRef(kind="hub")

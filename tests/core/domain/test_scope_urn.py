@@ -30,6 +30,12 @@ class TestFormatScopeUrn:
             format_scope_urn(kind="agent_workspace", id="ws1") == "agent_workspace:ws1"
         )
 
+    def test_filesystem(self) -> None:
+        assert (
+            format_scope_urn(kind="filesystem", id="/tmp/car repo")
+            == "filesystem:%2Ftmp%2Fcar%20repo"
+        )
+
     def test_unknown_kind_raises_kind_error(self) -> None:
         with pytest.raises(ScopeUrnKindError, match="Unknown scope kind"):
             format_scope_urn(kind="bogus", id="x")
@@ -46,9 +52,21 @@ class TestFormatScopeUrn:
         with pytest.raises(ScopeUrnError, match="parent_repo_id"):
             format_scope_urn(kind="worktree", id="wt1")
 
+    def test_worktree_parent_with_slash_raises(self) -> None:
+        with pytest.raises(ScopeUrnError, match="must not contain '/'"):
+            format_scope_urn(kind="worktree", id="wt1", parent_repo_id="owner/repo")
+
+    def test_worktree_id_with_slash_raises(self) -> None:
+        with pytest.raises(ScopeUrnError, match="must not contain '/'"):
+            format_scope_urn(kind="worktree", id="branch/wt1", parent_repo_id="r1")
+
     def test_agent_workspace_missing_id_raises(self) -> None:
         with pytest.raises(ScopeUrnError, match="requires an id"):
             format_scope_urn(kind="agent_workspace")
+
+    def test_filesystem_missing_path_raises(self) -> None:
+        with pytest.raises(ScopeUrnError, match="requires a path"):
+            format_scope_urn(kind="filesystem")
 
 
 class TestParseScopeUrn:
@@ -69,6 +87,14 @@ class TestParseScopeUrn:
         assert result == {
             "kind": "agent_workspace",
             "id": "ws1",
+            "parent_repo_id": None,
+        }
+
+    def test_filesystem(self) -> None:
+        result = parse_scope_urn("filesystem:%2Ftmp%2Fcar%20repo")
+        assert result == {
+            "kind": "filesystem",
+            "id": "/tmp/car repo",
             "parent_repo_id": None,
         }
 
@@ -116,6 +142,18 @@ class TestParseScopeUrn:
         with pytest.raises(ScopeUrnParseError, match="requires an id"):
             parse_scope_urn("agent_workspace:")
 
+    def test_agent_workspace_with_slash_raises_parse_error(self) -> None:
+        with pytest.raises(ScopeUrnParseError, match="must not contain '/'"):
+            parse_scope_urn("agent_workspace:a/b")
+
+    def test_filesystem_empty_path_raises_parse_error(self) -> None:
+        with pytest.raises(ScopeUrnParseError, match="requires a path"):
+            parse_scope_urn("filesystem:")
+
+    def test_filesystem_invalid_escape_raises_parse_error(self) -> None:
+        with pytest.raises(ScopeUrnParseError, match="invalid escape"):
+            parse_scope_urn("filesystem:%ZZ")
+
 
 class TestUrnRoundTrips:
     @pytest.mark.parametrize(
@@ -128,6 +166,10 @@ class TestUrnRoundTrips:
                 "worktree:r1/wt1",
             ),
             ({"kind": "agent_workspace", "id": "ws1"}, "agent_workspace:ws1"),
+            (
+                {"kind": "filesystem", "id": "/tmp/car repo"},
+                "filesystem:%2Ftmp%2Fcar%20repo",
+            ),
         ],
     )
     def test_format_then_parse_round_trips(self, kwargs: dict, expected: str) -> None:
@@ -139,4 +181,10 @@ class TestUrnRoundTrips:
         assert result["parent_repo_id"] == kwargs.get("parent_repo_id")
 
     def test_valid_scope_kinds_includes_all(self) -> None:
-        assert VALID_SCOPE_KINDS == {"hub", "repo", "worktree", "agent_workspace"}
+        assert VALID_SCOPE_KINDS == {
+            "hub",
+            "repo",
+            "worktree",
+            "agent_workspace",
+            "filesystem",
+        }

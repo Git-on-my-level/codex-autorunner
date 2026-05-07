@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Optional
+from urllib.parse import quote, unquote
 
 
 class ScopeUrnError(ValueError):
@@ -28,7 +29,26 @@ class ScopeUrnKindError(ScopeUrnError):
         super().__init__(f"Unknown scope kind '{kind}' in URN: {urn}")
 
 
-VALID_SCOPE_KINDS = frozenset({"hub", "repo", "worktree", "agent_workspace"})
+VALID_SCOPE_KINDS = frozenset(
+    {"hub", "repo", "worktree", "agent_workspace", "filesystem"}
+)
+
+
+def _require_segment(value: Optional[str], *, kind: str, field: str) -> str:
+    if not value:
+        raise ScopeUrnError(f"{kind} scope requires {field}")
+    if "/" in value:
+        raise ScopeUrnError(f"{kind} scope {field} must not contain '/'")
+    return value
+
+
+def _validate_percent_escapes(value: str, *, urn: str) -> None:
+    percent_pos = value.find("%")
+    while percent_pos >= 0:
+        escape = value[percent_pos + 1 : percent_pos + 3]
+        if len(escape) != 2 or any(c not in "0123456789abcdefABCDEF" for c in escape):
+            raise ScopeUrnParseError(urn, reason="filesystem path has invalid escape")
+        percent_pos = value.find("%", percent_pos + 1)
 
 
 def format_scope_urn(
@@ -42,19 +62,21 @@ def format_scope_urn(
     if kind == "hub":
         return "hub"
     if kind == "repo":
-        if not id:
-            raise ScopeUrnError("repo scope requires an id")
+        id = _require_segment(id, kind=kind, field="an id")
         return f"repo:{id}"
     if kind == "worktree":
-        if not id:
-            raise ScopeUrnError("worktree scope requires an id")
-        if not parent_repo_id:
-            raise ScopeUrnError("worktree scope requires a parent_repo_id")
+        id = _require_segment(id, kind=kind, field="an id")
+        parent_repo_id = _require_segment(
+            parent_repo_id, kind=kind, field="a parent_repo_id"
+        )
         return f"worktree:{parent_repo_id}/{id}"
     if kind == "agent_workspace":
-        if not id:
-            raise ScopeUrnError("agent_workspace scope requires an id")
+        id = _require_segment(id, kind=kind, field="an id")
         return f"agent_workspace:{id}"
+    if kind == "filesystem":
+        if not id:
+            raise ScopeUrnError("filesystem scope requires a path")
+        return f"filesystem:{quote(id, safe='')}"
     raise ScopeUrnKindError(urn=kind, kind=kind)
 
 
@@ -104,7 +126,20 @@ def parse_scope_urn(urn: str) -> dict[str, Optional[str]]:
             raise ScopeUrnParseError(
                 urn, reason="agent_workspace scope requires an id after ':'"
             )
+        if "/" in path:
+            raise ScopeUrnParseError(
+                urn, reason="agent_workspace scope id must not contain '/'"
+            )
         return {"kind": "agent_workspace", "id": path, "parent_repo_id": None}
+
+    if kind == "filesystem":
+        if not path:
+            raise ScopeUrnParseError(urn, reason="filesystem scope requires a path")
+        _validate_percent_escapes(path, urn=urn)
+        decoded_path = unquote(path)
+        if not decoded_path:
+            raise ScopeUrnParseError(urn, reason="filesystem scope requires a path")
+        return {"kind": "filesystem", "id": decoded_path, "parent_repo_id": None}
 
     raise ScopeUrnKindError(urn, kind=kind)
 
