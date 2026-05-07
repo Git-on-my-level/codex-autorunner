@@ -16,6 +16,7 @@ from codex_autorunner.agents.acp import (
     ACPMissingSessionError,
     ACPPermissionRequestEvent,
 )
+from codex_autorunner.agents.acp.client import _PromptState
 from codex_autorunner.agents.acp.errors import (
     ACPProcessCrashedError,
     ACPProtocolError,
@@ -47,6 +48,26 @@ pytestmark = pytest.mark.slow
 
 def fixture_command(scenario: str) -> list[str]:
     return [sys.executable, "-u", str(FIXTURE_PATH), "--scenario", scenario]
+
+
+def test_prompt_state_strict_deltas_append_without_overlap_merge() -> None:
+    state = _PromptState(session_id="session-1", turn_id="turn-1")
+
+    state.note_output_delta("Hel")
+    state.note_output_delta("lo")
+    state.note_output_delta("ha")
+    state.note_output_delta("ha")
+
+    assert state.final_output == "Hellohaha"
+
+
+def test_prompt_state_session_update_snapshots_merge_without_duplication() -> None:
+    state = _PromptState(session_id="session-1", turn_id="turn-1")
+
+    state.note_output_delta("fixture", merge_snapshot=True)
+    state.note_output_delta("fixture reply", merge_snapshot=True)
+
+    assert state.final_output == "fixture reply"
 
 
 @pytest.mark.parametrize(("method"), ("session/update", "session/request_permission"))
