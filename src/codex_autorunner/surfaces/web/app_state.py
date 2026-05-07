@@ -30,6 +30,7 @@ from ...core.managed_thread_identity import ManagedThreadIdentityStore
 from ...core.optional_dependencies import require_optional_dependencies
 from ...core.orchestration.sqlite import prepare_orchestration_sqlite
 from ...core.pma_thread_store import prepare_pma_thread_store
+from ...core.ports.surface_port_registry import SurfacePortRegistry
 from ...core.runtime import RuntimeContext
 from ...core.runtime_services import RuntimeServices
 from ...core.state import load_state
@@ -55,6 +56,7 @@ from .static_assets import (
     require_static_assets,
 )
 from .terminal_sessions import parse_tui_idle_seconds, prune_terminal_registry
+from .web_surface_port import WebSurfacePort, build_web_surface_port
 
 _DEV_INCLUDE_ROOT_REPO_ENV = "CAR_DEV_INCLUDE_ROOT_REPO"
 
@@ -96,6 +98,8 @@ class AppContext:
     logger: logging.Logger
     tui_idle_seconds: Optional[float]
     tui_idle_check_seconds: Optional[float]
+    surface_port_registry: SurfacePortRegistry
+    web_surface_port: WebSurfacePort
 
 
 @dataclass(frozen=True)
@@ -118,6 +122,8 @@ class HubAppContext:
     asset_version: str
     static_asset_provenance: StaticAssetProvenance
     logger: logging.Logger
+    surface_port_registry: SurfacePortRegistry
+    web_surface_port: WebSurfacePort
 
 
 @dataclass(frozen=True)
@@ -586,6 +592,12 @@ def build_app_context(
             hub_static.max_cache_entries,
             hub_static.max_cache_age_days,
         )
+    web_port = build_web_surface_port(
+        static_assets_ok=True,
+        logger=logger,
+    )
+    surface_port_registry = SurfacePortRegistry()
+    surface_port_registry.register("web", web_port)
     return AppContext(
         base_path=normalized_base,
         env=env,
@@ -615,6 +627,8 @@ def build_app_context(
         logger=logger,
         tui_idle_seconds=tui_idle_seconds,
         tui_idle_check_seconds=tui_idle_check_seconds,
+        surface_port_registry=surface_port_registry,
+        web_surface_port=web_port,
     )
 
 
@@ -646,6 +660,8 @@ def apply_app_context(app, context: AppContext) -> None:
     app.state.static_assets_context = context.static_assets_context
     app.state.asset_version = context.asset_version
     app.state.static_asset_provenance = context.static_asset_provenance
+    app.state.surface_port_registry = context.surface_port_registry
+    app.state.web_surface_port = context.web_surface_port
 
 
 def build_hub_context(
@@ -785,6 +801,12 @@ def build_hub_context(
         durable_writes=durable_writes,
         logger=logger,
     )
+    hub_web_port = build_web_surface_port(
+        static_assets_ok=True,
+        logger=logger,
+    )
+    hub_surface_port_registry = SurfacePortRegistry()
+    hub_surface_port_registry.register("web", hub_web_port)
     return HubAppContext(
         base_path=normalized_base,
         config=config,
@@ -804,6 +826,8 @@ def build_hub_context(
         asset_version=resolved_asset_version,
         static_asset_provenance=static_provenance,
         logger=logger,
+        surface_port_registry=hub_surface_port_registry,
+        web_surface_port=hub_web_port,
     )
 
 
@@ -826,3 +850,5 @@ def apply_hub_context(app, context: HubAppContext) -> None:
     app.state.asset_version = context.asset_version
     app.state.static_asset_provenance = context.static_asset_provenance
     app.state.hub_supervisor = context.supervisor
+    app.state.surface_port_registry = context.surface_port_registry
+    app.state.web_surface_port = context.web_surface_port
