@@ -2,7 +2,9 @@
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
   import { onDestroy, onMount, tick } from 'svelte';
+  import MasterDetail from '$lib/components/MasterDetail.svelte';
   import PmaMemoryView from '$lib/components/PmaMemoryView.svelte';
+  import ScopeChip, { type ScopeChipNavItem } from '$lib/components/ScopeChip.svelte';
   import SurfaceArtifactCard from '$lib/components/SurfaceArtifactCard.svelte';
   import { pmaApi, type ApiError, type JsonRecord } from '$lib/api/client';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
@@ -32,7 +34,6 @@
     PMA_CHAT_FILTER_ORDER,
     PMA_MEMORY_LIST_ID,
     pmaChatHeaderScopeLine,
-    pmaChatScopeLabel,
     pmaChatScopeLabelFromChat,
     progressPercent,
     reconcilePmaTimeline,
@@ -47,6 +48,7 @@
   } from '$lib/viewModels/pmaChat';
   import { buildPmaMemoryViewModel, type PmaMemoryViewModel } from '$lib/viewModels/pmaMemory';
   import { repoAccent, repoInitials } from '$lib/viewModels/repoIdentity';
+  import { agentWorkspaceRoute, repoRoute, worktreeRoute } from '$lib/viewModels/routes';
 
   let chats = $state<PmaChatSummary[]>([]);
   let timeline = $state<PmaTimelineItem[]>([]);
@@ -63,7 +65,7 @@
   let selectedModel = $state('');
   let selectedScopeId = $state('local');
   let filter = $state<PmaChatFilter>('all');
-  let mobilePane = $state<'list' | 'chat'>('list');
+  let detailMode = $state<'list' | 'detail'>('list');
   let search = $state('');
   let draft = $state('');
   let loadingChats = $state(true);
@@ -101,7 +103,8 @@
   const statusBar = $derived(buildPmaStatusBar(progress, activeChat));
   const modelState = $derived(modelSelectorState(loadingModels, modelError?.message ?? null, models.length));
   const selectedScope = $derived(scopeOptions.find((scope) => scope.id === selectedScopeId) ?? localPmaChatScopeOption());
-  const selectedScopeLabel = $derived(pmaChatScopeLabel(selectedScope));
+  const selectedScopeHref = $derived(scopeOptionHref(selectedScope));
+  const selectedScopeNav = $derived(scopeOptionNavItems(selectedScope));
   const headerScopeLine = $derived(pmaChatHeaderScopeLine(activeChat, repoLabelForRepoId));
   const agentStateLabel = $derived(
     agentError ? agentError.message : agents.length === 0 ? 'no agent' : 'agent'
@@ -154,6 +157,12 @@
     return () => window.clearInterval(interval);
   });
 
+  $effect(() => {
+    const requestedDetail = requestedDetailFromUrl();
+    if (!requestedDetail) return;
+    void activateDetailFromUrl(requestedDetail);
+  });
+
   onDestroy(() => {
     if (pendingRefreshTimer) window.clearTimeout(pendingRefreshTimer);
     closeStream();
@@ -187,12 +196,18 @@
     if (chatResult.ok) {
       chats = chatResult.data;
       const requestedChat = page.url.searchParams.get('chat');
-      activeChatId = chooseActiveChatId(chatResult.data, activeChatId, requestedChat);
+      const requestedDetail = requestedDetailFromUrl();
+      activeChatId = requestedDetail === PMA_MEMORY_LIST_ID
+        ? PMA_MEMORY_LIST_ID
+        : chooseActiveChatId(chatResult.data, activeChatId, requestedChat);
       if (activeChatId && activeChatId !== PMA_MEMORY_LIST_ID) {
-        mobilePane = 'chat';
+        detailMode = 'detail';
         syncSelectorsToActiveChat();
         void refreshActive(activeChatId);
         connectStream(activeChatId);
+      } else if (activeChatId === PMA_MEMORY_LIST_ID) {
+        detailMode = 'detail';
+        void loadMemoryDocs();
       }
     } else {
       chatError = chatResult.error;
@@ -246,8 +261,9 @@
     closeStream();
     timeline = [];
     progress = null;
-    mobilePane = 'chat';
+    detailMode = 'detail';
     activeError = null;
+    await syncDetailUrl(PMA_MEMORY_LIST_ID);
     await loadMemoryDocs();
   }
 
@@ -307,10 +323,83 @@
     activeChatId = chatId;
     timeline = [];
     progress = null;
-    mobilePane = 'chat';
+    detailMode = 'detail';
+    syncSelectorsToActiveChat();
+    await syncDetailUrl(chatId);
+    await refreshActive(chatId);
+    connectStream(chatId);
+  }
+
+  function requestedDetailFromUrl(): string | null {
+    const detail = page.url.searchParams.get('detail');
+    if (detail === 'memory') return PMA_MEMORY_LIST_ID;
+    if (detail?.startsWith('chat:')) return detail.slice('chat:'.length);
+    return page.url.searchParams.get('chat');
+  }
+
+  async function activateDetailFromUrl(detailId: string): Promise<void> {
+    if (detailId === activeChatId) return;
+    if (detailId === PMA_MEMORY_LIST_ID) {
+      await selectPinnedMemoryWithoutUrl();
+      return;
+    }
+    if (!chats.some((chat) => chat.id === detailId)) return;
+    await selectChatWithoutUrl(detailId);
+  }
+
+  async function selectPinnedMemoryWithoutUrl(): Promise<void> {
+    activeChatId = PMA_MEMORY_LIST_ID;
+    closeStream();
+    timeline = [];
+    progress = null;
+    detailMode = 'detail';
+    activeError = null;
+    await loadMemoryDocs();
+  }
+
+  async function selectChatWithoutUrl(chatId: string): Promise<void> {
+    activeChatId = chatId;
+    timeline = [];
+    progress = null;
+    detailMode = 'detail';
     syncSelectorsToActiveChat();
     await refreshActive(chatId);
     connectStream(chatId);
+  }
+
+  async function syncDetailUrl(detailId: string): Promise<void> {
+    const params = new URLSearchParams(page.url.searchParams);
+    params.delete('draft');
+    if (detailId === PMA_MEMORY_LIST_ID) {
+      params.set('detail', 'memory');
+      params.delete('chat');
+    } else {
+      params.set('detail', `chat:${detailId}`);
+      params.set('chat', detailId);
+    }
+    const query = params.toString();
+    await goto(href(`/chats${query ? `?${query}` : ''}`), { keepFocus: true, noScroll: true });
+  }
+
+  function scopeOptionHref(scope: PmaChatScopeOption): string | null {
+    if (scope.kind === 'local') return '/chats';
+    if (scope.kind === 'repo') return repoRoute(scope.resourceId);
+    if (scope.kind === 'worktree') return worktreeRoute(scope.resourceId, scope.parentRepoId);
+    if (scope.kind === 'agent_workspace') return agentWorkspaceRoute(scope.resourceId);
+    return null;
+  }
+
+  function scopeOptionNavItems(scope: PmaChatScopeOption): ScopeChipNavItem[] {
+    const items: ScopeChipNavItem[] = [{ label: 'Chats', href: '/chats', current: scope.kind === 'local' }];
+    if (scope.kind === 'repo') {
+      items.push({ label: 'Repo', href: repoRoute(scope.resourceId), current: true });
+    } else if (scope.kind === 'worktree') {
+      if (scope.parentRepoId) items.push({ label: 'Repo', href: repoRoute(scope.parentRepoId) });
+      items.push({ label: 'Worktree', href: worktreeRoute(scope.resourceId, scope.parentRepoId), current: true });
+    } else if (scope.kind === 'agent_workspace') {
+      items.push({ label: 'Agent workspace', href: agentWorkspaceRoute(scope.resourceId), current: true });
+    }
+    return items;
   }
 
   async function refreshActive(chatId: string, options: { quiet?: boolean } = {}): Promise<void> {
@@ -592,30 +681,16 @@
 
 </script>
 
-<section class="pma-layout" aria-label="Chats workspace">
-  <div class="pma-mobile-switch" role="tablist" aria-label="Chats panels">
-    <button
-      class:active={mobilePane === 'list'}
-      type="button"
-      role="tab"
-      aria-selected={mobilePane === 'list'}
-      onclick={() => (mobilePane = 'list')}
-    >
-      List
-    </button>
-    <button
-      class:active={mobilePane === 'chat'}
-      type="button"
-      role="tab"
-      aria-selected={mobilePane === 'chat'}
-      onclick={() => (mobilePane = 'chat')}
-      disabled={!activeChat && activeChatId !== PMA_MEMORY_LIST_ID}
-    >
-      Conversation
-    </button>
-  </div>
-
-  <aside class:hidden-mobile-pane={mobilePane !== 'list'} class="chat-list" aria-label="Chats">
+<MasterDetail
+  label="Chats workspace"
+  selected={Boolean(activeChat || activeChatId === PMA_MEMORY_LIST_ID)}
+  mode={detailMode}
+  listLabel="Chats"
+  detailLabel="Detail"
+  onModeChange={(mode) => (detailMode = mode)}
+>
+  {#snippet list()}
+  <aside class="chat-list" aria-label="Chats">
     <div class="chat-list-header">
       <div class="section-heading">
         <h2>Chats</h2>
@@ -634,7 +709,12 @@
         </label>
       </div>
     </div>
-    <p class="selected-scope-note">{selectedScopeLabel}</p>
+    <ScopeChip
+      label={selectedScope.label}
+      detail={selectedScope.detail}
+      href={selectedScopeHref}
+      navItems={selectedScopeNav}
+    />
 
     <label class="search-field">
       <span class="sr-only">Search chats</span>
@@ -753,8 +833,10 @@
       {/if}
     </div>
   </aside>
+  {/snippet}
 
-  <div class:hidden-mobile-pane={mobilePane !== 'chat'} class="active-chat">
+  {#snippet detail()}
+  <div class="active-chat">
     {#if activeChatId === PMA_MEMORY_LIST_ID}
       <div class="memory-chat-pane">
         <div class="chat-header">
@@ -865,7 +947,7 @@
         <div class="state-panel empty-state">
           <strong>No chat is selected</strong>
           <p>Pick a conversation or create a new chat to start work.</p>
-          <button type="button" onclick={() => (mobilePane = 'list')}>Browse chats</button>
+          <button type="button" onclick={() => (detailMode = 'list')}>Browse chats</button>
         </div>
       {:else if activeCards.length === 0 && !statusBar}
         <div class="state-panel empty-state">
@@ -1044,4 +1126,5 @@
     {/if}
     {/if}
   </div>
-</section>
+  {/snippet}
+</MasterDetail>
