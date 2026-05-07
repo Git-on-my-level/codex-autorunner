@@ -67,6 +67,10 @@ class FilesystemScopeResolver:
         repo = self._manifest.get(ref.id)
         if repo is None:
             raise ScopeRefError(f"Unknown repo scope: {ref.id}")
+        if repo.kind != "base":
+            raise ScopeRefError(
+                f"Scope {ref.id} is a {repo.kind} manifest entry, not a repo scope"
+            )
         abs_path = self._hub_root / repo.path
         return ResolvedScope(
             scope=ref,
@@ -80,6 +84,10 @@ class FilesystemScopeResolver:
         repo = self._manifest.get(ref.id)
         if repo is None:
             raise ScopeRefError(f"Unknown worktree scope: {ref.id}")
+        if repo.kind != "worktree":
+            raise ScopeRefError(
+                f"Scope {ref.id} is a {repo.kind} manifest entry, not a worktree scope"
+            )
         abs_path = self._hub_root / repo.path
         return ResolvedScope(
             scope=ref,

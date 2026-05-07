@@ -17,6 +17,7 @@ from codex_autorunner.core.domain.refs import (
     TicketRef,
 )
 from codex_autorunner.core.ports.memory_store import MemoryDoc, MemoryDocs
+from codex_autorunner.core.ports.scope_resolver import ResolvedScope
 from codex_autorunner.core.ports.ticket_store import TicketRecord, TicketStatus
 from codex_autorunner.manifest import (
     Manifest,
@@ -85,6 +86,17 @@ def _write_contextspace_doc(repo_root: Path, kind: str, content: str) -> None:
     doc_path.write_text(content, encoding="utf-8")
 
 
+class _NoWorkspaceResolver:
+    def resolve(self, ref: ScopeRef) -> ResolvedScope:
+        return ResolvedScope(scope=ref, display_name="No workspace")
+
+    def resolve_parent(self, ref: ScopeRef) -> ScopeRef | None:
+        return None
+
+    def resolve_children(self, ref: ScopeRef) -> list[ScopeRef]:
+        return []
+
+
 class TestFilesystemScopeResolver:
     def test_resolve_hub(self, tmp_path: Path) -> None:
         hub_root, manifest = _make_hub_tree(tmp_path)
@@ -108,6 +120,12 @@ class TestFilesystemScopeResolver:
         with pytest.raises(ScopeRefError, match="Unknown repo scope"):
             resolver.resolve(ScopeRef(kind="repo", id="nope"))
 
+    def test_resolve_repo_rejects_worktree_manifest_entry(self, tmp_path: Path) -> None:
+        hub_root, manifest = _make_hub_tree(tmp_path)
+        resolver = FilesystemScopeResolver(hub_root, manifest)
+        with pytest.raises(ScopeRefError, match="not a repo scope"):
+            resolver.resolve(ScopeRef(kind="repo", id="wt-1"))
+
     def test_resolve_worktree(self, tmp_path: Path) -> None:
         hub_root, manifest = _make_hub_tree(tmp_path)
         resolver = FilesystemScopeResolver(hub_root, manifest)
@@ -115,6 +133,13 @@ class TestFilesystemScopeResolver:
         result = resolver.resolve(wt)
         assert result.workspace_root == str(hub_root / "my-wt")
         assert result.metadata.get("worktree_of") == "repo-1"
+
+    def test_resolve_worktree_rejects_base_manifest_entry(self, tmp_path: Path) -> None:
+        hub_root, manifest = _make_hub_tree(tmp_path)
+        resolver = FilesystemScopeResolver(hub_root, manifest)
+        wt = ScopeRef(kind="worktree", id="repo-1", parent_repo_id="repo-1")
+        with pytest.raises(ScopeRefError, match="not a worktree scope"):
+            resolver.resolve(wt)
 
     def test_resolve_filesystem(self, tmp_path: Path) -> None:
         hub_root, manifest = _make_hub_tree(tmp_path)
@@ -168,6 +193,20 @@ class TestFilesystemScopeResolver:
 
 
 class TestFilesystemMemoryStore:
+    def test_load_scope_reads_hub_memory(self, tmp_path: Path) -> None:
+        hub_root, manifest = _make_hub_tree(tmp_path)
+        _write_contextspace_doc(hub_root, "active_context", "hub memory")
+
+        resolver = FilesystemScopeResolver(hub_root, manifest)
+        store = FilesystemMemoryStore(resolver)
+
+        result = asyncio.get_event_loop().run_until_complete(
+            store.load_scope(ScopeRef(kind="hub"))
+        )
+        assert {doc.key: doc.content for doc in result.docs} == {
+            "active_context": "hub memory"
+        }
+
     def test_load_existing_doc(self, tmp_path: Path) -> None:
         hub_root, manifest = _make_hub_tree(tmp_path)
         repo_root = hub_root / "my-repo"
@@ -182,6 +221,22 @@ class TestFilesystemMemoryStore:
         assert doc is not None
         assert doc.key == "decisions"
         assert "# Decisions" in doc.content
+
+    def test_load_worktree_doc_does_not_read_repo_memory(self, tmp_path: Path) -> None:
+        hub_root, manifest = _make_hub_tree(tmp_path)
+        repo_root = hub_root / "my-repo"
+        wt_root = hub_root / "my-wt"
+        _write_contextspace_doc(repo_root, "active_context", "repo memory")
+        _write_contextspace_doc(wt_root, "active_context", "worktree memory")
+
+        resolver = FilesystemScopeResolver(hub_root, manifest)
+        store = FilesystemMemoryStore(resolver)
+        scope = ScopeRef(kind="worktree", id="wt-1", parent_repo_id="repo-1")
+        ref = MemoryRef(scope=scope, key="active_context")
+
+        doc = asyncio.get_event_loop().run_until_complete(store.load(ref))
+        assert doc is not None
+        assert doc.content == "worktree memory"
 
     def test_load_missing_doc_returns_none(self, tmp_path: Path) -> None:
         hub_root, manifest = _make_hub_tree(tmp_path)
@@ -249,13 +304,20 @@ class TestFilesystemMemoryStore:
         deleted = asyncio.get_event_loop().run_until_complete(store.delete(ref))
         assert deleted is False
 
-    def test_load_scope_without_workspace_root(self, tmp_path: Path) -> None:
-        hub_root, manifest = _make_hub_tree(tmp_path)
-        resolver = FilesystemScopeResolver(hub_root, manifest)
-        store = FilesystemMemoryStore(resolver)
+    def test_load_scope_without_workspace_root(self) -> None:
+        store = FilesystemMemoryStore(_NoWorkspaceResolver())
         scope = ScopeRef(kind="hub")
         result = asyncio.get_event_loop().run_until_complete(store.load_scope(scope))
         assert result.docs == []
+
+    def test_save_without_workspace_root_raises(self) -> None:
+        store = FilesystemMemoryStore(_NoWorkspaceResolver())
+        ref = MemoryRef(scope=ScopeRef(kind="hub"), key="active_context")
+
+        with pytest.raises(ValueError, match="without workspace_root"):
+            asyncio.get_event_loop().run_until_complete(
+                store.save(ref, MemoryDoc(key="active_context", content="ctx"))
+            )
 
 
 class TestFilesystemTicketStore:
@@ -294,6 +356,51 @@ class TestFilesystemTicketStore:
         assert "B" in by_title
         assert by_title["A"].status == TicketStatus.PENDING
         assert by_title["B"].status == TicketStatus.DONE
+
+    def test_list_by_scope_does_not_recurse_into_nested_workspaces(
+        self, tmp_path: Path
+    ) -> None:
+        hub_root, manifest = _make_hub_tree(tmp_path)
+        repo_root = hub_root / "my-repo"
+        ticket_dir = repo_root / ".codex-autorunner" / "tickets"
+        _write_ticket(ticket_dir, 1, "tkt_repo", title="Repo ticket")
+        nested_ticket_dir = repo_root / "nested" / ".codex-autorunner" / "tickets"
+        nested_ticket_dir.mkdir(parents=True)
+        _write_ticket(nested_ticket_dir, 1, "tkt_nested", title="Nested ticket")
+
+        resolver = FilesystemScopeResolver(hub_root, manifest)
+        store = FilesystemTicketStore(resolver)
+        records = asyncio.get_event_loop().run_until_complete(
+            store.list_by_scope(ScopeRef(kind="repo", id="repo-1"))
+        )
+
+        assert [record.ref.ticket_id for record in records] == ["tkt_repo"]
+
+    def test_worktree_tickets_do_not_include_repo_tickets(self, tmp_path: Path) -> None:
+        hub_root, manifest = _make_hub_tree(tmp_path)
+        repo_ticket_dir = hub_root / "my-repo" / ".codex-autorunner" / "tickets"
+        wt_ticket_dir = hub_root / "my-wt" / ".codex-autorunner" / "tickets"
+        _write_ticket(repo_ticket_dir, 1, "tkt_repo", title="Repo ticket")
+        _write_ticket(wt_ticket_dir, 1, "tkt_worktree", title="Worktree ticket")
+
+        resolver = FilesystemScopeResolver(hub_root, manifest)
+        store = FilesystemTicketStore(resolver)
+        scope = ScopeRef(kind="worktree", id="wt-1", parent_repo_id="repo-1")
+
+        records = asyncio.get_event_loop().run_until_complete(
+            store.list_by_scope(scope)
+        )
+        assert [record.ref.ticket_id for record in records] == ["tkt_worktree"]
+
+    def test_create_without_workspace_root_raises(self) -> None:
+        store = FilesystemTicketStore(_NoWorkspaceResolver())
+        record = TicketRecord(
+            ref=TicketRef(scope=ScopeRef(kind="hub"), ticket_id="tkt_nowhere"),
+            title="No workspace",
+        )
+
+        with pytest.raises(ValueError, match="without workspace_root"):
+            asyncio.get_event_loop().run_until_complete(store.create(record))
 
     def test_update_status(self, tmp_path: Path) -> None:
         hub_root, manifest = _make_hub_tree(tmp_path)
