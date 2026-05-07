@@ -30,6 +30,7 @@ bin/
 
 # Testing
 .pytest_cache/
+.hypothesis/
 .coverage
 htmlcov/
 scorecard.png
