@@ -59,7 +59,6 @@ describe('ContextspaceView', () => {
     const { body } = render(ContextspaceView, { props: { state: 'ready', vm } });
 
     expect(body).toContain('Workspace memory: discord-5');
-    expect(body).toContain('Worktree-scoped contextspace');
     expect(body).toContain('Worktree memory is read from this worktree workspace contextspace.');
     expect(body).toContain('Open worktree variant');
     expect(body).toContain('Ask PMA to refresh this worktree memory');
@@ -69,7 +68,6 @@ describe('ContextspaceView', () => {
     const vm = buildContextspaceViewModel('missing-workspace', [], [mockRepoSummary], [mockWorktreeSummary]);
     const { body } = render(ContextspaceView, { props: { state: 'ready', vm } });
 
-    expect(body).toContain('Unknown workspace contextspace');
     expect(body).toContain('scoped contextspace was not loaded');
     expect(body).toContain('href="/repos"');
     expect(body).toContain('Open workspace index');

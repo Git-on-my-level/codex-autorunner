@@ -7,6 +7,7 @@
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import { statusLabel } from '$lib/viewModels/pmaChat';
   import type { PartialPageIssue } from '$lib/api/client';
+  import PageHero from './PageHero.svelte';
 
   let {
     state,
@@ -186,16 +187,14 @@
 {:else if mode === 'detail' && detail}
   <section class="page-stack repo-worktree-page">
     {#if detail.isMissing}
-      <div class="section-heading detail-heading">
-        <div>
-          <p class="eyebrow">{detail.eyebrow}</p>
-          <h1>{detail.title}</h1>
-          <p>The route id <code>{detail.id}</code> does not match a known {detail.kind} in the current hub inventory.</p>
-        </div>
-        <div class="detail-actions">
-          <a href={href(detail.missingIndexHref)}>{detail.missingIndexLabel}</a>
-        </div>
-      </div>
+      <PageHero
+        title={detail.title}
+        subtitle={`Route id ${detail.id} does not match a known ${detail.kind} in the current hub inventory.`}
+      >
+        {#snippet actions()}
+          <a class="hero-action" href={href(detail.missingIndexHref)}>{detail.missingIndexLabel}</a>
+        {/snippet}
+      </PageHero>
 
       <section class="page-panel identity-panel">
         <h2>Unknown workspace</h2>
@@ -205,35 +204,30 @@
         </div>
       </section>
     {:else}
-    <div class="section-heading detail-heading">
-      <div>
-        <p class="eyebrow">{detail.eyebrow}</p>
-        <h1>{detail.title}</h1>
-        <p>{detail.kind === 'worktree' ? 'repo worktree variant' : 'repo'} · {detail.stateLabel}{#if detail.branch} · {detail.branch}{/if}</p>
-      </div>
-      <div class="detail-actions">
+    <PageHero
+      title={detail.title}
+      subtitle={`${detail.kind === 'worktree' ? 'repo worktree variant' : 'repo'} · ${detail.stateLabel}${detail.branch ? ' · ' + detail.branch : ''}`}
+    >
+      {#snippet actions()}
         {#each detail.links.filter((link) => !link.secondary) as link}
-          <a href={href(link.href)}>{link.label}</a>
+          <a class="hero-action" href={href(link.href)}>{link.label}</a>
         {/each}
-      </div>
-    </div>
+      {/snippet}
+    </PageHero>
 
-    <section class="page-panel identity-panel">
-      <h2>{detail.kind === 'worktree' ? 'Repo worktree' : 'Repo'} identity</h2>
-      <dl class="compact-definition">
-        <div><dt>ID</dt><dd>{detail.id}</dd></div>
-        {#if detail.kind === 'worktree'}
-          <div>
-            <dt>Base repo</dt>
-            <dd>
-              {#if detail.baseRepoHref}<a href={href(detail.baseRepoHref)}>{detail.baseRepoLabel}</a>{:else}{detail.baseRepoLabel ?? 'Unknown'}{/if}
-            </dd>
-          </div>
-        {/if}
-        <div><dt>Branch</dt><dd>{detail.branch ?? 'Unknown'}</dd></div>
-        <div><dt>Path</dt><dd>{detail.path ?? 'Unknown'}</dd></div>
-      </dl>
-    </section>
+    <dl class="identity-strip" aria-label={`${detail.kind === 'worktree' ? 'Repo worktree' : 'Repo'} identity`}>
+      <div><dt>ID</dt><dd>{detail.id}</dd></div>
+      {#if detail.kind === 'worktree'}
+        <div>
+          <dt>Base repo</dt>
+          <dd>
+            {#if detail.baseRepoHref}<a href={href(detail.baseRepoHref)}>{detail.baseRepoLabel}</a>{:else}{detail.baseRepoLabel ?? 'Unknown'}{/if}
+          </dd>
+        </div>
+      {/if}
+      <div><dt>Branch</dt><dd>{detail.branch ?? 'Unknown'}</dd></div>
+      <div><dt>Path</dt><dd>{detail.path ?? 'Unknown'}</dd></div>
+    </dl>
 
     <section class={`ticket-flow-strip ${detail.flowStatus.signal}`} aria-label="Ticket flow status">
       <div>
@@ -429,8 +423,8 @@
     margin: 0;
     font-size: var(--font-size-4);
     font-weight: 650;
-    letter-spacing: -0.018em;
-    line-height: 1.2;
+    letter-spacing: -0.022em;
+    line-height: 1.18;
   }
 
   .repos-hero-sub {
@@ -443,30 +437,25 @@
   .repos-hero-stats {
     display: flex;
     align-items: stretch;
-    gap: 0;
+    gap: var(--space-5);
     margin: 0;
-    padding: 4px;
-    border: 1px solid var(--color-border-subtle);
-    border-radius: 8px;
-    background: var(--color-surface);
+    padding: 0;
+    background: transparent;
   }
 
   .repos-hero-stats > div {
     display: flex;
-    align-items: baseline;
-    gap: 6px;
-    padding: 2px var(--space-3);
-    border-right: 1px solid var(--color-border-subtle);
-  }
-
-  .repos-hero-stats > div:last-child {
-    border-right: 0;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    padding: 0;
   }
 
   .repos-hero-stats dt {
     margin: 0;
+    order: 2;
     color: var(--color-ink-muted);
-    font-size: 11px;
+    font-size: var(--font-size-0);
     font-weight: 500;
     letter-spacing: 0;
     text-transform: none;
@@ -475,10 +464,10 @@
   .repos-hero-stats dd {
     margin: 0;
     color: var(--color-ink);
-    font-size: var(--font-size-2);
+    font-size: var(--font-size-5);
     font-weight: 650;
     font-variant-numeric: tabular-nums;
-    letter-spacing: -0.01em;
+    letter-spacing: -0.022em;
     line-height: 1;
   }
 
@@ -841,9 +830,35 @@
       flex-direction: column;
       align-items: stretch;
       gap: var(--space-2);
+      padding: 0;
+    }
+    .repos-hero-copy {
+      gap: var(--space-2);
+    }
+    .repos-hero h1 {
+      font-size: var(--font-size-2);
+      line-height: 1.25;
+    }
+    .repos-hero-sub {
+      font-size: var(--font-size-0);
+      line-height: 1.35;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      display: -webkit-box;
+      -webkit-line-clamp: 1;
+      -webkit-box-orient: vertical;
     }
     .repos-hero-stats {
       align-self: flex-start;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      gap: var(--space-3);
+      flex-wrap: wrap;
+    }
+    .repos-hero-stats > div {
+      padding: 0;
+      border-right: 0;
     }
     .repo-card {
       grid-template-columns: auto minmax(0, 1fr);

@@ -3,7 +3,6 @@ import { renderMarkdownToHtml } from './contextspace';
 
 export type PmaMemoryDocumentTab = {
   id: string;
-  label: string;
   filename: string;
   content: string;
   html: string;
@@ -19,12 +18,7 @@ export type PmaMemoryViewModel = {
   presentCount: number;
 };
 
-const PMA_DOC_LABELS: Record<string, string> = {
-  'AGENTS.md': 'Durable guidance',
-  'active_context.md': 'Active context'
-};
-
-const PMA_DOC_ORDER = ['AGENTS.md', 'active_context.md'];
+const PMA_DOC_ORDER = ['AGENTS.md', 'active_context.md', 'context_log.md'];
 const PMA_DOC_SET = new Set(PMA_DOC_ORDER);
 
 export function buildPmaMemoryViewModel(docs: ContextspaceDocument[]): PmaMemoryViewModel {
@@ -40,7 +34,6 @@ export function buildPmaMemoryViewModel(docs: ContextspaceDocument[]): PmaMemory
     const content = doc.content ?? '';
     return {
       id: doc.id || doc.name,
-      label: PMA_DOC_LABELS[doc.name] ?? readableDocLabel(doc.name),
       filename: doc.name,
       content,
       html: renderMarkdownToHtml(content),
@@ -55,11 +48,4 @@ export function buildPmaMemoryViewModel(docs: ContextspaceDocument[]): PmaMemory
     docs: tabs,
     presentCount: tabs.filter((doc) => !doc.isMissing).length
   };
-}
-
-function readableDocLabel(name: string): string {
-  return name
-    .replace(/\.md$/i, '')
-    .replace(/[_-]+/g, ' ')
-    .replace(/\b\w/g, (char) => char.toUpperCase());
 }

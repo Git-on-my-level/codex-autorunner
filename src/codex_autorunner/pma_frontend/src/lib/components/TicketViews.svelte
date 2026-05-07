@@ -6,6 +6,7 @@
     TicketListViewModel
   } from '$lib/viewModels/ticket';
   import EditableMarkdown from '$lib/components/EditableMarkdown.svelte';
+  import PageHero from '$lib/components/PageHero.svelte';
   import { filterTicketRows, rowRelativeTime } from '$lib/viewModels/ticket';
   import { renderMarkdownToHtml } from '$lib/viewModels/markdown';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
@@ -162,11 +163,7 @@
   </section>
 {:else if mode === 'list' && list}
   <section class="page-stack ticket-page">
-    <div class="section-heading">
-      <p class="eyebrow">{list.eyebrow}</p>
-      <h1>{list.title}</h1>
-      <p>{list.subtitle}</p>
-    </div>
+    <PageHero title={list.title} subtitle={list.subtitle} />
 
     <div class="filter-row ticket-filter-row" role="tablist" aria-label="Ticket filters">
       {#each list.filters as filter}
@@ -320,7 +317,6 @@
     <header class="ticket-hero">
       <div class="ticket-hero-top">
         <nav class="ticket-breadcrumb" aria-label="Ticket breadcrumb">
-          <p class="eyebrow">{detail.workspaceKind === 'repo' ? 'Repo ticket' : detail.workspaceKind === 'worktree' ? 'Worktree ticket' : 'Ticket'}</p>
           {#if detail.workspaceHref}
             <a class="ticket-breadcrumb-link" href={href(detail.workspaceHref)}>{detail.repoLabel}</a>
           {:else}

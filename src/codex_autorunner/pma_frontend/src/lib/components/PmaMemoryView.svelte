@@ -64,8 +64,7 @@
           onclick={() => (activeDocId = doc.id)}
         >
           <span class="memory-tab-dot" aria-hidden="true"></span>
-          <span class="memory-tab-label">{doc.label}</span>
-          <small>{doc.filename}</small>
+          <span class="memory-tab-label">{doc.filename}</span>
         </button>
       {/each}
     </nav>
@@ -93,8 +92,9 @@
         content={activeDoc.content}
         html={activeDoc.html}
         isMissing={activeDoc.isMissing}
-        emptyTitle={`${activeDoc.label} has no content`}
+        emptyTitle={`${activeDoc.filename} has no content`}
         emptyMessage="PMA has not written content to this memory document yet."
+        editable={activeDoc.filename !== 'context_log.md'}
         onSave={onSaveDoc}
       />
     </article>
@@ -253,15 +253,15 @@
     box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 14%, transparent);
   }
 
-  .memory-tabs-v2 small {
+  .memory-tab-label {
     font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 11px;
-    color: var(--color-ink-faint);
-    font-weight: 400;
+    font-size: var(--font-size-1);
+    font-weight: 500;
+    color: var(--color-ink-muted);
   }
 
-  .memory-tabs-v2 button.active small {
-    color: var(--color-ink-muted);
+  .memory-tabs-v2 button.active .memory-tab-label {
+    color: var(--color-ink);
   }
 
   /* Reader */

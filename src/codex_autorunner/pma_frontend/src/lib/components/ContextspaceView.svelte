@@ -1,5 +1,6 @@
 <script lang="ts">
   import EditableMarkdown from '$lib/components/EditableMarkdown.svelte';
+  import PageHero from '$lib/components/PageHero.svelte';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import type { ContextspaceViewModel, ContextspaceDocKind } from '$lib/viewModels/contextspace';
 
@@ -43,17 +44,15 @@
   </section>
 {:else if vm && activeDoc}
   <section class="page-stack contextspace-page">
-    <div class="section-heading detail-heading">
-      <div>
-        <p class="eyebrow">{vm.eyebrow}</p>
-        <h1>{vm.title}</h1>
-        <p>{vm.description} {vm.presentCount} of {vm.docs.length} standard docs have content.</p>
-      </div>
-      <div class="detail-actions">
-        <a href={href(vm.openWorkspaceHref)}>{vm.openWorkspaceLabel}</a>
-        <a href={href(vm.askPmaHref)}>Ask PMA to update</a>
-      </div>
-    </div>
+    <PageHero
+      title={vm.title}
+      subtitle={`${vm.description} ${vm.presentCount} of ${vm.docs.length} standard docs have content.`}
+    >
+      {#snippet actions()}
+        <a class="hero-action" href={href(vm.openWorkspaceHref)}>{vm.openWorkspaceLabel}</a>
+        <a class="hero-action" href={href(vm.askPmaHref)}>Ask PMA to update</a>
+      {/snippet}
+    </PageHero>
 
     <div class="contextspace-layout">
       <aside class="page-panel contextspace-doc-list" aria-label="Scoped workspace contextspace documents">

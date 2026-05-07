@@ -606,7 +606,10 @@
             <span class="chat-card-main">
               <span class="chat-title-row">
                 <strong>{chat.title}</strong>
-                <span class={`status-pill ${chat.status}`}>{statusLabel(chat.status)}</span>
+                <span class="chat-title-trailing">
+                  <span class={`status-pill ${chat.status}`}>{statusLabel(chat.status)}</span>
+                  <span class="updated-at">{formatRelativeTime(chat.updatedAt)}</span>
+                </span>
               </span>
               <span class="chat-meta-row">
                 <span class="chat-id-tag">#{chat.id.slice(0, 6)}</span>
@@ -625,12 +628,16 @@
                   <span class="chat-model">{chat.model}</span>
                 {/if}
               </span>
-              <span class="chat-card-footer">
-                <span class={`progress-track status-${chat.status}`} aria-label={`${progressPercent(chat)} percent complete`}>
-                  <span style={`width: ${progressPercent(chat)}%`}></span>
+              {#if chat.progressPercent !== null && Number.isFinite(chat.progressPercent)}
+                <span class="chat-card-footer">
+                  <span
+                    class={`progress-track status-${chat.status}`}
+                    aria-label={`${Math.round(chat.progressPercent)} percent complete`}
+                  >
+                    <span style={`width: ${progressPercent(chat)}%`}></span>
+                  </span>
                 </span>
-                <span class="updated-at">{formatRelativeTime(chat.updatedAt)}</span>
-              </span>
+              {/if}
             </span>
           </button>
         {/each}

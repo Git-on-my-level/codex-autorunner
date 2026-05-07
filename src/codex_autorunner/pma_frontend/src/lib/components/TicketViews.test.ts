@@ -17,7 +17,6 @@ describe('TicketViews', () => {
     });
 
     expect(body).toContain('All tickets');
-    expect(body).toContain('All-ticket projection');
     expect(body).toContain('known repos and worktrees');
     expect(body).toContain('#110');
     expect(body).toContain('Implement typed UI API client and view models');
