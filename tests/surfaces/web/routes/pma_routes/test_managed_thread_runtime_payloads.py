@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -17,8 +18,10 @@ from codex_autorunner.surfaces.web.routes.pma_routes.managed_thread_runtime_payl
     build_running_turn_exists_payload,
     build_started_execution_error_payload,
     normalize_busy_policy,
+    resolve_managed_thread_message_options,
     sanitize_managed_thread_result_error,
 )
+from codex_autorunner.surfaces.web.schemas import PmaManagedThreadMessageRequest
 
 
 class TestSanitizeManagedThreadResultError:
@@ -76,6 +79,35 @@ class TestNormalizeBusyPolicy:
             normalize_busy_policy("block")
         assert exc_info.value.status_code == 400
         assert "busy_policy must be one of" in exc_info.value.detail
+
+
+def test_resolve_message_options_preserves_runtime_cwd_in_prompt(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    workspace_root = tmp_path / "repo"
+    hub_root.mkdir()
+    workspace_root.mkdir()
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(config=SimpleNamespace(root=hub_root, raw={}))
+        )
+    )
+
+    options = resolve_managed_thread_message_options(
+        request,
+        PmaManagedThreadMessageRequest(message="hello from route"),
+        managed_thread_id="thread-1",
+        thread={
+            "agent": "codex",
+            "workspace_root": str(workspace_root),
+            "resource_kind": "repo",
+        },
+        service=SimpleNamespace(),
+    )
+
+    assert f"Hub root: `{hub_root.resolve()}`." in options.execution_prompt
+    assert f"Runtime cwd: `{workspace_root.resolve()}`." in options.execution_prompt
 
 
 class TestBuildInterruptFailurePayload:

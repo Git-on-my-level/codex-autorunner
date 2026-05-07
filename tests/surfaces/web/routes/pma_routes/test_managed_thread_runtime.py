@@ -705,7 +705,12 @@ def test_managed_thread_message_route_uses_orchestration_service_seam(
     assert (
         captured["request"]
         .metadata["runtime_prompt"]
-        .startswith(format_pma_discoverability_preamble(hub_root=hub_env.hub_root))
+        .startswith(
+            format_pma_discoverability_preamble(
+                hub_root=hub_env.hub_root,
+                runtime_cwd=hub_env.repo_root.resolve(),
+            )
+        )
     )
     assert (
         captured["request"]
@@ -1818,7 +1823,12 @@ def test_managed_thread_message_route_honors_explicit_core_context_profile(
     assert (
         captured["request"]
         .metadata["runtime_prompt"]
-        .startswith(format_pma_discoverability_preamble(hub_root=hub_env.hub_root))
+        .startswith(
+            format_pma_discoverability_preamble(
+                hub_root=hub_env.hub_root,
+                runtime_cwd=hub_env.repo_root.resolve(),
+            )
+        )
     )
     assert "<injected context>" in captured["request"].metadata["runtime_prompt"]
 

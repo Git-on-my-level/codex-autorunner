@@ -231,6 +231,13 @@ def ensure_pma_docs(hub_root: Path, force: bool = False) -> None:
     )
     for filename, content_fn in seeds:
         canonical_path = docs_dir / filename
+        legacy_path = base_dir / filename
+        if not force and not canonical_path.exists() and legacy_path.exists():
+            try:
+                legacy_path.replace(canonical_path)
+                continue
+            except OSError:
+                pass
         content = content_fn()
         if content and not content.endswith("\n"):
             content += "\n"

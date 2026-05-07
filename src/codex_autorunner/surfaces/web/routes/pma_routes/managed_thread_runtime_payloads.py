@@ -126,7 +126,11 @@ def resolve_managed_thread_message_options(
                 defaults=defaults,
                 thread=thread,
                 hub_root=request.app.state.config.root,
-                runtime_cwd=None,
+                runtime_cwd=(
+                    Path(str(thread.get("workspace_root")))
+                    if thread.get("workspace_root")
+                    else None
+                ),
                 live_backend_thread_id=live_backend_thread_id,
                 approval_policy=approval_policy,
                 sandbox_policy=sandbox_policy,
