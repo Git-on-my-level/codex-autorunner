@@ -43,6 +43,8 @@ class ManagedThreadCreateResolution:
     requested_profile: Optional[str]
     metadata: dict[str, Any]
     followup_policy: ManagedThreadFollowupPolicy
+    pr_mode: bool = False
+    pr_base_ref: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -108,6 +110,31 @@ def _resolve_repo_snapshot(request: Request, repo_id: str) -> Any:
             continue
         return snapshot
     raise HTTPException(status_code=404, detail=f"Repo not found: {repo_id}")
+
+
+def _resolve_pr_upstream_repo_id(request: Request, repo_id: str) -> str:
+    snapshot = _resolve_repo_snapshot(request, repo_id)
+    kind = normalize_optional_text(getattr(snapshot, "kind", None))
+    if kind == "base":
+        return repo_id
+    if kind == "worktree":
+        base_repo_id = normalize_optional_text(getattr(snapshot, "worktree_of", None))
+        if base_repo_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="PR mode requires a worktree with worktree_of metadata",
+            )
+        base_snapshot = _resolve_repo_snapshot(request, base_repo_id)
+        if normalize_optional_text(getattr(base_snapshot, "kind", None)) != "base":
+            raise HTTPException(
+                status_code=400,
+                detail=f"PR upstream repo is not a base repo: {base_repo_id}",
+            )
+        return base_repo_id
+    raise HTTPException(
+        status_code=400,
+        detail="PR mode requires a base repo or hub-managed worktree repo",
+    )
 
 
 def _slugify_worktree_branch_component(value: Any) -> str:
@@ -504,6 +531,7 @@ def resolve_managed_thread_create_resolution(
         resource_id=payload.resource_id,
     )
     workspace_root = normalize_optional_text(payload.workspace_root)
+    pr_base_ref = normalize_optional_text(payload.pr_base_ref)
     followup_policy = resolve_managed_thread_followup_policy(
         payload,
         # Terminal follow-up defaults now apply when the thread is used, not at
@@ -517,11 +545,24 @@ def resolve_managed_thread_create_resolution(
             status_code=400,
             detail="Exactly one of resource owner or workspace_root is required",
         )
+    if pr_base_ref is not None and not payload.pr_mode:
+        raise HTTPException(
+            status_code=400,
+            detail="pr_base_ref requires PR mode",
+        )
+    if payload.pr_mode and resource_kind != "repo":
+        raise HTTPException(
+            status_code=400,
+            detail="PR mode requires a repo resource owner",
+        )
 
     resolved_runtime: Optional[str] = None
     if owner_present:
         assert resource_kind is not None
         assert resource_id is not None
+        if payload.pr_mode:
+            resource_id = _resolve_pr_upstream_repo_id(request, resource_id)
+            resolved_repo_id = resource_id
         resolved_workspace, resolved_repo_id, resolved_runtime = (
             _resolve_workspace_from_resource_owner(
                 request,
@@ -589,6 +630,10 @@ def resolve_managed_thread_create_resolution(
         "context_profile": context_profile,
         "approval_mode": approval_mode,
     }
+    if payload.pr_mode:
+        metadata["pr_mode"] = True
+        if pr_base_ref is not None:
+            metadata["pr_base_ref"] = pr_base_ref
     if requested_profile is not None:
         metadata["agent_profile"] = requested_profile
 
@@ -601,6 +646,8 @@ def resolve_managed_thread_create_resolution(
         requested_profile=requested_profile,
         metadata=metadata,
         followup_policy=followup_policy,
+        pr_mode=bool(payload.pr_mode),
+        pr_base_ref=pr_base_ref,
     )
 
 
@@ -617,13 +664,22 @@ def provision_managed_thread_workspace(
     context = get_pma_request_context(request)
     supervisor = context.hub_supervisor
     if supervisor is None:
+        if resolution.pr_mode:
+            raise HTTPException(status_code=500, detail="Hub supervisor unavailable")
         return fallback
 
     try:
         snapshot = _resolve_repo_snapshot(request, resolution.repo_id)
     except HTTPException:
+        if resolution.pr_mode:
+            raise
         return fallback
     if normalize_optional_text(getattr(snapshot, "kind", None)) != "base":
+        if resolution.pr_mode:
+            raise HTTPException(
+                status_code=400,
+                detail="PR mode requires a base repo",
+            )
         return fallback
 
     branch_name = _build_managed_thread_worktree_branch_name(
@@ -635,14 +691,25 @@ def provision_managed_thread_workspace(
         created = supervisor.create_worktree(
             base_repo_id=resolution.repo_id,
             branch=branch_name,
+            start_point=resolution.pr_base_ref,
         )
-    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as exc:
+        if resolution.pr_mode:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Unable to provision PR worktree: {exc}",
+            ) from exc
         return fallback
 
     worktree_path = getattr(created, "path", None)
     if isinstance(worktree_path, str):
         worktree_path = Path(worktree_path)
     if not isinstance(worktree_path, Path):
+        if resolution.pr_mode:
+            raise HTTPException(
+                status_code=409,
+                detail="Unable to provision PR worktree: missing worktree path",
+            )
         return fallback
     return ManagedThreadWorkspaceProvision(
         workspace_root=worktree_path.absolute(),

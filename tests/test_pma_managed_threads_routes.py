@@ -165,6 +165,106 @@ def test_create_managed_thread_with_repo_owner_prefers_fresh_worktree(
     assert stored["workspace_root"] == str(fresh_worktree_root.resolve())
 
 
+def test_create_pr_managed_thread_with_worktree_owner_uses_base_repo(
+    hub_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from codex_autorunner.core.config import load_hub_config
+    from codex_autorunner.manifest import load_manifest, save_manifest
+
+    hub_config = load_hub_config(hub_env.hub_root)
+    manifest = load_manifest(hub_config.manifest_path, hub_env.hub_root)
+    worktree_root = hub_env.hub_root / "worktrees" / "repo--existing"
+    worktree_root.mkdir(parents=True, exist_ok=True)
+    manifest.ensure_repo(
+        hub_env.hub_root,
+        worktree_root,
+        repo_id="repo--existing",
+        kind="worktree",
+        worktree_of=hub_env.repo_id,
+        branch="feature/existing",
+    )
+    save_manifest(hub_config.manifest_path, manifest, hub_env.hub_root)
+
+    app = create_hub_app(hub_env.hub_root)
+    fresh_worktree_root = hub_env.hub_root / "worktrees" / "repo--pma-pr"
+    fresh_worktree_root.mkdir(parents=True, exist_ok=True)
+    observed: dict[str, object] = {}
+
+    def _fake_create_worktree(
+        *, base_repo_id: str, branch: str, force: bool = False, start_point=None
+    ):
+        observed["base_repo_id"] = base_repo_id
+        observed["branch"] = branch
+        observed["force"] = force
+        observed["start_point"] = start_point
+        return SimpleNamespace(
+            id="repo--pma-pr",
+            path=fresh_worktree_root,
+            branch=branch,
+            kind="worktree",
+        )
+
+    monkeypatch.setattr(
+        app.state.hub_supervisor, "create_worktree", _fake_create_worktree
+    )
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "codex",
+                "resource_kind": "repo",
+                "resource_id": "repo--existing",
+                "name": "PR thread",
+                "pr_mode": True,
+                "pr_base_ref": "origin/main",
+            },
+        )
+
+    assert resp.status_code == 200
+    thread = resp.json()["thread"]
+    assert observed["base_repo_id"] == hub_env.repo_id
+    assert observed["start_point"] == "origin/main"
+    assert str(observed["branch"]).startswith(f"pma/{hub_env.repo_id}/")
+    assert thread["repo_id"] == hub_env.repo_id
+    assert thread["resource_kind"] == "repo"
+    assert thread["resource_id"] == hub_env.repo_id
+    assert thread["workspace_root"] == str(fresh_worktree_root.resolve())
+
+    store = PmaThreadStore(hub_env.hub_root)
+    stored = store.get_thread(thread["managed_thread_id"])
+    assert stored is not None
+    assert stored["metadata"]["pr_mode"] is True
+    assert stored["metadata"]["pr_base_ref"] == "origin/main"
+
+
+def test_create_pr_managed_thread_fails_when_worktree_provisioning_fails(
+    hub_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = create_hub_app(hub_env.hub_root)
+
+    def _fake_create_worktree(**_kwargs: object):
+        raise ValueError("origin fetch failed")
+
+    monkeypatch.setattr(
+        app.state.hub_supervisor, "create_worktree", _fake_create_worktree
+    )
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "codex",
+                **_repo_owner(hub_env),
+                "name": "PR thread",
+                "pr_mode": True,
+            },
+        )
+
+    assert resp.status_code == 409
+    assert "Unable to provision PR worktree" in resp.json()["detail"]
+
+
 def test_create_managed_thread_failure_cleanup_worktree_uses_archive(
     hub_env, monkeypatch: pytest.MonkeyPatch
 ) -> None:

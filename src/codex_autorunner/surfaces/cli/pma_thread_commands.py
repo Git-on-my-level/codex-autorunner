@@ -822,6 +822,19 @@ def pma_thread_spawn(
         None, "--workspace-root", help="Absolute or hub-relative workspace path"
     ),
     name: Optional[str] = typer.Option(None, "--name", help="Optional thread label"),
+    pr_mode: bool = typer.Option(
+        False,
+        "--pr/--no-pr",
+        help=(
+            "Spawn a PR-oriented thread in a fresh hub worktree from the repo "
+            "upstream/default branch"
+        ),
+    ),
+    pr_base_ref: Optional[str] = typer.Option(
+        None,
+        "--pr-base-ref",
+        help="Optional git ref for PR worktree creation (default: origin/<default-branch>)",
+    ),
     context_profile: Optional[str] = typer.Option(
         None,
         "--context-profile",
@@ -885,6 +898,12 @@ def pma_thread_spawn(
             err=True,
         )
         raise typer.Exit(code=1) from None
+    if pr_mode and normalized_resource_kind != "repo":
+        typer.echo("--pr requires --repo or --resource-kind repo", err=True)
+        raise typer.Exit(code=1) from None
+    if pr_base_ref is not None and not pr_mode:
+        typer.echo("--pr-base-ref requires --pr", err=True)
+        raise typer.Exit(code=1) from None
     normalized_context_profile = normalize_car_context_profile(context_profile)
     if context_profile is not None and normalized_context_profile is None:
         typer.echo(
@@ -920,21 +939,26 @@ def pma_thread_spawn(
             raise typer.BadParameter(
                 "--no-terminal-followup cannot be combined with --notify-on terminal"
             )
+        request_payload = {
+            "agent": normalized_agent,
+            "resource_kind": normalized_resource_kind,
+            "resource_id": normalized_resource_id,
+            "workspace_root": normalized_workspace_root,
+            "name": name,
+            "context_profile": normalized_context_profile,
+            "notify_on": normalized_notify_on,
+            "terminal_followup": terminal_followup,
+            "notify_lane": notify_lane,
+            "notify_once": notify_once,
+        }
+        if pr_mode:
+            request_payload["pr_mode"] = True
+        if pr_base_ref is not None:
+            request_payload["pr_base_ref"] = pr_base_ref
         data = _request_json(
             "POST",
             _build_pma_url(config, "/threads"),
-            {
-                "agent": normalized_agent,
-                "resource_kind": normalized_resource_kind,
-                "resource_id": normalized_resource_id,
-                "workspace_root": normalized_workspace_root,
-                "name": name,
-                "context_profile": normalized_context_profile,
-                "notify_on": normalized_notify_on,
-                "terminal_followup": terminal_followup,
-                "notify_lane": notify_lane,
-                "notify_once": notify_once,
-            },
+            request_payload,
             token_env=config.server_auth_token_env,
         )
     except httpx.HTTPError as exc:
