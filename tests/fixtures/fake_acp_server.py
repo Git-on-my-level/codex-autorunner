@@ -332,6 +332,8 @@ class FakeACPServer:
         if self._scenario == "official_second_prompt_hang_with_persisted_completion":
             # Match persisted session-store text so streaming chunks and recovery agree.
             reply_content = {"type": "text", "text": "identical fixture output"}
+        if self._scenario == "official_cumulative_stream_chunks":
+            reply_content = {"type": "text", "text": "fixture"}
         if self._scenario == "official_content_parts":
             thought_content = [
                 {"type": "text", "text": "thinking"},
@@ -450,6 +452,19 @@ class FakeACPServer:
                 },
             }
         )
+        if self._scenario == "official_cumulative_stream_chunks":
+            self.send(
+                {
+                    "method": "session/update",
+                    "params": {
+                        "sessionId": session_id,
+                        "update": {
+                            "sessionUpdate": "agent_message_chunk",
+                            "content": {"type": "text", "text": "fixture reply"},
+                        },
+                    },
+                }
+            )
         if self._scenario == "official_token_usage":
             self.send(
                 {

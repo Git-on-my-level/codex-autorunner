@@ -32,6 +32,7 @@ from ...core.acp_lifecycle import (
     should_map_missing_turn_id as _should_map_missing_turn_id,
 )
 from ...core.logging_utils import log_event
+from ...core.orchestration.stream_text_merge import merge_assistant_stream_text
 from ...core.text_utils import _normalize_optional_text
 from .errors import (
     ACPError,
@@ -1056,7 +1057,10 @@ class ACPClient:
         self._note_prompt_trace_event(state, event)
         state.events.append(event)
         if isinstance(event, ACPOutputDeltaEvent):
-            state.final_output += event.delta
+            state.final_output = merge_assistant_stream_text(
+                state.final_output,
+                event.delta,
+            )
         elif isinstance(event, ACPMessageEvent) and event.message:
             state.final_output = event.message
         await state.queue.put(event)

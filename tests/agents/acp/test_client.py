@@ -276,6 +276,31 @@ async def test_client_official_prompt_hang_tracks_last_session_update_state(
 
 
 @pytest.mark.asyncio
+async def test_client_merges_cumulative_stream_chunks_without_duplication(
+    tmp_path: Path,
+) -> None:
+    client = ACPClient(
+        fixture_command("official_cumulative_stream_chunks"),
+        cwd=tmp_path,
+    )
+    try:
+        created = await client.create_session(cwd=str(tmp_path))
+        handle = await client.start_prompt(created.session_id, "Reply with exactly OK.")
+
+        result = await asyncio.wait_for(handle.wait(), timeout=0.4)
+
+        assert result.status == "completed"
+        assert result.final_output == "fixture reply"
+        assert [
+            getattr(event, "delta", None)
+            for event in handle.snapshot_events()
+            if event.kind == "output_delta"
+        ] == ["fixture", "fixture reply"]
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
 async def test_client_can_recover_official_prompt_hang_with_synthetic_completion(
     tmp_path: Path,
 ) -> None:
