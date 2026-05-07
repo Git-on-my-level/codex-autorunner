@@ -562,7 +562,6 @@ def resolve_managed_thread_create_resolution(
         assert resource_id is not None
         if payload.pr_mode:
             resource_id = _resolve_pr_upstream_repo_id(request, resource_id)
-            resolved_repo_id = resource_id
         resolved_workspace, resolved_repo_id, resolved_runtime = (
             _resolve_workspace_from_resource_owner(
                 request,
