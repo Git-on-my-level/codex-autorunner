@@ -58,46 +58,6 @@
     {/if}
 
     <div class="dashboard-grid">
-      <section id="active-runs" class="page-panel dashboard-panel wide">
-        <div class="panel-heading-row">
-          <h2>Active runs</h2>
-        </div>
-        {@render degradedIssues(activeRunIssues)}
-        {#if dashboard.activeRuns.length === 0}
-          <div class="state-panel empty-state compact-empty">
-            <strong>No active runs</strong>
-            <p>Queue a ticket or send PMA a task to start work.</p>
-          </div>
-        {:else}
-          <div class="dashboard-list">
-            {#each dashboard.activeRuns as run}
-              <article class={`dashboard-row run-row status-${run.status}`}>
-                <a class="row-main" href={href(run.primaryHref)}>
-                  <span class="row-title">
-                    {run.title}
-                    <small class="row-id">#{run.id.slice(0, 6)}</small>
-                  </span>
-                  <span class="row-meta">
-                    <span class={`status-dot status-${run.status}`} aria-hidden="true"></span>
-                    {statusLabel(run.status)}
-                    {#if run.phase} · {run.phase}{/if}
-                    {#if run.ticketId} · <code>{run.ticketId}</code>{/if}
-                    · {dashboardRowMeta(run)}
-                  </span>
-                  <span class={`progress-track status-${run.status}`} aria-label={`${run.progress} percent complete`}>
-                    <span style={`width: ${run.progress}%`}></span>
-                  </span>
-                </a>
-                <div class="row-links">
-                  {#if run.ticketHref}<a href={href(run.ticketHref)}>Ticket</a>{/if}
-                  {#if run.chatHref}<a href={href(run.chatHref)}>Chat</a>{/if}
-                </div>
-              </article>
-            {/each}
-          </div>
-        {/if}
-      </section>
-
       <section id="waiting-for-me" class="page-panel dashboard-panel">
         <div class="panel-heading-row">
           <h2>Waiting for me</h2>
@@ -116,9 +76,65 @@
         {@render attentionList(dashboard.failedOrBlocked, 'No failed or blocked work is visible.')}
       </section>
 
+      <section id="active-runs" class="page-panel dashboard-panel wide">
+        <div class="panel-heading-row">
+          <div class="panel-heading-stack">
+            <h2>Active runs</h2>
+            <p class="panel-heading-sub">Live PMA chats and runs. Ticket-flow queues appear below.</p>
+          </div>
+        </div>
+        {@render degradedIssues(activeRunIssues)}
+        {#if dashboard.activeRuns.length === 0}
+          <div class="state-panel empty-state compact-empty">
+            <strong>No active runs</strong>
+            <p>Queue a ticket or send PMA a task to start work.</p>
+          </div>
+        {:else}
+          <div class="dashboard-list">
+            {#each dashboard.activeRuns as run}
+              {@const indeterminate = run.status === 'running' && run.progressPercent === null}
+              <article class={`dashboard-row run-row status-${run.status}`}>
+                <a class="row-main" href={href(run.primaryHref)}>
+                  <span class="row-title">
+                    <span class={`status-dot status-${run.status}`} aria-hidden="true"></span>
+                    {run.title}
+                    <small class="row-id">#{run.id.slice(0, 6)}</small>
+                  </span>
+                  <span class="row-meta">
+                    <span class="kind-chip">{run.kindLabel}</span>
+                    {statusLabel(run.status)}
+                    {#if run.phase} · {run.phase}{/if}
+                    {#if run.ticketId} · <code>{run.ticketId}</code>{/if}
+                    {#if run.elapsedLabel} · {run.elapsedLabel}{/if}
+                    · {dashboardRowMeta(run)}
+                  </span>
+                  <span
+                    class={`progress-track status-${run.status} ${indeterminate ? 'indeterminate' : ''} ${run.progressPercent === null && !indeterminate ? 'idle' : ''}`}
+                    aria-label={run.progressPercent === null ? statusLabel(run.status) : `${run.progressPercent} percent complete`}
+                  >
+                    {#if run.progressPercent !== null}
+                      <span style={`width: ${run.progressPercent}%`}></span>
+                    {:else if indeterminate}
+                      <span class="indeterminate-bar"></span>
+                    {/if}
+                  </span>
+                </a>
+                <div class="row-links">
+                  {#if run.ticketHref}<a href={href(run.ticketHref)}>Ticket</a>{/if}
+                  {#if run.chatHref}<a href={href(run.chatHref)}>Chat</a>{/if}
+                </div>
+              </article>
+            {/each}
+          </div>
+        {/if}
+      </section>
+
       <section id="queues" class="page-panel dashboard-panel wide">
         <div class="panel-heading-row">
-          <h2>Queues</h2>
+          <div class="panel-heading-stack">
+            <h2>Ticket-flow queues</h2>
+            <p class="panel-heading-sub">Per-repo and per-worktree ticket pipelines.</p>
+          </div>
           <a href={href('/repos')}>All repos</a>
         </div>
         {#if dashboard.queues.length === 0}

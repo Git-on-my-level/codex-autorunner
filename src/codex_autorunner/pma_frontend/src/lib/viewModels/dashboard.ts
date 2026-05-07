@@ -9,7 +9,7 @@ import type {
   WorkStatus,
   WorktreeSummary
 } from './domain';
-import { formatRelativeTime, progressPercent } from './pmaChat';
+import { formatRelativeTime } from './pmaChat';
 import { buildTicketFlowStatusViewModel, type TicketFlowStatusViewModel } from './ticketFlowStatus';
 
 export type DashboardMetric = {
@@ -23,8 +23,13 @@ export type DashboardRunRow = {
   id: string;
   title: string;
   status: WorkStatus;
-  progress: number;
+  /** Real progress percent if the source reports one; null means "unknown / use indeterminate motion". */
+  progressPercent: number | null;
   phase: string | null;
+  /** Human label like "PMA chat" / "PMA run" — distinguishes the row's source. */
+  kindLabel: 'PMA chat' | 'PMA run';
+  /** "2m elapsed" when the source reports duration; null otherwise. */
+  elapsedLabel: string | null;
   updatedAt: string | null;
   repoId: string | null;
   worktreeId: string | null;
@@ -154,8 +159,15 @@ function runProgressToRow(run: PmaRunProgress, chat: PmaChatSummary | null): Das
     id: run.id,
     title: chat?.title ?? stringFromRaw(run.raw, ['title', 'name', 'current_ticket_title']) ?? run.id,
     status: run.status,
-    progress: run.status === 'running' ? 64 : run.status === 'waiting' ? 28 : run.status === 'failed' ? 100 : 0,
+    progressPercent:
+      typeof chat?.progressPercent === 'number'
+        ? clampPercent(chat.progressPercent)
+        : run.status === 'done' || run.status === 'failed'
+          ? 100
+          : null,
     phase: run.phase,
+    kindLabel: 'PMA run',
+    elapsedLabel: formatElapsedSeconds(run.elapsedSeconds),
     updatedAt: run.lastEventAt ?? chat?.updatedAt ?? null,
     repoId,
     worktreeId,
@@ -174,8 +186,15 @@ function chatToRunRow(chat: PmaChatSummary): DashboardRunRow {
     id: chat.id,
     title: chat.title,
     status: chat.status,
-    progress: progressPercent(chat),
+    progressPercent:
+      typeof chat.progressPercent === 'number'
+        ? clampPercent(chat.progressPercent)
+        : chat.status === 'done' || chat.status === 'failed'
+          ? 100
+          : null,
     phase: chat.model,
+    kindLabel: 'PMA chat',
+    elapsedLabel: null,
     updatedAt: chat.updatedAt,
     repoId: chat.repoId,
     worktreeId: chat.worktreeId,
@@ -187,6 +206,21 @@ function chatToRunRow(chat: PmaChatSummary): DashboardRunRow {
     ticketHref: chat.ticketId ? ticketHref(chat.ticketId, chat.repoId, chat.worktreeId) : null,
     chatHref: `/pma?chat=${encodeURIComponent(chat.id)}`
   };
+}
+
+function clampPercent(value: number): number {
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function formatElapsedSeconds(seconds: number | null | undefined): string | null {
+  if (seconds === null || seconds === undefined || !Number.isFinite(seconds) || seconds < 0) return null;
+  const safe = Math.round(seconds);
+  if (safe < 60) return `${safe}s elapsed`;
+  const minutes = Math.floor(safe / 60);
+  if (minutes < 60) return `${minutes}m elapsed`;
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  return remainder ? `${hours}h ${remainder}m elapsed` : `${hours}h elapsed`;
 }
 
 function approvalToAttentionRow(approval: SensitiveApprovalRequest): DashboardAttentionRow {

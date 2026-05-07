@@ -907,6 +907,48 @@ a {
 .progress-track.status-blocked span { background: var(--color-danger); }
 .progress-track.status-done span { background: var(--color-ink-faint); }
 
+/* Indeterminate progress: when we do not have a real percent, animate a
+   thin sliver across the track instead of pinning every running row to the
+   same fake fill. Matches Linear/Notion's quiet "live" affordance. */
+.progress-track.indeterminate {
+  position: relative;
+  overflow: hidden;
+}
+
+.progress-track.indeterminate .indeterminate-bar {
+  display: block;
+  position: absolute;
+  inset: 0;
+  width: 38%;
+  border-radius: inherit;
+  background: var(--color-success);
+  opacity: 0.85;
+  animation: dashboard-indeterminate 1.6s var(--ease-in-out, ease-in-out) infinite;
+  will-change: transform;
+}
+
+.progress-track.indeterminate.status-waiting .indeterminate-bar { background: var(--color-warning); }
+.progress-track.indeterminate.status-blocked .indeterminate-bar,
+.progress-track.indeterminate.status-failed .indeterminate-bar { background: var(--color-danger); }
+
+/* When status is not "running" and we have no real progress, show only the
+   empty rail rather than a misleading fixed-width fill. */
+.progress-track.idle span { display: none; }
+
+@keyframes dashboard-indeterminate {
+  0%   { transform: translateX(-110%); }
+  60%  { transform: translateX(120%); }
+  100% { transform: translateX(120%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progress-track.indeterminate .indeterminate-bar {
+    animation: none;
+    width: 100%;
+    opacity: 0.35;
+  }
+}
+
 .chat-card p,
 .message p,
 .artifact-card p,
@@ -2630,6 +2672,44 @@ textarea:disabled {
   font-size: var(--font-size-2);
   font-weight: 600;
   letter-spacing: -0.01em;
+}
+
+.panel-heading-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.panel-heading-sub {
+  margin: 0;
+  color: var(--color-ink-muted);
+  font-size: var(--font-size-0);
+  font-weight: 400;
+  letter-spacing: 0;
+}
+
+/* Small inline tag identifying the source of a dashboard row (PMA chat vs
+   PMA run). Lower-contrast pill keeps the row scanline quiet but immediately
+   tells you whether the line is conversation-driven or a true run. */
+.kind-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
+  margin-right: var(--space-1);
+  border-radius: 999px;
+  background: var(--color-surface-muted);
+  color: var(--color-ink-muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  vertical-align: 1px;
+}
+
+.row-title .kind-chip {
+  margin-left: var(--space-1);
 }
 
 .queue-actions {
