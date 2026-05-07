@@ -79,7 +79,7 @@ class AppServerReadBuffer:
                 truncated=True,
             )
             return
-        await self._on_payload_line(self._buffer)
+        await self._on_payload_line(bytes(self._buffer))
 
     async def _collect_chunk(self, chunk: bytes, *, initializing: bool) -> None:
         self._buffer.extend(chunk)
@@ -145,7 +145,7 @@ class AppServerReadBuffer:
             newline_index = self._buffer.find(b"\n")
             if newline_index == -1:
                 return
-            line = self._buffer[:newline_index]
+            line = bytes(self._buffer[:newline_index])
             del self._buffer[: newline_index + 1]
             await self._on_payload_line(line)
 
