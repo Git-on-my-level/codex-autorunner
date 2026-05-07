@@ -5,19 +5,16 @@
   import {
     buildSessionUpdatePayload,
     buildSettingsViewModel,
-    type SettingsSensitiveAction,
     type SettingsSessionState,
     type SettingsViewModel
   } from '$lib/viewModels/settings';
-  import type { SensitiveApprovalRequest } from '$lib/viewModels/domain';
-  import { approvalActionUrl, filterSensitiveCarApprovals } from '$lib/viewModels/pmaChat';
 
   let view = $state<SettingsViewModel | null>(null);
   let sessionBaselineEpoch = $state(0);
   let loading = $state(true);
   let error = $state<ApiError | null>(null);
   let saveError = $state<ApiError | null>(null);
-  let pendingAction = $state<SettingsSensitiveAction | null>(null);
+  let saving = $state(false);
 
   onMount(() => {
     void loadSettings();
@@ -27,14 +24,13 @@
     loading = true;
     error = null;
     saveError = null;
-    const [session, agents, files, approvals] = await Promise.all([
+    const [session, agents, files] = await Promise.all([
       pmaApi.settings.getSession(),
       pmaApi.pma.listAgents(),
-      pmaApi.pma.listFiles(),
-      pmaApi.settings.listSessionUpdateApprovals()
+      pmaApi.pma.listFiles()
     ]);
 
-    if (!session.ok && !agents.ok && !files.ok && !approvals.ok) {
+    if (!session.ok && !agents.ok && !files.ok) {
       error = session.error;
       loading = false;
       return;
@@ -55,8 +51,7 @@
       session: session.ok ? session.data : null,
       agents: agentRows,
       modelCatalogs,
-      fileArtifacts: files.ok ? files.data : [],
-      approvals: approvals.ok ? approvals.data : []
+      fileArtifacts: files.ok ? files.data : []
     });
     sessionBaselineEpoch += 1;
     loading = false;
@@ -67,39 +62,18 @@
     view = { ...view, session };
   }
 
-  async function confirmSensitiveAction(action: SettingsSensitiveAction): Promise<void> {
-    pendingAction = null;
+  async function savePreferences(): Promise<void> {
+    if (!view || saving) return;
+    saving = true;
     saveError = null;
-    if (!['update-runtime-preferences', 'modify-car-config'].includes(action.id) || !view) return;
-    const result = await pmaApi.settings.requestSessionUpdateApproval(buildSessionUpdatePayload(view.session));
+    const result = await pmaApi.settings.updateSession(buildSessionUpdatePayload(view.session));
     if (!result.ok) {
       saveError = result.error;
+      saving = false;
       return;
     }
-    view = { ...view, approvals: filterSensitiveCarApprovals([...view.approvals, result.data]) };
     await loadSettings();
-  }
-
-  async function decideApproval(approval: SensitiveApprovalRequest, decision: 'approve' | 'decline'): Promise<void> {
-    saveError = null;
-    const url = approvalActionUrl(approval, decision);
-    if (!url) {
-      saveError = {
-        kind: 'parse',
-        status: null,
-        code: 'approval_route_missing',
-        message: 'This approval is visible, but the backend did not expose an approve/decline route.'
-      };
-      return;
-    }
-    const body = url === approval.raw.decision_url || url === approval.raw.route ? { decision, approval_id: approval.id } : undefined;
-    const result = await pmaApi.requestJson<JsonRecord>(url, { method: 'POST', body });
-    if (!result.ok) {
-      saveError = result.error;
-      return;
-    }
-    if (view) view = { ...view, approvals: filterSensitiveCarApprovals(view.approvals.filter((item) => item.id !== approval.id)) };
-    void loadSettings();
+    saving = false;
   }
 
   function stringField(record: JsonRecord, key: string): string | null {
@@ -123,10 +97,7 @@
   {view}
   errorMessage={error?.message ?? null}
   saveError={saveError?.message ?? null}
-  {pendingAction}
+  {saving}
   onSessionChange={updateSession}
-  onRequestSensitiveAction={(action) => (pendingAction = action)}
-  onConfirmSensitiveAction={confirmSensitiveAction}
-  onCancelSensitiveAction={() => (pendingAction = null)}
-  onApprovalDecision={decideApproval}
+  onSavePreferences={savePreferences}
 />

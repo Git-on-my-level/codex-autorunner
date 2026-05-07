@@ -1,5 +1,4 @@
-import type { SensitiveApprovalRequest, SurfaceArtifact } from './domain';
-import { filterSensitiveCarApprovals } from './pmaChat';
+import type { SurfaceArtifact } from './domain';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -29,14 +28,6 @@ export type SettingsStatusItem = {
   tone: 'ok' | 'warning' | 'muted';
 };
 
-export type SettingsSensitiveAction = {
-  id: string;
-  label: string;
-  description: string;
-  available: boolean;
-  reason: string;
-};
-
 export type SettingsViewModel = {
   hub: SettingsStatusItem[];
   session: SettingsSessionState;
@@ -45,8 +36,6 @@ export type SettingsViewModel = {
   integrations: SettingsStatusItem[];
   filebox: SettingsStatusItem[];
   secrets: SettingsStatusItem[];
-  sensitiveActions: SettingsSensitiveAction[];
-  approvals: SensitiveApprovalRequest[];
   advanced: SettingsStatusItem[];
 };
 
@@ -55,53 +44,7 @@ export type SettingsBuildInput = {
   agents?: JsonRecord[];
   modelCatalogs?: Record<string, JsonRecord[] | null>;
   fileArtifacts?: SurfaceArtifact[];
-  approvals?: SensitiveApprovalRequest[];
 };
-
-const sensitiveActionCopy: SettingsSensitiveAction[] = [
-  {
-    id: 'modify-car-config',
-    label: 'Modify CAR config',
-    description: 'Change persistent hub or repo CAR configuration.',
-    available: true,
-    reason: 'Runtime preferences are wired through /api/session/settings/approvals and /api/session/settings/approvals/{approval_id}/decision.'
-  },
-  {
-    id: 'manage-secrets',
-    label: 'Manage secrets',
-    description: 'Add, rotate, or remove stored secret values.',
-    available: false,
-    reason: 'Missing backend capability: no /api/session/secrets approval request or decision route exists yet.'
-  },
-  {
-    id: 'delete-repo-state',
-    label: 'Delete repo/worktree state',
-    description: 'Remove repo registrations, worktrees, or local workspace state.',
-    available: false,
-    reason: 'Missing backend capability: no approval-backed repo/worktree deletion route exists yet.'
-  },
-  {
-    id: 'destructive-cleanup',
-    label: 'Destructive cleanup',
-    description: 'Delete generated runtime files, snapshots, or cached state.',
-    available: false,
-    reason: 'Missing backend capability: no approval-backed cleanup route exists yet.'
-  },
-  {
-    id: 'reset-hub-runtime',
-    label: 'Reset hub/runtime state',
-    description: 'Clear runtime state or reset the hub control plane.',
-    available: false,
-    reason: 'Missing backend capability: no approval-backed hub/runtime reset route exists yet.'
-  },
-  {
-    id: 'change-credentials',
-    label: 'Change stored credentials',
-    description: 'Update provider tokens, app credentials, or account-linked secrets.',
-    available: false,
-    reason: 'Missing backend capability: no approval-backed credential storage route exists yet.'
-  }
-];
 
 export function buildSettingsViewModel(input: SettingsBuildInput): SettingsViewModel {
   const agents = input.agents ?? [];
@@ -110,7 +53,6 @@ export function buildSettingsViewModel(input: SettingsBuildInput): SettingsViewM
   const pmaAgents = agentStatuses.filter((agent) => agent.role === 'pma');
   const codingAgents = agentStatuses.filter((agent) => agent.role === 'coding');
   const fileArtifacts = input.fileArtifacts ?? [];
-  const approvals = filterSensitiveCarApprovals(input.approvals ?? []);
   const session = mapSession(input.session ?? {});
 
   return {
@@ -122,9 +64,9 @@ export function buildSettingsViewModel(input: SettingsBuildInput): SettingsViewM
         tone: input.session ? 'ok' : 'warning'
       },
       {
-        label: 'Sensitive approvals',
-        value: approvals.length > 0 ? `${approvals.length} pending` : 'No pending sensitive approvals',
-        tone: approvals.length > 0 ? 'warning' : 'ok'
+        label: 'Settings changes',
+        value: 'Direct save',
+        tone: 'ok'
       }
     ],
     session,
@@ -168,8 +110,6 @@ export function buildSettingsViewModel(input: SettingsBuildInput): SettingsViewM
         tone: 'muted'
       }
     ],
-    sensitiveActions: sensitiveActionCopy,
-    approvals,
     advanced: [
       {
         label: 'Approval policy',
@@ -194,6 +134,9 @@ export function buildSessionUpdatePayload(session: SettingsSessionState): JsonRe
   return {
     autorunner_model_override: blankToNull(session.modelOverride),
     autorunner_effort_override: blankToNull(session.effortOverride),
+    autorunner_approval_policy: blankToNull(session.approvalPolicy),
+    autorunner_sandbox_mode: blankToNull(session.sandboxMode),
+    autorunner_workspace_write_network: session.workspaceWriteNetwork,
     runner_stop_after_runs: positiveIntegerOrNull(session.stopAfterRuns)
   };
 }

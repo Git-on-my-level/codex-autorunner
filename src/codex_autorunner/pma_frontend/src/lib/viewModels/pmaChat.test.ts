@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { PmaChatSummary, PmaRunProgress, PmaTimelineItem, SurfaceArtifact } from './domain';
 import {
-  approvalActionUrl,
   artifactCardView,
   buildManagedThreadCreatePayload,
   buildManagedThreadMessagePayload,
@@ -11,7 +10,6 @@ import {
   buildPmaStatusBar,
   chooseActiveChatId,
   composeMessageWithAttachments,
-  filterSensitiveCarApprovals,
   filterPmaChats,
   filterArtifactsForActiveChat,
   formatRelativeTime,
@@ -572,32 +570,5 @@ describe('PMA chat view helpers', () => {
       'Run event'
     ]);
     expect(views.every((view) => view.detailLabel)).toBe(true);
-  });
-
-  it('filters sensitive CAR approvals without treating normal run progress as approval UI', () => {
-    const approvals = filterSensitiveCarApprovals([
-      {
-        id: 'normal-command',
-        title: 'Command completed',
-        description: 'pnpm test passed',
-        risk: 'low',
-        action: 'command',
-        createdAt: null,
-        raw: {}
-      },
-      {
-        id: 'delete-worktree',
-        title: 'Delete worktree',
-        description: 'Remove repo worktree from disk',
-        risk: 'high',
-        action: 'delete_worktree',
-        createdAt: null,
-        raw: { approve_url: '/approve', decline_url: '/decline' }
-      }
-    ]);
-
-    expect(approvals).toMatchObject([{ id: 'delete-worktree' }]);
-    expect(approvalActionUrl(approvals[0], 'approve')).toBe('/approve');
-    expect(approvalActionUrl(approvals[0], 'decline')).toBe('/decline');
   });
 });

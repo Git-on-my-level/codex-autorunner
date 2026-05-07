@@ -15,6 +15,6 @@ describe('/pma page', () => {
     expect(body).toContain('Attach files');
     expect(body).toContain('Attach images');
     expect(body).toContain('Attach link');
-    expect(body).toContain('PMA has full permission for normal coding work');
+    expect(body).toContain('Agent-native approvals apply during turns');
   });
 });

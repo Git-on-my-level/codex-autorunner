@@ -392,15 +392,8 @@ class SessionSettingsRequest(Payload):
     autorunner_effort_override: Optional[str] = None
     autorunner_approval_policy: Optional[str] = None
     autorunner_sandbox_mode: Optional[str] = None
-    autorunner_workspace_write_network: Optional[bool] = None
+    autorunner_workspace_write_network: Optional[StrictBool] = None
     runner_stop_after_runs: Optional[int] = None
-
-
-class SessionSettingsApprovalDecisionRequest(Payload):
-    model_config = ConfigDict(extra="forbid")
-
-    decision: Literal["approve", "decline"]
-    approval_id: Optional[str] = None
 
 
 class InteractionPromptResponseRequest(Payload):

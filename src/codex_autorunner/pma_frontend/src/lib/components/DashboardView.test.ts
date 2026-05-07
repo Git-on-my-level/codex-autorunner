@@ -28,15 +28,16 @@ describe('DashboardView', () => {
       summary: null,
       runs: [],
       chats: [],
-      approvals: [],
       tickets: []
     });
     const { body } = render(DashboardView, { props: { state: 'ready', dashboard } });
 
     expect(body).toContain('No active CAR work');
     expect(body).not.toContain('Open PMA');
-    expect(body).toContain('No active runs');
-    expect(body).toContain('Queue a ticket or send PMA a task to start work.');
+    expect(body).not.toContain('No active runs');
+    expect(body).not.toContain('Start or resume a ticket-flow queue to see active work here.');
+    expect(body).toContain('Ticket-flow queues');
+    expect(body).toContain('No queues yet');
     expect(body).not.toContain('View repos');
   });
 
@@ -54,15 +55,15 @@ describe('DashboardView', () => {
       },
       runs: [mockRunProgress],
       chats: [mockChatSummary],
-      approvals: [],
       tickets: [mockTicketSummary]
     });
     const { body } = render(DashboardView, { props: { state: 'ready', dashboard } });
 
     expect(body).toContain('Active runs');
+    expect(body).toContain('Per-repo and per-worktree ticket-flow state. Active runs appear first.');
+    expect(body).not.toContain('Live ticket-flow runs. Ticket-flow queues appear below.');
     expect(body).toContain('Hub rewrite foundation');
-    expect(body).toContain('href="/pma?chat=chat-1"');
-    expect(body).toContain('href="/repos/codex-autorunner/tickets/TICKET-110"');
+    expect(body).toContain('href="/worktrees/worktree-1/tickets/110"');
     expect(body).not.toContain('Repos and worktree variants');
     expect(body).not.toContain('Repo worktrees');
     expect(body).toContain('Recent activity');
@@ -74,7 +75,6 @@ describe('DashboardView', () => {
       summary: null,
       runs: [mockRunProgress],
       chats: [],
-      approvals: [],
       tickets: []
     });
     const { body } = render(DashboardView, {
@@ -84,7 +84,7 @@ describe('DashboardView', () => {
         sectionIssues: [
           {
             id: 'waiting_for_me',
-            title: 'Approvals unavailable',
+            title: 'Attention queue unavailable',
             message: 'automation endpoint returned 503',
             retryLabel: 'Retry'
           }
@@ -93,10 +93,10 @@ describe('DashboardView', () => {
       }
     });
 
-    expect(body).toContain('Approvals unavailable');
+    expect(body).toContain('Attention queue unavailable');
     expect(body).toContain('automation endpoint returned 503');
     expect(body).toContain('<button type="button">Retry</button>');
-    expect(body).toContain('Active runs');
+    expect(body).toContain('Ticket-flow queues');
   });
 
   it('renders internal links under the injected hub base path', () => {
@@ -105,12 +105,10 @@ describe('DashboardView', () => {
       summary: null,
       runs: [mockRunProgress],
       chats: [mockChatSummary],
-      approvals: [],
       tickets: [mockTicketSummary]
     });
     const { body } = render(DashboardView, { props: { state: 'ready', dashboard } });
 
-    expect(body).toContain('href="/car/pma?chat=chat-1"');
-    expect(body).toContain('href="/car/repos/codex-autorunner/tickets/TICKET-110"');
+    expect(body).toContain('href="/car/worktrees/worktree-1/tickets/110"');
   });
 });

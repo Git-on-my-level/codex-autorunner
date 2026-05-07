@@ -5,7 +5,6 @@ import type {
   PmaRunProgress,
   PmaTimelineItem,
   RepoSummary,
-  SensitiveApprovalRequest,
   SurfaceArtifact,
   WorktreeSummary,
   WorkStatus
@@ -895,55 +894,6 @@ export function artifactCardView(artifact: SurfaceArtifact): ArtifactCardView {
         detailLabel: 'Event details'
       };
   }
-}
-
-const sensitiveActionPattern =
-  /\b(config|secret|credential|delete|remove repo|delete repo|delete worktree|cleanup|clean slate|reset hub|reset runtime|destructive|force removal)\b/i;
-
-export function isSensitiveCarApproval(request: SensitiveApprovalRequest): boolean {
-  const haystack = [request.action, request.title, request.description].join(' ');
-  return sensitiveActionPattern.test(haystack);
-}
-
-export function filterSensitiveCarApprovals(
-  approvals: SensitiveApprovalRequest[]
-): SensitiveApprovalRequest[] {
-  return approvals.filter(isSensitiveCarApproval);
-}
-
-export function approvalScopeLabel(request: SensitiveApprovalRequest): string {
-  const raw = request.raw;
-  for (const key of ['target_scope', 'scope', 'repo_id', 'worktree_repo_id', 'resource_id']) {
-    const value = raw[key];
-    if (typeof value === 'string' && value.trim()) return value;
-  }
-  return request.action;
-}
-
-export function approvalActionUrl(
-  request: SensitiveApprovalRequest,
-  decision: 'approve' | 'decline'
-): string | null {
-  const raw = request.raw;
-  const directKeys =
-    decision === 'approve'
-      ? ['approve_url', 'approval_url', 'accept_url']
-      : ['decline_url', 'reject_url', 'deny_url'];
-  for (const key of directKeys) {
-    const value = raw[key];
-    if (typeof value === 'string' && value.trim()) return value;
-  }
-  const actions = raw.actions;
-  if (actions && typeof actions === 'object') {
-    const action = (actions as Record<string, unknown>)[decision] ?? (actions as Record<string, unknown>)[decision === 'approve' ? 'accept' : 'reject'];
-    if (typeof action === 'string' && action.trim()) return action;
-    if (action && typeof action === 'object') {
-      const url = (action as Record<string, unknown>).url;
-      if (typeof url === 'string' && url.trim()) return url;
-    }
-  }
-  const decisionUrl = raw.decision_url ?? raw.route;
-  return typeof decisionUrl === 'string' && decisionUrl.trim() ? decisionUrl : null;
 }
 
 function clampPercent(value: number): number {

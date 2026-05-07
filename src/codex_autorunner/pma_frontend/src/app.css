@@ -2689,29 +2689,6 @@ textarea:disabled {
   letter-spacing: 0;
 }
 
-/* Small inline tag identifying the source of a dashboard row (PMA chat vs
-   PMA run). Lower-contrast pill keeps the row scanline quiet but immediately
-   tells you whether the line is conversation-driven or a true run. */
-.kind-chip {
-  display: inline-flex;
-  align-items: center;
-  height: 18px;
-  padding: 0 6px;
-  margin-right: var(--space-1);
-  border-radius: 999px;
-  background: var(--color-surface-muted);
-  color: var(--color-ink-muted);
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-  vertical-align: 1px;
-}
-
-.row-title .kind-chip {
-  margin-left: var(--space-1);
-}
-
 .queue-actions {
   display: flex;
   align-items: center;

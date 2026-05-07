@@ -5,7 +5,6 @@ import type {
   PmaChatSummary,
   PmaRunProgress,
   RepoSummary,
-  SensitiveApprovalRequest,
   SurfaceArtifact,
   TicketDetail,
   TicketSummary,
@@ -140,15 +139,5 @@ export const mockContextspaceDocument: ContextspaceDocument = {
   content: '# Spec',
   updatedAt: '2026-05-04T00:02:00Z',
   isPinned: true,
-  raw: {}
-};
-
-export const mockSensitiveApprovalRequest: SensitiveApprovalRequest = {
-  id: 'approval-1',
-  title: 'Delete worktree',
-  description: 'Sensitive CAR control-plane operation.',
-  risk: 'high',
-  action: 'delete_worktree',
-  createdAt: '2026-05-04T00:02:00Z',
   raw: {}
 };

@@ -1,7 +1,6 @@
 import { render } from 'svelte/server';
 import { describe, expect, it } from 'vitest';
-import type { SensitiveApprovalRequest, SurfaceArtifact } from '$lib/viewModels/domain';
-import SensitiveApprovalCard from './SensitiveApprovalCard.svelte';
+import type { SurfaceArtifact } from '$lib/viewModels/domain';
 import SurfaceArtifactCard from './SurfaceArtifactCard.svelte';
 
 const baseArtifact: SurfaceArtifact = {
@@ -44,28 +43,5 @@ describe('surfaced artifact cards', () => {
       expect(body).toContain(`${kind} summary`);
       expect(body).toContain('<details>');
     }
-  });
-});
-
-describe('sensitive approval prompt', () => {
-  it('identifies target action, scope, policy, and decisions', () => {
-    const approval: SensitiveApprovalRequest = {
-      id: 'approval-1',
-      title: 'Delete worktree',
-      description: 'Remove a managed worktree from disk.',
-      risk: 'high',
-      action: 'delete_worktree',
-      createdAt: null,
-      raw: { target_scope: 'hub.worktree.cleanup:repo--branch' }
-    };
-
-    const { body } = render(SensitiveApprovalCard, { props: { approval } });
-
-    expect(body).toContain('Sensitive CAR approval');
-    expect(body).toContain('delete_worktree');
-    expect(body).toContain('hub.worktree.cleanup:repo--branch');
-    expect(body).toContain('normal coding work');
-    expect(body).toContain('Decline');
-    expect(body).toContain('Approve');
   });
 });

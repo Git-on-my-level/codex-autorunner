@@ -1,13 +1,10 @@
 <script lang="ts">
   import type {
     SettingsAgentStatus,
-    SettingsSensitiveAction,
     SettingsSessionState,
     SettingsStatusItem,
     SettingsViewModel
   } from '$lib/viewModels/settings';
-  import type { SensitiveApprovalRequest } from '$lib/viewModels/domain';
-  import SensitiveApprovalCard from './SensitiveApprovalCard.svelte';
   import PageHero from './PageHero.svelte';
   import { untrack } from 'svelte';
 
@@ -17,23 +14,17 @@
     sessionBaselineEpoch = 0,
     errorMessage = null,
     saveError = null,
-    pendingAction = null,
+    saving = false,
     onSessionChange,
-    onRequestSensitiveAction,
-    onConfirmSensitiveAction,
-    onCancelSensitiveAction,
-    onApprovalDecision
+    onSavePreferences
   }: {
     state: 'loading' | 'error' | 'ready';
     view?: SettingsViewModel | null;
     errorMessage?: string | null;
     saveError?: string | null;
-    pendingAction?: SettingsSensitiveAction | null;
+    saving?: boolean;
     onSessionChange?: (session: SettingsSessionState) => void;
-    onRequestSensitiveAction?: (action: SettingsSensitiveAction) => void;
-    onConfirmSensitiveAction?: (action: SettingsSensitiveAction) => void;
-    onCancelSensitiveAction?: () => void;
-    onApprovalDecision?: (approval: SensitiveApprovalRequest, decision: 'approve' | 'decline') => void;
+    onSavePreferences?: () => void;
     sessionBaselineEpoch?: number;
   } = $props();
 
@@ -51,32 +42,22 @@
     return (
       view.session.modelOverride !== baseline.modelOverride ||
       view.session.effortOverride !== baseline.effortOverride ||
-      view.session.stopAfterRuns !== baseline.stopAfterRuns
+      view.session.stopAfterRuns !== baseline.stopAfterRuns ||
+      view.session.approvalPolicy !== baseline.approvalPolicy ||
+      view.session.sandboxMode !== baseline.sandboxMode ||
+      view.session.workspaceWriteNetwork !== baseline.workspaceWriteNetwork
     );
   });
 
-  function patchSession(key: keyof SettingsSessionState, value: string): void {
+  function patchSession(key: keyof SettingsSessionState, value: SettingsSessionState[keyof SettingsSessionState]): void {
     if (!view) return;
     onSessionChange?.({ ...view.session, [key]: value });
   }
 
-  function requestSavePreferences(): void {
-    if (!view) return;
-    onRequestSensitiveAction?.({
-      id: 'update-runtime-preferences',
-      label: 'Update runtime preferences',
-      description: 'Save PMA model and run-limit overrides for future autorunner work.',
-      available: true,
-      reason: 'Requests explicit approval through /api/session/settings/approvals before writing /api/session/settings.'
-    });
-  }
-
-  function handleWindowKeydown(event: KeyboardEvent): void {
-    if (event.key === 'Escape' && pendingAction) onCancelSensitiveAction?.();
+  function patchNetwork(value: string): void {
+    patchSession('workspaceWriteNetwork', value === '' ? null : value === 'true');
   }
 </script>
-
-<svelte:window onkeydown={handleWindowKeydown} />
 
 <section class="page-stack settings-page">
   <PageHero
@@ -90,9 +71,9 @@
             <dd>{view.hub.find((item) => item.label.toLowerCase().includes('mode'))?.value ?? 'Local'}</dd>
             <dt>Hub mode</dt>
           </div>
-          <div class={view.approvals.length > 0 ? 'waiting' : 'neutral'}>
-            <dd>{view.approvals.length}</dd>
-            <dt>Pending approvals</dt>
+          <div class="neutral">
+            <dd>{sessionDirty ? 'Unsaved' : 'Saved'}</dd>
+            <dt>Preferences</dt>
           </div>
         </dl>
       {/if}
@@ -137,17 +118,50 @@
             oninput={(event) => patchSession('stopAfterRuns', event.currentTarget.value)}
           />
         </label>
+        <label>
+          <span>Approval policy</span>
+          <select
+            value={view.session.approvalPolicy}
+            onchange={(event) => patchSession('approvalPolicy', event.currentTarget.value)}
+          >
+            <option value="">Use server default</option>
+            <option value="never">never</option>
+            <option value="unlessTrusted">unlessTrusted</option>
+          </select>
+        </label>
+        <label>
+          <span>Sandbox mode</span>
+          <select
+            value={view.session.sandboxMode}
+            onchange={(event) => patchSession('sandboxMode', event.currentTarget.value)}
+          >
+            <option value="">Use server default</option>
+            <option value="dangerFullAccess">dangerFullAccess</option>
+            <option value="workspaceWrite">workspaceWrite</option>
+          </select>
+        </label>
+        <label>
+          <span>Workspace-write network</span>
+          <select
+            value={view.session.workspaceWriteNetwork === null ? '' : String(view.session.workspaceWriteNetwork)}
+            onchange={(event) => patchNetwork(event.currentTarget.value)}
+          >
+            <option value="">Use server default</option>
+            <option value="true">Enabled</option>
+            <option value="false">Disabled</option>
+          </select>
+        </label>
       </div>
       <div class="settings-form-footer">
-        <p class="permission-note">PMA has full permission for normal coding work. Sensitive CAR operations require approval.</p>
+        <p class="permission-note">Agent-native approvals apply during agent turns according to the selected policy and sandbox mode.</p>
         <button
           type="button"
           class="ghost-button"
           class:dirty={sessionDirty}
-          disabled={!sessionDirty}
-          onclick={requestSavePreferences}
+          disabled={!sessionDirty || saving}
+          onclick={() => onSavePreferences?.()}
         >
-          {sessionDirty ? 'Save preferences' : 'Saved'}
+          {saving ? 'Saving' : sessionDirty ? 'Save preferences' : 'Saved'}
         </button>
       </div>
       {#if saveError}
@@ -176,80 +190,12 @@
       </section>
     </div>
 
-    <section class="settings-section">
-      <div class="settings-section-head">
-        <h2 class="settings-section-title">Sensitive CAR actions</h2>
-        {#if view.approvals.length > 0}
-          <span class="status-pill waiting">{view.approvals.length} pending</span>
-        {/if}
-      </div>
-      {#if view.approvals.length === 0}
-        <div class="state-panel empty-state compact-empty">
-          <strong>No approvals waiting</strong>
-          <p>Sensitive CAR requests will appear here when PMA needs an explicit decision.</p>
-        </div>
-      {:else}
-        <div class="settings-approval-list">
-          {#each view.approvals as approval (approval.id)}
-            <SensitiveApprovalCard {approval} onDecision={onApprovalDecision} />
-          {/each}
-        </div>
-      {/if}
-      <div class="sensitive-action-grid">
-        {#each view.sensitiveActions as action}
-          {#if action.available}
-            <article class="sensitive-action available">
-              <div>
-                <strong>{action.label}</strong>
-                <p>{action.description}</p>
-                <span>{action.reason}</span>
-              </div>
-              <button type="button" onclick={() => onRequestSensitiveAction?.(action)}>Review</button>
-            </article>
-          {/if}
-        {/each}
-      </div>
-      <details class="advanced-panel">
-        <summary>Unavailable sensitive actions</summary>
-        <div class="sensitive-action-grid">
-          {#each view.sensitiveActions as action}
-            {#if !action.available}
-              <article class="sensitive-action unavailable">
-                <div>
-                  <strong>{action.label}</strong>
-                  <p>{action.description}</p>
-                  <span>Unavailable: {action.reason}</span>
-                </div>
-              </article>
-            {/if}
-          {/each}
-        </div>
-      </details>
-    </section>
-
     <details class="settings-section advanced-panel">
       <summary>Advanced / debug</summary>
       {@render statusList(view.advanced)}
     </details>
   {/if}
 </section>
-
-{#if pendingAction}
-  <div class="modal-backdrop" role="presentation">
-    <div class="approval-modal" role="dialog" aria-modal="true" aria-labelledby="settings-approval-title">
-      <span class="approval-type">Sensitive settings approval</span>
-      <h2 id="settings-approval-title">{pendingAction.label}</h2>
-      <p>{pendingAction.description}</p>
-      <p class="muted">{pendingAction.reason}</p>
-      <div class="approval-actions">
-        <button type="button" onclick={() => onCancelSensitiveAction?.()}>Cancel</button>
-        <button class="danger-action" type="button" onclick={() => onConfirmSensitiveAction?.(pendingAction)}>
-          Request approval
-        </button>
-      </div>
-    </div>
-  </div>
-{/if}
 
 {#snippet statusList(items: SettingsStatusItem[], compact = false)}
   <dl class:compact class="settings-status-list">

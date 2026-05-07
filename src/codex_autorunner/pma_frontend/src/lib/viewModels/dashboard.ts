@@ -3,7 +3,6 @@ import type {
   PmaChatSummary,
   PmaRunProgress,
   RepoSummary,
-  SensitiveApprovalRequest,
   SurfaceArtifact,
   TicketSummary,
   WorkStatus,
@@ -26,8 +25,8 @@ export type DashboardRunRow = {
   /** Real progress percent if the source reports one; null means "unknown / use indeterminate motion". */
   progressPercent: number | null;
   phase: string | null;
-  /** Human label like "PMA chat" / "PMA run" — distinguishes the row's source. */
-  kindLabel: 'PMA chat' | 'PMA run';
+  /** Human label like "Ticket flow" / "PMA chat" — distinguishes the row's source. */
+  kindLabel: 'Ticket flow' | 'PMA chat';
   /** "2m elapsed" when the source reports duration; null otherwise. */
   elapsedLabel: string | null;
   updatedAt: string | null;
@@ -47,7 +46,7 @@ export type DashboardAttentionRow = {
   title: string;
   description: string;
   status: WorkStatus;
-  kind: 'approval' | 'gate' | 'blocker' | 'unclear' | 'failure';
+  kind: 'gate' | 'blocker' | 'unclear' | 'failure' | 'file' | 'followup' | 'automation';
   updatedAt: string | null;
   primaryHref: string;
 };
@@ -86,7 +85,6 @@ export type DashboardSourceData = {
   summary: DashboardSummary | null;
   runs: PmaRunProgress[];
   chats: PmaChatSummary[];
-  approvals: SensitiveApprovalRequest[];
   tickets: TicketSummary[];
   repos?: RepoSummary[];
   worktrees?: WorktreeSummary[];
@@ -94,25 +92,26 @@ export type DashboardSourceData = {
 
 export function buildDashboardViewModel(source: DashboardSourceData): DashboardViewModel {
   const openTickets = source.tickets.filter((ticket) => ticket.status !== 'done');
-  const runRows = mergeRunRows(source.runs, source.chats);
+  const runRows = buildTicketFlowRunRows(source.runs, source.chats);
+  const allRunRows = mergeRunRows(source.runs, source.chats);
   const activeRuns = runRows.filter((row) => row.status === 'running');
   const waitingRows = [
-    ...source.approvals.map(approvalToAttentionRow),
-    ...runRows.filter((row) => row.status === 'waiting').map(runToAttentionRow),
+    ...buildActionQueueAttentionRows(source.summary),
+    ...allRunRows.filter((row) => row.status === 'waiting').map(runToAttentionRow),
     ...openTickets.filter((ticket) => ticket.status === 'waiting').map(ticketToAttentionRow)
   ];
   const failedRows = [
-    ...runRows.filter((row) => row.status === 'failed' || row.status === 'blocked').map(runToFailureRow),
+    ...allRunRows.filter((row) => row.status === 'failed' || row.status === 'blocked').map(runToFailureRow),
     ...openTickets
       .filter((ticket) => ticket.status === 'failed' || ticket.status === 'blocked')
       .map(ticketToFailureRow)
   ];
-  const recentActivity = buildRecentActivity(source, runRows, openTickets);
+  const recentActivity = buildRecentActivity(source, allRunRows, openTickets);
   const queues = buildQueueRows(source);
 
   return {
     metrics: [
-      { label: 'Active runs', value: activeRuns.length, href: '#active-runs', tone: 'active' },
+      { label: 'Active runs', value: activeRuns.length, href: '#queues', tone: 'active' },
       { label: 'Waiting for me', value: waitingRows.length, href: '#waiting-for-me', tone: 'waiting' },
       { label: 'Failed/blocked', value: failedRows.length, href: '#failed-blocked', tone: 'danger' },
       { label: 'Open tickets', value: openTickets.length || source.summary?.openTickets || 0, href: '#queues', tone: 'neutral' },
@@ -123,9 +122,9 @@ export function buildDashboardViewModel(source: DashboardSourceData): DashboardV
     queues,
     recentActivity: recentActivity.slice(0, 8),
     hasAnyData:
-      runRows.length > 0 ||
+      allRunRows.length > 0 ||
       source.chats.length > 0 ||
-      source.approvals.length > 0 ||
+      buildActionQueueAttentionRows(source.summary).length > 0 ||
       source.tickets.length > 0 ||
       (source.summary?.recentArtifacts.length ?? 0) > 0
   };
@@ -135,11 +134,20 @@ export function dashboardRowMeta(row: { updatedAt: string | null }, now = new Da
   return formatRelativeTime(row.updatedAt, now);
 }
 
-function mergeRunRows(runs: PmaRunProgress[], chats: PmaChatSummary[]): DashboardRunRow[] {
+function buildTicketFlowRunRows(runs: PmaRunProgress[], chats: PmaChatSummary[]): DashboardRunRow[] {
   const rows = new Map<string, DashboardRunRow>();
   for (const run of runs) {
+    // Dashboard active runs are ticket-flow runs; PMA chats only enrich linked rows.
     const chat = run.chatId ? chats.find((candidate) => candidate.id === run.chatId) ?? null : null;
     rows.set(`run:${run.id}`, runProgressToRow(run, chat));
+  }
+  return [...rows.values()].sort(byRecentThenTitle);
+}
+
+function mergeRunRows(runs: PmaRunProgress[], chats: PmaChatSummary[]): DashboardRunRow[] {
+  const rows = new Map<string, DashboardRunRow>();
+  for (const row of buildTicketFlowRunRows(runs, chats)) {
+    rows.set(`run:${row.id}`, row);
   }
   for (const chat of chats) {
     if (!['running', 'waiting', 'failed', 'blocked'].includes(chat.status)) continue;
@@ -166,7 +174,7 @@ function runProgressToRow(run: PmaRunProgress, chat: PmaChatSummary | null): Das
           ? 100
           : null,
     phase: run.phase,
-    kindLabel: 'PMA run',
+    kindLabel: 'Ticket flow',
     elapsedLabel: formatElapsedSeconds(run.elapsedSeconds),
     updatedAt: run.lastEventAt ?? chat?.updatedAt ?? null,
     repoId,
@@ -223,18 +231,6 @@ function formatElapsedSeconds(seconds: number | null | undefined): string | null
   return remainder ? `${hours}h ${remainder}m elapsed` : `${hours}h elapsed`;
 }
 
-function approvalToAttentionRow(approval: SensitiveApprovalRequest): DashboardAttentionRow {
-  return {
-    id: `approval:${approval.id}`,
-    title: approval.title,
-    description: approval.description || 'PMA is waiting on a sensitive CAR approval.',
-    status: 'waiting',
-    kind: 'approval',
-    updatedAt: approval.createdAt,
-    primaryHref: '/settings'
-  };
-}
-
 function runToAttentionRow(row: DashboardRunRow): DashboardAttentionRow {
   return {
     id: `wait:${row.id}`,
@@ -245,6 +241,74 @@ function runToAttentionRow(row: DashboardRunRow): DashboardAttentionRow {
     updatedAt: row.updatedAt,
     primaryHref: row.primaryHref
   };
+}
+
+function buildActionQueueAttentionRows(summary: DashboardSummary | null): DashboardAttentionRow[] {
+  return asRecordArray(summary?.raw.action_queue).map(actionQueueItemToAttentionRow);
+}
+
+function actionQueueItemToAttentionRow(item: Record<string, unknown>): DashboardAttentionRow {
+  const queueId = stringValue(item.action_queue_id) || stringValue(item.id) || 'action';
+  const title =
+    stringValue(item.name) ||
+    stringValue(item.title) ||
+    stringValue(item.summary) ||
+    readableQueueTitle(stringValue(item.queue_source), stringValue(item.item_type), queueId);
+  return {
+    id: `action:${queueId}`,
+    title,
+    description:
+      stringValue(item.recommended_detail) ||
+      stringValue(item.why_selected) ||
+      readableQueueDescription(stringValue(item.queue_source), stringValue(item.item_type)),
+    status: 'waiting',
+    kind: actionQueueKind(item),
+    updatedAt: freshnessTimestamp(item) ?? stringValue(item.timestamp) ?? stringValue(item.updated_at),
+    primaryHref: actionQueueHref(item)
+  };
+}
+
+function actionQueueKind(item: Record<string, unknown>): DashboardAttentionRow['kind'] {
+  const source = stringValue(item.queue_source);
+  const itemType = stringValue(item.item_type);
+  if (source === 'pma_file_inbox' || itemType.startsWith('pma_file')) return 'file';
+  if (source === 'managed_thread_followup' || itemType.startsWith('managed_thread')) return 'followup';
+  if (source === 'automation_wakeup' || itemType === 'automation_wakeup') return 'automation';
+  if (source === 'ticket_flow_inbox') return 'gate';
+  return 'gate';
+}
+
+function actionQueueHref(item: Record<string, unknown>): string {
+  const openUrl = stringValue(item.open_url);
+  if (openUrl && !openUrl.startsWith('/hub/')) return openUrl;
+  const threadId = stringValue(item.managed_thread_id) || stringValue(item.thread_id);
+  if (threadId) return `/pma?chat=${encodeURIComponent(threadId)}`;
+  const repoId = stringValue(item.repo_id);
+  if (repoId) return `/repos/${encodeURIComponent(repoId)}`;
+  if (actionQueueKind(item) === 'file') return '/pma';
+  return '/dashboard';
+}
+
+function readableQueueTitle(source: string, itemType: string, fallback: string): string {
+  if (source === 'pma_file_inbox' || itemType.startsWith('pma_file')) return 'PMA file inbox';
+  if (source === 'managed_thread_followup' || itemType.startsWith('managed_thread')) return 'Managed thread follow-up';
+  if (source === 'automation_wakeup' || itemType === 'automation_wakeup') return 'Automation wake-up';
+  if (source === 'ticket_flow_inbox') return 'Ticket-flow gate';
+  return fallback;
+}
+
+function readableQueueDescription(source: string, itemType: string): string {
+  if (source === 'pma_file_inbox' || itemType.startsWith('pma_file')) return 'PMA file inbox item needs review.';
+  if (source === 'managed_thread_followup' || itemType.startsWith('managed_thread')) return 'Managed thread needs operator follow-up.';
+  if (source === 'automation_wakeup' || itemType === 'automation_wakeup') return 'Pending automation wake-up needs handling.';
+  if (source === 'ticket_flow_inbox') return 'Ticket-flow run is paused or queued for user input.';
+  return 'PMA queue item needs review.';
+}
+
+function freshnessTimestamp(item: Record<string, unknown>): string | null {
+  const freshness = item.freshness;
+  if (!freshness || typeof freshness !== 'object' || Array.isArray(freshness)) return null;
+  return stringValue((freshness as Record<string, unknown>).basis_at);
 }
 
 function ticketToAttentionRow(ticket: TicketSummary): DashboardAttentionRow {
@@ -407,6 +471,16 @@ function stringFromRaw(raw: Record<string, unknown>, keys: string[]): string | n
     if (typeof value === 'string' && value.trim()) return value;
   }
   return null;
+}
+
+function stringValue(value: unknown): string {
+  if (typeof value === 'string' && value.trim()) return value;
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  return '';
+}
+
+function asRecordArray(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value) ? value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object') : [];
 }
 
 function repoHref(repoId: string): string {

@@ -7,7 +7,6 @@ import {
   mapPmaChatSummary,
   mapPmaRunProgress,
   mapRepoSummary,
-  mapSensitiveApprovalRequest,
   mapSurfaceArtifact,
   mapTicketDetail,
   mapTicketSummary,
@@ -20,7 +19,6 @@ import {
   type PmaRunProgress,
   type PmaTimelineItem,
   type RepoSummary,
-  type SensitiveApprovalRequest,
   type SurfaceArtifact,
   type TicketDetail,
   type TicketSummary,
@@ -473,20 +471,7 @@ export class PmaApiClient {
   settings = {
     getSession: async (): Promise<ApiResult<JsonRecord>> => this.getJson<JsonRecord>('/api/session/settings'),
     updateSession: async (body: unknown): Promise<ApiResult<JsonRecord>> =>
-      this.requestJson<JsonRecord>('/api/session/settings', { method: 'POST', body }),
-    requestSessionUpdateApproval: async (body: unknown): Promise<ApiResult<SensitiveApprovalRequest>> =>
-      mapResult(
-        await this.requestJson<JsonRecord>('/api/session/settings/approvals', { method: 'POST', body }),
-        mapSensitiveApprovalRequest
-      ),
-    listSessionUpdateApprovals: async (): Promise<ApiResult<SensitiveApprovalRequest[]>> =>
-      mapResult(await this.getJson<JsonRecord>('/api/session/settings/approvals'), (payload) =>
-        asArray(payload.approvals).map(mapSensitiveApprovalRequest)
-      ),
-    listApprovals: async (): Promise<ApiResult<SensitiveApprovalRequest[]>> =>
-      mapResult(await this.getJson<JsonRecord>('/hub/messages?sections=automation,action_queue'), (payload) =>
-        [...asArray(payload.automation), ...asArray(payload.action_queue)].map(mapSensitiveApprovalRequest)
-      )
+      this.requestJson<JsonRecord>('/api/session/settings', { method: 'POST', body })
   };
 }
 

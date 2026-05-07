@@ -9,13 +9,14 @@ describe('settings view model', () => {
     }
   });
 
-  it('groups settings sections around wired status and unavailable sensitive controls', () => {
+  it('groups settings sections around wired status and direct settings saves', () => {
     const view = buildSettingsViewModel({
       session: {
         autorunner_model_override: 'gpt-5.4',
         autorunner_effort_override: 'medium',
         autorunner_approval_policy: 'never',
-        autorunner_sandbox_mode: 'dangerFullAccess'
+        autorunner_sandbox_mode: 'dangerFullAccess',
+        autorunner_workspace_write_network: true
       },
       agents: [
         { id: 'hermes', name: 'Hermes', capabilities: ['durable_threads', 'model_listing'], capability_projection: projection('hermes', true) },
@@ -28,43 +29,20 @@ describe('settings view model', () => {
       ],
       modelCatalogs: {
         hermes: [{ id: 'gpt-5.4' }]
-      },
-      approvals: [
-        {
-          id: 'delete-worktree',
-          title: 'Delete worktree',
-          description: 'Remove repo/worktree state',
-          risk: 'high',
-          action: 'delete_worktree',
-          createdAt: null,
-          raw: {}
-        },
-        {
-          id: 'normal-run',
-          title: 'Run tests',
-          description: 'Normal coding work',
-          risk: 'low',
-          action: 'run_tests',
-          createdAt: null,
-          raw: {}
-        }
-      ]
+      }
     });
 
     expect(view.hub.map((item) => item.label)).toContain('Runtime settings API');
+    expect(view.hub).toContainEqual({ label: 'Settings changes', value: 'Direct save', tone: 'ok' });
     expect(view.pmaAgents).toMatchObject([{ id: 'hermes', modelStatus: 'available', modelCount: 1 }]);
     expect(view.codingAgents).toMatchObject([{ id: 'codex', modelStatus: 'unsupported' }]);
     expect(view.secrets[0]).toMatchObject({ value: 'Unavailable in PMA settings' });
-    expect(view.sensitiveActions.find((action) => action.id === 'modify-car-config')).toMatchObject({
-      available: true
-    });
-    expect(view.sensitiveActions.find((action) => action.id === 'manage-secrets')?.reason).toContain(
-      'Missing backend capability'
-    );
-    expect(view.approvals).toHaveLength(1);
+    expect(view.advanced).toContainEqual({ label: 'Approval policy', value: 'never', tone: 'muted' });
+    expect(view.advanced).toContainEqual({ label: 'Sandbox mode', value: 'dangerFullAccess', tone: 'muted' });
+    expect(view.advanced).toContainEqual({ label: 'Workspace-write network', value: 'Enabled', tone: 'muted' });
   });
 
-  it('builds the narrow session settings payload without approval-heavy coding controls', () => {
+  it('builds the full direct-save session settings payload', () => {
     expect(
       buildSessionUpdatePayload({
         modelOverride: 'gpt-5.4',
@@ -77,6 +55,9 @@ describe('settings view model', () => {
     ).toEqual({
       autorunner_model_override: 'gpt-5.4',
       autorunner_effort_override: null,
+      autorunner_approval_policy: 'never',
+      autorunner_sandbox_mode: 'dangerFullAccess',
+      autorunner_workspace_write_network: null,
       runner_stop_after_runs: 3
     });
   });

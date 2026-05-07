@@ -192,17 +192,6 @@ export type ContextspaceDocument = {
   raw: JsonRecord;
 };
 
-/** Sensitive CAR operation prompt. Normal coding-agent work should not create these. */
-export type SensitiveApprovalRequest = {
-  id: string;
-  title: string;
-  description: string;
-  risk: 'low' | 'medium' | 'high';
-  action: string;
-  createdAt: string | null;
-  raw: JsonRecord;
-};
-
 export function mapPmaChatSummary(raw: JsonRecord): PmaChatSummary {
   const latest = asRecord(raw.latest_execution ?? raw.latest_turn ?? raw.turn);
   const status = normalizeWorkStatus(raw.lifecycle_status ?? raw.runtime_status ?? raw.status ?? latest.status);
@@ -465,20 +454,6 @@ export function mapContextspaceDocument(raw: JsonRecord): ContextspaceDocument {
   };
 }
 
-export function mapSensitiveApprovalRequest(raw: JsonRecord): SensitiveApprovalRequest {
-  const id = stringValue(raw.id ?? raw.approval_id ?? raw.action_queue_id ?? raw.run_id, 'approval');
-  const action = stringValue(raw.action ?? raw.operation ?? raw.item_type, 'review');
-  return {
-    id,
-    title: stringValue(raw.title ?? raw.summary ?? action, action),
-    description: stringValue(raw.description ?? raw.reason ?? raw.message, ''),
-    risk: normalizeRisk(raw.risk ?? raw.sensitivity),
-    action,
-    createdAt: dateString(raw.created_at ?? raw.enqueued_at ?? raw.updated_at),
-    raw
-  };
-}
-
 export function normalizeWorkStatus(value: unknown): WorkStatus {
   const text = String(value ?? '').trim().toLowerCase();
   if (['running', 'active', 'in_progress', 'progress'].includes(text)) return 'running';
@@ -648,13 +623,6 @@ function normalizeArtifactKind(value: unknown): SurfaceArtifact['kind'] {
   if (text === 'link') return 'link';
   if (text.startsWith('http') || text.includes('pull request') || text.includes('pr/') || text.includes('github')) return 'link';
   return 'file';
-}
-
-function normalizeRisk(value: unknown): SensitiveApprovalRequest['risk'] {
-  const text = String(value ?? '').trim().toLowerCase();
-  if (text === 'high') return 'high';
-  if (text === 'medium') return 'medium';
-  return 'low';
 }
 
 function countByStatus(items: JsonRecord[], statuses: WorkStatus[]): number {

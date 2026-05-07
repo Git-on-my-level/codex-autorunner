@@ -1,7 +1,7 @@
 import { render } from 'svelte/server';
 import { describe, expect, it } from 'vitest';
 import SettingsView from './SettingsView.svelte';
-import { buildSettingsViewModel, type SettingsSensitiveAction } from '$lib/viewModels/settings';
+import { buildSettingsViewModel } from '$lib/viewModels/settings';
 
 const projection = (agent_id: string, allowed: boolean, reason: string | null = null) => ({
   agent_id,
@@ -15,7 +15,8 @@ const view = buildSettingsViewModel({
     autorunner_model_override: 'gpt-5.4',
     autorunner_effort_override: 'medium',
     autorunner_approval_policy: 'never',
-    autorunner_sandbox_mode: 'dangerFullAccess'
+    autorunner_sandbox_mode: 'dangerFullAccess',
+    autorunner_workspace_write_network: true
   },
   agents: [
     { id: 'hermes', name: 'Hermes', capabilities: ['durable_threads', 'model_listing'], capability_projection: projection('hermes', true) },
@@ -28,18 +29,7 @@ const view = buildSettingsViewModel({
   ],
   modelCatalogs: {
     hermes: [{ id: 'gpt-5.4' }]
-  },
-  approvals: [
-    {
-      id: 'delete-worktree',
-      title: 'Delete worktree',
-      description: 'Remove repo/worktree state.',
-      risk: 'high',
-      action: 'delete_worktree',
-      createdAt: null,
-      raw: { target_scope: 'repo/main' }
-    }
-  ]
+  }
 });
 
 describe('settings page component', () => {
@@ -57,39 +47,20 @@ describe('settings page component', () => {
     expect(body).toContain('1 models');
     expect(body).toContain('Model listing unsupported');
     expect(body).toContain('Unavailable in PMA settings');
+    expect(body).toContain('Approval policy');
+    expect(body).toContain('Sandbox mode');
+    expect(body).toContain('Workspace-write network');
+    expect(body).toContain('Agent-native approvals apply during agent turns');
     expect(body).not.toContain('Analytics');
   });
 
-  it('shows sensitive approvals without making normal coding permissions scary', () => {
+  it('does not render special PMA approval prompts for settings updates', () => {
     const { body } = render(SettingsView, { props: { state: 'ready', view } });
 
-    expect(body).toContain('Sensitive CAR approval');
-    expect(body).toContain('delete_worktree');
-    expect(body).toContain('PMA has full permission for normal coding work');
+    expect(body).not.toContain('Sensitive CAR approval');
+    expect(body).not.toContain('Request approval');
+    expect(body).not.toContain('Pending approvals');
+    expect(body).toContain('Saved');
     expect(body).not.toContain('Approve code edits');
-  });
-
-  it('renders the explicit approval modal for sensitive settings actions', () => {
-    const pendingAction: SettingsSensitiveAction = {
-      id: 'modify-car-config',
-      label: 'Modify CAR config',
-      description: 'Change persistent hub settings.',
-      available: true,
-      reason: 'This writes control-plane state.'
-    };
-
-    const { body } = render(SettingsView, {
-      props: {
-        state: 'ready',
-        view,
-        pendingAction
-      }
-    });
-
-    expect(body).toContain('role="dialog"');
-    expect(body).toContain('Sensitive settings approval');
-    expect(body).toContain('Modify CAR config');
-    expect(body).toContain('Request approval');
-    expect(body).toContain('Cancel');
   });
 });

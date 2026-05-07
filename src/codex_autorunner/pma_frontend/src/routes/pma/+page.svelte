@@ -1,7 +1,6 @@
 <script lang="ts">
   import { page } from '$app/state';
   import { onDestroy, onMount, tick } from 'svelte';
-  import SensitiveApprovalCard from '$lib/components/SensitiveApprovalCard.svelte';
   import SurfaceArtifactCard from '$lib/components/SurfaceArtifactCard.svelte';
   import { pmaApi, type ApiError, type JsonRecord } from '$lib/api/client';
   import { openPmaTailEventSource, type StreamSubscription } from '$lib/api/streaming';
@@ -11,11 +10,9 @@
     PmaChatSummary,
     PmaRunProgress,
     PmaTimelineItem,
-    SensitiveApprovalRequest,
     SurfaceArtifact
   } from '$lib/viewModels/domain';
   import {
-    approvalActionUrl,
     buildManagedThreadCreatePayload,
     buildPmaChatScopeOptions,
     buildManagedThreadMessagePayload,
@@ -23,7 +20,6 @@
     buildPmaStatusBar,
     chooseActiveChatId,
     composeMessageWithAttachments,
-    filterSensitiveCarApprovals,
     filterPmaChats,
     formatBytes,
     formatRelativeTime,
@@ -50,7 +46,6 @@
   let agents = $state<JsonRecord[]>([]);
   let models = $state<JsonRecord[]>([]);
   let scopeOptions = $state<PmaChatScopeOption[]>(buildPmaChatScopeOptions([], [], []));
-  let approvals = $state<SensitiveApprovalRequest[]>([]);
   let pendingAttachments = $state<PendingAttachment[]>([]);
   let linkDialogOpen = $state(false);
   let linkDraft = $state('');
@@ -111,7 +106,7 @@
   });
 
   $effect(() => {
-    const cardCount = activeCards.length + approvals.length;
+    const cardCount = activeCards.length;
     const chatChanged = activeChatId !== lastScrolledChatId;
     const cardCountChanged = cardCount !== lastScrolledCardCount;
 
@@ -126,11 +121,10 @@
   async function loadInitial(): Promise<void> {
     loadingChats = true;
     chatError = null;
-    const [chatResult, artifactResult, agentResult, approvalResult, repoResult, worktreeResult, agentWorkspaceResult] = await Promise.all([
+    const [chatResult, artifactResult, agentResult, repoResult, worktreeResult, agentWorkspaceResult] = await Promise.all([
       pmaApi.pma.listChats(),
       pmaApi.pma.listFiles(),
       pmaApi.pma.listAgents(),
-      pmaApi.settings.listApprovals(),
       pmaApi.hub.listRepos(),
       pmaApi.hub.listWorktrees(),
       pmaApi.hub.listAgentWorkspaces()
@@ -150,7 +144,6 @@
     }
 
     if (artifactResult.ok) artifacts = artifactResult.data;
-    if (approvalResult.ok) approvals = filterSensitiveCarApprovals(approvalResult.data);
     scopeOptions = buildPmaChatScopeOptions(
       repoResult.ok ? repoResult.data : [],
       worktreeResult.ok ? worktreeResult.data : [],
@@ -168,11 +161,6 @@
       agentError = agentResult.error;
     }
     loadingChats = false;
-  }
-
-  async function refreshApprovals(): Promise<void> {
-    const result = await pmaApi.settings.listApprovals();
-    if (result.ok) approvals = filterSensitiveCarApprovals(result.data);
   }
 
   async function loadModels(agentId: string, preferredModel = ''): Promise<void> {
@@ -222,7 +210,6 @@
     else if (statusResult.ok) updateProgress(statusResult.data);
     else if (!options.quiet) activeError = tailResult.error;
 
-    void refreshApprovals();
     loadingActive = false;
   }
 
@@ -468,37 +455,6 @@
     return true;
   }
 
-  async function decideApproval(
-    approval: SensitiveApprovalRequest,
-    decision: 'approve' | 'decline'
-  ): Promise<void> {
-    composeError = null;
-    const url = approvalActionUrl(approval, decision);
-    if (!url) {
-      composeError = {
-        kind: 'parse',
-        status: null,
-        code: 'approval_route_missing',
-        message: 'This approval is visible, but the backend did not expose an approve/decline route.'
-      };
-      return;
-    }
-    const body =
-      url === approval.raw.decision_url || url === approval.raw.route
-        ? { decision, approval_id: approval.id }
-        : undefined;
-    const result = await pmaApi.requestJson<JsonRecord>(url, {
-      method: 'POST',
-      body
-    });
-    if (result.ok) {
-      approvals = approvals.filter((item) => item.id !== approval.id);
-      void refreshApprovals();
-    } else {
-      composeError = result.error;
-    }
-  }
-
   function agentLabel(agent: JsonRecord): string {
     return stringField(agent, 'label') ?? stringField(agent, 'name') ?? stringField(agent, 'id') ?? 'Agent';
   }
@@ -726,7 +682,7 @@
         <div class="state-panel loading-state">
           <span class="state-icon" aria-hidden="true"></span>
           <strong>Loading active chat</strong>
-          <p>Collecting timeline, status, and approval prompts.</p>
+          <p>Collecting timeline and status.</p>
         </div>
       {:else if activeError}
         <div class="state-panel error">
@@ -740,7 +696,7 @@
           <p>Pick a conversation or create a new chat to start work.</p>
           <button type="button" onclick={() => (mobilePane = 'list')}>Browse chats</button>
         </div>
-      {:else if activeCards.length === 0 && approvals.length === 0 && !statusBar}
+      {:else if activeCards.length === 0 && !statusBar}
         <div class="state-panel empty-state">
           <strong>This chat is ready</strong>
           <p>Send a message or attach files so PMA can start from current context.</p>
@@ -755,9 +711,6 @@
             <span>{statusBar.queueDepthLabel}</span>
           </section>
         {/if}
-        {#each approvals as approval (approval.id)}
-          <SensitiveApprovalCard {approval} onDecision={decideApproval} />
-        {/each}
         {#each activeCards as card (card.id)}
           {#if card.kind === 'message'}
             <article class={`message ${card.message.role === 'user' ? 'user' : 'assistant'}`}>
@@ -914,7 +867,7 @@
         </div>
       </div>
     {/if}
-    <p class="permission-note">PMA has full permission for normal coding work. Sensitive CAR operations require approval.</p>
+    <p class="permission-note">Agent-native approvals apply during turns according to the selected approval policy and sandbox mode.</p>
     {#if composeError}
       <p class="compose-error">{composeError.message}</p>
     {/if}

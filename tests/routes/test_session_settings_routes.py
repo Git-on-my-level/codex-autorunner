@@ -133,82 +133,81 @@ def test_session_settings_reject_changes_while_run_is_active(_settings_env) -> N
     assert "Cannot change autorunner settings while a run is active" in response.text
 
 
-def test_session_settings_approval_request_and_approve(_settings_env) -> None:
+def test_session_settings_rejects_invalid_runtime_preferences(_settings_env) -> None:
     client, _repo_root = _settings_env
 
-    client.post(
+    invalid_approval = client.post(
         "/api/session/settings",
-        json={
-            "autorunner_model_override": "",
-            "autorunner_effort_override": "",
-            "runner_stop_after_runs": None,
-        },
+        json={"autorunner_approval_policy": "sometimes"},
+    )
+    assert invalid_approval.status_code == 400
+    assert "approval policy must be never or unlessTrusted" in invalid_approval.text
+
+    invalid_sandbox = client.post(
+        "/api/session/settings",
+        json={"autorunner_sandbox_mode": "readOnly"},
+    )
+    assert invalid_sandbox.status_code == 400
+    assert (
+        "sandbox mode must be dangerFullAccess or workspaceWrite"
+        in invalid_sandbox.text
     )
 
-    requested = client.post(
-        "/api/session/settings/approvals",
+    invalid_network = client.post(
+        "/api/session/settings",
+        json={"autorunner_workspace_write_network": "yes"},
+    )
+    assert invalid_network.status_code == 422
+
+    invalid_runs = client.post(
+        "/api/session/settings",
+        json={"runner_stop_after_runs": 0},
+    )
+    assert invalid_runs.status_code == 400
+    assert "runner_stop_after_runs must be a positive integer" in invalid_runs.text
+
+
+def test_session_settings_apply_all_runtime_preferences_directly(_settings_env) -> None:
+    client, _repo_root = _settings_env
+
+    response = client.post(
+        "/api/session/settings",
         json={
-            "autorunner_model_override": "gpt-5.4",
+            "autorunner_model_override": "gpt-5.5",
             "autorunner_effort_override": "high",
-            "runner_stop_after_runs": 3,
+            "autorunner_approval_policy": "unlessTrusted",
+            "autorunner_sandbox_mode": "workspaceWrite",
+            "autorunner_workspace_write_network": True,
+            "runner_stop_after_runs": 5,
         },
     )
 
-    assert requested.status_code == 200
-    approval = requested.json()
-    assert approval["action"] == "modify_car_config"
-    assert approval["risk"] == "high"
-    assert approval["decision_url"].endswith("/decision")
-
-    unchanged = client.get("/api/session/settings")
-    assert unchanged.status_code == 200
-    assert unchanged.json()["autorunner_model_override"] is None
-
-    listed = client.get("/api/session/settings/approvals")
-    assert listed.status_code == 200
-    assert [item["id"] for item in listed.json()["approvals"]] == [approval["id"]]
-    inbox = client.get("/api/interactions/prompts")
-    assert inbox.status_code == 200
-    assert [item["id"] for item in inbox.json()["prompts"]] == [approval["id"]]
-    assert inbox.json()["prompts"][0]["kind"] == "approval"
-
-    decided = client.post(
-        approval["decision_url"],
-        json={"decision": "approve", "approval_id": approval["id"]},
-    )
-
-    assert decided.status_code == 200
-    assert decided.json()["status"] == "approved"
-    refreshed = client.get("/api/session/settings")
-    assert refreshed.json()["autorunner_model_override"] == "gpt-5.4"
-    assert refreshed.json()["autorunner_effort_override"] == "high"
-    assert refreshed.json()["runner_stop_after_runs"] == 3
-    assert client.get("/api/session/settings/approvals").json()["approvals"] == []
+    assert response.status_code == 200
+    assert response.json() == {
+        "autorunner_model_override": "gpt-5.5",
+        "autorunner_effort_override": "high",
+        "autorunner_approval_policy": "unlessTrusted",
+        "autorunner_sandbox_mode": "workspaceWrite",
+        "autorunner_workspace_write_network": True,
+        "runner_stop_after_runs": 5,
+    }
 
 
-def test_session_settings_approval_decline_does_not_apply(_settings_env) -> None:
+def test_session_settings_approval_routes_are_removed(_settings_env) -> None:
     client, _repo_root = _settings_env
 
-    client.post(
-        "/api/session/settings",
-        json={
-            "autorunner_model_override": "gpt-5.4",
-            "autorunner_effort_override": "",
-            "runner_stop_after_runs": None,
-        },
+    assert client.get("/api/session/settings/approvals").status_code == 404
+    assert (
+        client.post(
+            "/api/session/settings/approvals",
+            json={"autorunner_model_override": "gpt-5.4"},
+        ).status_code
+        == 404
     )
-
-    requested = client.post(
-        "/api/session/settings/approvals",
-        json={"autorunner_model_override": "gpt-5.5"},
+    assert (
+        client.post(
+            "/api/session/settings/approvals/approval-1/decision",
+            json={"decision": "approve"},
+        ).status_code
+        == 404
     )
-    assert requested.status_code == 200
-    approval = requested.json()
-
-    declined = client.post(approval["decision_url"], json={"decision": "decline"})
-
-    assert declined.status_code == 200
-    assert declined.json()["status"] == "declined"
-    refreshed = client.get("/api/session/settings")
-    assert refreshed.json()["autorunner_model_override"] == "gpt-5.4"
-    assert client.get("/api/session/settings/approvals").json()["approvals"] == []

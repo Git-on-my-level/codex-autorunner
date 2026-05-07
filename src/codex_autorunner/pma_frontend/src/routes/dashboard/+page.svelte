@@ -20,17 +20,16 @@
     loading = true;
     error = null;
     sectionIssues = [];
-    const [summary, runs, chats, approvals, tickets, repos, worktrees] = await Promise.all([
+    const [summary, runs, chats, tickets, repos, worktrees] = await Promise.all([
       pmaApi.hub.getDashboard(),
       pmaApi.ticketFlow.listRuns(),
       pmaApi.pma.listChats(),
-      pmaApi.settings.listApprovals(),
       pmaApi.ticketFlow.listTickets(),
       pmaApi.hub.listRepos(),
       pmaApi.hub.listWorktrees()
     ]);
 
-    const results = [summary, runs, chats, approvals, tickets];
+    const results = [summary, runs, chats, tickets];
     const firstError = results.find((result) => !result.ok);
     if (results.every((result) => !result.ok) && firstError && !firstError.ok) {
       error = firstError.error;
@@ -41,8 +40,6 @@
     sectionIssues = [
       !summary.ok ? partialPageIssue('recent_activity', 'Dashboard summary unavailable', summary.error) : null,
       !runs.ok ? partialPageIssue('active_runs', 'Active runs unavailable', runs.error) : null,
-      !chats.ok ? partialPageIssue('active_runs', 'PMA chats unavailable', chats.error) : null,
-      !approvals.ok ? partialPageIssue('waiting_for_me', 'Approvals unavailable', approvals.error) : null,
       !tickets.ok ? partialPageIssue('tickets', 'Ticket queue unavailable', tickets.error) : null
     ].filter((issue): issue is PartialPageIssue => Boolean(issue));
 
@@ -50,7 +47,6 @@
       summary: dataOr(summary, null),
       runs: dataOr(runs, []),
       chats: dataOr(chats, []),
-      approvals: dataOr(approvals, []),
       tickets: dataOr(tickets, []),
       repos: dataOr(repos, []),
       worktrees: dataOr(worktrees, [])
