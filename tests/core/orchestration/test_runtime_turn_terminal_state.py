@@ -4,6 +4,14 @@ from types import SimpleNamespace
 
 from tests.acp_lifecycle_corpus import load_acp_lifecycle_corpus
 
+from codex_autorunner.core.orchestration.runtime_state_events import (
+    AssistantDelta,
+    AssistantMessage,
+    FailureSignal,
+    TerminalSignal,
+    TokenUsage,
+    normalize_runtime_state_events,
+)
 from codex_autorunner.core.orchestration.runtime_turn_terminal_state import (
     RuntimeTurnTerminalStateMachine,
 )
@@ -171,3 +179,50 @@ def test_runtime_turn_terminal_state_machine_ignores_prompt_output_commentary_fo
     )
 
     assert state.last_assistant_text == ""
+
+
+def test_runtime_turn_terminal_state_machine_reduces_semantic_events() -> None:
+    state = RuntimeTurnTerminalStateMachine(
+        backend_thread_id="thread-1",
+        backend_turn_id="turn-1",
+    )
+
+    state.note_state_event(AssistantDelta(text="hel", source="semantic"))
+    state.note_state_event(AssistantDelta(text="hello", source="semantic"))
+    state.note_state_event(
+        AssistantMessage(text="hello final", source="semantic", message_id="msg-1")
+    )
+    state.note_state_event(
+        TokenUsage(usage={"input": 3, "output": 5}, source="semantic")
+    )
+    state.note_state_event(FailureSignal(error="late warning", source="semantic"))
+    state.note_state_event(
+        TerminalSignal(status="ok", source="semantic", final_text="hello final")
+    )
+
+    assert state.last_assistant_text == "hello final"
+    assert state.token_usage == {"input": 3, "output": 5}
+    assert state.failure_cause == "late warning"
+    assert len(state.terminal_signals) == 1
+    assert state.terminal_signals[0].source == "semantic"
+    assert state.terminal_signals[0].status == "ok"
+
+
+def test_unknown_raw_event_remains_observable_without_terminal_mutation() -> None:
+    state = RuntimeTurnTerminalStateMachine(
+        backend_thread_id="thread-1",
+        backend_turn_id="turn-1",
+    )
+    raw = {"method": "vendor/unknown", "params": {"text": "ignore me"}}
+
+    assert normalize_runtime_state_events(raw) == []
+
+    state.note_raw_event(raw, timestamp="2026-01-01T00:00:00Z")
+
+    assert state.raw_events == [raw]
+    assert state.last_progress_timestamp == "2026-01-01T00:00:00Z"
+    assert state.last_runtime_method is None
+    assert state.last_assistant_text == ""
+    assert state.failure_cause is None
+    assert state.token_usage is None
+    assert state.terminal_signals == []

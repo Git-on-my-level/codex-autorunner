@@ -5,31 +5,23 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Literal, Optional
 
-from ..acp_lifecycle import (
-    analyze_acp_lifecycle_message,
-    extract_message_phase,
-)
-from ..acp_lifecycle import (
-    extract_error_message as _extract_error_message,
-)
-from ..acp_lifecycle import (
-    extract_message_text as _extract_message_text,
-)
-from ..acp_lifecycle import (
-    extract_output_delta as _extract_output_delta,
-)
 from ..time_utils import now_iso
-from .codex_item_normalizers import (
-    extract_agent_message_text as _shared_extract_agent_message_text,
-)
-from .codex_item_normalizers import (
-    extract_codex_usage,
-    is_commentary_agent_message,
-)
 from .codex_item_normalizers import (
     merge_runtime_raw_events as _merge_runtime_raw_events,
 )
 from .execution_history import ExecutionCheckpoint, ExecutionCheckpointSignal
+from .runtime_state_events import (
+    AssistantDelta,
+    AssistantMessage,
+    FailureSignal,
+    ProgressSignal,
+    RuntimeStateEvent,
+    TerminalSignal,
+    TokenUsage,
+    TransportReturned,
+    normalize_runtime_state_events,
+    normalize_transport_returned,
+)
 from .stream_text_merge import AssistantTextAccumulator
 
 RuntimeThreadOutcomeStatus = Literal["ok", "error", "interrupted"]
@@ -73,16 +65,6 @@ class RuntimeThreadOutcome:
     transport_request_return_timestamp: Optional[str] = None
     last_progress_timestamp: Optional[str] = None
     failure_cause: Optional[str] = None
-
-
-@dataclass
-class _RawEventInspection:
-    assistant_message_text: Optional[str] = None
-    assistant_stream_text: Optional[str] = None
-    failure_message: Optional[str] = None
-    terminal_signal: Optional[RuntimeThreadTerminalSignal] = None
-    token_usage: Optional[dict[str, Any]] = None
-    runtime_method: Optional[str] = None
 
 
 @dataclass
@@ -139,19 +121,52 @@ class RuntimeTurnTerminalStateMachine:
         self.raw_events.append(raw_event)
         self.last_progress_timestamp = event_timestamp
         self.last_progress_monotonic = time.monotonic()
-        inspection = _inspect_raw_event(raw_event, timestamp=event_timestamp)
-        if inspection.runtime_method:
-            self.last_runtime_method = inspection.runtime_method
-        if inspection.assistant_stream_text:
-            self._note_assistant_stream_text(inspection.assistant_stream_text)
-        if inspection.assistant_message_text:
-            self._note_assistant_message_text(inspection.assistant_message_text)
-        if inspection.failure_message:
-            self.failure_cause = inspection.failure_message
-        if inspection.token_usage:
-            self.token_usage = dict(inspection.token_usage)
-        if inspection.terminal_signal is not None:
-            self._note_terminal_signal(inspection.terminal_signal)
+        for event in normalize_runtime_state_events(raw_event):
+            self.note_state_event(event, timestamp=event_timestamp)
+
+    def note_state_event(
+        self,
+        event: RuntimeStateEvent,
+        *,
+        timestamp: Optional[str] = None,
+    ) -> None:
+        event_timestamp = timestamp or now_iso()
+        if isinstance(event, AssistantDelta):
+            self._note_assistant_stream_text(event.text)
+            return
+        if isinstance(event, AssistantMessage):
+            self._note_assistant_message_text(event.text)
+            return
+        if isinstance(event, TerminalSignal):
+            if event.final_text:
+                self._note_assistant_message_text(event.final_text)
+            if event.error:
+                self.failure_cause = event.error
+            self._note_terminal_signal(
+                RuntimeThreadTerminalSignal(
+                    source=event.source,
+                    status=event.status,
+                    timestamp=event_timestamp,
+                )
+            )
+            return
+        if isinstance(event, TransportReturned):
+            self.transport_request_return_timestamp = event_timestamp
+            self.transport_status = event.status
+            self.transport_errors = event.errors
+            if event.assistant_text.strip():
+                self._note_assistant_message_text(event.assistant_text)
+            if self.transport_errors and not self.failure_cause:
+                self.failure_cause = self.transport_errors[0]
+            return
+        if isinstance(event, FailureSignal):
+            self.failure_cause = event.error
+            return
+        if isinstance(event, TokenUsage):
+            self.token_usage = dict(event.usage)
+            return
+        if isinstance(event, ProgressSignal) and event.kind == "runtime_method":
+            self.last_runtime_method = event.message
 
     def note_transport_result(
         self,
@@ -160,37 +175,18 @@ class RuntimeTurnTerminalStateMachine:
         timestamp: Optional[str] = None,
     ) -> None:
         event_timestamp = timestamp or now_iso()
-        self.transport_request_return_timestamp = event_timestamp
-        self.transport_status = str(getattr(result, "status", "") or "").strip().lower()
-        self.transport_errors = tuple(
-            str(error or "").strip()
-            for error in (getattr(result, "errors", ()) or ())
-            if str(error or "").strip()
-        )
-        assistant_text = str(getattr(result, "assistant_text", "") or "")
-        if assistant_text.strip():
-            self._note_assistant_message_text(assistant_text)
+        transport_event = normalize_transport_returned(result)
+        self.note_state_event(transport_event, timestamp=event_timestamp)
         merged_raw_events = _merge_runtime_raw_events(
             self.raw_events,
-            list(getattr(result, "raw_events", ()) or ()),
+            list(transport_event.raw_events),
         )
         if len(merged_raw_events) > len(self.raw_events):
             new_events = merged_raw_events[len(self.raw_events) :]
             self.raw_events = merged_raw_events
             for raw_event in new_events:
-                inspection = _inspect_raw_event(raw_event, timestamp=event_timestamp)
-                if inspection.assistant_stream_text:
-                    self._note_assistant_stream_text(inspection.assistant_stream_text)
-                if inspection.assistant_message_text:
-                    self._note_assistant_message_text(inspection.assistant_message_text)
-                if inspection.failure_message:
-                    self.failure_cause = inspection.failure_message
-                if inspection.token_usage:
-                    self.token_usage = dict(inspection.token_usage)
-                if inspection.terminal_signal is not None:
-                    self._note_terminal_signal(inspection.terminal_signal)
-        if self.transport_errors and not self.failure_cause:
-            self.failure_cause = self.transport_errors[0]
+                for event in normalize_runtime_state_events(raw_event):
+                    self.note_state_event(event, timestamp=event_timestamp)
 
     def build_missing_backend_ids_outcome(self, error: str) -> RuntimeThreadOutcome:
         return RuntimeThreadOutcome(
@@ -444,110 +440,6 @@ class RuntimeTurnTerminalStateMachine:
         )
 
 
-def _inspect_raw_event(
-    raw_event: Any,
-    *,
-    timestamp: str,
-) -> _RawEventInspection:
-    if not isinstance(raw_event, dict):
-        return _RawEventInspection()
-    message = raw_event.get("message")
-    payload = message if isinstance(message, dict) else raw_event
-    method = str(payload.get("method") or "").strip()
-    params = payload.get("params")
-    if not isinstance(params, dict):
-        params = payload if isinstance(payload, dict) else {}
-    if not method:
-        return _RawEventInspection()
-
-    assistant_message_text = None
-    assistant_stream_text = None
-    failure_message = None
-    terminal_signal = None
-    token_usage = _extract_usage(params)
-    method_lower = method.lower()
-    lifecycle = analyze_acp_lifecycle_message(payload)
-
-    if method in {"message.completed", "message.updated"}:
-        role = _extract_message_role(params)
-        if (
-            role != "user"
-            and str(params.get("phase") or "").strip().lower() != "commentary"
-        ):
-            assistant_message_text = _extract_message_text(params)
-    elif method in {"prompt/message", "turn/message"}:
-        if lifecycle.message_phase != "commentary":
-            assistant_message_text = lifecycle.assistant_text
-    elif lifecycle.runtime_terminal_status is not None:
-        assistant_message_text = lifecycle.assistant_text or None
-        terminal_signal = RuntimeThreadTerminalSignal(
-            source=method,
-            status=lifecycle.runtime_terminal_status,
-            timestamp=timestamp,
-        )
-        if lifecycle.runtime_terminal_status in {"error", "interrupted"}:
-            failure_message = lifecycle.error_message or _extract_error_message(
-                params,
-                default="",
-            )
-    elif method in {"turn/failed", "turn/error", "error"}:
-        failure_message = _extract_error_message(params)
-        terminal_signal = RuntimeThreadTerminalSignal(
-            source=method,
-            status="error",
-            timestamp=timestamp,
-        )
-    elif method == "item/completed":
-        item = params.get("item")
-        if (
-            isinstance(item, dict)
-            and str(item.get("type") or "").strip() == "agentMessage"
-            and not is_commentary_agent_message(item)
-        ):
-            assistant_message_text = _shared_extract_agent_message_text(item) or None
-
-    if (
-        assistant_message_text is None
-        and (
-            method
-            in {
-                "prompt/output",
-                "prompt/delta",
-                "prompt/progress",
-                "turn/progress",
-                "item/agentMessage/delta",
-                "message.delta",
-                "turn/streamDelta",
-            }
-            or "outputdelta" in method_lower
-        )
-        and extract_message_phase(params) != "commentary"
-    ):
-        assistant_stream_text = _extract_output_delta(params)
-    if assistant_stream_text is None and method == "session/update":
-        update = params.get("update")
-        if isinstance(update, dict):
-            update_kind = str(lifecycle.session_update_kind or "").strip()
-            if (
-                update_kind == "agent_message_chunk"
-                and lifecycle.message_phase != "commentary"
-            ):
-                assistant_stream_text = _extract_output_delta(update)
-
-    return _RawEventInspection(
-        assistant_message_text=assistant_message_text,
-        assistant_stream_text=assistant_stream_text,
-        failure_message=failure_message,
-        terminal_signal=terminal_signal,
-        token_usage=token_usage,
-        runtime_method=method,
-    )
-
-
-def _extract_usage(params: dict[str, Any]) -> Optional[dict[str, Any]]:
-    return extract_codex_usage(params)
-
-
 def _checkpoint_preview(value: str, limit: int = 240) -> str:
     text = str(value or "")
     if len(text) <= limit:
@@ -555,18 +447,6 @@ def _checkpoint_preview(value: str, limit: int = 240) -> str:
     if limit <= 3:
         return text[:limit]
     return text[: limit - 3] + "..."
-
-
-def _extract_message_role(params: dict[str, Any]) -> str:
-    role = params.get("role")
-    if isinstance(role, str):
-        return role.strip().lower()
-    message = params.get("message")
-    if isinstance(message, dict):
-        role = message.get("role")
-        if isinstance(role, str):
-            return role.strip().lower()
-    return ""
 
 
 __all__ = [
