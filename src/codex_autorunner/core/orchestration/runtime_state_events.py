@@ -114,7 +114,10 @@ def normalize_runtime_state_events(raw_event: Any) -> list[RuntimeStateEvent]:
         return []
 
     events: list[RuntimeStateEvent] = []
+    lifecycle = analyze_acp_lifecycle_message(payload)
     usage = extract_codex_usage(params)
+    if not usage and lifecycle.usage:
+        usage = dict(lifecycle.usage)
     if usage:
         events.append(TokenUsage(usage=dict(usage), source=method))
 
@@ -123,8 +126,6 @@ def normalize_runtime_state_events(raw_event: Any) -> list[RuntimeStateEvent]:
     failure_message = None
     terminal_status: Optional[RuntimeStateEventStatus] = None
     method_lower = method.lower()
-    lifecycle = analyze_acp_lifecycle_message(payload)
-
     if method in {"message.completed", "message.updated"}:
         role = _extract_message_role(params)
         if (

@@ -1,7 +1,15 @@
 from __future__ import annotations
 
-from tests.acp_lifecycle_corpus import load_acp_lifecycle_corpus
+import copy
 
+import pytest
+from tests.acp_lifecycle_corpus import load_acp_lifecycle_corpus
+from tests.runtime_lifecycle_sequences import (
+    load_runtime_lifecycle_sequences,
+    runtime_lifecycle_sequence_ids,
+)
+
+from codex_autorunner.agents.types import TerminalTurnResult
 from codex_autorunner.core.orchestration.runtime_thread_events import (
     DECODE_FAILURE_REASON_EMPTY_METHOD,
     DECODE_FAILURE_REASON_REGISTRY_MISS,
@@ -22,6 +30,12 @@ from codex_autorunner.core.orchestration.runtime_thread_events import (
     terminal_run_event_from_outcome,
 )
 from codex_autorunner.core.orchestration.runtime_threads import RuntimeThreadOutcome
+from codex_autorunner.core.orchestration.runtime_turn_terminal_state import (
+    RuntimeThreadOutcome as TerminalStateOutcome,
+)
+from codex_autorunner.core.orchestration.runtime_turn_terminal_state import (
+    RuntimeTurnTerminalStateMachine,
+)
 from codex_autorunner.core.ports.run_event import (
     RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
     ApprovalRequested,
@@ -34,6 +48,16 @@ from codex_autorunner.core.ports.run_event import (
     ToolResult,
 )
 from codex_autorunner.core.sse import format_sse
+
+
+def _terminal_source(outcome: TerminalStateOutcome) -> str:
+    if outcome.terminal_signals:
+        return outcome.terminal_signals[-1].source
+    return outcome.completion_source
+
+
+def _delivery_allowed(outcome: TerminalStateOutcome) -> bool:
+    return outcome.status == "ok" and bool(outcome.assistant_text.strip())
 
 
 async def test_runtime_event_driver_keeps_timeline_chunks_and_reduced_output_separate() -> (
@@ -60,6 +84,87 @@ async def test_runtime_event_driver_keeps_timeline_chunks_and_reduced_output_sep
     assert driver.assistant_parts == ["Hel", "Hello"]
     assert "".join(driver.assistant_parts) == "HelHello"
     assert driver.best_assistant_text() == "Hello"
+
+
+@pytest.mark.parametrize(
+    ("case"),
+    load_runtime_lifecycle_sequences(),
+    ids=runtime_lifecycle_sequence_ids(),
+)
+async def test_runtime_lifecycle_sequence_corpus_reduces_final_state_and_timeline(
+    case: dict[str, object],
+) -> None:
+    driver = RuntimeEventDriver()
+    terminal_state = RuntimeTurnTerminalStateMachine(
+        backend_thread_id="thread-1",
+        backend_turn_id="turn-current",
+    )
+    outcome: TerminalStateOutcome | None = None
+
+    for action_obj in case["actions"]:  # type: ignore[index]
+        action = dict(action_obj)  # type: ignore[arg-type]
+        kind = action["kind"]
+        if kind == "raw_event":
+            raw_event = copy.deepcopy(action["raw"])
+            await driver.consume_raw_event(raw_event)
+            terminal_state.note_raw_event(raw_event)
+            continue
+        if kind == "transport_return":
+            terminal_state.note_transport_result(
+                TerminalTurnResult(
+                    status=str(action.get("status") or ""),
+                    assistant_text=str(action.get("assistant_text") or ""),
+                    errors=[
+                        str(error)
+                        for error in (action.get("errors") or [])
+                        if str(error).strip()
+                    ],
+                    raw_events=[
+                        copy.deepcopy(raw)
+                        for raw in (action.get("raw_events") or [])
+                        if isinstance(raw, dict)
+                    ],
+                )
+            )
+            continue
+        if kind == "timeout":
+            outcome = terminal_state.build_timeout_outcome(
+                str(action.get("error") or "Runtime thread timed out")
+            )
+            continue
+        if kind == "transport_exception":
+            outcome = terminal_state.build_transport_exception_outcome(
+                str(action.get("error") or "Runtime transport failed")
+            )
+            continue
+        raise AssertionError(f"Unknown lifecycle sequence action: {kind}")
+
+    if outcome is None:
+        outcome = terminal_state.build_outcome("Runtime thread failed")
+
+    expected = dict(case["expected"])  # type: ignore[index]
+    commentary = [
+        event.message
+        for event in driver.run_events
+        if isinstance(event, RunNotice) and event.kind == "commentary"
+    ]
+
+    assert outcome.status == expected["status"]
+    assert outcome.assistant_text == expected["assistant_text"]
+    assert _terminal_source(outcome) == expected["terminal_source"]
+    assert outcome.completion_source == expected["completion_source"]
+    assert terminal_state.token_usage == expected["token_usage"]
+    assert driver.token_usage == expected["token_usage"]
+    assert _delivery_allowed(outcome) is expected["delivery_allowed"]
+    assert driver.best_assistant_text() == expected["assistant_text"] or (
+        expected["status"] == "error"
+        and driver.best_assistant_text() in {"", "partial output"}
+    )
+    assert driver.assistant_parts == expected["assistant_timeline"]
+    assert [type(event).__name__ for event in driver.run_events] == expected[
+        "run_event_types"
+    ]
+    assert commentary == expected["commentary"]
 
 
 async def test_normalize_runtime_thread_raw_event_shared_lifecycle_corpus() -> None:

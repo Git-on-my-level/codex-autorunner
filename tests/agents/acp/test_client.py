@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 from tests.acp_lifecycle_corpus import load_acp_lifecycle_corpus
+from tests.runtime_lifecycle_sequences import load_runtime_lifecycle_sequences
 
 from codex_autorunner.agents.acp import (
     ACPClient,
@@ -111,6 +112,29 @@ async def test_client_maps_shared_lifecycle_fixtures_without_turn_id(
 
     expected_turn_id = "turn-2" if expected["uses_turn_id_fallback"] else None
     assert mapped.get("params", {}).get("turnId") == expected_turn_id
+
+
+@pytest.mark.asyncio
+async def test_client_turn_id_mapping_references_runtime_sequence_corpus() -> None:
+    client = ACPClient(fixture_command("official"))
+    client._ensure_prompt_state("session-1", "turn-current")
+    client._session_active_turns["session-1"] = "turn-current"
+
+    mapped_cases = [
+        case
+        for case in load_runtime_lifecycle_sequences()
+        if dict(case.get("expected") or {}).get("mapped_turn_id")
+    ]
+    assert mapped_cases
+
+    for case in mapped_cases:
+        expected_turn_id = str(dict(case["expected"])["mapped_turn_id"])
+        for action_obj in case["actions"]:
+            action = dict(action_obj)
+            if action.get("kind") != "raw_event":
+                continue
+            mapped = client._message_with_mapped_turn_id(dict(action["raw"]))
+            assert mapped.get("params", {}).get("turnId") == expected_turn_id
 
 
 @pytest.mark.asyncio
