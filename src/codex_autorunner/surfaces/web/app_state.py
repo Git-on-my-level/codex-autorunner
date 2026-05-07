@@ -47,6 +47,8 @@ from ...integrations.app_server.env import build_app_server_env
 from ...integrations.app_server.event_buffer import AppServerEventBuffer
 from ...integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from ...tickets.replies import resolve_reply_paths
+from ..discord import build_discord_surface_port
+from ..telegram import build_telegram_surface_port
 from .hub_jobs import HubJobManager
 from .runner_manager import RunnerManager
 from .static_assets import (
@@ -598,6 +600,10 @@ def build_app_context(
     )
     surface_port_registry = SurfacePortRegistry()
     surface_port_registry.register("web", web_port)
+    surface_port_registry.register("discord", build_discord_surface_port(logger=logger))
+    surface_port_registry.register(
+        "telegram", build_telegram_surface_port(logger=logger)
+    )
     return AppContext(
         base_path=normalized_base,
         env=env,
@@ -807,6 +813,12 @@ def build_hub_context(
     )
     hub_surface_port_registry = SurfacePortRegistry()
     hub_surface_port_registry.register("web", hub_web_port)
+    hub_surface_port_registry.register(
+        "discord", build_discord_surface_port(logger=logger)
+    )
+    hub_surface_port_registry.register(
+        "telegram", build_telegram_surface_port(logger=logger)
+    )
     return HubAppContext(
         base_path=normalized_base,
         config=config,
