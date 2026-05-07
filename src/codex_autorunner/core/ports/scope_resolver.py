@@ -8,6 +8,8 @@ from ..domain.refs import ScopeRef
 
 @dataclass(frozen=True)
 class ResolvedScope:
+    """Adapter-neutral scope metadata plus the legacy execution root bridge."""
+
     scope: ScopeRef
     display_name: str = ""
     workspace_root: Optional[str] = None

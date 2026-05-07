@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+from dataclasses import fields
 
 from codex_autorunner.core.domain.refs import (
     AgentRef,
@@ -276,3 +277,72 @@ class TestPortDependencyBoundaries:
             OutboundDelivery,
         ]:
             assert cls.__dataclass_params__.frozen, f"{cls.__name__} is not frozen"
+
+    def test_port_contract_names_stay_adapter_neutral(self) -> None:
+        forbidden_terms = {
+            "database",
+            "discord",
+            "fastapi",
+            "sqlite",
+            "sqlalchemy",
+            "svelte",
+            "telegram",
+        }
+        dataclasses = [
+            ResolvedScope,
+            ThreadRecord,
+            MemoryDoc,
+            MemoryDocs,
+            TicketRecord,
+            SurfaceCapabilities,
+            SurfaceHealth,
+            InboundEvent,
+            EngineCommand,
+            OutboundDelivery,
+        ]
+        protocols = [
+            ScopeResolver,
+            ThreadStore,
+            MemoryStore,
+            TicketStore,
+            SurfacePort,
+        ]
+
+        checked_names = []
+        for cls in dataclasses:
+            checked_names.append(cls.__name__)
+            checked_names.extend(field.name for field in fields(cls))
+        for protocol in protocols:
+            checked_names.append(protocol.__name__)
+            for name, member in inspect.getmembers(protocol, inspect.isfunction):
+                if name.startswith("_"):
+                    continue
+                checked_names.append(name)
+                checked_names.extend(inspect.signature(member).parameters)
+
+        for name in checked_names:
+            normalized = name.lower()
+            assert not any(term in normalized for term in forbidden_terms), name
+
+    def test_workspace_root_is_the_only_intentional_compatibility_leak(self) -> None:
+        dataclasses = [
+            ResolvedScope,
+            ThreadRecord,
+            MemoryDoc,
+            MemoryDocs,
+            TicketRecord,
+            SurfaceCapabilities,
+            SurfaceHealth,
+            InboundEvent,
+            EngineCommand,
+            OutboundDelivery,
+        ]
+
+        legacy_fields = [
+            f"{cls.__name__}.{field.name}"
+            for cls in dataclasses
+            for field in fields(cls)
+            if field.name == "workspace_root"
+        ]
+
+        assert legacy_fields == ["ResolvedScope.workspace_root"]
