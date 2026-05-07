@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal, Mapping, Optional
+from typing import Any, Callable, Literal, Mapping, Optional
 
 from .text_utils import _normalize_optional_text
 
@@ -359,6 +359,64 @@ def should_close_turn_buffer(method: str, params: Mapping[str, Any]) -> bool:
     if runtime_terminal_status_for_lifecycle(method, params) is None:
         return False
     return method not in _IDLE_TERMINAL_METHODS
+
+
+@dataclass(frozen=True)
+class ActiveTurnIdentityDecision:
+    allowed: bool
+    turn_id: Optional[str] = None
+    reason: str = ""
+
+
+def resolve_active_turn_for_missing_id(
+    *,
+    session_id: str,
+    method: str,
+    params: Mapping[str, Any],
+    active_turns: Mapping[str, str],
+    is_turn_open: Callable[[str], bool],
+) -> ActiveTurnIdentityDecision:
+    if not should_map_missing_turn_id(method, params):
+        return ActiveTurnIdentityDecision(False, reason="fallback_not_allowed")
+    active_turn_id = _normalize_optional_text(active_turns.get(session_id))
+    if not active_turn_id:
+        return ActiveTurnIdentityDecision(False, reason="no_active_turn")
+    if not is_turn_open(active_turn_id):
+        return ActiveTurnIdentityDecision(
+            False,
+            turn_id=active_turn_id,
+            reason="active_turn_closed",
+        )
+    return ActiveTurnIdentityDecision(True, turn_id=active_turn_id, reason="active")
+
+
+def should_register_server_turn_alias(
+    *,
+    local_turn_id: str,
+    alias_turn_id: Optional[str],
+    state_closed: bool,
+) -> ActiveTurnIdentityDecision:
+    normalized_alias = _normalize_optional_text(alias_turn_id)
+    if not normalized_alias:
+        return ActiveTurnIdentityDecision(False, reason="missing_alias")
+    if normalized_alias == local_turn_id:
+        return ActiveTurnIdentityDecision(False, reason="same_turn")
+    if state_closed:
+        return ActiveTurnIdentityDecision(
+            False,
+            turn_id=normalized_alias,
+            reason="state_closed",
+        )
+    return ActiveTurnIdentityDecision(True, turn_id=normalized_alias, reason="open")
+
+
+def active_turn_matches(
+    *,
+    active_turns: Mapping[Any, str],
+    session_id: Any,
+    turn_id: str,
+) -> bool:
+    return _normalize_optional_text(active_turns.get(session_id)) == turn_id
 
 
 @dataclass(frozen=True)

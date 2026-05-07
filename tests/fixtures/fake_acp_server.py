@@ -436,6 +436,20 @@ class FakeACPServer:
                 {"stopReason": "cancelled", "userMessageId": turn_id},
             )
             return
+        if self._scenario == "official_second_prompt_idle_without_output":
+            prompt_count = self._official_prompt_counts.get(session_id, 0) + 1
+            self._official_prompt_counts[session_id] = prompt_count
+            if prompt_count >= 2:
+                self.send(
+                    {
+                        "method": "session.status",
+                        "params": {
+                            "sessionId": session_id,
+                            "status": {"type": "idle"},
+                        },
+                    }
+                )
+                return
         # Keep official fixture pacing short so queue-visible / interrupt lab
         # scenarios exercise orchestration behavior instead of burning most of
         # the latency budget inside fixture sleeps under xdist load.

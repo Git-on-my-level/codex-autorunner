@@ -11,6 +11,9 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable, Optional, Sequence
 
 from ...core.acp_lifecycle import (
+    active_turn_matches as _active_turn_matches,
+)
+from ...core.acp_lifecycle import (
     classify_prompt_response_status as _classify_prompt_response_status,
 )
 from ...core.acp_lifecycle import (
@@ -26,10 +29,16 @@ from ...core.acp_lifecycle import (
     prompt_terminal_method_for_status as _prompt_terminal_method_for_status,
 )
 from ...core.acp_lifecycle import (
+    resolve_active_turn_for_missing_id as _resolve_active_turn_for_missing_id,
+)
+from ...core.acp_lifecycle import (
     session_update_content_summary as _session_update_content_summary,
 )
 from ...core.acp_lifecycle import (
-    should_map_missing_turn_id as _should_map_missing_turn_id,
+    should_map_missing_turn_id as _shared_should_map_missing_turn_id,
+)
+from ...core.acp_lifecycle import (
+    should_register_server_turn_alias as _should_register_server_turn_alias,
 )
 from ...core.logging_utils import log_event
 from ...core.orchestration.stream_text_merge import AssistantOutputState
@@ -104,6 +113,10 @@ _ACP_STDOUT_NOISE_PREFIXES = (
 )
 _ACP_STDOUT_BRACKETED_STATUS_RE = re.compile(r"^\[[^\]\s]{1,32}\]\s+(?![\[{])\S")
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+
+
+def _should_map_missing_turn_id(method: str, params: dict[str, Any]) -> bool:
+    return _shared_should_map_missing_turn_id(method, params)
 
 
 @dataclass(frozen=True)
@@ -925,9 +938,23 @@ class ACPClient:
         state: _PromptState,
         alias_turn_id: Optional[str],
     ) -> None:
-        normalized_alias = _normalize_optional_text(alias_turn_id)
-        if not normalized_alias or normalized_alias == state.turn_id:
+        decision = _should_register_server_turn_alias(
+            local_turn_id=state.turn_id,
+            alias_turn_id=alias_turn_id,
+            state_closed=state.closed,
+        )
+        if not decision.allowed:
+            if decision.reason == "state_closed":
+                self._log_trace_event(
+                    "acp.prompt.turn_alias_rejected",
+                    session_id=state.session_id,
+                    turn_id=state.turn_id,
+                    aliased_turn_id=decision.turn_id,
+                    reason=decision.reason,
+                    **self._prompt_trace_fields(state),
+                )
             return
+        normalized_alias = decision.turn_id or ""
         existing = self._prompts.get(normalized_alias)
         if existing is not None and existing is not state:
             raise ACPProtocolError(
@@ -962,9 +989,28 @@ class ACPClient:
             return None
         active_state = self._prompts.get(active_turn_id)
         if active_state is None or active_state.closed:
+            self._log_trace_event(
+                "acp.prompt.active_turn_mismatch",
+                session_id=session_id,
+                event_turn_id=event.turn_id,
+                active_turn_id=active_turn_id,
+                event_method=event.method,
+                event_kind=event.kind,
+                reason="active_turn_closed_or_missing",
+            )
             return None
         request_task = active_state.request_task
         if request_task is None or request_task.done():
+            self._log_trace_event(
+                "acp.prompt.active_turn_mismatch",
+                session_id=session_id,
+                event_turn_id=event.turn_id,
+                active_turn_id=active_turn_id,
+                event_method=event.method,
+                event_kind=event.kind,
+                reason="active_turn_request_not_inflight",
+                **self._prompt_trace_fields(active_state),
+            )
             return None
         await self._register_prompt_turn_alias(active_state, event.turn_id)
         self._log_trace_event(
@@ -1013,7 +1059,11 @@ class ACPClient:
         resolved_completion_source = completion_source or "terminal_event"
         state.closed = True
         state.completion_source = resolved_completion_source
-        if self._session_active_turns.get(state.session_id) == state.turn_id:
+        if _active_turn_matches(
+            active_turns=self._session_active_turns,
+            session_id=state.session_id,
+            turn_id=state.turn_id,
+        ):
             self._session_active_turns.pop(state.session_id, None)
         self._log_trace_event(
             "acp.prompt.terminal_recorded",
@@ -1223,7 +1273,12 @@ class ACPClient:
                     **self._prompt_trace_fields(state),
                 )
                 return
-            self._session_active_turns.pop(state.session_id, None)
+            if _active_turn_matches(
+                active_turns=self._session_active_turns,
+                session_id=state.session_id,
+                turn_id=state.turn_id,
+            ):
+                self._session_active_turns.pop(state.session_id, None)
             self._log_trace_event(
                 "acp.prompt.request_failed",
                 session_id=state.session_id,
@@ -1245,7 +1300,6 @@ class ACPClient:
             "turnId",
             "turn_id",
         )
-        await self._register_prompt_turn_alias(state, response_turn_id)
         response_status = _classify_prompt_response_status(result_payload)
         response_method = _prompt_terminal_method_for_status(response_status)
         self._log_trace_event(
@@ -1262,6 +1316,7 @@ class ACPClient:
             **self._prompt_trace_fields(state),
         )
         if state.closed:
+            await self._register_prompt_turn_alias(state, response_turn_id)
             self._log_trace_event(
                 "acp.prompt.request_reconciled",
                 session_id=state.session_id,
@@ -1277,6 +1332,7 @@ class ACPClient:
                 **self._prompt_trace_fields(state),
             )
             return
+        await self._register_prompt_turn_alias(state, response_turn_id)
         terminal_event = normalize_notification(
             {
                 "method": response_method,
@@ -1309,16 +1365,39 @@ class ACPClient:
         )
         if not session_id:
             return message
-        if not _should_map_missing_turn_id(method or "", params):
+        decision = _resolve_active_turn_for_missing_id(
+            session_id=session_id,
+            method=method or "",
+            params=params,
+            active_turns=self._session_active_turns,
+            is_turn_open=self._is_prompt_turn_open,
+        )
+        if not decision.allowed or not decision.turn_id:
+            if decision.reason not in {"fallback_not_allowed", "no_active_turn"}:
+                self._log_trace_event(
+                    "acp.prompt.missing_turn_id_fallback_rejected",
+                    session_id=session_id,
+                    method=method,
+                    candidate_turn_id=decision.turn_id,
+                    reason=decision.reason,
+                )
             return message
-        turn_id = self._session_active_turns.get(session_id)
-        if not turn_id:
-            return message
+        turn_id = decision.turn_id
+        self._log_trace_event(
+            "acp.prompt.missing_turn_id_fallback",
+            session_id=session_id,
+            turn_id=turn_id,
+            method=method,
+        )
         enriched = dict(message)
         enriched_params = dict(params)
         enriched_params["turnId"] = turn_id
         enriched["params"] = enriched_params
         return enriched
+
+    def _is_prompt_turn_open(self, turn_id: str) -> bool:
+        state = self._prompts.get(turn_id)
+        return state is not None and not state.closed
 
     def _track_background_task(self, task: asyncio.Task[Any]) -> None:
         self._background_tasks.add(task)
