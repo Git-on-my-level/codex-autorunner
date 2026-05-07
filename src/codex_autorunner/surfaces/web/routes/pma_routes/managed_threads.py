@@ -424,15 +424,24 @@ def build_managed_thread_crud_routes(
         service = build_managed_thread_orchestration_service(request)
         try:
             try:
-                thread = service.create_thread_target(
-                    resolved.agent_id,
-                    provisioned_workspace.workspace_root,
-                    repo_id=resolved.repo_id,
-                    resource_kind=resolved.resource_kind,
-                    resource_id=resolved.resource_id,
-                    display_name=normalize_optional_text(payload.name),
-                    metadata=resolved.metadata,
-                )
+                if resolved.scope is not None:
+                    thread = service.create_thread_target(
+                        resolved.agent_id,
+                        provisioned_workspace.workspace_root,
+                        scope=resolved.scope,
+                        display_name=normalize_optional_text(payload.name),
+                        metadata=resolved.metadata,
+                    )
+                else:
+                    thread = service.create_thread_target(
+                        resolved.agent_id,
+                        provisioned_workspace.workspace_root,
+                        repo_id=resolved.repo_id,
+                        resource_kind=resolved.resource_kind,
+                        resource_id=resolved.resource_id,
+                        display_name=normalize_optional_text(payload.name),
+                        metadata=resolved.metadata,
+                    )
             except Exception:
                 await _cleanup_failed_provisioned_worktree(
                     request,

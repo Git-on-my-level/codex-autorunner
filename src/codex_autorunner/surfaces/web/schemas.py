@@ -299,7 +299,10 @@ class PmaManagedThreadCreateRequest(Payload):
 
     agent: Optional[str] = None
     profile: Optional[str] = None
-    resource_kind: Optional[Literal["repo", "agent_workspace"]] = Field(
+    scope_urn: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("scope_urn", "scopeUrn")
+    )
+    resource_kind: Optional[Literal["repo", "worktree", "agent_workspace"]] = Field(
         default=None, validation_alias=AliasChoices("resource_kind", "resourceKind")
     )
     resource_id: Optional[str] = Field(
@@ -365,11 +368,6 @@ class PmaManagedThreadCreateRequest(Payload):
         if not isinstance(value, dict):
             return value
         payload = dict(value)
-        repo_id = payload.get("repo_id", payload.get("repoId"))
-        if repo_id is not None:
-            raise ValueError(
-                "repo_id is not supported; use resource_kind='repo' with resource_id"
-            )
         payload["notify_on_explicit"] = any(
             key in value for key in ("notify_on", "notifyOn")
         )

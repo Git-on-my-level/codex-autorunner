@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping, Optional
 
 from ..car_context import CarContextProfile, normalize_car_context_profile
+from ..domain.refs import ScopeRef
 from ..logging_utils import log_event
 from ..pma_automation_store import PmaAutomationStore
 from ..pma_thread_store import PmaThreadStore
@@ -187,6 +188,7 @@ class PmaThreadExecutionStore(ThreadExecutionStore):
         repo_id: Optional[str] = None,
         resource_kind: Optional[str] = None,
         resource_id: Optional[str] = None,
+        scope: Optional[ScopeRef] = None,
         display_name: Optional[str] = None,
         backend_thread_id: Optional[str] = None,
         context_profile: Optional[CarContextProfile] = None,
@@ -199,6 +201,7 @@ class PmaThreadExecutionStore(ThreadExecutionStore):
         created = self._store.create_thread(
             agent_id,
             workspace_root,
+            scope=scope,
             repo_id=repo_id,
             resource_kind=resource_kind,
             resource_id=resource_id,
@@ -520,6 +523,7 @@ class _ThreadRuntimeAdapter:
         repo_id: Optional[str] = None,
         resource_kind: Optional[str] = None,
         resource_id: Optional[str] = None,
+        scope: Optional[ScopeRef] = None,
         display_name: Optional[str] = None,
         backend_thread_id: Optional[str] = None,
         context_profile: Optional[CarContextProfile] = None,
@@ -535,6 +539,7 @@ class _ThreadRuntimeAdapter:
         return self.thread_store.create_thread_target(
             agent_id,
             workspace_root,
+            scope=scope,
             repo_id=repo_id,
             resource_kind=resource_kind,
             resource_id=resource_id,
@@ -553,6 +558,7 @@ class _ThreadRuntimeAdapter:
         repo_id: Optional[str] = None,
         resource_kind: Optional[str] = None,
         resource_id: Optional[str] = None,
+        scope: Optional[ScopeRef] = None,
         display_name: Optional[str] = None,
         backend_thread_id: Optional[str] = None,
         context_profile: Optional[CarContextProfile] = None,
@@ -566,6 +572,7 @@ class _ThreadRuntimeAdapter:
         return self.create_thread_target(
             agent_id,
             workspace_root,
+            scope=scope,
             repo_id=repo_id,
             resource_kind=resource_kind,
             resource_id=resource_id,
@@ -867,6 +874,7 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         repo_id: Optional[str] = None,
         resource_kind: Optional[str] = None,
         resource_id: Optional[str] = None,
+        scope: Optional[ScopeRef] = None,
         display_name: Optional[str] = None,
         backend_thread_id: Optional[str] = None,
         context_profile: Optional[CarContextProfile] = None,
@@ -875,6 +883,7 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         return self._runtime_adapter.create_thread_target(
             agent_id,
             workspace_root,
+            scope=scope,
             repo_id=repo_id,
             resource_kind=resource_kind,
             resource_id=resource_id,

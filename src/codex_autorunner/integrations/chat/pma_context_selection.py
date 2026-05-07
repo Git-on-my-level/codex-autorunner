@@ -53,9 +53,9 @@ def normalize_pma_resource_owner(
         raise PmaContextSelectionError(
             "resource_id is required when resource_kind is provided"
         )
-    if normalized_kind not in {None, "repo", "agent_workspace"}:
+    if normalized_kind not in {None, "repo", "worktree", "agent_workspace"}:
         raise PmaContextSelectionError(
-            "resource_kind must be one of: repo, agent_workspace"
+            "resource_kind must be one of: repo, worktree, agent_workspace"
         )
     normalized_repo = normalized_id if normalized_kind == "repo" else None
     return PmaResourceOwner(
@@ -143,6 +143,21 @@ def _resolve_owned_context(
                 resource_kind="repo"
             ),
             scope_label=f"repo {owner.resource_id}",
+        )
+    if owner.resource_kind == "worktree":
+        assert owner.resource_id is not None
+        workspace = _repo_workspace(repos, owner.resource_id)
+        if workspace is None:
+            raise PmaContextSelectionError(f"Worktree not found: {owner.resource_id}")
+        return PmaContextSelection(
+            workspace_root=workspace.absolute(),
+            repo_id=None,
+            resource_kind="worktree",
+            resource_id=owner.resource_id,
+            context_profile=default_managed_thread_context_profile(
+                resource_kind="worktree"
+            ),
+            scope_label=f"worktree {owner.resource_id}",
         )
     if owner.resource_kind == "agent_workspace":
         assert owner.resource_id is not None

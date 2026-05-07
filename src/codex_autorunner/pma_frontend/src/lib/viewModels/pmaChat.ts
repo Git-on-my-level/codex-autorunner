@@ -113,9 +113,7 @@ export type ManagedThreadCreatePayload = {
   agent?: string;
   model?: string;
   name: string;
-  workspace_root?: string;
-  resource_kind?: 'repo' | 'agent_workspace';
-  resource_id?: string;
+  scope_urn: string;
 };
 
 export type PmaChatScopeOption =
@@ -124,7 +122,7 @@ export type PmaChatScopeOption =
       kind: 'local';
       label: string;
       detail: string;
-      workspaceRoot: string;
+      scopeUrn: string;
     }
   | {
       id: string;
@@ -133,6 +131,7 @@ export type PmaChatScopeOption =
       detail: string;
       resourceKind: 'repo';
       resourceId: string;
+      scopeUrn: string;
     }
   | {
       id: string;
@@ -141,6 +140,8 @@ export type PmaChatScopeOption =
       detail: string;
       workspaceRoot: string;
       resourceId: string;
+      parentRepoId: string | null;
+      scopeUrn: string;
     }
   | {
       id: string;
@@ -150,6 +151,7 @@ export type PmaChatScopeOption =
       resourceKind: 'agent_workspace';
       resourceId: string;
       agentId: string | null;
+      scopeUrn: string;
     };
 
 export type ManagedThreadMessagePayload = {
@@ -710,16 +712,9 @@ export function buildManagedThreadCreatePayload(
     name
   };
   if (model) base.model = model;
-  if (scope.kind === 'repo' || scope.kind === 'agent_workspace') {
-    return {
-      ...base,
-      resource_kind: scope.resourceKind,
-      resource_id: scope.resourceId
-    };
-  }
   return {
     ...base,
-    workspace_root: scope.workspaceRoot
+    scope_urn: scope.scopeUrn
   };
 }
 
@@ -729,7 +724,7 @@ export function localPmaChatScopeOption(): PmaChatScopeOption {
     kind: 'local',
     label: 'Local hub',
     detail: 'Current workspace',
-    workspaceRoot: '.'
+    scopeUrn: 'hub'
   };
 }
 
@@ -746,7 +741,8 @@ export function buildPmaChatScopeOptions(
       label: repo.name || repo.id,
       detail: `Repo · ${repo.id}`,
       resourceKind: 'repo' as const,
-      resourceId: repo.id
+      resourceId: repo.id,
+      scopeUrn: `repo:${repo.id}`
     })),
     ...worktrees
       .filter((worktree) => Boolean(worktree.path))
@@ -756,7 +752,11 @@ export function buildPmaChatScopeOptions(
         label: worktree.name || worktree.id,
         detail: `Worktree · ${worktree.repoId ?? worktree.id}`,
         workspaceRoot: worktree.path || '.',
-        resourceId: worktree.id
+        resourceId: worktree.id,
+        parentRepoId: worktree.repoId,
+        scopeUrn: worktree.repoId
+          ? `worktree:${worktree.repoId}/${worktree.id}`
+          : `filesystem:${encodeURIComponent(worktree.path || '.')}`
       })),
     ...agentWorkspaces.map((workspace) => ({
       id: `agent_workspace:${workspace.id}`,
@@ -765,7 +765,8 @@ export function buildPmaChatScopeOptions(
       detail: `Agent workspace · ${workspace.runtime || workspace.id}`,
       resourceKind: 'agent_workspace' as const,
       resourceId: workspace.id,
-      agentId: workspace.runtime || null
+      agentId: workspace.runtime || null,
+      scopeUrn: `agent_workspace:${workspace.id}`
     }))
   ];
 }

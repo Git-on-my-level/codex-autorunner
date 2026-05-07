@@ -110,6 +110,84 @@ def test_create_managed_thread_with_repo_owner(hub_env) -> None:
     assert subscriptions == []
 
 
+def test_create_managed_thread_with_hub_scope_urn(hub_env) -> None:
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", "scope_urn": "hub", "name": "Hub thread"},
+        )
+
+    assert resp.status_code == 200
+    thread = resp.json()["thread"]
+    assert thread["repo_id"] is None
+    assert thread["resource_kind"] is None
+    assert thread["resource_id"] is None
+    assert thread["workspace_root"] == str(hub_env.hub_root.resolve())
+
+
+def test_create_managed_thread_with_repo_scope_urn(hub_env) -> None:
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "codex",
+                "scope_urn": f"repo:{hub_env.repo_id}",
+                "name": "Repo scope thread",
+            },
+        )
+
+    assert resp.status_code == 200
+    thread = resp.json()["thread"]
+    assert thread["repo_id"] == hub_env.repo_id
+    assert thread["resource_kind"] == "repo"
+    assert thread["resource_id"] == hub_env.repo_id
+    assert thread["workspace_root"] == str(hub_env.repo_root.resolve())
+
+
+def test_create_managed_thread_with_worktree_scope_urn(hub_env) -> None:
+    from codex_autorunner.bootstrap import seed_repo_files
+    from codex_autorunner.core.config import load_hub_config
+    from codex_autorunner.manifest import load_manifest, save_manifest
+
+    worktree_id = "repo--feature"
+    worktree_root = hub_env.hub_root / "worktrees" / worktree_id
+    worktree_root.mkdir(parents=True)
+    (worktree_root / ".git").mkdir()
+    seed_repo_files(worktree_root, git_required=False)
+    hub_config = load_hub_config(hub_env.hub_root)
+    manifest = load_manifest(hub_config.manifest_path, hub_env.hub_root)
+    manifest.ensure_repo(
+        hub_env.hub_root,
+        worktree_root,
+        repo_id=worktree_id,
+        kind="worktree",
+        worktree_of=hub_env.repo_id,
+        branch="feature",
+    )
+    save_manifest(hub_config.manifest_path, manifest, hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "codex",
+                "scope_urn": f"worktree:{hub_env.repo_id}/{worktree_id}",
+            },
+        )
+
+    assert resp.status_code == 200
+    thread = resp.json()["thread"]
+    assert thread["repo_id"] is None
+    assert thread["resource_kind"] == "worktree"
+    assert thread["resource_id"] == worktree_id
+    assert thread["workspace_root"] == str(worktree_root.resolve())
+
+
 def test_create_managed_thread_with_repo_owner_prefers_fresh_worktree(
     hub_env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -419,6 +497,35 @@ def test_create_managed_thread_with_agent_workspace_owner(
     assert thread["workspace_root"] == str(workspace.path.resolve())
     assert thread["context_profile"] == "none"
     assert thread["approval_mode"] == "yolo"
+
+
+def test_create_managed_thread_with_agent_workspace_scope_urn(
+    hub_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = create_hub_app(hub_env.hub_root)
+    monkeypatch.setattr(
+        "codex_autorunner.core.hub.probe_agent_workspace_runtime",
+        lambda _config, _workspace: {"status": "ready"},
+    )
+    workspace = app.state.hub_supervisor.create_agent_workspace(
+        workspace_id="zc-scope",
+        runtime="zeroclaw",
+        display_name="ZeroClaw Scope",
+    )
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/hub/pma/threads",
+            json={"scope_urn": f"agent_workspace:{workspace.id}"},
+        )
+
+    assert resp.status_code == 200
+    thread = resp.json()["thread"]
+    assert thread["agent"] == "zeroclaw"
+    assert thread["repo_id"] is None
+    assert thread["resource_kind"] == "agent_workspace"
+    assert thread["resource_id"] == workspace.id
+    assert thread["workspace_root"] == str(workspace.path.resolve())
 
 
 def test_create_and_resume_managed_thread_reject_backend_thread_id_input(
@@ -795,7 +902,7 @@ def test_create_managed_thread_rejects_invalid_notify_on_without_side_effect(
     assert after_count == before_count
 
 
-def test_create_managed_thread_rejects_legacy_repo_owner_alias(hub_env) -> None:
+def test_create_managed_thread_accepts_legacy_repo_owner_alias(hub_env) -> None:
     app = create_hub_app(hub_env.hub_root)
 
     with TestClient(app) as client:
@@ -804,8 +911,11 @@ def test_create_managed_thread_rejects_legacy_repo_owner_alias(hub_env) -> None:
             json={"agent": "codex", "repo_id": hub_env.repo_id},
         )
 
-    assert resp.status_code == 422
-    assert "repo_id" in str(resp.json())
+    assert resp.status_code == 200
+    thread = resp.json()["thread"]
+    assert thread["repo_id"] == hub_env.repo_id
+    assert thread["resource_kind"] == "repo"
+    assert thread["resource_id"] == hub_env.repo_id
 
 
 def test_create_managed_thread_rejects_missing_or_both_inputs(hub_env) -> None:

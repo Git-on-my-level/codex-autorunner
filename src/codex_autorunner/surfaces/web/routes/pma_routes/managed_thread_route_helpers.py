@@ -15,6 +15,7 @@ from .....core.car_context import (
     normalize_car_context_profile,
 )
 from .....core.chat_bindings import active_chat_binding_metadata_by_thread
+from .....core.domain.refs import ScopeRef, ScopeRefError
 from .....core.hub_control_plane.models import THREAD_TARGET_LIST_LIFECYCLE_STATUSES
 from .....core.managed_thread_status import derive_managed_thread_operator_status
 from .....core.orchestration import ActiveWorkSummary
@@ -45,6 +46,7 @@ class ManagedThreadCreateResolution:
     repo_id: Optional[str]
     resource_kind: Optional[str]
     resource_id: Optional[str]
+    scope: Optional[ScopeRef]
     requested_profile: Optional[str]
     metadata: dict[str, Any]
     followup_policy: ManagedThreadFollowupPolicy
@@ -174,6 +176,31 @@ def _normalize_resource_owner(
     except PmaContextSelectionError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return owner.resource_kind, owner.resource_id, owner.repo_id
+
+
+def _scope_ref_from_payload(
+    payload: PmaManagedThreadCreateRequest,
+) -> Optional[ScopeRef]:
+    scope_urn = normalize_optional_text(payload.scope_urn)
+    if scope_urn is None:
+        return None
+    if any(
+        normalize_optional_text(value) is not None
+        for value in (
+            payload.resource_kind,
+            payload.resource_id,
+            payload.repo_id,
+            payload.workspace_root,
+        )
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="scope_urn cannot be combined with legacy owner fields",
+        )
+    try:
+        return ScopeRef.from_urn(scope_urn)
+    except (ScopeRefError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _build_operator_status_fields(
@@ -458,11 +485,25 @@ def resolve_managed_thread_create_resolution(
 ) -> ManagedThreadCreateResolution:
     context = get_pma_request_context(request)
     hub_root = context.hub_root
-    workspace_text = normalize_optional_text(payload.workspace_root)
+    scope_ref = _scope_ref_from_payload(payload)
+    scope_workspace_root: Optional[str] = None
+    scope_resource_kind: Optional[str] = None
+    scope_resource_id: Optional[str] = None
+    if scope_ref is not None:
+        if scope_ref.kind == "filesystem":
+            scope_workspace_root = scope_ref.path
+        elif scope_ref.kind != "hub":
+            scope_resource_kind = scope_ref.kind
+            scope_resource_id = scope_ref.id
+    workspace_text = normalize_optional_text(
+        scope_workspace_root
+        if scope_workspace_root is not None
+        else payload.workspace_root
+    )
     pr_base_ref = normalize_optional_text(payload.pr_base_ref)
     owner = normalize_pma_resource_owner(
-        resource_kind=payload.resource_kind,
-        resource_id=payload.resource_id,
+        resource_kind=scope_resource_kind or payload.resource_kind,
+        resource_id=scope_resource_id or payload.resource_id,
         repo_id=payload.repo_id,
     )
     if workspace_text is not None and owner.resource_kind is not None:
@@ -475,10 +516,10 @@ def resolve_managed_thread_create_resolution(
             status_code=400,
             detail="pr_base_ref requires PR mode",
         )
-    if payload.pr_mode and owner.resource_kind != "repo":
+    if payload.pr_mode and owner.resource_kind not in {"repo", "worktree"}:
         raise HTTPException(
             status_code=400,
-            detail="PR mode requires a repo resource owner",
+            detail="PR mode requires a repo or worktree resource owner",
         )
     if workspace_text is not None and workspace_text != ".":
         _normalize_workspace_root_input(workspace_text)
@@ -513,7 +554,7 @@ def resolve_managed_thread_create_resolution(
     try:
         pma_context = resolve_pma_context_selection(
             hub_root=hub_root,
-            workspace_root=payload.workspace_root,
+            workspace_root=workspace_text,
             resource_kind=owner.resource_kind,
             resource_id=resource_id_for_ctx,
             repo_id=payload.repo_id,
@@ -603,6 +644,7 @@ def resolve_managed_thread_create_resolution(
         repo_id=resolved_repo_id,
         resource_kind=resource_kind,
         resource_id=resource_id,
+        scope=scope_ref,
         requested_profile=requested_profile,
         metadata=metadata,
         followup_policy=followup_policy,

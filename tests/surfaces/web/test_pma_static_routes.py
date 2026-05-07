@@ -19,13 +19,8 @@ PMA_MANUAL_SCREENSHOT_ROUTES = (
     "/repos/example",
     "/repos/example/tickets",
     "/repos/example/tickets/TICKET-100",
-    "/worktrees",
-    "/worktrees/example",
-    "/worktrees/example/tickets",
-    "/worktrees/example/tickets/TICKET-100",
     "/tickets",
     "/tickets/TICKET-100",
-    "/contextspace/example",
     "/settings",
 )
 
@@ -58,18 +53,30 @@ def test_pma_dynamic_spa_fallback_routes_with_runtime_ids(tmp_path):
         "/repos/codex-autorunner--discord-5/tickets/100",
         "/repos/codex-autorunner--discord-5/tickets/",
         "/repos/codex-autorunner--discord-5/tickets/100/",
-        "/worktrees/base--ticket-290",
-        "/worktrees/base--ticket-290/tickets/tkt_pma_ui_regression_fixtures_smoke_qa",
-        "/worktrees/base--ticket-290/tickets/",
-        "/worktrees/base--ticket-290/tickets/tkt_pma_ui_regression_fixtures_smoke_qa/",
         "/tickets/tkt_pma_ui_regression_fixtures_smoke_qa",
         "/tickets/TICKET-290-pma-ui-regression-fixtures-and-smoke-qa",
-        "/contextspace/worktree-1",
     ):
         response = client.get(path)
         assert response.status_code == 200
         assert "<title>PMA Hub</title>" in response.text
         assert "/_app/immutable/entry/app." in response.text
+
+
+def test_removed_legacy_frontend_routes_redirect_permanently(tmp_path):
+    hub_root = tmp_path / "hub"
+    seed_hub_files(hub_root, force=True)
+    client = TestClient(create_hub_app(hub_root), follow_redirects=False)
+
+    worktrees = client.get("/worktrees")
+    worktree = client.get("/worktrees/base--ticket-290/tickets/TICKET-100")
+    contextspace = client.get("/contextspace/base--ticket-290")
+
+    assert worktrees.status_code == 308
+    assert worktrees.headers["location"] == "/repos"
+    assert worktree.status_code == 308
+    assert worktree.headers["location"] == "/repos/base--ticket-290/tickets/TICKET-100"
+    assert contextspace.status_code == 308
+    assert contextspace.headers["location"] == "/repos/base--ticket-290/contextspace"
 
 
 def test_pma_static_assets_are_served_without_legacy_static_by_default(tmp_path):

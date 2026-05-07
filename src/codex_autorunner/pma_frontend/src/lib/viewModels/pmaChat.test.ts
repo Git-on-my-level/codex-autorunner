@@ -430,24 +430,23 @@ describe('PMA chat view helpers', () => {
     expect(buildManagedThreadCreatePayload('codex', local)).toEqual({
       agent: 'codex',
       name: 'New PMA chat',
-      workspace_root: '.'
+      scope_urn: 'hub'
     });
     expect(buildManagedThreadCreatePayload('codex', repo)).toEqual({
       agent: 'codex',
       name: 'New PMA chat',
-      resource_kind: 'repo',
-      resource_id: 'repo-1'
+      scope_urn: 'repo:repo-1'
     });
     expect(buildManagedThreadCreatePayload('codex', worktree)).toEqual({
       agent: 'codex',
       name: 'New PMA chat',
-      workspace_root: '/hub/repo-1-pma'
+      scope_urn: 'worktree:repo-1/worktree-1'
     });
     expect(buildManagedThreadCreatePayload('opencode', local, 'New PMA chat', 'zai/glm')).toEqual({
       agent: 'opencode',
       model: 'zai/glm',
       name: 'New PMA chat',
-      workspace_root: '.'
+      scope_urn: 'hub'
     });
   });
 
@@ -468,8 +467,7 @@ describe('PMA chat view helpers', () => {
     expect(buildManagedThreadCreatePayload('codex', scopes[1])).toEqual({
       agent: 'codex',
       name: 'New PMA chat',
-      resource_kind: 'agent_workspace',
-      resource_id: 'codex-pma'
+      scope_urn: 'agent_workspace:codex-pma'
     });
   });
 
@@ -513,7 +511,7 @@ describe('PMA chat view helpers', () => {
     expect(buildManagedThreadCreatePayload('codex')).toEqual({
       agent: 'codex',
       name: 'New PMA chat',
-      workspace_root: '.'
+      scope_urn: 'hub'
     });
     const attachments = [
       {
