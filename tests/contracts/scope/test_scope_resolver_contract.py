@@ -12,13 +12,16 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable
 
+import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from codex_autorunner.core import adapters as adapter_exports
 from codex_autorunner.core.adapters import FilesystemScopeResolver
-from codex_autorunner.core.domain.refs import ScopeRef
+from codex_autorunner.core.domain.refs import ScopeRef, ScopeRefError
 from codex_autorunner.core.domain.scope_chain import parent_scope, scope_chain
-from codex_autorunner.core.domain.scope_urn import parse_scope_urn
+from codex_autorunner.core.domain.scope_urn import ScopeUrnError, parse_scope_urn
+from tests.contracts.conftest import SCOPE_RESOLVER_FACTORIES
 
 # ---------------------------------------------------------------------------
 # Hypothesis strategies
@@ -50,8 +53,22 @@ scope_ref_strategy = st.one_of(
 )
 
 
+def _factory_name(class_name: str, suffix: str) -> str:
+    assert class_name.endswith(suffix)
+    return class_name[: -len(suffix)].lower()
+
+
 class TestScopeResolverContract:
     """Invariants every ScopeResolver must satisfy."""
+
+    def test_exported_scope_resolver_adapters_have_contract_factories(self) -> None:
+        registered = {name for name, _ in SCOPE_RESOLVER_FACTORIES}
+        expected = {
+            _factory_name(name, "ScopeResolver")
+            for name in adapter_exports.__all__
+            if name.endswith("ScopeResolver")
+        }
+        assert registered == expected
 
     def test_resolve_returns_resolved_scope_with_same_ref(
         self,
@@ -90,6 +107,26 @@ class TestScopeResolverContract:
         fs = ScopeRef(kind="filesystem", path="/tmp/some-place")
         result = resolver.resolve(fs)
         assert result.workspace_root == "/tmp/some-place"
+
+    def test_resolve_missing_repo_scope_raises_scope_error(
+        self,
+        scope_resolver_factory: Callable[[Path], FilesystemScopeResolver],
+        tmp_path: Path,
+    ) -> None:
+        resolver = scope_resolver_factory(tmp_path)
+        with pytest.raises(ScopeRefError, match="Unknown repo scope"):
+            resolver.resolve(ScopeRef(kind="repo", id="missing-repo"))
+
+    def test_resolve_missing_worktree_scope_raises_scope_error(
+        self,
+        scope_resolver_factory: Callable[[Path], FilesystemScopeResolver],
+        tmp_path: Path,
+    ) -> None:
+        resolver = scope_resolver_factory(tmp_path)
+        with pytest.raises(ScopeRefError, match="Unknown worktree scope"):
+            resolver.resolve(
+                ScopeRef(kind="worktree", id="missing-wt", parent_repo_id="repo-1")
+            )
 
     def test_resolve_parent_hub_returns_none(
         self,
@@ -211,3 +248,27 @@ class TestUrnRoundTripInvariants:
             assert current not in seen, f"loop detected at {current}"
             seen.add(current)
             current = parent_scope(current)
+
+
+class TestInvalidUrnContract:
+    """Invalid scope URNs must fail before adapter-specific resolution."""
+
+    @pytest.mark.parametrize(
+        "urn",
+        [
+            "",
+            "repo:",
+            "repo:a/b",
+            "worktree:noslash",
+            "worktree:/wt1",
+            "agent_workspace:",
+            "agent_workspace:a/b",
+            "filesystem:",
+            "filesystem:%ZZ",
+            "planet:earth",
+            "hub:extra",
+        ],
+    )
+    def test_invalid_urns_raise_scope_urn_error(self, urn: str) -> None:
+        with pytest.raises(ScopeUrnError):
+            ScopeRef.from_urn(urn)

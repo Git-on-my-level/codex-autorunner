@@ -16,6 +16,7 @@ import pytest
 from codex_autorunner.core.adapters import (
     FilesystemMemoryStore,
     FilesystemScopeResolver,
+    FilesystemTicketStore,
 )
 from codex_autorunner.manifest import Manifest, ManifestRepo
 
@@ -85,6 +86,18 @@ MEMORY_STORE_FACTORIES: list[Tuple[str, MemoryStoreFactory]] = [
 ]
 
 
+TicketStoreFactory = Callable[[Path], FilesystemTicketStore]
+
+TICKET_STORE_FACTORIES: list[Tuple[str, TicketStoreFactory]] = [
+    (
+        "filesystem",
+        lambda tmp: FilesystemTicketStore(
+            FilesystemScopeResolver(*_make_hub_tree(tmp)[:2])
+        ),
+    ),
+]
+
+
 @pytest.fixture()
 def hub_tree(tmp_path: Path) -> tuple[Path, Manifest]:
     return _make_hub_tree(tmp_path)
@@ -108,5 +121,12 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
         metafunc.parametrize(
             "memory_store_factory",
             [fn for _, fn in MEMORY_STORE_FACTORIES],
+            ids=ids,
+        )
+    if "ticket_store_factory" in metafunc.fixturenames:
+        ids = [name for name, _ in TICKET_STORE_FACTORIES]
+        metafunc.parametrize(
+            "ticket_store_factory",
+            [fn for _, fn in TICKET_STORE_FACTORIES],
             ids=ids,
         )

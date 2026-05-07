@@ -51,6 +51,16 @@ class StubSurfacePort:
         )
 
     async def send(self, command: EngineCommand) -> OutboundDelivery:
+        attachments = command.payload.get("attachments")
+        if attachments and command.target is not None:
+            capabilities = await self.capabilities(command.target)
+            if not capabilities.supports_files:
+                return OutboundDelivery(
+                    delivery_id=str(uuid.uuid4()),
+                    surface=command.target,
+                    status="failed",
+                    error="surface does not support file attachments",
+                )
         return OutboundDelivery(
             delivery_id=str(uuid.uuid4()),
             surface=command.target or self._surface,
@@ -94,6 +104,12 @@ def surface_kind(request) -> str:
 
 class TestSurfacePortContract:
     """Invariants every SurfacePort must satisfy."""
+
+    def test_registered_surface_port_factories_are_explicit(self) -> None:
+        registered = {name for name, _ in SURFACE_PORT_FACTORIES}
+        # No concrete engine SurfacePort adapters are registered yet; the stub
+        # keeps the protocol contract executable until one lands.
+        assert registered == {"stub"}
 
     def test_capabilities_returns_surface_capabilities(
         self, surface_port: SurfacePort
@@ -143,6 +159,36 @@ class TestSurfacePortContract:
         cmd = EngineCommand(command_type="send_message", target=target)
         delivery = _run(surface_port.send(cmd))
         assert delivery.surface == target
+
+    def test_send_rejects_attachments_when_files_are_unsupported(
+        self, surface_port: SurfacePort
+    ) -> None:
+        target = SurfaceRef(kind="stub", key="test-channel")
+        capabilities = _run(surface_port.capabilities(target))
+        if capabilities.supports_files:
+            pytest.skip(
+                "surface supports files; unsupported attachment contract skipped"
+            )
+
+        cmd = EngineCommand(
+            command_type="send_message",
+            target=target,
+            payload={
+                "text": "hello",
+                "attachments": [
+                    {
+                        "name": "report.txt",
+                        "content_type": "text/plain",
+                        "data": b"hello",
+                    }
+                ],
+            },
+        )
+        delivery = _run(surface_port.send(cmd))
+
+        assert delivery.surface == target
+        assert delivery.status == "failed"
+        assert delivery.error
 
     def test_receive_yields_inbound_events(self, surface_port: SurfacePort) -> None:
         surf = SurfaceRef(kind="stub", key="test-channel")

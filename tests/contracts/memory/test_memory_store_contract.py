@@ -15,12 +15,15 @@ import asyncio
 from pathlib import Path
 from typing import Callable
 
+import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from codex_autorunner.core import adapters as adapter_exports
 from codex_autorunner.core.adapters import FilesystemMemoryStore
-from codex_autorunner.core.domain.refs import MemoryRef, ScopeRef
+from codex_autorunner.core.domain.refs import MemoryRef, ScopeRef, ScopeRefError
 from codex_autorunner.core.ports.memory_store import MemoryDoc, MemoryDocs
+from tests.contracts.conftest import MEMORY_STORE_FACTORIES
 
 _doc_content = st.text(
     alphabet="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 \n.#-*_",
@@ -31,12 +34,26 @@ _doc_content = st.text(
 _valid_kinds = st.sampled_from(["active_context", "decisions", "spec"])
 
 
+def _factory_name(class_name: str, suffix: str) -> str:
+    assert class_name.endswith(suffix)
+    return class_name[: -len(suffix)].lower()
+
+
 def _run(coro):
     return asyncio.get_event_loop().run_until_complete(coro)
 
 
 class TestMemoryStoreContract:
     """Invariants every MemoryStore must satisfy."""
+
+    def test_exported_memory_store_adapters_have_contract_factories(self) -> None:
+        registered = {name for name, _ in MEMORY_STORE_FACTORIES}
+        expected = {
+            _factory_name(name, "MemoryStore")
+            for name in adapter_exports.__all__
+            if name.endswith("MemoryStore")
+        }
+        assert registered == expected
 
     def test_load_missing_returns_none(
         self,
@@ -122,6 +139,42 @@ class TestMemoryStoreContract:
         scope = ScopeRef(kind="repo", id="repo-1")
         ref = MemoryRef(scope=scope, key="spec")
         assert _run(store.delete(ref)) is False
+
+    def test_load_missing_scope_raises_scope_error(
+        self,
+        memory_store_factory: Callable[[Path], FilesystemMemoryStore],
+        tmp_path: Path,
+    ) -> None:
+        store = memory_store_factory(tmp_path)
+        ref = MemoryRef(scope=ScopeRef(kind="repo", id="missing-repo"), key="spec")
+        with pytest.raises(ScopeRefError, match="Unknown repo scope"):
+            _run(store.load(ref))
+
+    def test_save_missing_scope_raises_scope_error(
+        self,
+        memory_store_factory: Callable[[Path], FilesystemMemoryStore],
+        tmp_path: Path,
+    ) -> None:
+        store = memory_store_factory(tmp_path)
+        ref = MemoryRef(
+            scope=ScopeRef(kind="worktree", id="missing-wt", parent_repo_id="repo-1"),
+            key="spec",
+        )
+        with pytest.raises(ScopeRefError, match="Unknown worktree scope"):
+            _run(store.save(ref, MemoryDoc(key="spec", content="content")))
+
+    def test_invalid_key_is_rejected_without_writing(
+        self,
+        memory_store_factory: Callable[[Path], FilesystemMemoryStore],
+        tmp_path: Path,
+    ) -> None:
+        store = memory_store_factory(tmp_path)
+        scope = ScopeRef(kind="repo", id="repo-1")
+        ref = MemoryRef(scope=scope, key="../outside")
+        assert _run(store.load(ref)) is None
+        assert _run(store.delete(ref)) is False
+        with pytest.raises(ValueError):
+            _run(store.save(ref, MemoryDoc(key="../outside", content="nope")))
 
     def test_load_scope_returns_memory_docs(
         self,
