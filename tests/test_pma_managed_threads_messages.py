@@ -113,7 +113,12 @@ def test_send_message_persists_turns_and_reuses_backend_thread(hub_env) -> None:
     }
     first_prompt = str(fake_supervisor.client.turn_start_calls[0]["prompt"])
     second_prompt = str(fake_supervisor.client.turn_start_calls[1]["prompt"])
-    assert "Ops guide: `.codex-autorunner/pma/docs/ABOUT_CAR.md`." in first_prompt
+    assert "Hub PMA docs are hub-scoped" in first_prompt
+    assert (
+        str(hub_env.hub_root / ".codex-autorunner/pma/docs/ABOUT_CAR.md")
+        in first_prompt
+    )
+    assert f"Runtime cwd: `{hub_env.repo_root.resolve()}`." in first_prompt
     assert "<pma_workspace_docs>" in first_prompt
     assert "<user_message>" in first_prompt
     assert "first prompt" in first_prompt
@@ -643,7 +648,11 @@ def test_send_message_compact_seed_used_only_before_backend_thread_exists(
     ]
     assert len(relevant_prompts) == 2
     first_prompt, second_prompt = relevant_prompts
-    assert "Ops guide: `.codex-autorunner/pma/docs/ABOUT_CAR.md`." in first_prompt
+    assert "Hub PMA docs are hub-scoped" in first_prompt
+    assert (
+        str(hub_env.hub_root / ".codex-autorunner/pma/docs/ABOUT_CAR.md")
+        in first_prompt
+    )
     assert "<user_message>" in first_prompt
     assert "Context summary (from compaction):" in first_prompt
     assert "summary seed" in first_prompt

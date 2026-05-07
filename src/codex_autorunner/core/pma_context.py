@@ -64,15 +64,23 @@ class PmaPromptVariants:
 def format_pma_discoverability_preamble(
     *,
     hub_root: Optional[Path] = None,
+    runtime_cwd: Optional[Path] = None,
     pma_docs: Optional[Mapping[str, Any]] = None,
+    include_workspace_docs: bool = True,
 ) -> str:
     resolved_docs = pma_docs
-    if resolved_docs is None and hub_root is not None:
+    if include_workspace_docs and resolved_docs is None and hub_root is not None:
         try:
             resolved_docs = load_pma_workspace_docs(hub_root)
         except (OSError, ValueError, TypeError, RuntimeError, ConfigError) as exc:
             _logger.warning("Could not load PMA workspace docs: %s", exc)
-    return render_pma_discoverability_preamble(resolved_docs)
+    if not include_workspace_docs:
+        resolved_docs = None
+    return render_pma_discoverability_preamble(
+        resolved_docs,
+        hub_root=hub_root,
+        runtime_cwd=runtime_cwd,
+    )
 
 
 def format_pma_prompt(
@@ -97,7 +105,11 @@ def format_pma_prompt(
         render_hub_snapshot=_render_hub_snapshot,
         limits=limits,
     )
-    discoverability_text = format_pma_discoverability_preamble(hub_root=None)
+    discoverability_text = format_pma_discoverability_preamble(
+        hub_root=hub_root,
+        runtime_cwd=hub_root,
+        include_workspace_docs=False,
+    )
     pma_docs: Optional[Mapping[str, Any]] = None
     if hub_root is not None:
         try:

@@ -119,7 +119,11 @@ def test_managed_thread_compact_archive_resume_lifecycle(hub_env) -> None:
         assert second_msg.json()["backend_thread_id"] == "backend-thread-2"
 
         second_prompt = fake_supervisor.client.turn_start_calls[1]["prompt"]
-        assert "Ops guide: `.codex-autorunner/pma/docs/ABOUT_CAR.md`." in second_prompt
+        assert "Hub PMA docs are hub-scoped" in second_prompt
+        assert (
+            str(hub_env.hub_root / ".codex-autorunner/pma/docs/ABOUT_CAR.md")
+            in second_prompt
+        )
         assert "<user_message>" in second_prompt
         assert "Context summary (from compaction):" in second_prompt
         assert compact_summary in second_prompt
@@ -163,11 +167,19 @@ def test_managed_thread_compact_archive_resume_lifecycle(hub_env) -> None:
         assert resumed_backend_thread_id.startswith("backend-thread-")
         assert resumed_backend_thread_id != "backend-thread-2"
         assert fake_supervisor.client.thread_start_calls >= prior_thread_start_count
-        third_prompt = fake_supervisor.client.turn_start_calls[-1]["prompt"]
-        assert fake_supervisor.client.turn_start_calls[-1]["thread_id"] == (
-            resumed_backend_thread_id
+        resumed_turn_calls = [
+            call
+            for call in fake_supervisor.client.turn_start_calls
+            if "message after resume" in call["prompt"]
+        ]
+        assert resumed_turn_calls
+        third_prompt = resumed_turn_calls[-1]["prompt"]
+        assert resumed_turn_calls[-1]["thread_id"] == resumed_backend_thread_id
+        assert "Hub PMA docs are hub-scoped" in third_prompt
+        assert (
+            str(hub_env.hub_root / ".codex-autorunner/pma/docs/ABOUT_CAR.md")
+            in third_prompt
         )
-        assert "Ops guide: `.codex-autorunner/pma/docs/ABOUT_CAR.md`." in third_prompt
         assert "<user_message>" in third_prompt
         assert "message after resume" in third_prompt
 

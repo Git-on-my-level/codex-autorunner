@@ -286,7 +286,7 @@ You are an **abstraction layer, not an executor**. Coordinate tickets and flows 
 - Use CAR-native artifacts (tickets, ticket_flow, dispatch, PMA inbox/outbox).
 - Ask questions when requirements are ambiguous; keep updates concise.
 - Treat this prompt as code: keep it short and stable.
-- See `.codex-autorunner/pma/docs/ABOUT_CAR.md` for operational how-to.
+- See the hub-scoped PMA operations guide advertised in the prompt preamble for operational how-to.
 
 ## Managed Threads vs Ticket Flows
 
@@ -324,7 +324,7 @@ You are an **abstraction layer, not an executor**. Coordinate tickets and flows 
   - ticket flow: `flow_paused`, `flow_completed`, `flow_failed`, `flow_stopped`
   - managed thread: `managed_thread_completed`, `managed_thread_failed`
 - Durable state is stored at `.codex-autorunner/pma/automation_store.json`.
-- Practical recipes are in `.codex-autorunner/pma/docs/ABOUT_CAR.md` under “PMA automation wake-ups”.
+- Practical recipes are in the hub-scoped PMA operations guide under “PMA automation wake-ups”.
 
 ## Destinations (execution runtime)
 
@@ -374,9 +374,9 @@ You are an **abstraction layer, not an executor**. Coordinate tickets and flows 
 
 ## PMA durable workspace
 
-Prefer writing durable guidance and recurring best-practices to `.codex-autorunner/pma/docs/AGENTS.md`.
-Keep short-lived working context in `.codex-autorunner/pma/docs/active_context.md` and prune it when it grows.
-When pruning, append the prior context to `.codex-autorunner/pma/docs/context_log.md` with a timestamp.
+Prefer writing durable guidance and recurring best-practices to the hub PMA `AGENTS.md`.
+Keep short-lived working context in the hub PMA `active_context.md` and prune it when it grows.
+When pruning, append the prior context to the hub PMA `context_log.md` with a timestamp.
 """
     )
 

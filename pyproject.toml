@@ -81,6 +81,7 @@ codex_autorunner = [
   "static/vendor/**",
   "static/assets.json",
   "pma_static/**",
+  "docs/*.md",
 ]
 
 [tool.setuptools.exclude-package-data]

@@ -100,6 +100,7 @@ def _compose_execution_prompt(
     *,
     agent: Any,
     hub_root: Path,
+    runtime_cwd: Optional[Path] = None,
     stored_backend_id: Optional[str],
     compact_seed: Optional[str],
     message: str,
@@ -112,7 +113,10 @@ def _compose_execution_prompt(
     if str(agent or "").strip().lower() == "zeroclaw":
         return execution_message
 
-    preamble = format_pma_discoverability_preamble(hub_root=hub_root)
+    preamble = format_pma_discoverability_preamble(
+        hub_root=hub_root,
+        runtime_cwd=runtime_cwd,
+    )
     user_message = f"<user_message>\n{execution_message}\n</user_message>\n"
     car_context = render_injected_car_context(context_bundle)
     if not car_context:
@@ -241,6 +245,11 @@ def resolve_managed_thread_message_options(
     execution_prompt = _compose_execution_prompt(
         agent=thread.get("agent"),
         hub_root=request.app.state.config.root,
+        runtime_cwd=(
+            Path(str(thread.get("workspace_root")))
+            if thread.get("workspace_root")
+            else None
+        ),
         stored_backend_id=live_backend_thread_id,
         compact_seed=compact_seed,
         message=message,

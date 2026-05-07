@@ -273,6 +273,17 @@ def test_format_pma_prompt_includes_workspace_docs(tmp_path: Path) -> None:
     assert "</pma_workspace_docs>" in result
 
 
+def test_format_pma_prompt_labels_hub_scoped_absolute_docs(tmp_path: Path) -> None:
+    result = _format_seeded_pma_prompt(tmp_path)
+
+    expected_about = tmp_path / ".codex-autorunner" / "pma" / "docs" / "ABOUT_CAR.md"
+    assert f"Hub root: `{tmp_path.resolve()}`." in result
+    assert f"Runtime cwd: `{tmp_path.resolve()}`." in result
+    assert "Hub PMA docs are hub-scoped" in result
+    assert f"Ops guide: `{expected_about}`." in result
+    assert f"car docs search <query> --path {tmp_path.resolve()}" in result
+
+
 def test_format_pma_prompt_includes_agents_section(tmp_path: Path) -> None:
     """Test that AGENTS.md content is included in the prompt."""
     result = _format_seeded_pma_prompt(tmp_path)
@@ -1706,8 +1717,9 @@ def test_render_hub_snapshot_empty_both(tmp_path: Path) -> None:
 def test_format_pma_prompt_includes_filebox_paths(tmp_path: Path) -> None:
     result = _format_seeded_pma_prompt(tmp_path)
 
-    assert ".codex-autorunner/filebox/outbox/" in result
-    assert ".codex-autorunner/filebox/inbox/" in result
+    hub = tmp_path.expanduser().resolve()
+    assert str(hub / ".codex-autorunner/filebox/outbox") in result
+    assert str(hub / ".codex-autorunner/filebox/inbox") in result
 
 
 def test_format_pma_prompt_includes_ticket_template_discoverability(
