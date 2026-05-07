@@ -21,6 +21,7 @@ from ..chat.managed_thread_delivery_support import (
     ManagedThreadDeliveryCleanupContext,
     ManagedThreadDeliverySendResult,
     deliver_managed_thread_terminal_record,
+    managed_thread_terminal_delivery_send_key,
 )
 from .constants import DISCORD_MAX_MESSAGE_LENGTH
 from .progress_leases import cleanup_discord_terminal_progress_leases
@@ -64,14 +65,15 @@ async def deliver_discord_managed_thread_record(
         )
         if not chunks:
             chunks = [formatted]
-        base_record_id = (
-            f"{base_record_label}:{record.managed_thread_id}:{record.managed_turn_id}"
-        )
         for chunk_index, chunk in enumerate(chunks, start=1):
             record_id = (
-                f"{base_record_id}:chunk:{chunk_index}"
+                managed_thread_terminal_delivery_send_key(
+                    record, suffix=f"{base_record_label}:chunk:{chunk_index}"
+                )
                 if len(chunks) > 1
-                else base_record_id
+                else managed_thread_terminal_delivery_send_key(
+                    record, suffix=base_record_label
+                )
             )
             delivered = await service._send_channel_message_safe(
                 target_channel_id,
@@ -97,7 +99,9 @@ async def deliver_discord_managed_thread_record(
                 )
             },
             record_id=(
-                f"{error_record_label}:{record.managed_thread_id}:{record.managed_turn_id}"
+                managed_thread_terminal_delivery_send_key(
+                    record, suffix=error_record_label
+                )
             ),
         )
         if not delivered:
@@ -188,14 +192,15 @@ def build_discord_managed_thread_durable_delivery_hooks(
         )
         if not chunks:
             chunks = [formatted]
-        base_record_id = (
-            f"discord-queued:{record.managed_thread_id}:{record.managed_turn_id}"
-        )
         for chunk_index, chunk in enumerate(chunks, start=1):
             record_id = (
-                f"{base_record_id}:chunk:{chunk_index}"
+                managed_thread_terminal_delivery_send_key(
+                    record, suffix=f"discord-queued:chunk:{chunk_index}"
+                )
                 if len(chunks) > 1
-                else base_record_id
+                else managed_thread_terminal_delivery_send_key(
+                    record, suffix="discord-queued"
+                )
             )
             delivered = await service._send_channel_message_safe(
                 target_channel_id,
@@ -223,7 +228,9 @@ def build_discord_managed_thread_durable_delivery_hooks(
                 )
             },
             record_id=(
-                f"discord-queued-error:{record.managed_thread_id}:{record.managed_turn_id}"
+                managed_thread_terminal_delivery_send_key(
+                    record, suffix="discord-queued-error"
+                )
             ),
         )
         if not delivered:

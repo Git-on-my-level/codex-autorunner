@@ -64,6 +64,7 @@ class _TelegramHandlersStub:
         self._logger = logging.getLogger("test.telegram.adapter")
         self.sent_messages: list[dict[str, Any]] = []
         self.flushed_outbox: list[dict[str, Any]] = []
+        self.outbox_messages: list[dict[str, Any]] = []
 
     async def _send_message(
         self,
@@ -83,6 +84,36 @@ class _TelegramHandlersStub:
                 "reply_to": reply_to,
             }
         )
+
+    async def _send_message_with_outbox(
+        self,
+        chat_id: int,
+        text: str,
+        *,
+        thread_id: Optional[int],
+        reply_to: Optional[int],
+        record_id: Optional[str] = None,
+        outbox_key: Optional[str] = None,
+        delivery_metadata: Optional[dict[str, Any]] = None,
+    ) -> bool:
+        self.outbox_messages.append(
+            {
+                "chat_id": chat_id,
+                "text": text,
+                "thread_id": thread_id,
+                "reply_to": reply_to,
+                "record_id": record_id,
+                "outbox_key": outbox_key,
+                "delivery_metadata": dict(delivery_metadata or {}),
+            }
+        )
+        await self._send_message(
+            chat_id,
+            text,
+            thread_id=thread_id,
+            reply_to=reply_to,
+        )
+        return True
 
     async def _flush_outbox_files(
         self,
@@ -381,6 +412,34 @@ async def test_telegram_adapter_delivered_record_is_terminal(
     engine = delivery.engine
     re_claim = engine.claim_delivery(record.delivery_id)
     assert re_claim is None
+
+
+@pytest.mark.anyio
+async def test_telegram_second_handoff_after_delivered_does_not_resend(
+    tmp_path: Path,
+) -> None:
+    handlers = _TelegramHandlersStub(state_root=tmp_path)
+    delivery = _build_hooks(tmp_path, handlers=handlers)
+    finalized = _finalized_ok()
+
+    first = await handoff_managed_thread_final_delivery(
+        finalized,
+        delivery=delivery,
+        logger=logging.getLogger("test"),
+    )
+    second = await handoff_managed_thread_final_delivery(
+        finalized,
+        delivery=delivery,
+        logger=logging.getLogger("test"),
+    )
+
+    assert first is not None
+    assert second is not None
+    assert first.delivery_id == second.delivery_id
+    assert second.state is ManagedThreadDeliveryState.DELIVERED
+    assert len(handlers.sent_messages) == 1
+    assert len(handlers.outbox_messages) == 1
+    assert handlers.outbox_messages[0]["outbox_key"] == first.idempotency_key
 
 
 @pytest.mark.anyio

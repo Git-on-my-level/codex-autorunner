@@ -14,9 +14,12 @@ from ...core.orchestration import (
 @dataclass(frozen=True)
 class ManagedThreadDeliveryCleanupContext:
     delivery_id: str
+    idempotency_key: str
     managed_thread_id: str
     managed_turn_id: str
     final_status: str
+    assistant_text: str
+    error_text: Optional[str] = None
     transport_target: Mapping[str, Any] = field(default_factory=dict)
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
@@ -24,10 +27,18 @@ class ManagedThreadDeliveryCleanupContext:
     def from_record(cls, record: Any) -> "ManagedThreadDeliveryCleanupContext":
         return cls(
             delivery_id=str(getattr(record, "delivery_id", "") or ""),
+            idempotency_key=str(getattr(record, "idempotency_key", "") or ""),
             managed_thread_id=str(getattr(record, "managed_thread_id", "") or ""),
             managed_turn_id=str(getattr(record, "managed_turn_id", "") or ""),
-            final_status=str(
-                getattr(getattr(record, "envelope", None), "final_status", "") or ""
+            final_status=_normalize_terminal_status(
+                getattr(getattr(record, "envelope", None), "final_status", "")
+            ),
+            assistant_text=str(
+                getattr(getattr(record, "envelope", None), "assistant_text", "") or ""
+            ),
+            error_text=(
+                str(getattr(getattr(record, "envelope", None), "error_text", "") or "")
+                or None
             ),
             transport_target=dict(
                 getattr(getattr(record, "target", None), "transport_target", {}) or {}
@@ -52,6 +63,24 @@ ManagedThreadDeliveryCleanupFn = Callable[
 ]
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def managed_thread_terminal_delivery_send_key(
+    record: Any,
+    *,
+    suffix: Optional[str] = None,
+) -> str:
+    """Return the shared transport idempotency key for one terminal send."""
+
+    base = str(getattr(record, "idempotency_key", "") or "").strip()
+    if not base:
+        base = str(getattr(record, "delivery_id", "") or "").strip()
+    if not base:
+        managed_thread_id = str(getattr(record, "managed_thread_id", "") or "").strip()
+        managed_turn_id = str(getattr(record, "managed_turn_id", "") or "").strip()
+        base = f"managed-delivery:{managed_thread_id}:{managed_turn_id}"
+    normalized_suffix = str(suffix or "").strip()
+    return f"{base}:{normalized_suffix}" if normalized_suffix else base
 
 
 async def deliver_managed_thread_terminal_record(
@@ -110,10 +139,20 @@ async def deliver_managed_thread_terminal_record(
     )
 
 
+def _normalize_terminal_status(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized == "ok":
+        return "ok"
+    if normalized == "interrupted":
+        return "interrupted"
+    return "error"
+
+
 __all__ = [
     "ManagedThreadDeliveryCleanupContext",
     "ManagedThreadDeliveryCleanupFn",
     "ManagedThreadDeliverySendFn",
     "ManagedThreadDeliverySendResult",
     "deliver_managed_thread_terminal_record",
+    "managed_thread_terminal_delivery_send_key",
 ]
