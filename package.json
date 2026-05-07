@@ -23,7 +23,7 @@
     "eslint": "^10.2.1",
     "glob": "^13.0.6",
     "globals": "^17.5.0",
-    "html-validate": "^10.13.1",
+    "html-validate": "^10.15.0",
     "jsdom": "^29.1.0",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.59.1"
