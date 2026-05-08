@@ -10,12 +10,12 @@ import type {
 } from './domain';
 import { normalizeOptionalWorkStatus } from './domain';
 
-export type PmaChatFilter = 'all' | 'active' | 'waiting' | 'done';
+export type PmaChatFilter = 'all' | 'active' | 'waiting' | 'unread';
 
 /** Synthetic list selection id for pinned PMA Memory in the chats sidebar. */
 export const PMA_MEMORY_LIST_ID = '__memory__';
 
-export const PMA_CHAT_FILTER_ORDER: PmaChatFilter[] = ['all', 'waiting', 'active', 'done'];
+export const PMA_CHAT_FILTER_ORDER: PmaChatFilter[] = ['all', 'waiting', 'active', 'unread'];
 
 export type PendingAttachmentKind = 'file' | 'image' | 'link';
 
@@ -158,19 +158,23 @@ export type ManagedThreadMessagePayload = {
 
 const activeStatuses: WorkStatus[] = ['running'];
 const waitingStatuses: WorkStatus[] = ['waiting', 'blocked'];
-const doneStatuses: WorkStatus[] = ['done', 'failed', 'idle'];
 
 export function filterPmaChats(
   chats: PmaChatSummary[],
   filter: PmaChatFilter,
-  query: string
+  query: string,
+  lastSeen: Record<string, string> = {}
 ): PmaChatSummary[] {
   const needle = query.trim().toLowerCase();
   return chats
     .filter((chat) => {
       if (filter === 'active') return activeStatuses.includes(chat.status);
       if (filter === 'waiting') return waitingStatuses.includes(chat.status);
-      if (filter === 'done') return doneStatuses.includes(chat.status);
+      if (filter === 'unread') {
+        if (!chat.updatedAt) return false;
+        const seen = lastSeen[chat.id];
+        return !seen || chat.updatedAt > seen;
+      }
       return true;
     })
     .filter((chat) => {
@@ -203,12 +207,17 @@ export function sortChatsWaitingFirst(chats: PmaChatSummary[]): PmaChatSummary[]
   });
 }
 
-export function summarizeFilterCounts(chats: PmaChatSummary[]): Record<PmaChatFilter, number> {
+export function summarizeFilterCounts(
+  chats: PmaChatSummary[],
+  lastSeen: Record<string, string> = {}
+): Record<PmaChatFilter, number> {
   return {
     all: chats.length,
     active: chats.filter((chat) => activeStatuses.includes(chat.status)).length,
     waiting: chats.filter((chat) => waitingStatuses.includes(chat.status)).length,
-    done: chats.filter((chat) => doneStatuses.includes(chat.status)).length
+    unread: chats.filter(
+      (chat) => chat.updatedAt && (!lastSeen[chat.id] || chat.updatedAt > lastSeen[chat.id])
+    ).length
   };
 }
 
@@ -252,10 +261,14 @@ export function buildPmaTranscriptCards(
   artifacts: SurfaceArtifact[],
   progress: PmaRunProgress | null
 ): PmaCard[] {
+  const timelineCards = coalesceThinkingTraceCards(buildPmaCards(timeline, chat, artifacts));
+  const activityCards = shouldSupplementWithLiveActivity(timelineCards, progress)
+    ? buildPmaActivityCards(progress?.events ?? [])
+    : [];
   return summarizeCompletedTurnActivity(
     mergePmaTimelineAndActivityCards(
-      buildPmaCards(timeline, chat, artifacts),
-      buildPmaActivityCards(progress?.events ?? [])
+      timelineCards,
+      activityCards
     ),
     progress
   );
@@ -558,6 +571,54 @@ function mergeIntermediateText(current: string, incoming: string): string {
   if (incoming.startsWith(current)) return incoming;
   if (current.endsWith(incoming)) return current;
   return `${current}${incoming}`;
+}
+
+function shouldSupplementWithLiveActivity(cards: PmaCard[], progress: PmaRunProgress | null): boolean {
+  if (!progress || !progress.events.length) return false;
+  if (!progress.terminal) return true;
+  const latestMessage = cards.filter((card) => card.kind === 'message').at(-1);
+  if (latestMessage?.kind === 'message' && latestMessage.message.role === 'assistant') return false;
+  return !cards.some(
+    (card) =>
+      card.kind === 'message' &&
+      card.message.role === 'assistant' &&
+      card.turnId === progress.id
+  );
+}
+
+function coalesceThinkingTraceCards(cards: PmaCard[]): PmaCard[] {
+  const output: PmaCard[] = [];
+  const thinkingByTurn = new Map<string, Extract<PmaCard, { kind: 'intermediate' }>>();
+
+  for (const card of cards) {
+    if (!isThinkingTraceCard(card) || !card.turnId) {
+      output.push(card);
+      continue;
+    }
+
+    const existing = thinkingByTurn.get(card.turnId);
+    if (!existing) {
+      thinkingByTurn.set(card.turnId, card);
+      output.push(card);
+      continue;
+    }
+
+    existing.text = mergeIntermediateText(existing.text, card.text);
+    existing.eventIds.push(...card.eventIds.filter((id) => !existing.eventIds.includes(id)));
+    existing.detail = mergeTimelineDetails(existing.detail, card.detail);
+  }
+
+  return output;
+}
+
+function isThinkingTraceCard(card: PmaCard): card is Extract<PmaCard, { kind: 'intermediate' }> {
+  return card.kind === 'intermediate' && card.title.trim().toLowerCase() === 'thinking';
+}
+
+function mergeTimelineDetails(current: string | null, incoming: string | null): string | null {
+  if (!current) return incoming;
+  if (!incoming || incoming === current) return current;
+  return `${current}\n${incoming}`;
 }
 
 function toolDisplayTitle(event: SurfaceArtifact): string {
@@ -1097,8 +1158,7 @@ export function modelReasoningOptions(model: Record<string, unknown> | null): st
     ? rawOptions.filter((option): option is string => typeof option === 'string' && option.trim().length > 0).map((option) => option.trim())
     : [];
   if (options.length > 0) return Array.from(new Set(options));
-  const supportsRaw = model.supports_reasoning ?? model.supportsReasoning;
-  return supportsRaw === true ? ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] : [];
+  return [];
 }
 
 export function modelSelectorState(

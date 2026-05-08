@@ -47,6 +47,13 @@
     type PmaChatFilter,
     type PmaChatScopeOption
   } from '$lib/viewModels/pmaChat';
+  import {
+    isChatUnread,
+    loadLastSeenMap,
+    markChatRead,
+    saveLastSeenMap,
+    type ChatLastSeenMap
+  } from '$lib/viewModels/unread';
   import { repoAccent, repoInitials } from '$lib/viewModels/repoIdentity';
 
   let chats = $state<PmaChatSummary[]>([]);
@@ -88,14 +95,15 @@
   let lastScrolledChatId: string | null = null;
   let lastScrolledCardCount = 0;
   let lastScrolledEventCount = 0;
+  let lastSeenMap = $state<ChatLastSeenMap>(loadLastSeenMap());
 
   const activeChat = $derived(
     activeChatId
       ? chats.find((chat) => chat.id === activeChatId) ?? null
       : null
   );
-  const filteredChats = $derived(sortChatsWaitingFirst(filterPmaChats(chats, filter, search)));
-  const filterCounts = $derived(summarizeFilterCounts(chats));
+  const filteredChats = $derived(sortChatsWaitingFirst(filterPmaChats(chats, filter, search, lastSeenMap)));
+  const filterCounts = $derived(summarizeFilterCounts(chats, lastSeenMap));
   const activeCards = $derived<PmaCard[]>(buildPmaTranscriptCards(timeline, activeChat, artifacts, progress));
   const statusBar = $derived(buildPmaStatusBar(progress, activeChat));
   const selectedScope = $derived(scopeOptions.find((scope) => scope.id === selectedScopeId) ?? localPmaChatScopeOption());
@@ -201,6 +209,18 @@
 
   $effect(() => {
     if (selectedReasoning && !reasoningOptions.includes(selectedReasoning)) selectedReasoning = '';
+  });
+
+  $effect(() => {
+    if (!activeChat) return;
+    const stamp = activeChat.updatedAt;
+    if (!stamp) return;
+    const seen = lastSeenMap[activeChat.id];
+    if (seen && seen >= stamp) return;
+    const next = markChatRead(lastSeenMap, activeChat.id, stamp);
+    if (next === lastSeenMap) return;
+    lastSeenMap = next;
+    saveLastSeenMap(next);
   });
 
   onDestroy(() => {
@@ -336,6 +356,7 @@
     progress = null;
     detailMode = 'detail';
     syncSelectorsToActiveChat();
+    markActiveChatRead();
     await syncDetailUrl(chatId);
     await refreshActive(chatId);
     connectStream(chatId);
@@ -360,8 +381,19 @@
     progress = null;
     detailMode = 'detail';
     syncSelectorsToActiveChat();
+    markActiveChatRead();
     await refreshActive(chatId);
     connectStream(chatId);
+  }
+
+  function markActiveChatRead(): void {
+    if (!activeChatId) return;
+    const chat = chats.find((c) => c.id === activeChatId);
+    const stamp = chat?.updatedAt ?? new Date().toISOString();
+    const next = markChatRead(lastSeenMap, activeChatId, stamp);
+    if (next === lastSeenMap) return;
+    lastSeenMap = next;
+    saveLastSeenMap(next);
   }
 
   async function syncDetailUrl(detailId: string): Promise<void> {
@@ -794,6 +826,7 @@
 
     <div class="filter-row" aria-label="Chat status filters">
       {#each PMA_CHAT_FILTER_ORDER as item}
+        {#if item !== 'unread' || filterCounts.unread > 0 || filter === 'unread'}
         <button
           class:active={filter === item}
           class="chip"
@@ -803,6 +836,7 @@
           {filterChipLabel(item)}
           <span>{filterCounts[item]}</span>
         </button>
+        {/if}
       {/each}
     </div>
 
@@ -839,7 +873,12 @@
             {/if}
             <span class="chat-card-main">
               <span class="chat-title-row">
-                <strong>{chat.title}</strong>
+                <span class="chat-title-main">
+                  {#if isChatUnread(chat, lastSeenMap)}
+                    <span class="chat-unread-dot" aria-label="Unread"></span>
+                  {/if}
+                  <strong>{chat.title}</strong>
+                </span>
                 <span class="chat-title-trailing">
                   <span class={`chat-kind-badge ${pmaChatKind(chat)}`}>{pmaChatKindLabel(pmaChatKind(chat))}</span>
                   {#if chat.status !== 'idle' && chat.status !== 'done'}

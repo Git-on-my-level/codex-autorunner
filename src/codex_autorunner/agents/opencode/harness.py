@@ -505,12 +505,13 @@ class OpenCodeHarness(AgentHarness):
                     supports_reasoning = bool(capabilities.get("reasoning"))
                 variants = model.get("variants")
                 reasoning_options: list[str] = []
-                if isinstance(variants, dict):
+                if supports_reasoning and isinstance(variants, dict):
+                    # OpenCode provider variants are not reasoning efforts by
+                    # themselves. Only expose them through CAR's effort control
+                    # when the provider marks the model as reasoning-capable.
                     reasoning_options = [
                         key for key in variants.keys() if isinstance(key, str)
                     ]
-                    if reasoning_options:
-                        supports_reasoning = True
                 models.append(
                     ModelSpec(
                         id=f"{provider_id}/{model_id}",

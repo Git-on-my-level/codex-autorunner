@@ -52,6 +52,7 @@ class _StubClient:
         self.session_responses: dict[str, Any] = {}
         self.list_messages_calls: list[str] = []
         self.messages_response: Any = []
+        self.providers_response: Any = {}
         self.list_messages_error: Exception | None = None
         self.get_session_error: Exception | None = None
         self.prompt_error: Exception | None = None
@@ -135,7 +136,7 @@ class _StubClient:
 
     async def providers(self, *, directory: str | None = None) -> dict[str, object]:
         _ = directory
-        return {}
+        return self.providers_response
 
     async def respond_permission(self, *, request_id: str, reply: str) -> None:
         self.permission_replies.append((request_id, reply))
@@ -220,6 +221,51 @@ async def test_opencode_harness_reports_capabilities_from_contract() -> None:
     assert harness_supports_event_streaming(harness) is True
     assert harness.supports("approvals") is False
     assert report.capabilities == harness.capabilities
+
+
+@pytest.mark.asyncio
+async def test_opencode_harness_does_not_treat_plain_variants_as_reasoning_efforts() -> (
+    None
+):
+    client = _StubClient([])
+    client.providers_response = {
+        "providers": [
+            {
+                "id": "zai-coding-plan",
+                "models": {
+                    "glm-5-turbo": {
+                        "name": "GLM 5 Turbo",
+                        "capabilities": {"reasoning": False},
+                        "variants": {
+                            "none": {},
+                            "minimal": {},
+                            "low": {},
+                            "medium": {},
+                            "high": {},
+                            "xhigh": {},
+                        },
+                    },
+                    "reasoner": {
+                        "name": "Reasoner",
+                        "capabilities": {"reasoning": True},
+                        "variants": {"low": {}, "high": {}},
+                    },
+                },
+            }
+        ],
+        "default": {"zai-coding-plan": "glm-5-turbo"},
+    }
+    harness = OpenCodeHarness(_StubSupervisor(client))
+
+    catalog = await harness.model_catalog(Path("."))
+
+    models = {model.id: model for model in catalog.models}
+    glm = models["zai-coding-plan/glm-5-turbo"]
+    assert glm.supports_reasoning is False
+    assert glm.reasoning_options == []
+    reasoner = models["zai-coding-plan/reasoner"]
+    assert reasoner.supports_reasoning is True
+    assert reasoner.reasoning_options == ["low", "high"]
 
 
 @pytest.mark.asyncio

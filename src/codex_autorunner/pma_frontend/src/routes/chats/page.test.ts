@@ -12,7 +12,7 @@ describe('/chats page', () => {
     expect(body).toContain('chat-list');
     expect(body).toContain('Waiting');
     expect(body).toContain('Active');
-    expect(body).toContain('Done');
+    expect(body).not.toContain('Done');
     expect(body).toContain('Search chats');
     expect(body).toContain('Create or select a chat');
     expect(body).toContain('Attach files');

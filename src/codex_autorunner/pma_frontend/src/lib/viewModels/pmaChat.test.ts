@@ -113,8 +113,12 @@ describe('PMA chat view helpers', () => {
 
     expect(filterPmaChats(chats, 'active', '')).toHaveLength(1);
     expect(filterPmaChats(chats, 'waiting', 'billing')).toMatchObject([{ id: 'chat-2' }]);
-    expect(filterPmaChats(chats, 'done', 'ticket-099')).toMatchObject([{ id: 'chat-3' }]);
-    expect(summarizeFilterCounts(chats)).toEqual({ all: 3, active: 1, waiting: 1, done: 1 });
+    const lastSeen = { 'chat-1': '2026-05-04T00:00:00Z' };
+    expect(filterPmaChats(chats, 'unread', '', lastSeen).map((c) => c.id).sort()).toEqual([
+      'chat-2',
+      'chat-3'
+    ]);
+    expect(summarizeFilterCounts(chats, lastSeen)).toEqual({ all: 3, active: 1, waiting: 1, unread: 2 });
   });
 
   it('sorts waiting chats ahead of others then by recent updates', () => {
@@ -313,6 +317,92 @@ describe('PMA chat view helpers', () => {
     expect(cards[1]).toMatchObject({
       kind: 'turn_summary',
       title: 'Worked for 14s',
+      cards: [{ kind: 'intermediate' }, { kind: 'tool_group' }]
+    });
+  });
+
+  it('accumulates persisted OpenCode thinking deltas into one completed-turn summary row', () => {
+    const cards = buildPmaTranscriptCards(
+      [
+        timelineItem('turn:one:user', 'user_message', { text: 'Run a smoke test' }, '001'),
+        timelineItem('turn:one:intermediate:think-1', 'intermediate', {
+          intermediate_kind: 'thinking',
+          text: 'Got it'
+        }, '002'),
+        timelineItem('turn:one:intermediate:think-2', 'intermediate', {
+          intermediate_kind: 'thinking',
+          text: ' - I will create a test file'
+        }, '003'),
+        timelineItem('turn:one:intermediate:think-3', 'intermediate', {
+          intermediate_kind: 'thinking',
+          text: ', edit it, search within it, and then delete it.'
+        }, '004'),
+        timelineItem('turn:one:assistant', 'assistant_message', { text: 'Done.' }, '005')
+      ],
+      null,
+      [],
+      { ...baseProgress, id: 'one', terminal: true, status: 'done', elapsedSeconds: 17, events: [] }
+    );
+
+    expect(cards.map((card) => card.kind)).toEqual(['message', 'turn_summary', 'message']);
+    expect(cards[1]).toMatchObject({
+      kind: 'turn_summary',
+      cards: [
+        {
+          kind: 'intermediate',
+          title: 'thinking',
+          text: 'Got it - I will create a test file, edit it, search within it, and then delete it.'
+        }
+      ]
+    });
+  });
+
+  it('does not re-add terminal live progress outside the worked summary after final output lands', () => {
+    const cards = buildPmaTranscriptCards(
+      [
+        timelineItem('turn:one:user', 'user_message', { text: 'Run tools' }, '001'),
+        timelineItem('turn:one:intermediate:think-1', 'intermediate', { intermediate_kind: 'thinking', text: 'Reading files' }, '002'),
+        timelineItem('turn:one:tool:1:rg', 'tool_group', { tool_name: 'rg', result: { status: 'completed' } }, '003'),
+        timelineItem('turn:one:assistant', 'assistant_message', { text: 'Done.' }, '004')
+      ],
+      null,
+      [],
+      {
+        ...baseProgress,
+        id: 'one',
+        terminal: true,
+        status: 'done',
+        elapsedSeconds: 17,
+        events: [
+          {
+            ...baseArtifact,
+            id: 'live-thinking-1',
+            kind: 'progress',
+            createdAt: '2026-05-04T00:00:11Z',
+            summary: 'Reading files',
+            raw: {
+              execution_id: 'runtime-one',
+              progress_item: { kind: 'assistant_update', state: 'running', title: 'Thinking', summary: 'Reading files' }
+            }
+          },
+          {
+            ...baseArtifact,
+            id: 'live-tool-1',
+            kind: 'progress',
+            createdAt: '2026-05-04T00:00:12Z',
+            summary: 'rg',
+            raw: {
+              execution_id: 'runtime-one',
+              progress_item: { kind: 'tool', state: 'completed', title: 'rg' }
+            }
+          }
+        ]
+      }
+    );
+
+    expect(cards.map((card) => card.kind)).toEqual(['message', 'turn_summary', 'message']);
+    expect(cards[1]).toMatchObject({
+      kind: 'turn_summary',
       cards: [{ kind: 'intermediate' }, { kind: 'tool_group' }]
     });
   });
@@ -756,7 +846,7 @@ describe('PMA chat view helpers', () => {
     expect(agentCapabilityAllowed({ capability_projection: { actions: { list_models: { allowed: true } } } }, 'list_models')).toBe(true);
     expect(agentCapabilityAllowed({ capability_projection: { actions: { list_models: { allowed: false } } } }, 'list_models')).toBe(false);
     expect(modelReasoningOptions({ reasoning_options: ['low', 'high', 'high'] })).toEqual(['low', 'high']);
-    expect(modelReasoningOptions({ supports_reasoning: true })).toEqual(['none', 'minimal', 'low', 'medium', 'high', 'xhigh']);
+    expect(modelReasoningOptions({ supports_reasoning: true })).toEqual([]);
   });
 
   it('defines high-signal artifact card views for all surfaced variants', () => {

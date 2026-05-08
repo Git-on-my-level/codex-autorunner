@@ -107,10 +107,6 @@
       </div>
     </nav>
 
-    <div class="sidebar-footer">
-      <span class="status-dot" aria-hidden="true"></span>
-      <span class="sidebar-footer-copy">OSS local mode</span>
-    </div>
   </aside>
 
   <button class="mobile-scrim" type="button" aria-label="Close navigation" onclick={closeMobile}></button>

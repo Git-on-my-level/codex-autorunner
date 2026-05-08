@@ -1079,6 +1079,23 @@ a.scope-chip-label:hover {
   white-space: nowrap;
 }
 
+.chat-title-main {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  overflow: hidden;
+}
+
+.chat-unread-dot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  box-shadow: 0 0 0 2px var(--color-surface);
+}
+
 .chat-meta-row {
   flex-wrap: wrap;
   gap: var(--space-2);
