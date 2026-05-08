@@ -158,6 +158,7 @@ export type ManagedThreadMessagePayload = {
   message: string;
   attachments?: DocumentFileIntentPayload[];
   model?: string;
+  reasoning?: string;
   busy_policy?: 'queue';
 };
 
@@ -718,6 +719,20 @@ export function buildManagedThreadCreatePayload(
   };
 }
 
+export type PmaChatKind = 'pma' | 'coding_agent';
+
+export function pmaChatKind(chat: PmaChatSummary | null): PmaChatKind {
+  if (!chat) return 'pma';
+  const rawKind = stringValue(chat.raw.chat_kind ?? chat.raw.thread_kind ?? chat.raw.kind).toLowerCase();
+  if (['coding_agent', 'coding-agent', 'agent', 'direct_agent', 'direct-agent'].includes(rawKind)) return 'coding_agent';
+  const explicitName = stringValue(chat.raw.display_name ?? chat.raw.name ?? chat.raw.title ?? chat.title).toLowerCase();
+  return explicitName.includes('coding agent') ? 'coding_agent' : 'pma';
+}
+
+export function pmaChatKindLabel(kind: PmaChatKind): string {
+  return kind === 'coding_agent' ? 'Coding agent' : 'PMA';
+}
+
 export function localPmaChatScopeOption(): PmaChatScopeOption {
   return {
     id: 'local',
@@ -817,14 +832,27 @@ export function buildManagedThreadMessagePayload(
   message: string,
   model: string,
   isRunning: boolean,
-  attachments: PendingAttachment[] = []
+  attachments: PendingAttachment[] = [],
+  reasoning = ''
 ): ManagedThreadMessagePayload {
   return {
     message,
     attachments: attachments.length ? attachments.map(pendingAttachmentToIntent) : undefined,
     model: model || undefined,
+    reasoning: reasoning || undefined,
     busy_policy: isRunning ? 'queue' : undefined
   };
+}
+
+export function modelReasoningOptions(model: Record<string, unknown> | null): string[] {
+  if (!model) return [];
+  const rawOptions = model.reasoning_options ?? model.reasoningOptions ?? model.supportedReasoningEfforts;
+  const options = Array.isArray(rawOptions)
+    ? rawOptions.filter((option): option is string => typeof option === 'string' && option.trim().length > 0).map((option) => option.trim())
+    : [];
+  if (options.length > 0) return Array.from(new Set(options));
+  const supportsRaw = model.supports_reasoning ?? model.supportsReasoning;
+  return supportsRaw === true ? ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] : [];
 }
 
 export function modelSelectorState(

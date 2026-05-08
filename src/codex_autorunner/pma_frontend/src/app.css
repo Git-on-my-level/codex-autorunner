@@ -4871,6 +4871,33 @@ textarea:disabled {
   font-size: 10.5px;
 }
 
+.chat-kind-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border-subtle);
+  background: var(--color-surface-muted);
+  color: var(--color-ink-muted);
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.chat-kind-badge.pma {
+  color: var(--color-accent);
+  border-color: color-mix(in srgb, var(--color-accent) 28%, var(--color-border));
+  background: var(--color-accent-soft);
+}
+
+.chat-kind-badge.coding_agent {
+  color: var(--color-success);
+  border-color: color-mix(in srgb, var(--color-success) 28%, var(--color-border));
+  background: color-mix(in srgb, var(--color-success) 12%, var(--color-surface));
+}
+
 .chat-card .chat-meta-row code {
   font-size: 10.5px;
   color: var(--color-ink-muted);

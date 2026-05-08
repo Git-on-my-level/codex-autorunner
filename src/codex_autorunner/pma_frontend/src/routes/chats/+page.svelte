@@ -28,8 +28,12 @@
     formatBytes,
     formatRelativeTime,
     localPmaChatScopeOption,
+    modelReasoningOptions,
+    modelSelectorState,
     optimisticUserTimelineItemFromSend,
     PMA_CHAT_FILTER_ORDER,
+    pmaChatKind,
+    pmaChatKindLabel,
     pmaChatHeaderScopeLine,
     pmaChatScopeLabelFromChat,
     progressPercent,
@@ -58,6 +62,7 @@
   let activeChatId = $state<string | null>(null);
   let selectedAgent = $state('codex');
   let selectedModel = $state('');
+  let selectedReasoning = $state('');
   let selectedScopeId = $state('local');
   let newChatKind = $state<'pma' | 'agent'>('pma');
   let filter = $state<PmaChatFilter>('all');
@@ -68,9 +73,12 @@
   let loadingActive = $state(false);
   let sending = $state(false);
   let creating = $state(false);
+  let loadingModels = $state(false);
   let chatError = $state<ApiError | null>(null);
   let activeError = $state<ApiError | null>(null);
   let composeError = $state<ApiError | null>(null);
+  let agentError = $state<ApiError | null>(null);
+  let modelError = $state<ApiError | null>(null);
   let streamState = $state<'idle' | 'connecting' | 'connected' | 'interrupted'>('idle');
   let streamError = $state<string | null>(null);
   let streamLastEventAt = $state<string | null>(null);
@@ -94,11 +102,20 @@
   const activeCards = $derived<PmaCard[]>(buildPmaCards(timeline, activeChat, artifacts));
   const statusBar = $derived(buildPmaStatusBar(progress, activeChat));
   const selectedScope = $derived(scopeOptions.find((scope) => scope.id === selectedScopeId) ?? localPmaChatScopeOption());
+  const selectedModelRecord = $derived(modelRecordForValue(models, selectedModel));
+  const reasoningOptions = $derived(modelReasoningOptions(selectedModelRecord));
+  const supportsReasoning = $derived(reasoningOptions.length > 0);
+  const modelState = $derived(modelSelectorState(loadingModels, modelError?.message ?? null, models.length));
   const canStartCodingAgentChat = $derived(selectedScope.kind !== 'local');
+  const activeChatKind = $derived(pmaChatKind(activeChat));
+  const activeChatIsCodingAgent = $derived(activeChatKind === 'coding_agent');
   const createChatLabel = $derived(
     creating ? 'Creating...' : newChatKind === 'agent' && canStartCodingAgentChat ? '+ Coding agent' : '+ PMA chat'
   );
   const headerScopeLine = $derived(pmaChatHeaderScopeLine(activeChat, repoLabelForRepoId));
+  const agentStateLabel = $derived(
+    agentError ? agentError.message : agents.length === 0 ? 'no agent' : 'agent'
+  );
 
   function repoLabelForRepoId(repoId: string): string | null {
     const opt = scopeOptions.find((scope) => scope.kind === 'repo' && scope.resourceId === repoId);
@@ -155,6 +172,10 @@
 
   $effect(() => {
     if (!canStartCodingAgentChat && newChatKind === 'agent') newChatKind = 'pma';
+  });
+
+  $effect(() => {
+    if (selectedReasoning && !reasoningOptions.includes(selectedReasoning)) selectedReasoning = '';
   });
 
   onDestroy(() => {
@@ -227,8 +248,7 @@
       }
       void loadModels(selectedAgent, activeChat?.model ?? selectedModel);
     } else {
-      models = [];
-      selectedModel = '';
+      agentError = agentResult.error;
     }
     applyNewChatQueryParam();
     loadingChats = false;
@@ -276,16 +296,24 @@
   }
 
   async function loadModels(agentId: string, preferredModel = ''): Promise<void> {
+    loadingModels = true;
+    modelError = null;
     const result = await pmaApi.pma.listAgentModels(agentId);
     if (!result.ok) {
       models = [];
       selectedModel = '';
+      modelError = result.error;
+      loadingModels = false;
       return;
     }
     models = result.data;
     selectedModel = preferredModel && modelExists(result.data, preferredModel)
       ? preferredModel
       : stringField(result.data[0], 'id') ?? stringField(result.data[0], 'model') ?? '';
+    if (selectedReasoning && !modelReasoningOptions(modelRecordForValue(result.data, selectedModel)).includes(selectedReasoning)) {
+      selectedReasoning = '';
+    }
+    loadingModels = false;
   }
 
   async function selectChat(chatId: string): Promise<void> {
@@ -429,7 +457,12 @@
     const chat = chats.find((item) => item.id === activeChatId);
     if (!chat?.agentId) return;
     selectedAgent = chat.agentId;
+    selectedReasoning = stringField(chat.raw, 'reasoning') ?? '';
     void loadModels(chat.agentId, chat.model ?? selectedModel);
+  }
+
+  function handleAgentChange(): void {
+    void loadModels(selectedAgent);
   }
 
   function newChatDisplayName(): string {
@@ -453,6 +486,11 @@
 
   function modelExists(catalog: JsonRecord[], model: string): boolean {
     return catalog.some((entry) => (stringField(entry, 'id') ?? stringField(entry, 'model') ?? modelLabel(entry)) === model);
+  }
+
+  function modelRecordForValue(catalog: JsonRecord[], model: string): JsonRecord | null {
+    if (!model) return null;
+    return catalog.find((entry) => (stringField(entry, 'id') ?? stringField(entry, 'model') ?? modelLabel(entry)) === model) ?? null;
   }
 
   function isMessageStackNearBottom(): boolean {
@@ -502,7 +540,7 @@
     const targetIsRunning = targetChatId === activeChatId && activeChat?.status === 'running';
     const result = await pmaApi.pma.sendMessage(
       targetChatId,
-      buildManagedThreadMessagePayload(message, selectedModel, targetIsRunning, attachmentsForMessage)
+      buildManagedThreadMessagePayload(message, selectedModel, targetIsRunning, attachmentsForMessage, selectedReasoning)
     );
     if (result.ok) {
       draft = '';
@@ -692,6 +730,7 @@
               <span class="chat-title-row">
                 <strong>{chat.title}</strong>
                 <span class="chat-title-trailing">
+                  <span class={`chat-kind-badge ${pmaChatKind(chat)}`}>{pmaChatKindLabel(pmaChatKind(chat))}</span>
                   <span class={`status-pill ${chat.status}`}>{statusLabel(chat.status)}</span>
                   <span class="updated-at">{formatRelativeTime(chat.updatedAt)}</span>
                 </span>
@@ -758,6 +797,52 @@
         {/if}
       </div>
       <div class="selector-row">
+        {#if activeChatIsCodingAgent}
+          <label class="selector-field">
+            <span>{agentStateLabel}</span>
+            <select
+              aria-label="Agent"
+              bind:value={selectedAgent}
+              disabled={agents.length === 0}
+              onchange={handleAgentChange}
+            >
+            {#if agents.length === 0}
+              <option value={selectedAgent}>{agentError ? 'Unavailable' : 'Configured agent'}</option>
+            {:else}
+              {#each agents as agent}
+                <option value={stringField(agent, 'id') ?? stringField(agent, 'agent') ?? agentLabel(agent)}>
+                  {agentLabel(agent)}
+                </option>
+              {/each}
+            {/if}
+            </select>
+          </label>
+          <label class={`selector-field ${modelState.state}`}>
+            <span>{modelState.label}</span>
+            <select aria-label="Model" bind:value={selectedModel} disabled={modelState.disabled}>
+            {#if models.length === 0}
+              <option value="">Configured model</option>
+            {:else}
+              {#each models as model}
+                <option value={stringField(model, 'id') ?? stringField(model, 'model') ?? modelLabel(model)}>
+                  {modelLabel(model)}
+                </option>
+              {/each}
+            {/if}
+            </select>
+          </label>
+          {#if supportsReasoning}
+            <label class="selector-field">
+              <span>effort</span>
+              <select aria-label="Effort" bind:value={selectedReasoning}>
+                <option value="">Default effort</option>
+                {#each reasoningOptions as effort}
+                  <option value={effort}>{effort}</option>
+                {/each}
+              </select>
+            </label>
+          {/if}
+        {/if}
         <button
           class={`memory-toggle-button ${memoryOpen ? 'is-open' : ''}`}
           type="button"

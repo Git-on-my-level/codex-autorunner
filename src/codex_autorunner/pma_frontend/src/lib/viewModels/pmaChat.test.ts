@@ -15,8 +15,11 @@ import {
   formatRelativeTime,
   isPrimaryProgressArtifact,
   mergePmaActivityEvents,
+  modelReasoningOptions,
   modelSelectorState,
   optimisticUserTimelineItemFromSend,
+  pmaChatKind,
+  pmaChatKindLabel,
   pmaChatHeaderScopeLine,
   pmaChatScopeLabelFromChat,
   progressPercent,
@@ -540,12 +543,19 @@ describe('PMA chat view helpers', () => {
         }
       ],
       model: 'gpt-5.2',
+      reasoning: undefined,
       busy_policy: 'queue'
+    });
+    expect(buildManagedThreadMessagePayload('Continue', 'gpt-5.2', false, [], 'high')).toMatchObject({
+      message: 'Continue',
+      model: 'gpt-5.2',
+      reasoning: 'high'
     });
     expect(buildManagedThreadMessagePayload('Continue', '', false)).toEqual({
       message: 'Continue',
       attachments: undefined,
       model: undefined,
+      reasoning: undefined,
       busy_policy: undefined
     });
   });
@@ -555,6 +565,15 @@ describe('PMA chat view helpers', () => {
     expect(modelSelectorState(false, null, 0)).toMatchObject({ state: 'empty', disabled: true });
     expect(modelSelectorState(false, 'Agent missing provider', 0)).toMatchObject({ state: 'error', disabled: true });
     expect(modelSelectorState(false, null, 2)).toMatchObject({ state: 'loaded', disabled: false });
+  });
+
+  it('derives chat kind and reasoning affordances from shared thread/model metadata', () => {
+    expect(pmaChatKind(baseChat)).toBe('pma');
+    expect(pmaChatKind({ ...baseChat, raw: { name: 'New coding agent chat' } })).toBe('coding_agent');
+    expect(pmaChatKind({ ...baseChat, raw: { chat_kind: 'direct_agent' } })).toBe('coding_agent');
+    expect(pmaChatKindLabel('coding_agent')).toBe('Coding agent');
+    expect(modelReasoningOptions({ reasoning_options: ['low', 'high', 'high'] })).toEqual(['low', 'high']);
+    expect(modelReasoningOptions({ supports_reasoning: true })).toEqual(['none', 'minimal', 'low', 'medium', 'high', 'xhigh']);
   });
 
   it('defines high-signal artifact card views for all surfaced variants', () => {

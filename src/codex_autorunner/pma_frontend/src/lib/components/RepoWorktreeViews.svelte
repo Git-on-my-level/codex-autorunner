@@ -115,10 +115,6 @@
                 {#if row.signalFailed > 0}<span class="signal-pill failed">{row.signalFailed} failed</span>{/if}
                 {#if row.signalActive > 0}<span class="signal-pill active">{row.signalActive} active</span>{/if}
               </div>
-              <div class="repo-chat-actions" aria-label={`Start a chat scoped to ${row.label}`}>
-                <a class="repo-chat-action primary" href={href(row.pmaChatHref)}>Chat with PMA</a>
-                <a class="repo-chat-action" href={href(row.codingAgentChatHref)}>Chat with coding agent</a>
-              </div>
             </div>
 
             {#if row.childWorktrees.length > 0}
@@ -146,10 +142,6 @@
                         </div>
                       </div>
                       <div class="worktree-card-counts">
-                        <div class="worktree-chat-actions" aria-label={`Start a chat scoped to ${worktree.label}`}>
-                          <a class="repo-chat-action compact primary" href={href(worktree.pmaChatHref)}>Chat with PMA</a>
-                          <a class="repo-chat-action compact" href={href(worktree.codingAgentChatHref)}>Chat with coding agent</a>
-                        </div>
                         {#if worktree.activeRuns > 0}
                           <span class="count-chip is-active" title="Active runs">
                             <strong>{worktree.activeRuns}</strong><em>run{worktree.activeRuns === 1 ? '' : 's'}</em>
@@ -522,14 +514,6 @@
     gap: 6px;
   }
 
-  .repo-chat-actions {
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-
   .signal-pill {
     display: inline-flex;
     align-items: center;
@@ -554,41 +538,6 @@
   .signal-pill.active {
     color: var(--color-success);
     border-color: color-mix(in srgb, var(--color-success) 35%, var(--color-border));
-  }
-
-  .repo-chat-action {
-    flex-shrink: 0;
-    padding: 6px 12px;
-    border-radius: 8px;
-    border: 1px solid var(--color-border-strong);
-    background: var(--color-surface);
-    font-size: var(--font-size-1);
-    font-weight: 600;
-    color: var(--color-accent);
-    text-decoration: none;
-  }
-
-  .repo-chat-action.primary {
-    color: white;
-    border-color: var(--color-accent);
-    background: var(--color-accent);
-  }
-
-  .repo-chat-action:hover {
-    border-color: var(--color-accent);
-    background: var(--color-accent-soft);
-  }
-
-  .repo-chat-action.primary:hover {
-    color: white;
-    background: color-mix(in srgb, var(--color-accent) 88%, black);
-  }
-
-  .repo-chat-action.compact {
-    min-height: 28px;
-    padding: 4px 9px;
-    font-size: 11px;
-    line-height: 1.2;
   }
 
   .repo-avatar {
@@ -685,14 +634,6 @@
   .worktree-card-counts {
     display: flex;
     align-items: center;
-    gap: 6px;
-  }
-
-  .worktree-chat-actions {
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    flex-wrap: wrap;
     gap: 6px;
   }
 
@@ -967,8 +908,6 @@
     }
     .worktree-card-counts {
       grid-column: 2;
-      align-items: flex-start;
-      flex-direction: column;
     }
   }
 </style>
