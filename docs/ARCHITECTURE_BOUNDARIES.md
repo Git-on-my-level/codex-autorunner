@@ -49,6 +49,7 @@ The codebase is organized into four layers, from most stable (left) to most vola
 **Module prefixes:**
 - `codex_autorunner.adapters*` - External adapters (Telegram, Discord, GitHub, Docker, Chat, App Server, templates). See `10_CODEBASE_CONSTITUTION.md` for the canonical list.
 - `codex_autorunner.agents*` - Agent implementations (codex, opencode, hermes, zeroclaw). See `10_CODEBASE_CONSTITUTION.md` for the canonical list.
+- `codex_autorunner.flows*` - Flow composition roots that wire agent/adapter implementations to control-plane flow APIs while leaving the protocol-agnostic engine in `codex_autorunner.core.flows*`.
 
 **Non-responsibilities:**
 - Avoid owning business logic; keep logic in engine/control plane

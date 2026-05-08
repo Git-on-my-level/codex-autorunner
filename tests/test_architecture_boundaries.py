@@ -8,6 +8,7 @@ Layers are defined by module prefix:
 - Control Plane: codex_autorunner.core* (excluding flows/ports),
                  codex_autorunner.contextspace*, codex_autorunner.tickets*
 - Adapters: codex_autorunner.adapters*, codex_autorunner.agents*
+- Adapter composition: codex_autorunner.flows*
 - Surfaces: codex_autorunner.surfaces*
 
 Top-level modules under ``codex_autorunner.<name>`` that do not match a
@@ -21,6 +22,7 @@ in a comment header containing "ARCHITECTURE_SHIM:".
 from __future__ import annotations
 
 import ast
+import importlib.util
 import re
 from dataclasses import dataclass
 from enum import IntEnum
@@ -70,6 +72,7 @@ LAYER_PREFIXES: dict[Layer, list[str]] = {
     Layer.ADAPTERS: [
         "codex_autorunner.adapters",
         "codex_autorunner.agents",
+        "codex_autorunner.flows",
     ],
     Layer.SURFACES: [
         "codex_autorunner.surfaces",
@@ -78,6 +81,180 @@ LAYER_PREFIXES: dict[Layer, list[str]] = {
 
 SHIM_PATTERN = re.compile(r"_shim\.py$|_shim/__init__\.py$")
 SHIM_DECLARATION_PATTERN = re.compile(r"ARCHITECTURE_SHIM:")
+
+ALLOWED_BOUNDARY_IMPORTS: dict[str, set[str]] = {
+    # Existing package-root compatibility facades.
+    "codex_autorunner.api": {
+        "codex_autorunner.agents.base",
+        "codex_autorunner.agents.registry",
+        "codex_autorunner.agents.types",
+    },
+    "codex_autorunner.cli": {
+        "codex_autorunner.surfaces.cli.cli",
+    },
+    "codex_autorunner.housekeeping": {
+        "codex_autorunner.adapters.docker.runtime",
+    },
+    "codex_autorunner.pma_chat_delivery_runtime": {
+        "codex_autorunner.adapters.chat.bound_live_progress",
+        "codex_autorunner.adapters.chat.pma_delivery",
+        "codex_autorunner.adapters.discord.pma_delivery",
+        "codex_autorunner.adapters.discord.state",
+        "codex_autorunner.adapters.telegram.pma_delivery",
+        "codex_autorunner.adapters.telegram.state",
+    },
+    "codex_autorunner.server": {
+        "codex_autorunner.surfaces.web.app",
+        "codex_autorunner.surfaces.web.middleware",
+    },
+    "codex_autorunner.ticket_helper_script_common": {
+        "codex_autorunner.agents.registry",
+    },
+    # Existing ticket/control-plane helpers that validate configured agent IDs.
+    "codex_autorunner.tickets.bulk": {
+        "codex_autorunner.agents.hermes_identity",
+    },
+    "codex_autorunner.tickets.lint": {
+        "codex_autorunner.agents.hermes_identity",
+        "codex_autorunner.agents.registry",
+    },
+    "codex_autorunner.tickets.pack_import": {
+        "codex_autorunner.agents.registry",
+    },
+    "codex_autorunner.tickets.runner": {
+        "codex_autorunner.agents.hermes_identity",
+    },
+    "codex_autorunner.tickets.runner_selection": {
+        "codex_autorunner.agents.registry",
+    },
+    # Existing flow-engine/control-plane crossings exposed by resolving relative
+    # imports. They are kept explicit so new relative crossings still fail.
+    "codex_autorunner.core.flows.app_server_event_compaction": {
+        "codex_autorunner.core.text_utils",
+    },
+    "codex_autorunner.core.flows.archive_helpers": {
+        "codex_autorunner.bootstrap",
+        "codex_autorunner.core.apps.artifacts",
+        "codex_autorunner.core.apps.hooks",
+        "codex_autorunner.core.archive",
+        "codex_autorunner.core.archive_retention",
+        "codex_autorunner.core.config",
+        "codex_autorunner.core.pma_thread_store",
+        "codex_autorunner.core.sqlite_utils",
+        "codex_autorunner.core.state_lifecycle",
+        "codex_autorunner.core.state_roots",
+        "codex_autorunner.manifest",
+        "codex_autorunner.tickets.files",
+        "codex_autorunner.tickets.outbox",
+    },
+    "codex_autorunner.core.flows.controller": {
+        "codex_autorunner.core.git_utils",
+        "codex_autorunner.core.lifecycle_events",
+        "codex_autorunner.core.state_roots",
+        "codex_autorunner.core.utils",
+        "codex_autorunner.manifest",
+    },
+    "codex_autorunner.core.flows.failure_diagnostics": {
+        "codex_autorunner.core.coercion",
+    },
+    "codex_autorunner.core.flows.flow_housekeeping": {
+        "codex_autorunner.core.config",
+    },
+    "codex_autorunner.core.flows.flow_telemetry_hooks": {
+        "codex_autorunner.core.apps.hooks",
+        "codex_autorunner.core.config",
+        "codex_autorunner.core.state_roots",
+    },
+    "codex_autorunner.core.flows.hub_overview": {
+        "codex_autorunner.core.chat_bindings",
+        "codex_autorunner.core.state_roots",
+        "codex_autorunner.manifest",
+    },
+    "codex_autorunner.core.flows.pause_dispatch": {
+        "codex_autorunner.core.redaction",
+        "codex_autorunner.core.ticket_flow_projection",
+        "codex_autorunner.tickets.outbox",
+    },
+    "codex_autorunner.core.flows.reconciler": {
+        "codex_autorunner.core.config",
+        "codex_autorunner.core.locks",
+        "codex_autorunner.core.state_roots",
+        "codex_autorunner.tickets.outbox",
+        "codex_autorunner.tickets.replies",
+    },
+    "codex_autorunner.core.flows.runtime": {
+        "codex_autorunner.core.lifecycle_events",
+    },
+    "codex_autorunner.core.flows.start_policy": {
+        "codex_autorunner.tickets.files",
+        "codex_autorunner.tickets.ingest_state",
+        "codex_autorunner.tickets.lint",
+    },
+    "codex_autorunner.core.flows.store": {
+        "codex_autorunner.core.config",
+        "codex_autorunner.core.sqlite_utils",
+        "codex_autorunner.core.state_roots",
+        "codex_autorunner.core.time_utils",
+    },
+    "codex_autorunner.core.flows.telemetry_export": {
+        "codex_autorunner.core.state_lifecycle",
+    },
+    "codex_autorunner.core.flows.ux_helpers": {
+        "codex_autorunner.core.freshness",
+        "codex_autorunner.core.ticket_flow_operator",
+        "codex_autorunner.core.ticket_flow_summary",
+        "codex_autorunner.tickets.files",
+    },
+    "codex_autorunner.core.flows.worker_process": {
+        "codex_autorunner.core.text_utils",
+        "codex_autorunner.core.utils",
+    },
+    "codex_autorunner.core.flows.worker_reaper": {
+        "codex_autorunner.core.diagnostics.process_snapshot",
+        "codex_autorunner.core.state_roots",
+        "codex_autorunner.core.text_utils",
+        "codex_autorunner.flow_worker_reaper_constants",
+    },
+    "codex_autorunner.core.flows.workspace_root": {
+        "codex_autorunner.core.utils",
+    },
+    "codex_autorunner.core.ports.agent_backend": {
+        "codex_autorunner.core.time_utils",
+    },
+    "codex_autorunner.core.ports.memory_store": {
+        "codex_autorunner.core.domain.refs",
+    },
+    "codex_autorunner.core.ports.run_event": {
+        "codex_autorunner.core.time_utils",
+    },
+    "codex_autorunner.core.ports.scope_resolver": {
+        "codex_autorunner.core.domain.refs",
+    },
+    "codex_autorunner.core.ports.surface_port": {
+        "codex_autorunner.core.domain.refs",
+    },
+    "codex_autorunner.core.ports.surface_port_registry": {
+        "codex_autorunner.core.domain.refs",
+    },
+    "codex_autorunner.core.ports.thread_store": {
+        "codex_autorunner.core.domain.refs",
+    },
+    "codex_autorunner.core.ports.ticket_store": {
+        "codex_autorunner.core.domain.refs",
+    },
+    # Explicit composition seam: the orchestration control-plane exposes ticket
+    # flow targets while the concrete ticket-flow runtime lives in flows/.
+    "codex_autorunner.core.orchestration.flows": {
+        "codex_autorunner.flows.ticket_flow.runtime_helpers",
+    },
+    "codex_autorunner.core.pma_inbox": {
+        "codex_autorunner.flows.ticket_flow.runtime_helpers",
+    },
+}
+
+
+def is_allowed_boundary_import(source_module: str, imported: str) -> bool:
+    return imported in ALLOWED_BOUNDARY_IMPORTS.get(source_module, set())
 
 
 def module_name_from_path(path: Path) -> str:
@@ -133,7 +310,42 @@ def has_shim_declaration(path: Path) -> bool:
         return False
 
 
-def extract_imports(source: str) -> list[str]:
+def _source_package_name(source_module: str, source_path: Path | None) -> str:
+    if source_path is not None and source_path.name == "__init__.py":
+        return source_module
+    return source_module.rpartition(".")[0]
+
+
+def _resolve_import_from_module(
+    node: ast.ImportFrom,
+    *,
+    source_module: str,
+    source_path: Path | None,
+) -> list[str]:
+    if node.level == 0:
+        return [node.module] if node.module else []
+
+    package_name = _source_package_name(source_module, source_path)
+    if not package_name:
+        return []
+
+    relative_name = "." * node.level + (node.module or "")
+    try:
+        resolved = importlib.util.resolve_name(relative_name, package_name)
+    except ImportError:
+        return []
+
+    if node.module:
+        return [resolved]
+    return [f"{resolved}.{alias.name}" for alias in node.names]
+
+
+def extract_imports(
+    source: str,
+    *,
+    source_module: str = "",
+    source_path: Path | None = None,
+) -> list[str]:
     imports = []
     try:
         tree = ast.parse(source)
@@ -145,8 +357,13 @@ def extract_imports(source: str) -> list[str]:
             for alias in node.names:
                 imports.append(alias.name)
         elif isinstance(node, ast.ImportFrom):
-            if node.module:
-                imports.append(node.module)
+            imports.extend(
+                _resolve_import_from_module(
+                    node,
+                    source_module=source_module,
+                    source_path=source_path,
+                )
+            )
     return imports
 
 
@@ -183,7 +400,11 @@ def check_violations(files: list[Path]) -> list[Violation]:
         except OSError:
             continue
 
-        imports = extract_imports(source)
+        imports = extract_imports(
+            source,
+            source_module=module_name,
+            source_path=path,
+        )
 
         for imported in imports:
             if not imported.startswith("codex_autorunner."):
@@ -191,6 +412,9 @@ def check_violations(files: list[Path]) -> list[Violation]:
 
             imported_layer = classify_module(imported)
             if imported_layer == Layer.UNKNOWN:
+                continue
+
+            if is_allowed_boundary_import(module_name, imported):
                 continue
 
             if imported_layer > source_layer:
@@ -277,8 +501,15 @@ def test_engine_does_not_import_control_plane():
         except OSError:
             continue
 
-        imports = extract_imports(source)
+        module_name = module_name_from_path(path)
+        imports = extract_imports(
+            source,
+            source_module=module_name,
+            source_path=path,
+        )
         for imported in imports:
+            if is_allowed_boundary_import(module_name, imported):
+                continue
             if imported.startswith("codex_autorunner.core."):
                 if imported.startswith(
                     "codex_autorunner.core.flows."
@@ -317,6 +548,8 @@ def _engine_flows_forbidden_imports_for_module(
         return []
     violations: list[str] = []
     for imported in imports:
+        if is_allowed_boundary_import(module_name, imported):
+            continue
         if not imported.startswith("codex_autorunner."):
             continue
         if imported == "codex_autorunner.core.flows" or imported.startswith(
@@ -340,7 +573,11 @@ def test_engine_flows_import_scope_is_restricted() -> None:
             source = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        imports = extract_imports(source)
+        imports = extract_imports(
+            source,
+            source_module=module_name,
+            source_path=path,
+        )
         bad = _engine_flows_forbidden_imports_for_module(module_name, imports)
         violations.extend(
             f"{path.relative_to(SRC_ROOT.parent.parent)} imports {imported}"
@@ -366,6 +603,46 @@ def test_engine_regression_detects_top_level_control_plane_import() -> None:
 
 def test_top_level_module_is_not_unknown_layer() -> None:
     assert classify_module("codex_autorunner.manifest") == Layer.CONTROL_PLANE
+
+
+def test_flows_modules_are_adapter_layer_composition_roots() -> None:
+    assert classify_module("codex_autorunner.flows") == Layer.ADAPTERS
+    assert classify_module("codex_autorunner.flows.ticket_flow.definition") == (
+        Layer.ADAPTERS
+    )
+
+
+def test_extract_imports_resolves_relative_imports() -> None:
+    source = (
+        "from ...surfaces.web import app\n"
+        "from .runtime_helpers import start_ticket_flow_run\n"
+        "from . import models\n"
+    )
+    imports = extract_imports(
+        source,
+        source_module="codex_autorunner.core.flows.worker_process",
+        source_path=SRC_ROOT / "core" / "flows" / "worker_process.py",
+    )
+    assert imports == [
+        "codex_autorunner.surfaces.web",
+        "codex_autorunner.core.flows.runtime_helpers",
+        "codex_autorunner.core.flows.models",
+    ]
+
+
+def test_boundary_enforcement_catches_relative_reverse_import(tmp_path: Path) -> None:
+    source_path = tmp_path / "src" / "codex_autorunner" / "core" / "flows"
+    source_path.mkdir(parents=True)
+    module_path = source_path / "worker_process.py"
+    module_path.write_text("from ...surfaces.web import app\n", encoding="utf-8")
+
+    violations = check_violations([module_path])
+
+    assert len(violations) == 1
+    assert violations[0].source_module == "codex_autorunner.core.flows.worker_process"
+    assert violations[0].imported_module == "codex_autorunner.surfaces.web"
+    assert violations[0].source_layer == Layer.ENGINE
+    assert violations[0].imported_layer == Layer.SURFACES
 
 
 # ---------------------------------------------------------------------------
