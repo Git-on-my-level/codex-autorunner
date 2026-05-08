@@ -44,6 +44,7 @@ from .models import (
     NotificationRecordResponse,
     NotificationReplyTargetLookupRequest,
     PmaSnapshotResponse,
+    PreviousCompletedExecutionLookupRequest,
     QueueDepthRequest,
     QueueDepthResponse,
     QueuedExecutionListRequest,
@@ -493,6 +494,22 @@ class HttpHubControlPlaneClient(HubControlPlaneClient):
                 "/hub/api/control-plane/thread-targets/"
                 f"{request.thread_target_id}/executions/latest"
             ),
+        )
+        return ExecutionResponse.from_mapping(payload)
+
+    async def get_previous_completed_execution(
+        self, request: PreviousCompletedExecutionLookupRequest
+    ) -> ExecutionResponse:
+        params = {}
+        if request.exclude_execution_id is not None:
+            params["exclude_execution_id"] = request.exclude_execution_id
+        payload = await self._request(
+            method="GET",
+            path=(
+                "/hub/api/control-plane/thread-targets/"
+                f"{request.thread_target_id}/executions/previous-completed"
+            ),
+            params=params,
         )
         return ExecutionResponse.from_mapping(payload)
 

@@ -29,6 +29,7 @@ from ....core.hub_control_plane import (
     NotificationDeliveryMarkRequest,
     NotificationLookupRequest,
     NotificationReplyTargetLookupRequest,
+    PreviousCompletedExecutionLookupRequest,
     QueueDepthRequest,
     QueuedExecutionListRequest,
     RunningExecutionLookupRequest,
@@ -342,6 +343,23 @@ def build_hub_control_plane_routes() -> APIRouter:
                 {"thread_target_id": thread_target_id}
             ),
             operation=service.get_latest_execution,
+        )
+
+    @router.get("/thread-targets/{thread_target_id}/executions/previous-completed")
+    async def get_previous_completed_execution(
+        request: Request,
+        thread_target_id: str,
+        exclude_execution_id: Optional[str] = None,
+    ):
+        service = _require_control_plane_service(request)
+        return await _run_control_plane_call(
+            request_factory=lambda: PreviousCompletedExecutionLookupRequest.from_mapping(
+                {
+                    "thread_target_id": thread_target_id,
+                    "exclude_execution_id": exclude_execution_id,
+                }
+            ),
+            operation=service.get_previous_completed_execution,
         )
 
     @router.get("/thread-targets/{thread_target_id}/executions/queued")

@@ -37,6 +37,7 @@ from .models import (
     NotificationRecordResponse,
     NotificationReplyTargetLookupRequest,
     PmaSnapshotResponse,
+    PreviousCompletedExecutionLookupRequest,
     QueueDepthRequest,
     QueueDepthResponse,
     QueuedExecutionListRequest,
@@ -131,6 +132,10 @@ class HubControlPlaneClient(Protocol):
 
     async def get_latest_execution(
         self, request: LatestExecutionLookupRequest
+    ) -> ExecutionResponse: ...
+
+    async def get_previous_completed_execution(
+        self, request: PreviousCompletedExecutionLookupRequest
     ) -> ExecutionResponse: ...
 
     async def list_queued_executions(
