@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from codex_autorunner.integrations.agents.codex_backend import CodexAppServerBackend
+from codex_autorunner.adapters.agents.codex_backend import CodexAppServerBackend
 
 
 def _make_buffer_logger() -> tuple[logging.Logger, StringIO, logging.Handler]:

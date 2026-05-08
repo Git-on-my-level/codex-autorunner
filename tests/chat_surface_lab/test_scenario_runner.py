@@ -306,11 +306,11 @@ async def test_runner_executes_newt_reset_parity(
         )
 
     monkeypatch.setattr(
-        "codex_autorunner.integrations.discord.car_handlers.session_commands.run_newt_branch_reset",
+        "codex_autorunner.adapters.discord.car_handlers.session_commands.run_newt_branch_reset",
         _fake_reset,
     )
     monkeypatch.setattr(
-        "codex_autorunner.integrations.telegram.handlers.commands.workspace_session_commands.run_newt_branch_reset",
+        "codex_autorunner.adapters.telegram.handlers.commands.workspace_session_commands.run_newt_branch_reset",
         _fake_reset,
     )
 

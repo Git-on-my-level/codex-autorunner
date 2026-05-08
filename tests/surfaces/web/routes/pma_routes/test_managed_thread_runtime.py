@@ -9,6 +9,9 @@ import pytest
 from fastapi.testclient import TestClient
 from tests.support.web_test_helpers import build_pma_hub_app
 
+from codex_autorunner.adapters.github import (
+    managed_thread_pr_binding as managed_thread_pr_binding_module,
+)
 from codex_autorunner.core.orchestration import (
     ColdTraceStore,
     OrchestrationBindingStore,
@@ -23,9 +26,6 @@ from codex_autorunner.core.pma_context import format_pma_discoverability_preambl
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.pr_bindings import PrBindingStore
 from codex_autorunner.core.scm_polling_watches import ScmPollingWatchStore
-from codex_autorunner.integrations.github import (
-    managed_thread_pr_binding as managed_thread_pr_binding_module,
-)
 from codex_autorunner.surfaces.web.routes.pma_routes import managed_thread_runtime
 
 pytestmark = pytest.mark.slow

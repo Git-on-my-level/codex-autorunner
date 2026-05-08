@@ -5,17 +5,17 @@ from types import SimpleNamespace
 
 import pytest
 
-from codex_autorunner.integrations.telegram.adapter import (
+from codex_autorunner.adapters.telegram.adapter import (
     TelegramForwardOrigin,
     TelegramMessage,
 )
-from codex_autorunner.integrations.telegram.handlers.commands.files import (
+from codex_autorunner.adapters.telegram.handlers.commands.files import (
     FilesCommands,
     MediaBatchContext,
     MediaBatchResult,
     MediaBatchStats,
 )
-from codex_autorunner.integrations.telegram.state import TelegramTopicRecord
+from codex_autorunner.adapters.telegram.state import TelegramTopicRecord
 
 
 class _RouterStub:

@@ -12,6 +12,7 @@ pytestmark = pytest.mark.slow
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from codex_autorunner.adapters.app_server.event_buffer import AppServerEventBuffer
 from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.core.config import CONFIG_FILENAME
 from codex_autorunner.core.hub import HubSupervisor
@@ -25,7 +26,6 @@ from codex_autorunner.core.managed_thread_identity import (
     AppServerThreadRegistry,
     default_app_server_threads_path,
 )
-from codex_autorunner.integrations.app_server.event_buffer import AppServerEventBuffer
 from codex_autorunner.manifest import load_manifest
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web import app as web_app_module

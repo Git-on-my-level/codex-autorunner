@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from codex_autorunner.integrations.telegram.handlers.commands.files import (
+from codex_autorunner.adapters.telegram.handlers.commands.files import (
     FilesCommands,
 )
 

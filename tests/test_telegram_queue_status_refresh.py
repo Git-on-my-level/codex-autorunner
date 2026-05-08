@@ -7,9 +7,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from codex_autorunner.integrations.chat.queue_status import QueueStatusItem
-from codex_autorunner.integrations.telegram.config import TelegramBotConfig
-from codex_autorunner.integrations.telegram.service import TelegramBotService
+from codex_autorunner.adapters.chat.queue_status import QueueStatusItem
+from codex_autorunner.adapters.telegram.config import TelegramBotConfig
+from codex_autorunner.adapters.telegram.service import TelegramBotService
 
 
 def _config(root: Path) -> TelegramBotConfig:

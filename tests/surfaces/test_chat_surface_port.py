@@ -5,20 +5,20 @@ from typing import Sequence
 
 import pytest
 
-from codex_autorunner.core.domain.refs import SurfaceRef
-from codex_autorunner.core.ports.surface_port import EngineCommand, SurfaceHealthStatus
-from codex_autorunner.integrations.chat.adapter import (
+from codex_autorunner.adapters.chat.adapter import (
     SendAttachmentRequest,
     SendTextRequest,
 )
-from codex_autorunner.integrations.chat.capabilities import ChatCapabilities
-from codex_autorunner.integrations.chat.models import (
+from codex_autorunner.adapters.chat.capabilities import ChatCapabilities
+from codex_autorunner.adapters.chat.models import (
     ChatAttachment,
     ChatMessageEvent,
     ChatMessageRef,
     ChatThreadRef,
 )
-from codex_autorunner.integrations.chat.renderer import RenderedText, TextRenderer
+from codex_autorunner.adapters.chat.renderer import RenderedText, TextRenderer
+from codex_autorunner.core.domain.refs import SurfaceRef
+from codex_autorunner.core.ports.surface_port import EngineCommand, SurfaceHealthStatus
 from codex_autorunner.surfaces._chat_surface_port import (
     engine_command_from_chat_event,
     inbound_event_from_chat_event,

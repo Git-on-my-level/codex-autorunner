@@ -25,7 +25,7 @@ def _is_missing_backend_thread_error(exc: Exception) -> bool:
     exc_type = type(exc)
     if exc_type.__name__ != "CodexAppServerResponseError":
         return False
-    if not exc_type.__module__.startswith("codex_autorunner.integrations.app_server"):
+    if not exc_type.__module__.startswith("codex_autorunner.adapters.app_server"):
         return False
     message = str(exc).lower()
     return any(marker in message for marker in _MISSING_THREAD_MARKERS)

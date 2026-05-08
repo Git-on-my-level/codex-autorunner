@@ -270,7 +270,7 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                     binary_profile = profile
                     if profile:
                         try:
-                            from ....integrations.chat.agents import (
+                            from ....adapters.chat.agents import (
                                 chat_hermes_profile_options,
                             )
 

@@ -26,11 +26,11 @@ from scripts.drift_check_utils import (  # noqa: E402
     render_text_diff,
 )
 
-from codex_autorunner.core.destinations import parse_destination_config  # noqa: E402
-from codex_autorunner.integrations.docker.profile_contracts import (  # noqa: E402
+from codex_autorunner.adapters.docker.profile_contracts import (  # noqa: E402
     FULL_DEV_PROFILE_CONTRACT,
     SUPPORTED_DOCKER_PROFILES,
 )
+from codex_autorunner.core.destinations import parse_destination_config  # noqa: E402
 
 CONTRACT_BEGIN = "<!-- CAR_DESTINATION_CONTRACT:BEGIN -->"
 CONTRACT_END = "<!-- CAR_DESTINATION_CONTRACT:END -->"

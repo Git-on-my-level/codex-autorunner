@@ -3,10 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Sequence
 
-from codex_autorunner.core.destinations import DockerDestination
-from codex_autorunner.integrations.agents.destination_wrapping import (
+from codex_autorunner.adapters.agents.destination_wrapping import (
     wrap_command_for_destination,
 )
+from codex_autorunner.core.destinations import DockerDestination
 
 
 class _FakeDockerRuntime:

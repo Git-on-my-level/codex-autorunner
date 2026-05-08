@@ -11,7 +11,7 @@ manual verification.
 This document is intentionally aligned with the surrounding repo architecture:
 
 - real chat runtime and UX behavior remain owned by production modules under
-  `src/codex_autorunner/integrations/`
+  `src/codex_autorunner/adapters/`
 - lab-only contracts, scenario models, and artifact shapes live under
   `tests/chat_surface_lab/`
 - reusable surface fixtures stay in `tests/chat_surface_harness/`
@@ -129,10 +129,10 @@ real surface ingress path while the lab is still being built out.
 
 Production ownership does not move:
 
-- `src/codex_autorunner/integrations/chat/` continues to own shared runtime and
+- `src/codex_autorunner/adapters/chat/` continues to own shared runtime and
   UX contracts
-- `src/codex_autorunner/integrations/telegram/` and
-  `src/codex_autorunner/integrations/discord/` continue to own transport
+- `src/codex_autorunner/adapters/telegram/` and
+  `src/codex_autorunner/adapters/discord/` continue to own transport
   adapters and platform behavior
 - `.codex-autorunner/contextspace/spec.md` remains the initiative-level source
   of truth; this document is the repo-local implementation contract for tests

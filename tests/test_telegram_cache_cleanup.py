@@ -3,13 +3,13 @@ from pathlib import Path
 
 import pytest
 
-from codex_autorunner.integrations.telegram.config import TelegramBotConfig
-from codex_autorunner.integrations.telegram.constants import (
+from codex_autorunner.adapters.telegram.config import TelegramBotConfig
+from codex_autorunner.adapters.telegram.constants import (
     REASONING_BUFFER_TTL_SECONDS,
     SELECTION_STATE_TTL_SECONDS,
 )
-from codex_autorunner.integrations.telegram.service import TelegramBotService
-from codex_autorunner.integrations.telegram.types import SelectionState
+from codex_autorunner.adapters.telegram.service import TelegramBotService
+from codex_autorunner.adapters.telegram.types import SelectionState
 
 
 @pytest.mark.anyio

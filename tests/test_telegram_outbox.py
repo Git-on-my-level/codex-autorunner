@@ -8,17 +8,17 @@ from typing import Optional
 import httpx
 import pytest
 
-from codex_autorunner.core.state import now_iso
-from codex_autorunner.integrations.telegram import outbox as outbox_module
-from codex_autorunner.integrations.telegram.outbox import (
+from codex_autorunner.adapters.telegram import outbox as outbox_module
+from codex_autorunner.adapters.telegram.outbox import (
     OUTBOX_OPERATION_SEND_DELETE_PLACEHOLDER,
     OUTBOX_OPERATION_SEND_KEEP_PLACEHOLDER,
     TelegramOutboxManager,
 )
-from codex_autorunner.integrations.telegram.state import (
+from codex_autorunner.adapters.telegram.state import (
     OutboxRecord,
     TelegramStateStore,
 )
+from codex_autorunner.core.state import now_iso
 
 
 @pytest.mark.anyio
@@ -117,7 +117,7 @@ async def test_outbox_coalescing_collapses_edits(
         )
         manager.start()
 
-        from codex_autorunner.integrations.telegram.outbox import _outbox_key
+        from codex_autorunner.adapters.telegram.outbox import _outbox_key
 
         outbox_key = _outbox_key(123, 456, 789, "edit")
 

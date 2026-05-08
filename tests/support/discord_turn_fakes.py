@@ -8,17 +8,17 @@ from typing import Any, Optional
 import pytest
 
 import codex_autorunner.agents.registry as agent_registry_module
-from codex_autorunner.agents.registry import AgentDescriptor
-from codex_autorunner.integrations.chat.collaboration_policy import CollaborationPolicy
-from codex_autorunner.integrations.discord.config import (
+from codex_autorunner.adapters.chat.collaboration_policy import CollaborationPolicy
+from codex_autorunner.adapters.discord.config import (
     DiscordBotConfig,
     DiscordBotDispatchConfig,
     DiscordBotMediaConfig,
     DiscordBotShellConfig,
     DiscordCommandRegistration,
 )
-from codex_autorunner.integrations.discord.service import DiscordBotService
-from codex_autorunner.integrations.discord.state import DiscordStateStore
+from codex_autorunner.adapters.discord.service import DiscordBotService
+from codex_autorunner.adapters.discord.state import DiscordStateStore
+from codex_autorunner.agents.registry import AgentDescriptor
 
 
 class _FakeRest:

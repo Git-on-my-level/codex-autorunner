@@ -10,6 +10,8 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from codex_autorunner.adapters.discord.state import DiscordStateStore
+from codex_autorunner.adapters.telegram.state import TelegramStateStore
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.orchestration.runtime_bindings import (
     clear_runtime_thread_binding,
@@ -19,8 +21,6 @@ from codex_autorunner.core.pma_thread_store import (
     PmaThreadStore,
 )
 from codex_autorunner.core.pma_transcripts import PmaTranscriptStore
-from codex_autorunner.integrations.discord.state import DiscordStateStore
-from codex_autorunner.integrations.telegram.state import TelegramStateStore
 from codex_autorunner.server import create_hub_app
 from tests.conftest import write_test_config
 from tests.pma_support import (

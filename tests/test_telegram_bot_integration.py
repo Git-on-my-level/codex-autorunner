@@ -7,19 +7,19 @@ from typing import Optional
 
 import pytest
 
-from codex_autorunner.integrations.telegram.adapter import (
+from codex_autorunner.adapters.telegram.adapter import (
     TelegramCallbackQuery,
     TelegramDocument,
     TelegramMessage,
     TelegramMessageEntity,
     TelegramPhotoSize,
 )
-from codex_autorunner.integrations.telegram.config import TelegramBotConfig
-from codex_autorunner.integrations.telegram.handlers import (
+from codex_autorunner.adapters.telegram.config import TelegramBotConfig
+from codex_autorunner.adapters.telegram.handlers import (
     commands_runtime as telegram_commands_runtime,
 )
-from codex_autorunner.integrations.telegram.service import TelegramBotService
-from codex_autorunner.integrations.telegram.types import PendingQuestion, SelectionState
+from codex_autorunner.adapters.telegram.service import TelegramBotService
+from codex_autorunner.adapters.telegram.types import PendingQuestion, SelectionState
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "app_server_fixture.py"
 

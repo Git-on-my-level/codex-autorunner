@@ -7,6 +7,7 @@ from typing import Any, Optional
 
 import pytest
 
+from codex_autorunner.adapters.agents.agent_pool_impl import DefaultAgentPool
 from codex_autorunner.agents.registry import AgentDescriptor
 from codex_autorunner.agents.types import (
     ConversationRef,
@@ -19,7 +20,6 @@ from codex_autorunner.core.flows.models import FlowEventType
 from codex_autorunner.core.orchestration import ColdTraceStore
 from codex_autorunner.core.orchestration.turn_timeline import list_turn_timeline
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
-from codex_autorunner.integrations.agents.agent_pool_impl import DefaultAgentPool
 from codex_autorunner.tickets.agent_pool import AgentTurnRequest
 
 
@@ -1198,7 +1198,7 @@ async def test_run_turn_uses_profile_aware_runtime_resolution_for_hermes_queue_d
     )
 
     monkeypatch.setattr(
-        "codex_autorunner.integrations.agents.agent_pool_impl.resolve_agent_runtime",
+        "codex_autorunner.adapters.agents.agent_pool_impl.resolve_agent_runtime",
         lambda agent_id, profile=None, context=None: (
             SimpleNamespace(
                 logical_agent_id="hermes",

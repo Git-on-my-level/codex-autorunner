@@ -5,7 +5,7 @@ The import-boundary check prevents new violations while allowing existing ones v
 
 ## What the check does
 - Scans `src/codex_autorunner/**` for Python imports.
-- Applies boundary rules to core and integrations modules.
+- Applies boundary rules to core and adapter modules.
 - Fails only when **new** violations appear compared to the allowlist.
 
 ## How to run

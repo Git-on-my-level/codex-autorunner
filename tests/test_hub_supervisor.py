@@ -20,6 +20,13 @@ import codex_autorunner.core.hub_repo_manager as repo_manager_module
 import codex_autorunner.core.hub_runner_orchestrator as orch_module
 import codex_autorunner.core.hub_topology as hub_topology_module
 import codex_autorunner.core.hub_worktree_manager as wtm_module
+from codex_autorunner.adapters.agents.backend_orchestrator import (
+    build_backend_orchestrator,
+)
+from codex_autorunner.adapters.agents.wiring import (
+    build_agent_backend_factory,
+    build_app_server_supervisor_factory,
+)
 from codex_autorunner.bootstrap import seed_repo_files
 from codex_autorunner.core.config import (
     CONFIG_FILENAME,
@@ -42,13 +49,6 @@ from codex_autorunner.core.orchestration.bindings import OrchestrationBindingSto
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.runner_controller import ProcessRunnerController
 from codex_autorunner.core.state import RunnerState, save_state
-from codex_autorunner.integrations.agents.backend_orchestrator import (
-    build_backend_orchestrator,
-)
-from codex_autorunner.integrations.agents.wiring import (
-    build_agent_backend_factory,
-    build_app_server_supervisor_factory,
-)
 from codex_autorunner.manifest import load_manifest, sanitize_repo_id, save_manifest
 from codex_autorunner.server import create_hub_app
 from tests.conftest import write_test_config

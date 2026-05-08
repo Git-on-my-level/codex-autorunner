@@ -420,7 +420,7 @@ def test_cleanup_state_dry_run_reports_all_buckets(monkeypatch, repo: Path) -> N
         scope=None,
     ):
         captured["calls"].append(("workspace", scope, dry_run))
-        from codex_autorunner.integrations.app_server.retention import (
+        from codex_autorunner.adapters.app_server.retention import (
             WorkspacePruneSummary,
         )
 
@@ -501,7 +501,7 @@ def test_cleanup_state_scope_global_includes_global_workspaces(
         scope=None,
     ):
         captured["calls"].append(("workspace", scope, dry_run))
-        from codex_autorunner.integrations.app_server.retention import (
+        from codex_autorunner.adapters.app_server.retention import (
             WorkspacePruneSummary,
         )
 
@@ -602,7 +602,7 @@ def test_cleanup_state_scope_all_includes_both_repo_and_global(
             captured["scopes"].append(
                 scope.value if hasattr(scope, "value") else str(scope)
             )
-        from codex_autorunner.integrations.app_server.retention import (
+        from codex_autorunner.adapters.app_server.retention import (
             WorkspacePruneSummary,
         )
 

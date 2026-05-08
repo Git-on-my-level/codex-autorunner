@@ -10,6 +10,29 @@ from typing import Any, Callable, Optional
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from .....adapters.chat.bound_chat_execution_metadata import (
+    bound_chat_progress_targets_from_execution_mapping,
+    merge_bound_chat_execution_metadata,
+)
+from .....adapters.chat.bound_live_progress import (
+    build_bound_chat_queue_execution_controller,
+    cleanup_bound_chat_live_progress_failure,
+    cleanup_bound_chat_live_progress_success,
+)
+from .....adapters.chat.managed_thread_turns import (
+    ManagedThreadCoordinatorHooks,
+    ManagedThreadDurableDeliveryHooks,
+    ManagedThreadErrorMessages,
+    ManagedThreadExecutionHooks,
+    ManagedThreadFinalizationResult,
+    ManagedThreadStatus,
+    ManagedThreadSurfaceInfo,
+    ManagedThreadTurnCoordinator,
+    build_managed_thread_delivery_intent,
+)
+from .....adapters.github.managed_thread_pr_binding import (
+    self_claim_and_arm_pr_binding,
+)
 from .....core.config import ConfigError, load_repo_config
 from .....core.orchestration import (
     ManagedThreadDeliveryAttemptResult,
@@ -29,29 +52,6 @@ from .....core.pma_thread_store import (
     PmaThreadStore,
 )
 from .....core.text_utils import _truncate_text
-from .....integrations.chat.bound_chat_execution_metadata import (
-    bound_chat_progress_targets_from_execution_mapping,
-    merge_bound_chat_execution_metadata,
-)
-from .....integrations.chat.bound_live_progress import (
-    build_bound_chat_queue_execution_controller,
-    cleanup_bound_chat_live_progress_failure,
-    cleanup_bound_chat_live_progress_success,
-)
-from .....integrations.chat.managed_thread_turns import (
-    ManagedThreadCoordinatorHooks,
-    ManagedThreadDurableDeliveryHooks,
-    ManagedThreadErrorMessages,
-    ManagedThreadExecutionHooks,
-    ManagedThreadFinalizationResult,
-    ManagedThreadStatus,
-    ManagedThreadSurfaceInfo,
-    ManagedThreadTurnCoordinator,
-    build_managed_thread_delivery_intent,
-)
-from .....integrations.github.managed_thread_pr_binding import (
-    self_claim_and_arm_pr_binding,
-)
 from ...schemas import PmaManagedThreadMessageRequest
 from ...services.pma.managed_thread_followup import (
     ManagedThreadAutomationClient,

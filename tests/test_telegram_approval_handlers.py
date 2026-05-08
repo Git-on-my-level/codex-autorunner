@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from codex_autorunner.integrations.telegram.handlers.approvals import (
+from codex_autorunner.adapters.telegram.handlers.approvals import (
     TelegramApprovalHandlers,
 )
 

@@ -17,7 +17,7 @@ Command-line interface for codex-autorunner.
 ## Allowed Dependencies
 
 - `core.*` (engine, config, state, etc.)
-- `integrations.*` (as needed)
+- `adapters.*` (as needed)
 - Third-party CLI libraries (click, argparse, etc.)
 
 ## Key Components

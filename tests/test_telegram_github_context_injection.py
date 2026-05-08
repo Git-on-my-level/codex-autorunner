@@ -6,13 +6,13 @@ from types import SimpleNamespace
 
 import pytest
 
-import codex_autorunner.integrations.github.context_injection as github_context_module
-from codex_autorunner.core.injected_context import wrap_injected_context
-from codex_autorunner.core.utils import RepoNotFoundError
-from codex_autorunner.integrations.github.service import parse_github_url
-from codex_autorunner.integrations.telegram.handlers.commands.execution import (
+import codex_autorunner.adapters.github.context_injection as github_context_module
+from codex_autorunner.adapters.github.service import parse_github_url
+from codex_autorunner.adapters.telegram.handlers.commands.execution import (
     ExecutionCommands,
 )
+from codex_autorunner.core.injected_context import wrap_injected_context
+from codex_autorunner.core.utils import RepoNotFoundError
 
 
 class _GitHubServiceStub:

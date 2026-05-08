@@ -9,6 +9,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Optional
 
+from codex_autorunner.adapters.app_server.client import CodexAppServerClient
+from codex_autorunner.adapters.app_server.protocol_helpers import (
+    normalize_approval_request,
+)
 from codex_autorunner.agents.acp.client import ACPClient
 from codex_autorunner.agents.acp.events import (
     ACPEvent,
@@ -23,10 +27,6 @@ from codex_autorunner.agents.hermes.supervisor import HermesSupervisor
 from codex_autorunner.agents.opencode.client import OpenCodeClient
 from codex_autorunner.agents.opencode.supervisor import OpenCodeSupervisor
 from codex_autorunner.agents.registry import AgentDescriptor
-from codex_autorunner.integrations.app_server.client import CodexAppServerClient
-from codex_autorunner.integrations.app_server.protocol_helpers import (
-    normalize_approval_request,
-)
 
 FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures"
 APP_SERVER_FIXTURE_PATH = FIXTURES_DIR / "app_server_fixture.py"

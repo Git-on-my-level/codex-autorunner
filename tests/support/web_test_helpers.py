@@ -12,19 +12,19 @@ from typing import Optional
 
 from fastapi import FastAPI
 
+from codex_autorunner.adapters.agents.backend_orchestrator import (
+    build_backend_orchestrator,
+)
+from codex_autorunner.adapters.agents.wiring import (
+    build_agent_backend_factory,
+    build_app_server_supervisor_factory,
+)
 from codex_autorunner.core.config import (
     CONFIG_FILENAME,
     DEFAULT_HUB_CONFIG,
     load_hub_config,
 )
 from codex_autorunner.core.hub import HubSupervisor
-from codex_autorunner.integrations.agents.backend_orchestrator import (
-    build_backend_orchestrator,
-)
-from codex_autorunner.integrations.agents.wiring import (
-    build_agent_backend_factory,
-    build_app_server_supervisor_factory,
-)
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.routes import flows as flow_routes
 from codex_autorunner.surfaces.web.routes import messages as messages_routes

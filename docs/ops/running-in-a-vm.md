@@ -36,7 +36,7 @@ Use this only when validating a real image for `destination.profile: full-dev`. 
 ```bash
 CAR_TEST_DOCKER_FULL_DEV=1 \
 CAR_TEST_DOCKER_FULL_DEV_IMAGE=ghcr.io/your-org/your-image:tag \
-.venv/bin/python -m pytest -q tests/integrations/docker/test_full_dev_profile_probe.py -m integration
+.venv/bin/python -m pytest -q tests/adapters/docker/test_full_dev_profile_probe.py -m integration
 ```
 
 What it checks:

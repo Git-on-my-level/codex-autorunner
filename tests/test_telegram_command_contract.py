@@ -2,14 +2,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from codex_autorunner.integrations.telegram.adapter import (
+from codex_autorunner.adapters.telegram.adapter import (
     TelegramCommand,
     parse_command,
 )
-from codex_autorunner.integrations.telegram.commands_registry import (
+from codex_autorunner.adapters.telegram.commands_registry import (
     build_command_payloads,
 )
-from codex_autorunner.integrations.telegram.handlers.commands_spec import (
+from codex_autorunner.adapters.telegram.handlers.commands_spec import (
     build_command_specs,
 )
 from tests.fixtures.telegram_command_helpers import (

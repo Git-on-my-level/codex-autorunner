@@ -36,7 +36,7 @@ KEYWORD_CONTRACTED_APIS: dict[str, dict[str, str]] = {
         "description": "Path containment check (root, target)",
     },
     "_path_within": {
-        "module": "codex_autorunner.integrations.discord.service",
+        "module": "codex_autorunner.adapters.discord.service",
         "description": "Path containment check (root, target)",
     },
 }

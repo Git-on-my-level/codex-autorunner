@@ -10,6 +10,22 @@ from typing import Any, Optional
 
 import pytest
 
+from codex_autorunner.adapters.telegram.adapter import (
+    FlowCallback,
+    TelegramCallbackQuery,
+    TelegramMessage,
+    build_model_keyboard,
+    parse_callback_data,
+)
+from codex_autorunner.adapters.telegram.constants import TELEGRAM_MAX_MESSAGE_LENGTH
+from codex_autorunner.adapters.telegram.handlers.commands import (
+    flows as flows_module,
+)
+from codex_autorunner.adapters.telegram.handlers.commands.flows import FlowCommands
+from codex_autorunner.adapters.telegram.notifications import (
+    TelegramNotificationHandlers,
+)
+from codex_autorunner.adapters.telegram.progress_stream import TurnProgressTracker
 from codex_autorunner.bootstrap import seed_repo_files
 from codex_autorunner.core.flows import FlowStore
 from codex_autorunner.core.flows import hub_overview as hub_overview_module
@@ -24,22 +40,6 @@ from codex_autorunner.core.ports.run_event import (
     Completed,
     ToolCall,
 )
-from codex_autorunner.integrations.telegram.adapter import (
-    FlowCallback,
-    TelegramCallbackQuery,
-    TelegramMessage,
-    build_model_keyboard,
-    parse_callback_data,
-)
-from codex_autorunner.integrations.telegram.constants import TELEGRAM_MAX_MESSAGE_LENGTH
-from codex_autorunner.integrations.telegram.handlers.commands import (
-    flows as flows_module,
-)
-from codex_autorunner.integrations.telegram.handlers.commands.flows import FlowCommands
-from codex_autorunner.integrations.telegram.notifications import (
-    TelegramNotificationHandlers,
-)
-from codex_autorunner.integrations.telegram.progress_stream import TurnProgressTracker
 
 
 def _health(tmp_path: Path, status: str = "alive") -> FlowWorkerHealth:
@@ -550,7 +550,7 @@ async def test_progress_edit_cadence_emits_when_interval_elapsed(
     key = ("turn-1", "thread-1")
     harness._turn_progress_updated_at[key] = 10.0
     monkeypatch.setattr(
-        "codex_autorunner.integrations.telegram.notifications.time.monotonic",
+        "codex_autorunner.adapters.telegram.notifications.time.monotonic",
         lambda: 12.2,
     )
 
@@ -569,7 +569,7 @@ async def test_progress_edit_cadence_schedules_when_interval_not_elapsed(
     key = ("turn-1", "thread-1")
     harness._turn_progress_updated_at[key] = 10.0
     monkeypatch.setattr(
-        "codex_autorunner.integrations.telegram.notifications.time.monotonic",
+        "codex_autorunner.adapters.telegram.notifications.time.monotonic",
         lambda: 10.5,
     )
 
@@ -597,11 +597,11 @@ async def test_progress_edit_does_not_construct_lock_when_turn_lock_exists(
         return _AsyncNoopLock()
 
     monkeypatch.setattr(
-        "codex_autorunner.integrations.telegram.notifications.asyncio.Lock",
+        "codex_autorunner.adapters.telegram.notifications.asyncio.Lock",
         _counting_lock,
     )
     monkeypatch.setattr(
-        "codex_autorunner.integrations.telegram.notifications.time.monotonic",
+        "codex_autorunner.adapters.telegram.notifications.time.monotonic",
         lambda: 12.2,
     )
 
@@ -670,11 +670,11 @@ async def test_turn_progress_heartbeat_expires_after_max_lifetime(
         return 1805.0
 
     monkeypatch.setattr(
-        "codex_autorunner.integrations.telegram.notifications.time.monotonic",
+        "codex_autorunner.adapters.telegram.notifications.time.monotonic",
         _fake_monotonic,
     )
     monkeypatch.setattr(
-        "codex_autorunner.integrations.telegram.notifications.asyncio.sleep",
+        "codex_autorunner.adapters.telegram.notifications.asyncio.sleep",
         _fake_sleep,
     )
 
@@ -866,7 +866,7 @@ async def test_emit_progress_edit_records_backoff_after_failed_edit(
 ) -> None:
     harness = _FailingProgressMarkupHarness()
     monkeypatch.setattr(
-        "codex_autorunner.integrations.telegram.notifications.time.monotonic",
+        "codex_autorunner.adapters.telegram.notifications.time.monotonic",
         lambda: 10.0,
     )
 
@@ -884,7 +884,7 @@ async def test_progress_edit_cadence_defers_while_backoff_is_active(
     key = ("turn-1", "thread-1")
     harness._turn_progress_backoff_until[key] = 20.0
     monkeypatch.setattr(
-        "codex_autorunner.integrations.telegram.notifications.time.monotonic",
+        "codex_autorunner.adapters.telegram.notifications.time.monotonic",
         lambda: 12.0,
     )
 

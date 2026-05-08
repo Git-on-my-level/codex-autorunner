@@ -7,40 +7,40 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from codex_autorunner.agents.registry import AgentDescriptor
-from codex_autorunner.bootstrap import seed_hub_files
-from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
-from codex_autorunner.integrations.chat.models import (
+from codex_autorunner.adapters.chat.models import (
     ChatAttachment,
     ChatMessageEvent,
     ChatMessageRef,
     ChatThreadRef,
 )
-from codex_autorunner.integrations.discord.components import (
+from codex_autorunner.adapters.discord.components import (
     build_cancel_turn_custom_id,
 )
-from codex_autorunner.integrations.discord.config import (
+from codex_autorunner.adapters.discord.config import (
     DiscordBotConfig,
     DiscordBotMediaConfig,
     DiscordBotShellConfig,
     DiscordCommandRegistration,
 )
-from codex_autorunner.integrations.discord.managed_thread_routing import (
+from codex_autorunner.adapters.discord.managed_thread_routing import (
     build_discord_thread_orchestration_service,
 )
-from codex_autorunner.integrations.discord.outbox import DiscordOutboxManager
-from codex_autorunner.integrations.discord.service import DiscordBotService
-from codex_autorunner.integrations.discord.state import DiscordStateStore
-from codex_autorunner.integrations.telegram.adapter import (
+from codex_autorunner.adapters.discord.outbox import DiscordOutboxManager
+from codex_autorunner.adapters.discord.service import DiscordBotService
+from codex_autorunner.adapters.discord.state import DiscordStateStore
+from codex_autorunner.adapters.telegram.adapter import (
     TelegramCallbackQuery,
     TelegramMessage,
     TelegramUpdate,
 )
-from codex_autorunner.integrations.telegram.config import TelegramBotConfig
-from codex_autorunner.integrations.telegram.handlers.commands.execution import (
+from codex_autorunner.adapters.telegram.config import TelegramBotConfig
+from codex_autorunner.adapters.telegram.handlers.commands.execution import (
     _build_telegram_thread_orchestration_service,
 )
-from codex_autorunner.integrations.telegram.service import TelegramBotService
+from codex_autorunner.adapters.telegram.service import TelegramBotService
+from codex_autorunner.agents.registry import AgentDescriptor
+from codex_autorunner.bootstrap import seed_hub_files
+from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from tests.chat_surface_lab.backend_runtime import (
     HermesFixtureRuntime,
     app_server_fixture_command,
@@ -96,7 +96,7 @@ def patch_hermes_runtime(monkeypatch: Any, runtime: HermesFixtureRuntime) -> Non
         _build_supervisor_from_config,
     )
     monkeypatch.setattr(
-        "codex_autorunner.integrations.telegram.handlers.commands.execution.get_registered_agents",
+        "codex_autorunner.adapters.telegram.handlers.commands.execution.get_registered_agents",
         _registered,
     )
 

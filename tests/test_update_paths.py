@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from codex_autorunner.core import update as update_core
-from codex_autorunner.core.update_paths import resolve_update_paths
-from codex_autorunner.integrations.telegram.handlers.commands_runtime import (
+from codex_autorunner.adapters.telegram.handlers.commands_runtime import (
     TelegramCommandHandlers,
 )
+from codex_autorunner.core import update as update_core
+from codex_autorunner.core.update_paths import resolve_update_paths
 
 
 def test_update_paths_default_match_modules(tmp_path: Path, monkeypatch) -> None:

@@ -5,10 +5,10 @@ from typing import Any
 
 from typer.testing import CliRunner
 
+from codex_autorunner.adapters.chat.channel_directory import ChannelDirectoryStore
+from codex_autorunner.adapters.chat.queue_control import ChatQueueControlStore
 from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.cli import app
-from codex_autorunner.integrations.chat.channel_directory import ChannelDirectoryStore
-from codex_autorunner.integrations.chat.queue_control import ChatQueueControlStore
 from codex_autorunner.surfaces.cli.commands import chat as chat_module
 
 runner = CliRunner()

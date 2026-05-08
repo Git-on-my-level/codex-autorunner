@@ -1,4 +1,4 @@
-from codex_autorunner.integrations.telegram.helpers import _extract_thread_path
+from codex_autorunner.adapters.telegram.helpers import _extract_thread_path
 
 
 def test_extract_thread_path_prefers_nested_cwd_over_root() -> None:

@@ -131,12 +131,12 @@ ignore = ["E501"]
 "src/codex_autorunner/surfaces/cli/commands/*.py" = ["B008"]
 "src/codex_autorunner/surfaces/web/routes/terminal_images.py" = ["B008"]
 "src/codex_autorunner/surfaces/web/routes/voice.py" = ["B008"]
-"tests/integrations/chat/test_parity_checker.py" = ["E402"]
-"tests/integrations/discord/test_flow_archive.py" = ["E402"]
-"tests/integrations/discord/test_flow_handlers.py" = ["E402"]
-"tests/integrations/discord/test_pma_commands.py" = ["E402"]
-"tests/integrations/discord/test_service_routing.py" = ["E402"]
-"tests/integrations/github/test_polling.py" = ["E402"]
+"tests/adapters/chat/test_parity_checker.py" = ["E402"]
+"tests/adapters/discord/test_flow_archive.py" = ["E402"]
+"tests/adapters/discord/test_flow_handlers.py" = ["E402"]
+"tests/adapters/discord/test_pma_commands.py" = ["E402"]
+"tests/adapters/discord/test_service_routing.py" = ["E402"]
+"tests/adapters/github/test_polling.py" = ["E402"]
 "tests/routes/test_scm_webhooks.py" = ["E402"]
 "tests/test_hub_app_context.py" = ["E402"]
 "tests/test_hub_issue_1266.py" = ["E402"]
@@ -163,14 +163,14 @@ ignore_errors = false
 
 [[tool.mypy.overrides]]
 module = [
-  "codex_autorunner.integrations.app_server",
-  "codex_autorunner.integrations.app_server.*",
+  "codex_autorunner.adapters.app_server",
+  "codex_autorunner.adapters.app_server.*",
 ]
 ignore_errors = false
 
 [[tool.mypy.overrides]]
 module = [
-  "codex_autorunner.integrations.telegram",
-  "codex_autorunner.integrations.telegram.*",
+  "codex_autorunner.adapters.telegram",
+  "codex_autorunner.adapters.telegram.*",
 ]
 ignore_errors = true

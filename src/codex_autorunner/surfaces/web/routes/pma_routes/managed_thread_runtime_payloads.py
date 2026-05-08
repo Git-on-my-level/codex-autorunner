@@ -5,6 +5,7 @@ from typing import Any
 
 from fastapi import HTTPException, Request
 
+from .....adapters.chat.approval_modes import resolve_approval_mode_policies
 from .....agents.managed_runtime import sync_managed_workspace_compat_files
 from .....core.pma.attachments import (
     normalize_managed_thread_attachments as _core_normalize_managed_thread_attachments,
@@ -32,7 +33,6 @@ from .....core.pma.outbound_payloads import (
 )
 from .....core.pma.policies import normalize_busy_policy as _core_normalize_busy_policy
 from .....core.text_utils import _normalize_optional_text
-from .....integrations.chat.approval_modes import resolve_approval_mode_policies
 from ...schemas import PmaManagedThreadMessageRequest
 from ...services.pma.common import pma_config_from_raw as shared_pma_config_from_raw
 from ...services.pma.managed_thread_followup import (

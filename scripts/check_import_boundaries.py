@@ -22,13 +22,13 @@ PACKAGE_ROOT = SRC_ROOT / "codex_autorunner"
 LAYER_RULES = {
     "core": {
         "deny": (
-            "codex_autorunner.integrations",
+            "codex_autorunner.adapters",
             "codex_autorunner.surfaces",
             "codex_autorunner.cli",
             "codex_autorunner.server",
         )
     },
-    "integrations": {
+    "adapters": {
         "deny": (
             "codex_autorunner.surfaces",
             "codex_autorunner.cli",

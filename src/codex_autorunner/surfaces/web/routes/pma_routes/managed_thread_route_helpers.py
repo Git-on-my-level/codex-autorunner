@@ -9,6 +9,12 @@ from typing import Any, Optional
 
 from fastapi import HTTPException, Request
 
+from .....adapters.chat.approval_modes import normalize_approval_mode
+from .....adapters.chat.pma_context_selection import (
+    PmaContextSelectionError,
+    normalize_pma_resource_owner,
+    resolve_pma_context_selection,
+)
 from .....agents.registry import resolve_agent_runtime, validate_agent_id
 from .....core.car_context import (
     default_managed_thread_context_profile,
@@ -21,12 +27,6 @@ from .....core.managed_thread_status import derive_managed_thread_operator_statu
 from .....core.orchestration import ActiveWorkSummary
 from .....core.orchestration.models import Binding, ThreadTarget
 from .....core.text_utils import _truncate_text
-from .....integrations.chat.approval_modes import normalize_approval_mode
-from .....integrations.chat.pma_context_selection import (
-    PmaContextSelectionError,
-    normalize_pma_resource_owner,
-    resolve_pma_context_selection,
-)
 from ...schemas import PmaManagedThreadCreateRequest
 from ...services.pma import get_pma_request_context
 from ...services.pma.managed_thread_followup import (
@@ -453,7 +453,7 @@ def _resolve_requested_profile(
     valid_profiles = set(available_profiles.keys())
     if agent_id == "hermes":
         try:
-            from .....integrations.chat.agents import chat_hermes_profile_options
+            from .....adapters.chat.agents import chat_hermes_profile_options
 
             valid_profiles |= {
                 opt.profile

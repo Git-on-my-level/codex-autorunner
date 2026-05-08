@@ -5,8 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from codex_autorunner.integrations.telegram.adapter import TelegramMessage
-from codex_autorunner.integrations.telegram.handlers.commands.flows import FlowCommands
+from codex_autorunner.adapters.telegram.adapter import TelegramMessage
+from codex_autorunner.adapters.telegram.handlers.commands.flows import FlowCommands
 
 
 class _TopicStoreStub:

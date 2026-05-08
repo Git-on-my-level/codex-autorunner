@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from codex_autorunner.integrations.telegram.config import (
+from codex_autorunner.adapters.telegram.config import (
     DEFAULT_APP_SERVER_COMMAND,
     DEFAULT_MEDIA_MAX_FILE_BYTES,
     DEFAULT_MESSAGE_OVERFLOW,

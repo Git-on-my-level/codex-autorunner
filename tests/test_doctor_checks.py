@@ -7,6 +7,16 @@ from unittest.mock import patch
 
 import pytest
 
+from codex_autorunner.adapters.chat.doctor import (
+    ChatSurfaceLabContractStatus,
+    chat_doctor_checks,
+    chat_surface_lab_doctor_checks,
+)
+from codex_autorunner.adapters.chat.parity_checker import ParityCheckResult
+from codex_autorunner.adapters.telegram import doctor as telegram_doctor
+from codex_autorunner.adapters.telegram.doctor import (
+    telegram_doctor_checks,
+)
 from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.core.agent_config import AgentConfig
 from codex_autorunner.core.config import load_hub_config
@@ -21,16 +31,6 @@ from codex_autorunner.core.runtime import (
     pma_doctor_checks,
     summarize_opencode_lifecycle,
     zeroclaw_doctor_checks,
-)
-from codex_autorunner.integrations.chat.doctor import (
-    ChatSurfaceLabContractStatus,
-    chat_doctor_checks,
-    chat_surface_lab_doctor_checks,
-)
-from codex_autorunner.integrations.chat.parity_checker import ParityCheckResult
-from codex_autorunner.integrations.telegram import doctor as telegram_doctor
-from codex_autorunner.integrations.telegram.doctor import (
-    telegram_doctor_checks,
 )
 from tests.conftest import write_test_config
 
@@ -1272,7 +1272,7 @@ def test_hermes_doctor_detects_prefix_alias_missing_backend_metadata(
 
 def test_chat_doctor_checks_use_parity_contract_group(monkeypatch):
     monkeypatch.setattr(
-        "codex_autorunner.integrations.chat.doctor.run_parity_checks",
+        "codex_autorunner.adapters.chat.doctor.run_parity_checks",
         lambda repo_root=None: (
             ParityCheckResult(
                 id="discord.contract_commands_routed",
@@ -1358,7 +1358,7 @@ def test_chat_doctor_checks_failures_are_actionable(
     fix_snippet: str,
 ) -> None:
     monkeypatch.setattr(
-        "codex_autorunner.integrations.chat.doctor.run_parity_checks",
+        "codex_autorunner.adapters.chat.doctor.run_parity_checks",
         lambda repo_root=None: (result,),
     )
 
@@ -1374,7 +1374,7 @@ def test_chat_doctor_checks_failures_are_actionable(
 
 def test_chat_doctor_checks_report_ux_regression_contract_failures(monkeypatch):
     monkeypatch.setattr(
-        "codex_autorunner.integrations.chat.doctor.run_parity_checks",
+        "codex_autorunner.adapters.chat.doctor.run_parity_checks",
         lambda repo_root=None: (
             ParityCheckResult(
                 id="chat.ux_latency_budget_contract_complete",
@@ -1425,7 +1425,7 @@ def test_chat_doctor_checks_report_ux_regression_contract_failures(monkeypatch):
 
 def test_chat_surface_lab_doctor_checks_report_contract_health(monkeypatch) -> None:
     monkeypatch.setattr(
-        "codex_autorunner.integrations.chat.doctor._collect_chat_surface_lab_contract_status",
+        "codex_autorunner.adapters.chat.doctor._collect_chat_surface_lab_contract_status",
         lambda repo_root=None: ChatSurfaceLabContractStatus(
             scenario_count=9,
         ),
@@ -1451,7 +1451,7 @@ def test_chat_surface_lab_doctor_checks_failures_are_actionable(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(
-        "codex_autorunner.integrations.chat.doctor._collect_chat_surface_lab_contract_status",
+        "codex_autorunner.adapters.chat.doctor._collect_chat_surface_lab_contract_status",
         lambda repo_root=None: ChatSurfaceLabContractStatus(
             scenario_count=7,
             parse_errors=("first_visible_feedback.json:missing scenario_id",),
@@ -1497,7 +1497,7 @@ def test_chat_surface_lab_doctor_checks_skip_when_checkout_paths_missing(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(
-        "codex_autorunner.integrations.chat.doctor._collect_chat_surface_lab_contract_status",
+        "codex_autorunner.adapters.chat.doctor._collect_chat_surface_lab_contract_status",
         lambda repo_root=None: ChatSurfaceLabContractStatus(
             skipped=True,
             skip_reason="missing checkout paths: tests/chat_surface_lab/scenarios",

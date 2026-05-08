@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from codex_autorunner.adapters.telegram.state import TelegramStateStore
 from codex_autorunner.core.config import (
     CONFIG_FILENAME,
     DEFAULT_HUB_CONFIG,
@@ -15,7 +16,6 @@ from codex_autorunner.core.hub import HubSupervisor
 from codex_autorunner.core.pma_lane_worker import PmaLaneWorker
 from codex_autorunner.core.pma_queue import PmaQueue, QueueItemState
 from codex_autorunner.core.pma_transcripts import PmaTranscriptStore
-from codex_autorunner.integrations.telegram.state import TelegramStateStore
 from codex_autorunner.manifest import load_manifest, save_manifest
 
 

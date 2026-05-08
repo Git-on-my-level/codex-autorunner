@@ -6,8 +6,8 @@ from unittest.mock import MagicMock
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from codex_autorunner.adapters.chat.agents import ChatAgentProfileOption
 from codex_autorunner.agents.types import ModelCatalog, ModelSpec
-from codex_autorunner.integrations.chat.agents import ChatAgentProfileOption
 from codex_autorunner.surfaces.web.routes.agents import build_agents_routes
 from codex_autorunner.surfaces.web.routes.agents_helpers import (
     normalize_path_agent_id,
@@ -380,7 +380,7 @@ def test_list_agents_merges_alias_only_hermes_profiles(monkeypatch) -> None:
         )
 
     monkeypatch.setattr(
-        "codex_autorunner.integrations.chat.agents.chat_hermes_profile_options",
+        "codex_autorunner.adapters.chat.agents.chat_hermes_profile_options",
         _fake_options,
     )
     monkeypatch.setattr(

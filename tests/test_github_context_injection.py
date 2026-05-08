@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-import codex_autorunner.integrations.github.context_injection as context_module
+import codex_autorunner.adapters.github.context_injection as context_module
 from codex_autorunner.core.injected_context import wrap_injected_context
 from codex_autorunner.core.utils import RepoNotFoundError
 

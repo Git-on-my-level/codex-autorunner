@@ -4,7 +4,7 @@ import pytest
 
 pytestmark = pytest.mark.slow
 
-from tests.integrations.telegram.test_newt_workspace_commands import (
+from tests.adapters.telegram.test_newt_workspace_commands import (
     test_newt_branch_name_includes_chat_identity,
     test_newt_dirty_worktree_reports_blockers_with_submodule_context,
     test_newt_infers_base_repo_from_legacy_wt_worktree_id,

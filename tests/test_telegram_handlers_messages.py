@@ -4,8 +4,8 @@ from typing import Optional
 
 import pytest
 
-import codex_autorunner.integrations.telegram.handlers.messages as msg_module
-from codex_autorunner.integrations.telegram.adapter import (
+import codex_autorunner.adapters.telegram.handlers.messages as msg_module
+from codex_autorunner.adapters.telegram.adapter import (
     TelegramAudio,
     TelegramDocument,
     TelegramForwardOrigin,
@@ -13,10 +13,10 @@ from codex_autorunner.integrations.telegram.adapter import (
     TelegramPhotoSize,
     TelegramVoice,
 )
-from codex_autorunner.integrations.telegram.handlers.media_ingress import (
+from codex_autorunner.adapters.telegram.handlers.media_ingress import (
     MediaBatchBuffer as _MediaBatchBuffer,
 )
-from codex_autorunner.integrations.telegram.handlers.media_ingress import (
+from codex_autorunner.adapters.telegram.handlers.media_ingress import (
     document_is_image,
     handle_media_message,
     has_batchable_media,
@@ -27,7 +27,7 @@ from codex_autorunner.integrations.telegram.handlers.media_ingress import (
     select_photo,
     select_voice_candidate,
 )
-from codex_autorunner.integrations.telegram.handlers.messages import (
+from codex_autorunner.adapters.telegram.handlers.messages import (
     _CoalescedBuffer,
     buffer_coalesced_message,
     buffer_media_batch,
@@ -35,7 +35,7 @@ from codex_autorunner.integrations.telegram.handlers.messages import (
     handle_message_inner,
     should_bypass_topic_queue,
 )
-from codex_autorunner.integrations.telegram.state import TelegramTopicRecord
+from codex_autorunner.adapters.telegram.state import TelegramTopicRecord
 from tests.fixtures.telegram_command_helpers import (
     bot_command_entity,
     make_command_spec,
@@ -285,7 +285,7 @@ async def test_audio_message_bypasses_coalescing_like_voice(
 ) -> None:
     from unittest.mock import MagicMock
 
-    import codex_autorunner.integrations.telegram.handlers.messages as msg_module
+    import codex_autorunner.adapters.telegram.handlers.messages as msg_module
 
     audio_message = _message(
         audio=TelegramAudio("a1", None, 180, "song.mp3", "audio/mpeg", 200)
@@ -439,7 +439,7 @@ async def test_buffer_coalesced_message_does_not_construct_lock_when_key_exists(
         return _AsyncNoopLock()
 
     monkeypatch.setattr(
-        "codex_autorunner.integrations.telegram.handlers.messages.asyncio.Lock",
+        "codex_autorunner.adapters.telegram.handlers.messages.asyncio.Lock",
         _counting_lock,
     )
 
@@ -707,7 +707,7 @@ async def test_buffer_media_batch_does_not_construct_lock_when_key_exists(
         return _AsyncNoopLock()
 
     monkeypatch.setattr(
-        "codex_autorunner.integrations.telegram.handlers.messages.asyncio.Lock",
+        "codex_autorunner.adapters.telegram.handlers.messages.asyncio.Lock",
         _counting_lock,
     )
 
@@ -1155,7 +1155,7 @@ async def test_handle_message_inner_uses_formatted_forwarded_prompt_text(
             captured["prompt_text"] = request.prompt_text
             await submit_thread_message(request)
 
-    import codex_autorunner.integrations.telegram.handlers.surface_ingress as _surface_ingress_mod
+    import codex_autorunner.adapters.telegram.handlers.surface_ingress as _surface_ingress_mod
 
     monkeypatch.setattr(
         _surface_ingress_mod,
@@ -1260,7 +1260,7 @@ async def test_handle_media_message_uses_formatted_forwarded_caption(
             captured["prompt_text"] = request.prompt_text
             await submit_thread_message(request)
 
-    import codex_autorunner.integrations.telegram.handlers.media_ingress as _media_ingress_mod
+    import codex_autorunner.adapters.telegram.handlers.media_ingress as _media_ingress_mod
 
     monkeypatch.setattr(
         _media_ingress_mod,
@@ -1559,7 +1559,7 @@ async def test_handle_message_inner_paused_flow_with_media_uses_media_handler(
         )
 
     monkeypatch.setattr(
-        "codex_autorunner.integrations.telegram.handlers.messages.handle_media_message",
+        "codex_autorunner.adapters.telegram.handlers.messages.handle_media_message",
         _fake_handle_media_message,
     )
 

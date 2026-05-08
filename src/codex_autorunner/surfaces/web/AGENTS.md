@@ -12,7 +12,7 @@ This surface owns FastAPI routes, web-specific services, and static asset servin
 - Route handlers live under `routes/`; prefer extending the closest route package before growing `app.py`.
 - Shared web-specific logic belongs in `services/`, `static_assets.py`, `static_refresh.py`, or nearby helpers.
 - UI source lives in `../../static_src/`; compiled assets live in `../../static/`.
-- PMA managed-thread chat routes expose backend-owned timeline, progress, queue, and delivery state from `integrations/chat/` and `core/orchestration/`. Do not add web-local transcript composition or delivery state machines.
+- PMA managed-thread chat routes expose backend-owned timeline, progress, queue, and delivery state from `adapters/chat/` and `core/orchestration/`. Do not add web-local transcript composition or delivery state machines.
 - Broader surface overview: `README.md`.
 
 ## Tests

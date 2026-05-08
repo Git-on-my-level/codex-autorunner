@@ -8,8 +8,8 @@ from typing import Any, Optional
 
 import pytest
 
-import codex_autorunner.integrations.chat.managed_thread_turns as managed_thread_turns_module
-import codex_autorunner.integrations.discord.message_turns as discord_message_turns_module
+import codex_autorunner.adapters.chat.managed_thread_turns as managed_thread_turns_module
+import codex_autorunner.adapters.discord.message_turns as discord_message_turns_module
 from tests.support.discord_turn_fakes import _config, _FakeRest
 
 

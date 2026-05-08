@@ -113,11 +113,11 @@ test-full:
 # Add additional platform suites here as new chat adapters land.
 test-chat-platform-contract:
 	$(PYTHON) -m pytest -q \
-		tests/integrations/chat/test_command_contract.py \
-		tests/integrations/chat/test_command_ingress_parity.py \
-		tests/integrations/discord/test_service_routing.py \
-		tests/integrations/discord/test_interactions_parse.py \
-		tests/integrations/chat/test_parity_checker.py \
+		tests/adapters/chat/test_command_contract.py \
+		tests/adapters/chat/test_command_ingress_parity.py \
+		tests/adapters/discord/test_service_routing.py \
+		tests/adapters/discord/test_interactions_parse.py \
+		tests/adapters/chat/test_parity_checker.py \
 		tests/test_telegram_command_contract.py \
 		tests/test_doctor_checks.py::test_chat_doctor_checks_use_parity_contract_group \
 		tests/test_doctor_checks.py::test_chat_doctor_checks_failures_are_actionable
@@ -137,14 +137,14 @@ test-managed-thread-cutover:
 		tests/test_hub_supervisor.py \
 		tests/test_pma_managed_threads_lifecycle.py \
 		tests/test_pma_managed_threads_turns.py \
-		tests/integrations/chat/test_orchestration_guardrails.py \
+		tests/adapters/chat/test_orchestration_guardrails.py \
 		tests/test_telegram_pma_routing.py \
 		tests/test_telegram_bot_integration.py \
 		tests/test_telegram_turn_queue.py \
 		tests/test_telegram_status_rate_limits.py \
-		tests/integrations/discord/test_service_routing.py \
-		tests/integrations/discord/test_message_turns.py \
-		tests/integrations/discord/test_message_turns_transient_progress.py \
+		tests/adapters/discord/test_service_routing.py \
+		tests/adapters/discord/test_message_turns.py \
+		tests/adapters/discord/test_message_turns_transient_progress.py \
 		tests/test_redaction.py
 
 test-integration:

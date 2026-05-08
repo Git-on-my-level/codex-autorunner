@@ -1,0 +1,511 @@
+from __future__ import annotations
+
+import asyncio
+import logging
+from typing import Optional
+
+import pytest
+
+from codex_autorunner.adapters.chat.callbacks import (
+    LogicalCallback,
+    encode_logical_callback,
+)
+from codex_autorunner.adapters.chat.dispatcher import (
+    ChatDispatcher,
+    is_bypass_event,
+)
+from codex_autorunner.adapters.chat.models import (
+    ChatInteractionEvent,
+    ChatInteractionRef,
+    ChatMessageEvent,
+    ChatMessageRef,
+    ChatThreadRef,
+)
+from codex_autorunner.adapters.chat.queue_control import ChatQueueControlStore
+
+
+def _message_event(
+    update_id: str,
+    *,
+    chat_id: str = "chat-1",
+    thread_id: Optional[str] = "thread-1",
+    message_id: str = "msg-1",
+    text: str = "hello",
+) -> ChatMessageEvent:
+    thread = ChatThreadRef(platform="fake", chat_id=chat_id, thread_id=thread_id)
+    return ChatMessageEvent(
+        update_id=update_id,
+        thread=thread,
+        message=ChatMessageRef(thread=thread, message_id=message_id),
+        from_user_id="user-1",
+        text=text,
+    )
+
+
+def _interaction_event(
+    update_id: str,
+    *,
+    chat_id: str = "chat-1",
+    thread_id: Optional[str] = "thread-1",
+    payload: str = "qdone:req-1",
+) -> ChatInteractionEvent:
+    thread = ChatThreadRef(platform="fake", chat_id=chat_id, thread_id=thread_id)
+    return ChatInteractionEvent(
+        update_id=update_id,
+        thread=thread,
+        interaction=ChatInteractionRef(thread=thread, interaction_id=f"cb-{update_id}"),
+        from_user_id="user-1",
+        payload=payload,
+    )
+
+
+@pytest.mark.anyio
+async def test_dispatcher_orders_normal_events_per_conversation() -> None:
+    dispatcher = ChatDispatcher()
+    observed: list[str] = []
+
+    async def handler(event, _context) -> None:
+        await asyncio.sleep(0.01)
+        observed.append(event.update_id)
+
+    await asyncio.gather(
+        dispatcher.dispatch(_message_event("u1", message_id="m1"), handler),
+        dispatcher.dispatch(_message_event("u2", message_id="m2"), handler),
+        dispatcher.dispatch(_message_event("u3", message_id="m3"), handler),
+    )
+    await dispatcher.wait_idle()
+
+    assert observed == ["u1", "u2", "u3"]
+
+
+@pytest.mark.anyio
+async def test_dispatcher_bypass_events_run_immediately() -> None:
+    dispatcher = ChatDispatcher()
+    release_first = asyncio.Event()
+    entered_first = asyncio.Event()
+    observed: list[str] = []
+
+    async def handler(event, _context) -> None:
+        if event.update_id == "normal-1":
+            observed.append("normal-1-start")
+            entered_first.set()
+            await release_first.wait()
+            observed.append("normal-1-end")
+            return
+        observed.append(event.update_id)
+
+    await dispatcher.dispatch(
+        _message_event("normal-1", message_id="m1", text="normal"), handler
+    )
+    await entered_first.wait()
+    await dispatcher.dispatch(
+        _interaction_event("bypass", payload="qopt:0:0:req-1"), handler
+    )
+    release_first.set()
+    await dispatcher.wait_idle()
+
+    assert observed[:3] == ["normal-1-start", "bypass", "normal-1-end"]
+
+
+@pytest.mark.anyio
+async def test_dispatcher_dedupe_hook_short_circuits_processing() -> None:
+    seen: list[str] = []
+
+    def dedupe_predicate(event, _context) -> bool:
+        return event.update_id != "dup"
+
+    dispatcher = ChatDispatcher(dedupe_predicate=dedupe_predicate)
+
+    async def handler(event, _context) -> None:
+        seen.append(event.update_id)
+
+    duplicate_result = await dispatcher.dispatch(_message_event("dup"), handler)
+    accepted_result = await dispatcher.dispatch(_message_event("ok"), handler)
+    await dispatcher.wait_idle()
+
+    assert duplicate_result.status == "duplicate"
+    assert accepted_result.status == "queued"
+    assert accepted_result.queued_pending == 1
+    assert accepted_result.queued_while_busy is False
+    assert seen == ["ok"]
+
+
+@pytest.mark.anyio
+async def test_dispatcher_treats_logical_callback_ids_case_insensitively() -> None:
+    payload = encode_logical_callback(
+        LogicalCallback(callback_id="QUESTION_DONE", payload={"request_id": "req-1"})
+    )
+    event = _interaction_event("u-1", payload=payload)
+
+    dispatcher = ChatDispatcher()
+
+    async def _noop_handler(_event, _context) -> None:
+        return
+
+    result = await dispatcher.dispatch(event, _noop_handler)
+    assert result.bypassed is True
+    assert result.status == "dispatched"
+
+
+@pytest.mark.anyio
+async def test_dispatcher_supports_custom_bypass_rules() -> None:
+    dispatcher = ChatDispatcher(
+        bypass_interaction_prefixes=(),
+        bypass_callback_ids=(),
+        bypass_message_texts=("!stop",),
+    )
+    release_first = asyncio.Event()
+    entered_first = asyncio.Event()
+    observed: list[str] = []
+
+    async def handler(event, _context) -> None:
+        if event.update_id == "normal-1":
+            observed.append("normal-1-start")
+            entered_first.set()
+            await release_first.wait()
+            observed.append("normal-1-end")
+            return
+        observed.append(event.update_id)
+
+    await dispatcher.dispatch(
+        _message_event("normal-1", message_id="m1", text="normal"), handler
+    )
+    await entered_first.wait()
+    queued = await dispatcher.dispatch(
+        _interaction_event("queued", payload="qopt:0:0:req-1"), handler
+    )
+    bypassed = await dispatcher.dispatch(
+        _message_event("bypass", message_id="m2", text="!stop"), handler
+    )
+    release_first.set()
+    await dispatcher.wait_idle()
+
+    assert queued.status == "queued"
+    assert queued.bypassed is False
+    assert queued.queued_while_busy is True
+    assert queued.queued_pending == 1
+    assert bypassed.status == "dispatched"
+    assert bypassed.bypassed is True
+    assert observed[:4] == ["normal-1-start", "bypass", "normal-1-end", "queued"]
+
+
+@pytest.mark.anyio
+async def test_dispatcher_holds_conversation_while_external_busy_until_woken() -> None:
+    externally_busy = True
+    dispatcher = ChatDispatcher(busy_predicate=lambda _event, _context: externally_busy)
+    observed: list[str] = []
+
+    async def handler(event, _context) -> None:
+        observed.append(event.update_id)
+
+    result = await dispatcher.dispatch(
+        _message_event("normal-1", message_id="m-1"),
+        handler,
+    )
+    await asyncio.sleep(0.01)
+
+    assert result.status == "queued"
+    assert result.queued_pending == 1
+    assert result.queued_while_busy is True
+    assert observed == []
+
+    externally_busy = False
+    assert await dispatcher.wake_conversation("fake:chat-1:thread-1") is True
+    await asyncio.wait_for(dispatcher.wait_idle(), timeout=1.0)
+
+    assert observed == ["normal-1"]
+
+
+@pytest.mark.anyio
+async def test_dispatcher_rechecks_external_busy_before_skipping_worker_start() -> None:
+    busy_checks = 0
+
+    async def busy_predicate(_event, _context) -> bool:
+        nonlocal busy_checks
+        busy_checks += 1
+        return busy_checks == 1
+
+    dispatcher = ChatDispatcher(busy_predicate=busy_predicate)
+    observed: list[str] = []
+
+    async def handler(event, _context) -> None:
+        observed.append(event.update_id)
+
+    result = await dispatcher.dispatch(
+        _message_event("normal-1", message_id="m-1"),
+        handler,
+    )
+    await asyncio.wait_for(dispatcher.wait_idle(), timeout=1.0)
+
+    assert result.status == "queued"
+    assert result.queued_pending == 1
+    assert result.queued_while_busy is False
+    assert observed == ["normal-1"]
+    assert busy_checks == 2
+
+
+@pytest.mark.anyio
+async def test_dispatcher_close_cancels_workers_and_queued_events() -> None:
+    dispatcher = ChatDispatcher()
+    entered = asyncio.Event()
+    observed: list[str] = []
+
+    async def handler(event, _context) -> None:
+        observed.append(event.update_id)
+        entered.set()
+        await asyncio.sleep(10)
+
+    await dispatcher.dispatch(_message_event("normal-1"), handler)
+    await entered.wait()
+    await dispatcher.dispatch(_message_event("normal-2"), handler)
+
+    await asyncio.wait_for(dispatcher.close(), timeout=1.0)
+    await asyncio.wait_for(dispatcher.wait_idle(), timeout=1.0)
+
+    assert observed == ["normal-1"]
+
+
+@pytest.mark.anyio
+async def test_dispatcher_clear_pending_keeps_active_handler_running() -> None:
+    dispatcher = ChatDispatcher()
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    observed: list[str] = []
+
+    async def handler(event, _context) -> None:
+        observed.append(event.update_id)
+        if event.update_id == "normal-1":
+            entered.set()
+            await release.wait()
+
+    await dispatcher.dispatch(_message_event("normal-1"), handler)
+    await entered.wait()
+    await dispatcher.dispatch(_message_event("normal-2"), handler)
+    await dispatcher.dispatch(_message_event("normal-3"), handler)
+
+    assert await dispatcher.pending("fake:chat-1:thread-1") == 2
+    assert await dispatcher.clear_pending("fake:chat-1:thread-1") == 2
+    assert await dispatcher.pending("fake:chat-1:thread-1") == 0
+
+    release.set()
+    await dispatcher.wait_idle()
+
+    assert observed == ["normal-1"]
+
+
+@pytest.mark.anyio
+async def test_dispatcher_cancel_pending_message_removes_only_selected_item() -> None:
+    dispatcher = ChatDispatcher()
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    observed: list[str] = []
+
+    async def handler(event, _context) -> None:
+        observed.append(event.update_id)
+        if event.update_id == "normal-1":
+            entered.set()
+            await release.wait()
+
+    await dispatcher.dispatch(_message_event("normal-1", message_id="m-1"), handler)
+    await entered.wait()
+    await dispatcher.dispatch(_message_event("normal-2", message_id="m-2"), handler)
+    await dispatcher.dispatch(_message_event("normal-3", message_id="m-3"), handler)
+
+    assert (
+        await dispatcher.cancel_pending_message("fake:chat-1:thread-1", "m-2") is True
+    )
+
+    release.set()
+    await dispatcher.wait_idle()
+
+    assert observed == ["normal-1", "normal-3"]
+
+
+@pytest.mark.anyio
+async def test_dispatcher_promote_pending_message_moves_selected_item_to_front() -> (
+    None
+):
+    dispatcher = ChatDispatcher()
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    observed: list[str] = []
+
+    async def handler(event, _context) -> None:
+        observed.append(event.update_id)
+        if event.update_id == "normal-1":
+            entered.set()
+            await release.wait()
+
+    await dispatcher.dispatch(_message_event("normal-1", message_id="m-1"), handler)
+    await entered.wait()
+    await dispatcher.dispatch(_message_event("normal-2", message_id="m-2"), handler)
+    await dispatcher.dispatch(_message_event("normal-3", message_id="m-3"), handler)
+
+    assert (
+        await dispatcher.promote_pending_message("fake:chat-1:thread-1", "m-3") is True
+    )
+
+    release.set()
+    await dispatcher.wait_idle()
+
+    assert observed == ["normal-1", "normal-3", "normal-2"]
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "expected_param"),
+    [
+        ({"bypass_interaction_prefixes": "qopt:"}, "bypass_interaction_prefixes"),
+        ({"bypass_callback_ids": "question_done"}, "bypass_callback_ids"),
+        ({"bypass_message_texts": "!stop"}, "bypass_message_texts"),
+    ],
+)
+def test_dispatcher_rejects_scalar_string_bypass_iterables(
+    kwargs: dict[str, str], expected_param: str
+) -> None:
+    with pytest.raises(TypeError, match=expected_param):
+        ChatDispatcher(**kwargs)
+
+
+@pytest.mark.anyio
+async def test_dispatcher_times_out_stalled_handler_and_releases_queue(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    logger = logging.getLogger("test.chat_dispatcher.timeout")
+    dispatcher = ChatDispatcher(
+        logger=logger,
+        handler_timeout_seconds=0.05,
+        handler_stalled_warning_seconds=0.01,
+    )
+    release = asyncio.Event()
+    started = asyncio.Event()
+    observed: list[str] = []
+
+    async def handler(event, _context) -> None:
+        observed.append(f"start:{event.update_id}")
+        if event.update_id == "normal-1":
+            started.set()
+            await release.wait()
+        observed.append(f"end:{event.update_id}")
+
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        await dispatcher.dispatch(_message_event("normal-1", message_id="m-1"), handler)
+        await started.wait()
+        await dispatcher.dispatch(_message_event("normal-2", message_id="m-2"), handler)
+        await asyncio.wait_for(dispatcher.wait_idle(), timeout=1.0)
+
+    assert observed == ["start:normal-1", "start:normal-2", "end:normal-2"]
+    assert '"event":"chat.dispatch.handler.stalled"' in caplog.text
+    assert '"event":"chat.dispatch.handler.timeout"' in caplog.text
+    assert '"event":"chat.dispatch.handler.done"' in caplog.text
+
+
+@pytest.mark.anyio
+async def test_dispatcher_logs_traceback_for_handler_failures(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    logger = logging.getLogger("test.chat_dispatcher.failure")
+    dispatcher = ChatDispatcher(logger=logger)
+
+    async def handler(_event, _context) -> None:
+        raise RuntimeError("boom")
+
+    with caplog.at_level(logging.ERROR, logger=logger.name):
+        await dispatcher.dispatch(_message_event("boom", message_id="m-1"), handler)
+        await asyncio.wait_for(dispatcher.wait_idle(), timeout=1.0)
+
+    assert '"event":"chat.dispatch.handler.failed"' in caplog.text
+    assert "RuntimeError: boom" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "expected_param"),
+    [
+        ({"interaction_prefixes": "qopt:"}, "interaction_prefixes"),
+        ({"callback_ids": "question_done"}, "callback_ids"),
+        ({"message_texts": "!stop"}, "message_texts"),
+    ],
+)
+def test_is_bypass_event_rejects_scalar_string_iterables(
+    kwargs: dict[str, str], expected_param: str
+) -> None:
+    with pytest.raises(TypeError, match=expected_param):
+        is_bypass_event(_interaction_event("u-1"), **kwargs)
+
+
+@pytest.mark.anyio
+async def test_dispatcher_force_reset_cancels_active_handler_and_clears_snapshot(
+    tmp_path,
+) -> None:
+    store = ChatQueueControlStore(tmp_path)
+    dispatcher = ChatDispatcher(queue_control_store=store)
+    entered = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def handler(event, _context) -> None:
+        if event.update_id != "normal-1":
+            return
+        entered.set()
+        try:
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    await dispatcher.dispatch(_message_event("normal-1", message_id="m-1"), handler)
+    await entered.wait()
+    await dispatcher.dispatch(_message_event("normal-2", message_id="m-2"), handler)
+
+    snapshot = store.read_snapshot("fake:chat-1:thread-1")
+    assert isinstance(snapshot, dict)
+    assert snapshot["active"] is True
+    assert snapshot["pending_count"] == 1
+
+    result = await asyncio.wait_for(
+        dispatcher.force_reset("fake:chat-1:thread-1"),
+        timeout=1.0,
+    )
+    await asyncio.wait_for(cancelled.wait(), timeout=1.0)
+    await asyncio.wait_for(dispatcher.wait_idle(), timeout=1.0)
+
+    assert result["cancelled_active"] is True
+    assert result["cancelled_pending"] == 1
+    assert store.read_snapshot("fake:chat-1:thread-1") is None
+
+
+@pytest.mark.anyio
+async def test_dispatcher_force_reset_preserves_messages_enqueued_during_reset(
+    tmp_path,
+) -> None:
+    dispatcher = ChatDispatcher(queue_control_store=ChatQueueControlStore(tmp_path))
+    entered = asyncio.Event()
+    cancelled = asyncio.Event()
+    release_cancel = asyncio.Event()
+    processed: list[str] = []
+
+    async def handler(event, _context) -> None:
+        if event.update_id == "normal-1":
+            entered.set()
+            try:
+                await asyncio.sleep(10)
+            except asyncio.CancelledError:
+                cancelled.set()
+                await release_cancel.wait()
+                raise
+        else:
+            processed.append(event.update_id)
+
+    await dispatcher.dispatch(_message_event("normal-1", message_id="m-1"), handler)
+    await entered.wait()
+    await dispatcher.dispatch(_message_event("normal-2", message_id="m-2"), handler)
+
+    reset_task = asyncio.create_task(dispatcher.force_reset("fake:chat-1:thread-1"))
+    await asyncio.wait_for(cancelled.wait(), timeout=1.0)
+    await dispatcher.dispatch(_message_event("normal-3", message_id="m-3"), handler)
+    release_cancel.set()
+
+    result = await asyncio.wait_for(reset_task, timeout=1.0)
+    await asyncio.wait_for(dispatcher.wait_idle(), timeout=1.0)
+
+    assert result["cancelled_active"] is True
+    assert result["cancelled_pending"] == 1
+    assert processed == ["normal-3"]

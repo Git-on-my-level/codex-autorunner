@@ -10,6 +10,35 @@ from typing import Any, Iterator, Optional
 import anyio
 import pytest
 
+from codex_autorunner.adapters.app_server.client import (
+    CodexAppServerDisconnected,
+    CodexAppServerResponseError,
+)
+from codex_autorunner.adapters.chat.managed_thread_turns import (
+    build_managed_thread_delivery_intent,
+)
+from codex_autorunner.adapters.telegram.adapter import (
+    TelegramMessage,
+)
+from codex_autorunner.adapters.telegram.handlers import (
+    messages as telegram_messages_module,
+)
+from codex_autorunner.adapters.telegram.handlers.commands import (
+    execution as execution_commands_module,
+)
+from codex_autorunner.adapters.telegram.handlers.commands.execution import (
+    _TurnRunResult,
+)
+from codex_autorunner.adapters.telegram.handlers.commands_runtime import (
+    TelegramCommandHandlers,
+    _RuntimeStub,
+)
+from codex_autorunner.adapters.telegram.notifications import (
+    TelegramNotificationHandlers,
+)
+from codex_autorunner.adapters.telegram.state import (
+    TelegramTopicRecord,
+)
 from codex_autorunner.agents.registry import AgentDescriptor
 from codex_autorunner.core.hub_control_plane import HubSharedStateService
 from codex_autorunner.core.managed_thread_identity import (
@@ -29,35 +58,6 @@ from codex_autorunner.core.pma_thread_store import (
     prepare_pma_thread_store,
 )
 from codex_autorunner.core.sse import format_sse
-from codex_autorunner.integrations.app_server.client import (
-    CodexAppServerDisconnected,
-    CodexAppServerResponseError,
-)
-from codex_autorunner.integrations.chat.managed_thread_turns import (
-    build_managed_thread_delivery_intent,
-)
-from codex_autorunner.integrations.telegram.adapter import (
-    TelegramMessage,
-)
-from codex_autorunner.integrations.telegram.handlers import (
-    messages as telegram_messages_module,
-)
-from codex_autorunner.integrations.telegram.handlers.commands import (
-    execution as execution_commands_module,
-)
-from codex_autorunner.integrations.telegram.handlers.commands.execution import (
-    _TurnRunResult,
-)
-from codex_autorunner.integrations.telegram.handlers.commands_runtime import (
-    TelegramCommandHandlers,
-    _RuntimeStub,
-)
-from codex_autorunner.integrations.telegram.notifications import (
-    TelegramNotificationHandlers,
-)
-from codex_autorunner.integrations.telegram.state import (
-    TelegramTopicRecord,
-)
 from tests.support.telegram_turn_fakes import (
     _BaseTelegramFakeHarness as _BaseFakeHarness,
 )
@@ -2561,7 +2561,7 @@ async def test_repo_message_ingress_callback_reaches_orchestrated_thread_executi
             await kwargs["submit_thread_message"](request)
             return SimpleNamespace(route="thread", thread_result=None)
 
-    import codex_autorunner.integrations.telegram.handlers.surface_ingress as _si_mod2
+    import codex_autorunner.adapters.telegram.handlers.surface_ingress as _si_mod2
 
     monkeypatch.setattr(
         _si_mod2, "build_surface_orchestration_ingress", lambda **_: _IngressStub()
@@ -2683,7 +2683,7 @@ async def test_repo_message_ingress_callback_reaches_hermes_orchestrated_thread_
             await kwargs["submit_thread_message"](request)
             return SimpleNamespace(route="thread", thread_result=None)
 
-    import codex_autorunner.integrations.telegram.handlers.surface_ingress as _si_mod3
+    import codex_autorunner.adapters.telegram.handlers.surface_ingress as _si_mod3
 
     monkeypatch.setattr(
         _si_mod3, "build_surface_orchestration_ingress", lambda **_: _IngressStub()

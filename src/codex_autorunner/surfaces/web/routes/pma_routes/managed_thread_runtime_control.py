@@ -11,6 +11,26 @@ from typing import Any, Optional
 
 from fastapi import HTTPException, Request
 
+from .....adapters.app_server.event_buffer import AppServerEventBuffer
+from .....adapters.chat.bound_chat_execution_metadata import (
+    bound_chat_progress_targets_from_execution_mapping,
+    execution_mapping_has_chat_surface_origin,
+)
+from .....adapters.chat.bound_live_progress import (
+    build_bound_chat_progress_cleanup_metadata,
+)
+from .....adapters.chat.managed_thread_turns import (
+    ManagedThreadCoordinatorHooks,
+    ManagedThreadQueueWorkerHooks,
+)
+from .....adapters.chat.managed_thread_turns import (
+    ensure_managed_thread_queue_worker as ensure_shared_managed_thread_queue_worker,
+)
+from .....adapters.discord.rendering import format_discord_message
+from .....adapters.discord.state import DiscordStateStore
+from .....adapters.discord.state import OutboxRecord as DiscordOutboxRecord
+from .....adapters.telegram.state import OutboxRecord as TelegramOutboxRecord
+from .....adapters.telegram.state import TelegramStateStore, parse_topic_key
 from .....core.chat_bindings import (
     DISCORD_STATE_FILE_DEFAULT,
     TELEGRAM_STATE_FILE_DEFAULT,
@@ -19,26 +39,6 @@ from .....core.orchestration import OrchestrationBindingStore
 from .....core.orchestration.cold_trace_store import ColdTraceStore
 from .....core.pma_thread_store import PmaThreadStore
 from .....core.time_utils import now_iso
-from .....integrations.app_server.event_buffer import AppServerEventBuffer
-from .....integrations.chat.bound_chat_execution_metadata import (
-    bound_chat_progress_targets_from_execution_mapping,
-    execution_mapping_has_chat_surface_origin,
-)
-from .....integrations.chat.bound_live_progress import (
-    build_bound_chat_progress_cleanup_metadata,
-)
-from .....integrations.chat.managed_thread_turns import (
-    ManagedThreadCoordinatorHooks,
-    ManagedThreadQueueWorkerHooks,
-)
-from .....integrations.chat.managed_thread_turns import (
-    ensure_managed_thread_queue_worker as ensure_shared_managed_thread_queue_worker,
-)
-from .....integrations.discord.rendering import format_discord_message
-from .....integrations.discord.state import DiscordStateStore
-from .....integrations.discord.state import OutboxRecord as DiscordOutboxRecord
-from .....integrations.telegram.state import OutboxRecord as TelegramOutboxRecord
-from .....integrations.telegram.state import TelegramStateStore, parse_topic_key
 from .automation_adapter import (
     first_callable,
     get_automation_store,

@@ -3,8 +3,8 @@ from typing import Any
 
 import pytest
 
+from codex_autorunner.adapters.app_server.client import CodexAppServerResponseError
 from codex_autorunner.agents.codex.harness import CodexHarness
-from codex_autorunner.integrations.app_server.client import CodexAppServerResponseError
 
 
 class _StubClient:

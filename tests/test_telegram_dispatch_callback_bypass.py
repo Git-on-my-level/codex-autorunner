@@ -5,8 +5,7 @@ from typing import Any, Optional
 
 import pytest
 
-from codex_autorunner.core.orchestration import ChatOperationState
-from codex_autorunner.integrations.telegram.adapter import (
+from codex_autorunner.adapters.telegram.adapter import (
     TelegramCallbackQuery,
     TelegramUpdate,
     encode_approval_callback,
@@ -18,10 +17,11 @@ from codex_autorunner.integrations.telegram.adapter import (
     encode_question_option_callback,
     encode_resume_callback,
 )
-from codex_autorunner.integrations.telegram.dispatch import (
+from codex_autorunner.adapters.telegram.dispatch import (
     DispatchContext,
     _dispatch_callback,
 )
+from codex_autorunner.core.orchestration import ChatOperationState
 
 
 def _callback_update(

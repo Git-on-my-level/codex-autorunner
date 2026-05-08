@@ -5,17 +5,17 @@ from pathlib import Path
 
 import pytest
 
-from codex_autorunner.integrations.telegram.chat_state_store import (
+from codex_autorunner.adapters.telegram.chat_state_store import (
     TelegramChatStateStore,
 )
-from codex_autorunner.integrations.telegram.handlers.commands.workspace import (
+from codex_autorunner.adapters.telegram.handlers.commands.workspace import (
     WorkspaceCommands,
 )
-from codex_autorunner.integrations.telegram.state import (
+from codex_autorunner.adapters.telegram.state import (
     TelegramStateStore,
     TelegramTopicRecord,
 )
-from codex_autorunner.integrations.telegram.state_types import ThreadSummary
+from codex_autorunner.adapters.telegram.state_types import ThreadSummary
 
 
 class _RouterStub:

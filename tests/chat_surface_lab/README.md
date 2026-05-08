@@ -67,7 +67,7 @@ TICKET-160 adds a deterministic latency budget suite runner:
 
 - `latency_budget_runner.py` executes named lab scenarios and enforces the
   shared UX latency budgets from
-  `src/codex_autorunner/integrations/chat/ux_regression_contract.py`
+  `src/codex_autorunner/adapters/chat/ux_regression_contract.py`
 - the runner writes machine-readable artifacts under
   `.codex-autorunner/diagnostics/chat-latency-budgets/` with
   `latest.json`, `history/*`, and per-run `runs/<run_id>/suite_report.json`
@@ -96,7 +96,7 @@ TICKET-170 adds seeded exploration and incident replay tooling:
 TICKET-012 strengthens the campaign gate:
 
 - The campaign north star is formalized in
-  `src/codex_autorunner/integrations/chat/ux_regression_contract.py` via
+  `src/codex_autorunner/adapters/chat/ux_regression_contract.py` via
   `CAMPAIGN_NORTH_STAR_LATENCY_THRESHOLDS`,
   `CAMPAIGN_CRITICAL_SCENARIO_MATRIX`, `campaign_north_star_status()`, and
   `format_campaign_scorecard()`.
@@ -187,7 +187,7 @@ high-signal fields:
 - `transcript_invariants`: transcript and log assertions
 - `latency_budgets`: budget assertions bound to concrete timing log fields
 - `contract_links`: optional mapping to
-  `src/codex_autorunner/integrations/chat/ux_regression_contract.py`
+  `src/codex_autorunner/adapters/chat/ux_regression_contract.py`
 - `execution_mode`: `surface_harness` (default) or `reference_only`
 
 ## Running the corpus

@@ -7,6 +7,13 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
+from codex_autorunner.adapters.agents.backend_orchestrator import (
+    build_backend_orchestrator,
+)
+from codex_autorunner.adapters.agents.wiring import (
+    build_agent_backend_factory,
+    build_app_server_supervisor_factory,
+)
 from codex_autorunner.core.config import (
     CONFIG_FILENAME,
     DEFAULT_HUB_CONFIG,
@@ -23,13 +30,6 @@ from codex_autorunner.core.pma_hygiene import (
     build_pma_hygiene_report,
 )
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
-from codex_autorunner.integrations.agents.backend_orchestrator import (
-    build_backend_orchestrator,
-)
-from codex_autorunner.integrations.agents.wiring import (
-    build_agent_backend_factory,
-    build_app_server_supervisor_factory,
-)
 from codex_autorunner.manifest import load_manifest
 from codex_autorunner.surfaces.cli.pma_cli import pma_app
 from tests.conftest import write_test_config

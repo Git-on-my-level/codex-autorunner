@@ -7,12 +7,12 @@ from typing import Any
 
 import pytest
 
+from codex_autorunner.adapters.app_server.client import (
+    CodexAppServerResponseError,
+)
 from codex_autorunner.agents.codex.harness import CodexHarness
 from codex_autorunner.agents.codex.harness import logger as codex_harness_logger
 from codex_autorunner.agents.registry import get_registered_agents
-from codex_autorunner.integrations.app_server.client import (
-    CodexAppServerResponseError,
-)
 
 
 class _TurnHandle:

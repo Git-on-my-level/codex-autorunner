@@ -6,11 +6,11 @@ from typing import Any, Callable
 
 import pytest
 
-from codex_autorunner.integrations.chat.ux_regression_contract import (
+from codex_autorunner.adapters.chat.ux_regression_contract import (
     CHAT_UX_LATENCY_BUDGETS,
 )
-from codex_autorunner.integrations.discord import message_turns as discord_message_turns
-from codex_autorunner.integrations.telegram.adapter import TelegramUpdate
+from codex_autorunner.adapters.discord import message_turns as discord_message_turns
+from codex_autorunner.adapters.telegram.adapter import TelegramUpdate
 
 from .harness import (
     DiscordSurfaceHarness,

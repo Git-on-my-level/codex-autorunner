@@ -11,20 +11,20 @@ from typing import Any, Callable, Optional, Sequence
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from codex_autorunner.adapters.chat.execution_event_journal import (
+    list_chat_execution_journal,
+)
+from codex_autorunner.adapters.chat.ux_regression_contract import (
+    CHAT_UX_LATENCY_BUDGETS,
+)
+from codex_autorunner.adapters.discord import message_turns as discord_message_turns
+from codex_autorunner.adapters.telegram.adapter import TelegramUpdate
+from codex_autorunner.adapters.telegram.handlers.commands import (
+    execution as telegram_execution,
+)
 from codex_autorunner.browser.runtime import BrowserRuntime
 from codex_autorunner.core.chat_bindings import active_chat_binding_metadata_by_thread
 from codex_autorunner.core.pma_automation_store import PmaAutomationStore
-from codex_autorunner.integrations.chat.execution_event_journal import (
-    list_chat_execution_journal,
-)
-from codex_autorunner.integrations.chat.ux_regression_contract import (
-    CHAT_UX_LATENCY_BUDGETS,
-)
-from codex_autorunner.integrations.discord import message_turns as discord_message_turns
-from codex_autorunner.integrations.telegram.adapter import TelegramUpdate
-from codex_autorunner.integrations.telegram.handlers.commands import (
-    execution as telegram_execution,
-)
 from codex_autorunner.surfaces.web.routes.pma_routes.managed_threads import (
     build_automation_routes,
 )

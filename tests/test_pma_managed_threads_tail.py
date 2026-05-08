@@ -10,11 +10,11 @@ from typing import Any, Optional
 import pytest
 from fastapi.testclient import TestClient
 
+from codex_autorunner.adapters.app_server.event_buffer import AppServerEventBuffer
 from codex_autorunner.agents.hermes.harness import HermesHarness
 from codex_autorunner.core.orchestration.turn_timeline import persist_turn_timeline
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.ports.run_event import OutputDelta
-from codex_autorunner.integrations.app_server.event_buffer import AppServerEventBuffer
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.routes.pma_routes import tail_stream
 from codex_autorunner.surfaces.web.routes.pma_routes.managed_thread_tail_serializers import (

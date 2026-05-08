@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from codex_autorunner.adapters.chat.run_mirror import ChatRunMirror
 from codex_autorunner.core.state_roots import (
     DISCORD_STATE_DB_FILENAME,
     GITHUB_BROKER_DB_FILENAME,
@@ -36,7 +37,6 @@ from codex_autorunner.core.state_roots import (
     resolve_telegram_state_path,
     validate_path_within_roots,
 )
-from codex_autorunner.integrations.chat.run_mirror import ChatRunMirror
 
 
 class TestResolveRepoStateRoot:

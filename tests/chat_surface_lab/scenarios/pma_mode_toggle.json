@@ -103,7 +103,7 @@
   ],
   "contract_links": {
     "references": [
-      "tests/integrations/discord/test_pma_commands.py"
+      "tests/adapters/discord/test_pma_commands.py"
     ]
   },
   "tags": [

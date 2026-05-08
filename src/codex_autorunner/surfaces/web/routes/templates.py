@@ -6,6 +6,12 @@ from typing import Optional
 import yaml
 from fastapi import APIRouter, HTTPException, Request
 
+from ....adapters.templates import (
+    TemplateScanError,
+    TemplateScanRejectedError,
+    format_template_scan_rejection,
+    run_template_scan,
+)
 from ....agents.registry import validate_agent_id
 from ....core.config import (
     ConfigError,
@@ -28,12 +34,6 @@ from ....core.templates import (
 from ....core.templates.scan_cache import TemplateScanRecord, get_scan_record, scan_lock
 from ....core.text_utils import _next_available_ticket_index
 from ....core.utils import find_template_repo
-from ....integrations.templates import (
-    TemplateScanError,
-    TemplateScanRejectedError,
-    format_template_scan_rejection,
-    run_template_scan,
-)
 from ....tickets.files import safe_relpath
 from ....tickets.frontmatter import split_markdown_frontmatter
 from ....tickets.lint import parse_ticket_index

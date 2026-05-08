@@ -6,34 +6,34 @@ from typing import Any, Optional
 
 import pytest
 
-from codex_autorunner.core.orchestration.runtime_threads import (
-    RUNTIME_THREAD_INTERRUPTED_ERROR,
-    RUNTIME_THREAD_TIMEOUT_ERROR,
-)
-from codex_autorunner.integrations.telegram.adapter import (
+from codex_autorunner.adapters.telegram.adapter import (
     TelegramDocument,
     TelegramMessage,
     TelegramPhotoSize,
     TelegramVoice,
 )
-from codex_autorunner.integrations.telegram.config import TelegramBotDefaults
-from codex_autorunner.integrations.telegram.handlers import (
+from codex_autorunner.adapters.telegram.config import TelegramBotDefaults
+from codex_autorunner.adapters.telegram.handlers import (
     messages as telegram_messages_module,
 )
-from codex_autorunner.integrations.telegram.handlers.commands import (
+from codex_autorunner.adapters.telegram.handlers.commands import (
     execution as execution_commands_module,
 )
-from codex_autorunner.integrations.telegram.handlers.commands.execution import (
+from codex_autorunner.adapters.telegram.handlers.commands.execution import (
     ExecutionCommands,
     _TurnRunResult,
 )
-from codex_autorunner.integrations.telegram.handlers.commands.workspace import (
+from codex_autorunner.adapters.telegram.handlers.commands.workspace import (
     WorkspaceCommands,
 )
-from codex_autorunner.integrations.telegram.handlers.media_ingress import (
+from codex_autorunner.adapters.telegram.handlers.media_ingress import (
     handle_media_message,
 )
-from codex_autorunner.integrations.telegram.state import TelegramTopicRecord
+from codex_autorunner.adapters.telegram.state import TelegramTopicRecord
+from codex_autorunner.core.orchestration.runtime_threads import (
+    RUNTIME_THREAD_INTERRUPTED_ERROR,
+    RUNTIME_THREAD_TIMEOUT_ERROR,
+)
 
 
 class _RouterStub:
@@ -464,8 +464,8 @@ async def test_telegram_text_messages_route_through_orchestration_ingress(
             captured["callbacks"] = set(kwargs)
             return SimpleNamespace(route="thread", thread_result=None)
 
-    import codex_autorunner.integrations.telegram.handlers.media_ingress as _mi_mod
-    import codex_autorunner.integrations.telegram.handlers.surface_ingress as _si_mod
+    import codex_autorunner.adapters.telegram.handlers.media_ingress as _mi_mod
+    import codex_autorunner.adapters.telegram.handlers.surface_ingress as _si_mod
 
     monkeypatch.setattr(
         _si_mod, "build_surface_orchestration_ingress", lambda **_: _IngressStub()
@@ -721,7 +721,7 @@ async def test_telegram_media_messages_route_through_orchestration_ingress(
             captured["callbacks"] = set(kwargs)
             return SimpleNamespace(route="thread", thread_result=None)
 
-    import codex_autorunner.integrations.telegram.handlers.media_ingress as _mi_mod
+    import codex_autorunner.adapters.telegram.handlers.media_ingress as _mi_mod
 
     monkeypatch.setattr(
         _mi_mod, "build_surface_orchestration_ingress", lambda **_: _IngressStub()
@@ -1070,7 +1070,7 @@ async def test_message_routing_submits_thread_work_through_orchestration_ingress
             await submit_thread_message(request)
             return SimpleNamespace(route="thread", thread_result=None)
 
-    import codex_autorunner.integrations.telegram.handlers.surface_ingress as _si_mod
+    import codex_autorunner.adapters.telegram.handlers.surface_ingress as _si_mod
 
     monkeypatch.setattr(
         _si_mod, "build_surface_orchestration_ingress", lambda **_: _FakeIngress()

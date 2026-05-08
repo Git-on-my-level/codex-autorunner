@@ -12,7 +12,7 @@ FastAPI web UI, API routes, and web-specific workflows.
 ## Allowed Dependencies
 
 - `core.*` (engine, state, config, etc.)
-- `integrations.*` (app_server, telegram, etc.)
+- `adapters.*` (app_server, telegram, etc.)
 - `surfaces.cli` (shared CLI utilities)
 - Third-party web frameworks (FastAPI, starlette)
 

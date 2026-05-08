@@ -4,13 +4,13 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 
-from .....agents.registry import get_available_agents
-from .....core.agent_capability_projection import project_thread_capabilities
-from .....core.orchestration.catalog import map_agent_capabilities
-from .....integrations.chat.surface_action_manifest import (
+from .....adapters.chat.surface_action_manifest import (
     SurfaceActionManifestContext,
     build_surface_action_manifest,
 )
+from .....agents.registry import get_available_agents
+from .....core.agent_capability_projection import project_thread_capabilities
+from .....core.orchestration.catalog import map_agent_capabilities
 from ...services.pma import get_pma_request_context
 
 

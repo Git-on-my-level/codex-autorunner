@@ -8,6 +8,7 @@ from typing import Annotated, Any, Optional, cast
 
 from fastapi import APIRouter, Body, HTTPException, Request
 
+from .....adapters.chat.execution_event_journal import list_chat_execution_journal
 from .....agents.registry import (
     get_registered_agents,
     resolve_agent_runtime,
@@ -22,7 +23,6 @@ from .....core.orchestration.managed_thread_timeline import (
 from .....core.orchestration.turn_timeline import list_turn_timeline
 from .....core.pma_automation_store import PmaAutomationThreadNotFoundError
 from .....core.text_utils import _truncate_text
-from .....integrations.chat.execution_event_journal import list_chat_execution_journal
 from ...schemas import (
     PmaAutomationSubscriptionCreateRequest,
     PmaAutomationTimerCancelRequest,

@@ -19,6 +19,7 @@ from typing import Any, AsyncIterator, Awaitable, Callable, Optional
 
 import httpx
 
+from ...adapters.chat.agents import DEFAULT_CHAT_AGENT_MODELS
 from ...core.logging_utils import log_event
 from ...core.orchestration.interfaces import FreshConversationRequiredError
 from ...core.orchestration.runtime_thread_events import (
@@ -26,7 +27,6 @@ from ...core.orchestration.runtime_thread_events import (
 )
 from ...core.orchestration.turn_event_buffer import TurnEventBuffer
 from ...core.sse import SSEEvent
-from ...integrations.chat.agents import DEFAULT_CHAT_AGENT_MODELS
 from ..base import AgentHarness
 from ..types import (
     AgentId,

@@ -7,19 +7,19 @@ from typing import Any
 import httpx
 import pytest
 
-from codex_autorunner.integrations.chat.adapter import (
+from codex_autorunner.adapters.chat.adapter import (
     SendAttachmentRequest,
     SendTextRequest,
 )
-from codex_autorunner.integrations.chat.errors import ChatAdapterPermanentError
-from codex_autorunner.integrations.chat.models import (
+from codex_autorunner.adapters.chat.errors import ChatAdapterPermanentError
+from codex_autorunner.adapters.chat.models import (
     ChatAction,
     ChatInteractionRef,
     ChatMessageRef,
     ChatThreadRef,
 )
-from codex_autorunner.integrations.telegram.adapter import TelegramBotClient
-from codex_autorunner.integrations.telegram.chat_adapter import TelegramChatAdapter
+from codex_autorunner.adapters.telegram.adapter import TelegramBotClient
+from codex_autorunner.adapters.telegram.chat_adapter import TelegramChatAdapter
 
 
 class _DummyPoller:

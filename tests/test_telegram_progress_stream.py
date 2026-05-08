@@ -1,4 +1,4 @@
-from codex_autorunner.integrations.telegram.progress_stream import (
+from codex_autorunner.adapters.telegram.progress_stream import (
     TurnProgressTracker,
     render_progress_text,
 )

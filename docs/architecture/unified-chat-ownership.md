@@ -26,7 +26,7 @@ must replace them by stable backend IDs when the timeline refreshes.
 
 ## Surface Adapters
 
-`src/codex_autorunner/integrations/chat/` owns shared surface contracts,
+`src/codex_autorunner/adapters/chat/` owns shared surface contracts,
 managed-thread coordinator setup, progress helpers, shared command semantics,
 and adapter-neutral delivery hooks.
 
@@ -53,7 +53,7 @@ Binding ownership:
 
 - `core/orchestration/` owns durable thread targets, executions, queue state,
   runtime bindings, and surface binding records.
-- `integrations/chat/` owns shared resolution and coordinator-facing metadata.
+- `adapters/chat/` owns shared resolution and coordinator-facing metadata.
 - Surface adapters own platform identifiers and API calls after the shared
   target has been resolved.
 
@@ -73,7 +73,7 @@ Discord, and Telegram can be inspected against the same backend truth.
 ## Change Checklist
 
 - Add shared lifecycle, ordering, progress, or delivery behavior under
-  `integrations/chat/` or `core/orchestration/`.
+  `adapters/chat/` or `core/orchestration/`.
 - Keep PMA, Discord, and Telegram adapters limited to projection, rendering,
   transport, and platform constraints.
 - Preserve stable timeline item IDs and ordering keys when changing payloads.

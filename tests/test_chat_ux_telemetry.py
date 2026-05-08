@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from unittest.mock import MagicMock
 
-from codex_autorunner.integrations.chat.chat_ux_telemetry import (
+from codex_autorunner.adapters.chat.chat_ux_telemetry import (
     ChatUxFailureReason,
     ChatUxMilestone,
     ChatUxTimingAccumulator,
@@ -279,7 +279,7 @@ class TestDoctorDiagnostics:
         reset_global_accumulator()
 
     def test_empty_accumulator_returns_info_check(self) -> None:
-        from codex_autorunner.integrations.chat.doctor import (
+        from codex_autorunner.adapters.chat.doctor import (
             chat_ux_timing_diagnostic_checks,
         )
 
@@ -289,7 +289,7 @@ class TestDoctorDiagnostics:
         assert "no data" in checks[0].message
 
     def test_normal_timing_returns_passing_check(self) -> None:
-        from codex_autorunner.integrations.chat.doctor import (
+        from codex_autorunner.adapters.chat.doctor import (
             chat_ux_timing_diagnostic_checks,
         )
 
@@ -306,7 +306,7 @@ class TestDoctorDiagnostics:
         assert not any("slow path" in c.name for c in checks)
 
     def test_slow_p95_triggers_failure_check(self) -> None:
-        from codex_autorunner.integrations.chat.doctor import (
+        from codex_autorunner.adapters.chat.doctor import (
             chat_ux_timing_diagnostic_checks,
         )
 

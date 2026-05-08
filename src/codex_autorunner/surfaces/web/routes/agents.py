@@ -103,7 +103,7 @@ def _serialize_agent_profiles(request: Request, agent_id: str) -> dict[str, Any]
     hermes_profile_options: Iterable[Any] = ()
     if agent_id == "hermes":
         try:
-            from ....integrations.chat.agents import chat_hermes_profile_options
+            from ....adapters.chat.agents import chat_hermes_profile_options
 
             hermes_profile_options = chat_hermes_profile_options(request.app.state)
         except Exception:  # intentional: optional hermes integration

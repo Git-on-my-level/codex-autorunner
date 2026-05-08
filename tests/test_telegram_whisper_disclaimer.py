@@ -1,12 +1,12 @@
 import asyncio
 from pathlib import Path
 
-from codex_autorunner.core.injected_context import wrap_injected_context
-from codex_autorunner.integrations.telegram.config import TelegramBotConfig
-from codex_autorunner.integrations.telegram.constants import (
+from codex_autorunner.adapters.telegram.config import TelegramBotConfig
+from codex_autorunner.adapters.telegram.constants import (
     WHISPER_TRANSCRIPT_DISCLAIMER,
 )
-from codex_autorunner.integrations.telegram.service import TelegramBotService
+from codex_autorunner.adapters.telegram.service import TelegramBotService
+from codex_autorunner.core.injected_context import wrap_injected_context
 from codex_autorunner.voice import VoiceConfig
 
 

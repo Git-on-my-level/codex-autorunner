@@ -9,6 +9,8 @@ from typing import Any, Callable, Mapping, Optional
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from ....adapters.github import GitHubWebhookConfig, normalize_github_webhook
+from ....adapters.github.publisher import build_github_publish_executors
 from ....core.pr_bindings import PrBindingStore
 from ....core.publish_journal import PublishJournalStore
 from ....core.scm_automation_service import ScmAutomationService
@@ -27,8 +29,6 @@ from ....core.scm_webhook_config import (
     resolve_github_webhook_config,
     resolve_payload_limits,
 )
-from ....integrations.github import GitHubWebhookConfig, normalize_github_webhook
-from ....integrations.github.publisher import build_github_publish_executors
 
 ScmDrainCallback = Callable[[Request, ScmEvent], object]
 _DEFAULT_INSPECT_LIMIT = 50

@@ -8,6 +8,13 @@ from typing import Any, Optional
 
 import typer
 
+from ....adapters.chat.doctor import (
+    chat_doctor_checks,
+    chat_surface_lab_doctor_checks,
+    chat_ux_timing_diagnostic_checks,
+)
+from ....adapters.discord.doctor import discord_doctor_checks
+from ....adapters.telegram.doctor import telegram_doctor_checks
 from ....core.config import ConfigError, RepoConfig, derive_repo_config, load_hub_config
 from ....core.diagnostics.process_snapshot import (
     collect_processes,
@@ -35,13 +42,6 @@ from ....core.utils import (
     is_within,
     resolve_executable,
 )
-from ....integrations.chat.doctor import (
-    chat_doctor_checks,
-    chat_surface_lab_doctor_checks,
-    chat_ux_timing_diagnostic_checks,
-)
-from ....integrations.discord.doctor import discord_doctor_checks
-from ....integrations.telegram.doctor import telegram_doctor_checks
 from .utils import get_car_version, raise_exit
 
 logger = logging.getLogger(__name__)

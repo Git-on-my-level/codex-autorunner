@@ -6,18 +6,18 @@ from types import SimpleNamespace
 
 import pytest
 
+from codex_autorunner.adapters.telegram.adapter import (
+    TelegramDocument,
+    TelegramMessage,
+)
+from codex_autorunner.adapters.telegram.handlers.commands.execution import (
+    ExecutionCommands,
+)
+from codex_autorunner.adapters.telegram.state import TelegramTopicRecord
 from codex_autorunner.core.context_awareness import (
     CAR_AWARENESS_BLOCK,
     PROMPT_WRITING_HINT,
 )
-from codex_autorunner.integrations.telegram.adapter import (
-    TelegramDocument,
-    TelegramMessage,
-)
-from codex_autorunner.integrations.telegram.handlers.commands.execution import (
-    ExecutionCommands,
-)
-from codex_autorunner.integrations.telegram.state import TelegramTopicRecord
 
 
 class _ContextExecutionStub(ExecutionCommands):

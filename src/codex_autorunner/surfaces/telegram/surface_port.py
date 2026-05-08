@@ -3,8 +3,8 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from ...integrations.chat.adapter import ChatAdapter
-from ...integrations.telegram.constants import TELEGRAM_MAX_MESSAGE_LENGTH
+from ...adapters.chat.adapter import ChatAdapter
+from ...adapters.telegram.constants import TELEGRAM_MAX_MESSAGE_LENGTH
 from .._chat_surface_port import ChatSurfacePort, ChatSurfacePortConfig
 
 _TELEGRAM_SURFACE_KIND = "telegram"

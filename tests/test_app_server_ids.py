@@ -1,4 +1,4 @@
-from codex_autorunner.integrations.app_server.ids import (
+from codex_autorunner.adapters.app_server.ids import (
     extract_thread_id,
     extract_thread_id_for_turn,
     extract_turn_id,

@@ -9,6 +9,11 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from codex_autorunner.adapters.app_server.client import (
+    CodexAppServerResponseError,
+)
+from codex_autorunner.adapters.discord.state import DiscordStateStore
+from codex_autorunner.adapters.telegram.state import TelegramStateStore, topic_key
 from codex_autorunner.agents.opencode.runtime import OpenCodeTurnOutput
 from codex_autorunner.agents.registry import AgentDescriptor
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
@@ -21,11 +26,6 @@ from codex_autorunner.core.orchestration import (
 from codex_autorunner.core.pma_queue import PmaQueue, QueueItemState
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.pma_transcripts import PmaTranscriptStore
-from codex_autorunner.integrations.app_server.client import (
-    CodexAppServerResponseError,
-)
-from codex_autorunner.integrations.discord.state import DiscordStateStore
-from codex_autorunner.integrations.telegram.state import TelegramStateStore, topic_key
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.routes import pma as pma_routes
 from codex_autorunner.surfaces.web.routes.pma_routes import (

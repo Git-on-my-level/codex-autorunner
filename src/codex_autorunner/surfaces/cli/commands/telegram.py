@@ -9,6 +9,18 @@ from typing import Any, Callable, Optional
 
 import typer
 
+from ....adapters.telegram.adapter import TelegramAPIError, TelegramBotClient
+from ....adapters.telegram.service import (
+    TelegramBotConfig,
+    TelegramBotConfigError,
+    TelegramBotLockError,
+    TelegramBotService,
+)
+from ....adapters.telegram.state import (
+    TelegramStateStore,
+    parse_topic_key,
+    topic_key,
+)
 from ....core.config import (
     ConfigError,
     collect_env_overrides,
@@ -16,18 +28,6 @@ from ....core.config import (
 )
 from ....core.logging_utils import log_event, setup_rotating_logger
 from ....core.redaction import redact_text
-from ....integrations.telegram.adapter import TelegramAPIError, TelegramBotClient
-from ....integrations.telegram.service import (
-    TelegramBotConfig,
-    TelegramBotConfigError,
-    TelegramBotLockError,
-    TelegramBotService,
-)
-from ....integrations.telegram.state import (
-    TelegramStateStore,
-    parse_topic_key,
-    topic_key,
-)
 from ....voice import VoiceConfig
 from ._log_trace_common import (
     LogTraceMatch,

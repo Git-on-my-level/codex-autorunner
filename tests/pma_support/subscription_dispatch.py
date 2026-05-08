@@ -7,13 +7,13 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Optional
 
+from codex_autorunner.adapters.discord.state import DiscordStateStore
+from codex_autorunner.adapters.telegram.state import TelegramStateStore, topic_key
 from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.orchestration import OrchestrationBindingStore
 from codex_autorunner.core.pma_automation_store import PmaAutomationStore
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
-from codex_autorunner.integrations.discord.state import DiscordStateStore
-from codex_autorunner.integrations.telegram.state import TelegramStateStore, topic_key
 from codex_autorunner.surfaces.web.routes.pma_routes.publish import (
     publish_automation_result,
 )

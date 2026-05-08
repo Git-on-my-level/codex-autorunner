@@ -6,12 +6,12 @@ from typing import Optional
 
 import pytest
 
-from codex_autorunner.integrations.telegram.adapter import TelegramMessage
-from codex_autorunner.integrations.telegram.handlers.commands_runtime import (
+from codex_autorunner.adapters.telegram.adapter import TelegramMessage
+from codex_autorunner.adapters.telegram.handlers.commands_runtime import (
     TelegramCommandHandlers,
     _RuntimeStub,
 )
-from codex_autorunner.integrations.telegram.state import TelegramTopicRecord
+from codex_autorunner.adapters.telegram.state import TelegramTopicRecord
 
 
 class _RateLimitClientStub:

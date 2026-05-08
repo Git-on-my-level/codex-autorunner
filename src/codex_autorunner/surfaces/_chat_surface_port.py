@@ -4,6 +4,13 @@ import logging
 from dataclasses import dataclass
 from typing import Any, AsyncGenerator, Optional
 
+from ..adapters.chat.adapter import ChatAdapter, SendTextRequest
+from ..adapters.chat.models import (
+    ChatEvent,
+    ChatInteractionEvent,
+    ChatMessageEvent,
+    ChatThreadRef,
+)
 from ..core.domain.refs import ParticipantRef, SurfaceRef
 from ..core.ports.surface_port import (
     EngineCommand,
@@ -14,13 +21,6 @@ from ..core.ports.surface_port import (
     SurfaceHealthStatus,
 )
 from ..core.time_utils import now_iso
-from ..integrations.chat.adapter import ChatAdapter, SendTextRequest
-from ..integrations.chat.models import (
-    ChatEvent,
-    ChatInteractionEvent,
-    ChatMessageEvent,
-    ChatThreadRef,
-)
 
 
 @dataclass(frozen=True)

@@ -10,6 +10,7 @@ import zipfile
 from pathlib import Path
 from typing import Any, Optional
 
+from ...adapters.chat.agents import DEFAULT_CHAT_AGENT_MODELS
 from ...agents.opencode.run_prompt import OpenCodeRunConfig, run_opencode_prompt
 from ...agents.opencode.runtime import PERMISSION_ALLOW
 from ...agents.opencode.supervisor import OpenCodeSupervisor
@@ -25,7 +26,6 @@ from ...core.locks import (
 from ...core.runtime import RuntimeContext
 from ...core.state import now_iso
 from ...core.utils import atomic_write, read_json
-from ...integrations.chat.agents import DEFAULT_CHAT_AGENT_MODELS
 from .models import (
     ACTIVE_REVIEW_STATUSES,
     ReviewPromptKind,

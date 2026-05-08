@@ -4,12 +4,12 @@ from typing import Optional
 
 import pytest
 
-from codex_autorunner.integrations.chat.callbacks import decode_logical_callback
-from codex_autorunner.integrations.chat.models import (
+from codex_autorunner.adapters.chat.callbacks import decode_logical_callback
+from codex_autorunner.adapters.chat.models import (
     ChatInteractionEvent,
     ChatMessageEvent,
 )
-from codex_autorunner.integrations.telegram.adapter import (
+from codex_autorunner.adapters.telegram.adapter import (
     TelegramAudio,
     TelegramCallbackQuery,
     TelegramDocument,
@@ -19,7 +19,7 @@ from codex_autorunner.integrations.telegram.adapter import (
     TelegramUpdate,
     TelegramVoice,
 )
-from codex_autorunner.integrations.telegram.chat_adapter import TelegramChatAdapter
+from codex_autorunner.adapters.telegram.chat_adapter import TelegramChatAdapter
 
 
 class _DummyPoller:

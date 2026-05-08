@@ -10,23 +10,23 @@ from typing import Any, Callable, Mapping, Optional
 
 import typer
 
-from ....core.config import ConfigError, load_hub_config
-from ....core.orchestration.sqlite import resolve_orchestration_sqlite_path
-from ....integrations.chat.channel_directory import (
+from ....adapters.chat.channel_directory import (
     ChannelDirectoryStore,
     channel_entry_key,
 )
-from ....integrations.chat.dispatcher import conversation_id_for
-from ....integrations.chat.queue_control import (
+from ....adapters.chat.dispatcher import conversation_id_for
+from ....adapters.chat.queue_control import (
     ChatQueueControlStore,
     normalize_chat_thread_id,
 )
-from ....integrations.discord.config import (
+from ....adapters.discord.config import (
     DEFAULT_BOT_TOKEN_ENV as DEFAULT_DISCORD_BOT_TOKEN_ENV,
 )
-from ....integrations.discord.rest import DiscordRestClient
-from ....integrations.telegram.adapter import TelegramBotClient
-from ....integrations.telegram.state_types import parse_topic_key
+from ....adapters.discord.rest import DiscordRestClient
+from ....adapters.telegram.adapter import TelegramBotClient
+from ....adapters.telegram.state_types import parse_topic_key
+from ....core.config import ConfigError, load_hub_config
+from ....core.orchestration.sqlite import resolve_orchestration_sqlite_path
 from ..hub_path_option import hub_root_path_option
 
 _TELEGRAM_BOT_TOKEN_ENV = "CAR_TELEGRAM_BOT_TOKEN"

@@ -2,9 +2,9 @@ from pathlib import Path
 
 import pytest
 
-import codex_autorunner.integrations.telegram.service as service_module
-from codex_autorunner.integrations.telegram.config import TelegramBotConfig
-from codex_autorunner.integrations.telegram.service import TelegramBotService
+import codex_autorunner.adapters.telegram.service as service_module
+from codex_autorunner.adapters.telegram.config import TelegramBotConfig
+from codex_autorunner.adapters.telegram.service import TelegramBotService
 
 
 @pytest.mark.anyio

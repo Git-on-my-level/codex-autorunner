@@ -1,6 +1,6 @@
 import pytest
 
-from codex_autorunner.integrations.telegram.adapter import (
+from codex_autorunner.adapters.telegram.adapter import (
     DocumentBrowserCallback,
     TelegramCallbackQuery,
     encode_agent_callback,
@@ -21,8 +21,8 @@ from codex_autorunner.integrations.telegram.adapter import (
     encode_update_callback,
     encode_update_confirm_callback,
 )
-from codex_autorunner.integrations.telegram.handlers.callbacks import handle_callback
-from codex_autorunner.integrations.telegram.types import CompactState, SelectionState
+from codex_autorunner.adapters.telegram.handlers.callbacks import handle_callback
+from codex_autorunner.adapters.telegram.types import CompactState, SelectionState
 
 
 class _HandlerStub:

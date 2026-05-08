@@ -1,12 +1,12 @@
 """Tests for the shared OpenCode part handler factory in utils.py."""
 
+from codex_autorunner.adapters.telegram.handlers.utils import (
+    _build_opencode_token_usage,
+)
 from codex_autorunner.agents.opencode.usage_decoder import (
     extract_usage,
     extract_usage_field,
     flatten_usage,
-)
-from codex_autorunner.integrations.telegram.handlers.utils import (
-    _build_opencode_token_usage,
 )
 
 

@@ -6,6 +6,7 @@ from typing import Any, Optional
 
 from fastapi import HTTPException
 
+from .....adapters.github.context_injection import maybe_inject_github_context
 from .....core.orchestration import (
     SurfaceThreadMessageRequest,
     build_surface_orchestration_ingress,
@@ -28,7 +29,6 @@ from .....core.pma_context import (
 )
 from .....core.pma_origin import PmaOriginContext, extract_pma_origin_metadata
 from .....core.text_utils import _normalize_optional_text
-from .....integrations.github.context_injection import maybe_inject_github_context
 from ...services.pma import get_pma_request_context
 from ...services.pma.common import pma_config_from_raw
 from ..agent_profile_validation import resolve_requested_agent_profile

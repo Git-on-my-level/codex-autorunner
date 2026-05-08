@@ -50,10 +50,10 @@ The mergeable conclusion is narrower than the fastest experiment:
 - `make test-fast`: passed, `8105 passed in 111.74s`.
 - A 10-worker `-n auto` run passed once in 63.06s but was rejected after a
   later local timeout in
-  `tests/integrations/chat/test_hermes_official_completion.py::test_telegram_pma_turn_completes_for_official_hermes_prompt[asyncio]`.
+  `tests/adapters/chat/test_hermes_official_completion.py::test_telegram_pma_turn_completes_for_official_hermes_prompt[asyncio]`.
 - A more aggressive `--dist loadfile` fast-target variant was rejected after a
   local timeout in
-  `tests/integrations/discord/test_dispatch_validation.py::test_dispatch_deferred_slash_commands_ack_before_prior_handler_finishes[asyncio]`.
+  `tests/adapters/discord/test_dispatch_validation.py::test_dispatch_deferred_slash_commands_ack_before_prior_handler_finishes[asyncio]`.
 - Serial comparison command, `/usr/bin/time -p .venv/bin/python -m pytest -m
   "not integration and not slow"`, timed out one test after `8094` passes and
   `188.51s` wall time. That reinforced the decision to keep only the passing

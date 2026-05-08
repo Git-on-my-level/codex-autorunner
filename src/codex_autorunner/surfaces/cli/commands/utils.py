@@ -294,14 +294,14 @@ def require_optional_feature(
 
 
 def build_hub_supervisor(config: HubConfig) -> HubSupervisor:
-    from ....agents.registry import validate_agent_id
-    from ....core.hub import HubSupervisor
-    from ....integrations.agents import build_backend_orchestrator
-    from ....integrations.agents.wiring import (
+    from ....adapters.agents import build_backend_orchestrator
+    from ....adapters.agents.wiring import (
         build_agent_backend_factory,
         build_app_server_supervisor_factory,
     )
-    from ....integrations.github.polling import build_hub_scm_poll_processor
+    from ....adapters.github.polling import build_hub_scm_poll_processor
+    from ....agents.registry import validate_agent_id
+    from ....core.hub import HubSupervisor
 
     return HubSupervisor(
         config,
@@ -317,6 +317,12 @@ def build_hub_supervisor(config: HubConfig) -> HubSupervisor:
 
 
 def fetch_template_with_scan(template: str, ctx, hub: Optional[Path]):
+    from ....adapters.templates.scan_agent import (
+        TemplateScanError,
+        TemplateScanRejectedError,
+        format_template_scan_rejection,
+        run_template_scan,
+    )
     from ....core.config import ConfigError
     from ....core.git_utils import GitError
     from ....core.templates import (
@@ -328,12 +334,6 @@ def fetch_template_with_scan(template: str, ctx, hub: Optional[Path]):
         get_scan_record,
         parse_template_ref,
         scan_lock,
-    )
-    from ....integrations.templates.scan_agent import (
-        TemplateScanError,
-        TemplateScanRejectedError,
-        format_template_scan_rejection,
-        run_template_scan,
     )
 
     try:

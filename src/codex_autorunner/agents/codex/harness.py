@@ -5,13 +5,13 @@ import re
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
-from ...integrations.app_server import is_missing_thread_error
-from ...integrations.app_server.client import (
+from ...adapters.app_server import is_missing_thread_error
+from ...adapters.app_server.client import (
     CodexAppServerResponseError,
 )
-from ...integrations.app_server.event_buffer import AppServerEventBuffer
-from ...integrations.app_server.supervisor import WorkspaceAppServerSupervisor
-from ...integrations.chat.model_selection import REASONING_EFFORT_VALUES
+from ...adapters.app_server.event_buffer import AppServerEventBuffer
+from ...adapters.app_server.supervisor import WorkspaceAppServerSupervisor
+from ...adapters.chat.model_selection import REASONING_EFFORT_VALUES
 from ..base import AgentHarness
 from ..types import (
     AgentId,

@@ -17,14 +17,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 from urllib.parse import unquote
 
+from .....adapters.chat.agents import (
+    resolve_chat_agent_and_profile,
+)
 from .....core.logging_utils import safe_log
 from .....core.orchestration.sqlite import resolve_orchestration_sqlite_path
 from .....core.pma_thread_store import PmaThreadStore
 from .....core.text_utils import _coerce_int as _standalone_coerce_int
 from .....core.usage import get_repo_session_usage_ledger
-from .....integrations.chat.agents import (
-    resolve_chat_agent_and_profile,
-)
 
 logger = logging.getLogger(__name__)
 

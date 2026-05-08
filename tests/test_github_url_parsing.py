@@ -1,4 +1,4 @@
-from codex_autorunner.integrations.github.service import (
+from codex_autorunner.adapters.github.service import (
     find_github_links,
     parse_github_url,
 )

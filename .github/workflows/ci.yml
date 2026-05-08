@@ -154,9 +154,9 @@ jobs:
       - name: Run Discord interaction stress coverage
         run: >
           python -m pytest
-          tests/integrations/discord/test_reliability.py
-          tests/integrations/discord/test_interaction_runtime_chaos.py
-          tests/integrations/discord/test_interaction_runtime_contracts.py
+          tests/adapters/discord/test_reliability.py
+          tests/adapters/discord/test_interaction_runtime_chaos.py
+          tests/adapters/discord/test_interaction_runtime_contracts.py
           -q
 
       - name: Run chat-apps lane checks

@@ -6,14 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from codex_autorunner.core.orchestration.chat_operation_state import ChatOperationState
-from codex_autorunner.core.pma_notification_store import PmaNotificationStore
-from codex_autorunner.core.ports.run_event import (
-    RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
-    OutputDelta,
-)
-from codex_autorunner.integrations.chat import bound_live_progress as progress_module
-from codex_autorunner.integrations.chat.bound_live_progress import (
+from codex_autorunner.adapters.chat import bound_live_progress as progress_module
+from codex_autorunner.adapters.chat.bound_live_progress import (
     bound_chat_progress_delete_record_id,
     bound_chat_progress_edit_operation_id,
     bound_chat_progress_send_record_id,
@@ -23,21 +17,27 @@ from codex_autorunner.integrations.chat.bound_live_progress import (
     mark_bound_chat_progress_delivered,
     resolve_bound_chat_queue_progress_context,
 )
-from codex_autorunner.integrations.chat.managed_thread_turns import (
+from codex_autorunner.adapters.chat.managed_thread_turns import (
     ManagedThreadFinalizationResult,
 )
-from codex_autorunner.integrations.discord.config import DiscordBotConfig
-from codex_autorunner.integrations.discord.service import DiscordBotService
-from codex_autorunner.integrations.discord.state import DiscordStateStore
-from codex_autorunner.integrations.discord.state import (
+from codex_autorunner.adapters.discord.config import DiscordBotConfig
+from codex_autorunner.adapters.discord.service import DiscordBotService
+from codex_autorunner.adapters.discord.state import DiscordStateStore
+from codex_autorunner.adapters.discord.state import (
     OutboxRecord as DiscordOutboxRecord,
 )
-from codex_autorunner.integrations.telegram.config import TelegramBotConfig
-from codex_autorunner.integrations.telegram.service import TelegramBotService
-from codex_autorunner.integrations.telegram.state import (
+from codex_autorunner.adapters.telegram.config import TelegramBotConfig
+from codex_autorunner.adapters.telegram.service import TelegramBotService
+from codex_autorunner.adapters.telegram.state import (
     OutboxRecord as TelegramOutboxRecord,
 )
-from codex_autorunner.integrations.telegram.state import TelegramStateStore
+from codex_autorunner.adapters.telegram.state import TelegramStateStore
+from codex_autorunner.core.orchestration.chat_operation_state import ChatOperationState
+from codex_autorunner.core.pma_notification_store import PmaNotificationStore
+from codex_autorunner.core.ports.run_event import (
+    RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+    OutputDelta,
+)
 from tests.discord_message_turns_support import _config as discord_config
 
 
@@ -654,7 +654,7 @@ async def test_discord_service_cleanup_retires_progress_from_service_outbox_deli
             return True
 
         monkeypatch.setattr(
-            "codex_autorunner.integrations.discord.service._handle_discord_outbox_delivery_impl",
+            "codex_autorunner.adapters.discord.service._handle_discord_outbox_delivery_impl",
             _noop_delivery,
         )
         monkeypatch.setattr(service, "_delete_channel_message_safe", _fake_delete)
@@ -1282,7 +1282,7 @@ async def test_telegram_run_polling_recovers_managed_thread_executions_on_startu
 
     monkeypatch.setattr(service, "_perform_hub_handshake", _perform_hub_handshake)
     monkeypatch.setattr(
-        "codex_autorunner.integrations.telegram.service._recover_managed_thread_executions_on_startup_impl",
+        "codex_autorunner.adapters.telegram.service._recover_managed_thread_executions_on_startup_impl",
         _recover,
     )
     monkeypatch.setattr(service._chat_core, "run", _run_chat_core)

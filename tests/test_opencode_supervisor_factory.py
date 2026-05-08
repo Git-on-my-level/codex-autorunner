@@ -1,14 +1,14 @@
 import logging
 from pathlib import Path
 
+from codex_autorunner.adapters.agents import opencode_supervisor_factory
+from codex_autorunner.adapters.agents.destination_wrapping import WrappedCommand
 from codex_autorunner.core.config import (
     CONFIG_FILENAME,
     REPO_OVERRIDE_FILENAME,
     load_repo_config,
 )
 from codex_autorunner.core.utils import build_opencode_supervisor
-from codex_autorunner.integrations.agents import opencode_supervisor_factory
-from codex_autorunner.integrations.agents.destination_wrapping import WrappedCommand
 from tests.conftest import write_test_config
 
 

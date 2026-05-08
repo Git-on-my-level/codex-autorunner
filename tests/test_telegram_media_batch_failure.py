@@ -1,4 +1,4 @@
-from codex_autorunner.integrations.telegram.handlers import commands_runtime
+from codex_autorunner.adapters.telegram.handlers import commands_runtime
 
 
 def test_format_media_batch_failure_empty() -> None:

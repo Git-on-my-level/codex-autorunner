@@ -7,14 +7,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
-from codex_autorunner.integrations.discord import (
+from codex_autorunner.adapters.discord import (
     managed_thread_routing as discord_managed_thread_routing,
 )
-from codex_autorunner.integrations.discord import message_turns as discord_message_turns
-from codex_autorunner.integrations.telegram.handlers.commands import (
+from codex_autorunner.adapters.discord import message_turns as discord_message_turns
+from codex_autorunner.adapters.telegram.handlers.commands import (
     execution as telegram_execution,
 )
+from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.surfaces.web.routes.pma_routes import (
     chat_runtime,
     managed_thread_runtime,

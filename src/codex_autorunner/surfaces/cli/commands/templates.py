@@ -6,6 +6,12 @@ from typing import Any, Callable, Optional
 import typer
 import yaml
 
+from ....adapters.templates.scan_agent import (
+    TemplateScanError,
+    TemplateScanRejectedError,
+    format_template_scan_rejection,
+    run_template_scan,
+)
 from ....agents.registry import validate_agent_id
 from ....core.config import ConfigError, load_hub_config
 from ....core.git_utils import GitError
@@ -24,12 +30,6 @@ from ....core.templates import (
     search_templates,
 )
 from ....core.text_utils import _next_available_ticket_index
-from ....integrations.templates.scan_agent import (
-    TemplateScanError,
-    TemplateScanRejectedError,
-    format_template_scan_rejection,
-    run_template_scan,
-)
 from ....tickets.frontmatter import split_markdown_frontmatter
 from ....tickets.lint import parse_ticket_index
 from ..hub_path_option import hub_root_path_option

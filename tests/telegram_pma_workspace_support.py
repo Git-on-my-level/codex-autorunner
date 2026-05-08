@@ -7,34 +7,34 @@ from typing import Any, Optional
 import httpx
 import pytest
 
+from codex_autorunner.adapters.app_server.client import (
+    CodexAppServerResponseError,
+)
+from codex_autorunner.adapters.telegram.adapter import TelegramMessage
+from codex_autorunner.adapters.telegram.handlers.commands import (
+    build_command_specs,
+)
+from codex_autorunner.adapters.telegram.handlers.commands import (
+    execution as execution_commands_module,
+)
+from codex_autorunner.adapters.telegram.handlers.commands.workspace import (
+    WorkspaceCommands,
+)
+from codex_autorunner.adapters.telegram.handlers.commands_runtime import (
+    TelegramCommandHandlers,
+    _RuntimeStub,
+)
+from codex_autorunner.adapters.telegram.handlers.selections import SelectionState
+from codex_autorunner.adapters.telegram.helpers import _format_help_text
+from codex_autorunner.adapters.telegram.state import (
+    TelegramTopicRecord,
+)
+from codex_autorunner.adapters.telegram.state_types import ThreadSummary
 from codex_autorunner.core.managed_thread_identity import (
     PMA_OPENCODE_KEY,
     AppServerThreadRegistry,
 )
 from codex_autorunner.core.pma_context import default_pma_prompt_state_path
-from codex_autorunner.integrations.app_server.client import (
-    CodexAppServerResponseError,
-)
-from codex_autorunner.integrations.telegram.adapter import TelegramMessage
-from codex_autorunner.integrations.telegram.handlers.commands import (
-    build_command_specs,
-)
-from codex_autorunner.integrations.telegram.handlers.commands import (
-    execution as execution_commands_module,
-)
-from codex_autorunner.integrations.telegram.handlers.commands.workspace import (
-    WorkspaceCommands,
-)
-from codex_autorunner.integrations.telegram.handlers.commands_runtime import (
-    TelegramCommandHandlers,
-    _RuntimeStub,
-)
-from codex_autorunner.integrations.telegram.handlers.selections import SelectionState
-from codex_autorunner.integrations.telegram.helpers import _format_help_text
-from codex_autorunner.integrations.telegram.state import (
-    TelegramTopicRecord,
-)
-from codex_autorunner.integrations.telegram.state_types import ThreadSummary
 from tests.telegram_pma_managed_thread_support import (
     _InProcessHubControlPlaneClient,
     _PMAClientStub,
@@ -1415,11 +1415,11 @@ async def test_apply_compact_summary_preserves_pma_mode_for_replacement_thread(
         ),
     )
     monkeypatch.setattr(
-        "codex_autorunner.integrations.chat.managed_thread_lifecycle.replace_surface_thread",
+        "codex_autorunner.adapters.chat.managed_thread_lifecycle.replace_surface_thread",
         _fake_replace_surface_thread,
     )
     monkeypatch.setattr(
-        "codex_autorunner.integrations.chat.managed_thread_lifecycle.bind_surface_thread",
+        "codex_autorunner.adapters.chat.managed_thread_lifecycle.bind_surface_thread",
         _fake_bind_surface_thread,
     )
 

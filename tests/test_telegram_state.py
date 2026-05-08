@@ -2,12 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from codex_autorunner.core.chat_bindings import repo_has_active_non_pma_chat_binding
-from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
-from codex_autorunner.core.orchestration.bindings import OrchestrationBindingStore
-from codex_autorunner.core.orchestration.sqlite import initialize_orchestration_sqlite
-from codex_autorunner.core.pma_thread_store import PmaThreadStore
-from codex_autorunner.integrations.telegram.state import (
+from codex_autorunner.adapters.telegram.state import (
     OutboxRecord,
     PendingApprovalRecord,
     TelegramState,
@@ -15,6 +10,11 @@ from codex_autorunner.integrations.telegram.state import (
     TelegramTopicRecord,
     topic_key,
 )
+from codex_autorunner.core.chat_bindings import repo_has_active_non_pma_chat_binding
+from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
+from codex_autorunner.core.orchestration.bindings import OrchestrationBindingStore
+from codex_autorunner.core.orchestration.sqlite import initialize_orchestration_sqlite
+from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.manifest import (
     MANIFEST_VERSION,
     Manifest,

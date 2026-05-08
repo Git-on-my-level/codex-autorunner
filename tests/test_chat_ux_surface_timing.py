@@ -5,7 +5,7 @@ import logging
 
 import pytest
 
-from codex_autorunner.integrations.chat.chat_ux_telemetry import (
+from codex_autorunner.adapters.chat.chat_ux_telemetry import (
     ChatUxFailureReason,
     ChatUxMilestone,
     ChatUxTimingSnapshot,

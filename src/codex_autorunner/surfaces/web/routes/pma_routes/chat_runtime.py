@@ -7,6 +7,9 @@ from typing import Any, Optional, cast
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
+from .....adapters.github.context_injection import (
+    maybe_inject_github_context as maybe_inject_github_context,
+)
 from .....agents.base import harness_supports_event_streaming
 from .....agents.codex.harness import CodexHarness
 from .....agents.registry import get_registered_agents as _get_registered_agents
@@ -20,9 +23,6 @@ from .....core.pma_lifecycle import PmaLifecycleRouter
 from .....core.pma_queue import QueueItemState
 from .....core.sse import format_sse
 from .....core.text_utils import _normalize_optional_text
-from .....integrations.github.context_injection import (
-    maybe_inject_github_context as maybe_inject_github_context,
-)
 from ...schemas import (
     PmaChatRequest,
     PmaHistoryCompactRequest,

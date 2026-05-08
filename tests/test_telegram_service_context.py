@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from codex_autorunner.integrations.app_server.event_buffer import AppServerEventBuffer
-from codex_autorunner.integrations.telegram.config import TelegramBotConfig
-from codex_autorunner.integrations.telegram.service import TelegramBotService
+from codex_autorunner.adapters.app_server.event_buffer import AppServerEventBuffer
+from codex_autorunner.adapters.telegram.config import TelegramBotConfig
+from codex_autorunner.adapters.telegram.service import TelegramBotService
 
 
 def _config(root: Path) -> TelegramBotConfig:

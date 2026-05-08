@@ -6,13 +6,13 @@ from typing import Any, Optional
 
 import pytest
 
-from codex_autorunner.integrations.telegram.adapter import (
+from codex_autorunner.adapters.telegram.adapter import (
     TelegramCallbackQuery,
     TelegramMessage,
     TelegramUpdate,
     encode_resume_callback,
 )
-from codex_autorunner.integrations.telegram.dispatch import (
+from codex_autorunner.adapters.telegram.dispatch import (
     DispatchContext,
     _build_context,
     _operation_identity,

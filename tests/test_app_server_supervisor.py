@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from codex_autorunner.integrations.app_server.supervisor import (
+from codex_autorunner.adapters.app_server.supervisor import (
     WorkspaceAppServerSupervisor,
 )
 from codex_autorunner.workspace import canonical_workspace_root, workspace_id_for_path
@@ -73,7 +73,7 @@ async def test_get_client_same_workspace_reuses_single_client_instance(
             self.close_calls += 1
 
     monkeypatch.setattr(
-        "codex_autorunner.integrations.app_server.supervisor.CodexAppServerClient",
+        "codex_autorunner.adapters.app_server.supervisor.CodexAppServerClient",
         FakeClient,
     )
 

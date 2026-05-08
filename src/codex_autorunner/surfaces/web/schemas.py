@@ -17,10 +17,10 @@ from pydantic import (
     model_validator,
 )
 
+from ...adapters.chat.approval_modes import normalize_approval_mode
 from ...core.car_context import CarContextProfile
 from ...core.text_utils import _normalize_text
 from ...flows.review.models import ReviewStateSnapshot, ReviewStatus
-from ...integrations.chat.approval_modes import normalize_approval_mode
 from ._schema_normalization import (
     merge_normalized_filter,
     normalize_filter_payload,

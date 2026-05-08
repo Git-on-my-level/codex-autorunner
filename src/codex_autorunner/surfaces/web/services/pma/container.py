@@ -6,6 +6,7 @@ from typing import Any, Callable, Optional
 
 from fastapi import Request
 
+from .....adapters.github.context_injection import maybe_inject_github_context
 from .....agents.hermes.supervisor import build_hermes_supervisor_from_config
 from .....bootstrap import ensure_pma_docs
 from .....core.orchestration import OrchestrationBindingStore
@@ -14,7 +15,6 @@ from .....core.pma_context import build_hub_snapshot
 from .....core.pma_thread_store import PmaThreadStore
 from .....core.pma_transcripts import PmaTranscriptStore
 from .....core.utils import atomic_write
-from .....integrations.github.context_injection import maybe_inject_github_context
 from .common import pma_config_from_raw
 
 

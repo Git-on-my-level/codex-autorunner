@@ -5,15 +5,15 @@ from typing import Any, Optional
 
 import pytest
 
-from codex_autorunner.core.config import load_repo_config
-from codex_autorunner.core.ports.run_event import Completed
-from codex_autorunner.core.templates import FetchedTemplate, get_scan_record
-from codex_autorunner.integrations.templates.scan_agent import (
+from codex_autorunner.adapters.templates.scan_agent import (
     TemplateScanFormatError,
     TemplateScanRejectedError,
     parse_template_scan_output,
     run_template_scan_with_orchestrator,
 )
+from codex_autorunner.core.config import load_repo_config
+from codex_autorunner.core.ports.run_event import Completed
+from codex_autorunner.core.templates import FetchedTemplate, get_scan_record
 
 
 class FakeOrchestrator:

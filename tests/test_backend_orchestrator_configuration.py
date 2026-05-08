@@ -7,14 +7,14 @@ from typing import Any, AsyncGenerator, Optional
 
 import pytest
 
+from codex_autorunner.adapters.agents.backend_orchestrator import (
+    BackendContext,
+    BackendOrchestrator,
+)
 from codex_autorunner.core.config import TicketFlowConfig
 from codex_autorunner.core.ports.agent_backend import AgentBackend
 from codex_autorunner.core.ports.run_event import Completed, RunEvent, Started, now_iso
 from codex_autorunner.core.state import RunnerState
-from codex_autorunner.integrations.agents.backend_orchestrator import (
-    BackendContext,
-    BackendOrchestrator,
-)
 
 
 class _RecordingBackend(AgentBackend):
@@ -88,7 +88,7 @@ async def test_backend_orchestrator_uses_generic_backend_configure(
         return _build_backend
 
     monkeypatch.setattr(
-        "codex_autorunner.integrations.agents.wiring.build_agent_backend_factory",
+        "codex_autorunner.adapters.agents.wiring.build_agent_backend_factory",
         _fake_factory,
     )
 
@@ -148,7 +148,7 @@ async def test_backend_orchestrator_forwards_input_items_when_present(
         return _build_backend
 
     monkeypatch.setattr(
-        "codex_autorunner.integrations.agents.wiring.build_agent_backend_factory",
+        "codex_autorunner.adapters.agents.wiring.build_agent_backend_factory",
         _fake_factory,
     )
 
@@ -197,7 +197,7 @@ async def test_backend_orchestrator_context_tracks_session_from_start_session(
         return _build_backend
 
     monkeypatch.setattr(
-        "codex_autorunner.integrations.agents.wiring.build_agent_backend_factory",
+        "codex_autorunner.adapters.agents.wiring.build_agent_backend_factory",
         _fake_factory,
     )
 
@@ -239,7 +239,7 @@ async def test_reset_thread_id_clears_runtime_state_for_codex_key(
         return _build_backend
 
     monkeypatch.setattr(
-        "codex_autorunner.integrations.agents.wiring.build_agent_backend_factory",
+        "codex_autorunner.adapters.agents.wiring.build_agent_backend_factory",
         _fake_factory,
     )
 
@@ -287,7 +287,7 @@ async def test_reset_thread_id_targets_opencode_runtime_for_opencode_key(
         return _build_backend
 
     monkeypatch.setattr(
-        "codex_autorunner.integrations.agents.wiring.build_agent_backend_factory",
+        "codex_autorunner.adapters.agents.wiring.build_agent_backend_factory",
         _fake_factory,
     )
 

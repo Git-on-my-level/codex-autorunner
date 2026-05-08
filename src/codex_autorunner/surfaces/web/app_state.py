@@ -7,6 +7,18 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping, Optional, cast
 
+from ...adapters.agents import build_backend_orchestrator
+from ...adapters.agents.opencode_supervisor_factory import (
+    build_opencode_supervisor_from_repo_config,
+)
+from ...adapters.agents.wiring import (
+    build_agent_backend_factory,
+    build_app_server_supervisor_factory,
+)
+from ...adapters.app_server.client import ApprovalHandler, NotificationHandler
+from ...adapters.app_server.env import build_app_server_env
+from ...adapters.app_server.event_buffer import AppServerEventBuffer
+from ...adapters.app_server.supervisor import WorkspaceAppServerSupervisor
 from ...agents.opencode.supervisor import OpenCodeSupervisor
 from ...agents.registry import validate_agent_id
 from ...bootstrap import ensure_hub_car_shim
@@ -34,18 +46,6 @@ from ...core.ports.surface_port_registry import SurfacePortRegistry
 from ...core.runtime import RuntimeContext
 from ...core.runtime_services import RuntimeServices
 from ...core.state import load_state
-from ...integrations.agents import build_backend_orchestrator
-from ...integrations.agents.opencode_supervisor_factory import (
-    build_opencode_supervisor_from_repo_config,
-)
-from ...integrations.agents.wiring import (
-    build_agent_backend_factory,
-    build_app_server_supervisor_factory,
-)
-from ...integrations.app_server.client import ApprovalHandler, NotificationHandler
-from ...integrations.app_server.env import build_app_server_env
-from ...integrations.app_server.event_buffer import AppServerEventBuffer
-from ...integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from ...tickets.replies import resolve_reply_paths
 from ..acp_remote import build_acp_remote_surface_port
 from ..discord import build_discord_surface_port
@@ -679,8 +679,8 @@ def build_hub_context(
 ) -> HubAppContext:
     import sys
 
+    from ...adapters.github.polling import build_hub_scm_poll_processor
     from ...core.hub import HubSupervisor
-    from ...integrations.github.polling import build_hub_scm_poll_processor
 
     config = load_hub_config(hub_root or Path.cwd())
     dev_include_root_repo = _env_truthy(os.getenv(_DEV_INCLUDE_ROOT_REPO_ENV))

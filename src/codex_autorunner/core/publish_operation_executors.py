@@ -397,6 +397,14 @@ def _resolve_notify_message(
     turn_status = _normalize_optional_text(turn.get("status")) or "unknown"
     metadata = _normalize_mapping(turn.get("metadata"))
     runtime_started_at = _normalize_optional_text(metadata.get(_RUNTIME_STARTED_AT_KEY))
+    if runtime_started_at is not None:
+        return (
+            _require_text(
+                payload.get("message") or payload.get("body") or payload.get("text"),
+                field_name="notify_chat message",
+            ),
+            (thread_target_id, managed_turn_id, turn),
+        )
     if turn_status == "queued":
         blocking_turn = _running_turn_blocking_queue(
             thread_store,
@@ -442,14 +450,6 @@ def _resolve_notify_message(
         raise RetryablePublishError(
             "Waiting for queued managed turn to reach front of queue",
             retry_after_seconds=_managed_turn_queue_wait_retry_seconds(),
-        )
-    if runtime_started_at is not None:
-        return (
-            _require_text(
-                payload.get("message") or payload.get("body") or payload.get("text"),
-                field_name="notify_chat message",
-            ),
-            (thread_target_id, managed_turn_id, turn),
         )
     if turn_status in {"error", "interrupted", "ok"}:
         if failure_message is not None:

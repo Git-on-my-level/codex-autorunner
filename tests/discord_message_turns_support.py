@@ -13,12 +13,38 @@ from typing import Any, Optional
 import anyio
 import pytest
 
+import codex_autorunner.adapters.chat.managed_thread_turns as managed_thread_turns_module
+import codex_autorunner.adapters.discord.managed_thread_routing as discord_managed_thread_routing_module
+import codex_autorunner.adapters.discord.message_turns as discord_message_turns_module
+import codex_autorunner.adapters.discord.progress_leases as discord_progress_leases_module
+import codex_autorunner.adapters.discord.service as discord_service_module
 import codex_autorunner.agents.registry as agent_registry_module
-import codex_autorunner.integrations.chat.managed_thread_turns as managed_thread_turns_module
-import codex_autorunner.integrations.discord.managed_thread_routing as discord_managed_thread_routing_module
-import codex_autorunner.integrations.discord.message_turns as discord_message_turns_module
-import codex_autorunner.integrations.discord.progress_leases as discord_progress_leases_module
-import codex_autorunner.integrations.discord.service as discord_service_module
+from codex_autorunner.adapters.app_server.client import (
+    CodexAppServerDisconnected,
+)
+from codex_autorunner.adapters.chat.collaboration_policy import (
+    build_discord_collaboration_policy,
+)
+from codex_autorunner.adapters.chat.compaction import build_compact_seed_prompt
+from codex_autorunner.adapters.chat.dispatcher import build_dispatch_context
+from codex_autorunner.adapters.chat.managed_thread_surface_kernel import (
+    build_managed_thread_terminal_delivery_hooks,
+)
+from codex_autorunner.adapters.chat.managed_thread_turns import (
+    ManagedThreadExecutionHooks,
+    ManagedThreadQueueWorkerHooks,
+)
+from codex_autorunner.adapters.discord.managed_thread_routing import (
+    _build_discord_runner_hooks,
+)
+from codex_autorunner.adapters.discord.service import (
+    DISCORD_QUEUED_PLACEHOLDER_TEXT as QUEUED_PLACEHOLDER_TEXT,
+)
+from codex_autorunner.adapters.discord.service import (
+    DiscordBotService,
+    DiscordMessageTurnResult,
+)
+from codex_autorunner.adapters.discord.state import DiscordStateStore
 from codex_autorunner.agents.registry import AgentDescriptor
 from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.core.context_awareness import (
@@ -50,32 +76,6 @@ from codex_autorunner.core.ports.run_event import (
 )
 from codex_autorunner.core.sse import format_sse
 from codex_autorunner.core.utils import canonicalize_path
-from codex_autorunner.integrations.app_server.client import (
-    CodexAppServerDisconnected,
-)
-from codex_autorunner.integrations.chat.collaboration_policy import (
-    build_discord_collaboration_policy,
-)
-from codex_autorunner.integrations.chat.compaction import build_compact_seed_prompt
-from codex_autorunner.integrations.chat.dispatcher import build_dispatch_context
-from codex_autorunner.integrations.chat.managed_thread_surface_kernel import (
-    build_managed_thread_terminal_delivery_hooks,
-)
-from codex_autorunner.integrations.chat.managed_thread_turns import (
-    ManagedThreadExecutionHooks,
-    ManagedThreadQueueWorkerHooks,
-)
-from codex_autorunner.integrations.discord.managed_thread_routing import (
-    _build_discord_runner_hooks,
-)
-from codex_autorunner.integrations.discord.service import (
-    DISCORD_QUEUED_PLACEHOLDER_TEXT as QUEUED_PLACEHOLDER_TEXT,
-)
-from codex_autorunner.integrations.discord.service import (
-    DiscordBotService,
-    DiscordMessageTurnResult,
-)
-from codex_autorunner.integrations.discord.state import DiscordStateStore
 from tests.support.discord_turn_fakes import (
     _BaseDiscordFakeHarness,
     _build_discord_service,
@@ -334,7 +334,7 @@ async def test_queue_worker_start_clears_stale_queued_progress_placeholder(
             return True
 
     monkeypatch.setattr(
-        "codex_autorunner.integrations.discord.managed_thread_routing.build_managed_thread_surface_queue_execution_hooks",
+        "codex_autorunner.adapters.discord.managed_thread_routing.build_managed_thread_surface_queue_execution_hooks",
         lambda **kwargs: ManagedThreadExecutionHooks(
             on_execution_started=lambda started_execution: _run_queue_execution_start(
                 kwargs, started_execution
@@ -4868,7 +4868,7 @@ async def test_message_create_silent_destination_ignores_plain_text_and_commands
 
     monkeypatch.setattr(service, "_run_agent_turn_for_message", _should_not_run_turn)
     monkeypatch.setattr(
-        "codex_autorunner.integrations.discord.car_handlers.shell_commands.subprocess.run",
+        "codex_autorunner.adapters.discord.car_handlers.shell_commands.subprocess.run",
         _should_not_run_shell,
     )
 
@@ -4918,7 +4918,7 @@ async def test_message_create_honors_shared_turn_policy_gate(
         raise AssertionError("agent turn should not run when shared policy denies")
 
     monkeypatch.setattr(
-        "codex_autorunner.integrations.discord.service.should_trigger_plain_text_turn",
+        "codex_autorunner.adapters.discord.service.should_trigger_plain_text_turn",
         _deny_policy,
     )
     monkeypatch.setattr(service, "_run_agent_turn_for_message", _should_not_run_turn)
@@ -5245,7 +5245,7 @@ async def test_message_create_bang_shell_executes_in_bound_workspace(
         raise AssertionError("bang-prefixed messages should bypass agent turn path")
 
     monkeypatch.setattr(
-        "codex_autorunner.integrations.discord.car_handlers.shell_commands.subprocess.run",
+        "codex_autorunner.adapters.discord.car_handlers.shell_commands.subprocess.run",
         _fake_shell_run,
     )
     monkeypatch.setattr(service, "_run_agent_turn_for_message", _should_not_run_turn)
@@ -5288,7 +5288,7 @@ async def test_message_create_bang_shell_honors_shell_disable_flag(
 
     monkeypatch.setattr(service, "_run_agent_turn_for_message", _should_not_run_turn)
     monkeypatch.setattr(
-        "codex_autorunner.integrations.discord.car_handlers.shell_commands.subprocess.run",
+        "codex_autorunner.adapters.discord.car_handlers.shell_commands.subprocess.run",
         _should_not_run_shell,
     )
 
@@ -5318,7 +5318,7 @@ async def test_message_create_bang_shell_attaches_oversized_output(
         return subprocess.CompletedProcess(args[0], 0, long_output, "")
 
     monkeypatch.setattr(
-        "codex_autorunner.integrations.discord.car_handlers.shell_commands.subprocess.run",
+        "codex_autorunner.adapters.discord.car_handlers.shell_commands.subprocess.run",
         _fake_shell_run,
     )
 
@@ -5824,11 +5824,11 @@ async def test_message_create_resumes_paused_flow_run_in_repo_mode(
     monkeypatch.setattr(service, "_find_paused_flow_run", _fake_find_paused)
     monkeypatch.setattr(service, "_write_user_reply", _fake_write_reply)
     monkeypatch.setattr(
-        "codex_autorunner.integrations.discord.service.build_ticket_flow_controller",
+        "codex_autorunner.adapters.discord.service.build_ticket_flow_controller",
         lambda _: _FakeController(),
     )
     monkeypatch.setattr(
-        "codex_autorunner.integrations.discord.service.ensure_worker",
+        "codex_autorunner.adapters.discord.service.ensure_worker",
         lambda *args, **kwargs: {},
     )
     monkeypatch.setattr(service, "_run_agent_turn_for_message", _should_not_run_turn)
@@ -5884,16 +5884,16 @@ async def test_message_create_bang_shell_resumes_paused_flow_run_in_repo_mode(
     monkeypatch.setattr(service, "_find_paused_flow_run", _fake_find_paused)
     monkeypatch.setattr(service, "_write_user_reply", _fake_write_reply)
     monkeypatch.setattr(
-        "codex_autorunner.integrations.discord.service.build_ticket_flow_controller",
+        "codex_autorunner.adapters.discord.service.build_ticket_flow_controller",
         lambda _: _FakeController(),
     )
     monkeypatch.setattr(
-        "codex_autorunner.integrations.discord.service.ensure_worker",
+        "codex_autorunner.adapters.discord.service.ensure_worker",
         lambda *args, **kwargs: {},
     )
     monkeypatch.setattr(service, "_run_agent_turn_for_message", _should_not_run_turn)
     monkeypatch.setattr(
-        "codex_autorunner.integrations.discord.car_handlers.shell_commands.subprocess.run",
+        "codex_autorunner.adapters.discord.car_handlers.shell_commands.subprocess.run",
         _should_not_run_shell,
     )
 
@@ -5983,11 +5983,11 @@ async def test_message_create_attachment_only_resumes_paused_flow_run(
     monkeypatch.setattr(service, "_find_paused_flow_run", _fake_find_paused)
     monkeypatch.setattr(service, "_write_user_reply", _fake_write_reply)
     monkeypatch.setattr(
-        "codex_autorunner.integrations.discord.service.build_ticket_flow_controller",
+        "codex_autorunner.adapters.discord.service.build_ticket_flow_controller",
         lambda _: _FakeController(),
     )
     monkeypatch.setattr(
-        "codex_autorunner.integrations.discord.service.ensure_worker",
+        "codex_autorunner.adapters.discord.service.ensure_worker",
         lambda *args, **kwargs: {},
     )
     monkeypatch.setattr(service, "_run_agent_turn_for_message", _should_not_run_turn)

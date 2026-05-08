@@ -44,7 +44,7 @@ class ZeroClawSupervisorError(RuntimeError):
 
 
 def _wrap_command_for_destination(**kwargs):
-    from ...integrations.agents.destination_wrapping import (
+    from ...adapters.agents.destination_wrapping import (
         wrap_command_for_destination,
     )
 

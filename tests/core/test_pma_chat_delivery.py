@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from codex_autorunner.adapters.discord.state import DiscordStateStore
+from codex_autorunner.adapters.telegram.state import TelegramStateStore, topic_key
 from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.orchestration import OrchestrationBindingStore
@@ -19,8 +21,6 @@ from codex_autorunner.core.pma_notification_store import (
     build_notification_context_block,
 )
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
-from codex_autorunner.integrations.discord.state import DiscordStateStore
-from codex_autorunner.integrations.telegram.state import TelegramStateStore, topic_key
 from tests.conftest import write_test_config
 
 

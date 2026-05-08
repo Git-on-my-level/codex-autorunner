@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from codex_autorunner.integrations.chat.ux_regression_contract import (
+from codex_autorunner.adapters.chat.ux_regression_contract import (
     REQUIRED_CHAT_UX_REGRESSION_SCENARIO_IDS,
     campaign_north_star_status,
     format_campaign_scorecard,

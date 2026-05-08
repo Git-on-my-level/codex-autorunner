@@ -4,12 +4,12 @@ from typing import Optional
 
 import pytest
 
-from codex_autorunner.integrations.telegram.constants import TELEGRAM_MAX_MESSAGE_LENGTH
-from codex_autorunner.integrations.telegram.rendering import (
+from codex_autorunner.adapters.telegram.constants import TELEGRAM_MAX_MESSAGE_LENGTH
+from codex_autorunner.adapters.telegram.rendering import (
     _format_telegram_html,
     _format_telegram_markdown,
 )
-from codex_autorunner.integrations.telegram.transport import TelegramMessageTransport
+from codex_autorunner.adapters.telegram.transport import TelegramMessageTransport
 
 
 @dataclass

@@ -5,16 +5,16 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from codex_autorunner.adapters.agents.backend_orchestrator import (
+    BackendOrchestrator,
+)
+from codex_autorunner.adapters.agents.opencode_backend import OpenCodeBackend
 from codex_autorunner.agents.opencode.runtime import OpenCodeTurnOutput
 from codex_autorunner.agents.opencode.supervisor import OpenCodeSupervisor
 from codex_autorunner.core.config import TicketFlowConfig
 from codex_autorunner.core.ports.agent_backend import AgentEvent
 from codex_autorunner.core.ports.run_event import Completed, Started
 from codex_autorunner.core.state import RunnerState
-from codex_autorunner.integrations.agents.backend_orchestrator import (
-    BackendOrchestrator,
-)
-from codex_autorunner.integrations.agents.opencode_backend import OpenCodeBackend
 
 
 def _make_mock_client() -> MagicMock:
@@ -308,7 +308,7 @@ async def test_run_turn_disposes_temporary_session_and_resets_state() -> None:
 async def test_run_turn_events_keeps_resumed_session_alive(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    from codex_autorunner.integrations.agents import opencode_backend as backend_module
+    from codex_autorunner.adapters.agents import opencode_backend as backend_module
 
     backend = OpenCodeBackend(base_url="http://localhost:8080", workspace_root=tmp_path)
     client = _SessionClientStub()
@@ -347,7 +347,7 @@ async def test_run_turn_events_keeps_resumed_session_alive(
 async def test_run_turn_events_keeps_last_turn_id_after_temporary_session_disposal(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    from codex_autorunner.integrations.agents import opencode_backend as backend_module
+    from codex_autorunner.adapters.agents import opencode_backend as backend_module
 
     backend = OpenCodeBackend(base_url="http://localhost:8080", workspace_root=tmp_path)
     client = _SessionClientStub()
@@ -384,7 +384,7 @@ async def test_backend_orchestrator_reuses_fresh_opencode_session_when_enabled(
 ) -> None:
     from types import SimpleNamespace
 
-    from codex_autorunner.integrations.agents import opencode_backend as backend_module
+    from codex_autorunner.adapters.agents import opencode_backend as backend_module
 
     backend = OpenCodeBackend(base_url="http://localhost:8080", workspace_root=tmp_path)
     client = _SessionClientStub()

@@ -2,9 +2,9 @@ import logging
 
 import typer
 
+from ...adapters.agents.build_agent_pool import build_agent_pool
 from ...core.config import load_repo_config
 from ...flows.ticket_flow import build_ticket_flow_definition
-from ...integrations.agents.build_agent_pool import build_agent_pool
 from .commands.apps import register_apps_commands
 from .commands.chat import register_chat_commands
 from .commands.cleanup import register_cleanup_commands

@@ -1,4 +1,4 @@
-from codex_autorunner.integrations.telegram.handlers.utils import (
+from codex_autorunner.adapters.telegram.handlers.utils import (
     _build_opencode_token_usage,
 )
 
@@ -7,7 +7,7 @@ def test_extract_opencode_usage_value_removed() -> None:
     import importlib
 
     module = importlib.import_module(
-        "codex_autorunner.integrations.telegram.handlers.utils"
+        "codex_autorunner.adapters.telegram.handlers.utils"
     )
     assert not hasattr(
         module, "_extract_opencode_usage_value"

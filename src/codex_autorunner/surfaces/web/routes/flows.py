@@ -14,6 +14,12 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+from ....adapters.agents.build_agent_pool import build_agent_pool
+from ....adapters.chat.surface_action_manifest import (
+    SurfaceActionManifestContext,
+    build_surface_action_manifest,
+)
+from ....adapters.github.service import GitHubError, GitHubService
 from ....agents.hermes_identity import canonicalize_hermes_identity
 from ....core.apps import resolve_registered_app_artifact_path
 from ....core.config import load_repo_config
@@ -72,12 +78,6 @@ from ....flows.ticket_flow.runtime_helpers import (
     normalize_ticket_flow_input_data,
     seed_bootstrap_ticket_if_needed,
 )
-from ....integrations.agents.build_agent_pool import build_agent_pool
-from ....integrations.chat.surface_action_manifest import (
-    SurfaceActionManifestContext,
-    build_surface_action_manifest,
-)
-from ....integrations.github.service import GitHubError, GitHubService
 from ....tickets import DEFAULT_MAX_TOTAL_TURNS
 from ....tickets.bulk import (
     bulk_clear_model_pin,

@@ -5,13 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from codex_autorunner.core.locks import FileLock
-from codex_autorunner.integrations.telegram.config import (
+from codex_autorunner.adapters.telegram.config import (
     TelegramBotConfig,
     TelegramBotLockError,
 )
-from codex_autorunner.integrations.telegram.helpers import _telegram_lock_path
-from codex_autorunner.integrations.telegram.service import TelegramBotService
+from codex_autorunner.adapters.telegram.helpers import _telegram_lock_path
+from codex_autorunner.adapters.telegram.service import TelegramBotService
+from codex_autorunner.core.locks import FileLock
 
 
 def _make_config(root: Path) -> TelegramBotConfig:

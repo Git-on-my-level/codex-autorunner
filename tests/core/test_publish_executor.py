@@ -10,6 +10,13 @@ from pathlib import Path
 
 import pytest
 
+from codex_autorunner.adapters.discord.state import DiscordStateStore
+from codex_autorunner.adapters.github.publisher import (
+    build_github_enqueue_managed_turn_executor,
+    build_post_pr_comment_executor,
+    build_react_pr_review_comment_executor,
+)
+from codex_autorunner.adapters.github.service import RepoInfo
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.orchestration import OrchestrationBindingStore
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
@@ -27,13 +34,6 @@ from codex_autorunner.core.publish_operation_executors import (
     build_notify_chat_executor,
 )
 from codex_autorunner.core.scm_events import ScmEventStore
-from codex_autorunner.integrations.discord.state import DiscordStateStore
-from codex_autorunner.integrations.github.publisher import (
-    build_github_enqueue_managed_turn_executor,
-    build_post_pr_comment_executor,
-    build_react_pr_review_comment_executor,
-)
-from codex_autorunner.integrations.github.service import RepoInfo
 from tests.conftest import write_test_config
 
 _ALLOW_PR_COMMENT_POLICY = {

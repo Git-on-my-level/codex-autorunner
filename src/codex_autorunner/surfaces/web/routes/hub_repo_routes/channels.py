@@ -10,6 +10,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
+from .....adapters.chat.channel_directory import (
+    ChannelDirectoryStore,
+    channel_entry_key,
+)
+from .....adapters.telegram.state import topic_key
 from .....core.chat_bindings import (
     DISCORD_STATE_FILE_DEFAULT,
     TELEGRAM_STATE_FILE_DEFAULT,
@@ -27,11 +32,6 @@ from .....core.managed_thread_identity import (
 from .....core.pma_context import (
     get_latest_ticket_flow_run_state_with_record,
 )
-from .....integrations.chat.channel_directory import (
-    ChannelDirectoryStore,
-    channel_entry_key,
-)
-from .....integrations.telegram.state import topic_key
 from .channel_source_readers import (
     canonical_workspace_path,
     coerce_int,

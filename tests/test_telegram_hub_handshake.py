@@ -8,11 +8,11 @@ from typing import Any
 
 import pytest
 
+from codex_autorunner.adapters.telegram.config import TelegramBotConfig
+from codex_autorunner.adapters.telegram.service import TelegramBotService
 from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.core.hub_control_plane.errors import HubControlPlaneError
 from codex_autorunner.core.orchestration import ORCHESTRATION_SCHEMA_VERSION
-from codex_autorunner.integrations.telegram.config import TelegramBotConfig
-from codex_autorunner.integrations.telegram.service import TelegramBotService
 
 
 def _config(root: Path) -> TelegramBotConfig:
@@ -254,7 +254,7 @@ async def test_telegram_handshake_retries_transient_startup_failures(
     try:
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(
-                "codex_autorunner.integrations.telegram.service.time.monotonic",
+                "codex_autorunner.adapters.telegram.service.time.monotonic",
                 lambda: 0.0,
             )
             with caplog.at_level(logging.INFO, logger=logger.name):

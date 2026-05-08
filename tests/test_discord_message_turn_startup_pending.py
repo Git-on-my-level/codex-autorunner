@@ -8,16 +8,16 @@ from types import SimpleNamespace
 
 import pytest
 
+import codex_autorunner.adapters.chat.managed_thread_turns as managed_thread_turns_module
+import codex_autorunner.adapters.discord.managed_thread_routing as discord_managed_thread_routing_module
 import codex_autorunner.agents.registry as agent_registry_module
-import codex_autorunner.integrations.chat.managed_thread_turns as managed_thread_turns_module
-import codex_autorunner.integrations.discord.managed_thread_routing as discord_managed_thread_routing_module
-from codex_autorunner.agents.registry import AgentDescriptor
-from codex_autorunner.integrations.chat.dispatcher import build_dispatch_context
-from codex_autorunner.integrations.discord import (
+from codex_autorunner.adapters.chat.dispatcher import build_dispatch_context
+from codex_autorunner.adapters.discord import (
     message_turns as discord_message_turns_module,
 )
-from codex_autorunner.integrations.discord.service import DiscordBotService
-from codex_autorunner.integrations.discord.state import DiscordStateStore
+from codex_autorunner.adapters.discord.service import DiscordBotService
+from codex_autorunner.adapters.discord.state import DiscordStateStore
+from codex_autorunner.agents.registry import AgentDescriptor
 from tests.support.discord_turn_fakes import (
     _config,
     _FakeOutboxManager,

@@ -5,10 +5,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from codex_autorunner.integrations.telegram import service as telegram_service_module
-from codex_autorunner.integrations.telegram.config import TelegramBotConfig
-from codex_autorunner.integrations.telegram.service import TelegramBotService
-from codex_autorunner.integrations.telegram.state import topic_key
+from codex_autorunner.adapters.telegram import service as telegram_service_module
+from codex_autorunner.adapters.telegram.config import TelegramBotConfig
+from codex_autorunner.adapters.telegram.service import TelegramBotService
+from codex_autorunner.adapters.telegram.state import topic_key
 
 
 def _config(root: Path) -> TelegramBotConfig:

@@ -6,6 +6,12 @@ from typing import Callable, Optional
 
 import typer
 
+from ....adapters.app_server.retention import (
+    prune_workspace_root,
+    resolve_global_workspace_root,
+    resolve_repo_workspace_root,
+    resolve_workspace_retention_policy,
+)
 from ....core.archive_retention import (
     prune_run_archive_root,
     prune_worktree_archive_root,
@@ -67,12 +73,6 @@ from ....housekeeping import (
     default_housekeeping_rule_named,
     resolve_housekeeping_rule,
     run_housekeeping_once,
-)
-from ....integrations.app_server.retention import (
-    prune_workspace_root,
-    resolve_global_workspace_root,
-    resolve_repo_workspace_root,
-    resolve_workspace_retention_policy,
 )
 from ....manifest import load_manifest
 from ....workspace import workspace_id_for_path

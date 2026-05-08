@@ -8,6 +8,7 @@ from typing import Any, Callable, Dict, Optional
 
 from fastapi import HTTPException, Request
 
+from .....adapters.app_server import is_missing_thread_error
 from .....agents.registry import (
     get_registered_agents,
     resolve_agent_runtime,
@@ -15,7 +16,6 @@ from .....agents.registry import (
 )
 from .....core.orchestration import FreshConversationRequiredError
 from .....core.usage import persist_opencode_usage_snapshot
-from .....integrations.app_server import is_missing_thread_error
 
 logger = logging.getLogger(__name__)
 

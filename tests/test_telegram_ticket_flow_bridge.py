@@ -7,18 +7,18 @@ from typing import Optional
 
 import pytest
 
+from codex_autorunner.adapters.telegram.config import PauseDispatchNotifications
+from codex_autorunner.adapters.telegram.handlers.paused_flow_reply import (
+    submit_flow_reply_core,
+)
+from codex_autorunner.adapters.telegram.ticket_flow_bridge import (
+    TelegramTicketFlowBridge,
+)
 from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
 from codex_autorunner.core.apps import compute_bundle_sha
 from codex_autorunner.core.flows import FlowStore
 from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.core.state_roots import resolve_repo_state_root
-from codex_autorunner.integrations.telegram.config import PauseDispatchNotifications
-from codex_autorunner.integrations.telegram.handlers.paused_flow_reply import (
-    submit_flow_reply_core,
-)
-from codex_autorunner.integrations.telegram.ticket_flow_bridge import (
-    TelegramTicketFlowBridge,
-)
 
 
 class _DummyRecord:

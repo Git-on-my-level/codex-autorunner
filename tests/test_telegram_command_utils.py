@@ -6,18 +6,18 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from codex_autorunner.agents.opencode.client import OpenCodeProtocolError
-from codex_autorunner.agents.opencode.supervisor import OpenCodeSupervisorError
-from codex_autorunner.integrations.github.context_injection import issue_only_link
-from codex_autorunner.integrations.telegram.constants import TELEGRAM_MAX_MESSAGE_LENGTH
-from codex_autorunner.integrations.telegram.handlers.commands.command_utils import (
+from codex_autorunner.adapters.github.context_injection import issue_only_link
+from codex_autorunner.adapters.telegram.constants import TELEGRAM_MAX_MESSAGE_LENGTH
+from codex_autorunner.adapters.telegram.handlers.commands.command_utils import (
     _format_download_failure_response,
     _format_httpx_exception,
     _format_opencode_exception,
     _format_telegram_download_error,
     _opencode_review_arguments,
 )
-from codex_autorunner.integrations.telegram.transport import TelegramMessageTransport
+from codex_autorunner.adapters.telegram.transport import TelegramMessageTransport
+from codex_autorunner.agents.opencode.client import OpenCodeProtocolError
+from codex_autorunner.agents.opencode.supervisor import OpenCodeSupervisorError
 
 
 def test_issue_only_link_matches_single_link_wrappers() -> None:

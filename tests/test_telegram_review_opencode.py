@@ -6,19 +6,19 @@ from typing import Any, Optional
 
 import pytest
 
-import codex_autorunner.integrations.telegram.handlers.commands.github as github_commands
-from codex_autorunner.core.sse import SSEEvent
-from codex_autorunner.integrations.chat.managed_thread_progress import (
+import codex_autorunner.adapters.telegram.handlers.commands.github as github_commands
+from codex_autorunner.adapters.chat.managed_thread_progress import (
     ProgressRuntimeState,
     apply_run_event_to_progress_tracker,
 )
-from codex_autorunner.integrations.telegram.adapter import TelegramMessage
-from codex_autorunner.integrations.telegram.handlers.commands_runtime import (
+from codex_autorunner.adapters.telegram.adapter import TelegramMessage
+from codex_autorunner.adapters.telegram.handlers.commands_runtime import (
     TelegramCommandHandlers,
     _RuntimeStub,
 )
-from codex_autorunner.integrations.telegram.progress_stream import TurnProgressTracker
-from codex_autorunner.integrations.telegram.state import TelegramTopicRecord
+from codex_autorunner.adapters.telegram.progress_stream import TurnProgressTracker
+from codex_autorunner.adapters.telegram.state import TelegramTopicRecord
+from codex_autorunner.core.sse import SSEEvent
 
 
 class _OpenCodeClientStub:

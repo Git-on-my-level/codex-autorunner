@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from codex_autorunner.integrations.telegram.adapter import (
+from codex_autorunner.adapters.telegram.adapter import (
     TelegramAPIError,
     TelegramMessage,
     TelegramUpdate,

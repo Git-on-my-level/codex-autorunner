@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from typing import Any, Awaitable, Callable
 
-from codex_autorunner.integrations.telegram.adapter import (
+from codex_autorunner.adapters.telegram.adapter import (
     TelegramMessage,
     TelegramMessageEntity,
 )
-from codex_autorunner.integrations.telegram.handlers.commands import CommandSpec
+from codex_autorunner.adapters.telegram.handlers.commands import CommandSpec
 
 CommandHandler = Callable[[TelegramMessage, str, Any], Awaitable[None]]
 

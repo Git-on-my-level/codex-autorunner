@@ -7,7 +7,7 @@ Layers are defined by module prefix:
 - Engine: codex_autorunner.core.flows*, codex_autorunner.core.ports*
 - Control Plane: codex_autorunner.core* (excluding flows/ports),
                  codex_autorunner.contextspace*, codex_autorunner.tickets*
-- Adapters: codex_autorunner.integrations*, codex_autorunner.agents*
+- Adapters: codex_autorunner.adapters*, codex_autorunner.agents*
 - Surfaces: codex_autorunner.surfaces*
 
 Top-level modules under ``codex_autorunner.<name>`` that do not match a
@@ -68,7 +68,7 @@ LAYER_PREFIXES: dict[Layer, list[str]] = {
         "codex_autorunner.tickets",
     ],
     Layer.ADAPTERS: [
-        "codex_autorunner.integrations",
+        "codex_autorunner.adapters",
         "codex_autorunner.agents",
     ],
     Layer.SURFACES: [
@@ -373,8 +373,8 @@ def test_top_level_module_is_not_unknown_layer() -> None:
 # ---------------------------------------------------------------------------
 
 _SIDE_PROCESS_PREFIXES: tuple[str, ...] = (
-    "codex_autorunner.integrations.discord",
-    "codex_autorunner.integrations.telegram",
+    "codex_autorunner.adapters.discord",
+    "codex_autorunner.adapters.telegram",
 )
 
 _FORBIDDEN_SHARED_STATE_PATTERNS: tuple[str, ...] = (
@@ -397,23 +397,23 @@ _FORBIDDEN_POLLING_OWNER_PATTERNS: tuple[str, ...] = (
 )
 
 _SIDE_PROCESS_BOUNDARY_ALLOWLIST: dict[str, list[str]] = {
-    "integrations/discord/service.py": [
+    "adapters/discord/service.py": [
         "build_ticket_flow_orchestration_service -- ALLOWED: ticket flow uses per-workspace orchestration SQLite",
         "seed_repo_files -- ALLOWED: bootstrap seeding runs during startup before hub handshake completes",
     ],
-    "integrations/telegram/service.py": [
+    "adapters/telegram/service.py": [
         "AppServerThreadRegistry -- ALLOWED: protocol-local PMA thread ID mapping for topic routing",
     ],
-    "integrations/telegram/handlers/commands/execution.py": [
+    "adapters/telegram/handlers/commands/execution.py": [
         "AppServerThreadRegistry -- ALLOWED: protocol-local PMA thread ID mapping for topic routing",
     ],
-    "integrations/telegram/handlers/commands/flows.py": [
+    "adapters/telegram/handlers/commands/flows.py": [
         "build_ticket_flow_orchestration_service -- ALLOWED: ticket flow uses per-workspace orchestration SQLite",
     ],
-    "integrations/agents/agent_pool_impl.py": [
+    "adapters/agents/agent_pool_impl.py": [
         "PmaThreadStore -- ALLOWED: agent pool manages thread execution records in hub context",
     ],
-    "integrations/agents/backend_orchestrator.py": [
+    "adapters/agents/backend_orchestrator.py": [
         "AppServerThreadRegistry -- ALLOWED: protocol-local session tracking in backend orchestrator",
     ],
 }

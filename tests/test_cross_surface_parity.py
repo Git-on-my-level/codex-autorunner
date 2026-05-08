@@ -8,13 +8,11 @@ import pytest
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
-from codex_autorunner.cli import app
-from codex_autorunner.core.report_retention import prune_report_directory
-from codex_autorunner.integrations.chat.turn_metrics import (
+from codex_autorunner.adapters.chat.turn_metrics import (
     compose_turn_response_with_footer,
     format_turn_footer,
 )
-from codex_autorunner.integrations.telegram.helpers import (
+from codex_autorunner.adapters.telegram.helpers import (
     _coerce_thread_list,
     _extract_context_usage_percent,
     _extract_thread_list_cursor,
@@ -22,10 +20,12 @@ from codex_autorunner.integrations.telegram.helpers import (
     _format_turn_metrics,
     _parse_review_commit_log,
 )
-from codex_autorunner.integrations.telegram.progress_stream import (
+from codex_autorunner.adapters.telegram.progress_stream import (
     TurnProgressTracker,
     render_progress_text,
 )
+from codex_autorunner.cli import app
+from codex_autorunner.core.report_retention import prune_report_directory
 from codex_autorunner.server import create_hub_app
 
 runner = CliRunner()
@@ -201,16 +201,12 @@ def test_cross_surface_parity_report(hub_env) -> None:
         )
 
     runtime_path = Path(
-        "src/codex_autorunner/integrations/telegram/handlers/commands_runtime.py"
+        "src/codex_autorunner/adapters/telegram/handlers/commands_runtime.py"
     )
-    spec_path = Path(
-        "src/codex_autorunner/integrations/telegram/handlers/commands_spec.py"
-    )
-    trigger_mode_path = Path(
-        "src/codex_autorunner/integrations/telegram/trigger_mode.py"
-    )
+    spec_path = Path("src/codex_autorunner/adapters/telegram/handlers/commands_spec.py")
+    trigger_mode_path = Path("src/codex_autorunner/adapters/telegram/trigger_mode.py")
     telegram_messages_path = Path(
-        "src/codex_autorunner/integrations/telegram/handlers/messages.py"
+        "src/codex_autorunner/adapters/telegram/handlers/messages.py"
     )
     runtime_text = runtime_path.read_text(encoding="utf-8")
     spec_text = spec_path.read_text(encoding="utf-8")
@@ -221,7 +217,7 @@ def test_cross_surface_parity_report(hub_env) -> None:
         "def _handle_bang_shell(" in runtime_text
         or "def _handle_bang_shell("
         in Path(
-            "src/codex_autorunner/integrations/telegram/handlers/commands/shared.py"
+            "src/codex_autorunner/adapters/telegram/handlers/commands/shared.py"
         ).read_text(encoding="utf-8")
     )
     checks.append(
@@ -284,13 +280,13 @@ def test_cross_surface_parity_report(hub_env) -> None:
         )
     )
 
-    discord_service_path = Path("src/codex_autorunner/integrations/discord/service.py")
-    discord_ingress_path = Path("src/codex_autorunner/integrations/discord/ingress.py")
+    discord_service_path = Path("src/codex_autorunner/adapters/discord/service.py")
+    discord_ingress_path = Path("src/codex_autorunner/adapters/discord/ingress.py")
     discord_interaction_registry_path = Path(
-        "src/codex_autorunner/integrations/discord/interaction_registry.py"
+        "src/codex_autorunner/adapters/discord/interaction_registry.py"
     )
     discord_interaction_dispatch_path = Path(
-        "src/codex_autorunner/integrations/discord/interaction_dispatch.py"
+        "src/codex_autorunner/adapters/discord/interaction_dispatch.py"
     )
     discord_service_text = (
         discord_service_path.read_text(encoding="utf-8")
@@ -368,7 +364,7 @@ def test_cross_surface_parity_report(hub_env) -> None:
     )
 
     discord_shared_command_ingress = (
-        "integrations.chat.command_ingress import canonicalize_command_ingress"
+        "adapters.chat.command_ingress import canonicalize_command_ingress"
         in discord_ingress_text
         and discord_ingress_text.count("canonicalize_command_ingress(") >= 2
     )
@@ -405,9 +401,9 @@ def test_cross_surface_parity_report(hub_env) -> None:
         )
     )
 
-    chat_doctor_text = Path(
-        "src/codex_autorunner/integrations/chat/doctor.py"
-    ).read_text(encoding="utf-8")
+    chat_doctor_text = Path("src/codex_autorunner/adapters/chat/doctor.py").read_text(
+        encoding="utf-8"
+    )
     cli_doctor_text = Path(
         "src/codex_autorunner/surfaces/cli/commands/doctor.py"
     ).read_text(encoding="utf-8")

@@ -4,11 +4,11 @@ from typing import Any
 
 import pytest
 
-from codex_autorunner.integrations.telegram.adapter import (
+from codex_autorunner.adapters.telegram.adapter import (
     TelegramCommand,
     TelegramMessage,
 )
-from codex_autorunner.integrations.telegram.handlers.commands_runtime import (
+from codex_autorunner.adapters.telegram.handlers.commands_runtime import (
     TelegramCommandHandlers,
 )
 from tests.fixtures.telegram_command_helpers import make_command_spec

@@ -9,7 +9,7 @@ This package contains surface-specific code for codex-autorunner. Surfaces are r
 - `discord/`: Discord `SurfacePort` facade and inbound event normalization
 - `telegram/`: Telegram `SurfacePort` facade and inbound event normalization
 
-Chat platform API clients remain in `integrations/` as outbound transport
+Chat platform API clients remain in `adapters/` as outbound transport
 adapters. Surface packages own the PMA-facing surface contract and translate
 adapter-normalized inbound events into canonical engine commands.
 
@@ -17,4 +17,4 @@ adapter-normalized inbound events into canonical engine commands.
 
 Surfaces are Layer 3 (outermost). For the full layer definitions, dependency rules, and enforcement, see `docs/ARCHITECTURE_BOUNDARIES.md`.
 
-Allowed dependencies: Surfaces may import from `core.*`, `integrations.*`, and other surface modules. Vendor SDK assumptions stay in integrations.
+Allowed dependencies: Surfaces may import from `core.*`, `adapters.*`, and other surface modules. Vendor SDK assumptions stay in adapters.
