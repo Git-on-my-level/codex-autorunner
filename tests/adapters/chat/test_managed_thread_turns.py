@@ -29,6 +29,7 @@ from codex_autorunner.core.orchestration.runtime_threads import (
     RuntimeThreadExecution,
     RuntimeThreadOutcome,
 )
+from codex_autorunner.core.orchestration.turn_timeline import list_turn_timeline
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.ports.run_event import RunNotice
 from codex_autorunner.core.pr_bindings import PrBindingStore
@@ -2870,6 +2871,103 @@ async def test_finalize_managed_thread_execution_batches_live_timeline_persisten
         "running",
         "ok",
     ]
+
+
+@pytest.mark.anyio
+async def test_finalize_managed_thread_execution_persists_local_timeline_without_hub_client(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = _started_execution_with_backend_ids(tmp_path)
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "harness_supports_event_streaming",
+        lambda _harness: True,
+    )
+
+    async def _progress_stream(*args: Any, **kwargs: Any):
+        _ = args, kwargs
+        yield {"index": 0, "message": {"method": "session/update"}}
+
+    async def _normalize(raw_event: Any, _state: Any) -> list[Any]:
+        _ = raw_event
+        return [
+            RunNotice(
+                timestamp="2026-04-15T00:00:01Z",
+                kind="progress",
+                message="running pwd",
+            )
+        ]
+
+    async def _successful_outcome(*args: Any, **kwargs: Any) -> RuntimeThreadOutcome:
+        _ = args, kwargs
+        return RuntimeThreadOutcome(
+            status="ok",
+            assistant_text="fixture reply",
+            error=None,
+            backend_thread_id="session-1",
+            backend_turn_id="turn-1",
+        )
+
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "harness_progress_event_stream",
+        _progress_stream,
+    )
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "normalize_runtime_progress_event",
+        _normalize,
+    )
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "await_runtime_thread_outcome",
+        _successful_outcome,
+    )
+
+    orchestration_service = SimpleNamespace(
+        get_thread_target=lambda managed_thread_id: SimpleNamespace(
+            backend_thread_id="session-1"
+        ),
+        get_thread_runtime_binding=lambda managed_thread_id: SimpleNamespace(
+            backend_thread_id="session-1"
+        ),
+        record_execution_result=lambda *args, **kwargs: SimpleNamespace(
+            status="ok",
+            error=None,
+        ),
+    )
+
+    result = await managed_thread_turns_module.finalize_managed_thread_execution(
+        orchestration_service=orchestration_service,
+        started=started,
+        state_root=tmp_path,
+        hub_client=None,
+        surface=managed_thread_turns_module.ManagedThreadSurfaceInfo(
+            log_label="PMA",
+            surface_kind="web",
+            surface_key="thread-1",
+        ),
+        errors=managed_thread_turns_module.ManagedThreadErrorMessages(
+            public_execution_error="PMA execution failed",
+            timeout_error="PMA turn timed out",
+            interrupted_error="PMA turn interrupted",
+            timeout_seconds=5,
+        ),
+        logger=logging.getLogger("test.managed_thread.timeline_local"),
+        turn_preview="preview",
+    )
+
+    assert result.status == "ok"
+    entries = list_turn_timeline(tmp_path, execution_id="exec-1")
+    event_types = [entry["event_type"] for entry in entries]
+    assert event_types == ["run_notice", "run_notice", "turn_completed"]
+    assert sorted(entry["event_index"] for entry in entries) == [1, 2, 3]
+    assert any(
+        isinstance(entry.get("event"), dict)
+        and entry["event"].get("message") == "running pwd"
+        for entry in entries
+    )
 
 
 @pytest.mark.anyio

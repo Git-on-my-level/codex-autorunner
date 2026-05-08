@@ -1305,11 +1305,21 @@ def _select_compaction_keep_rows(
     ):
         _mark(row)
 
+    # Preserve operator-action evidence before assistant text deltas. Completed PMA
+    # turns should reload with the tools they ran, even when verbose answer streams
+    # are compacted down to cold trace.
+    prioritized_tool_rows = [
+        row
+        for row in reversed(timeline_rows)
+        if row["event_type"] in {"tool_call", "tool_result"}
+    ]
+    for row in prioritized_tool_rows:
+        _mark(row)
+
     prioritized_recent_rows = [
         row
         for row in reversed(timeline_rows)
-        if row["event_type"]
-        in {"tool_call", "tool_result", "run_notice", "output_delta"}
+        if row["event_type"] in {"run_notice", "output_delta"}
     ]
     for row in prioritized_recent_rows:
         _mark(row)

@@ -299,7 +299,7 @@ def _append_timeline_event_items(
         event = _event_payload(entry)
         event_index = _event_index(entry, fallback)
         timestamp = _event_timestamp(entry)
-        event_stable_id = str(entry.get("event_id") or f"{event_index:04d}")
+        event_stable_id = f"{event_index:04d}"
         progress_item = _progress_item_for_entry(
             entry,
             event_index=event_index,
@@ -358,6 +358,8 @@ def _append_timeline_event_items(
                     status=str(entry.get("status") or "recorded"),
                     payload={
                         **event,
+                        "source_event_ids": [event_index],
+                        "source_event_type": event_type,
                         "progress_item": (
                             progress_item.to_dict()
                             if progress_item is not None
@@ -385,6 +387,9 @@ def _append_timeline_event_items(
                         "text": event.get("message") or "",
                         "event_type": event_type,
                         "event": event,
+                        "source_event_ids": [event_index],
+                        "source_event_type": event_type,
+                        "detail_available": True,
                         "progress_item": (
                             progress_item.to_dict()
                             if progress_item is not None
@@ -412,6 +417,9 @@ def _append_timeline_event_items(
                         "text": event.get("content") or "",
                         "event_type": event_type,
                         "event": event,
+                        "source_event_ids": [event_index],
+                        "source_event_type": event_type,
+                        "detail_available": True,
                         "progress_item": (
                             progress_item.to_dict()
                             if progress_item is not None
@@ -424,6 +432,175 @@ def _append_timeline_event_items(
 
     flush_tool_group()
     return sequence
+
+
+def timeline_item_from_tail_event(
+    *,
+    managed_thread_id: str,
+    managed_turn_id: str,
+    tail_event: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Project one live tail event into the canonical PMA timeline item shape.
+
+    Live web streams should append/update the same durable item contract returned
+    by `/timeline`; chat adapters can keep rendering compact progress summaries.
+    """
+
+    normalized_thread_id = _normalize_optional_text(managed_thread_id)
+    normalized_turn_id = _normalize_optional_text(managed_turn_id)
+    if normalized_thread_id is None or normalized_turn_id is None:
+        return None
+
+    event_type = str(tail_event.get("event_type") or "").strip()
+    event_id = str(tail_event.get("event_id") or "").strip()
+    timestamp = _normalize_optional_text(tail_event.get("received_at"))
+    progress_item = tail_event.get("progress_item")
+    progress = dict(progress_item) if isinstance(progress_item, dict) else {}
+    progress_kind = str(
+        tail_event.get("progress_kind") or progress.get("kind") or ""
+    ).strip()
+    progress_group_id = _normalize_optional_text(
+        tail_event.get("progress_group_id") or progress.get("group_id")
+    )
+    progress_item_id = _normalize_optional_text(
+        tail_event.get("progress_item_id") or progress.get("item_id")
+    )
+    stable_suffix = (
+        progress_group_id
+        or progress_item_id
+        or event_id
+        or str(tail_event.get("summary") or "event")
+    )
+    source_event_ids = progress.get("event_ids")
+    if not isinstance(source_event_ids, list) or not source_event_ids:
+        source_event_ids = [int(tail_event.get("event_id") or 0)]
+    try:
+        source_event_key = f"{int(source_event_ids[-1]):04d}"
+    except (TypeError, ValueError):
+        source_event_key = event_id or stable_suffix
+
+    base = {
+        "order_key": _order_key(
+            timestamp,
+            int(tail_event.get("event_id") or 0),
+            stable_suffix,
+        ),
+        "timestamp": timestamp,
+        "managed_thread_id": normalized_thread_id,
+        "managed_turn_id": normalized_turn_id,
+        "status": str(tail_event.get("progress_state") or "recorded"),
+    }
+
+    if event_type in {"tool_started", "tool_completed", "tool_failed"}:
+        tool_name = (
+            _normalize_optional_text(tail_event.get("tool_name"))
+            or _normalize_optional_text(progress.get("tool_name"))
+            or "tool"
+        )
+        tool_stable_id = stable_suffix
+        if progress_group_id and progress_group_id.startswith("tools:"):
+            parts = progress_group_id.split(":", 2)
+            if len(parts) >= 2:
+                try:
+                    tool_stable_id = str(int(parts[1]))
+                except ValueError:
+                    tool_stable_id = parts[1]
+        item_id = f"turn:{normalized_turn_id}:tool:{tool_stable_id}:{tool_name}"
+        state = str(tail_event.get("tool_state") or progress.get("state") or "")
+        result = None
+        if state in {"completed", "failed"}:
+            result = {
+                "status": "error" if state == "failed" else "completed",
+                "summary": tail_event.get("summary"),
+            }
+        return {
+            **base,
+            "item_id": item_id,
+            "kind": "tool_group",
+            "status": state or base["status"],
+            "payload": {
+                "tool_name": tool_name,
+                "call": {
+                    "tool_name": tool_name,
+                    "summary": tail_event.get("summary"),
+                },
+                "result": result,
+                "progress_items": [progress] if progress else [],
+                "source_event_ids": source_event_ids,
+                "source_event_type": event_type,
+                "detail_available": True,
+                "live_tail_event": dict(tail_event),
+            },
+        }
+
+    if event_type in {"progress", "assistant_update"} or progress_kind in {
+        "assistant_update",
+        "notice",
+    }:
+        item_id = f"turn:{normalized_turn_id}:intermediate:{source_event_key}"
+        text = str(tail_event.get("summary") or "")
+        title = str(tail_event.get("title") or progress.get("title") or "").strip()
+        intermediate_kind = (
+            "thinking"
+            if progress_kind == "assistant_update" or title.lower() == "thinking"
+            else event_type or "notice"
+        )
+        return {
+            **base,
+            "item_id": item_id,
+            "kind": "intermediate",
+            "payload": {
+                "intermediate_kind": intermediate_kind,
+                "text": text,
+                "event_type": event_type,
+                "event": dict(tail_event),
+                "source_event_ids": source_event_ids,
+                "source_event_type": event_type,
+                "detail_available": True,
+                "progress_item": progress or None,
+                "live_tail_event": dict(tail_event),
+            },
+        }
+
+    if progress_kind == "approval" or event_type == "approval_requested":
+        request_id = stable_suffix
+        return {
+            **base,
+            "item_id": f"turn:{normalized_turn_id}:approval:{request_id}",
+            "kind": "approval",
+            "status": str(tail_event.get("progress_state") or "waiting"),
+            "payload": {
+                "request_id": request_id,
+                "description": tail_event.get("summary") or "Approval requested",
+                "source_event_ids": source_event_ids,
+                "source_event_type": event_type,
+                "detail_available": True,
+                "progress_item": progress or None,
+                "live_tail_event": dict(tail_event),
+            },
+        }
+
+    if event_type in {"turn_failed", "turn_interrupted"}:
+        item_id = f"turn:{normalized_turn_id}:intermediate:{source_event_key}"
+        return {
+            **base,
+            "item_id": item_id,
+            "kind": "intermediate",
+            "status": "error" if event_type == "turn_failed" else "interrupted",
+            "payload": {
+                "intermediate_kind": event_type,
+                "text": str(tail_event.get("summary") or ""),
+                "event_type": event_type,
+                "event": dict(tail_event),
+                "source_event_ids": source_event_ids,
+                "source_event_type": event_type,
+                "detail_available": True,
+                "progress_item": progress or None,
+                "live_tail_event": dict(tail_event),
+            },
+        }
+
+    return None
 
 
 def _append_assistant_message(
@@ -629,4 +806,5 @@ __all__ = [
     "TIMELINE_CONTRACT_VERSION",
     "ManagedThreadTimelineItem",
     "build_managed_thread_timeline",
+    "timeline_item_from_tail_event",
 ]

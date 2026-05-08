@@ -29,6 +29,17 @@ describe('SSE helpers', () => {
     });
   });
 
+  it('normalizes PMA timeline stream events', () => {
+    const parsed = parseJsonSseFrame('id: 7\nevent: timeline\ndata: {"item_id":"turn:1:intermediate:0001","kind":"intermediate"}\n\n');
+    expect(parsed).not.toBeNull();
+
+    expect(normalizePmaTailStreamEvent(parsed!)).toEqual({
+      kind: 'timeline',
+      lastEventId: '7',
+      payload: { item_id: 'turn:1:intermediate:0001', kind: 'intermediate' }
+    });
+  });
+
   it('opens PMA tail EventSource under the configured hub base path', () => {
     const close = vi.fn();
     const addEventListener = vi.fn();
@@ -42,6 +53,7 @@ describe('SSE helpers', () => {
     expect(eventSource).toHaveBeenCalledWith('/car/hub/pma/threads/thread%2F1/tail/events', {
       withCredentials: undefined
     });
+    expect(addEventListener).toHaveBeenCalledWith('timeline', expect.any(Function));
     subscription.close();
     expect(close).toHaveBeenCalledOnce();
   });

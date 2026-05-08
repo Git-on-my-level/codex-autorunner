@@ -76,6 +76,8 @@ def test_pma_dynamic_spa_fallback_routes_with_runtime_ids(tmp_path):
     client = TestClient(create_hub_app(hub_root))
 
     for path in (
+        "/chats/5b78deb3-306c-4287-af8e-b1c9f80124a7",
+        "/chats/nested/deep-link/segment",
         "/repos/repo.with.dots",
         "/repos/codex-autorunner--discord-5/",
         "/repos/codex-autorunner--discord-5/tickets/100",

@@ -14,6 +14,7 @@ from codex_autorunner.core.orchestration.managed_thread_delivery_ledger import (
 )
 from codex_autorunner.core.orchestration.managed_thread_timeline import (
     build_managed_thread_timeline,
+    timeline_item_from_tail_event,
 )
 from codex_autorunner.core.orchestration.turn_timeline import persist_turn_timeline
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
@@ -169,6 +170,11 @@ def test_running_timeline_projects_progress_tool_group_and_approval(
     ]
     approval = next(item for item in payload["items"] if item["kind"] == "approval")
     assert approval["payload"]["progress_item"]["kind"] == "approval"
+    intermediate = next(
+        item for item in payload["items"] if item["kind"] == "intermediate"
+    )
+    assert intermediate["payload"]["source_event_ids"] == [1]
+    assert intermediate["payload"]["detail_available"] is True
 
 
 def test_queued_user_messages_remain_distinct_and_ordered_while_running(
@@ -259,6 +265,41 @@ def test_failed_and_interrupted_timelines_include_terminal_status(
     assert (
         statuses[f"turn:{interrupted_id}:status:interrupted"]["status"] == "interrupted"
     )
+
+
+def test_live_tail_event_projects_to_canonical_timeline_item() -> None:
+    item = timeline_item_from_tail_event(
+        managed_thread_id="thread-1",
+        managed_turn_id="turn-1",
+        tail_event={
+            "event_id": 2,
+            "event_type": "tool_completed",
+            "summary": "tool: pytest",
+            "received_at": "2026-05-06T10:00:03Z",
+            "tool_name": "pytest",
+            "tool_state": "completed",
+            "progress_item": {
+                "item_id": "progress:tool:0002:pytest",
+                "kind": "tool",
+                "state": "completed",
+                "title": "pytest",
+                "summary": "tool: pytest",
+                "event_ids": [2],
+                "group_id": "tools:0001:pytest",
+                "group_kind": "tool_group",
+                "tool_name": "pytest",
+            },
+            "progress_group_id": "tools:0001:pytest",
+            "progress_kind": "tool",
+            "progress_state": "completed",
+        },
+    )
+
+    assert item is not None
+    assert item["kind"] == "tool_group"
+    assert item["item_id"] == "turn:turn-1:tool:1:pytest"
+    assert item["payload"]["source_event_ids"] == [2]
+    assert item["payload"]["detail_available"] is True
 
 
 def test_timeline_includes_delivery_state_items(tmp_path: Path) -> None:

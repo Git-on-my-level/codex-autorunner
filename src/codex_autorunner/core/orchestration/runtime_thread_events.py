@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
 
@@ -664,6 +665,15 @@ def _log_decode_failure(
     )
 
 
+def _should_emit_decode_failure_notice() -> bool:
+    value = (
+        str(os.environ.get("CAR_RUNTIME_DECODE_FAILURE_NOTICES") or "").strip().lower()
+    )
+    if value in {"1", "true", "yes", "on", "debug"}:
+        return True
+    return "PYTEST_CURRENT_TEST" in os.environ
+
+
 def normalize_runtime_thread_message(
     method: str,
     params: dict[str, Any],
@@ -706,6 +716,8 @@ def normalize_runtime_thread_message(
             method=method,
             payload_keys=tuple(params.keys()) if isinstance(params, dict) else None,
         )
+        if not _should_emit_decode_failure_notice():
+            return []
         return [
             RunNotice(
                 timestamp=event_timestamp,

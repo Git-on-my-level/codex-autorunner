@@ -597,6 +597,20 @@ _APPROVAL_METHODS = frozenset(
 )
 
 
+def _reasoning_summary_part_text(params: dict[str, Any]) -> str:
+    for key in ("text", "summary", "delta"):
+        value = params.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    part = params.get("part")
+    if isinstance(part, dict):
+        for key in ("text", "summary", "content"):
+            value = part.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+    return ""
+
+
 class CodexItemDecoder(MessageDecoder):
 
     def methods(self) -> frozenset[str]:
@@ -605,6 +619,7 @@ class CodexItemDecoder(MessageDecoder):
                 {
                     "item/started",
                     "item/reasoning/summaryTextDelta",
+                    "item/reasoning/summaryPartAdded",
                     "item/completed",
                     "item/agentMessage/delta",
                     "item/toolCall/start",
@@ -638,6 +653,18 @@ class CodexItemDecoder(MessageDecoder):
                 delta = f"{state.reasoning_buffers.get(key, '')}{delta}"
                 state.reasoning_buffers[key] = delta
             return [RunNotice(timestamp=ts, kind="thinking", message=delta)]
+
+        if method == "item/reasoning/summaryPartAdded":
+            summary = _reasoning_summary_part_text(params)
+            if not summary:
+                return []
+            key = _reasoning_buffer_key(params)
+            if key:
+                existing = state.reasoning_buffers.get(key, "")
+                separator = "\n\n" if existing else ""
+                summary = f"{existing}{separator}{summary}"
+                state.reasoning_buffers[key] = summary
+            return [RunNotice(timestamp=ts, kind="thinking", message=summary)]
 
         if method == "item/completed":
             return self._decode_item_completed(params, state, ts)
@@ -858,6 +885,27 @@ class ACPPromptTurnDecoder(MessageDecoder):
         if acp.runtime_terminal_status == "ok":
             state.completed_seen = True
         return events
+
+
+class TurnDiffDecoder(MessageDecoder):
+    """Consume high-volume runtime notifications without polluting user timelines."""
+
+    def methods(self) -> frozenset[str]:
+        return frozenset(
+            {
+                "turn/diff/updated",
+                "server.connected",
+                "server.heartbeat",
+                "session.updated",
+                "session.diff",
+            }
+        )
+
+    def can_decode(self, method: str) -> bool:
+        return method.startswith("turn/diff/") or method in self.methods()
+
+    def decode(self, method, params, state, ctx):
+        return []
 
 
 class PermissionDecoder(MessageDecoder):
@@ -1172,6 +1220,7 @@ def build_default_decoder_registry() -> DecoderRegistry:
     registry.register(CodexItemDecoder())
     registry.register(LifecycleBoundaryDecoder())
     registry.register(ACPPromptTurnDecoder())
+    registry.register(TurnDiffDecoder())
     registry.register(PermissionDecoder())
     registry.register(UsageDecoder())
     registry.register(SessionUpdateDecoder())
@@ -1188,6 +1237,7 @@ __all__ = [
     "CodexItemDecoder",
     "LifecycleBoundaryDecoder",
     "ACPPromptTurnDecoder",
+    "TurnDiffDecoder",
     "PermissionDecoder",
     "UsageDecoder",
     "SessionUpdateDecoder",

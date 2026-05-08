@@ -87,6 +87,7 @@ from ...core.orchestration.runtime_threads import (
     begin_next_queued_runtime_thread_execution,
     begin_runtime_thread_execution,
 )
+from ...core.orchestration.turn_timeline import persist_turn_timeline
 from ...core.pma_transcripts import PmaTranscriptStore
 from ..github.managed_thread_pr_binding import self_claim_and_arm_pr_binding
 from .execution_event_journal import make_chat_execution_journal_notice
@@ -2328,6 +2329,29 @@ async def finalize_managed_thread_execution(
     )
     timeline_events.append(ingress_notice)
 
+    def _persist_execution_timeline_locally(
+        *,
+        metadata: dict[str, Any],
+        events: list[Any],
+        start_index: int,
+    ) -> int:
+        return persist_turn_timeline(
+            state_root,
+            execution_id=managed_turn_id,
+            target_kind="thread_target",
+            target_id=managed_thread_id,
+            repo_id=str(current_thread_metadata.get("repo_id") or "").strip() or None,
+            resource_kind=(
+                str(current_thread_metadata.get("resource_kind") or "").strip() or None
+            ),
+            resource_id=(
+                str(current_thread_metadata.get("resource_id") or "").strip() or None
+            ),
+            metadata=metadata,
+            events=events,
+            start_index=start_index,
+        )
+
     async def _persist_live_timeline_events(events: list[Any]) -> None:
         nonlocal live_timeline_count
         nonlocal live_timeline_error_logged
@@ -2336,11 +2360,41 @@ async def finalize_managed_thread_execution(
         if live_timeline_error_logged:
             return
         if resolved_hub_client is None:
-            live_timeline_error_logged = True
+            metadata = _surface_metadata(
+                started,
+                surface,
+                backend_thread_id=current_backend_thread_id or None,
+                backend_turn_id=started.execution.backend_id,
+                status="running",
+            )
+            try:
+                live_timeline_count += _persist_execution_timeline_locally(
+                    metadata=metadata,
+                    events=events,
+                    start_index=live_timeline_count + 1,
+                )
+            except (OSError, RuntimeError, ValueError) as exc:
+                live_timeline_error_logged = True
+                log_event(
+                    logger,
+                    logging.ERROR,
+                    "chat.managed_thread.live_timeline_local_persist_failed",
+                    **_managed_thread_trace_fields(
+                        managed_thread_id=managed_thread_id,
+                        managed_turn_id=managed_turn_id,
+                        backend_thread_id=current_backend_thread_id or None,
+                        backend_turn_id=started.execution.backend_id,
+                        surface=surface,
+                    ),
+                    persisted_event_count=len(events),
+                    start_index=live_timeline_count + 1,
+                    exc=exc,
+                )
+                return
             log_event(
                 logger,
-                logging.ERROR,
-                "chat.managed_thread.live_timeline_client_missing",
+                logging.INFO,
+                "chat.managed_thread.live_timeline_persisted_locally",
                 **_managed_thread_trace_fields(
                     managed_thread_id=managed_thread_id,
                     managed_turn_id=managed_turn_id,
@@ -2348,6 +2402,7 @@ async def finalize_managed_thread_execution(
                     backend_turn_id=started.execution.backend_id,
                     surface=surface,
                 ),
+                persisted_event_count=len(events),
             )
             return
         try:
@@ -2505,10 +2560,33 @@ async def finalize_managed_thread_execution(
         events: list[Any],
     ) -> Optional[str]:
         if resolved_hub_client is None:
+            try:
+                _persist_execution_timeline_locally(
+                    metadata=metadata,
+                    events=events,
+                    start_index=live_timeline_count + 1,
+                )
+            except (OSError, RuntimeError, ValueError) as exc:
+                log_event(
+                    logger,
+                    logging.ERROR,
+                    "chat.managed_thread.final_timeline_local_persist_failed",
+                    **_managed_thread_trace_fields(
+                        managed_thread_id=managed_thread_id,
+                        managed_turn_id=managed_turn_id,
+                        backend_thread_id=current_backend_thread_id or None,
+                        backend_turn_id=started.execution.backend_id,
+                        surface=surface,
+                    ),
+                    persisted_event_count=len(events),
+                    start_index=live_timeline_count + 1,
+                    exc=exc,
+                )
+                return None
             log_event(
                 logger,
-                logging.ERROR,
-                "chat.managed_thread.final_timeline_client_missing",
+                logging.INFO,
+                "chat.managed_thread.final_timeline_persisted_locally",
                 **_managed_thread_trace_fields(
                     managed_thread_id=managed_thread_id,
                     managed_turn_id=managed_turn_id,
@@ -2516,6 +2594,8 @@ async def finalize_managed_thread_execution(
                     backend_turn_id=started.execution.backend_id,
                     surface=surface,
                 ),
+                persisted_event_count=len(events),
+                start_index=live_timeline_count + 1,
             )
             return None
         manifest_id = str(metadata.get("trace_manifest_id") or "").strip() or None

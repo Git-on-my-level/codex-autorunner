@@ -1,11 +1,9 @@
 from pathlib import Path
 
-import pytest
-
-from codex_autorunner.manifest import ManifestError, load_manifest_with_issues
+from codex_autorunner.manifest import load_manifest_with_issues
 
 
-def test_manifest_rejects_removed_workspace_section(tmp_path: Path) -> None:
+def test_manifest_strips_removed_workspace_section(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     hub_root.mkdir()
     manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
@@ -15,12 +13,14 @@ def test_manifest_rejects_removed_workspace_section(tmp_path: Path) -> None:
         f"version: 3\nrepos: []\n{ws_section}: []\n",
         encoding="utf-8",
     )
-    with pytest.raises(ManifestError) as excinfo:
-        load_manifest_with_issues(manifest_path, hub_root)
-    assert ws_section in str(excinfo.value)
+    manifest, _issues = load_manifest_with_issues(manifest_path, hub_root)
+    assert manifest.version == 3
+    text = manifest_path.read_text(encoding="utf-8")
+    assert ws_section not in text
+    assert "version: 3" in text
 
 
-def test_manifest_rejects_removed_agents_block(tmp_path: Path) -> None:
+def test_manifest_strips_removed_agents_block(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     hub_root.mkdir()
     manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
@@ -30,6 +30,8 @@ def test_manifest_rejects_removed_agents_block(tmp_path: Path) -> None:
         f"version: 3\nrepos: []\nagents:\n  {legacy_agent}: {{}}\n",
         encoding="utf-8",
     )
-    with pytest.raises(ManifestError) as excinfo:
-        load_manifest_with_issues(manifest_path, hub_root)
-    assert legacy_agent in str(excinfo.value)
+    manifest, _issues = load_manifest_with_issues(manifest_path, hub_root)
+    assert manifest.version == 3
+    text = manifest_path.read_text(encoding="utf-8")
+    assert legacy_agent not in text
+    assert "agents:" not in text

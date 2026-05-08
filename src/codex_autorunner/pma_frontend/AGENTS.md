@@ -8,6 +8,12 @@ hubs serve by default.
 
 - App source: `src/codex_autorunner/pma_frontend/src/`
 - Built output: `src/codex_autorunner/pma_static/`
+- **Hub deep links**: SvelteKit client routing does not run until `index.html`
+  loads. If you add routes under `src/routes/` that users can refresh or open in
+  a new tab, the FastAPI hub must serve that same HTML for those paths (see
+  `surfaces/web/AGENTS.md` section “PMA Hub SPA shell” and the `PMA Hub SPA shell`
+  comment block in `../surfaces/web/app.py`). Prefer documenting a new deep path in
+  `tests/surfaces/web/test_pma_static_routes.py`.
 - Design system: `DESIGN.md`
 - Legacy/reference UI: `../static_src/` and `../static/`; run it with
   `make serve-legacy-ui` or `CAR_ENABLE_LEGACY_UI=1`.

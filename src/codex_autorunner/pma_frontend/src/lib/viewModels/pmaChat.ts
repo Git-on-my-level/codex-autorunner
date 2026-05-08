@@ -67,9 +67,11 @@ export type ArtifactCardView = {
 };
 
 export type PmaCard =
-  | { kind: 'message'; id: string; message: PmaChatMessage }
-  | { kind: 'intermediate'; id: string; title: string; text: string; eventIds: string[] }
-  | { kind: 'tool_group'; id: string; tools: PmaToolCallCard[] }
+  | { kind: 'message'; id: string; message: PmaChatMessage; turnId: string | null; orderKey: string; timestamp: string | null }
+  | { kind: 'intermediate'; id: string; title: string; text: string; eventIds: string[]; detail: string | null; turnId: string | null; orderKey: string; timestamp: string | null }
+  | { kind: 'tool_group'; id: string; tools: PmaToolCallCard[]; turnId: string | null; orderKey: string; timestamp: string | null }
+  | { kind: 'turn_summary'; id: string; title: string; cards: PmaCard[]; turnId: string | null; orderKey: string; timestamp: string | null }
+  | { kind: 'approval'; id: string; title: string; summary: string; detail: string | null; turnId: string | null; orderKey: string; timestamp: string | null }
   | { kind: 'ticket'; id: string; title: string; summary: string | null; ticketId: string }
   | { kind: 'artifact'; id: string; artifact: SurfaceArtifact };
 
@@ -77,7 +79,10 @@ export type PmaToolCallCard = {
   id: string;
   title: string;
   summary: string | null;
+  detail: string | null;
   state: 'started' | 'completed' | 'failed' | 'unknown';
+  eventIds: string[];
+  source?: SurfaceArtifact;
 };
 
 type CanonicalProgressItem = {
@@ -241,19 +246,49 @@ export function buildPmaCards(
   return cards;
 }
 
+export function buildPmaTranscriptCards(
+  timeline: PmaTimelineItem[],
+  chat: PmaChatSummary | null,
+  artifacts: SurfaceArtifact[],
+  progress: PmaRunProgress | null
+): PmaCard[] {
+  return summarizeCompletedTurnActivity(
+    mergePmaTimelineAndActivityCards(
+      buildPmaCards(timeline, chat, artifacts),
+      buildPmaActivityCards(progress?.events ?? [])
+    ),
+    progress
+  );
+}
+
 export function reconcilePmaTimeline(
   existing: PmaTimelineItem[],
   incoming: PmaTimelineItem[],
   limit = 500
 ): PmaTimelineItem[] {
   if (!incoming.length) return existing;
-  const byId = new Map(existing.map((item) => [item.id, item]));
+  const canonicalUserMessages = incoming.filter((item) => item.kind === 'user_message' && !item.id.startsWith('optimistic:'));
+  const byId = new Map(
+    existing
+      .filter((item) => !isSupersededOptimisticUserMessage(item, canonicalUserMessages))
+      .map((item) => [item.id, item])
+  );
   for (const item of incoming) {
     byId.set(item.id, { ...byId.get(item.id), ...item, payload: { ...byId.get(item.id)?.payload, ...item.payload } });
   }
   return [...byId.values()]
     .sort(compareTimelineItems)
     .slice(-limit);
+}
+
+function isSupersededOptimisticUserMessage(item: PmaTimelineItem, canonicalUserMessages: PmaTimelineItem[]): boolean {
+  if (!item.id.startsWith('optimistic:') || item.kind !== 'user_message') return false;
+  const optimisticText = stringValue(item.payload.text).trim();
+  return canonicalUserMessages.some((canonical) => {
+    if (canonical.chatId !== item.chatId) return false;
+    const canonicalText = stringValue(canonical.payload.text).trim();
+    return Boolean(optimisticText && canonicalText && optimisticText === canonicalText);
+  });
 }
 
 export function optimisticUserTimelineItemFromSend(
@@ -314,7 +349,10 @@ export function buildPmaActivityCards(events: SurfaceArtifact[]): PmaCard[] {
     cards.push({
       kind: 'tool_group',
       id: `tools-${toolGroup[0].id}-${toolGroup.at(-1)?.id ?? toolGroup[0].id}`,
-      tools: toolGroup
+      tools: toolGroup,
+      turnId: activityTurnId(toolGroup[0].source),
+      orderKey: activityOrderKey(toolGroup[0].source),
+      timestamp: toolGroup[0].source?.createdAt ?? null
     });
     toolGroup = [];
   };
@@ -326,11 +364,15 @@ export function buildPmaActivityCards(events: SurfaceArtifact[]): PmaCard[] {
         id: event.id,
         title: toolDisplayTitle(event),
         summary: stringValue(canonicalProgressItem(event)?.summary) || event.summary,
-        state: toolState(event)
+        detail: null,
+        state: toolState(event),
+        eventIds: [event.id, ...progressItemEventIds(canonicalProgressItem(event))],
+        source: event
       });
       continue;
     }
 
+    if (isHiddenLifecycleActivity(event)) continue;
     const text = assistantActivityText(event);
     if (!text) continue;
     flushToolGroup();
@@ -345,11 +387,32 @@ export function buildPmaActivityCards(events: SurfaceArtifact[]): PmaCard[] {
       id: `intermediate-${event.id}`,
       title: intermediateTitle(event),
       text,
-      eventIds: [event.id]
+      detail: null,
+      eventIds: [event.id],
+      turnId: activityTurnId(event),
+      orderKey: activityOrderKey(event),
+      timestamp: event.createdAt
     });
   }
   flushToolGroup();
   return cards;
+}
+
+export function mergePmaTimelineAndActivityCards(
+  timelineCards: PmaCard[],
+  activityCards: PmaCard[]
+): PmaCard[] {
+  if (!activityCards.length) return timelineCards;
+  const timelineIds = new Set(timelineCards.map((card) => card.id));
+  const timelineEventIds = new Set<string>();
+  for (const card of timelineCards) {
+    for (const id of cardEventIds(card)) timelineEventIds.add(id);
+  }
+  const extra = activityCards.filter((card) => {
+    if (timelineIds.has(card.id)) return false;
+    return !cardEventIds(card).some((id) => timelineEventIds.has(id));
+  });
+  return [...timelineCards, ...extra].sort(comparePmaCards);
 }
 
 export function filterArtifactsForActiveChat(
@@ -508,6 +571,20 @@ function toolState(event: SurfaceArtifact): PmaToolCallCard['state'] {
   return 'unknown';
 }
 
+function isDecodeFailureActivity(event: SurfaceArtifact): boolean {
+  const item = canonicalProgressItem(event);
+  const kind = stringValue(item?.kind).toLowerCase();
+  const title = (stringValue(item?.title) || event.title).trim().toLowerCase();
+  return kind === 'decode_failure' || title === 'decode failure';
+}
+
+function isHiddenLifecycleActivity(event: SurfaceArtifact): boolean {
+  if (isDecodeFailureActivity(event)) return true;
+  const item = canonicalProgressItem(event);
+  const title = (stringValue(item?.title) || event.title).trim().toLowerCase();
+  return title === 'chat execution journal' || title === 'compaction summary';
+}
+
 function timelineItemToCard(item: PmaTimelineItem): PmaCard[] {
   if (item.kind === 'user_message' || item.kind === 'assistant_message') {
     const text = stringValue(item.payload.text);
@@ -517,6 +594,9 @@ function timelineItemToCard(item: PmaTimelineItem): PmaCard[] {
       {
         kind: 'message',
         id: item.id,
+        turnId: item.turnId,
+        orderKey: item.orderKey,
+        timestamp: item.timestamp,
         message: {
           id: item.id,
           chatId: item.chatId,
@@ -532,12 +612,43 @@ function timelineItemToCard(item: PmaTimelineItem): PmaCard[] {
     ];
   }
   if (item.kind === 'intermediate') {
+    if (isHiddenLifecycleTimelineItem(item)) return [];
     const text = stringValue(item.payload.text);
     if (!text.trim()) return [];
-    return [{ kind: 'intermediate', id: item.id, title: intermediateTimelineTitle(item), text, eventIds: [item.id] }];
+    return [{
+      kind: 'intermediate',
+      id: item.id,
+      title: intermediateTimelineTitle(item),
+      text,
+      detail: timelineDetail(item),
+      eventIds: timelineSourceEventIds(item),
+      turnId: item.turnId,
+      orderKey: item.orderKey,
+      timestamp: item.timestamp
+    }];
   }
   if (item.kind === 'tool_group') {
-    return [{ kind: 'tool_group', id: item.id, tools: [toolCardFromTimeline(item)] }];
+    return [{
+      kind: 'tool_group',
+      id: item.id,
+      tools: [toolCardFromTimeline(item)],
+      turnId: item.turnId,
+      orderKey: item.orderKey,
+      timestamp: item.timestamp
+    }];
+  }
+  if (item.kind === 'approval') {
+    const title = stringValue(item.payload.description) || stringValue(item.payload.summary) || 'Approval requested';
+    return [{
+      kind: 'approval',
+      id: item.id,
+      title: 'Approval requested',
+      summary: title,
+      detail: timelineDetail(item),
+      turnId: item.turnId,
+      orderKey: item.orderKey,
+      timestamp: item.timestamp
+    }];
   }
   if (item.kind === 'artifact') {
     return [{ kind: 'artifact', id: item.id, artifact: mapTimelineArtifact(item.payload) }];
@@ -557,12 +668,46 @@ function toolCardFromTimeline(item: PmaTimelineItem): PmaToolCallCard {
         : 'started';
   const title = stringValue(item.payload.tool_name) || stringValue(call.tool_name) || 'Tool call';
   const summary = stringValue(result.summary) || stringValue(call.summary) || null;
-  return { id: item.id, title, summary, state };
+  return { id: item.id, title, summary, detail: timelineDetail(item), state, eventIds: timelineSourceEventIds(item) };
 }
 
 function intermediateTimelineTitle(item: PmaTimelineItem): string {
   const kind = stringValue(item.payload.intermediate_kind).replace(/_/g, ' ');
   return kind || 'PMA update';
+}
+
+function isDecodeFailureTimelineItem(item: PmaTimelineItem): boolean {
+  const kind = stringValue(item.payload.intermediate_kind).toLowerCase();
+  const title = intermediateTimelineTitle(item).trim().toLowerCase();
+  return kind === 'decode_failure' || title === 'decode failure';
+}
+
+function isHiddenLifecycleTimelineItem(item: PmaTimelineItem): boolean {
+  if (isDecodeFailureTimelineItem(item)) return true;
+  const intermediateKind = stringValue(item.payload.intermediate_kind).toLowerCase();
+  const eventType = stringValue(item.payload.event_type).toLowerCase();
+  if (eventType === 'output_delta' && ['assistant_stream', 'assistant_message'].includes(intermediateKind)) {
+    return true;
+  }
+  const event = asRecord(item.payload.event);
+  return ['chat_execution_journal', 'compaction_summary'].includes(
+    stringValue(event.kind).toLowerCase()
+  );
+}
+
+function timelineDetail(item: PmaTimelineItem): string | null {
+  const detailSource =
+    item.payload.live_tail_event ??
+    item.payload.event ??
+    item.payload.result ??
+    item.payload.call ??
+    null;
+  if (!detailSource || typeof detailSource !== 'object') return null;
+  try {
+    return JSON.stringify(detailSource, null, 2);
+  } catch {
+    return null;
+  }
 }
 
 function mapTimelineArtifact(raw: Record<string, unknown>): SurfaceArtifact {
@@ -575,6 +720,124 @@ function mapTimelineArtifact(raw: Record<string, unknown>): SurfaceArtifact {
     createdAt: stringValue(raw.created_at ?? raw.modified_at) || null,
     raw
   };
+}
+
+function summarizeCompletedTurnActivity(cards: PmaCard[], progress: PmaRunProgress | null): PmaCard[] {
+  const byTurn = new Map<string, PmaCard[]>();
+  for (const card of cards) {
+    const turnId = cardTurnId(card);
+    if (!turnId) continue;
+    const group = byTurn.get(turnId) ?? [];
+    group.push(card);
+    byTurn.set(turnId, group);
+  }
+  const summaryByTurn = new Map<string, PmaCard>();
+  for (const [turnId, group] of byTurn) {
+    const trace = group.filter(isTraceCard);
+    if (!trace.length) continue;
+    const hasAssistantMessage = group.some((card) => card.kind === 'message' && card.message.role === 'assistant');
+    if (!hasAssistantMessage) continue;
+    const isCurrentRunning = progress?.id === turnId && !progress.terminal && progress.status === 'running';
+    if (isCurrentRunning) continue;
+    const firstTrace = trace[0];
+    summaryByTurn.set(turnId, {
+      kind: 'turn_summary',
+      id: `turn:${turnId}:summary`,
+      title: `Worked for ${turnElapsedLabel(turnId, group, progress)}`,
+      cards: trace,
+      turnId,
+      orderKey: firstTrace.orderKey,
+      timestamp: firstTrace.timestamp
+    });
+  }
+  const output: PmaCard[] = [];
+  const inserted = new Set<string>();
+  for (const card of cards) {
+    const turnId = cardTurnId(card);
+    if (turnId && summaryByTurn.has(turnId) && isTraceCard(card)) {
+      if (!inserted.has(turnId)) {
+        output.push(summaryByTurn.get(turnId)!);
+        inserted.add(turnId);
+      }
+      continue;
+    }
+    output.push(card);
+  }
+  return output;
+}
+
+function turnElapsedLabel(turnId: string, cards: PmaCard[], progress: PmaRunProgress | null): string {
+  if (progress?.id === turnId && progress.elapsedSeconds !== null) return formatDuration(progress.elapsedSeconds);
+  const times = cards
+    .map((card) => Date.parse(cardTimestamp(card) ?? ''))
+    .filter((value) => Number.isFinite(value));
+  if (times.length >= 2) return formatDuration(Math.max(0, Math.round((Math.max(...times) - Math.min(...times)) / 1000)));
+  return 'a moment';
+}
+
+function isTraceCard(card: PmaCard): card is Extract<PmaCard, { kind: 'intermediate' | 'tool_group' | 'approval' }> {
+  return card.kind === 'intermediate' || card.kind === 'tool_group' || card.kind === 'approval';
+}
+
+function cardTurnId(card: PmaCard): string | null {
+  return 'turnId' in card ? card.turnId : null;
+}
+
+function cardTimestamp(card: PmaCard): string | null {
+  return 'timestamp' in card ? card.timestamp : null;
+}
+
+function cardEventIds(card: PmaCard): string[] {
+  if (card.kind === 'intermediate') return card.eventIds;
+  if (card.kind === 'tool_group') return card.tools.flatMap((tool) => [tool.id, ...tool.eventIds]);
+  if (card.kind === 'approval') return [card.id];
+  return [];
+}
+
+function timelineSourceEventIds(item: PmaTimelineItem): string[] {
+  return [
+    item.id,
+    ...unknownArrayToStrings(item.payload.source_event_ids),
+    ...progressItemEventIds(asRecord(item.payload.progress_item) as CanonicalProgressItem),
+    ...asRecordArray(item.payload.progress_items).flatMap((progressItem) => progressItemEventIds(progressItem as CanonicalProgressItem))
+  ];
+}
+
+function progressItemEventIds(item: CanonicalProgressItem | null | undefined): string[] {
+  return unknownArrayToStrings(item?.event_ids);
+}
+
+function unknownArrayToStrings(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => stringValue(item)).filter(Boolean);
+}
+
+function activityTurnId(event: SurfaceArtifact | undefined): string | null {
+  if (!event) return null;
+  return stringValue(event.raw.managed_turn_id ?? event.raw.turn_id ?? event.raw.execution_id ?? event.raw.run_id) || null;
+}
+
+function activityOrderKey(event: SurfaceArtifact | undefined): string {
+  if (!event) return '';
+  const item = canonicalProgressItem(event);
+  const eventIds = progressItemEventIds(item);
+  const sequence = Number.parseInt(eventIds.at(-1) ?? event.id, 10);
+  if (Number.isFinite(sequence)) {
+    return `${String(sequence).padStart(8, '0')}|${event.createdAt ?? ''}|${event.id}`;
+  }
+  return stringValue(event.raw.order_key) || `${event.createdAt ?? ''}|${event.id}|${stringValue(item?.item_id)}`;
+}
+
+function comparePmaCards(left: PmaCard, right: PmaCard): number {
+  return cardSortKey(left).localeCompare(cardSortKey(right));
+}
+
+function cardSortKey(card: PmaCard): string {
+  const timestamp = cardTimestamp(card);
+  const orderKey = 'orderKey' in card ? card.orderKey : '';
+  if (timestamp) return `${timestamp}|${orderKey}|${card.id}`;
+  if (orderKey) return orderKey;
+  return card.id;
 }
 
 function compareTimelineItems(left: PmaTimelineItem, right: PmaTimelineItem): number {

@@ -502,6 +502,9 @@ def test_managed_thread_tail_events_reuses_active_harness_state(
     assert factory_calls == ["opencode"]
     assert resp.headers["content-type"].startswith("text/event-stream")
     assert "event: tail" in resp.text
+    assert "event: timeline" in resp.text
+    assert "\nid: 1\n" in resp.text
+    assert '"kind": "intermediate"' in resp.text
     assert "assistant_update" in resp.text
 
 

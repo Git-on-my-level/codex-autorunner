@@ -13,6 +13,9 @@ from .....agents.base import (
     harness_progress_event_stream,
     harness_supports_event_streaming,
 )
+from .....core.orchestration.managed_thread_timeline import (
+    timeline_item_from_tail_event,
+)
 from .....core.orchestration.progress_projection import ProgressProjectionState
 from .....core.orchestration.runtime_thread_events import (
     RuntimeThreadRunEventState,
@@ -205,6 +208,30 @@ def _stream_lifecycle_fields(payload: dict[str, Any]) -> dict[str, Any]:
         "stream_close_reason": payload.get("stream_close_reason"),
         "stream_lifecycle": payload.get("stream_lifecycle"),
     }
+
+
+def _timeline_stream_frame(
+    *,
+    managed_thread_id: str,
+    managed_turn_id: Any,
+    tail_event: dict[str, Any],
+) -> str | None:
+    item = timeline_item_from_tail_event(
+        managed_thread_id=managed_thread_id,
+        managed_turn_id=str(managed_turn_id or ""),
+        tail_event=tail_event,
+    )
+    if item is None:
+        return None
+    event_id = tail_event.get("event_id")
+    event_id_line = (
+        f"id: {event_id}\n" if isinstance(event_id, int) and event_id > 0 else ""
+    )
+    return (
+        f"event: timeline\n"
+        f"{event_id_line}"
+        f"data: {json.dumps(item, ensure_ascii=True)}\n\n"
+    )
 
 
 async def _build_managed_thread_orchestration_service_async(request: Request) -> Any:
@@ -558,6 +585,13 @@ def build_managed_thread_tail_routes(
                     f"{event_id_line}"
                     f"data: {json.dumps(event, ensure_ascii=True)}\n\n"
                 )
+                timeline_frame = _timeline_stream_frame(
+                    managed_thread_id=managed_thread_id,
+                    managed_turn_id=snapshot.get("managed_turn_id"),
+                    tail_event=event,
+                )
+                if timeline_frame is not None:
+                    yield timeline_frame
 
             if snapshot.get("stream_should_close"):
                 return
@@ -644,6 +678,13 @@ def build_managed_thread_tail_routes(
                                 f"{event_id_line}"
                                 f"data: {json.dumps(event, ensure_ascii=True)}\n\n"
                             )
+                            timeline_frame = _timeline_stream_frame(
+                                managed_thread_id=managed_thread_id,
+                                managed_turn_id=snapshot.get("managed_turn_id"),
+                                tail_event=event,
+                            )
+                            if timeline_frame is not None:
+                                yield timeline_frame
                         break
 
                     now = datetime.now(timezone.utc)
@@ -734,6 +775,13 @@ def build_managed_thread_tail_routes(
                         f"id: {event_id}\n"
                         f"data: {json.dumps(serialized_entry, ensure_ascii=True)}\n\n"
                     )
+                    timeline_frame = _timeline_stream_frame(
+                        managed_thread_id=managed_thread_id,
+                        managed_turn_id=snapshot.get("managed_turn_id"),
+                        tail_event=serialized_entry,
+                    )
+                    if timeline_frame is not None:
+                        yield timeline_frame
 
             refreshed = await _build_managed_thread_tail_snapshot(
                 request=request,

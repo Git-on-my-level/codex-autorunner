@@ -26,6 +26,17 @@ The hub is a focused, internal product for engineers. The visual taste is
   half-screen on a header that says "Repos".
 - **Hover earns affordance.** Borders strengthen, shadows lift gently,
   hidden chevrons slide in. Never animate layout-shifting properties.
+- **Each fact lives in exactly one place.** If the breadcrumb already
+  carries `#5b78de`, don't repeat it in the header subtitle. If the
+  scope is a clickable ingress link, don't also render it as plain
+  meta text. When two surfaces show the same value, delete the weaker
+  one — usually the read-only twin of the actionable one.
+- **Suppress empty signals.** A row that reads `idle · idle · elapsed
+  n/a · queue 0` is communicating nothing four times. Hide bars and
+  pills when the only thing they have to say is "nothing is happening."
+  Only render status surfaces when the value is non-default and
+  meaningful (`running`, `waiting`, `blocked`, `failed`, queue > 0,
+  elapsed known).
 
 Reference implementations:
 
@@ -139,6 +150,25 @@ Hard rules for hero headers:
   topbar breadcrumb already tells the user where they are. If a page is
   ambiguous without an eyebrow, fix the breadcrumb or the title — don't
   paper over it.
+
+### Header rows for dense detail surfaces
+
+Some surfaces (chat detail, ticket detail) carry more identity than a
+single subtitle row can hold without wrapping into mush. Use up to
+three left-aligned rows in the header:
+
+1. Title (`<h1>`).
+2. Scope/parent identity — usually a single clickable ingress link
+   (`worktree → repo`, `repo → org`). The most scannable handle for
+   "where am I?" sits here, not buried in meta.
+3. Meta row — kind badge, status, ticket id, locked-config tag, etc.
+   Allow this row to wrap; it's the lowest-density tier.
+
+For live state and locked configuration that doesn't belong in the
+left meta column, use a **right-side aside** in the header
+(`.chat-header-aside` is the reference). Cap the aside at ~50% width,
+align right-stacked, and hide it entirely when nothing inside it has
+content. Don't render an empty aside just to "balance" the header.
 
 ### Inline KPI strip (`.hero-stats`)
 
@@ -289,6 +319,21 @@ Pick one and only one of these per element. Never combine more than two:
 
 Never use color alone for state. Always pair with a label or icon.
 
+### Active vs terminal states
+
+Loud status surfaces (pills, accent strips, sticky banners) are for
+**active** states the user can still influence: `running`, `waiting`,
+`blocked`, `failed`. Terminal/stable states (`done`, `idle`) should
+either be silent or fold into an existing meta row.
+
+- After a turn finishes, the assistant's reply itself signals "done."
+  A persistent `done · 4s elapsed` chip on top of that is duplicated
+  signal. If completion timing is genuinely useful (audit, debugging),
+  inline it into the existing subtitle as one more meta token (`done ·
+  completed · 4s elapsed`) — don't promote it to a chip again.
+- An `idle` row is almost always noise. If you can't say anything more
+  than the word `idle`, render nothing.
+
 ### Status dots — two scales
 
 Status dots come in two sizes; pick the one that matches the surrounding
@@ -381,6 +426,87 @@ stay as solid primary buttons because the action is the point.
 - Error: `.state-panel.error` with a Retry button.
 - Partial-page degradations: render the `degradedIssues` snippet
   per-section. Don't fail the whole page when only one slice failed.
+
+### Empty state as primary canvas
+
+When a primary view has no content yet (a chat with no messages, a
+ticket queue with no tickets, a memory page with no notes), the
+otherwise-blank center column is the **best** place for setup or
+configuration affordances. Don't squeeze them into the page header
+where they steal density from identity/meta and force the user to
+look in two places at once.
+
+Concrete pattern:
+
+- Header stays minimal — title + scope + meta only.
+- The empty state replaces the would-be content with a focused setup
+  card centered on `margin: auto 0`. Just the controls the user
+  actually needs to start, no marketing copy or explanatory paragraphs
+  about what they're about to do (the labels carry that signal).
+- Once the view has any real content, the setup card disappears and
+  the controls either move to a compact passive display in the header
+  or vanish entirely (see Lifecycle controls).
+
+This is how the chat detail's "pick agent / model / effort" lives
+when a chat is fresh, instead of stacked in the header.
+
+## Lifecycle controls
+
+A control is either editable for the entire life of the surface, or
+it's a one-time-at-start choice. **Pick the model that matches reality
+and never present an "edit" UI for something that's actually locked.**
+
+- **Editable throughout** (e.g. composer textarea, search input,
+  filter chips): always show as live controls.
+- **Locked after first action** (e.g. agent for a chat — switching it
+  silently forks a new chat anyway): show editable only in the empty
+  state. Once the surface has activity, render the value as **plain
+  read-only text** — usually a small mono tag in the meta row. Never
+  render a disabled `<select>` with explanatory hint text; a disabled
+  control invites a click that has no good outcome.
+- **Editable but consequential** (e.g. model on a chat that supports
+  mid-conversation switching): keep editable; place behind a chip +
+  popover so the loud "controls" chrome doesn't compete with the
+  primary canvas.
+
+Boilerplate prose like "Approvals apply during turns according to the
+selected approval policy and sandbox mode" does not belong next to
+the composer. If the rule never changes with state, it's documentation
+— move it to the help system or the docs folder, not the runtime UI.
+
+## Navigation and deep links
+
+Selectable detail views must be **path-addressable**, not query-string
+addressable. `/chats/abc123` beats `/chats?detail=chat:abc123&chat=abc123`
+on every axis: bookmarkable, shareable, breadcrumbable, back-buttonable,
+and visible in the URL bar without scanning.
+
+Conventions:
+
+- One file per master-detail page using SvelteKit optional params
+  (`/chats/[[chatId]]/+page.svelte`). The same component handles both
+  list and detail; it reads `page.params.<id>` to decide which mode
+  to render.
+- Selecting a row pushes the path via `goto`. Closing the detail
+  navigates back to the list path. Both directions update history so
+  the browser back button works.
+- Add a structured route in `breadcrumbs.ts` for any new path-based
+  detail view. Keep most-specific patterns first.
+- The breadcrumb is the **canonical back affordance**. Don't ship a
+  separate "back to list" button when the breadcrumb already does
+  the job.
+
+### Master-detail toggles
+
+Toggle widgets (`Chats / Detail` segmented control) are a fallback for
+viewports that can't fit both panes side-by-side. They are not a
+primary navigation pattern. Hide them whenever the URL already
+addresses the state — at narrow viewports, navigating between list
+and detail happens via the URL (clicking a card pushes the detail
+path; clicking the breadcrumb returns to the list).
+
+`MasterDetail.svelte` accepts `showSwitch={false}` for exactly this
+case. Reach for it any time you give the page proper deep links.
 
 ## Forms and inputs
 
@@ -490,6 +616,27 @@ Don't:
 - Build new layout primitives by copying CSS into a component's `<style>`
   block when the same shape exists in `app.css` or as a shared component.
   Promote the pattern, then use it.
+- Render the same value twice on the same surface. If the breadcrumb
+  shows `#abc123`, drop the chip in the subtitle. If the ingress link
+  shows `repo / worktree`, drop the duplicate scope text in meta. Pick
+  the more useful (usually actionable) representation; delete the rest.
+- Render an "edit" UI for a control that's actually locked. A disabled
+  `<select>` is a worse signal than plain read-only text — it invites
+  hover and click and then disappoints. If the control can't change,
+  display the value, not the form.
+- Render an empty status pill ("idle · idle · elapsed n/a · queue 0").
+  Hide the surface when it has nothing to say.
+- Ship a query-string deep link (`?detail=chat:abc&chat=abc`) for a
+  selectable row when the route supports a path segment. Path-based
+  URLs are the convention for selectable detail views; query strings
+  are for filters and transient flags.
+- Use a master-detail toggle as the primary nav. The breadcrumb is
+  the canonical back affordance; toggles are a fallback for narrow
+  viewports where deep links also handle navigation. Hide the toggle
+  with `showSwitch={false}` once the page is path-addressable.
+- Keep boilerplate prose in the runtime UI ("Approvals apply during
+  turns…"). If the rule never changes with state, it belongs in the
+  docs, not the chrome.
 
 ## Build
 

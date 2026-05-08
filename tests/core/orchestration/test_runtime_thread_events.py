@@ -2732,6 +2732,20 @@ class TestDecodeFailureObservability:
         assert events[0].data["method"] == "future/unknownMethod"
         assert "future/unknownMethod" in events[0].message
 
+    async def test_unknown_method_is_silent_without_debug_notice_gate(
+        self, monkeypatch
+    ) -> None:
+        monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+        monkeypatch.delenv("CAR_RUNTIME_DECODE_FAILURE_NOTICES", raising=False)
+        state = RuntimeThreadRunEventState()
+
+        events = await normalize_runtime_thread_raw_event(
+            {"method": "future/unknownMethod", "params": {"data": 42}},
+            state,
+        )
+
+        assert events == []
+
     async def test_empty_method_emits_decode_failure_notice(self) -> None:
         state = RuntimeThreadRunEventState()
 
@@ -2866,6 +2880,11 @@ class TestRegistryIsSoleDispatchPath:
         "turn/completed",
         "prompt/cancelled",
         "turn/cancelled",
+        "turn/diff/updated",
+        "server.connected",
+        "server.heartbeat",
+        "session.updated",
+        "session.diff",
         "permission/requested",
         "session/request_permission",
         "permission/decision",
@@ -2927,6 +2946,11 @@ class TestRegistryIsSoleDispatchPath:
             "turn/completed": {"status": "completed"},
             "prompt/cancelled": {"status": "cancelled"},
             "turn/cancelled": {"status": "cancelled"},
+            "turn/diff/updated": {"patch": "diff"},
+            "server.connected": {},
+            "server.heartbeat": {},
+            "session.updated": {},
+            "session.diff": {},
             "permission/requested": {"requestId": "r1"},
             "session/request_permission": {"requestId": "r2"},
             "permission/decision": {"decision": "accept"},

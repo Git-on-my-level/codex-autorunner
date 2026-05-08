@@ -922,6 +922,14 @@ def create_hub_app(
             html, headers=pma_index_response_headers(pma_static_dir, context.base_path)
         )
 
+    # --- PMA Hub SPA shell (deep links / refresh) ---
+    # SvelteKit owns URL→screen after load. The hub must return the same index.html
+    # for any refreshable path the frontend can emit, or the browser gets FastAPI's
+    # JSON 404. Add a hub GET that maps to _pma_index_response() when you introduce a
+    # new client-only subtree under src/codex_autorunner/pma_frontend/src/routes/.
+    # Prefer a "{rest:path}" catch-all per top-level segment when that subtree can nest.
+    # See surfaces/web/AGENTS.md (section PMA Hub SPA shell).
+
     @app.get("/", include_in_schema=False)
     def hub_index():
         target = f"{context.base_path}/chats" if context.base_path else "/chats"
@@ -934,6 +942,7 @@ def create_hub_app(
             return _legacy_index_response()
 
     @app.get("/chats", include_in_schema=False)
+    @app.get("/chats/{rest:path}", include_in_schema=False)
     @app.get("/repos", include_in_schema=False)
     @app.get("/repos/{repo_id}", include_in_schema=False)
     @app.get("/repos/{repo_id}/tickets", include_in_schema=False)
@@ -943,7 +952,8 @@ def create_hub_app(
     @app.get("/tickets", include_in_schema=False)
     @app.get("/tickets/{ticket_id}", include_in_schema=False)
     @app.get("/settings", include_in_schema=False)
-    def pma_hub_index():
+    @app.get("/hub", include_in_schema=False)
+    def pma_hub_index(rest: Optional[str] = None):
         return _pma_index_response()
 
     def _resolve_worktree_parent_repo_id(worktree_id: str) -> str:
@@ -972,6 +982,18 @@ def create_hub_app(
                 status_code=404,
                 detail=f"Worktree not found in repo scope: {repo_id}/{worktree_id}",
             )
+
+    @app.get("/repos/{repo_id}/memory", include_in_schema=False)
+    def pma_repo_memory_shell(repo_id: str):
+        return _pma_index_response()
+
+    @app.get(
+        "/repos/{repo_id}/worktrees/{worktree_id}/memory",
+        include_in_schema=False,
+    )
+    def pma_worktree_memory_shell(repo_id: str, worktree_id: str):
+        _require_worktree_scope(repo_id, worktree_id)
+        return _pma_index_response()
 
     @app.get("/worktrees", include_in_schema=False)
     def legacy_worktrees_index_redirect():

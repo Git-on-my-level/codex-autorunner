@@ -8,7 +8,7 @@
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import { openPmaTailEventSource, type StreamSubscription } from '$lib/api/streaming';
   import { repoRoute, worktreeRoute } from '$lib/viewModels/routes';
-  import { mapPmaRunProgress } from '$lib/viewModels/domain';
+  import { mapPmaRunProgress, mapPmaTimelineItem } from '$lib/viewModels/domain';
   import { renderMarkdownToHtml } from '$lib/viewModels/contextspace';
   import type {
     PmaChatSummary,
@@ -21,7 +21,7 @@
     buildManagedThreadCreatePayload,
     buildPmaChatScopeOptions,
     buildManagedThreadMessagePayload,
-    buildPmaCards,
+    buildPmaTranscriptCards,
     buildPmaStatusBar,
     chooseActiveChatId,
     composeMessageWithAttachments,
@@ -31,7 +31,6 @@
     localPmaChatScopeOption,
     modelReasoningOptions,
     modelSelectorState,
-    optimisticUserTimelineItemFromSend,
     PMA_CHAT_FILTER_ORDER,
     pmaChatKind,
     pmaChatKindLabel,
@@ -88,6 +87,7 @@
   let pendingRefreshTimer: number | null = null;
   let lastScrolledChatId: string | null = null;
   let lastScrolledCardCount = 0;
+  let lastScrolledEventCount = 0;
 
   const activeChat = $derived(
     activeChatId
@@ -96,7 +96,7 @@
   );
   const filteredChats = $derived(sortChatsWaitingFirst(filterPmaChats(chats, filter, search)));
   const filterCounts = $derived(summarizeFilterCounts(chats));
-  const activeCards = $derived<PmaCard[]>(buildPmaCards(timeline, activeChat, artifacts));
+  const activeCards = $derived<PmaCard[]>(buildPmaTranscriptCards(timeline, activeChat, artifacts, progress));
   const statusBar = $derived(buildPmaStatusBar(progress, activeChat));
   const selectedScope = $derived(scopeOptions.find((scope) => scope.id === selectedScopeId) ?? localPmaChatScopeOption());
   const selectedAgentRecord = $derived(agentRecordForId(selectedAgent));
@@ -120,9 +120,11 @@
   const showStatusBar = $derived(
     Boolean(
       statusBar &&
-        (statusBar.state !== 'idle' ||
-          (progress?.elapsedSeconds !== null && progress?.elapsedSeconds !== undefined) ||
-          (progress?.queueDepth ?? 0) > 0)
+        statusBar.state !== 'idle' &&
+        statusBar.state !== 'done' &&
+        ((progress?.elapsedSeconds !== null && progress?.elapsedSeconds !== undefined) ||
+          (progress?.queueDepth ?? 0) > 0 ||
+          ['running', 'waiting', 'blocked', 'failed'].includes(statusBar.state))
     )
   );
   const chatHasActivity = $derived(activeCards.length > 0 || showStatusBar);
@@ -130,11 +132,6 @@
   const selectedAgentLabel = $derived(selectedAgentRecord ? agentLabel(selectedAgentRecord) : selectedAgent || 'Agent');
   const selectedModelLabel = $derived(selectedModelRecord ? modelLabel(selectedModelRecord) : selectedModel || '');
   const selectedEffortLabel = $derived(selectedReasoning || 'default');
-  let configPopoverOpen = $state(false);
-
-  $effect(() => {
-    if (showStartPicker) configPopoverOpen = false;
-  });
 
   function repoLabelForRepoId(repoId: string): string | null {
     const opt = scopeOptions.find((scope) => scope.kind === 'repo' && scope.resourceId === repoId);
@@ -213,14 +210,17 @@
 
   $effect(() => {
     const cardCount = activeCards.length;
+    const eventCount = progress?.events.length ?? 0;
     const chatChanged = activeChatId !== lastScrolledChatId;
     const cardCountChanged = cardCount !== lastScrolledCardCount;
+    const eventCountChanged = eventCount !== lastScrolledEventCount;
 
-    if (!activeChat || loadingActive || (!chatChanged && !cardCountChanged)) return;
+    if (!activeChat || loadingActive || (!chatChanged && !cardCountChanged && !eventCountChanged)) return;
 
     const shouldFollowLatest = chatChanged || isMessageStackNearBottom();
     lastScrolledChatId = activeChatId;
     lastScrolledCardCount = cardCount;
+    lastScrolledEventCount = eventCount;
     if (shouldFollowLatest) void scrollMessagesToBottom();
   });
 
@@ -405,7 +405,13 @@
         if (activeChatId !== chatId) return;
         streamState = 'connected';
         streamLastEventAt = new Date().toISOString();
-        if (event.kind === 'tail') scheduleActiveRefresh(chatId, 350);
+        if (event.kind === 'timeline') {
+          const item = mapPmaTimelineItem(event.payload);
+          timeline = reconcilePmaTimeline(timeline, [item]);
+          if (item.kind === 'user_message') dropOptimisticPlaceholders();
+          return;
+        }
+        if (event.kind === 'tail') return;
         if (event.kind === 'progress' || event.kind === 'state') {
           const nextProgress = mapPmaRunProgress(event.payload);
           updateProgress(nextProgress);
@@ -454,7 +460,24 @@
   }
 
   function updateProgress(nextProgress: PmaRunProgress): void {
-    progress = nextProgress;
+    if (progress && progress.id === nextProgress.id) {
+      const seen = new Set<string>();
+      const merged: SurfaceArtifact[] = [];
+      for (const ev of [...progress.events, ...nextProgress.events]) {
+        if (!ev.id || seen.has(ev.id)) continue;
+        seen.add(ev.id);
+        merged.push(ev);
+      }
+      progress = { ...nextProgress, events: merged };
+    } else {
+      progress = nextProgress;
+    }
+  }
+
+  function dropOptimisticPlaceholders(): void {
+    if (timeline.some((item) => item.id.startsWith('optimistic:'))) {
+      timeline = timeline.filter((item) => !item.id.startsWith('optimistic:'));
+    }
   }
 
   function retryStream(): void {
@@ -575,17 +598,57 @@
 
   async function sendMessage(): Promise<void> {
     if ((!draft.trim() && pendingAttachments.length === 0) || !activeChatId) return;
+    const draftSnapshot = draft;
+    const attachmentsSnapshot = pendingAttachments;
+    const optimisticChatId = activeChatId;
+    const optimisticId = `optimistic:user:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
+    const optimisticTimestamp = new Date().toISOString();
+    const optimisticPlaceholder: PmaTimelineItem = {
+      id: optimisticId,
+      kind: 'user_message',
+      orderKey: `optimistic|${optimisticTimestamp}|${optimisticId}`,
+      timestamp: optimisticTimestamp,
+      chatId: optimisticChatId,
+      turnId: '',
+      status: null,
+      payload: {
+        text: draftSnapshot,
+        text_preview: draftSnapshot.slice(0, 240),
+        attachments: attachmentsSnapshot.map((att) => ({
+          id: att.id,
+          kind: att.kind,
+          title: att.title,
+          url: att.url,
+          size_label: att.sizeLabel
+        }))
+      },
+      raw: { optimistic: true }
+    };
+    timeline = reconcilePmaTimeline(timeline, [optimisticPlaceholder]);
+    draft = '';
     sending = true;
     composeError = null;
+
+    const removeOptimistic = () => {
+      timeline = timeline.filter((item) => !item.id.startsWith('optimistic:'));
+    };
+    const restoreDraft = () => {
+      removeOptimistic();
+      draft = draftSnapshot;
+      pendingAttachments = attachmentsSnapshot;
+    };
+
     const uploaded = await ensureAttachmentsUploaded();
     if (!uploaded) {
+      restoreDraft();
       sending = false;
       return;
     }
     const attachmentsForMessage = pendingAttachments;
-    const message = composeMessageWithAttachments(draft, attachmentsForMessage);
+    const message = composeMessageWithAttachments(draftSnapshot, attachmentsForMessage);
     const targetChatId = await ensureChatForSelectedAgent();
     if (!targetChatId) {
+      restoreDraft();
       sending = false;
       return;
     }
@@ -595,12 +658,11 @@
       buildManagedThreadMessagePayload(message, selectedModel, targetIsRunning, attachmentsForMessage, selectedReasoning)
     );
     if (result.ok) {
-      draft = '';
-      pendingAttachments = [];
-      const optimisticItem = optimisticUserTimelineItemFromSend(result.data.raw, message, targetChatId);
-      if (optimisticItem) timeline = reconcilePmaTimeline(timeline, [optimisticItem]);
       await refreshActive(targetChatId, { quiet: true });
+      removeOptimistic();
+      pendingAttachments = [];
     } else {
+      restoreDraft();
       composeError = result.error;
     }
     sending = false;
@@ -721,18 +783,14 @@
   {#snippet list()}
   <aside class="chat-list" aria-label="Chats">
     <div class="chat-list-header">
-      <div class="section-heading">
-        <h2>Chats</h2>
-      </div>
-      <button class="new-chat-button prominent-new-chat" type="button" onclick={createChat} disabled={creating}>
+      <label class="search-field chat-list-search">
+        <span class="sr-only">Search chats</span>
+        <input bind:value={search} type="search" placeholder="Search chats, repos, tickets" />
+      </label>
+      <button class="new-chat-button" type="button" onclick={createChat} disabled={creating}>
         {createChatLabel}
       </button>
     </div>
-
-    <label class="search-field">
-      <span class="sr-only">Search chats</span>
-      <input bind:value={search} type="search" placeholder="Search chats, repos, tickets" />
-    </label>
 
     <div class="filter-row" aria-label="Chat status filters">
       {#each PMA_CHAT_FILTER_ORDER as item}
@@ -784,18 +842,18 @@
                 <strong>{chat.title}</strong>
                 <span class="chat-title-trailing">
                   <span class={`chat-kind-badge ${pmaChatKind(chat)}`}>{pmaChatKindLabel(pmaChatKind(chat))}</span>
-                  <span class={`status-pill ${chat.status}`}>{statusLabel(chat.status)}</span>
-                  <span class="updated-at">{formatRelativeTime(chat.updatedAt)}</span>
+                  {#if chat.status !== 'idle' && chat.status !== 'done'}
+                    <span class={`status-pill ${chat.status}`}>{statusLabel(chat.status)}</span>
+                  {/if}
+                  {#if chat.updatedAt}
+                    <span class="updated-at">{formatRelativeTime(chat.updatedAt)}</span>
+                  {/if}
                 </span>
               </span>
               <span class="chat-meta-row">
                 <span class="chat-id-tag">#{chat.id.slice(0, 6)}</span>
                 <span class="chat-meta-dot" aria-hidden="true">·</span>
                 <span class="chat-scope">{pmaChatScopeLabelFromChat(chat)}</span>
-                {#if chat.worktreeId}
-                  <span class="chat-meta-dot" aria-hidden="true">·</span>
-                  <span>{chat.worktreeId}</span>
-                {/if}
                 {#if chat.ticketId}
                   <span class="chat-meta-dot" aria-hidden="true">·</span>
                   <code>{chat.ticketId}</code>
@@ -835,112 +893,78 @@
       <div class="chat-header-copy">
         <h1>{activeChat?.title ?? 'Chats'}</h1>
         {#if activeChat}
-          <p class="chat-header-subtitle">
-            <span class={`chat-kind-badge ${activeChatKind}`}>{activeChatKindLabel}</span>
-            <span class={`status-dot status-${activeChat.status}`} aria-hidden="true"></span>
-            <span>{statusLabel(activeChat.status)}</span>
+          <p class="chat-header-scope-line">
             {#if activeRepoIngress}
-              <span class="chat-meta-dot" aria-hidden="true">·</span>
               <a class="chat-header-scope-link" href={href(activeRepoIngress.href)}>
                 <span class="chat-header-scope">{activeRepoIngress.detail}</span>
                 <span class="chat-header-scope-arrow" aria-hidden="true">→</span>
               </a>
             {:else}
-              <span class="chat-meta-dot" aria-hidden="true">·</span>
               <span class="chat-header-scope">{headerScopeLine}</span>
+            {/if}
+          </p>
+          <p class="chat-header-subtitle">
+            <span class={`chat-kind-badge ${activeChatKind}`}>{activeChatKindLabel}</span>
+            <span class={`status-dot status-${activeChat.status}`} aria-hidden="true"></span>
+            {#if activeChat.status === 'done' && progress?.elapsedSeconds !== null && progress?.elapsedSeconds !== undefined && statusBar}
+              <strong class="chat-header-status-strong">{statusLabel(activeChat.status)}</strong>
+              {#if statusBar.phase && statusBar.phase.toLowerCase() !== statusLabel(activeChat.status).toLowerCase()}
+                <span>{statusBar.phase}</span>
+              {/if}
+              <span>{statusBar.elapsedLabel}</span>
+            {:else}
+              <span>{statusLabel(activeChat.status)}</span>
             {/if}
             {#if activeChat.ticketId}
               <span class="chat-meta-dot" aria-hidden="true">·</span>
               <code>{activeChat.ticketId}</code>
             {/if}
-            <span class="chat-meta-dot" aria-hidden="true">·</span>
-            <span class="chat-header-id">#{activeChat.id.slice(0, 6)}</span>
+            {#if chatHasActivity}
+              <span class="chat-meta-dot" aria-hidden="true">·</span>
+              <span class="chat-header-config" title="Locked for this chat">
+                {selectedAgentLabel}{selectedModelLabel ? ` · ${selectedModelLabel}` : ''}{showEffortSelector ? ` · ${selectedEffortLabel}` : ''}
+              </span>
+            {/if}
           </p>
         {/if}
       </div>
-      {#if activeChat && chatHasActivity && showAgentSelector}
-        <div class="config-summary">
-          <button
-            type="button"
-            class="config-summary-chip"
-            aria-haspopup="dialog"
-            aria-expanded={configPopoverOpen}
-            onclick={() => (configPopoverOpen = !configPopoverOpen)}
-            title="Adjust model or effort"
-          >
-            <span class="config-summary-agent">{selectedAgentLabel}</span>
-            {#if selectedModelLabel}
-              <span class="config-summary-dot" aria-hidden="true">·</span>
-              <span class="config-summary-model">{selectedModelLabel}</span>
-            {/if}
-            {#if showEffortSelector}
-              <span class="config-summary-dot" aria-hidden="true">·</span>
-              <span class="config-summary-effort">{selectedEffortLabel}</span>
-            {/if}
-            <span class="config-summary-caret" aria-hidden="true">▾</span>
-          </button>
-          {#if configPopoverOpen}
-            <div class="config-popover" role="dialog" aria-label="Chat configuration">
-              <label class="selector-field stacked">
-                <span>agent</span>
-                <select aria-label="Agent" disabled value={selectedAgent}>
-                  <option value={selectedAgent}>{selectedAgentLabel}</option>
-                </select>
-                <small class="config-popover-hint">Start a new chat to switch agents.</small>
-              </label>
-              {#if showModelSelector}
-                <label class={`selector-field stacked ${modelState.state}`}>
-                  <span>{modelState.label}</span>
-                  <select aria-label="Model" bind:value={selectedModel} disabled={modelState.disabled}>
-                    {#if models.length === 0}
-                      <option value="">Configured model</option>
-                    {:else}
-                      {#each models as model}
-                        <option value={stringField(model, 'id') ?? stringField(model, 'model') ?? modelLabel(model)}>
-                          {modelLabel(model)}
-                        </option>
-                      {/each}
-                    {/if}
-                  </select>
-                </label>
+      {#if activeChat && (showStatusBar || showStreamHealth)}
+        <aside class="chat-header-aside" aria-label="Chat status">
+          {#if showStatusBar && statusBar}
+            <div class={`pma-status-bar ${statusBar.state}`} aria-label="PMA turn status">
+              <span class="status-dot" aria-hidden="true"></span>
+              <strong>{statusLabel(statusBar.state)}</strong>
+              {#if statusBar.phase && statusBar.phase.toLowerCase() !== statusLabel(statusBar.state).toLowerCase()}
+                <span>{statusBar.phase}</span>
               {/if}
-              {#if showEffortSelector}
-                <label class="selector-field stacked">
-                  <span>effort</span>
-                  <select aria-label="Effort" bind:value={selectedReasoning}>
-                    <option value="">Default effort</option>
-                    {#each reasoningOptions as effort}
-                      <option value={effort}>{effort}</option>
-                    {/each}
-                  </select>
-                </label>
+              {#if progress?.elapsedSeconds !== null && progress?.elapsedSeconds !== undefined}
+                <span>{statusBar.elapsedLabel}</span>
               {/if}
-              <div class="config-popover-actions">
-                <button type="button" class="ghost-button" onclick={() => (configPopoverOpen = false)}>Done</button>
-              </div>
+              {#if (progress?.queueDepth ?? 0) > 0}
+                <span>{statusBar.queueDepthLabel}</span>
+              {/if}
             </div>
           {/if}
-        </div>
+          {#if showStreamHealth}
+            <div class={`stream-health ${streamState}`} role="status">
+              <span class="status-dot" aria-hidden="true"></span>
+              <span>
+                {#if streamState === 'connected'}
+                  Live{streamLastEventAt ? ` · ${formatRelativeTime(streamLastEventAt)}` : ''}
+                {:else if streamState === 'connecting'}
+                  Connecting…
+                {:else if streamState === 'interrupted'}
+                  {streamError}
+                {/if}
+              </span>
+              {#if streamState === 'interrupted'}
+                <button type="button" onclick={retryStream}>Reconnect</button>
+              {/if}
+            </div>
+          {/if}
+        </aside>
       {/if}
     </div>
-
-    {#if activeChat && showStreamHealth}
-      <div class={`stream-health ${streamState}`} role="status">
-        <span class="status-dot" aria-hidden="true"></span>
-        <span>
-          {#if streamState === 'connected'}
-            Live{streamLastEventAt ? ` · ${formatRelativeTime(streamLastEventAt)}` : ''}
-          {:else if streamState === 'connecting'}
-            Connecting…
-          {:else if streamState === 'interrupted'}
-            {streamError}
-          {/if}
-        </span>
-        {#if streamState === 'interrupted'}
-          <button type="button" onclick={retryStream}>Reconnect</button>
-        {/if}
-      </div>
-    {/if}
 
     <div bind:this={messageStack} class="message-stack" aria-live="polite">
       {#if loadingActive}
@@ -1008,21 +1032,6 @@
           {/if}
         </div>
       {:else}
-        {#if showStatusBar && statusBar}
-          <section class={`pma-status-bar ${statusBar.state}`} aria-label="PMA turn status">
-            <span class="status-dot" aria-hidden="true"></span>
-            <strong>{statusLabel(statusBar.state)}</strong>
-            {#if statusBar.phase && statusBar.phase.toLowerCase() !== statusLabel(statusBar.state).toLowerCase()}
-              <span>{statusBar.phase}</span>
-            {/if}
-            {#if progress?.elapsedSeconds !== null && progress?.elapsedSeconds !== undefined}
-              <span>{statusBar.elapsedLabel}</span>
-            {/if}
-            {#if (progress?.queueDepth ?? 0) > 0}
-              <span>{statusBar.queueDepthLabel}</span>
-            {/if}
-          </section>
-        {/if}
         {#each activeCards as card (card.id)}
           {#if card.kind === 'message'}
             <article class={`message ${card.message.role === 'user' ? 'user' : 'assistant'}`}>
@@ -1032,18 +1041,29 @@
               </div>
             </article>
           {:else if card.kind === 'intermediate'}
-            <article class="intermediate-card" aria-label="PMA intermediate output">
-              <span class="artifact-type">PMA update</span>
-              <strong>{card.title}</strong>
+            <details class="intermediate-card" aria-label="PMA intermediate output">
+              <summary>
+                <strong>{card.title}</strong>
+              </summary>
               <div class="message-markdown markdown-body">
                 {@html renderMarkdownToHtml(card.text)}
               </div>
-            </article>
+              {#if card.detail}
+                <pre class="timeline-detail">{card.detail}</pre>
+              {/if}
+            </details>
           {:else if card.kind === 'tool_group'}
+            {@const headlineTool = card.tools[0]}
             <details class="tool-call-bar">
               <summary>
-                <span>Tool calls</span>
-                <strong>{card.tools.length} {card.tools.length === 1 ? 'tool call' : 'tool calls'}</strong>
+                <span>Tools</span>
+                <strong>
+                  {#if headlineTool}
+                    {headlineTool.title}{card.tools.length > 1 ? ` · +${card.tools.length - 1} more` : ''}
+                  {:else}
+                    Tool call
+                  {/if}
+                </strong>
               </summary>
               <ol>
                 {#each card.tools as tool (tool.id)}
@@ -1053,9 +1073,85 @@
                     {#if tool.summary && tool.summary !== tool.title}
                       <small>{tool.summary}</small>
                     {/if}
+                    {#if tool.detail}
+                      <pre class="timeline-detail">{tool.detail}</pre>
+                    {/if}
                   </li>
                 {/each}
-              </ol>
+                </ol>
+            </details>
+          {:else if card.kind === 'turn_summary'}
+            <details class="tool-call-bar turn-summary-card">
+              <summary>
+                <strong>{card.title}</strong>
+              </summary>
+              <div class="turn-summary-trace">
+                {#each card.cards as traceCard (traceCard.id)}
+                  {#if traceCard.kind === 'intermediate'}
+                    <details class="intermediate-card nested-trace" aria-label="PMA intermediate output">
+                      <summary>
+                        <strong>{traceCard.title}</strong>
+                      </summary>
+                      <div class="message-markdown markdown-body">
+                        {@html renderMarkdownToHtml(traceCard.text)}
+                      </div>
+                      {#if traceCard.detail}
+                        <pre class="timeline-detail">{traceCard.detail}</pre>
+                      {/if}
+                    </details>
+                  {:else if traceCard.kind === 'tool_group'}
+                    {@const traceHeadlineTool = traceCard.tools[0]}
+                    <details class="tool-call-bar nested-trace">
+                      <summary>
+                        <span>Tools</span>
+                        <strong>
+                          {#if traceHeadlineTool}
+                            {traceHeadlineTool.title}{traceCard.tools.length > 1 ? ` · +${traceCard.tools.length - 1} more` : ''}
+                          {:else}
+                            Tool call
+                          {/if}
+                        </strong>
+                      </summary>
+                      <ol>
+                        {#each traceCard.tools as tool (tool.id)}
+                          <li class={tool.state}>
+                            <span>{tool.state}</span>
+                            <strong>{tool.title}</strong>
+                            {#if tool.summary && tool.summary !== tool.title}
+                              <small>{tool.summary}</small>
+                            {/if}
+                            {#if tool.detail}
+                              <pre class="timeline-detail">{tool.detail}</pre>
+                            {/if}
+                          </li>
+                        {/each}
+                      </ol>
+                    </details>
+                  {:else if traceCard.kind === 'approval'}
+                    <details class="approval-card nested-trace">
+                      <summary>
+                        <span>Approval</span>
+                        <strong>{traceCard.title}</strong>
+                      </summary>
+                      <p>{traceCard.summary}</p>
+                      {#if traceCard.detail}
+                        <pre class="timeline-detail">{traceCard.detail}</pre>
+                      {/if}
+                    </details>
+                  {/if}
+                {/each}
+              </div>
+            </details>
+          {:else if card.kind === 'approval'}
+            <details class="approval-card">
+              <summary>
+                <span class="artifact-type">Approval</span>
+                <strong>{card.title}</strong>
+              </summary>
+              <p>{card.summary}</p>
+              {#if card.detail}
+                <pre class="timeline-detail">{card.detail}</pre>
+              {/if}
             </details>
           {:else if card.kind === 'ticket'}
             <article class="artifact-card ticket-card">

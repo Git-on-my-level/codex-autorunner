@@ -323,6 +323,7 @@ async def execute_harness_turn(
         _wait_for_idle_timeout(activity_tracker, resolved_timeout_seconds)
     )
     interrupt_task = asyncio.create_task(interrupt_event.wait())
+    turn_completed_normally = False
     try:
         done, _ = await asyncio.wait(
             {turn_task, timeout_task, interrupt_task},
@@ -355,17 +356,32 @@ async def execute_harness_turn(
             cancel_background_task(turn_task, name="pma.runtime.turn.wait")
             return {"status": "interrupted", "detail": "PMA chat interrupted"}
         turn_result = await turn_task
+        turn_completed_normally = True
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     finally:
         cancel_background_task(timeout_task, name="pma.runtime.timeout.wait")
         cancel_background_task(interrupt_task, name="pma.runtime.interrupt.wait")
         if stream_task is not None:
-            stream_task.cancel()
-            try:
-                await stream_task
-            except asyncio.CancelledError:
-                pass
+            if turn_completed_normally:
+                try:
+                    await asyncio.wait_for(stream_task, timeout=0.5)
+                except asyncio.TimeoutError:
+                    stream_task.cancel()
+                    try:
+                        await stream_task
+                    except asyncio.CancelledError:
+                        pass
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    logger.debug("PMA runtime event collector failed", exc_info=True)
+            else:
+                stream_task.cancel()
+                try:
+                    await stream_task
+                except asyncio.CancelledError:
+                    pass
 
     raw_events = tuple(getattr(turn_result, "raw_events", ()) or ())
     merged_raw_events = tuple(

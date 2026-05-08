@@ -355,12 +355,25 @@ def test_compact_completed_execution_history_reduces_hot_rows_and_keeps_cold_tra
                AND event_id LIKE '%:compaction-summary'
             """
         ).fetchone()
+        retained_event_types = [
+            str(row["event_type"] or "")
+            for row in conn.execute(
+                """
+                SELECT event_type
+                  FROM orch_event_projections
+                 WHERE event_family = 'turn.timeline'
+                   AND execution_id = 'exec-compact'
+                """
+            ).fetchall()
+        ]
 
     assert int(count_row["cnt"] or 0) <= 8
     assert summary_row is not None
     payload = json.loads(str(summary_row["payload_json"]))
     assert payload["event"]["kind"] == "compaction_summary"
     assert payload["event"]["data"]["removed_hot_rows"] > 0
+    assert "tool_call" in retained_event_types
+    assert "tool_result" in retained_event_types
 
 
 def test_compaction_skips_small_executions_without_loading_timeline_rows(

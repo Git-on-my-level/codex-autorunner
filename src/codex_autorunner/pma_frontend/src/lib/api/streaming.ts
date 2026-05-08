@@ -10,6 +10,7 @@ export type SseEvent<T = unknown> = {
 export type PmaTailStreamEvent =
   | { kind: 'state'; payload: Record<string, unknown>; lastEventId: string | null }
   | { kind: 'tail'; payload: Record<string, unknown>; lastEventId: string | null }
+  | { kind: 'timeline'; payload: Record<string, unknown>; lastEventId: string | null }
   | { kind: 'progress'; payload: Record<string, unknown>; lastEventId: string | null }
   | { kind: 'message'; payload: unknown; lastEventId: string | null };
 
@@ -60,6 +61,7 @@ export function normalizePmaTailStreamEvent(event: SseEvent<unknown>): PmaTailSt
   const payload = asRecord(event.data);
   if (event.event === 'state') return { kind: 'state', payload, lastEventId: event.id };
   if (event.event === 'tail') return { kind: 'tail', payload, lastEventId: event.id };
+  if (event.event === 'timeline') return { kind: 'timeline', payload, lastEventId: event.id };
   if (event.event === 'progress') return { kind: 'progress', payload, lastEventId: event.id };
   return { kind: 'message', payload: event.data, lastEventId: event.id };
 }
@@ -85,6 +87,7 @@ export function openPmaTailEventSource(
   };
   source.addEventListener('state', handle);
   source.addEventListener('tail', handle);
+  source.addEventListener('timeline', handle);
   source.addEventListener('progress', handle);
   source.addEventListener('message', handle);
   source.addEventListener('error', (event) => options.onError?.(event));

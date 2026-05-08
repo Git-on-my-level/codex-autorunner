@@ -7,8 +7,10 @@ import {
   agentCapabilityAllowed,
   buildPmaChatScopeOptions,
   buildPmaCards,
+  buildPmaActivityCards,
   buildPmaLiveActivity,
   buildPmaStatusBar,
+  buildPmaTranscriptCards,
   chooseActiveChatId,
   composeMessageWithAttachments,
   filterPmaChats,
@@ -16,6 +18,7 @@ import {
   formatRelativeTime,
   isPrimaryProgressArtifact,
   mergePmaActivityEvents,
+  mergePmaTimelineAndActivityCards,
   modelReasoningOptions,
   modelSelectorState,
   optimisticUserTimelineItemFromSend,
@@ -262,8 +265,9 @@ describe('PMA chat view helpers', () => {
     const cards = buildPmaCards(
       [
         timelineItem('turn:one:user', 'user_message', { text: 'Create tickets' }, '001'),
-        timelineItem('turn:one:intermediate:think-1', 'intermediate', { intermediate_kind: 'thinking', text: 'Inspecting repo state.' }, '002'),
-        timelineItem('turn:one:tool:1:rg', 'tool_group', { tool_name: 'rg tickets', call: { summary: 'rg tickets' } }, '003'),
+        timelineItem('turn:one:intermediate:think-1', 'intermediate', { intermediate_kind: 'thinking', text: 'Inspecting repo state.', event: { kind: 'thinking', message: 'Inspecting repo state.' } }, '002'),
+        timelineItem('turn:one:tool:1:rg', 'tool_group', { tool_name: 'rg tickets', call: { summary: 'rg tickets' }, result: { status: 'completed', summary: '2 matches' } }, '003'),
+        timelineItem('turn:one:approval:write-1', 'approval', { description: 'Allow write' }, '0035'),
         timelineItem('turn:one:intermediate:think-2', 'intermediate', { intermediate_kind: 'thinking', text: 'Drafting ticket files.' }, '004'),
         timelineItem('turn:one:assistant', 'assistant_message', { text: 'Done.\n\n- [TICKET-001.md](/tmp/TICKET-001.md)' }, '005')
       ],
@@ -275,13 +279,194 @@ describe('PMA chat view helpers', () => {
       'message',
       'intermediate',
       'tool_group',
+      'approval',
       'intermediate',
       'message'
     ]);
     expect(cards[2]).toMatchObject({
       kind: 'tool_group',
-      tools: [{ title: 'rg tickets', state: 'started' }]
+      tools: [{ title: 'rg tickets', state: 'completed', summary: '2 matches' }]
     });
+    expect(cards[3]).toMatchObject({
+      kind: 'approval',
+      summary: 'Allow write'
+    });
+    expect(cards.find((card) => card.kind === 'intermediate')).toMatchObject({
+      detail: expect.stringContaining('Inspecting repo state')
+    });
+  });
+
+  it('collapses completed turn activity into one worked summary before the assistant reply', () => {
+    const cards = buildPmaTranscriptCards(
+      [
+        timelineItem('turn:one:user', 'user_message', { text: 'Create tickets' }, '001'),
+        timelineItem('turn:one:intermediate:think-1', 'intermediate', { intermediate_kind: 'thinking', text: 'Inspecting repo state.' }, '002'),
+        timelineItem('turn:one:tool:1:rg', 'tool_group', { tool_name: 'rg tickets', call: { summary: 'rg tickets' }, result: { status: 'completed' } }, '003'),
+        timelineItem('turn:one:assistant', 'assistant_message', { text: 'Done.' }, '004')
+      ],
+      null,
+      [],
+      { ...baseProgress, id: 'one', terminal: true, status: 'done', elapsedSeconds: 14, events: [] }
+    );
+
+    expect(cards.map((card) => card.kind)).toEqual(['message', 'turn_summary', 'message']);
+    expect(cards[1]).toMatchObject({
+      kind: 'turn_summary',
+      title: 'Worked for 14s',
+      cards: [{ kind: 'intermediate' }, { kind: 'tool_group' }]
+    });
+  });
+
+  it('keeps current running activity expanded until the assistant message lands', () => {
+    const cards = buildPmaTranscriptCards(
+      [
+        timelineItem('turn:one:user', 'user_message', { text: 'Create tickets' }, '001'),
+        timelineItem('turn:one:intermediate:think-1', 'intermediate', { intermediate_kind: 'thinking', text: 'Inspecting repo state.' }, '002')
+      ],
+      null,
+      [],
+      { ...baseProgress, id: 'one', terminal: false, status: 'running', events: [] }
+    );
+
+    expect(cards.map((card) => card.kind)).toEqual(['message', 'intermediate']);
+  });
+
+  it('dedupes live activity against canonical source event ids and preserves chronological order', () => {
+    const canonical = buildPmaCards(
+      [
+        timelineItem('turn:one:user', 'user_message', { text: 'Run tools' }, '00000001'),
+        timelineItem(
+          'turn:one:tool:7:rg',
+          'tool_group',
+          {
+            tool_name: 'rg',
+            progress_items: [{ event_ids: [7] }],
+            call: { summary: 'rg TODO' },
+            result: { status: 'completed' }
+          },
+          '00000007'
+        ),
+        {
+          ...timelineItem('turn:one:assistant', 'assistant_message', { text: 'Done.' }, '00000009'),
+          timestamp: '2026-05-04T00:00:13Z'
+        }
+      ],
+      null,
+      []
+    );
+    const live = buildPmaActivityCards([
+      {
+        ...baseArtifact,
+        id: '7',
+        kind: 'progress',
+        createdAt: '2026-05-04T00:00:11Z',
+        raw: {
+          managed_turn_id: 'one',
+          progress_item: { kind: 'tool', state: 'completed', title: 'rg', event_ids: [7] }
+        }
+      },
+      {
+        ...baseArtifact,
+        id: '8',
+        kind: 'progress',
+        createdAt: '2026-05-04T00:00:12Z',
+        summary: 'Still thinking',
+        raw: {
+          managed_turn_id: 'one',
+          progress_item: { kind: 'assistant_update', state: 'running', title: 'Thinking', summary: 'Still thinking', event_ids: [8] }
+        }
+      }
+    ]);
+
+    expect(mergePmaTimelineAndActivityCards(canonical, live).map((card) => card.id)).toEqual([
+      'turn:one:user',
+      'turn:one:tool:7:rg',
+      'intermediate-8',
+      'turn:one:assistant'
+    ]);
+  });
+
+  it('drops decode-failure lifecycle noise from canonical and live activity cards', () => {
+    expect(
+      buildPmaCards(
+        [
+          timelineItem('turn:one:intermediate:1', 'intermediate', {
+            intermediate_kind: 'decode_failure',
+            text: 'No decoder for method: turn/diff/updated'
+          })
+        ],
+        null,
+        []
+      )
+    ).toEqual([]);
+    expect(
+      buildPmaActivityCards([
+        {
+          ...baseArtifact,
+          id: 'decode-1',
+          kind: 'progress',
+          title: 'Decode Failure',
+          summary: 'No decoder for method: turn/diff/updated',
+          raw: { progress_item: { kind: 'decode_failure', title: 'Decode Failure', summary: 'No decoder for method: turn/diff/updated' } }
+        }
+      ])
+    ).toEqual([]);
+  });
+
+  it('drops persisted assistant answer deltas and internal journal notices from visible trace cards', () => {
+    const cards = buildPmaCards(
+      [
+        timelineItem('turn:one:intermediate:journal', 'intermediate', {
+          intermediate_kind: 'chat_execution_journal',
+          text: 'Managed-thread execution accepted',
+          event: { kind: 'chat_execution_journal', message: 'Managed-thread execution accepted' }
+        }),
+        timelineItem('turn:one:intermediate:compaction', 'intermediate', {
+          intermediate_kind: 'compaction_summary',
+          text: 'Compacted hot timeline rows.',
+          event: { kind: 'compaction_summary', message: 'Compacted hot timeline rows.' }
+        }),
+        timelineItem('turn:one:intermediate:stream', 'intermediate', {
+          intermediate_kind: 'assistant_stream',
+          event_type: 'output_delta',
+          text: 'Final answer chunk'
+        }),
+        timelineItem('turn:one:intermediate:final-echo', 'intermediate', {
+          intermediate_kind: 'assistant_message',
+          event_type: 'output_delta',
+          text: 'Final answer'
+        }),
+        timelineItem('turn:one:intermediate:thinking', 'intermediate', {
+          intermediate_kind: 'thinking',
+          text: 'Reading files'
+        })
+      ],
+      null,
+      []
+    );
+
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({ kind: 'intermediate', text: 'Reading files' });
+    expect(
+      buildPmaActivityCards([
+        {
+          ...baseArtifact,
+          id: 'journal-1',
+          kind: 'progress',
+          title: 'Chat Execution Journal',
+          summary: 'Managed-thread execution accepted',
+          raw: { progress_item: { kind: 'notice', title: 'Chat Execution Journal', summary: 'Managed-thread execution accepted' } }
+        },
+        {
+          ...baseArtifact,
+          id: 'compaction-1',
+          kind: 'progress',
+          title: 'Compaction Summary',
+          summary: 'Compacted hot timeline rows.',
+          raw: { progress_item: { kind: 'notice', title: 'Compaction Summary', summary: 'Compacted hot timeline rows.' } }
+        }
+      ])
+    ).toEqual([]);
   });
 
   it('reconciles optimistic sends with backend timeline IDs in order', () => {
@@ -301,6 +486,20 @@ describe('PMA chat view helpers', () => {
       [
         timelineItem('turn:turn-1:user', 'user_message', { text: 'first' }, '001'),
         optimistic!
+      ],
+      [
+        timelineItem('turn:turn-2:user', 'user_message', { text: 'queued second' }, '002')
+      ]
+    );
+
+    expect(merged.map((item) => item.id)).toEqual(['turn:turn-1:user', 'turn:turn-2:user']);
+  });
+
+  it('removes random optimistic user placeholders when the canonical user message arrives', () => {
+    const merged = reconcilePmaTimeline(
+      [
+        timelineItem('optimistic:user:123', 'user_message', { text: 'queued second' }, 'optimistic'),
+        timelineItem('turn:turn-1:user', 'user_message', { text: 'first' }, '001')
       ],
       [
         timelineItem('turn:turn-2:user', 'user_message', { text: 'queued second' }, '002')

@@ -292,6 +292,9 @@ if [[ "$RUN_WEB_UI" == true ]]; then
   echo "Running PMA Hub frontend tests..."
   pnpm pma:test
 
+  echo "Checking PMA Hub SPA shell routes vs SvelteKit pages..."
+  "$PYTHON_BIN" scripts/check_pma_hub_spa_shell.py
+
   echo "Checking PMA static assets are committed..."
   if [ -d src/codex_autorunner/pma_static ]; then
     if ! git diff --exit-code -- src/codex_autorunner/pma_static >/dev/null 2>&1; then
