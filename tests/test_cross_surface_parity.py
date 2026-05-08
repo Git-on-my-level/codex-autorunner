@@ -205,12 +205,18 @@ def test_cross_surface_parity_report(hub_env) -> None:
     )
     spec_path = Path("src/codex_autorunner/adapters/telegram/handlers/commands_spec.py")
     trigger_mode_path = Path("src/codex_autorunner/adapters/telegram/trigger_mode.py")
+    telegram_message_policy_path = Path(
+        "src/codex_autorunner/adapters/telegram/handlers/message_policy.py"
+    )
     telegram_messages_path = Path(
         "src/codex_autorunner/adapters/telegram/handlers/messages.py"
     )
     runtime_text = runtime_path.read_text(encoding="utf-8")
     spec_text = spec_path.read_text(encoding="utf-8")
     trigger_mode_text = trigger_mode_path.read_text(encoding="utf-8")
+    telegram_message_policy_text = telegram_message_policy_path.read_text(
+        encoding="utf-8"
+    )
     telegram_messages_text = telegram_messages_path.read_text(encoding="utf-8")
 
     telegram_shell_passthrough = (
@@ -253,6 +259,9 @@ def test_cross_surface_parity_report(hub_env) -> None:
 
     telegram_mentions_path = _contains_all(
         telegram_messages_text,
+        "evaluate_message_policy",
+    ) and _contains_all(
+        telegram_message_policy_text,
         "from ..trigger_mode import should_trigger_run",
         "should_trigger_run(",
     )
@@ -288,6 +297,9 @@ def test_cross_surface_parity_report(hub_env) -> None:
     discord_interaction_dispatch_path = Path(
         "src/codex_autorunner/adapters/discord/interaction_dispatch.py"
     )
+    discord_agent_commands_path = Path(
+        "src/codex_autorunner/adapters/discord/car_handlers/agent_commands.py"
+    )
     discord_service_text = (
         discord_service_path.read_text(encoding="utf-8")
         if discord_service_path.exists()
@@ -306,6 +318,11 @@ def test_cross_surface_parity_report(hub_env) -> None:
     discord_interaction_dispatch_text = (
         discord_interaction_dispatch_path.read_text(encoding="utf-8")
         if discord_interaction_dispatch_path.exists()
+        else ""
+    )
+    discord_agent_commands_text = (
+        discord_agent_commands_path.read_text(encoding="utf-8")
+        if discord_agent_commands_path.exists()
         else ""
     )
 
@@ -343,10 +360,10 @@ def test_cross_surface_parity_report(hub_env) -> None:
             discord_interaction_registry_text,
             'canonical_path=("car", "agent")',
             'description="View or set the agent"',
+            'method_name="_handle_car_agent"',
         )
         and _contains_all(
-            discord_interaction_registry_text,
-            'method_name="_handle_car_agent"',
+            discord_agent_commands_text,
             "await service._handle_car_agent(",
         )
         and _contains_all(
