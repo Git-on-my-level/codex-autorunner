@@ -33,6 +33,16 @@ const view = buildSettingsViewModel({
 });
 
 describe('settings page component', () => {
+  it('renders appearance theme controls', () => {
+    const { body } = render(SettingsView, { props: { state: 'ready', view } });
+
+    expect(body).toContain('Appearance');
+    expect(body).toContain('Color theme');
+    expect(body).toContain('Dracula');
+    expect(body).toContain('Solarized Light');
+    expect(body).toContain('System (match OS)');
+  });
+
   it('renders the required settings sections with useful status', () => {
     const { body } = render(SettingsView, { props: { state: 'ready', view } });
 

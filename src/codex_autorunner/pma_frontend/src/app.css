@@ -50,6 +50,50 @@
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
   --transition-fast: 120ms var(--ease-out);
   --transition-base: 180ms var(--ease-out);
+  /* Surfaces that are not in the core scale (panels, scrims, mixed glyphs) */
+  --color-panel-tint: #fbfcfe;
+  --color-scrim: rgb(15 15 20 / 0.32);
+  --color-topbar-fill: color-mix(in srgb, var(--color-bg) 86%, transparent);
+  --glyph-mix-base: white;
+  --scrollbar-thumb: rgb(15 15 20 / 0.14);
+  --scrollbar-thumb-hover: rgb(15 15 20 / 0.28);
+  --scrollbar-track-strong: rgb(15 15 20 / 0.18);
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  --color-bg: #0e1014;
+  --color-surface: #16191f;
+  --color-surface-muted: #1e2229;
+  --color-surface-sunken: #12151a;
+  --color-ink: #e8e8ec;
+  --color-ink-soft: #d0d0d8;
+  --color-ink-muted: #94949e;
+  --color-ink-faint: #6e6e78;
+  --color-border: #2c313c;
+  --color-border-strong: #3d4654;
+  --color-border-subtle: #1b1f27;
+  --color-accent: #8b8ef2;
+  --color-accent-hover: #7276df;
+  --color-accent-soft: rgb(139 142 242 / 0.16);
+  --color-accent-ring: rgb(139 142 242 / 0.3);
+  --color-success: #3dd598;
+  --color-success-soft: rgb(61 213 152 / 0.14);
+  --color-warning: #e5a54b;
+  --color-warning-soft: rgb(229 165 75 / 0.16);
+  --color-danger: #ef6a6a;
+  --color-danger-soft: rgb(239 106 106 / 0.16);
+  --color-idle: #909098;
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.35), 0 1px 1px rgb(0 0 0 / 0.22);
+  --shadow-2: 0 16px 40px -12px rgb(0 0 0 / 0.55), 0 8px 16px -8px rgb(0 0 0 / 0.4);
+  --shadow-focus: 0 0 0 3px var(--color-accent-ring);
+  --color-panel-tint: #161c24;
+  --color-scrim: rgb(0 0 0 / 0.55);
+  --color-topbar-fill: color-mix(in srgb, var(--color-bg) 90%, transparent);
+  --glyph-mix-base: #16191f;
+  --scrollbar-thumb: rgb(255 255 255 / 0.12);
+  --scrollbar-thumb-hover: rgb(255 255 255 / 0.22);
+  --scrollbar-track-strong: rgb(255 255 255 / 0.16);
 }
 
 html,
@@ -397,7 +441,7 @@ a {
   min-height: 44px;
   padding: 0 var(--space-5);
   border-bottom: 1px solid var(--color-border-subtle);
-  background: rgb(250 250 250 / 0.86);
+  background: var(--color-topbar-fill);
   backdrop-filter: saturate(180%) blur(18px);
   -webkit-backdrop-filter: saturate(180%) blur(18px);
 }
@@ -913,7 +957,7 @@ a.scope-chip-label:hover {
 }
 
 .chat-row-glyph.repo-mini-glyph {
-  background: color-mix(in srgb, var(--glyph-accent, var(--color-accent)) 14%, white);
+  background: color-mix(in srgb, var(--glyph-accent, var(--color-accent)) 14%, var(--glyph-mix-base));
   color: var(--glyph-accent, var(--color-accent));
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--glyph-accent, var(--color-accent)) 22%, transparent);
 }
@@ -1470,8 +1514,8 @@ textarea:hover {
 }
 
 .intermediate-card {
-  border-left: 4px solid #9aa8b8;
-  background: #fbfcfe;
+  border-left: 4px solid var(--color-border-strong);
+  background: var(--color-panel-tint);
 }
 
 .intermediate-card strong {
@@ -1480,8 +1524,8 @@ textarea:hover {
 }
 
 .tool-call-bar {
-  border-left: 4px solid #8090a2;
-  background: #fbfcfe;
+  border-left: 4px solid var(--color-border-strong);
+  background: var(--color-panel-tint);
   padding: 0;
   overflow: hidden;
 }
@@ -1502,7 +1546,7 @@ textarea:hover {
 
 .tool-call-bar summary span {
   border-radius: 999px;
-  background: #edf2f7;
+  background: var(--color-surface-muted);
   color: var(--color-ink-muted);
   padding: 2px 8px;
   font-size: 11px;
@@ -1608,9 +1652,9 @@ textarea:hover {
   gap: var(--space-3);
   max-width: 760px;
   padding: var(--space-3);
-  border: 1px solid #dce4ee;
+  border: 1px solid var(--color-border);
   border-radius: var(--radius-3);
-  background: #fbfcfe;
+  background: var(--color-panel-tint);
 }
 
 .live-activity-header {
@@ -2194,8 +2238,9 @@ textarea:hover {
 
 .settings-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
   gap: var(--space-4);
+  align-items: start;
 }
 
 .settings-panel {
@@ -2224,7 +2269,7 @@ textarea:hover {
 
 .settings-form-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
   gap: var(--space-3);
 }
 
@@ -2282,8 +2327,9 @@ textarea:hover {
 
 .settings-status-list div {
   display: grid;
-  grid-template-columns: minmax(130px, 0.4fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, min(42%, 12rem)) minmax(0, 1fr);
   gap: var(--space-3);
+  align-items: start;
   border-radius: 0;
   border: 0;
 }
@@ -2304,7 +2350,23 @@ textarea:hover {
 
 .settings-status-list dd {
   margin: 0;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+  word-break: normal;
+  hyphens: manual;
+}
+
+/* Inside narrow Integrations / Attachments / Secrets cards, stack rows so
+ * values aren't squeezed into ultra-narrow columns beside long labels. */
+.settings-grid > .settings-section {
+  container-type: inline-size;
+  min-width: 0;
+}
+
+@container (max-width: 380px) {
+  .settings-status-list:not(.compact) div {
+    grid-template-columns: 1fr;
+    gap: var(--space-1);
+  }
 }
 
 .settings-status-list .ok dd {
@@ -2390,7 +2452,7 @@ textarea:hover {
   display: grid;
   place-items: center;
   padding: var(--space-5);
-  background: rgb(23 32 46 / 0.38);
+  background: var(--color-scrim);
 }
 
 .approval-modal {
@@ -2608,7 +2670,7 @@ textarea:hover {
   padding: 0 var(--space-2);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-2);
-  background: #fbfcfe;
+  background: var(--color-panel-tint);
 }
 
 .pending-attachment.error {
@@ -3257,7 +3319,7 @@ textarea:disabled {
   padding: var(--space-4);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-2);
-  background: #fbfcfe;
+  background: var(--color-panel-tint);
 }
 
 .markdown-body pre code {
@@ -4039,7 +4101,7 @@ textarea:disabled {
   padding: var(--space-3);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-2);
-  background: #fbfcfe;
+  background: var(--color-panel-tint);
 }
 
 .timeline-item strong,
@@ -4419,7 +4481,7 @@ textarea:disabled {
 /* Refined scrollbars (WebKit) */
 * {
   scrollbar-width: thin;
-  scrollbar-color: rgb(15 15 20 / 0.18) transparent;
+  scrollbar-color: var(--scrollbar-track-strong) transparent;
 }
 
 *::-webkit-scrollbar {
@@ -4432,14 +4494,14 @@ textarea:disabled {
 }
 
 *::-webkit-scrollbar-thumb {
-  background: rgb(15 15 20 / 0.14);
+  background: var(--scrollbar-thumb);
   border: 2px solid transparent;
   border-radius: 999px;
   background-clip: padding-box;
 }
 
 *::-webkit-scrollbar-thumb:hover {
-  background: rgb(15 15 20 / 0.28);
+  background: var(--scrollbar-thumb-hover);
   background-clip: padding-box;
   border: 2px solid transparent;
 }
@@ -4585,6 +4647,24 @@ textarea:disabled {
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--color-ink-muted);
+}
+
+.theme-select-field {
+  display: grid;
+  gap: 3px;
+  max-width: min(100%, 400px);
+  min-width: 0;
+}
+
+.theme-select-field span {
+  color: var(--color-ink-muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.theme-select-field select {
+  width: 100%;
+  min-height: 34px;
 }
 
 .settings-form-footer {

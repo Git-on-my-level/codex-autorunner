@@ -21,13 +21,16 @@ describe('repo/worktree view models', () => {
     expect(vm.openTicketCount).toBe(4);
     expect(vm.rows[0]).toMatchObject({
       href: '/repos/repo-1',
-      chatNewHref: '/chats?new=repo:repo-1',
+      pmaChatHref: '/chats?new=repo:repo-1&kind=pma',
+      codingAgentChatHref: '/chats?new=repo:repo-1&kind=agent',
       signalWaiting: 0,
       signalFailed: 0,
       signalActive: 1,
       childWorktrees: [
         {
           href: '/repos/repo-1/worktrees/worktree-1',
+          pmaChatHref: '/chats?new=worktree:worktree-1&kind=pma',
+          codingAgentChatHref: '/chats?new=worktree:worktree-1&kind=agent',
           currentTicketId: 'TICKET-110',
           currentRunTitle: 'Hub rewrite foundation'
         }
@@ -59,17 +62,25 @@ describe('repo/worktree view models', () => {
     expect(vm.rows.map((row) => row.id)).toEqual(['repo-1', 'orphan-worktree']);
     expect(vm.rows[0]).toMatchObject({
       id: 'repo-1',
-      chatNewHref: '/chats?new=repo:repo-1',
+      pmaChatHref: '/chats?new=repo:repo-1&kind=pma',
+      codingAgentChatHref: '/chats?new=repo:repo-1&kind=agent',
       signalWaiting: 0,
       signalFailed: 0,
       signalActive: 0,
-      childWorktrees: [{ id: 'worktree-1' }]
+      childWorktrees: [
+        {
+          id: 'worktree-1',
+          pmaChatHref: '/chats?new=worktree:worktree-1&kind=pma',
+          codingAgentChatHref: '/chats?new=worktree:worktree-1&kind=agent'
+        }
+      ]
     });
     expect(vm.rows[1]).toMatchObject({
       id: 'orphan-worktree',
       kind: 'worktree',
       repoHref: '/repos/missing-repo',
-      chatNewHref: '/chats?new=repo:missing-repo',
+      pmaChatHref: '/chats?new=worktree:orphan-worktree&kind=pma',
+      codingAgentChatHref: '/chats?new=worktree:orphan-worktree&kind=agent',
       signalWaiting: 0,
       signalFailed: 0,
       signalActive: 0,
@@ -95,7 +106,8 @@ describe('repo/worktree view models', () => {
     expect(vm.rows[0]).toMatchObject({
       href: '/repos/repo-1/worktrees/worktree-1',
       repoHref: '/repos/repo-1',
-      chatNewHref: '/chats?new=repo:repo-1',
+      pmaChatHref: '/chats?new=worktree:worktree-1&kind=pma',
+      codingAgentChatHref: '/chats?new=worktree:worktree-1&kind=agent',
       signalWaiting: 0,
       signalFailed: 0,
       signalActive: 0

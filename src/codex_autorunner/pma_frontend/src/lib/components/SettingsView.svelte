@@ -6,7 +6,13 @@
     SettingsViewModel
   } from '$lib/viewModels/settings';
   import PageHero from './PageHero.svelte';
-  import { untrack } from 'svelte';
+  import {
+    applyThemePreference,
+    isThemePreference,
+    readStoredThemePreference,
+    type ThemePreference
+  } from '$lib/theme';
+  import { onMount, untrack } from 'svelte';
 
   let {
     state: viewState,
@@ -29,6 +35,22 @@
   } = $props();
 
   let savedSession: SettingsSessionState | null = $state(null);
+  let themePreference = $state<ThemePreference>('system');
+
+  onMount(() => {
+    themePreference = readStoredThemePreference();
+  });
+
+  function pickThemePreference(pref: ThemePreference): void {
+    themePreference = pref;
+    applyThemePreference(pref);
+  }
+
+  function onThemeSelectChange(event: Event): void {
+    const v = (event.currentTarget as HTMLSelectElement).value;
+    if (!isThemePreference(v)) return;
+    pickThemePreference(v);
+  }
 
   $effect(() => {
     sessionBaselineEpoch;
@@ -85,6 +107,35 @@
   {:else if viewState === 'error'}
     <div class="state-panel error">Could not load settings. {errorMessage}</div>
   {:else if view}
+    <section class="settings-section">
+      <h2 class="settings-section-title">Appearance</h2>
+      <p class="permission-note">
+        Color theme applies across PMA Hub in this browser.
+        <strong>System (match OS)</strong> uses the hub default light/dark palettes, not the IDE presets below.
+      </p>
+      <label class="theme-select-field">
+        <span>Theme</span>
+        <select aria-label="Color theme" value={themePreference} onchange={onThemeSelectChange}>
+          <optgroup label="PMA Hub default">
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+            <option value="system">System (match OS)</option>
+          </optgroup>
+          <optgroup label="Solarized">
+            <option value="solarized-light">Solarized Light</option>
+            <option value="solarized-dark">Solarized Dark</option>
+          </optgroup>
+          <optgroup label="Popular (IDE-style)">
+            <option value="dracula">Dracula</option>
+            <option value="nord">Nord</option>
+            <option value="one-dark">One Dark</option>
+            <option value="github-light">GitHub Light</option>
+            <option value="github-dark">GitHub Dark</option>
+          </optgroup>
+        </select>
+      </label>
+    </section>
+
     <section class="settings-section">
       <h2 class="settings-section-title">Hub</h2>
       {@render statusList(view.hub)}

@@ -4,7 +4,6 @@
   import { onDestroy, onMount, tick } from 'svelte';
   import MasterDetail from '$lib/components/MasterDetail.svelte';
   import MemoryRail from '$lib/components/MemoryRail.svelte';
-  import ScopeChip, { type ScopeChipNavItem } from '$lib/components/ScopeChip.svelte';
   import SurfaceArtifactCard from '$lib/components/SurfaceArtifactCard.svelte';
   import { pmaApi, type ApiError, type JsonRecord } from '$lib/api/client';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
@@ -29,7 +28,6 @@
     formatBytes,
     formatRelativeTime,
     localPmaChatScopeOption,
-    modelSelectorState,
     optimisticUserTimelineItemFromSend,
     PMA_CHAT_FILTER_ORDER,
     pmaChatHeaderScopeLine,
@@ -46,7 +44,6 @@
     type PmaChatScopeOption
   } from '$lib/viewModels/pmaChat';
   import { repoAccent, repoInitials } from '$lib/viewModels/repoIdentity';
-  import { agentWorkspaceRoute, repoRoute, worktreeRoute } from '$lib/viewModels/routes';
 
   let chats = $state<PmaChatSummary[]>([]);
   let timeline = $state<PmaTimelineItem[]>([]);
@@ -62,6 +59,7 @@
   let selectedAgent = $state('codex');
   let selectedModel = $state('');
   let selectedScopeId = $state('local');
+  let newChatKind = $state<'pma' | 'agent'>('pma');
   let filter = $state<PmaChatFilter>('all');
   let detailMode = $state<'list' | 'detail'>('list');
   let search = $state('');
@@ -70,12 +68,9 @@
   let loadingActive = $state(false);
   let sending = $state(false);
   let creating = $state(false);
-  let loadingModels = $state(false);
   let chatError = $state<ApiError | null>(null);
   let activeError = $state<ApiError | null>(null);
   let composeError = $state<ApiError | null>(null);
-  let agentError = $state<ApiError | null>(null);
-  let modelError = $state<ApiError | null>(null);
   let streamState = $state<'idle' | 'connecting' | 'connected' | 'interrupted'>('idle');
   let streamError = $state<string | null>(null);
   let streamLastEventAt = $state<string | null>(null);
@@ -98,14 +93,12 @@
   const filterCounts = $derived(summarizeFilterCounts(chats));
   const activeCards = $derived<PmaCard[]>(buildPmaCards(timeline, activeChat, artifacts));
   const statusBar = $derived(buildPmaStatusBar(progress, activeChat));
-  const modelState = $derived(modelSelectorState(loadingModels, modelError?.message ?? null, models.length));
   const selectedScope = $derived(scopeOptions.find((scope) => scope.id === selectedScopeId) ?? localPmaChatScopeOption());
-  const selectedScopeHref = $derived(scopeOptionHref(selectedScope));
-  const selectedScopeNav = $derived(scopeOptionNavItems(selectedScope));
-  const headerScopeLine = $derived(pmaChatHeaderScopeLine(activeChat, repoLabelForRepoId));
-  const agentStateLabel = $derived(
-    agentError ? agentError.message : agents.length === 0 ? 'no agent' : 'agent'
+  const canStartCodingAgentChat = $derived(selectedScope.kind !== 'local');
+  const createChatLabel = $derived(
+    creating ? 'Creating...' : newChatKind === 'agent' && canStartCodingAgentChat ? '+ Coding agent' : '+ PMA chat'
   );
+  const headerScopeLine = $derived(pmaChatHeaderScopeLine(activeChat, repoLabelForRepoId));
 
   function repoLabelForRepoId(repoId: string): string | null {
     const opt = scopeOptions.find((scope) => scope.kind === 'repo' && scope.resourceId === repoId);
@@ -158,6 +151,10 @@
     const requestedDetail = requestedDetailFromUrl();
     if (!requestedDetail) return;
     void activateDetailFromUrl(requestedDetail);
+  });
+
+  $effect(() => {
+    if (!canStartCodingAgentChat && newChatKind === 'agent') newChatKind = 'pma';
   });
 
   onDestroy(() => {
@@ -221,7 +218,7 @@
       agentWorkspaceResult.ok ? agentWorkspaceResult.data : []
     );
     if (!scopeOptions.some((scope) => scope.id === selectedScopeId)) selectedScopeId = 'local';
-    applyNewChatQueryParam();
+    if (!canStartCodingAgentChat) newChatKind = 'pma';
     if (agentResult.ok) {
       agents = agentResult.data;
       if (!activeChat?.agentId) {
@@ -230,15 +227,19 @@
       }
       void loadModels(selectedAgent, activeChat?.model ?? selectedModel);
     } else {
-      agentError = agentResult.error;
+      models = [];
+      selectedModel = '';
     }
+    applyNewChatQueryParam();
     loadingChats = false;
   }
 
   function applyNewChatQueryParam(): void {
+    // Scoped repo/worktree launches live on the repo pages; Chats only exposes hub PMA creation by default.
     const raw = page.url.searchParams.get('new');
     if (!raw) return;
     let decoded = raw;
+    let appliedScope = false;
     try {
       decoded = decodeURIComponent(raw);
     } catch {
@@ -246,33 +247,45 @@
     }
     if (decoded.startsWith('repo:')) {
       const sid = `repo:${decoded.slice('repo:'.length)}`;
-      if (scopeOptions.some((scope) => scope.id === sid)) selectedScopeId = sid;
+      if (scopeOptions.some((scope) => scope.id === sid)) {
+        selectedScopeId = sid;
+        appliedScope = true;
+      }
     } else if (decoded.startsWith('worktree:')) {
       const sid = `worktree:${decoded.slice('worktree:'.length)}`;
-      if (scopeOptions.some((scope) => scope.id === sid)) selectedScopeId = sid;
+      if (scopeOptions.some((scope) => scope.id === sid)) {
+        selectedScopeId = sid;
+        appliedScope = true;
+      }
+    } else if (decoded.startsWith('agent_workspace:')) {
+      const sid = `agent_workspace:${decoded.slice('agent_workspace:'.length)}`;
+      if (scopeOptions.some((scope) => scope.id === sid)) {
+        selectedScopeId = sid;
+        appliedScope = true;
+      }
     }
+    const requestedKind = page.url.searchParams.get('kind');
+    newChatKind = requestedKind === 'agent' && selectedScopeId !== 'local' ? 'agent' : 'pma';
     const params = new URLSearchParams(page.url.searchParams);
     params.delete('new');
+    params.delete('kind');
     const query = params.toString();
-    void goto(href(`/chats${query ? `?${query}` : ''}`), { replaceState: true });
+    void goto(href(`/chats${query ? `?${query}` : ''}`), { replaceState: true }).then(() => {
+      if (appliedScope) void createChat();
+    });
   }
 
   async function loadModels(agentId: string, preferredModel = ''): Promise<void> {
-    loadingModels = true;
-    modelError = null;
     const result = await pmaApi.pma.listAgentModels(agentId);
     if (!result.ok) {
       models = [];
       selectedModel = '';
-      modelError = result.error;
-      loadingModels = false;
       return;
     }
     models = result.data;
     selectedModel = preferredModel && modelExists(result.data, preferredModel)
       ? preferredModel
       : stringField(result.data[0], 'id') ?? stringField(result.data[0], 'model') ?? '';
-    loadingModels = false;
   }
 
   async function selectChat(chatId: string): Promise<void> {
@@ -321,27 +334,6 @@
     if (memoryOpen) params.set('memory', '1');
     const query = params.toString();
     await goto(href(`/chats${query ? `?${query}` : ''}`), { keepFocus: true, noScroll: true });
-  }
-
-  function scopeOptionHref(scope: PmaChatScopeOption): string | null {
-    if (scope.kind === 'local') return '/chats';
-    if (scope.kind === 'repo') return repoRoute(scope.resourceId);
-    if (scope.kind === 'worktree') return worktreeRoute(scope.resourceId, scope.parentRepoId);
-    if (scope.kind === 'agent_workspace') return agentWorkspaceRoute(scope.resourceId);
-    return null;
-  }
-
-  function scopeOptionNavItems(scope: PmaChatScopeOption): ScopeChipNavItem[] {
-    const items: ScopeChipNavItem[] = [{ label: 'Chats', href: '/chats', current: scope.kind === 'local' }];
-    if (scope.kind === 'repo') {
-      items.push({ label: 'Repo', href: repoRoute(scope.resourceId), current: true });
-    } else if (scope.kind === 'worktree') {
-      if (scope.parentRepoId) items.push({ label: 'Repo', href: repoRoute(scope.parentRepoId) });
-      items.push({ label: 'Worktree', href: worktreeRoute(scope.resourceId, scope.parentRepoId), current: true });
-    } else if (scope.kind === 'agent_workspace') {
-      items.push({ label: 'Agent workspace', href: agentWorkspaceRoute(scope.resourceId), current: true });
-    }
-    return items;
   }
 
   async function refreshActive(chatId: string, options: { quiet?: boolean } = {}): Promise<void> {
@@ -440,14 +432,16 @@
     void loadModels(chat.agentId, chat.model ?? selectedModel);
   }
 
-  function handleAgentChange(): void {
-    void loadModels(selectedAgent);
+  function newChatDisplayName(): string {
+    return newChatKind === 'agent' && canStartCodingAgentChat
+      ? 'New coding agent chat'
+      : 'New PMA chat';
   }
 
   async function ensureChatForSelectedAgent(): Promise<string | null> {
     if (!activeChat?.agentId || activeChat.agentId === selectedAgent) return activeChatId;
     const scopedAgent = selectedScope?.kind === 'agent_workspace' && selectedScope.agentId ? selectedScope.agentId : selectedAgent;
-    const result = await pmaApi.pma.createChat(buildManagedThreadCreatePayload(scopedAgent, selectedScope, 'New PMA chat', selectedModel));
+    const result = await pmaApi.pma.createChat(buildManagedThreadCreatePayload(scopedAgent, selectedScope, newChatDisplayName(), selectedModel));
     if (!result.ok) {
       composeError = result.error;
       return null;
@@ -477,10 +471,12 @@
     creating = true;
     composeError = null;
     const scopedAgent = selectedScope?.kind === 'agent_workspace' && selectedScope.agentId ? selectedScope.agentId : selectedAgent;
-    const result = await pmaApi.pma.createChat(buildManagedThreadCreatePayload(scopedAgent, selectedScope, 'New PMA chat', selectedModel));
+    const result = await pmaApi.pma.createChat(buildManagedThreadCreatePayload(scopedAgent, selectedScope, newChatDisplayName(), selectedModel));
     if (result.ok) {
       chats = [result.data, ...chats.filter((chat) => chat.id !== result.data.id)];
       await selectChat(result.data.id);
+      selectedScopeId = 'local';
+      newChatKind = 'pma';
     } else {
       composeError = result.error;
     }
@@ -637,26 +633,10 @@
       <div class="section-heading">
         <h2>Chats</h2>
       </div>
-      <div class="new-chat-controls">
-        <button class="new-chat-button prominent-new-chat" type="button" onclick={createChat} disabled={creating}>
-          {creating ? 'Creating…' : '+ New chat'}
-        </button>
-        <label class="scope-field">
-          <span>Scope</span>
-          <select aria-label="Chat scope" bind:value={selectedScopeId} disabled={creating}>
-            {#each scopeOptions as scope (scope.id)}
-              <option value={scope.id}>{scope.detail}: {scope.label}</option>
-            {/each}
-          </select>
-        </label>
-      </div>
+      <button class="new-chat-button prominent-new-chat" type="button" onclick={createChat} disabled={creating}>
+        {createChatLabel}
+      </button>
     </div>
-    <ScopeChip
-      label={selectedScope.label}
-      detail={selectedScope.detail}
-      href={selectedScopeHref}
-      navItems={selectedScopeNav}
-    />
 
     <label class="search-field">
       <span class="sr-only">Search chats</span>
@@ -793,39 +773,6 @@
           </svg>
           <span>Memory</span>
         </button>
-        <label class="selector-field">
-          <span>{agentStateLabel}</span>
-          <select
-            aria-label="Agent"
-            bind:value={selectedAgent}
-            disabled={agents.length === 0}
-            onchange={handleAgentChange}
-          >
-          {#if agents.length === 0}
-            <option value={selectedAgent}>{agentError ? 'Unavailable' : 'Configured agent'}</option>
-          {:else}
-            {#each agents as agent}
-              <option value={stringField(agent, 'id') ?? stringField(agent, 'agent') ?? agentLabel(agent)}>
-                {agentLabel(agent)}
-              </option>
-            {/each}
-          {/if}
-          </select>
-        </label>
-        <label class={`selector-field ${modelState.state}`}>
-          <span>{modelState.label}</span>
-          <select aria-label="Model" bind:value={selectedModel} disabled={modelState.disabled}>
-          {#if models.length === 0}
-            <option value="">Configured model</option>
-          {:else}
-            {#each models as model}
-              <option value={stringField(model, 'id') ?? stringField(model, 'model') ?? modelLabel(model)}>
-                {modelLabel(model)}
-              </option>
-            {/each}
-          {/if}
-          </select>
-        </label>
       </div>
     </div>
 

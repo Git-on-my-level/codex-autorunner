@@ -5,9 +5,16 @@
   import { primaryNav, isActiveRoute } from '$lib/navigation';
   import { stripRuntimeBasePath, withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import { Palette, createPaletteStore, scopeSource } from '$lib/palette';
-  import { onDestroy } from 'svelte';
+  import {
+    applyThemePreference,
+    attachThemeSchemeListener,
+    detachThemeSchemeListener,
+    THEME_STORAGE_KEY
+  } from '$lib/theme';
+  import { onDestroy, onMount } from 'svelte';
   import type { Snippet } from 'svelte';
   import '../app.css';
+  import '../theme-presets.css';
 
   let { children }: { children: Snippet } = $props();
   let collapsed = $state(false);
@@ -24,7 +31,21 @@
     (path) => void goto(href(path))
   );
 
-  onDestroy(() => paletteStore.destroy());
+  onMount(() => {
+    attachThemeSchemeListener();
+    try {
+      if (localStorage.getItem(THEME_STORAGE_KEY) === null) {
+        applyThemePreference('system');
+      }
+    } catch {
+      /* private mode / quota */
+    }
+  });
+
+  onDestroy(() => {
+    paletteStore.destroy();
+    detachThemeSchemeListener();
+  });
 
   const closeMobile = () => {
     mobileOpen = false;

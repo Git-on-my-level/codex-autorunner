@@ -1,6 +1,47 @@
 <!doctype html>
 <html lang="en">
   <head>
+    <script>
+      (function () {
+        try {
+          var k = 'car.pma.theme';
+          var raw = localStorage.getItem(k);
+          var presets = {
+            'solarized-light': 1,
+            'solarized-dark': 1,
+            dracula: 1,
+            nord: 1,
+            'one-dark': 1,
+            'github-light': 1,
+            'github-dark': 1
+          };
+          var pref;
+          if (raw === 'light' || raw === 'dark' || raw === 'system') {
+            pref = raw;
+          } else if (raw && presets[raw]) {
+            pref = raw;
+          } else {
+            pref = 'system';
+          }
+          if (pref === 'system') {
+            var dark =
+              window.matchMedia &&
+              window.matchMedia('(prefers-color-scheme: dark)').matches;
+            document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+          } else {
+            document.documentElement.setAttribute('data-theme', pref);
+          }
+        } catch (e) {
+          var darkFallback =
+            window.matchMedia &&
+            window.matchMedia('(prefers-color-scheme: dark)').matches;
+          document.documentElement.setAttribute(
+            'data-theme',
+            darkFallback ? 'dark' : 'light'
+          );
+        }
+      })();
+    </script>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#fafafa" />

@@ -37,8 +37,10 @@ export type RepoWorktreeIndexRow = {
   signalWaiting: number;
   signalFailed: number;
   signalActive: number;
-  /** Deep-link into chats with the new-chat scope picker preset. */
-  chatNewHref: string;
+  /** Deep-link into chats with the new-chat scope picker preset for PMA mediation. */
+  pmaChatHref: string;
+  /** Deep-link into chats with the new-chat scope picker preset for direct agent control. */
+  codingAgentChatHref: string;
 };
 
 export type RepoWorktreeChildRow = {
@@ -54,6 +56,10 @@ export type RepoWorktreeChildRow = {
   lastActivityAt: string | null;
   href: string;
   ticketHref: string | null;
+  /** Deep-link into chats with PMA mediation scoped to this worktree. */
+  pmaChatHref: string;
+  /** Deep-link into chats with direct agent control scoped to this worktree. */
+  codingAgentChatHref: string;
 };
 
 export type RepoWorktreeRunCard = {
@@ -129,6 +135,8 @@ export type RepoWorktreeDetailViewModel = {
   hasActiveRun: boolean;
   missingIndexHref: string;
   missingIndexLabel: string;
+  pmaChatHref: string;
+  codingAgentChatHref: string;
 };
 
 export type RepoWorktreeSourceData = {
@@ -239,7 +247,9 @@ export function buildRepoWorktreeDetailViewModel(
     baseRepoHref: kind === 'worktree' && (resource as WorktreeSummary | null)?.repoId ? repoRoute((resource as WorktreeSummary).repoId as string) : null,
     hasActiveRun: activeRunCards.length > 0,
     missingIndexHref: kind === 'repo' ? '/repos' : '/worktrees',
-    missingIndexLabel: kind === 'repo' ? 'Back to repos' : 'Back to worktrees'
+    missingIndexLabel: kind === 'repo' ? 'Back to repos' : 'Back to worktrees',
+    pmaChatHref: scopedChatHref(kind, id, 'pma'),
+    codingAgentChatHref: scopedChatHref(kind, id, 'agent')
   };
 }
 
@@ -267,7 +277,9 @@ function missingDetailViewModel(kind: RepoWorktreeKind, id: string): RepoWorktre
     baseRepoHref: null,
     hasActiveRun: false,
     missingIndexHref: kind === 'repo' ? '/repos' : '/worktrees',
-    missingIndexLabel: kind === 'repo' ? 'Back to repos' : 'Back to worktrees'
+    missingIndexLabel: kind === 'repo' ? 'Back to repos' : 'Back to worktrees',
+    pmaChatHref: '/chats',
+    codingAgentChatHref: '/chats'
   };
 }
 
@@ -298,7 +310,8 @@ function repoToIndexRow(repo: RepoSummary, worktrees: WorktreeSummary[], source:
     signalWaiting: 0,
     signalFailed: 0,
     signalActive: 0,
-    chatNewHref: `/chats?new=repo:${encodeURIComponent(repo.id)}`
+    pmaChatHref: scopedChatHref('repo', repo.id, 'pma'),
+    codingAgentChatHref: scopedChatHref('repo', repo.id, 'agent')
   };
 }
 
@@ -320,10 +333,18 @@ function worktreeToIndexRow(worktree: WorktreeSummary, _source: RepoWorktreeSour
     signalWaiting: 0,
     signalFailed: 0,
     signalActive: 0,
-    chatNewHref: worktree.repoId
-      ? `/chats?new=repo:${encodeURIComponent(worktree.repoId)}`
-      : `/chats?new=worktree:${encodeURIComponent(worktree.id)}`
+    pmaChatHref: scopedChatHref('worktree', worktree.id, 'pma'),
+    codingAgentChatHref: scopedChatHref('worktree', worktree.id, 'agent')
   };
+}
+
+function scopedChatHref(
+  kind: RepoWorktreeKind,
+  id: string,
+  chatKind: 'pma' | 'agent' = 'pma'
+): string {
+  const scope = kind === 'repo' ? `repo:${encodeURIComponent(id)}` : `worktree:${encodeURIComponent(id)}`;
+  return `/chats?new=${scope}&kind=${chatKind}`;
 }
 
 function worktreeToChildRow(worktree: WorktreeSummary, source: RepoWorktreeSourceData): RepoWorktreeChildRow {
@@ -348,7 +369,9 @@ function worktreeToChildRow(worktree: WorktreeSummary, source: RepoWorktreeSourc
     currentTicketId,
     lastActivityAt: worktree.lastActivityAt,
     href: worktreeRoute(worktree.id, worktree.repoId),
-    ticketHref: worktreeTicketRoute(worktree.id, worktree.repoId)
+    ticketHref: worktreeTicketRoute(worktree.id, worktree.repoId),
+    pmaChatHref: scopedChatHref('worktree', worktree.id, 'pma'),
+    codingAgentChatHref: scopedChatHref('worktree', worktree.id, 'agent')
   };
 }
 

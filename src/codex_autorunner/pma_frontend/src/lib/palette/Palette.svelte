@@ -84,7 +84,7 @@
     position: fixed;
     inset: 0;
     z-index: 1000;
-    background: rgb(15 15 20 / 0.32);
+    background: var(--color-scrim);
     display: flex;
     justify-content: center;
     padding-top: 12vh;

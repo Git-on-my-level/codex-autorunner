@@ -115,9 +115,10 @@
                 {#if row.signalFailed > 0}<span class="signal-pill failed">{row.signalFailed} failed</span>{/if}
                 {#if row.signalActive > 0}<span class="signal-pill active">{row.signalActive} active</span>{/if}
               </div>
-              <a class="repo-chat-action" href={href(row.chatNewHref)}>
-                {row.kind === 'repo' ? 'Chat with this repo' : 'Open scoped chat'}
-              </a>
+              <div class="repo-chat-actions" aria-label={`Start a chat scoped to ${row.label}`}>
+                <a class="repo-chat-action primary" href={href(row.pmaChatHref)}>Chat with PMA</a>
+                <a class="repo-chat-action" href={href(row.codingAgentChatHref)}>Chat with coding agent</a>
+              </div>
             </div>
 
             {#if row.childWorktrees.length > 0}
@@ -145,6 +146,10 @@
                         </div>
                       </div>
                       <div class="worktree-card-counts">
+                        <div class="worktree-chat-actions" aria-label={`Start a chat scoped to ${worktree.label}`}>
+                          <a class="repo-chat-action compact primary" href={href(worktree.pmaChatHref)}>Chat with PMA</a>
+                          <a class="repo-chat-action compact" href={href(worktree.codingAgentChatHref)}>Chat with coding agent</a>
+                        </div>
                         {#if worktree.activeRuns > 0}
                           <span class="count-chip is-active" title="Active runs">
                             <strong>{worktree.activeRuns}</strong><em>run{worktree.activeRuns === 1 ? '' : 's'}</em>
@@ -192,9 +197,8 @@
       subtitle={`${detail.kind === 'worktree' ? 'repo worktree variant' : 'repo'} · ${detail.stateLabel}${detail.branch ? ' · ' + detail.branch : ''}`}
     >
       {#snippet actions()}
-        {#if detail.kind === 'repo'}
-          <a class="hero-action" href={href(`/chats?new=repo:${encodeURIComponent(detail.id)}`)}>Chat with this repo</a>
-        {/if}
+        <a class="hero-action" href={href(detail.pmaChatHref)}>Chat with PMA</a>
+        <a class="hero-action" href={href(detail.codingAgentChatHref)}>Chat with coding agent</a>
         {#each detail.links.filter((link) => !link.secondary) as link}
           <a class="hero-action" href={href(link.href)}>{link.label}</a>
         {/each}
@@ -518,6 +522,14 @@
     gap: 6px;
   }
 
+  .repo-chat-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
   .signal-pill {
     display: inline-flex;
     align-items: center;
@@ -556,9 +568,27 @@
     text-decoration: none;
   }
 
+  .repo-chat-action.primary {
+    color: white;
+    border-color: var(--color-accent);
+    background: var(--color-accent);
+  }
+
   .repo-chat-action:hover {
     border-color: var(--color-accent);
     background: var(--color-accent-soft);
+  }
+
+  .repo-chat-action.primary:hover {
+    color: white;
+    background: color-mix(in srgb, var(--color-accent) 88%, black);
+  }
+
+  .repo-chat-action.compact {
+    min-height: 28px;
+    padding: 4px 9px;
+    font-size: 11px;
+    line-height: 1.2;
   }
 
   .repo-avatar {
@@ -655,6 +685,14 @@
   .worktree-card-counts {
     display: flex;
     align-items: center;
+    gap: 6px;
+  }
+
+  .worktree-chat-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    flex-wrap: wrap;
     gap: 6px;
   }
 
@@ -929,6 +967,8 @@
     }
     .worktree-card-counts {
       grid-column: 2;
+      align-items: flex-start;
+      flex-direction: column;
     }
   }
 </style>
