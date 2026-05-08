@@ -26,6 +26,7 @@ import {
   pmaChatKindLabel,
   pmaChatHeaderScopeLine,
   pmaChatScopeLabelFromChat,
+  pmaChatScopeTagView,
   progressPercent,
   reconcilePmaTimeline,
   removePendingAttachment,
@@ -137,6 +138,28 @@ describe('PMA chat view helpers', () => {
     expect(
       pmaChatHeaderScopeLine({ ...baseChat, repoId: 'repo-1', worktreeId: 'wt-9' }, () => 'My Repo')
     ).toBe('Repo - My Repo - wt-9');
+  });
+
+  it('builds scope tag chips with optional friendly repo/worktree labels', () => {
+    expect(
+      pmaChatScopeTagView({ ...baseChat, repoId: 'repo-1', worktreeId: null }, { repoLabel: () => 'My Repo' })
+    ).toEqual({ kindKey: 'repo', kindLabel: 'Repo', detail: 'My Repo' });
+    expect(
+      pmaChatScopeTagView(
+        { ...baseChat, repoId: 'repo-1', worktreeId: 'wt-9' },
+        { worktreeLabel: () => 'WT nine' }
+      )
+    ).toEqual({ kindKey: 'worktree', kindLabel: 'Worktree', detail: 'WT nine' });
+    expect(pmaChatScopeTagView({ ...baseChat, repoId: null, worktreeId: null, raw: { workspace_root: '/tmp/hub' } })).toEqual({
+      kindKey: 'hub',
+      kindLabel: 'Hub',
+      detail: '/tmp/hub'
+    });
+    expect(pmaChatScopeTagView({ ...baseChat, repoId: null, worktreeId: null, raw: {} })).toEqual({
+      kindKey: 'local',
+      kindLabel: 'Local',
+      detail: 'Hub workspace'
+    });
   });
 
   it('prefers URL/request id, then a valid current id, otherwise none', () => {

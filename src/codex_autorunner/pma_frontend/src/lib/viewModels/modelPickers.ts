@@ -20,6 +20,16 @@ export function agentRecordForId(agents: PickerRecord[], id: string): PickerReco
   return agents.find((entry) => agentId(entry) === id) ?? null;
 }
 
+/** Chat list / compact rows: friendly agent label when catalog is loaded, else raw id. */
+export function agentDisplayForChat(
+  agents: PickerRecord[],
+  chat: { agentId: string | null }
+): string {
+  if (!chat.agentId) return '';
+  const rec = agentRecordForId(agents, chat.agentId);
+  return rec ? agentLabel(rec) : chat.agentId;
+}
+
 export function agentCanListModels(agent: PickerRecord | null): boolean {
   return agentCapabilityAllowed(agent, 'list_models');
 }

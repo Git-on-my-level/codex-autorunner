@@ -67,6 +67,17 @@ describe('view model mappers', () => {
     });
   });
 
+  it('falls back to status_changed_at when updated_at is absent from list payloads', () => {
+    const vm = mapPmaChatSummary({
+      managed_thread_id: 't-stamp',
+      name: 'Hello',
+      agent: 'codex',
+      normalized_status: 'done',
+      status_changed_at: '2026-05-08T12:00:00Z'
+    });
+    expect(vm.updatedAt).toBe('2026-05-08T12:00:00Z');
+  });
+
   it('maps invalid ticket frontmatter to needs-repair status instead of run failure', () => {
     const vm = mapTicketSummary({
       id: 'tkt-invalid',

@@ -33,7 +33,7 @@
     pmaChatKind,
     pmaChatKindLabel,
     pmaChatHeaderScopeLine,
-    pmaChatScopeLabelFromChat,
+    pmaChatScopeTagView,
     progressPercent,
     reconcilePmaTimeline,
     removePendingAttachment,
@@ -55,6 +55,7 @@
   import { repoAccent, repoInitials } from '$lib/viewModels/repoIdentity';
   import {
     agentCanListModels,
+    agentDisplayForChat,
     agentId,
     agentLabel,
     agentRecordForId,
@@ -861,6 +862,11 @@
         </div>
       {:else}
         {#each filteredChats as chat (chat.id)}
+          {@const scopeTags = pmaChatScopeTagView(chat, {
+            repoLabel: repoLabelForRepoId,
+            worktreeLabel: (wid) => worktreeScopeOption(wid)?.label ?? null
+          })}
+          {@const listAgentLabel = agentDisplayForChat(agents, chat)}
           <button
             class:active={chat.id === activeChatId}
             class={`chat-card status-${chat.status}`}
@@ -879,14 +885,16 @@
             {/if}
             <span class="chat-card-main">
               <span class="chat-title-row">
-                <span class="chat-title-main">
+                <span class="chat-title-cluster">
                   {#if isChatUnread(chat, lastSeenMap)}
                     <span class="chat-unread-dot" aria-label="Unread"></span>
                   {/if}
-                  <strong>{chat.title}</strong>
+                  <span class="chat-title-text-badge">
+                    <strong>{chat.title}</strong>
+                    <span class={`chat-kind-badge ${pmaChatKind(chat)}`}>{pmaChatKindLabel(pmaChatKind(chat))}</span>
+                  </span>
                 </span>
                 <span class="chat-title-trailing">
-                  <span class={`chat-kind-badge ${pmaChatKind(chat)}`}>{pmaChatKindLabel(pmaChatKind(chat))}</span>
                   {#if chat.status !== 'idle' && chat.status !== 'done'}
                     <span class={`status-pill ${chat.status}`}>{statusLabel(chat.status)}</span>
                   {/if}
@@ -896,16 +904,21 @@
                 </span>
               </span>
               <span class="chat-meta-row">
-                <span class="chat-id-tag">#{chat.id.slice(0, 6)}</span>
-                <span class="chat-meta-dot" aria-hidden="true">·</span>
-                <span class="chat-scope">{pmaChatScopeLabelFromChat(chat)}</span>
+                <span class="chat-scope-tags">
+                  <span class={`chat-scope-kind-tag ${scopeTags.kindKey}`}>{scopeTags.kindLabel}</span>
+                  <span class="chat-scope-detail-tag" title={scopeTags.detail}>{scopeTags.detail}</span>
+                </span>
                 {#if chat.ticketId}
                   <span class="chat-meta-dot" aria-hidden="true">·</span>
                   <code>{chat.ticketId}</code>
                 {/if}
-                {#if chat.model}
+                {#if listAgentLabel || chat.model}
                   <span class="chat-meta-dot" aria-hidden="true">·</span>
-                  <span class="chat-model">{chat.model}</span>
+                  <span class="chat-agent-model">
+                    {#if listAgentLabel}<span class="chat-agent">{listAgentLabel}</span>{/if}
+                    {#if listAgentLabel && chat.model}<span class="chat-meta-dot" aria-hidden="true">·</span>{/if}
+                    {#if chat.model}<span class="chat-model">{chat.model}</span>{/if}
+                  </span>
                 {/if}
               </span>
               {#if chat.progressPercent !== null && Number.isFinite(chat.progressPercent)}

@@ -84,6 +84,32 @@ def test_serialize_model_catalog_projects_public_fields() -> None:
     }
 
 
+def test_model_spec_clears_reasoning_options_when_support_is_false() -> None:
+    catalog = ModelCatalog(
+        default_model="plain-model",
+        models=[
+            ModelSpec(
+                id="plain-model",
+                display_name="Plain Model",
+                supports_reasoning=False,
+                reasoning_options=["none", "high"],
+            )
+        ],
+    )
+
+    assert serialize_model_catalog(catalog) == {
+        "default_model": "plain-model",
+        "models": [
+            {
+                "id": "plain-model",
+                "display_name": "Plain Model",
+                "supports_reasoning": False,
+                "reasoning_options": [],
+            }
+        ],
+    }
+
+
 def test_serialize_agent_profiles_merges_and_sorts_hermes_aliases() -> None:
     profiles = serialize_agent_profiles(
         {

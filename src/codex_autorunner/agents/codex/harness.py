@@ -11,7 +11,6 @@ from ...adapters.app_server.client import (
 )
 from ...adapters.app_server.event_buffer import AppServerEventBuffer
 from ...adapters.app_server.supervisor import WorkspaceAppServerSupervisor
-from ...adapters.chat.model_selection import REASONING_EFFORT_VALUES
 from ..base import AgentHarness
 from ..types import (
     AgentId,
@@ -83,8 +82,6 @@ def _coerce_reasoning_efforts(entry: dict[str, Any]) -> list[str]:
     default_effort = entry.get("defaultReasoningEffort")
     if isinstance(default_effort, str) and default_effort:
         efforts.append(default_effort)
-    if not efforts:
-        efforts = list(REASONING_EFFORT_VALUES)
     return list(dict.fromkeys(efforts))
 
 

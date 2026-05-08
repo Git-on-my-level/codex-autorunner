@@ -73,6 +73,30 @@ async def test_model_catalog_uses_codex_agent_filter_and_normalizes_alias_name()
         "gpt-5.3-codex-spark",
         "Internal Preview (Fast)",
     ]
+    assert catalog.models[0].supports_reasoning is True
+    assert catalog.models[0].reasoning_options == ["low", "medium", "high"]
+    assert catalog.models[1].supports_reasoning is False
+    assert catalog.models[1].reasoning_options == []
+
+
+@pytest.mark.asyncio
+async def test_model_catalog_does_not_invent_reasoning_options_when_missing() -> None:
+    client = _StubClient(
+        response={
+            "data": [
+                {
+                    "id": "plain-model",
+                    "displayName": "Plain Model",
+                }
+            ]
+        }
+    )
+    harness = CodexHarness(_StubSupervisor(client), events=object())  # type: ignore[arg-type]
+
+    catalog = await harness.model_catalog(Path("."))
+
+    assert catalog.models[0].supports_reasoning is False
+    assert catalog.models[0].reasoning_options == []
 
 
 @pytest.mark.asyncio

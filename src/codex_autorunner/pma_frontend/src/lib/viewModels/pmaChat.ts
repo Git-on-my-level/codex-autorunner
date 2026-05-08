@@ -1235,6 +1235,45 @@ export function pmaChatScopeLabelFromChat(chat: PmaChatSummary | null): string {
   return 'Local hub · current workspace';
 }
 
+export type PmaChatScopeUiKind = 'repo' | 'worktree' | 'hub' | 'local';
+
+export type PmaChatScopeTagView = {
+  kindKey: PmaChatScopeUiKind;
+  kindLabel: string;
+  detail: string;
+};
+
+/** Scope line split into a kind chip plus detail for chat list cards. */
+export function pmaChatScopeTagView(
+  chat: PmaChatSummary,
+  opts?: {
+    repoLabel?: (repoId: string) => string | null;
+    worktreeLabel?: (worktreeId: string) => string | null;
+  }
+): PmaChatScopeTagView {
+  const repoLabel = opts?.repoLabel;
+  const worktreeLabel = opts?.worktreeLabel;
+  if (chat.worktreeId) {
+    return {
+      kindKey: 'worktree',
+      kindLabel: 'Worktree',
+      detail: worktreeLabel?.(chat.worktreeId) ?? chat.worktreeId
+    };
+  }
+  if (chat.repoId) {
+    return {
+      kindKey: 'repo',
+      kindLabel: 'Repo',
+      detail: repoLabel?.(chat.repoId) ?? chat.repoId
+    };
+  }
+  const workspaceRoot = stringValue(chat.raw.workspace_root);
+  if (workspaceRoot && workspaceRoot !== '.') {
+    return { kindKey: 'hub', kindLabel: 'Hub', detail: workspaceRoot };
+  }
+  return { kindKey: 'local', kindLabel: 'Local', detail: 'Hub workspace' };
+}
+
 /** One-line scope for the active chat header (`PMA - global` vs repo naming). */
 export function pmaChatHeaderScopeLine(
   chat: PmaChatSummary | null,

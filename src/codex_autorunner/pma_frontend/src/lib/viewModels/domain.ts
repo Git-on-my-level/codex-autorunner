@@ -225,7 +225,15 @@ export function mapPmaChatSummary(raw: JsonRecord): PmaChatSummary {
     worktreeId,
     ticketId,
     progressPercent: numberOrNull(raw.progress_percent ?? raw.progress),
-    updatedAt: dateString(raw.updated_at ?? raw.last_activity_at ?? latest.finished_at ?? latest.started_at),
+    updatedAt: dateString(
+      raw.updated_at ??
+        raw.last_activity_at ??
+        raw.status_changed_at ??
+        raw.created_at ??
+        latest.last_event_at ??
+        latest.finished_at ??
+        latest.started_at
+    ),
     raw
   };
 }

@@ -1075,10 +1075,9 @@ a.scope-chip-label:hover {
 }
 
 .chat-title-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  display: flex;
+  align-items: flex-start;
   gap: var(--space-2);
-  align-items: start;
   min-width: 0;
 }
 
@@ -1087,6 +1086,26 @@ a.scope-chip-label:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.chat-title-cluster {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  flex: 1;
+}
+
+.chat-title-text-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+}
+
+.chat-title-text-badge .chat-kind-badge {
+  flex-shrink: 0;
 }
 
 .chat-title-main {
@@ -5412,11 +5431,68 @@ textarea:disabled {
 }
 
 .chat-scope,
-.chat-model {
+.chat-model,
+.chat-agent {
   color: var(--color-ink-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
+}
+
+.chat-scope-tags {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.chat-scope-kind-tag {
+  flex-shrink: 0;
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid rgb(255 255 255 / 0.1);
+  color: var(--color-ink-muted);
+  background: rgb(255 255 255 / 0.04);
+}
+
+.chat-scope-kind-tag.repo {
+  color: var(--color-accent);
+  border-color: color-mix(in srgb, var(--color-accent) 40%, transparent);
+  background: color-mix(in srgb, var(--color-accent) 14%, transparent);
+}
+
+.chat-scope-kind-tag.worktree {
+  color: var(--color-success);
+  border-color: color-mix(in srgb, var(--color-success) 40%, transparent);
+  background: color-mix(in srgb, var(--color-success) 12%, transparent);
+}
+
+.chat-scope-kind-tag.hub {
+  color: var(--color-warning);
+  border-color: color-mix(in srgb, var(--color-warning) 35%, transparent);
+  background: color-mix(in srgb, var(--color-warning) 10%, transparent);
+}
+
+.chat-scope-detail-tag {
+  font-size: 11px;
+  color: var(--color-ink-muted);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-agent-model {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
   min-width: 0;
 }
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   agentCanListModels,
+  agentDisplayForChat,
   agentId,
   agentRecordForId,
   firstModelValue,
@@ -34,6 +35,12 @@ describe('model picker helpers', () => {
     expect(agentCanListModels(agentRecordForId(agents, 'codex'))).toBe(true);
     expect(agentCanListModels(agentRecordForId(agents, 'hermes'))).toBe(false);
     expect(agentCanListModels(null)).toBe(false);
+  });
+
+  it('shows catalog agent label on chat rows when known, otherwise raw id', () => {
+    expect(agentDisplayForChat(agents, { agentId: 'codex' })).toBe('Codex');
+    expect(agentDisplayForChat(agents, { agentId: 'unknown-bot' })).toBe('unknown-bot');
+    expect(agentDisplayForChat(agents, { agentId: null })).toBe('');
   });
 
   it('normalizes model identity and reasoning options from catalog records', () => {

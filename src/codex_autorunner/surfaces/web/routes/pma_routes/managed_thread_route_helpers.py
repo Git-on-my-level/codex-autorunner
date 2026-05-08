@@ -407,6 +407,13 @@ def _serialize_thread_target(
         "approval_mode": normalize_approval_mode(thread.approval_mode, default="yolo"),
         "accepts_messages": thread.lifecycle_status == "active",
     }
+    updated_at_value = normalize_optional_text(thread.updated_at)
+    if not updated_at_value:
+        updated_at_value = normalize_optional_text(thread.status_changed_at)
+    if not updated_at_value:
+        updated_at_value = normalize_optional_text(thread.created_at)
+    payload["updated_at"] = updated_at_value
+    payload["created_at"] = normalize_optional_text(thread.created_at)
     payload.update(
         _build_operator_status_fields(
             normalized_status=thread.status,
