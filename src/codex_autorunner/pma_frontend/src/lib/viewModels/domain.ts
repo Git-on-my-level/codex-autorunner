@@ -108,6 +108,20 @@ export type DashboardSummary = {
   raw: JsonRecord;
 };
 
+/** Compact git status summary surfaced on repo/worktree cards. */
+export type GitStatusSummary = {
+  branch: string | null;
+  dirty: boolean;
+  filesChanged: number | null;
+  insertions: number | null;
+  deletions: number | null;
+  untracked: number | null;
+  staged: number | null;
+  hasUpstream: boolean | null;
+  ahead: number | null;
+  behind: number | null;
+};
+
 /** Repository index row. */
 export type RepoSummary = {
   id: string;
@@ -119,6 +133,7 @@ export type RepoSummary = {
   activeRuns: number;
   openTickets: number;
   lastActivityAt: string | null;
+  gitStatus?: GitStatusSummary | null;
   raw: JsonRecord;
 };
 
@@ -133,6 +148,7 @@ export type WorktreeSummary = {
   activeRuns: number;
   openTickets: number;
   lastActivityAt: string | null;
+  gitStatus?: GitStatusSummary | null;
   raw: JsonRecord;
 };
 
@@ -170,7 +186,7 @@ export type TicketDetail = TicketSummary & {
   artifacts: SurfaceArtifact[];
 };
 
-/** Contextspace document shape for editable workspace memory. */
+/** Contextspace document shape for editable durable workspace context. */
 export type ContextspaceDocument = {
   id: string;
   name: string;
@@ -183,7 +199,15 @@ export type ContextspaceDocument = {
 
 export function mapPmaChatSummary(raw: JsonRecord): PmaChatSummary {
   const latest = asRecord(raw.latest_execution ?? raw.latest_turn ?? raw.turn);
-  const status = normalizeWorkStatus(raw.normalized_status ?? raw.runtime_status ?? raw.status ?? latest.status ?? raw.lifecycle_status);
+  const status = normalizeWorkStatus(
+    raw.effective_status ??
+      raw.execution_status ??
+      raw.normalized_status ??
+      raw.runtime_status ??
+      raw.status ??
+      latest.status ??
+      raw.lifecycle_status
+  );
   const id = stringValue(raw.thread_target_id ?? raw.managed_thread_id ?? raw.thread_id ?? raw.id, 'unknown-chat');
   const resourceKind = nullableString(raw.resource_kind);
   const resourceId = nullableString(raw.resource_id);
@@ -328,6 +352,7 @@ export function mapRepoSummary(raw: JsonRecord): RepoSummary {
       numberOrNull(raw.open_tickets ?? raw.open_ticket_count) ??
       (totalTickets !== null && doneTickets !== null ? Math.max(0, totalTickets - doneTickets) : 0),
     lastActivityAt: dateString(raw.last_activity_at ?? raw.updated_at ?? runState.last_event_at ?? raw.last_run_started_at),
+    gitStatus: mapGitStatusSummary(raw),
     raw
   };
 }
@@ -353,7 +378,56 @@ export function mapWorktreeSummary(raw: JsonRecord): WorktreeSummary {
       numberOrNull(raw.open_tickets ?? raw.open_ticket_count) ??
       (totalTickets !== null && doneTickets !== null ? Math.max(0, totalTickets - doneTickets) : 0),
     lastActivityAt: dateString(raw.last_activity_at ?? raw.updated_at ?? runState.last_event_at ?? raw.last_run_started_at),
+    gitStatus: mapGitStatusSummary(raw),
     raw
+  };
+}
+
+function mapGitStatusSummary(raw: JsonRecord): GitStatusSummary | null {
+  const candidates = [raw.git_status, raw.git, asRecord(raw.run_state).git_status];
+  const source = candidates.find(
+    (value): value is JsonRecord => Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+  );
+  if (!source) return null;
+  const upstream = asRecord(source.upstream ?? source);
+  const diff = asRecord(source.diff_stats ?? source.diff ?? source);
+  const filesChanged = numberOrNull(source.files_changed ?? diff.files_changed ?? diff.filesChanged);
+  const insertions = numberOrNull(source.insertions ?? diff.insertions);
+  const deletions = numberOrNull(source.deletions ?? diff.deletions);
+  const untracked = numberOrNull(source.untracked ?? source.untracked_count);
+  const staged = numberOrNull(source.staged ?? source.staged_count);
+  const aheadVal = numberOrNull(source.ahead ?? upstream.ahead);
+  const behindVal = numberOrNull(source.behind ?? upstream.behind);
+  const hasUpstreamRaw = source.has_upstream ?? upstream.has_upstream;
+  const hasUpstream = typeof hasUpstreamRaw === 'boolean' ? hasUpstreamRaw : aheadVal !== null || behindVal !== null ? true : null;
+  const dirtyRaw = source.dirty ?? source.is_dirty;
+  const dirty =
+    typeof dirtyRaw === 'boolean'
+      ? dirtyRaw
+      : (filesChanged ?? 0) > 0 || (untracked ?? 0) > 0 || (staged ?? 0) > 0;
+  const hasAnySignal =
+    dirty ||
+    filesChanged !== null ||
+    insertions !== null ||
+    deletions !== null ||
+    untracked !== null ||
+    staged !== null ||
+    aheadVal !== null ||
+    behindVal !== null ||
+    hasUpstream !== null ||
+    nullableString(source.branch) !== null;
+  if (!hasAnySignal) return null;
+  return {
+    branch: nullableString(source.branch),
+    dirty,
+    filesChanged,
+    insertions,
+    deletions,
+    untracked,
+    staged,
+    hasUpstream,
+    ahead: aheadVal,
+    behind: behindVal
   };
 }
 

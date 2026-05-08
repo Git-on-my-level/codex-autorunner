@@ -123,6 +123,7 @@ def test_scope_frontend_routes_cover_hub_repo_and_parent_scoped_worktree(tmp_pat
         "/chats",
         "/repos/base",
         "/repos/base/worktrees/base--review",
+        "/repos/base/worktrees/base--review/contextspace",
         "/repos/base/worktrees/base--review/tickets/TICKET-100",
     )
     for path in cases:

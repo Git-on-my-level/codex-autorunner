@@ -36,7 +36,7 @@ export const routeViewModels = {
   },
   contextspace: {
     eyebrow: 'Workspace contextspace',
-    title: 'Workspace memory',
+    title: 'Workspace contextspace',
     panelTitle: 'Durable shared context',
     description:
       'Spec, decisions, active context, and PMA-maintained workspace notes will appear here.'
@@ -52,8 +52,8 @@ export function repoTicketRoute(repoId: string, ticketId?: string): string {
   return ticketId ? `${base}/${encodeURIComponent(ticketId)}` : base;
 }
 
-export function repoMemoryRoute(repoId: string): string {
-  return `${repoRoute(repoId)}/memory`;
+export function repoContextspaceRoute(repoId: string): string {
+  return `${repoRoute(repoId)}/contextspace`;
 }
 
 export function worktreeRoute(worktreeId: string, parentRepoId: string | null = null): string {
@@ -67,8 +67,8 @@ export function worktreeTicketRoute(worktreeId: string, parentRepoId: string | n
   return ticketId ? `${base}/${encodeURIComponent(ticketId)}` : base;
 }
 
-export function worktreeMemoryRoute(worktreeId: string, parentRepoId: string | null = null): string {
-  return `${worktreeRoute(worktreeId, parentRepoId)}/memory`;
+export function worktreeContextspaceRoute(worktreeId: string, parentRepoId: string | null = null): string {
+  return `${worktreeRoute(worktreeId, parentRepoId)}/contextspace`;
 }
 
 export function legacyWorktreeRedirectPath(pathname: string, worktreeId: string, parentRepoId: string | null): string | null {
@@ -80,6 +80,6 @@ export function legacyWorktreeRedirectPath(pathname: string, worktreeId: string,
   if (suffix === '/tickets') return worktreeTicketRoute(worktreeId, parentRepoId);
   const ticketMatch = suffix.match(/^\/tickets\/([^/]+)$/);
   if (ticketMatch) return worktreeTicketRoute(worktreeId, parentRepoId, decodeURIComponent(ticketMatch[1]));
-  if (suffix === '/memory') return worktreeMemoryRoute(worktreeId, parentRepoId);
+  if (suffix === '/contextspace') return worktreeContextspaceRoute(worktreeId, parentRepoId);
   return null;
 }

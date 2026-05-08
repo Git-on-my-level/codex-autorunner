@@ -31,8 +31,20 @@
 
   const currentRunIssues = $derived(sectionIssues.filter((issue) => issue.id === 'current_run'));
   const ticketIssues = $derived(sectionIssues.filter((issue) => issue.id === 'tickets'));
+  const contextspaceIssues = $derived(sectionIssues.filter((issue) => issue.id === 'contextspace'));
   const artifactIssues = $derived(sectionIssues.filter((issue) => issue.id === 'artifacts'));
   const queueTickets = $derived(detail ? [...detail.currentTickets, ...detail.nextTickets] : []);
+
+  function formatGitDiff(insertions: number | null, deletions: number | null): string | null {
+    const parts: string[] = [];
+    if (insertions && insertions > 0) parts.push(`+${insertions}`);
+    if (deletions && deletions > 0) parts.push(`-${deletions}`);
+    return parts.length ? parts.join(' ') : null;
+  }
+
+  function pluralize(count: number, singular: string, plural?: string): string {
+    return `${count} ${count === 1 ? singular : plural ?? `${singular}s`}`;
+  }
 
   const shortDetailTitle = $derived.by(() => {
     if (!detail) return '';
@@ -274,12 +286,40 @@
         </div>
       </section>
     {:else}
-    <PageHero title={shortDetailTitle} subtitle={detailSubtitle}>
-      {#snippet actions()}
-        <a class="hero-action" href={href(detail.pmaChatHref)}>PMA chat</a>
-        <a class="hero-action" href={href(detail.codingAgentChatHref)}>Coding agent</a>
-      {/snippet}
-    </PageHero>
+    <PageHero title={shortDetailTitle} subtitle={detailSubtitle} />
+
+    {#if detail.gitStatus}
+      {@const git = detail.gitStatus}
+      {@const diffLabel = formatGitDiff(git.insertions, git.deletions)}
+      <div class="git-status-bar" aria-label="Git status">
+        <span class={`git-state-pill ${git.dirty ? 'dirty' : 'clean'}`}>
+          <span class="git-state-dot" aria-hidden="true"></span>
+          {git.dirty ? 'Dirty' : 'Clean'}
+        </span>
+        {#if git.filesChanged !== null && git.filesChanged > 0}
+          <span class="git-chip">{pluralize(git.filesChanged, 'file')} changed</span>
+        {/if}
+        {#if diffLabel}
+          <span class="git-chip git-chip-diff">{diffLabel}</span>
+        {/if}
+        {#if git.staged !== null && git.staged > 0}
+          <span class="git-chip">{git.staged} staged</span>
+        {/if}
+        {#if git.untracked !== null && git.untracked > 0}
+          <span class="git-chip">{git.untracked} untracked</span>
+        {/if}
+        {#if git.hasUpstream === false}
+          <span class="git-chip git-chip-warn">No upstream</span>
+        {:else}
+          {#if git.ahead !== null && git.ahead > 0}
+            <span class="git-chip git-chip-ahead">↑ {git.ahead} ahead</span>
+          {/if}
+          {#if git.behind !== null && git.behind > 0}
+            <span class="git-chip git-chip-behind">↓ {git.behind} behind</span>
+          {/if}
+        {/if}
+      </div>
+    {/if}
 
     {#if showFlowStrip}
       <section class={`ticket-flow-strip ${detail.flowStatus.signal}`} aria-label="Ticket flow status">
@@ -349,56 +389,124 @@
         </section>
       {/if}
 
-      {#if queueTickets.length > 0 || ticketIssues.length > 0}
-        <section class="page-panel execution-panel wide workspace-ticket-queue-panel">
-          <div class="panel-heading-row">
-            <h2>{detail.kind === 'worktree' ? 'Worktree tickets' : 'Repo tickets'}</h2>
-            <a href={href(detail.ticketIndexHref)}>All</a>
-          </div>
-          {@render degradedIssues(ticketIssues)}
-          {#if queueTickets.length > 0}
-            <div class="workspace-ticket-list">
-              {#each queueTickets as ticket}
-                <a class={`workspace-ticket-row ${ticket.status}`} class:current={ticket.isCurrent} class:done={ticket.status === 'done'} href={href(ticket.href)}>
-                  <span>
-                    <strong>{ticket.title}</strong>
-                    {#if ticket.isCurrent}<em class="working-badge">Working</em>{/if}
-                    {#if ticket.diffLabel}<em>{ticket.diffLabel}</em>{/if}
-                    {#if ticket.durationLabel}<em>{ticket.durationLabel}</em>{/if}
-                    {#if ticket.bodyPreview}<small>{ticket.bodyPreview}</small>{/if}
-                  </span>
-                  <span class="status-pill {ticket.status}">{statusLabel(ticket.status)}</span>
+      <section class="page-panel execution-panel wide contextspace-panel">
+        <div class="panel-heading-row">
+          <h2>Contextspace</h2>
+          <a href={href(detail.contextspaceHref)}>Open</a>
+        </div>
+        {@render degradedIssues(contextspaceIssues)}
+        <ul class="contextspace-compact-list" role="list">
+          {#each detail.contextspace as doc}
+            <li class={`contextspace-compact-item ${doc.status}`} class:has-preview={Boolean(doc.preview)}>
+              <a class="contextspace-compact-row" href={href(doc.href)}>
+                <span class={`contextspace-compact-dot ${doc.status}`} aria-hidden="true"></span>
+                <span class="contextspace-compact-name">{doc.filename}</span>
+                <span class="contextspace-compact-summary">{doc.summary}</span>
+                {#if doc.updatedAt}
+                  <span class="contextspace-compact-time">{rowRelativeTime({ updatedAt: doc.updatedAt })}</span>
+                {/if}
+              </a>
+              {#if doc.previewHtml}
+                <a class="contextspace-spec-preview" href={href(doc.href)} aria-label={`Open ${doc.filename}`}>
+                  <div class="contextspace-spec-preview-body markdown-body">
+                    {@html doc.previewHtml}
+                  </div>
+                  <span class="contextspace-spec-preview-fade" aria-hidden="true"></span>
                 </a>
-              {/each}
+              {:else if doc.preview}
+                <a class="contextspace-spec-preview" href={href(doc.href)}>
+                  <pre>{doc.preview}</pre>
+                </a>
+              {/if}
+            </li>
+          {/each}
+        </ul>
+      </section>
+
+      <section class="page-panel execution-panel wide workspace-ticket-queue-panel">
+        <div class="panel-heading-row">
+          <h2>{detail.kind === 'worktree' ? 'Worktree tickets' : 'Repo tickets'}</h2>
+          <a href={href(detail.ticketIndexHref)}>All</a>
+        </div>
+        {@render degradedIssues(ticketIssues)}
+        {#if detail.ticketOverview.total > 0}
+          <div class="ticket-overview-stats" aria-label="Ticket overview">
+            <div><span>Open</span><strong>{detail.ticketOverview.open}</strong></div>
+            <div><span>Done/total</span><strong>{detail.ticketOverview.done}/{detail.ticketOverview.total}</strong></div>
+            {#if detail.ticketOverview.active > 0}
+              <div class="is-active"><span>Active</span><strong>{detail.ticketOverview.active}</strong></div>
+            {/if}
+            {#if detail.ticketOverview.failed > 0}
+              <div class="is-failed"><span>Needs fix</span><strong>{detail.ticketOverview.failed}</strong></div>
+            {/if}
+          </div>
+        {/if}
+        <div class="workspace-ticket-list">
+          {#if detail.ticketOverview.preview.length > 0}
+            {#each detail.ticketOverview.preview as ticket}
+              <a class={`workspace-ticket-row ${ticket.status}`} class:current={ticket.isCurrent} class:done={ticket.status === 'done'} href={href(ticket.href)}>
+                <span>
+                  <strong>{ticket.title}</strong>
+                  {#if ticket.isCurrent}<em class="working-badge">Working</em>{/if}
+                  {#if ticket.diffLabel}<em>{ticket.diffLabel}</em>{/if}
+                  {#if ticket.durationLabel}<em>{ticket.durationLabel}</em>{/if}
+                  {#if ticket.isCurrent && ticket.bodyPreview}<small>{ticket.bodyPreview}</small>{/if}
+                </span>
+                <span class="status-pill {ticket.status}">{statusLabel(ticket.status)}</span>
+              </a>
+            {/each}
+            {#if detail.ticketOverview.remaining > 0}
+              <a class="ticket-overview-more" href={href(detail.ticketIndexHref)}>
+                +{detail.ticketOverview.remaining} more open ticket{detail.ticketOverview.remaining === 1 ? '' : 's'}
+              </a>
+            {/if}
+          {:else if ticketIssues.length === 0}
+            <div class="workspace-ticket-row empty-ticket-row" role="status">
+              <span>
+                <strong>No tickets</strong>
+                <small>No scoped tickets are queued for this {detail.kind}.</small>
+              </span>
+              <span class="status-pill idle">idle</span>
             </div>
           {/if}
-        </section>
-      {/if}
+        </div>
+      </section>
 
-      {#if detail.chats.length > 0}
-        <section class="page-panel execution-panel wide">
-          <div class="panel-heading-row">
-            <h2>Chats</h2>
+      <section class="page-panel execution-panel wide">
+        <div class="panel-heading-row chats-panel-heading">
+          <h2>Chats</h2>
+          <div class="panel-heading-actions">
+            <a class="hero-action" href={href(detail.pmaChatHref)}>PMA chat</a>
+            <a class="hero-action" href={href(detail.codingAgentChatHref)}>Coding agent</a>
           </div>
+        </div>
+        {#if detail.chats.length > 0}
           <div class="chat-row-list">
-            {#each detail.chats as chat}
+            {#each detail.chats.slice(0, 5) as chat}
+              {@const metaParts = [
+                chat.agentId,
+                chat.model,
+                chat.updatedAt ? rowRelativeTime({ updatedAt: chat.updatedAt }) : null
+              ].filter((p): p is string => typeof p === 'string' && p.length > 0)}
               <a class={`chat-row ${chat.status}`} href={href(chat.href)}>
                 <span class={`chat-row-kind kind-${chat.kind}`}>{chat.kindLabel}</span>
                 <span class="chat-row-body">
                   <span class="chat-row-title">{chat.title}</span>
-                  <span class="chat-row-meta">
-                    {#if chat.model}{chat.model}{/if}
-                    {#if chat.updatedAt} · {rowRelativeTime({ updatedAt: chat.updatedAt })}{/if}
-                  </span>
+                  {#if metaParts.length > 0}
+                    <span class="chat-row-meta">{metaParts.join(' · ')}</span>
+                  {/if}
                 </span>
                 {#if chat.status !== 'idle' && chat.status !== 'done'}
                   <span class="status-pill {chat.status}">{statusLabel(chat.status)}</span>
                 {/if}
               </a>
             {/each}
+            {#if detail.chats.length > 5}
+              <a class="ticket-overview-more" href={href('/chats')}>+{detail.chats.length - 5} more chat{detail.chats.length - 5 === 1 ? '' : 's'}</a>
+            {/if}
           </div>
-        </section>
-      {/if}
+        {/if}
+      </section>
 
       {#if detail.artifacts.length > 0 || artifactIssues.length > 0}
         <section class="page-panel execution-panel wide">
@@ -411,13 +519,6 @@
       {/if}
     </div>
 
-    {#if detail.links.length > 0}
-      <div class="secondary-actions">
-        {#each detail.links as link}
-          <a href={href(link.href)}>{link.label}</a>
-        {/each}
-      </div>
-    {/if}
     {/if}
   </section>
 {/if}
@@ -863,10 +964,79 @@
     }
   }
 
+  .panel-heading-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
   .chat-row-list {
     display: grid;
     gap: var(--space-2);
   }
+
+  .contextspace-row-list {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .contextspace-row {
+    display: grid;
+    grid-template-columns: minmax(140px, auto) minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    border-radius: 8px;
+    border: 1px solid var(--color-border-subtle);
+    background: var(--color-surface);
+    color: inherit;
+    text-decoration: none;
+    transition: border-color var(--transition-base), background var(--transition-base);
+  }
+
+  .contextspace-row:hover {
+    border-color: var(--color-border-strong);
+    background: var(--color-surface-hover, var(--color-surface));
+  }
+
+  .contextspace-row-kind {
+    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    color: var(--color-ink-soft);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .contextspace-row-body {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .contextspace-row-title {
+    font-weight: 600;
+    color: var(--color-text-strong, inherit);
+  }
+
+  .contextspace-row-meta {
+    font-size: 0.85rem;
+    color: var(--color-text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .workspace-ticket-row.empty-ticket-row {
+    cursor: default;
+  }
+
+  .workspace-ticket-row.empty-ticket-row:hover {
+    border-color: var(--color-border-subtle);
+    background: var(--color-surface);
+  }
+
   .chat-row {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr) auto;
@@ -916,5 +1086,321 @@
   .chat-row-meta {
     font-size: 0.85rem;
     color: var(--color-text-muted);
+  }
+
+  @media (max-width: 760px) {
+    .contextspace-row {
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
+    .contextspace-row-kind {
+      grid-column: 1 / -1;
+    }
+  }
+
+  /* Git status bar — sits between hero and flow strip. */
+  .git-status-bar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 0 2px;
+  }
+
+  .git-state-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 22px;
+    padding: 0 10px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    border: 1px solid transparent;
+  }
+
+  .git-state-pill .git-state-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 999px;
+    background: currentColor;
+  }
+
+  .git-state-pill.clean {
+    background: var(--color-success-soft);
+    color: var(--color-success);
+    border-color: color-mix(in srgb, var(--color-success) 30%, transparent);
+  }
+
+  .git-state-pill.dirty {
+    background: color-mix(in srgb, var(--color-warning) 14%, transparent);
+    color: var(--color-warning);
+    border-color: color-mix(in srgb, var(--color-warning) 35%, transparent);
+  }
+
+  .git-chip {
+    display: inline-flex;
+    align-items: center;
+    height: 22px;
+    padding: 0 9px;
+    border-radius: 999px;
+    background: var(--color-surface-muted);
+    color: var(--color-ink-muted);
+    font-size: 11px;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    border: 1px solid var(--color-border-subtle);
+    white-space: nowrap;
+  }
+
+  .git-chip-diff {
+    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+
+  .git-chip-ahead {
+    color: var(--color-accent);
+    border-color: color-mix(in srgb, var(--color-accent) 32%, transparent);
+    background: var(--color-accent-soft);
+  }
+
+  .git-chip-behind {
+    color: var(--color-warning);
+    border-color: color-mix(in srgb, var(--color-warning) 32%, transparent);
+    background: color-mix(in srgb, var(--color-warning) 12%, transparent);
+  }
+
+  .git-chip-warn {
+    color: var(--color-ink-muted);
+    border-style: dashed;
+  }
+
+  /* Compact contextspace list */
+  .contextspace-compact-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .contextspace-compact-item {
+    display: flex;
+    flex-direction: column;
+    border-radius: 6px;
+  }
+
+  .contextspace-compact-row {
+    display: grid;
+    grid-template-columns: 10px minmax(120px, auto) minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--space-3);
+    padding: 8px 10px;
+    color: inherit;
+    text-decoration: none;
+    border-radius: 6px;
+    transition: background-color var(--transition-fast);
+  }
+
+  .contextspace-compact-row:hover {
+    background: var(--color-surface-muted);
+  }
+
+  .contextspace-compact-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 999px;
+    background: var(--color-border-strong);
+    justify-self: center;
+  }
+
+  .contextspace-compact-dot.present {
+    background: var(--color-success);
+  }
+
+  .contextspace-compact-name {
+    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    color: var(--color-ink-soft);
+    white-space: nowrap;
+  }
+
+  .contextspace-compact-summary {
+    font-size: var(--font-size-0);
+    color: var(--color-ink-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+
+  .contextspace-compact-item.empty .contextspace-compact-summary {
+    color: var(--color-ink-faint);
+    font-style: italic;
+  }
+
+  .contextspace-compact-time {
+    font-size: 11px;
+    color: var(--color-ink-faint);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  .contextspace-spec-preview {
+    position: relative;
+    display: block;
+    margin: 6px 10px 10px;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 8px;
+    background: var(--color-surface-sunken);
+    text-decoration: none;
+    color: inherit;
+    overflow: hidden;
+    transition: border-color var(--transition-base);
+  }
+
+  .contextspace-spec-preview:hover {
+    border-color: var(--color-border-strong);
+  }
+
+  .contextspace-spec-preview-body {
+    padding: 14px 18px 18px;
+    max-height: 360px;
+    overflow: hidden;
+    color: var(--color-ink);
+    font-size: var(--font-size-1);
+    line-height: 1.55;
+  }
+
+  .contextspace-spec-preview-body :global(h1),
+  .contextspace-spec-preview-body :global(h2),
+  .contextspace-spec-preview-body :global(h3) {
+    margin: 0 0 8px;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+  }
+
+  .contextspace-spec-preview-body :global(h1) { font-size: var(--font-size-2); }
+  .contextspace-spec-preview-body :global(h2) { font-size: var(--font-size-1); margin-top: 14px; }
+  .contextspace-spec-preview-body :global(h3) { font-size: var(--font-size-1); color: var(--color-ink-soft); margin-top: 10px; }
+
+  .contextspace-spec-preview-body :global(p) {
+    margin: 0 0 8px;
+    color: var(--color-ink-soft);
+  }
+
+  .contextspace-spec-preview-body :global(ul) {
+    margin: 0 0 8px;
+    padding-left: 20px;
+    color: var(--color-ink-soft);
+  }
+
+  .contextspace-spec-preview-body :global(li) {
+    margin-bottom: 2px;
+  }
+
+  .contextspace-spec-preview-body :global(code) {
+    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.92em;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: var(--color-surface-muted);
+    color: var(--color-ink);
+  }
+
+  .contextspace-spec-preview-body :global(pre) {
+    margin: 0 0 8px;
+    padding: 10px 12px;
+    border-radius: 6px;
+    background: var(--color-surface-muted);
+    overflow: auto;
+    font-size: 12px;
+  }
+
+  .contextspace-spec-preview-body :global(pre code) {
+    background: transparent;
+    padding: 0;
+  }
+
+  .contextspace-spec-preview-body :global(strong) {
+    color: var(--color-ink);
+  }
+
+  .contextspace-spec-preview-body :global(a) {
+    color: var(--color-accent);
+    text-decoration: none;
+  }
+
+  .contextspace-spec-preview-fade {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 56px;
+    pointer-events: none;
+    background: linear-gradient(180deg, transparent, var(--color-surface-sunken));
+  }
+
+  .contextspace-spec-preview pre {
+    margin: 0;
+    padding: 10px 14px;
+    max-height: 220px;
+    overflow: auto;
+    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--color-ink-soft);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  /* Ticket overview compact stats */
+  .ticket-overview-stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3) var(--space-5);
+    padding: 4px 2px var(--space-2);
+    border-bottom: 1px dashed var(--color-border-subtle);
+    margin-bottom: var(--space-2);
+  }
+
+  .ticket-overview-stats > div {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+  }
+
+  .ticket-overview-stats span {
+    color: var(--color-ink-muted);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .ticket-overview-stats strong {
+    color: var(--color-ink);
+    font-size: var(--font-size-2);
+    font-weight: 650;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .ticket-overview-stats .is-active strong { color: var(--color-success); }
+  .ticket-overview-stats .is-failed strong { color: var(--color-danger); }
+
+  .ticket-overview-more {
+    align-self: flex-start;
+    padding: 6px 12px;
+    border-radius: 999px;
+    border: 1px solid var(--color-border-subtle);
+    background: transparent;
+    font-size: 12px;
+    color: var(--color-ink-muted);
+    text-decoration: none;
+    transition: color var(--transition-fast), border-color var(--transition-fast);
+  }
+
+  .ticket-overview-more:hover {
+    color: var(--color-accent);
+    border-color: var(--color-accent);
   }
 </style>

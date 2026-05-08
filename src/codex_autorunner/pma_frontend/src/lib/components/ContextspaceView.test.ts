@@ -33,14 +33,15 @@ describe('ContextspaceView', () => {
     );
     const { body } = render(ContextspaceView, { props: { state: 'ready', vm } });
 
-    expect(body).toContain('Workspace memory: codex-autorunner');
-    expect(body).toContain('Repo memory is read from this repo workspace contextspace.');
+    expect(body).toContain('Contextspace: codex-autorunner');
+    expect(body).toContain('Repo contextspace is read from this repo workspace.');
+    expect(body).toContain('2 of 3 standard docs have content');
     expect(body).toContain('active_context.md');
     expect(body).toContain('<h1>Active Context</h1>');
     expect(body).toContain('markdown-edit-target');
     expect(body).toContain('Copy');
-    expect(body).toContain('Open repo');
-    expect(body).toContain('Ask PMA to update');
+    expect(body).toContain('href="#active_context"');
+    expect(body).toContain('href="#spec"');
   });
 
   it('renders useful empty states for missing docs', () => {
@@ -48,9 +49,9 @@ describe('ContextspaceView', () => {
     const { body } = render(ContextspaceView, { props: { state: 'ready', vm } });
 
     expect(body).toContain('0 of 3 standard docs have content');
-    expect(body).toContain('active_context.md · missing');
-    expect(body).toContain('Active context has no content');
-    expect(body).toContain('Ask PMA to refresh this repo memory');
+    expect(body).toContain('active_context.md');
+    expect(body).toContain('active_context.md has no content');
+    expect(body).toContain('Click to add durable context');
     expect(body).not.toContain('textarea');
   });
 
@@ -58,10 +59,9 @@ describe('ContextspaceView', () => {
     const vm = buildContextspaceViewModel('worktree-1', [], [mockRepoSummary], [mockWorktreeSummary]);
     const { body } = render(ContextspaceView, { props: { state: 'ready', vm } });
 
-    expect(body).toContain('Workspace memory: discord-5');
-    expect(body).toContain('Worktree memory is read from this worktree workspace contextspace.');
-    expect(body).toContain('Open worktree variant');
-    expect(body).toContain('Ask PMA to refresh this worktree memory');
+    expect(body).toContain('Contextspace: discord-5');
+    expect(body).toContain('Worktree contextspace is read from this worktree workspace.');
+    expect(body).toContain('href="#active_context"');
   });
 
   it('renders unknown workspace contextspace without dead workspace links', () => {
@@ -69,8 +69,7 @@ describe('ContextspaceView', () => {
     const { body } = render(ContextspaceView, { props: { state: 'ready', vm } });
 
     expect(body).toContain('scoped contextspace was not loaded');
-    expect(body).toContain('href="/repos"');
-    expect(body).toContain('Open workspace index');
+    expect(body).toContain('href="#active_context"');
     expect(body).not.toContain('href="/repos/missing-workspace"');
     expect(body).not.toContain('href="/worktrees/missing-workspace"');
   });

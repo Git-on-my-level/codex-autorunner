@@ -164,6 +164,80 @@ class HubRepoProjectionService:
                     return artifacts
         return artifacts
 
+    def _compute_git_status(self, snapshot: Any) -> Optional[dict[str, Any]]:
+        """Compact git status snapshot for repo/worktree cards.
+
+        Cheap and best-effort: any git failure returns None so the UI degrades silently.
+        Cached upstream by `_repo_state_payload` so this only runs at most once per
+        repo every ~45s.
+        """
+        from .git_utils import (
+            git_available,
+            git_branch,
+            git_diff_stats,
+            git_status_porcelain,
+            git_upstream_status,
+        )
+
+        if not getattr(snapshot, "exists_on_disk", False):
+            return None
+        repo_root = snapshot.path
+        try:
+            if not git_available(repo_root):
+                return None
+        except Exception:
+            return None
+
+        files_changed = 0
+        untracked = 0
+        staged = 0
+        try:
+            porcelain = git_status_porcelain(repo_root)
+        except Exception:
+            porcelain = None
+        if porcelain is not None:
+            for raw_line in porcelain.splitlines():
+                line = raw_line.rstrip("\n")
+                if not line:
+                    continue
+                files_changed += 1
+                if line.startswith("??"):
+                    untracked += 1
+                elif len(line) >= 2 and line[0] != " " and line[0] != "?":
+                    staged += 1
+
+        diff = None
+        try:
+            diff = git_diff_stats(repo_root)
+        except Exception:
+            diff = None
+
+        upstream = None
+        try:
+            upstream = git_upstream_status(repo_root)
+        except Exception:
+            upstream = None
+
+        branch_name: Optional[str]
+        try:
+            branch_name = git_branch(repo_root)
+        except Exception:
+            branch_name = None
+
+        dirty = files_changed > 0
+        return {
+            "branch": branch_name,
+            "dirty": dirty,
+            "files_changed": files_changed,
+            "untracked": untracked,
+            "staged": staged,
+            "insertions": (diff or {}).get("insertions"),
+            "deletions": (diff or {}).get("deletions"),
+            "has_upstream": (upstream or {}).get("has_upstream"),
+            "ahead": (upstream or {}).get("ahead"),
+            "behind": (upstream or {}).get("behind"),
+        }
+
     @staticmethod
     def _ticket_flow_progress_percent(ticket_flow: Any) -> Optional[int]:
         if not isinstance(ticket_flow, dict):
@@ -198,6 +272,7 @@ class HubRepoProjectionService:
             "run_state": None,
             "current_run_artifacts": [],
             "canonical_state_v1": None,
+            "git_status": self._compute_git_status(snapshot),
         }
         if not (snapshot.initialized and snapshot.exists_on_disk):
             return payload

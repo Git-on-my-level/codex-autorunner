@@ -26,11 +26,11 @@ describe('breadcrumbsForPath', () => {
       { label: 'r', href: '/repos/r' },
       { label: 'wt-1', href: null }
     ]);
-    expect(breadcrumbsForPath('/repos/r/worktrees/wt-1/memory')).toEqual([
+    expect(breadcrumbsForPath('/repos/r/worktrees/wt-1/contextspace')).toEqual([
       { label: 'Repos', href: '/repos' },
       { label: 'r', href: '/repos/r' },
       { label: 'wt-1', href: '/repos/r/worktrees/wt-1' },
-      { label: 'Memory', href: null }
+      { label: 'Contextspace', href: null }
     ]);
   });
 
@@ -40,10 +40,26 @@ describe('breadcrumbsForPath', () => {
   });
 
   it('handles contextspace routes', () => {
-    expect(breadcrumbsForPath('/repos/codex-autorunner/memory')).toEqual([
+    expect(breadcrumbsForPath('/repos/codex-autorunner/contextspace')).toEqual([
       { label: 'Repos', href: '/repos' },
       { label: 'codex-autorunner', href: '/repos/codex-autorunner' },
-      { label: 'Memory', href: null }
+      { label: 'Contextspace', href: null }
+    ]);
+  });
+
+  it('covers scoped new-ticket composer routes', () => {
+    expect(breadcrumbsForPath('/repos/my-repo/tickets/new')).toEqual([
+      { label: 'Repos', href: '/repos' },
+      { label: 'my-repo', href: '/repos/my-repo' },
+      { label: 'Tickets', href: '/repos/my-repo/tickets' },
+      { label: 'New', href: null }
+    ]);
+    expect(breadcrumbsForPath('/repos/r/worktrees/wt-1/tickets/new')).toEqual([
+      { label: 'Repos', href: '/repos' },
+      { label: 'r', href: '/repos/r' },
+      { label: 'wt-1', href: '/repos/r/worktrees/wt-1' },
+      { label: 'Tickets', href: '/repos/r/worktrees/wt-1/tickets' },
+      { label: 'New', href: null }
     ]);
   });
 

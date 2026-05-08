@@ -29,12 +29,13 @@
     if (showLoading) loading = true;
     error = null;
     sectionIssues = [];
-    const [repos, worktrees, runs, chats, tickets] = await Promise.all([
+    const [repos, worktrees, runs, chats, tickets, contextspace] = await Promise.all([
       pmaApi.hub.listRepos(),
       pmaApi.hub.listWorktrees(),
       pmaApi.ticketFlow.listRuns({ repo: repoId }),
       pmaApi.pma.listChats(),
-      pmaApi.ticketFlow.listTickets({ repo: repoId })
+      pmaApi.ticketFlow.listTickets({ repo: repoId }),
+      pmaApi.contextspace.listDocuments(repoId)
     ]);
     const primaryError = !repos.ok ? repos.error : !worktrees.ok ? worktrees.error : null;
     if (primaryError) {
@@ -45,7 +46,8 @@
     const baseIssues = [
       !runs.ok ? partialPageIssue('current_run', 'Active runs unavailable', runs.error) : null,
       !chats.ok ? partialPageIssue('current_run', 'PMA chats unavailable', chats.error) : null,
-      !tickets.ok ? partialPageIssue('tickets', 'Ticket queue unavailable', tickets.error) : null
+      !tickets.ok ? partialPageIssue('tickets', 'Ticket queue unavailable', tickets.error) : null,
+      !contextspace.ok ? partialPageIssue('contextspace', 'Contextspace unavailable', contextspace.error) : null
     ].filter((issue): issue is PartialPageIssue => Boolean(issue));
     const baseSource = {
       repos: dataOr(repos, []),
@@ -53,6 +55,7 @@
       runs: dataOr(runs, []),
       chats: dataOr(chats, []),
       tickets: dataOr(tickets, []),
+      contextspaceDocs: dataOr(contextspace, []),
       artifacts: [] as SurfaceArtifact[]
     };
     const baseDetail = buildRepoWorktreeDetailViewModel(baseSource, 'repo', repoId);
@@ -67,6 +70,7 @@
     );
     const artifactIssues = artifactResults
       .filter((result): result is { ok: false; error: ApiError } => !result.ok)
+      .filter((result) => result.error.status !== 404)
       .map((result) => partialPageIssue('artifacts', 'Surfaced artifacts unavailable', result.error));
     sectionIssues = [...baseIssues, ...artifactIssues];
     const artifacts = artifactResults.flatMap((result) => (result.ok ? result.data : []));

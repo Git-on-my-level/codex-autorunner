@@ -5,7 +5,7 @@ export {
   threadSource,
   scopeSource,
   ticketSource,
-  memorySource,
+  contextspaceSource,
   recentActionsSource,
   commandSource,
   loadAllItems,

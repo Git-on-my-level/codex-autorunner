@@ -4,6 +4,23 @@ import TicketViews from './TicketViews.svelte';
 import { mockArtifact, mockChatSummary, mockRunProgress, mockTicketDetail, mockTicketSummary } from '$lib/viewModels/mockData';
 import { buildTicketDetailViewModel, buildTicketListViewModel } from '$lib/viewModels/ticket';
 
+const codexAgent = {
+  id: 'codex',
+  name: 'Codex',
+  capability_projection: { actions: { list_models: { allowed: true, missing_capabilities: [] } } }
+};
+
+const hermesAgent = {
+  id: 'hermes',
+  name: 'Hermes',
+  capability_projection: { actions: { list_models: { allowed: false, missing_capabilities: ['model_listing'] } } }
+};
+
+const codexModels = [
+  { id: 'gpt-5', label: 'GPT-5', reasoning_options: ['medium', 'high'] },
+  { id: 'gpt-5-mini', label: 'GPT-5 Mini', reasoning_options: [] }
+];
+
 describe('TicketViews', () => {
   it('renders ticket rows without exposing raw markdown as the only representation', () => {
     const list = buildTicketListViewModel({
@@ -20,7 +37,6 @@ describe('TicketViews', () => {
     expect(body).toContain('known repos and worktrees');
     expect(body).toContain('#110');
     expect(body).toContain('Implement typed UI API client and view models');
-    expect(body).toContain('PMA chat');
     expect(body).toContain('running');
     expect(body).not.toContain('title:');
   });
@@ -81,10 +97,11 @@ describe('TicketViews', () => {
         mode: 'list',
         list,
         selectedFilter: 'open',
-        onCreateTicket: async () => true,
         onReorderTicket: async () => true
       }
     });
+
+    expect(body).toContain('href="/repos/repo-1/tickets/new"');
 
     expect(body).toContain('Ticket flow controls');
     expect(body).toContain('0/2 done');
@@ -112,8 +129,8 @@ describe('TicketViews', () => {
               repo_id: 'repo-1',
               action_policy: [
                 { action: 'start', enabled: false, label: 'Start queue', disabled_reason: 'Ticket flow is already active', surface_visibility: { queue: true } },
-                { action: 'stop', enabled: true, label: 'Stop', surface_visibility: { queue: true } },
-                { action: 'restart', enabled: false, label: 'Restart', requires_confirmation: true, disabled_reason: 'No restartable flow run', surface_visibility: { queue: true } }
+                { action: 'stop', enabled: true, label: 'Stop', route: '/api/flows/run-policy/stop', surface_visibility: { queue: true } },
+                { action: 'restart', enabled: false, label: 'Restart', route: '/api/flows/run-policy/restart', requires_confirmation: true, disabled_reason: 'No restartable flow run', surface_visibility: { queue: true } }
               ]
             }
           }
@@ -125,10 +142,24 @@ describe('TicketViews', () => {
     );
 
     expect(list.queueActions).toEqual([
-      { action: 'start', enabled: false, label: 'Start queue', requiresConfirmation: false, disabledReason: 'Ticket flow is already active' },
-      { action: 'stop', enabled: true, label: 'Stop', requiresConfirmation: false, disabledReason: null },
-      { action: 'restart', enabled: false, label: 'Restart', requiresConfirmation: true, disabledReason: 'No restartable flow run' }
+      { action: 'start', enabled: false, label: 'Start queue', requiresConfirmation: false, disabledReason: 'Ticket flow is already active', method: 'POST', route: null },
+      { action: 'stop', enabled: true, label: 'Stop', requiresConfirmation: false, disabledReason: null, method: 'POST', route: '/api/flows/run-policy/stop' },
+      { action: 'restart', enabled: false, label: 'Restart', requiresConfirmation: true, disabledReason: 'No restartable flow run', method: 'POST', route: '/api/flows/run-policy/restart' }
     ]);
+  });
+
+  it('does not invent queue controls when backend action state is unavailable', () => {
+    const list = buildTicketListViewModel(
+      {
+        tickets: [{ ...mockTicketSummary, workspaceKind: 'repo', workspaceId: 'repo-1', repoId: 'repo-1', worktreeId: null }],
+        runs: [{ ...mockRunProgress, id: 'run-without-policy', raw: { repo_id: 'repo-1' } }],
+        chats: [],
+        artifacts: []
+      },
+      { kind: 'repo', id: 'repo-1' }
+    );
+
+    expect(list.queueActions).toEqual([]);
   });
 
   it('builds queue controls from backend action manifest data', () => {
@@ -142,17 +173,17 @@ describe('TicketViews', () => {
       { kind: 'repo', id: 'repo-1' },
       {
         actions: [
-          { action_id: 'ticket_flow.start', enabled: false, label: 'Start queue', disabled_reason: 'Ticket flow is already active' },
-          { action_id: 'ticket_flow.stop', enabled: true, label: 'Stop', disabled_reason: null },
-          { action_id: 'ticket_flow.restart', enabled: false, label: 'Restart', requires_confirmation: true, disabled_reason: 'No restartable flow run' }
+          { action_id: 'ticket_flow.start', enabled: false, label: 'Start queue', disabled_reason: 'Ticket flow is already active', method: 'POST', route: '/api/flows/ticket_flow/bootstrap' },
+          { action_id: 'ticket_flow.stop', enabled: true, label: 'Stop', disabled_reason: null, method: 'POST', route: '/api/flows/run-policy/stop' },
+          { action_id: 'ticket_flow.restart', enabled: false, label: 'Restart', requires_confirmation: true, disabled_reason: 'No restartable flow run', method: 'POST', route: '/api/flows/run-policy/restart' }
         ]
       }
     );
 
     expect(list.queueActions).toEqual([
-      { action: 'start', enabled: false, label: 'Start queue', requiresConfirmation: false, disabledReason: 'Ticket flow is already active' },
-      { action: 'stop', enabled: true, label: 'Stop', requiresConfirmation: false, disabledReason: null },
-      { action: 'restart', enabled: false, label: 'Restart', requiresConfirmation: true, disabledReason: 'No restartable flow run' }
+      { action: 'start', enabled: false, label: 'Start queue', requiresConfirmation: false, disabledReason: 'Ticket flow is already active', method: 'POST', route: '/api/flows/ticket_flow/bootstrap' },
+      { action: 'stop', enabled: true, label: 'Stop', requiresConfirmation: false, disabledReason: null, method: 'POST', route: '/api/flows/run-policy/stop' },
+      { action: 'restart', enabled: false, label: 'Restart', requiresConfirmation: true, disabledReason: 'No restartable flow run', method: 'POST', route: '/api/flows/run-policy/restart' }
     ]);
   });
 
@@ -160,6 +191,7 @@ describe('TicketViews', () => {
     const detail = buildTicketDetailViewModel(
       {
         ...mockTicketDetail,
+        raw: { frontmatter: { agent: 'codex', model: 'gpt-5', reasoning: 'high' } },
         body: `## Goal
 Users can browse tickets.
 
@@ -195,22 +227,57 @@ Users can browse tickets.
       }
     );
     const { body } = render(TicketViews, {
-      props: { state: 'ready', mode: 'detail', detail }
+      props: {
+        state: 'ready',
+        mode: 'detail',
+        detail,
+        agents: [codexAgent],
+        modelCatalogs: { codex: codexModels }
+      }
     });
 
-    expect(body).toContain('Ticket settings');
     expect(body).toContain('Agent');
-    expect(body).toContain('Worktree: worktree-1');
-    expect(body).toContain('href="/repos/repo-1/worktrees/worktree-1"');
+    expect(body).toContain('Model');
+    expect(body).toContain('Reasoning');
+    expect(body).toContain('GPT-5');
+    expect(body).toContain('high');
     expect(body).toContain('Back to worktree tickets');
     expect(body).toContain('href="/repos/repo-1/worktrees/worktree-1/tickets"');
     expect(body).toContain('Users can browse tickets.');
     expect(body).toContain('Render list');
     expect(body).toContain('Acceptance criteria');
     expect(body).toContain('Component tests');
-    expect(body).toContain('Ticket activity');
-    expect(body).toContain('Chat history');
-    expect(body).toContain('Ticket implementation is in progress.');
+    expect(body).toContain('running');
+    expect(body).not.toContain('Ticket contract loaded');
+    expect(body).not.toContain('Preview ready');
+    expect(body).not.toContain('Linked PMA chat history');
+    expect(body).not.toContain('Ticket implementation is in progress.');
+  });
+
+  it('hides ticket model and reasoning pickers when the selected agent lacks model-listing support', () => {
+    const detail = buildTicketDetailViewModel(
+      {
+        ...mockTicketDetail,
+        raw: { frontmatter: { agent: 'hermes', model: 'manual-model', reasoning: 'high' } }
+      },
+      { tickets: [mockTicketSummary], runs: [], chats: [], artifacts: [] }
+    );
+
+    const { body } = render(TicketViews, {
+      props: {
+        state: 'ready',
+        mode: 'detail',
+        detail,
+        agents: [hermesAgent],
+        modelCatalogs: {}
+      }
+    });
+
+    expect(body).toContain('Agent');
+    expect(body).toContain('hermes');
+    expect(body).not.toContain('aria-label="Model"');
+    expect(body).not.toContain('aria-label="Reasoning"');
+    expect(body).not.toContain('manual-model');
   });
 
   it('renders execution timeline states and keeps debug secondary', () => {
@@ -227,11 +294,43 @@ Users can browse tickets.
       props: { state: 'ready', mode: 'detail', detail }
     });
 
-    expect(body).toContain('Execution timeline');
     expect(body).toContain('failed');
     expect(body).toContain('Retry run');
     expect(body).toContain('Raw logs/debug');
-    expect(body).toContain('Surfaced artifacts');
+    expect(body).not.toContain('Execution timeline');
+    expect(body).not.toContain('Surfaced artifacts');
+  });
+
+  it('renders ticket-flow worker activity separately from linked PMA chat history', () => {
+    const detail = buildTicketDetailViewModel(mockTicketDetail, {
+      tickets: [mockTicketSummary],
+      runs: [mockRunProgress],
+      chats: [mockChatSummary],
+      artifacts: []
+    });
+    const { body } = render(TicketViews, {
+      props: {
+        state: 'ready',
+        mode: 'detail',
+        detail,
+        workerActivity: {
+          items: [
+            {
+              id: 'live-worker-output',
+              title: 'Live worker output',
+              summary: null,
+              detail: 'Running pytest...',
+              status: 'running',
+              timestamp: '2026-05-04T00:02:00Z'
+            }
+          ]
+        }
+      }
+    });
+
+    expect(body).toContain('Worker output');
+    expect(body).toContain('Running pytest...');
+    expect(body).not.toContain('Streaming output and ticket-linked chat history appear here once PMA starts working this ticket.');
   });
 
   it('renders sparse ticket-detail side panels without raw debug as primary content', () => {
@@ -254,10 +353,10 @@ Users can browse tickets.
       props: { state: 'ready', mode: 'detail', detail }
     });
 
-    expect(body).toContain('No artifacts surfaced');
-    expect(body).toContain('Screenshots, previews, files, and test summaries will appear after PMA work produces them.');
-    expect(body).toContain('No linked PMA chat');
-    expect(body).toContain('A ticket-linked conversation appears here after PMA starts discussing this ticket.');
+    expect(body).not.toContain('No artifacts surfaced');
+    expect(body).not.toContain('Screenshots, previews, files, and test summaries will appear after PMA work produces them.');
+    expect(body).not.toContain('No linked PMA chat');
+    expect(body).not.toContain('A ticket-linked conversation appears here after PMA starts discussing this ticket.');
     expect(body).not.toContain('Raw logs/debug');
   });
 });

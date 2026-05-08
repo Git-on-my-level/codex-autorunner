@@ -511,6 +511,16 @@ def build_managed_thread_crud_routes(
             resource_id=query.resource_id,
             limit=query.limit,
         )
+        active_work_by_thread = {
+            summary.thread_target_id: summary
+            for summary in service.list_active_work_summaries(
+                agent_id=query.agent_id,
+                repo_id=query.repo_id,
+                resource_kind=query.resource_kind,
+                resource_id=query.resource_id,
+                limit=max(query.limit, len(threads), 1),
+            )
+        }
         binding_metadata = _load_chat_binding_metadata_by_thread(
             get_pma_request_context(request).hub_root
         )
@@ -519,6 +529,9 @@ def build_managed_thread_crud_routes(
                 _serialize_thread_target(
                     thread,
                     binding_metadata_by_thread=binding_metadata,
+                    active_work_summary=active_work_by_thread.get(
+                        thread.thread_target_id
+                    ),
                 )
                 for thread in threads
             ]

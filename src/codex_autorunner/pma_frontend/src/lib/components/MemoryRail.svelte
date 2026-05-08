@@ -30,7 +30,7 @@
   async function loadMemory(): Promise<void> {
     loading = true;
     error = null;
-    const docs = await pmaApi.memory.listDocs(scope);
+    const docs = await pmaApi.pma.listDocsWithContent();
     if (!docs.ok) {
       error = docs.error;
       vm = null;
@@ -42,7 +42,7 @@
   }
 
   async function saveDoc(docId: string, content: string): Promise<boolean> {
-    const result = await pmaApi.memory.saveDoc(scope, docId, content);
+    const result = await pmaApi.pma.updateDoc(docId, content);
     if (!result.ok) {
       error = result.error;
       return false;

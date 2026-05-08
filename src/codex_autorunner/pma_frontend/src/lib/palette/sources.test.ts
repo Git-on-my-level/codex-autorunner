@@ -3,7 +3,7 @@ import {
   threadSource,
   scopeSource,
   ticketSource,
-  memorySource,
+  contextspaceSource,
   recentActionsSource,
   commandSource,
   loadAllItems,
@@ -99,12 +99,12 @@ describe('ticketSource', () => {
   });
 });
 
-describe('memorySource', () => {
+describe('contextspaceSource', () => {
   it('produces items from contextspace docs', () => {
     const docs: ContextspaceDocument[] = [
       { id: 'spec', name: 'spec.md', kind: 'spec', content: '', updatedAt: null, isPinned: true, raw: {} }
     ];
-    const source = memorySource(docs);
+    const source = contextspaceSource(docs);
     const items = source.load();
     expect(items).toHaveLength(1);
     expect(items[0].label).toBe('spec.md');

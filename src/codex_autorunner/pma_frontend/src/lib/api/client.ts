@@ -23,7 +23,6 @@ import {
   type WorktreeSummary
 } from '$lib/viewModels/domain';
 import { runtimeBasePath, withRuntimeBasePath } from '$lib/runtime/basePath';
-import type { ScopeRef } from '$lib/viewModels/scope';
 
 export type ApiErrorKind = 'http' | 'network' | 'parse' | 'aborted';
 
@@ -376,6 +375,10 @@ export class PmaApiClient {
       mapResult(await this.getJson<JsonRecord>(flowRunPath(runId, 'dispatch_history', owner)), (payload) =>
         asArray(payload.history).flatMap((entry) => asArray(entry.attachments)).map(mapSurfaceArtifact)
       ),
+    getDispatchHistory: async (runId: string, owner?: { repo?: string; worktree?: string }): Promise<ApiResult<JsonRecord[]>> =>
+      mapResult(await this.getJson<JsonRecord>(flowRunPath(runId, 'dispatch_history', owner)), (payload) =>
+        asArray(payload.history)
+      ),
     resumeRun: async (runId: string): Promise<ApiResult<PmaRunProgress>> =>
       mapResult(
         await this.requestJson<JsonRecord>(`/api/flows/${encodeURIComponent(runId)}/resume`, {
@@ -469,25 +472,6 @@ export class PmaApiClient {
       this.requestJson<JsonRecord>('/api/session/settings', { method: 'POST', body })
   };
 
-  memory = {
-    listDocs: async (scope: ScopeRef): Promise<ApiResult<ContextspaceDocument[]>> => {
-      if (scope.kind === 'hub') {
-        return this.pma.listDocsWithContent();
-      }
-      const workspaceId = scope.kind === 'repo' ? scope.id : scope.kind === 'worktree' ? scope.id : null;
-      if (!workspaceId) return { ok: true, data: [] };
-      return this.contextspace.listDocuments(workspaceId);
-    },
-    saveDoc: async (scope: ScopeRef, docId: string, content: string): Promise<ApiResult<boolean>> => {
-      if (scope.kind === 'hub') {
-        const result = await this.pma.updateDoc(docId, content);
-        return result.ok ? { ok: true, data: true } : result;
-      }
-      const workspaceId = scope.kind === 'repo' ? scope.id : scope.kind === 'worktree' ? scope.id : undefined;
-      const result = await this.contextspace.updateDocument(workspaceId, docId, content);
-      return result.ok ? { ok: true, data: true } : result;
-    }
-  };
 }
 
 export function mapResult<T, U>(result: ApiResult<T>, mapper: (data: T) => U): ApiResult<U> {

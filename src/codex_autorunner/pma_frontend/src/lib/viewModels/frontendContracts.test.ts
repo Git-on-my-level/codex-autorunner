@@ -8,7 +8,7 @@ import {
   scopeBreadcrumbs,
   scopeRoute,
   scopeTicketRoute,
-  scopeMemoryRoute,
+  scopeContextspaceRoute,
   scopeFromApiPayload,
   scopeFromTicket,
   scopeMatchesResource,
@@ -20,9 +20,8 @@ import {
   ScopeUrnParseError,
   ScopeUrnKindError
 } from './scope';
-import { buildMemoryViewModel, CONTEXTSPACE_DOC_ORDER, PMA_DOC_ORDER } from './memory';
 import type { ContextspaceDocument } from './domain';
-import { buildContextspaceViewModel } from './contextspace';
+import { buildContextspaceViewModel, CONTEXTSPACE_DOC_ORDER } from './contextspace';
 
 const BACKEND_VALID_SCOPE_KINDS = ['hub', 'repo', 'worktree', 'filesystem'] as const;
 
@@ -203,20 +202,20 @@ describe('Frontend-backend scope routing contract', () => {
     expect(scopeTicketRoute({ kind: 'worktree', id: 'wt-1', parentRepoId: 'r1' })).toBe('/repos/r1/worktrees/wt-1/tickets');
   });
 
-  it('repo memory route matches backend repo scope', () => {
-    expect(scopeMemoryRoute({ kind: 'repo', id: 'my-repo' })).toBe('/repos/my-repo/memory');
+  it('repo contextspace route matches backend repo scope', () => {
+    expect(scopeContextspaceRoute({ kind: 'repo', id: 'my-repo' })).toBe('/repos/my-repo/contextspace');
   });
 
-  it('worktree memory route matches backend worktree scope', () => {
-    expect(scopeMemoryRoute({ kind: 'worktree', id: 'wt-1', parentRepoId: 'r1' })).toBe('/repos/r1/worktrees/wt-1/memory');
+  it('worktree contextspace route matches backend worktree scope', () => {
+    expect(scopeContextspaceRoute({ kind: 'worktree', id: 'wt-1', parentRepoId: 'r1' })).toBe('/repos/r1/worktrees/wt-1/contextspace');
   });
 
   it('hub has no ticket route', () => {
     expect(scopeTicketRoute({ kind: 'hub' })).toBeNull();
   });
 
-  it('hub has no memory route', () => {
-    expect(scopeMemoryRoute({ kind: 'hub' })).toBeNull();
+  it('hub has no contextspace route', () => {
+    expect(scopeContextspaceRoute({ kind: 'hub' })).toBeNull();
   });
 });
 
@@ -319,7 +318,7 @@ describe('Frontend-backend query formatting contract', () => {
   });
 });
 
-describe('Frontend-backend memory rendering contract', () => {
+describe('Frontend-backend contextspace rendering contract', () => {
   describe('contextspace doc kinds match backend CONTEXTSPACE_DOC_KINDS', () => {
     it('frontend contextspace doc kinds match backend catalog', () => {
       const frontendKinds = new Set(CONTEXTSPACE_DOC_ORDER.map((name) => name.replace(/\.md$/, '')));
@@ -343,23 +342,27 @@ describe('Frontend-backend memory rendering contract', () => {
     });
   });
 
-  describe('memory view model renders contextspace docs correctly', () => {
+  describe('contextspace view model renders contextspace docs correctly', () => {
     const docs: ContextspaceDocument[] = [
       { id: 'active_context', name: 'active_context.md', kind: 'active_context', content: '# Context', updatedAt: null, isPinned: true, raw: {} },
       { id: 'spec', name: 'spec.md', kind: 'spec', content: '# Spec', updatedAt: null, isPinned: true, raw: {} },
       { id: 'decisions', name: 'decisions.md', kind: 'decisions', content: '', updatedAt: null, isPinned: true, raw: {} },
     ];
 
-    it('repo memory includes all contextspace doc kinds', () => {
-      const vm = buildMemoryViewModel({ kind: 'repo', id: 'my-repo' }, docs);
+    it('repo contextspace includes all contextspace doc kinds', () => {
+      const vm = buildContextspaceViewModel('my-repo', docs, [
+        { id: 'my-repo', name: 'My Repo', path: '/tmp/my-repo', status: 'idle', defaultBranch: null, worktreeCount: 0, activeRuns: 0, openTickets: 0, lastActivityAt: null, raw: {} },
+      ]);
       const docNames = vm.docs.map((d) => d.filename.replace(/\.md$/, ''));
       for (const kind of BACKEND_CONTEXTSPACE_DOC_KINDS) {
         expect(docNames).toContain(kind);
       }
     });
 
-    it('worktree memory includes all contextspace doc kinds', () => {
-      const vm = buildMemoryViewModel({ kind: 'worktree', id: 'wt-1', parentRepoId: 'r1' }, docs);
+    it('worktree contextspace includes all contextspace doc kinds', () => {
+      const vm = buildContextspaceViewModel('wt-1', docs, [], [
+        { id: 'wt-1', repoId: 'r1', name: 'Worktree 1', path: '/tmp/wt-1', branch: null, status: 'idle', activeRuns: 0, openTickets: 0, lastActivityAt: null, raw: {} },
+      ]);
       const docNames = vm.docs.map((d) => d.filename.replace(/\.md$/, ''));
       for (const kind of BACKEND_CONTEXTSPACE_DOC_KINDS) {
         expect(docNames).toContain(kind);
@@ -367,8 +370,10 @@ describe('Frontend-backend memory rendering contract', () => {
     });
 
     it('renders markdown to html for content', () => {
-      const vm = buildMemoryViewModel({ kind: 'repo', id: 'r1' }, [
+      const vm = buildContextspaceViewModel('r1', [
         { id: 'spec', name: 'spec.md', kind: 'spec', content: '# Hello World', updatedAt: null, isPinned: false, raw: {} },
+      ], [
+        { id: 'r1', name: 'Repo 1', path: '/tmp/r1', status: 'idle', defaultBranch: null, worktreeCount: 0, activeRuns: 0, openTickets: 0, lastActivityAt: null, raw: {} },
       ]);
       const specDoc = vm.docs.find((d) => d.filename === 'spec.md');
       expect(specDoc?.html).toContain('Hello World');
@@ -376,20 +381,26 @@ describe('Frontend-backend memory rendering contract', () => {
     });
 
     it('empty content is marked as missing', () => {
-      const vm = buildMemoryViewModel({ kind: 'repo', id: 'r1' }, []);
+      const vm = buildContextspaceViewModel('r1', [], [
+        { id: 'r1', name: 'Repo 1', path: '/tmp/r1', status: 'idle', defaultBranch: null, worktreeCount: 0, activeRuns: 0, openTickets: 0, lastActivityAt: null, raw: {} },
+      ]);
       for (const doc of vm.docs) {
         expect(doc.isMissing).toBe(true);
       }
     });
 
     it('non-empty content is not marked as missing', () => {
-      const vm = buildMemoryViewModel({ kind: 'repo', id: 'r1' }, docs);
+      const vm = buildContextspaceViewModel('r1', docs, [
+        { id: 'r1', name: 'Repo 1', path: '/tmp/r1', status: 'idle', defaultBranch: null, worktreeCount: 0, activeRuns: 0, openTickets: 0, lastActivityAt: null, raw: {} },
+      ]);
       const present = vm.docs.find((d) => d.filename === 'spec.md');
       expect(present?.isMissing).toBe(false);
     });
 
     it('presentCount matches non-missing docs', () => {
-      const vm = buildMemoryViewModel({ kind: 'repo', id: 'r1' }, docs);
+      const vm = buildContextspaceViewModel('r1', docs, [
+        { id: 'r1', name: 'Repo 1', path: '/tmp/r1', status: 'idle', defaultBranch: null, worktreeCount: 0, activeRuns: 0, openTickets: 0, lastActivityAt: null, raw: {} },
+      ]);
       expect(vm.presentCount).toBe(2);
     });
   });

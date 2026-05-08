@@ -1,16 +1,19 @@
 import { mapSurfaceArtifact } from './domain';
+import { renderMarkdownToHtml } from './markdown';
 import type {
+  GitStatusSummary,
   PmaChatSummary,
   PmaRunProgress,
   RepoSummary,
   SurfaceArtifact,
   TicketSummary,
   WorkStatus,
-  WorktreeSummary
+  WorktreeSummary,
+  ContextspaceDocument
 } from './domain';
 import { formatRelativeTime, pmaChatKind, pmaChatKindLabel, progressPercent, statusLabel } from './pmaChat';
 import type { PmaChatKind } from './pmaChat';
-import { repoMemoryRoute, repoRoute, repoTicketRoute, worktreeMemoryRoute, worktreeRoute, worktreeTicketRoute } from './routes';
+import { repoContextspaceRoute, repoRoute, repoTicketRoute, worktreeContextspaceRoute, worktreeRoute, worktreeTicketRoute } from './routes';
 import {
   aliasesOverlap,
   buildTicketFlowStatusViewModel,
@@ -114,6 +117,20 @@ export type RepoWorktreeArtifactRow = {
   createdAt: string | null;
 };
 
+export type RepoWorktreeContextspaceRow = {
+  id: string;
+  title: string;
+  filename: string;
+  summary: string;
+  status: 'present' | 'empty';
+  updatedAt: string | null;
+  href: string;
+  /** Trimmed multi-line preview; non-empty only when the doc warrants inline expansion (e.g. spec). */
+  preview: string | null;
+  /** Rendered markdown HTML for inline previews. */
+  previewHtml: string | null;
+};
+
 export type RepoWorktreeLink = {
   label: string;
   href: string;
@@ -179,12 +196,16 @@ export type RepoWorktreeDetailViewModel = {
   flowStatus: TicketFlowStatusViewModel;
   activity: RepoWorktreeArtifactRow[];
   chats: RepoWorktreeChatRow[];
+  contextspace: RepoWorktreeContextspaceRow[];
+  contextspaceHref: string;
   currentTickets: RepoWorktreeTicketRow[];
   nextTickets: RepoWorktreeTicketRow[];
   artifacts: RepoWorktreeArtifactRow[];
   links: RepoWorktreeLink[];
   ticketIndexHref: string;
   ticketIndexLabel: string;
+  /** Compact rollup of ticket queue counts for the overview card. */
+  ticketOverview: RepoWorktreeTicketOverview;
   childWorktrees: RepoWorktreeChildRow[];
   baseRepoLabel: string | null;
   baseRepoHref: string | null;
@@ -193,6 +214,19 @@ export type RepoWorktreeDetailViewModel = {
   missingIndexLabel: string;
   pmaChatHref: string;
   codingAgentChatHref: string;
+  gitStatus: GitStatusSummary | null;
+};
+
+export type RepoWorktreeTicketOverview = {
+  total: number;
+  done: number;
+  open: number;
+  active: number;
+  failed: number;
+  /** Up to 3 representative open tickets (current first, then queued). */
+  preview: RepoWorktreeTicketRow[];
+  /** Number of remaining open tickets not in `preview`. */
+  remaining: number;
 };
 
 export type RepoWorktreeSourceData = {
@@ -201,6 +235,7 @@ export type RepoWorktreeSourceData = {
   runs: PmaRunProgress[];
   chats: PmaChatSummary[];
   tickets: TicketSummary[];
+  contextspaceDocs?: ContextspaceDocument[];
   artifacts: SurfaceArtifact[];
 };
 
@@ -275,6 +310,7 @@ export function buildRepoWorktreeDetailViewModel(
     .filter((ticket) => ticket.status !== 'done' && !currentTicketIds.has(ticket.id))
     .slice(0, 5)
     .map((ticket) => ticketToRow(ticket, activeCurrentTicketId));
+  const ticketOverview = buildTicketOverview(scopedTickets, currentTickets, nextTickets);
   const resourceArtifacts = asRecordArray(resource.raw.current_run_artifacts).map(mapSurfaceArtifact);
   const runArtifacts = [...resourceArtifacts, ...source.artifacts, ...relatedRuns.flatMap((run) => run.events)].map(artifactToRow);
   const activity = [
@@ -297,12 +333,18 @@ export function buildRepoWorktreeDetailViewModel(
     chats: relatedChats
       .map((chat) => chatToRow(chat))
       .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? '')),
+    contextspaceHref: kind === 'repo' ? repoContextspaceRoute(id) : worktreeContextspaceRoute(id, parentRepoId),
+    contextspace: contextspaceRows(
+      source.contextspaceDocs ?? [],
+      kind === 'repo' ? repoContextspaceRoute(id) : worktreeContextspaceRoute(id, parentRepoId)
+    ),
     currentTickets,
     nextTickets,
     artifacts: runArtifacts.slice(0, 6),
     links: buildContextLinks(kind, id, runArtifacts, parentRepoId),
     ticketIndexHref: scopedTicketHref(kind, id, parentRepoId),
     ticketIndexLabel: kind === 'repo' ? 'Repo tickets' : 'Worktree tickets',
+    ticketOverview,
     childWorktrees: childWorktreeSummaries.map((worktree) => worktreeToChildRow(worktree, source, baseRepo?.name ?? null)),
     baseRepoLabel: baseRepo?.name ?? (kind === 'worktree' ? (resource as WorktreeSummary | null)?.repoId ?? null : null),
     baseRepoHref: kind === 'worktree' && (resource as WorktreeSummary | null)?.repoId ? repoRoute((resource as WorktreeSummary).repoId as string) : null,
@@ -310,8 +352,34 @@ export function buildRepoWorktreeDetailViewModel(
     missingIndexHref: kind === 'repo' ? '/repos' : '/worktrees',
     missingIndexLabel: kind === 'repo' ? 'Back to repos' : 'Back to worktrees',
     pmaChatHref: scopedChatHref(kind, id, 'pma'),
-    codingAgentChatHref: scopedChatHref(kind, id, 'agent')
+    codingAgentChatHref: scopedChatHref(kind, id, 'agent'),
+    gitStatus: resource.gitStatus ?? null
   };
+}
+
+function buildTicketOverview(
+  tickets: TicketSummary[],
+  currentTickets: RepoWorktreeTicketRow[],
+  nextTickets: RepoWorktreeTicketRow[]
+): RepoWorktreeTicketOverview {
+  const total = tickets.length;
+  const done = tickets.filter((ticket) => ticket.status === 'done').length;
+  const open = total - done;
+  const active = tickets.filter((ticket) => ticket.status === 'running' || ticket.status === 'waiting' || ticket.status === 'blocked').length;
+  const failed = tickets.filter((ticket) => ticket.status === 'failed' || ticket.status === 'invalid').length;
+  const previewSeen = new Set<string>();
+  const preview: RepoWorktreeTicketRow[] = [];
+  for (const row of [...currentTickets, ...nextTickets]) {
+    if (previewSeen.has(row.id)) continue;
+    previewSeen.add(row.id);
+    preview.push(row);
+    if (preview.length >= 3) break;
+  }
+  const previewIds = new Set(preview.map((row) => row.id));
+  const remaining = tickets.filter(
+    (ticket) => ticket.status !== 'done' && !previewIds.has(ticket.id)
+  ).length;
+  return { total, done, open, active, failed, preview, remaining };
 }
 
 function missingDetailViewModel(kind: RepoWorktreeKind, id: string): RepoWorktreeDetailViewModel {
@@ -328,12 +396,15 @@ function missingDetailViewModel(kind: RepoWorktreeKind, id: string): RepoWorktre
     flowStatus: buildTicketFlowStatusViewModel([], []),
     activity: [],
     chats: [],
+    contextspace: [],
+    contextspaceHref: kind === 'repo' ? '/repos' : '/worktrees',
     currentTickets: [],
     nextTickets: [],
     artifacts: [],
     links: [{ label: kind === 'repo' ? 'Back to repos' : 'Back to worktrees', href: kind === 'repo' ? '/repos' : '/worktrees', secondary: false }],
     ticketIndexHref: kind === 'repo' ? '/repos' : '/worktrees',
     ticketIndexLabel: kind === 'repo' ? 'Back to repos' : 'Back to worktrees',
+    ticketOverview: { total: 0, done: 0, open: 0, active: 0, failed: 0, preview: [], remaining: 0 },
     childWorktrees: [],
     baseRepoLabel: null,
     baseRepoHref: null,
@@ -341,7 +412,8 @@ function missingDetailViewModel(kind: RepoWorktreeKind, id: string): RepoWorktre
     missingIndexHref: kind === 'repo' ? '/repos' : '/worktrees',
     missingIndexLabel: kind === 'repo' ? 'Back to repos' : 'Back to worktrees',
     pmaChatHref: '/chats',
-    codingAgentChatHref: '/chats'
+    codingAgentChatHref: '/chats',
+    gitStatus: null
   };
 }
 
@@ -588,6 +660,43 @@ function artifactToRow(artifact: SurfaceArtifact): RepoWorktreeArtifactRow {
   };
 }
 
+const CONTEXTSPACE_ROW_ORDER = [
+  { id: 'spec', filename: 'spec.md', title: 'Spec' },
+  { id: 'active_context', filename: 'active_context.md', title: 'Active context' },
+  { id: 'decisions', filename: 'decisions.md', title: 'Decisions' }
+];
+
+function contextspaceRows(docs: ContextspaceDocument[], contextspaceHref: string): RepoWorktreeContextspaceRow[] {
+  const byFilename = new Map(docs.map((doc) => [doc.name, doc]));
+  const byKind = new Map(docs.map((doc) => [doc.kind, doc]));
+  return CONTEXTSPACE_ROW_ORDER.map((entry) => {
+    const doc = byFilename.get(entry.filename) ?? byKind.get(entry.id);
+    const content = doc?.content.trim() ?? '';
+    const expand = entry.id === 'spec' && content;
+    return {
+      id: entry.id,
+      title: entry.title,
+      filename: entry.filename,
+      summary: content ? firstLine(content) : 'No context recorded',
+      status: content ? 'present' : 'empty',
+      updatedAt: doc?.updatedAt ?? null,
+      href: `${contextspaceHref}#${encodeURIComponent(entry.id)}`,
+      preview: expand ? content : null,
+      previewHtml: expand ? renderMarkdownToHtml(content) : null
+    };
+  });
+}
+
+function firstLine(content: string): string {
+  const line = content
+    .split('\n')
+    .map((part) => part.trim())
+    .find((part) => part.length > 0);
+  if (!line) return 'Context recorded';
+  const normalized = line.replace(/^#+\s*/, '');
+  return normalized.length > 100 ? `${normalized.slice(0, 97)}...` : normalized;
+}
+
 function runToActivity(run: RepoWorktreeRunCard): RepoWorktreeArtifactRow {
   return {
     id: `run:${run.id}`,
@@ -661,12 +770,9 @@ function fallbackTicketSummary(id: string): TicketSummary {
   };
 }
 
-function buildContextLinks(kind: RepoWorktreeKind, id: string, artifacts: RepoWorktreeArtifactRow[], parentRepoId: string | null = null): RepoWorktreeLink[] {
+function buildContextLinks(_kind: RepoWorktreeKind, _id: string, artifacts: RepoWorktreeArtifactRow[], _parentRepoId: string | null = null): RepoWorktreeLink[] {
   const preview = artifacts.find((artifact) => artifact.kind === 'preview_url' && artifact.href);
-  const scopeLabel = kind === 'repo' ? 'repo' : 'worktree';
   return [
-    { label: `View ${scopeLabel} tickets`, href: scopedTicketHref(kind, id, parentRepoId), secondary: false },
-    { label: `View ${scopeLabel} memory`, href: kind === 'repo' ? repoMemoryRoute(id) : worktreeMemoryRoute(id, parentRepoId), secondary: false },
     ...(preview?.href ? [{ label: 'Open preview', href: preview.href, secondary: false }] : [])
   ];
 }

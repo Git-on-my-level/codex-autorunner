@@ -88,6 +88,33 @@ describe('API client error handling', () => {
     }
   });
 
+  it('maps PMA chat list status from backend execution state before lifecycle state', async () => {
+    const fetcher = vi.fn(async () =>
+      Response.json({
+        threads: [
+          {
+            thread_target_id: 'thread-1',
+            display_name: 'PMA room',
+            status: 'completed',
+            normalized_status: 'completed',
+            execution_status: 'running'
+          }
+        ]
+      })
+    ) as unknown as typeof fetch;
+    const client = new PmaApiClient(fetcher);
+
+    const result = await client.pma.listChats();
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data[0]).toMatchObject({
+        id: 'thread-1',
+        status: 'running'
+      });
+    }
+  });
+
   it('prefixes API requests with the runtime hub base path when configured', async () => {
     const fetcher = vi.fn(async () =>
       Response.json({

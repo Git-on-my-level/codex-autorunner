@@ -4,7 +4,6 @@
   import TicketViews from '$lib/components/TicketViews.svelte';
   import { pmaApi, type ApiError, type PartialPageIssue } from '$lib/api/client';
   import {
-    createScopedTicket,
     loadScopedTicketQueue,
     reorderScopedTicket,
     runScopedTicketQueueCommand,
@@ -31,8 +30,8 @@
     void loadTickets();
   });
 
-  async function loadTickets(): Promise<void> {
-    loading = true;
+  async function loadTickets(showLoading = true): Promise<void> {
+    if (showLoading) loading = true;
     error = null;
     sectionIssues = [];
     const result = await loadScopedTicketQueue(pmaApi, queueConfig, (initialList) => {
@@ -51,27 +50,24 @@
     loading = false;
   }
 
-  async function createTicket(payload: { title: string; body: string }): Promise<boolean> {
-    actionStatus = scopedTicketActionStatus('create', queueConfig);
-    const result = await createScopedTicket(pmaApi, queueConfig, payload);
-    actionStatus = result.status;
-    if (result.ok) await loadTickets();
-    return result.ok;
-  }
-
   async function reorderTicket(sourceRouteId: string, destinationRouteId: string, placeAfter: boolean): Promise<boolean> {
-    actionStatus = scopedTicketActionStatus('reorder', queueConfig);
     const result = await reorderScopedTicket(pmaApi, queueConfig, sourceRouteId, destinationRouteId, placeAfter);
     actionStatus = result.status;
-    if (result.ok) await loadTickets();
+    if (result.ok) await loadTickets(false);
     return result.ok;
   }
 
   async function runQueueCommand(command: 'start' | 'stop' | 'restart'): Promise<void> {
     const runId = list?.queueRun?.id ?? null;
+    const action = list?.queueActions.find((candidate) => candidate.action === command) ?? null;
     actionStatus = scopedTicketActionStatus(command, queueConfig);
-    const result = await runScopedTicketQueueCommand(pmaApi, queueConfig, command, runId, () =>
-      window.confirm('Restart ticket flow? This will stop the current run and start a new one.')
+    const result = await runScopedTicketQueueCommand(
+      pmaApi,
+      queueConfig,
+      command,
+      runId,
+      () => window.confirm('Restart ticket flow? This will stop the current run and start a new one.'),
+      action
     );
     actionStatus = result.status;
     if (result.shouldReload) await loadTickets();
@@ -89,7 +85,6 @@
   onRetry={loadTickets}
   onFilter={(filter) => (selectedFilter = filter)}
   onQueueCommand={runQueueCommand}
-  onCreateTicket={createTicket}
   onReorderTicket={reorderTicket}
   errorMessage={error?.message ?? null}
 />

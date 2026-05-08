@@ -840,6 +840,17 @@ describe('PMA chat view helpers', () => {
     ).toBe('Repo · repo-1');
   });
 
+  it('labels hub-scoped chats using workspace_root as Hub (not repo/worktree)', () => {
+    expect(
+      pmaChatScopeLabelFromChat({
+        ...baseChat,
+        repoId: null,
+        worktreeId: null,
+        raw: { workspace_root: '/Users/me/proj' }
+      })
+    ).toBe('Hub · /Users/me/proj');
+  });
+
   it('renders pending attachment message text and removes staged attachments', () => {
     const attachments = [
       {
@@ -932,6 +943,7 @@ describe('PMA chat view helpers', () => {
     expect(agentCapabilityAllowed({ capability_projection: { actions: { list_models: { allowed: true } } } }, 'list_models')).toBe(true);
     expect(agentCapabilityAllowed({ capability_projection: { actions: { list_models: { allowed: false } } } }, 'list_models')).toBe(false);
     expect(modelReasoningOptions({ reasoning_options: ['low', 'high', 'high'] })).toEqual(['low', 'high']);
+    expect(modelReasoningOptions({ supports_reasoning: false, reasoning_options: ['none', 'high'] })).toEqual([]);
     expect(modelReasoningOptions({ supports_reasoning: true })).toEqual([]);
   });
 

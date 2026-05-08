@@ -983,15 +983,15 @@ def create_hub_app(
                 detail=f"Worktree not found in repo scope: {repo_id}/{worktree_id}",
             )
 
-    @app.get("/repos/{repo_id}/memory", include_in_schema=False)
-    def pma_repo_memory_shell(repo_id: str):
+    @app.get("/repos/{repo_id}/contextspace", include_in_schema=False)
+    def pma_repo_contextspace_shell(repo_id: str):
         return _pma_index_response()
 
     @app.get(
-        "/repos/{repo_id}/worktrees/{worktree_id}/memory",
+        "/repos/{repo_id}/worktrees/{worktree_id}/contextspace",
         include_in_schema=False,
     )
-    def pma_worktree_memory_shell(repo_id: str, worktree_id: str):
+    def pma_worktree_contextspace_shell(repo_id: str, worktree_id: str):
         _require_worktree_scope(repo_id, worktree_id)
         return _pma_index_response()
 

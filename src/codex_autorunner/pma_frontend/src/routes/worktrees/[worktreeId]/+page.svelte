@@ -52,10 +52,12 @@
       await goto(href(redirectTo), { replaceState: true });
       return;
     }
+    const contextspace = await pmaApi.contextspace.listDocuments(worktreeId);
     const baseIssues = [
       !runs.ok ? partialPageIssue('current_run', 'Active runs unavailable', runs.error) : null,
       !chats.ok ? partialPageIssue('current_run', 'PMA chats unavailable', chats.error) : null,
-      !tickets.ok ? partialPageIssue('tickets', 'Ticket queue unavailable', tickets.error) : null
+      !tickets.ok ? partialPageIssue('tickets', 'Ticket queue unavailable', tickets.error) : null,
+      !contextspace.ok ? partialPageIssue('contextspace', 'Contextspace unavailable', contextspace.error) : null
     ].filter((issue): issue is PartialPageIssue => Boolean(issue));
     const baseSource = {
       repos: dataOr(repos, []),
@@ -63,6 +65,7 @@
       runs: dataOr(runs, []),
       chats: dataOr(chats, []),
       tickets: dataOr(tickets, []),
+      contextspaceDocs: dataOr(contextspace, []),
       artifacts: [] as SurfaceArtifact[]
     };
     const baseDetail = buildRepoWorktreeDetailViewModel(baseSource, 'worktree', worktreeId);
@@ -77,6 +80,7 @@
     );
     const artifactIssues = artifactResults
       .filter((result): result is { ok: false; error: ApiError } => !result.ok)
+      .filter((result) => result.error.status !== 404)
       .map((result) => partialPageIssue('artifacts', 'Surfaced artifacts unavailable', result.error));
     sectionIssues = [...baseIssues, ...artifactIssues];
     const artifacts = artifactResults.flatMap((result) => (result.ok ? result.data : []));

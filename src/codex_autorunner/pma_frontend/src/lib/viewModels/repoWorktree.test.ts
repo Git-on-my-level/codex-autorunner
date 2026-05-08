@@ -169,7 +169,7 @@ describe('repo/worktree view models', () => {
     expect(vm.rows[0].childWorktrees[0]).toMatchObject({ signalWaiting: 1, signalFailed: 0, signalActive: 0 });
   });
 
-  it('builds active current-run detail with links and artifacts', () => {
+  it('builds active current-run detail with scoped sections and artifacts', () => {
     const vm = buildRepoWorktreeDetailViewModel(
       {
         repos: [mockRepoSummary],
@@ -177,6 +177,17 @@ describe('repo/worktree view models', () => {
         runs: [{ ...mockRunProgress, raw: { repo_id: 'repo-1', current_ticket_id: 'TICKET-110' } }],
         chats: [{ ...mockChatSummary, repoId: 'repo-1' }],
         tickets: [mockTicketSummary],
+        contextspaceDocs: [
+          {
+            id: 'spec',
+            name: 'spec.md',
+            kind: 'spec',
+            content: '# Detail spec',
+            updatedAt: '2026-05-04T00:01:00Z',
+            isPinned: true,
+            raw: {}
+          }
+        ],
         artifacts: [mockArtifact]
       },
       'repo',
@@ -191,10 +202,18 @@ describe('repo/worktree view models', () => {
       chatHref: '/chats?chat=chat-1'
     });
     expect(vm.links.map((link) => link.label)).not.toContain('Open PMA chat');
-    expect(vm.links.map((link) => link.label)).toContain('View repo tickets');
-    expect(vm.links.find((link) => link.label === 'View repo tickets')?.href).toBe('/repos/repo-1/tickets');
-    expect(vm.links.map((link) => link.label)).toContain('View repo memory');
     expect(vm.ticketIndexHref).toBe('/repos/repo-1/tickets');
+    expect(vm.contextspaceHref).toBe('/repos/repo-1/contextspace');
+    expect(vm.contextspace.find((doc) => doc.id === 'spec')).toMatchObject({
+      filename: 'spec.md',
+      summary: 'Detail spec',
+      status: 'present',
+      href: '/repos/repo-1/contextspace#spec',
+      preview: '# Detail spec'
+    });
+    expect(vm.contextspace.find((doc) => doc.id === 'spec')?.previewHtml).toContain('<h1>Detail spec</h1>');
+    expect(vm.contextspace.find((doc) => doc.id === 'active_context')?.preview).toBeNull();
+    expect(vm.contextspace[0].id).toBe('spec');
     expect(vm.links.map((link) => link.label)).toContain('Open preview');
     expect(vm.artifacts[0]).toMatchObject({ kind: 'preview_url' });
     expect(vm.childWorktrees).toHaveLength(1);
@@ -221,7 +240,8 @@ describe('repo/worktree view models', () => {
     expect(vm.baseRepoLabel).toBe('codex-autorunner');
     expect(vm.baseRepoHref).toBe('/repos/repo-1');
     expect(vm.currentRuns[0].ticketHref).toBe('/repos/repo-1/worktrees/worktree-1/tickets/TICKET-110');
-    expect(vm.links.find((link) => link.label === 'View worktree tickets')?.href).toBe('/repos/repo-1/worktrees/worktree-1/tickets');
+    expect(vm.ticketIndexHref).toBe('/repos/repo-1/worktrees/worktree-1/tickets');
+    expect(vm.contextspaceHref).toBe('/repos/repo-1/worktrees/worktree-1/contextspace');
   });
 
   it('does not match repo-level records on worktree detail through the parent repo id', () => {
@@ -268,10 +288,9 @@ describe('repo/worktree view models', () => {
     expect(vm.hasActiveRun).toBe(false);
     expect(vm.currentRuns).toHaveLength(0);
     expect(vm.nextTickets[0].title).toBe(mockTicketSummary.title);
-    expect(vm.links.find((link) => link.label === 'View repo tickets')).toMatchObject({
-      href: '/repos/repo-1/tickets',
-      secondary: false
-    });
+    expect(vm.ticketIndexHref).toBe('/repos/repo-1/tickets');
+    expect(vm.contextspace).toHaveLength(3);
+    expect(vm.contextspace.every((doc) => doc.status === 'empty')).toBe(true);
   });
 
   it('does not mark the fallback current ticket as working when the flow is not active', () => {

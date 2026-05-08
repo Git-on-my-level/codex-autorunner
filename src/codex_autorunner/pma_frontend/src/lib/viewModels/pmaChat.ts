@@ -1231,7 +1231,7 @@ export function pmaChatScopeLabelFromChat(chat: PmaChatSummary | null): string {
   if (chat.worktreeId) return `Worktree · ${chat.worktreeId}`;
   if (chat.repoId) return `Repo · ${chat.repoId}`;
   const workspaceRoot = stringValue(chat.raw.workspace_root);
-  if (workspaceRoot && workspaceRoot !== '.') return `Workspace · ${workspaceRoot}`;
+  if (workspaceRoot && workspaceRoot !== '.') return `Hub · ${workspaceRoot}`;
   return 'Local hub · current workspace';
 }
 
@@ -1272,6 +1272,7 @@ export function buildManagedThreadMessagePayload(
 
 export function modelReasoningOptions(model: Record<string, unknown> | null): string[] {
   if (!model) return [];
+  if (model.supports_reasoning === false || model.supportsReasoning === false) return [];
   const rawOptions = model.reasoning_options ?? model.reasoningOptions ?? model.supportedReasoningEfforts;
   const options = Array.isArray(rawOptions)
     ? rawOptions.filter((option): option is string => typeof option === 'string' && option.trim().length > 0).map((option) => option.trim())

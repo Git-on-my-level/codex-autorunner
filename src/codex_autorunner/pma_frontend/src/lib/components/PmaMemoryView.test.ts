@@ -37,6 +37,6 @@ describe('PmaMemoryView', () => {
     expect(body).not.toContain('Prompt');
     expect(body).not.toContain('random.md');
     expect(body).not.toContain('Open workspace index');
-    expect(body).not.toContain('Ask PMA to update');
+    expect(body).not.toContain('href="/chats');
   });
 });

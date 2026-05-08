@@ -1612,6 +1612,35 @@ def build_flow_routes() -> APIRouter:
             if store:
                 store.close()
 
+    @router.post("/{run_id}/restart", response_model=FlowStatusResponse)
+    async def restart_flow(http_request: Request, run_id: str):
+        state = _ensure_state_in_app(http_request)
+        run_id = _normalize_run_id(run_id)
+        repo_root = find_repo_root()
+        record = _get_flow_record(repo_root, run_id)
+        if record.flow_type != "ticket_flow":
+            raise HTTPException(status_code=400, detail="Only ticket_flow can restart")
+
+        if record.status in {
+            FlowRunStatus.PENDING,
+            FlowRunStatus.RUNNING,
+            FlowRunStatus.STOPPING,
+            FlowRunStatus.PAUSED,
+        }:
+            service = _build_flow_orchestration_service(repo_root, record.flow_type)
+            _stop_worker(run_id, state)
+            try:
+                await service.stop_flow_run(run_id)
+            except ValueError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        return await _start_flow(
+            "ticket_flow",
+            FlowStartRequest(metadata={"force_new": True}),
+            state,
+            force_new=True,
+        )
+
     @router.post("/{run_id}/resume", response_model=FlowStatusResponse)
     async def resume_flow(http_request: Request, run_id: str, force: bool = False):
         _ensure_state_in_app(http_request)

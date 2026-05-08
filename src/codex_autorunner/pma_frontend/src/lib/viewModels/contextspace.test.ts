@@ -22,11 +22,9 @@ describe('contextspace view models', () => {
       [mockWorktreeSummary]
     );
 
-    expect(vm.title).toBe('Workspace memory: codex-autorunner');
+    expect(vm.title).toBe('Contextspace: codex-autorunner');
     expect(vm.eyebrow).toBe('Repo-scoped contextspace');
-    expect(vm.description).toContain('Repo memory');
-    expect(vm.openWorkspaceHref).toBe('/repos/repo-1');
-    expect(vm.askPmaHref).toContain('/chats?draft=');
+    expect(vm.description).toContain('Repo contextspace');
     expect(vm.docs.map((doc) => doc.filename)).toEqual(['active_context.md', 'spec.md', 'decisions.md']);
     expect(vm.docs[0]).toMatchObject({ id: 'active_context', isMissing: true });
     expect(vm.presentCount).toBe(2);
@@ -36,20 +34,16 @@ describe('contextspace view models', () => {
     const vm = buildContextspaceViewModel('worktree-1', [], [mockRepoSummary], [mockWorktreeSummary]);
 
     expect(vm.workspaceKind).toBe('worktree');
-    expect(vm.description).toContain('Worktree memory');
-    expect(vm.openWorkspaceHref).toBe('/repos/repo-1/worktrees/worktree-1');
-    expect(vm.openWorkspaceLabel).toBe('Open worktree variant');
+    expect(vm.description).toContain('Worktree contextspace');
   });
 
   it('treats local contextspace as unsupported in the PMA hub', () => {
     const vm = buildContextspaceViewModel('local', [], [mockRepoSummary], [mockWorktreeSummary]);
 
     expect(vm.workspaceKind).toBe('unknown');
-    expect(vm.title).toBe('Workspace memory: local');
+    expect(vm.title).toBe('Contextspace: local');
     expect(vm.eyebrow).toBe('Unknown workspace contextspace');
     expect(vm.description).toContain('scoped contextspace was not loaded');
-    expect(vm.openWorkspaceHref).toBe('/repos');
-    expect(vm.openWorkspaceLabel).toBe('Open workspace index');
   });
 
   it('marks unknown workspace ids without pretending they are unscoped contextspace', () => {
@@ -59,8 +53,6 @@ describe('contextspace view models', () => {
     expect(vm.isUnknown).toBe(true);
     expect(vm.eyebrow).toBe('Unknown workspace contextspace');
     expect(vm.description).toContain('scoped contextspace was not loaded');
-    expect(vm.openWorkspaceHref).toBe('/repos');
-    expect(vm.openWorkspaceLabel).toBe('Open workspace index');
     expect(vm.presentCount).toBe(0);
   });
 

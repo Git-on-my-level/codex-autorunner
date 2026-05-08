@@ -6,6 +6,7 @@
     SettingsViewModel
   } from '$lib/viewModels/settings';
   import PageHero from './PageHero.svelte';
+  import AutoDismissNotice from './AutoDismissNotice.svelte';
   import {
     applyThemePreference,
     isThemePreference,
@@ -222,9 +223,7 @@
           {saving ? 'Saving' : sessionDirty ? 'Save preferences' : 'Saved'}
         </button>
       </div>
-      {#if saveError}
-        <p class="compose-error">{saveError}</p>
-      {/if}
+      <AutoDismissNotice message={saveError} tone="danger" />
       <h3 class="settings-subtitle">PMA-capable agents</h3>
       {@render agentList(view.pmaAgents, 'No PMA-capable agents are visible from the server.')}
       <h3 class="settings-subtitle">Coding agents</h3>

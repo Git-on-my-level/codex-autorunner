@@ -355,7 +355,19 @@ def _serialize_thread_target(
     thread: ThreadTarget,
     *,
     binding_metadata_by_thread: Optional[dict[str, dict[str, Any]]] = None,
+    active_work_summary: Optional[ActiveWorkSummary] = None,
 ) -> dict[str, Any]:
+    target_runtime_status = normalize_optional_text(thread.status)
+    execution_status = (
+        normalize_optional_text(active_work_summary.execution_status)
+        if active_work_summary is not None
+        else None
+    )
+    effective_status = (
+        execution_status
+        if execution_status in {"running", "queued"}
+        else target_runtime_status
+    )
     payload = {
         "managed_thread_id": thread.thread_target_id,
         "agent": thread.agent_id,
@@ -368,8 +380,19 @@ def _serialize_thread_target(
         "model": normalize_optional_text(getattr(thread, "model", None)),
         "backend_thread_id": thread.backend_thread_id,
         "lifecycle_status": thread.lifecycle_status,
-        "normalized_status": thread.status,
-        "status": thread.status,
+        "runtime_status": effective_status,
+        "normalized_status": effective_status,
+        "status": effective_status,
+        "target_runtime_status": target_runtime_status,
+        "execution_status": execution_status,
+        "active_turn_id": (
+            active_work_summary.execution_id
+            if active_work_summary is not None
+            else None
+        ),
+        "queued_count": (
+            active_work_summary.queued_count if active_work_summary is not None else 0
+        ),
         "status_reason": thread.status_reason,
         "status_changed_at": thread.status_changed_at,
         "status_terminal": bool(thread.status_terminal),

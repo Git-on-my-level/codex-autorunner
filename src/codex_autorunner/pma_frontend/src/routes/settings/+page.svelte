@@ -10,7 +10,7 @@
     type SettingsSessionState,
     type SettingsViewModel
   } from '$lib/viewModels/settings';
-  import { agentCapabilityAllowed } from '$lib/viewModels/pmaChat';
+  import { agentCanListModels, agentId } from '$lib/viewModels/modelPickers';
 
   let view = $state<SettingsViewModel | null>(null);
   let sessionBaselineEpoch = $state(0);
@@ -46,10 +46,10 @@
     const modelCatalogs: Record<string, JsonRecord[] | null> = {};
     await Promise.all(
       agentRows.map(async (agent) => {
-        const agentId = stringField(agent, 'id');
-        if (!agentId || !agentCapabilityAllowed(agent, 'list_models')) return;
-        const result = await pmaApi.pma.listAgentModels(agentId);
-        modelCatalogs[agentId] = result.ok ? result.data : null;
+        if (!agentCanListModels(agent)) return;
+        const id = agentId(agent);
+        const result = await pmaApi.pma.listAgentModels(id);
+        modelCatalogs[id] = result.ok ? result.data : null;
       })
     );
 
@@ -80,11 +80,6 @@
     }
     await loadSettings();
     saving = false;
-  }
-
-  function stringField(record: JsonRecord, key: string): string | null {
-    const value = record[key];
-    return typeof value === 'string' && value.trim() ? value : null;
   }
 </script>
 

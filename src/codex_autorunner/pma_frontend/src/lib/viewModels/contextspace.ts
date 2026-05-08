@@ -1,6 +1,5 @@
 import type { ContextspaceDocument, RepoSummary, WorktreeSummary } from './domain';
 import { renderMarkdownToHtml } from './markdown';
-import { repoRoute, worktreeRoute } from './routes';
 export { renderMarkdownToHtml } from './markdown';
 
 export type ContextspaceDocKind = 'active_context' | 'spec' | 'decisions';
@@ -22,12 +21,11 @@ export type ContextspaceViewModel = {
   workspaceKind: 'repo' | 'worktree' | 'unknown';
   isUnknown: boolean;
   description: string;
-  openWorkspaceHref: string;
-  openWorkspaceLabel: string;
-  askPmaHref: string;
   docs: ContextspaceDocumentTab[];
   presentCount: number;
 };
+
+export const CONTEXTSPACE_DOC_ORDER = ['active_context.md', 'spec.md', 'decisions.md'] as const;
 
 const DOC_ORDER: Array<{ id: ContextspaceDocKind; label: string; filename: string }> = [
   { id: 'active_context', label: 'Active context', filename: 'active_context.md' },
@@ -44,12 +42,6 @@ export function buildContextspaceViewModel(
   const repo = repos.find((candidate) => candidate.id === workspaceId) ?? null;
   const worktree = worktrees.find((candidate) => candidate.id === workspaceId) ?? null;
   const workspaceKind = worktree ? 'worktree' : repo ? 'repo' : 'unknown';
-  const workspaceHref =
-    workspaceKind === 'worktree'
-      ? worktreeRoute(workspaceId, worktree?.repoId ?? null)
-      : workspaceKind === 'repo'
-        ? repoRoute(workspaceId)
-        : '/repos';
   const title = worktree?.name ?? repo?.name ?? workspaceId;
   const docMap = new Map(docs.map((doc) => [normalizeDocKind(doc.kind || doc.id || doc.name), doc]));
   const tabs = DOC_ORDER.map((entry) => {
@@ -63,11 +55,9 @@ export function buildContextspaceViewModel(
       updatedAt: doc?.updatedAt ?? null
     };
   });
-  const askPrompt = `Please review and update the ${workspaceKind} contextspace docs for workspace ${workspaceId}: active_context.md, spec.md, and decisions.md.`;
-
   return {
     workspaceId,
-    title: `Workspace memory: ${title}`,
+    title: `Contextspace: ${title}`,
     eyebrow:
       workspaceKind === 'repo'
         ? 'Repo-scoped contextspace'
@@ -78,18 +68,10 @@ export function buildContextspaceViewModel(
     isUnknown: workspaceKind === 'unknown',
     description:
       workspaceKind === 'repo'
-        ? 'Repo memory is read from this repo workspace contextspace.'
+        ? 'Repo contextspace is read from this repo workspace.'
         : workspaceKind === 'worktree'
-          ? 'Worktree memory is read from this worktree workspace contextspace.'
+          ? 'Worktree contextspace is read from this worktree workspace.'
           : 'This workspace id was not matched to a known repo or worktree, so scoped contextspace was not loaded.',
-    openWorkspaceHref: workspaceHref,
-    openWorkspaceLabel:
-      workspaceKind === 'worktree'
-        ? 'Open worktree variant'
-        : workspaceKind === 'repo'
-          ? 'Open repo'
-          : 'Open workspace index',
-    askPmaHref: `/chats?draft=${encodeURIComponent(askPrompt)}`,
     docs: tabs,
     presentCount: tabs.filter((doc) => !doc.isMissing).length
   };

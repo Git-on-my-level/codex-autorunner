@@ -19,6 +19,19 @@ export type TicketSourceData = {
   timeline?: PmaTimelineItem[];
 };
 
+export type TicketWorkerActivityItem = {
+  id: string;
+  title: string;
+  summary: string | null;
+  detail: string | null;
+  status: WorkStatus;
+  timestamp: string | null;
+};
+
+export type TicketWorkerActivity = {
+  items: TicketWorkerActivityItem[];
+};
+
 export type TicketEditPayload = {
   title: string;
   agent: string;
@@ -31,6 +44,8 @@ export type TicketEditPayload = {
 export type TicketOwnerScope = {
   kind: 'repo' | 'worktree';
   id: string;
+  /** Present for worktree queues mounted under `/repos/{repo}/worktrees/{wt}/tickets`. */
+  parentRepoId?: string | null;
   label?: string | null;
 } | null;
 
@@ -71,6 +86,8 @@ export type TicketQueueAction = {
   label: string;
   requiresConfirmation: boolean;
   disabledReason: string | null;
+  method: 'GET' | 'POST';
+  route: string | null;
 };
 
 export type SurfaceActionManifestAction = {
@@ -79,6 +96,8 @@ export type SurfaceActionManifestAction = {
   enabled?: boolean;
   disabled_reason?: string | null;
   requires_confirmation?: boolean;
+  method?: string;
+  route?: string | null;
   tone?: string;
 };
 
@@ -150,6 +169,14 @@ export type TicketDetailViewModel = {
   agentLabel: string;
   modelLabel: string | null;
   reasoningLabel: string | null;
+  /** Stored agent id for inline settings (frontmatter.agent / summary), not chat-derived labels. */
+  agentRaw: string;
+  /** Stored model id for inline settings — mirrors ticket markdown `model:` (API or body fallback). */
+  modelRaw: string;
+  /** Stored reasoning effort token for inline settings (empty = default / omit on save). */
+  reasoningRaw: string;
+  /** Changes when persisted ticket settings or body content relevant to sync changes (from server). */
+  settingsSyncSignature: string;
   done: boolean;
   frontmatter: Record<string, unknown>;
   updatedLabel: string;
@@ -188,7 +215,8 @@ export function buildTicketListViewModel(
   const ownerLabel = owner?.label || owner?.id;
   const queueRun = owner ? findQueueRun(source.runs, owner) ?? findQueueRunFromRows(rows) : null;
   const flowStatus = buildTicketFlowStatusViewModel(source.tickets, source.runs, owner);
-  const rowsWithCurrent = rows.map((row) => ({ ...row, isCurrent: row.id === flowStatus.currentTicketId || row.routeId === flowStatus.currentTicketId }));
+  const activeCurrentTicketId = isTicketFlowActuallyWorking(flowStatus.status) ? flowStatus.currentTicketId : null;
+  const rowsWithCurrent = rows.map((row) => ({ ...row, isCurrent: row.id === activeCurrentTicketId || row.routeId === activeCurrentTicketId }));
   return {
     title: owner ? `${ownerLabel} tickets` : 'Tickets',
     eyebrow: owner ? `${owner.kind === 'repo' ? 'Repo' : 'Worktree'} ticket queue` : 'All-ticket projection',
@@ -206,14 +234,93 @@ export function buildTicketListViewModel(
     })),
     workspaceFilters: buildWorkspaceFilters(rowsWithCurrent),
     queueRun,
-    queueActions: buildQueueActions(queueRun, source.runs, rowsWithCurrent, actionManifest),
+    queueActions: buildQueueActions(queueRun, source.runs, actionManifest),
     flowStatus,
     rows: rowsWithCurrent
   };
 }
 
+function isTicketFlowActuallyWorking(status: WorkStatus): boolean {
+  return status === 'running' || status === 'waiting' || status === 'blocked';
+}
+
 export function filterTicketRows(rows: TicketListRow[], filter: TicketFilter, workspaceFilter = 'all'): TicketListRow[] {
   return rows.filter((row) => rowMatchesFilter(row, filter) && rowMatchesWorkspaceFilter(row, workspaceFilter));
+}
+
+/** Raw `model` from API frontmatter or from a leading `---` / `---` block in the ticket body. */
+export function ticketModelRawFromDetail(detail: TicketDetail): string {
+  const fm = asRecord(detail.raw.frontmatter);
+  const direct = stringFromRaw(fm, ['model']);
+  if (direct) return direct;
+  const block = extractFrontmatterYamlFromBody(detail.body);
+  return parseYamlScalarFromBlock(block, 'model') ?? '';
+}
+
+/** Raw `reasoning` effort token from API frontmatter or from the body header block. */
+export function ticketReasoningRawFromDetail(detail: TicketDetail): string {
+  const fm = asRecord(detail.raw.frontmatter);
+  const direct = stringFromRaw(fm, ['reasoning']);
+  if (direct) return direct;
+  const block = extractFrontmatterYamlFromBody(detail.body);
+  return parseYamlScalarFromBlock(block, 'reasoning') ?? '';
+}
+
+/** Stored agent id for editing: YAML `agent` wins over summary `agentId`. */
+export function ticketAgentRawFromDetail(detail: TicketDetail, frontmatter: Record<string, unknown>): string {
+  const fromFm = stringFromRaw(frontmatter, ['agent']);
+  if (fromFm) return fromFm;
+  if (detail.agentId) return detail.agentId;
+  return '';
+}
+
+function buildTicketSettingsSyncSignature(
+  detail: TicketDetail,
+  frontmatter: Record<string, unknown>,
+  modelRaw: string,
+  reasoningRaw: string,
+  agentRaw: string
+): string {
+  const title = stringFromRaw(frontmatter, ['title']) ?? detail.title;
+  return JSON.stringify({
+    agent: agentRaw,
+    model: modelRaw,
+    reasoning: reasoningRaw,
+    done: Boolean(frontmatter.done),
+    title,
+    bodyLen: detail.body.length
+  });
+}
+
+function extractFrontmatterYamlFromBody(markdown: string): string | null {
+  const text = markdown.replace(/\r\n/g, '\n');
+  if (!text.startsWith('---\n')) return null;
+  const rest = text.slice(4);
+  const end = rest.indexOf('\n---\n');
+  if (end !== -1) return rest.slice(0, end);
+  const endAlt = rest.indexOf('\n---');
+  if (endAlt === -1) return null;
+  return rest.slice(0, endAlt);
+}
+
+function parseYamlScalarFromBlock(block: string | null, key: string): string | null {
+  if (!block || !/^[a-zA-Z0-9_]+$/.test(key)) return null;
+  for (const line of block.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const match = trimmed.match(new RegExp(`^${key}\\s*:\\s*(.*)$`));
+    if (!match) continue;
+    let value = match[1].trim();
+    if (!value) return null;
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    return value || null;
+  }
+  return null;
 }
 
 export function buildTicketDetailViewModel(
@@ -236,6 +343,10 @@ export function buildTicketDetailViewModel(
   const routeId = routeIdForTicket(detail);
   const selectedIndex = sourceTickets.findIndex((row) => row.routeId === routeId || row.id === detail.id);
   const frontmatter = asRecord(detail.raw.frontmatter);
+  const modelRaw = ticketModelRawFromDetail(detail);
+  const reasoningRaw = ticketReasoningRawFromDetail(detail);
+  const agentRaw = ticketAgentRawFromDetail(detail, frontmatter);
+  const settingsSyncSignature = buildTicketSettingsSyncSignature(detail, frontmatter, modelRaw, reasoningRaw, agentRaw);
 
   return {
     id: detail.id,
@@ -251,8 +362,12 @@ export function buildTicketDetailViewModel(
     pathLabel: detail.path,
     workspacePathLabel: detail.workspacePath,
     agentLabel: detail.agentId ?? chat?.agentId ?? 'Unassigned',
-    modelLabel: stringFromRaw(frontmatter, ['model']),
-    reasoningLabel: stringFromRaw(frontmatter, ['reasoning']),
+    modelLabel: modelRaw || null,
+    reasoningLabel: reasoningRaw || null,
+    agentRaw,
+    modelRaw,
+    reasoningRaw,
+    settingsSyncSignature,
     done: Boolean(frontmatter.done),
     frontmatter,
     updatedLabel: formatRelativeTime(detail.updatedAt ?? run?.lastEventAt ?? null, now),
@@ -266,7 +381,7 @@ export function buildTicketDetailViewModel(
     chatHref,
     runHref,
     debugHref,
-    actions: buildActions(chatHref, runHref, debugHref, run?.status ?? detail.status),
+    actions: buildActions(runHref, debugHref, run?.status ?? detail.status),
     rawBody: detail.body,
     sourceTickets,
     previousTicketHref: selectedIndex > 0 ? sourceTickets[selectedIndex - 1].href : null,
@@ -310,6 +425,72 @@ export function mergeTicketRunProgress(runs: PmaRunProgress[], progress: PmaRunP
   return runs.map((run, runIndex) => (runIndex === index ? progress : run));
 }
 
+export function buildTicketWorkerActivity(
+  dispatchHistory: Record<string, unknown>[] = [],
+  flowEvents: Record<string, unknown>[] = []
+): TicketWorkerActivity {
+  const items: TicketWorkerActivityItem[] = [];
+  const liveText = flowEvents
+    .filter((event) => stringFromRaw(event, ['event_type']) === 'agent_stream_delta')
+    .map((event) => stringFromRaw(asRecord(event.data), ['delta']) ?? '')
+    .join('')
+    .trim();
+  if (liveText) {
+    items.push({
+      id: 'live-worker-output',
+      title: 'Live worker output',
+      summary: null,
+      detail: liveText,
+      status: 'running',
+      timestamp: latestFlowEventTimestamp(flowEvents)
+    });
+  }
+  for (const event of flowEvents) {
+    const eventType = stringFromRaw(event, ['event_type']);
+    if (eventType === 'agent_stream_delta') continue;
+    if (eventType === 'step_started') {
+      const stepName = stringFromRaw(asRecord(event.data), ['step_name']) ?? 'Step started';
+      items.push(workerItem(`event-${event.seq ?? items.length}`, stepName, null, null, 'running', stringFromRaw(event, ['timestamp'])));
+    } else if (eventType === 'app_server_event') {
+      const data = asRecord(event.data);
+      items.push(workerItem(
+        `event-${event.seq ?? items.length}`,
+        stringFromRaw(data, ['title', 'method', 'type', 'event_type']) ?? 'Worker event',
+        stringFromRaw(data, ['summary', 'message']),
+        compactJson(data),
+        'running',
+        stringFromRaw(event, ['timestamp'])
+      ));
+    }
+  }
+  for (const entry of dispatchHistory) {
+    const dispatch = asRecord(entry.dispatch);
+    const errors = Array.isArray(entry.errors) ? entry.errors.filter((value): value is string => typeof value === 'string') : [];
+    const attachments = Array.isArray(entry.attachments) ? entry.attachments : [];
+    const diff = asRecord(dispatch.diff_stats);
+    const diffParts = [
+      typeof diff.insertions === 'number' ? `+${diff.insertions}` : null,
+      typeof diff.deletions === 'number' ? `-${diff.deletions}` : null,
+      typeof diff.files_changed === 'number' ? `${diff.files_changed} files` : null
+    ].filter(Boolean);
+    const summaryParts = [
+      stringFromRaw(dispatch, ['body']),
+      diffParts.length ? diffParts.join(' ') : null,
+      attachments.length ? `${attachments.length} attachment${attachments.length === 1 ? '' : 's'}` : null,
+      errors.length ? errors.join('; ') : null
+    ].filter((value): value is string => Boolean(value));
+    items.push(workerItem(
+      `dispatch-${String(entry.seq ?? items.length)}`,
+      stringFromRaw(dispatch, ['title', 'mode']) ?? `Dispatch ${String(entry.seq ?? '')}`.trim(),
+      summaryParts.join(' · ') || null,
+      null,
+      errors.length ? 'failed' : 'done',
+      stringFromRaw(entry, ['created_at'])
+    ));
+  }
+  return { items: items.slice(0, 80) };
+}
+
 export function rowRelativeTime(row: { updatedAt?: string | null; createdAt?: string | null }, now = new Date()): string {
   return formatRelativeTime(row.updatedAt ?? row.createdAt ?? null, now);
 }
@@ -346,6 +527,35 @@ function ticketToListRow(ticket: TicketSummary, source: TicketSourceData): Ticke
   };
 }
 
+function workerItem(
+  id: string,
+  title: string,
+  summary: string | null,
+  detail: string | null,
+  status: WorkStatus,
+  timestamp: string | null
+): TicketWorkerActivityItem {
+  return { id, title, summary, detail, status, timestamp };
+}
+
+function latestFlowEventTimestamp(events: Record<string, unknown>[]): string | null {
+  for (const event of [...events].reverse()) {
+    const timestamp = stringFromRaw(event, ['timestamp']);
+    if (timestamp) return timestamp;
+  }
+  return null;
+}
+
+function compactJson(value: Record<string, unknown>): string | null {
+  const keys = Object.keys(value);
+  if (!keys.length) return null;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return null;
+  }
+}
+
 function findQueueRun(runs: PmaRunProgress[], owner: Exclude<TicketOwnerScope, null>): TicketQueueRun | null {
   const matchingRuns = runs.filter((run) => runMatchesOwner(run, owner));
   return (
@@ -371,7 +581,6 @@ function findQueueRunFromRows(rows: TicketListRow[]): TicketQueueRun | null {
 function buildQueueActions(
   queueRun: TicketQueueRun | null,
   runs: PmaRunProgress[],
-  rows: TicketListRow[],
   actionManifest: SurfaceActionManifest | null
 ): TicketQueueAction[] {
   const manifestActions = actionsFromManifest(actionManifest);
@@ -382,29 +591,7 @@ function buildQueueActions(
     .map(queueActionFromPolicy)
     .filter((action): action is TicketQueueAction => action !== null);
   if (projected.length > 0) return orderQueueActions(projected);
-  return [
-    {
-      action: 'start',
-      enabled: !queueRun && rows.some((row) => row.status !== 'done'),
-      label: 'Start queue',
-      requiresConfirmation: false,
-      disabledReason: queueRun ? 'Ticket flow is already active' : 'No open tickets'
-    },
-    {
-      action: 'stop',
-      enabled: false,
-      label: 'Stop queue',
-      requiresConfirmation: false,
-      disabledReason: 'No active flow run'
-    },
-    {
-      action: 'restart',
-      enabled: false,
-      label: 'Restart queue',
-      requiresConfirmation: true,
-      disabledReason: 'No restartable flow run'
-    }
-  ];
+  return [];
 }
 
 function actionsFromManifest(manifest: SurfaceActionManifest | null): TicketQueueAction[] {
@@ -423,7 +610,9 @@ function queueActionFromManifest(action: SurfaceActionManifestAction): TicketQue
     enabled: action.enabled === true,
     label: typeof action.label === 'string' && action.label.trim() ? action.label : name,
     requiresConfirmation: action.requires_confirmation === true,
-    disabledReason: typeof action.disabled_reason === 'string' && action.disabled_reason.trim() ? action.disabled_reason : null
+    disabledReason: typeof action.disabled_reason === 'string' && action.disabled_reason.trim() ? action.disabled_reason : null,
+    method: action.method === 'GET' ? 'GET' : 'POST',
+    route: typeof action.route === 'string' && action.route.trim() ? action.route : null
   };
 }
 
@@ -438,7 +627,9 @@ function queueActionFromPolicy(value: unknown): TicketQueueAction | null {
     enabled: action.enabled === true,
     label: stringFromRaw(action, ['label']) ?? name,
     requiresConfirmation: action.requires_confirmation === true,
-    disabledReason: stringFromRaw(action, ['disabled_reason'])
+    disabledReason: stringFromRaw(action, ['disabled_reason']),
+    method: stringFromRaw(action, ['method']) === 'GET' ? 'GET' : 'POST',
+    route: stringFromRaw(action, ['route'])
   };
 }
 
@@ -565,10 +756,8 @@ function buildTimeline(detail: TicketDetail, run: PmaRunProgress | null, artifac
   return items;
 }
 
-function buildActions(chatHref: string | null, runHref: string | null, debugHref: string | null, status: WorkStatus): TicketAction[] {
-  const actions: TicketAction[] = chatHref
-    ? [{ label: 'Open PMA chat', href: chatHref, secondary: false, command: null }]
-    : [];
+function buildActions(runHref: string | null, debugHref: string | null, status: WorkStatus): TicketAction[] {
+  const actions: TicketAction[] = [];
   if (runHref) actions.push({ label: 'Open run', href: runHref, secondary: false, command: null });
   if (status === 'waiting' || status === 'blocked') actions.push({ label: 'Continue run', href: null, secondary: false, command: 'resume' });
   if (status === 'failed') actions.push({ label: 'Retry run', href: null, secondary: false, command: 'bootstrap' });
@@ -653,7 +842,12 @@ function syntheticChat(ticket: TicketDetail, run: PmaRunProgress): PmaChatSummar
 }
 
 function routeIdForTicket(ticket: TicketSummary): string {
-  return ticket.number ? String(ticket.number) : ticket.id;
+  return ticketRouteSegmentFromSummary(ticket);
+}
+
+/** URL segment for a ticket row or detail link (matches list/detail routing). */
+export function ticketRouteSegmentFromSummary(ticket: Pick<TicketSummary, 'id' | 'number'>): string {
+  return ticket.number != null ? String(ticket.number) : ticket.id;
 }
 
 function bodyFromTicketSummary(ticket: TicketSummary): string {

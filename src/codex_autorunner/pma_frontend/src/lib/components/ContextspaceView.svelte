@@ -1,8 +1,7 @@
 <script lang="ts">
-  import EditableMarkdown from '$lib/components/EditableMarkdown.svelte';
-  import PageHero from '$lib/components/PageHero.svelte';
-  import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
-  import type { ContextspaceViewModel, ContextspaceDocKind } from '$lib/viewModels/contextspace';
+  import { onMount } from 'svelte';
+  import MarkdownDocViewer from '$lib/components/MarkdownDocViewer.svelte';
+  import type { ContextspaceViewModel } from '$lib/viewModels/contextspace';
 
   let {
     state: viewState,
@@ -16,21 +15,55 @@
     onSaveDoc?: (docId: string, content: string) => Promise<boolean> | boolean;
   } = $props();
 
-  let activeDocId = $state<ContextspaceDocKind>('active_context');
-  let copyState = $state('Copy');
+  let activeDocId = $state<string>('active_context');
 
-  const activeDoc = $derived(vm?.docs.find((doc) => doc.id === activeDocId) ?? vm?.docs[0] ?? null);
+  onMount(() => {
+    selectDocFromLocation({ replace: true });
+    window.addEventListener('hashchange', selectDocFromLocation);
+    window.addEventListener('popstate', selectDocFromLocation);
+    return () => {
+      window.removeEventListener('hashchange', selectDocFromLocation);
+      window.removeEventListener('popstate', selectDocFromLocation);
+    };
+  });
 
-  async function copyActiveDoc(): Promise<void> {
-    if (!activeDoc) return;
-    try {
-      await navigator.clipboard.writeText(activeDoc.content);
-      copyState = 'Copied';
-      window.setTimeout(() => (copyState = 'Copy'), 1600);
-    } catch {
-      copyState = 'Copy failed';
-      window.setTimeout(() => (copyState = 'Copy'), 1800);
+  $effect(() => {
+    if (!vm) return;
+    selectDocFromLocation();
+    if (!vm.docs.some((doc) => doc.id === activeDocId)) {
+      activeDocId = vm.docs[0]?.id ?? 'active_context';
     }
+  });
+
+  function docHref(doc: { id: string }): string {
+    return `#${encodeURIComponent(doc.id)}`;
+  }
+
+  function selectDoc(docId: string): void {
+    activeDocId = docId;
+    if (typeof window === 'undefined') return;
+    const nextUrl = new URL(window.location.href);
+    nextUrl.hash = encodeURIComponent(docId);
+    window.history.pushState(null, '', nextUrl);
+  }
+
+  function selectDocFromLocation(_event?: Event | { replace?: boolean }): void {
+    if (typeof window === 'undefined' || !vm) return;
+    const hashDoc = normalizeDocToken(window.location.hash);
+    const queryDoc = normalizeDocToken(new URL(window.location.href).searchParams.get('doc'));
+    const target = [hashDoc, queryDoc].find((candidate) => candidate && vm.docs.some((doc) => doc.id === candidate));
+    if (target) activeDocId = target;
+  }
+
+  function normalizeDocToken(value: string | null): string | null {
+    if (!value) return null;
+    const decoded = decodeURIComponent(value.replace(/^#/, '').trim()).toLowerCase();
+    const withoutExtension = decoded.replace(/\.md$/, '');
+    if (withoutExtension === 'active' || withoutExtension === 'active-context') return 'active_context';
+    if (withoutExtension === 'active_context' || withoutExtension === 'spec' || withoutExtension === 'decisions') {
+      return withoutExtension;
+    }
+    return null;
   }
 </script>
 
@@ -42,60 +75,18 @@
   <section class="page-stack">
     <div class="state-panel error">Could not load contextspace. {errorMessage}</div>
   </section>
-{:else if vm && activeDoc}
-  <section class="page-stack contextspace-page">
-    <PageHero
-      title={vm.title}
-      subtitle={`${vm.description} ${vm.presentCount} of ${vm.docs.length} standard docs have content.`}
-    >
-      {#snippet actions()}
-        <a class="hero-action" href={href(vm.openWorkspaceHref)}>{vm.openWorkspaceLabel}</a>
-        <a class="hero-action" href={href(vm.askPmaHref)}>Ask PMA to update</a>
-      {/snippet}
-    </PageHero>
-
-    <div class="contextspace-layout">
-      <aside class="page-panel contextspace-doc-list" aria-label="Scoped workspace contextspace documents">
-        <h2>Documents</h2>
-        <div class="doc-tab-list">
-          {#each vm.docs as doc}
-            <button
-              class:active={doc.id === activeDoc.id}
-              class:missing={doc.isMissing}
-              type="button"
-              onclick={() => (activeDocId = doc.id)}
-            >
-              <span>{doc.label}</span>
-              <small>{doc.filename}{doc.isMissing ? ' · missing' : ''}</small>
-            </button>
-          {/each}
-        </div>
-      </aside>
-
-      <article class="page-panel contextspace-reader">
-        <div class="panel-heading-row">
-          <div>
-            <h2>{activeDoc.filename}</h2>
-            <p>{activeDoc.isMissing ? 'No content has been written yet.' : 'Readable markdown preview.'}</p>
-          </div>
-          <button class="secondary-button" type="button" onclick={copyActiveDoc} disabled={activeDoc.isMissing}>
-            {copyState}
-          </button>
-        </div>
-
-        <EditableMarkdown
-          docId={activeDoc.id}
-          content={activeDoc.content}
-          html={activeDoc.html}
-          isMissing={activeDoc.isMissing}
-          editable={!vm.isUnknown}
-          emptyTitle={`${activeDoc.label} has no content`}
-          emptyMessage={`Ask PMA to refresh this ${vm.workspaceKind} memory before starting work that depends on shared context.`}
-          emptyActionHref={href(vm.askPmaHref)}
-          emptyActionLabel="Ask PMA to update"
-          onSave={onSaveDoc}
-        />
-      </article>
-    </div>
-  </section>
+{:else if vm}
+  <MarkdownDocViewer
+    title={vm.title}
+    description={`${vm.description} ${vm.presentCount} of ${vm.docs.length} standard docs have content.`}
+    docs={vm.docs}
+    presentCount={vm.presentCount}
+    ariaLabel="Contextspace documents"
+    {activeDocId}
+    emptyMessage="Click to add durable context for future PMA and ticket-flow work."
+    editableDoc={() => !vm?.isUnknown}
+    {docHref}
+    onSelectDoc={selectDoc}
+    {onSaveDoc}
+  />
 {/if}

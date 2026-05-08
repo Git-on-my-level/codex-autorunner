@@ -1,4 +1,4 @@
-import { repoMemoryRoute, repoRoute, repoTicketRoute, worktreeMemoryRoute, worktreeRoute, worktreeTicketRoute } from './routes';
+import { repoContextspaceRoute, repoRoute, repoTicketRoute, worktreeContextspaceRoute, worktreeRoute, worktreeTicketRoute } from './routes';
 
 export type ScopeKind = 'hub' | 'repo' | 'worktree' | 'filesystem';
 
@@ -186,12 +186,12 @@ export function scopeTicketRoute(scope: ScopeRef): string | null {
   }
 }
 
-export function scopeMemoryRoute(scope: ScopeRef): string | null {
+export function scopeContextspaceRoute(scope: ScopeRef): string | null {
   switch (scope.kind) {
     case 'repo':
-      return repoMemoryRoute(scope.id);
+      return repoContextspaceRoute(scope.id);
     case 'worktree':
-      return worktreeMemoryRoute(scope.id, scope.parentRepoId ?? null);
+      return worktreeContextspaceRoute(scope.id, scope.parentRepoId ?? null);
     default:
       return null;
   }

@@ -8,7 +8,7 @@ import {
   scopeBreadcrumbs,
   scopeRoute,
   scopeTicketRoute,
-  scopeMemoryRoute,
+  scopeContextspaceRoute,
   scopeFromApiPayload,
   scopeFromTicket,
   scopeMatchesResource,
@@ -210,17 +210,17 @@ describe('scopeTicketRoute', () => {
   });
 });
 
-describe('scopeMemoryRoute', () => {
-  it('generates repo memory route', () => {
-    expect(scopeMemoryRoute({ kind: 'repo', id: 'my-repo' })).toBe('/repos/my-repo/memory');
+describe('scopeContextspaceRoute', () => {
+  it('generates repo contextspace route', () => {
+    expect(scopeContextspaceRoute({ kind: 'repo', id: 'my-repo' })).toBe('/repos/my-repo/contextspace');
   });
 
-  it('generates worktree memory route', () => {
-    expect(scopeMemoryRoute({ kind: 'worktree', id: 'wt-1', parentRepoId: 'r1' })).toBe('/repos/r1/worktrees/wt-1/memory');
+  it('generates worktree contextspace route', () => {
+    expect(scopeContextspaceRoute({ kind: 'worktree', id: 'wt-1', parentRepoId: 'r1' })).toBe('/repos/r1/worktrees/wt-1/contextspace');
   });
 
   it('returns null for hub', () => {
-    expect(scopeMemoryRoute({ kind: 'hub' })).toBeNull();
+    expect(scopeContextspaceRoute({ kind: 'hub' })).toBeNull();
   });
 });
 

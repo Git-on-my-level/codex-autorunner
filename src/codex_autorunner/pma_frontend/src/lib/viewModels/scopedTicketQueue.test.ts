@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { TicketDetail } from './domain';
 import {
   buildScopedTicketQueueCommandPlan,
+  createScopedTicket,
   runScopedTicketQueueCommand,
   scopedTicketActionStatus,
   scopedTicketMissingRunStatus,
@@ -24,10 +26,47 @@ const worktreeConfig: ScopedTicketQueueConfig = {
   kind: 'worktree',
   resourceId: 'wt-1',
   apiBasePath: '/repos/wt-1/api/flows',
-  displayLabel: 'worktree'
+  displayLabel: 'worktree',
+  parentRepoId: null
 };
 
 describe('scoped ticket queue helpers', () => {
+  it('returns ticket route id when create succeeds', async () => {
+    const ticketFlow = {
+      createTicket: vi.fn().mockResolvedValue({ ok: true, data: { id: 'T-1', number: 8 } as TicketDetail })
+    };
+    const result = await createScopedTicket({ ticketFlow } as unknown as Parameters<typeof createScopedTicket>[0], repoConfig, {
+      title: 'A',
+      body: 'B'
+    });
+    expect(result).toEqual({ ok: true, status: 'Ticket created.', ticketRouteId: '8' });
+  });
+
+  it('falls back to ticket id in route segment when create response has no index', async () => {
+    const ticketFlow = {
+      createTicket: vi.fn().mockResolvedValue({ ok: true, data: { id: 'TICKET-99', number: null } as TicketDetail })
+    };
+    const result = await createScopedTicket({ ticketFlow } as unknown as Parameters<typeof createScopedTicket>[0], repoConfig, {
+      title: 'A',
+      body: 'B'
+    });
+    expect(result).toEqual({ ok: true, status: 'Ticket created.', ticketRouteId: 'TICKET-99' });
+  });
+
+  it('surfaces API errors from create', async () => {
+    const ticketFlow = {
+      createTicket: vi.fn().mockResolvedValue({
+        ok: false,
+        error: { kind: 'http', status: 400, code: 'bad', message: 'Cannot create' }
+      })
+    };
+    const result = await createScopedTicket({ ticketFlow } as unknown as Parameters<typeof createScopedTicket>[0], repoConfig, {
+      title: 'A',
+      body: 'B'
+    });
+    expect(result).toEqual({ ok: false, status: 'Cannot create' });
+  });
+
   it('maps scope kinds to ticket API owners', () => {
     expect(scopedTicketQueueOwner(repoConfig)).toEqual({ repo: 'repo 1' });
     expect(scopedTicketQueueOwner(worktreeConfig)).toEqual({ worktree: 'wt-1' });
@@ -43,9 +82,16 @@ describe('scoped ticket queue helpers', () => {
       apiBasePath: '/repos/repo%201/api/flows',
       displayLabel: 'Repo: repo 1'
     });
+    expect(scopeToTicketQueueConfig(worktreeScope)).toEqual({
+      kind: 'worktree',
+      resourceId: 'wt-1',
+      apiBasePath: '/repos/wt-1/api/flows',
+      displayLabel: 'Worktree: wt-1',
+      parentRepoId: 'repo 1'
+    });
     expect(scopeToTicketOwner(repoScope)).toEqual({ repo: 'repo 1' });
     expect(scopeToTicketOwner(worktreeScope)).toEqual({ worktree: 'wt-1' });
-    expect(scopeToTicketOwnerScope(worktreeScope)).toEqual({ kind: 'worktree', id: 'wt-1' });
+    expect(scopeToTicketOwnerScope(worktreeScope)).toEqual({ kind: 'worktree', id: 'wt-1', parentRepoId: 'repo 1' });
     expect(ticketScopeUrn(worktreeScope)).toBe('worktree:repo 1/wt-1');
     expect(ticketScopeHref(worktreeScope)).toBe('/repos/repo%201/worktrees/wt-1/tickets');
   });
@@ -116,6 +162,31 @@ describe('scoped ticket queue helpers', () => {
     expect(requestJson).toHaveBeenNthCalledWith(2, '/repos/wt-1/api/flows/ticket_flow/bootstrap', {
       method: 'POST',
       body: { metadata: { force_new: true } }
+    });
+  });
+
+  it('executes backend manifest routes without a separately loaded run id', async () => {
+    const requestJson = vi.fn().mockResolvedValue({ ok: true, data: {} });
+    const result = await runScopedTicketQueueCommand(
+      { requestJson },
+      repoConfig,
+      'stop',
+      null,
+      () => true,
+      {
+        action: 'stop',
+        enabled: true,
+        label: 'Stop',
+        requiresConfirmation: false,
+        disabledReason: null,
+        method: 'POST',
+        route: '/repos/repo%201/api/flows/run-from-manifest/stop'
+      }
+    );
+
+    expect(result).toEqual({ status: 'Ticket flow command accepted.', shouldReload: true });
+    expect(requestJson).toHaveBeenCalledWith('/repos/repo%201/api/flows/run-from-manifest/stop', {
+      method: 'POST'
     });
   });
 

@@ -4,10 +4,8 @@ import type { RepoSummary, WorktreeSummary } from '$lib/viewModels/domain';
 import {
   repoRoute,
   repoTicketRoute,
-  repoMemoryRoute,
   worktreeRoute,
-  worktreeTicketRoute,
-  worktreeMemoryRoute
+  worktreeTicketRoute
 } from '$lib/viewModels/routes';
 
 const RECENT_ACTIONS_MAX = 20;
@@ -127,25 +125,25 @@ export function ticketSource(
   };
 }
 
-export function memorySource(
+export function contextspaceSource(
   docs: ContextspaceDocument[],
   scopeId?: string
 ): PaletteSource {
   return {
-    group: 'Memory',
+    group: 'Contextspace',
     priority: 40,
     load: () =>
       docs.map((doc) => {
         let href = '/settings?memory=1';
         if (scopeId && doc.kind) {
           const base = `/repos/${encodeURIComponent(scopeId)}`;
-          href = `${base}/memory`;
+          href = `${base}/contextspace`;
         }
         return {
-          id: `memory:${doc.id}`,
+          id: `contextspace:${doc.id}`,
           label: doc.name,
-          group: 'Memory',
-          keywords: `memory doc ${doc.kind} ${doc.name}`,
+          group: 'Contextspace',
+          keywords: `contextspace doc ${doc.kind} ${doc.name}`,
           action: { kind: 'navigate', href }
         };
       })

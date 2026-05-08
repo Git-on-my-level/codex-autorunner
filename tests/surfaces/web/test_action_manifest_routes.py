@@ -57,6 +57,12 @@ def test_ticket_flow_action_manifest_route_shape(tmp_path: Path, monkeypatch) ->
     )
     assert stop["enabled"] is True
     assert stop["route"] == "/api/flows/run-1/stop"
+    restart = next(
+        action
+        for action in payload["actions"]
+        if action["action_id"] == "ticket_flow.restart"
+    )
+    assert restart["route"] == "/api/flows/run-1/restart"
 
 
 def test_pma_thread_action_manifest_route_shape(monkeypatch) -> None:

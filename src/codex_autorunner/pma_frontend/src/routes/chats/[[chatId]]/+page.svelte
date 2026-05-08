@@ -3,7 +3,9 @@
   import { page } from '$app/state';
   import { onDestroy, onMount, tick } from 'svelte';
   import MasterDetail from '$lib/components/MasterDetail.svelte';
-  import PmaTranscriptCards from '$lib/components/PmaTranscriptCards.svelte';
+  import ChatTranscriptCards from '$lib/components/ChatTranscriptCards.svelte';
+  import AutoDismissNotice from '$lib/components/AutoDismissNotice.svelte';
+  import ModelReasoningPicker from '$lib/components/ModelReasoningPicker.svelte';
   import { pmaApi, type ApiError, type JsonRecord } from '$lib/api/client';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import { openPmaTailEventSource, type StreamSubscription } from '$lib/api/streaming';
@@ -16,7 +18,6 @@
     SurfaceArtifact
   } from '$lib/viewModels/domain';
   import {
-    agentCapabilityAllowed,
     buildManagedThreadCreatePayload,
     buildPmaChatScopeOptions,
     buildManagedThreadMessagePayload,
@@ -28,8 +29,6 @@
     formatBytes,
     formatRelativeTime,
     localPmaChatScopeOption,
-    modelReasoningOptions,
-    modelSelectorState,
     PMA_CHAT_FILTER_ORDER,
     pmaChatKind,
     pmaChatKindLabel,
@@ -54,6 +53,18 @@
     type ChatLastSeenMap
   } from '$lib/viewModels/unread';
   import { repoAccent, repoInitials } from '$lib/viewModels/repoIdentity';
+  import {
+    agentCanListModels,
+    agentId,
+    agentLabel,
+    agentRecordForId,
+    firstModelValue,
+    modelExists,
+    modelLabel,
+    modelRecordForValue,
+    pickerReasoningOptions,
+    stringField
+  } from '$lib/viewModels/modelPickers';
 
   let chats = $state<PmaChatSummary[]>([]);
   let timeline = $state<PmaTimelineItem[]>([]);
@@ -105,15 +116,13 @@
   const activeCards = $derived<PmaCard[]>(buildPmaTranscriptCards(timeline, activeChat, artifacts, progress));
   const statusBar = $derived(buildPmaStatusBar(progress, activeChat));
   const selectedScope = $derived(scopeOptions.find((scope) => scope.id === selectedScopeId) ?? localPmaChatScopeOption());
-  const selectedAgentRecord = $derived(agentRecordForId(selectedAgent));
-  const selectedAgentCanListModels = $derived(agentCapabilityAllowed(selectedAgentRecord, 'list_models'));
+  const selectedAgentRecord = $derived(agentRecordForId(agents, selectedAgent));
+  const selectedAgentCanListModels = $derived(agentCanListModels(selectedAgentRecord));
   const selectedModelRecord = $derived(modelRecordForValue(models, selectedModel));
-  const reasoningOptions = $derived(modelReasoningOptions(selectedModelRecord));
-  const supportsReasoning = $derived(reasoningOptions.length > 0);
+  const reasoningOptions = $derived(pickerReasoningOptions(models, selectedModel));
   const showAgentSelector = $derived(Boolean(activeChat && agents.length > 0));
   const showModelSelector = $derived(Boolean(activeChat && selectedAgentCanListModels && (loadingModels || models.length > 0)));
-  const showEffortSelector = $derived(Boolean(showModelSelector && supportsReasoning));
-  const modelState = $derived(modelSelectorState(loadingModels, null, models.length));
+  const showEffortSelector = $derived(Boolean(showModelSelector && reasoningOptions.length > 0));
   const canStartCodingAgentChat = $derived(selectedScope.kind !== 'local');
   const activeChatKind = $derived(pmaChatKind(activeChat));
   const activeChatKindLabel = $derived(pmaChatKindLabel(activeChatKind));
@@ -281,7 +290,7 @@
       agents = agentResult.data;
       if (!activeChat?.agentId) {
         selectedAgent =
-          stringField(agentResult.data[0], 'id') ?? stringField(agentResult.data[0], 'agent') ?? selectedAgent;
+          agentResult.data[0] ? agentId(agentResult.data[0]) : selectedAgent;
       }
       void loadModels(selectedAgent, activeChat?.model ?? selectedModel);
     }
@@ -325,7 +334,7 @@
   }
 
   async function loadModels(agentId: string, preferredModel = ''): Promise<void> {
-    if (!agentCapabilityAllowed(agentRecordForId(agentId), 'list_models')) {
+    if (!agentCanListModels(agentRecordForId(agents, agentId))) {
       models = [];
       selectedModel = '';
       selectedReasoning = '';
@@ -344,8 +353,8 @@
     models = result.data;
     selectedModel = preferredModel && modelExists(result.data, preferredModel)
       ? preferredModel
-      : stringField(result.data[0], 'id') ?? stringField(result.data[0], 'model') ?? '';
-    if (selectedReasoning && !modelReasoningOptions(modelRecordForValue(result.data, selectedModel)).includes(selectedReasoning)) {
+      : firstModelValue(result.data);
+    if (selectedReasoning && !pickerReasoningOptions(result.data, selectedModel).includes(selectedReasoning)) {
       selectedReasoning = '';
     }
     loadingModels = false;
@@ -492,6 +501,7 @@
   }
 
   function updateProgress(nextProgress: PmaRunProgress): void {
+    syncChatListStatusFromProgress(nextProgress);
     if (progress && progress.id === nextProgress.id) {
       const seen = new Set<string>();
       const merged: SurfaceArtifact[] = [];
@@ -504,6 +514,28 @@
     } else {
       progress = nextProgress;
     }
+  }
+
+  function syncChatListStatusFromProgress(nextProgress: PmaRunProgress): void {
+    const chatId = nextProgress.chatId ?? activeChatId;
+    if (!chatId) return;
+    chats = chats.map((chat) => {
+      if (chat.id !== chatId) return chat;
+      return {
+        ...chat,
+        status: nextProgress.status,
+        progressPercent: nextProgress.progressPercent ?? chat.progressPercent,
+        updatedAt: nextProgress.lastEventAt ?? chat.updatedAt,
+        raw: {
+          ...chat.raw,
+          execution_status: nextProgress.status,
+          normalized_status: nextProgress.status,
+          status: nextProgress.status,
+          active_turn_id: nextProgress.id,
+          queued_count: nextProgress.queueDepth
+        }
+      };
+    });
   }
 
   function dropOptimisticPlaceholders(): void {
@@ -550,15 +582,6 @@
     return result.data.id;
   }
 
-  function modelExists(catalog: JsonRecord[], model: string): boolean {
-    return catalog.some((entry) => (stringField(entry, 'id') ?? stringField(entry, 'model') ?? modelLabel(entry)) === model);
-  }
-
-  function agentRecordForId(agentId: string): JsonRecord | null {
-    if (!agentId) return null;
-    return agents.find((entry) => (stringField(entry, 'id') ?? stringField(entry, 'agent') ?? agentLabel(entry)) === agentId) ?? null;
-  }
-
   function worktreeScopeOption(worktreeId: string): Extract<PmaChatScopeOption, { kind: 'worktree' }> | null {
     return scopeOptions.find(
       (scope): scope is Extract<PmaChatScopeOption, { kind: 'worktree' }> =>
@@ -594,11 +617,6 @@
       };
     }
     return null;
-  }
-
-  function modelRecordForValue(catalog: JsonRecord[], model: string): JsonRecord | null {
-    if (!model) return null;
-    return catalog.find((entry) => (stringField(entry, 'id') ?? stringField(entry, 'model') ?? modelLabel(entry)) === model) ?? null;
   }
 
   function isMessageStackNearBottom(): boolean {
@@ -786,19 +804,6 @@
     }
     pendingAttachments = uploaded;
     return true;
-  }
-
-  function agentLabel(agent: JsonRecord): string {
-    return stringField(agent, 'label') ?? stringField(agent, 'name') ?? stringField(agent, 'id') ?? 'Agent';
-  }
-
-  function modelLabel(model: JsonRecord): string {
-    return stringField(model, 'label') ?? stringField(model, 'name') ?? stringField(model, 'id') ?? stringField(model, 'model') ?? 'Model';
-  }
-
-  function stringField(record: JsonRecord | undefined, key: string): string | null {
-    const value = record?.[key];
-    return typeof value === 'string' && value.trim() ? value : null;
   }
 
 </script>
@@ -1035,43 +1040,24 @@
                 onchange={handleAgentChange}
               >
                 {#each agents as agent}
-                  <option value={stringField(agent, 'id') ?? stringField(agent, 'agent') ?? agentLabel(agent)}>
+                  <option value={agentId(agent)}>
                     {agentLabel(agent)}
                   </option>
                 {/each}
               </select>
             </label>
           {/if}
-          {#if showModelSelector}
-            <label class={`start-picker-row ${modelState.state}`}>
-              <span>model</span>
-              <select aria-label="Model" bind:value={selectedModel} disabled={modelState.disabled}>
-                {#if models.length === 0}
-                  <option value="">Configured model</option>
-                {:else}
-                  {#each models as model}
-                    <option value={stringField(model, 'id') ?? stringField(model, 'model') ?? modelLabel(model)}>
-                      {modelLabel(model)}
-                    </option>
-                  {/each}
-                {/if}
-              </select>
-            </label>
-          {/if}
-          {#if showEffortSelector}
-            <label class="start-picker-row">
-              <span>effort</span>
-              <select aria-label="Effort" bind:value={selectedReasoning}>
-                <option value="">Default</option>
-                {#each reasoningOptions as effort}
-                  <option value={effort}>{effort}</option>
-                {/each}
-              </select>
-            </label>
-          {/if}
+          <ModelReasoningPicker
+            bind:modelValue={selectedModel}
+            bind:reasoningValue={selectedReasoning}
+            {models}
+            loading={loadingModels}
+            showModel={showModelSelector}
+            showReasoning={showEffortSelector}
+          />
         </div>
       {:else}
-        <PmaTranscriptCards cards={activeCards} />
+        <ChatTranscriptCards cards={activeCards} />
       {/if}
     </div>
 
@@ -1184,9 +1170,7 @@
         </div>
       </div>
     {/if}
-    {#if composeError}
-      <p class="compose-error">{composeError.message}</p>
-    {/if}
+    <AutoDismissNotice message={composeError?.message ?? null} tone="danger" />
   </div>
   {/snippet}
 </MasterDetail>

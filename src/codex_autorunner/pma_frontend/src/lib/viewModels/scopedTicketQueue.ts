@@ -7,10 +7,12 @@ import {
   type PartialPageIssue,
   type RequestOptions
 } from '$lib/api/client';
-import type { PmaChatSummary, PmaRunProgress, SurfaceArtifact, TicketSummary } from '$lib/viewModels/domain';
+import type { PmaChatSummary, PmaRunProgress, SurfaceArtifact, TicketDetail, TicketSummary } from '$lib/viewModels/domain';
 import {
   buildTicketListViewModel,
+  ticketRouteSegmentFromSummary,
   type SurfaceActionManifest,
+  type TicketQueueAction,
   type TicketListViewModel,
   type TicketOwnerScope
 } from '$lib/viewModels/ticket';
@@ -27,7 +29,8 @@ export function scopeToTicketQueueConfig(scope: ScopeRef): ScopedTicketQueueConf
     kind: scope.kind,
     resourceId: scope.id,
     apiBasePath: `/repos/${encodeURIComponent(scope.id)}/api/flows`,
-    displayLabel: scopeLabel(scope)
+    displayLabel: scopeLabel(scope),
+    ...(scope.kind === 'worktree' ? { parentRepoId: scope.parentRepoId ?? null } : {})
   };
 }
 
@@ -39,7 +42,7 @@ export function scopeToTicketOwner(scope: ScopeRef): ScopedTicketQueueOwner | nu
 
 export function scopeToTicketOwnerScope(scope: ScopeRef): TicketOwnerScope {
   if (scope.kind === 'repo') return { kind: 'repo', id: scope.id };
-  if (scope.kind === 'worktree') return { kind: 'worktree', id: scope.id };
+  if (scope.kind === 'worktree') return { kind: 'worktree', id: scope.id, parentRepoId: scope.parentRepoId ?? null };
   return null;
 }
 
@@ -58,6 +61,8 @@ export type ScopedTicketQueueConfig = {
   resourceId: string;
   apiBasePath: string;
   displayLabel: string;
+  /** For worktree queues linked under a repo-owned URL (`/repos/.../worktrees/.../tickets`). */
+  parentRepoId?: string | null;
 };
 
 export type ScopedTicketQueueLoadResult =
@@ -93,7 +98,7 @@ type ScopedTicketQueueApi = {
     createTicket(
       body: { agent?: string; title?: string; goal?: string; body?: string; profile?: string },
       owner: ScopedTicketQueueOwner
-    ): Promise<ApiResult<unknown>>;
+    ): Promise<ApiResult<TicketDetail>>;
     reorderTicket(
       sourceIndex: number,
       destinationIndex: number,
@@ -110,8 +115,9 @@ export function scopedTicketQueueOwner(config: Pick<ScopedTicketQueueConfig, 'ki
   return config.kind === 'repo' ? { repo: config.resourceId } : { worktree: config.resourceId };
 }
 
-export function scopedTicketQueueScope(config: Pick<ScopedTicketQueueConfig, 'kind' | 'resourceId'>): Exclude<TicketOwnerScope, null> {
-  return { kind: config.kind, id: config.resourceId };
+export function scopedTicketQueueScope(config: ScopedTicketQueueConfig): Exclude<TicketOwnerScope, null> {
+  if (config.kind === 'repo') return { kind: 'repo', id: config.resourceId };
+  return { kind: 'worktree', id: config.resourceId, parentRepoId: config.parentRepoId ?? null };
 }
 
 export async function loadScopedTicketQueue(
@@ -164,12 +170,14 @@ export async function createScopedTicket(
   api: ScopedTicketQueueApi,
   config: ScopedTicketQueueConfig,
   payload: { title: string; body: string }
-): Promise<{ ok: boolean; status: string }> {
+): Promise<{ ok: boolean; status: string; ticketRouteId?: string | null }> {
   const result = await api.ticketFlow.createTicket(
     { agent: 'codex', title: payload.title, body: payload.body },
     scopedTicketQueueOwner(config)
   );
-  return { ok: result.ok, status: result.ok ? 'Ticket created.' : result.error.message };
+  if (!result.ok) return { ok: false, status: result.error.message };
+  const ticketRouteId = ticketRouteSegmentFromSummary(result.data);
+  return { ok: true, status: 'Ticket created.', ticketRouteId };
 }
 
 export async function reorderScopedTicket(
@@ -190,7 +198,7 @@ export async function reorderScopedTicket(
     placeAfter,
     scopedTicketQueueOwner(config)
   );
-  return { ok: result.ok, status: result.ok ? 'Ticket order updated.' : result.error.message };
+  return { ok: result.ok, status: result.ok ? 'Order saved.' : result.error.message };
 }
 
 export function scopedTicketActionStatus(
@@ -247,8 +255,23 @@ export async function runScopedTicketQueueCommand(
   config: ScopedTicketQueueConfig,
   command: ScopedTicketQueueCommand,
   runId: string | null,
-  confirmRestart: () => boolean
+  confirmRestart: () => boolean,
+  action: TicketQueueAction | null = null
 ): Promise<ScopedTicketQueueCommandResult> {
+  if (action?.requiresConfirmation && !confirmRestart()) {
+    return { status: null, shouldReload: false };
+  }
+  if (action?.enabled && action.route) {
+    const options: RequestOptions = { method: action.method };
+    if (action.method === 'POST' && command === 'restart') {
+      options.body = { metadata: { force_new: true } };
+    }
+    const result = await api.requestJson<JsonRecord>(action.route, options);
+    return {
+      status: result.ok ? 'Ticket flow command accepted.' : result.error.message,
+      shouldReload: true
+    };
+  }
   if ((command === 'stop' || command === 'restart') && !runId) {
     return { status: scopedTicketMissingRunStatus(config), shouldReload: false };
   }

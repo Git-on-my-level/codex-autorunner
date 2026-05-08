@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   legacyWorktreeRedirectPath,
-  repoMemoryRoute,
+  repoContextspaceRoute,
   repoRoute,
   repoTicketRoute,
-  worktreeMemoryRoute,
+  worktreeContextspaceRoute,
   worktreeRoute,
   worktreeTicketRoute
 } from './routes';
@@ -16,10 +16,10 @@ describe('scope-nested frontend routes', () => {
     expect(repoRoute('my-repo')).toBe('/repos/my-repo');
   });
 
-  it('builds nested worktree, memory, and ticket URLs with the parent repo', () => {
+  it('builds nested worktree, contextspace, and ticket URLs with the parent repo', () => {
     expect(worktreeRoute('wt-1', 'repo-1')).toBe('/repos/repo-1/worktrees/wt-1');
-    expect(repoMemoryRoute('repo-1')).toBe('/repos/repo-1/memory');
-    expect(worktreeMemoryRoute('wt-1', 'repo-1')).toBe('/repos/repo-1/worktrees/wt-1/memory');
+    expect(repoContextspaceRoute('repo-1')).toBe('/repos/repo-1/contextspace');
+    expect(worktreeContextspaceRoute('wt-1', 'repo-1')).toBe('/repos/repo-1/worktrees/wt-1/contextspace');
     expect(repoTicketRoute('repo-1', '42')).toBe('/repos/repo-1/tickets/42');
     expect(worktreeTicketRoute('wt-1', 'repo-1', '42')).toBe('/repos/repo-1/worktrees/wt-1/tickets/42');
   });
@@ -35,7 +35,9 @@ describe('scope-nested frontend routes', () => {
     expect(legacyWorktreeRedirectPath('/worktrees/wt-1/tickets/TICKET-027', 'wt-1', 'repo-1')).toBe(
       '/repos/repo-1/worktrees/wt-1/tickets/TICKET-027'
     );
-    expect(legacyWorktreeRedirectPath('/worktrees/wt-1/memory', 'wt-1', 'repo-1')).toBe('/repos/repo-1/worktrees/wt-1/memory');
+    expect(legacyWorktreeRedirectPath('/worktrees/wt-1/contextspace', 'wt-1', 'repo-1')).toBe(
+      '/repos/repo-1/worktrees/wt-1/contextspace'
+    );
   });
 
   it('does not redirect nested, unknown, or parentless worktree routes', () => {

@@ -1,7 +1,7 @@
 import { render } from 'svelte/server';
 import { describe, expect, it } from 'vitest';
 import RepoWorktreeViews from './RepoWorktreeViews.svelte';
-import { mockArtifact, mockChatSummary, mockRepoSummary, mockRunProgress, mockTicketSummary, mockWorktreeSummary } from '$lib/viewModels/mockData';
+import { mockArtifact, mockChatSummary, mockContextspaceDocument, mockRepoSummary, mockRunProgress, mockTicketSummary, mockWorktreeSummary } from '$lib/viewModels/mockData';
 import {
   buildRepoWorktreeDetailViewModel,
   buildRepoWorktreeIndexViewModel
@@ -66,6 +66,7 @@ describe('RepoWorktreeViews', () => {
         runs: [{ ...mockRunProgress, raw: { repo_id: 'repo-1', current_ticket_id: 'TICKET-110' } }],
         chats: [{ ...mockChatSummary, repoId: 'repo-1' }],
         tickets: [mockTicketSummary],
+        contextspaceDocs: [mockContextspaceDocument],
         artifacts: [mockArtifact]
       },
       'repo',
@@ -77,14 +78,15 @@ describe('RepoWorktreeViews', () => {
     expect(body).toContain('Hub rewrite foundation');
     expect(body).toContain('codex');
     expect(body).toContain('PMA chat');
-    expect(body).toContain('View repo tickets');
     expect(body).toContain('href="/repos/repo-1/tickets"');
-    expect(body).toContain('View repo memory');
-    expect(body).toContain('href="/repos/repo-1/memory"');
-    expect(body).toContain('Open preview');
+    expect(body).toContain('Contextspace');
+    expect(body).toContain('spec.md');
+    expect(body).toContain('Spec');
+    expect(body).toContain('href="/repos/repo-1/contextspace#active_context"');
     expect(body).not.toContain('Debug logs');
     expect(body).toContain('Surfaced artifacts');
     expect(body).toContain('Chats');
+    expect(body).toContain('configured model');
     expect(body).not.toContain('Child worktrees');
     expect(body).not.toContain('Activity');
     expect(body).not.toContain('Open PMA chat');
@@ -98,6 +100,7 @@ describe('RepoWorktreeViews', () => {
         runs: [{ ...mockRunProgress, raw: { worktree_id: 'worktree-1', current_ticket: 'TICKET-110.md', turn_count: 3 } }],
         chats: [{ ...mockChatSummary, worktreeId: 'worktree-1' }],
         tickets: [{ ...mockTicketSummary, raw: { body: 'Scoped worktree body preview.' } }],
+        contextspaceDocs: [mockContextspaceDocument],
         artifacts: [mockArtifact]
       },
       'worktree',
@@ -113,6 +116,7 @@ describe('RepoWorktreeViews', () => {
     expect(body).toContain('Scoped worktree body preview.');
     expect(body).toContain('+80 -5 4 files');
     expect(body).toContain('2m 0s');
+    expect(body).not.toContain('contextspace-row-kind');
   });
 
   it('renders a no-active-run state without primary terminal or analytics content', () => {
@@ -122,7 +126,8 @@ describe('RepoWorktreeViews', () => {
         worktrees: [],
         runs: [],
         chats: [],
-        tickets: [{ ...mockTicketSummary, status: 'idle' }],
+        tickets: [],
+        contextspaceDocs: [],
         artifacts: []
       },
       'repo',
@@ -134,10 +139,75 @@ describe('RepoWorktreeViews', () => {
     expect(body).not.toContain('Active run');
     expect(body).not.toContain('Create a worktree when a ticket needs isolated repo state.');
     expect(body).toContain('Repo tickets');
-    expect(body).toContain('View repo memory');
-    expect(body).toContain('href="/repos/repo-1/memory"');
+    expect(body).toContain('No tickets');
+    expect(body).toContain('No scoped tickets are queued for this repo.');
+    expect(body).toContain('Contextspace');
+    expect(body).toContain('active_context.md');
+    expect(body).toContain('No context recorded');
+    expect(body).toContain('href="/repos/repo-1/contextspace#active_context"');
+    expect(body).toContain('Chats');
+    expect(body).toContain('href="/chats?new=repo:repo-1&amp;kind=pma"');
     expect(body).not.toContain('Terminal');
     expect(body).not.toContain('Analytics');
+    const tickets = body.indexOf('Repo tickets');
+    const contextspace = body.indexOf('Contextspace');
+    const chats = body.indexOf('>Chats<');
+    expect(contextspace).toBeGreaterThan(-1);
+    expect(contextspace).toBeLessThan(tickets);
+    expect(tickets).toBeLessThan(chats);
+  });
+
+  it('renders git status pills and an inline spec preview when data is available', () => {
+    const detail = buildRepoWorktreeDetailViewModel(
+      {
+        repos: [
+          {
+            ...mockRepoSummary,
+            gitStatus: {
+              branch: 'main',
+              dirty: true,
+              filesChanged: 3,
+              insertions: 42,
+              deletions: 7,
+              untracked: 1,
+              staged: null,
+              hasUpstream: true,
+              ahead: 2,
+              behind: 1
+            }
+          }
+        ],
+        worktrees: [],
+        runs: [],
+        chats: [],
+        tickets: [],
+        contextspaceDocs: [
+          {
+            id: 'spec',
+            name: 'spec.md',
+            kind: 'spec',
+            content: '# Build the thing\n\n## Goal\n- Ship feature X\n- Make it fast',
+            updatedAt: '2026-05-04T00:01:00Z',
+            isPinned: true,
+            raw: {}
+          }
+        ],
+        artifacts: []
+      },
+      'repo',
+      'repo-1'
+    );
+    const { body } = render(RepoWorktreeViews, { props: { state: 'ready', mode: 'detail', detail } });
+
+    expect(body).toContain('Dirty');
+    expect(body).toContain('3 files changed');
+    expect(body).toContain('+42 -7');
+    expect(body).toContain('1 untracked');
+    expect(body).toContain('↑ 2 ahead');
+    expect(body).toContain('↓ 1 behind');
+    expect(body).toContain('contextspace-spec-preview');
+    expect(body).toContain('<h1>Build the thing</h1>');
+    expect(body).toContain('Ship feature X');
   });
 
   it('renders unknown detail as an explicit missing-resource state', () => {

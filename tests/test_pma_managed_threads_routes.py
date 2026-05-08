@@ -188,6 +188,68 @@ def test_create_managed_thread_with_worktree_scope_urn(hub_env) -> None:
     assert thread["workspace_root"] == str(worktree_root.resolve())
 
 
+def test_list_managed_threads_uses_active_execution_status(hub_env) -> None:
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "codex",
+                **_repo_owner(hub_env),
+                "name": "Busy thread",
+            },
+        )
+        assert create_resp.status_code == 200
+        thread = create_resp.json()["thread"]
+        managed_thread_id = thread["managed_thread_id"]
+
+        store = PmaThreadStore(hub_env.hub_root)
+        running_turn = store.create_turn(managed_thread_id, prompt="work")
+        queued_thread_resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "codex",
+                **_repo_owner(hub_env),
+                "name": "Queued thread",
+            },
+        )
+        assert queued_thread_resp.status_code == 200
+        queued_thread_id = queued_thread_resp.json()["thread"]["managed_thread_id"]
+        first_queued_thread_turn = store.create_turn(
+            queued_thread_id, prompt="first work"
+        )
+        queued_turn = store.create_turn(
+            queued_thread_id, prompt="queued work", busy_policy="queue"
+        )
+        assert store.mark_turn_finished(
+            first_queued_thread_turn["managed_turn_id"], status="ok"
+        )
+
+        list_resp = client.get("/hub/pma/threads")
+
+    assert list_resp.status_code == 200
+    threads = {item["managed_thread_id"]: item for item in list_resp.json()["threads"]}
+    listed = threads[managed_thread_id]
+    assert running_turn["status"] == "running"
+    assert listed["target_runtime_status"] == "running"
+    assert listed["execution_status"] == "running"
+    assert listed["active_turn_id"] == running_turn["managed_turn_id"]
+    assert listed["runtime_status"] == "running"
+    assert listed["normalized_status"] == "running"
+    assert listed["status"] == "running"
+
+    queued_listed = threads[queued_thread_id]
+    assert queued_turn["status"] == "queued"
+    assert queued_listed["target_runtime_status"] == "completed"
+    assert queued_listed["execution_status"] == "queued"
+    assert queued_listed["active_turn_id"] == queued_turn["managed_turn_id"]
+    assert queued_listed["queued_count"] == 1
+    assert queued_listed["runtime_status"] == "queued"
+    assert queued_listed["normalized_status"] == "queued"
+    assert queued_listed["status"] == "queued"
+
+
 def test_create_managed_thread_with_repo_owner_prefers_fresh_worktree(
     hub_env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1899,6 +1961,29 @@ def test_managed_thread_crud_routes_use_orchestration_service(
             )
             return [self.thread]
 
+        def list_active_work_summaries(
+            self,
+            *,
+            agent_id=None,
+            repo_id=None,
+            resource_kind=None,
+            resource_id=None,
+            limit=200,
+        ):
+            self.calls.append(
+                (
+                    "list_active_work_summaries",
+                    {
+                        "agent_id": agent_id,
+                        "repo_id": repo_id,
+                        "resource_kind": resource_kind,
+                        "resource_id": resource_id,
+                        "limit": limit,
+                    },
+                )
+            )
+            return []
+
         def get_thread_target(self, thread_target_id):
             self.calls.append(("get", {"thread_target_id": thread_target_id}))
             if thread_target_id != self.thread.thread_target_id:
@@ -2008,6 +2093,16 @@ def test_managed_thread_crud_routes_use_orchestration_service(
                 "agent_id": "codex",
                 "lifecycle_status": None,
                 "runtime_status": "idle",
+                "repo_id": hub_env.repo_id,
+                "resource_kind": "repo",
+                "resource_id": hub_env.repo_id,
+                "limit": 200,
+            },
+        ),
+        (
+            "list_active_work_summaries",
+            {
+                "agent_id": "codex",
                 "repo_id": hub_env.repo_id,
                 "resource_kind": "repo",
                 "resource_id": hub_env.repo_id,

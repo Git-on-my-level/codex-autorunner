@@ -18,6 +18,11 @@ export type StreamSubscription = {
   close: () => void;
 };
 
+export type FlowRunStreamEvent = {
+  id: string | null;
+  payload: Record<string, unknown>;
+};
+
 export type JsonStreamOptions = {
   onEvent: (event: PmaTailStreamEvent) => void;
   onError?: (error: Event) => void;
@@ -90,6 +95,28 @@ export function openPmaTailEventSource(
   source.addEventListener('timeline', handle);
   source.addEventListener('progress', handle);
   source.addEventListener('message', handle);
+  source.addEventListener('error', (event) => options.onError?.(event));
+  return { close: () => source.close() };
+}
+
+export function openFlowRunEventSource(
+  runId: string,
+  owner: { repo?: string; worktree?: string } | undefined,
+  options: {
+    onEvent: (event: FlowRunStreamEvent) => void;
+    onError?: (error: Event) => void;
+    withCredentials?: boolean;
+  },
+  basePath = runtimeBasePath()
+): StreamSubscription {
+  const workspaceId = owner?.repo ?? owner?.worktree;
+  const prefix = workspaceId ? `/repos/${encodeURIComponent(workspaceId)}/api/flows` : '/api/flows';
+  const source = new EventSource(withRuntimeBasePath(`${prefix}/${encodeURIComponent(runId)}/events`, basePath), {
+    withCredentials: options.withCredentials
+  });
+  source.addEventListener('message', (message: MessageEvent) => {
+    options.onEvent({ id: message.lastEventId || null, payload: asRecord(parseJson(message.data)) });
+  });
   source.addEventListener('error', (event) => options.onError?.(event));
   return { close: () => source.close() };
 }

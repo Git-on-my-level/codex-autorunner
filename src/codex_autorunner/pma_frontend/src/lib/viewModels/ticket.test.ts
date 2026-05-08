@@ -3,10 +3,12 @@ import { mockArtifact, mockChatSummary, mockRunProgress, mockTicketDetail, mockT
 import {
   buildTicketDetailViewModel,
   buildTicketListViewModel,
+  buildTicketUpdateContent,
   filterTicketRows,
   parseTicketContract,
   resolveTicketRouteId,
-  ticketDetailFromSummary
+  ticketDetailFromSummary,
+  ticketModelRawFromDetail
 } from './ticket';
 
 describe('ticket view models', () => {
@@ -148,6 +150,37 @@ describe('ticket view models', () => {
     expect(vm.queueRun).toMatchObject({ id: 'run-repo-1', status: 'running' });
   });
 
+  it('does not mark a fallback current ticket as working when the scoped flow is idle', () => {
+    const vm = buildTicketListViewModel(
+      {
+        tickets: [
+          {
+            ...mockTicketSummary,
+            id: 'TICKET-001',
+            number: 1,
+            title: 'First ticket',
+            status: 'idle',
+            workspaceKind: 'repo',
+            workspaceId: 'repo-1',
+            repoId: 'repo-1',
+            worktreeId: null,
+            raw: {}
+          }
+        ],
+        runs: [],
+        chats: [],
+        artifacts: []
+      },
+      { kind: 'repo', id: 'repo-1' }
+    );
+
+    expect(vm.flowStatus).toMatchObject({
+      status: 'idle',
+      currentTicketId: 'TICKET-001'
+    });
+    expect(vm.rows[0].isCurrent).toBe(false);
+  });
+
   it('keeps invalid tickets out of the failed filter while flagging attention', () => {
     const vm = buildTicketListViewModel({
       tickets: [
@@ -213,7 +246,7 @@ Users can inspect tickets.
     expect(detail.timeline.map((item) => item.title)).toContain('waiting');
     expect(detail.artifacts[0]).toMatchObject({ kind: 'preview_url' });
     expect(detail.linkedChatId).toBe('chat-1');
-    expect(detail.actions.map((action) => action.label)).toContain('Open PMA chat');
+    expect(detail.actions.map((action) => action.label)).not.toContain('Open PMA chat');
     expect(detail.actions.map((action) => action.label)).toContain('Continue run');
     expect(detail.actions.find((action) => action.label === 'Raw logs/debug')?.secondary).toBe(true);
   });
@@ -293,5 +326,94 @@ Users can inspect tickets.
       number: null,
       body: 'Manual ticket body'
     });
+  });
+
+  it('reads stored model from ticket API frontmatter for the settings form', () => {
+    const rawDetail = {
+      ...mockTicketDetail,
+      raw: {
+        frontmatter: {
+          ticket_id: 'TICKET-110',
+          agent: 'codex',
+          done: false,
+          title: mockTicketDetail.title,
+          model: 'gpt-5'
+        }
+      }
+    };
+    expect(ticketModelRawFromDetail(rawDetail)).toBe('gpt-5');
+    const vm = buildTicketDetailViewModel(rawDetail, {
+      tickets: [mockTicketSummary],
+      runs: [],
+      chats: [],
+      artifacts: []
+    });
+    expect(vm.modelRaw).toBe('gpt-5');
+    expect(vm.settingsSyncSignature).toContain('gpt-5');
+  });
+
+  it('changes settingsSyncSignature when persisted model/reasoning/agent fields change', () => {
+    const a = buildTicketDetailViewModel(
+      {
+        ...mockTicketDetail,
+        raw: {
+          frontmatter: {
+            ticket_id: 'TICKET-110',
+            agent: 'codex',
+            done: false,
+            title: 't',
+            model: 'gpt-5',
+            reasoning: 'high'
+          }
+        }
+      },
+      { tickets: [mockTicketSummary], runs: [], chats: [], artifacts: [] }
+    );
+    const b = buildTicketDetailViewModel(
+      {
+        ...mockTicketDetail,
+        raw: {
+          frontmatter: {
+            ticket_id: 'TICKET-110',
+            agent: 'opencode',
+            done: false,
+            title: 't',
+            model: 'gpt-4o',
+            reasoning: 'minimal'
+          }
+        },
+        agentId: 'opencode'
+      },
+      { tickets: [mockTicketSummary], runs: [], chats: [], artifacts: [] }
+    );
+    expect(a.settingsSyncSignature).not.toBe(b.settingsSyncSignature);
+  });
+
+  it('writes model and reasoning into serialized ticket markdown on save', () => {
+    const detail = buildTicketDetailViewModel(
+      {
+        ...mockTicketDetail,
+        raw: {
+          frontmatter: {
+            ticket_id: 'TICKET-110',
+            agent: 'codex',
+            done: false,
+            title: 'Hello'
+          }
+        }
+      },
+      { tickets: [mockTicketSummary], runs: [], chats: [], artifacts: [] }
+    );
+    const md = buildTicketUpdateContent(detail, {
+      title: 'Hello',
+      agent: 'codex',
+      model: 'gpt-5-mini',
+      reasoning: 'minimal',
+      done: false,
+      body: 'Body text'
+    });
+    expect(md).toContain('"gpt-5-mini"');
+    expect(md).toContain('"minimal"');
+    expect(md).toContain('Body text');
   });
 });
