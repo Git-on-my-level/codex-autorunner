@@ -1,6 +1,6 @@
 import { render } from 'svelte/server';
 import { describe, expect, it } from 'vitest';
-import Page from './+page.svelte';
+import Page from './[[chatId]]/+page.svelte';
 
 describe('/chats page', () => {
   it('renders filters, chat list shell, and composer affordances without global memory controls', () => {
@@ -16,6 +16,5 @@ describe('/chats page', () => {
     expect(body).toContain('Search chats');
     expect(body).toContain('Create or select a chat');
     expect(body).toContain('Attach files');
-    expect(body).toContain('Agent-native approvals apply during turns');
   });
 });

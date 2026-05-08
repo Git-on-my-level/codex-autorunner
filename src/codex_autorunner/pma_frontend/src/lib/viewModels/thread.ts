@@ -44,7 +44,7 @@ export function mapThreadSummary(raw: Record<string, unknown>): ThreadSummary {
     surface,
     title: buildThreadTitle(raw, id, ticketId, scope),
     status: normalizeWorkStatus(
-      raw.lifecycle_status ?? raw.runtime_status ?? raw.status ?? latest.status
+      raw.normalized_status ?? raw.runtime_status ?? raw.status ?? latest.status ?? raw.lifecycle_status
     ),
     agentId: nullableString(raw.agent_id ?? raw.agent),
     model: nullableString(raw.model ?? latest.model),

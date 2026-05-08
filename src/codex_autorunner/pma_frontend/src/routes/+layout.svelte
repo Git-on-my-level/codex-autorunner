@@ -136,9 +136,8 @@
           {/if}
         {/each}
       </nav>
-      <div class="hub-status" role="status">
+      <div class="hub-status" role="status" title="Hub ready" aria-label="Hub ready">
         <span class="status-dot" aria-hidden="true"></span>
-        <span>Hub ready</span>
       </div>
     </header>
 

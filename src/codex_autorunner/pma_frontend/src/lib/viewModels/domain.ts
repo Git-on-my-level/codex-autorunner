@@ -320,7 +320,7 @@ export function mapRepoSummary(raw: JsonRecord): RepoSummary {
     id,
     name: stringValue(raw.name ?? raw.display_name, id),
     path: nullableString(raw.path ?? raw.repo_root),
-    status: normalizeWorkStatus(ticketFlow.status ?? runState.flow_status ?? raw.status ?? raw.runtime_status),
+    status: normalizeWorkStatus(ticketFlow.status ?? runState.flow_status ?? raw.normalized_status ?? raw.runtime_status ?? raw.status ?? raw.lifecycle_status),
     defaultBranch: nullableString(raw.default_branch ?? raw.branch ?? raw.current_branch),
     worktreeCount: numberOrNull(raw.worktree_count ?? raw.worktrees_count ?? asArray(raw.worktrees).length) ?? 0,
     activeRuns,
@@ -347,7 +347,7 @@ export function mapWorktreeSummary(raw: JsonRecord): WorktreeSummary {
     name: stringValue(raw.name ?? raw.display_name ?? raw.branch, id),
     path: nullableString(raw.path ?? raw.workspace_root),
     branch: nullableString(raw.branch ?? raw.current_branch),
-    status: normalizeWorkStatus(ticketFlow.status ?? runState.flow_status ?? raw.status ?? raw.runtime_status),
+    status: normalizeWorkStatus(ticketFlow.status ?? runState.flow_status ?? raw.normalized_status ?? raw.runtime_status ?? raw.status ?? raw.lifecycle_status),
     activeRuns,
     openTickets:
       numberOrNull(raw.open_tickets ?? raw.open_ticket_count) ??
@@ -603,7 +603,7 @@ function normalizeArtifactKind(value: unknown): SurfaceArtifact['kind'] {
 
 function countByStatus(items: JsonRecord[], statuses: WorkStatus[]): number {
   return items.filter((item) =>
-    statuses.includes(normalizeWorkStatus(item.status ?? item.state ?? item.runtime_status ?? item.lifecycle_status ?? item.turn_status))
+    statuses.includes(normalizeWorkStatus(item.normalized_status ?? item.runtime_status ?? item.status ?? item.state ?? item.turn_status ?? item.lifecycle_status))
   ).length;
 }
 

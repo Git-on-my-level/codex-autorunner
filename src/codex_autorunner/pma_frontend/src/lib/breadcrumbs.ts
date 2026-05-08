@@ -186,6 +186,18 @@ const STRUCTURED_ROUTES: StructuredRoute[] = [
     description: 'Hub compatibility route',
     pattern: /^\/hub$/,
     toCrumbs: () => [{ label: 'Hub', href: null }]
+  },
+  {
+    description: 'Chat detail',
+    pattern: /^\/chats\/([^/]+)$/,
+    toCrumbs: (m) => {
+      const chatId = decodeURIComponent(m[1]);
+      const short = chatId.length > 6 ? `#${chatId.slice(0, 6)}` : `#${chatId}`;
+      return [
+        { label: 'Chats', href: '/chats' },
+        { label: short, href: null }
+      ];
+    }
   }
 ];
 

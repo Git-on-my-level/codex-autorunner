@@ -9,6 +9,7 @@
     mode = 'detail',
     listLabel = 'List',
     detailLabel = 'Detail',
+    showSwitch = true,
     onModeChange = undefined,
     rail = undefined,
     list,
@@ -19,6 +20,7 @@
     mode?: MasterDetailMode;
     listLabel?: string;
     detailLabel?: string;
+    showSwitch?: boolean;
     onModeChange?: (mode: MasterDetailMode) => void;
     rail?: Snippet;
     list: Snippet;
@@ -38,27 +40,29 @@
   data-mode={mode}
   aria-label={label}
 >
-  <div class="master-detail-switch" role="tablist" aria-label={`${label} panels`}>
-    <button
-      class:active={mode === 'list'}
-      type="button"
-      role="tab"
-      aria-selected={mode === 'list'}
-      onclick={() => setMode('list')}
-    >
-      {listLabel}
-    </button>
-    <button
-      class:active={mode === 'detail'}
-      type="button"
-      role="tab"
-      aria-selected={mode === 'detail'}
-      onclick={() => setMode('detail')}
-      disabled={!selected}
-    >
-      {detailLabel}
-    </button>
-  </div>
+  {#if showSwitch}
+    <div class="master-detail-switch" role="tablist" aria-label={`${label} panels`}>
+      <button
+        class:active={mode === 'list'}
+        type="button"
+        role="tab"
+        aria-selected={mode === 'list'}
+        onclick={() => setMode('list')}
+      >
+        {listLabel}
+      </button>
+      <button
+        class:active={mode === 'detail'}
+        type="button"
+        role="tab"
+        aria-selected={mode === 'detail'}
+        onclick={() => setMode('detail')}
+        disabled={!selected}
+      >
+        {detailLabel}
+      </button>
+    </div>
+  {/if}
 
   <div class:hidden-mobile-pane={mode !== 'list'} class="master-detail-list">
     {@render list()}

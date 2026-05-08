@@ -116,6 +116,25 @@
     creating ? 'Creating...' : newChatKind === 'agent' && canStartCodingAgentChat ? '+ Coding agent' : '+ PMA chat'
   );
   const headerScopeLine = $derived(pmaChatHeaderScopeLine(activeChat, repoLabelForRepoId));
+  const showStreamHealth = $derived(streamState !== 'idle');
+  const showStatusBar = $derived(
+    Boolean(
+      statusBar &&
+        (statusBar.state !== 'idle' ||
+          (progress?.elapsedSeconds !== null && progress?.elapsedSeconds !== undefined) ||
+          (progress?.queueDepth ?? 0) > 0)
+    )
+  );
+  const chatHasActivity = $derived(activeCards.length > 0 || showStatusBar);
+  const showStartPicker = $derived(Boolean(activeChat) && !loadingActive && !activeError && !chatHasActivity);
+  const selectedAgentLabel = $derived(selectedAgentRecord ? agentLabel(selectedAgentRecord) : selectedAgent || 'Agent');
+  const selectedModelLabel = $derived(selectedModelRecord ? modelLabel(selectedModelRecord) : selectedModel || '');
+  const selectedEffortLabel = $derived(selectedReasoning || 'default');
+  let configPopoverOpen = $state(false);
+
+  $effect(() => {
+    if (showStartPicker) configPopoverOpen = false;
+  });
 
   function repoLabelForRepoId(repoId: string): string | null {
     const opt = scopeOptions.find((scope) => scope.kind === 'repo' && scope.resourceId === repoId);
@@ -166,7 +185,16 @@
 
   $effect(() => {
     const requestedDetail = requestedDetailFromUrl();
-    if (!requestedDetail) return;
+    if (!requestedDetail) {
+      if (activeChatId !== null) {
+        closeStream();
+        activeChatId = null;
+        timeline = [];
+        progress = null;
+        detailMode = 'list';
+      }
+      return;
+    }
     void activateDetailFromUrl(requestedDetail);
   });
 
@@ -209,8 +237,7 @@
 
     if (chatResult.ok) {
       chats = chatResult.data;
-      const requestedChat = page.url.searchParams.get('chat');
-      const requestedDetail = requestedDetailFromUrl();
+      const requestedChat = page.params.chatId ?? page.url.searchParams.get('chat');
       activeChatId = chooseActiveChatId(chatResult.data, activeChatId, requestedChat);
       if (activeChatId) {
         detailMode = 'detail';
@@ -315,6 +342,7 @@
   }
 
   function requestedDetailFromUrl(): string | null {
+    if (page.params.chatId) return page.params.chatId;
     const detail = page.url.searchParams.get('detail');
     if (detail?.startsWith('chat:')) return detail.slice('chat:'.length);
     return page.url.searchParams.get('chat');
@@ -339,10 +367,11 @@
   async function syncDetailUrl(detailId: string): Promise<void> {
     const params = new URLSearchParams(page.url.searchParams);
     params.delete('draft');
-    params.set('detail', `chat:${detailId}`);
-    params.set('chat', detailId);
+    params.delete('detail');
+    params.delete('chat');
     const query = params.toString();
-    await goto(href(`/chats${query ? `?${query}` : ''}`), { keepFocus: true, noScroll: true });
+    const target = `/chats/${encodeURIComponent(detailId)}${query ? `?${query}` : ''}`;
+    await goto(href(target), { keepFocus: true, noScroll: true });
   }
 
   async function refreshActive(chatId: string, options: { quiet?: boolean } = {}): Promise<void> {
@@ -686,6 +715,7 @@
   mode={detailMode}
   listLabel="Chats"
   detailLabel="Detail"
+  showSwitch={false}
   onModeChange={(mode) => (detailMode = mode)}
 >
   {#snippet list()}
@@ -807,11 +837,18 @@
         {#if activeChat}
           <p class="chat-header-subtitle">
             <span class={`chat-kind-badge ${activeChatKind}`}>{activeChatKindLabel}</span>
-            <span class="chat-meta-dot" aria-hidden="true">·</span>
             <span class={`status-dot status-${activeChat.status}`} aria-hidden="true"></span>
-            {statusLabel(activeChat.status)}
-            <span class="chat-meta-dot" aria-hidden="true">·</span>
-            <span class="chat-header-scope">{headerScopeLine}</span>
+            <span>{statusLabel(activeChat.status)}</span>
+            {#if activeRepoIngress}
+              <span class="chat-meta-dot" aria-hidden="true">·</span>
+              <a class="chat-header-scope-link" href={href(activeRepoIngress.href)}>
+                <span class="chat-header-scope">{activeRepoIngress.detail}</span>
+                <span class="chat-header-scope-arrow" aria-hidden="true">→</span>
+              </a>
+            {:else}
+              <span class="chat-meta-dot" aria-hidden="true">·</span>
+              <span class="chat-header-scope">{headerScopeLine}</span>
+            {/if}
             {#if activeChat.ticketId}
               <span class="chat-meta-dot" aria-hidden="true">·</span>
               <code>{activeChat.ticketId}</code>
@@ -819,74 +856,84 @@
             <span class="chat-meta-dot" aria-hidden="true">·</span>
             <span class="chat-header-id">#{activeChat.id.slice(0, 6)}</span>
           </p>
-          {#if activeRepoIngress}
-            <a class="repo-ingress-link" href={href(activeRepoIngress.href)}>
-              <span>{activeRepoIngress.label}</span>
-              <strong>{activeRepoIngress.detail}</strong>
-              <span aria-hidden="true">→</span>
-            </a>
-          {/if}
         {/if}
       </div>
-      <div class="selector-row">
-        {#if showAgentSelector}
-          <label class="selector-field">
-            <span>agent</span>
-            <select
-              aria-label="Agent"
-              bind:value={selectedAgent}
-              onchange={handleAgentChange}
-            >
-              {#each agents as agent}
-                <option value={stringField(agent, 'id') ?? stringField(agent, 'agent') ?? agentLabel(agent)}>
-                  {agentLabel(agent)}
-                </option>
-              {/each}
-            </select>
-          </label>
-        {/if}
-        {#if showModelSelector}
-          <label class={`selector-field ${modelState.state}`}>
-            <span>{modelState.label}</span>
-            <select aria-label="Model" bind:value={selectedModel} disabled={modelState.disabled}>
-            {#if models.length === 0}
-              <option value="">Configured model</option>
-            {:else}
-              {#each models as model}
-                <option value={stringField(model, 'id') ?? stringField(model, 'model') ?? modelLabel(model)}>
-                  {modelLabel(model)}
-                </option>
-              {/each}
+      {#if activeChat && chatHasActivity && showAgentSelector}
+        <div class="config-summary">
+          <button
+            type="button"
+            class="config-summary-chip"
+            aria-haspopup="dialog"
+            aria-expanded={configPopoverOpen}
+            onclick={() => (configPopoverOpen = !configPopoverOpen)}
+            title="Adjust model or effort"
+          >
+            <span class="config-summary-agent">{selectedAgentLabel}</span>
+            {#if selectedModelLabel}
+              <span class="config-summary-dot" aria-hidden="true">·</span>
+              <span class="config-summary-model">{selectedModelLabel}</span>
             {/if}
-            </select>
-          </label>
-        {/if}
-        {#if showEffortSelector}
-          <label class="selector-field">
-            <span>effort</span>
-            <select aria-label="Effort" bind:value={selectedReasoning}>
-              <option value="">Default effort</option>
-              {#each reasoningOptions as effort}
-                <option value={effort}>{effort}</option>
-              {/each}
-            </select>
-          </label>
-        {/if}
-      </div>
+            {#if showEffortSelector}
+              <span class="config-summary-dot" aria-hidden="true">·</span>
+              <span class="config-summary-effort">{selectedEffortLabel}</span>
+            {/if}
+            <span class="config-summary-caret" aria-hidden="true">▾</span>
+          </button>
+          {#if configPopoverOpen}
+            <div class="config-popover" role="dialog" aria-label="Chat configuration">
+              <label class="selector-field stacked">
+                <span>agent</span>
+                <select aria-label="Agent" disabled value={selectedAgent}>
+                  <option value={selectedAgent}>{selectedAgentLabel}</option>
+                </select>
+                <small class="config-popover-hint">Start a new chat to switch agents.</small>
+              </label>
+              {#if showModelSelector}
+                <label class={`selector-field stacked ${modelState.state}`}>
+                  <span>{modelState.label}</span>
+                  <select aria-label="Model" bind:value={selectedModel} disabled={modelState.disabled}>
+                    {#if models.length === 0}
+                      <option value="">Configured model</option>
+                    {:else}
+                      {#each models as model}
+                        <option value={stringField(model, 'id') ?? stringField(model, 'model') ?? modelLabel(model)}>
+                          {modelLabel(model)}
+                        </option>
+                      {/each}
+                    {/if}
+                  </select>
+                </label>
+              {/if}
+              {#if showEffortSelector}
+                <label class="selector-field stacked">
+                  <span>effort</span>
+                  <select aria-label="Effort" bind:value={selectedReasoning}>
+                    <option value="">Default effort</option>
+                    {#each reasoningOptions as effort}
+                      <option value={effort}>{effort}</option>
+                    {/each}
+                  </select>
+                </label>
+              {/if}
+              <div class="config-popover-actions">
+                <button type="button" class="ghost-button" onclick={() => (configPopoverOpen = false)}>Done</button>
+              </div>
+            </div>
+          {/if}
+        </div>
+      {/if}
     </div>
 
-    {#if activeChat}
+    {#if activeChat && showStreamHealth}
       <div class={`stream-health ${streamState}`} role="status">
         <span class="status-dot" aria-hidden="true"></span>
         <span>
           {#if streamState === 'connected'}
-            Live updates connected{streamLastEventAt ? ` · ${formatRelativeTime(streamLastEventAt)}` : ''}
+            Live{streamLastEventAt ? ` · ${formatRelativeTime(streamLastEventAt)}` : ''}
           {:else if streamState === 'connecting'}
-            Connecting live updates
+            Connecting…
           {:else if streamState === 'interrupted'}
             {streamError}
-          {:else}
-            Live updates idle
           {/if}
         </span>
         {#if streamState === 'interrupted'}
@@ -914,19 +961,66 @@
           <p>Pick a conversation or create a new chat to start work.</p>
           <button type="button" onclick={() => (detailMode = 'list')}>Browse chats</button>
         </div>
-      {:else if activeCards.length === 0 && !statusBar}
-        <div class="state-panel empty-state">
-          <strong>This chat is ready</strong>
-          <p>Send a message or attach files so PMA can start from current context.</p>
+      {:else if showStartPicker}
+        <div class="start-picker" aria-label="Start of chat configuration">
+          {#if showAgentSelector}
+            <label class="start-picker-row">
+              <span>agent</span>
+              <select
+                aria-label="Agent"
+                bind:value={selectedAgent}
+                onchange={handleAgentChange}
+              >
+                {#each agents as agent}
+                  <option value={stringField(agent, 'id') ?? stringField(agent, 'agent') ?? agentLabel(agent)}>
+                    {agentLabel(agent)}
+                  </option>
+                {/each}
+              </select>
+            </label>
+          {/if}
+          {#if showModelSelector}
+            <label class={`start-picker-row ${modelState.state}`}>
+              <span>model</span>
+              <select aria-label="Model" bind:value={selectedModel} disabled={modelState.disabled}>
+                {#if models.length === 0}
+                  <option value="">Configured model</option>
+                {:else}
+                  {#each models as model}
+                    <option value={stringField(model, 'id') ?? stringField(model, 'model') ?? modelLabel(model)}>
+                      {modelLabel(model)}
+                    </option>
+                  {/each}
+                {/if}
+              </select>
+            </label>
+          {/if}
+          {#if showEffortSelector}
+            <label class="start-picker-row">
+              <span>effort</span>
+              <select aria-label="Effort" bind:value={selectedReasoning}>
+                <option value="">Default</option>
+                {#each reasoningOptions as effort}
+                  <option value={effort}>{effort}</option>
+                {/each}
+              </select>
+            </label>
+          {/if}
         </div>
       {:else}
-        {#if statusBar}
+        {#if showStatusBar && statusBar}
           <section class={`pma-status-bar ${statusBar.state}`} aria-label="PMA turn status">
             <span class="status-dot" aria-hidden="true"></span>
             <strong>{statusLabel(statusBar.state)}</strong>
-            <span>{statusBar.phase}</span>
-            <span>{statusBar.elapsedLabel}</span>
-            <span>{statusBar.queueDepthLabel}</span>
+            {#if statusBar.phase && statusBar.phase.toLowerCase() !== statusLabel(statusBar.state).toLowerCase()}
+              <span>{statusBar.phase}</span>
+            {/if}
+            {#if progress?.elapsedSeconds !== null && progress?.elapsedSeconds !== undefined}
+              <span>{statusBar.elapsedLabel}</span>
+            {/if}
+            {#if (progress?.queueDepth ?? 0) > 0}
+              <span>{statusBar.queueDepthLabel}</span>
+            {/if}
           </section>
         {/if}
         {#each activeCards as card (card.id)}
@@ -1085,7 +1179,6 @@
         </div>
       </div>
     {/if}
-    <p class="permission-note">Agent-native approvals apply during turns according to the selected approval policy and sandbox mode.</p>
     {#if composeError}
       <p class="compose-error">{composeError.message}</p>
     {/if}

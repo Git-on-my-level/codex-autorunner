@@ -8,13 +8,14 @@ describe('mapThreadSummary', () => {
       display_name: 'Repo fix',
       agent_id: 'codex',
       lifecycle_status: 'active',
+      normalized_status: 'idle',
       repo_id: 'repo-1',
       latest_execution: { model: 'gpt-5.2', started_at: '2026-05-04T00:00:00Z' }
     });
 
     expect(vm.id).toBe('thread-1');
     expect(vm.title).toBe('Repo fix');
-    expect(vm.status).toBe('running');
+    expect(vm.status).toBe('idle');
     expect(vm.agentId).toBe('codex');
     expect(vm.model).toBe('gpt-5.2');
     expect(vm.scope).toEqual({ kind: 'repo', id: 'repo-1' });
