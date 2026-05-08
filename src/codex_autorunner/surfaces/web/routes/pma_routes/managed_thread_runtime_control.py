@@ -6,7 +6,6 @@ import json
 import logging
 import sqlite3
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import HTTPException, Request
@@ -447,31 +446,6 @@ async def recover_orphaned_executions(
                     getattr(app_server_events, "list_events", None)
                 ) or callable(getattr(app_server_events, "stream_entries", None)):
                     continue
-            if (
-                str(thread.agent_id or "").strip().lower() == "zeroclaw"
-                and thread.workspace_root
-                and thread.backend_thread_id
-                and execution.backend_id
-            ):
-                zeroclaw_supervisor = getattr(app.state, "zeroclaw_supervisor", None)
-                list_turn_events = getattr(
-                    zeroclaw_supervisor, "list_turn_events", None
-                )
-                if callable(list_turn_events):
-                    try:
-                        live_events = await list_turn_events(
-                            Path(str(thread.workspace_root)),
-                            thread.backend_thread_id,
-                            execution.backend_id,
-                        )
-                    except (
-                        AttributeError,
-                        TypeError,
-                        RuntimeError,
-                    ):  # intentional: defensive fallback for dynamic supervisor call
-                        live_events = []
-                    if live_events:
-                        continue
             service.recover_running_execution_after_restart(managed_thread_id)
         except (
             RuntimeError,

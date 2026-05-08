@@ -23,7 +23,7 @@ def _build_client(with_supervisors: bool = False) -> TestClient:
         app.state.config = SimpleNamespace(
             root=_TEST_HUB_ROOT,
             raw={"pma": {"enabled": True}},
-            agent_binary=lambda _agent_id: "zeroclaw",
+            agent_binary=lambda _agent_id: "hermes",
         )
         app.state.engine = SimpleNamespace(repo_root=_TEST_REPO_ROOT)
 
@@ -136,7 +136,7 @@ def test_pma_agents_includes_profile_defaults(monkeypatch) -> None:
         root=_TEST_HUB_ROOT,
         raw={"pma": {"enabled": True, "profile": "m4"}},
         agent_binary=lambda _agent_id, profile=None: (
-            "hermes" if profile else "zeroclaw"
+            "hermes" if profile else "opencode"
         ),
         agent_profiles=lambda agent_id: (
             {"m4": SimpleNamespace(display_name="M4 PMA")}

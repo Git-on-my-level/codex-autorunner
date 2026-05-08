@@ -2903,7 +2903,7 @@ def test_pma_cli_thread_archive_preserves_not_found_detail(
     assert "possible base-path mismatch" not in result.output
 
 
-def test_pma_cli_thread_spawn_defaults_agent_for_agent_workspace(
+def test_pma_cli_thread_spawn_defaults_agent_for_repo_owner(
     monkeypatch, tmp_path: Path
 ) -> None:
     calls: list[tuple[str, str, dict[str, object] | None, dict[str, object] | None]] = (
@@ -2924,28 +2924,33 @@ def test_pma_cli_thread_spawn_defaults_agent_for_agent_workspace(
         if method == "POST" and url.endswith("/hub/pma/threads"):
             return {
                 "thread": {
-                    "managed_thread_id": "thread-zc-1",
-                    "agent": "zeroclaw",
-                    "resource_kind": "agent_workspace",
-                    "resource_id": "zc-main",
+                    "managed_thread_id": "thread-hub-1",
+                    "agent": "codex",
+                    "resource_kind": "repo",
+                    "resource_id": "base",
                 }
             }
         if method == "GET" and url.endswith("/hub/pma/threads"):
             return {
                 "threads": [
                     {
-                        "managed_thread_id": "thread-zc-1",
-                        "agent": "zeroclaw",
+                        "managed_thread_id": "thread-hub-1",
+                        "agent": "codex",
                         "status": "idle",
                         "status_reason": "thread_created",
-                        "resource_kind": "agent_workspace",
-                        "resource_id": "zc-main",
+                        "resource_kind": "repo",
+                        "resource_id": "base",
                     }
                 ]
             }
         raise AssertionError(f"unexpected request: {method} {url}")
 
     monkeypatch.setattr(pma_thread_commands, "_request_json", _fake_request_json)
+    monkeypatch.setattr(
+        pma_thread_commands,
+        "_fetch_agent_capabilities",
+        lambda config, path: {"codex": {"durable_threads"}},
+    )
 
     runner = CliRunner()
     create_result = runner.invoke(
@@ -2953,12 +2958,12 @@ def test_pma_cli_thread_spawn_defaults_agent_for_agent_workspace(
         [
             "thread",
             "spawn",
-            "--resource-kind",
-            "agent_workspace",
-            "--resource-id",
-            "zc-main",
+            "--agent",
+            "codex",
+            "--repo",
+            "base",
             "--name",
-            "ZeroClaw Main",
+            "Base repo thread",
             "--path",
             str(tmp_path),
         ],
@@ -2968,32 +2973,30 @@ def test_pma_cli_thread_spawn_defaults_agent_for_agent_workspace(
         [
             "thread",
             "list",
-            "--resource-kind",
-            "agent_workspace",
-            "--resource-id",
-            "zc-main",
+            "--repo",
+            "base",
             "--path",
             str(tmp_path),
         ],
     )
 
     assert create_result.exit_code == 0
-    assert create_result.stdout.strip() == "thread-zc-1"
+    assert create_result.stdout.strip() == "thread-hub-1"
     assert list_result.exit_code == 0
-    assert "thread-zc-1 agent=zeroclaw status=idle" in list_result.stdout
-    assert "owner=agent_workspace:zc-main" in list_result.stdout
+    assert "thread-hub-1 agent=codex status=idle" in list_result.stdout
+    assert "repo=base" in list_result.stdout
 
     assert calls == [
         (
             "POST",
             "http://127.0.0.1:4321/hub/pma/threads",
             {
-                "agent": None,
-                "resource_kind": "agent_workspace",
-                "resource_id": "zc-main",
+                "agent": "codex",
+                "resource_kind": "repo",
+                "resource_id": "base",
                 "workspace_root": None,
-                "name": "ZeroClaw Main",
-                "context_profile": "none",
+                "name": "Base repo thread",
+                "context_profile": "car_ambient",
                 "notify_on": None,
                 "terminal_followup": None,
                 "notify_lane": None,
@@ -3006,8 +3009,8 @@ def test_pma_cli_thread_spawn_defaults_agent_for_agent_workspace(
             "http://127.0.0.1:4321/hub/pma/threads",
             None,
             {
-                "resource_kind": "agent_workspace",
-                "resource_id": "zc-main",
+                "resource_kind": "repo",
+                "resource_id": "base",
                 "limit": 200,
             },
         ),

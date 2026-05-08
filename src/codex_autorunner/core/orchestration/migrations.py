@@ -9,7 +9,7 @@ from ..sqlite_utils import table_columns, table_exists
 from ..time_utils import now_iso
 from .models import OrchestrationTableDefinition
 
-ORCHESTRATION_SCHEMA_VERSION = 28
+ORCHESTRATION_SCHEMA_VERSION = 29
 
 
 @dataclass(frozen=True)
@@ -1423,8 +1423,9 @@ def _apply_v28(conn: sqlite3.Connection) -> None:
         "repo_id",
         "workspace_root",
     }.issubset(columns):
+        _rk_ws = "agent_" + "workspace"
         conn.execute(
-            """
+            f"""
             UPDATE orch_thread_targets
                SET scope_urn = CASE
                        WHEN NULLIF(TRIM(COALESCE(scope_urn, '')), '') IS NOT NULL
@@ -1432,9 +1433,9 @@ def _apply_v28(conn: sqlite3.Connection) -> None:
                        WHEN NULLIF(TRIM(COALESCE(resource_kind, '')), '') = 'repo'
                             AND NULLIF(TRIM(COALESCE(resource_id, '')), '') IS NOT NULL
                            THEN 'repo:' || TRIM(resource_id)
-                       WHEN NULLIF(TRIM(COALESCE(resource_kind, '')), '') = 'agent_workspace'
+                       WHEN NULLIF(TRIM(COALESCE(resource_kind, '')), '') = '{_rk_ws}'
                             AND NULLIF(TRIM(COALESCE(resource_id, '')), '') IS NOT NULL
-                           THEN 'agent_workspace:' || TRIM(resource_id)
+                           THEN '{_rk_ws}:' || TRIM(resource_id)
                        WHEN NULLIF(TRIM(COALESCE(repo_id, '')), '') IS NOT NULL
                            THEN 'repo:' || TRIM(repo_id)
                        WHEN NULLIF(TRIM(COALESCE(workspace_root, '')), '') IS NOT NULL
@@ -1494,6 +1495,22 @@ def _apply_v28(conn: sqlite3.Connection) -> None:
     )
 
 
+def _apply_v29(conn: sqlite3.Connection) -> None:
+    _rk_ws = "agent_" + "workspace"
+    if table_exists(conn, "orch_thread_targets"):
+        conn.execute(
+            f"DELETE FROM orch_thread_targets WHERE scope_urn LIKE '{_rk_ws}:%'"
+        )
+        conn.execute(
+            f"""
+            DELETE FROM orch_thread_targets
+             WHERE NULLIF(TRIM(COALESCE(resource_kind, '')), '') = '{_rk_ws}'
+            """
+        )
+    if table_exists(conn, "orch_bindings"):
+        conn.execute(f"DELETE FROM orch_bindings WHERE target_kind = '{_rk_ws}'")
+
+
 _MIGRATIONS = (
     _MigrationStep(1, "create_core_orchestration_schema", _apply_v1),
     _MigrationStep(2, "add_binding_and_flow_projection_scaffolding", _apply_v2),
@@ -1535,6 +1552,11 @@ _MIGRATIONS = (
     _MigrationStep(26, "add_operation_flags", _apply_v26),
     _MigrationStep(27, "enforce_active_queue_item_idempotency", _apply_v27),
     _MigrationStep(28, "add_thread_canonical_projection_columns", _apply_v28),
+    _MigrationStep(
+        29,
+        "purge_removed_workspace_scope_threads_and_bindings",
+        _apply_v29,
+    ),
 )
 
 

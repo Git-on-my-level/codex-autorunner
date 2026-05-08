@@ -7,7 +7,6 @@ export const HUB_JOB_TIMEOUT_MS = 180000;
 
 export let hubData: HubData = {
   repos: [],
-  agent_workspaces: [],
   last_scan_at: null,
   pinned_parent_repo_ids: [],
 };
@@ -38,9 +37,6 @@ export function setPinnedParentRepoIds(ids: Set<string>, data: HubData): void {
 export function applyHubData(data: HubData): void {
   hubData = {
     repos: Array.isArray(data?.repos) ? data.repos : [],
-    agent_workspaces: Array.isArray(data?.agent_workspaces)
-      ? data.agent_workspaces
-      : [],
     last_scan_at: data?.last_scan_at || null,
     pinned_parent_repo_ids: normalizePinnedParentRepoIds(
       data?.pinned_parent_repo_ids
@@ -93,10 +89,7 @@ export { bootstrapHubData, refreshHub, triggerHubScan, loadHubUsage, handleSyste
 export {
   handleCleanupAll,
   showCreateRepoModal,
-  showCreateAgentWorkspaceModal,
   hideCreateRepoModal,
-  hideCreateAgentWorkspaceModal,
   handleCreateRepoSubmit,
-  handleCreateAgentWorkspaceSubmit,
   initHubSettings,
 } from "./hubModals.js";

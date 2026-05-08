@@ -13,8 +13,6 @@ def parent_scope(scope: ScopeRef) -> Optional[ScopeRef]:
         return ScopeRef(kind="hub")
     if scope.kind == "worktree":
         return ScopeRef(kind="repo", id=scope.parent_repo_id)
-    if scope.kind == "agent_workspace":
-        return ScopeRef(kind="hub")
     if scope.kind == "filesystem":
         return ScopeRef(kind="hub")
     return None

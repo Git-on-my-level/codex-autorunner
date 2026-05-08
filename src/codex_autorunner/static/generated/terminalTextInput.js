@@ -1,7 +1,7 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { api, flash } from "./utils.js?v=7fa8004f6840e214503b15a447aff6b141a7ad76cba89a9cf20138dbd2d88456";
-import { CONSTANTS } from "./constants.js?v=7fa8004f6840e214503b15a447aff6b141a7ad76cba89a9cf20138dbd2d88456";
-import { publish } from "./bus.js?v=7fa8004f6840e214503b15a447aff6b141a7ad76cba89a9cf20138dbd2d88456";
+import { api, flash } from "./utils.js?v=510fd0419ed9eddfa5851d4093853609591d2a4765ecd74f3add9600783da27f";
+import { CONSTANTS } from "./constants.js?v=510fd0419ed9eddfa5851d4093853609591d2a4765ecd74f3add9600783da27f";
+import { publish } from "./bus.js?v=510fd0419ed9eddfa5851d4093853609591d2a4765ecd74f3add9600783da27f";
 export const TEXT_INPUT_STORAGE_KEYS = Object.freeze({
     enabled: "codex_terminal_text_input_enabled",
     draft: "codex_terminal_text_input_draft",

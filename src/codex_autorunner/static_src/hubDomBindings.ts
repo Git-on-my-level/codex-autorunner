@@ -22,14 +22,10 @@ import { refreshHub, triggerHubScan, loadHubUsage } from "./hubRefresh.js";
 import {
   openRepoSettingsModal,
   promptAndSetRepoDestination,
-  promptAndSetAgentWorkspaceDestination,
   handleCleanupAll,
   showCreateRepoModal,
-  showCreateAgentWorkspaceModal,
   hideCreateRepoModal,
-  hideCreateAgentWorkspaceModal,
   handleCreateRepoSubmit,
-  handleCreateAgentWorkspaceSubmit,
   initHubSettings,
 } from "./hubModals.js";
 
@@ -43,18 +39,12 @@ const hubSortOrderEl = document.getElementById(
   "hub-sort-order"
 ) as HTMLSelectElement | null;
 const hubRepoPanelEl = document.getElementById("hub-repo-panel");
-const hubAgentPanelEl = document.getElementById("hub-agent-panel");
 const hubShellEl = document.getElementById("hub-shell");
 const hubRepoPanelSummaryEl = document.getElementById(
   "hub-repo-panel-summary"
 ) as HTMLButtonElement | null;
-const hubAgentPanelSummaryEl = document.getElementById(
-  "hub-agent-panel-summary"
-) as HTMLButtonElement | null;
 const hubRepoPanelStateEl = document.getElementById("hub-repo-panel-state");
-const hubAgentPanelStateEl = document.getElementById("hub-agent-panel-state");
 const repoListEl = document.getElementById("hub-repo-list");
-const agentWorkspaceListEl = document.getElementById("hub-agent-workspace-list");
 const hubUsageRefresh = document.getElementById("hub-usage-refresh");
 
 let hubOpenPanel: string = loadHubOpenPanel();
@@ -236,81 +226,6 @@ async function handleRepoAction(repoId: string, action: string): Promise<void> {
   }
 }
 
-async function handleAgentWorkspaceAction(
-  workspaceId: string,
-  action: string
-): Promise<void> {
-  const buttons = agentWorkspaceListEl?.querySelectorAll(
-    `button[data-agent-workspace="${workspaceId}"][data-action="${action}"]`
-  );
-  buttons?.forEach((btn) => ((btn as HTMLButtonElement).disabled = true));
-  try {
-    const workspace = getHubData().agent_workspaces.find((item) => item.id === workspaceId);
-    if (!workspace) {
-      flash(`Agent workspace not found: ${workspaceId}`, "error");
-      return;
-    }
-
-    if (action === "enable" || action === "disable") {
-      const enabled = action === "enable";
-      await api(`/hub/agent-workspaces/${encodeURIComponent(workspaceId)}`, {
-        method: "PATCH",
-        body: { enabled },
-      });
-      flash(`${enabled ? "Enabled" : "Disabled"}: ${workspaceId}`, "success");
-      await refreshHub();
-      return;
-    }
-
-    if (action === "set_destination") {
-      const updated = await promptAndSetAgentWorkspaceDestination(workspace);
-      if (updated) {
-        await refreshHub();
-      }
-      return;
-    }
-
-    if (action === "remove") {
-      const ok = await confirmModal(
-        `Remove agent workspace "${workspace.display_name || workspace.id}" from CAR?\n\nManaged files will stay on disk at:\n${workspace.path}`,
-        { confirmText: "Remove" }
-      );
-      if (!ok) return;
-      const { startHubJob } = await importVersionedModule<
-        typeof import("./hubActions.js")
-      >("./hubActions.js");
-      await startHubJob(`/hub/jobs/agent-workspaces/${encodeURIComponent(workspaceId)}/remove`, {
-        body: { delete_dir: false },
-        startedMessage: "Agent workspace removal queued",
-      });
-      flash(`Removed agent workspace: ${workspaceId}`, "success");
-      await refreshHub();
-      return;
-    }
-
-    if (action === "delete") {
-      const ok = await confirmModal(
-        `Delete agent workspace "${workspace.display_name || workspace.id}"?\n\nCAR will unregister it and delete its managed directory:\n${workspace.path}`,
-        { confirmText: "Delete", danger: true }
-      );
-      if (!ok) return;
-      const { startHubJob } = await importVersionedModule<
-        typeof import("./hubActions.js")
-      >("./hubActions.js");
-      await startHubJob(`/hub/jobs/agent-workspaces/${encodeURIComponent(workspaceId)}/delete`, {
-        body: { delete_dir: true },
-        startedMessage: "Agent workspace delete queued",
-      });
-      flash(`Deleted agent workspace: ${workspaceId}`, "success");
-      await refreshHub();
-    }
-  } catch (err) {
-    flash((err as Error).message || "Agent workspace action failed", "error");
-  } finally {
-    buttons?.forEach((btn) => ((btn as HTMLButtonElement).disabled = false));
-  }
-}
-
 function prefetchRepo(url: string): void {
   if (!url || prefetchedUrls.has(url)) return;
   prefetchedUrls.add(url);
@@ -320,23 +235,14 @@ function prefetchRepo(url: string): void {
 export function applyHubPanelState(openPanel: string): void {
   hubOpenPanel = openPanel;
   const reposOpen = openPanel === "repos";
-  const agentsOpen = openPanel === "agents";
   hubShellEl?.setAttribute("data-hub-open-panel", openPanel);
   hubRepoPanelEl?.classList.toggle("hub-panel-expanded", reposOpen);
   hubRepoPanelEl?.classList.toggle("hub-panel-collapsed", !reposOpen);
-  hubAgentPanelEl?.classList.toggle("hub-panel-expanded", agentsOpen);
-  hubAgentPanelEl?.classList.toggle("hub-panel-collapsed", !agentsOpen);
   if (hubRepoPanelSummaryEl) {
     hubRepoPanelSummaryEl.setAttribute("aria-expanded", reposOpen ? "true" : "false");
   }
   if (hubRepoPanelStateEl) {
     hubRepoPanelStateEl.textContent = reposOpen ? "Expanded" : "Show panel";
-  }
-  if (hubAgentPanelSummaryEl) {
-    hubAgentPanelSummaryEl.setAttribute("aria-expanded", agentsOpen ? "true" : "false");
-  }
-  if (hubAgentPanelStateEl) {
-    hubAgentPanelStateEl.textContent = agentsOpen ? "Expanded" : "Show panel";
   }
 }
 
@@ -350,9 +256,6 @@ function initHubPanelControls(): void {
   applyHubPanelState(hubOpenPanel);
   hubRepoPanelSummaryEl?.addEventListener("click", () => {
     toggleHubPanel("repos");
-  });
-  hubAgentPanelSummaryEl?.addEventListener("click", () => {
-    toggleHubPanel("agents");
   });
 }
 
@@ -381,22 +284,9 @@ function attachHubHandlers(): void {
   initHubSettings();
   const refreshBtn = document.getElementById("hub-refresh") as HTMLButtonElement | null;
   const newRepoBtn = document.getElementById("hub-new-repo") as HTMLButtonElement | null;
-  const newAgentBtn = document.getElementById("hub-new-agent") as HTMLButtonElement | null;
   const createCancelBtn = document.getElementById("create-repo-cancel") as HTMLButtonElement | null;
   const createSubmitBtn = document.getElementById("create-repo-submit") as HTMLButtonElement | null;
   const createRepoId = document.getElementById("create-repo-id") as HTMLInputElement | null;
-  const createAgentCancelBtn = document.getElementById(
-    "create-agent-workspace-cancel"
-  ) as HTMLButtonElement | null;
-  const createAgentSubmitBtn = document.getElementById(
-    "create-agent-workspace-submit"
-  ) as HTMLButtonElement | null;
-  const createAgentId = document.getElementById(
-    "create-agent-workspace-id"
-  ) as HTMLInputElement | null;
-  const createAgentRuntime = document.getElementById(
-    "create-agent-workspace-runtime"
-  ) as HTMLInputElement | null;
   if (refreshBtn) {
     refreshBtn.addEventListener("click", () => triggerHubScan());
   }
@@ -424,14 +314,7 @@ function attachHubHandlers(): void {
 
   if (newRepoBtn) {
     newRepoBtn.addEventListener("click", () => {
-      toggleHubPanel("repos");
       showCreateRepoModal();
-    });
-  }
-  if (newAgentBtn) {
-    newAgentBtn.addEventListener("click", () => {
-      toggleHubPanel("agents");
-      showCreateAgentWorkspaceModal();
     });
   }
   if (createCancelBtn) {
@@ -440,34 +323,12 @@ function attachHubHandlers(): void {
   if (createSubmitBtn) {
     createSubmitBtn.addEventListener("click", handleCreateRepoSubmit);
   }
-  if (createAgentCancelBtn) {
-    createAgentCancelBtn.addEventListener("click", hideCreateAgentWorkspaceModal);
-  }
-  if (createAgentSubmitBtn) {
-    createAgentSubmitBtn.addEventListener("click", handleCreateAgentWorkspaceSubmit);
-  }
 
   if (createRepoId) {
     createRepoId.addEventListener("keydown", (e) => {
       if (e.key === "Enter") {
         e.preventDefault();
         handleCreateRepoSubmit();
-      }
-    });
-  }
-  if (createAgentId) {
-    createAgentId.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") {
-        e.preventDefault();
-        handleCreateAgentWorkspaceSubmit();
-      }
-    });
-  }
-  if (createAgentRuntime) {
-    createAgentRuntime.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") {
-        e.preventDefault();
-        handleCreateAgentWorkspaceSubmit();
       }
     });
   }
@@ -523,23 +384,6 @@ function attachHubHandlers(): void {
       const card = target.closest(".hub-repo-clickable") as HTMLElement | null;
       if (card && card.dataset.href) {
         prefetchRepo(card.dataset.href);
-      }
-    });
-  }
-
-  if (agentWorkspaceListEl) {
-    agentWorkspaceListEl.addEventListener("click", (event) => {
-      const target = event.target as HTMLElement;
-      const btn =
-        target instanceof HTMLElement
-          ? (target.closest("button[data-action]") as HTMLElement | null)
-          : null;
-      if (!btn) return;
-      event.stopPropagation();
-      const action = btn.dataset.action;
-      const workspaceId = btn.dataset.agentWorkspace;
-      if (action && workspaceId) {
-        handleAgentWorkspaceAction(workspaceId, action);
       }
     });
   }

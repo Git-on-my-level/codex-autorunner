@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from codex_autorunner.core.car_context import (
-    DEFAULT_AGENT_WORKSPACE_CONTEXT_PROFILE,
     DEFAULT_REPO_THREAD_CONTEXT_PROFILE,
     build_car_context_bundle,
     default_managed_thread_context_profile,
@@ -16,18 +15,9 @@ from codex_autorunner.core.context_awareness import (
 )
 
 
-def test_default_managed_thread_context_profile_for_repo_threads() -> None:
+def test_default_managed_thread_context_profile() -> None:
     assert DEFAULT_REPO_THREAD_CONTEXT_PROFILE == "car_ambient"
-    assert default_managed_thread_context_profile(resource_kind="repo") == "car_ambient"
-    assert default_managed_thread_context_profile(resource_kind=None) == "car_ambient"
-
-
-def test_default_managed_thread_context_profile_for_agent_workspaces() -> None:
-    assert DEFAULT_AGENT_WORKSPACE_CONTEXT_PROFILE == "none"
-    assert (
-        default_managed_thread_context_profile(resource_kind="agent_workspace")
-        == "none"
-    )
+    assert default_managed_thread_context_profile() == "car_ambient"
 
 
 def test_ambient_profile_only_escalates_on_car_triggers() -> None:

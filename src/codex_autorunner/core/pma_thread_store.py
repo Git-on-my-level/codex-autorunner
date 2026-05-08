@@ -405,7 +405,7 @@ class PmaThreadStore:
             if scope is not None
             else ScopeRef(kind="filesystem", path=str(workspace)).to_urn()
         )
-        if scope is None and normalized_resource_kind in {"repo", "agent_workspace"}:
+        if scope is None and normalized_resource_kind == "repo":
             normalized_scope_urn = ScopeRef(
                 kind=normalized_resource_kind,
                 id=normalized_resource_id,
@@ -529,8 +529,8 @@ class PmaThreadStore:
     async def list_by_scope(self, scope: ScopeRef) -> list[ThreadRecord]:
         if scope.kind == "repo":
             rows = self.list_threads(repo_id=scope.id)
-        elif scope.kind == "agent_workspace":
-            rows = self.list_threads(resource_kind=scope.kind, resource_id=scope.id)
+        elif scope.kind == "worktree":
+            rows = self.list_threads(resource_kind="worktree", resource_id=scope.id)
         else:
             rows = self.list_threads()
         records: list[ThreadRecord] = []

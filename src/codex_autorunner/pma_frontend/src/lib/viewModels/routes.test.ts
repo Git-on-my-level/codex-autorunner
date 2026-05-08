@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  agentWorkspaceRoute,
   legacyWorktreeRedirectPath,
   repoMemoryRoute,
   repoRoute,
@@ -11,11 +10,10 @@ import {
 } from './routes';
 
 describe('scope-nested frontend routes', () => {
-  it('builds primary hub, repo, chat filter, and agent workspace URLs', () => {
+  it('builds primary hub, repo, and chat filter URLs', () => {
     expect('/hub').toBe('/hub');
     expect('/chats?scope=repo%3Amy-repo').toBe('/chats?scope=repo%3Amy-repo');
     expect(repoRoute('my-repo')).toBe('/repos/my-repo');
-    expect(agentWorkspaceRoute('codex-pma')).toBe('/agent-workspaces/codex-pma');
   });
 
   it('builds nested worktree, memory, and ticket URLs with the parent repo', () => {

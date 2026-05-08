@@ -26,7 +26,7 @@ def _build_client(with_supervisors: bool = False) -> TestClient:
         app.state.opencode_supervisor = MagicMock()
         app.state.app_server_events = MagicMock()
         app.state.config = SimpleNamespace(
-            agent_binary=lambda _agent_id: "zeroclaw",
+            agent_binary=lambda _agent_id: "hermes",
         )
         app.state.engine = SimpleNamespace(repo_root=_TEST_REPO_ROOT)
     app.include_router(build_agents_routes())
@@ -192,13 +192,6 @@ def test_list_agents_includes_expected_capabilities() -> None:
         assert "message_turns" in opencode_caps
         assert "review" in opencode_caps
 
-    if "zeroclaw" in agents:
-        zeroclaw_caps = agents["zeroclaw"]["capabilities"]
-        assert "durable_threads" in zeroclaw_caps
-        assert "message_turns" in zeroclaw_caps
-        assert "active_thread_discovery" in zeroclaw_caps
-        assert "event_streaming" in zeroclaw_caps
-
 
 def test_list_agents_fallback_does_not_advertise_unavailable_capabilities(
     monkeypatch,
@@ -221,32 +214,6 @@ def test_list_agents_fallback_does_not_advertise_unavailable_capabilities(
             "capabilities": [],
         }
     ]
-
-
-def test_list_agents_omits_zeroclaw_when_runtime_is_incompatible(
-    monkeypatch,
-) -> None:
-    monkeypatch.setattr(
-        "codex_autorunner.agents.registry.zeroclaw_runtime_preflight",
-        lambda _config: type(
-            "Result",
-            (),
-            {
-                "status": "incompatible",
-                "version": "zeroclaw 0.2.0",
-                "launch_mode": None,
-                "message": "incompatible",
-                "fix": "Install a compatible ZeroClaw build.",
-            },
-        )(),
-    )
-    client = _build_client(with_supervisors=True)
-
-    response = client.get("/api/agents")
-
-    assert response.status_code == 200
-    data = response.json()
-    assert "zeroclaw" not in {agent["id"] for agent in data["agents"]}
 
 
 def test_list_agents_includes_hermes_when_available(monkeypatch) -> None:
@@ -332,7 +299,7 @@ def test_list_agents_includes_configured_profiles(monkeypatch) -> None:
     app.state.app_server_events = MagicMock()
     app.state.config = SimpleNamespace(
         agent_binary=lambda _agent_id, profile=None: (
-            "hermes" if profile else "zeroclaw"
+            "hermes" if profile else "opencode"
         ),
         agent_profiles=lambda agent_id: (
             {"m4": SimpleNamespace(display_name="M4 PMA")}
@@ -426,40 +393,6 @@ def test_models_endpoint_returns_capability_error_for_unknown_agent() -> None:
     assert response.status_code == 404
     data = response.json()
     assert "Unknown agent" in data["detail"]
-
-
-def test_events_endpoint_returns_capability_error_for_agent_without_event_streaming(
-    monkeypatch,
-) -> None:
-    monkeypatch.setattr(
-        "codex_autorunner.agents.registry.zeroclaw_runtime_preflight",
-        lambda _config: type(
-            "Result",
-            (),
-            {
-                "status": "ready",
-                "version": "zeroclaw 0.2.0",
-                "launch_mode": "binary",
-                "message": "ready",
-                "fix": None,
-            },
-        )(),
-    )
-    from codex_autorunner.agents.zeroclaw.harness import ZEROCLAW_CAPABILITIES
-
-    if "event_streaming" in ZEROCLAW_CAPABILITIES:
-        return
-
-    client = _build_client(with_supervisors=True)
-
-    response = client.get(
-        "/api/agents/zeroclaw/turns/turn-123/events",
-        params={"thread_id": "thread-123"},
-    )
-
-    assert response.status_code == 400
-    data = response.json()
-    assert "event_streaming" in data["detail"]
 
 
 def test_events_endpoint_returns_unknown_agent_for_unregistered() -> None:

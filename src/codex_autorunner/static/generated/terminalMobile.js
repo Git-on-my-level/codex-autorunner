@@ -1,6 +1,6 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { isMobileViewport } from "./utils.js?v=7fa8004f6840e214503b15a447aff6b141a7ad76cba89a9cf20138dbd2d88456";
-import { getBufferSnapshot, snapshotBufferLines, isAltBufferActive, clearAltScrollbackState, updateAltScrollback, } from "./terminalTranscript.js?v=7fa8004f6840e214503b15a447aff6b141a7ad76cba89a9cf20138dbd2d88456";
+import { isMobileViewport } from "./utils.js?v=510fd0419ed9eddfa5851d4093853609591d2a4765ecd74f3add9600783da27f";
+import { getBufferSnapshot, snapshotBufferLines, isAltBufferActive, clearAltScrollbackState, updateAltScrollback, } from "./terminalTranscript.js?v=510fd0419ed9eddfa5851d4093853609591d2a4765ecd74f3add9600783da27f";
 const textEncoder = new TextEncoder();
 export function createMobileState() {
     return {

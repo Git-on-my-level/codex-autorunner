@@ -29,9 +29,7 @@ class ScopeUrnKindError(ScopeUrnError):
         super().__init__(f"Unknown scope kind '{kind}' in URN: {urn}")
 
 
-VALID_SCOPE_KINDS = frozenset(
-    {"hub", "repo", "worktree", "agent_workspace", "filesystem"}
-)
+VALID_SCOPE_KINDS = frozenset({"hub", "repo", "worktree", "filesystem"})
 
 
 def _require_segment(value: Optional[str], *, kind: str, field: str) -> str:
@@ -70,9 +68,6 @@ def format_scope_urn(
             parent_repo_id, kind=kind, field="a parent_repo_id"
         )
         return f"worktree:{parent_repo_id}/{id}"
-    if kind == "agent_workspace":
-        id = _require_segment(id, kind=kind, field="an id")
-        return f"agent_workspace:{id}"
     if kind == "filesystem":
         if not id:
             raise ScopeUrnError("filesystem scope requires a path")
@@ -120,17 +115,6 @@ def parse_scope_urn(urn: str) -> dict[str, Optional[str]]:
             "id": path[slash_pos + 1 :],
             "parent_repo_id": path[:slash_pos],
         }
-
-    if kind == "agent_workspace":
-        if not path:
-            raise ScopeUrnParseError(
-                urn, reason="agent_workspace scope requires an id after ':'"
-            )
-        if "/" in path:
-            raise ScopeUrnParseError(
-                urn, reason="agent_workspace scope id must not contain '/'"
-            )
-        return {"kind": "agent_workspace", "id": path, "parent_repo_id": None}
 
     if kind == "filesystem":
         if not path:

@@ -68,11 +68,6 @@ from ._thread_targets import (
     resolve_thread_target_list_status_fields,
 )
 from ._workspaces import (
-    AgentWorkspaceDescriptor,
-    AgentWorkspaceListRequest,
-    AgentWorkspaceListResponse,
-    AgentWorkspaceLookupRequest,
-    AgentWorkspaceResponse,
     AutomationRequest,
     AutomationResult,
     PmaSnapshotResponse,
@@ -85,11 +80,6 @@ from ._workspaces import (
 )
 
 __all__ = [
-    "AgentWorkspaceDescriptor",
-    "AgentWorkspaceListRequest",
-    "AgentWorkspaceListResponse",
-    "AgentWorkspaceLookupRequest",
-    "AgentWorkspaceResponse",
     "AutomationRequest",
     "AutomationResult",
     "Binding",

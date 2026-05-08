@@ -1,12 +1,11 @@
-import { agentWorkspaceRoute, repoMemoryRoute, repoRoute, repoTicketRoute, worktreeMemoryRoute, worktreeRoute, worktreeTicketRoute } from './routes';
+import { repoMemoryRoute, repoRoute, repoTicketRoute, worktreeMemoryRoute, worktreeRoute, worktreeTicketRoute } from './routes';
 
-export type ScopeKind = 'hub' | 'repo' | 'worktree' | 'agent_workspace' | 'filesystem';
+export type ScopeKind = 'hub' | 'repo' | 'worktree' | 'filesystem';
 
 export type ScopeRef =
   | { kind: 'hub' }
   | { kind: 'repo'; id: string }
   | { kind: 'worktree'; id: string; parentRepoId: string }
-  | { kind: 'agent_workspace'; id: string }
   | { kind: 'filesystem'; path: string };
 
 export type SurfaceRef = {
@@ -14,7 +13,7 @@ export type SurfaceRef = {
   key: string;
 };
 
-const VALID_SCOPE_KINDS: Set<string> = new Set(['hub', 'repo', 'worktree', 'agent_workspace', 'filesystem']);
+const VALID_SCOPE_KINDS: Set<string> = new Set(['hub', 'repo', 'worktree', 'filesystem']);
 
 export function formatScopeUrn(scope: ScopeRef): string {
   switch (scope.kind) {
@@ -24,8 +23,6 @@ export function formatScopeUrn(scope: ScopeRef): string {
       return `repo:${scope.id}`;
     case 'worktree':
       return `worktree:${scope.parentRepoId}/${scope.id}`;
-    case 'agent_workspace':
-      return `agent_workspace:${scope.id}`;
     case 'filesystem':
       return `filesystem:${encodeURIComponent(scope.path)}`;
   }
@@ -74,12 +71,6 @@ export function parseScopeUrn(urn: string): ScopeRef {
     };
   }
 
-  if (kind === 'agent_workspace') {
-    if (!path) throw new ScopeUrnParseError(urn, 'agent_workspace scope requires an id after ":"');
-    if (path.includes('/')) throw new ScopeUrnParseError(urn, "agent_workspace scope id must not contain '/'");
-    return { kind: 'agent_workspace', id: path };
-  }
-
   if (kind === 'filesystem') {
     if (!path) throw new ScopeUrnParseError(urn, 'filesystem scope requires a path');
     validatePercentEscapes(path, urn);
@@ -115,8 +106,6 @@ export function parentScope(scope: ScopeRef): ScopeRef | null {
       return { kind: 'hub' };
     case 'worktree':
       return { kind: 'repo', id: scope.parentRepoId };
-    case 'agent_workspace':
-      return { kind: 'hub' };
     case 'filesystem':
       return null;
   }
@@ -130,8 +119,6 @@ export function scopeLabel(scope: ScopeRef): string {
       return `Repo: ${scope.id}`;
     case 'worktree':
       return `Worktree: ${scope.id}`;
-    case 'agent_workspace':
-      return `Agent workspace: ${scope.id}`;
     case 'filesystem':
       return scope.path.split(/[\\/]/).filter(Boolean).at(-1) ?? scope.path;
   }
@@ -144,8 +131,6 @@ export function scopeShortLabel(scope: ScopeRef): string {
     case 'repo':
       return scope.id;
     case 'worktree':
-      return scope.id;
-    case 'agent_workspace':
       return scope.id;
     case 'filesystem':
       return scope.path.split(/[\\/]/).filter(Boolean).at(-1) ?? scope.path;
@@ -185,8 +170,6 @@ export function scopeRoute(scope: ScopeRef): string | null {
       return repoRoute(scope.id);
     case 'worktree':
       return worktreeRoute(scope.id, scope.parentRepoId ?? null);
-    case 'agent_workspace':
-      return agentWorkspaceRoute(scope.id);
     case 'filesystem':
       return null;
   }
@@ -273,7 +256,6 @@ export function scopeMatchesResource(scope: ScopeRef, kind: string, id: string):
   if (scope.kind === 'repo' && kind === 'repo') return scope.id === id;
   if (scope.kind === 'worktree' && kind === 'worktree') return scope.id === id;
   if (scope.kind === 'worktree' && kind === 'repo') return scope.parentRepoId === id;
-  if (scope.kind === 'agent_workspace' && kind === 'agent_workspace') return scope.id === id;
   return false;
 }
 
@@ -310,7 +292,6 @@ function buildScopeRef(kind: string, id: string | null, parentRepoId: string | n
   if (kind === 'hub') return { kind: 'hub' };
   if (kind === 'repo' && id) return { kind: 'repo', id };
   if (kind === 'worktree' && id && parentRepoId) return { kind: 'worktree', id, parentRepoId };
-  if (kind === 'agent_workspace' && id) return { kind: 'agent_workspace', id };
   if (kind === 'filesystem' && path) return { kind: 'filesystem', path };
   if (kind === 'repo' && !id && path) return { kind: 'filesystem', path };
   return { kind: 'hub' };

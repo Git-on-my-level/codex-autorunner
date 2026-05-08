@@ -22,7 +22,8 @@
     saveError = null,
     saving = false,
     onSessionChange,
-    onSavePreferences
+    onSavePreferences,
+    onOpenPmaMemory
   }: {
     state: 'loading' | 'error' | 'ready';
     view?: SettingsViewModel | null;
@@ -31,6 +32,7 @@
     saving?: boolean;
     onSessionChange?: (session: SettingsSessionState) => void;
     onSavePreferences?: () => void;
+    onOpenPmaMemory?: () => void;
     sessionBaselineEpoch?: number;
   } = $props();
 
@@ -137,7 +139,12 @@
     </section>
 
     <section class="settings-section">
-      <h2 class="settings-section-title">Hub</h2>
+      <div class="settings-section-head">
+        <h2 class="settings-section-title">Hub</h2>
+        <button type="button" class="ghost-button" onclick={() => onOpenPmaMemory?.()}>
+          PMA memory
+        </button>
+      </div>
       {@render statusList(view.hub)}
     </section>
 

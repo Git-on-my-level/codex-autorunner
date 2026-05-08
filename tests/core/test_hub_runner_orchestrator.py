@@ -30,7 +30,6 @@ def _seed_manifest(hub_config: HubConfig, repo_id: str = "demo") -> Path:
     manifest = Manifest(
         version=2,
         repos=[ManifestRepo(id=repo_id, path=Path(repo_id))],
-        agent_workspaces=[],
     )
     save_manifest(hub_config.manifest_path, manifest, hub_config.root)
     repo_root = (hub_config.root / repo_id).resolve()

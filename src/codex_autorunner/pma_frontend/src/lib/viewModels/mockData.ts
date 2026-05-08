@@ -37,6 +37,7 @@ export const mockRunProgress: PmaRunProgress = {
   idleSeconds: 2,
   lastEventId: 12,
   lastEventAt: '2026-05-04T00:02:00Z',
+  progressPercent: 50,
   events: [mockArtifact],
   raw: {}
 };

@@ -47,7 +47,7 @@ describe('breadcrumbsForPath', () => {
     ]);
   });
 
-  it('covers hub, ticket, chat filter, and agent workspace scope URLs', () => {
+  it('covers hub, ticket, and chat scope URLs', () => {
     expect(breadcrumbsForPath('/hub')).toEqual([{ label: 'Hub', href: null }]);
     expect(breadcrumbsForPath('/repos/r/worktrees/wt-1/tickets/42')).toEqual([
       { label: 'Repos', href: '/repos' },
@@ -57,10 +57,6 @@ describe('breadcrumbsForPath', () => {
       { label: '#42', href: null }
     ]);
     expect(breadcrumbsForPath('/chats')).toEqual([{ label: 'Chats', href: null }]);
-    expect(breadcrumbsForPath('/agent-workspaces/codex-pma')).toEqual([
-      { label: 'Agent workspaces', href: '/agent-workspaces' },
-      { label: 'codex-pma', href: null }
-    ]);
   });
 
   it('treats / as Chats home', () => {

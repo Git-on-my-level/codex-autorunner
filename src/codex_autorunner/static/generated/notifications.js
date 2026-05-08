@@ -1,6 +1,6 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { api, confirmModal, escapeHtml, flash, inputModal, openModal, resolvePath } from "./utils.js?v=7fa8004f6840e214503b15a447aff6b141a7ad76cba89a9cf20138dbd2d88456";
-import { registerAutoRefresh } from "./autoRefresh.js?v=7fa8004f6840e214503b15a447aff6b141a7ad76cba89a9cf20138dbd2d88456";
+import { api, confirmModal, escapeHtml, flash, inputModal, openModal, resolvePath } from "./utils.js?v=510fd0419ed9eddfa5851d4093853609591d2a4765ecd74f3add9600783da27f";
+import { registerAutoRefresh } from "./autoRefresh.js?v=510fd0419ed9eddfa5851d4093853609591d2a4765ecd74f3add9600783da27f";
 const HUB_HINT_SCOPE_STORAGE_KEY = "car.hub.hint-scope";
 const HUB_HINT_SCOPE_EVENT = "car:capability-hint-request";
 let notificationsInitialized = false;

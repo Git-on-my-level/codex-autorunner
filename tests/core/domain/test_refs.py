@@ -11,6 +11,7 @@ from codex_autorunner.core.domain.refs import (
     SurfaceRef,
     TicketRef,
 )
+from codex_autorunner.core.domain.scope_urn import ScopeUrnKindError
 
 
 class TestScopeRef:
@@ -30,11 +31,6 @@ class TestScopeRef:
         assert s.kind == "worktree"
         assert s.id == "wt1"
         assert s.parent_repo_id == "r1"
-
-    def test_agent_workspace(self) -> None:
-        s = ScopeRef(kind="agent_workspace", id="ws1")
-        assert s.kind == "agent_workspace"
-        assert s.id == "ws1"
 
     def test_filesystem(self) -> None:
         s = ScopeRef(kind="filesystem", path="/tmp/car repo")
@@ -68,14 +64,6 @@ class TestScopeRef:
     def test_worktree_missing_parent_raises(self) -> None:
         with pytest.raises(ScopeRefError, match="requires a parent_repo_id"):
             ScopeRef(kind="worktree", id="wt1")
-
-    def test_agent_workspace_missing_id_raises(self) -> None:
-        with pytest.raises(ScopeRefError, match="requires an id"):
-            ScopeRef(kind="agent_workspace")
-
-    def test_agent_workspace_with_parent_raises(self) -> None:
-        with pytest.raises(ScopeRefError, match="must not have a parent_repo_id"):
-            ScopeRef(kind="agent_workspace", id="ws1", parent_repo_id="x")
 
     def test_filesystem_missing_path_raises(self) -> None:
         with pytest.raises(ScopeRefError, match="requires a path"):
@@ -111,9 +99,6 @@ class TestScopeRef:
             == "worktree:r1/wt1"
         )
         assert (
-            ScopeRef(kind="agent_workspace", id="ws1").to_urn() == "agent_workspace:ws1"
-        )
-        assert (
             ScopeRef(kind="filesystem", path="/tmp/car repo").to_urn()
             == "filesystem:%2Ftmp%2Fcar%20repo"
         )
@@ -124,9 +109,8 @@ class TestScopeRef:
         assert ScopeRef.from_urn("worktree:r1/wt1") == ScopeRef(
             kind="worktree", id="wt1", parent_repo_id="r1"
         )
-        assert ScopeRef.from_urn("agent_workspace:ws1") == ScopeRef(
-            kind="agent_workspace", id="ws1"
-        )
+        with pytest.raises(ScopeUrnKindError):
+            ScopeRef.from_urn("legacy_scope_kind:ws1")
         assert ScopeRef.from_urn("filesystem:%2Ftmp%2Fcar%20repo") == ScopeRef(
             kind="filesystem", path="/tmp/car repo"
         )

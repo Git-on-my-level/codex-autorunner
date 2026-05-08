@@ -317,27 +317,29 @@ def test_service_lists_definitions_and_resolves_thread_targets(tmp_path: Path) -
     assert service.get_thread_status(created.thread_target_id) is not None
 
 
-def test_service_supports_agent_workspace_thread_targets(tmp_path: Path) -> None:
+def test_service_supports_repo_thread_targets_with_explicit_resource_columns(
+    tmp_path: Path,
+) -> None:
     harness = _FakeHarness()
     service = _build_service(tmp_path, harness)
-    workspace_root = tmp_path / "runtimes" / "zeroclaw" / "zc-main"
+    workspace_root = tmp_path / "workspace-main"
     workspace_root.mkdir(parents=True)
 
     created = service.create_thread_target(
         "codex",
         workspace_root,
-        resource_kind="agent_workspace",
-        resource_id="zc-main",
-        display_name="Workspace Backlog",
+        resource_kind="repo",
+        resource_id="hub-repo",
+        display_name="Repo Backlog",
     )
     listed = service.list_thread_targets(
-        resource_kind="agent_workspace",
-        resource_id="zc-main",
+        resource_kind="repo",
+        resource_id="hub-repo",
     )
 
-    assert created.resource_kind == "agent_workspace"
-    assert created.resource_id == "zc-main"
-    assert created.repo_id is None
+    assert created.resource_kind == "repo"
+    assert created.resource_id == "hub-repo"
+    assert created.repo_id == "hub-repo"
     assert [thread.thread_target_id for thread in listed] == [created.thread_target_id]
 
 
@@ -373,7 +375,7 @@ def test_service_preserves_thread_context_profile_from_metadata(tmp_path: Path) 
     assert created.context_profile == "car_core"
 
 
-def test_create_thread_target_supports_durable_zeroclaw_agent_workspace(
+def test_create_thread_target_supports_durable_hermes_catalog_agent(
     tmp_path: Path,
 ) -> None:
     harness = _FakeHarness(
@@ -383,19 +385,23 @@ def test_create_thread_target_supports_durable_zeroclaw_agent_workspace(
                 "message_turns",
                 "active_thread_discovery",
                 "event_streaming",
+                "interrupt",
+                "approvals",
             ]
         )
     )
     descriptors = {
-        "zeroclaw": _make_descriptor(
-            "zeroclaw",
-            name="ZeroClaw",
+        "hermes": _make_descriptor(
+            "hermes",
+            name="Hermes",
             capabilities=frozenset(
                 [
                     "durable_threads",
                     "message_turns",
                     "active_thread_discovery",
                     "event_streaming",
+                    "interrupt",
+                    "approvals",
                 ]
             ),
         )
@@ -409,9 +415,9 @@ def test_create_thread_target_supports_durable_zeroclaw_agent_workspace(
     )
     workspace_root = tmp_path / "workspace"
     workspace_root.mkdir()
-    created = service.create_thread_target("zeroclaw", workspace_root)
+    created = service.create_thread_target("hermes", workspace_root)
 
-    assert created.agent_id == "zeroclaw"
+    assert created.agent_id == "hermes"
     assert created.workspace_root == str(workspace_root)
 
 

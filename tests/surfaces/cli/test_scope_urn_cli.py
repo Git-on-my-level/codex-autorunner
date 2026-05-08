@@ -14,13 +14,6 @@ def test_normalize_scope_urn_repo():
     assert wr is None
 
 
-def test_normalize_scope_urn_agent_workspace():
-    rk, rid, wr = normalize_scope_urn_to_owner_fields("agent_workspace:ws-42")
-    assert rk == "agent_workspace"
-    assert rid == "ws-42"
-    assert wr is None
-
-
 def test_normalize_scope_urn_filesystem():
     rk, rid, wr = normalize_scope_urn_to_owner_fields("filesystem:/tmp/workspace")
     assert rk is None

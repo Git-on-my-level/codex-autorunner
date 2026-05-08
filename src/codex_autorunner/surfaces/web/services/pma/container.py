@@ -158,10 +158,6 @@ class PmaRequestContext:
         return self.container.get_host_attr("hub_client")
 
     @property
-    def zeroclaw_supervisor(self) -> Any:
-        return self.container.get_host_attr("zeroclaw_supervisor")
-
-    @property
     def hermes_supervisors_by_profile(self) -> dict[str, Any]:
         return self.container.hermes_supervisors_by_profile
 

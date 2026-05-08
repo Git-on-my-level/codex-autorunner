@@ -223,8 +223,8 @@ def normalize_resource_owner_options(
             "--resource-id is required when --resource-kind is provided", err=True
         )
         raise typer.Exit(code=1) from None
-    if normalized_resource_kind not in {None, "repo", "agent_workspace"}:
-        typer.echo("--resource-kind must be one of: repo, agent_workspace", err=True)
+    if normalized_resource_kind not in {None, "repo", "worktree"}:
+        typer.echo("--resource-kind must be one of: repo, worktree", err=True)
         raise typer.Exit(code=1) from None
     if normalized_repo_id and normalized_resource_kind not in {None, "repo"}:
         typer.echo(
@@ -279,7 +279,7 @@ def normalize_scope_urn_to_owner_fields(
         return None, None, None
     if kind == "filesystem":
         return None, None, scope_id
-    if kind in {"repo", "agent_workspace"}:
+    if kind == "repo":
         if not scope_id:
             typer.echo(f"--scope URN '{scope_urn}' requires an id", err=True)
             raise typer.Exit(code=1) from None

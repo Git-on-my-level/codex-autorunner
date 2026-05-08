@@ -501,7 +501,7 @@ def test_format_pma_prompt_includes_hub_snapshot_and_message(tmp_path: Path) -> 
         in result
     )
     assert "Do not launch runtime CLIs directly" in result
-    assert "`codex`, `opencode`, `zeroclaw`" in result
+    assert "`codex`, `opencode`, etc." in result
     assert "Do not write ticket files as scaffolding for managed-thread work" in result
     assert "3+ planned tickets" in result
     assert "car pma thread spawn" in result
@@ -932,7 +932,6 @@ def test_build_snapshot_freshness_summary_omits_empty_sections_and_adds_summary(
                 }
             }
         ],
-        agent_workspaces=[],
         inbox=[],
         action_queue=[],
         pma_threads=[],
@@ -980,8 +979,7 @@ def test_build_hub_snapshot_ignores_pma_self_thread_hung_noise(hub_env) -> None:
     thread = thread_store.create_thread(
         "hermes-m4-pma",
         hub_env.hub_root,
-        resource_kind="agent_workspace",
-        resource_id="pma-self",
+        repo_id=hub_env.repo_id,
         name="PMA self thread",
     )
     thread_id = thread["managed_thread_id"]
@@ -1452,36 +1450,6 @@ def test_build_hub_snapshot_includes_pma_threads_section(hub_env) -> None:
     assert "last_turn=-" in rendered
     assert "reason=thread_created" in rendered
     assert "freshness: status=" in rendered
-
-
-def test_build_hub_snapshot_includes_agent_workspaces_section(hub_env) -> None:
-    from codex_autorunner.core.pma_context import _render_hub_snapshot
-
-    supervisor = _build_supervisor(hub_env.hub_root)
-    try:
-        supervisor.create_agent_workspace(
-            workspace_id="zc-main",
-            runtime="zeroclaw",
-            display_name="ZeroClaw Main",
-            enabled=False,
-        )
-        snapshot = asyncio.run(
-            build_hub_snapshot(supervisor, hub_root=hub_env.hub_root)
-        )
-    finally:
-        supervisor.shutdown()
-
-    agent_workspaces = snapshot.get("agent_workspaces")
-    assert isinstance(agent_workspaces, list)
-    assert agent_workspaces
-    first = agent_workspaces[0]
-    assert first["id"] == "zc-main"
-    assert first["runtime"] == "zeroclaw"
-    assert first["resource_kind"] == "agent_workspace"
-
-    rendered = _render_hub_snapshot(snapshot)
-    assert "Agent Workspaces:" in rendered
-    assert "zc-main (ZeroClaw Main): runtime=zeroclaw" in rendered
 
 
 def test_render_hub_snapshot_distinguishes_run_dispatch_vs_pma_files(

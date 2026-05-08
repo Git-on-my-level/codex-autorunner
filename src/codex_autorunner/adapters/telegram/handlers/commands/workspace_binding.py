@@ -102,11 +102,7 @@ class WorkspaceBindingMixin:
         chat_id, thread_id = _split_topic_key(key)
         scope = self._topic_scope_id(resolved_repo_id, workspace_path)
         await self._router.set_topic_scope(chat_id, thread_id, scope)
-        resolved_workspace_id = (
-            resource_id
-            if resource_kind == "agent_workspace"
-            else self._workspace_id_for_path(workspace_path)
-        )
+        resolved_workspace_id = self._workspace_id_for_path(workspace_path)
         await self._router.bind_topic(
             chat_id,
             thread_id,
@@ -162,11 +158,7 @@ class WorkspaceBindingMixin:
         workspace_path, repo_id, resource_kind, resource_id = resolved
         scope = self._topic_scope_id(repo_id, workspace_path)
         await self._router.set_topic_scope(message.chat_id, message.thread_id, scope)
-        resolved_workspace_id = (
-            resource_id
-            if resource_kind == "agent_workspace"
-            else self._workspace_id_for_path(workspace_path)
-        )
+        resolved_workspace_id = self._workspace_id_for_path(workspace_path)
         await self._router.bind_topic(
             message.chat_id,
             message.thread_id,

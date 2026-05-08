@@ -72,22 +72,6 @@ def test_managed_thread_prompt_compacts_only_fresh_backend_conversations(
     assert "Context summary (from compaction)" not in resumed
 
 
-def test_zeroclaw_prompt_skips_pma_preamble(tmp_path: Path) -> None:
-    prompt = compose_managed_thread_execution_prompt(
-        ManagedThreadPromptRequest(
-            agent="zeroclaw",
-            hub_root=tmp_path,
-            runtime_cwd=None,
-            stored_backend_id=None,
-            compact_seed=None,
-            message="plain message",
-            context_bundle=build_car_context_bundle("none"),
-        )
-    )
-
-    assert prompt == "plain message"
-
-
 def test_queue_prompt_builder_can_return_plain_prompt_without_injector(
     tmp_path: Path,
 ) -> None:

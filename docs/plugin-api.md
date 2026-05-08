@@ -16,9 +16,10 @@ External runtimes do not always map to repos.
 
 - Use repo semantics when the agent's durable identity is a project worktree and
   CAR should execute against that code checkout.
-- Use `agent_workspace` semantics when the durable identity is runtime-managed
-  memory, config, or session state that should live under
-  `<hub_root>/.codex-autorunner/runtimes/<runtime>/<workspace_id>/`.
+- Use filesystem scope semantics when the durable execution root is an explicit
+  absolute workspace path that should not be confused with a Git repo entry.
+  Hub manifests remain repo-centric; filesystem threads bind orchestration to a
+  concrete directory CAR executes under.
 
 CAR does not install runtimes for plugins. A plugin may detect or launch a
 configured binary, but the operator remains responsible for making that runtime
@@ -154,17 +155,12 @@ These are runtimes that:
 
 If your runtime does not expose a documented public thread or session API, do
 not advertise the durable-thread contract unless CAR can prove equivalent
-relaunch and resume semantics with a first-class CAR-managed
-`agent_workspace`.
+relaunch and resume semantics end to end.
 
 Hermes is the reference example for the documented repo-backed path: CAR trusts
 Hermes durable sessions through ACP when the installed build advertises the ACP
-launch contract CAR expects. ZeroClaw is the reference example for the narrower
-`agent_workspace` path: CAR proves `durable_threads` and `message_turns` only
-for CAR-managed agent workspaces when the installed runtime build advertises the
-exact launch contract CAR uses. Current public `zeroclaw 0.2.0` does not
-advertise `zeroclaw agent --session-state-file`, so CAR now reports it as
-incompatible instead of inferring durability from workspace selection alone.
+launch contract CAR expects. Codex and OpenCode remain the reference examples
+for full-featured repo/worktree execution with their respective capability sets.
 
 ## Capability Model
 
@@ -209,11 +205,6 @@ The harness automatically gates optional helper methods:
 
 ## Reference Implementations
 
-- **ZeroClaw**: detect-only CAR-managed `agent_workspace` adapter. Supports
-  `durable_threads`, `message_turns`, `active_thread_discovery`, and
-  `event_streaming` for CAR-managed agent workspaces. Caveats remain explicit:
-  workspace memory is shared across threads, one active turn is allowed per
-  ZeroClaw session, and `interrupt` and `review` are not advertised.
 - **Hermes**: ACP-backed repo or worktree adapter. Supports `durable_threads`,
   `message_turns`, `active_thread_discovery`, `interrupt`, `event_streaming`,
   and `approvals`. Caveats remain explicit: Hermes runs against a shared

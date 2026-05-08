@@ -3,12 +3,11 @@ import { describe, expect, it } from 'vitest';
 import Page from './+page.svelte';
 
 describe('/chats page', () => {
-  it('renders memory toggle, filters, chat list shell, and composer affordances', () => {
+  it('renders filters, chat list shell, and composer affordances without global memory controls', () => {
     const { body } = render(Page);
 
     expect(body).toContain('Chats workspace');
-    expect(body).toContain('Memory');
-    expect(body).toContain('memory-toggle-button');
+    expect(body).not.toContain('memory-toggle-button');
     expect(body).toContain('+ PMA chat');
     expect(body).toContain('chat-list');
     expect(body).toContain('Waiting');

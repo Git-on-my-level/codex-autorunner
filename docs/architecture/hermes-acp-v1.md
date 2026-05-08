@@ -7,7 +7,8 @@ instead of reopening resource-model or capability decisions.
 ## Scope
 
 Hermes v1 is a runtime-backed agent integrated through ACP. It is not a CAR
-native target, and it is not an `agent_workspace` runtime in v1.
+native target, and hub manifests do not allocate a parallel non-repo resource row
+for Hermes in v1.
 
 ## Resource Model
 
@@ -19,7 +20,7 @@ native target, and it is not an `agent_workspace` runtime in v1.
   existing runtime-binding path (`backend_thread_id` plus optional
   `backend_runtime_instance_id` metadata).
 - Hermes owns native session durability and resume semantics.
-- CAR must not treat Hermes as a first-class CAR-managed `agent_workspace`.
+- CAR must not treat Hermes as a hub-manifest resource distinct from repo/worktree targeting.
 - CAR must not infer extra isolation guarantees from session selection alone.
 
 ## State And Isolation Model
@@ -144,13 +145,13 @@ changed or explicitly gated. Owners refer to downstream Hermes tickets.
 | Area | Current seam to touch | Why Hermes needs it | Owner |
 | --- | --- | --- | --- |
 | ACP core | `src/codex_autorunner/agents/acp/` (new package) | Generic stdio ACP transport, request/response plumbing, notifications, cancel, permission hook, and fake server fixture. | TICKET-120 |
-| Config and validation | `src/codex_autorunner/core/config.py`, `src/codex_autorunner/core/config_validation.py` | Add Hermes config defaults and validate `hermes acp` launch config without implying `agent_workspace` semantics. | TICKET-130 |
+| Config and validation | `src/codex_autorunner/core/config.py`, `src/codex_autorunner/core/config_validation.py` | Add Hermes config defaults and validate `hermes acp` launch config without implying extra hub resource rows beyond repos/worktrees. | TICKET-130 |
 | Discovery and doctor | `src/codex_autorunner/core/runtime.py`, `src/codex_autorunner/surfaces/cli/commands/doctor.py` | Surface Hermes readiness, missing binary/remediation, and shared-home assumptions through doctor/preflight. | TICKET-130 |
 | Registry | `src/codex_autorunner/agents/registry.py` | Register Hermes with the exact v1 capability set and no false claims. | TICKET-140 |
 | Hermes harness | `src/codex_autorunner/agents/hermes/` (new package) | Thin Hermes wrapper over ACP core for create/resume/list/turn/interrupt/event-stream behavior. | TICKET-140 |
 | Capability/runtime mapping | `src/codex_autorunner/core/orchestration/runtime_thread_events.py` | Map Hermes/ACP event shapes into CAR runtime events while keeping raw payloads. | TICKET-140 |
 | PMA turn execution | `src/codex_autorunner/surfaces/web/routes/pma_routes/chat_runtime.py` | Remove Codex/OpenCode-only assumptions in PMA runtime execution and stream handling. | TICKET-150 |
-| PMA live tailing | `src/codex_autorunner/surfaces/web/routes/pma_routes/tail_stream.py` | Extend live tail support beyond Codex and ZeroClaw so Hermes turns can be tailed. | TICKET-150 |
+| PMA live tailing | `src/codex_autorunner/surfaces/web/routes/pma_routes/tail_stream.py` | Extend live tail support beyond Codex and OpenCode so Hermes turns can be tailed. | TICKET-150 |
 | PMA managed-thread runtime | `src/codex_autorunner/surfaces/web/routes/pma_routes/managed_thread_runtime.py`, `src/codex_autorunner/core/orchestration/service.py`, `src/codex_autorunner/core/pma_thread_store.py` | Ensure Hermes session bindings are stored, recovered, cleared, and interrupted through the generic managed-thread path. | TICKET-150 |
 | Approval bridge | `src/codex_autorunner/agents/acp/`, `src/codex_autorunner/agents/hermes/`, `src/codex_autorunner/adapters/chat/handlers/approvals.py`, `src/codex_autorunner/adapters/telegram/handlers/approvals.py` | Turn ACP permission requests into CAR approval UX and only advertise `approvals` when the full path works. | TICKET-160 |
 | Web agent metadata | `src/codex_autorunner/surfaces/web/routes/agents.py`, `src/codex_autorunner/surfaces/web/routes/pma_routes/meta.py` | Replace hard-coded Codex/OpenCode model/event assumptions with registry-driven capability behavior. | TICKET-170 |

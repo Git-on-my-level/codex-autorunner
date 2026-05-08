@@ -45,16 +45,16 @@ async def test_channel_binding_crud(tmp_path: Path) -> None:
             guild_id="789",
             workspace_path=str(tmp_path / "new-workspace"),
             repo_id=None,
-            resource_kind="agent_workspace",
-            resource_id="agent-workspace-1",
+            resource_kind="worktree",
+            resource_id="hub-wt-1",
         )
         binding = await store.get_binding(channel_id="123")
         assert binding is not None
         assert binding["guild_id"] == "789"
         assert binding["workspace_path"] == str(tmp_path / "new-workspace")
         assert binding["repo_id"] is None
-        assert binding["resource_kind"] == "agent_workspace"
-        assert binding["resource_id"] == "agent-workspace-1"
+        assert binding["resource_kind"] == "worktree"
+        assert binding["resource_id"] == "hub-wt-1"
 
         all_bindings = await store.list_bindings()
         assert len(all_bindings) == 1

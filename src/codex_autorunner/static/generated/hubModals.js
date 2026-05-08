@@ -1,9 +1,9 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { api, flash, confirmModal, inputModal, openModal, } from "./utils.js?v=7fa8004f6840e214503b15a447aff6b141a7ad76cba89a9cf20138dbd2d88456";
-import { setCleanupAllInFlight, renderSummary } from "./hubRepoCards.js?v=7fa8004f6840e214503b15a447aff6b141a7ad76cba89a9cf20138dbd2d88456";
-import { getHubData, startHubJob, } from "./hubActions.js?v=7fa8004f6840e214503b15a447aff6b141a7ad76cba89a9cf20138dbd2d88456";
-import { refreshHub } from "./hubRefresh.js?v=7fa8004f6840e214503b15a447aff6b141a7ad76cba89a9cf20138dbd2d88456";
-import { loadUpdateTargetOptions, handleSystemUpdate } from "./hubRefresh.js?v=7fa8004f6840e214503b15a447aff6b141a7ad76cba89a9cf20138dbd2d88456";
+import { api, flash, confirmModal, inputModal, openModal, } from "./utils.js?v=510fd0419ed9eddfa5851d4093853609591d2a4765ecd74f3add9600783da27f";
+import { setCleanupAllInFlight, renderSummary } from "./hubRepoCards.js?v=510fd0419ed9eddfa5851d4093853609591d2a4765ecd74f3add9600783da27f";
+import { getHubData, startHubJob, } from "./hubActions.js?v=510fd0419ed9eddfa5851d4093853609591d2a4765ecd74f3add9600783da27f";
+import { refreshHub } from "./hubRefresh.js?v=510fd0419ed9eddfa5851d4093853609591d2a4765ecd74f3add9600783da27f";
+import { loadUpdateTargetOptions, handleSystemUpdate } from "./hubRefresh.js?v=510fd0419ed9eddfa5851d4093853609591d2a4765ecd74f3add9600783da27f";
 function splitCommaSeparated(value) {
     return value
         .split(",")
@@ -326,18 +326,6 @@ async function promptAndSetRepoDestination(repo) {
     flash(`Updated destination for ${repo.id}: ${effective}`, "success");
     return true;
 }
-async function promptAndSetAgentWorkspaceDestination(workspace) {
-    const body = await promptForDestinationBody(workspace.display_name || workspace.id, workspace.effective_destination);
-    if (!body)
-        return false;
-    const payload = (await api(`/hub/agent-workspaces/${encodeURIComponent(workspace.id)}/destination`, {
-        method: "POST",
-        body,
-    }));
-    const effective = formatDestinationSummary(payload.effective_destination);
-    flash(`Updated destination for ${workspace.id}: ${effective}`, "success");
-    return true;
-}
 async function openRepoSettingsModal(repo) {
     const overlay = document.createElement("div");
     overlay.className = "modal-overlay";
@@ -619,18 +607,10 @@ export async function handleCleanupAll() {
     }
 }
 export let closeCreateRepoModal = null;
-export let closeCreateAgentWorkspaceModal = null;
 export function hideCreateRepoModal() {
     if (closeCreateRepoModal) {
         const close = closeCreateRepoModal;
         closeCreateRepoModal = null;
-        close();
-    }
-}
-export function hideCreateAgentWorkspaceModal() {
-    if (closeCreateAgentWorkspaceModal) {
-        const close = closeCreateAgentWorkspaceModal;
-        closeCreateAgentWorkspaceModal = null;
         close();
     }
 }
@@ -666,29 +646,6 @@ export function showCreateRepoModal() {
     if (gitCheck)
         gitCheck.checked = true;
 }
-export function showCreateAgentWorkspaceModal() {
-    const modal = document.getElementById("create-agent-workspace-modal");
-    if (!modal)
-        return;
-    const triggerEl = document.activeElement;
-    hideCreateAgentWorkspaceModal();
-    const input = document.getElementById("create-agent-workspace-id");
-    closeCreateAgentWorkspaceModal = openModal(modal, {
-        initialFocus: input || modal,
-        returnFocusTo: triggerEl,
-        onRequestClose: hideCreateAgentWorkspaceModal,
-    });
-    if (input) {
-        input.value = "";
-        input.focus();
-    }
-    const runtimeInput = document.getElementById("create-agent-workspace-runtime");
-    if (runtimeInput)
-        runtimeInput.value = "";
-    const nameInput = document.getElementById("create-agent-workspace-name");
-    if (nameInput)
-        nameInput.value = "";
-}
 async function createRepo(repoId, repoPath, gitInit, gitUrl) {
     try {
         const payload = {};
@@ -716,28 +673,6 @@ async function createRepo(repoId, repoPath, gitInit, gitUrl) {
         return false;
     }
 }
-async function createAgentWorkspace(workspaceId, runtime, displayName) {
-    try {
-        const payload = {};
-        if (workspaceId)
-            payload.id = workspaceId;
-        if (runtime)
-            payload.runtime = runtime;
-        if (displayName)
-            payload.display_name = displayName;
-        await startHubJob("/hub/jobs/agent-workspaces", {
-            body: payload,
-            startedMessage: "Agent workspace creation queued",
-        });
-        flash(`Created agent workspace: ${workspaceId || displayName || "workspace"}`, "success");
-        await refreshHub();
-        return true;
-    }
-    catch (err) {
-        flash(err.message || "Failed to create agent workspace", "error");
-        return false;
-    }
-}
 export async function handleCreateRepoSubmit() {
     const idInput = document.getElementById("create-repo-id");
     const pathInput = document.getElementById("create-repo-path");
@@ -754,22 +689,6 @@ export async function handleCreateRepoSubmit() {
     const ok = await createRepo(repoId, repoPath, gitInit, gitUrl);
     if (ok) {
         hideCreateRepoModal();
-    }
-}
-export async function handleCreateAgentWorkspaceSubmit() {
-    const idInput = document.getElementById("create-agent-workspace-id");
-    const runtimeInput = document.getElementById("create-agent-workspace-runtime");
-    const nameInput = document.getElementById("create-agent-workspace-name");
-    const workspaceId = idInput?.value?.trim() || null;
-    const runtime = runtimeInput?.value?.trim() || null;
-    const displayName = nameInput?.value?.trim() || null;
-    if (!workspaceId || !runtime) {
-        flash("Workspace ID and runtime are required", "error");
-        return;
-    }
-    const ok = await createAgentWorkspace(workspaceId, runtime, displayName);
-    if (ok) {
-        hideCreateAgentWorkspaceModal();
     }
 }
 export function initHubSettings() {
@@ -809,4 +728,4 @@ export function initHubSettings() {
         updateBtn.addEventListener("click", () => handleSystemUpdate("hub-update-btn", updateTarget ? updateTarget.id : null));
     }
 }
-export { promptAndSetRepoDestination, promptAndSetAgentWorkspaceDestination, openRepoSettingsModal, removeRepoWithChecks, };
+export { promptAndSetRepoDestination, openRepoSettingsModal, removeRepoWithChecks, };

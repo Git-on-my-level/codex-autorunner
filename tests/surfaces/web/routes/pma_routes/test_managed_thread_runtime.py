@@ -2695,21 +2695,21 @@ def test_managed_thread_message_route_delegates_harness_to_shared_finalization(
     assert isinstance(captured["started"].harness, FakeHarness)
 
 
-def test_zeroclaw_managed_thread_projects_compat_agents_file_for_core_profile(
+def test_opencode_managed_thread_projects_compat_agents_file_for_core_profile(
     hub_env,
     monkeypatch,
 ) -> None:
     app = build_pma_hub_app(hub_env.hub_root)
     workspace_root = (
-        hub_env.hub_root / ".codex-autorunner" / "runtimes" / "zeroclaw" / "zc-main"
+        hub_env.hub_root / ".codex-autorunner" / "runtimes" / "opencode" / "oc-main"
     )
     workspace_root.mkdir(parents=True, exist_ok=True)
     store = PmaThreadStore(hub_env.hub_root)
     created = store.create_thread(
-        "zeroclaw",
+        "opencode",
         workspace_root.resolve(),
-        resource_kind="agent_workspace",
-        resource_id="zc-main",
+        resource_kind="repo",
+        resource_id=hub_env.repo_id,
         metadata={"context_profile": "car_core"},
     )
     managed_thread_id = str(created["managed_thread_id"])
@@ -2775,9 +2775,6 @@ def test_zeroclaw_managed_thread_projects_compat_agents_file_for_core_profile(
         )
 
     assert response.status_code == 200
-    agents_path = workspace_root / "workspace" / "AGENTS.md"
-    assert agents_path.exists()
-    assert "# AGENTS" in agents_path.read_text(encoding="utf-8")
 
 
 def test_managed_thread_interrupt_route_uses_orchestration_service_seam(

@@ -45,15 +45,6 @@ class ScopeRef:
                 raise ScopeRefError("worktree scope requires a parent_repo_id")
             if self.path is not None:
                 raise ScopeRefError("worktree scope must not have a path")
-        elif self.kind == "agent_workspace":
-            if not self.id:
-                raise ScopeRefError("agent_workspace scope requires an id")
-            if self.parent_repo_id is not None:
-                raise ScopeRefError(
-                    "agent_workspace scope must not have a parent_repo_id"
-                )
-            if self.path is not None:
-                raise ScopeRefError("agent_workspace scope must not have a path")
         elif self.kind == "filesystem":
             if self.id is not None:
                 raise ScopeRefError("filesystem scope must not have an id")

@@ -1,14 +1,14 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { api, escapeHtml, flash, getUrlParams, resolvePath, updateUrlParams, } from "./utils.js?v=7fa8004f6840e214503b15a447aff6b141a7ad76cba89a9cf20138dbd2d88456";
-import { subscribe } from "./bus.js?v=7fa8004f6840e214503b15a447aff6b141a7ad76cba89a9cf20138dbd2d88456";
-import { isRepoHealthy } from "./health.js?v=7fa8004f6840e214503b15a447aff6b141a7ad76cba89a9cf20138dbd2d88456";
-import { preserveScroll } from "./preserve.js?v=7fa8004f6840e214503b15a447aff6b141a7ad76cba89a9cf20138dbd2d88456";
-import { createSmartRefresh } from "./smartRefresh.js?v=7fa8004f6840e214503b15a447aff6b141a7ad76cba89a9cf20138dbd2d88456";
-import { createFileBoxWidget } from "./fileboxUi.js?v=7fa8004f6840e214503b15a447aff6b141a7ad76cba89a9cf20138dbd2d88456";
-import { renderMarkdown } from "./markdown.js?v=7fa8004f6840e214503b15a447aff6b141a7ad76cba89a9cf20138dbd2d88456";
-import { formatTimestamp, formatBytes } from "./formatUtils.js?v=7fa8004f6840e214503b15a447aff6b141a7ad76cba89a9cf20138dbd2d88456";
-import { getActiveMessageRunId, refreshBell } from "./messagesBell.js?v=7fa8004f6840e214503b15a447aff6b141a7ad76cba89a9cf20138dbd2d88456";
-export { initMessageBell, refreshBell } from "./messagesBell.js?v=7fa8004f6840e214503b15a447aff6b141a7ad76cba89a9cf20138dbd2d88456";
+import { api, escapeHtml, flash, getUrlParams, resolvePath, updateUrlParams, } from "./utils.js?v=510fd0419ed9eddfa5851d4093853609591d2a4765ecd74f3add9600783da27f";
+import { subscribe } from "./bus.js?v=510fd0419ed9eddfa5851d4093853609591d2a4765ecd74f3add9600783da27f";
+import { isRepoHealthy } from "./health.js?v=510fd0419ed9eddfa5851d4093853609591d2a4765ecd74f3add9600783da27f";
+import { preserveScroll } from "./preserve.js?v=510fd0419ed9eddfa5851d4093853609591d2a4765ecd74f3add9600783da27f";
+import { createSmartRefresh } from "./smartRefresh.js?v=510fd0419ed9eddfa5851d4093853609591d2a4765ecd74f3add9600783da27f";
+import { createFileBoxWidget } from "./fileboxUi.js?v=510fd0419ed9eddfa5851d4093853609591d2a4765ecd74f3add9600783da27f";
+import { renderMarkdown } from "./markdown.js?v=510fd0419ed9eddfa5851d4093853609591d2a4765ecd74f3add9600783da27f";
+import { formatTimestamp, formatBytes } from "./formatUtils.js?v=510fd0419ed9eddfa5851d4093853609591d2a4765ecd74f3add9600783da27f";
+import { getActiveMessageRunId, refreshBell } from "./messagesBell.js?v=510fd0419ed9eddfa5851d4093853609591d2a4765ecd74f3add9600783da27f";
+export { initMessageBell, refreshBell } from "./messagesBell.js?v=510fd0419ed9eddfa5851d4093853609591d2a4765ecd74f3add9600783da27f";
 let messagesInitialized = false;
 let selectedRunId = null;
 const MESSAGE_REFRESH_REASONS = ["initial", "background", "manual"];

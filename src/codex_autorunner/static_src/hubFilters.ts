@@ -191,7 +191,7 @@ export function saveHubOpenPanel(value: string): void {
 export function loadHubOpenPanel(): string {
   try {
     const raw = localStorage.getItem(HUB_PANEL_PREFS_KEY);
-    if (raw === "repos" || raw === "agents") {
+    if (raw === "repos") {
       return raw;
     }
   } catch (_err) {

@@ -192,7 +192,6 @@ def _build_snapshot_freshness_summary(
     generated_at: str,
     stale_threshold_seconds: int,
     repos: list[dict[str, Any]],
-    agent_workspaces: list[dict[str, Any]],
     inbox: list[dict[str, Any]],
     action_queue: list[dict[str, Any]],
     pma_threads: list[dict[str, Any]],
@@ -204,11 +203,6 @@ def _build_snapshot_freshness_summary(
             generated_at=generated_at,
             stale_threshold_seconds=stale_threshold_seconds,
             extractor=_extract_entry_freshness,
-        ),
-        "agent_workspaces": summarize_section_freshness(
-            agent_workspaces,
-            generated_at=generated_at,
-            stale_threshold_seconds=stale_threshold_seconds,
         ),
         "inbox": summarize_section_freshness(
             inbox,
@@ -345,37 +339,6 @@ def _build_repo_summaries(
     return repos
 
 
-def _build_agent_workspace_summaries(
-    supervisor: HubSupervisor,
-    *,
-    hub_root: Optional[Path],
-    limits: PmaSnapshotLimits,
-) -> list[dict[str, Any]]:
-    list_agent_workspaces = getattr(supervisor, "list_agent_workspaces", None)
-    if not callable(list_agent_workspaces):
-        return []
-    agent_workspace_snapshots = sorted(
-        list_agent_workspaces(), key=lambda snap: snap.id
-    )
-    agent_workspaces: list[dict[str, Any]] = []
-    for workspace in agent_workspace_snapshots[: limits.max_repos]:
-        if hub_root is not None:
-            summary = workspace.to_dict(hub_root)
-        else:
-            summary = {
-                "id": workspace.id,
-                "runtime": workspace.runtime,
-                "path": str(workspace.path),
-                "display_name": workspace.display_name,
-                "enabled": workspace.enabled,
-                "exists_on_disk": workspace.exists_on_disk,
-                "effective_destination": workspace.effective_destination,
-                "resource_kind": workspace.resource_kind,
-            }
-        agent_workspaces.append(summary)
-    return agent_workspaces
-
-
 def _collect_hub_local_artifacts(
     *,
     hub_root: Optional[Path],
@@ -435,7 +398,6 @@ async def build_hub_snapshot_payload(
         return {
             "generated_at": generated_at,
             "repos": [],
-            "agent_workspaces": [],
             "inbox": [],
             "action_queue": [],
             "templates": {"enabled": False, "repos": []},
@@ -456,7 +418,6 @@ async def build_hub_snapshot_payload(
                 generated_at=generated_at,
                 stale_threshold_seconds=stale_threshold_seconds,
                 repos=[],
-                agent_workspaces=[],
                 inbox=[],
                 action_queue=[],
                 pma_threads=[],
@@ -467,7 +428,6 @@ async def build_hub_snapshot_payload(
     limits = PmaSnapshotLimits.from_supervisor(supervisor)
     (
         repos,
-        agent_workspaces,
         inbox,
         lifecycle_events,
         process_monitor,
@@ -476,12 +436,6 @@ async def build_hub_snapshot_payload(
             _build_repo_summaries,
             supervisor,
             stale_threshold_seconds=stale_threshold_seconds,
-            limits=limits,
-        ),
-        asyncio.to_thread(
-            _build_agent_workspace_summaries,
-            supervisor,
-            hub_root=hub_root,
             limits=limits,
         ),
         asyncio.to_thread(
@@ -515,7 +469,6 @@ async def build_hub_snapshot_payload(
         generated_at=generated_at,
         stale_threshold_seconds=stale_threshold_seconds,
         repos=repos,
-        agent_workspaces=agent_workspaces,
         inbox=inbox,
         action_queue=action_queue,
         pma_threads=pma_threads,
@@ -525,7 +478,6 @@ async def build_hub_snapshot_payload(
     return {
         "generated_at": generated_at,
         "repos": repos,
-        "agent_workspaces": agent_workspaces,
         "inbox": inbox,
         "action_queue": action_queue,
         "templates": templates,

@@ -463,19 +463,15 @@ def test_hub_channel_directory_route_uses_managed_thread_id_for_pma_usage(
     }
 
 
-def test_hub_channel_directory_route_surfaces_agent_workspace_binding_metadata(
+def test_hub_channel_directory_route_surfaces_repo_binding_metadata(
     tmp_path: Path,
 ) -> None:
     hub_root = tmp_path / "hub"
     supervisor = create_test_hub_supervisor(hub_root)
-    workspace = supervisor.create_agent_workspace(
-        workspace_id="zc-main",
-        runtime="zeroclaw",
-        display_name="ZeroClaw Main",
-    )
+    repo = supervisor.create_repo("zc-repo")
 
     store = ChannelDirectoryStore(hub_root)
-    store.record_seen("discord", "chan-zc", None, "ZeroClaw / #main", {})
+    store.record_seen("discord", "chan-zc", None, "CAR / #main", {})
 
     write_discord_binding_rows(
         hub_root / ".codex-autorunner" / "discord_state.sqlite3",
@@ -483,10 +479,10 @@ def test_hub_channel_directory_route_surfaces_agent_workspace_binding_metadata(
             {
                 "channel_id": "chan-zc",
                 "guild_id": None,
-                "workspace_path": str(workspace.path.resolve()),
-                "repo_id": None,
-                "resource_kind": "agent_workspace",
-                "resource_id": workspace.id,
+                "workspace_path": str(repo.path.resolve()),
+                "repo_id": "zc-repo",
+                "resource_kind": "repo",
+                "resource_id": "zc-repo",
                 "pma_enabled": 0,
                 "agent": "codex",
                 "updated_at": "2026-01-01T00:00:01Z",
@@ -503,12 +499,12 @@ def test_hub_channel_directory_route_surfaces_agent_workspace_binding_metadata(
         for entry in response.json()["entries"]
         if entry["key"] == "discord:chan-zc"
     )
-    assert row["workspace_path"] == str(workspace.path.resolve())
-    assert row.get("repo_id") is None
-    assert row.get("resource_kind") == "agent_workspace"
-    assert row.get("resource_id") == workspace.id
-    assert row["provenance"]["resource_kind"] == "agent_workspace"
-    assert row["provenance"]["resource_id"] == workspace.id
+    assert row["workspace_path"] == str(repo.path.resolve())
+    assert row.get("repo_id") == "zc-repo"
+    assert row.get("resource_kind") == "repo"
+    assert row.get("resource_id") == "zc-repo"
+    assert row["provenance"]["resource_kind"] == "repo"
+    assert row["provenance"]["resource_id"] == "zc-repo"
 
 
 def test_hub_channel_directory_route_includes_pma_managed_threads(

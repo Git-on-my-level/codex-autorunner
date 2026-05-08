@@ -15,11 +15,7 @@ from typing import (
     cast,
 )
 
-from ..manifest import (
-    ManifestAgentWorkspace,
-    ManifestRepo,
-    normalize_manifest_destination,
-)
+from ..manifest import ManifestRepo, normalize_manifest_destination
 from ..workspace import workspace_id_for_path
 from .utils import subprocess_env
 
@@ -444,30 +440,6 @@ def resolve_effective_repo_destination(
     )
 
 
-def resolve_effective_agent_workspace_destination(
-    workspace: ManifestAgentWorkspace,
-) -> DestinationResolution:
-    issues: list[str] = []
-
-    if workspace.destination is not None:
-        own = parse_destination_config(
-            workspace.destination,
-            context=f"agent workspace '{workspace.id}' destination",
-        )
-        if own.valid:
-            return DestinationResolution(
-                destination=own.destination,
-                source="agent_workspace",
-            )
-        issues.extend(own.errors)
-
-    return DestinationResolution(
-        destination=LocalDestination(),
-        source="default",
-        issues=tuple(issues),
-    )
-
-
 __all__ = [
     "Destination",
     "DestinationParseResult",
@@ -481,7 +453,6 @@ __all__ = [
     "default_local_destination",
     "parse_destination_config",
     "probe_docker_readiness",
-    "resolve_effective_agent_workspace_destination",
     "resolve_effective_repo_destination",
     "validate_destination_write_payload",
 ]

@@ -1,5 +1,4 @@
 import type {
-  AgentWorkspaceSummary,
   PmaChatMessage,
   PmaChatSummary,
   PmaRunProgress,
@@ -141,16 +140,6 @@ export type PmaChatScopeOption =
       workspaceRoot: string;
       resourceId: string;
       parentRepoId: string | null;
-      scopeUrn: string;
-    }
-  | {
-      id: string;
-      kind: 'agent_workspace';
-      label: string;
-      detail: string;
-      resourceKind: 'agent_workspace';
-      resourceId: string;
-      agentId: string | null;
       scopeUrn: string;
     };
 
@@ -733,6 +722,18 @@ export function pmaChatKindLabel(kind: PmaChatKind): string {
   return kind === 'coding_agent' ? 'Coding agent' : 'PMA';
 }
 
+export function agentCapabilityAllowed(
+  record: Record<string, unknown> | null,
+  action: string
+): boolean {
+  const projection = record?.capability_projection;
+  if (!projection || typeof projection !== 'object') return false;
+  const actions = (projection as Record<string, unknown>).actions;
+  if (!actions || typeof actions !== 'object') return false;
+  const result = (actions as Record<string, unknown>)[action];
+  return Boolean(result && typeof result === 'object' && (result as Record<string, unknown>).allowed === true);
+}
+
 export function localPmaChatScopeOption(): PmaChatScopeOption {
   return {
     id: 'local',
@@ -745,8 +746,7 @@ export function localPmaChatScopeOption(): PmaChatScopeOption {
 
 export function buildPmaChatScopeOptions(
   repos: RepoSummary[],
-  worktrees: WorktreeSummary[],
-  agentWorkspaces: AgentWorkspaceSummary[]
+  worktrees: WorktreeSummary[]
 ): PmaChatScopeOption[] {
   return [
     localPmaChatScopeOption(),
@@ -772,17 +772,7 @@ export function buildPmaChatScopeOptions(
         scopeUrn: worktree.repoId
           ? `worktree:${worktree.repoId}/${worktree.id}`
           : `filesystem:${encodeURIComponent(worktree.path || '.')}`
-      })),
-    ...agentWorkspaces.map((workspace) => ({
-      id: `agent_workspace:${workspace.id}`,
-      kind: 'agent_workspace' as const,
-      label: workspace.name || workspace.id,
-      detail: `Agent workspace · ${workspace.runtime || workspace.id}`,
-      resourceKind: 'agent_workspace' as const,
-      resourceId: workspace.id,
-      agentId: workspace.runtime || null,
-      scopeUrn: `agent_workspace:${workspace.id}`
-    }))
+      }))
   ];
 }
 
@@ -790,15 +780,11 @@ export function pmaChatScopeLabel(scope: PmaChatScopeOption | null): string {
   if (!scope) return 'Workspace scope';
   if (scope.kind === 'local') return 'Local hub · current workspace';
   if (scope.kind === 'repo') return `Repo · ${scope.resourceId}`;
-  if (scope.kind === 'agent_workspace') return `Agent workspace · ${scope.resourceId}`;
   return `Worktree · ${scope.resourceId}`;
 }
 
 export function pmaChatScopeLabelFromChat(chat: PmaChatSummary | null): string {
   if (!chat) return 'Choose a scope before creating a chat';
-  const resourceKind = stringValue(chat.raw.resource_kind).toLowerCase();
-  const resourceId = stringValue(chat.raw.resource_id);
-  if (resourceKind === 'agent_workspace' && resourceId) return `Agent workspace · ${resourceId}`;
   if (chat.worktreeId) return `Worktree · ${chat.worktreeId}`;
   if (chat.repoId) return `Repo · ${chat.repoId}`;
   const workspaceRoot = stringValue(chat.raw.workspace_root);
@@ -812,9 +798,6 @@ export function pmaChatHeaderScopeLine(
   repoLabel?: (repoId: string) => string | null
 ): string {
   if (!chat) return '';
-  const resourceKind = stringValue(chat.raw.resource_kind).toLowerCase();
-  const resourceId = stringValue(chat.raw.resource_id);
-  if (resourceKind === 'agent_workspace' && resourceId) return `Agent workspace - ${resourceId}`;
   if (chat.worktreeId) {
     const repoId = chat.repoId ?? '';
     const repoName = repoId ? repoLabel?.(repoId) ?? repoId : '';

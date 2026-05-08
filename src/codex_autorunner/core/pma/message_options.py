@@ -84,9 +84,7 @@ def resolve_managed_thread_message_options(
     )
     context_profile = normalize_car_context_profile(
         input.thread.get("context_profile") or metadata.get("context_profile"),
-        default=default_managed_thread_context_profile(
-            resource_kind=input.thread.get("resource_kind")
-        ),
+        default=default_managed_thread_context_profile(),
     )
     context_bundle = build_car_context_bundle(
         context_profile,

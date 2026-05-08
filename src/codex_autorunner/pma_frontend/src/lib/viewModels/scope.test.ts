@@ -34,10 +34,6 @@ describe('formatScopeUrn', () => {
     expect(formatScopeUrn({ kind: 'worktree', id: 'wt-1', parentRepoId: 'base-repo' })).toBe('worktree:base-repo/wt-1');
   });
 
-  it('formats agent_workspace scope', () => {
-    expect(formatScopeUrn({ kind: 'agent_workspace', id: 'ws-1' })).toBe('agent_workspace:ws-1');
-  });
-
   it('formats filesystem scope with encoding', () => {
     expect(formatScopeUrn({ kind: 'filesystem', path: '/Users/dev/project' })).toBe('filesystem:%2FUsers%2Fdev%2Fproject');
   });
@@ -56,10 +52,6 @@ describe('parseScopeUrn', () => {
   it('parses worktree URN', () => {
     const scope = parseScopeUrn('worktree:base-repo/wt-1');
     expect(scope).toEqual({ kind: 'worktree', id: 'wt-1', parentRepoId: 'base-repo' });
-  });
-
-  it('parses agent_workspace URN', () => {
-    expect(parseScopeUrn('agent_workspace:ws-1')).toEqual({ kind: 'agent_workspace', id: 'ws-1' });
   });
 
   it('parses filesystem URN with decoding', () => {
@@ -86,11 +78,6 @@ describe('parseScopeUrn', () => {
 
   it('round-trips worktree', () => {
     const urn = 'worktree:codex-autorunner/discord-5';
-    expect(formatScopeUrn(parseScopeUrn(urn))).toBe(urn);
-  });
-
-  it('round-trips agent_workspace', () => {
-    const urn = 'agent_workspace:codex';
     expect(formatScopeUrn(parseScopeUrn(urn))).toBe(urn);
   });
 
@@ -127,10 +114,6 @@ describe('parseScopeUrn', () => {
     expect(() => parseScopeUrn('worktree:repo/')).toThrow(ScopeUrnParseError);
   });
 
-  it('rejects agent_workspace without id', () => {
-    expect(() => parseScopeUrn('agent_workspace:')).toThrow(ScopeUrnParseError);
-  });
-
   it('rejects hub with path component', () => {
     expect(() => parseScopeUrn('hub:extra')).toThrow(ScopeUrnParseError);
   });
@@ -149,10 +132,6 @@ describe('parentScope', () => {
     expect(parentScope({ kind: 'worktree', id: 'wt-1', parentRepoId: 'r1' })).toEqual({ kind: 'repo', id: 'r1' });
   });
 
-  it('returns hub for agent_workspace', () => {
-    expect(parentScope({ kind: 'agent_workspace', id: 'ws-1' })).toEqual({ kind: 'hub' });
-  });
-
   it('returns null for filesystem', () => {
     expect(parentScope({ kind: 'filesystem', path: '/tmp' })).toBeNull();
   });
@@ -169,10 +148,6 @@ describe('scopeLabel', () => {
 
   it('labels worktree', () => {
     expect(scopeLabel({ kind: 'worktree', id: 'discord-5', parentRepoId: 'codex-autorunner' })).toBe('Worktree: discord-5');
-  });
-
-  it('labels agent_workspace', () => {
-    expect(scopeLabel({ kind: 'agent_workspace', id: 'codex' })).toBe('Agent workspace: codex');
   });
 
   it('labels filesystem with basename', () => {
@@ -210,10 +185,6 @@ describe('scopeRoute', () => {
 
   it('routes worktree', () => {
     expect(scopeRoute({ kind: 'worktree', id: 'wt-1', parentRepoId: 'r1' })).toBe('/repos/r1/worktrees/wt-1');
-  });
-
-  it('routes agent_workspace scopes', () => {
-    expect(scopeRoute({ kind: 'agent_workspace', id: 'ws-1' })).toBe('/agent-workspaces/ws-1');
   });
 
   it('routes filesystem as null', () => {
@@ -353,11 +324,8 @@ describe('scopeFromApiPayload', () => {
     expect(scopeFromApiPayload({ resource_kind: 'worktree', resource_id: 'wt-1' })).toEqual({ kind: 'hub' });
   });
 
-  it('extracts agent_workspace', () => {
-    expect(scopeFromApiPayload({ resource_kind: 'agent_workspace', resource_id: 'ws-1' })).toEqual({
-      kind: 'agent_workspace',
-      id: 'ws-1'
-    });
+  it('falls back to hub for unrecognized resource_kind', () => {
+    expect(scopeFromApiPayload({ resource_kind: 'custom_scope', resource_id: 'x' })).toEqual({ kind: 'hub' });
   });
 });
 

@@ -26,6 +26,7 @@
     [scopeSource([], [])],
     {
       toggleSidebar: () => (collapsed = !collapsed),
+      toggleMemory: () => void goto(href('/settings?memory=1')),
       goBack: () => window.history.back()
     },
     (path) => void goto(href(path))

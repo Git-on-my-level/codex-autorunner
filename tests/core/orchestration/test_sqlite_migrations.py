@@ -378,14 +378,6 @@ def test_apply_orchestration_migrations_backfills_thread_scope_variants(
                 None,
             ),
             (
-                "agent-workspace",
-                None,
-                "agent_workspace",
-                "zc-main",
-                "/tmp/zc-main",
-                None,
-            ),
-            (
                 "worktree-preserved",
                 None,
                 "worktree",
@@ -446,7 +438,6 @@ def test_apply_orchestration_migrations_backfills_thread_scope_variants(
         "scope_urn": "repo:repo-1",
     }
     assert by_id["repo-resource"]["scope_urn"] == "repo:repo-2"
-    assert by_id["agent-workspace"]["scope_urn"] == "agent_workspace:zc-main"
     assert by_id["worktree-preserved"]["scope_urn"] == "worktree:base/base--feature"
     assert by_id["workspace-only"]["scope_urn"] == "filesystem:/tmp/raw workspace"
     assert [dict(row) for row in second_scope_rows] == [dict(row) for row in scope_rows]
@@ -971,3 +962,62 @@ def test_apply_orchestration_migrations_backfills_resource_owner_columns(
     assert binding_row["repo_id"] == "repo-1"
     assert binding_row["resource_kind"] == "repo"
     assert binding_row["resource_id"] == "repo-1"
+
+
+def test_apply_v29_purges_removed_workspace_owner_threads_and_bindings(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "orchestration.sqlite3"
+    _rk = "agent_" + "workspace"
+
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE orch_thread_targets (
+                thread_target_id TEXT PRIMARY KEY,
+                scope_urn TEXT,
+                resource_kind TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE orch_bindings (
+                binding_id TEXT PRIMARY KEY,
+                target_kind TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            f"""
+            INSERT INTO orch_thread_targets (
+                thread_target_id,
+                scope_urn,
+                resource_kind
+            ) VALUES
+                ('ws-scope', '{_rk}:zc-main', 'repo'),
+                ('ws-kind', NULL, '{_rk}'),
+                ('repo-scope', 'repo:foo', 'repo')
+            """
+        )
+        conn.execute(
+            f"""
+            INSERT INTO orch_bindings (binding_id, target_kind) VALUES
+                ('b-ws', '{_rk}'),
+                ('b-thread', 'thread')
+            """
+        )
+        migrations_module._apply_v29(conn)
+        thread_ids = {
+            str(row["thread_target_id"])
+            for row in conn.execute(
+                "SELECT thread_target_id FROM orch_thread_targets"
+            ).fetchall()
+        }
+        binding_kinds = {
+            str(row["target_kind"])
+            for row in conn.execute("SELECT target_kind FROM orch_bindings").fetchall()
+        }
+
+    assert thread_ids == {"repo-scope"}
+    assert binding_kinds == {"thread"}

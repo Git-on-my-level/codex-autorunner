@@ -12,7 +12,6 @@ import { registerAutoRefresh, setAutoRefreshEnabled } from "./autoRefresh.js";
 import { isUiMockActive } from "./uiMock.js";
 import {
   renderReposWithScroll,
-  renderAgentWorkspaces,
   renderSummary,
 } from "./hubRepoCards.js";
 import type {
@@ -171,7 +170,6 @@ export async function refreshHub(): Promise<void> {
     saveHubBootstrapCache(hubData);
     renderSummary(hubData.repos || [], hubData);
     renderReposWithScroll(hubData.repos || [], getHubChannelEntries(), getPinnedParentRepoIds());
-    renderAgentWorkspaces(hubData.agent_workspaces || [], getHubChannelEntries());
     loadHubUsage({ silent: true }).catch(() => {});
     loadHubChannelDirectory({ silent: true }).catch(() => {});
   } catch (err) {
@@ -219,7 +217,6 @@ async function silentRefreshHub(): Promise<void> {
     saveHubBootstrapCache(hubData);
     renderSummary(hubData.repos || [], hubData);
     renderReposWithScroll(hubData.repos || [], getHubChannelEntries(), getPinnedParentRepoIds());
-    renderAgentWorkspaces(hubData.agent_workspaces || [], getHubChannelEntries());
     await Promise.allSettled([
       loadHubUsage({ silent: true, allowRetry: false }),
       loadHubChannelDirectory({ silent: true }),
@@ -269,7 +266,6 @@ export function bootstrapHubData(): void {
     applyHubData(cachedHub);
     renderSummary(hubData.repos || [], hubData);
     renderReposWithScroll(hubData.repos || [], getHubChannelEntries(), getPinnedParentRepoIds());
-    renderAgentWorkspaces(hubData.agent_workspaces || [], getHubChannelEntries());
   }
   const cachedUsage = loadSessionCache<HubUsageData | null>(HUB_USAGE_CACHE_KEY, HUB_CACHE_TTL_MS);
   if (cachedUsage) {

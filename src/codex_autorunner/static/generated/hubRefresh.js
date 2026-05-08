@@ -1,11 +1,11 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { api, flash } from "./utils.js?v=7fa8004f6840e214503b15a447aff6b141a7ad76cba89a9cf20138dbd2d88456";
-import { HUB_CACHE_TTL_MS, HUB_USAGE_CACHE_KEY, saveSessionCache, loadSessionCache, loadHubBootstrapCache, saveHubBootstrapCache, indexHubUsage, } from "./hubCache.js?v=7fa8004f6840e214503b15a447aff6b141a7ad76cba89a9cf20138dbd2d88456";
-import { registerAutoRefresh, setAutoRefreshEnabled } from "./autoRefresh.js?v=7fa8004f6840e214503b15a447aff6b141a7ad76cba89a9cf20138dbd2d88456";
-import { isUiMockActive } from "./uiMock.js?v=7fa8004f6840e214503b15a447aff6b141a7ad76cba89a9cf20138dbd2d88456";
-import { renderReposWithScroll, renderAgentWorkspaces, renderSummary, } from "./hubRepoCards.js?v=7fa8004f6840e214503b15a447aff6b141a7ad76cba89a9cf20138dbd2d88456";
-import { loadUpdateTargetOptions, handleSystemUpdate, } from "./systemUpdateUi.js?v=7fa8004f6840e214503b15a447aff6b141a7ad76cba89a9cf20138dbd2d88456";
-import { getHubData, applyHubData, getHubChannelEntries, getPinnedParentRepoIds, startHubJob, } from "./hubActions.js?v=7fa8004f6840e214503b15a447aff6b141a7ad76cba89a9cf20138dbd2d88456";
+import { api, flash } from "./utils.js?v=510fd0419ed9eddfa5851d4093853609591d2a4765ecd74f3add9600783da27f";
+import { HUB_CACHE_TTL_MS, HUB_USAGE_CACHE_KEY, saveSessionCache, loadSessionCache, loadHubBootstrapCache, saveHubBootstrapCache, indexHubUsage, } from "./hubCache.js?v=510fd0419ed9eddfa5851d4093853609591d2a4765ecd74f3add9600783da27f";
+import { registerAutoRefresh, setAutoRefreshEnabled } from "./autoRefresh.js?v=510fd0419ed9eddfa5851d4093853609591d2a4765ecd74f3add9600783da27f";
+import { isUiMockActive } from "./uiMock.js?v=510fd0419ed9eddfa5851d4093853609591d2a4765ecd74f3add9600783da27f";
+import { renderReposWithScroll, renderSummary, } from "./hubRepoCards.js?v=510fd0419ed9eddfa5851d4093853609591d2a4765ecd74f3add9600783da27f";
+import { loadUpdateTargetOptions, handleSystemUpdate, } from "./systemUpdateUi.js?v=510fd0419ed9eddfa5851d4093853609591d2a4765ecd74f3add9600783da27f";
+import { getHubData, applyHubData, getHubChannelEntries, getPinnedParentRepoIds, startHubJob, } from "./hubActions.js?v=510fd0419ed9eddfa5851d4093853609591d2a4765ecd74f3add9600783da27f";
 export const HUB_REFRESH_ACTIVE_MS = 5000;
 export const HUB_REFRESH_IDLE_MS = 30000;
 const hubUsageMeta = document.getElementById("hub-usage-meta");
@@ -125,7 +125,6 @@ export async function refreshHub() {
         saveHubBootstrapCache(hubData);
         renderSummary(hubData.repos || [], hubData);
         renderReposWithScroll(hubData.repos || [], getHubChannelEntries(), getPinnedParentRepoIds());
-        renderAgentWorkspaces(hubData.agent_workspaces || [], getHubChannelEntries());
         loadHubUsage({ silent: true }).catch(() => { });
         loadHubChannelDirectory({ silent: true }).catch(() => { });
     }
@@ -173,7 +172,6 @@ async function silentRefreshHub() {
         saveHubBootstrapCache(hubData);
         renderSummary(hubData.repos || [], hubData);
         renderReposWithScroll(hubData.repos || [], getHubChannelEntries(), getPinnedParentRepoIds());
-        renderAgentWorkspaces(hubData.agent_workspaces || [], getHubChannelEntries());
         await Promise.allSettled([
             loadHubUsage({ silent: true, allowRetry: false }),
             loadHubChannelDirectory({ silent: true }),
@@ -229,7 +227,6 @@ export function bootstrapHubData() {
         applyHubData(cachedHub);
         renderSummary(hubData.repos || [], hubData);
         renderReposWithScroll(hubData.repos || [], getHubChannelEntries(), getPinnedParentRepoIds());
-        renderAgentWorkspaces(hubData.agent_workspaces || [], getHubChannelEntries());
     }
     const cachedUsage = loadSessionCache(HUB_USAGE_CACHE_KEY, HUB_CACHE_TTL_MS);
     if (cachedUsage) {

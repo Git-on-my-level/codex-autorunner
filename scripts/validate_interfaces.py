@@ -31,10 +31,6 @@ SCHEMA_BINDINGS = {
             "ticket_flow_display",
         },
     },
-    "AgentWorkspaceSnapshot": {
-        "typescript": "HubAgentWorkspace",
-        "python": "AgentWorkspaceSnapshot",
-    },
     "HubState": {"typescript": "HubData", "python": "HubState"},
 }
 

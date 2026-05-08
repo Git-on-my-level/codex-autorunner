@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import dataclasses
 import logging
 from pathlib import Path
@@ -778,38 +777,6 @@ class WorkspaceCommands(
         arg = (arg or "").strip()
         if not arg:
             return None
-        hub_client = getattr(self, "_hub_client", None)
-        if hub_client is not None:
-            try:
-                from concurrent.futures import ThreadPoolExecutor
-
-                from .....core.hub_control_plane import AgentWorkspaceListRequest
-
-                request = AgentWorkspaceListRequest()
-
-                def _fetch() -> Any:
-                    return asyncio.run(hub_client.list_agent_workspaces(request))
-
-                with ThreadPoolExecutor(max_workers=1) as pool:
-                    future = pool.submit(_fetch)
-                    response = future.result(timeout=10)
-                for descriptor in response.workspaces:
-                    workspace_id = descriptor.workspace_id
-                    workspace_path = descriptor.workspace_root
-                    if not workspace_id or not workspace_path:
-                        continue
-                    if workspace_id != arg:
-                        continue
-                    return (
-                        str(canonicalize_path(Path(workspace_path))),
-                        None,
-                        "agent_workspace",
-                        workspace_id,
-                    )
-            except (OSError, ValueError, RuntimeError, Exception):
-                self._logger.debug(
-                    "resolve_workspace: hub_client lookup failed", exc_info=True
-                )
         if self._manifest_path and self._hub_root:
             try:
                 manifest = load_manifest(self._manifest_path, self._hub_root)

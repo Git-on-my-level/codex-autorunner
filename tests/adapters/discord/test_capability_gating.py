@@ -186,7 +186,7 @@ class TestCapabilityHelpers:
         assert service._agent_supports_resume("codex") is True
         assert service._agent_supports_resume("opencode") is True
         assert service._agent_supports_resume("hermes") is True
-        assert service._agent_supports_resume("zeroclaw") is True
+        assert service._agent_supports_resume("opencode") is True
 
     def test_agent_supports_effort_uses_chat_capability_helper(
         self, tmp_path: Path
@@ -224,7 +224,6 @@ class TestWebAgentSelectorIncludesHermes:
                 self.app_server_supervisor = MagicMock()
                 self.opencode_supervisor = MagicMock()
                 self.config = FakeConfig()
-                self.zeroclaw_supervisor = None
                 self.hermes_supervisor = MagicMock()
                 for agent_id in registered.keys():
                     setattr(self, f"{agent_id}_supervisor", MagicMock())

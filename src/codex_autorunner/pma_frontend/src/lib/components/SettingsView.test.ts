@@ -47,6 +47,7 @@ describe('settings page component', () => {
     const { body } = render(SettingsView, { props: { state: 'ready', view } });
 
     expect(body).toContain('Hub');
+    expect(body).toContain('PMA memory');
     expect(body).toContain('PMA agent');
     expect(body).toContain('Coding agents');
     expect(body).toContain('Integrations');

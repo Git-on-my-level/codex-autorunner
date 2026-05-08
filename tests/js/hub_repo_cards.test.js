@@ -17,15 +17,6 @@ const dom = new JSDOM(
         </div>
         <div id="hub-repo-list"></div>
       </section>
-      <section id="hub-agent-panel" class="hub-repo-panel hub-agent-panel">
-        <div class="hub-panel-header">
-          <div class="hub-panel-header-main">
-            <button id="hub-agent-panel-summary" aria-controls="hub-agent-workspace-list" aria-expanded="false"></button>
-            <span id="hub-agent-panel-state"></span>
-          </div>
-        </div>
-        <div id="hub-agent-workspace-list"></div>
-      </section>
     </div>
     <div id="hub-last-scan"></div>
     <div id="pma-last-scan"></div>
@@ -39,16 +30,6 @@ const dom = new JSDOM(
     <input id="hub-repo-search" value="" />
     <select id="hub-flow-filter"></select>
     <select id="hub-sort-order"></select>
-    <button id="hub-new-agent" type="button"></button>
-    <div id="create-agent-workspace-modal" class="modal-overlay" hidden>
-      <div class="modal-dialog" role="dialog">
-        <input id="create-agent-workspace-id" />
-        <input id="create-agent-workspace-runtime" />
-        <input id="create-agent-workspace-name" />
-        <button id="create-agent-workspace-cancel" type="button"></button>
-        <button id="create-agent-workspace-submit" type="button"></button>
-      </div>
-    </div>
   </body></html>`,
   { url: "http://localhost/hub/" }
 );
@@ -363,18 +344,14 @@ test("repo cards collapse pma-managed threads into a compact summary row", () =>
   assert.doesNotMatch(text, /ticket-flow:codex/);
 });
 
-test("hub panel state collapses repositories and agents independently with one expanded panel", () => {
-  __hubTest.applyHubPanelState("agents");
+test("hub panel state expands repositories when repos panel is active", () => {
+  __hubTest.applyHubPanelState("repos");
 
   const repoPanel = document.getElementById("hub-repo-panel");
-  const agentPanel = document.getElementById("hub-agent-panel");
   const repoToggle = document.getElementById("hub-repo-panel-summary");
-  const agentToggle = document.getElementById("hub-agent-panel-summary");
 
-  assert.equal(repoPanel?.classList.contains("hub-panel-collapsed"), true);
-  assert.equal(agentPanel?.classList.contains("hub-panel-collapsed"), false);
-  assert.equal(repoToggle?.getAttribute("aria-expanded"), "false");
-  assert.equal(agentToggle?.getAttribute("aria-expanded"), "true");
+  assert.equal(repoPanel?.classList.contains("hub-panel-collapsed"), false);
+  assert.equal(repoToggle?.getAttribute("aria-expanded"), "true");
 });
 
 test("hub panel toggles keep working when localStorage is unavailable", () => {
@@ -389,15 +366,12 @@ test("hub panel toggles keep working when localStorage is unavailable", () => {
 
   try {
     const repoPanel = document.getElementById("hub-repo-panel");
-    const agentPanel = document.getElementById("hub-agent-panel");
 
     __hubTest.applyHubPanelState("repos");
-    __hubTest.toggleHubPanel("agents");
-    assert.equal(agentPanel?.classList.contains("hub-panel-collapsed"), false);
-    assert.equal(repoPanel?.classList.contains("hub-panel-collapsed"), true);
+    assert.equal(repoPanel?.classList.contains("hub-panel-collapsed"), false);
 
     __hubTest.toggleHubPanel("agents");
-    assert.equal(agentPanel?.classList.contains("hub-panel-collapsed"), false);
+    assert.equal(repoPanel?.classList.contains("hub-panel-collapsed"), true);
 
     __hubTest.toggleHubPanel("repos");
     assert.equal(repoPanel?.classList.contains("hub-panel-collapsed"), false);
@@ -442,7 +416,6 @@ test("hub bootstrap cache falls back to durable localStorage and restores sessio
         ticket_flow_display: null,
       },
     ],
-    agent_workspaces: [],
     last_scan_at: "2026-04-10T10:00:00Z",
     pinned_parent_repo_ids: [],
   };
@@ -458,34 +431,6 @@ test("hub bootstrap cache falls back to durable localStorage and restores sessio
 
   assert.deepEqual(restored, payload);
   assert.equal(sessionValues.some((value) => value.includes("cached-repo")), true);
-});
-
-test("agent workspace cards render runtime, managed path, and lifecycle actions", () => {
-  __hubTest.renderAgentWorkspaces([
-    {
-      id: "zc-main",
-      runtime: "zeroclaw",
-      path: ".codex-autorunner/runtimes/zeroclaw/zc-main",
-      display_name: "ZeroClaw Main",
-      enabled: false,
-      exists_on_disk: true,
-      effective_destination: {
-        kind: "docker",
-        image: "ghcr.io/acme/zeroclaw:latest",
-      },
-      resource_kind: "agent_workspace",
-    },
-  ]);
-
-  const text =
-    document.getElementById("hub-agent-workspace-list")?.textContent || "";
-  assert.match(text, /ZeroClaw Main/);
-  assert.match(text, /zeroclaw/);
-  assert.match(text, /disabled/);
-  assert.match(text, /Destination/);
-  assert.match(text, /Remove/);
-  assert.match(text, /Delete/);
-  assert.match(text, /zc-main/);
 });
 
 test("pinned repos sort before unpinned repos in renderRepos source", async () => {
@@ -547,7 +492,6 @@ test("hub bootstrap cache does not act as authoritative source for repo state", 
         ticket_flow_display: null,
       },
     ],
-    agent_workspaces: [],
     last_scan_at: "2026-01-01T00:00:00Z",
     pinned_parent_repo_ids: [],
   };
@@ -585,7 +529,6 @@ test("hub bootstrap cache does not act as authoritative source for repo state", 
         ticket_flow_display: null,
       },
     ],
-    agent_workspaces: [],
     last_scan_at: new Date().toISOString(),
     pinned_parent_repo_ids: [],
   };
@@ -634,22 +577,7 @@ test("cleanup-all button reflects aria-disabled when no eligible cleanup targets
   assert.equal(btn?.getAttribute("aria-disabled"), "true");
 });
 
-test("hub interaction harness expands agents and opens the agent modal", () => {
-  const agentPanel = document.getElementById("hub-agent-panel");
-  const repoPanel = document.getElementById("hub-repo-panel");
-  const agentSummary = document.getElementById("hub-agent-panel-summary");
-  const newAgentBtn = document.getElementById("hub-new-agent");
-  const agentModal = document.getElementById("create-agent-workspace-modal");
-
-  agentModal.hidden = true;
+test("hub interaction harness initializes repo panel controls", () => {
   __hubTest.applyHubPanelState("repos");
-  __hubTest.initInteractionHarness();
-
-  agentSummary.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
-  assert.equal(agentPanel?.classList.contains("hub-panel-collapsed"), false);
-  assert.equal(repoPanel?.classList.contains("hub-panel-collapsed"), true);
-
-  newAgentBtn.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
-  assert.equal(agentPanel?.classList.contains("hub-panel-collapsed"), false);
-  assert.equal(agentModal?.hidden, false);
+  assert.doesNotThrow(() => __hubTest.initInteractionHarness());
 });

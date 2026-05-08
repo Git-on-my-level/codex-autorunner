@@ -167,13 +167,6 @@ def _stub_surface_startup_handshakes_for_non_handshake_tests(
         )
 
     class _NoopSupervisor:
-        def list_agent_workspaces(self, *, use_cache: bool = True) -> list[object]:
-            _ = use_cache
-            return []
-
-        def get_agent_workspace_snapshot(self, workspace_id: str) -> object:
-            raise ValueError(f"Unknown workspace id: {workspace_id}")
-
         def run_setup_commands_for_workspace(
             self, workspace_root: Path, *, repo_id_hint: str | None = None
         ) -> int:
@@ -310,12 +303,6 @@ def _stub_surface_startup_handshakes_for_non_handshake_tests(
                 (),
                 {"snapshot": await build_hub_snapshot(None, hub_root=self._hub_root)},
             )()
-
-        async def get_agent_workspace(self, request):
-            return self._service.get_agent_workspace(request)
-
-        async def list_agent_workspaces(self, request):
-            return self._service.list_agent_workspaces(request)
 
         async def run_workspace_setup_commands(self, request):
             return self._service.run_workspace_setup_commands(request)

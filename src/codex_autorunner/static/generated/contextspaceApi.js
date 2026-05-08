@@ -1,5 +1,5 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { api } from "./utils.js?v=7fa8004f6840e214503b15a447aff6b141a7ad76cba89a9cf20138dbd2d88456";
+import { api } from "./utils.js?v=510fd0419ed9eddfa5851d4093853609591d2a4765ecd74f3add9600783da27f";
 export async function fetchContextspace() {
     return (await api("/api/contextspace"));
 }

@@ -12,7 +12,6 @@ from tests.pma_context_support import (
     test_build_hub_snapshot_filters_dismissed_stopped_run_from_inbox_and_queue,
     test_build_hub_snapshot_ignores_pma_self_thread_hung_noise,
     test_build_hub_snapshot_includes_action_queue_with_supersession,
-    test_build_hub_snapshot_includes_agent_workspaces_section,
     test_build_hub_snapshot_includes_automation_summary,
     test_build_hub_snapshot_includes_effective_destination,
     test_build_hub_snapshot_includes_pma_threads_section,

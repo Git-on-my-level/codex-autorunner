@@ -25,8 +25,6 @@ class FilesystemScopeResolver:
             return self._resolve_repo(ref)
         if ref.kind == "worktree":
             return self._resolve_worktree(ref)
-        if ref.kind == "agent_workspace":
-            return self._resolve_agent_workspace(ref)
         if ref.kind == "filesystem":
             assert ref.path is not None
             return ResolvedScope(
@@ -45,8 +43,6 @@ class FilesystemScopeResolver:
             for repo in self._manifest.repos:
                 if repo.kind == "base":
                     children.append(ScopeRef(kind="repo", id=repo.id))
-            for ws in self._manifest.agent_workspaces:
-                children.append(ScopeRef(kind="agent_workspace", id=ws.id))
             return children
         if ref.kind == "repo":
             children = []
@@ -94,19 +90,6 @@ class FilesystemScopeResolver:
             display_name=repo.display_name or ref.id,
             workspace_root=str(abs_path),
             metadata={"worktree_of": ref.parent_repo_id, "branch": repo.branch},
-        )
-
-    def _resolve_agent_workspace(self, ref: ScopeRef) -> ResolvedScope:
-        assert ref.id is not None
-        ws = self._manifest.get_agent_workspace(ref.id)
-        if ws is None:
-            raise ScopeRefError(f"Unknown agent_workspace scope: {ref.id}")
-        abs_path = self._hub_root / ws.path
-        return ResolvedScope(
-            scope=ref,
-            display_name=ws.display_name or ref.id,
-            workspace_root=str(abs_path),
-            metadata={"runtime": ws.runtime},
         )
 
 

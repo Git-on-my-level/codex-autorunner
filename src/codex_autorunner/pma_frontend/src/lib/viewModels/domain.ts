@@ -69,6 +69,7 @@ export type PmaRunProgress = {
   idleSeconds: number | null;
   lastEventId: number | null;
   lastEventAt: string | null;
+  progressPercent: number | null;
   events: SurfaceArtifact[];
   raw: JsonRecord;
 };
@@ -135,18 +136,6 @@ export type WorktreeSummary = {
   raw: JsonRecord;
 };
 
-/** Agent-owned workspace exposed by the hub control plane. */
-export type AgentWorkspaceSummary = {
-  id: string;
-  runtime: string;
-  name: string;
-  path: string | null;
-  enabled: boolean;
-  existsOnDisk: boolean;
-  resourceKind: string;
-  raw: JsonRecord;
-};
-
 /** Ticket queue row. */
 export type TicketSummary = {
   id: string;
@@ -194,7 +183,7 @@ export type ContextspaceDocument = {
 
 export function mapPmaChatSummary(raw: JsonRecord): PmaChatSummary {
   const latest = asRecord(raw.latest_execution ?? raw.latest_turn ?? raw.turn);
-  const status = normalizeWorkStatus(raw.lifecycle_status ?? raw.runtime_status ?? raw.status ?? latest.status);
+  const status = normalizeWorkStatus(raw.normalized_status ?? raw.runtime_status ?? raw.status ?? latest.status ?? raw.lifecycle_status);
   const id = stringValue(raw.thread_target_id ?? raw.managed_thread_id ?? raw.thread_id ?? raw.id, 'unknown-chat');
   const resourceKind = nullableString(raw.resource_kind);
   const resourceId = nullableString(raw.resource_id);
@@ -275,6 +264,7 @@ export function mapPmaRunProgress(raw: JsonRecord): PmaRunProgress {
         source.started_at ??
         source.created_at
     ),
+    progressPercent: progressPercentFromRun(source),
     events: asArray(source.events ?? source.lifecycle_events).map(mapSurfaceArtifact),
     raw
   };
@@ -363,20 +353,6 @@ export function mapWorktreeSummary(raw: JsonRecord): WorktreeSummary {
       numberOrNull(raw.open_tickets ?? raw.open_ticket_count) ??
       (totalTickets !== null && doneTickets !== null ? Math.max(0, totalTickets - doneTickets) : 0),
     lastActivityAt: dateString(raw.last_activity_at ?? raw.updated_at ?? runState.last_event_at ?? raw.last_run_started_at),
-    raw
-  };
-}
-
-export function mapAgentWorkspaceSummary(raw: JsonRecord): AgentWorkspaceSummary {
-  const id = stringValue(raw.id ?? raw.workspace_id ?? raw.name, 'unknown-agent-workspace');
-  return {
-    id,
-    runtime: stringValue(raw.runtime ?? raw.agent ?? raw.agent_id, ''),
-    name: stringValue(raw.display_name ?? raw.name, id),
-    path: nullableString(raw.path ?? raw.workspace_root),
-    enabled: raw.enabled !== false,
-    existsOnDisk: raw.exists_on_disk !== false,
-    resourceKind: stringValue(raw.resource_kind, 'agent_workspace'),
     raw
   };
 }
@@ -629,6 +605,20 @@ function countByStatus(items: JsonRecord[], statuses: WorkStatus[]): number {
   return items.filter((item) =>
     statuses.includes(normalizeWorkStatus(item.status ?? item.state ?? item.runtime_status ?? item.lifecycle_status ?? item.turn_status))
   ).length;
+}
+
+function progressPercentFromRun(source: JsonRecord): number | null {
+  const explicit = numberOrNull(source.progress_percent ?? source.progress);
+  if (explicit !== null) return clampPercent(explicit);
+  const ticketProgress = asRecord(source.ticket_progress);
+  const total = numberOrNull(ticketProgress.total);
+  const done = numberOrNull(ticketProgress.done);
+  if (total === null || done === null || total <= 0) return null;
+  return clampPercent((done / total) * 100);
+}
+
+function clampPercent(value: number): number {
+  return Math.max(0, Math.min(100, Math.round(value)));
 }
 
 function asRecord(value: unknown): JsonRecord {

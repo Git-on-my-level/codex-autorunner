@@ -18,7 +18,7 @@ Agent coordination hub that drives Codex app-server and OpenCode using markdown 
 
 See `docs/car_constitution/20_ARCHITECTURE_MAP.md` → "Data Layout & Config" for the authoritative directory layout and config precedence.
 
-Config sections (repo): docs, codex, prompt, runner, git, github, server, terminal, voice, log, server_log, app_server, opencode, hermes, zeroclaw, discord_bot, telegram_bot, agents, notifications.
+Config sections (repo): docs, codex, prompt, runner, git, github, server, terminal, voice, log, server_log, app_server, opencode, hermes, discord_bot, telegram_bot, agents, notifications.
 
 ## Core loop
 - Parse TODO checkboxes and preserve ordering.

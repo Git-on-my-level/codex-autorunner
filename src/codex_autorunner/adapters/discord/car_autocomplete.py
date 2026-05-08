@@ -20,7 +20,6 @@ _TICKET_AUTOCOMPLETE_WORKER_TIMEOUT = max(
 )
 REPO_AUTOCOMPLETE_TOKEN_PREFIX = "repo@"
 WORKSPACE_AUTOCOMPLETE_TOKEN_PREFIX = "workspace@"
-AGENT_WORKSPACE_AUTOCOMPLETE_TOKEN_PREFIX = "agent_workspace@"
 
 
 def repo_autocomplete_value(repo_id: str) -> str:
@@ -37,14 +36,6 @@ def workspace_autocomplete_value(workspace_path: str) -> str:
         return normalized_path
     digest = hashlib.sha256(normalized_path.encode("utf-8")).hexdigest()[:24]
     return f"{WORKSPACE_AUTOCOMPLETE_TOKEN_PREFIX}{digest}"
-
-
-def agent_workspace_autocomplete_value(workspace_id: str) -> str:
-    normalized_id = workspace_id.strip()
-    if len(normalized_id) <= 100:
-        return normalized_id
-    digest = hashlib.sha256(normalized_id.encode("utf-8")).hexdigest()[:24]
-    return f"{AGENT_WORKSPACE_AUTOCOMPLETE_TOKEN_PREFIX}{digest}"
 
 
 def resolve_workspace_from_token(
@@ -87,21 +78,6 @@ def resolve_workspace_from_token(
             ]
             if len(workspace_matches) == 1:
                 return workspace_matches[0]
-
-    if normalized.startswith(AGENT_WORKSPACE_AUTOCOMPLETE_TOKEN_PREFIX):
-        digest = normalized[len(AGENT_WORKSPACE_AUTOCOMPLETE_TOKEN_PREFIX) :]
-        if digest:
-            agent_matches: list[tuple[Optional[str], Optional[str], str]] = [
-                (resource_kind, resource_id, workspace_path)
-                for resource_kind, resource_id, workspace_path in candidates
-                if resource_kind == "agent_workspace"
-                and isinstance(resource_id, str)
-                and hashlib.sha256(resource_id.encode("utf-8"))
-                .hexdigest()
-                .startswith(digest)
-            ]
-            if len(agent_matches) == 1:
-                return agent_matches[0]
 
     return None
 

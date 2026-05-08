@@ -223,6 +223,7 @@ def seed_flow_run(
     diff_events: list[dict],
     started_at: Optional[str] = None,
     finished_at: Optional[str] = None,
+    state: Optional[dict] = None,
 ) -> None:
     db_path = repo_root / ".codex-autorunner" / "flows.db"
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -231,7 +232,7 @@ def seed_flow_run(
         store.update_flow_run_status(
             run_id,
             status,
-            state={},
+            state=state or {},
             started_at=started_at,
             finished_at=finished_at,
         )

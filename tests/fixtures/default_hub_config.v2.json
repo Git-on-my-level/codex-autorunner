@@ -11,9 +11,6 @@
       "subagent_models": {
         "subagent": "zai-coding-plan/glm-4.7-flashx"
       }
-    },
-    "zeroclaw": {
-      "binary": "zeroclaw"
     }
   },
   "app_server": {

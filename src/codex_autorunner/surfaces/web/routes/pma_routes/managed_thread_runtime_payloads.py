@@ -6,7 +6,6 @@ from typing import Any
 from fastapi import HTTPException, Request
 
 from .....adapters.chat.approval_modes import resolve_approval_mode_policies
-from .....agents.managed_runtime import sync_managed_workspace_compat_files
 from .....core.pma.attachments import (
     normalize_managed_thread_attachments as _core_normalize_managed_thread_attachments,
 )
@@ -140,23 +139,6 @@ def resolve_managed_thread_message_options(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-def sync_zeroclaw_context_if_needed(
-    *,
-    thread: dict[str, Any],
-    options: ManagedThreadMessageOptions,
-) -> None:
-    if str(thread.get("agent") or "").strip().lower() != "zeroclaw":
-        return
-    workspace_root = _normalize_optional_text(thread.get("workspace_root"))
-    if workspace_root is None:
-        return
-    sync_managed_workspace_compat_files(
-        "zeroclaw",
-        runtime_workspace_root=Path(workspace_root) / "workspace",
-        bundle=options.context_bundle,
-    )
-
-
 __all__ = [
     "MANAGED_THREAD_PUBLIC_EXECUTION_ERROR",
     "ManagedThreadMessageOptions",
@@ -176,5 +158,4 @@ __all__ = [
     "normalize_managed_thread_attachments",
     "resolve_managed_thread_message_options",
     "sanitize_managed_thread_result_error",
-    "sync_zeroclaw_context_if_needed",
 ]

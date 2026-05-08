@@ -95,21 +95,21 @@ def test_binding_normalizes_surface_mapping() -> None:
     assert binding.to_dict()["surface_kind"] == "telegram"
 
 
-def test_thread_target_preserves_agent_workspace_owner() -> None:
+def test_thread_target_preserves_explicit_repo_owner_columns() -> None:
     target = ThreadTarget.from_mapping(
         {
-            "managed_thread_id": "mt-zc-1",
+            "managed_thread_id": "mt-1",
             "agent": "codex",
-            "resource_kind": "agent_workspace",
-            "resource_id": "zc-main",
-            "workspace_root": "/tmp/runtimes/zeroclaw/zc-main",
+            "resource_kind": "repo",
+            "resource_id": "demo-repo",
+            "workspace_root": "/tmp/workspace/demo",
             "normalized_status": "idle",
         }
     )
 
-    assert target.resource_kind == "agent_workspace"
-    assert target.resource_id == "zc-main"
-    assert target.repo_id is None
+    assert target.resource_kind == "repo"
+    assert target.resource_id == "demo-repo"
+    assert target.repo_id == "demo-repo"
 
 
 def test_thread_model_preserves_canonical_refs_and_legacy_aliases() -> None:

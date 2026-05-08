@@ -491,13 +491,6 @@ def _install_inprocess_hub_client_stubs_for_lab() -> None:
     from codex_autorunner.core.pma_thread_store import prepare_pma_thread_store
 
     class _NoopSupervisor:
-        def list_agent_workspaces(self, *, use_cache: bool = True) -> list[object]:
-            _ = use_cache
-            return []
-
-        def get_agent_workspace_snapshot(self, workspace_id: str) -> object:
-            raise ValueError(f"Unknown workspace id: {workspace_id}")
-
         def run_setup_commands_for_workspace(
             self, workspace_root: Path, *, repo_id_hint: Optional[str] = None
         ) -> int:
@@ -636,12 +629,6 @@ def _install_inprocess_hub_client_stubs_for_lab() -> None:
                 (),
                 {"snapshot": await build_hub_snapshot(None, hub_root=self._hub_root)},
             )()
-
-        async def get_agent_workspace(self, request: Any) -> Any:
-            return self._service.get_agent_workspace(request)
-
-        async def list_agent_workspaces(self, request: Any) -> Any:
-            return self._service.list_agent_workspaces(request)
 
         async def run_workspace_setup_commands(self, request: Any) -> Any:
             return self._service.run_workspace_setup_commands(request)

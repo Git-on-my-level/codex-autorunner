@@ -346,7 +346,6 @@ class DefaultAgentPool:
             getattr(context, "app_server_supervisor", None),
             getattr(context, "opencode_supervisor", None),
             getattr(context, "hermes_supervisor", None),
-            getattr(context, "zeroclaw_supervisor", None),
         }:
             close_all = getattr(supervisor, "close_all", None)
             if callable(close_all):

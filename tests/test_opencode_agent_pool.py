@@ -1397,7 +1397,6 @@ async def test_close_all_closes_runtime_supervisors(tmp_path: Path):
         app_server_supervisor=codex_supervisor,
         opencode_supervisor=opencode_supervisor,
         hermes_supervisor=hermes_supervisor,
-        zeroclaw_supervisor=None,
     )
 
     await pool.close_all()

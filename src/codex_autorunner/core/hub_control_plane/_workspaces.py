@@ -116,124 +116,6 @@ class TranscriptHistoryResponse:
 
 
 @dataclass(frozen=True)
-class AgentWorkspaceDescriptor:
-    workspace_id: str
-    runtime_kind: str
-    workspace_root: str
-    display_name: str
-    enabled: bool
-    exists_on_disk: bool
-    resource_kind: str = "agent_workspace"
-
-    @classmethod
-    def from_mapping(cls, data: Mapping[str, Any]) -> "AgentWorkspaceDescriptor":
-        return cls(
-            workspace_id=normalize_required_text(
-                data.get("workspace_id") or data.get("id"),
-                field_name="workspace_id",
-            ),
-            runtime_kind=normalize_required_text(
-                data.get("runtime_kind") or data.get("runtime"),
-                field_name="runtime_kind",
-            ),
-            workspace_root=normalize_required_text(
-                data.get("workspace_root") or data.get("path"),
-                field_name="workspace_root",
-            ),
-            display_name=normalize_required_text(
-                data.get("display_name"),
-                field_name="display_name",
-            ),
-            enabled=bool(data.get("enabled", True)),
-            exists_on_disk=bool(data.get("exists_on_disk", True)),
-            resource_kind=(
-                normalize_optional_text(data.get("resource_kind")) or "agent_workspace"
-            ),
-        )
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "workspace_id": self.workspace_id,
-            "runtime_kind": self.runtime_kind,
-            "workspace_root": self.workspace_root,
-            "display_name": self.display_name,
-            "enabled": self.enabled,
-            "exists_on_disk": self.exists_on_disk,
-            "resource_kind": self.resource_kind,
-        }
-
-
-@dataclass(frozen=True)
-class AgentWorkspaceLookupRequest:
-    workspace_id: str
-
-    @classmethod
-    def from_mapping(cls, data: Mapping[str, Any]) -> "AgentWorkspaceLookupRequest":
-        return cls(
-            workspace_id=normalize_required_text(
-                data.get("workspace_id"),
-                field_name="workspace_id",
-            )
-        )
-
-    def to_dict(self) -> dict[str, Any]:
-        return {"workspace_id": self.workspace_id}
-
-
-@dataclass(frozen=True)
-class AgentWorkspaceListRequest:
-    include_disabled: bool = True
-
-    @classmethod
-    def from_mapping(cls, data: Mapping[str, Any]) -> "AgentWorkspaceListRequest":
-        return cls(include_disabled=bool(data.get("include_disabled", True)))
-
-    def to_dict(self) -> dict[str, Any]:
-        return {"include_disabled": self.include_disabled}
-
-
-@dataclass(frozen=True)
-class AgentWorkspaceResponse:
-    workspace: Optional[AgentWorkspaceDescriptor]
-
-    @classmethod
-    def from_mapping(cls, data: Mapping[str, Any]) -> "AgentWorkspaceResponse":
-        raw_workspace = data.get("workspace")
-        workspace = (
-            AgentWorkspaceDescriptor.from_mapping(raw_workspace)
-            if isinstance(raw_workspace, Mapping)
-            else None
-        )
-        return cls(workspace=workspace)
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "workspace": (None if self.workspace is None else self.workspace.to_dict())
-        }
-
-
-@dataclass(frozen=True)
-class AgentWorkspaceListResponse:
-    workspaces: tuple[AgentWorkspaceDescriptor, ...]
-
-    @classmethod
-    def from_mapping(cls, data: Mapping[str, Any]) -> "AgentWorkspaceListResponse":
-        raw_workspaces = data.get("workspaces")
-        if not isinstance(raw_workspaces, list):
-            return cls(workspaces=())
-        return cls(
-            workspaces=tuple(
-                AgentWorkspaceDescriptor.from_mapping(item)
-                for item in raw_workspaces
-                if isinstance(item, Mapping)
-            )
-        )
-
-    def to_dict(self) -> dict[str, Any]:
-        return {"workspaces": [workspace.to_dict() for workspace in self.workspaces]}
-
-
-@dataclass(frozen=True)
 class WorkspaceSetupCommandRequest:
     workspace_root: str
     repo_id_hint: Optional[str] = None
@@ -345,11 +227,6 @@ class AutomationResult:
 
 
 __all__ = [
-    "AgentWorkspaceDescriptor",
-    "AgentWorkspaceListRequest",
-    "AgentWorkspaceListResponse",
-    "AgentWorkspaceLookupRequest",
-    "AgentWorkspaceResponse",
     "AutomationRequest",
     "AutomationResult",
     "PmaSnapshotResponse",

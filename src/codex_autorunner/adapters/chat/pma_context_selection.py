@@ -53,10 +53,8 @@ def normalize_pma_resource_owner(
         raise PmaContextSelectionError(
             "resource_id is required when resource_kind is provided"
         )
-    if normalized_kind not in {None, "repo", "worktree", "agent_workspace"}:
-        raise PmaContextSelectionError(
-            "resource_kind must be one of: repo, worktree, agent_workspace"
-        )
+    if normalized_kind not in {None, "repo", "worktree"}:
+        raise PmaContextSelectionError("resource_kind must be one of: repo, worktree")
     normalized_repo = normalized_id if normalized_kind == "repo" else None
     return PmaResourceOwner(
         resource_kind=normalized_kind,
@@ -71,7 +69,7 @@ def hub_pma_context(hub_root: Path) -> PmaContextSelection:
         repo_id=None,
         resource_kind=None,
         resource_id=None,
-        context_profile=default_managed_thread_context_profile(resource_kind=None),
+        context_profile=default_managed_thread_context_profile(),
         scope_label="hub",
     )
 
@@ -84,7 +82,6 @@ def resolve_pma_context_selection(
     resource_id: Optional[str] = None,
     repo_id: Optional[str] = None,
     repos: Any = (),
-    agent_workspaces: Any = (),
 ) -> PmaContextSelection:
     owner = normalize_pma_resource_owner(
         resource_kind=resource_kind,
@@ -96,7 +93,6 @@ def resolve_pma_context_selection(
             hub_root=hub_root,
             owner=owner,
             repos=repos,
-            agent_workspaces=agent_workspaces,
         )
 
     workspace_text = _optional_text(workspace_root)
@@ -117,7 +113,7 @@ def resolve_pma_context_selection(
         repo_id=None,
         resource_kind=None,
         resource_id=None,
-        context_profile=default_managed_thread_context_profile(resource_kind=None),
+        context_profile=default_managed_thread_context_profile(),
         scope_label=f"workspace {workspace}",
     )
 
@@ -127,7 +123,6 @@ def _resolve_owned_context(
     hub_root: Path,
     owner: PmaResourceOwner,
     repos: Any,
-    agent_workspaces: Any,
 ) -> PmaContextSelection:
     if owner.resource_kind == "repo":
         assert owner.resource_id is not None
@@ -139,9 +134,7 @@ def _resolve_owned_context(
             repo_id=owner.resource_id,
             resource_kind="repo",
             resource_id=owner.resource_id,
-            context_profile=default_managed_thread_context_profile(
-                resource_kind="repo"
-            ),
+            context_profile=default_managed_thread_context_profile(),
             scope_label=f"repo {owner.resource_id}",
         )
     if owner.resource_kind == "worktree":
@@ -154,28 +147,8 @@ def _resolve_owned_context(
             repo_id=None,
             resource_kind="worktree",
             resource_id=owner.resource_id,
-            context_profile=default_managed_thread_context_profile(
-                resource_kind="worktree"
-            ),
+            context_profile=default_managed_thread_context_profile(),
             scope_label=f"worktree {owner.resource_id}",
-        )
-    if owner.resource_kind == "agent_workspace":
-        assert owner.resource_id is not None
-        workspace, runtime = _agent_workspace(agent_workspaces, owner.resource_id)
-        if workspace is None:
-            raise PmaContextSelectionError(
-                f"Agent workspace not found: {owner.resource_id}"
-            )
-        return PmaContextSelection(
-            workspace_root=workspace.absolute(),
-            repo_id=None,
-            resource_kind="agent_workspace",
-            resource_id=owner.resource_id,
-            context_profile=default_managed_thread_context_profile(
-                resource_kind="agent_workspace"
-            ),
-            scope_label=f"agent workspace {owner.resource_id}",
-            runtime=runtime,
         )
     return hub_pma_context(hub_root)
 
@@ -189,20 +162,6 @@ def _repo_workspace(repos: Any, repo_id: str) -> Optional[Path]:
         path = Path(entry_path) if isinstance(entry_path, str) else entry_path
         return path if isinstance(path, Path) else None
     return None
-
-
-def _agent_workspace(
-    agent_workspaces: Any, workspace_id: str
-) -> tuple[Optional[Path], Optional[str]]:
-    for entry in agent_workspaces or ():
-        entry_id = _entry_value(entry, "id", 0)
-        if entry_id != workspace_id:
-            continue
-        entry_path = _entry_value(entry, "path", 1)
-        path = Path(entry_path) if isinstance(entry_path, str) else entry_path
-        runtime = _optional_text(_entry_value(entry, "runtime", 2))
-        return (path if isinstance(path, Path) else None), runtime
-    return None, None
 
 
 def _entry_value(entry: Any, attr: str, index: int) -> Any:

@@ -243,9 +243,7 @@ def _serialize_managed_thread(thread: dict[str, Any]) -> dict[str, Any]:
         metadata = {}
     payload["context_profile"] = normalize_car_context_profile(
         metadata.get("context_profile"),
-        default=default_managed_thread_context_profile(
-            resource_kind=payload["resource_kind"]
-        ),
+        default=default_managed_thread_context_profile(),
     )
     payload["approval_mode"] = normalize_approval_mode(
         metadata.get("approval_mode"),
@@ -381,9 +379,7 @@ def _serialize_thread_target(
         "compact_seed": thread.compact_seed,
         "context_profile": normalize_car_context_profile(
             thread.context_profile,
-            default=default_managed_thread_context_profile(
-                resource_kind=thread.resource_kind
-            ),
+            default=default_managed_thread_context_profile(),
         ),
         "approval_mode": normalize_approval_mode(thread.approval_mode, default="yolo"),
         "accepts_messages": thread.lifecycle_status == "active",
@@ -399,32 +395,6 @@ def _serialize_thread_target(
         managed_thread_id=thread.thread_target_id,
         binding_metadata_by_thread=binding_metadata_by_thread,
     )
-
-
-def _raise_agent_workspace_runtime_not_ready(
-    request: Request, resource_id: str
-) -> None:
-    supervisor = get_pma_request_context(request).hub_supervisor
-    if supervisor is None:
-        raise HTTPException(status_code=500, detail="Hub supervisor unavailable")
-    snapshot = supervisor.get_agent_workspace_snapshot(resource_id)
-    if not snapshot.enabled:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Agent workspace '{resource_id}' is disabled",
-        )
-    readiness = supervisor.get_agent_workspace_runtime_readiness(resource_id)
-    if not isinstance(readiness, dict):
-        return
-    status = str(readiness.get("status") or "").strip().lower()
-    if status in {"", "ready", "deferred"}:
-        return
-    message = str(readiness.get("message") or "").strip()
-    fix = str(readiness.get("fix") or "").strip()
-    detail = message or f"Agent workspace runtime '{snapshot.runtime}' is not ready"
-    if fix:
-        detail = f"{detail} Fix: {fix}"
-    raise HTTPException(status_code=400, detail=detail)
 
 
 def _resolve_requested_profile(
@@ -540,9 +510,6 @@ def resolve_managed_thread_create_resolution(
     )
     supervisor = context.hub_supervisor
     repos = supervisor.list_repos() if supervisor is not None else ()
-    agent_workspaces = (
-        supervisor.list_agent_workspaces() if supervisor is not None else ()
-    )
     resource_id_for_ctx = owner.resource_id
     if payload.pr_mode:
         if not resource_id_for_ctx:
@@ -559,7 +526,6 @@ def resolve_managed_thread_create_resolution(
             resource_id=resource_id_for_ctx,
             repo_id=payload.repo_id,
             repos=repos,
-            agent_workspaces=agent_workspaces,
         )
     except PmaContextSelectionError as exc:
         detail = str(exc)
@@ -578,34 +544,11 @@ def resolve_managed_thread_create_resolution(
     resolved_workspace = pma_context.workspace_root
     if not _is_within_root(resolved_workspace, hub_root):
         raise HTTPException(status_code=400, detail="Resolved resource path is invalid")
-    resolved_runtime = pma_context.runtime
-
-    if resource_kind == "agent_workspace":
-        if resolved_runtime is None:
-            raise HTTPException(
-                status_code=400,
-                detail="Agent workspace runtime is unavailable",
-            )
-        if agent_id is None:
-            agent_id = resolved_runtime
-        elif agent_id != resolved_runtime:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "agent must match the agent workspace runtime "
-                    f"('{resolved_runtime}')"
-                ),
-            )
-        assert resource_id is not None
-        _raise_agent_workspace_runtime_not_ready(request, resource_id)
 
     if agent_id is None:
         raise HTTPException(
             status_code=400,
-            detail=(
-                "agent is required unless an agent workspace owner supplies "
-                "the runtime"
-            ),
+            detail="agent is required",
         )
 
     requested_profile = _resolve_requested_profile(

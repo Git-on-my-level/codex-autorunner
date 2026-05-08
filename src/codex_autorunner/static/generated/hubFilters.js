@@ -1,5 +1,5 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { HUB_BASE } from "./env.js?v=7fa8004f6840e214503b15a447aff6b141a7ad76cba89a9cf20138dbd2d88456";
+import { HUB_BASE } from "./env.js?v=510fd0419ed9eddfa5851d4093853609591d2a4765ecd74f3add9600783da27f";
 export function nonPmaChatBoundThreadCount(repo) {
     if (repo.non_pma_chat_bound_thread_count != null) {
         return Math.max(0, Number(repo.non_pma_chat_bound_thread_count || 0));
@@ -165,7 +165,7 @@ export function saveHubOpenPanel(value) {
 export function loadHubOpenPanel() {
     try {
         const raw = localStorage.getItem(HUB_PANEL_PREFS_KEY);
-        if (raw === "repos" || raw === "agents") {
+        if (raw === "repos") {
             return raw;
         }
     }

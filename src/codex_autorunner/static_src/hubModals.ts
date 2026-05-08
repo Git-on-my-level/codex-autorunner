@@ -8,8 +8,6 @@ import {
 import { setCleanupAllInFlight, renderSummary } from "./hubRepoCards.js";
 import type {
   HubRepo,
-  HubAgentWorkspace,
-  HubAgentWorkspaceDetail,
   HubDestinationResponse,
   CleanupAllPreview,
 } from "./hubTypes.js";
@@ -400,27 +398,6 @@ async function promptAndSetRepoDestination(repo: HubRepo): Promise<boolean> {
   return true;
 }
 
-async function promptAndSetAgentWorkspaceDestination(
-  workspace: HubAgentWorkspace
-): Promise<boolean> {
-  const body = await promptForDestinationBody(
-    workspace.display_name || workspace.id,
-    workspace.effective_destination
-  );
-  if (!body) return false;
-
-  const payload = (await api(
-    `/hub/agent-workspaces/${encodeURIComponent(workspace.id)}/destination`,
-    {
-      method: "POST",
-      body,
-    }
-  )) as HubAgentWorkspaceDetail;
-  const effective = formatDestinationSummary(payload.effective_destination);
-  flash(`Updated destination for ${workspace.id}: ${effective}`, "success");
-  return true;
-}
-
 async function openRepoSettingsModal(repo: HubRepo): Promise<void> {
   const overlay = document.createElement("div");
   overlay.className = "modal-overlay";
@@ -743,20 +720,11 @@ export async function handleCleanupAll(): Promise<void> {
 }
 
 export let closeCreateRepoModal: (() => void) | null = null;
-export let closeCreateAgentWorkspaceModal: (() => void) | null = null;
 
 export function hideCreateRepoModal(): void {
   if (closeCreateRepoModal) {
     const close = closeCreateRepoModal;
     closeCreateRepoModal = null;
-    close();
-  }
-}
-
-export function hideCreateAgentWorkspaceModal(): void {
-  if (closeCreateAgentWorkspaceModal) {
-    const close = closeCreateAgentWorkspaceModal;
-    closeCreateAgentWorkspaceModal = null;
     close();
   }
 }
@@ -790,33 +758,6 @@ export function showCreateRepoModal(): void {
   if (gitCheck) gitCheck.checked = true;
 }
 
-export function showCreateAgentWorkspaceModal(): void {
-  const modal = document.getElementById("create-agent-workspace-modal");
-  if (!modal) return;
-  const triggerEl = document.activeElement;
-  hideCreateAgentWorkspaceModal();
-  const input = document.getElementById(
-    "create-agent-workspace-id"
-  ) as HTMLInputElement | null;
-  closeCreateAgentWorkspaceModal = openModal(modal, {
-    initialFocus: input || modal,
-    returnFocusTo: triggerEl as HTMLElement | null,
-    onRequestClose: hideCreateAgentWorkspaceModal,
-  });
-  if (input) {
-    input.value = "";
-    input.focus();
-  }
-  const runtimeInput = document.getElementById(
-    "create-agent-workspace-runtime"
-  ) as HTMLInputElement | null;
-  if (runtimeInput) runtimeInput.value = "";
-  const nameInput = document.getElementById(
-    "create-agent-workspace-name"
-  ) as HTMLInputElement | null;
-  if (nameInput) nameInput.value = "";
-}
-
 async function createRepo(repoId: string | null, repoPath: string | null, gitInit: boolean, gitUrl: string | null): Promise<boolean> {
   try {
     const payload: Record<string, unknown> = {};
@@ -841,29 +782,6 @@ async function createRepo(repoId: string | null, repoPath: string | null, gitIni
   }
 }
 
-async function createAgentWorkspace(
-  workspaceId: string | null,
-  runtime: string | null,
-  displayName: string | null
-): Promise<boolean> {
-  try {
-    const payload: Record<string, unknown> = {};
-    if (workspaceId) payload.id = workspaceId;
-    if (runtime) payload.runtime = runtime;
-    if (displayName) payload.display_name = displayName;
-    await startHubJob("/hub/jobs/agent-workspaces", {
-      body: payload,
-      startedMessage: "Agent workspace creation queued",
-    });
-    flash(`Created agent workspace: ${workspaceId || displayName || "workspace"}`, "success");
-    await refreshHub();
-    return true;
-  } catch (err) {
-    flash((err as Error).message || "Failed to create agent workspace", "error");
-    return false;
-  }
-}
-
 export async function handleCreateRepoSubmit(): Promise<void> {
   const idInput = document.getElementById("create-repo-id") as HTMLInputElement | null;
   const pathInput = document.getElementById("create-repo-path") as HTMLInputElement | null;
@@ -883,32 +801,6 @@ export async function handleCreateRepoSubmit(): Promise<void> {
   const ok = await createRepo(repoId, repoPath, gitInit, gitUrl);
   if (ok) {
     hideCreateRepoModal();
-  }
-}
-
-export async function handleCreateAgentWorkspaceSubmit(): Promise<void> {
-  const idInput = document.getElementById(
-    "create-agent-workspace-id"
-  ) as HTMLInputElement | null;
-  const runtimeInput = document.getElementById(
-    "create-agent-workspace-runtime"
-  ) as HTMLInputElement | null;
-  const nameInput = document.getElementById(
-    "create-agent-workspace-name"
-  ) as HTMLInputElement | null;
-
-  const workspaceId = idInput?.value?.trim() || null;
-  const runtime = runtimeInput?.value?.trim() || null;
-  const displayName = nameInput?.value?.trim() || null;
-
-  if (!workspaceId || !runtime) {
-    flash("Workspace ID and runtime are required", "error");
-    return;
-  }
-
-  const ok = await createAgentWorkspace(workspaceId, runtime, displayName);
-  if (ok) {
-    hideCreateAgentWorkspaceModal();
   }
 }
 
@@ -960,7 +852,6 @@ export function initHubSettings(): void {
 
 export {
   promptAndSetRepoDestination,
-  promptAndSetAgentWorkspaceDestination,
   openRepoSettingsModal,
   removeRepoWithChecks,
 };

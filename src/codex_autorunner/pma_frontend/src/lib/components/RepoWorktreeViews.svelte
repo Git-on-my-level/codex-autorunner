@@ -255,9 +255,11 @@
                 </p>
               </div>
             </div>
-            <span class="progress-track" aria-label={`${run.progress} percent complete`}>
-              <span style={`width: ${run.progress}%`}></span>
-            </span>
+            {#if run.progress !== null}
+              <span class="progress-track" aria-label={`${run.progress} percent complete`}>
+                <span style={`width: ${run.progress}%`}></span>
+              </span>
+            {/if}
             <div class="row-links">
               {#if run.chatHref}<a href={href(run.chatHref)}>PMA chat</a>{/if}
               {#if run.ticketHref}<a href={href(run.ticketHref)}>Ticket</a>{/if}

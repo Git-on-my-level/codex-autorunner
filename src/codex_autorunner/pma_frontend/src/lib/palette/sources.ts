@@ -7,8 +7,7 @@ import {
   repoMemoryRoute,
   worktreeRoute,
   worktreeTicketRoute,
-  worktreeMemoryRoute,
-  agentWorkspaceRoute
+  worktreeMemoryRoute
 } from '$lib/viewModels/routes';
 
 const RECENT_ACTIONS_MAX = 20;
@@ -48,8 +47,7 @@ export function threadSource(threads: PmaChatSummary[]): PaletteSource {
 
 export function scopeSource(
   repos: RepoSummary[],
-  worktrees: WorktreeSummary[],
-  agentWorkspaces?: { id: string; name: string; resourceKind: string }[]
+  worktrees: WorktreeSummary[]
 ): PaletteSource {
   return {
     group: 'Scopes',
@@ -95,17 +93,6 @@ export function scopeSource(
           action: { kind: 'navigate', href: worktreeRoute(wt.id, wt.repoId ?? null) }
         });
       }
-      if (agentWorkspaces) {
-        for (const ws of agentWorkspaces) {
-          items.push({
-            id: `scope:agent-workspace:${ws.id}`,
-            label: ws.name,
-            group: 'Scopes',
-            keywords: `agent workspace ${ws.id} ${ws.resourceKind}`,
-            action: { kind: 'navigate', href: agentWorkspaceRoute(ws.id) }
-          });
-        }
-      }
       return items;
     }
   };
@@ -149,7 +136,7 @@ export function memorySource(
     priority: 40,
     load: () =>
       docs.map((doc) => {
-        let href = '/chats?detail=memory';
+        let href = '/settings?memory=1';
         if (scopeId && doc.kind) {
           const base = `/repos/${encodeURIComponent(scopeId)}`;
           href = `${base}/memory`;

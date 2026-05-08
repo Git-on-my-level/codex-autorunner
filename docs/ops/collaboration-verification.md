@@ -133,7 +133,7 @@ across runtime threads, bindings, PMA shims, and flow targets:
   does not collapse into a normal chat thread.
 - **Observability**: Thread and flow targets share discovery and observability
   surfaces without losing their distinct identities.
-- **Capability filtering**: ZeroClaw and Hermes capability differences, plus
+- **Capability filtering**: Codex, OpenCode, and Hermes capability differences, plus
   capability-aware filtering, continue to work inside the integrated build.
 
 ### Acceptance criteria
@@ -152,7 +152,7 @@ across runtime threads, bindings, PMA shims, and flow targets:
    routing decisions; ordinary chat routing must resolve through shared
    orchestration-managed thread targets.
 
-### Hermes and ZeroClaw capability verification
+### Hermes capability verification
 
 Verify that richer adapter capabilities remain visible and are not flattened to
 the weakest common interface:

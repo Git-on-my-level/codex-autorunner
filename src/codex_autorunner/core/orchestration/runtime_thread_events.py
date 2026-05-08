@@ -198,7 +198,7 @@ async def decode_runtime_raw_messages(raw_event: Any) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = []
     async for sse_event in _parse_runtime_thread_sse(text):
         payload = _load_json_object(sse_event.data)
-        if sse_event.event in {"app-server", "event", "zeroclaw"}:
+        if sse_event.event in {"app-server", "event"}:
             message = payload.get("message")
             if isinstance(message, dict):
                 messages.append(dict(message))
@@ -626,7 +626,7 @@ def _normalize_sse_event(
     timestamp: Optional[str] = None,
 ) -> list[RunEvent]:
     payload = _load_json_object(sse_event.data)
-    if sse_event.event in {"app-server", "event", "zeroclaw"}:
+    if sse_event.event in {"app-server", "event"}:
         message = payload.get("message")
         if isinstance(message, dict):
             return normalize_runtime_thread_message(

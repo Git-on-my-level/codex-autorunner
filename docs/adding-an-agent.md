@@ -16,26 +16,23 @@ Reference points in-tree today:
 - **Hermes**: ACP-backed repo/worktree runtime with durable threads, approvals,
   and event streaming, but without active-thread discovery,
   review/model-listing/transcript-history
-- **ZeroClaw**: narrower `agent_workspace` runtime with detect-only durability
-  requirements
 
 ## Choose The Right Resource Model
 
 Before writing code, decide what CAR is actually managing:
 
 - Use repo semantics when the agent works against project code in a repo/worktree.
-- Use `agent_workspace` semantics when the durable thing is runtime state rather
-  than project code.
+- Use filesystem scope semantics when orchestration must target an explicit
+  absolute workspace directory that is not modeled as a manifest repo row.
 
-For the full resource-model contract, including first-class CAR-managed `agent_workspace`
-semantics and the ZeroClaw durability caveat, see `docs/plugin-api.md`.
+For the durable-thread contract and capability caveats, see `docs/plugin-api.md`.
 
 ## Prerequisites
 
 Before adding a new agent, ensure:
 1. The agent binary/CLI is available and callable
-2. The agent has either a documented protocol/API or a CAR-proven
-   `agent_workspace` contract for durable state
+2. The agent has either a documented protocol/API or a CAR-proven durable-thread
+   harness contract suitable for repo/worktree execution
 3. The agent supports durable thread/session operations: create, resume, and execute turns
 4. You have tested the agent works independently of CAR
 
@@ -308,7 +305,6 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
     "agents": {
         "codex": {"binary": "codex"},
         "opencode": {"binary": "opencode"},
-        "zeroclaw": {"binary": "zeroclaw"},
         "hermes": {"binary": "hermes"},
         "myagent": {"binary": "myagent"},  # ADD THIS
     },
@@ -482,7 +478,7 @@ Before submitting, verify:
 
 ## References
 
-- Existing implementations: `src/codex_autorunner/agents/codex/`, `src/codex_autorunner/agents/opencode/`, `src/codex_autorunner/agents/hermes/`, `src/codex_autorunner/agents/zeroclaw/`
+- Existing implementations: `src/codex_autorunner/agents/codex/`, `src/codex_autorunner/agents/opencode/`, `src/codex_autorunner/agents/hermes/`, `src/codex_autorunner/agents/acp/`
 - Agent harness protocol: `src/codex_autorunner/agents/base.py`
 - Registry: `src/codex_autorunner/agents/registry.py`
 

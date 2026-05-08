@@ -243,7 +243,7 @@ def test_create_thread_accepts_canonical_refs_and_persists_projection_columns(
     assert thread.backend_binding.backend_runtime_instance_id == "runtime-1"
 
 
-def test_create_thread_writes_canonical_non_repo_owner_without_repo_projection(
+def test_create_thread_writes_canonical_worktree_owner_without_repo_projection(
     tmp_path: Path,
 ) -> None:
     hub_root = tmp_path / "hub"
@@ -254,7 +254,7 @@ def test_create_thread_writes_canonical_non_repo_owner_without_repo_projection(
     created = store.create_thread(
         "codex",
         workspace_root,
-        scope=ScopeRef(kind="agent_workspace", id="zc-main"),
+        scope=ScopeRef(kind="worktree", id="wt-1", parent_repo_id="base"),
     )
 
     with open_orchestration_sqlite(hub_root, durable=False) as conn:
@@ -269,11 +269,11 @@ def test_create_thread_writes_canonical_non_repo_owner_without_repo_projection(
 
     assert row is not None
     assert row["repo_id"] is None
-    assert row["resource_kind"] == "agent_workspace"
-    assert row["resource_id"] == "zc-main"
-    assert row["scope_urn"] == "agent_workspace:zc-main"
-    assert store.list_threads(resource_kind="agent_workspace", resource_id="zc-main")
-    assert store.list_threads(repo_id="zc-main") == []
+    assert row["resource_kind"] == "worktree"
+    assert row["resource_id"] == "wt-1"
+    assert row["scope_urn"] == "worktree:base/wt-1"
+    assert store.list_threads(resource_kind="worktree", resource_id="wt-1")
+    assert store.list_threads(repo_id="wt-1") == []
 
 
 def test_create_thread_preserves_worktree_scope_on_read_model(tmp_path: Path) -> None:

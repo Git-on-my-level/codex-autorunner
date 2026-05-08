@@ -31,20 +31,9 @@ function baseRepo(partial) {
         ...partial,
     };
 }
-function baseWorkspace(partial) {
-    return {
-        runtime: "mock",
-        enabled: true,
-        exists_on_disk: true,
-        effective_destination: { kind: "path", path: partial.path },
-        resource_kind: "agent_workspace",
-        ...partial,
-    };
-}
 const isoScan = "2025-12-10T20:00:00.000Z";
 const defaultHubData = {
     repos: [],
-    agent_workspaces: [],
     last_scan_at: isoScan,
     pinned_parent_repo_ids: [],
 };
@@ -60,7 +49,6 @@ function bundle(id, label, description, patch) {
         ...defaultHubData,
         ...patch.hubData,
         repos: patch.hubData?.repos ?? defaultHubData.repos,
-        agent_workspaces: patch.hubData?.agent_workspaces ?? defaultHubData.agent_workspaces,
     };
     return {
         id,
@@ -81,7 +69,7 @@ const mockPmaAgentsList = {
         { id: "codex", label: "Codex CLI (mock)" },
     ],
 };
-const healthyScenario = bundle("healthy", "Healthy multi-repo", "Two base repos, one agent workspace, token usage, pinned parent.", {
+const healthyScenario = bundle("healthy", "Healthy multi-repo", "Two base repos, token usage, pinned parent.", {
     hubData: {
         repos: [
             baseRepo({
@@ -97,13 +85,6 @@ const healthyScenario = bundle("healthy", "Healthy multi-repo", "Two base repos,
                 last_run_id: 88,
                 status: "idle",
                 is_clean: true,
-            }),
-        ],
-        agent_workspaces: [
-            baseWorkspace({
-                id: "ws-notebooks",
-                display_name: "Notebooks",
-                path: "/Volumes/agents/ws-notebooks",
             }),
         ],
         last_scan_at: isoScan,
@@ -135,8 +116,8 @@ const pmaHealthyScenario = {
     pmaAgents: mockPmaAgentsList,
 };
 const scenarios = {
-    empty: bundle("empty", "Empty hub", "No repos, no agent workspaces, no channel rows.", {
-        hubData: { repos: [], agent_workspaces: [], last_scan_at: null },
+    empty: bundle("empty", "Empty hub", "No repos and no channel rows.", {
+        hubData: { repos: [], last_scan_at: null },
     }),
     healthy: healthyScenario,
     "pma-healthy": pmaHealthyScenario,
@@ -333,7 +314,6 @@ const scenarios = {
     "pma-agents-ok": bundle("pma-agents-ok", "PMA enabled (probe + agents list)", "Empty hub but PMA agents list present — use with ?view=pma for the PMA shell without real repos.", {
         hubData: {
             repos: [],
-            agent_workspaces: [],
             last_scan_at: null,
             pinned_parent_repo_ids: [],
         },
@@ -342,7 +322,6 @@ const scenarios = {
     onboarding: bundle("onboarding", "First-run / clean slate (onboarding)", "Empty hub + mocked PMA agents. Pair with ?view=pma and ?carOnboarding=1 to reset the setup walkthrough strip (see walkthrough.ts).", {
         hubData: {
             repos: [],
-            agent_workspaces: [],
             last_scan_at: null,
             pinned_parent_repo_ids: [],
         },

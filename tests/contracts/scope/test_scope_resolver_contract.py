@@ -48,7 +48,6 @@ scope_ref_strategy = st.one_of(
         id=_safe_id,
         parent_repo_id=_safe_id,
     ),
-    st.builds(ScopeRef, kind=st.just("agent_workspace"), id=_safe_id),
     st.builds(ScopeRef, kind=st.just("filesystem"), path=_safe_path),
 )
 
@@ -261,8 +260,8 @@ class TestInvalidUrnContract:
             "repo:a/b",
             "worktree:noslash",
             "worktree:/wt1",
-            "agent_workspace:",
-            "agent_workspace:a/b",
+            "vault:",
+            "vault:a/b",
             "filesystem:",
             "filesystem:%ZZ",
             "planet:earth",

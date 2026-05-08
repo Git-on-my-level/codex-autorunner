@@ -26,7 +26,6 @@ from ..chat.approval_modes import (
 from ..telegram.constants import DEFAULT_SKILLS_LIST_LIMIT
 from ..telegram.helpers import _format_skills_list
 from .car_autocomplete import (
-    agent_workspace_autocomplete_value,
     repo_autocomplete_value,
     resolve_workspace_from_token,
     workspace_autocomplete_value,
@@ -115,65 +114,6 @@ def _list_manifest_repos(
         return []
 
 
-def _list_agent_workspaces(service: Any) -> list[tuple[str, str, str]]:
-    hub_client = getattr(service, "_hub_client", None)
-    if hub_client is None:
-        return []
-    try:
-        import asyncio
-        from concurrent.futures import (
-            ThreadPoolExecutor,
-        )
-        from concurrent.futures import (
-            TimeoutError as FuturesTimeoutError,
-        )
-
-        from ...core.hub_control_plane import AgentWorkspaceListRequest
-
-        request = AgentWorkspaceListRequest()
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # Cannot use run_coroutine_threadsafe on the same loop —
-            # it would deadlock. Run asyncio.run() in a worker thread
-            # with a fresh loop instead.
-            def _fetch() -> Any:
-                return asyncio.run(hub_client.list_agent_workspaces(request))
-
-            with ThreadPoolExecutor(max_workers=1) as pool:
-                future = pool.submit(_fetch)
-                response = future.result(timeout=10)
-        else:
-            response = loop.run_until_complete(
-                hub_client.list_agent_workspaces(request)
-            )
-    except (Exception, FuturesTimeoutError):
-        return _list_agent_workspaces_from_cache(service)
-    workspaces: list[tuple[str, str, str]] = []
-    for descriptor in response.workspaces:
-        workspace_id = descriptor.workspace_id
-        workspace_path = descriptor.workspace_root
-        if not workspace_id or not workspace_path:
-            continue
-        display_name = descriptor.display_name or workspace_id
-        workspaces.append(
-            (workspace_id, str(canonicalize_path(Path(workspace_path))), display_name)
-        )
-    workspaces.sort(key=lambda item: (item[2].lower(), item[0]))
-    service._agent_workspaces_cache = workspaces
-    return workspaces
-
-
-def _list_agent_workspaces_from_cache(
-    service: Any,
-) -> list[tuple[str, str, str]]:
-    cached: list[tuple[str, str, str]] | None = getattr(
-        service, "_agent_workspaces_cache", None
-    )
-    if cached is not None:
-        return list(cached)
-    return []
-
-
 def _resource_owner_for_workspace(
     service: Any,
     workspace_root: Path,
@@ -197,19 +137,10 @@ def _resource_owner_for_workspace(
     )
     if normalized_resource_kind == "repo" and normalized_resource_id:
         return "repo", normalized_resource_id, normalized_resource_id
-    if normalized_resource_kind == "agent_workspace" and normalized_resource_id:
-        return "agent_workspace", normalized_resource_id, None
     if normalized_repo_id:
         return "repo", normalized_repo_id, normalized_repo_id
 
     canonical_workspace = str(canonicalize_path(workspace_root))
-    for (
-        workspace_id,
-        workspace_path,
-        _display_name,
-    ) in service._list_agent_workspaces():
-        if workspace_path == canonical_workspace:
-            return "agent_workspace", workspace_id, None
     for listed_repo_id, listed_path in service._list_manifest_repos():
         if str(canonicalize_path(Path(listed_path))) == canonical_workspace:
             return "repo", listed_repo_id, listed_repo_id
@@ -226,16 +157,6 @@ def _list_bind_workspace_candidates(
         normalized_path = str(canonicalize_path(Path(path)))
         candidates.append(("repo", repo_id, normalized_path))
         manifest_paths.add(normalized_path)
-
-    for (
-        workspace_id,
-        workspace_path,
-        _display_name,
-    ) in service._list_agent_workspaces():
-        if workspace_path in manifest_paths:
-            continue
-        candidates.append(("agent_workspace", workspace_id, workspace_path))
-        manifest_paths.add(workspace_path)
 
     seen_paths: set[str] = set(manifest_paths)
     try:
@@ -267,12 +188,6 @@ def _bind_candidate_value(
 ) -> str:
     if resource_kind == "repo" and isinstance(resource_id, str) and resource_id:
         return repo_autocomplete_value(resource_id)
-    if (
-        resource_kind == "agent_workspace"
-        and isinstance(resource_id, str)
-        and resource_id
-    ):
-        return agent_workspace_autocomplete_value(resource_id)
     return workspace_autocomplete_value(workspace_path)
 
 
@@ -295,8 +210,6 @@ def _build_bind_picker_items(
         value = _bind_candidate_value(resource_kind, resource_id, workspace_path)
         label = _bind_candidate_label(resource_kind, resource_id, workspace_path)
         description = workspace_path
-        if resource_kind == "agent_workspace":
-            description = f"agent workspace \u00b7 {workspace_path}"
         items.append((value, label, description))
     return items
 
@@ -601,12 +514,7 @@ async def _bind_to_workspace_candidate(
     )
     await service._store.clear_pending_compact_seed(channel_id=channel_id)
 
-    if selected_resource_kind == "agent_workspace" and selected_resource_id:
-        message = (
-            f"Bound this channel to agent workspace: "
-            f"{selected_resource_id} ({workspace})"
-        )
-    elif selected_resource_id:
+    if selected_resource_id:
         message = f"Bound this channel to: {selected_resource_id} ({workspace})"
     else:
         message = f"Bound this channel to workspace: {workspace}"

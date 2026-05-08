@@ -503,41 +503,6 @@ def _render_repos_section(
     lines.append("")
 
 
-def _render_agent_workspaces_section(
-    snapshot: dict[str, Any],
-    lines: list[str],
-    *,
-    max_repos: int,
-    max_field_chars: int,
-) -> None:
-    agent_workspaces = snapshot.get("agent_workspaces") or []
-    if not agent_workspaces:
-        return
-    lines.append("Agent Workspaces:")
-    for workspace in list(agent_workspaces)[: max(0, max_repos)]:
-        workspace_id = _truncate(str(workspace.get("id", "")), max_field_chars)
-        display_name = _truncate(
-            str(workspace.get("display_name", "")), max_field_chars
-        )
-        runtime = _truncate(str(workspace.get("runtime", "")), max_field_chars)
-        enabled = str(bool(workspace.get("enabled"))).lower()
-        exists_on_disk = str(bool(workspace.get("exists_on_disk"))).lower()
-        destination_text = _render_destination_summary(
-            workspace.get("effective_destination"), max_field_chars=max_field_chars
-        )
-        lines.append(
-            f"- {workspace_id} ({display_name}): runtime={runtime} "
-            f"destination={destination_text} enabled={enabled} "
-            f"exists_on_disk={exists_on_disk}"
-        )
-        freshness_summary = _render_freshness_summary(
-            workspace.get("freshness"), max_field_chars=max_field_chars
-        )
-        if freshness_summary:
-            lines.append(f"  freshness: {freshness_summary}")
-    lines.append("")
-
-
 def _render_templates_section(
     snapshot: dict[str, Any],
     lines: list[str],
@@ -921,9 +886,6 @@ def _render_hub_snapshot(
         max_repos=max_repos,
         max_field_chars=fc,
         max_text_chars=max_text_chars,
-    )
-    _render_agent_workspaces_section(
-        snapshot, lines, max_repos=max_repos, max_field_chars=fc
     )
     _render_templates_section(
         snapshot, lines, max_template_repos=max_template_repos, max_field_chars=fc

@@ -27,7 +27,6 @@ ControlPlaneCapability = Literal[
     "thread_targets",
     "transcript_history",
     "compact_seed_updates",
-    "agent_workspaces",
     "workspace_setup_commands",
     "automation_requests",
     "execution_timeline_persistence",

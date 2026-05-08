@@ -80,7 +80,6 @@ from .managed_thread_runtime_payloads import (
     build_started_execution_error_payload,
     resolve_managed_thread_message_options,
     sanitize_managed_thread_result_error,
-    sync_zeroclaw_context_if_needed,
 )
 from .managed_thread_runtime_payloads import (
     get_live_thread_runtime_binding as _get_live_thread_runtime_binding,
@@ -874,7 +873,6 @@ def build_managed_thread_runtime_routes(
                     or "",
                 ),
             )
-        sync_zeroclaw_context_if_needed(thread=thread, options=options)
         prepared_execution = None
         try:
             progress_targets = _resolve_pma_chat_bound_surface_targets(

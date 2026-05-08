@@ -48,16 +48,16 @@ describe('mapThreadSummary', () => {
     expect(vm.scope).toEqual({ kind: 'hub' });
   });
 
-  it('maps agent_workspace-scoped thread', () => {
+  it('maps unrecognized resource_kind thread payloads to hub scope', () => {
     const vm = mapThreadSummary({
       managed_thread_id: 'thread-ws',
-      resource_kind: 'agent_workspace',
+      resource_kind: 'custom_workspace',
       resource_id: 'ws-1',
       agent: 'opencode',
       status: 'running'
     });
 
-    expect(vm.scope).toEqual({ kind: 'agent_workspace', id: 'ws-1' });
+    expect(vm.scope).toEqual({ kind: 'hub' });
   });
 
   it('extracts ticket id from ticket flow thread', () => {

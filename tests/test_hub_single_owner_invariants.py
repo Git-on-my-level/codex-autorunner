@@ -336,7 +336,6 @@ def test_load_hub_state_returns_empty_for_missing_file(tmp_path: Path) -> None:
     state = load_hub_state(tmp_path / "nonexistent.json", tmp_path)
     assert state.last_scan_at is None
     assert state.repos == []
-    assert state.agent_workspaces == []
     assert state.pinned_parent_repo_ids == []
 
 
@@ -366,7 +365,6 @@ def test_load_hub_state_skips_bad_entries_but_loads_good_ones(tmp_path: Path) ->
                 "status": "not_a_real_status_value",
             },
         ],
-        "agent_workspaces": [],
     }
     state_path = tmp_path / "hub_state.json"
     state_path.write_text(json.dumps(payload), encoding="utf-8")
@@ -381,7 +379,6 @@ def test_load_hub_state_normalizes_pinned_repo_ids(tmp_path: Path) -> None:
 
     payload = {
         "repos": [],
-        "agent_workspaces": [],
         "pinned_parent_repo_ids": [
             "  alpha  ",
             "beta",

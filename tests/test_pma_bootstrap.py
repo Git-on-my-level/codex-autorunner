@@ -47,7 +47,7 @@ def test_pma_files_created_on_hub_init(tmp_path: Path) -> None:
         in prompt_content
     )
     assert "Do not launch runtime CLIs directly" in prompt_content
-    assert "`codex`, `opencode`, `zeroclaw`" in prompt_content
+    assert "(`codex`, `opencode`, etc.)" in prompt_content
     assert (
         "Do not write ticket files as scaffolding for managed-thread work"
         in prompt_content

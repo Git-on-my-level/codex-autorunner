@@ -7,11 +7,6 @@ from .errors import (
 )
 from .http_client import HttpHubControlPlaneClient
 from .models import (
-    AgentWorkspaceDescriptor,
-    AgentWorkspaceListRequest,
-    AgentWorkspaceListResponse,
-    AgentWorkspaceLookupRequest,
-    AgentWorkspaceResponse,
     AutomationRequest,
     AutomationResult,
     Binding,
@@ -86,11 +81,6 @@ from .remote_execution_store import RemoteThreadExecutionStore
 from .service import HubSharedStateService
 
 __all__ = [
-    "AgentWorkspaceDescriptor",
-    "AgentWorkspaceListRequest",
-    "AgentWorkspaceListResponse",
-    "AgentWorkspaceLookupRequest",
-    "AgentWorkspaceResponse",
     "AutomationRequest",
     "AutomationResult",
     "Binding",

@@ -5,9 +5,8 @@ Destinations control where agent backends execute for each managed resource in h
 ## Summary
 
 - Default destination is `local`.
-- Destination config is stored per `repos[]` or `agent_workspaces[]` entry in `<hub_root>/.codex-autorunner/manifest.yml`.
+- Destination config is stored per `repos[]` entry in `<hub_root>/.codex-autorunner/manifest.yml`.
 - Worktrees inherit destination from their base repo unless the worktree sets an explicit override.
-- Agent workspaces do not inherit from repos or other workspaces.
 - Canonical schema reference: [Hub Manifest Destination Schema](../reference/hub-manifest-schema.md).
 
 ## Destination Kinds
@@ -56,23 +55,11 @@ Supported Docker fields in manifest/API payloads:
 
 Notes:
 - The repo path is always bind-mounted automatically as `${REPO_ROOT}:${REPO_ROOT}`.
-- Agent workspaces use the same automatic bind-mount rule for the managed workspace root.
 - The canonical mount flag is `read_only` in manifest storage.
 - API requests also accept `readOnly` and `readonly` aliases, normalized to `read_only`.
 - Docker destination overrides app-server supervisor state root to:
   - `<repo_root>/.codex-autorunner/app_server_workspaces`
 - This keeps state under repo-local `.codex-autorunner/` and writable from the repo mount.
-
-ZeroClaw under Docker:
-- CAR mounts the managed agent-workspace root, not just the nested runtime workspace.
-- ZeroClaw still runs with `ZEROCLAW_WORKSPACE=<workspace_root>/workspace`.
-- CAR also sets `ZEROCLAW_CONFIG_DIR=${HOME}/.zeroclaw` so ZeroClaw keeps using
-  the canonical host-style config directory instead of treating the managed
-  workspace as its config root.
-- The ZeroClaw process executes with its working directory set to that managed `workspace/` directory inside the container so session-state files under `<workspace_root>/threads/` and shared workspace memory stay on the same durable mount.
-- If you use a Docker destination for ZeroClaw, mount `${HOME}/.zeroclaw` into
-  the container at the same path or point `ZEROCLAW_CONFIG_DIR` at another
-  mounted config directory.
 
 ## `full-dev` Profile Contract
 

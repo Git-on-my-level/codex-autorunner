@@ -66,12 +66,12 @@ class TestNormalizeResourceOwner:
         assert rid == "base"
         assert repo_id == "base"
 
-    def test_valid_agent_workspace_pair(self) -> None:
+    def test_valid_worktree_pair(self) -> None:
         kind, rid, repo_id = _normalize_resource_owner(
-            resource_kind="agent_workspace", resource_id="zc-main"
+            resource_kind="worktree", resource_id="wt-1"
         )
-        assert kind == "agent_workspace"
-        assert rid == "zc-main"
+        assert kind == "worktree"
+        assert rid == "wt-1"
         assert repo_id is None
 
     def test_resource_id_without_kind_rejected(self) -> None:

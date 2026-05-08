@@ -53,7 +53,6 @@ describe('scoped ticket queue helpers', () => {
   it('does not map non-ticket scopes into ticket queue owners', () => {
     expect(scopeToTicketQueueConfig({ kind: 'hub' })).toBeNull();
     expect(scopeToTicketOwner({ kind: 'filesystem', path: '/tmp/project' })).toBeNull();
-    expect(scopeToTicketOwnerScope({ kind: 'agent_workspace', id: 'codex' })).toBeNull();
     expect(ticketScopeHref({ kind: 'hub' })).toBeNull();
   });
 

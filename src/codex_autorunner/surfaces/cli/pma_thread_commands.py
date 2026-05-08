@@ -810,7 +810,7 @@ def _record_thread_compact_audit(
 
 def pma_thread_spawn(
     agent: Optional[str] = typer.Option(
-        None, "--agent", help="Thread agent to use (codex|opencode|hermes|zeroclaw)"
+        None, "--agent", help="Thread agent to use (codex|opencode|hermes)"
     ),
     scope: Optional[str] = typer.Option(
         None,
@@ -821,7 +821,7 @@ def pma_thread_spawn(
         None, "--repo", help="Hub repo id for the target workspace"
     ),
     resource_kind: Optional[str] = typer.Option(
-        None, "--resource-kind", help="Managed resource kind (repo|agent_workspace)"
+        None, "--resource-kind", help="Managed resource kind (repo|worktree)"
     ),
     resource_id: Optional[str] = typer.Option(
         None, "--resource-id", help="Managed resource id"
@@ -919,11 +919,8 @@ def pma_thread_spawn(
             err=True,
         )
         raise typer.Exit(code=1) from None
-    if normalized_agent is None and normalized_resource_kind != "agent_workspace":
-        typer.echo(
-            "--agent is required unless --resource-kind agent_workspace is used",
-            err=True,
-        )
+    if normalized_agent is None:
+        typer.echo("--agent is required", err=True)
         raise typer.Exit(code=1) from None
     if pr_mode and normalized_resource_kind != "repo":
         typer.echo("--pr requires --repo or --resource-kind repo", err=True)
@@ -939,9 +936,7 @@ def pma_thread_spawn(
         )
         raise typer.Exit(code=1) from None
     if normalized_context_profile is None:
-        normalized_context_profile = default_managed_thread_context_profile(
-            resource_kind=normalized_resource_kind
-        )
+        normalized_context_profile = default_managed_thread_context_profile()
 
     hub_root = _resolve_hub_path(path)
     try:

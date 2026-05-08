@@ -71,10 +71,6 @@ export function worktreeMemoryRoute(worktreeId: string, parentRepoId: string | n
   return `${worktreeRoute(worktreeId, parentRepoId)}/memory`;
 }
 
-export function agentWorkspaceRoute(workspaceId: string): string {
-  return `/agent-workspaces/${encodeURIComponent(workspaceId)}`;
-}
-
 export function legacyWorktreeRedirectPath(pathname: string, worktreeId: string, parentRepoId: string | null): string | null {
   if (!parentRepoId) return null;
   const expectedPrefix = `/worktrees/${encodeURIComponent(worktreeId)}`;

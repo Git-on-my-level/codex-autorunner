@@ -29,7 +29,6 @@ from ._schema_normalization import (
 from .serializers import (
     OrchestrationHealthPayload,
     SectionFreshnessSummary,
-    WorkspaceDestinationPayload,
 )
 
 
@@ -144,47 +143,6 @@ class HubRemoveRepoRequest(Payload):
     )
     delete_dir: bool = True
     delete_worktrees: bool = False
-
-
-class HubCreateAgentWorkspaceRequest(Payload):
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
-
-    workspace_id: Optional[str] = Field(
-        default=None,
-        validation_alias=AliasChoices("workspace_id", "workspaceId", "id"),
-    )
-    runtime: str
-    enabled: bool = True
-    display_name: Optional[str] = Field(
-        default=None,
-        validation_alias=AliasChoices("display_name", "displayName", "name"),
-    )
-
-
-class HubUpdateAgentWorkspaceRequest(Payload):
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
-
-    enabled: Optional[bool] = None
-    display_name: Optional[str] = Field(
-        default=None,
-        validation_alias=AliasChoices("display_name", "displayName", "name"),
-    )
-
-
-class HubRemoveAgentWorkspaceRequest(Payload):
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
-
-    delete_dir: bool = Field(
-        default=False, validation_alias=AliasChoices("delete_dir", "deleteDir")
-    )
-
-
-class HubDeleteAgentWorkspaceRequest(Payload):
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
-
-    delete_dir: bool = Field(
-        default=True, validation_alias=AliasChoices("delete_dir", "deleteDir")
-    )
 
 
 class HubCreateWorktreeRequest(Payload):
@@ -302,7 +260,7 @@ class PmaManagedThreadCreateRequest(Payload):
     scope_urn: Optional[str] = Field(
         default=None, validation_alias=AliasChoices("scope_urn", "scopeUrn")
     )
-    resource_kind: Optional[Literal["repo", "worktree", "agent_workspace"]] = Field(
+    resource_kind: Optional[Literal["repo", "worktree"]] = Field(
         default=None, validation_alias=AliasChoices("resource_kind", "resourceKind")
     )
     resource_id: Optional[str] = Field(
@@ -434,20 +392,14 @@ __all__ = [
     "GithubContextRequest",
     "GithubIssueRequest",
     "GithubPrSyncRequest",
-    "HubAgentWorkspaceListResponse",
-    "HubAgentWorkspaceMutationResponse",
-    "HubAgentWorkspaceResponse",
-    "HubAgentWorkspaceSummaryResponse",
     "HubArchiveRepoStateRequest",
     "HubArchiveRepoStateResponse",
     "HubArchiveWorktreeRequest",
     "HubArchiveWorktreeResponse",
     "HubArchiveWorktreeStateResponse",
     "HubCleanupWorktreeRequest",
-    "HubCreateAgentWorkspaceRequest",
     "HubCreateRepoRequest",
     "HubCreateWorktreeRequest",
-    "HubDeleteAgentWorkspaceRequest",
     "HubDestinationMountRequest",
     "HubDestinationSetRequest",
     "HubJobResponse",
@@ -456,9 +408,7 @@ __all__ = [
     "HubMessagesFreshnessResponse",
     "HubMessagesResponse",
     "HubPinRepoRequest",
-    "HubRemoveAgentWorkspaceRequest",
     "HubRemoveRepoRequest",
-    "HubUpdateAgentWorkspaceRequest",
     "LocalRunArchiveSummary",
     "LocalRunArchivesResponse",
     "Payload",
@@ -567,33 +517,6 @@ class HubDestinationSetRequest(Payload):
 
     def normalized_payload(self) -> dict[str, Any]:
         return self.model_dump(exclude_none=True)
-
-
-class HubAgentWorkspaceSummaryResponse(ResponseModel):
-    id: str
-    runtime: str
-    path: str
-    display_name: str
-    enabled: bool
-    exists_on_disk: bool
-    effective_destination: WorkspaceDestinationPayload
-    resource_kind: str
-
-
-class HubAgentWorkspaceResponse(HubAgentWorkspaceSummaryResponse):
-    configured_destination: Optional[WorkspaceDestinationPayload] = None
-    source: Optional[str] = None
-    issues: List[str] = Field(default_factory=list)
-
-
-class HubAgentWorkspaceListResponse(ResponseModel):
-    agent_workspaces: List[HubAgentWorkspaceSummaryResponse]
-
-
-class HubAgentWorkspaceMutationResponse(ResponseModel):
-    status: str
-    workspace_id: str
-    delete_dir: bool
 
 
 class HubMessageSnapshotResponse(ResponseModel):

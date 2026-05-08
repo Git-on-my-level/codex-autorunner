@@ -10,10 +10,6 @@ import httpx
 from .client import HubControlPlaneClient
 from .errors import HubControlPlaneError, HubControlPlaneErrorInfo
 from .models import (
-    AgentWorkspaceListRequest,
-    AgentWorkspaceListResponse,
-    AgentWorkspaceLookupRequest,
-    AgentWorkspaceResponse,
     AutomationRequest,
     AutomationResult,
     ExecutionBackendIdUpdateRequest,
@@ -675,25 +671,6 @@ class HttpHubControlPlaneClient(HubControlPlaneClient):
             path="/hub/api/control-plane/pma-snapshot",
         )
         return PmaSnapshotResponse.from_mapping(payload)
-
-    async def get_agent_workspace(
-        self, request: AgentWorkspaceLookupRequest
-    ) -> AgentWorkspaceResponse:
-        payload = await self._request(
-            method="GET",
-            path=f"/hub/api/control-plane/agent-workspaces/{request.workspace_id}",
-        )
-        return AgentWorkspaceResponse.from_mapping(payload)
-
-    async def list_agent_workspaces(
-        self, request: AgentWorkspaceListRequest
-    ) -> AgentWorkspaceListResponse:
-        payload = await self._request(
-            method="GET",
-            path="/hub/api/control-plane/agent-workspaces",
-            params=request.to_dict(),
-        )
-        return AgentWorkspaceListResponse.from_mapping(payload)
 
     async def run_workspace_setup_commands(
         self, request: WorkspaceSetupCommandRequest

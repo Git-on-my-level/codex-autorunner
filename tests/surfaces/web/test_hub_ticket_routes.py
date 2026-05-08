@@ -2,8 +2,9 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 from tests.support.web_test_helpers import create_test_hub_supervisor
-from tests.surfaces.web._hub_test_support import init_git_repo
+from tests.surfaces.web._hub_test_support import init_git_repo, seed_flow_run
 
+from codex_autorunner.core.flows import FlowRunStatus
 from codex_autorunner.server import create_hub_app
 
 
@@ -95,6 +96,51 @@ def test_hub_tickets_filters_to_requested_owner(tmp_path: Path) -> None:
     assert response.status_code == 200
 
     assert [row["ticket_id"] for row in response.json()["tickets"]] == ["tkt_base"]
+
+
+def test_hub_tickets_enriches_current_ticket_with_live_run_metadata(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    supervisor = create_test_hub_supervisor(hub_root)
+    base = supervisor.create_repo("base")
+    run_id = "22222222-2222-4222-8222-222222222222"
+    _write_ticket(
+        base.path,
+        "TICKET-001.md",
+        'ticket_id: "tkt_base"\ntitle: "Base"\nagent: codex\ndone: false\n',
+        "Base body",
+    )
+    seed_flow_run(
+        base.path,
+        run_id=run_id,
+        status=FlowRunStatus.RUNNING,
+        diff_events=[
+            {"insertions": 5, "deletions": 2, "files_changed": 1},
+            {"insertions": 3, "deletions": 0, "files_changed": 2},
+        ],
+        started_at="2026-03-13T08:00:00Z",
+        state={
+            "ticket_engine": {
+                "current_ticket": ".codex-autorunner/tickets/TICKET-001.md",
+                "status": "running",
+            }
+        },
+    )
+
+    client = TestClient(create_hub_app(hub_root))
+    response = client.get("/hub/tickets?repo=base")
+    assert response.status_code == 200
+
+    row = response.json()["tickets"][0]
+    assert row["run_id"] == run_id
+    assert row["status"] == "running"
+    assert row["diff_stats"] == {
+        "insertions": 8,
+        "deletions": 2,
+        "files_changed": 3,
+    }
+    assert row["duration_seconds"] is not None
 
 
 def test_hub_tickets_repo_filter_includes_child_worktrees(tmp_path: Path) -> None:

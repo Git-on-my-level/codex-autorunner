@@ -34,7 +34,6 @@ from ....core.runtime import (
     hub_worktree_doctor_checks,
     pma_doctor_checks,
     summarize_opencode_lifecycle,
-    zeroclaw_doctor_checks,
 )
 from ....core.utils import (
     RepoNotFoundError,
@@ -332,7 +331,6 @@ def register_doctor_commands(
                 + pma_checks
                 + hub_worktree_checks
                 + hub_destination_checks
-                + zeroclaw_doctor_checks(hub_config)
                 + hermes_doctor_checks(hub_config)
                 + chat_checks
                 + chat_lab_checks

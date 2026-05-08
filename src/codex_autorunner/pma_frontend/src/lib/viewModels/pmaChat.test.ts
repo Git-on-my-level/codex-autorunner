@@ -4,6 +4,7 @@ import {
   artifactCardView,
   buildManagedThreadCreatePayload,
   buildManagedThreadMessagePayload,
+  agentCapabilityAllowed,
   buildPmaChatScopeOptions,
   buildPmaCards,
   buildPmaLiveActivity,
@@ -88,6 +89,7 @@ const baseProgress: PmaRunProgress = {
   idleSeconds: 2,
   lastEventId: 7,
   lastEventAt: '2026-05-04T00:00:30Z',
+  progressPercent: null,
   events: [
     {
       ...baseArtifact,
@@ -426,8 +428,7 @@ describe('PMA chat view helpers', () => {
           lastActivityAt: null,
           raw: {}
         }
-      ],
-      []
+      ]
     );
 
     expect(buildManagedThreadCreatePayload('codex', local)).toEqual({
@@ -453,34 +454,15 @@ describe('PMA chat view helpers', () => {
     });
   });
 
-  it('builds managed thread creation payloads for backend-owned agent workspaces', () => {
-    const scopes = buildPmaChatScopeOptions([], [], [
-      {
-        id: 'codex-pma',
-        runtime: 'codex',
-        name: 'Codex PMA',
-        path: '/hub/.agent-workspaces/codex-pma',
-        enabled: true,
-        existsOnDisk: true,
-        resourceKind: 'agent_workspace',
-        raw: {}
-      }
-    ]);
-
-    expect(buildManagedThreadCreatePayload('codex', scopes[1])).toEqual({
-      agent: 'codex',
-      name: 'New PMA chat',
-      scope_urn: 'agent_workspace:codex-pma'
-    });
-  });
-
   it('labels existing chat scopes from durable backend fields', () => {
-    expect(pmaChatScopeLabelFromChat({ ...baseChat, raw: { resource_kind: 'agent_workspace', resource_id: 'codex-pma' } })).toBe(
-      'Agent workspace · codex-pma'
-    );
-    expect(pmaChatScopeLabelFromChat({ ...baseChat, repoId: 'repo-1', worktreeId: null, raw: { resource_kind: 'repo', resource_id: 'repo-1' } })).toBe(
-      'Repo · repo-1'
-    );
+    expect(
+      pmaChatScopeLabelFromChat({
+        ...baseChat,
+        repoId: 'repo-1',
+        worktreeId: null,
+        raw: { resource_kind: 'repo', resource_id: 'repo-1' }
+      })
+    ).toBe('Repo · repo-1');
   });
 
   it('renders pending attachment message text and removes staged attachments', () => {
@@ -572,6 +554,8 @@ describe('PMA chat view helpers', () => {
     expect(pmaChatKind({ ...baseChat, raw: { name: 'New coding agent chat' } })).toBe('coding_agent');
     expect(pmaChatKind({ ...baseChat, raw: { chat_kind: 'direct_agent' } })).toBe('coding_agent');
     expect(pmaChatKindLabel('coding_agent')).toBe('Coding agent');
+    expect(agentCapabilityAllowed({ capability_projection: { actions: { list_models: { allowed: true } } } }, 'list_models')).toBe(true);
+    expect(agentCapabilityAllowed({ capability_projection: { actions: { list_models: { allowed: false } } } }, 'list_models')).toBe(false);
     expect(modelReasoningOptions({ reasoning_options: ['low', 'high', 'high'] })).toEqual(['low', 'high']);
     expect(modelReasoningOptions({ supports_reasoning: true })).toEqual(['none', 'minimal', 'low', 'medium', 'high', 'xhigh']);
   });

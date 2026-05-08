@@ -1,5 +1,4 @@
 import type {
-  HubAgentWorkspace,
   HubChannelDirectoryResponse,
   HubData,
   HubRepo,
@@ -54,24 +53,10 @@ function baseRepo(
   };
 }
 
-function baseWorkspace(
-  partial: Pick<HubAgentWorkspace, "id" | "display_name" | "path"> & Partial<HubAgentWorkspace>
-): HubAgentWorkspace {
-  return {
-    runtime: "mock",
-    enabled: true,
-    exists_on_disk: true,
-    effective_destination: { kind: "path", path: partial.path },
-    resource_kind: "agent_workspace",
-    ...partial,
-  };
-}
-
 const isoScan = "2025-12-10T20:00:00.000Z";
 
 const defaultHubData: HubData = {
   repos: [],
-  agent_workspaces: [],
   last_scan_at: isoScan,
   pinned_parent_repo_ids: [],
 };
@@ -99,7 +84,6 @@ function bundle(id: string, label: string, description: string, patch: BundlePat
     ...defaultHubData,
     ...patch.hubData,
     repos: patch.hubData?.repos ?? defaultHubData.repos,
-    agent_workspaces: patch.hubData?.agent_workspaces ?? defaultHubData.agent_workspaces,
   };
   return {
     id,
@@ -125,7 +109,7 @@ const mockPmaAgentsList = {
 const healthyScenario = bundle(
   "healthy",
   "Healthy multi-repo",
-  "Two base repos, one agent workspace, token usage, pinned parent.",
+  "Two base repos, token usage, pinned parent.",
   {
     hubData: {
       repos: [
@@ -142,13 +126,6 @@ const healthyScenario = bundle(
           last_run_id: 88,
           status: "idle",
           is_clean: true,
-        }),
-      ],
-      agent_workspaces: [
-        baseWorkspace({
-          id: "ws-notebooks",
-          display_name: "Notebooks",
-          path: "/Volumes/agents/ws-notebooks",
         }),
       ],
       last_scan_at: isoScan,
@@ -184,8 +161,8 @@ const pmaHealthyScenario: UiMockScenarioBundle = {
 };
 
 const scenarios: Record<string, UiMockScenarioBundle> = {
-  empty: bundle("empty", "Empty hub", "No repos, no agent workspaces, no channel rows.", {
-    hubData: { repos: [], agent_workspaces: [], last_scan_at: null },
+  empty: bundle("empty", "Empty hub", "No repos and no channel rows.", {
+    hubData: { repos: [], last_scan_at: null },
   }),
 
   healthy: healthyScenario,
@@ -419,7 +396,6 @@ const scenarios: Record<string, UiMockScenarioBundle> = {
     {
       hubData: {
         repos: [],
-        agent_workspaces: [],
         last_scan_at: null,
         pinned_parent_repo_ids: [],
       },
@@ -434,7 +410,6 @@ const scenarios: Record<string, UiMockScenarioBundle> = {
     {
       hubData: {
         repos: [],
-        agent_workspaces: [],
         last_scan_at: null,
         pinned_parent_repo_ids: [],
       },

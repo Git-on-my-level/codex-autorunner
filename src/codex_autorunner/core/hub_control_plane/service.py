@@ -3,9 +3,8 @@ from __future__ import annotations
 import logging
 from importlib import metadata as importlib_metadata
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Any, Optional
 
-from ..hub import AgentWorkspaceSnapshot
 from ..orchestration.bindings import OrchestrationBindingStore
 from ..orchestration.cold_trace_store import ColdTraceStore
 from ..orchestration.models import ExecutionRecord, ThreadTarget
@@ -20,11 +19,6 @@ from ..pma_thread_store import PmaThreadStore
 from ..pma_transcripts import PmaTranscriptStore
 from .errors import HubControlPlaneError
 from .models import (
-    AgentWorkspaceDescriptor,
-    AgentWorkspaceListRequest,
-    AgentWorkspaceListResponse,
-    AgentWorkspaceLookupRequest,
-    AgentWorkspaceResponse,
     AutomationRequest,
     AutomationResult,
     ExecutionBackendIdUpdateRequest,
@@ -91,7 +85,6 @@ from .models import (
 CONTROL_PLANE_API_VERSION = "1.0.0"
 CONTROL_PLANE_MINIMUM_CLIENT_API_VERSION = "1.0.0"
 CONTROL_PLANE_CAPABILITIES: tuple[str, ...] = (
-    "agent_workspaces",
     "automation_requests",
     "compact_seed_updates",
     "compatibility_handshake",
@@ -180,20 +173,6 @@ def _notification_record_from_conversation(
     if conversation is None:
         return None
     return NotificationRecord.from_mapping(conversation.to_dict())
-
-
-def _workspace_descriptor_from_snapshot(
-    snapshot: AgentWorkspaceSnapshot,
-) -> AgentWorkspaceDescriptor:
-    return AgentWorkspaceDescriptor(
-        workspace_id=snapshot.id,
-        runtime_kind=snapshot.runtime,
-        workspace_root=str(snapshot.path),
-        display_name=snapshot.display_name,
-        enabled=bool(snapshot.enabled),
-        exists_on_disk=bool(snapshot.exists_on_disk),
-        resource_kind=snapshot.resource_kind,
-    )
 
 
 class HubSharedStateService:
@@ -767,34 +746,6 @@ class HubSharedStateService:
                 build_hub_snapshot(self._supervisor, hub_root=self._hub_root)
             )
         return PmaSnapshotResponse(snapshot=snapshot)
-
-    def get_agent_workspace(
-        self, request: AgentWorkspaceLookupRequest
-    ) -> AgentWorkspaceResponse:
-        try:
-            snapshot = self._supervisor.get_agent_workspace_snapshot(
-                request.workspace_id
-            )
-        except ValueError:
-            return AgentWorkspaceResponse(workspace=None)
-        return AgentWorkspaceResponse(
-            workspace=_workspace_descriptor_from_snapshot(snapshot)
-        )
-
-    def list_agent_workspaces(
-        self, request: AgentWorkspaceListRequest
-    ) -> AgentWorkspaceListResponse:
-        snapshots: Iterable[AgentWorkspaceSnapshot] = (
-            self._supervisor.list_agent_workspaces(use_cache=False)
-        )
-        workspaces = tuple(
-            descriptor
-            for descriptor in (
-                _workspace_descriptor_from_snapshot(snapshot) for snapshot in snapshots
-            )
-            if request.include_disabled or descriptor.enabled
-        )
-        return AgentWorkspaceListResponse(workspaces=workspaces)
 
     def run_workspace_setup_commands(
         self, request: WorkspaceSetupCommandRequest

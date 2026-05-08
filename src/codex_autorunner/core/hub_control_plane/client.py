@@ -3,10 +3,6 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 
 from .models import (
-    AgentWorkspaceListRequest,
-    AgentWorkspaceListResponse,
-    AgentWorkspaceLookupRequest,
-    AgentWorkspaceResponse,
     AutomationRequest,
     AutomationResult,
     ExecutionBackendIdUpdateRequest,
@@ -211,14 +207,6 @@ class HubControlPlaneClient(Protocol):
     ) -> TranscriptWriteResponse: ...
 
     async def get_pma_snapshot(self) -> PmaSnapshotResponse: ...
-
-    async def get_agent_workspace(
-        self, request: AgentWorkspaceLookupRequest
-    ) -> AgentWorkspaceResponse: ...
-
-    async def list_agent_workspaces(
-        self, request: AgentWorkspaceListRequest
-    ) -> AgentWorkspaceListResponse: ...
 
     async def run_workspace_setup_commands(
         self, request: WorkspaceSetupCommandRequest

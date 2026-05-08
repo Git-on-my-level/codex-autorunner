@@ -1417,17 +1417,6 @@ class DiscordBotService(DiscordInteractionResponseMixin):
             for repo_id, path in self._list_manifest_repos()
         ]
         seen_paths = {workspace_path for _kind, _id, workspace_path in cheap_candidates}
-        cheap_candidates.extend(
-            (
-                "agent_workspace",
-                workspace_id,
-                workspace_path,
-            )
-            for workspace_id, workspace_path, _display_name in self._list_agent_workspaces_from_cache()
-        )
-        seen_paths.update(
-            workspace_path for _kind, _id, workspace_path in cheap_candidates
-        )
         try:
             for child in sorted(
                 self._config.root.iterdir(),
@@ -4190,16 +4179,6 @@ class DiscordBotService(DiscordInteractionResponseMixin):
 
     def _list_manifest_repos(self) -> list[tuple[str, str]]:
         from .workspace_commands import _list_manifest_repos as _impl
-
-        return _impl(self)
-
-    def _list_agent_workspaces(self) -> list[tuple[str, str, str]]:
-        from .workspace_commands import _list_agent_workspaces as _impl
-
-        return _impl(self)
-
-    def _list_agent_workspaces_from_cache(self) -> list[tuple[str, str, str]]:
-        from .workspace_commands import _list_agent_workspaces_from_cache as _impl
 
         return _impl(self)
 

@@ -38,9 +38,6 @@ def compose_managed_thread_execution_prompt(
             request.message,
         )
 
-    if str(request.agent or "").strip().lower() == "zeroclaw":
-        return execution_message
-
     preamble = format_pma_discoverability_preamble(
         hub_root=request.hub_root,
         runtime_cwd=request.runtime_cwd,

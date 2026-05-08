@@ -9,14 +9,12 @@ from typing import Any, Dict, List, Optional, Protocol, Sequence, Tuple
 
 from ..manifest import (
     Manifest,
-    ManifestAgentWorkspace,
     ManifestRepo,
     load_manifest,
     normalize_manifest_destination,
 )
 from .destinations import (
     default_local_destination,
-    resolve_effective_agent_workspace_destination,
     resolve_effective_repo_destination,
 )
 from .git_utils import git_available, git_is_clean
@@ -142,36 +140,6 @@ class RepoSnapshot:
         }
 
 
-@dataclasses.dataclass
-class AgentWorkspaceSnapshot:
-    id: str
-    runtime: str
-    path: Path
-    display_name: str
-    enabled: bool
-    exists_on_disk: bool
-    effective_destination: Dict[str, Any] = dataclasses.field(
-        default_factory=default_local_destination
-    )
-    resource_kind: str = "agent_workspace"
-
-    def to_dict(self, hub_root: Path) -> Dict[str, object]:
-        try:
-            rel_path = self.path.relative_to(hub_root)
-        except ValueError:
-            rel_path = self.path
-        return {
-            "id": self.id,
-            "runtime": self.runtime,
-            "path": str(rel_path),
-            "display_name": self.display_name,
-            "enabled": self.enabled,
-            "exists_on_disk": self.exists_on_disk,
-            "effective_destination": self.effective_destination,
-            "resource_kind": self.resource_kind,
-        }
-
-
 @dataclasses.dataclass(frozen=True)
 class WorkspaceArchiveTarget:
     base_repo_root: Path
@@ -185,18 +153,12 @@ class WorkspaceArchiveTarget:
 class HubState:
     last_scan_at: Optional[str]
     repos: List[RepoSnapshot]
-    agent_workspaces: List[AgentWorkspaceSnapshot] = dataclasses.field(
-        default_factory=list
-    )
     pinned_parent_repo_ids: List[str] = dataclasses.field(default_factory=list)
 
     def to_dict(self, hub_root: Path) -> Dict[str, object]:
         return {
             "last_scan_at": self.last_scan_at,
             "repos": [repo.to_dict(hub_root) for repo in self.repos],
-            "agent_workspaces": [
-                workspace.to_dict(hub_root) for workspace in self.agent_workspaces
-            ],
             "pinned_parent_repo_ids": list(self.pinned_parent_repo_ids or []),
         }
 
@@ -204,9 +166,9 @@ class HubState:
 class HubTopologyRepository:
     """Single manifest-backed authority for hub topology reads.
 
-    Hub mutations should read manifest state, build refreshed repo and agent
-    workspace snapshots, and resolve archive targets through this repository
-    instead of rebuilding topology ad hoc in callers.
+    Hub mutations should read manifest state, build refreshed repo snapshots,
+    and resolve archive targets through this repository instead of rebuilding
+    topology ad hoc in callers.
     """
 
     def __init__(self, *, hub_root: Path, manifest_path: Path) -> None:
@@ -235,16 +197,13 @@ class HubTopologyRepository:
             if records is not None
             else [self._record_for_repo(entry) for entry in resolved_manifest.repos]
         )
-        repos, agent_workspaces, pinned_parent_repo_ids = build_full_topology(
+        repos, pinned_parent_repo_ids = build_full_topology(
             resolved_records,
-            resolved_manifest.agent_workspaces,
             existing_pinned_parent_repo_ids,
-            self._hub_root,
         )
         return HubState(
             last_scan_at=last_scan_at,
             repos=repos,
-            agent_workspaces=agent_workspaces,
             pinned_parent_repo_ids=pinned_parent_repo_ids,
         )
 
@@ -255,13 +214,6 @@ class HubTopologyRepository:
             raise ValueError(f"Repo {repo_id} not found in manifest")
         repos_by_id = {entry.id: entry for entry in manifest.repos}
         return build_repo_snapshot(record, repos_by_id)
-
-    def agent_workspace_snapshot(self, workspace_id: str) -> AgentWorkspaceSnapshot:
-        manifest = self.load_manifest()
-        workspace = manifest.get_agent_workspace(workspace_id)
-        if workspace is None:
-            raise ValueError(f"Agent workspace {workspace_id} not found in manifest")
-        return build_agent_workspace_snapshot(workspace, self._hub_root)
 
     def resolve_workspace_archive_target(
         self,
@@ -387,47 +339,18 @@ def build_repo_snapshot(
     )
 
 
-def build_agent_workspace_snapshot(
-    workspace: ManifestAgentWorkspace,
-    hub_root: Path,
-) -> AgentWorkspaceSnapshot:
-    workspace_path = (hub_root / workspace.path).resolve()
-    effective_destination = resolve_effective_agent_workspace_destination(
-        workspace
-    ).to_dict()
-    return AgentWorkspaceSnapshot(
-        id=workspace.id,
-        runtime=workspace.runtime,
-        path=workspace_path,
-        display_name=workspace.display_name or workspace_path.name or workspace.id,
-        enabled=workspace.enabled,
-        exists_on_disk=workspace_path.exists(),
-        effective_destination=effective_destination,
-    )
-
-
 def build_repo_snapshots(records: Sequence[RepoTopologyRecord]) -> List[RepoSnapshot]:
     repos_by_id = {record.repo.id: record.repo for record in records}
     return [build_repo_snapshot(record, repos_by_id) for record in records]
 
 
-def build_agent_workspace_snapshots(
-    workspaces: List[ManifestAgentWorkspace],
-    hub_root: Path,
-) -> List[AgentWorkspaceSnapshot]:
-    return [build_agent_workspace_snapshot(entry, hub_root) for entry in workspaces]
-
-
 def build_full_topology(
     records: Sequence[RepoTopologyRecord],
-    agent_workspaces: List[ManifestAgentWorkspace],
     existing_pinned_ids: List[str],
-    hub_root: Path,
-) -> Tuple[List[RepoSnapshot], List[AgentWorkspaceSnapshot], List[str]]:
+) -> Tuple[List[RepoSnapshot], List[str]]:
     snapshots = build_repo_snapshots(records)
-    workspace_snapshots = build_agent_workspace_snapshots(agent_workspaces, hub_root)
     pinned = prune_pinned_parent_repo_ids(existing_pinned_ids, snapshots)
-    return snapshots, workspace_snapshots, pinned
+    return snapshots, pinned
 
 
 def prune_pinned_parent_repo_ids(
@@ -460,7 +383,6 @@ def load_hub_state(state_path: Path, hub_root: Path) -> HubState:
         return HubState(
             last_scan_at=None,
             repos=[],
-            agent_workspaces=[],
             pinned_parent_repo_ids=[],
         )
     data = state_path.read_text(encoding="utf-8")
@@ -473,7 +395,6 @@ def load_hub_state(state_path: Path, hub_root: Path) -> HubState:
         return HubState(
             last_scan_at=None,
             repos=[],
-            agent_workspaces=[],
             pinned_parent_repo_ids=[],
         )
     last_scan_at = payload.get("last_scan_at")
@@ -481,9 +402,7 @@ def load_hub_state(state_path: Path, hub_root: Path) -> HubState:
         payload.get("pinned_parent_repo_ids")
     )
     repos_payload = payload.get("repos") or []
-    agent_workspaces_payload = payload.get("agent_workspaces") or []
     repos: List[RepoSnapshot] = []
-    agent_workspaces: List[AgentWorkspaceSnapshot] = []
     for entry in repos_payload:
         try:
             repo = RepoSnapshot(
@@ -531,33 +450,9 @@ def load_hub_state(state_path: Path, hub_root: Path) -> HubState:
                 exc,
             )
             continue
-    for entry in agent_workspaces_payload:
-        try:
-            workspace = AgentWorkspaceSnapshot(
-                id=str(entry.get("id")),
-                runtime=str(entry.get("runtime", "")),
-                path=hub_root / entry.get("path", ""),
-                display_name=str(entry.get("display_name", "")),
-                enabled=bool(entry.get("enabled", True)),
-                exists_on_disk=bool(entry.get("exists_on_disk", False)),
-                effective_destination=(
-                    normalize_manifest_destination(entry.get("effective_destination"))
-                    or default_local_destination()
-                ),
-            )
-            agent_workspaces.append(workspace)
-        except (ValueError, TypeError, KeyError) as exc:
-            workspace_id = entry.get("id", "unknown")
-            logger.warning(
-                "Failed to load agent workspace snapshot for id=%s from hub state: %s",
-                workspace_id,
-                exc,
-            )
-            continue
     return HubState(
         last_scan_at=last_scan_at,
         repos=repos,
-        agent_workspaces=agent_workspaces,
         pinned_parent_repo_ids=pinned_parent_repo_ids,
     )
 

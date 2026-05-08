@@ -1,3 +1,4 @@
+import { mapSurfaceArtifact } from './domain';
 import type {
   PmaChatSummary,
   PmaRunProgress,
@@ -68,7 +69,7 @@ export type RepoWorktreeRunCard = {
   status: WorkStatus;
   phase: string | null;
   agentId: string | null;
-  progress: number;
+  progress: number | null;
   updatedAt: string | null;
   ticketId: string | null;
   chatHref: string | null;
@@ -218,7 +219,8 @@ export function buildRepoWorktreeDetailViewModel(
     .filter((ticket) => ticket.status !== 'done' && !currentTicketIds.has(ticket.id))
     .slice(0, 5)
     .map((ticket) => ticketToRow(ticket, flowStatus.currentTicketId));
-  const runArtifacts = [...source.artifacts, ...relatedRuns.flatMap((run) => run.events)].map(artifactToRow);
+  const resourceArtifacts = asRecordArray(resource.raw.current_run_artifacts).map(mapSurfaceArtifact);
+  const runArtifacts = [...resourceArtifacts, ...source.artifacts, ...relatedRuns.flatMap((run) => run.events)].map(artifactToRow);
   const activity = [
     ...relatedRuns.flatMap((run) => run.events).map(artifactToRow),
     ...visibleRuns.map(runToActivity)
@@ -417,7 +419,7 @@ function runToCard(
     status: run.status,
     phase: run.phase,
     agentId: chat?.agentId ?? stringFromRaw(run.raw, ['agent_id', 'agent']),
-    progress: chat ? progressPercent(chat, run) : run.status === 'running' ? 64 : run.status === 'waiting' ? 28 : run.status === 'done' ? 100 : 0,
+    progress: chat ? progressPercent(chat, run) : run.progressPercent,
     updatedAt: run.lastEventAt ?? chat?.updatedAt ?? null,
     ticketId,
     chatHref: run.chatId ? `/chats?chat=${encodeURIComponent(run.chatId)}` : chat ? `/chats?chat=${encodeURIComponent(chat.id)}` : null,
@@ -617,6 +619,12 @@ function stringFromRaw(raw: Record<string, unknown>, keys: string[]): string | n
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function asRecordArray(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
+    : [];
 }
 
 function indexRowSignalPriority(row: RepoWorktreeIndexRow): number {

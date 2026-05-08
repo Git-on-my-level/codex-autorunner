@@ -81,26 +81,8 @@ export interface HubRepo {
   ticket_flow_display?: HubTicketFlowDisplay | null;
 }
 
-export interface HubAgentWorkspace {
-  id: string;
-  runtime: string;
-  path: string;
-  display_name: string;
-  enabled: boolean;
-  exists_on_disk: boolean;
-  effective_destination: Record<string, unknown>;
-  resource_kind: "agent_workspace";
-}
-
-export interface HubAgentWorkspaceDetail extends HubAgentWorkspace {
-  configured_destination: Record<string, unknown> | null;
-  source: string;
-  issues?: string[] | null;
-}
-
 export interface HubData {
   repos: HubRepo[];
-  agent_workspaces: HubAgentWorkspace[];
   last_scan_at: string | null;
   pinned_parent_repo_ids?: string[];
 }
@@ -226,7 +208,7 @@ export interface HubViewPrefs {
   sortOrder: HubSortOrder;
 }
 
-export type HubOpenPanel = "repos" | "agents";
+export type HubOpenPanel = "repos";
 
 export interface HubRepoGroup {
   base: HubRepo;

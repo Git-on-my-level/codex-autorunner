@@ -16,7 +16,6 @@ CAR_CONTEXT_PROFILE_VALUES: tuple[CarContextProfile, ...] = (
 DEFAULT_PMA_CONTEXT_PROFILE: CarContextProfile = "car_core"
 DEFAULT_TICKET_FLOW_CONTEXT_PROFILE: CarContextProfile = "car_core"
 DEFAULT_REPO_THREAD_CONTEXT_PROFILE: CarContextProfile = "car_ambient"
-DEFAULT_AGENT_WORKSPACE_CONTEXT_PROFILE: CarContextProfile = "none"
 
 _CAR_TRIGGER_RE = re.compile(
     r"\b(ticket|tickets|dispatch|resume|contextspace|codex-autorunner|car)\b",
@@ -48,12 +47,7 @@ def normalize_car_context_profile(
     return default
 
 
-def default_managed_thread_context_profile(
-    *,
-    resource_kind: object = None,
-) -> CarContextProfile:
-    if str(resource_kind or "").strip().lower() == "agent_workspace":
-        return DEFAULT_AGENT_WORKSPACE_CONTEXT_PROFILE
+def default_managed_thread_context_profile() -> CarContextProfile:
     return DEFAULT_REPO_THREAD_CONTEXT_PROFILE
 
 
@@ -207,7 +201,6 @@ def render_runtime_compat_agents_md(bundle: CarContextBundle) -> str:
 
 __all__ = [
     "CAR_CONTEXT_PROFILE_VALUES",
-    "DEFAULT_AGENT_WORKSPACE_CONTEXT_PROFILE",
     "DEFAULT_PMA_CONTEXT_PROFILE",
     "DEFAULT_REPO_THREAD_CONTEXT_PROFILE",
     "DEFAULT_TICKET_FLOW_CONTEXT_PROFILE",

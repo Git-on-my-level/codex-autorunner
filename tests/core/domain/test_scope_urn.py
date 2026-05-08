@@ -25,11 +25,6 @@ class TestFormatScopeUrn:
             == "worktree:repo1/wt1"
         )
 
-    def test_agent_workspace(self) -> None:
-        assert (
-            format_scope_urn(kind="agent_workspace", id="ws1") == "agent_workspace:ws1"
-        )
-
     def test_filesystem(self) -> None:
         assert (
             format_scope_urn(kind="filesystem", id="/tmp/car repo")
@@ -60,10 +55,6 @@ class TestFormatScopeUrn:
         with pytest.raises(ScopeUrnError, match="must not contain '/'"):
             format_scope_urn(kind="worktree", id="branch/wt1", parent_repo_id="r1")
 
-    def test_agent_workspace_missing_id_raises(self) -> None:
-        with pytest.raises(ScopeUrnError, match="requires an id"):
-            format_scope_urn(kind="agent_workspace")
-
     def test_filesystem_missing_path_raises(self) -> None:
         with pytest.raises(ScopeUrnError, match="requires a path"):
             format_scope_urn(kind="filesystem")
@@ -81,14 +72,6 @@ class TestParseScopeUrn:
     def test_worktree(self) -> None:
         result = parse_scope_urn("worktree:repo1/wt1")
         assert result == {"kind": "worktree", "id": "wt1", "parent_repo_id": "repo1"}
-
-    def test_agent_workspace(self) -> None:
-        result = parse_scope_urn("agent_workspace:ws1")
-        assert result == {
-            "kind": "agent_workspace",
-            "id": "ws1",
-            "parent_repo_id": None,
-        }
 
     def test_filesystem(self) -> None:
         result = parse_scope_urn("filesystem:%2Ftmp%2Fcar%20repo")
@@ -138,14 +121,6 @@ class TestParseScopeUrn:
         with pytest.raises(ScopeUrnParseError, match="<repo_id>/<worktree_id>"):
             parse_scope_urn("worktree:repo1/")
 
-    def test_agent_workspace_empty_id_raises_parse_error(self) -> None:
-        with pytest.raises(ScopeUrnParseError, match="requires an id"):
-            parse_scope_urn("agent_workspace:")
-
-    def test_agent_workspace_with_slash_raises_parse_error(self) -> None:
-        with pytest.raises(ScopeUrnParseError, match="must not contain '/'"):
-            parse_scope_urn("agent_workspace:a/b")
-
     def test_filesystem_empty_path_raises_parse_error(self) -> None:
         with pytest.raises(ScopeUrnParseError, match="requires a path"):
             parse_scope_urn("filesystem:")
@@ -165,7 +140,6 @@ class TestUrnRoundTrips:
                 {"kind": "worktree", "id": "wt1", "parent_repo_id": "r1"},
                 "worktree:r1/wt1",
             ),
-            ({"kind": "agent_workspace", "id": "ws1"}, "agent_workspace:ws1"),
             (
                 {"kind": "filesystem", "id": "/tmp/car repo"},
                 "filesystem:%2Ftmp%2Fcar%20repo",
@@ -185,6 +159,5 @@ class TestUrnRoundTrips:
             "hub",
             "repo",
             "worktree",
-            "agent_workspace",
             "filesystem",
         }

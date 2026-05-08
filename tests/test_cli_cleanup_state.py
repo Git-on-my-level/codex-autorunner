@@ -646,7 +646,6 @@ class TestCleanupStateGlobalCleanup:
             "codex_autorunner.surfaces.cli.commands.cleanup.load_manifest",
             lambda manifest_path, root: types.SimpleNamespace(
                 repos=[],
-                agent_workspaces=[],
             ),
         )
 
@@ -699,7 +698,6 @@ class TestCleanupStateGlobalCleanup:
             "codex_autorunner.surfaces.cli.commands.cleanup.load_manifest",
             lambda manifest_path, root: types.SimpleNamespace(
                 repos=[],
-                agent_workspaces=[],
             ),
         )
 
@@ -759,7 +757,6 @@ class TestCleanupStateGlobalCleanup:
             "codex_autorunner.surfaces.cli.commands.cleanup.load_manifest",
             lambda manifest_path, root: types.SimpleNamespace(
                 repos=[],
-                agent_workspaces=[],
             ),
         )
 
@@ -829,7 +826,6 @@ class TestCleanupStateGlobalCleanup:
             "codex_autorunner.surfaces.cli.commands.cleanup.load_manifest",
             lambda manifest_path, root: types.SimpleNamespace(
                 repos=[],
-                agent_workspaces=[],
             ),
         )
 
@@ -894,7 +890,6 @@ class TestCleanupStateGlobalCleanup:
             "codex_autorunner.surfaces.cli.commands.cleanup.load_manifest",
             lambda manifest_path, root: types.SimpleNamespace(
                 repos=[],
-                agent_workspaces=[],
             ),
         )
 
@@ -985,7 +980,6 @@ class TestCleanupStateGlobalCleanup:
             "codex_autorunner.surfaces.cli.commands.cleanup.load_manifest",
             lambda manifest_path, root: types.SimpleNamespace(
                 repos=[],
-                agent_workspaces=[],
             ),
         )
 
@@ -1554,7 +1548,6 @@ class TestCleanupStateScope:
             "codex_autorunner.surfaces.cli.commands.cleanup.load_manifest",
             lambda manifest_path, root: types.SimpleNamespace(
                 repos=[],
-                agent_workspaces=[],
             ),
         )
 

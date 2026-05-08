@@ -57,7 +57,6 @@ def test_chat_agent_supports_effort_for_review_capable_agents() -> None:
     assert chat_agent_supports_effort("codex") is True
     assert chat_agent_supports_effort("opencode") is True
     assert chat_agent_supports_effort("hermes") is False
-    assert chat_agent_supports_effort("zeroclaw") is False
 
 
 def test_chat_agent_command_choices_is_registry_driven() -> None:
@@ -109,11 +108,10 @@ def test_chat_agent_definitions_keep_builtins_first_and_append_aliases(
 
     definitions = chat_agent_definitions()
 
-    assert [definition.value for definition in definitions[:4]] == [
+    assert [definition.value for definition in definitions[:3]] == [
         "codex",
         "opencode",
         "hermes",
-        "zeroclaw",
     ]
     assert definitions[-1].value == "plugin-agent"
     assert definitions[-1].description == "Plugin Agent"

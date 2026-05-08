@@ -50,6 +50,7 @@ describe('view model mappers', () => {
       display_name: 'Repo fix',
       agent_id: 'codex',
       lifecycle_status: 'active',
+      normalized_status: 'idle',
       repo_id: 'repo-1',
       latest_execution: { model: 'gpt-5.2', started_at: '2026-05-04T00:00:00Z' }
     });
@@ -57,7 +58,7 @@ describe('view model mappers', () => {
     expect(vm).toMatchObject({
       id: 'thread-1',
       title: 'Repo fix',
-      status: 'running',
+      status: 'idle',
       agentId: 'codex',
       model: 'gpt-5.2',
       repoId: 'repo-1',

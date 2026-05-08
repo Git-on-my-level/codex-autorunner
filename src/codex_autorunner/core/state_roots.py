@@ -272,22 +272,6 @@ def resolve_hub_runtime_root(hub_root: Path, *, runtime: str) -> Path:
     return path
 
 
-def resolve_hub_agent_workspace_root(
-    hub_root: Path,
-    *,
-    runtime: str,
-    workspace_id: str,
-) -> Path:
-    """Return the canonical root for a managed agent workspace."""
-    runtime_root = resolve_hub_runtime_root(hub_root, runtime=runtime)
-    workspace_segment = _validate_hub_resource_segment(
-        workspace_id, label="workspace_id"
-    )
-    path = runtime_root / workspace_segment
-    validate_path_within_roots(path, allowed_roots=[runtime_root], resolve=False)
-    return path
-
-
 def resolve_cache_root() -> Path:
     """Return the system temp directory for non-canonical caches.
 
@@ -415,7 +399,6 @@ __all__ = [
     "resolve_cache_root",
     "resolve_global_state_root",
     "resolve_global_github_broker_db_path",
-    "resolve_hub_agent_workspace_root",
     "resolve_hub_apps_root",
     "resolve_hub_manifest_path",
     "resolve_hub_orchestration_db_path",

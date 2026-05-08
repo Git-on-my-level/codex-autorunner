@@ -24,7 +24,7 @@ import { buildMemoryViewModel, CONTEXTSPACE_DOC_ORDER, PMA_DOC_ORDER } from './m
 import type { ContextspaceDocument } from './domain';
 import { buildContextspaceViewModel } from './contextspace';
 
-const BACKEND_VALID_SCOPE_KINDS = ['hub', 'repo', 'worktree', 'agent_workspace', 'filesystem'] as const;
+const BACKEND_VALID_SCOPE_KINDS = ['hub', 'repo', 'worktree', 'filesystem'] as const;
 
 const BACKEND_CONTEXTSPACE_DOC_KINDS = ['active_context', 'decisions', 'spec'] as const;
 const BACKEND_CONTEXTSPACE_DOC_PATHS = ['active_context.md', 'decisions.md', 'spec.md'] as const;
@@ -32,14 +32,14 @@ const BACKEND_CONTEXTSPACE_DOC_PATHS = ['active_context.md', 'decisions.md', 'sp
 describe('Frontend-backend scope contract', () => {
   describe('scope kinds match backend VALID_SCOPE_KINDS', () => {
     it('frontend covers all backend scope kinds', () => {
-      const frontendKinds = new Set<ScopeRef['kind']>(['hub', 'repo', 'worktree', 'agent_workspace', 'filesystem']);
+      const frontendKinds = new Set<ScopeRef['kind']>(['hub', 'repo', 'worktree', 'filesystem']);
       for (const kind of BACKEND_VALID_SCOPE_KINDS) {
         expect(frontendKinds.has(kind)).toBe(true);
       }
     });
 
     it('frontend does not invent scope kinds absent from backend', () => {
-      const frontendKinds = new Set<ScopeRef['kind']>(['hub', 'repo', 'worktree', 'agent_workspace', 'filesystem']);
+      const frontendKinds = new Set<ScopeRef['kind']>(['hub', 'repo', 'worktree', 'filesystem']);
       expect(frontendKinds.size).toBe(BACKEND_VALID_SCOPE_KINDS.length);
     });
   });
@@ -49,7 +49,6 @@ describe('Frontend-backend scope contract', () => {
       [{ kind: 'hub' }, 'hub'],
       [{ kind: 'repo', id: 'my-repo' }, 'repo:my-repo'],
       [{ kind: 'worktree', id: 'wt-1', parentRepoId: 'base-repo' }, 'worktree:base-repo/wt-1'],
-      [{ kind: 'agent_workspace', id: 'ws-1' }, 'agent_workspace:ws-1'],
       [{ kind: 'filesystem', path: '/Users/dev/project' }, 'filesystem:%2FUsers%2Fdev%2Fproject'],
     ];
 
@@ -65,7 +64,6 @@ describe('Frontend-backend scope contract', () => {
       ['hub', { kind: 'hub' }],
       ['repo:my-repo', { kind: 'repo', id: 'my-repo' }],
       ['worktree:base-repo/wt-1', { kind: 'worktree', id: 'wt-1', parentRepoId: 'base-repo' }],
-      ['agent_workspace:ws-1', { kind: 'agent_workspace', id: 'ws-1' }],
       ['filesystem:%2FUsers%2Fdev%2Fproject', { kind: 'filesystem', path: '/Users/dev/project' }],
     ];
 
@@ -81,7 +79,6 @@ describe('Frontend-backend scope contract', () => {
       { kind: 'hub' },
       { kind: 'repo', id: 'codex-autorunner' },
       { kind: 'worktree', id: 'discord-5', parentRepoId: 'codex-autorunner' },
-      { kind: 'agent_workspace', id: 'ws-1' },
       { kind: 'filesystem', path: '/tmp/some-place' },
     ];
 
@@ -105,10 +102,6 @@ describe('Frontend-backend scope contract', () => {
 
     it('worktree parent is repo', () => {
       expect(parentScope({ kind: 'worktree', id: 'wt-1', parentRepoId: 'r1' })).toEqual({ kind: 'repo', id: 'r1' });
-    });
-
-    it('agent_workspace parent is hub', () => {
-      expect(parentScope({ kind: 'agent_workspace', id: 'ws-1' })).toEqual({ kind: 'hub' });
     });
 
     it('filesystem has no parent (returns null, frontend deviates intentionally from backend)', () => {
@@ -138,7 +131,6 @@ describe('Frontend-backend scope contract', () => {
       'repo:a/b',
       'worktree:noslash',
       'worktree:/wt1',
-      'agent_workspace:',
       'filesystem:',
       'planet:earth',
       'hub:extra',
@@ -177,10 +169,6 @@ describe('Frontend-backend scope label contract', () => {
     expect(scopeLabel({ kind: 'worktree', id: 'discord-5', parentRepoId: 'base' })).toBe('Worktree: discord-5');
   });
 
-  it('agent_workspace label includes id', () => {
-    expect(scopeLabel({ kind: 'agent_workspace', id: 'codex' })).toBe('Agent workspace: codex');
-  });
-
   it('filesystem label uses basename', () => {
     expect(scopeLabel({ kind: 'filesystem', path: '/Users/dev/project' })).toBe('project');
   });
@@ -205,10 +193,6 @@ describe('Frontend-backend scope routing contract', () => {
 
   it('worktree routes nested under parent repo', () => {
     expect(scopeRoute({ kind: 'worktree', id: 'wt-1', parentRepoId: 'r1' })).toBe('/repos/r1/worktrees/wt-1');
-  });
-
-  it('agent_workspace routes to /agent-workspaces/<id>', () => {
-    expect(scopeRoute({ kind: 'agent_workspace', id: 'ws-1' })).toBe('/agent-workspaces/ws-1');
   });
 
   it('repo ticket route matches backend repo scope', () => {
@@ -282,13 +266,6 @@ describe('Frontend-backend query formatting contract', () => {
         kind: 'worktree',
         id: 'wt-1',
         parentRepoId: 'base'
-      });
-    });
-
-    it('extracts agent_workspace', () => {
-      expect(scopeFromApiPayload({ resource_kind: 'agent_workspace', resource_id: 'ws-1' })).toEqual({
-        kind: 'agent_workspace',
-        id: 'ws-1'
       });
     });
 

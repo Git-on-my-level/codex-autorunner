@@ -30,7 +30,6 @@ from codex_autorunner.core.runtime import (
     hub_worktree_doctor_checks,
     pma_doctor_checks,
     summarize_opencode_lifecycle,
-    zeroclaw_doctor_checks,
 )
 from tests.conftest import write_test_config
 
@@ -860,207 +859,6 @@ def test_hub_destination_doctor_checks_reports_invalid_destination(tmp_path: Pat
     )
 
 
-def test_hub_destination_doctor_checks_reports_agent_workspace_destination(
-    tmp_path: Path, monkeypatch
-):
-    hub_root = tmp_path / "hub"
-    hub_root.mkdir()
-    seed_hub_files(hub_root, force=True)
-
-    manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
-    manifest_path.write_text(
-        "\n".join(
-            [
-                "version: 3",
-                "repos: []",
-                "agent_workspaces:",
-                "  - id: zc-main",
-                "    runtime: zeroclaw",
-                "    path: .codex-autorunner/runtimes/zeroclaw/zc-main",
-                "    enabled: true",
-                "    destination:",
-                "      kind: docker",
-                "      image: ghcr.io/acme/zeroclaw:latest",
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-    hub_config = load_hub_config(hub_root)
-    monkeypatch.setattr(
-        "codex_autorunner.core.runtime.probe_docker_readiness",
-        lambda: DockerReadiness(
-            binary_available=True,
-            daemon_reachable=True,
-            detail="docker daemon reachable",
-        ),
-    )
-    checks = hub_destination_doctor_checks(hub_config)
-    assert any(
-        "zc-main: effective destination 'docker' (source=agent_workspace)"
-        in check.message
-        for check in checks
-    )
-    assert any(
-        check.check_id == "hub.destination.docker.daemon"
-        and "agent_workspace:zc-main" in check.message
-        for check in checks
-    )
-
-
-def test_hub_destination_doctor_checks_reports_invalid_agent_workspace_destination(
-    tmp_path: Path,
-):
-    hub_root = tmp_path / "hub"
-    hub_root.mkdir()
-    seed_hub_files(hub_root, force=True)
-
-    manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
-    manifest_path.write_text(
-        "\n".join(
-            [
-                "version: 3",
-                "repos: []",
-                "agent_workspaces:",
-                "  - id: zc-main",
-                "    runtime: zeroclaw",
-                "    path: .codex-autorunner/runtimes/zeroclaw/zc-main",
-                "    enabled: true",
-                "    destination:",
-                "      kind: docker",
-                "      image: ''",
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-    hub_config = load_hub_config(hub_root)
-    checks = hub_destination_doctor_checks(hub_config)
-    assert any(
-        "zc-main: effective destination 'local' (source=default)" in check.message
-        for check in checks
-    )
-    assert any(
-        (not check.passed) and "requires non-empty 'image'" in check.message
-        for check in checks
-    )
-
-
-def test_zeroclaw_doctor_checks_report_missing_binary_for_enabled_workspaces(
-    tmp_path: Path, monkeypatch
-):
-    hub_root = tmp_path / "hub"
-    hub_root.mkdir()
-    seed_hub_files(hub_root, force=True)
-
-    manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
-    manifest_path.write_text(
-        "\n".join(
-            [
-                "version: 3",
-                "repos: []",
-                "agent_workspaces:",
-                "  - id: zc-main",
-                "    runtime: zeroclaw",
-                "    path: .codex-autorunner/runtimes/zeroclaw/zc-main",
-                "    enabled: true",
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-    hub_config = load_hub_config(hub_root)
-    monkeypatch.setattr(
-        "codex_autorunner.agents.registry.zeroclaw_runtime_preflight",
-        lambda _config: type(
-            "Result",
-            (),
-            {
-                "status": "missing_binary",
-                "version": None,
-                "launch_mode": None,
-                "message": "ZeroClaw binary 'zeroclaw' is not available on PATH.",
-                "fix": "Install ZeroClaw on the host.",
-            },
-        )(),
-    )
-
-    checks = zeroclaw_doctor_checks(hub_config)
-
-    assert len(checks) == 1
-    check = checks[0]
-    assert check.check_id == "hub.zeroclaw.binary"
-    assert check.passed is False
-    assert check.severity == "error"
-    assert "zc-main" in check.message
-    assert "Install ZeroClaw" in (check.fix or "")
-
-
-def test_zeroclaw_doctor_checks_report_incompatible_runtime_for_enabled_workspaces(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    hub_root = tmp_path / "hub"
-    hub_root.mkdir()
-    seed_hub_files(hub_root, force=True)
-
-    manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
-    manifest_path.write_text(
-        "\n".join(
-            [
-                "version: 3",
-                "repos: []",
-                "agent_workspaces:",
-                "  - id: zc-main",
-                "    runtime: zeroclaw",
-                "    path: .codex-autorunner/runtimes/zeroclaw/zc-main",
-                "    enabled: true",
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-    hub_config = load_hub_config(hub_root)
-    monkeypatch.setattr(
-        "codex_autorunner.agents.registry.zeroclaw_runtime_preflight",
-        lambda _config: type(
-            "Result",
-            (),
-            {
-                "status": "incompatible",
-                "version": "zeroclaw 0.2.0",
-                "launch_mode": None,
-                "message": "ZeroClaw zeroclaw 0.2.0 does not advertise `zeroclaw agent --session-state-file` in `zeroclaw agent --help`.",
-                "fix": "Install a compatible ZeroClaw build.",
-            },
-        )(),
-    )
-
-    checks = zeroclaw_doctor_checks(hub_config)
-
-    assert len(checks) == 1
-    check = checks[0]
-    assert check.passed is False
-    assert check.severity == "error"
-    assert "session-state-file" in check.message
-    assert "zc-main" in check.message
-
-
-def test_zeroclaw_doctor_checks_skip_default_binary_without_workspaces(
-    tmp_path: Path,
-) -> None:
-    hub_root = tmp_path / "hub"
-    hub_root.mkdir()
-    seed_hub_files(hub_root, force=True)
-
-    hub_config = load_hub_config(hub_root)
-
-    assert zeroclaw_doctor_checks(hub_config) == []
-
-
 def test_hermes_doctor_checks_skip_default_binary_without_workspaces(tmp_path: Path):
     hub_root = tmp_path / "hub"
     hub_root.mkdir()
@@ -1079,23 +877,16 @@ def test_hermes_doctor_checks_report_missing_binary_for_enabled_workspaces(
     seed_hub_files(hub_root, force=True)
 
     manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
-    manifest_path.write_text(
-        "\n".join(
-            [
-                "version: 3",
-                "repos: []",
-                "agent_workspaces:",
-                "  - id: hermes-main",
-                "    runtime: hermes",
-                "    path: .codex-autorunner/runtimes/hermes/hermes-main",
-                "    enabled: true",
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
+    manifest_path.write_text("version: 3\nrepos: []\n", encoding="utf-8")
 
     hub_config = load_hub_config(hub_root)
+    hub_config.agents["hermes"] = AgentConfig(
+        backend="hermes",
+        binary="/tmp/car-nonexistent-hermes-binary",
+        serve_command=None,
+        base_url=None,
+        subagent_models=None,
+    )
     monkeypatch.setattr(
         "codex_autorunner.agents.registry.hermes_runtime_preflight",
         lambda _config: type(
@@ -1117,8 +908,7 @@ def test_hermes_doctor_checks_report_missing_binary_for_enabled_workspaces(
     check = checks[0]
     assert check.check_id == "hub.hermes.binary"
     assert check.passed is False
-    assert check.severity == "error"
-    assert "hermes-main" in check.message
+    assert check.severity == "warning"
     assert "Install Hermes" in (check.fix or "")
 
 
@@ -1130,23 +920,16 @@ def test_hermes_doctor_checks_report_incompatible_runtime_for_enabled_workspaces
     seed_hub_files(hub_root, force=True)
 
     manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
-    manifest_path.write_text(
-        "\n".join(
-            [
-                "version: 3",
-                "repos: []",
-                "agent_workspaces:",
-                "  - id: hermes-main",
-                "    runtime: hermes",
-                "    path: .codex-autorunner/runtimes/hermes/hermes-main",
-                "    enabled: true",
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
+    manifest_path.write_text("version: 3\nrepos: []\n", encoding="utf-8")
 
     hub_config = load_hub_config(hub_root)
+    hub_config.agents["hermes"] = AgentConfig(
+        backend="hermes",
+        binary="/tmp/car-nonexistent-hermes-binary",
+        serve_command=None,
+        base_url=None,
+        subagent_models=None,
+    )
     monkeypatch.setattr(
         "codex_autorunner.agents.registry.hermes_runtime_preflight",
         lambda _config: type(
@@ -1167,9 +950,8 @@ def test_hermes_doctor_checks_report_incompatible_runtime_for_enabled_workspaces
     assert len(checks) == 1
     check = checks[0]
     assert check.passed is False
-    assert check.severity == "error"
+    assert check.severity == "warning"
     assert "hermes acp" in check.message
-    assert "hermes-main" in check.message
 
 
 def test_hermes_doctor_checks_report_configured_aliases_individually(

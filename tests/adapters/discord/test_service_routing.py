@@ -64,9 +64,6 @@ from codex_autorunner.adapters.discord import service as discord_service_module
 from codex_autorunner.adapters.discord import (
     update_service as discord_update_service_module,
 )
-from codex_autorunner.adapters.discord import (
-    workspace_commands as discord_workspace_commands_module,
-)
 from codex_autorunner.adapters.discord.car_autocomplete import (
     repo_autocomplete_value,
     workspace_autocomplete_value,
@@ -3654,7 +3651,7 @@ async def test_car_agent_without_name_returns_picker_when_bound(tmp_path: Path) 
         menu = components[0]["components"][0]
         assert menu["custom_id"] == "agent_select"
         values = {opt["value"] for opt in menu["options"]}
-        assert values == {"codex", "opencode", "hermes", "zeroclaw"}
+        assert values == {"codex", "opencode", "hermes"}
     finally:
         await store.close()
 
@@ -6333,31 +6330,11 @@ async def test_car_newt_runs_hub_setup_commands_for_bound_workspace(
 
 
 @pytest.mark.anyio
-async def test_hub_client_setup_commands_survive_loop_switch_after_workspace_lookup(
+async def test_hub_http_client_workspace_setup_survives_loop_switch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id="repo-1",
-    )
-
-    rest = _FakeRest()
-    gateway = _FakeGateway([_interaction(name="newt", options=[])])
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
 
     class _LoopStickyAsyncClient:
         instances: list["_LoopStickyAsyncClient"] = []
@@ -6385,23 +6362,6 @@ async def test_hub_client_setup_commands_survive_loop_switch_after_workspace_loo
             elif self.bound_loop is not current_loop:
                 raise RuntimeError("Event loop is closed")
             self.calls.append(f"{path}|timeout={timeout}")
-            if path == "/hub/api/control-plane/agent-workspaces":
-                return httpx.Response(
-                    200,
-                    json={
-                        "workspaces": [
-                            {
-                                "workspace_id": "wksp-1",
-                                "runtime_kind": "hermes",
-                                "workspace_root": str(workspace.resolve()),
-                                "display_name": "Workspace One",
-                                "enabled": True,
-                                "exists_on_disk": True,
-                                "resource_kind": "agent_workspace",
-                            }
-                        ]
-                    },
-                )
             if path == "/hub/api/control-plane/handshake":
                 return httpx.Response(
                     200,
@@ -6430,38 +6390,31 @@ async def test_hub_client_setup_commands_survive_loop_switch_after_workspace_loo
         "codex_autorunner.core.hub_control_plane.http_client.httpx.AsyncClient",
         _LoopStickyAsyncClient,
     )
-    service._hub_client = discord_service_module.HttpHubControlPlaneClient(
+    hub_client = discord_service_module.HttpHubControlPlaneClient(
         base_url="http://testserver"
     )
 
-    try:
-        workspaces = discord_workspace_commands_module._list_agent_workspaces(service)
-        assert workspaces == [("wksp-1", str(workspace.resolve()), "Workspace One")]
+    setup_result = await hub_client.run_workspace_setup_commands(
+        WorkspaceSetupCommandRequest(
+            workspace_root=str(workspace.resolve()),
+            repo_id_hint="repo-1",
+        )
+    )
+    assert setup_result.setup_command_count == 1
 
-        setup_result = await service._hub_client.run_workspace_setup_commands(
-            WorkspaceSetupCommandRequest(
-                workspace_root=str(workspace.resolve()),
-                repo_id_hint="repo-1",
-            )
+    setup_again = await hub_client.run_workspace_setup_commands(
+        WorkspaceSetupCommandRequest(
+            workspace_root=str(workspace.resolve()),
+            repo_id_hint="repo-2",
         )
+    )
+    assert setup_again.setup_command_count == 1
 
-        assert setup_result.setup_command_count == 1
-        assert any(
-            any(
-                call.startswith("/hub/api/control-plane/agent-workspaces")
-                for call in instance.calls
-            )
-            for instance in _LoopStickyAsyncClient.instances
-        )
-        assert any(
-            any(
-                call == "/hub/api/control-plane/workspace-setup-commands|timeout=None"
-                for call in instance.calls
-            )
-            for instance in _LoopStickyAsyncClient.instances
-        )
-    finally:
-        await store.close()
+    assert any(
+        call.startswith("/hub/api/control-plane/workspace-setup-commands")
+        for instance in _LoopStickyAsyncClient.instances
+        for call in instance.calls
+    )
 
 
 @pytest.mark.anyio

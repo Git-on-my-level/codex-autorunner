@@ -96,7 +96,7 @@ export function buildStandardShortcuts(
       { when: 'always' }
     ),
     createBinding(
-      { id: 'toggle-memory', label: 'Toggle memory rail', keys: 'ctrl+m', macKeys: 'meta+m' },
+      { id: 'toggle-memory', label: 'Open PMA memory', keys: 'ctrl+m', macKeys: 'meta+m' },
       { kind: 'command', handler: callbacks.toggleMemory }
     ),
     createBinding(

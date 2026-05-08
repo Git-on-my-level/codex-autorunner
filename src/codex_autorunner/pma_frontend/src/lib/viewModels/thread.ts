@@ -138,7 +138,6 @@ function scopeLabelStr(scope: ScopeRef): string | null {
     case 'hub': return null;
     case 'repo': return scope.id;
     case 'worktree': return `worktree ${scope.id}`;
-    case 'agent_workspace': return scope.id;
     case 'filesystem': return scope.path.split(/[\\/]/).filter(Boolean).at(-1) ?? scope.path;
   }
 }

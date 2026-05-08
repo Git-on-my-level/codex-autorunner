@@ -21,7 +21,6 @@ from codex_autorunner.surfaces.web.routes.pma_routes.managed_thread_tail_seriali
     _refresh_active_turn_diagnostics,
 )
 from tests.pma_support import _enable_pma
-from tests.pma_support.managed_threads import FakeZeroClawEventSupervisor
 
 pytestmark = pytest.mark.slow
 
@@ -1057,83 +1056,3 @@ def test_managed_thread_tail_stream_preserves_since_filter_for_live_events(
         assert "event: tail" in body
         assert "\nid: 2\n" in body
         assert "\nid: 1\n" not in body
-
-
-def test_managed_thread_status_surfaces_zeroclaw_phase_and_last_tool(hub_env) -> None:
-    _enable_pma(hub_env.hub_root)
-    app = create_hub_app(hub_env.hub_root)
-    store = PmaThreadStore(hub_env.hub_root)
-    thread = store.create_thread("zeroclaw", hub_env.repo_root.resolve())
-    managed_thread_id = str(thread["managed_thread_id"])
-    turn = store.create_turn(managed_thread_id, prompt="zeroclaw prompt")
-    managed_turn_id = str(turn["managed_turn_id"])
-    store.set_thread_backend_id(managed_thread_id, "zeroclaw-session-1")
-    store.set_turn_backend_turn_id(managed_turn_id, "zeroclaw-turn-1")
-
-    app.state.zeroclaw_supervisor = FakeZeroClawEventSupervisor(
-        events=[
-            {
-                "raw_event": 'event: zeroclaw\ndata: {"message":{"method":"message.delta","params":{"text":"🤔 Thinking..."}}}\n\n',
-                "published_at": "2026-03-17T01:00:00Z",
-            },
-            {
-                "raw_event": 'event: zeroclaw\ndata: {"message":{"method":"message.delta","params":{"text":"⏳ web_search"}}}\n\n',
-                "published_at": "2026-03-17T01:00:05Z",
-            },
-        ]
-    )
-
-    with TestClient(app) as client:
-        status_resp = client.get(f"/hub/pma/threads/{managed_thread_id}/status")
-        assert status_resp.status_code == 200
-        status_payload = status_resp.json()
-        assert status_payload["stream_available"] is True
-        assert status_payload["turn"]["phase"] == "waiting_on_tool_call"
-        assert status_payload["turn"]["last_tool"]["name"] == "web_search"
-        assert status_payload["turn"]["last_tool"]["in_flight"] is True
-        assert status_payload["active_turn_diagnostics"]["request_kind"] == "message"
-        assert (
-            status_payload["active_turn_diagnostics"]["last_event_type"]
-            == "tool_started"
-        )
-        assert "web_search" in (
-            status_payload["active_turn_diagnostics"]["last_event_summary"] or ""
-        )
-
-        tail_resp = client.get(f"/hub/pma/threads/{managed_thread_id}/tail")
-        assert tail_resp.status_code == 200
-        tail_payload = tail_resp.json()
-        assert [event["event_type"] for event in tail_payload["events"]] == [
-            "assistant_update",
-            "tool_started",
-        ]
-
-
-def test_managed_thread_status_degrades_when_zeroclaw_turn_buffer_is_missing(
-    hub_env,
-) -> None:
-    _enable_pma(hub_env.hub_root)
-    app = create_hub_app(hub_env.hub_root)
-    store = PmaThreadStore(hub_env.hub_root)
-    thread = store.create_thread("zeroclaw", hub_env.repo_root.resolve())
-    managed_thread_id = str(thread["managed_thread_id"])
-    turn = store.create_turn(managed_thread_id, prompt="zeroclaw prompt")
-    managed_turn_id = str(turn["managed_turn_id"])
-    store.set_thread_backend_id(managed_thread_id, "zeroclaw-session-1")
-    store.set_turn_backend_turn_id(managed_turn_id, "zeroclaw-turn-1")
-
-    app.state.zeroclaw_supervisor = FakeZeroClawEventSupervisor(
-        error=RuntimeError("missing in-memory turn buffer")
-    )
-
-    with TestClient(app) as client:
-        status_resp = client.get(f"/hub/pma/threads/{managed_thread_id}/status")
-        assert status_resp.status_code == 200
-        status_payload = status_resp.json()
-        assert status_payload["recent_progress"] == []
-        assert status_payload["turn"]["last_tool"] is None
-
-        tail_resp = client.get(f"/hub/pma/threads/{managed_thread_id}/tail")
-        assert tail_resp.status_code == 200
-        tail_payload = tail_resp.json()
-        assert tail_payload["events"] == []

@@ -24,12 +24,6 @@ from .hermes.supervisor import (
 )
 from .opencode.harness import OpenCodeHarness
 from .types import RuntimeCapability, normalize_runtime_capabilities
-from .zeroclaw.harness import ZEROCLAW_CAPABILITIES, ZeroClawHarness
-from .zeroclaw.supervisor import (
-    build_zeroclaw_supervisor_from_config,
-    zeroclaw_binary_available,
-    zeroclaw_runtime_preflight,
-)
 
 _logger = logging.getLogger(__name__)
 
@@ -153,42 +147,6 @@ def _check_codex_health(ctx: Any) -> bool:
 def _check_opencode_health(ctx: Any) -> bool:
     supervisor = ctx.opencode_supervisor
     return supervisor is not None
-
-
-def _make_zeroclaw_harness(ctx: Any) -> AgentHarness:
-    supervisor = getattr(ctx, "zeroclaw_supervisor", None)
-    if supervisor is None:
-        config = _resolve_runtime_agent_config(ctx)
-        logger = getattr(ctx, "logger", None)
-        if config is None:
-            raise RuntimeError("ZeroClaw harness unavailable: config missing")
-        supervisor = build_zeroclaw_supervisor_from_config(config, logger=logger)
-        if supervisor is None:
-            raise RuntimeError("ZeroClaw harness unavailable: binary not configured")
-        try:
-            ctx.zeroclaw_supervisor = supervisor
-        except AttributeError:
-            _logger.debug("zeroclaw_supervisor cache write skipped", exc_info=True)
-    return ZeroClawHarness(supervisor)
-
-
-def _check_zeroclaw_health(ctx: Any) -> bool:
-    supervisor = getattr(ctx, "zeroclaw_supervisor", None)
-    if supervisor is not None:
-        return True
-    config = _resolve_runtime_agent_config(ctx)
-    if config is not None:
-        return zeroclaw_runtime_preflight(config).status == "ready"
-    binary = getattr(ctx, "zeroclaw_binary", None)
-    if isinstance(binary, str) and binary.strip():
-        return zeroclaw_binary_available(
-            type(
-                "_InlineConfig",
-                (),
-                {"agent_binary": staticmethod(lambda _agent_id: binary.strip())},
-            )()
-        )
-    return False
 
 
 def _resolve_requested_agent_id(ctx: Any, *, default: str) -> str:
@@ -531,10 +489,6 @@ def _build_opencode_backend(
     return factory._build_opencode_backend(target, state, notification_handler)
 
 
-def _preflight_zeroclaw_runtime(config: Any, _target: AgentExecutionTarget) -> Any:
-    return zeroclaw_runtime_preflight(config)
-
-
 def _preflight_hermes_runtime(config: Any, target: AgentExecutionTarget) -> Any:
     return _run_hermes_preflight(
         config,
@@ -762,14 +716,6 @@ _BUILTIN_AGENTS: dict[str, AgentDescriptor] = {
         make_harness=_make_opencode_harness,
         healthcheck=_check_opencode_health,
         backend_factory=_build_opencode_backend,
-    ),
-    "zeroclaw": AgentDescriptor(
-        id="zeroclaw",
-        name="ZeroClaw",
-        capabilities=ZEROCLAW_CAPABILITIES,
-        make_harness=_make_zeroclaw_harness,
-        healthcheck=_check_zeroclaw_health,
-        runtime_preflight=_preflight_zeroclaw_runtime,
     ),
     "hermes": AgentDescriptor(
         id="hermes",

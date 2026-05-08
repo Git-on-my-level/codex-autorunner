@@ -1420,9 +1420,6 @@ async def test_scheduler_bind_target_workspace_root_uses_direct_path_fast_path(
     service._list_manifest_repos = Mock(  # type: ignore[assignment]
         side_effect=AssertionError("direct path should not scan manifest repos")
     )
-    service._list_agent_workspaces_from_cache = Mock(  # type: ignore[assignment]
-        side_effect=AssertionError("direct path should not scan cached workspaces")
-    )
 
     resolved = await service._scheduler_bind_target_workspace_root(str(workspace_root))
 
@@ -1440,20 +1437,11 @@ async def test_scheduler_bind_target_workspace_root_uses_local_manifest_repo_onl
     service._list_manifest_repos = Mock(  # type: ignore[assignment]
         return_value=[("repo_1", str(repo_root))]
     )
-    service._list_agent_workspaces_from_cache = Mock(  # type: ignore[assignment]
-        return_value=[]
-    )
-    service._list_agent_workspaces = Mock(  # type: ignore[assignment]
-        side_effect=AssertionError(
-            "scheduler resolution must not live-fetch agent workspaces"
-        )
-    )
 
     resolved = await service._scheduler_bind_target_workspace_root("repo_1")
 
     assert resolved == repo_root
     service._list_manifest_repos.assert_called_once()
-    service._list_agent_workspaces_from_cache.assert_called_once()
 
 
 @pytest.mark.anyio
@@ -1465,12 +1453,6 @@ async def test_scheduler_bind_target_workspace_root_resolves_tokenized_local_pat
     workspace_root.mkdir()
     service._config = SimpleNamespace(root=tmp_path)
     service._list_manifest_repos = Mock(return_value=[])  # type: ignore[assignment]
-    service._list_agent_workspaces_from_cache = Mock(return_value=[])  # type: ignore[assignment]
-    service._list_agent_workspaces = Mock(  # type: ignore[assignment]
-        side_effect=AssertionError(
-            "scheduler resolution must not live-fetch agent workspaces"
-        )
-    )
 
     resolved = await service._scheduler_bind_target_workspace_root(
         workspace_autocomplete_value(str(workspace_root))
@@ -1478,7 +1460,6 @@ async def test_scheduler_bind_target_workspace_root_resolves_tokenized_local_pat
 
     assert resolved == workspace_root
     service._list_manifest_repos.assert_called_once()
-    service._list_agent_workspaces_from_cache.assert_called_once()
 
 
 @pytest.mark.anyio

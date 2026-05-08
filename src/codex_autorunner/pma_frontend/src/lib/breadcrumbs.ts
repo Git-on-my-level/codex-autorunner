@@ -183,22 +183,6 @@ const STRUCTURED_ROUTES: StructuredRoute[] = [
     }
   },
   {
-    description: 'Agent workspace detail',
-    pattern: /^\/agent-workspaces\/([^/]+)$/,
-    toCrumbs: (m) => {
-      const workspaceId = decodeURIComponent(m[1]);
-      return [
-        { label: 'Agent workspaces', href: '/agent-workspaces' },
-        { label: workspaceId, href: null }
-      ];
-    }
-  },
-  {
-    description: 'Agent workspace index',
-    pattern: /^\/agent-workspaces$/,
-    toCrumbs: () => [{ label: 'Agent workspaces', href: null }]
-  },
-  {
     description: 'Hub compatibility route',
     pattern: /^\/hub$/,
     toCrumbs: () => [{ label: 'Hub', href: null }]

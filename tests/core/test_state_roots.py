@@ -22,7 +22,6 @@ from codex_autorunner.core.state_roots import (
     resolve_discord_state_path,
     resolve_global_github_broker_db_path,
     resolve_global_state_root,
-    resolve_hub_agent_workspace_root,
     resolve_hub_apps_root,
     resolve_hub_manifest_path,
     resolve_hub_orchestration_db_path,
@@ -109,21 +108,13 @@ class TestResolveHubStateRoot:
 
     def test_hub_state_includes_runtime_roots(self, tmp_path):
         runtimes = resolve_hub_runtimes_root(Path(tmp_path))
-        runtime = resolve_hub_runtime_root(Path(tmp_path), runtime="zeroclaw")
-        workspace = resolve_hub_agent_workspace_root(
-            Path(tmp_path), runtime="zeroclaw", workspace_id="main"
-        )
+        runtime = resolve_hub_runtime_root(Path(tmp_path), runtime="opencode")
         assert runtimes == Path(tmp_path) / REPO_STATE_DIR / "runtimes"
-        assert runtime == runtimes / "zeroclaw"
-        assert workspace == runtimes / "zeroclaw" / "main"
+        assert runtime == runtimes / "opencode"
 
-    def test_agent_workspace_root_rejects_unsafe_segments(self, tmp_path):
+    def test_runtime_root_rejects_unsafe_segments(self, tmp_path):
         with pytest.raises(StateRootError):
             resolve_hub_runtime_root(Path(tmp_path), runtime="../escape")
-        with pytest.raises(StateRootError):
-            resolve_hub_agent_workspace_root(
-                Path(tmp_path), runtime="zeroclaw", workspace_id="../escape"
-            )
 
 
 class TestResolveHubOrchestrationDbPath:
@@ -316,9 +307,7 @@ class TestStateRootContract:
     def test_hub_runtime_paths_are_within_hub_state_root(self, tmp_path):
         hub_root = Path(tmp_path)
         hub_state = resolve_hub_state_root(hub_root)
-        workspace_root = resolve_hub_agent_workspace_root(
-            hub_root, runtime="zeroclaw", workspace_id="main"
-        )
+        workspace_root = resolve_hub_runtime_root(hub_root, runtime="opencode")
         assert is_within_allowed_root(workspace_root, allowed_roots=[hub_state])
 
     def test_global_state_paths_are_within_global_root(self, tmp_path, monkeypatch):

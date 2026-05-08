@@ -1,11 +1,10 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { api, flash } from "./utils.js?v=7fa8004f6840e214503b15a447aff6b141a7ad76cba89a9cf20138dbd2d88456";
-import { normalizePinnedParentRepoIds } from "./hubFilters.js?v=7fa8004f6840e214503b15a447aff6b141a7ad76cba89a9cf20138dbd2d88456";
+import { api, flash } from "./utils.js?v=510fd0419ed9eddfa5851d4093853609591d2a4765ecd74f3add9600783da27f";
+import { normalizePinnedParentRepoIds } from "./hubFilters.js?v=510fd0419ed9eddfa5851d4093853609591d2a4765ecd74f3add9600783da27f";
 export const HUB_JOB_POLL_INTERVAL_MS = 1200;
 export const HUB_JOB_TIMEOUT_MS = 180000;
 export let hubData = {
     repos: [],
-    agent_workspaces: [],
     last_scan_at: null,
     pinned_parent_repo_ids: [],
 };
@@ -30,9 +29,6 @@ export function setPinnedParentRepoIds(ids, data) {
 export function applyHubData(data) {
     hubData = {
         repos: Array.isArray(data?.repos) ? data.repos : [],
-        agent_workspaces: Array.isArray(data?.agent_workspaces)
-            ? data.agent_workspaces
-            : [],
         last_scan_at: data?.last_scan_at || null,
         pinned_parent_repo_ids: normalizePinnedParentRepoIds(data?.pinned_parent_repo_ids),
     };
@@ -64,6 +60,6 @@ export async function startHubJob(path, { body, startedMessage } = {}) {
     }
     return pollHubJob(job.job_id);
 }
-export { applyHubPanelState, toggleHubPanel, initInteractionHarness, attachHandlersAndControls } from "./hubDomBindings.js?v=7fa8004f6840e214503b15a447aff6b141a7ad76cba89a9cf20138dbd2d88456";
-export { bootstrapHubData, refreshHub, triggerHubScan, loadHubUsage, handleSystemUpdate } from "./hubRefresh.js?v=7fa8004f6840e214503b15a447aff6b141a7ad76cba89a9cf20138dbd2d88456";
-export { handleCleanupAll, showCreateRepoModal, showCreateAgentWorkspaceModal, hideCreateRepoModal, hideCreateAgentWorkspaceModal, handleCreateRepoSubmit, handleCreateAgentWorkspaceSubmit, initHubSettings, } from "./hubModals.js?v=7fa8004f6840e214503b15a447aff6b141a7ad76cba89a9cf20138dbd2d88456";
+export { applyHubPanelState, toggleHubPanel, initInteractionHarness, attachHandlersAndControls } from "./hubDomBindings.js?v=510fd0419ed9eddfa5851d4093853609591d2a4765ecd74f3add9600783da27f";
+export { bootstrapHubData, refreshHub, triggerHubScan, loadHubUsage, handleSystemUpdate } from "./hubRefresh.js?v=510fd0419ed9eddfa5851d4093853609591d2a4765ecd74f3add9600783da27f";
+export { handleCleanupAll, showCreateRepoModal, hideCreateRepoModal, handleCreateRepoSubmit, initHubSettings, } from "./hubModals.js?v=510fd0419ed9eddfa5851d4093853609591d2a4765ecd74f3add9600783da27f";

@@ -354,23 +354,6 @@ def test_descriptor_rejects_non_canonical_capabilities() -> None:
         )
 
 
-def test_zeroclaw_descriptor_conforms_to_contract() -> None:
-    """Test that ZeroClaw only advertises the durable-thread subset it proves."""
-    agents = get_registered_agents()
-    assert "zeroclaw" in agents
-
-    descriptor = agents["zeroclaw"]
-
-    assert descriptor.capabilities == frozenset(
-        [
-            RuntimeCapability("durable_threads"),
-            RuntimeCapability("message_turns"),
-            RuntimeCapability("active_thread_discovery"),
-            RuntimeCapability("event_streaming"),
-        ]
-    )
-
-
 def test_codex_descriptor_supports_full_capabilities() -> None:
     """Test that Codex descriptor supports all optional capabilities."""
     agents = get_registered_agents()
@@ -422,8 +405,7 @@ def test_plugin_descriptor_loading() -> None:
     for agent_id, descriptor in agents.items():
         assert descriptor.id == agent_id
         assert descriptor.name
-        if agent_id != "zeroclaw":
-            assert descriptor.capabilities
+        assert descriptor.capabilities
         assert callable(descriptor.make_harness)
         assert descriptor.plugin_api_version == CAR_PLUGIN_API_VERSION
 
@@ -439,6 +421,6 @@ def test_plugin_cannot_override_builtin() -> None:
     """Test that plugins cannot override built-in agent IDs."""
     agents = reload_agents()
 
-    builtin_ids = {"codex", "opencode", "zeroclaw"}
+    builtin_ids = {"codex", "opencode", "hermes"}
     for builtin_id in builtin_ids:
         assert builtin_id in agents
