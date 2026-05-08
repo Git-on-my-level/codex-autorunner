@@ -215,6 +215,20 @@ class PmaQueue:
         self._notify_in_memory_enqueue(item)
         return item, None
 
+    def find_active_by_idempotency_key_sync(
+        self, lane_id: str, idempotency_key: str
+    ) -> Optional[PmaQueueItem]:
+        """Return an active queue item for retry orchestration without appending.
+
+        Generic queue dedupe records audit rows. Automation wake-up retry already has
+        a durable wake-up row, so callers can use this probe to avoid creating
+        duplicate queue rows while still restarting the lane worker.
+        """
+        with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            return self._find_active_item_by_idempotency_key_conn(
+                conn, lane_id, idempotency_key
+            )
+
     async def dequeue(self, lane_id: str) -> Optional[PmaQueueItem]:
         self._record_loop()
         queue = self._lane_queues.get(lane_id)

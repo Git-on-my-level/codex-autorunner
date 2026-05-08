@@ -936,10 +936,10 @@ class HubSupervisor:
     ) -> None:
         self._pma_lane_worker_starter = starter
 
-    def _request_pma_lane_worker_start(self, lane_id: Optional[str]) -> None:
+    def _request_pma_lane_worker_start(self, lane_id: Optional[str]) -> Optional[bool]:
         starter = self._pma_lane_worker_starter
         if starter is None:
-            return
+            return None
         normalized_lane_id = (
             lane_id.strip()
             if isinstance(lane_id, str) and lane_id.strip()
@@ -947,11 +947,13 @@ class HubSupervisor:
         )
         try:
             starter(normalized_lane_id)
+            return True
         except (RuntimeError, OSError, ValueError, TypeError):
             logger.exception(
                 "Failed requesting PMA lane worker startup for lane_id=%s",
                 normalized_lane_id,
             )
+            return False
 
     def process_pma_automation_now(
         self, *, include_timers: bool = True, limit: int = 100
@@ -1205,8 +1207,17 @@ class HubSupervisor:
                     and str(wakeup.get("lane_id")).strip()
                     else "pma:default"
                 )
-                _, dupe_reason = queue.enqueue_sync(lane_id, idempotency_key, payload)
-                self._request_pma_lane_worker_start(lane_id)
+                dupe_reason: Optional[str]
+                existing_item = queue.find_active_by_idempotency_key_sync(
+                    lane_id, idempotency_key
+                )
+                if existing_item is not None:
+                    dupe_reason = f"duplicate of {existing_item.item_id}"
+                else:
+                    _, dupe_reason = queue.enqueue_sync(
+                        lane_id, idempotency_key, payload
+                    )
+                worker_start_result = self._request_pma_lane_worker_start(lane_id)
             except (sqlite3.Error, OSError, ValueError, TypeError, RuntimeError):
                 logger.exception(
                     "Failed to drain PMA automation wake-up %s into PMA queue",
@@ -1219,6 +1230,14 @@ class HubSupervisor:
                     wakeup_id,
                     dupe_reason,
                 )
+            if worker_start_result is False:
+                logger.warning(
+                    "Leaving PMA automation wake-up %s pending because lane worker "
+                    "startup failed for lane_id=%s",
+                    wakeup_id,
+                    lane_id,
+                )
+                continue
             if mark_wakeup_dispatched(wakeup_id):
                 drained += 1
         return drained

@@ -580,6 +580,57 @@ def test_drain_automation_wakeups_requests_lane_worker_start(tmp_path: Path) -> 
         supervisor.shutdown()
 
 
+def test_drain_automation_wakeups_retries_when_lane_worker_start_fails(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    _write_hub_config(
+        hub_root,
+        dispatch_interception=False,
+        extra_lines=["  reactive_enabled: false"],
+    )
+    supervisor = HubSupervisor(load_hub_config(hub_root), start_lifecycle_worker=False)
+
+    try:
+        started_lanes: list[str] = []
+
+        def _failing_starter(lane_id: str) -> None:
+            started_lanes.append(lane_id)
+            raise RuntimeError("terminal bridge unavailable")
+
+        supervisor.set_pma_lane_worker_starter(_failing_starter)
+        store = supervisor.get_pma_automation_store()
+        created, deduped = store.enqueue_wakeup(
+            source="lifecycle_subscription",
+            lane_id="pma:default",
+            repo_id="repo-1",
+            run_id="run-1",
+            from_state="running",
+            to_state="completed",
+            reason="flow_completed",
+            timestamp="2026-01-01T00:00:00Z",
+            idempotency_key="wakeup-retry-startup",
+        )
+        assert deduped is False
+
+        assert supervisor.drain_pma_automation_wakeups() == 0
+        assert started_lanes == ["pma:default"]
+        assert len(_read_queue_items(hub_root)) == 1
+        pending = store.list_pending_wakeups()
+        assert [entry["wakeup_id"] for entry in pending] == [created.wakeup_id]
+
+        supervisor.set_pma_lane_worker_starter(started_lanes.append)
+
+        assert supervisor.drain_pma_automation_wakeups() == 1
+        assert started_lanes == ["pma:default", "pma:default"]
+        assert len(_read_queue_items(hub_root)) == 1
+        assert store.list_pending_wakeups() == []
+        dispatched = store.list_wakeups(state_filter="dispatched")
+        assert [entry["wakeup_id"] for entry in dispatched] == [created.wakeup_id]
+    finally:
+        supervisor.shutdown()
+
+
 def test_drain_automation_wakeups_from_thread_without_event_loop(
     tmp_path: Path,
 ) -> None:
