@@ -94,7 +94,9 @@ describe('TicketViews', () => {
     expect(body).toContain('Implement the current ticket body preview.');
     expect(body).toContain('+80 -5 4 files');
     expect(body).toContain('2m 0s');
-    expect(body).toContain('Move #110 down');
+    expect(body).toContain('Drag #110 to reorder');
+    expect(body).not.toContain('Move #110 down');
+    expect(body).not.toContain('Move</span>');
     expect(body).not.toContain('All workspaces');
   });
 
@@ -176,7 +178,20 @@ Users can browse tickets.
         tickets: [mockTicketSummary],
         runs: [mockRunProgress],
         chats: [mockChatSummary],
-        artifacts: [mockArtifact]
+        artifacts: [mockArtifact],
+        timeline: [
+          {
+            id: 'assistant-1',
+            kind: 'assistant_message',
+            orderKey: '00000001|message|assistant-1',
+            timestamp: '2026-05-04T00:02:00Z',
+            chatId: 'chat-1',
+            turnId: 'turn-1',
+            status: 'done',
+            payload: { text: 'Ticket implementation is in progress.' },
+            raw: {}
+          }
+        ]
       }
     );
     const { body } = render(TicketViews, {
@@ -193,6 +208,9 @@ Users can browse tickets.
     expect(body).toContain('Render list');
     expect(body).toContain('Acceptance criteria');
     expect(body).toContain('Component tests');
+    expect(body).toContain('Ticket activity');
+    expect(body).toContain('Chat history');
+    expect(body).toContain('Ticket implementation is in progress.');
   });
 
   it('renders execution timeline states and keeps debug secondary', () => {

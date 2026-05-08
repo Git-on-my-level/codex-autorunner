@@ -3,10 +3,12 @@
   import type {
     TicketDetailViewModel,
     TicketFilter,
+    TicketListRow,
     TicketListViewModel
   } from '$lib/viewModels/ticket';
   import EditableMarkdown from '$lib/components/EditableMarkdown.svelte';
   import PageHero from '$lib/components/PageHero.svelte';
+  import PmaTranscriptCards from '$lib/components/PmaTranscriptCards.svelte';
   import { filterTicketRows, rowRelativeTime } from '$lib/viewModels/ticket';
   import { renderMarkdownToHtml } from '$lib/viewModels/markdown';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
@@ -83,6 +85,9 @@
   let queueOpen = $state(false);
   let createOpen = $state(false);
   let queueMenuOpen = $state(false);
+  let dragSourceRouteId = $state<string | null>(null);
+  let dragTargetRouteId = $state<string | null>(null);
+  let dragPlaceAfter = $state(false);
   let createTitle = $state('');
   let createBody = $state('');
   const ticketMarkdownContent = $derived(detail && editTicketId === detail.id ? editBody : detail?.rawBody ?? '');
@@ -140,6 +145,48 @@
     return Number.isInteger(value) ? value : null;
   }
 
+  function canDragTicketRow(row: TicketListRow): boolean {
+    return Boolean(onReorderTicket && routeNumber(row.routeId) !== null);
+  }
+
+  function resetTicketDrag(): void {
+    dragSourceRouteId = null;
+    dragTargetRouteId = null;
+    dragPlaceAfter = false;
+  }
+
+  function beginTicketDrag(event: DragEvent, row: TicketListRow): void {
+    if (!canDragTicketRow(row)) {
+      event.preventDefault();
+      return;
+    }
+    dragSourceRouteId = row.routeId;
+    dragTargetRouteId = row.routeId;
+    dragPlaceAfter = false;
+    event.dataTransfer?.setData('text/plain', row.routeId);
+    if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+  }
+
+  function updateTicketDropTarget(event: DragEvent, row: TicketListRow): void {
+    if (!dragSourceRouteId || !canDragTicketRow(row)) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    dragTargetRouteId = row.routeId;
+    dragPlaceAfter = event.clientY > rect.top + rect.height / 2;
+  }
+
+  async function dropTicketRow(event: DragEvent, row: TicketListRow): Promise<void> {
+    if (!dragSourceRouteId || !canDragTicketRow(row)) return;
+    event.preventDefault();
+    const sourceRouteId = dragSourceRouteId;
+    const destinationRouteId = row.routeId;
+    const placeAfter = dragPlaceAfter;
+    resetTicketDrag();
+    if (sourceRouteId === destinationRouteId) return;
+    await onReorderTicket?.(sourceRouteId, destinationRouteId, placeAfter);
+  }
+
   function queueActionLabel(action: 'start' | 'stop' | 'restart'): string {
     return queueActions.find((candidate) => candidate.action === action)?.label ?? (action === 'start' ? 'Start queue' : action === 'stop' ? 'Stop queue' : 'Restart queue');
   }
@@ -150,6 +197,10 @@
 
   function queueActionReason(action: 'start' | 'stop' | 'restart'): string | null {
     return queueActions.find((candidate) => candidate.action === action)?.disabledReason ?? null;
+  }
+
+  function ticketTranscriptStartsOpen(status: string): boolean {
+    return status === 'running' || status === 'waiting' || status === 'blocked';
   }
 </script>
 
@@ -263,21 +314,40 @@
             <span>Agent</span>
             <span>Status</span>
             <span>Run</span>
-            <span>Move</span>
             <span>Updated</span>
             <span>Chat</span>
           </div>
-          {#each visibleRows as row, index}
-            <article class={`ticket-row ${row.status}`} class:current={row.isCurrent} class:done={row.status === 'done'}>
-              <a class="ticket-row-title" href={href(row.href)} data-sveltekit-preload-data="tap">
-                <strong>{row.numberLabel}</strong>
-                <span>
-                  {row.title}
-                  {#if row.isCurrent}<em class="working-badge">Working</em>{/if}
-                  {#if row.workspaceKind === 'unscoped'}<em class="working-badge needs-repair" title="Needs owner repair">Needs owner repair</em>{/if}
-                  {#if row.bodyPreview}<small>{row.bodyPreview}</small>{/if}
-                </span>
-              </a>
+          {#each visibleRows as row}
+            <article
+              class={`ticket-row ${row.status} ${dragSourceRouteId === row.routeId ? 'drag-source' : ''} ${dragTargetRouteId === row.routeId && !dragPlaceAfter && dragSourceRouteId !== row.routeId ? 'drop-before' : ''} ${dragTargetRouteId === row.routeId && dragPlaceAfter && dragSourceRouteId !== row.routeId ? 'drop-after' : ''}`}
+              class:current={row.isCurrent}
+              class:done={row.status === 'done'}
+              ondragover={(event) => updateTicketDropTarget(event, row)}
+              ondrop={(event) => void dropTicketRow(event, row)}
+            >
+              <span class="ticket-row-title">
+                <button
+                  type="button"
+                  class="ticket-drag-handle"
+                  draggable={canDragTicketRow(row)}
+                  disabled={!canDragTicketRow(row)}
+                  aria-label={`Drag ${row.numberLabel} to reorder`}
+                  title={canDragTicketRow(row) ? 'Drag to reorder' : 'Only numbered scoped tickets can be reordered'}
+                  ondragstart={(event) => beginTicketDrag(event, row)}
+                  ondragend={resetTicketDrag}
+                >
+                  <span aria-hidden="true">☰</span>
+                </button>
+                <a class="ticket-row-title-link" href={href(row.href)} data-sveltekit-preload-data="tap">
+                  <strong>{row.numberLabel}</strong>
+                  <span>
+                    {row.title}
+                    {#if row.isCurrent}<em class="working-badge">Working</em>{/if}
+                    {#if row.workspaceKind === 'unscoped'}<em class="working-badge needs-repair" title="Needs owner repair">Needs owner repair</em>{/if}
+                    {#if row.bodyPreview}<small>{row.bodyPreview}</small>{/if}
+                  </span>
+                </a>
+              </span>
               <span>{row.agentLabel}</span>
               <span>
                 <span class="status-pill {row.status}">{statusLabel(row.status)}</span>
@@ -290,10 +360,6 @@
                 {:else}
                   <span class="muted">No run</span>
                 {/if}
-              </span>
-              <span class="row-move-actions">
-                <button type="button" aria-label={`Move ${row.numberLabel} up`} disabled={!onReorderTicket || routeNumber(row.routeId) === null || index === 0 || routeNumber(visibleRows[index - 1].routeId) === null} onclick={() => onReorderTicket?.(row.routeId, visibleRows[index - 1].routeId, false)}>Up</button>
-                <button type="button" aria-label={`Move ${row.numberLabel} down`} disabled={!onReorderTicket || routeNumber(row.routeId) === null || index >= visibleRows.length - 1 || routeNumber(visibleRows[index + 1].routeId) === null} onclick={() => onReorderTicket?.(row.routeId, visibleRows[index + 1].routeId, true)}>Down</button>
               </span>
               <span>{rowRelativeTime(row)}</span>
               <span>
@@ -433,6 +499,32 @@
             <p class="ticket-settings-foot muted">Workspace path: <code>{detail.workspacePathLabel}</code></p>
           {/if}
         </details>
+
+        <section class="page-panel ticket-chat-panel">
+          <div class="panel-heading-row">
+            <h2>Ticket activity</h2>
+            {#if detail.chatHref}
+              <a class="inline-link" href={href(detail.chatHref)}>Open PMA chat</a>
+            {/if}
+          </div>
+          {@render degradedIssues(chatIssues)}
+          {#if detail.chatTranscriptCards.length === 0}
+            <div class="state-panel empty-state compact-empty">
+              <strong>No ticket activity yet</strong>
+              <p>Streaming output and ticket-linked chat history appear here once PMA starts working this ticket.</p>
+            </div>
+          {:else}
+            <details class="ticket-chat-history" open={ticketTranscriptStartsOpen(detail.status)}>
+              <summary>
+                <span>Chat history</span>
+                <span class="muted">{detail.chatTranscriptCards.length} item{detail.chatTranscriptCards.length === 1 ? '' : 's'}</span>
+              </summary>
+              <div class="ticket-transcript-list">
+                <PmaTranscriptCards cards={detail.chatTranscriptCards} />
+              </div>
+            </details>
+          {/if}
+        </section>
 
         <article class="ticket-markdown-card">
           <EditableMarkdown

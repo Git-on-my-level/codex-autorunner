@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { mockArtifact, mockChatSummary, mockRepoSummary, mockRunProgress, mockTicketSummary, mockWorktreeSummary } from './mockData';
-import { buildRepoWorktreeDetailViewModel, buildRepoWorktreeIndexViewModel } from './repoWorktree';
+import {
+  buildRepoWorktreeDetailViewModel,
+  buildRepoWorktreeIndexViewModel,
+  countRepoWorktreeIndexEntities,
+  filterRepoWorktreeIndexRows,
+  visibleRepoWorktreeChildren
+} from './repoWorktree';
 
 describe('repo/worktree view models', () => {
   it('builds a lightweight repo index with child worktrees grouped under the repo', () => {
@@ -17,7 +23,7 @@ describe('repo/worktree view models', () => {
     expect(vm.rows.map((row) => row.id)).toEqual(['repo-1']);
     expect(vm.title).toBe('Repos');
     expect(vm.eyebrow).toBe('Repo ownership');
-    expect(vm.activeCount).toBe(1);
+    expect(vm.activeCount).toBe(2);
     expect(vm.openTicketCount).toBe(4);
     expect(vm.rows[0]).toMatchObject({
       href: '/repos/repo-1',
@@ -113,6 +119,54 @@ describe('repo/worktree view models', () => {
       signalActive: 0
     });
     expect(vm.rows[0].detail).toBeNull();
+  });
+
+  it('filters nested worktrees by status the same way search filters nested worktrees', () => {
+    const activeWorktree = {
+      ...mockWorktreeSummary,
+      id: 'worktree-active',
+      name: 'active branch',
+      branch: 'active',
+      status: 'running' as const,
+      activeRuns: 1
+    };
+    const idleWorktree = {
+      ...mockWorktreeSummary,
+      id: 'worktree-idle',
+      name: 'idle branch',
+      branch: 'idle',
+      status: 'idle' as const,
+      activeRuns: 0
+    };
+    const vm = buildRepoWorktreeIndexViewModel({
+      repos: [{ ...mockRepoSummary, status: 'idle', activeRuns: 0 }],
+      worktrees: [activeWorktree, idleWorktree],
+      runs: [],
+      chats: [],
+      tickets: [],
+      artifacts: []
+    });
+
+    expect(filterRepoWorktreeIndexRows(vm.rows, '', 'active').map((row) => row.id)).toEqual(['repo-1']);
+    expect(visibleRepoWorktreeChildren(vm.rows[0], '', 'active').map((child) => child.id)).toEqual([
+      'worktree-active'
+    ]);
+    expect(countRepoWorktreeIndexEntities(vm.rows)).toBe(3);
+    expect(vm.activeCount).toBe(2);
+  });
+
+  it('carries PMA signal badges on child worktrees', () => {
+    const vm = buildRepoWorktreeIndexViewModel({
+      repos: [{ ...mockRepoSummary, status: 'idle', activeRuns: 0 }],
+      worktrees: [{ ...mockWorktreeSummary, status: 'idle', activeRuns: 0 }],
+      runs: [],
+      chats: [{ ...mockChatSummary, status: 'waiting', repoId: 'repo-1', worktreeId: 'worktree-1' }],
+      tickets: [],
+      artifacts: []
+    });
+
+    expect(vm.rows[0].signalWaiting).toBe(1);
+    expect(vm.rows[0].childWorktrees[0]).toMatchObject({ signalWaiting: 1, signalFailed: 0, signalActive: 0 });
   });
 
   it('builds active current-run detail with links and artifacts', () => {

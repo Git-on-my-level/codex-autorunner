@@ -253,6 +253,23 @@ describe('view model mappers', () => {
     });
   });
 
+  it('treats pending repo ticket-flow state as active instead of waiting for user', () => {
+    const vm = mapRepoSummary({
+      id: 'base',
+      name: 'Base repo',
+      ticket_flow_display: {
+        status: 'pending',
+        is_active: true,
+        done_count: 1,
+        total_count: 3
+      }
+    });
+
+    expect(vm.status).toBe('running');
+    expect(vm.activeRuns).toBe(1);
+    expect(vm.openTickets).toBe(2);
+  });
+
   it('maps worktree summaries from enriched hub repo payloads', () => {
     const vm = mapWorktreeSummary({
       id: 'base--feature',

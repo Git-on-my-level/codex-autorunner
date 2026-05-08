@@ -1,9 +1,10 @@
 <script lang="ts">
   import type {
+    RepoWorktreeIndexFilter,
     RepoWorktreeDetailViewModel,
     RepoWorktreeIndexViewModel
   } from '$lib/viewModels/repoWorktree';
-  import { rowRelativeTime } from '$lib/viewModels/repoWorktree';
+  import { countRepoWorktreeIndexEntities, filterRepoWorktreeIndexRows, rowRelativeTime, visibleRepoWorktreeChildren } from '$lib/viewModels/repoWorktree';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import { statusLabel } from '$lib/viewModels/pmaChat';
   import type { PartialPageIssue } from '$lib/api/client';
@@ -33,46 +34,55 @@
   const artifactIssues = $derived(sectionIssues.filter((issue) => issue.id === 'artifacts'));
   const queueTickets = $derived(detail ? [...detail.currentTickets, ...detail.nextTickets] : []);
 
-  type RepoFilter = 'all' | 'active' | 'waiting';
-  const REPO_FILTERS: RepoFilter[] = ['all', 'waiting', 'active'];
+  const shortDetailTitle = $derived.by(() => {
+    if (!detail) return '';
+    if (detail.kind === 'worktree' && detail.baseRepoLabel) {
+      const prefix = `${detail.baseRepoLabel}--`;
+      if (detail.title.startsWith(prefix)) return detail.title.slice(prefix.length);
+    }
+    return detail.title;
+  });
+
+  const detailSubtitle = $derived.by(() => {
+    if (!detail) return '';
+    const parts: string[] = [];
+    if (detail.branch) parts.push(detail.branch);
+    if (detail.path) parts.push(detail.path);
+    return parts.join(' · ');
+  });
+
+  const showFlowStrip = $derived.by(() => {
+    if (!detail) return false;
+    const f = detail.flowStatus;
+    const hasSignal = f.signal !== 'idle' && f.signal !== 'done';
+    const hasTicket = f.currentTicketLabel !== 'None';
+    const hasTurns = f.turnsLabel !== 'Unknown';
+    const hasElapsed = f.elapsedLabel !== 'Unknown';
+    const hasProgress = f.progressLabel !== '0/0';
+    const hasActivity = f.lastActivityLabel !== 'No activity yet';
+    const hasReason = f.reasonLabel !== 'No reason reported';
+    return hasSignal || hasTicket || hasTurns || hasElapsed || hasProgress || hasActivity || hasReason;
+  });
+
+  const REPO_FILTERS: RepoWorktreeIndexFilter[] = ['all', 'waiting', 'active'];
   let search = $state('');
-  let filter = $state<RepoFilter>('all');
+  let filter = $state<RepoWorktreeIndexFilter>('all');
 
   const indexRows = $derived(index?.rows ?? []);
 
-  const filteredRows = $derived.by(() => {
-    const needle = search.trim().toLowerCase();
-    return indexRows.filter((row) => {
-      if (filter === 'active' && row.activeRuns === 0 && row.status !== 'running') return false;
-      if (filter === 'waiting' && row.status !== 'waiting' && row.status !== 'blocked') return false;
-      if (!needle) return true;
-      const haystack: string[] = [row.label, row.branch ?? '', row.path ?? ''];
-      for (const child of row.childWorktrees) {
-        haystack.push(child.label, child.branch ?? '', child.path ?? '');
-      }
-      return haystack.some((value) => value.toLowerCase().includes(needle));
-    });
-  });
+  const filteredRows = $derived(filterRepoWorktreeIndexRows(indexRows, search, filter));
 
   function visibleChildren(row: RepoWorktreeIndexViewModel['rows'][number]) {
-    const needle = search.trim().toLowerCase();
-    if (!needle) return row.childWorktrees;
-    const repoMatches = [row.label, row.branch ?? '', row.path ?? ''].some((v) =>
-      v.toLowerCase().includes(needle)
-    );
-    if (repoMatches) return row.childWorktrees;
-    return row.childWorktrees.filter((child) =>
-      [child.label, child.branch ?? '', child.path ?? ''].some((v) => v.toLowerCase().includes(needle))
-    );
+    return visibleRepoWorktreeChildren(row, search, filter);
   }
 
-  function repoFilterCount(key: RepoFilter): number {
-    if (key === 'all') return indexRows.length;
+  function repoFilterCount(key: RepoWorktreeIndexFilter): number {
+    if (key === 'all') return countRepoWorktreeIndexEntities(indexRows);
     if (key === 'active') return index?.activeCount ?? 0;
     return index?.waitingCount ?? 0;
   }
 
-  function repoFilterLabel(key: RepoFilter): string {
+  function repoFilterLabel(key: RepoWorktreeIndexFilter): string {
     return key === 'all' ? 'All' : key.charAt(0).toUpperCase() + key.slice(1);
   }
 </script>
@@ -201,8 +211,17 @@
                           </div>
                         {/if}
                       </div>
-                      {#if worktree.activeRuns > 0 || worktree.openTickets > 0}
+                      {#if worktree.activeRuns > 0 || worktree.openTickets > 0 || worktree.signalWaiting > 0 || worktree.signalFailed > 0 || worktree.signalActive > 0}
                         <div class="worktree-card-counts">
+                          {#if worktree.signalWaiting > 0}
+                            <span class="signal-pill waiting" title="Scoped PMA chats or runs waiting for attention">{worktree.signalWaiting} waiting</span>
+                          {/if}
+                          {#if worktree.signalFailed > 0}
+                            <span class="signal-pill failed" title="Scoped PMA chats or runs failed">{worktree.signalFailed} failed</span>
+                          {/if}
+                          {#if worktree.signalActive > 0}
+                            <span class="signal-pill active" title="Scoped PMA chats or runs active">{worktree.signalActive} active</span>
+                          {/if}
                           {#if worktree.activeRuns > 0}
                             <span class="count-chip is-active" title="Active runs">
                               <strong>{worktree.activeRuns}</strong><em>run{worktree.activeRuns === 1 ? '' : 's'}</em>
@@ -255,169 +274,150 @@
         </div>
       </section>
     {:else}
-    <PageHero
-      title={detail.title}
-      subtitle={`${detail.kind === 'worktree' ? 'repo worktree variant' : 'repo'} · ${detail.stateLabel}${detail.branch ? ' · ' + detail.branch : ''}`}
-    >
+    <PageHero title={shortDetailTitle} subtitle={detailSubtitle}>
       {#snippet actions()}
-        <a class="hero-action" href={href(detail.pmaChatHref)}>Chat with PMA</a>
-        <a class="hero-action" href={href(detail.codingAgentChatHref)}>Chat with coding agent</a>
-        {#each detail.links.filter((link) => !link.secondary) as link}
-          <a class="hero-action" href={href(link.href)}>{link.label}</a>
-        {/each}
+        <a class="hero-action" href={href(detail.pmaChatHref)}>PMA chat</a>
+        <a class="hero-action" href={href(detail.codingAgentChatHref)}>Coding agent</a>
       {/snippet}
     </PageHero>
 
-    <dl class="identity-strip" aria-label={`${detail.kind === 'worktree' ? 'Repo worktree' : 'Repo'} identity`}>
-      <div><dt>ID</dt><dd>{detail.id}</dd></div>
-      {#if detail.kind === 'worktree'}
-        <div>
-          <dt>Base repo</dt>
-          <dd>
-            {#if detail.baseRepoHref}<a href={href(detail.baseRepoHref)}>{detail.baseRepoLabel}</a>{:else}{detail.baseRepoLabel ?? 'Unknown'}{/if}
-          </dd>
-        </div>
-      {/if}
-      <div><dt>Branch</dt><dd>{detail.branch ?? 'Unknown'}</dd></div>
-      <div><dt>Path</dt><dd>{detail.path ?? 'Unknown'}</dd></div>
-    </dl>
-
-    <section class={`ticket-flow-strip ${detail.flowStatus.signal}`} aria-label="Ticket flow status">
-      <div>
-        <span>Status</span>
-        <strong>{detail.flowStatus.statusLabel}</strong>
-      </div>
-      <div>
-        <span>Current ticket</span>
-        {#if detail.flowStatus.currentTicketHref}
-          <a href={href(detail.flowStatus.currentTicketHref)}>{detail.flowStatus.currentTicketLabel}</a>
-        {:else}
-          <strong>{detail.flowStatus.currentTicketLabel}</strong>
+    {#if showFlowStrip}
+      <section class={`ticket-flow-strip ${detail.flowStatus.signal}`} aria-label="Ticket flow status">
+        {#if detail.flowStatus.signal !== 'idle' && detail.flowStatus.signal !== 'done'}
+          <div>
+            <span>Status</span>
+            <strong>{detail.flowStatus.statusLabel}</strong>
+          </div>
         {/if}
-      </div>
-      <div><span>Turns</span><strong>{detail.flowStatus.turnsLabel}</strong></div>
-      <div><span>Elapsed</span><strong>{detail.flowStatus.elapsedLabel}</strong></div>
-      <div><span>Done/total</span><strong>{detail.flowStatus.progressLabel}</strong></div>
-      <div><span>Last activity</span><strong>{detail.flowStatus.lastActivityLabel}</strong></div>
-      <div class="flow-reason"><span>Reason</span><strong>{detail.flowStatus.reasonLabel}</strong></div>
-    </section>
+        {#if detail.flowStatus.currentTicketLabel !== 'None'}
+          <div>
+            <span>Current ticket</span>
+            {#if detail.flowStatus.currentTicketHref}
+              <a href={href(detail.flowStatus.currentTicketHref)}>{detail.flowStatus.currentTicketLabel}</a>
+            {:else}
+              <strong>{detail.flowStatus.currentTicketLabel}</strong>
+            {/if}
+          </div>
+        {/if}
+        {#if detail.flowStatus.turnsLabel !== 'Unknown'}
+          <div><span>Turns</span><strong>{detail.flowStatus.turnsLabel}</strong></div>
+        {/if}
+        {#if detail.flowStatus.elapsedLabel !== 'Unknown'}
+          <div><span>Elapsed</span><strong>{detail.flowStatus.elapsedLabel}</strong></div>
+        {/if}
+        {#if detail.flowStatus.progressLabel !== '0/0'}
+          <div><span>Done/total</span><strong>{detail.flowStatus.progressLabel}</strong></div>
+        {/if}
+        {#if detail.flowStatus.lastActivityLabel !== 'No activity yet'}
+          <div><span>Last activity</span><strong>{detail.flowStatus.lastActivityLabel}</strong></div>
+        {/if}
+        {#if detail.flowStatus.reasonLabel !== 'No reason reported'}
+          <div class="flow-reason"><span>Reason</span><strong>{detail.flowStatus.reasonLabel}</strong></div>
+        {/if}
+      </section>
+    {/if}
 
     <div class="detail-grid">
-      <section class="page-panel execution-panel wide">
-        <div class="panel-heading-row">
-          <h2>Current run</h2>
-          <a href={href(detail.ticketIndexHref)}>{detail.ticketIndexLabel}</a>
-        </div>
-        {@render degradedIssues(currentRunIssues)}
-        {#if detail.currentRuns.length === 0 || !detail.hasActiveRun}
-          <div class="state-panel empty-state compact-empty">
-            <strong>No active run</strong>
-            <p>Use PMA or the ticket queue to start the next {detail.kind === 'worktree' ? 'worktree' : 'repo'} ticket.</p>
-          </div>
-        {/if}
-        {#each detail.currentRuns as run}
-          <article class={`run-card ${run.status}`}>
-            <div class="run-card-main">
-              <span class="status-pill {run.status}">{statusLabel(run.status)}</span>
-              <div>
-                <h3>{run.title}</h3>
-                <p>
-                  {#if run.agentId}{run.agentId} · {/if}{run.phase ?? 'run activity'} · {rowRelativeTime({ updatedAt: run.updatedAt })}
-                </p>
-              </div>
-            </div>
-            {#if run.progress !== null}
-              <span class="progress-track" aria-label={`${run.progress} percent complete`}>
-                <span style={`width: ${run.progress}%`}></span>
-              </span>
-            {/if}
-            <div class="row-links">
-              {#if run.chatHref}<a href={href(run.chatHref)}>PMA chat</a>{/if}
-              {#if run.ticketHref}<a href={href(run.ticketHref)}>Ticket</a>{/if}
-              {#if run.logsHref}<a class="secondary-link" href={href(run.logsHref)}>Debug logs</a>{/if}
-            </div>
-          </article>
-        {/each}
-      </section>
-
-      <section class="page-panel execution-panel wide workspace-ticket-queue-panel">
-        <div class="panel-heading-row">
-          <h2>{detail.kind === 'worktree' ? 'Worktree ticket queue' : 'Repo ticket queue'}</h2>
-          <a href={href(detail.ticketIndexHref)}>{detail.ticketIndexLabel}</a>
-        </div>
-        {@render degradedIssues(ticketIssues)}
-        {#if queueTickets.length === 0}
-          <div class="state-panel empty-state compact-empty">
-            <strong>No queued tickets</strong>
-            <p>Add a ticket for this {detail.kind === 'worktree' ? 'worktree' : 'repo'} when there is follow-up work.</p>
-          </div>
-        {:else}
-          <div class="workspace-ticket-list">
-            {#each queueTickets as ticket}
-              <a class={`workspace-ticket-row ${ticket.status}`} class:current={ticket.isCurrent} class:done={ticket.status === 'done'} href={href(ticket.href)}>
-                <span>
-                  <strong>{ticket.title}</strong>
-                  {#if ticket.isCurrent}<em class="working-badge">Working</em>{/if}
-                  {#if ticket.diffLabel}<em>{ticket.diffLabel}</em>{/if}
-                  {#if ticket.durationLabel}<em>{ticket.durationLabel}</em>{/if}
-                  {#if ticket.bodyPreview}<small>{ticket.bodyPreview}</small>{/if}
-                </span>
-                <span class="status-pill {ticket.status}">{statusLabel(ticket.status)}</span>
-              </a>
-            {/each}
-          </div>
-        {/if}
-      </section>
-
-      <section class="page-panel execution-panel">
-        <h2>Activity</h2>
-        {@render compactList(detail.activity, 'No live activity summary is available yet.')}
-      </section>
-
-      {#if detail.kind === 'repo'}
+      {#if detail.hasActiveRun && detail.currentRuns.length > 0}
         <section class="page-panel execution-panel wide">
-        <h2>Child worktrees</h2>
-        {#if detail.childWorktrees.length === 0}
-            <div class="state-panel empty-state compact-empty">
-              <strong>No child worktrees</strong>
-              <p>Create a worktree when a ticket needs isolated repo state.</p>
-            </div>
-          {:else}
-            <div class="child-worktree-list detail-child-worktrees">
-              {#each detail.childWorktrees as worktree}
-                <article class={`child-worktree-row ${worktree.status}`}>
-                  <a href={href(worktree.href)}>
-                    <span class="status-pill {worktree.status}">{statusLabel(worktree.status)}</span>
-                    <span>
-                      <strong>{worktree.label}</strong>
-                      <span>
-                        branch {worktree.branch ?? 'unknown'} · {worktree.openTickets} open ticket{worktree.openTickets === 1 ? '' : 's'}{#if worktree.currentRunTitle} · {worktree.currentRunTitle}{/if}
-                      </span>
-                    </span>
-                  </a>
-                  <div class="workspace-row-meta">
-                    <span>{worktree.activeRuns} runs</span>
-                    {#if worktree.ticketHref}<a href={href(worktree.ticketHref)}>Current ticket</a>{/if}
-                  </div>
-                </article>
+          <div class="panel-heading-row">
+            <h2>Active run</h2>
+          </div>
+          {@render degradedIssues(currentRunIssues)}
+          {#each detail.currentRuns as run}
+            <article class={`run-card ${run.status}`}>
+              <div class="run-card-main">
+                <span class="status-pill {run.status}">{statusLabel(run.status)}</span>
+                <div>
+                  <h3>{run.title}</h3>
+                  <p>
+                    {#if run.agentId}{run.agentId} · {/if}{run.phase ?? 'run activity'} · {rowRelativeTime({ updatedAt: run.updatedAt })}
+                  </p>
+                </div>
+              </div>
+              {#if run.progress !== null}
+                <span class="progress-track" aria-label={`${run.progress} percent complete`}>
+                  <span style={`width: ${run.progress}%`}></span>
+                </span>
+              {/if}
+              <div class="row-links">
+                {#if run.chatHref}<a href={href(run.chatHref)}>PMA chat</a>{/if}
+                {#if run.ticketHref}<a href={href(run.ticketHref)}>Ticket</a>{/if}
+              </div>
+            </article>
+          {/each}
+        </section>
+      {/if}
+
+      {#if queueTickets.length > 0 || ticketIssues.length > 0}
+        <section class="page-panel execution-panel wide workspace-ticket-queue-panel">
+          <div class="panel-heading-row">
+            <h2>{detail.kind === 'worktree' ? 'Worktree tickets' : 'Repo tickets'}</h2>
+            <a href={href(detail.ticketIndexHref)}>All</a>
+          </div>
+          {@render degradedIssues(ticketIssues)}
+          {#if queueTickets.length > 0}
+            <div class="workspace-ticket-list">
+              {#each queueTickets as ticket}
+                <a class={`workspace-ticket-row ${ticket.status}`} class:current={ticket.isCurrent} class:done={ticket.status === 'done'} href={href(ticket.href)}>
+                  <span>
+                    <strong>{ticket.title}</strong>
+                    {#if ticket.isCurrent}<em class="working-badge">Working</em>{/if}
+                    {#if ticket.diffLabel}<em>{ticket.diffLabel}</em>{/if}
+                    {#if ticket.durationLabel}<em>{ticket.durationLabel}</em>{/if}
+                    {#if ticket.bodyPreview}<small>{ticket.bodyPreview}</small>{/if}
+                  </span>
+                  <span class="status-pill {ticket.status}">{statusLabel(ticket.status)}</span>
+                </a>
               {/each}
             </div>
           {/if}
         </section>
       {/if}
 
-      <section class="page-panel execution-panel wide">
-        <h2>Surfaced artifacts</h2>
-        {@render degradedIssues(artifactIssues)}
-        {@render compactList(detail.artifacts, 'No surfaced artifacts are available yet.')}
-      </section>
+      {#if detail.chats.length > 0}
+        <section class="page-panel execution-panel wide">
+          <div class="panel-heading-row">
+            <h2>Chats</h2>
+          </div>
+          <div class="chat-row-list">
+            {#each detail.chats as chat}
+              <a class={`chat-row ${chat.status}`} href={href(chat.href)}>
+                <span class={`chat-row-kind kind-${chat.kind}`}>{chat.kindLabel}</span>
+                <span class="chat-row-body">
+                  <span class="chat-row-title">{chat.title}</span>
+                  <span class="chat-row-meta">
+                    {#if chat.model}{chat.model}{/if}
+                    {#if chat.updatedAt} · {rowRelativeTime({ updatedAt: chat.updatedAt })}{/if}
+                  </span>
+                </span>
+                {#if chat.status !== 'idle' && chat.status !== 'done'}
+                  <span class="status-pill {chat.status}">{statusLabel(chat.status)}</span>
+                {/if}
+              </a>
+            {/each}
+          </div>
+        </section>
+      {/if}
+
+      {#if detail.artifacts.length > 0 || artifactIssues.length > 0}
+        <section class="page-panel execution-panel wide">
+          <h2>Surfaced artifacts</h2>
+          {@render degradedIssues(artifactIssues)}
+          {#if detail.artifacts.length > 0}
+            {@render compactList(detail.artifacts, '')}
+          {/if}
+        </section>
+      {/if}
     </div>
 
-    <div class="secondary-actions">
-      {#each detail.links.filter((link) => link.secondary) as link}
-        <a href={href(link.href)}>{link.label}</a>
-      {/each}
-    </div>
+    {#if detail.links.length > 0}
+      <div class="secondary-actions">
+        {#each detail.links as link}
+          <a href={href(link.href)}>{link.label}</a>
+        {/each}
+      </div>
+    {/if}
     {/if}
   </section>
 {/if}
@@ -640,6 +640,7 @@
   .worktree-card-counts {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: 6px;
   }
 
@@ -860,5 +861,60 @@
     .worktree-card-counts {
       grid-column: 2;
     }
+  }
+
+  .chat-row-list {
+    display: grid;
+    gap: var(--space-2);
+  }
+  .chat-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    border-radius: 8px;
+    border: 1px solid var(--color-border-subtle);
+    background: var(--color-surface);
+    text-decoration: none;
+    color: inherit;
+    transition: border-color var(--transition-base), background var(--transition-base);
+  }
+  .chat-row:hover {
+    border-color: var(--color-border-strong);
+    background: var(--color-surface-hover, var(--color-surface));
+  }
+  .chat-row-kind {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    background: var(--color-surface-muted, rgb(255 255 255 / 0.04));
+    color: var(--color-text-muted);
+    border: 1px solid var(--color-border-subtle);
+  }
+  .chat-row-kind.kind-coding_agent {
+    color: var(--color-accent);
+    border-color: color-mix(in srgb, var(--color-accent) 40%, transparent);
+  }
+  .chat-row-body {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }
+  .chat-row-title {
+    font-weight: 600;
+    color: var(--color-text-strong, inherit);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .chat-row-meta {
+    font-size: 0.85rem;
+    color: var(--color-text-muted);
   }
 </style>

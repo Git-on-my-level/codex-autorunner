@@ -320,7 +320,7 @@ export function mapRepoSummary(raw: JsonRecord): RepoSummary {
     id,
     name: stringValue(raw.name ?? raw.display_name, id),
     path: nullableString(raw.path ?? raw.repo_root),
-    status: normalizeWorkStatus(ticketFlow.status ?? runState.flow_status ?? raw.normalized_status ?? raw.runtime_status ?? raw.status ?? raw.lifecycle_status),
+    status: normalizeResourceWorkStatus(ticketFlow.status ?? runState.flow_status ?? raw.normalized_status ?? raw.runtime_status ?? raw.status ?? raw.lifecycle_status),
     defaultBranch: nullableString(raw.default_branch ?? raw.branch ?? raw.current_branch),
     worktreeCount: numberOrNull(raw.worktree_count ?? raw.worktrees_count ?? asArray(raw.worktrees).length) ?? 0,
     activeRuns,
@@ -347,7 +347,7 @@ export function mapWorktreeSummary(raw: JsonRecord): WorktreeSummary {
     name: stringValue(raw.name ?? raw.display_name ?? raw.branch, id),
     path: nullableString(raw.path ?? raw.workspace_root),
     branch: nullableString(raw.branch ?? raw.current_branch),
-    status: normalizeWorkStatus(ticketFlow.status ?? runState.flow_status ?? raw.normalized_status ?? raw.runtime_status ?? raw.status ?? raw.lifecycle_status),
+    status: normalizeResourceWorkStatus(ticketFlow.status ?? runState.flow_status ?? raw.normalized_status ?? raw.runtime_status ?? raw.status ?? raw.lifecycle_status),
     activeRuns,
     openTickets:
       numberOrNull(raw.open_tickets ?? raw.open_ticket_count) ??
@@ -440,6 +440,14 @@ export function normalizeWorkStatus(value: unknown): WorkStatus {
   if (['blocked', 'stalled'].includes(text)) return 'blocked';
   if (['invalid', 'malformed', 'validation_failed', 'needs_repair'].includes(text)) return 'invalid';
   return 'idle';
+}
+
+function normalizeResourceWorkStatus(value: unknown): WorkStatus {
+  const text = String(value ?? '').trim().toLowerCase();
+  // Repo/worktree cards should only say "waiting" for true attention states.
+  // Flow "pending" and PMA queue "queued" still represent active work, not user input.
+  if (['pending', 'queued', 'stopping'].includes(text)) return 'running';
+  return normalizeWorkStatus(value);
 }
 
 export function normalizeOptionalWorkStatus(value: unknown): WorkStatus | null {

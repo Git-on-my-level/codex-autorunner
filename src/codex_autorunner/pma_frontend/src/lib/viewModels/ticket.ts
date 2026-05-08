@@ -1,5 +1,5 @@
-import type { PmaChatSummary, PmaRunProgress, SurfaceArtifact, TicketDetail, TicketSummary, WorkStatus } from './domain';
-import { formatRelativeTime, progressPercent, statusLabel } from './pmaChat';
+import type { PmaChatSummary, PmaRunProgress, PmaTimelineItem, SurfaceArtifact, TicketDetail, TicketSummary, WorkStatus } from './domain';
+import { buildPmaTranscriptCards, formatRelativeTime, progressPercent, statusLabel, type PmaCard } from './pmaChat';
 import { repoRoute, repoTicketRoute, worktreeRoute, worktreeTicketRoute } from './routes';
 import {
   aliasesOverlap,
@@ -16,6 +16,7 @@ export type TicketSourceData = {
   runs: PmaRunProgress[];
   chats: PmaChatSummary[];
   artifacts: SurfaceArtifact[];
+  timeline?: PmaTimelineItem[];
 };
 
 export type TicketEditPayload = {
@@ -157,6 +158,8 @@ export type TicketDetailViewModel = {
   timeline: TicketTimelineItem[];
   progressPercent: number;
   artifacts: TicketArtifactRow[];
+  chatTranscriptCards: PmaCard[];
+  linkedChatId: string | null;
   chatHref: string | null;
   runHref: string | null;
   debugHref: string | null;
@@ -227,6 +230,8 @@ export function buildTicketDetailViewModel(
   const runHref = run ? `/api/flows/${encodeURIComponent(run.id)}/status` : detail.runId ? `/api/flows/${encodeURIComponent(detail.runId)}/status` : null;
   const debugHref = run ? `/api/flows/${encodeURIComponent(run.id)}/dispatch_history` : null;
   const chatHref = chat ? `/chats?chat=${encodeURIComponent(chat.id)}` : detail.chatKey ? `/chats?chat=${encodeURIComponent(detail.chatKey)}` : null;
+  const linkedChatId = chat?.id ?? null;
+  const chatTranscriptCards = buildPmaTranscriptCards(source.timeline ?? [], chat, [...detail.artifacts, ...source.artifacts], run);
   const sourceTickets = source.tickets.map((ticket) => ticketToListRow(ticket, source)).sort(byTicketNumberThenTitle);
   const routeId = routeIdForTicket(detail);
   const selectedIndex = sourceTickets.findIndex((row) => row.routeId === routeId || row.id === detail.id);
@@ -256,6 +261,8 @@ export function buildTicketDetailViewModel(
     timeline: buildTimeline(detail, run, runArtifacts),
     progressPercent: progress,
     artifacts: uniqueArtifacts(runArtifacts).slice(0, 8).map(artifactToRow),
+    chatTranscriptCards,
+    linkedChatId,
     chatHref,
     runHref,
     debugHref,
@@ -294,6 +301,13 @@ export function buildTicketUpdateContent(detail: TicketDetailViewModel, payload:
   setOptional(frontmatter, 'model', payload.model.trim());
   setOptional(frontmatter, 'reasoning', payload.reasoning.trim());
   return `---\n${serializeFrontmatter(frontmatter)}---\n\n${payload.body.trimEnd()}\n`;
+}
+
+export function mergeTicketRunProgress(runs: PmaRunProgress[], progress: PmaRunProgress | null): PmaRunProgress[] {
+  if (!progress) return runs;
+  const index = runs.findIndex((run) => run.id === progress.id);
+  if (index === -1) return [progress, ...runs];
+  return runs.map((run, runIndex) => (runIndex === index ? progress : run));
 }
 
 export function rowRelativeTime(row: { updatedAt?: string | null; createdAt?: string | null }, now = new Date()): string {

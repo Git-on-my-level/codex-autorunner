@@ -8,7 +8,8 @@ import type {
   WorkStatus,
   WorktreeSummary
 } from './domain';
-import { formatRelativeTime, progressPercent, statusLabel } from './pmaChat';
+import { formatRelativeTime, pmaChatKind, pmaChatKindLabel, progressPercent, statusLabel } from './pmaChat';
+import type { PmaChatKind } from './pmaChat';
 import { repoMemoryRoute, repoRoute, repoTicketRoute, worktreeMemoryRoute, worktreeRoute, worktreeTicketRoute } from './routes';
 import {
   aliasesOverlap,
@@ -19,6 +20,7 @@ import {
 } from './ticketFlowStatus';
 
 export type RepoWorktreeKind = 'repo' | 'worktree';
+export type RepoWorktreeIndexFilter = 'all' | 'active' | 'waiting';
 
 export type RepoWorktreeIndexRow = {
   id: string;
@@ -61,6 +63,10 @@ export type RepoWorktreeChildRow = {
   pmaChatHref: string;
   /** Deep-link into chats with direct agent control scoped to this worktree. */
   codingAgentChatHref: string;
+  /** PMA chats + ticket-flow runs scoped to this worktree. */
+  signalWaiting: number;
+  signalFailed: number;
+  signalActive: number;
 };
 
 export type RepoWorktreeRunCard = {
@@ -74,7 +80,6 @@ export type RepoWorktreeRunCard = {
   ticketId: string | null;
   chatHref: string | null;
   ticketHref: string | null;
-  logsHref: string | null;
 };
 
 export type RepoWorktreeTicketRow = {
@@ -86,6 +91,18 @@ export type RepoWorktreeTicketRow = {
   durationLabel: string | null;
   bodyPreview: string | null;
   isCurrent: boolean;
+};
+
+export type RepoWorktreeChatRow = {
+  id: string;
+  title: string;
+  status: WorkStatus;
+  kind: PmaChatKind;
+  kindLabel: string;
+  agentId: string | null;
+  model: string | null;
+  updatedAt: string | null;
+  href: string;
 };
 
 export type RepoWorktreeArtifactRow = {
@@ -112,6 +129,43 @@ export type RepoWorktreeIndexViewModel = {
   openTicketCount: number;
 };
 
+export function filterRepoWorktreeIndexRows(
+  rows: RepoWorktreeIndexRow[],
+  search: string,
+  filter: RepoWorktreeIndexFilter
+): RepoWorktreeIndexRow[] {
+  const needle = search.trim().toLowerCase();
+  return rows.filter((row) => {
+    const rowMatches = rowMatchesNeedle(row, needle) && rowMatchesFilter(row, filter);
+    const childMatches = row.childWorktrees.some(
+      (child) => childMatchesNeedle(child, needle) && childMatchesFilter(child, filter)
+    );
+    return rowMatches || childMatches;
+  });
+}
+
+export function visibleRepoWorktreeChildren(
+  row: RepoWorktreeIndexRow,
+  search: string,
+  filter: RepoWorktreeIndexFilter
+): RepoWorktreeChildRow[] {
+  const needle = search.trim().toLowerCase();
+  const repoMatches = rowMatchesNeedle(row, needle) && rowMatchesFilter(row, filter);
+  if (repoMatches) return row.childWorktrees.filter((child) => childMatchesFilter(child, filter));
+  return row.childWorktrees.filter((child) => childMatchesNeedle(child, needle) && childMatchesFilter(child, filter));
+}
+
+export function countRepoWorktreeIndexEntities(
+  rows: RepoWorktreeIndexRow[],
+  filter: RepoWorktreeIndexFilter = 'all'
+): number {
+  return rows.reduce((total, row) => {
+    const rowCount = rowMatchesFilter(row, filter) ? 1 : 0;
+    const childCount = row.childWorktrees.filter((child) => childMatchesFilter(child, filter)).length;
+    return total + rowCount + childCount;
+  }, 0);
+}
+
 export type RepoWorktreeDetailViewModel = {
   kind: RepoWorktreeKind;
   id: string;
@@ -124,6 +178,7 @@ export type RepoWorktreeDetailViewModel = {
   currentRuns: RepoWorktreeRunCard[];
   flowStatus: TicketFlowStatusViewModel;
   activity: RepoWorktreeArtifactRow[];
+  chats: RepoWorktreeChatRow[];
   currentTickets: RepoWorktreeTicketRow[];
   nextTickets: RepoWorktreeTicketRow[];
   artifacts: RepoWorktreeArtifactRow[];
@@ -181,8 +236,8 @@ export function buildRepoWorktreeIndexViewModel(
     title: kind === 'worktree' ? 'Secondary worktree index' : 'Repos',
     eyebrow: kind === 'worktree' ? 'Repo-owned variants' : 'Repo ownership',
     rows,
-    activeCount: rows.filter((row) => row.status === 'running').length,
-    waitingCount: rows.filter((row) => row.status === 'waiting' || row.status === 'blocked').length,
+    activeCount: countRepoWorktreeIndexEntities(rows, 'active'),
+    waitingCount: countRepoWorktreeIndexEntities(rows, 'waiting'),
     openTicketCount: rows.reduce((total, row) => total + row.openTickets, 0)
   };
 }
@@ -239,6 +294,9 @@ export function buildRepoWorktreeDetailViewModel(
     currentRuns: visibleRuns,
     flowStatus,
     activity,
+    chats: relatedChats
+      .map((chat) => chatToRow(chat))
+      .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? '')),
     currentTickets,
     nextTickets,
     artifacts: runArtifacts.slice(0, 6),
@@ -269,6 +327,7 @@ function missingDetailViewModel(kind: RepoWorktreeKind, id: string): RepoWorktre
     currentRuns: [],
     flowStatus: buildTicketFlowStatusViewModel([], []),
     activity: [],
+    chats: [],
     currentTickets: [],
     nextTickets: [],
     artifacts: [],
@@ -372,6 +431,7 @@ function worktreeToChildRow(
   )[0];
   const tickets = ticketsForResource(source.tickets, 'worktree', worktree.id).filter((ticket) => ticket.status !== 'done');
   const currentTicketId = run?.ticketId ?? tickets[0]?.id ?? null;
+  const signals = scopedSignals(source, 'worktree', worktree.id);
   return {
     id: worktree.id,
     label: shortenWorktreeLabel(worktree.name, repoName),
@@ -386,7 +446,10 @@ function worktreeToChildRow(
     href: worktreeRoute(worktree.id, worktree.repoId),
     ticketHref: worktreeTicketRoute(worktree.id, worktree.repoId),
     pmaChatHref: scopedChatHref('worktree', worktree.id, 'pma'),
-    codingAgentChatHref: scopedChatHref('worktree', worktree.id, 'agent')
+    codingAgentChatHref: scopedChatHref('worktree', worktree.id, 'agent'),
+    signalWaiting: signals.waiting,
+    signalFailed: signals.failed,
+    signalActive: signals.active
   };
 }
 
@@ -436,8 +499,7 @@ function runToCard(
     updatedAt: run.lastEventAt ?? chat?.updatedAt ?? null,
     ticketId,
     chatHref: run.chatId ? `/chats?chat=${encodeURIComponent(run.chatId)}` : chat ? `/chats?chat=${encodeURIComponent(chat.id)}` : null,
-    ticketHref: ticketId ? scopedTicketDetail(scopeKind, scopeId, ticketId, parentRepoId) : null,
-    logsHref: `/api/flows/${encodeURIComponent(run.id)}/dispatch_history`
+    ticketHref: ticketId ? scopedTicketDetail(scopeKind, scopeId, ticketId, parentRepoId) : null
   };
 }
 
@@ -452,8 +514,22 @@ function chatToCard(chat: PmaChatSummary, scopeKind: RepoWorktreeKind, scopeId: 
     updatedAt: chat.updatedAt,
     ticketId: chat.ticketId,
     chatHref: `/chats?chat=${encodeURIComponent(chat.id)}`,
-    ticketHref: chat.ticketId ? scopedTicketDetail(scopeKind, scopeId, chat.ticketId, parentRepoId) : null,
-    logsHref: null
+    ticketHref: chat.ticketId ? scopedTicketDetail(scopeKind, scopeId, chat.ticketId, parentRepoId) : null
+  };
+}
+
+function chatToRow(chat: PmaChatSummary): RepoWorktreeChatRow {
+  const kind = pmaChatKind(chat);
+  return {
+    id: chat.id,
+    title: chat.title,
+    status: chat.status,
+    kind,
+    kindLabel: pmaChatKindLabel(kind),
+    agentId: chat.agentId,
+    model: chat.model,
+    updatedAt: chat.updatedAt,
+    href: `/chats?chat=${encodeURIComponent(chat.id)}`
   };
 }
 
@@ -660,16 +736,30 @@ function bySignalsThenActiveThenRecent(left: RepoWorktreeIndexRow, right: RepoWo
 }
 
 function enrichIndexRowSignals(row: RepoWorktreeIndexRow, source: RepoWorktreeSourceData): RepoWorktreeIndexRow {
-  const childIds = row.childWorktrees.map((child) => child.id);
+  const signals = scopedSignals(source, row.kind, row.id, row.childWorktrees.map((child) => child.id));
+  return {
+    ...row,
+    signalWaiting: signals.waiting,
+    signalFailed: signals.failed,
+    signalActive: signals.active
+  };
+}
+
+function scopedSignals(
+  source: RepoWorktreeSourceData,
+  kind: RepoWorktreeKind,
+  id: string,
+  childIds: string[] = []
+): { waiting: number; failed: number; active: number } {
   const scopedChats = source.chats.filter((chat) =>
-    row.kind === 'repo'
-      ? chat.repoId === row.id || (chat.worktreeId ? childIds.includes(chat.worktreeId) : false)
-      : chat.worktreeId === row.id
+    kind === 'repo'
+      ? chat.repoId === id || (chat.worktreeId ? childIds.includes(chat.worktreeId) : false)
+      : chat.worktreeId === id
   );
   const scopedRuns = source.runs.filter((run) =>
-    row.kind === 'repo'
-      ? runMatchesResource(run, 'repo', row.id) || childIds.some((wid) => runMatchesResource(run, 'worktree', wid))
-      : runMatchesResource(run, 'worktree', row.id)
+    kind === 'repo'
+      ? runMatchesResource(run, 'repo', id) || childIds.some((wid) => runMatchesResource(run, 'worktree', wid))
+      : runMatchesResource(run, 'worktree', id)
   );
   const chatIds = new Set(scopedChats.map((chat) => chat.id));
   let waiting = 0;
@@ -685,12 +775,7 @@ function enrichIndexRowSignals(row: RepoWorktreeIndexRow, source: RepoWorktreeSo
     if (run.chatId && chatIds.has(run.chatId)) continue;
     bumpStatus(run.status);
   }
-  return {
-    ...row,
-    signalWaiting: waiting,
-    signalFailed: failed,
-    signalActive: active
-  };
+  return { waiting, failed, active };
 }
 
 function byActiveThenRecent(left: RepoWorktreeIndexRow, right: RepoWorktreeIndexRow): number {
@@ -734,4 +819,26 @@ function aggregateStatus(base: WorkStatus, children: WorkStatus[]): WorkStatus {
   if (statuses.includes('failed')) return 'failed';
   if (statuses.includes('idle')) return 'idle';
   return base;
+}
+
+function rowMatchesNeedle(row: RepoWorktreeIndexRow, needle: string): boolean {
+  if (!needle) return true;
+  return [row.label, row.branch ?? '', row.path ?? ''].some((value) => value.toLowerCase().includes(needle));
+}
+
+function childMatchesNeedle(child: RepoWorktreeChildRow, needle: string): boolean {
+  if (!needle) return true;
+  return [child.label, child.branch ?? '', child.path ?? ''].some((value) => value.toLowerCase().includes(needle));
+}
+
+function rowMatchesFilter(row: RepoWorktreeIndexRow, filter: RepoWorktreeIndexFilter): boolean {
+  if (filter === 'active') return row.activeRuns > 0 || row.status === 'running' || row.signalActive > 0;
+  if (filter === 'waiting') return row.status === 'waiting' || row.status === 'blocked' || row.signalWaiting > 0;
+  return true;
+}
+
+function childMatchesFilter(child: RepoWorktreeChildRow, filter: RepoWorktreeIndexFilter): boolean {
+  if (filter === 'active') return child.activeRuns > 0 || child.status === 'running' || child.signalActive > 0;
+  if (filter === 'waiting') return child.status === 'waiting' || child.status === 'blocked' || child.signalWaiting > 0;
+  return true;
 }

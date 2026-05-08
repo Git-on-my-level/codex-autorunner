@@ -3836,7 +3836,7 @@ textarea:disabled {
 .ticket-table-head,
 .ticket-row {
   display: grid;
-  grid-template-columns: minmax(220px, 2.2fr) minmax(68px, 0.65fr) minmax(72px, 0.7fr) minmax(68px, 0.65fr) minmax(72px, 0.65fr) minmax(72px, 0.7fr) minmax(64px, 0.65fr);
+  grid-template-columns: minmax(240px, 2.35fr) minmax(68px, 0.65fr) minmax(72px, 0.7fr) minmax(68px, 0.65fr) minmax(72px, 0.7fr) minmax(64px, 0.65fr);
   align-items: center;
   gap: var(--space-2);
 }
@@ -3881,7 +3881,32 @@ textarea:disabled {
   opacity: 0.68;
 }
 
+.ticket-row.drag-source {
+  opacity: 0.45;
+}
+
+.ticket-row.drop-before,
+.ticket-row.drop-after {
+  border-color: var(--color-accent);
+}
+
+.ticket-row.drop-before {
+  box-shadow: inset 0 3px 0 var(--color-accent);
+}
+
+.ticket-row.drop-after {
+  box-shadow: inset 0 -3px 0 var(--color-accent);
+}
+
 .ticket-row-title {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.ticket-row-title-link {
   display: grid;
   grid-template-columns: 54px minmax(0, 1fr);
   align-items: center;
@@ -3889,11 +3914,40 @@ textarea:disabled {
   min-width: 0;
 }
 
-.ticket-row-title strong {
+.ticket-drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 28px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--color-ink-muted);
+  cursor: grab;
+  font-size: 14px;
+}
+
+.ticket-drag-handle:hover:not(:disabled),
+.ticket-drag-handle:focus-visible {
+  background: var(--color-surface-sunken);
+  color: var(--color-ink);
+}
+
+.ticket-drag-handle:active {
+  cursor: grabbing;
+}
+
+.ticket-drag-handle:disabled {
+  cursor: not-allowed;
+  opacity: 0.35;
+}
+
+.ticket-row-title-link strong {
   color: var(--color-accent);
 }
 
-.ticket-row-title span,
+.ticket-row-title-link span,
 .ticket-row > span {
   min-width: 0;
   overflow: hidden;
@@ -3901,7 +3955,7 @@ textarea:disabled {
   white-space: nowrap;
 }
 
-.ticket-row-title small,
+.ticket-row-title-link small,
 .workspace-ticket-row small {
   display: block;
   min-width: 0;
@@ -3927,27 +3981,6 @@ textarea:disabled {
   font-style: normal;
   font-weight: 600;
   vertical-align: middle;
-}
-
-.row-move-actions {
-  display: inline-flex;
-  gap: 4px;
-}
-
-.row-move-actions button {
-  min-height: 24px;
-  padding: 0 6px;
-  border: 1px solid var(--color-border-subtle);
-  border-radius: 5px;
-  background: var(--color-surface);
-  color: var(--color-ink-muted);
-  cursor: pointer;
-  font-size: 11px;
-}
-
-.row-move-actions button:disabled {
-  cursor: not-allowed;
-  opacity: 0.45;
 }
 
 .ticket-detail-grid {
@@ -4318,6 +4351,60 @@ textarea:disabled {
   padding: 0 var(--space-4) var(--space-3);
   font-size: var(--font-size-0);
   overflow-wrap: anywhere;
+}
+
+.ticket-chat-panel {
+  padding: var(--space-4);
+}
+
+.ticket-chat-panel .panel-heading-row {
+  margin-bottom: var(--space-3);
+}
+
+.ticket-chat-history {
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-2);
+  background: var(--color-surface-muted);
+}
+
+.ticket-chat-history > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  cursor: pointer;
+  list-style: none;
+  font-weight: 600;
+}
+
+.ticket-chat-history > summary::-webkit-details-marker {
+  display: none;
+}
+
+.ticket-chat-history > summary::before {
+  content: "▸";
+  display: inline-block;
+  color: var(--color-ink-muted);
+  transition: transform var(--transition-fast);
+}
+
+.ticket-chat-history[open] > summary {
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.ticket-chat-history[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.ticket-transcript-list {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+}
+
+.ticket-transcript-list .message {
+  max-width: min(100%, 860px);
 }
 
 .ticket-markdown-card {
@@ -4806,7 +4893,11 @@ textarea:disabled {
   }
 
   .ticket-row-title {
-    grid-template-columns: 1fr;
+    grid-template-columns: 26px minmax(0, 1fr);
+  }
+
+  .ticket-row-title-link {
+    grid-template-columns: 48px minmax(0, 1fr);
   }
 
   .message {

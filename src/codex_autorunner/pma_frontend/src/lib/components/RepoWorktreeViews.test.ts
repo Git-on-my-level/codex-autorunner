@@ -28,6 +28,21 @@ describe('RepoWorktreeViews', () => {
     expect(body).not.toContain('Analytics');
   });
 
+  it('renders scoped signal badges on child worktrees', () => {
+    const index = buildRepoWorktreeIndexViewModel({
+      repos: [{ ...mockRepoSummary, status: 'idle', activeRuns: 0 }],
+      worktrees: [{ ...mockWorktreeSummary, status: 'idle', activeRuns: 0 }],
+      runs: [],
+      chats: [{ ...mockChatSummary, status: 'waiting', repoId: 'repo-1', worktreeId: 'worktree-1' }],
+      tickets: [],
+      artifacts: []
+    });
+    const { body } = render(RepoWorktreeViews, { props: { state: 'ready', mode: 'index', index } });
+
+    expect(body).toContain('Scoped PMA chats or runs waiting for attention');
+    expect(body).toContain('1 waiting');
+  });
+
   it('renders sparse repo index empty-state copy', () => {
     const index = buildRepoWorktreeIndexViewModel({
       repos: [],
@@ -43,7 +58,7 @@ describe('RepoWorktreeViews', () => {
     expect(body).toContain('Register a workspace before queueing repo-scoped tickets.');
   });
 
-  it('renders active-run detail with chat, ticket, contextspace, preview, and secondary logs', () => {
+  it('renders active-run detail with chat, ticket, contextspace, and preview', () => {
     const detail = buildRepoWorktreeDetailViewModel(
       {
         repos: [mockRepoSummary],
@@ -58,7 +73,7 @@ describe('RepoWorktreeViews', () => {
     );
     const { body } = render(RepoWorktreeViews, { props: { state: 'ready', mode: 'detail', detail } });
 
-    expect(body).toContain('Current run');
+    expect(body).toContain('Active run');
     expect(body).toContain('Hub rewrite foundation');
     expect(body).toContain('codex');
     expect(body).toContain('PMA chat');
@@ -67,9 +82,11 @@ describe('RepoWorktreeViews', () => {
     expect(body).toContain('View repo memory');
     expect(body).toContain('href="/repos/repo-1/memory"');
     expect(body).toContain('Open preview');
-    expect(body).toContain('Debug logs');
+    expect(body).not.toContain('Debug logs');
     expect(body).toContain('Surfaced artifacts');
-    expect(body).toContain('Child worktrees');
+    expect(body).toContain('Chats');
+    expect(body).not.toContain('Child worktrees');
+    expect(body).not.toContain('Activity');
     expect(body).not.toContain('Open PMA chat');
   });
 
@@ -113,9 +130,10 @@ describe('RepoWorktreeViews', () => {
     );
     const { body } = render(RepoWorktreeViews, { props: { state: 'ready', mode: 'detail', detail } });
 
-    expect(body).toContain('No active run');
-    expect(body).toContain('Create a worktree when a ticket needs isolated repo state.');
-    expect(body).toContain('Repo ticket queue');
+    expect(body).not.toContain('No active run');
+    expect(body).not.toContain('Active run');
+    expect(body).not.toContain('Create a worktree when a ticket needs isolated repo state.');
+    expect(body).toContain('Repo tickets');
     expect(body).toContain('View repo memory');
     expect(body).toContain('href="/repos/repo-1/memory"');
     expect(body).not.toContain('Terminal');

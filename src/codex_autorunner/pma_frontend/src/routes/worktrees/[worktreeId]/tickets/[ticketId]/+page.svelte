@@ -8,6 +8,7 @@
   import {
     buildTicketUpdateContent,
     buildTicketDetailViewModel,
+    mergeTicketRunProgress,
     resolveTicketRouteId,
     ticketDetailFromSummary,
     type TicketDetailViewModel,
@@ -123,14 +124,24 @@
     detail = baseDetail;
     sectionIssues = baseIssues;
     loading = false;
-    const artifactResult = currentRunId ? await pmaApi.ticketFlow.listArtifacts(currentRunId, { worktree: ownerId }) : null;
+    const [artifactResult, timelineResult, tailResult, statusResult] = await Promise.all([
+      currentRunId ? pmaApi.ticketFlow.listArtifacts(currentRunId, { worktree: ownerId }) : Promise.resolve(null),
+      baseDetail.linkedChatId ? pmaApi.pma.getTimeline(baseDetail.linkedChatId) : Promise.resolve(null),
+      baseDetail.linkedChatId ? pmaApi.pma.getTail(baseDetail.linkedChatId) : Promise.resolve(null),
+      baseDetail.linkedChatId ? pmaApi.pma.getStatus(baseDetail.linkedChatId) : Promise.resolve(null)
+    ]);
     if (!isCurrentRequest()) return;
-    sectionIssues = artifactResult && !artifactResult.ok
-      ? [...baseIssues, partialPageIssue('artifacts', 'Surfaced artifacts unavailable', artifactResult.error)]
-      : baseIssues;
+    sectionIssues = [
+      ...baseIssues,
+      artifactResult && !artifactResult.ok ? partialPageIssue('artifacts', 'Surfaced artifacts unavailable', artifactResult.error) : null,
+      timelineResult && !timelineResult.ok ? partialPageIssue('linked_chat', 'Ticket chat history unavailable', timelineResult.error) : null
+    ].filter((issue): issue is PartialPageIssue => Boolean(issue));
+    const latestProgress = tailResult?.ok ? tailResult.data : statusResult?.ok ? statusResult.data : null;
     detail = buildTicketDetailViewModel(ticketDetail, {
       ...baseSource,
-      artifacts: artifactResult?.ok ? artifactResult.data : []
+      runs: mergeTicketRunProgress(runs, latestProgress),
+      artifacts: artifactResult?.ok ? artifactResult.data : [],
+      timeline: timelineResult?.ok ? timelineResult.data : []
     });
     loading = false;
   }

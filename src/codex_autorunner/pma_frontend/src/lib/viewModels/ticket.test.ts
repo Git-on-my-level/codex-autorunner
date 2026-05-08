@@ -212,9 +212,44 @@ Users can inspect tickets.
     expect(detail.workspaceHref).toBe('/repos/repo-1/worktrees/worktree-1');
     expect(detail.timeline.map((item) => item.title)).toContain('waiting');
     expect(detail.artifacts[0]).toMatchObject({ kind: 'preview_url' });
+    expect(detail.linkedChatId).toBe('chat-1');
     expect(detail.actions.map((action) => action.label)).toContain('Open PMA chat');
     expect(detail.actions.map((action) => action.label)).toContain('Continue run');
     expect(detail.actions.find((action) => action.label === 'Raw logs/debug')?.secondary).toBe(true);
+  });
+
+  it('builds ticket detail transcript cards from linked chat timeline and live progress', () => {
+    const detail = buildTicketDetailViewModel(
+      mockTicketDetail,
+      {
+        tickets: [mockTicketSummary],
+        runs: [mockRunProgress],
+        chats: [mockChatSummary],
+        artifacts: [],
+        timeline: [
+          {
+            id: 'timeline-assistant-1',
+            kind: 'assistant_message',
+            orderKey: '00000001|message|timeline-assistant-1',
+            timestamp: '2026-05-04T00:02:00Z',
+            chatId: 'chat-1',
+            turnId: 'turn-1',
+            status: 'running',
+            payload: { text: 'I am implementing the ticket now.' },
+            raw: {}
+          }
+        ]
+      }
+    );
+
+    expect(detail.chatTranscriptCards).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'message',
+          message: expect.objectContaining({ text: 'I am implementing the ticket now.' })
+        })
+      ])
+    );
   });
 
   it('matches ticket runs from nested ticket engine state', () => {
