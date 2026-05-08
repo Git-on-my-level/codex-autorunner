@@ -119,23 +119,32 @@ class OpenCodeToolPartShape:
 
 
 def _extract_tool_input(part: dict[str, Any]) -> dict[str, Any]:
-    input_payload: dict[str, Any] = {}
+    for key in ("input", "args", "arguments", "params"):
+        value = part.get(key)
+        payload = _coerce_tool_input_payload(value)
+        if payload:
+            return payload
+
+    state = part.get("state")
+    if isinstance(state, dict):
+        for key in ("input", "args", "arguments", "params"):
+            payload = _coerce_tool_input_payload(state.get(key))
+            if payload:
+                return payload
+
     for key in ("input", "command", "cmd", "script"):
         value = part.get(key)
         if isinstance(value, str) and value.strip():
-            input_payload[key] = value.strip()
-            break
-    if not input_payload:
-        args = part.get("args") or part.get("arguments") or part.get("params")
-        if isinstance(args, dict):
-            for key in ("command", "cmd", "script", "input"):
-                value = args.get(key)
-                if isinstance(value, str) and value.strip():
-                    input_payload[key] = value.strip()
-                    break
-        elif isinstance(args, str) and args.strip():
-            input_payload["input"] = args.strip()
-    return input_payload
+            return {key: value.strip()}
+    return {}
+
+
+def _coerce_tool_input_payload(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str) and value.strip():
+        return {"input": value.strip()}
+    return {}
 
 
 __all__ = [

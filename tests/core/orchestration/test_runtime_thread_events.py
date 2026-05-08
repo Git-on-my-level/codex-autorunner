@@ -1152,7 +1152,7 @@ async def test_normalize_runtime_thread_raw_event_uses_part_type_memory_for_reas
     assert first[0].message == "thinking"
     assert len(second) == 1
     assert isinstance(second[0], RunNotice)
-    assert second[0].message == " more"
+    assert second[0].message == "thinking more"
     assert state.best_assistant_text() == ""
 
 
@@ -1188,6 +1188,72 @@ async def test_normalize_runtime_thread_raw_event_maps_opencode_tool_parts_to_to
     assert isinstance(output[0], ToolCall)
     assert output[0].tool_name == "bash"
     assert output[0].tool_input == {"input": "pwd"}
+
+
+async def test_normalize_runtime_thread_raw_event_preserves_structured_opencode_tool_inputs() -> (
+    None
+):
+    state = RuntimeThreadRunEventState()
+
+    output = await normalize_runtime_thread_raw_event(
+        format_sse(
+            "app-server",
+            {
+                "message": {
+                    "method": "message.part.updated",
+                    "params": {
+                        "properties": {
+                            "part": {
+                                "id": "tool-1",
+                                "type": "tool",
+                                "tool": "glob",
+                                "state": {
+                                    "status": "running",
+                                    "input": {"pattern": "**/*.py", "path": "src"},
+                                },
+                            }
+                        }
+                    },
+                }
+            },
+        ),
+        state,
+    )
+
+    assert len(output) == 1
+    assert isinstance(output[0], ToolCall)
+    assert output[0].tool_name == "glob"
+    assert output[0].tool_input == {"pattern": "**/*.py", "path": "src"}
+
+
+async def test_normalize_runtime_thread_raw_event_preserves_codex_style_tool_item_input() -> (
+    None
+):
+    state = RuntimeThreadRunEventState()
+
+    output = await normalize_runtime_thread_raw_event(
+        format_sse(
+            "app-server",
+            {
+                "message": {
+                    "method": "item/toolCall/start",
+                    "params": {
+                        "item": {
+                            "type": "tool",
+                            "name": "glob",
+                            "input": {"pattern": "**/*.py"},
+                        }
+                    },
+                }
+            },
+        ),
+        state,
+    )
+
+    assert len(output) == 1
+    assert isinstance(output[0], ToolCall)
+    assert output[0].tool_name == "glob"
+    assert output[0].tool_input == {"pattern": "**/*.py"}
 
 
 async def test_normalize_runtime_thread_raw_event_maps_codex_tool_end_to_tool_result() -> (

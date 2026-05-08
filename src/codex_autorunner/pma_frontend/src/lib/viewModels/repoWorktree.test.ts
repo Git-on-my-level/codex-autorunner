@@ -112,7 +112,7 @@ describe('repo/worktree view models', () => {
       signalFailed: 0,
       signalActive: 0
     });
-    expect(vm.rows[0].detail).toContain('Repo worktree variant');
+    expect(vm.rows[0].detail).toBeNull();
   });
 
   it('builds active current-run detail with links and artifacts', () => {
@@ -217,6 +217,28 @@ describe('repo/worktree view models', () => {
     expect(vm.links.find((link) => link.label === 'View repo tickets')).toMatchObject({
       href: '/repos/repo-1/tickets',
       secondary: false
+    });
+  });
+
+  it('does not mark the fallback current ticket as working when the flow is not active', () => {
+    const vm = buildRepoWorktreeDetailViewModel(
+      {
+        repos: [{ ...mockRepoSummary, status: 'idle', activeRuns: 0 }],
+        worktrees: [],
+        runs: [],
+        chats: [],
+        tickets: [{ ...mockTicketSummary, status: 'invalid', errors: ['frontmatter.agent is required'] }],
+        artifacts: []
+      },
+      'repo',
+      'repo-1'
+    );
+
+    expect(vm.flowStatus.status).toBe('invalid');
+    expect(vm.flowStatus.currentTicketId).toBe(mockTicketSummary.id);
+    expect(vm.nextTickets[0]).toMatchObject({
+      title: mockTicketSummary.title,
+      isCurrent: false
     });
   });
 

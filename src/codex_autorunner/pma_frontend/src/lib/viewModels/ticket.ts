@@ -327,7 +327,7 @@ function ticketToListRow(ticket: TicketSummary, source: TicketSourceData): Ticke
     updatedAt: ticket.updatedAt ?? run?.lastEventAt ?? chat?.updatedAt ?? null,
     chatHref: chat ? `/chats?chat=${encodeURIComponent(chat.id)}` : ticket.chatKey ? `/chats?chat=${encodeURIComponent(ticket.chatKey)}` : null,
     href: scopedTicketHref(ticket) ?? '/chats',
-    needsAttention: ticket.errors.length > 0 || ['waiting', 'failed', 'blocked'].includes(status),
+    needsAttention: ticket.errors.length > 0 || ['waiting', 'failed', 'blocked', 'invalid'].includes(status),
     isCurrent: false
   };
 }

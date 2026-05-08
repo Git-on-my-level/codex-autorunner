@@ -19,12 +19,11 @@ describe('RepoWorktreeViews', () => {
     });
     const { body } = render(RepoWorktreeViews, { props: { state: 'ready', mode: 'index', index } });
 
-    expect(body).toContain('Workspaces and worktrees connected to PMA.');
     expect(body).toContain('codex-autorunner');
     expect(body).toContain('discord-5');
     expect(body).toContain('href="/repos/repo-1"');
     expect(body).toContain('href="/repos/repo-1/worktrees/worktree-1"');
-    expect(body).toContain('Default branch main · 1 worktree');
+    expect(body).toContain('1 worktree');
     expect(body).not.toContain('Terminal');
     expect(body).not.toContain('Analytics');
   });
@@ -42,7 +41,6 @@ describe('RepoWorktreeViews', () => {
 
     expect(body).toContain('No repos registered');
     expect(body).toContain('Register a workspace before queueing repo-scoped tickets.');
-    expect(body).toContain('Tickets');
   });
 
   it('renders active-run detail with chat, ticket, contextspace, preview, and secondary logs', () => {

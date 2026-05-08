@@ -139,9 +139,9 @@ describe('PMA chat view helpers', () => {
     ).toBe('Repo - My Repo - wt-9');
   });
 
-  it('keeps the selected chat when still present and falls back otherwise', () => {
+  it('prefers URL/request id, then a valid current id, otherwise none', () => {
     expect(chooseActiveChatId([baseChat], 'chat-1')).toBe('chat-1');
-    expect(chooseActiveChatId([baseChat], 'missing')).toBe('chat-1');
+    expect(chooseActiveChatId([baseChat], 'missing')).toBeNull();
     expect(chooseActiveChatId([], 'missing')).toBeNull();
   });
 
@@ -296,7 +296,7 @@ describe('PMA chat view helpers', () => {
       summary: 'Allow write'
     });
     expect(cards.find((card) => card.kind === 'intermediate')).toMatchObject({
-      detail: expect.stringContaining('Inspecting repo state')
+      detail: '1 thinking update · source events turn:one:intermediate:think-1'
     });
   });
 
@@ -351,10 +351,12 @@ describe('PMA chat view helpers', () => {
         {
           kind: 'intermediate',
           title: 'thinking',
-          text: 'Got it - I will create a test file, edit it, search within it, and then delete it.'
+          text: 'Got it - I will create a test file, edit it, search within it, and then delete it.',
+          detail: '3 thinking updates · source events turn:one:intermediate:think-1, turn:one:intermediate:think-2, turn:one:intermediate:think-3'
         }
       ]
     });
+    expect(JSON.stringify(cards[1])).not.toContain('"message":"Got it"');
   });
 
   it('does not re-add terminal live progress outside the worked summary after final output lands', () => {
@@ -473,6 +475,90 @@ describe('PMA chat view helpers', () => {
       'turn:one:tool:7:rg',
       'intermediate-8',
       'turn:one:assistant'
+    ]);
+  });
+
+  it('anchors live progress after the user row when SSE timestamps precede the persisted prompt', () => {
+    const canonical = buildPmaCards(
+      [
+        {
+          ...timelineItem('turn:one:user', 'user_message', { text: 'Do work' }, '00000042'),
+          timestamp: '2026-05-08T12:00:05Z',
+          orderKey: '00000042|2026-05-08T12:00:05Z|turn:one:user'
+        }
+      ],
+      null,
+      []
+    );
+    const live = buildPmaActivityCards([
+      {
+        ...baseArtifact,
+        id: 'prog-1',
+        kind: 'progress',
+        createdAt: '2026-05-08T12:00:01Z',
+        raw: {
+          managed_turn_id: 'one',
+          progress_item: {
+            kind: 'notice',
+            title: 'Progress',
+            summary: 'Starting',
+            event_ids: [1]
+          }
+        }
+      },
+      {
+        ...baseArtifact,
+        id: 'prog-2',
+        kind: 'progress',
+        createdAt: '2026-05-08T12:00:02Z',
+        raw: {
+          managed_turn_id: 'one',
+          progress_item: {
+            kind: 'notice',
+            title: 'Progress',
+            summary: 'Continuing',
+            event_ids: [2]
+          }
+        }
+      }
+    ]);
+
+    expect(mergePmaTimelineAndActivityCards(canonical, live).map((card) => card.id)).toEqual([
+      'turn:one:user',
+      'intermediate-prog-1',
+      'intermediate-prog-2'
+    ]);
+  });
+
+  it('anchors live progress after optimistic user bubbles', () => {
+    const optimistic = optimisticUserTimelineItemFromSend(
+      { managed_turn_id: 'one', delivered_message: 'Hi', managed_thread_id: 'chat-1' },
+      'Hi',
+      'chat-1'
+    );
+    expect(optimistic).not.toBeNull();
+    const canonical = buildPmaCards([optimistic!], null, []);
+    const live = buildPmaActivityCards([
+      {
+        ...baseArtifact,
+        id: 'prog-opt',
+        kind: 'progress',
+        createdAt: '2026-05-08T11:59:00Z',
+        raw: {
+          managed_turn_id: 'one',
+          progress_item: {
+            kind: 'notice',
+            title: 'Progress',
+            summary: 'Early SSE',
+            event_ids: [1]
+          }
+        }
+      }
+    ]);
+
+    expect(mergePmaTimelineAndActivityCards(canonical, live).map((card) => card.id)).toEqual([
+      'turn:one:user',
+      'intermediate-prog-opt'
     ]);
   });
 

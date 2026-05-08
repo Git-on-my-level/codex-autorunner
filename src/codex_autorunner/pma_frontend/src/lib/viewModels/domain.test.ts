@@ -24,6 +24,7 @@ describe('view model mappers', () => {
       ['ok', 'done'],
       ['completed', 'done'],
       ['error', 'failed'],
+      ['invalid', 'invalid'],
       ['interrupted', 'done'],
       ['stalled', 'blocked'],
       ['unexpected-status', 'idle'],
@@ -64,6 +65,17 @@ describe('view model mappers', () => {
       repoId: 'repo-1',
       updatedAt: '2026-05-04T00:00:00Z'
     });
+  });
+
+  it('maps invalid ticket frontmatter to needs-repair status instead of run failure', () => {
+    const vm = mapTicketSummary({
+      id: 'tkt-invalid',
+      path: '.codex-autorunner/tickets/TICKET-001.md',
+      errors: ['frontmatter.agent is required'],
+      frontmatter: { title: 'Needs repair', done: false }
+    });
+
+    expect(vm.status).toBe('invalid');
   });
 
   it('derives readable ticket-flow chat summaries from managed thread payload fields', () => {

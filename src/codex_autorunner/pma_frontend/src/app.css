@@ -519,6 +519,16 @@ a {
   grid-template-columns: minmax(272px, min(30vw, 340px)) minmax(0, 1fr) minmax(220px, 18vw);
 }
 
+@media (min-width: 1021px) {
+  .master-detail.master-detail-hide-detail {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .master-detail.master-detail-hide-detail .master-detail-main {
+    display: none;
+  }
+}
+
 .master-detail-list,
 .master-detail-main,
 .master-detail-rail {
@@ -1205,7 +1215,8 @@ a.scope-chip-label:hover {
 }
 
 .status-pill.waiting,
-.status-pill.blocked {
+.status-pill.blocked,
+.status-pill.invalid {
   background: var(--color-warning-soft);
   color: var(--color-warning);
 }
@@ -1394,6 +1405,22 @@ a.scope-chip-label:hover {
   font-size: var(--font-size-0);
 }
 
+.chat-header-scope-line .pma-status-bar {
+  margin: 0;
+  min-height: 26px;
+  padding: 2px var(--space-2);
+  border-radius: 999px;
+  background: var(--color-surface-muted);
+  border-color: transparent;
+  font-size: var(--font-size-0);
+  flex: 0 0 auto;
+}
+
+.chat-header-scope-primary {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
 .chat-header-aside .stream-health {
   margin: 0;
   padding: 0;
@@ -1412,7 +1439,9 @@ a.scope-chip-label:hover {
 .chat-header-scope-line {
   display: flex;
   align-items: center;
-  gap: 6px;
+  justify-content: space-between;
+  gap: var(--space-2);
+  flex-wrap: wrap;
   margin: 0;
   min-width: 0;
   font-size: var(--font-size-1);
@@ -2468,7 +2497,8 @@ textarea:hover {
 }
 
 .workspace-ticket-row.waiting,
-.workspace-ticket-row.blocked {
+.workspace-ticket-row.blocked,
+.workspace-ticket-row.invalid {
   border-left: 4px solid var(--color-warning);
 }
 
@@ -3332,6 +3362,7 @@ textarea:disabled {
 .ticket-flow-line.waiting { border-left-color: var(--color-warning); }
 .ticket-flow-line.blocked,
 .ticket-flow-line.failed { border-left-color: var(--color-danger); }
+.ticket-flow-line.invalid { border-left-color: var(--color-warning); }
 
 .ticket-flow-line .flow-line-meta {
   color: var(--color-ink-muted);
@@ -3832,7 +3863,8 @@ textarea:disabled {
 }
 
 .ticket-row.waiting,
-.ticket-row.blocked {
+.ticket-row.blocked,
+.ticket-row.invalid {
   border-left: 4px solid var(--color-warning);
 }
 

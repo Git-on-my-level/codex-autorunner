@@ -148,6 +148,27 @@ describe('ticket view models', () => {
     expect(vm.queueRun).toMatchObject({ id: 'run-repo-1', status: 'running' });
   });
 
+  it('keeps invalid tickets out of the failed filter while flagging attention', () => {
+    const vm = buildTicketListViewModel({
+      tickets: [
+        {
+          ...mockTicketSummary,
+          id: 'TICKET-invalid',
+          status: 'invalid',
+          errors: ['frontmatter.agent is required']
+        }
+      ],
+      runs: [],
+      chats: [],
+      artifacts: []
+    });
+
+    expect(vm.rows[0].needsAttention).toBe(true);
+    expect(filterTicketRows(vm.rows, 'needs_attention')).toHaveLength(1);
+    expect(filterTicketRows(vm.rows, 'failed')).toHaveLength(0);
+    expect(filterTicketRows(vm.rows, 'open')).toHaveLength(1);
+  });
+
   it('parses ticket contract sections from markdown', () => {
     const sections = parseTicketContract(`Intro note
 

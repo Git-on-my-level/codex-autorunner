@@ -11,7 +11,7 @@
   import { repoAccent, repoInitials } from '$lib/viewModels/repoIdentity';
 
   let {
-    state,
+    state: viewState,
     mode,
     index = null,
     detail = null,
@@ -32,50 +32,99 @@
   const ticketIssues = $derived(sectionIssues.filter((issue) => issue.id === 'tickets'));
   const artifactIssues = $derived(sectionIssues.filter((issue) => issue.id === 'artifacts'));
   const queueTickets = $derived(detail ? [...detail.currentTickets, ...detail.nextTickets] : []);
+
+  type RepoFilter = 'all' | 'active' | 'waiting';
+  const REPO_FILTERS: RepoFilter[] = ['all', 'waiting', 'active'];
+  let search = $state('');
+  let filter = $state<RepoFilter>('all');
+
+  const indexRows = $derived(index?.rows ?? []);
+
+  const filteredRows = $derived.by(() => {
+    const needle = search.trim().toLowerCase();
+    return indexRows.filter((row) => {
+      if (filter === 'active' && row.activeRuns === 0 && row.status !== 'running') return false;
+      if (filter === 'waiting' && row.status !== 'waiting' && row.status !== 'blocked') return false;
+      if (!needle) return true;
+      const haystack: string[] = [row.label, row.branch ?? '', row.path ?? ''];
+      for (const child of row.childWorktrees) {
+        haystack.push(child.label, child.branch ?? '', child.path ?? '');
+      }
+      return haystack.some((value) => value.toLowerCase().includes(needle));
+    });
+  });
+
+  function visibleChildren(row: RepoWorktreeIndexViewModel['rows'][number]) {
+    const needle = search.trim().toLowerCase();
+    if (!needle) return row.childWorktrees;
+    const repoMatches = [row.label, row.branch ?? '', row.path ?? ''].some((v) =>
+      v.toLowerCase().includes(needle)
+    );
+    if (repoMatches) return row.childWorktrees;
+    return row.childWorktrees.filter((child) =>
+      [child.label, child.branch ?? '', child.path ?? ''].some((v) => v.toLowerCase().includes(needle))
+    );
+  }
+
+  function repoFilterCount(key: RepoFilter): number {
+    if (key === 'all') return indexRows.length;
+    if (key === 'active') return index?.activeCount ?? 0;
+    return index?.waitingCount ?? 0;
+  }
+
+  function repoFilterLabel(key: RepoFilter): string {
+    return key === 'all' ? 'All' : key.charAt(0).toUpperCase() + key.slice(1);
+  }
 </script>
 
-{#if state === 'loading'}
+{#if viewState === 'loading'}
   <section class="page-stack">
     <div class="state-panel">Loading workspace state...</div>
   </section>
-{:else if state === 'error'}
+{:else if viewState === 'error'}
   <section class="page-stack">
     <div class="state-panel error">Could not load workspace state. {errorMessage}</div>
   </section>
 {:else if mode === 'index' && index}
   <section class="page-stack repo-worktree-page repos-index-v2">
-    <header class="repos-hero">
-      <div class="repos-hero-copy">
-        <h1>{index.title}</h1>
-        <p class="repos-hero-sub">Workspaces and worktrees connected to PMA.</p>
-      </div>
-      <dl class="repos-hero-stats" aria-label="Workspace summary">
-        <div class={index.activeCount > 0 ? 'is-active' : ''}>
-          <dt>Active</dt>
-          <dd>{index.activeCount}</dd>
+    {#if indexRows.length > 0}
+      <header class="repos-controls">
+        <label class="search-field repos-search">
+          <span class="sr-only">Search repos and worktrees</span>
+          <input bind:value={search} type="search" placeholder="Search repos, worktrees, branches" />
+        </label>
+        <div class="filter-row" aria-label="Repo status filters">
+          {#each REPO_FILTERS as item}
+            <button
+              class:active={filter === item}
+              class="chip"
+              type="button"
+              onclick={() => (filter = item)}
+            >
+              {repoFilterLabel(item)}
+              <span>{repoFilterCount(item)}</span>
+            </button>
+          {/each}
         </div>
-        <div class={index.waitingCount > 0 ? 'is-waiting' : ''}>
-          <dt>Waiting</dt>
-          <dd>{index.waitingCount}</dd>
-        </div>
-        <div>
-          <dt>Tickets</dt>
-          <dd>{index.openTicketCount}</dd>
-        </div>
-      </dl>
-    </header>
+      </header>
+    {/if}
 
     {@render degradedIssues(currentRunIssues)}
     {@render degradedIssues(ticketIssues)}
 
-    {#if index.rows.length === 0}
+    {#if indexRows.length === 0}
       <div class="state-panel empty-state compact-empty repos-empty">
         <strong>No repos registered</strong>
         <p>Register a workspace before queueing repo-scoped tickets.</p>
       </div>
+    {:else if filteredRows.length === 0}
+      <div class="state-panel empty-state compact-empty repos-empty">
+        <strong>No matches</strong>
+        <p>Try a different search or filter.</p>
+      </div>
     {:else}
       <ul class="repos-list" role="list">
-        {#each index.rows as row}
+        {#each filteredRows as row}
           {@const accent = repoAccent(row.label)}
           <li class={`repo-item status-${row.status}`} class:has-children={row.childWorktrees.length > 0} style={`--repo-accent: ${accent};`}>
             <a class="repo-card" href={href(row.href)}>
@@ -83,43 +132,52 @@
               <div class="repo-card-body">
                 <div class="repo-card-title">
                   <span class="repo-name">{row.label}</span>
-                  <span class={`repo-status status-pill ${row.status}`}>{statusLabel(row.status)}</span>
+                  {#if row.status !== 'idle' && row.status !== 'done'}
+                    <span class={`repo-status status-pill ${row.status}`}>{statusLabel(row.status)}</span>
+                  {/if}
                 </div>
                 <div class="repo-card-meta">
-                  <span class="repo-meta-kind">{row.kind === 'worktree' ? 'worktree' : 'repo'}</span>
                   {#if row.branch}
-                    <span class="repo-meta-dot" aria-hidden="true">·</span>
-                    <span class="repo-meta-branch"><span class="repo-meta-icon" aria-hidden="true">⎇</span>{row.branch}</span>
+                    <span class="repo-meta-branch">{row.branch}</span>
                   {/if}
                   {#if row.detail}
-                    <span class="repo-meta-dot" aria-hidden="true">·</span>
+                    {#if row.branch}<span class="repo-meta-dot" aria-hidden="true">·</span>{/if}
                     <span>{row.detail}</span>
                   {/if}
-                  <span class="repo-meta-dot" aria-hidden="true">·</span>
-                  <span class="repo-meta-time">{rowRelativeTime(row)}</span>
+                  {#if row.lastActivityAt}
+                    {#if row.branch || row.detail}<span class="repo-meta-dot" aria-hidden="true">·</span>{/if}
+                    <span class="repo-meta-time">{rowRelativeTime(row)}</span>
+                  {/if}
                 </div>
               </div>
-              <div class="repo-card-counts" aria-label="Activity counts">
-                <span class={`count-chip ${row.activeRuns > 0 ? 'is-active' : ''}`} title="Active runs">
-                  <strong>{row.activeRuns}</strong><em>run{row.activeRuns === 1 ? '' : 's'}</em>
-                </span>
-                <span class={`count-chip ${row.openTickets > 0 ? 'is-tickets' : ''}`} title="Open tickets">
-                  <strong>{row.openTickets}</strong><em>ticket{row.openTickets === 1 ? '' : 's'}</em>
-                </span>
-              </div>
-              <span class="repo-chevron" aria-hidden="true">→</span>
+              {#if row.activeRuns > 0 || row.openTickets > 0}
+                <div class="repo-card-counts" aria-label="Activity counts">
+                  {#if row.activeRuns > 0}
+                    <span class="count-chip is-active" title="Active runs">
+                      <strong>{row.activeRuns}</strong><em>run{row.activeRuns === 1 ? '' : 's'}</em>
+                    </span>
+                  {/if}
+                  {#if row.openTickets > 0}
+                    <span class="count-chip is-tickets" title="Open tickets">
+                      <strong>{row.openTickets}</strong><em>ticket{row.openTickets === 1 ? '' : 's'}</em>
+                    </span>
+                  {/if}
+                </div>
+              {/if}
             </a>
-            <div class="repo-row-toolbar">
-              <div class="repo-signal-pills" aria-label="Scoped PMA chats and runs">
-                {#if row.signalWaiting > 0}<span class="signal-pill waiting">{row.signalWaiting} waiting</span>{/if}
-                {#if row.signalFailed > 0}<span class="signal-pill failed">{row.signalFailed} failed</span>{/if}
-                {#if row.signalActive > 0}<span class="signal-pill active">{row.signalActive} active</span>{/if}
+            {#if row.signalWaiting > 0 || row.signalFailed > 0 || row.signalActive > 0}
+              <div class="repo-row-toolbar">
+                <div class="repo-signal-pills" aria-label="Scoped PMA chats and runs">
+                  {#if row.signalWaiting > 0}<span class="signal-pill waiting">{row.signalWaiting} waiting</span>{/if}
+                  {#if row.signalFailed > 0}<span class="signal-pill failed">{row.signalFailed} failed</span>{/if}
+                  {#if row.signalActive > 0}<span class="signal-pill active">{row.signalActive} active</span>{/if}
+                </div>
               </div>
-            </div>
+            {/if}
 
-            {#if row.childWorktrees.length > 0}
+            {#if visibleChildren(row).length > 0}
               <ul class="worktree-list" role="list" aria-label={`Worktrees owned by ${row.label}`}>
-                {#each row.childWorktrees as worktree}
+                {#each visibleChildren(row) as worktree}
                   <li class={`worktree-item status-${worktree.status}`}>
                     <div class="worktree-card">
                       <span class="worktree-rail" aria-hidden="true"></span>
@@ -127,33 +185,46 @@
                       <div class="worktree-card-body">
                         <div class="worktree-card-title">
                           <a class="worktree-name" href={href(worktree.href)}>{worktree.label}</a>
-                          <span class={`status-pill ${worktree.status}`}>{statusLabel(worktree.status)}</span>
-                        </div>
-                        <div class="worktree-card-meta">
-                          {#if worktree.branch}
-                            <span class="repo-meta-branch"><span class="repo-meta-icon" aria-hidden="true">⎇</span>{worktree.branch}</span>
-                            <span class="repo-meta-dot" aria-hidden="true">·</span>
-                          {/if}
-                          <span>{worktree.openTickets} open ticket{worktree.openTickets === 1 ? '' : 's'}</span>
-                          {#if worktree.currentRunTitle}
-                            <span class="repo-meta-dot" aria-hidden="true">·</span>
-                            <span class="worktree-run-title">{worktree.currentRunTitle}</span>
+                          {#if worktree.status !== 'idle' && worktree.status !== 'done'}
+                            <span class={`status-pill ${worktree.status}`}>{statusLabel(worktree.status)}</span>
                           {/if}
                         </div>
-                      </div>
-                      <div class="worktree-card-counts">
-                        {#if worktree.activeRuns > 0}
-                          <span class="count-chip is-active" title="Active runs">
-                            <strong>{worktree.activeRuns}</strong><em>run{worktree.activeRuns === 1 ? '' : 's'}</em>
-                          </span>
-                        {/if}
-                        <span class={`count-chip ${worktree.openTickets > 0 ? 'is-tickets' : ''}`} title="Open worktree tickets">
-                          <strong>{worktree.openTickets}</strong><em>ticket{worktree.openTickets === 1 ? '' : 's'}</em>
-                        </span>
-                        {#if worktree.ticketHref}
-                          <a class="queue-link" href={href(worktree.ticketHref)}>Tickets</a>
+                        {#if worktree.branch || worktree.currentRunTitle}
+                          <div class="worktree-card-meta">
+                            {#if worktree.branch}
+                              <span class="repo-meta-branch">{worktree.branch}</span>
+                            {/if}
+                            {#if worktree.currentRunTitle}
+                              {#if worktree.branch}<span class="repo-meta-dot" aria-hidden="true">·</span>{/if}
+                              <span class="worktree-run-title">{worktree.currentRunTitle}</span>
+                            {/if}
+                          </div>
                         {/if}
                       </div>
+                      {#if worktree.activeRuns > 0 || worktree.openTickets > 0}
+                        <div class="worktree-card-counts">
+                          {#if worktree.activeRuns > 0}
+                            <span class="count-chip is-active" title="Active runs">
+                              <strong>{worktree.activeRuns}</strong><em>run{worktree.activeRuns === 1 ? '' : 's'}</em>
+                            </span>
+                          {/if}
+                          {#if worktree.openTickets > 0}
+                            {#if worktree.ticketHref}
+                              <a
+                                class="count-chip count-chip-link is-tickets"
+                                href={href(worktree.ticketHref)}
+                                title="Open worktree tickets"
+                              >
+                                <strong>{worktree.openTickets}</strong><em>ticket{worktree.openTickets === 1 ? '' : 's'}</em>
+                              </a>
+                            {:else}
+                              <span class="count-chip is-tickets" title="Open worktree tickets">
+                                <strong>{worktree.openTickets}</strong><em>ticket{worktree.openTickets === 1 ? '' : 's'}</em>
+                              </span>
+                            {/if}
+                          {/if}
+                        </div>
+                      {/if}
                     </div>
                   </li>
                 {/each}
@@ -387,78 +458,17 @@
     gap: var(--space-3);
   }
 
-  .repos-hero {
+  .repos-controls {
     display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: var(--space-5);
+    align-items: center;
+    gap: var(--space-3);
     padding: 0 2px;
   }
 
-  .repos-hero-copy {
+  .repos-search {
+    flex: 1 1 auto;
     min-width: 0;
-    display: flex;
-    align-items: baseline;
-    gap: var(--space-3);
-    flex-wrap: wrap;
   }
-
-  .repos-hero h1 {
-    margin: 0;
-    font-size: var(--font-size-4);
-    font-weight: 650;
-    letter-spacing: -0.022em;
-    line-height: 1.18;
-  }
-
-  .repos-hero-sub {
-    margin: 0;
-    color: var(--color-ink-muted);
-    font-size: var(--font-size-1);
-    line-height: 1.4;
-  }
-
-  .repos-hero-stats {
-    display: flex;
-    align-items: stretch;
-    gap: var(--space-5);
-    margin: 0;
-    padding: 0;
-    background: transparent;
-  }
-
-  .repos-hero-stats > div {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 2px;
-    padding: 0;
-  }
-
-  .repos-hero-stats dt {
-    margin: 0;
-    order: 2;
-    color: var(--color-ink-muted);
-    font-size: var(--font-size-0);
-    font-weight: 500;
-    letter-spacing: 0;
-    text-transform: none;
-  }
-
-  .repos-hero-stats dd {
-    margin: 0;
-    color: var(--color-ink);
-    font-size: var(--font-size-5);
-    font-weight: 650;
-    font-variant-numeric: tabular-nums;
-    letter-spacing: -0.022em;
-    line-height: 1;
-  }
-
-  .repos-hero-stats > div.is-active dd { color: var(--color-success); }
-  .repos-hero-stats > div.is-waiting dd { color: var(--color-warning); }
-  .repos-hero-stats > div.is-active dt { color: var(--color-success); }
-  .repos-hero-stats > div.is-waiting dt { color: var(--color-warning); }
 
   .repos-empty {
     border-radius: 12px;
@@ -491,7 +501,7 @@
 
   .repo-card {
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    grid-template-columns: auto minmax(0, 1fr) auto;
     align-items: center;
     gap: var(--space-4);
     padding: var(--space-4) var(--space-5);
@@ -621,12 +631,6 @@
     color: var(--color-ink-soft);
   }
 
-  .repo-meta-icon {
-    color: var(--color-ink-faint);
-    font-size: 12px;
-    line-height: 1;
-  }
-
   .repo-meta-time {
     color: var(--color-ink-faint);
     font-variant-numeric: tabular-nums;
@@ -641,10 +645,10 @@
 
   .count-chip {
     display: inline-flex;
-    align-items: baseline;
+    align-items: center;
     gap: 4px;
     min-height: 24px;
-    padding: 2px 8px;
+    padding: 2px 10px;
     border-radius: 999px;
     background: var(--color-surface-muted);
     color: var(--color-ink-muted);
@@ -686,19 +690,14 @@
     color: var(--color-accent);
   }
 
-  .repo-chevron {
-    color: var(--color-ink-faint);
-    font-size: 14px;
-    line-height: 1;
-    opacity: 0;
-    transform: translateX(-4px);
-    transition: opacity var(--transition-base), transform var(--transition-base), color var(--transition-base);
+  a.count-chip-link {
+    text-decoration: none;
+    transition: filter var(--transition-base), box-shadow var(--transition-base);
   }
 
-  .repo-item:hover .repo-chevron {
-    opacity: 1;
-    transform: translateX(0);
-    color: var(--color-ink);
+  a.count-chip-link:hover {
+    filter: brightness(0.95);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 20%, transparent);
   }
 
   .repo-status {
@@ -809,25 +808,6 @@
     color: var(--color-accent);
   }
 
-  .queue-link {
-    min-height: 24px;
-    display: inline-flex;
-    align-items: center;
-    padding: 0 8px;
-    border: 1px solid var(--color-border-subtle);
-    border-radius: 999px;
-    color: var(--color-accent);
-    font-size: 11px;
-    font-weight: 650;
-    text-decoration: none;
-    white-space: nowrap;
-  }
-
-  .queue-link:hover {
-    border-color: var(--color-border-strong);
-    background: var(--color-surface-muted);
-  }
-
   .worktree-run-title {
     overflow: hidden;
     text-overflow: ellipsis;
@@ -853,39 +833,11 @@
   .repo-item.status-failed::before { background: var(--color-danger); }
 
   @media (max-width: 760px) {
-    .repos-hero {
+    .repos-controls {
       flex-direction: column;
       align-items: stretch;
       gap: var(--space-2);
       padding: 0;
-    }
-    .repos-hero-copy {
-      gap: var(--space-2);
-    }
-    .repos-hero h1 {
-      font-size: var(--font-size-2);
-      line-height: 1.25;
-    }
-    .repos-hero-sub {
-      font-size: var(--font-size-0);
-      line-height: 1.35;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      display: -webkit-box;
-      -webkit-line-clamp: 1;
-      -webkit-box-orient: vertical;
-    }
-    .repos-hero-stats {
-      align-self: flex-start;
-      padding: 0;
-      border: 0;
-      background: transparent;
-      gap: var(--space-3);
-      flex-wrap: wrap;
-    }
-    .repos-hero-stats > div {
-      padding: 0;
-      border-right: 0;
     }
     .repo-card {
       grid-template-columns: auto minmax(0, 1fr);
@@ -896,9 +848,6 @@
     .repo-card-counts {
       grid-column: 1 / -1;
       flex-wrap: wrap;
-    }
-    .repo-chevron {
-      display: none;
     }
     .worktree-list {
       padding: 0 var(--space-4) var(--space-3);

@@ -13,7 +13,7 @@ export type TicketFlowStatusViewModel = {
   progressLabel: string;
   lastActivityLabel: string;
   reasonLabel: string;
-  signal: 'active' | 'waiting' | 'blocked' | 'failed' | 'idle' | 'done';
+  signal: 'active' | 'waiting' | 'blocked' | 'failed' | 'invalid' | 'idle' | 'done';
 };
 
 export type TicketFlowOwnerScope = {
@@ -221,6 +221,7 @@ function statusSignal(status: WorkStatus): TicketFlowStatusViewModel['signal'] {
   if (status === 'waiting') return 'waiting';
   if (status === 'blocked') return 'blocked';
   if (status === 'failed') return 'failed';
+  if (status === 'invalid') return 'invalid';
   if (status === 'done') return 'done';
   return 'idle';
 }

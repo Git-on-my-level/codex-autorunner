@@ -10,6 +10,7 @@
     listLabel = 'List',
     detailLabel = 'Detail',
     showSwitch = true,
+    hideDetail = false,
     onModeChange = undefined,
     rail = undefined,
     list,
@@ -21,6 +22,8 @@
     listLabel?: string;
     detailLabel?: string;
     showSwitch?: boolean;
+    /** Wide screens only: hide the detail column so the list spans the master-detail area. */
+    hideDetail?: boolean;
     onModeChange?: (mode: MasterDetailMode) => void;
     rail?: Snippet;
     list: Snippet;
@@ -36,6 +39,7 @@
 
 <section
   class:has-rail={hasRail}
+  class:master-detail-hide-detail={hideDetail}
   class="master-detail"
   data-mode={mode}
   aria-label={label}

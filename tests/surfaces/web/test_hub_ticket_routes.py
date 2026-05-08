@@ -143,6 +143,53 @@ def test_hub_tickets_enriches_current_ticket_with_live_run_metadata(
     assert row["duration_seconds"] is not None
 
 
+def test_hub_tickets_marks_lint_errors_invalid_not_failed(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    supervisor = create_test_hub_supervisor(hub_root)
+    base = supervisor.create_repo("base")
+    _write_ticket(
+        base.path,
+        "TICKET-001.md",
+        'title: "Needs repair"\ndone: false\n',
+        "Base body",
+    )
+
+    client = TestClient(create_hub_app(hub_root))
+    response = client.get("/hub/tickets?repo=base")
+    assert response.status_code == 200
+
+    row = response.json()["tickets"][0]
+    assert row["errors"]
+    assert row["status"] == "invalid"
+
+
+def test_hub_tickets_marks_duplicate_ticket_numbers_invalid(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    supervisor = create_test_hub_supervisor(hub_root)
+    base = supervisor.create_repo("base")
+    for name, title in (
+        ("TICKET-001-alpha.md", "Alpha"),
+        ("TICKET-001-beta.md", "Beta"),
+    ):
+        _write_ticket(
+            base.path,
+            name,
+            f'ticket_id: "{title.lower()}"\ntitle: "{title}"\nagent: codex\ndone: false\n',
+            "Body",
+        )
+
+    client = TestClient(create_hub_app(hub_root))
+    response = client.get("/hub/tickets?repo=base")
+    assert response.status_code == 200
+
+    rows = response.json()["tickets"]
+    assert [row["status"] for row in rows] == ["invalid", "invalid"]
+    assert all(
+        any("Duplicate ticket index 001" in error for error in row["errors"])
+        for row in rows
+    )
+
+
 def test_hub_tickets_repo_filter_includes_child_worktrees(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     supervisor = create_test_hub_supervisor(hub_root)

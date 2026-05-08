@@ -24,7 +24,7 @@ export type RepoWorktreeIndexRow = {
   id: string;
   kind: RepoWorktreeKind;
   label: string;
-  detail: string;
+  detail: string | null;
   status: WorkStatus;
   branch: string | null;
   path: string | null;
@@ -214,11 +214,12 @@ export function buildRepoWorktreeDetailViewModel(
   const currentTicketIds = new Set(visibleRuns.map((run) => run.ticketId).filter((ticketId): ticketId is string => Boolean(ticketId)));
   const scopedTickets = ticketsForResource(source.tickets, kind, id);
   const flowStatus = buildTicketFlowStatusViewModel(scopedTickets, relatedRuns, { kind, id });
-  const currentTickets = ticketsForIds(scopedTickets, currentTicketIds, flowStatus.currentTicketId);
+  const activeCurrentTicketId = isActiveTicketFlowStatus(flowStatus.status) ? flowStatus.currentTicketId : null;
+  const currentTickets = ticketsForIds(scopedTickets, currentTicketIds, activeCurrentTicketId);
   const nextTickets = scopedTickets
     .filter((ticket) => ticket.status !== 'done' && !currentTicketIds.has(ticket.id))
     .slice(0, 5)
-    .map((ticket) => ticketToRow(ticket, flowStatus.currentTicketId));
+    .map((ticket) => ticketToRow(ticket, activeCurrentTicketId));
   const resourceArtifacts = asRecordArray(resource.raw.current_run_artifacts).map(mapSurfaceArtifact);
   const runArtifacts = [...resourceArtifacts, ...source.artifacts, ...relatedRuns.flatMap((run) => run.events)].map(artifactToRow);
   const activity = [
@@ -244,7 +245,7 @@ export function buildRepoWorktreeDetailViewModel(
     links: buildContextLinks(kind, id, runArtifacts, parentRepoId),
     ticketIndexHref: scopedTicketHref(kind, id, parentRepoId),
     ticketIndexLabel: kind === 'repo' ? 'Repo tickets' : 'Worktree tickets',
-    childWorktrees: childWorktreeSummaries.map((worktree) => worktreeToChildRow(worktree, source)),
+    childWorktrees: childWorktreeSummaries.map((worktree) => worktreeToChildRow(worktree, source, baseRepo?.name ?? null)),
     baseRepoLabel: baseRepo?.name ?? (kind === 'worktree' ? (resource as WorktreeSummary | null)?.repoId ?? null : null),
     baseRepoHref: kind === 'worktree' && (resource as WorktreeSummary | null)?.repoId ? repoRoute((resource as WorktreeSummary).repoId as string) : null,
     hasActiveRun: activeRunCards.length > 0,
@@ -290,16 +291,18 @@ export function rowRelativeTime(row: { lastActivityAt?: string | null; updatedAt
 }
 
 function repoToIndexRow(repo: RepoSummary, worktrees: WorktreeSummary[], source: RepoWorktreeSourceData): RepoWorktreeIndexRow {
-  const childWorktrees = worktrees.map((worktree) => worktreeToChildRow(worktree, source)).sort(byChildActiveThenLabel);
+  const childWorktrees = worktrees
+    .map((worktree) => worktreeToChildRow(worktree, source, repo.name))
+    .sort(byChildActiveThenLabel);
   const childActiveRuns = childWorktrees.reduce((total, worktree) => total + worktree.activeRuns, 0);
   const childOpenTickets = childWorktrees.reduce((total, worktree) => total + worktree.openTickets, 0);
   return {
     id: repo.id,
     kind: 'repo',
     label: repo.name,
-    detail: repo.defaultBranch
-      ? `Default branch ${repo.defaultBranch} · ${childWorktrees.length} worktree${childWorktrees.length === 1 ? '' : 's'}`
-      : `Repository · ${childWorktrees.length} worktree${childWorktrees.length === 1 ? '' : 's'}`,
+    detail: childWorktrees.length > 0
+      ? `${childWorktrees.length} worktree${childWorktrees.length === 1 ? '' : 's'}`
+      : null,
     status: aggregateStatus(repo.status, childWorktrees.map((worktree) => worktree.status)),
     branch: repo.defaultBranch,
     path: repo.path,
@@ -322,7 +325,7 @@ function worktreeToIndexRow(worktree: WorktreeSummary, _source: RepoWorktreeSour
     id: worktree.id,
     kind: 'worktree',
     label: worktree.name,
-    detail: worktree.branch ? `Repo worktree variant · branch ${worktree.branch}` : 'Repo worktree variant',
+    detail: null,
     status: worktree.status,
     branch: worktree.branch,
     path: worktree.path,
@@ -349,7 +352,17 @@ function scopedChatHref(
   return `/chats?new=${scope}&kind=${chatKind}`;
 }
 
-function worktreeToChildRow(worktree: WorktreeSummary, source: RepoWorktreeSourceData): RepoWorktreeChildRow {
+function shortenWorktreeLabel(name: string, repoName: string | null): string {
+  if (!repoName) return name;
+  const prefix = `${repoName}--`;
+  return name.startsWith(prefix) ? name.slice(prefix.length) : name;
+}
+
+function worktreeToChildRow(
+  worktree: WorktreeSummary,
+  source: RepoWorktreeSourceData,
+  repoName: string | null = null
+): RepoWorktreeChildRow {
   const run = mergeRunCards(
     source.runs.filter((candidate) => runMatchesResource(candidate, 'worktree', worktree.id)),
     source.chats.filter((candidate) => chatMatchesResource(candidate, 'worktree', worktree.id)),
@@ -361,7 +374,7 @@ function worktreeToChildRow(worktree: WorktreeSummary, source: RepoWorktreeSourc
   const currentTicketId = run?.ticketId ?? tickets[0]?.id ?? null;
   return {
     id: worktree.id,
-    label: worktree.name,
+    label: shortenWorktreeLabel(worktree.name, repoName),
     status: run?.status ?? worktree.status,
     branch: worktree.branch,
     path: worktree.path,
@@ -455,6 +468,10 @@ function ticketToRow(ticket: TicketSummary, currentTicketId: string | null = nul
     bodyPreview: bodyPreview(ticket),
     isCurrent: ticket.id === currentTicketId || (ticket.number !== null && String(ticket.number) === currentTicketId)
   };
+}
+
+function isActiveTicketFlowStatus(status: WorkStatus): boolean {
+  return status === 'running' || status === 'waiting';
 }
 
 function ticketDiffLabel(ticket: TicketSummary): string | null {

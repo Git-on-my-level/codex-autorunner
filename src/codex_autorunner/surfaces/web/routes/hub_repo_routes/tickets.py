@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
 def _ticket_status(frontmatter: dict[str, object] | None, errors: list[str]) -> str:
     if errors:
-        return "failed"
+        return "invalid"
     if bool((frontmatter or {}).get("done")):
         return "done"
     return "idle"
@@ -130,6 +130,33 @@ def _enrich_current_ticket_payload(
     )
     if isinstance(flow_status, str) and flow_status.strip():
         payload["status"] = flow_status
+
+
+def _mark_duplicate_ticket_numbers(payloads: list[dict[str, object]]) -> None:
+    by_number: dict[int, list[dict[str, object]]] = {}
+    for payload in payloads:
+        number = payload.get("ticket_number")
+        if not isinstance(number, int):
+            continue
+        by_number.setdefault(number, []).append(payload)
+
+    for number, duplicates in by_number.items():
+        if len(duplicates) < 2:
+            continue
+        paths = ", ".join(
+            str(item.get("ticket_path") or item.get("path")) for item in duplicates
+        )
+        message = (
+            f"Duplicate ticket index {number:03d}: multiple files share the same index "
+            f"({paths}). Rename or remove duplicates to ensure deterministic ordering."
+        )
+        for payload in duplicates:
+            errors = payload.get("errors")
+            if not isinstance(errors, list):
+                errors = []
+                payload["errors"] = errors
+            errors.append(message)
+            payload["status"] = _ticket_status(None, [message])
 
 
 def _ticket_payload(
@@ -246,6 +273,7 @@ def build_hub_ticket_router(context: HubAppContext) -> APIRouter:
                     run_state = None
                     run_record = None
                     diff_stats = None
+            workspace_payloads: list[dict[str, object]] = []
             for path in list_ticket_paths(ticket_dir):
                 payload = _ticket_payload(
                     hub_root=context.config.root,
@@ -265,6 +293,9 @@ def build_hub_ticket_router(context: HubAppContext) -> APIRouter:
                     run_record=run_record,
                     diff_stats=diff_stats,
                 )
+                workspace_payloads.append(payload)
+            _mark_duplicate_ticket_numbers(workspace_payloads)
+            for payload in workspace_payloads:
                 if requested_status and str(payload.get("status")) != requested_status:
                     continue
                 tickets.append(payload)

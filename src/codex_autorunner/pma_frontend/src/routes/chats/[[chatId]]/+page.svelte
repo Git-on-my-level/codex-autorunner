@@ -86,7 +86,6 @@
   let composeError = $state<ApiError | null>(null);
   let streamState = $state<'idle' | 'connecting' | 'connected' | 'interrupted'>('idle');
   let streamError = $state<string | null>(null);
-  let streamLastEventAt = $state<string | null>(null);
   let streamSubscription: StreamSubscription | null = null;
   let fileInput: HTMLInputElement | null = $state(null);
   let imageInput: HTMLInputElement | null = $state(null);
@@ -124,7 +123,10 @@
     creating ? 'Creating...' : newChatKind === 'agent' && canStartCodingAgentChat ? '+ Coding agent' : '+ PMA chat'
   );
   const headerScopeLine = $derived(pmaChatHeaderScopeLine(activeChat, repoLabelForRepoId));
-  const showStreamHealth = $derived(streamState !== 'idle');
+  /** Omit connected “Live · …” — redundant with the PMA turn pill on the scope row. */
+  const showStreamHealthAside = $derived(
+    streamState === 'connecting' || streamState === 'interrupted'
+  );
   const showStatusBar = $derived(
     Boolean(
       statusBar &&
@@ -436,7 +438,6 @@
       onEvent: (event) => {
         if (activeChatId !== chatId) return;
         streamState = 'connected';
-        streamLastEventAt = new Date().toISOString();
         if (event.kind === 'timeline') {
           const item = mapPmaTimelineItem(event.payload);
           timeline = reconcilePmaTimeline(timeline, [item]);
@@ -810,6 +811,7 @@
   listLabel="Chats"
   detailLabel="Detail"
   showSwitch={false}
+  hideDetail={!activeChat}
   onModeChange={(mode) => (detailMode = mode)}
 >
   {#snippet list()}
@@ -932,26 +934,44 @@
       <div class="chat-header-copy">
         <h1>{activeChat?.title ?? 'Chats'}</h1>
         {#if activeChat}
-          <p class="chat-header-scope-line">
-            {#if activeRepoIngress}
-              <a class="chat-header-scope-link" href={href(activeRepoIngress.href)}>
-                <span class="chat-header-scope">{activeRepoIngress.detail}</span>
-                <span class="chat-header-scope-arrow" aria-hidden="true">→</span>
-              </a>
-            {:else}
-              <span class="chat-header-scope">{headerScopeLine}</span>
+          <div class="chat-header-scope-line">
+            <span class="chat-header-scope-primary">
+              {#if activeRepoIngress}
+                <a class="chat-header-scope-link" href={href(activeRepoIngress.href)}>
+                  <span class="chat-header-scope">{activeRepoIngress.detail}</span>
+                  <span class="chat-header-scope-arrow" aria-hidden="true">→</span>
+                </a>
+              {:else}
+                <span class="chat-header-scope">{headerScopeLine}</span>
+              {/if}
+            </span>
+            {#if showStatusBar && statusBar}
+              <div class={`pma-status-bar ${statusBar.state}`} aria-label="PMA turn status">
+                <span class="status-dot" aria-hidden="true"></span>
+                <strong>{statusLabel(statusBar.state)}</strong>
+                {#if statusBar.phase && statusBar.phase.toLowerCase() !== statusLabel(statusBar.state).toLowerCase()}
+                  <span>{statusBar.phase}</span>
+                {/if}
+                {#if progress?.elapsedSeconds !== null && progress?.elapsedSeconds !== undefined}
+                  <span>{statusBar.elapsedLabel}</span>
+                {/if}
+                {#if (progress?.queueDepth ?? 0) > 0}
+                  <span>{statusBar.queueDepthLabel}</span>
+                {/if}
+              </div>
             {/if}
-          </p>
+          </div>
           <p class="chat-header-subtitle">
             <span class={`chat-kind-badge ${activeChatKind}`}>{activeChatKindLabel}</span>
-            <span class={`status-dot status-${activeChat.status}`} aria-hidden="true"></span>
             {#if activeChat.status === 'done' && progress?.elapsedSeconds !== null && progress?.elapsedSeconds !== undefined && statusBar}
+              <span class={`status-dot status-${activeChat.status}`} aria-hidden="true"></span>
               <strong class="chat-header-status-strong">{statusLabel(activeChat.status)}</strong>
               {#if statusBar.phase && statusBar.phase.toLowerCase() !== statusLabel(activeChat.status).toLowerCase()}
                 <span>{statusBar.phase}</span>
               {/if}
               <span>{statusBar.elapsedLabel}</span>
-            {:else}
+            {:else if activeChat.status !== 'idle'}
+              <span class={`status-dot status-${activeChat.status}`} aria-hidden="true"></span>
               <span>{statusLabel(activeChat.status)}</span>
             {/if}
             {#if activeChat.ticketId}
@@ -967,46 +987,27 @@
           </p>
         {/if}
       </div>
-      {#if activeChat && (showStatusBar || showStreamHealth)}
-        <aside class="chat-header-aside" aria-label="Chat status">
-          {#if showStatusBar && statusBar}
-            <div class={`pma-status-bar ${statusBar.state}`} aria-label="PMA turn status">
-              <span class="status-dot" aria-hidden="true"></span>
-              <strong>{statusLabel(statusBar.state)}</strong>
-              {#if statusBar.phase && statusBar.phase.toLowerCase() !== statusLabel(statusBar.state).toLowerCase()}
-                <span>{statusBar.phase}</span>
+      {#if activeChat && showStreamHealthAside}
+        <aside class="chat-header-aside" aria-label="Chat stream status">
+          <div class={`stream-health ${streamState}`} role="status">
+            <span class="status-dot" aria-hidden="true"></span>
+            <span>
+              {#if streamState === 'connecting'}
+                Connecting…
+              {:else}
+                {streamError}
               {/if}
-              {#if progress?.elapsedSeconds !== null && progress?.elapsedSeconds !== undefined}
-                <span>{statusBar.elapsedLabel}</span>
-              {/if}
-              {#if (progress?.queueDepth ?? 0) > 0}
-                <span>{statusBar.queueDepthLabel}</span>
-              {/if}
-            </div>
-          {/if}
-          {#if showStreamHealth}
-            <div class={`stream-health ${streamState}`} role="status">
-              <span class="status-dot" aria-hidden="true"></span>
-              <span>
-                {#if streamState === 'connected'}
-                  Live{streamLastEventAt ? ` · ${formatRelativeTime(streamLastEventAt)}` : ''}
-                {:else if streamState === 'connecting'}
-                  Connecting…
-                {:else if streamState === 'interrupted'}
-                  {streamError}
-                {/if}
-              </span>
-              {#if streamState === 'interrupted'}
-                <button type="button" onclick={retryStream}>Reconnect</button>
-              {/if}
-            </div>
-          {/if}
+            </span>
+            {#if streamState === 'interrupted'}
+              <button type="button" onclick={retryStream}>Reconnect</button>
+            {/if}
+          </div>
         </aside>
       {/if}
     </div>
 
     <div bind:this={messageStack} class="message-stack" aria-live="polite">
-      {#if loadingActive}
+      {#if loadingActive && activeChat}
         <div class="state-panel loading-state">
           <span class="state-icon" aria-hidden="true"></span>
           <strong>Loading active chat</strong>

@@ -1,6 +1,6 @@
 type JsonRecord = Record<string, unknown>;
 
-export type WorkStatus = 'running' | 'waiting' | 'idle' | 'done' | 'failed' | 'blocked';
+export type WorkStatus = 'running' | 'waiting' | 'idle' | 'done' | 'failed' | 'blocked' | 'invalid';
 
 /** Stable chat-list shape consumed by PMA room components. */
 export type PmaChatSummary = {
@@ -377,7 +377,7 @@ export function mapTicketSummary(raw: JsonRecord): TicketSummary {
     id,
     number: index,
     title: stringValue(frontmatter.title ?? raw.title ?? raw.summary ?? raw.current_ticket_title, index ? `Ticket ${index}` : id),
-    status: errors.length ? 'failed' : done ? 'done' : normalizeWorkStatus(statusSource),
+    status: errors.length ? 'invalid' : done ? 'done' : normalizeWorkStatus(statusSource),
     workspaceKind,
     workspaceId,
     workspacePath: nullableString(raw.workspace_path),
@@ -438,6 +438,7 @@ export function normalizeWorkStatus(value: unknown): WorkStatus {
   if (text === 'idle') return 'idle';
   if (['failed', 'error', 'errored'].includes(text)) return 'failed';
   if (['blocked', 'stalled'].includes(text)) return 'blocked';
+  if (['invalid', 'malformed', 'validation_failed', 'needs_repair'].includes(text)) return 'invalid';
   return 'idle';
 }
 

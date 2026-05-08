@@ -228,7 +228,7 @@ export function chooseActiveChatId(
 ): string | null {
   if (requestedId && chats.some((chat) => chat.id === requestedId)) return requestedId;
   if (currentId && chats.some((chat) => chat.id === currentId)) return currentId;
-  return chats[0]?.id ?? null;
+  return null;
 }
 
 export function buildPmaCards(
@@ -411,6 +411,101 @@ export function buildPmaActivityCards(events: SurfaceArtifact[]): PmaCard[] {
   return cards;
 }
 
+/** Leading digits of PMA timeline `order_key` (`{sequence:08d}|…`), or an 8-digit test shorthand. */
+function parseLeadingTimelineSequence(orderKey: string): number | null {
+  const trimmed = orderKey.trim();
+  const prefixed = /^(\d{8})\|/.exec(trimmed);
+  if (prefixed) {
+    const value = Number.parseInt(prefixed[1], 10);
+    return Number.isFinite(value) ? value : null;
+  }
+  if (/^\d{8}$/.test(trimmed)) {
+    const value = Number.parseInt(trimmed, 10);
+    return Number.isFinite(value) ? value : null;
+  }
+  return null;
+}
+
+function turnUserTimelineSequence(cards: PmaCard[]): Map<string, number> {
+  const map = new Map<string, number>();
+  for (const card of cards) {
+    if (card.kind !== 'message' || card.message.role !== 'user') continue;
+    const turnId = card.turnId;
+    if (!turnId) continue;
+    const seq = parseLeadingTimelineSequence(card.orderKey);
+    if (seq !== null) map.set(turnId, seq);
+  }
+  return map;
+}
+
+function buildOptimisticUserOrderKeyByTurn(cards: PmaCard[]): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const card of cards) {
+    if (card.kind !== 'message' || card.message.role !== 'user') continue;
+    const turnId = card.turnId;
+    if (!turnId || !card.orderKey.startsWith('optimistic|')) continue;
+    map.set(turnId, card.orderKey);
+  }
+  return map;
+}
+
+/** Highest backend sequence for durable rows that are not the turn's final assistant reply. */
+function maxTimelineTraceSequenceByTurn(cards: PmaCard[]): Map<string, number> {
+  const map = new Map<string, number>();
+  for (const card of cards) {
+    if (!('turnId' in card) || !card.turnId) continue;
+    if (card.kind === 'turn_summary') continue;
+    if (card.kind === 'message' && card.message.role === 'assistant') continue;
+    if (!('orderKey' in card) || !card.orderKey) continue;
+    const seq = parseLeadingTimelineSequence(card.orderKey);
+    if (seq === null) continue;
+    const prior = map.get(card.turnId);
+    map.set(card.turnId, prior === undefined ? seq : Math.max(prior, seq));
+  }
+  return map;
+}
+
+function transcriptMergeSortKey(
+  card: PmaCard,
+  isLiveExtra: boolean,
+  ctx: {
+    turnUserSeq: Map<string, number>;
+    maxTraceSeqByTurn: Map<string, number>;
+    optimisticUserOrderKeyByTurn: Map<string, string>;
+    timelineOrdinal: number;
+    liveOrdinal: number;
+  }
+): string {
+  const orderKey = 'orderKey' in card ? card.orderKey : '';
+
+  if (!isLiveExtra) {
+    if (orderKey) return orderKey;
+    return `99999999|meta|${String(ctx.timelineOrdinal).padStart(8, '0')}|${card.id}`;
+  }
+
+  const turnId = 'turnId' in card ? card.turnId : null;
+  const liveInner = parseLeadingTimelineSequence(orderKey) ?? ctx.liveOrdinal;
+
+  if (turnId) {
+    const optimisticUserKey = ctx.optimisticUserOrderKeyByTurn.get(turnId);
+    if (optimisticUserKey) {
+      return `${optimisticUserKey}|live|${String(liveInner).padStart(8, '0')}|${String(ctx.liveOrdinal).padStart(8, '0')}|${card.id}`;
+    }
+    const traceMax = ctx.maxTraceSeqByTurn.get(turnId);
+    const userSeq = ctx.turnUserSeq.get(turnId);
+    const anchor =
+      traceMax !== undefined ? traceMax : userSeq !== undefined ? userSeq : 0;
+    const anchorStr = String(anchor).padStart(8, '0');
+    return `${anchorStr}|live|${String(liveInner).padStart(8, '0')}|${String(ctx.liveOrdinal).padStart(8, '0')}|${card.id}`;
+  }
+
+  const ts = cardTimestamp(card);
+  if (ts) {
+    return `${ts}|live|${String(liveInner).padStart(8, '0')}|${String(ctx.liveOrdinal).padStart(8, '0')}|${card.id}`;
+  }
+  return `99999998|live|${String(liveInner).padStart(8, '0')}|${String(ctx.liveOrdinal).padStart(8, '0')}|${card.id}`;
+}
+
 export function mergePmaTimelineAndActivityCards(
   timelineCards: PmaCard[],
   activityCards: PmaCard[]
@@ -425,7 +520,35 @@ export function mergePmaTimelineAndActivityCards(
     if (timelineIds.has(card.id)) return false;
     return !cardEventIds(card).some((id) => timelineEventIds.has(id));
   });
-  return [...timelineCards, ...extra].sort(comparePmaCards);
+  if (!extra.length) return timelineCards;
+
+  const turnUserSeq = turnUserTimelineSequence(timelineCards);
+  const maxTraceSeqByTurn = maxTimelineTraceSequenceByTurn(timelineCards);
+  const optimisticUserOrderKeyByTurn = buildOptimisticUserOrderKeyByTurn(timelineCards);
+  const timelineOrdinal = new Map<PmaCard, number>(
+    timelineCards.map((card, index) => [card, index])
+  );
+  const extraOrdinal = new Map<PmaCard, number>(extra.map((card, index) => [card, index]));
+  const extraSet = new Set(extra);
+
+  const merged = [...timelineCards, ...extra];
+  return merged.sort((left, right) => {
+    const leftKey = transcriptMergeSortKey(left, extraSet.has(left), {
+      turnUserSeq,
+      maxTraceSeqByTurn,
+      optimisticUserOrderKeyByTurn,
+      timelineOrdinal: timelineOrdinal.get(left) ?? 0,
+      liveOrdinal: extraOrdinal.get(left) ?? 0
+    });
+    const rightKey = transcriptMergeSortKey(right, extraSet.has(right), {
+      turnUserSeq,
+      maxTraceSeqByTurn,
+      optimisticUserOrderKeyByTurn,
+      timelineOrdinal: timelineOrdinal.get(right) ?? 0,
+      liveOrdinal: extraOrdinal.get(right) ?? 0
+    });
+    return leftKey.localeCompare(rightKey);
+  });
 }
 
 export function filterArtifactsForActiveChat(
@@ -605,7 +728,7 @@ function coalesceThinkingTraceCards(cards: PmaCard[]): PmaCard[] {
 
     existing.text = mergeIntermediateText(existing.text, card.text);
     existing.eventIds.push(...card.eventIds.filter((id) => !existing.eventIds.includes(id)));
-    existing.detail = mergeTimelineDetails(existing.detail, card.detail);
+    existing.detail = thinkingDetailSummary(existing.eventIds);
   }
 
   return output;
@@ -615,10 +738,17 @@ function isThinkingTraceCard(card: PmaCard): card is Extract<PmaCard, { kind: 'i
   return card.kind === 'intermediate' && card.title.trim().toLowerCase() === 'thinking';
 }
 
-function mergeTimelineDetails(current: string | null, incoming: string | null): string | null {
-  if (!current) return incoming;
-  if (!incoming || incoming === current) return current;
-  return `${current}\n${incoming}`;
+function thinkingTimelineDetail(item: PmaTimelineItem): string | null {
+  const kind = stringValue(item.payload.intermediate_kind).trim().toLowerCase();
+  if (kind !== 'thinking') return null;
+  return thinkingDetailSummary(timelineSourceEventIds(item));
+}
+
+function thinkingDetailSummary(eventIds: string[]): string | null {
+  const uniqueIds = Array.from(new Set(eventIds.filter(Boolean)));
+  if (!uniqueIds.length) return null;
+  const label = uniqueIds.length === 1 ? '1 thinking update' : `${uniqueIds.length} thinking updates`;
+  return `${label} · source events ${uniqueIds.join(', ')}`;
 }
 
 function toolDisplayTitle(event: SurfaceArtifact): string {
@@ -681,7 +811,7 @@ function timelineItemToCard(item: PmaTimelineItem): PmaCard[] {
       id: item.id,
       title: intermediateTimelineTitle(item),
       text,
-      detail: timelineDetail(item),
+      detail: thinkingTimelineDetail(item) ?? timelineDetail(item),
       eventIds: timelineSourceEventIds(item),
       turnId: item.turnId,
       orderKey: item.orderKey,
@@ -889,18 +1019,6 @@ function activityOrderKey(event: SurfaceArtifact | undefined): string {
   return stringValue(event.raw.order_key) || `${event.createdAt ?? ''}|${event.id}|${stringValue(item?.item_id)}`;
 }
 
-function comparePmaCards(left: PmaCard, right: PmaCard): number {
-  return cardSortKey(left).localeCompare(cardSortKey(right));
-}
-
-function cardSortKey(card: PmaCard): string {
-  const timestamp = cardTimestamp(card);
-  const orderKey = 'orderKey' in card ? card.orderKey : '';
-  if (timestamp) return `${timestamp}|${orderKey}|${card.id}`;
-  if (orderKey) return orderKey;
-  return card.id;
-}
-
 function compareTimelineItems(left: PmaTimelineItem, right: PmaTimelineItem): number {
   return timelineSortKey(left).localeCompare(timelineSortKey(right));
 }
@@ -946,6 +1064,7 @@ export function progressPercent(chat: PmaChatSummary, progress: PmaRunProgress |
 }
 
 export function statusLabel(status: WorkStatus): string {
+  if (status === 'invalid') return 'needs repair';
   return status.replace('_', ' ');
 }
 
