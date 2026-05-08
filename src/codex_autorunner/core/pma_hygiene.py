@@ -486,9 +486,9 @@ def _build_automation_candidates(hub_root: Path) -> list[dict[str, Any]]:
         if not wakeup_id:
             continue
         state = str(entry.get("state") or "pending").strip().lower()
-        group = "protected" if state == "pending" else "safe"
+        group = "protected" if state in {"pending", "queued"} else "safe"
         reason = (
-            "Pending automation wakeup still represents queued follow-up work."
+            "Pending or queued automation wakeup still represents follow-up work."
             if group == "protected"
             else "Delivered automation wakeup is safe to purge."
         )

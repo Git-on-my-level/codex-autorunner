@@ -39,6 +39,8 @@ from codex_autorunner.core.pma_domain.constants import (
     TIMER_TYPE_WATCHDOG,
     WAKEUP_STATE_DISPATCHED,
     WAKEUP_STATE_PENDING,
+    WAKEUP_STATE_QUEUED,
+    WAKEUP_STATE_WORKER_STARTED,
 )
 from codex_autorunner.core.pma_domain.delivery_lifecycle import (
     DELIVERY_LIFECYCLE_TERMINAL_STATES,
@@ -371,8 +373,13 @@ class TestConstantsConsistency:
         assert len(types) == 2
 
     def test_wakeup_states_are_distinct(self) -> None:
-        states = {WAKEUP_STATE_PENDING, WAKEUP_STATE_DISPATCHED}
-        assert len(states) == 2
+        states = {
+            WAKEUP_STATE_PENDING,
+            WAKEUP_STATE_QUEUED,
+            WAKEUP_STATE_WORKER_STARTED,
+            WAKEUP_STATE_DISPATCHED,
+        }
+        assert len(states) == 4
 
 
 # ---------------------------------------------------------------------------

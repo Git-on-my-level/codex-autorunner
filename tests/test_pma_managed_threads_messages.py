@@ -1381,8 +1381,8 @@ def test_managed_thread_completion_subscription_enqueues_wakeup(hub_env) -> None
 
     automation_store = app.state.hub_supervisor.get_pma_automation_store()
     assert automation_store.list_pending_wakeups(limit=10) == []
-    dispatched = automation_store.list_wakeups(state_filter="dispatched")
-    assert any(entry.get("thread_id") == managed_thread_id for entry in dispatched)
+    worker_started = automation_store.list_wakeups(state_filter="worker_started")
+    assert any(entry.get("thread_id") == managed_thread_id for entry in worker_started)
 
     queue_path = (
         hub_env.hub_root

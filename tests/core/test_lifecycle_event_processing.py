@@ -618,6 +618,7 @@ def test_drain_automation_wakeups_retries_when_lane_worker_start_fails(
         assert len(_read_queue_items(hub_root)) == 1
         pending = store.list_pending_wakeups()
         assert [entry["wakeup_id"] for entry in pending] == [created.wakeup_id]
+        assert pending[0]["state"] == "queued"
 
         supervisor.set_pma_lane_worker_starter(started_lanes.append)
 
@@ -625,8 +626,8 @@ def test_drain_automation_wakeups_retries_when_lane_worker_start_fails(
         assert started_lanes == ["pma:default", "pma:default"]
         assert len(_read_queue_items(hub_root)) == 1
         assert store.list_pending_wakeups() == []
-        dispatched = store.list_wakeups(state_filter="dispatched")
-        assert [entry["wakeup_id"] for entry in dispatched] == [created.wakeup_id]
+        worker_started = store.list_wakeups(state_filter="worker_started")
+        assert [entry["wakeup_id"] for entry in worker_started] == [created.wakeup_id]
     finally:
         supervisor.shutdown()
 

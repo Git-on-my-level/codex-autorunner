@@ -6,6 +6,7 @@ from codex_autorunner.core.pma_domain.automation_reducer import (
     reduce_dequeue_due_timers,
     reduce_timer_touch,
     reduce_wakeup_dispatch,
+    reduce_wakeup_queued,
 )
 from codex_autorunner.core.pma_domain.constants import (
     DEFAULT_WATCHDOG_IDLE_SECONDS,
@@ -15,6 +16,8 @@ from codex_autorunner.core.pma_domain.constants import (
     TIMER_TYPE_WATCHDOG,
     WAKEUP_STATE_DISPATCHED,
     WAKEUP_STATE_PENDING,
+    WAKEUP_STATE_QUEUED,
+    WAKEUP_STATE_WORKER_STARTED,
 )
 from codex_autorunner.core.pma_domain.models import PmaTimer, PmaWakeup
 
@@ -210,8 +213,31 @@ class TestReduceDequeueDueTimers:
         assert result.updated_timers[1].timer_id == "timer-b"
 
 
+class TestReduceWakeupQueued:
+    def test_queue_pending_wakeup(self):
+        wakeup = _make_wakeup()
+        stamp = _iso_from_dt(datetime.now(timezone.utc))
+
+        result = reduce_wakeup_queued(wakeup, stamp)
+
+        assert result.queued is True
+        assert result.wakeup_id == "wakeup-1"
+        assert result.updated_wakeup is not None
+        assert result.updated_wakeup.state == WAKEUP_STATE_QUEUED
+        assert result.updated_wakeup.metadata["queued_at"] == stamp
+
+    def test_queue_already_queued_is_noop(self):
+        wakeup = _make_wakeup(state=WAKEUP_STATE_QUEUED)
+        stamp = _iso_from_dt(datetime.now(timezone.utc))
+
+        result = reduce_wakeup_queued(wakeup, stamp)
+
+        assert result.queued is False
+        assert result.updated_wakeup is None
+
+
 class TestReduceWakeupDispatch:
-    def test_dispatch_pending_wakeup(self):
+    def test_dispatch_pending_wakeup_marks_worker_started(self):
         wakeup = _make_wakeup()
         stamp = _iso_from_dt(datetime.now(timezone.utc))
 
@@ -220,11 +246,31 @@ class TestReduceWakeupDispatch:
         assert result.dispatched is True
         assert result.wakeup_id == "wakeup-1"
         assert result.updated_wakeup is not None
-        assert result.updated_wakeup.state == WAKEUP_STATE_DISPATCHED
+        assert result.updated_wakeup.state == WAKEUP_STATE_WORKER_STARTED
         assert result.updated_wakeup.dispatched_at == stamp
         assert result.updated_wakeup.updated_at == stamp
+        assert result.updated_wakeup.metadata["worker_started_at"] == stamp
+
+    def test_dispatch_queued_wakeup_marks_worker_started(self):
+        wakeup = _make_wakeup(state=WAKEUP_STATE_QUEUED)
+        stamp = _iso_from_dt(datetime.now(timezone.utc))
+
+        result = reduce_wakeup_dispatch(wakeup, stamp)
+
+        assert result.dispatched is True
+        assert result.updated_wakeup is not None
+        assert result.updated_wakeup.state == WAKEUP_STATE_WORKER_STARTED
 
     def test_dispatch_already_dispatched_is_noop(self):
+        stamp = _iso_from_dt(datetime.now(timezone.utc))
+        wakeup = _make_wakeup(state=WAKEUP_STATE_WORKER_STARTED, dispatched_at=stamp)
+
+        result = reduce_wakeup_dispatch(wakeup, stamp)
+
+        assert result.dispatched is False
+        assert result.updated_wakeup is None
+
+    def test_dispatch_legacy_dispatched_is_noop(self):
         stamp = _iso_from_dt(datetime.now(timezone.utc))
         wakeup = _make_wakeup(state=WAKEUP_STATE_DISPATCHED, dispatched_at=stamp)
 

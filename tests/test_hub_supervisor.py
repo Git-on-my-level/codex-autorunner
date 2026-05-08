@@ -4099,6 +4099,7 @@ def test_drain_pma_automation_wakeups_processes_pending(
             "list_pending_wakeups",
             lambda limit=100, **_kwargs: wakeups,
         )
+        monkeypatch.setattr(store, "mark_wakeup_queued", lambda wid: True)
         monkeypatch.setattr(store, "mark_wakeup_dispatched", lambda wid: True)
         drained = supervisor.drain_pma_automation_wakeups()
         assert drained == 1

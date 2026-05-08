@@ -168,9 +168,9 @@ def test_wakeup_queue_dedup_and_dispatch_persists(tmp_path) -> None:
     reloaded = PmaAutomationStore(tmp_path)
     pending_after = reloaded.list_pending_wakeups(limit=10)
     assert pending_after == []
-    dispatched = reloaded.list_wakeups(state_filter="dispatched")
-    assert len(dispatched) == 1
-    assert dispatched[0]["wakeup_id"] == created.wakeup_id
+    worker_started = reloaded.list_wakeups(state_filter="worker_started")
+    assert len(worker_started) == 1
+    assert worker_started[0]["wakeup_id"] == created.wakeup_id
 
 
 def test_timer_rejects_unknown_subscription_id(tmp_path) -> None:

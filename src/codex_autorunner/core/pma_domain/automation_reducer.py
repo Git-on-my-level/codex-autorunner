@@ -10,6 +10,8 @@ from .constants import (
     TIMER_STATE_PENDING,
     TIMER_TYPE_WATCHDOG,
     WAKEUP_STATE_DISPATCHED,
+    WAKEUP_STATE_QUEUED,
+    WAKEUP_STATE_WORKER_STARTED,
 )
 from .models import PmaTimer, PmaWakeup
 
@@ -117,17 +119,52 @@ class WakeupDispatchResult:
     updated_wakeup: Optional[PmaWakeup] = None
 
 
+@dataclass(frozen=True)
+class WakeupQueueResult:
+    wakeup_id: str
+    queued: bool
+    updated_wakeup: Optional[PmaWakeup] = None
+
+
+def reduce_wakeup_queued(
+    wakeup: PmaWakeup,
+    queued_at: str,
+) -> WakeupQueueResult:
+    if wakeup.state in {
+        WAKEUP_STATE_QUEUED,
+        WAKEUP_STATE_WORKER_STARTED,
+        WAKEUP_STATE_DISPATCHED,
+    }:
+        return WakeupQueueResult(wakeup_id=wakeup.wakeup_id, queued=False)
+    metadata = dict(wakeup.metadata or {})
+    metadata.setdefault("queued_at", queued_at)
+    updated = replace(
+        wakeup,
+        state=WAKEUP_STATE_QUEUED,
+        updated_at=queued_at,
+        metadata=metadata,
+    )
+    return WakeupQueueResult(
+        wakeup_id=wakeup.wakeup_id,
+        queued=True,
+        updated_wakeup=updated,
+    )
+
+
 def reduce_wakeup_dispatch(
     wakeup: PmaWakeup,
     dispatched_at: str,
 ) -> WakeupDispatchResult:
-    if wakeup.state == WAKEUP_STATE_DISPATCHED:
+    if wakeup.state in {WAKEUP_STATE_WORKER_STARTED, WAKEUP_STATE_DISPATCHED}:
         return WakeupDispatchResult(wakeup_id=wakeup.wakeup_id, dispatched=False)
+    metadata = dict(wakeup.metadata or {})
+    metadata.setdefault("worker_started_at", dispatched_at)
     updated = replace(
         wakeup,
-        state=WAKEUP_STATE_DISPATCHED,
+        state=WAKEUP_STATE_WORKER_STARTED,
         dispatched_at=dispatched_at,
         updated_at=dispatched_at,
+        metadata=metadata,
     )
     return WakeupDispatchResult(
         wakeup_id=wakeup.wakeup_id,

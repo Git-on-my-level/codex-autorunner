@@ -5,6 +5,7 @@ import shutil
 import sqlite3
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
@@ -57,6 +58,14 @@ from .types import AppServerSupervisorFactory, BackendFactory
 logger = logging.getLogger("codex_autorunner.hub")
 
 _LIST_REPOS_CACHE_TTL_SECONDS = 30.0
+
+
+@dataclass(frozen=True)
+class PmaLaneWorkerStartResult:
+    accepted: bool
+    reason: str
+    lane_id: str
+
 
 BackendFactoryBuilder = Callable[[Path, RepoConfig], BackendFactory]
 AppServerSupervisorFactoryBuilder = Callable[[RepoConfig], AppServerSupervisorFactory]
@@ -936,24 +945,38 @@ class HubSupervisor:
     ) -> None:
         self._pma_lane_worker_starter = starter
 
-    def _request_pma_lane_worker_start(self, lane_id: Optional[str]) -> Optional[bool]:
+    def _request_pma_lane_worker_start(
+        self, lane_id: Optional[str]
+    ) -> PmaLaneWorkerStartResult:
         starter = self._pma_lane_worker_starter
-        if starter is None:
-            return None
         normalized_lane_id = (
             lane_id.strip()
             if isinstance(lane_id, str) and lane_id.strip()
             else DEFAULT_PMA_LANE_ID
         )
+        if starter is None:
+            return PmaLaneWorkerStartResult(
+                accepted=True,
+                reason="no_lane_worker_starter_configured",
+                lane_id=normalized_lane_id,
+            )
         try:
             starter(normalized_lane_id)
-            return True
+            return PmaLaneWorkerStartResult(
+                accepted=True,
+                reason="accepted",
+                lane_id=normalized_lane_id,
+            )
         except (RuntimeError, OSError, ValueError, TypeError):
             logger.exception(
                 "Failed requesting PMA lane worker startup for lane_id=%s",
                 normalized_lane_id,
             )
-            return False
+            return PmaLaneWorkerStartResult(
+                accepted=False,
+                reason="starter_failed",
+                lane_id=normalized_lane_id,
+            )
 
     def process_pma_automation_now(
         self, *, include_timers: bool = True, limit: int = 100
@@ -1117,8 +1140,13 @@ class HubSupervisor:
 
         store = self.ensure_pma_automation_store()
         list_pending_wakeups = getattr(store, "list_pending_wakeups", None)
+        mark_wakeup_queued = getattr(store, "mark_wakeup_queued", None)
         mark_wakeup_dispatched = getattr(store, "mark_wakeup_dispatched", None)
-        if not callable(list_pending_wakeups) or not callable(mark_wakeup_dispatched):
+        if (
+            not callable(list_pending_wakeups)
+            or not callable(mark_wakeup_queued)
+            or not callable(mark_wakeup_dispatched)
+        ):
             return 0
         wakeups = list_pending_wakeups(limit=take, require_dispatch_decision=True)
         if not wakeups:
@@ -1207,16 +1235,13 @@ class HubSupervisor:
                     and str(wakeup.get("lane_id")).strip()
                     else "pma:default"
                 )
-                dupe_reason: Optional[str]
-                existing_item = queue.find_active_by_idempotency_key_sync(
-                    lane_id, idempotency_key
+                item, created_queue_item = queue.ensure_active_item_sync(
+                    lane_id, idempotency_key, payload
                 )
-                if existing_item is not None:
-                    dupe_reason = f"duplicate of {existing_item.item_id}"
-                else:
-                    _, dupe_reason = queue.enqueue_sync(
-                        lane_id, idempotency_key, payload
-                    )
+                dupe_reason = (
+                    None if created_queue_item else f"duplicate of {item.item_id}"
+                )
+                mark_wakeup_queued(wakeup_id)
                 worker_start_result = self._request_pma_lane_worker_start(lane_id)
             except (sqlite3.Error, OSError, ValueError, TypeError, RuntimeError):
                 logger.exception(
@@ -1230,12 +1255,13 @@ class HubSupervisor:
                     wakeup_id,
                     dupe_reason,
                 )
-            if worker_start_result is False:
+            if not worker_start_result.accepted:
                 logger.warning(
                     "Leaving PMA automation wake-up %s pending because lane worker "
-                    "startup failed for lane_id=%s",
+                    "startup failed for lane_id=%s reason=%s",
                     wakeup_id,
-                    lane_id,
+                    worker_start_result.lane_id,
+                    worker_start_result.reason,
                 )
                 continue
             if mark_wakeup_dispatched(wakeup_id):

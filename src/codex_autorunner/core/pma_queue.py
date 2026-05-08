@@ -229,6 +229,21 @@ class PmaQueue:
                 conn, lane_id, idempotency_key
             )
 
+    def ensure_active_item_sync(
+        self,
+        lane_id: str,
+        idempotency_key: str,
+        payload: dict[str, Any],
+    ) -> tuple[PmaQueueItem, bool]:
+        """Return the active item for a key, creating one only when absent."""
+        existing = self.find_active_by_idempotency_key_sync(lane_id, idempotency_key)
+        if existing is not None:
+            return existing, False
+        item = PmaQueueItem.create(lane_id, idempotency_key, payload)
+        self._append_to_file_sync(item)
+        self._notify_in_memory_enqueue(item)
+        return item, True
+
     async def dequeue(self, lane_id: str) -> Optional[PmaQueueItem]:
         self._record_loop()
         queue = self._lane_queues.get(lane_id)
