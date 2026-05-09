@@ -167,6 +167,12 @@ from ...core.orchestration import (
     plan_chat_operation_duplicate,
     plan_chat_operation_recovery,
 )
+from ...core.orchestration.chat_operation_scheduler_projection import (
+    discord_execution_status_to_chat_operation_state,
+    discord_interaction_has_pending_delivery,
+    discord_scheduler_state_to_chat_operation_state,
+    discord_scheduler_terminal_outcome,
+)
 from ...core.orchestration.managed_thread_delivery_ledger import (
     SQLiteManagedThreadDeliveryEngine,
 )
@@ -4991,31 +4997,7 @@ class DiscordBotService(DiscordInteractionResponseMixin):
     def _discord_chat_operation_state_for_scheduler(
         self, scheduler_state: str
     ) -> Optional[ChatOperationState]:
-        normalized = str(scheduler_state or "").strip().lower()
-        if normalized in {
-            "received",
-            "dispatch_ready",
-            "dispatch_ack_pending",
-            "queue_wait_ack_pending",
-        }:
-            return ChatOperationState.RECEIVED
-        if normalized == "acknowledged":
-            return ChatOperationState.ACKNOWLEDGED
-        if normalized in {"scheduled", "waiting_on_resources", "recovery_scheduled"}:
-            return ChatOperationState.QUEUED
-        if normalized == "executing":
-            return ChatOperationState.RUNNING
-        if normalized in {"delivery_pending", "delivery_replaying"}:
-            return ChatOperationState.DELIVERING
-        if normalized == "completed":
-            return ChatOperationState.COMPLETED
-        if normalized == "abandoned":
-            return ChatOperationState.FAILED
-        if normalized == "delivery_expired":
-            return ChatOperationState.CANCELLED
-        if "interrupt" in normalized:
-            return ChatOperationState.INTERRUPTING
-        return None
+        return discord_scheduler_state_to_chat_operation_state(scheduler_state)
 
     async def _register_chat_operation_received(
         self,
@@ -5406,11 +5388,7 @@ class DiscordBotService(DiscordInteractionResponseMixin):
             increment_attempt_count=increment_attempt_count,
         )
         record = await self._store.get_interaction(ctx.interaction_id)
-        terminal_outcome = None
-        if scheduler_state == "abandoned":
-            terminal_outcome = "abandoned"
-        elif scheduler_state == "delivery_expired":
-            terminal_outcome = "expired"
+        terminal_outcome = discord_scheduler_terminal_outcome(scheduler_state)
         patch_fn = (
             self._patch_chat_operation_recovery
             if _for_recovery
@@ -5922,13 +5900,15 @@ class DiscordBotService(DiscordInteractionResponseMixin):
 
     @staticmethod
     def _interaction_has_pending_delivery(record: InteractionLedgerRecord) -> bool:
-        cursor_pending = isinstance(record.delivery_cursor_json, dict) and str(
-            record.delivery_cursor_json.get("state") or ""
-        ).strip() in {"pending", "failed"}
-        return cursor_pending or record.scheduler_state in {
-            "delivery_pending",
-            "delivery_replaying",
-        }
+        cursor_state = (
+            str(record.delivery_cursor_json.get("state") or "").strip()
+            if isinstance(record.delivery_cursor_json, dict)
+            else None
+        )
+        return discord_interaction_has_pending_delivery(
+            scheduler_state=record.scheduler_state,
+            delivery_cursor_state=cursor_state,
+        )
 
     async def _check_interaction_ingress_duplicate(self, ctx: IngressContext) -> bool:
         reservations = getattr(self, "_ingress_pre_ack_reservations", None)
@@ -6057,8 +6037,7 @@ class DiscordBotService(DiscordInteractionResponseMixin):
             execution_status=execution_status,
             execution_error=execution_error,
         )
-        shared_state: Optional[ChatOperationState]
-        terminal_outcome = None
+        has_pending_delivery = False
         if execution_status == "completed":
             record = await self._store.get_interaction(ctx.interaction_id)
             has_pending_delivery = bool(
@@ -6067,22 +6046,12 @@ class DiscordBotService(DiscordInteractionResponseMixin):
                 and str(record.delivery_cursor_json.get("state") or "").strip()
                 in {"pending", "failed"}
             )
-            shared_state = (
-                ChatOperationState.DELIVERING
-                if has_pending_delivery
-                else ChatOperationState.COMPLETED
+        shared_state, terminal_outcome = (
+            discord_execution_status_to_chat_operation_state(
+                execution_status,
+                has_pending_delivery=has_pending_delivery,
             )
-        elif execution_status == "cancelled":
-            shared_state = ChatOperationState.CANCELLED
-        elif execution_status == "timeout":
-            shared_state = ChatOperationState.FAILED
-            terminal_outcome = "timeout"
-        elif execution_status == "failed":
-            shared_state = ChatOperationState.FAILED
-        elif execution_status == "running":
-            shared_state = ChatOperationState.RUNNING
-        else:
-            shared_state = None
+        )
         await self._patch_chat_operation(
             ctx.interaction_id,
             state=shared_state,
