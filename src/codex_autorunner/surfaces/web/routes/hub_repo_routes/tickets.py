@@ -247,9 +247,9 @@ def build_hub_ticket_router(context: HubAppContext) -> APIRouter:
                 snapshot.worktree_of if workspace_kind == "worktree" else snapshot.id
             )
             worktree_id = snapshot.id if workspace_kind == "worktree" else None
-            if repo and repo_id != repo:
+            if repo and (workspace_kind != "repo" or snapshot.id != repo):
                 continue
-            if worktree and worktree_id != worktree:
+            if worktree and (workspace_kind != "worktree" or worktree_id != worktree):
                 continue
             store = None
             run_state: Any = None

@@ -12,7 +12,7 @@ describe('settings view model', () => {
   it('groups settings sections around wired status and direct settings saves', () => {
     const view = buildSettingsViewModel({
       session: {
-        autorunner_model_override: 'gpt-5.4',
+        autorunner_model_overrides: { hermes: 'hermes-model' },
         autorunner_effort_override: 'medium',
         autorunner_approval_policy: 'never',
         autorunner_sandbox_mode: 'dangerFullAccess',
@@ -28,14 +28,15 @@ describe('settings view model', () => {
         }
       ],
       modelCatalogs: {
-        hermes: [{ id: 'gpt-5.4' }]
+        hermes: [{ id: 'gpt-5.4', display_name: 'GPT-5.4' }]
       }
     });
 
     expect(view.hub.map((item) => item.label)).toContain('Runtime settings API');
+    expect(view.session.modelOverrides).toEqual({ hermes: 'hermes-model' });
     expect(view.hub).toContainEqual({ label: 'Settings changes', value: 'Direct save', tone: 'ok' });
     expect(view.agents).toMatchObject([
-      { id: 'hermes', modelStatus: 'available', modelCount: 1 },
+      { id: 'hermes', modelStatus: 'available', modelCount: 1, modelOptions: [{ id: 'gpt-5.4', label: 'GPT-5.4 (gpt-5.4)' }] },
       { id: 'codex', modelStatus: 'unsupported' }
     ]);
     expect(view.integrations).toContainEqual({
@@ -52,7 +53,7 @@ describe('settings view model', () => {
   it('builds the full direct-save session settings payload', () => {
     expect(
       buildSessionUpdatePayload({
-        modelOverride: 'gpt-5.4',
+        modelOverrides: { codex: 'gpt-5.4', opencode: 'zai/default', hermes: '' },
         effortOverride: '',
         stopAfterRuns: '3',
         approvalPolicy: 'never',
@@ -60,7 +61,7 @@ describe('settings view model', () => {
         workspaceWriteNetwork: null
       })
     ).toEqual({
-      autorunner_model_override: 'gpt-5.4',
+      autorunner_model_overrides: { codex: 'gpt-5.4', opencode: 'zai/default' },
       autorunner_effort_override: null,
       autorunner_approval_policy: 'never',
       autorunner_sandbox_mode: 'dangerFullAccess',

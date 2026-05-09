@@ -6,7 +6,9 @@ from fastapi import APIRouter, HTTPException, Request
 
 from .....agents.registry import get_agent_descriptor, get_available_agents
 from .....core.agent_capability_projection import project_agent_capabilities
+from .....core.agent_model_defaults import resolve_model_for_agent
 from .....core.orchestration.catalog import map_agent_capabilities
+from .....core.state import load_state
 from ...services.pma import get_pma_request_context
 from ..agents import (
     _available_agents,
@@ -156,18 +158,29 @@ def build_pma_meta_routes(
                         include_supervisor_metadata=False,
                     )
                 )
+        try:
+            state = load_state(request.app.state.engine.state_path)
+        except (OSError, ValueError, AttributeError):
+            state = None
+        default_model = resolve_model_for_agent(
+            default_agent,
+            state=state,
+            config=request.app.state.config,
+            configured_default=defaults.get("model"),
+            include_builtin=False,
+        )
         payload: dict[str, Any] = {"agents": agents, "default": default_agent}
         payload["agents"] = enriched_agents
         if (
             defaults.get("profile")
-            or defaults.get("model")
+            or default_model
             or defaults.get("reasoning")
         ):
             payload["defaults"] = {
                 key: value
                 for key, value in {
                     "profile": defaults.get("profile"),
-                    "model": defaults.get("model"),
+                    "model": default_model,
                     "reasoning": defaults.get("reasoning"),
                 }.items()
                 if value

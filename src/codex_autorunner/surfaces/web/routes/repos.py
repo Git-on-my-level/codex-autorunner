@@ -38,6 +38,14 @@ def _apply_run_overrides(request: Request, payload: RunControlRequest) -> None:
         return
     with state_lock(engine.state_path):
         state = load_state(engine.state_path)
+        model_overrides = dict(state.autorunner_model_overrides)
+        effective_agent = agent if agent_set else state.autorunner_agent_override
+        if model_set:
+            model_agent = (effective_agent or "codex").strip().lower()
+            if model is None:
+                model_overrides.pop(model_agent, None)
+            else:
+                model_overrides[model_agent] = model
         new_state = RunnerState(
             last_run_id=state.last_run_id,
             status=state.status,
@@ -47,9 +55,8 @@ def _apply_run_overrides(request: Request, payload: RunControlRequest) -> None:
             autorunner_agent_override=(
                 agent if agent_set else state.autorunner_agent_override
             ),
-            autorunner_model_override=(
-                model if model_set else state.autorunner_model_override
-            ),
+            autorunner_model_override=model_overrides.get("codex"),
+            autorunner_model_overrides=model_overrides,
             autorunner_effort_override=(
                 reasoning if reasoning_set else state.autorunner_effort_override
             ),
@@ -115,6 +122,7 @@ def build_repos_routes() -> APIRouter:
                 last_run_finished_at=now_iso(),
                 autorunner_agent_override=state.autorunner_agent_override,
                 autorunner_model_override=state.autorunner_model_override,
+                autorunner_model_overrides=state.autorunner_model_overrides,
                 autorunner_effort_override=state.autorunner_effort_override,
                 autorunner_approval_policy=state.autorunner_approval_policy,
                 autorunner_sandbox_mode=state.autorunner_sandbox_mode,
@@ -182,6 +190,7 @@ def build_repos_routes() -> APIRouter:
                 last_run_finished_at=None,
                 autorunner_agent_override=current_state.autorunner_agent_override,
                 autorunner_model_override=current_state.autorunner_model_override,
+                autorunner_model_overrides=current_state.autorunner_model_overrides,
                 autorunner_effort_override=current_state.autorunner_effort_override,
                 autorunner_approval_policy=current_state.autorunner_approval_policy,
                 autorunner_sandbox_mode=current_state.autorunner_sandbox_mode,

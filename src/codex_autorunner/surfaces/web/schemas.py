@@ -344,6 +344,7 @@ class SessionSettingsRequest(Payload):
     model_config = ConfigDict(extra="forbid")
 
     autorunner_model_override: Optional[str] = None
+    autorunner_model_overrides: Optional[Dict[str, Optional[str]]] = None
     autorunner_effort_override: Optional[str] = None
     autorunner_approval_policy: Optional[str] = None
     autorunner_sandbox_mode: Optional[str] = None
@@ -649,6 +650,7 @@ class HubJobResponse(ResponseModel):
 
 class SessionSettingsResponse(ResponseModel):
     autorunner_model_override: Optional[str]
+    autorunner_model_overrides: Dict[str, str]
     autorunner_effort_override: Optional[str]
     autorunner_approval_policy: Optional[str]
     autorunner_sandbox_mode: Optional[str]

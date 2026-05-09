@@ -9,7 +9,7 @@ import {
   type TicketFlowStatusViewModel
 } from './ticketFlowStatus';
 
-export type TicketFilter = 'needs_attention' | 'active' | 'waiting' | 'failed' | 'open' | 'done_recent';
+export type TicketFilter = 'all' | 'needs_attention' | 'active' | 'waiting' | 'failed' | 'open' | 'done_recent';
 
 export type TicketSourceData = {
   tickets: TicketSummary[];
@@ -204,6 +204,7 @@ export type TicketDetailViewModel = {
 };
 
 const filterLabels: Record<TicketFilter, string> = {
+  all: 'All',
   needs_attention: 'Needs attention',
   active: 'Active',
   waiting: 'Waiting',
@@ -211,6 +212,9 @@ const filterLabels: Record<TicketFilter, string> = {
   open: 'Open',
   done_recent: 'Done/recent'
 };
+
+/** Chips shown on ticket list pages — broader filters stay available via `filterTicketRows` for tests/tools. */
+const LIST_PAGE_FILTER_IDS: TicketFilter[] = ['all', 'open'];
 
 export function buildTicketListViewModel(
   source: TicketSourceData,
@@ -231,9 +235,9 @@ export function buildTicketListViewModel(
       : 'This projection spans known repos and worktrees. Tickets without a registered owner are flagged for ownership repair.',
     queueTitle: owner ? `${owner.kind === 'repo' ? 'Repo' : 'Worktree'} ticket queue` : 'All tickets',
     scopedOwner: owner,
-    defaultFilter: 'open',
+    defaultFilter: 'all',
     defaultWorkspaceFilter: 'all',
-    filters: (Object.keys(filterLabels) as TicketFilter[]).map((id) => ({
+    filters: LIST_PAGE_FILTER_IDS.map((id) => ({
       id,
       label: filterLabels[id],
       count: rowsWithCurrent.filter((row) => rowMatchesFilter(row, id)).length
@@ -260,6 +264,15 @@ export function ticketModelRawFromDetail(detail: TicketDetail): string {
   const direct = stringFromRaw(fm, ['model']);
   if (direct) return direct;
   const block = extractFrontmatterYamlFromBody(detail.body);
+  return parseYamlScalarFromBlock(block, 'model') ?? '';
+}
+
+/** Raw `model` from summary frontmatter or body YAML (falls back to linked chat in `ticketToListRow`). */
+export function ticketModelRawFromSummary(ticket: TicketSummary): string {
+  const fm = asRecord(ticket.raw.frontmatter);
+  const direct = stringFromRaw(fm, ['model']);
+  if (direct) return direct;
+  const block = extractFrontmatterYamlFromBody(bodyFromTicketSummary(ticket));
   return parseYamlScalarFromBlock(block, 'model') ?? '';
 }
 
@@ -509,6 +522,9 @@ function ticketToListRow(ticket: TicketSummary, source: TicketSourceData): Ticke
   const chat = findTicketChat(ticket, source.chats, run);
   const status = run?.status ?? ticket.status;
   const scope = workspaceScope(ticket);
+  const modelFromTicket = ticketModelRawFromSummary(ticket).trim();
+  const modelFromChat = chat?.model?.trim() ?? '';
+  const modelResolved = modelFromTicket || modelFromChat;
   return {
     id: ticket.id,
     routeId: routeIdForTicket(ticket),
@@ -521,7 +537,7 @@ function ticketToListRow(ticket: TicketSummary, source: TicketSourceData): Ticke
     ownerTicketHref: scopedTicketHref(ticket),
     pathLabel: ticket.path,
     agentLabel: ticket.agentId ?? chat?.agentId ?? 'Unassigned',
-    modelLabel: stringFromRaw(asRecord(ticket.raw.frontmatter), ['model']),
+    modelLabel: modelResolved ? modelResolved : null,
     diffLabel: diffLabel(ticket),
     durationLabel: formatDuration(ticket.durationSeconds),
     bodyPreview: bodyPreview(ticket),
@@ -566,13 +582,19 @@ function compactJson(value: Record<string, unknown>): string | null {
 }
 
 function findQueueRun(runs: PmaRunProgress[], owner: Exclude<TicketOwnerScope, null>): TicketQueueRun | null {
-  const matchingRuns = runs.filter((run) => runMatchesOwner(run, owner));
+  const matchingRuns = runs.filter((run) => runMatchesOwner(run, owner) && !isPendingStopRequestedRun(run));
   return (
     matchingRuns.find((run) => run.status === 'running') ??
     matchingRuns.find((run) => run.status === 'waiting' || run.status === 'blocked') ??
     matchingRuns[0] ??
     null
   );
+}
+
+function isPendingStopRequestedRun(run: PmaRunProgress): boolean {
+  const rawStatus = stringFromRaw(run.raw, ['status']) ?? run.status;
+  const stopRequested = booleanFromRaw(run.raw, ['stop_requested']);
+  return String(rawStatus).trim().toLowerCase() === 'pending' && stopRequested === true;
 }
 
 function findQueueRunFromRows(rows: TicketListRow[]): TicketQueueRun | null {
@@ -653,9 +675,29 @@ function runMatchesOwner(run: PmaRunProgress, owner: Exclude<TicketOwnerScope, n
   const raw = run.raw;
   const resourceKind = stringFromRaw(raw, ['resource_kind', 'state.resource_kind', 'input_data.resource_kind']);
   const resourceId = stringFromRaw(raw, ['resource_id', 'state.resource_id', 'input_data.resource_id']);
-  const repoId = stringFromRaw(raw, ['repo_id', 'base_repo_id', 'state.repo_id', 'state.base_repo_id', 'input_data.repo_id', 'input_data.base_repo_id']);
-  const worktreeId = stringFromRaw(raw, ['worktree_id', 'worktree_repo_id', 'state.worktree_id', 'state.worktree_repo_id', 'input_data.worktree_id', 'input_data.worktree_repo_id']);
-  if (owner.kind === 'repo') return resourceId === owner.id || repoId === owner.id || (resourceKind === 'repo' && resourceId === owner.id);
+  const explicitWorktreeId = stringFromRaw(raw, [
+    'worktree_id',
+    'worktree_repo_id',
+    'state.worktree_id',
+    'state.worktree_repo_id',
+    'input_data.worktree_id',
+    'input_data.worktree_repo_id',
+    'state.ticket_engine.worktree_id'
+  ]);
+  if (owner.kind === 'repo') {
+    if (resourceKind === 'worktree' || explicitWorktreeId) return false;
+    const repoId = stringFromRaw(raw, ['repo_id', 'state.repo_id', 'input_data.repo_id']);
+    return resourceId === owner.id || repoId === owner.id || (resourceKind === 'repo' && resourceId === owner.id);
+  }
+  const worktreeId = stringFromRaw(raw, [
+    'worktree_id',
+    'worktree_repo_id',
+    'state.worktree_id',
+    'state.worktree_repo_id',
+    'input_data.worktree_id',
+    'input_data.worktree_repo_id',
+    'state.ticket_engine.worktree_id'
+  ]);
   return resourceId === owner.id || worktreeId === owner.id || (resourceKind === 'worktree' && resourceId === owner.id);
 }
 
@@ -708,6 +750,7 @@ function buildWorkspaceFilters(rows: TicketListRow[]): { id: string; label: stri
 
 function rowMatchesFilter(row: TicketListRow, filter: TicketFilter): boolean {
   const runState = row.currentRunState;
+  if (filter === 'all') return true;
   if (filter === 'needs_attention') return row.needsAttention;
   if (filter === 'active') return row.status === 'running' || runState === 'running';
   if (filter === 'waiting') return row.status === 'waiting' || row.status === 'blocked' || runState === 'waiting' || runState === 'blocked';
@@ -958,6 +1001,23 @@ function stringFromRaw(raw: Record<string, unknown>, keys: string[]): string | n
     }, raw);
     if (typeof value === 'string' && value.trim()) return value;
     if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  }
+  return null;
+}
+
+function booleanFromRaw(raw: Record<string, unknown>, keys: string[]): boolean | null {
+  for (const key of keys) {
+    const value = key.split('.').reduce<unknown>((cursor, part) => {
+      if (!cursor || typeof cursor !== 'object' || Array.isArray(cursor)) return undefined;
+      return (cursor as Record<string, unknown>)[part];
+    }, raw);
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'number' && Number.isFinite(value)) return value !== 0;
+    if (typeof value === 'string' && value.trim()) {
+      const normalized = value.trim().toLowerCase();
+      if (['1', 'true', 'yes'].includes(normalized)) return true;
+      if (['0', 'false', 'no'].includes(normalized)) return false;
+    }
   }
   return null;
 }

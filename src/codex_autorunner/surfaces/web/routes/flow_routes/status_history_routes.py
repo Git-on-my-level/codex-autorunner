@@ -49,7 +49,11 @@ def _resolve_outbox_for_record(record: Any, repo_root: Path):
 
     input_data = dict(getattr(record, "input_data", {}) or {})
     try:
-        workspace_root = resolve_ticket_flow_workspace_root(input_data, repo_root)
+        workspace_root = resolve_ticket_flow_workspace_root(
+            input_data,
+            repo_root,
+            enforce_repo_boundary=True,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return resolve_outbox_paths(workspace_root=workspace_root, run_id=record.id)
@@ -75,7 +79,7 @@ def build_status_history_routes(
         request: Request,
         flow_type: Optional[str] = None,
         flow_target_id: Optional[str] = None,
-        reconcile: bool = False,
+        reconcile: bool = True,
     ):
         _ensure_state_in_app(request)
         return list_flow_runs_payload(
@@ -89,7 +93,7 @@ def build_status_history_routes(
 
     @router.get("/{run_id}/status", response_model=dict[str, Any])
     async def get_flow_status(
-        http_request: Request, run_id: str, reconcile: bool = False
+        http_request: Request, run_id: str, reconcile: bool = True
     ):
         state = _ensure_state_in_app(http_request)
         run_id = _normalize_run_id(run_id)
@@ -333,7 +337,11 @@ def build_status_history_routes(
 
         input_data = dict(record.input_data or {})
         try:
-            workspace_root = resolve_ticket_flow_workspace_root(input_data, repo_root)
+            workspace_root = resolve_ticket_flow_workspace_root(
+                input_data,
+                repo_root,
+                enforce_repo_boundary=True,
+            )
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         from .....tickets.replies import resolve_reply_paths

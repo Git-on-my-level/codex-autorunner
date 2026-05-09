@@ -35,8 +35,11 @@ export type RepoWorktreeIndexRow = {
   path: string | null;
   activeRuns: number;
   openTickets: number;
+  totalTickets: number;
+  doneTickets: number;
   lastActivityAt: string | null;
   href: string;
+  ticketHref: string | null;
   repoHref: string | null;
   childWorktrees: RepoWorktreeChildRow[];
   /** PMA chats + ticket-flow runs scoped to this row (runs tied to an already-counted chat are skipped). */
@@ -61,6 +64,8 @@ export type RepoWorktreeChildRow = {
   path: string | null;
   activeRuns: number;
   openTickets: number;
+  totalTickets: number;
+  doneTickets: number;
   currentRunTitle: string | null;
   currentTicketId: string | null;
   lastActivityAt: string | null;
@@ -152,6 +157,11 @@ export type RepoWorktreeIndexViewModel = {
   activeCount: number;
   waitingCount: number;
   openTicketCount: number;
+  /**
+   * When false, ticket quantity chips and progress are hidden (hub ticket list did not load).
+   * Counts on rows are zero; single source of truth is `/hub/tickets` when true.
+   */
+  ticketIndexMetricsAvailable: boolean;
 };
 
 export function filterRepoWorktreeIndexRows(
@@ -249,12 +259,17 @@ export type RepoWorktreeSourceData = {
   tickets: TicketSummary[];
   contextspaceDocs?: ContextspaceDocument[];
   artifacts: SurfaceArtifact[];
+  /**
+   * Set from `tickets.ok` on index pages. When `false`, index ticket chips are suppressed (no snapshot fallback).
+   */
+  ticketsListLoaded?: boolean;
 };
 
 export function buildRepoWorktreeIndexViewModel(
   source: RepoWorktreeSourceData,
   kind: 'all' | RepoWorktreeKind = 'all'
 ): RepoWorktreeIndexViewModel {
+  const ticketIndexMetricsAvailable = source.ticketsListLoaded !== false;
   const repoIds = new Set(source.repos.map((repo) => repo.id));
   const orphanWorktrees = source.worktrees.filter((worktree) => !worktree.repoId || !repoIds.has(worktree.repoId));
   const rows =
@@ -285,7 +300,8 @@ export function buildRepoWorktreeIndexViewModel(
     rows,
     activeCount: countRepoWorktreeIndexEntities(rows, 'active'),
     waitingCount: countRepoWorktreeIndexEntities(rows, 'waiting'),
-    openTicketCount: rows.reduce((total, row) => total + row.openTickets, 0)
+    ticketIndexMetricsAvailable,
+    openTicketCount: ticketIndexMetricsAvailable ? rows.reduce((total, row) => total + row.openTickets, 0) : 0
   };
 }
 
@@ -308,14 +324,14 @@ export function buildRepoWorktreeDetailViewModel(
       ? source.repos.find((repo) => repo.id === (resource as WorktreeSummary | null)?.repoId) ?? null
       : null;
   const parentRepoId = kind === 'worktree' ? (resource as WorktreeSummary | null)?.repoId ?? null : null;
-  const relatedRuns = source.runs.filter((run) => runMatchesResource(run, kind, id));
-  const relatedChats = source.chats.filter((chat) => chatMatchesResource(chat, kind, id));
-  const runCards = mergeRunCards(relatedRuns, relatedChats, kind, id, parentRepoId);
+  const primaryRuns = source.runs.filter((run) => runMatchesResource(run, kind, id));
+  const primaryChats = source.chats.filter((chat) => chatMatchesResource(chat, kind, id));
+  const runCards = mergeRunCards(primaryRuns, primaryChats, kind, id, parentRepoId);
   const activeRunCards = runCards.filter((run) => ['running', 'waiting', 'blocked'].includes(run.status));
   const visibleRuns = activeRunCards.length ? activeRunCards : runCards.slice(0, 1);
   const currentTicketIds = new Set(visibleRuns.map((run) => run.ticketId).filter((ticketId): ticketId is string => Boolean(ticketId)));
   const scopedTickets = ticketsForResource(source.tickets, kind, id);
-  const flowStatus = buildTicketFlowStatusViewModel(scopedTickets, relatedRuns, { kind, id });
+  const flowStatus = buildTicketFlowStatusViewModel(scopedTickets, primaryRuns, { kind, id });
   const activeCurrentTicketId = isActiveTicketFlowStatus(flowStatus.status) ? flowStatus.currentTicketId : null;
   const currentTickets = ticketsForIds(scopedTickets, currentTicketIds, activeCurrentTicketId);
   const nextTickets = scopedTickets
@@ -324,9 +340,9 @@ export function buildRepoWorktreeDetailViewModel(
     .map((ticket) => ticketToRow(ticket, activeCurrentTicketId));
   const ticketOverview = buildTicketOverview(scopedTickets, currentTickets, nextTickets);
   const resourceArtifacts = asRecordArray(resource.raw.current_run_artifacts).map(mapSurfaceArtifact);
-  const runArtifacts = [...resourceArtifacts, ...source.artifacts, ...relatedRuns.flatMap((run) => run.events)].map(artifactToRow);
+  const runArtifacts = [...resourceArtifacts, ...source.artifacts, ...primaryRuns.flatMap((run) => run.events)].map(artifactToRow);
   const activity = [
-    ...relatedRuns.flatMap((run) => run.events).map(artifactToRow),
+    ...primaryRuns.flatMap((run) => run.events).map(artifactToRow),
     ...visibleRuns.map(runToActivity)
   ].slice(0, 6);
 
@@ -342,7 +358,7 @@ export function buildRepoWorktreeDetailViewModel(
     currentRuns: visibleRuns,
     flowStatus,
     activity,
-    chats: relatedChats
+    chats: primaryChats
       .map((chat) => chatToRow(chat))
       .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? '')),
     contextspaceHref: kind === 'repo' ? repoContextspaceRoute(id) : worktreeContextspaceRoute(id, parentRepoId),
@@ -357,7 +373,7 @@ export function buildRepoWorktreeDetailViewModel(
     ticketIndexHref: scopedTicketHref(kind, id, parentRepoId),
     ticketIndexLabel: kind === 'repo' ? 'Repo tickets' : 'Worktree tickets',
     ticketOverview,
-    childWorktrees: childWorktreeSummaries.map((worktree) => worktreeToChildRow(worktree, source, baseRepo?.name ?? null)),
+    childWorktrees: childWorktreeSummaries.map((worktree) => worktreeToNavChildRow(worktree, baseRepo?.name ?? null)),
     baseRepoLabel: baseRepo?.name ?? (kind === 'worktree' ? (resource as WorktreeSummary | null)?.repoId ?? null : null),
     baseRepoHref: kind === 'worktree' && (resource as WorktreeSummary | null)?.repoId ? repoRoute((resource as WorktreeSummary).repoId as string) : null,
     hasActiveRun: activeRunCards.length > 0,
@@ -441,12 +457,25 @@ export function rowRelativeTime(row: { lastActivityAt?: string | null; updatedAt
   return formatRelativeTime(row.lastActivityAt ?? row.updatedAt ?? row.createdAt ?? null, now);
 }
 
+function hubTicketListLoaded(source: RepoWorktreeSourceData): boolean {
+  return source.ticketsListLoaded !== false;
+}
+
+/** Single source for repo/worktree index ticket chips: `/hub/tickets` summaries scoped per row. */
+function ticketIndexRollup(scoped: TicketSummary[]): { open: number; total: number; done: number } {
+  const total = scoped.length;
+  const done = scoped.filter((ticket) => ticket.status === 'done').length;
+  const open = scoped.filter((ticket) => ticket.status !== 'done').length;
+  return { open, total, done };
+}
+
 function repoToIndexRow(repo: RepoSummary, worktrees: WorktreeSummary[], source: RepoWorktreeSourceData): RepoWorktreeIndexRow {
+  const listLoaded = hubTicketListLoaded(source);
   const childWorktrees = worktrees
-    .map((worktree) => worktreeToChildRow(worktree, source, repo.name))
+    .map((worktree) => worktreeToNavChildRow(worktree, repo.name))
     .sort(byChildActiveThenLabel);
-  const childActiveRuns = childWorktrees.reduce((total, worktree) => total + worktree.activeRuns, 0);
-  const childOpenTickets = childWorktrees.reduce((total, worktree) => total + worktree.openTickets, 0);
+  const repoScoped = ticketsForResource(source.tickets, 'repo', repo.id);
+  const rollup = listLoaded ? ticketIndexRollup(repoScoped) : { open: 0, total: 0, done: 0 };
   return {
     id: repo.id,
     kind: 'repo',
@@ -454,13 +483,16 @@ function repoToIndexRow(repo: RepoSummary, worktrees: WorktreeSummary[], source:
     detail: childWorktrees.length > 0
       ? `${childWorktrees.length} worktree${childWorktrees.length === 1 ? '' : 's'}`
       : null,
-    status: aggregateStatus(repo.status, childWorktrees.map((worktree) => worktree.status)),
+    status: repo.status,
     branch: repo.defaultBranch,
     path: repo.path,
-    activeRuns: repo.activeRuns + childActiveRuns,
-    openTickets: repo.openTickets + childOpenTickets,
-    lastActivityAt: mostRecent([repo.lastActivityAt, ...childWorktrees.map((worktree) => worktree.lastActivityAt)]),
+    activeRuns: repo.activeRuns,
+    openTickets: rollup.open,
+    totalTickets: rollup.total,
+    doneTickets: rollup.done,
+    lastActivityAt: repo.lastActivityAt,
     href: repoRoute(repo.id),
+    ticketHref: repoTicketRoute(repo.id),
     repoHref: null,
     childWorktrees,
     signalWaiting: 0,
@@ -475,7 +507,41 @@ function repoToIndexRow(repo: RepoSummary, worktrees: WorktreeSummary[], source:
   };
 }
 
-function worktreeToIndexRow(worktree: WorktreeSummary, _source: RepoWorktreeSourceData): RepoWorktreeIndexRow {
+function worktreeToNavChildRow(
+  worktree: WorktreeSummary,
+  repoName: string | null = null
+): RepoWorktreeChildRow {
+  return {
+    id: worktree.id,
+    label: shortenWorktreeLabel(worktree.name, repoName),
+    status: 'idle',
+    branch: worktree.branch,
+    path: worktree.path,
+    activeRuns: 0,
+    openTickets: 0,
+    totalTickets: 0,
+    doneTickets: 0,
+    currentRunTitle: null,
+    currentTicketId: null,
+    lastActivityAt: null,
+    href: worktreeRoute(worktree.id, worktree.repoId),
+    ticketHref: worktreeTicketRoute(worktree.id, worktree.repoId),
+    pmaChatHref: scopedChatHref('worktree', worktree.id, 'pma'),
+    codingAgentChatHref: scopedChatHref('worktree', worktree.id, 'agent'),
+    signalWaiting: 0,
+    signalFailed: 0,
+    signalActive: 0,
+    hasCarState: false,
+    unboundManagedThreadCount: 0,
+    chatBound: false,
+    cleanupBlockedByChatBinding: false
+  };
+}
+
+function worktreeToIndexRow(worktree: WorktreeSummary, source: RepoWorktreeSourceData): RepoWorktreeIndexRow {
+  const listLoaded = hubTicketListLoaded(source);
+  const scoped = ticketsForResource(source.tickets, 'worktree', worktree.id);
+  const rollup = listLoaded ? ticketIndexRollup(scoped) : { open: 0, total: 0, done: 0 };
   return {
     id: worktree.id,
     kind: 'worktree',
@@ -485,9 +551,12 @@ function worktreeToIndexRow(worktree: WorktreeSummary, _source: RepoWorktreeSour
     branch: worktree.branch,
     path: worktree.path,
     activeRuns: worktree.activeRuns,
-    openTickets: worktree.openTickets,
+    openTickets: rollup.open,
+    totalTickets: rollup.total,
+    doneTickets: rollup.done,
     lastActivityAt: worktree.lastActivityAt,
     href: worktreeRoute(worktree.id, worktree.repoId),
+    ticketHref: worktree.repoId ? worktreeTicketRoute(worktree.id, worktree.repoId) : null,
     repoHref: worktree.repoId ? repoRoute(worktree.repoId) : null,
     childWorktrees: [],
     signalWaiting: 0,
@@ -522,6 +591,7 @@ function worktreeToChildRow(
   source: RepoWorktreeSourceData,
   repoName: string | null = null
 ): RepoWorktreeChildRow {
+  const listLoaded = hubTicketListLoaded(source);
   const run = mergeRunCards(
     source.runs.filter((candidate) => runMatchesResource(candidate, 'worktree', worktree.id)),
     source.chats.filter((candidate) => chatMatchesResource(candidate, 'worktree', worktree.id)),
@@ -529,8 +599,10 @@ function worktreeToChildRow(
     worktree.id,
     worktree.repoId
   )[0];
-  const tickets = ticketsForResource(source.tickets, 'worktree', worktree.id).filter((ticket) => ticket.status !== 'done');
-  const currentTicketId = run?.ticketId ?? tickets[0]?.id ?? null;
+  const allTickets = ticketsForResource(source.tickets, 'worktree', worktree.id);
+  const openQueue = allTickets.filter((ticket) => ticket.status !== 'done');
+  const rollup = listLoaded ? ticketIndexRollup(allTickets) : { open: 0, total: 0, done: 0 };
+  const currentTicketId = run?.ticketId ?? openQueue[0]?.id ?? null;
   const signals = scopedSignals(source, 'worktree', worktree.id);
   return {
     id: worktree.id,
@@ -539,7 +611,9 @@ function worktreeToChildRow(
     branch: worktree.branch,
     path: worktree.path,
     activeRuns: worktree.activeRuns || (run && ['running', 'waiting', 'blocked'].includes(run.status) ? 1 : 0),
-    openTickets: worktree.openTickets || tickets.length,
+    openTickets: rollup.open,
+    totalTickets: rollup.total,
+    doneTickets: rollup.done,
     currentRunTitle: run?.title ?? null,
     currentTicketId,
     lastActivityAt: worktree.lastActivityAt,
@@ -755,6 +829,8 @@ function ticketsForResource(tickets: TicketSummary[], kind: RepoWorktreeKind, id
 
 function ticketMatchesResource(ticket: TicketSummary, kind: RepoWorktreeKind, id: string): boolean {
   if (ticket.workspaceKind === kind && ticket.workspaceId === id) return true;
+  if (ticket.workspaceKind === kind && ticket.workspaceId != null && ticket.workspaceId !== id) return false;
+  if (kind === 'repo' && (ticket.workspaceKind === 'worktree' || ticket.worktreeId)) return false;
   const raw = ticket.raw;
   const frontmatter = asRecord(raw.frontmatter);
   const repoAliases = [
@@ -824,11 +900,16 @@ function ticketDetailHref(ticket: TicketSummary): string {
 }
 
 function runMatchesResource(run: PmaRunProgress, kind: RepoWorktreeKind, id: string): boolean {
-  const keys = kind === 'repo' ? ['repo_id', 'resource_id', 'base_repo_id'] : ['worktree_id', 'worktree_repo_id'];
   const state = asRecord(run.raw.state);
   const ticketEngine = asRecord(state.ticket_engine);
   const resourceKind = stringFromRaw(run.raw, ['resource_kind']) ?? stringFromRaw(state, ['resource_kind']) ?? stringFromRaw(ticketEngine, ['resource_kind']);
   const resourceId = stringFromRaw(run.raw, ['resource_id']) ?? stringFromRaw(state, ['resource_id']) ?? stringFromRaw(ticketEngine, ['resource_id']);
+  const explicitWorktreeId =
+    stringFromRaw(run.raw, ['worktree_id', 'worktree_repo_id']) ??
+    stringFromRaw(state, ['worktree_id', 'worktree_repo_id']) ??
+    stringFromRaw(ticketEngine, ['worktree_id', 'worktree_repo_id']);
+  if (kind === 'repo' && (resourceKind === 'worktree' || explicitWorktreeId)) return false;
+  const keys = kind === 'repo' ? ['repo_id'] : ['worktree_id', 'worktree_repo_id'];
   return (
     keys.some((key) => run.raw[key] === id || state[key] === id || ticketEngine[key] === id) ||
     (resourceKind === kind && resourceId === id)
@@ -836,7 +917,7 @@ function runMatchesResource(run: PmaRunProgress, kind: RepoWorktreeKind, id: str
 }
 
 function chatMatchesResource(chat: PmaChatSummary, kind: RepoWorktreeKind, id: string): boolean {
-  return kind === 'repo' ? chat.repoId === id : chat.worktreeId === id;
+  return kind === 'repo' ? chat.repoId === id && !chat.worktreeId : chat.worktreeId === id;
 }
 
 function stringFromRaw(raw: Record<string, unknown>, keys: string[]): string | null {
@@ -900,12 +981,13 @@ function scopedSignals(
 ): { waiting: number; failed: number; active: number } {
   const scopedChats = source.chats.filter((chat) =>
     kind === 'repo'
-      ? chat.repoId === id || (chat.worktreeId ? childIds.includes(chat.worktreeId) : false)
+      ? Boolean(chat.repoId === id && !chat.worktreeId)
       : chat.worktreeId === id
   );
   const scopedRuns = source.runs.filter((run) =>
     kind === 'repo'
-      ? runMatchesResource(run, 'repo', id) || childIds.some((wid) => runMatchesResource(run, 'worktree', wid))
+      ? runMatchesResource(run, 'repo', id) &&
+        !childIds.some((wid) => runMatchesResource(run, 'worktree', wid))
       : runMatchesResource(run, 'worktree', id)
   );
   const chatIds = new Set(scopedChats.map((chat) => chat.id));

@@ -31,7 +31,9 @@ describe('ticket view models', () => {
       artifacts: []
     });
 
-    expect(vm.defaultFilter).toBe('open');
+    expect(vm.defaultFilter).toBe('all');
+    expect(vm.filters.map((f) => f.id)).toEqual(['all', 'open']);
+    expect(filterTicketRows(vm.rows, 'all')).toHaveLength(2);
     expect(vm.title).toBe('Tickets');
     expect(vm.eyebrow).toBe('All-ticket projection');
     expect(vm.subtitle).toContain('Tickets without a registered owner');
@@ -41,7 +43,8 @@ describe('ticket view models', () => {
       title: mockTicketSummary.title,
       repoLabel: 'Worktree: worktree-1',
       currentRunState: 'running',
-      chatHref: '/chats?chat=chat-1'
+      chatHref: '/chats?chat=chat-1',
+      modelLabel: 'configured model'
     });
     expect(vm.workspaceFilters.map((filter) => filter.id)).toContain('worktree:worktree-1');
     expect(filterTicketRows(vm.rows, 'active')).toHaveLength(2);
@@ -72,6 +75,43 @@ describe('ticket view models', () => {
       repoLabel: 'Needs owner repair',
       workspaceHref: null
     });
+  });
+
+  it('does not expose stale pending stop-requested runs as queue actions', () => {
+    const vm = buildTicketListViewModel(
+      {
+        tickets: [],
+        runs: [
+          {
+            ...mockRunProgress,
+            id: 'run-stale',
+            status: 'waiting',
+            raw: {
+              id: 'run-stale',
+              status: 'pending',
+              stop_requested: true,
+              repo_id: 'repo-1',
+              action_policy: [
+                {
+                  action: 'stop',
+                  enabled: true,
+                  label: 'Stop',
+                  method: 'POST',
+                  route: '/api/flows/run-stale/stop',
+                  surface_visibility: { queue: true }
+                }
+              ]
+            }
+          }
+        ],
+        chats: [],
+        artifacts: []
+      },
+      { kind: 'repo', id: 'repo-1' }
+    );
+
+    expect(vm.queueRun).toBeNull();
+    expect(vm.queueActions).toEqual([]);
   });
 
   it('labels repo-scoped and worktree-scoped tickets from explicit resource ownership', () => {

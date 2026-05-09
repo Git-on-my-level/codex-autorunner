@@ -28,7 +28,7 @@
     parentRepoId: routeRepoId ?? hubParentRepoId
   });
   let list = $state<TicketListViewModel | null>(null);
-  let selectedFilter = $state<TicketFilter>('open');
+  let selectedFilter = $state<TicketFilter>('all');
   let loading = $state(true);
   let error = $state<ApiError | null>(null);
   let sectionIssues = $state<PartialPageIssue[]>([]);
@@ -57,7 +57,7 @@
     }
     const result = await loadScopedTicketQueue(pmaApi, queueConfig, (initialList) => {
       list = initialList;
-      selectedFilter = 'open';
+      selectedFilter = 'all';
       loading = false;
     });
     if (!result.ok) {
@@ -67,7 +67,7 @@
     }
     list = result.list;
     sectionIssues = result.sectionIssues;
-    selectedFilter = 'open';
+    selectedFilter = 'all';
     loading = false;
   }
 

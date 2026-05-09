@@ -1,7 +1,7 @@
 type JsonRecord = Record<string, unknown>;
 
 export type SettingsSessionState = {
-  modelOverride: string;
+  modelOverrides: Record<string, string>;
   effortOverride: string;
   stopAfterRuns: string;
   approvalPolicy: string;
@@ -16,7 +16,12 @@ export type SettingsAgentStatus = {
   modelStatus: 'available' | 'unsupported' | 'unavailable';
   modelCount: number;
   modelLabel: string;
-  providerLabel: string;
+  modelOptions: SettingsModelOption[];
+};
+
+export type SettingsModelOption = {
+  id: string;
+  label: string;
 };
 
 export type SettingsStatusItem = {
@@ -181,7 +186,11 @@ function mapVoiceStatus(raw: JsonRecord | null): SettingsVoiceStatus {
 
 export function buildSessionUpdatePayload(session: SettingsSessionState): JsonRecord {
   return {
-    autorunner_model_override: blankToNull(session.modelOverride),
+    autorunner_model_overrides: Object.fromEntries(
+      Object.entries(session.modelOverrides)
+        .map(([agent, model]) => [agent.trim().toLowerCase(), model.trim()])
+        .filter(([agent, model]) => agent && model)
+    ),
     autorunner_effort_override: blankToNull(session.effortOverride),
     autorunner_approval_policy: blankToNull(session.approvalPolicy),
     autorunner_sandbox_mode: blankToNull(session.sandboxMode),
@@ -191,8 +200,18 @@ export function buildSessionUpdatePayload(session: SettingsSessionState): JsonRe
 }
 
 function mapSession(raw: JsonRecord): SettingsSessionState {
+  const modelOverrides = recordValue(raw.autorunner_model_overrides);
+  const normalizedModelOverrides = Object.fromEntries(
+    Object.entries(modelOverrides)
+      .map(([agent, model]) => [agent.trim().toLowerCase(), stringValue(model)])
+      .filter(([agent, model]) => agent && model)
+  );
+  const legacyCodexModel = stringValue(raw.autorunner_model_override);
+  if (legacyCodexModel && !normalizedModelOverrides.codex) {
+    normalizedModelOverrides.codex = legacyCodexModel;
+  }
   return {
-    modelOverride: stringValue(raw.autorunner_model_override),
+    modelOverrides: normalizedModelOverrides,
     effortOverride: stringValue(raw.autorunner_effort_override),
     stopAfterRuns: numberString(raw.runner_stop_after_runs),
     approvalPolicy: stringValue(raw.autorunner_approval_policy),
@@ -203,12 +222,13 @@ function mapSession(raw: JsonRecord): SettingsSessionState {
 }
 
 function mapAgentStatus(agent: JsonRecord, modelCatalogs: Record<string, JsonRecord[] | null>): SettingsAgentStatus {
-  const id = stringValue(agent.id) || 'agent';
+  const id = (stringValue(agent.id) || 'agent').toLowerCase();
   const capabilities = stringArray(agent.capabilities);
-  const models = modelCatalogs[id] ?? null;
+  const models = modelCatalogs[id] ?? modelCatalogs[stringValue(agent.id)] ?? null;
   const modelGate = capabilityGate(agent, 'list_models');
   const modelStatus = modelGate.allowed ? (models ? 'available' : 'unavailable') : 'unsupported';
   const modelCount = models?.length ?? 0;
+  const modelOptions = modelCatalogOptions(models);
   return {
     id,
     name: stringValue(agent.name) || id,
@@ -221,8 +241,23 @@ function mapAgentStatus(agent: JsonRecord, modelCatalogs: Record<string, JsonRec
         : modelStatus === 'unsupported'
           ? modelGate.reason || 'Model listing unsupported'
           : 'Model listing unavailable',
-    providerLabel: providerLabel(agent)
+    modelOptions
   };
+}
+
+function modelCatalogOptions(models: JsonRecord[] | null): SettingsModelOption[] {
+  if (!models) return [];
+  return models
+    .map((model) => {
+      const id = stringValue(model.id);
+      if (!id) return null;
+      const displayName = stringValue(model.display_name);
+      return {
+        id,
+        label: displayName && displayName !== id ? `${displayName} (${id})` : id
+      };
+    })
+    .filter((model): model is SettingsModelOption => Boolean(model));
 }
 
 function capabilityGate(agent: JsonRecord, action: string): { allowed: boolean; reason: string | null } {
@@ -233,15 +268,6 @@ function capabilityGate(agent: JsonRecord, action: string): { allowed: boolean; 
     allowed: gate.allowed === true,
     reason: stringValue(gate.reason) || null
   };
-}
-
-function providerLabel(agent: JsonRecord): string {
-  const profile = stringValue(agent.default_profile ?? agent.metadata_profile);
-  const version = stringValue(agent.version ?? agent.protocol_version);
-  if (profile && version) return `${profile} · ${version}`;
-  if (profile) return profile;
-  if (version) return version;
-  return 'Configured locally';
 }
 
 function stringValue(value: unknown): string {

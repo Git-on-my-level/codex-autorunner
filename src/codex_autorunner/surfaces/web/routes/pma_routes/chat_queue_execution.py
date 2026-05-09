@@ -7,6 +7,7 @@ from typing import Any, Optional
 from fastapi import HTTPException
 
 from .....adapters.github.context_injection import maybe_inject_github_context
+from .....core.agent_model_defaults import resolve_model_for_agent
 from .....core.orchestration import (
     SurfaceThreadMessageRequest,
     build_surface_orchestration_ingress,
@@ -28,6 +29,7 @@ from .....core.pma_context import (
     load_pma_prompt,
 )
 from .....core.pma_origin import PmaOriginContext, extract_pma_origin_metadata
+from .....core.state import load_state
 from .....core.text_utils import _normalize_optional_text
 from ...services.pma import get_pma_request_context
 from ...services.pma.common import pma_config_from_raw
@@ -44,6 +46,26 @@ logger = logging.getLogger(__name__)
 def _get_pma_config(request: Any) -> dict[str, Any]:
     context = get_pma_request_context(request)
     return pma_config_from_raw(context.raw_config)
+
+
+def _resolve_queue_default_model(
+    request: Any,
+    *,
+    agent: Optional[str],
+    configured_default: Optional[str],
+) -> Optional[str]:
+    try:
+        state = load_state(request.app.state.engine.state_path)
+    except (OSError, ValueError, AttributeError):
+        state = None
+    defaults = _get_pma_config(request)
+    return resolve_model_for_agent(
+        agent or defaults.get("default_agent") or "codex",
+        state=state,
+        config=request.app.state.config,
+        configured_default=configured_default,
+        include_builtin=False,
+    )
 
 
 def _resolve_profile_with_stale_pma_origin_fallback(
@@ -259,8 +281,12 @@ async def execute_queue_item(
             persist=False,
         )
 
-    if not model and defaults.get("model"):
-        model = defaults["model"]
+    if not model:
+        model = _resolve_queue_default_model(
+            request,
+            agent=agent,
+            configured_default=defaults.get("model"),
+        )
     if not reasoning and defaults.get("reasoning"):
         reasoning = defaults["reasoning"]
 

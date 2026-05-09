@@ -143,6 +143,19 @@ class TestFlowResume:
 
 
 class TestStopRequested:
+    def test_pending_to_stopped(self):
+        result = _reduce(
+            FlowRunStatus.PENDING,
+            FlowTrigger(kind=TriggerKind.STOP_REQUESTED),
+            current_step="ticket_turn",
+        )
+        assert result.status == FlowRunStatus.STOPPED
+        assert result.finished_at == _NOW
+        assert result.current_step is None
+        assert result.state.get("reason_summary") == "Stopped by user"
+        assert result.state.get("reason_code") == "user_stop"
+        assert "flow_stopped" in _effect_event_names(result)
+
     def test_running_to_stopped(self):
         result = _reduce(
             FlowRunStatus.RUNNING,
@@ -695,6 +708,14 @@ def _health(alive: bool, **kwargs) -> SimpleNamespace:
 
 
 class TestResolveReconcileTrigger:
+    def test_pending_stop_requested_with_dead_worker_stops(self):
+        rec = _rec(FlowRunStatus.PENDING)
+        rec.stop_requested = True
+        rec.current_step = "ticket_turn"
+        trigger = resolve_reconcile_trigger(rec, _health(False))
+        assert trigger is not None
+        assert trigger.kind == TriggerKind.STOP_REQUESTED
+
     def test_running_engine_completed(self):
         rec = _rec(FlowRunStatus.RUNNING, {"ticket_engine": {"status": "completed"}})
         trigger = resolve_reconcile_trigger(rec, _health(True))

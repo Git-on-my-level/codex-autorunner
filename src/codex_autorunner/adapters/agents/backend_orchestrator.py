@@ -35,6 +35,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncGenerator, Optional
 
+from ...core.agent_model_defaults import resolve_model_for_agent
 from ...core.config import RepoConfig
 from ...core.managed_thread_identity import (
     FILE_CHAT_OPENCODE_KEY,
@@ -195,13 +196,20 @@ class BackendOrchestrator:
         app_server_cfg = getattr(self._config, "app_server", None)
         turn_timeout_seconds = getattr(app_server_cfg, "turn_timeout_seconds", None)
 
+        effective_model = resolve_model_for_agent(
+            agent_id,
+            model,
+            state=state,
+            config=self._config,
+        )
+
         backend.configure(
             approval_policy=state.autorunner_approval_policy,
             approval_policy_default="never",
             sandbox_policy=state.autorunner_sandbox_mode,
             sandbox_policy_default="dangerFullAccess",
             reuse_session=reuse_session,
-            model=model,
+            model=effective_model,
             reasoning=reasoning,
             reasoning_effort=reasoning,
             turn_timeout_seconds=turn_timeout_seconds,

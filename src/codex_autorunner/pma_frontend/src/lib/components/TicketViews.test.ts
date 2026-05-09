@@ -113,6 +113,60 @@ describe('TicketViews', () => {
     expect(body).not.toContain('All workspaces');
   });
 
+  it('disables drag handles for invalid duplicate ticket rows', () => {
+    const list = buildTicketListViewModel(
+      {
+        tickets: [
+          {
+            ...mockTicketSummary,
+            id: 'repo:repo-1:tkt_base',
+            number: 1,
+            title: 'Repo ticket',
+            status: 'idle',
+            path: '.codex-autorunner/tickets/TICKET-001.md',
+            ticketPath: '.codex-autorunner/tickets/TICKET-001.md',
+            workspaceKind: 'repo',
+            workspaceId: 'repo-1',
+            repoId: 'repo-1',
+            worktreeId: null,
+            raw: {}
+          },
+          {
+            ...mockTicketSummary,
+            id: 'repo:repo-1:tkt_duplicate',
+            number: 1,
+            title: 'Duplicate repo ticket',
+            status: 'invalid',
+            path: '.codex-autorunner/tickets/TICKET-001-dup.md',
+            ticketPath: '.codex-autorunner/tickets/TICKET-001-dup.md',
+            workspaceKind: 'repo',
+            workspaceId: 'repo-1',
+            repoId: 'repo-1',
+            worktreeId: null,
+            errors: ['Duplicate ticket index 001'],
+            raw: {}
+          }
+        ],
+        runs: [],
+        chats: [],
+        artifacts: []
+      },
+      { kind: 'repo', id: 'repo-1' }
+    );
+
+    const { body } = render(TicketViews, {
+      props: {
+        state: 'ready',
+        mode: 'list',
+        list,
+        onReorderTicket: async () => true
+      }
+    });
+
+    expect(body).toContain('Drag to reorder in this queue');
+    expect(body).toContain('Fix duplicate or invalid ticket metadata before reordering');
+  });
+
   it('builds queue controls from backend action policy data', () => {
     const list = buildTicketListViewModel(
       {

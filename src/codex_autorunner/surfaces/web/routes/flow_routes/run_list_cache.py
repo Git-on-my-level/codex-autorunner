@@ -62,7 +62,7 @@ def _prune_flow_run_list_payload(payload: list[dict[str, Any]]) -> None:
 
 def _list_runs_cache_handles(
     request: Request,
-) -> tuple[dict[tuple[str, str], _FlowRunListCacheEntry], threading.Lock]:
+) -> tuple[dict[tuple[str, str, str], _FlowRunListCacheEntry], threading.Lock]:
     app_state = request.app.state
     if not hasattr(app_state, "flow_run_list_cache"):
         app_state.flow_run_list_cache = {}
@@ -70,7 +70,8 @@ def _list_runs_cache_handles(
         app_state.flow_run_list_cache_lock = threading.Lock()
     return (
         cast(
-            dict[tuple[str, str], _FlowRunListCacheEntry], app_state.flow_run_list_cache
+            dict[tuple[str, str, str], _FlowRunListCacheEntry],
+            app_state.flow_run_list_cache,
         ),
         cast(threading.Lock, app_state.flow_run_list_cache_lock),
     )
@@ -107,7 +108,7 @@ def _build_flow_run_list_payload(
 
 def _load_cached_flow_run_list(
     request: Request,
-    cache_key: tuple[str, str],
+    cache_key: tuple[str, str, str],
 ) -> Optional[list[dict[str, Any]]]:
     cache, cache_lock = _list_runs_cache_handles(request)
     now = time.monotonic()
@@ -120,7 +121,7 @@ def _load_cached_flow_run_list(
 
 def _store_cached_flow_run_list(
     request: Request,
-    cache_key: tuple[str, str],
+    cache_key: tuple[str, str, str],
     payload: list[dict[str, Any]],
 ) -> None:
     cache, cache_lock = _list_runs_cache_handles(request)
@@ -143,7 +144,7 @@ def list_flow_runs_payload(
     repo_root = deps.find_repo_root()
     if repo_root is None:
         return []
-    cache_key = (flow_type or "", flow_target_id or "")
+    cache_key = (str(repo_root.resolve()), flow_type or "", flow_target_id or "")
     if not reconcile:
         cached = _load_cached_flow_run_list(request, cache_key)
         if cached is not None:

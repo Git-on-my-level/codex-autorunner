@@ -19,7 +19,7 @@ from typing import Any, AsyncIterator, Awaitable, Callable, Optional
 
 import httpx
 
-from ...adapters.chat.agents import DEFAULT_CHAT_AGENT_MODELS
+from ...core.agent_model_defaults import resolve_model_for_agent
 from ...core.logging_utils import log_event
 from ...core.orchestration.interfaces import FreshConversationRequiredError
 from ...core.orchestration.runtime_thread_events import (
@@ -682,7 +682,7 @@ class OpenCodeHarness(AgentHarness):
             await self._release_turn_client(reserved_workspace)
             raise
         if model is None:
-            model = DEFAULT_CHAT_AGENT_MODELS.get("opencode")
+            model = resolve_model_for_agent("opencode")
         model_payload = split_model_id(model)
         pre_connected_event_seen = asyncio.Event()
         event_queue, stream_task = await _pre_connect_event_stream(
@@ -807,7 +807,7 @@ class OpenCodeHarness(AgentHarness):
             await self._release_turn_client(reserved_workspace)
             raise
         if model is None:
-            model = DEFAULT_CHAT_AGENT_MODELS.get("opencode")
+            model = resolve_model_for_agent("opencode")
         arguments = prompt if prompt else ""
         pre_connected_event_seen = asyncio.Event()
         event_queue, stream_task = await _pre_connect_event_stream(

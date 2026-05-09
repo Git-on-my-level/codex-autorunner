@@ -1,1 +1,0 @@
-import"../chunks/BHXiqKey.js";import{p as r,a,g as s,u as t}from"../chunks/D9dc1iPj.js";import{p as n}from"../chunks/CSqj8tIa.js";import{S as m}from"../chunks/BRkv_mCg.js";function g(o,p){r(p,!0);const e=t(()=>({kind:"repo",id:n.params.repoId??"unknown-repo"}));m(o,{get scope(){return s(e)}}),a()}export{g as component};

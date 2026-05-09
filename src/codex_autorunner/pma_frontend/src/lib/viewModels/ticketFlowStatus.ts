@@ -122,11 +122,24 @@ export function aliasesOverlap(left: Set<string>, right: Set<string>): boolean {
 }
 
 function selectPrimaryRun(runs: PmaRunProgress[]): PmaRunProgress | null {
+  const actionableRuns = runs.filter((run) => !isPendingStopRequestedRun(run));
   return (
-    runs.find((run) => run.status === 'running') ??
-    runs.find((run) => run.status === 'waiting' || run.status === 'blocked' || run.status === 'failed') ??
+    actionableRuns.find((run) => run.status === 'running') ??
+    actionableRuns.find((run) => run.status === 'waiting' || run.status === 'blocked' || run.status === 'failed') ??
     null
   );
+}
+
+function isPendingStopRequestedRun(run: PmaRunProgress): boolean {
+  const rawStatus = stringFromRaw(run.raw, 'status') ?? run.status;
+  const stopRequested = rawValue(run.raw, 'stop_requested');
+  return String(rawStatus).trim().toLowerCase() === 'pending' && isTruthyRaw(stopRequested);
+}
+
+function isTruthyRaw(value: unknown): boolean {
+  if (value === true || value === 1) return true;
+  if (typeof value === 'string') return ['1', 'true', 'yes'].includes(value.trim().toLowerCase());
+  return false;
 }
 
 function mostRecentRun(runs: PmaRunProgress[]): PmaRunProgress | null {
@@ -167,18 +180,34 @@ function findTicketForRun(tickets: TicketSummary[], run: PmaRunProgress): Ticket
 
 function ticketMatchesOwner(ticket: TicketSummary, owner: Exclude<TicketFlowOwnerScope, null>): boolean {
   if (ticket.workspaceKind === owner.kind && ticket.workspaceId === owner.id) return true;
-  return owner.kind === 'repo' ? ticket.repoId === owner.id : ticket.worktreeId === owner.id;
+  if (owner.kind === 'repo') {
+    if (ticket.workspaceKind === 'worktree' || ticket.worktreeId) return false;
+    return ticket.repoId === owner.id;
+  }
+  return ticket.worktreeId === owner.id;
 }
 
 function runMatchesOwner(run: PmaRunProgress, owner: Exclude<TicketFlowOwnerScope, null>): boolean {
   const resourceKind = stringFromRaw(run.raw, 'resource_kind') ?? stringFromRaw(run.raw, 'state.resource_kind') ?? stringFromRaw(run.raw, 'state.ticket_engine.resource_kind');
   const resourceId = stringFromRaw(run.raw, 'resource_id') ?? stringFromRaw(run.raw, 'state.resource_id') ?? stringFromRaw(run.raw, 'state.ticket_engine.resource_id');
   if (resourceKind === owner.kind && resourceId === owner.id) return true;
+  const worktreeKeys = [
+    'worktree_id',
+    'worktree_repo_id',
+    'state.worktree_id',
+    'state.worktree_repo_id',
+    'input_data.worktree_id',
+    'input_data.worktree_repo_id',
+    'state.ticket_engine.worktree_id'
+  ];
+  const explicitWorktreeId = worktreeKeys.map((key) => stringFromRaw(run.raw, key)).find((v): v is string => Boolean(v));
+  if (owner.kind === 'repo' && (resourceKind === 'worktree' || explicitWorktreeId)) return false;
   const keys =
     owner.kind === 'repo'
-      ? ['repo_id', 'base_repo_id', 'state.repo_id', 'state.base_repo_id', 'input_data.repo_id', 'input_data.base_repo_id']
+      ? ['repo_id', 'state.repo_id', 'input_data.repo_id']
       : ['worktree_id', 'worktree_repo_id', 'state.worktree_id', 'state.worktree_repo_id', 'input_data.worktree_id', 'input_data.worktree_repo_id'];
-  return keys.some((key) => stringFromRaw(run.raw, key) === owner.id);
+  if (keys.some((key) => stringFromRaw(run.raw, key) === owner.id)) return true;
+  return false;
 }
 
 function ticketDisplayLabel(ticket: TicketSummary): string {

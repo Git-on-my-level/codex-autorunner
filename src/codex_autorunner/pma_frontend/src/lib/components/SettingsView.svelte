@@ -69,7 +69,7 @@
     if (!view || !savedSession) return false;
     const baseline = savedSession;
     return (
-      view.session.modelOverride !== baseline.modelOverride ||
+      JSON.stringify(view.session.modelOverrides) !== JSON.stringify(baseline.modelOverrides) ||
       view.session.effortOverride !== baseline.effortOverride ||
       view.session.stopAfterRuns !== baseline.stopAfterRuns ||
       view.session.approvalPolicy !== baseline.approvalPolicy ||
@@ -89,6 +89,24 @@
   function patchSession(key: keyof SettingsSessionState, value: SettingsSessionState[keyof SettingsSessionState]): void {
     if (!view) return;
     onSessionChange?.({ ...view.session, [key]: value });
+  }
+
+  function patchAgentModel(agentId: string, value: string): void {
+    if (!view) return;
+    const agent = agentId.trim().toLowerCase();
+    const next = { ...view.session.modelOverrides };
+    const model = value.trim();
+    if (model) {
+      next[agent] = model;
+    } else {
+      delete next[agent];
+    }
+    onSessionChange?.({ ...view.session, modelOverrides: next });
+  }
+
+  function selectedAgentModel(agent: SettingsAgentStatus, session: SettingsSessionState): string {
+    const selected = session.modelOverrides[agent.id] ?? '';
+    return agent.modelOptions.some((model) => model.id === selected) ? selected : '';
   }
 
   function patchNetwork(value: string): void {
@@ -190,14 +208,6 @@
       </div>
       <div class="settings-form-grid">
         <label>
-          <span>Model override</span>
-          <input
-            value={view.session.modelOverride}
-            placeholder="Use agent default"
-            oninput={(event) => patchSession('modelOverride', event.currentTarget.value)}
-          />
-        </label>
-        <label>
           <span>Reasoning override</span>
           <input
             value={view.session.effortOverride}
@@ -253,7 +263,7 @@
 
     <section class="settings-section">
       <h2 class="settings-section-title">Agents</h2>
-      {@render agentList(view.agents, 'No agents are visible from the server.')}
+      {@render agentList(view.agents, view.session, 'No agents are visible from the server.')}
     </section>
 
     <section class="settings-section">
@@ -295,7 +305,7 @@
   </dl>
 {/snippet}
 
-{#snippet agentList(agents: SettingsAgentStatus[], emptyText: string)}
+{#snippet agentList(agents: SettingsAgentStatus[], session: SettingsSessionState, emptyText: string)}
   {#if agents.length === 0}
     <div class="state-panel empty-state compact-empty">
       <strong>No agents visible</strong>
@@ -307,16 +317,27 @@
         <article class="agent-status-row">
           <div class="agent-status-id">
             <strong>{agent.name}</strong>
-            <span><code>{agent.id}</code> · {agent.providerLabel}</span>
           </div>
           {#if agent.modelStatus === 'available'}
-            <span class="count-chip is-active" title={agent.modelLabel}>
-              <strong>{agent.modelCount}</strong><em>{agent.modelCount === 1 ? 'model' : 'models'}</em>
-            </span>
+            <div class="agent-model-control">
+              <label>
+                <span>Default model</span>
+                <select
+                  aria-label={`${agent.name} default model`}
+                  value={selectedAgentModel(agent, session)}
+                  onchange={(event) => patchAgentModel(agent.id, event.currentTarget.value)}
+                >
+                  <option value="">Use built-in default</option>
+                  {#each agent.modelOptions as model}
+                    <option value={model.id}>{model.label}</option>
+                  {/each}
+                </select>
+              </label>
+            </div>
           {:else if agent.modelStatus === 'unavailable'}
-            <span class="status-pill waiting">unavailable</span>
+            <span class="agent-model-muted">Models unavailable</span>
           {:else}
-            <span class="status-pill idle">no listing</span>
+            <span class="agent-model-muted">Model selection unavailable</span>
           {/if}
         </article>
       {/each}
@@ -332,52 +353,6 @@
   .agent-status-id strong {
     font-size: var(--font-size-1);
     font-weight: 600;
-  }
-
-  .agent-status-id span {
-    font-size: var(--font-size-0);
-    color: var(--color-ink-muted);
-  }
-
-  .agent-status-id code {
-    font-family: var(--font-mono, ui-monospace, monospace);
-    color: var(--color-ink-soft);
-  }
-
-  .count-chip {
-    display: inline-flex;
-    align-items: baseline;
-    gap: 4px;
-    min-height: 24px;
-    padding: 2px 10px;
-    border-radius: 999px;
-    background: var(--color-surface-muted);
-    color: var(--color-ink-muted);
-    font-size: var(--font-size-0);
-    font-weight: 500;
-    line-height: 1.2;
-    white-space: nowrap;
-  }
-
-  .count-chip strong {
-    color: var(--color-ink);
-    font-weight: 650;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .count-chip em {
-    font-style: normal;
-    color: var(--color-ink-muted);
-  }
-
-  .count-chip.is-active {
-    background: var(--color-success-soft);
-    color: var(--color-success);
-  }
-
-  .count-chip.is-active strong,
-  .count-chip.is-active em {
-    color: var(--color-success);
   }
 
   .settings-action-grid {

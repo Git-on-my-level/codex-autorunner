@@ -28,7 +28,7 @@ const view = buildSettingsViewModel({
     }
   ],
   modelCatalogs: {
-    hermes: [{ id: 'gpt-5.4' }]
+    hermes: [{ id: 'gpt-5.4', display_name: 'GPT-5.4' }]
   }
 });
 
@@ -56,7 +56,13 @@ describe('settings page component', () => {
     expect(body).toContain('Agents');
     expect(body).toContain('Hermes');
     expect(body).toContain('Codex');
-    expect(body).toContain('Model override');
+    expect(body).toContain('Default model');
+    expect(body).toContain('Use built-in default');
+    expect(body).toContain('GPT-5.4 (gpt-5.4)');
+    expect(body).toContain('Model selection unavailable');
+    expect(body).not.toContain('no listing');
+    expect(body).not.toContain('6 models');
+    expect(body).not.toContain('20 models');
     expect(body).toContain('Reasoning override');
     expect(body).toContain('Approval policy');
     expect(body).toContain('Sandbox mode');

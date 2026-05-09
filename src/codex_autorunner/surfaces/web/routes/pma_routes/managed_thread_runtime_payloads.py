@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import HTTPException, Request
 
 from .....adapters.chat.approval_modes import resolve_approval_mode_policies
+from .....core.agent_model_defaults import resolve_model_for_agent
 from .....core.pma.attachments import (
     normalize_managed_thread_attachments as _core_normalize_managed_thread_attachments,
 )
@@ -31,6 +32,7 @@ from .....core.pma.outbound_payloads import (
     sanitize_managed_thread_result_error,
 )
 from .....core.pma.policies import normalize_busy_policy as _core_normalize_busy_policy
+from .....core.state import load_state
 from .....core.text_utils import _normalize_optional_text
 from ...schemas import PmaManagedThreadMessageRequest
 from ...services.pma.common import pma_config_from_raw as shared_pma_config_from_raw
@@ -56,6 +58,25 @@ def normalize_busy_policy(value: Any) -> Any:
 def get_pma_route_config(request: Request) -> dict[str, Any]:
     raw = getattr(request.app.state.config, "raw", {})
     return shared_pma_config_from_raw(raw)
+
+
+def _resolve_managed_thread_default_model(
+    request: Request,
+    *,
+    agent: Any,
+    configured_default: Any,
+) -> str | None:
+    try:
+        state = load_state(request.app.state.engine.state_path)
+    except (OSError, ValueError, AttributeError):
+        state = None
+    return resolve_model_for_agent(
+        _normalize_optional_text(agent) or "codex",
+        state=state,
+        config=request.app.state.config,
+        configured_default=configured_default,
+        include_builtin=False,
+    )
 
 
 def get_live_thread_runtime_binding(service: Any, managed_thread_id: str) -> Any:
@@ -97,6 +118,11 @@ def resolve_managed_thread_message_options(
     service: Any,
 ) -> ManagedThreadMessageOptions:
     defaults = get_pma_route_config(request)
+    defaults["model"] = _resolve_managed_thread_default_model(
+        request,
+        agent=thread.get("agent") or defaults.get("default_agent"),
+        configured_default=defaults.get("model"),
+    )
     followup_policy = resolve_managed_thread_followup_policy(
         payload,
         default_terminal_followup=bool(

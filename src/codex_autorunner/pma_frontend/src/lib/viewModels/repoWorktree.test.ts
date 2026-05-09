@@ -8,6 +8,15 @@ import {
   visibleRepoWorktreeChildren
 } from './repoWorktree';
 
+const repoTicketSummary = {
+  ...mockTicketSummary,
+  workspaceKind: 'repo' as const,
+  workspaceId: 'repo-1',
+  workspacePath: '/workspace/codex-autorunner',
+  repoId: 'repo-1',
+  worktreeId: null
+};
+
 describe('repo/worktree view models', () => {
   it('builds a lightweight repo index with child worktrees grouped under the repo', () => {
     const vm = buildRepoWorktreeIndexViewModel({
@@ -15,33 +24,94 @@ describe('repo/worktree view models', () => {
       worktrees: [mockWorktreeSummary],
       runs: [{ ...mockRunProgress, raw: { worktree_id: 'worktree-1', current_ticket_id: 'TICKET-110' } }],
       chats: [{ ...mockChatSummary, repoId: 'repo-1', worktreeId: 'worktree-1' }],
-      tickets: [mockTicketSummary],
+      tickets: [repoTicketSummary],
       artifacts: []
     });
 
+    expect(vm.ticketIndexMetricsAvailable).toBe(true);
     expect(vm.rows).toHaveLength(1);
     expect(vm.rows.map((row) => row.id)).toEqual(['repo-1']);
     expect(vm.title).toBe('Repos');
     expect(vm.eyebrow).toBe('Repo ownership');
     expect(vm.activeCount).toBe(2);
-    expect(vm.openTicketCount).toBe(4);
+    expect(vm.openTicketCount).toBe(1);
     expect(vm.rows[0]).toMatchObject({
       href: '/repos/repo-1',
+      ticketHref: '/repos/repo-1/tickets',
+      openTickets: 1,
+      totalTickets: 1,
+      doneTickets: 0,
       pmaChatHref: '/chats?new=repo:repo-1&kind=pma',
       codingAgentChatHref: '/chats?new=repo:repo-1&kind=agent',
       signalWaiting: 0,
       signalFailed: 0,
-      signalActive: 1,
+      signalActive: 0,
       childWorktrees: [
         {
+          id: 'worktree-1',
           href: '/repos/repo-1/worktrees/worktree-1',
           pmaChatHref: '/chats?new=worktree:worktree-1&kind=pma',
           codingAgentChatHref: '/chats?new=worktree:worktree-1&kind=agent',
+          signalActive: 1,
+          openTickets: 0,
+          totalTickets: 0,
+          doneTickets: 0,
           currentTicketId: 'TICKET-110',
           currentRunTitle: 'Hub rewrite foundation'
         }
       ]
     });
+  });
+
+  it('omits index ticket metrics when the hub ticket list did not load (no snapshot fallback)', () => {
+    const vm = buildRepoWorktreeIndexViewModel({
+      repos: [mockRepoSummary],
+      worktrees: [],
+      runs: [],
+      chats: [],
+      tickets: [],
+      artifacts: [],
+      ticketsListLoaded: false
+    });
+    expect(vm.ticketIndexMetricsAvailable).toBe(false);
+    expect(vm.openTicketCount).toBe(0);
+    expect(vm.rows[0].openTickets).toBe(0);
+    expect(vm.rows[0].totalTickets).toBe(0);
+    expect(vm.rows[0].doneTickets).toBe(0);
+  });
+
+  it('counts repo open tickets from summaries excluding done status', () => {
+    const vm = buildRepoWorktreeIndexViewModel({
+      repos: [mockRepoSummary],
+      worktrees: [],
+      runs: [],
+      chats: [],
+      tickets: [
+        {
+          ...mockTicketSummary,
+          id: 'done-ticket',
+          workspaceKind: 'repo',
+          workspaceId: 'repo-1',
+          repoId: 'repo-1',
+          worktreeId: null,
+          status: 'done'
+        },
+        {
+          ...mockTicketSummary,
+          id: 'open-ticket',
+          workspaceKind: 'repo',
+          workspaceId: 'repo-1',
+          repoId: 'repo-1',
+          worktreeId: null,
+          status: 'idle'
+        }
+      ],
+      artifacts: []
+    });
+    expect(vm.ticketIndexMetricsAvailable).toBe(true);
+    expect(vm.rows[0].totalTickets).toBe(2);
+    expect(vm.rows[0].doneTickets).toBe(1);
+    expect(vm.rows[0].openTickets).toBe(1);
   });
 
   it('keeps known child worktrees under their owning repo and only promotes orphan worktrees', () => {
@@ -85,6 +155,7 @@ describe('repo/worktree view models', () => {
       id: 'orphan-worktree',
       kind: 'worktree',
       repoHref: '/repos/missing-repo',
+      ticketHref: '/repos/missing-repo/worktrees/orphan-worktree/tickets',
       pmaChatHref: '/chats?new=worktree:orphan-worktree&kind=pma',
       codingAgentChatHref: '/chats?new=worktree:orphan-worktree&kind=agent',
       signalWaiting: 0,
@@ -111,6 +182,7 @@ describe('repo/worktree view models', () => {
     expect(vm.eyebrow).toBe('Repo-owned variants');
     expect(vm.rows[0]).toMatchObject({
       href: '/repos/repo-1/worktrees/worktree-1',
+      ticketHref: '/repos/repo-1/worktrees/worktree-1/tickets',
       repoHref: '/repos/repo-1',
       pmaChatHref: '/chats?new=worktree:worktree-1&kind=pma',
       codingAgentChatHref: '/chats?new=worktree:worktree-1&kind=agent',
@@ -165,7 +237,7 @@ describe('repo/worktree view models', () => {
       artifacts: []
     });
 
-    expect(vm.rows[0].signalWaiting).toBe(1);
+    expect(vm.rows[0].signalWaiting).toBe(0);
     expect(vm.rows[0].childWorktrees[0]).toMatchObject({ signalWaiting: 1, signalFailed: 0, signalActive: 0 });
   });
 
@@ -219,8 +291,28 @@ describe('repo/worktree view models', () => {
     expect(vm.childWorktrees).toHaveLength(1);
     expect(vm.childWorktrees[0]).toMatchObject({
       href: '/repos/repo-1/worktrees/worktree-1',
-      currentTicketId: 'TICKET-110'
+      currentTicketId: 'TICKET-110',
+      openTickets: 1,
+      activeRuns: 1
     });
+  });
+
+  it('keeps child worktree ticket-flow runs out of repo detail state', () => {
+    const vm = buildRepoWorktreeDetailViewModel(
+      {
+        repos: [{ ...mockRepoSummary, status: 'idle', activeRuns: 0 }],
+        worktrees: [mockWorktreeSummary],
+        runs: [{ ...mockRunProgress, id: 'run-wt-only', raw: { worktree_id: 'worktree-1', current_ticket_id: 'TICKET-110' } }],
+        chats: [],
+        tickets: [mockTicketSummary],
+        artifacts: []
+      },
+      'repo',
+      'repo-1'
+    );
+
+    expect(vm.hasActiveRun).toBe(false);
+    expect(vm.flowStatus.status).toBe('idle');
   });
 
   it('names the base repo on worktree detail when known', () => {
@@ -278,7 +370,7 @@ describe('repo/worktree view models', () => {
         worktrees: [],
         runs: [],
         chats: [],
-        tickets: [{ ...mockTicketSummary, status: 'idle' }],
+        tickets: [{ ...repoTicketSummary, status: 'idle' }],
         artifacts: []
       },
       'repo',
@@ -300,7 +392,7 @@ describe('repo/worktree view models', () => {
         worktrees: [],
         runs: [],
         chats: [],
-        tickets: [{ ...mockTicketSummary, status: 'invalid', errors: ['frontmatter.agent is required'] }],
+        tickets: [{ ...repoTicketSummary, status: 'invalid', errors: ['frontmatter.agent is required'] }],
         artifacts: []
       },
       'repo',
@@ -323,8 +415,8 @@ describe('repo/worktree view models', () => {
         runs: [],
         chats: [],
         tickets: [
-          { ...mockTicketSummary, id: 'ticket-a', title: 'Repo ticket', repoId: 'repo-1' },
-          { ...mockTicketSummary, id: 'ticket-b', title: 'Other repo ticket', repoId: 'repo-2' }
+          { ...repoTicketSummary, id: 'ticket-a', title: 'Repo ticket', repoId: 'repo-1' },
+          { ...repoTicketSummary, id: 'ticket-b', title: 'Other repo ticket', repoId: 'repo-2', workspaceId: 'repo-2' }
         ],
         artifacts: []
       },
@@ -343,7 +435,7 @@ describe('repo/worktree view models', () => {
         runs: [],
         chats: [],
         tickets: [
-          { ...mockTicketSummary, id: 'ticket-scoped', title: 'Repo-owned ticket', repoId: 'repo-1', worktreeId: null },
+          { ...repoTicketSummary, id: 'ticket-scoped', title: 'Repo-owned ticket', repoId: 'repo-1', worktreeId: null },
           { ...mockTicketSummary, id: 'ticket-unscoped', title: 'Fallback ticket', repoId: null, worktreeId: null, raw: {} }
         ],
         artifacts: []

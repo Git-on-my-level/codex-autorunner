@@ -1,4 +1,8 @@
 import { pmaApi, type JsonRecord } from '$lib/api/client';
+import {
+  confirmDialog,
+  confirmDialogTyped
+} from '$lib/components/confirmDialog';
 
 export type ActionNotice = {
   message: string;
@@ -22,22 +26,34 @@ export type ArchiveStateTarget = {
 
 export async function confirmAndCleanupWorktree(target: CleanupWorktreeTarget): Promise<ActionNotice | null> {
   if (typeof window === 'undefined') return null;
-  const ok = window.confirm(
-    `Cleanup worktree "${target.label}"?\n\nCAR will archive a review snapshot, stop any runner, remove the worktree checkout, and unregister it from the hub.`
-  );
-  if (!ok) return null;
 
   const requiresTypedConfirmation = target.chatBound || target.cleanupBlockedByChatBinding;
   const confirmationText = `cleanup ${target.id}`;
   let forceAttestation: string | null = null;
+
   if (requiresTypedConfirmation) {
-    const entered = window.prompt(
-      `This worktree is bound to chat state. Type "${confirmationText}" to confirm cleanup.`
-    );
+    const entered = await confirmDialogTyped({
+      title: `Cleanup worktree "${target.label}"`,
+      message:
+        `This worktree is bound to chat state. CAR will archive a review snapshot, stop any runner, remove the worktree checkout, and unregister it from the hub.`,
+      confirmText: 'Archive & remove',
+      danger: true,
+      requireType: confirmationText
+    });
+    if (entered === null) return null;
     if (entered !== confirmationText) {
       return { tone: 'warning', message: 'Cleanup cancelled; confirmation text did not match.' };
     }
     forceAttestation = entered;
+  } else {
+    const ok = await confirmDialog({
+      title: `Cleanup worktree "${target.label}"`,
+      message:
+        'CAR will archive a review snapshot, stop any runner, remove the worktree checkout, and unregister it from the hub.',
+      confirmText: 'Archive & remove',
+      danger: true
+    });
+    if (!ok) return null;
   }
 
   const result = await pmaApi.hub.cleanupWorktree({
@@ -64,9 +80,12 @@ export async function confirmAndArchiveState(target: ArchiveStateTarget): Promis
           target.unboundManagedThreadCount === 1 ? '' : 's'
         }.`
       : '';
-  const ok = window.confirm(
-    `Archive ${subject} "${target.label}"?\n\nCAR will ${stateText}. Git files and active chat bindings are not deleted.${threadText}`
-  );
+  const ok = await confirmDialog({
+    title: `Archive ${subject} "${target.label}"`,
+    message: `CAR will ${stateText}. Git files and active chat bindings are not deleted.${threadText}`,
+    confirmText: 'Archive',
+    danger: true
+  });
   if (!ok) return null;
 
   const result = await pmaApi.hub.archiveState({

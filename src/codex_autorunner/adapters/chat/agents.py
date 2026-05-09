@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from types import MappingProxyType
 from typing import Any, Literal, Optional, Tuple
 
-DEFAULT_CHAT_AGENT = "codex"
-DEFAULT_CHAT_AGENT_MODELS = MappingProxyType(
-    {
-        "codex": "gpt-5.5",
-        "opencode": "zai-coding-plan/glm-5.1",
-    }
+from ...core.agent_model_defaults import (
+    BUILTIN_DEFAULT_AGENT_MODELS as DEFAULT_CHAT_AGENT_MODELS,
 )
+
+DEFAULT_CHAT_AGENT = "codex"
 
 AgentModelResetMode = Literal["clear", "agent_default"]
 CHAT_EFFORT_CAPABILITY = "review"

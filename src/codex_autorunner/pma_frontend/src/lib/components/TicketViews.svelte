@@ -26,7 +26,7 @@
     mode,
     list = null,
     detail = null,
-    selectedFilter = 'needs_attention',
+    selectedFilter = 'all',
     selectedWorkspaceFilter = 'all',
     errorMessage = null,
     actionStatus = null,
@@ -145,7 +145,8 @@
     }
   });
   let dragSourceRouteId = $state<string | null>(null);
-  let dragTargetRouteId = $state<string | null>(null);
+  let dragSourceRowKey = $state<string | null>(null);
+  let dragTargetRowKey = $state<string | null>(null);
   let dragPlaceAfter = $state(false);
   const ticketMarkdownContent = $derived(detail && editTicketId === detail.id ? editBody : detail?.rawBody ?? '');
   const newTicketHref = $derived.by(() => {
@@ -243,12 +244,33 @@
   }
 
   function canDragTicketRow(row: TicketListRow): boolean {
-    return Boolean(onReorderTicket && routeNumber(row.routeId) !== null);
+    if (!onReorderTicket || routeNumber(row.routeId) === null) return false;
+    if (row.status === 'invalid') return false;
+    const owner = list?.scopedOwner;
+    if (!owner) return false;
+    return row.workspaceKind === owner.kind && row.workspaceId === owner.id;
+  }
+
+  function ticketDragDisabledReason(row: TicketListRow): string {
+    if (routeNumber(row.routeId) === null) return 'Only numbered tickets can be reordered';
+    if (row.status === 'invalid') return 'Fix duplicate or invalid ticket metadata before reordering';
+    const owner = list?.scopedOwner;
+    if (owner && (row.workspaceKind !== owner.kind || row.workspaceId !== owner.id)) {
+      return row.workspaceKind === 'worktree'
+        ? 'Open this worktree queue to reorder this ticket'
+        : 'Open the owning queue to reorder this ticket';
+    }
+    return 'Ticket reordering is unavailable';
+  }
+
+  function rowDragKey(row: TicketListRow): string {
+    return row.id;
   }
 
   function resetTicketDrag(): void {
     dragSourceRouteId = null;
-    dragTargetRouteId = null;
+    dragSourceRowKey = null;
+    dragTargetRowKey = null;
     dragPlaceAfter = false;
   }
 
@@ -258,9 +280,10 @@
       return;
     }
     dragSourceRouteId = row.routeId;
-    dragTargetRouteId = row.routeId;
+    dragSourceRowKey = rowDragKey(row);
+    dragTargetRowKey = rowDragKey(row);
     dragPlaceAfter = false;
-    event.dataTransfer?.setData('text/plain', row.routeId);
+    event.dataTransfer?.setData('text/plain', rowDragKey(row));
     if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
   }
 
@@ -269,7 +292,7 @@
     event.preventDefault();
     if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
     const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
-    dragTargetRouteId = row.routeId;
+    dragTargetRowKey = rowDragKey(row);
     dragPlaceAfter = event.clientY > rect.top + rect.height / 2;
   }
 
@@ -416,7 +439,7 @@
             {@const hasNumber = numberDigits !== row.numberLabel}
             {@const agentText = row.agentLabel && row.agentLabel !== 'Unassigned' ? row.agentLabel : null}
             <article
-              class={`ticket-card ${row.status} ${dragSourceRouteId === row.routeId ? 'drag-source' : ''} ${dragTargetRouteId === row.routeId && !dragPlaceAfter && dragSourceRouteId !== row.routeId ? 'drop-before' : ''} ${dragTargetRouteId === row.routeId && dragPlaceAfter && dragSourceRouteId !== row.routeId ? 'drop-after' : ''}`}
+              class={`ticket-card ${row.status} ${dragSourceRowKey === rowDragKey(row) ? 'drag-source' : ''} ${dragTargetRowKey === rowDragKey(row) && !dragPlaceAfter && dragSourceRowKey !== rowDragKey(row) ? 'drop-before' : ''} ${dragTargetRowKey === rowDragKey(row) && dragPlaceAfter && dragSourceRowKey !== rowDragKey(row) ? 'drop-after' : ''}`}
               class:current={row.isCurrent}
               class:done={row.status === 'done'}
               role="listitem"
@@ -429,7 +452,7 @@
                 draggable={canDragTicketRow(row)}
                 disabled={!canDragTicketRow(row)}
                 aria-label={`Drag ${row.numberLabel} to reorder`}
-                title={canDragTicketRow(row) ? 'Drag to reorder' : 'Only numbered scoped tickets can be reordered'}
+                title={canDragTicketRow(row) ? 'Drag to reorder in this queue' : ticketDragDisabledReason(row)}
                 ondragstart={(event) => beginTicketDrag(event, row)}
                 ondragend={resetTicketDrag}
               >
@@ -467,9 +490,9 @@
                     {#if agentText}
                       <span class="ticket-card-agent">{agentText}</span>
                     {/if}
-                    <span class="ticket-card-model" class:placeholder={!row.modelLabel}>
-                      {row.modelLabel ?? 'default model'}
-                    </span>
+                    {#if row.modelLabel}
+                      <span class="ticket-card-model">{row.modelLabel}</span>
+                    {/if}
                   </div>
                 {/if}
               </a>
@@ -881,10 +904,6 @@
     max-width: 14rem;
     overflow: hidden;
     text-overflow: ellipsis;
-  }
-  .ticket-card-model.placeholder {
-    font-style: italic;
-    opacity: 0.75;
   }
 
   @media (max-width: 640px) {

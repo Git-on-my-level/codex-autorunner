@@ -48,7 +48,8 @@
         runs: dataOr(runs, []),
         chats: dataOr(chats, []),
         tickets: dataOr(tickets, []),
-        artifacts: []
+        artifacts: [],
+        ticketsListLoaded: tickets.ok
       },
       'worktree'
     );

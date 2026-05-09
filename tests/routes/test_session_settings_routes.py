@@ -46,6 +46,7 @@ def test_session_settings_round_trip_persists_values(_settings_env) -> None:
     assert initial.status_code == 200
     assert initial.json() == {
         "autorunner_model_override": None,
+        "autorunner_model_overrides": {},
         "autorunner_effort_override": None,
         "autorunner_approval_policy": None,
         "autorunner_sandbox_mode": None,
@@ -68,6 +69,7 @@ def test_session_settings_round_trip_persists_values(_settings_env) -> None:
     assert response.status_code == 200
     assert response.json() == {
         "autorunner_model_override": "gpt-5.4",
+        "autorunner_model_overrides": {"codex": "gpt-5.4"},
         "autorunner_effort_override": "high",
         "autorunner_approval_policy": "never",
         "autorunner_sandbox_mode": "workspaceWrite",
@@ -111,6 +113,7 @@ def test_session_settings_allow_clearing_values(_settings_env) -> None:
     assert cleared.status_code == 200
     assert cleared.json() == {
         "autorunner_model_override": None,
+        "autorunner_model_overrides": {},
         "autorunner_effort_override": None,
         "autorunner_approval_policy": None,
         "autorunner_sandbox_mode": None,
@@ -185,11 +188,34 @@ def test_session_settings_apply_all_runtime_preferences_directly(_settings_env) 
     assert response.status_code == 200
     assert response.json() == {
         "autorunner_model_override": "gpt-5.5",
+        "autorunner_model_overrides": {"codex": "gpt-5.5"},
         "autorunner_effort_override": "high",
         "autorunner_approval_policy": "unlessTrusted",
         "autorunner_sandbox_mode": "workspaceWrite",
         "autorunner_workspace_write_network": True,
         "runner_stop_after_runs": 5,
+    }
+
+
+def test_session_settings_persist_per_agent_model_defaults(_settings_env) -> None:
+    client, _repo_root = _settings_env
+
+    response = client.post(
+        "/api/session/settings",
+        json={
+            "autorunner_model_overrides": {
+                "codex": "gpt-5.5",
+                "opencode": "zai-coding-plan/glm-5.1",
+                "hermes": "",
+            }
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["autorunner_model_override"] == "gpt-5.5"
+    assert response.json()["autorunner_model_overrides"] == {
+        "codex": "gpt-5.5",
+        "opencode": "zai-coding-plan/glm-5.1",
     }
 
 

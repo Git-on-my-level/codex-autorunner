@@ -5,6 +5,7 @@
   import { primaryNav, isActiveRoute } from '$lib/navigation';
   import { stripRuntimeBasePath, withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import { Palette, createPaletteStore, scopeSource } from '$lib/palette';
+  import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import {
     applyThemePreference,
     attachThemeSchemeListener,
@@ -144,3 +145,4 @@
 </div>
 
 <Palette store={paletteStore} />
+<ConfirmDialog />

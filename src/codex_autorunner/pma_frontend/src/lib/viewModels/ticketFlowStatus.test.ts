@@ -40,4 +40,41 @@ describe('ticket flow status routes', () => {
 
     expect(vm.currentTicketHref).toBe('/worktrees/orphan/tickets/27');
   });
+
+  it('does not treat pending stop-requested runs as active work', () => {
+    const vm = buildTicketFlowStatusViewModel(
+      [],
+      [
+        {
+          id: 'run-stale',
+          chatId: null,
+          status: 'waiting',
+          workStatus: null,
+          operatorStatus: null,
+          terminal: false,
+          streamShouldClose: false,
+          streamCloseReason: null,
+          phase: null,
+          guidance: 'Stop requested',
+          queueDepth: 0,
+          elapsedSeconds: null,
+          idleSeconds: null,
+          lastEventId: null,
+          lastEventAt: '2026-05-04T00:02:00Z',
+          progressPercent: null,
+          events: [],
+          raw: {
+            id: 'run-stale',
+            status: 'pending',
+            stop_requested: true,
+            repo_id: 'codex-autorunner'
+          }
+        }
+      ],
+      { kind: 'repo', id: 'codex-autorunner' }
+    );
+
+    expect(vm.status).toBe('idle');
+    expect(vm.signal).toBe('idle');
+  });
 });

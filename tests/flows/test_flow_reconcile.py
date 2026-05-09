@@ -8,6 +8,45 @@ from codex_autorunner.core.flows.reconciler import reconcile_flow_run
 from codex_autorunner.core.flows.store import FlowStore
 
 
+def test_reconcile_pending_stop_requested_without_worker_marks_stopped(
+    monkeypatch, tmp_path: Path
+) -> None:
+    db = tmp_path / "flows.db"
+    store = FlowStore(db)
+    store.initialize()
+    record = store.create_flow_run(
+        run_id="run-pending-stop",
+        flow_type="ticket_flow",
+        input_data={},
+        state={},
+    )
+    store.update_current_step(record.id, "ticket_turn")
+    store.set_stop_requested(record.id, True)
+
+    def fake_health_dead(repo_root, run_id):
+        return SimpleNamespace(
+            is_alive=False,
+            status="dead",
+            message="worker metadata missing",
+            artifact_path=tmp_path,
+        )
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.reconciler.check_worker_health",
+        fake_health_dead,
+    )
+
+    current_record = store.get_flow_run(record.id)
+    assert current_record is not None
+    recovered, updated, locked = reconcile_flow_run(tmp_path, current_record, store)
+
+    assert recovered.status == FlowRunStatus.STOPPED
+    assert recovered.finished_at is not None
+    assert recovered.current_step is None
+    assert recovered.state.get("reason_code") == "user_stop"
+    assert updated is True
+    assert locked is False
+
 def test_recover_paused_run_when_inner_running(monkeypatch, tmp_path: Path) -> None:
     db = tmp_path / "flows.db"
     store = FlowStore(db)

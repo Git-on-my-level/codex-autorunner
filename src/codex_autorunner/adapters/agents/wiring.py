@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping, Optional, cast
 
 from ...agents.registry import get_agent_descriptor, resolve_agent_execution_target
+from ...core.agent_model_defaults import resolve_model_for_agent
 from ...core.config import RepoConfig
 from ...core.destinations import DockerDestination
 from ...core.ports.agent_backend import AgentBackend
@@ -99,7 +100,11 @@ class AgentBackendFactory:
         else:
             sandbox_policy = sandbox_mode
 
-        model = state.autorunner_model_override or self._config.codex_model
+        model = resolve_model_for_agent(
+            target.runtime_agent_id,
+            state=state,
+            config=self._config,
+        )
         reasoning_effort = (
             state.autorunner_effort_override or self._config.codex_reasoning
         )
@@ -185,7 +190,11 @@ class AgentBackendFactory:
                     workspace_root=self._repo_root,
                     auth=auth,
                     timeout=self._config.app_server.request_timeout,
-                    model=state.autorunner_model_override,
+                    model=resolve_model_for_agent(
+                        target.runtime_agent_id,
+                        state=state,
+                        config=self._config,
+                    ),
                     reasoning=state.autorunner_effort_override,
                     approval_policy=state.autorunner_approval_policy,
                     session_stall_timeout_seconds=self._config.opencode.session_stall_timeout_seconds,
@@ -197,7 +206,11 @@ class AgentBackendFactory:
                     workspace_root=self._repo_root,
                     auth=auth,
                     timeout=self._config.app_server.request_timeout,
-                    model=state.autorunner_model_override,
+                    model=resolve_model_for_agent(
+                        target.runtime_agent_id,
+                        state=state,
+                        config=self._config,
+                    ),
                     reasoning=state.autorunner_effort_override,
                     approval_policy=state.autorunner_approval_policy,
                     session_stall_timeout_seconds=self._config.opencode.session_stall_timeout_seconds,
@@ -206,7 +219,11 @@ class AgentBackendFactory:
             self._backend_cache[cache_key] = cached
         elif isinstance(cached, OpenCodeBackend):
             cached.configure(
-                model=state.autorunner_model_override,
+                model=resolve_model_for_agent(
+                    target.runtime_agent_id,
+                    state=state,
+                    config=self._config,
+                ),
                 reasoning=state.autorunner_effort_override,
                 approval_policy=state.autorunner_approval_policy,
             )

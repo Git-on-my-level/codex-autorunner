@@ -190,7 +190,7 @@ def test_hub_tickets_marks_duplicate_ticket_numbers_invalid(tmp_path: Path) -> N
     )
 
 
-def test_hub_tickets_repo_filter_includes_child_worktrees(tmp_path: Path) -> None:
+def test_hub_tickets_repo_and_worktree_filters_do_not_mix_owners(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     supervisor = create_test_hub_supervisor(hub_root)
     base = supervisor.create_repo("base")
@@ -218,9 +218,14 @@ def test_hub_tickets_repo_filter_includes_child_worktrees(tmp_path: Path) -> Non
     assert response.status_code == 200
 
     rows = response.json()["tickets"]
-    assert [row["ticket_id"] for row in rows] == ["tkt_base", "tkt_child"]
-    assert rows[1]["workspace_kind"] == "worktree"
-    assert rows[1]["repo_id"] == "base"
+    assert [row["ticket_id"] for row in rows] == ["tkt_base"]
+    assert rows[0]["workspace_kind"] == "repo"
+
+    worktree_response = client.get(f"/hub/tickets?worktree={worktree.id}")
+    assert worktree_response.status_code == 200
+    worktree_rows = worktree_response.json()["tickets"]
+    assert [row["ticket_id"] for row in worktree_rows] == ["tkt_child"]
+    assert worktree_rows[0]["workspace_kind"] == "worktree"
 
 
 def test_hub_ticket_projection_ids_are_workspace_qualified(tmp_path: Path) -> None:

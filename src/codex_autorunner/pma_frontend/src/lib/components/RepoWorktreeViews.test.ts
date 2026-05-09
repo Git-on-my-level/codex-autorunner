@@ -9,12 +9,22 @@ import {
 
 describe('RepoWorktreeViews', () => {
   it('renders a status-oriented repo/worktree index', () => {
+    const repoScopedTicket = {
+      ...mockTicketSummary,
+      id: 'TICKET-111',
+      number: 111,
+      workspaceKind: 'repo' as const,
+      workspaceId: 'repo-1',
+      repoId: 'repo-1',
+      worktreeId: null,
+      status: 'idle' as const
+    };
     const index = buildRepoWorktreeIndexViewModel({
       repos: [mockRepoSummary],
       worktrees: [mockWorktreeSummary],
       runs: [mockRunProgress],
       chats: [mockChatSummary],
-      tickets: [mockTicketSummary],
+      tickets: [mockTicketSummary, repoScopedTicket],
       artifacts: []
     });
     const { body } = render(RepoWorktreeViews, { props: { state: 'ready', mode: 'index', index } });
@@ -22,6 +32,7 @@ describe('RepoWorktreeViews', () => {
     expect(body).toContain('codex-autorunner');
     expect(body).toContain('discord-5');
     expect(body).toContain('href="/repos/repo-1"');
+    expect(body).toContain('href="/repos/repo-1/tickets"');
     expect(body).toContain('href="/repos/repo-1/worktrees/worktree-1"');
     expect(body).toContain('1 worktree');
     expect(body).not.toContain('Terminal');

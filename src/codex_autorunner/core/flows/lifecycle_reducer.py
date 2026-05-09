@@ -260,6 +260,7 @@ def _reduce_stop_requested(
 ) -> TransitionResult:
     _require_status(
         current_status,
+        FlowRunStatus.PENDING,
         FlowRunStatus.RUNNING,
         FlowRunStatus.STOPPING,
         trigger=trigger.kind,
@@ -268,9 +269,11 @@ def _reduce_stop_requested(
     state = ensure_reason_summary(
         state, status=FlowRunStatus.STOPPED, default="Stopped by user"
     )
+    state.setdefault("reason_code", "user_stop")
     return TransitionResult(
         status=FlowRunStatus.STOPPED,
         state=state,
+        current_step=None if current_status == FlowRunStatus.PENDING else NO_CHANGE,
         finished_at=now,
         effects=[
             EffectIntent(
@@ -691,6 +694,11 @@ def resolve_reconcile_trigger(
     inner_status = engine.get("status")
     reason_code = engine.get("reason_code")
     is_alive = getattr(health, "is_alive", False)
+
+    if status == FlowRunStatus.PENDING:
+        if record.stop_requested and not is_alive:
+            return FlowTrigger(kind=TriggerKind.STOP_REQUESTED)
+        return None
 
     if status == FlowRunStatus.RUNNING:
         if inner_status == "completed":

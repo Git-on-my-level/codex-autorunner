@@ -85,6 +85,7 @@
   let filter = $state<RepoWorktreeIndexFilter>('all');
 
   const indexRows = $derived(index?.rows ?? []);
+  const ticketMetricsReady = $derived(index?.ticketIndexMetricsAvailable ?? false);
 
   const filteredRows = $derived(filterRepoWorktreeIndexRows(indexRows, search, filter));
 
@@ -175,83 +176,114 @@
         {#each filteredRows as row}
           {@const accent = repoAccent(row.label)}
           <li class={`repo-item status-${row.status}`} class:has-children={row.childWorktrees.length > 0} style={`--repo-accent: ${accent};`}>
-            <a class="repo-card" href={href(row.href)}>
-              <span class="repo-avatar" aria-hidden="true">{repoInitials(row.label)}</span>
-              <div class="repo-card-body">
-                <div class="repo-card-title">
-                  <span class="repo-name">{row.label}</span>
-                  {#if row.status !== 'idle' && row.status !== 'done'}
-                    <span class={`repo-status status-pill ${row.status}`}>{statusLabel(row.status)}</span>
-                  {/if}
+            <div class="repo-head">
+            <div class="repo-card">
+              <a class="repo-card-main" href={href(row.href)} aria-label={`Open ${row.label} detail`}>
+                <span class="repo-avatar" aria-hidden="true">{repoInitials(row.label)}</span>
+                <div class="repo-card-body">
+                  <div class="repo-card-title">
+                    <span class="repo-name">{row.label}</span>
+                    {#if row.status !== 'idle' && row.status !== 'done'}
+                      <span class={`repo-status status-pill ${row.status}`}>{statusLabel(row.status)}</span>
+                    {/if}
+                  </div>
+                  <div class="repo-card-meta">
+                    {#if row.branch}
+                      <span class="repo-meta-branch">{row.branch}</span>
+                    {/if}
+                    {#if row.detail}
+                      {#if row.branch}<span class="repo-meta-dot" aria-hidden="true">·</span>{/if}
+                      <span>{row.detail}</span>
+                    {/if}
+                    {#if row.lastActivityAt}
+                      {#if row.branch || row.detail}<span class="repo-meta-dot" aria-hidden="true">·</span>{/if}
+                      <span class="repo-meta-time">{rowRelativeTime(row)}</span>
+                    {/if}
+                  </div>
                 </div>
-                <div class="repo-card-meta">
-                  {#if row.branch}
-                    <span class="repo-meta-branch">{row.branch}</span>
-                  {/if}
-                  {#if row.detail}
-                    {#if row.branch}<span class="repo-meta-dot" aria-hidden="true">·</span>{/if}
-                    <span>{row.detail}</span>
-                  {/if}
-                  {#if row.lastActivityAt}
-                    {#if row.branch || row.detail}<span class="repo-meta-dot" aria-hidden="true">·</span>{/if}
-                    <span class="repo-meta-time">{rowRelativeTime(row)}</span>
-                  {/if}
-                </div>
-              </div>
-              {#if row.activeRuns > 0 || row.openTickets > 0}
+              </a>
+              {#if ticketMetricsReady && row.totalTickets > 0}
+                {@const pct = Math.round((row.doneTickets / row.totalTickets) * 100)}
+                <span
+                  class="ticket-progress"
+                  title={`${row.doneTickets}/${row.totalTickets} tickets done (${pct}%)`}
+                  aria-hidden="true"
+                  style:--progress={`${pct}%`}
+                ></span>
+              {/if}
+              {#if row.activeRuns > 0 || (ticketMetricsReady && row.openTickets > 0)}
                 <div class="repo-card-counts" aria-label="Activity counts">
                   {#if row.activeRuns > 0}
-                    <span class="count-chip is-active" title="Active runs">
+                    <a
+                      class="count-chip count-chip-link is-active"
+                      href={href(row.href)}
+                      title="Open runs and execution state"
+                    >
                       <strong>{row.activeRuns}</strong><em>run{row.activeRuns === 1 ? '' : 's'}</em>
-                    </span>
+                    </a>
                   {/if}
                   {#if row.openTickets > 0}
-                    <span class="count-chip is-tickets" title="Open tickets">
-                      <strong>{row.openTickets}</strong><em>ticket{row.openTickets === 1 ? '' : 's'}</em>
-                    </span>
+                    {#if row.ticketHref}
+                      <a
+                        class="count-chip count-chip-link is-tickets"
+                        href={href(row.ticketHref)}
+                        title={row.totalTickets > 0 ? `${row.doneTickets} of ${row.totalTickets} done` : 'Open tickets'}
+                      >
+                        <strong>{row.openTickets}</strong><em>ticket{row.openTickets === 1 ? '' : 's'}</em>
+                        {#if row.totalTickets > 0 && row.doneTickets > 0}
+                          <span class="count-chip-progress">{row.doneTickets}/{row.totalTickets}</span>
+                        {/if}
+                      </a>
+                    {:else}
+                      <span class="count-chip is-tickets" title={row.totalTickets > 0 ? `${row.doneTickets} of ${row.totalTickets} done` : 'Open tickets'}>
+                        <strong>{row.openTickets}</strong><em>ticket{row.openTickets === 1 ? '' : 's'}</em>
+                        {#if row.totalTickets > 0 && row.doneTickets > 0}
+                          <span class="count-chip-progress">{row.doneTickets}/{row.totalTickets}</span>
+                        {/if}
+                      </span>
+                    {/if}
                   {/if}
                 </div>
               {/if}
-            </a>
-            {#if row.signalWaiting > 0 || row.signalFailed > 0 || row.signalActive > 0 || (onArchiveState && canArchiveState(row)) || (row.kind === 'worktree' && onCleanupWorktree)}
-              <div class="repo-row-toolbar">
-                <div class="repo-signal-pills" aria-label="Scoped PMA chats and runs">
-                  {#if row.signalWaiting > 0}<span class="signal-pill waiting">{row.signalWaiting} waiting</span>{/if}
-                  {#if row.signalFailed > 0}<span class="signal-pill failed">{row.signalFailed} failed</span>{/if}
-                  {#if row.signalActive > 0}<span class="signal-pill active">{row.signalActive} active</span>{/if}
-                </div>
-                {#if (onArchiveState && canArchiveState(row)) || (row.kind === 'worktree' && onCleanupWorktree)}
-                  <div class="repo-action-buttons" aria-label={`Actions for ${row.label}`}>
-                    {#if onArchiveState && canArchiveState(row)}
-                      <button
-                        class="icon-action archive"
-                        type="button"
-                        title="Archive CAR state without deleting git files"
-                        aria-label={`Archive CAR state for ${row.label}`}
-                        onclick={(event) => handleArchiveClick(event, {
-                          kind: row.kind,
-                          id: row.id,
-                          label: row.label,
-                          hasCarState: row.hasCarState,
-                          unboundManagedThreadCount: row.unboundManagedThreadCount
-                        })}
-                      >
-                        {@render broomIcon()}
-                      </button>
-                    {/if}
-                    {#if row.kind === 'worktree' && onCleanupWorktree}
-                      <button
-                        class="icon-action cleanup"
-                        type="button"
-                        title="Cleanup worktree: archive a snapshot, then delete the checkout"
-                        aria-label={`Cleanup worktree ${row.label}`}
-                        onclick={(event) => handleCleanupClick(event, row)}
-                      >
-                        {@render trashIcon()}
-                      </button>
-                    {/if}
-                  </div>
+            </div>
+            {#if (onArchiveState && canArchiveState(row)) || (row.kind === 'worktree' && onCleanupWorktree)}
+              <div class="repo-action-buttons repo-head-actions" aria-label={`Actions for ${row.label}`}>
+                {#if onArchiveState && canArchiveState(row)}
+                  <button
+                    class="icon-action archive"
+                    type="button"
+                    title="Archive CAR state without deleting git files"
+                    aria-label={`Archive CAR state for ${row.label}`}
+                    onclick={(event) => handleArchiveClick(event, {
+                      kind: row.kind,
+                      id: row.id,
+                      label: row.label,
+                      hasCarState: row.hasCarState,
+                      unboundManagedThreadCount: row.unboundManagedThreadCount
+                    })}
+                  >
+                    <span class="emoji-icon" aria-hidden="true">🧹</span>
+                  </button>
                 {/if}
+                {#if row.kind === 'worktree' && onCleanupWorktree}
+                  <button
+                    class="icon-action cleanup"
+                    type="button"
+                    title="Cleanup worktree: archive a snapshot, then delete the checkout"
+                    aria-label={`Cleanup worktree ${row.label}`}
+                    onclick={(event) => handleCleanupClick(event, row)}
+                  >
+                    {@render trashIcon()}
+                  </button>
+                {/if}
+              </div>
+            {/if}
+            </div>
+            {#if row.signalWaiting > 0 || row.signalFailed > 0 || row.signalActive > 0}
+              <div class="repo-signal-pills" aria-label="Scoped PMA chats and runs">
+                {#if row.signalWaiting > 0}<span class="signal-pill waiting">{row.signalWaiting} waiting</span>{/if}
+                {#if row.signalFailed > 0}<span class="signal-pill failed">{row.signalFailed} failed</span>{/if}
+                {#if row.signalActive > 0}<span class="signal-pill active">{row.signalActive} active</span>{/if}
               </div>
             {/if}
 
@@ -281,7 +313,7 @@
                           </div>
                         {/if}
                       </div>
-                      {#if worktree.activeRuns > 0 || worktree.openTickets > 0 || worktree.signalWaiting > 0 || worktree.signalFailed > 0 || worktree.signalActive > 0}
+                      {#if worktree.activeRuns > 0 || (ticketMetricsReady && worktree.openTickets > 0) || worktree.signalWaiting > 0 || worktree.signalFailed > 0 || worktree.signalActive > 0}
                         <div class="worktree-card-counts">
                           {#if worktree.signalWaiting > 0}
                             <span class="signal-pill waiting" title="Scoped PMA chats or runs waiting for attention">{worktree.signalWaiting} waiting</span>
@@ -302,17 +334,32 @@
                               <a
                                 class="count-chip count-chip-link is-tickets"
                                 href={href(worktree.ticketHref)}
-                                title="Open worktree tickets"
+                                title={worktree.totalTickets > 0 ? `${worktree.doneTickets} of ${worktree.totalTickets} done` : 'Open worktree tickets'}
                               >
                                 <strong>{worktree.openTickets}</strong><em>ticket{worktree.openTickets === 1 ? '' : 's'}</em>
+                                {#if worktree.totalTickets > 0 && worktree.doneTickets > 0}
+                                  <span class="count-chip-progress">{worktree.doneTickets}/{worktree.totalTickets}</span>
+                                {/if}
                               </a>
                             {:else}
-                              <span class="count-chip is-tickets" title="Open worktree tickets">
+                              <span class="count-chip is-tickets" title={worktree.totalTickets > 0 ? `${worktree.doneTickets} of ${worktree.totalTickets} done` : 'Open worktree tickets'}>
                                 <strong>{worktree.openTickets}</strong><em>ticket{worktree.openTickets === 1 ? '' : 's'}</em>
+                                {#if worktree.totalTickets > 0 && worktree.doneTickets > 0}
+                                  <span class="count-chip-progress">{worktree.doneTickets}/{worktree.totalTickets}</span>
+                                {/if}
                               </span>
                             {/if}
                           {/if}
                         </div>
+                      {/if}
+                      {#if ticketMetricsReady && worktree.totalTickets > 0}
+                        {@const wpct = Math.round((worktree.doneTickets / worktree.totalTickets) * 100)}
+                        <span
+                          class="ticket-progress ticket-progress--worktree"
+                          title={`${worktree.doneTickets}/${worktree.totalTickets} tickets done (${wpct}%)`}
+                          aria-hidden="true"
+                          style:--progress={`${wpct}%`}
+                        ></span>
                       {/if}
                       {#if onCleanupWorktree || (onArchiveState && canArchiveState(worktree))}
                         <div class="repo-action-buttons" aria-label={`Actions for ${worktree.label}`}>
@@ -330,7 +377,7 @@
                                 unboundManagedThreadCount: worktree.unboundManagedThreadCount
                               })}
                             >
-                              {@render broomIcon()}
+                              <span class="emoji-icon" aria-hidden="true">🧹</span>
                             </button>
                           {/if}
                           {#if onCleanupWorktree}
@@ -392,7 +439,7 @@
               unboundManagedThreadCount: detail.unboundManagedThreadCount
             })}
           >
-            {@render broomIcon()}
+            <span class="emoji-icon" aria-hidden="true">🧹</span>
             <span>Archive</span>
           </button>
         {/if}
@@ -519,8 +566,14 @@
 
       <section class="page-panel execution-panel wide contextspace-panel">
         <div class="panel-heading-row">
-          <h2>Contextspace</h2>
-          <a href={href(detail.contextspaceHref)}>Open</a>
+          <a
+            class="panel-heading-primary-link"
+            href={href(detail.contextspaceHref)}
+            data-sveltekit-preload-data="tap"
+          >
+            <h2>Contextspace</h2>
+            <span class="panel-heading-primary-hint">Browse all<span aria-hidden="true"> →</span></span>
+          </a>
         </div>
         {@render degradedIssues(contextspaceIssues)}
         <ul class="contextspace-compact-list" role="list">
@@ -553,8 +606,14 @@
 
       <section class="page-panel execution-panel wide workspace-ticket-queue-panel">
         <div class="panel-heading-row">
-          <h2>{detail.kind === 'worktree' ? 'Worktree tickets' : 'Repo tickets'}</h2>
-          <a href={href(detail.ticketIndexHref)}>All</a>
+          <a
+            class="panel-heading-primary-link"
+            href={href(detail.ticketIndexHref)}
+            data-sveltekit-preload-data="tap"
+          >
+            <h2>{detail.kind === 'worktree' ? 'Worktree tickets' : 'Repo tickets'}</h2>
+            <span class="panel-heading-primary-hint">All tickets<span aria-hidden="true"> →</span></span>
+          </a>
         </div>
         {@render degradedIssues(ticketIssues)}
         {#if detail.ticketOverview.total > 0}
@@ -604,33 +663,55 @@
         <div class="panel-heading-row chats-panel-heading">
           <h2>Chats</h2>
           <div class="panel-heading-actions">
-            <a class="hero-action" href={href(detail.pmaChatHref)}>PMA chat</a>
-            <a class="hero-action" href={href(detail.codingAgentChatHref)}>Coding agent</a>
+            <a class="chip-button" href={href(detail.pmaChatHref)} data-sveltekit-preload-data="tap">+ PMA chat</a>
+            <a class="chip-button" href={href(detail.codingAgentChatHref)} data-sveltekit-preload-data="tap">+ Coding agent</a>
           </div>
         </div>
         {#if detail.chats.length > 0}
+          {@const accentHex = repoAccent(detail.title)}
+          {@const initials = repoInitials(detail.title)}
           <div class="chat-row-list">
             {#each detail.chats.slice(0, 5) as chat}
-              {@const metaParts = [
-                chat.agentId,
-                chat.model,
-                chat.updatedAt ? rowRelativeTime({ updatedAt: chat.updatedAt }) : null
-              ].filter((p): p is string => typeof p === 'string' && p.length > 0)}
-              <a class={`chat-row ${chat.status}`} href={href(chat.href)}>
-                <span class={`chat-row-kind kind-${chat.kind}`}>{chat.kindLabel}</span>
-                <span class="chat-row-body">
-                  <span class="chat-row-title">{chat.title}</span>
-                  {#if metaParts.length > 0}
-                    <span class="chat-row-meta">{metaParts.join(' · ')}</span>
+              {@const metaBits = [chat.agentId, chat.model].filter((p): p is string => typeof p === 'string' && p.length > 0)}
+              <a class={`chat-row status-${chat.status}`} href={href(chat.href)}>
+                <span
+                  class="chat-row-glyph repo-mini-glyph"
+                  style={`--glyph-accent: ${accentHex}`}
+                  aria-hidden="true"
+                >{initials}</span>
+                <span class="chat-row-main">
+                  <span class="chat-title-row">
+                    <span class="chat-title-cluster">
+                      <span class="chat-title-text-badge">
+                        <strong>{chat.title}</strong>
+                        <span class={`chat-scope-kind-tag ${detail.kind}`}>{detail.kind === 'repo' ? 'REPO' : 'WORKTREE'}</span>
+                        <span class={`chat-kind-badge ${chat.kind}`}>{chat.kindLabel}</span>
+                      </span>
+                    </span>
+                    <span class="chat-title-trailing">
+                      {#if chat.status !== 'idle' && chat.status !== 'done'}
+                        <span class={`status-pill ${chat.status}`}>{statusLabel(chat.status)}</span>
+                      {/if}
+                      {#if chat.updatedAt}
+                        <span class="updated-at">{rowRelativeTime({ updatedAt: chat.updatedAt })}</span>
+                      {/if}
+                    </span>
+                  </span>
+                  {#if metaBits.length > 0}
+                    <span class="chat-meta-row">
+                      <span class="chat-agent-model">
+                        {#each metaBits as bit, i}
+                          {#if i > 0}<span class="chat-meta-dot" aria-hidden="true">·</span>{/if}
+                          <span class={i === 0 ? 'chat-agent' : 'chat-model'}>{bit}</span>
+                        {/each}
+                      </span>
+                    </span>
                   {/if}
                 </span>
-                {#if chat.status !== 'idle' && chat.status !== 'done'}
-                  <span class="status-pill {chat.status}">{statusLabel(chat.status)}</span>
-                {/if}
               </a>
             {/each}
             {#if detail.chats.length > 5}
-              <a class="ticket-overview-more" href={href('/chats')}>+{detail.chats.length - 5} more chat{detail.chats.length - 5 === 1 ? '' : 's'}</a>
+              <a class="row-overflow-link" href={href('/chats')}>+{detail.chats.length - 5} more chat{detail.chats.length - 5 === 1 ? '' : 's'}</a>
             {/if}
           </div>
         {/if}
@@ -680,16 +761,6 @@
       {#if onRetry}<button type="button" onclick={() => onRetry?.()}>{issue.retryLabel}</button>{/if}
     </div>
   {/each}
-{/snippet}
-
-{#snippet broomIcon()}
-  <svg viewBox="0 0 24 24" aria-hidden="true">
-    <path d="M14 4l6 6" />
-    <path d="M12.5 5.5l6 6" />
-    <path d="M7 16l9.5-9.5" />
-    <path d="M4.5 18.5c2.5 2.5 6.7 2.2 9.5-.7l-4-4c-2.9 2.8-3.2 7-.7 9.5" />
-    <path d="M3 21c2.4-.1 4.5-.8 6.3-2.2" />
-  </svg>
 {/snippet}
 
 {#snippet trashIcon()}
@@ -748,20 +819,50 @@
     box-shadow: 0 8px 24px -16px rgb(15 15 20 / 0.18), 0 2px 6px -3px rgb(15 15 20 / 0.06);
   }
 
+  .repo-head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding-right: var(--space-5);
+  }
+
   .repo-card {
+    position: relative;
+    flex: 1 1 auto;
+    min-width: 0;
     display: grid;
     grid-template-columns: auto minmax(0, 1fr) auto;
     align-items: center;
     gap: var(--space-4);
     padding: var(--space-4) var(--space-5);
     color: var(--color-ink);
-    text-decoration: none;
   }
 
-  .repo-row-toolbar {
-    display: flex;
+  .repo-card-main {
+    grid-column: 1 / 3;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
     align-items: center;
-    justify-content: space-between;
+    gap: var(--space-4);
+    min-width: 0;
+    color: inherit;
+    text-decoration: none;
+    border-radius: 8px;
+    margin: calc(var(--space-1) * -1);
+    padding: var(--space-1);
+  }
+
+  .repo-card-main:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--color-accent) 55%, transparent);
+    outline-offset: 2px;
+  }
+
+  .repo-head-actions {
+    flex: 0 0 auto;
+  }
+
+  .repo-signal-pills {
+    display: flex;
     flex-wrap: wrap;
     gap: var(--space-2);
     padding: var(--space-2) var(--space-5) var(--space-3);
@@ -774,6 +875,14 @@
     align-items: center;
     gap: 6px;
     flex: 0 0 auto;
+  }
+
+  .emoji-icon {
+    display: inline-grid;
+    place-items: center;
+    font-size: 14px;
+    line-height: 1;
+    filter: grayscale(0.2);
   }
 
   .icon-action {
@@ -951,6 +1060,11 @@
     gap: 6px;
   }
 
+  .repo-card-counts {
+    grid-column: 3;
+    justify-self: end;
+  }
+
   .count-chip {
     display: inline-flex;
     align-items: center;
@@ -998,6 +1112,40 @@
     color: var(--color-accent);
   }
 
+  .count-chip-progress {
+    margin-left: 4px;
+    padding-left: 6px;
+    border-left: 1px solid color-mix(in srgb, currentColor 35%, transparent);
+    font-variant-numeric: tabular-nums;
+    opacity: 0.85;
+    font-size: 10px;
+  }
+
+  .ticket-progress {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 2px;
+    background: color-mix(in srgb, var(--color-accent) 14%, transparent);
+    overflow: hidden;
+    pointer-events: none;
+  }
+
+  .ticket-progress::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    width: var(--progress, 0%);
+    background: var(--color-accent);
+    transition: width var(--transition-base);
+  }
+
+  .ticket-progress--worktree {
+    height: 1px;
+    background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+  }
+
   a.count-chip-link {
     text-decoration: none;
     transition: filter var(--transition-base), box-shadow var(--transition-base);
@@ -1006,6 +1154,10 @@
   a.count-chip-link:hover {
     filter: brightness(0.95);
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 20%, transparent);
+  }
+
+  a.count-chip-link.is-active:hover {
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-success) 22%, transparent);
   }
 
   .repo-status {
@@ -1034,7 +1186,7 @@
   .worktree-card {
     position: relative;
     display: grid;
-    grid-template-columns: 28px minmax(0, 1fr) auto auto;
+    grid-template-columns: 28px minmax(0, 1fr) auto 70px;
     align-items: center;
     gap: var(--space-3);
     padding: var(--space-2) 0 var(--space-2) 8px;
@@ -1042,6 +1194,11 @@
     text-decoration: none;
     border-radius: 6px;
     transition: background-color var(--transition-fast);
+  }
+
+  .worktree-card > .repo-action-buttons {
+    grid-column: 4;
+    justify-self: end;
   }
 
   .worktree-card:hover {
@@ -1123,22 +1280,7 @@
     max-width: 32ch;
   }
 
-  /* Status accent strip on the left edge of the repo card */
-  .repo-item::before {
-    content: "";
-    position: absolute;
-    left: 0;
-    top: 12px;
-    bottom: 12px;
-    width: 3px;
-    border-radius: 0 3px 3px 0;
-    background: transparent;
-    transition: background-color var(--transition-base);
-  }
-  .repo-item.status-running::before { background: var(--color-success); }
-  .repo-item.status-waiting::before,
-  .repo-item.status-blocked::before { background: var(--color-warning); }
-  .repo-item.status-failed::before { background: var(--color-danger); }
+  /* Status accent strip removed in favor of the bottom progress bar. */
 
   @media (max-width: 760px) {
     .repos-controls {
@@ -1153,9 +1295,14 @@
       row-gap: var(--space-2);
       padding: var(--space-3) var(--space-4);
     }
+    .repo-card-main {
+      grid-column: 1 / -1;
+      grid-row: 1;
+    }
     .repo-card-counts {
       grid-column: 1 / -1;
-      flex-wrap: wrap;
+      grid-row: 2;
+      justify-self: start;
     }
     .worktree-list {
       padding: 0 var(--space-4) var(--space-3);
@@ -1197,17 +1344,22 @@
     align-items: center;
     gap: var(--space-3);
     padding: var(--space-3) var(--space-4);
-    border-radius: 8px;
+    border-radius: var(--radius-2);
     border: 1px solid var(--color-border-subtle);
     background: var(--color-surface);
     color: inherit;
     text-decoration: none;
-    transition: border-color var(--transition-base), background var(--transition-base);
+    transition: border-color var(--transition-fast), background var(--transition-fast),
+      color var(--transition-fast);
   }
 
   .contextspace-row:hover {
-    border-color: var(--color-border-strong);
-    background: var(--color-surface-hover, var(--color-surface));
+    border-color: var(--color-accent);
+    background: var(--color-surface-muted);
+    color: var(--color-accent);
+  }
+  .contextspace-row:hover .contextspace-row-title {
+    color: var(--color-accent);
   }
 
   .contextspace-row-kind {
@@ -1249,53 +1401,65 @@
 
   .chat-row {
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-columns: auto minmax(0, 1fr);
     align-items: center;
     gap: var(--space-3);
     padding: var(--space-3) var(--space-4);
-    border-radius: 8px;
+    border-radius: var(--radius-2);
     border: 1px solid var(--color-border-subtle);
     background: var(--color-surface);
     text-decoration: none;
     color: inherit;
-    transition: border-color var(--transition-base), background var(--transition-base);
+    transition: border-color var(--transition-fast), background var(--transition-fast);
   }
   .chat-row:hover {
-    border-color: var(--color-border-strong);
-    background: var(--color-surface-hover, var(--color-surface));
+    border-color: var(--color-accent);
+    background: var(--color-surface-muted);
   }
-  .chat-row-kind {
-    display: inline-flex;
-    align-items: center;
-    padding: 2px 8px;
-    border-radius: 999px;
-    font-size: 0.72rem;
-    font-weight: 600;
-    letter-spacing: 0.02em;
-    text-transform: uppercase;
-    background: var(--color-surface-muted, rgb(255 255 255 / 0.04));
-    color: var(--color-text-muted);
-    border: 1px solid var(--color-border-subtle);
-  }
-  .chat-row-kind.kind-coding_agent {
-    color: var(--color-accent);
-    border-color: color-mix(in srgb, var(--color-accent) 40%, transparent);
-  }
-  .chat-row-body {
+  .chat-row-main {
     display: grid;
-    gap: 2px;
+    gap: 4px;
     min-width: 0;
   }
-  .chat-row-title {
-    font-weight: 600;
-    color: var(--color-text-strong, inherit);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+
+  .row-overflow-link {
+    display: block;
+    padding: var(--space-2) var(--space-4);
+    border-radius: var(--radius-2);
+    border: 1px dashed var(--color-border-subtle);
+    color: var(--color-ink-muted);
+    text-decoration: none;
+    font-size: var(--font-size-1);
+    text-align: center;
+    transition: color var(--transition-fast), border-color var(--transition-fast);
   }
-  .chat-row-meta {
-    font-size: 0.85rem;
-    color: var(--color-text-muted);
+  .row-overflow-link:hover {
+    color: var(--color-accent);
+    border-color: var(--color-accent);
+  }
+
+  .chip-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    min-height: 26px;
+    padding: 0 var(--space-3);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-2);
+    background: transparent;
+    color: var(--color-ink-muted);
+    font-family: var(--font-mono);
+    font-size: var(--font-size-1);
+    font-weight: 500;
+    text-decoration: none;
+    cursor: pointer;
+    transition: color var(--transition-fast), border-color var(--transition-fast),
+      background var(--transition-fast);
+  }
+  .chip-button:hover {
+    color: var(--color-accent);
+    border-color: var(--color-accent);
+    background: var(--color-accent-soft);
   }
 
   @media (max-width: 760px) {
@@ -1598,14 +1762,15 @@
   .ticket-overview-stats .is-failed strong { color: var(--color-danger); }
 
   .ticket-overview-more {
-    align-self: flex-start;
-    padding: 6px 12px;
-    border-radius: 999px;
-    border: 1px solid var(--color-border-subtle);
+    display: block;
+    padding: var(--space-2) var(--space-4);
+    border-radius: var(--radius-2);
+    border: 1px dashed var(--color-border-subtle);
     background: transparent;
-    font-size: 12px;
+    font-size: var(--font-size-1);
     color: var(--color-ink-muted);
     text-decoration: none;
+    text-align: center;
     transition: color var(--transition-fast), border-color var(--transition-fast);
   }
 
