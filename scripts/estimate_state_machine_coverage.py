@@ -48,6 +48,7 @@ STATE_MACHINE_FILENAME_MARKERS = (
     "flow",
     "lifecycle",
     "managed_thread",
+    "pma",
     "policy",
     "queue",
     "reducer",
