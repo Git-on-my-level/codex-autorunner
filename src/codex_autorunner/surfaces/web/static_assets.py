@@ -66,12 +66,12 @@ def resolve_static_dir() -> tuple[Path, Optional[ExitStack]]:
     return fallback, None
 
 
-def resolve_pma_static_dir() -> tuple[Path, Optional[ExitStack]]:
-    """Locate the packaged PMA Hub SvelteKit static assets when built."""
+def resolve_web_static_dir() -> tuple[Path, Optional[ExitStack]]:
+    """Locate the packaged Web Hub SvelteKit static assets when built."""
 
-    static_root = resources.files("codex_autorunner").joinpath("pma_static")
+    static_root = resources.files("codex_autorunner").joinpath("web_static")
     if isinstance(static_root, Path):
-        fallback = Path(__file__).resolve().parent.parent / "pma_static"
+        fallback = Path(__file__).resolve().parent.parent / "web_static"
         if static_root.exists():
             return static_root, None
         return fallback, None
@@ -83,13 +83,13 @@ def resolve_pma_static_dir() -> tuple[Path, Optional[ExitStack]]:
         Exception
     ):  # intentional: importlib.resources can raise varied errors across Python versions
         stack.close()
-        fallback = Path(__file__).resolve().parent.parent / "pma_static"
+        fallback = Path(__file__).resolve().parent.parent / "web_static"
         return fallback, None
     if static_path.exists():
         return static_path, stack
 
     stack.close()
-    fallback = Path(__file__).resolve().parent.parent / "pma_static"
+    fallback = Path(__file__).resolve().parent.parent / "web_static"
     return fallback, None
 
 
@@ -149,7 +149,7 @@ def render_index_html(static_dir: Path, version: Optional[str]) -> str:
     return text
 
 
-def render_pma_index_html(static_dir: Path, base_path: str = "") -> str:
+def render_web_index_html(static_dir: Path, base_path: str = "") -> str:
     index_path = static_dir / "index.html"
     html = index_path.read_text(encoding="utf-8")
     if base_path:
@@ -236,9 +236,9 @@ def index_response_headers() -> dict[str, str]:
     return headers
 
 
-def pma_index_response_headers(static_dir: Path, base_path: str = "") -> dict[str, str]:
+def web_index_response_headers(static_dir: Path, base_path: str = "") -> dict[str, str]:
     headers = index_response_headers()
-    html = render_pma_index_html(static_dir, base_path=base_path)
+    html = render_web_index_html(static_dir, base_path=base_path)
     script_hashes = _inline_script_hashes(html)
     if not script_hashes:
         return headers

@@ -76,7 +76,7 @@ include-package-data = true
 
 [tool.setuptools.package-data]
 codex_autorunner = [
-  "pma_static/**",
+  "web_static/**",
   "docs/*.md",
 ]
 

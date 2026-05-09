@@ -1406,7 +1406,7 @@ def test_hub_home_served_and_repo_mounted(tmp_path: Path):
     assert resp.headers["location"] == "/chats"
     pma_resp = client.get("/chats")
     assert pma_resp.status_code == 200
-    assert b"<title>PMA Hub</title>" in pma_resp.content
+    assert b"<title>Web Hub</title>" in pma_resp.content
     legacy_resp = client.get("/legacy")
     assert legacy_resp.status_code == 404
 

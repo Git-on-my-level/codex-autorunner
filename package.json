@@ -8,14 +8,14 @@
     "pnpm": ">=9.15.0"
   },
   "scripts": {
-    "lint": "pnpm pma:lint",
-    "typecheck": "pnpm pma:typecheck",
-    "build": "pnpm pma:build",
-    "pma:dev": "pnpm --filter @codex-autorunner/pma-hub dev",
-    "pma:build": "pnpm --filter @codex-autorunner/pma-hub build",
-    "pma:typecheck": "pnpm --filter @codex-autorunner/pma-hub typecheck",
-    "pma:lint": "pnpm --filter @codex-autorunner/pma-hub lint",
-    "pma:test": "pnpm --filter @codex-autorunner/pma-hub test",
-    "pma:smoke:hub": ".venv/bin/python scripts/pma_live_hub_smoke.py"
+    "lint": "pnpm web:lint",
+    "typecheck": "pnpm web:typecheck",
+    "build": "pnpm web:build",
+    "web:dev": "pnpm --filter @codex-autorunner/web-hub dev",
+    "web:build": "pnpm --filter @codex-autorunner/web-hub build",
+    "web:typecheck": "pnpm --filter @codex-autorunner/web-hub typecheck",
+    "web:lint": "pnpm --filter @codex-autorunner/web-hub lint",
+    "web:test": "pnpm --filter @codex-autorunner/web-hub test",
+    "web:smoke:hub": ".venv/bin/python scripts/pma_live_hub_smoke.py"
   }
 }

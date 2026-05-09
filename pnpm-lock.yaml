@@ -8,7 +8,7 @@ importers:
 
   .: {}
 
-  src/codex_autorunner/pma_frontend:
+  src/codex_autorunner/web_frontend:
     dependencies:
       isomorphic-dompurify:
         specifier: ^3.12.0

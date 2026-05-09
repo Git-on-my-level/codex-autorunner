@@ -13,20 +13,21 @@ PORT ?= 4173
 # `make serve-onboarding`: temp hub; default port avoids clashing with `make serve`.
 ONBOARDING_HOST ?= $(HOST)
 ONBOARDING_PORT ?= 4174
-PMA_UI_SCREEN_MODE ?= fixture
-PMA_UI_SCREEN_OUT ?= .codex-autorunner/render/pma_ui_samples/latest
-PMA_UI_SCREEN_VIEWPORT ?=
-PMA_UI_SCREEN_VIEWPORTS ?= $(if $(PMA_UI_SCREEN_VIEWPORT),$(PMA_UI_SCREEN_VIEWPORT),1440x1000 390x844)
-PMA_UI_SCREEN_HOST ?= $(HOST)
-PMA_UI_SCREEN_PORT ?= 0
-PMA_UI_SCREEN_HUB_ROOT ?= $(CAR_ROOT)
-PMA_UI_SCREEN_ARGS ?=
+WEB_UI_SCREEN_MODE ?= fixture
+WEB_UI_SCREEN_OUT ?= .codex-autorunner/render/web_ui_samples/latest
+WEB_UI_SCREEN_VIEWPORT ?=
+WEB_UI_SCREEN_VIEWPORTS ?= $(if $(WEB_UI_SCREEN_VIEWPORT),$(WEB_UI_SCREEN_VIEWPORT),1440x1000 390x844)
+WEB_UI_SCREEN_HOST ?= $(HOST)
+WEB_UI_SCREEN_PORT ?= 0
+WEB_UI_SCREEN_HUB_ROOT ?= $(CAR_ROOT)
+WEB_UI_SCREEN_ARGS ?=
 HUB_HOST ?= 127.0.0.1
 HUB_PORT ?= 4517
 HUB_BASE_PATH ?= /car
-# Local source checkouts are not initialized hubs. `make serve` and `make serve-dev`
-# use this hub root so config/state resolve from a real `.codex-autorunner/` tree.
+# Hub filesystem root for serve-hub; `make serve` also falls back to this repo if no config under CAR_ROOT.
 CAR_ROOT ?= $(HOME)/car-workspace
+# Vite dev server port (`make serve`). Hub API uses PORT (default 4173).
+WEB_DEV_PORT ?= 5173
 LAUNCH_AGENT ?= $(HOME)/Library/LaunchAgents/com.codex.autorunner.plist
 LAUNCH_LABEL ?= com.codex.autorunner
 NVM_BIN ?= $(HOME)/.nvm/versions/node/v22.12.0/bin
@@ -36,12 +37,12 @@ PIPX_ROOT ?= $(HOME)/.local/pipx
 PIPX_VENV ?= $(PIPX_ROOT)/venvs/codex-autorunner
 PIPX_PYTHON ?= $(PIPX_VENV)/bin/python
 
-.PHONY: install dev hooks build pma-build test test-fast test-full test-chat-platform-contract test-chat-surface-lab test-managed-thread-cutover check check-full check-extended preflight-hub-startup format serve serve-dev serve-onboarding pma-ui-screens launchd-hub deadcode-baseline venv venv-dev setup npm-install car-artifacts agent-compatibility-check agent-compatibility-refresh protocol-schemas-check protocol-schemas-refresh typecheck-strict perf-idle-cpu perf-chat-latency-budgets perf-chat-seeded-exploration
+.PHONY: install dev hooks build web-build test test-fast test-full test-chat-platform-contract test-chat-surface-lab test-managed-thread-cutover check check-full check-extended preflight-hub-startup format serve serve-hub serve-onboarding web-ui-screens launchd-hub deadcode-baseline venv venv-dev setup npm-install car-artifacts agent-compatibility-check agent-compatibility-refresh protocol-schemas-check protocol-schemas-refresh typecheck-strict perf-idle-cpu perf-chat-latency-budgets perf-chat-seeded-exploration
 
-build: pma-build
+build: web-build
 
-pma-build: npm-install
-	pnpm pma:build
+web-build: npm-install
+	pnpm web:build
 
 install:
 	$(PYTHON) -m pip install .
@@ -169,21 +170,23 @@ format:
 deadcode-baseline:
 	$(PYTHON) scripts/deadcode.py --update-baseline
 
-serve: pma-build
+# Development: hub API (Python --reload) + Web Vite dev server (HMR). Use the printed Vite URL.
+serve: venv-dev npm-install
+	@HOST=$(HOST) PORT=$(PORT) WEB_DEV_PORT=$(WEB_DEV_PORT) CAR_ROOT="$(CAR_ROOT)" CAR_HUB_ROOT="$(if $(CAR_HUB_ROOT),$(CAR_HUB_ROOT),$(CAR_ROOT))" "$(CURDIR)/scripts/serve-dev-hub.sh"
+
+# Production-style hub: pre-built Web static assets, no Python/Vite reload.
+serve-hub: web-build
 	@PORT_PID=$$(lsof -t -nP -iTCP:$(PORT) -sTCP:LISTEN 2>/dev/null | head -n 1); \
 	if [ -n "$$PORT_PID" ]; then \
-		echo "Port $(PORT) is already in use by PID $$PORT_PID. Stop the existing server before running \`make serve\`." >&2; \
+		echo "Port $(PORT) is already in use by PID $$PORT_PID. Stop the existing server before running \`make serve-hub\`." >&2; \
 		lsof -nP -iTCP:$(PORT) -sTCP:LISTEN >&2 || true; \
 		exit 1; \
 	fi
 	$(PYTHON) -m codex_autorunner.cli hub serve --path "$(CAR_ROOT)" --host $(HOST) --port $(PORT)
 
-serve-dev: venv-dev pma-build
-	cd "$(CAR_ROOT)" && CAR_DEV_INCLUDE_ROOT_REPO=1 "$(PYTHON_ABS)" -m uvicorn codex_autorunner.server:create_hub_app --factory --reload --host $(HOST) --port $(PORT) --reload-dir "$(CURDIR)/src" --reload-include '*.py' --reload-include '*.js' --reload-include '*.css' --reload-include '*.html' --reload-include '*.json' --reload-exclude '**/worktrees/**' --reload-exclude '**/.codex-autorunner/**' --reload-exclude '.codex-autorunner/**' --timeout-graceful-shutdown 1
-
 # Hub initialized with `car init --mode hub` in a new temp directory (no repos, clean manifest).
 # Prints URLs for real-server onboarding and optional client-mocked PMA.
-serve-onboarding: pma-build
+serve-onboarding: web-build
 	@set -e; \
 	PORT_PID=$$(lsof -t -nP -iTCP:$(ONBOARDING_PORT) -sTCP:LISTEN 2>/dev/null | head -n 1); \
 	if [ -n "$$PORT_PID" ]; then \
@@ -205,19 +208,19 @@ serve-onboarding: pma-build
 	echo ""; \
 	cd "$$ROOT" && exec "$(PYTHON_ABS)" -m codex_autorunner.cli serve --host $(ONBOARDING_HOST) --port $(ONBOARDING_PORT)
 
-pma-ui-screens: pma-build
+web-ui-screens: web-build
 	@set --; \
-	for viewport in $(PMA_UI_SCREEN_VIEWPORTS); do \
+	for viewport in $(WEB_UI_SCREEN_VIEWPORTS); do \
 		set -- "$$@" --viewport "$$viewport"; \
 	done; \
-	$(PYTHON) scripts/pma_ui_screens.py \
-		--mode '$(PMA_UI_SCREEN_MODE)' \
-		--host '$(PMA_UI_SCREEN_HOST)' \
-		--port '$(PMA_UI_SCREEN_PORT)' \
-		--hub-root '$(PMA_UI_SCREEN_HUB_ROOT)' \
-		--out-dir '$(PMA_UI_SCREEN_OUT)' \
+	$(PYTHON) scripts/web_ui_screens.py \
+		--mode '$(WEB_UI_SCREEN_MODE)' \
+		--host '$(WEB_UI_SCREEN_HOST)' \
+		--port '$(WEB_UI_SCREEN_PORT)' \
+		--hub-root '$(WEB_UI_SCREEN_HUB_ROOT)' \
+		--out-dir '$(WEB_UI_SCREEN_OUT)' \
 		"$$@" \
-		$(PMA_UI_SCREEN_ARGS)
+		$(WEB_UI_SCREEN_ARGS)
 
 launchd-hub:
 	@LABEL="$(LAUNCH_LABEL)" \

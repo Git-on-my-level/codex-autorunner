@@ -79,9 +79,9 @@ from .routes.settings import build_settings_routes
 from .routes.system import build_system_routes
 from .services.pma import create_pma_application_container
 from .static_assets import (
-    pma_index_response_headers,
-    render_pma_index_html,
-    resolve_pma_static_dir,
+    render_web_index_html,
+    resolve_web_static_dir,
+    web_index_response_headers,
 )
 
 __all__ = ["create_app", "create_hub_app", "create_repo_app"]
@@ -216,15 +216,15 @@ def create_hub_app(
     app.state.static_assets_lock = threading.Lock()
     app.state.hub_static_assets = None
     app.state.orchestration_housekeeping = None
-    pma_static_dir, pma_static_context = resolve_pma_static_dir()
-    app.state.pma_static_dir = pma_static_dir
-    app.state.pma_static_assets_context = pma_static_context
-    pma_app_assets_dir = pma_static_dir / "_app"
-    if pma_app_assets_dir.exists():
+    web_static_dir, web_static_context = resolve_web_static_dir()
+    app.state.web_static_dir = web_static_dir
+    app.state.web_static_assets_context = web_static_context
+    web_app_assets_dir = web_static_dir / "_app"
+    if web_app_assets_dir.exists():
         app.mount(
             "/_app",
-            CacheStaticFiles(directory=pma_app_assets_dir),
-            name="pma-app-assets",
+            CacheStaticFiles(directory=web_app_assets_dir),
+            name="web-app-assets",
         )
     raw_config = getattr(context.config, "raw", {})
     pma_config = raw_config.get("pma", {}) if isinstance(raw_config, dict) else {}
@@ -827,11 +827,11 @@ def create_hub_app(
                 static_context = getattr(app.state, "static_assets_context", None)
                 if static_context is not None:
                     static_context.close()
-                pma_static_context = getattr(
-                    app.state, "pma_static_assets_context", None
+                web_static_context = getattr(
+                    app.state, "web_static_assets_context", None
                 )
-                if pma_static_context is not None:
-                    pma_static_context.close()
+                if web_static_context is not None:
+                    web_static_context.close()
                 stop_all = getattr(app.state, "pma_lane_worker_stop_all", None)
                 if stop_all is not None:
                     try:
@@ -884,25 +884,25 @@ def create_hub_app(
     app.include_router(build_hub_messages_routes(context))
     app.include_router(build_hub_repo_routes(context, mount_manager))
 
-    def _pma_index_response():
-        index_path = pma_static_dir / "index.html"
+    def _web_index_response():
+        index_path = web_static_dir / "index.html"
         if not index_path.exists():
             raise HTTPException(
                 status_code=500,
-                detail="PMA Hub UI assets missing; run `pnpm pma:build`",
+                detail="Web Hub UI assets missing; run `pnpm web:build`",
             )
-        html = render_pma_index_html(pma_static_dir, base_path=context.base_path)
+        html = render_web_index_html(web_static_dir, base_path=context.base_path)
         return HTMLResponse(
-            html, headers=pma_index_response_headers(pma_static_dir, context.base_path)
+            html, headers=web_index_response_headers(web_static_dir, context.base_path)
         )
 
-    # --- PMA Hub SPA shell (deep links / refresh) ---
+    # --- Web Hub SPA shell (deep links / refresh) ---
     # SvelteKit owns URL→screen after load. The hub must return the same index.html
     # for any refreshable path the frontend can emit, or the browser gets FastAPI's
-    # JSON 404. Add a hub GET that maps to _pma_index_response() when you introduce a
-    # new client-only subtree under src/codex_autorunner/pma_frontend/src/routes/.
+    # JSON 404. Add a hub GET that maps to _web_index_response() when you introduce a
+    # new client-only subtree under src/codex_autorunner/web_frontend/src/routes/.
     # Prefer a "{rest:path}" catch-all per top-level segment when that subtree can nest.
-    # See surfaces/web/AGENTS.md (section PMA Hub SPA shell).
+    # See surfaces/web/AGENTS.md (section Web Hub SPA shell).
 
     @app.get("/", include_in_schema=False)
     def hub_index():
@@ -921,8 +921,8 @@ def create_hub_app(
     @app.get("/tickets/{ticket_id}", include_in_schema=False)
     @app.get("/settings", include_in_schema=False)
     @app.get("/hub", include_in_schema=False)
-    def pma_hub_index(rest: Optional[str] = None):
-        return _pma_index_response()
+    def web_hub_index(rest: Optional[str] = None):
+        return _web_index_response()
 
     def _resolve_worktree_parent_repo_id(worktree_id: str) -> str:
         for snapshot in context.supervisor.list_repos():
@@ -953,7 +953,7 @@ def create_hub_app(
 
     @app.get("/repos/{repo_id}/contextspace", include_in_schema=False)
     def pma_repo_contextspace_shell(repo_id: str):
-        return _pma_index_response()
+        return _web_index_response()
 
     @app.get(
         "/repos/{repo_id}/worktrees/{worktree_id}/contextspace",
@@ -961,7 +961,7 @@ def create_hub_app(
     )
     def pma_worktree_contextspace_shell(repo_id: str, worktree_id: str):
         _require_worktree_scope(repo_id, worktree_id)
-        return _pma_index_response()
+        return _web_index_response()
 
     @app.get("/worktrees", include_in_schema=False)
     def legacy_worktrees_index_redirect():
@@ -994,7 +994,7 @@ def create_hub_app(
 
     @app.get("/repos/{repo_id}/", include_in_schema=False)
     def pma_repo_index_slash(repo_id: str):
-        return _pma_index_response()
+        return _web_index_response()
 
     @app.get("/repos/{repo_id}/worktrees/{worktree_id}", include_in_schema=False)
     @app.get("/repos/{repo_id}/worktrees/{worktree_id}/", include_in_schema=False)
@@ -1016,7 +1016,7 @@ def create_hub_app(
     )
     def pma_worktree_index(repo_id: str, worktree_id: str):
         _require_worktree_scope(repo_id, worktree_id)
-        return _pma_index_response()
+        return _web_index_response()
 
     def removed_repo_tab_redirect(repo_id: str):
         encoded_repo_id = quote(repo_id, safe="")

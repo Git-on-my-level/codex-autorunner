@@ -157,30 +157,30 @@ car render demo \
 `car render demo` defaults to `--media-only`, which keeps outbox output focused on screenshots/video for end users.
 Use `--full-artifacts` when you also want structured JSON/HTML/trace outputs.
 
-## PMA UI Screenshot Pack
+## Web UI Screenshot Pack
 
-Use `make pma-ui-screens` while iterating on the PMA Svelte UI. It rebuilds the
-PMA static bundle, starts a disposable fixture hub, captures the primary PMA
+Use `make web-ui-screens` while iterating on the Web Svelte UI. It rebuilds the
+Web static bundle, starts a disposable fixture hub, captures the primary Web
 routes, and writes PNGs plus `manifest.json` under
-`.codex-autorunner/render/pma_ui_samples/latest`.
+`.codex-autorunner/render/web_ui_samples/latest`.
 
 Common variants:
 
 ```bash
 # Deterministic fixture hub, default route pack.
-make pma-ui-screens
+make web-ui-screens
 
 # Capture a real hub root instead of the fixture.
-make pma-ui-screens PMA_UI_SCREEN_MODE=hub PMA_UI_SCREEN_HUB_ROOT="$HOME/car-workspace"
+make web-ui-screens WEB_UI_SCREEN_MODE=hub WEB_UI_SCREEN_HUB_ROOT="$HOME/car-workspace"
 
 # Capture an already-running hub.
-make pma-ui-screens PMA_UI_SCREEN_MODE=url PMA_UI_SCREEN_ARGS="--base-url http://127.0.0.1:4180"
+make web-ui-screens WEB_UI_SCREEN_MODE=url WEB_UI_SCREEN_ARGS="--base-url http://127.0.0.1:4180"
 
 # Publish the PNGs to the filebox outbox after capture.
-make pma-ui-screens PMA_UI_SCREEN_ARGS="--outbox"
+make web-ui-screens WEB_UI_SCREEN_ARGS="--outbox"
 
 # Capture only a couple of routes while tuning layout.
-make pma-ui-screens PMA_UI_SCREEN_ARGS="--route chat=/pma --route memory=/pma-memory"
+make web-ui-screens WEB_UI_SCREEN_ARGS="--route chat=/pma --route memory=/pma-memory"
 ```
 
 ## Demo Preflight

@@ -24,6 +24,7 @@ from ...agents.registry import validate_agent_id
 from ...bootstrap import ensure_hub_car_shim
 from ...core import hub_inbox_resolution
 from ...core.config import (
+    ACTIVE_HUB_ROOT_ENV,
     AppServerConfig,
     ConfigError,
     HubConfig,
@@ -62,6 +63,17 @@ from .terminal_sessions import parse_tui_idle_seconds, prune_terminal_registry
 from .web_surface_port import WebSurfacePort, build_web_surface_port
 
 _DEV_INCLUDE_ROOT_REPO_ENV = "CAR_DEV_INCLUDE_ROOT_REPO"
+
+
+def _hub_config_start_path(hub_root: Optional[Path]) -> Path:
+    """Directory used to locate `.codex-autorunner/config.yml` for the hub."""
+    if hub_root is not None:
+        return hub_root
+    env_root = os.environ.get(ACTIVE_HUB_ROOT_ENV, "").strip()
+    if env_root:
+        return Path(env_root).expanduser().resolve()
+    return Path.cwd()
+
 
 _find_message_resolution = hub_inbox_resolution.find_message_resolution
 _hub_inbox_dismissals_path = hub_inbox_resolution.hub_inbox_dismissals_path
@@ -682,7 +694,7 @@ def build_hub_context(
     from ...adapters.github.polling import build_hub_scm_poll_processor
     from ...core.hub import HubSupervisor
 
-    config = load_hub_config(hub_root or Path.cwd())
+    config = load_hub_config(_hub_config_start_path(hub_root))
     dev_include_root_repo = _env_truthy(os.getenv(_DEV_INCLUDE_ROOT_REPO_ENV))
     dev_mode_root_repo_enabled = False
     if (

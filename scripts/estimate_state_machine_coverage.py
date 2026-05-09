@@ -19,7 +19,7 @@ from typing import Iterable, Sequence
 DEFAULT_SOURCE_ROOT = Path("src/codex_autorunner")
 EXCLUDED_PARTS = {
     "__pycache__",
-    "pma_static",
+    "web_static",
     "static",
 }
 

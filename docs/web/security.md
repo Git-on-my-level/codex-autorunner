@@ -6,7 +6,7 @@ interface and how to secure it.
 
 ## Scope and threat model
 
-- The web server exposes a FastAPI HTTP API and the PMA Hub web UI.
+- The web server exposes a FastAPI HTTP API and the Web Hub web UI.
 - The UI/API can run code and modify files in bound workspaces.
 - There is no built-in multi-user auth or per-endpoint role separation.
 
@@ -34,9 +34,9 @@ The following endpoints remain public so health checks and static assets work:
 
 - `/` (UI shell)
 - `/pma`, `/dashboard`, `/repos`, `/worktrees`, `/tickets`, `/contextspace/*`,
-  and `/settings` (PMA Hub shell)
+  and `/settings` (Web Hub shell)
 - `/_app/*`
-- `/static/*` (PMA Hub assets)
+- `/static/*` (Web Hub assets)
 - `/health`
 - `/cat/*`
 

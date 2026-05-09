@@ -67,7 +67,7 @@ out of archive listings and retention pruning.
   visible snapshots.
 
 ## Viewing archives in the UI
-Archive snapshots can be browsed in the PMA Hub. You can:
+Archive snapshots can be browsed in the Web Hub. You can:
 - browse snapshots by worktree ID and timestamp
 - view snapshot metadata and `META.json`
 - open archived files (tickets, contextspace, runs, flows, and any optional

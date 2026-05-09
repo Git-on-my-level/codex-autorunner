@@ -23,7 +23,7 @@ Mapping the conceptual layers to the codebase:
   - **Discord interaction runtime**: ingress (`ingress.py`) -> command runner (`command_runner.py`) -> interaction dispatch (`interaction_dispatch.py`).  Two-phase lifecycle: ingress acknowledges on the gateway hot path, then the runner executes the handler in the background with timeout enforcement.
 - **Surfaces**:
   - **Hub**: Supervises multiple repos/worktrees (primary interface for users).
-  - **Web/UI**: `src/codex_autorunner/surfaces/web/` (FastAPI routes, web services), `src/codex_autorunner/pma_static/` (PMA Hub built assets).
+  - **Web/UI**: `src/codex_autorunner/surfaces/web/` (FastAPI routes, web services), `src/codex_autorunner/web_static/` (Web Hub built assets).
   - **CLI**: `src/codex_autorunner/surfaces/cli/` (Typer command surface).
 
 ## Data Layout & Config

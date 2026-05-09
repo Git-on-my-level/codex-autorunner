@@ -983,6 +983,13 @@ async def test_close_handle_deletes_registry_record_when_process_owned(
         or True,
     )
     monkeypatch.setattr(supervisor, "_terminate_record_process", _fake_terminate)
+    # Avoid depending on whether low PIDs like 123 exist on the host (getpgid would
+    # then populate pgid); this test only cares about terminate/delete bookkeeping.
+    monkeypatch.setattr(
+        supervisor,
+        "_record_pid_and_pgid",
+        lambda pid: (None, None) if pid is None else (pid, None),
+    )
 
     await supervisor._close_handle(handle, reason="close_all")
 

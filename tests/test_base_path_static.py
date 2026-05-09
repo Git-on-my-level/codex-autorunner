@@ -23,7 +23,7 @@ def _base_path_app(tmp_path_factory):
     yield create_hub_app(hub_root, base_path="/car")
 
 
-def test_pma_static_assets_served_with_base_path(_base_path_app) -> None:
+def test_web_static_assets_served_with_base_path(_base_path_app) -> None:
     client = TestClient(_base_path_app)
     res = client.get("/car/chats")
     assert res.status_code == 200

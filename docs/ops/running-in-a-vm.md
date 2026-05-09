@@ -7,18 +7,18 @@ Notes for running codex-autorunner inside containerized or cloud-provisioned VMs
 
 | Service | How to run | Notes |
 |---------|-----------|-------|
-| Web Hub (FastAPI/Uvicorn) | `make serve-dev` (port 4173) | Set `CAR_DEV_INCLUDE_ROOT_REPO=1` to include the repo itself in the hub |
+| Web Hub (dev: FastAPI reload + Vite HMR) | `make serve` — hub on **4173**, Web UI on **5173** (`WEB_DEV_PORT`) | Open the printed **Vite** URL; `CAR_DEV_INCLUDE_ROOT_REPO=1` is set by the script |
 | Python tests | `make test` or `.venv/bin/python -m pytest -m "not integration"` | Serial by default; use `-n auto` for xdist parallelism |
 | Lane-aware checks | `./scripts/check.sh` (auto-detect) or `./scripts/check.sh --lane <lane>` | Lanes: `core`, `web-ui`, `chat-apps`, `aggregate` (full) |
 | Full validation | `./scripts/check.sh --full` or `make check-full` | Runs all lanes plus extended checks |
 | Linting | `black --check src tests`, `ruff check src tests`, `make typecheck-strict` | Individual linters for targeted runs |
-| PMA Hub build | `pnpm run build` or `make build` | Builds the default Svelte UI in `src/codex_autorunner/pma_frontend/` → `src/codex_autorunner/pma_static/`; always rebuild after PMA UI changes |
+| Web Hub build | `pnpm run build` or `make build` | Builds the default Svelte UI in `src/codex_autorunner/web_frontend/` → `src/codex_autorunner/web_static/`; always rebuild after Web UI changes |
 
 ## Startup caveats
 
 - **`python3.12-venv` system package**: Required but not pre-installed on Ubuntu 24.04 cloud VMs. Install via `sudo apt-get install -y python3.12-venv` before `make setup`.
 - **Hub init**: Before running the dev server for the first time, run `CAR_DEV_INCLUDE_ROOT_REPO=1 .venv/bin/car init --mode hub` to bootstrap `.codex-autorunner/`.
-- **Dev server binding**: Use `make serve-dev HOST=0.0.0.0` (not the default `127.0.0.1`) to make the UI accessible outside the VM. Health check: `curl http://localhost:4173/health`.
+- **Dev server binding**: Use `make serve HOST=0.0.0.0 WEB_DEV_PORT=5173` (defaults shown) so both the hub and Vite listen outside localhost. Health check: `curl http://localhost:4173/health`. For production-like static PMA only (no HMR), use `make serve-hub`.
 - **Process termination tests**: A few tests in `tests/test_opencode_supervisor_process_management.py` and `tests/test_process_termination.py` may fail in containerized environments due to PID namespace / signal handling constraints. These are environment-specific, not code bugs.
 - **Text delta coalescer**: `tests/unit/test_text_delta_coalescer.py::test_multibyte_unicode_newline` may occasionally error in containerized VMs. This is environment-specific.
 - **Test suite is large**: ~6300+ tests. Run via `make test` (serial, `-m "not integration"`) or in parallel with `-n auto` (used by `scripts/check.sh`).

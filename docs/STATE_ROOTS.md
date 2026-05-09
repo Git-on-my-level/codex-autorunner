@@ -279,7 +279,7 @@ audit visibility and ad-hoc tooling, but they are **not** the source of truth:
 Deleting any mirror file does not affect correctness; SQLite remains
 authoritative and mirrors are regenerated on the next write.
 
-Separate from persistence mirrors, `PmaStateStore` owns PMA UI runtime state
+Separate from persistence mirrors, `PmaStateStore` owns PMA runtime state
 in `.codex-autorunner/pma/state.json`. This file is not part of the canonical
 queue/thread/automation persistence path.
 

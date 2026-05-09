@@ -85,7 +85,7 @@ def enable_pma(hub_root: Path, *, enable_github_polling: bool = False) -> None:
     write_test_config(hub_root / CONFIG_FILENAME, cfg)
 
 
-def build_pma_hub_app(
+def build_web_hub_app(
     hub_root: Path,
     *,
     enable_github_polling: bool = False,

@@ -283,23 +283,23 @@ if [[ "$RUN_WEB_UI" == true ]]; then
   need_cmd node
   need_cmd pnpm
 
-  echo "Linting PMA Hub frontend..."
-  pnpm pma:lint
+  echo "Linting Web Hub frontend..."
+  pnpm web:lint
 
-  echo "Build PMA Hub static assets (pnpm run build)..."
+  echo "Build Web Hub static assets (pnpm run build)..."
   pnpm run build
 
-  echo "Running PMA Hub frontend tests..."
-  pnpm pma:test
+  echo "Running Web Hub frontend tests..."
+  pnpm web:test
 
-  echo "Checking PMA Hub SPA shell routes vs SvelteKit pages..."
-  "$PYTHON_BIN" scripts/check_pma_hub_spa_shell.py
+  echo "Checking Web Hub SPA shell routes vs SvelteKit pages..."
+  "$PYTHON_BIN" scripts/check_web_hub_spa_shell.py
 
-  echo "Checking PMA static assets are committed..."
-  if [ -d src/codex_autorunner/pma_static ]; then
-    if ! git diff --exit-code -- src/codex_autorunner/pma_static >/dev/null 2>&1; then
-      echo "PMA static assets are out of date. Run 'pnpm run build' and commit updated pma_static output." >&2
-      git diff --stat -- src/codex_autorunner/pma_static >&2
+  echo "Checking Web static assets are committed..."
+  if [ -d src/codex_autorunner/web_static ]; then
+    if ! git diff --exit-code -- src/codex_autorunner/web_static >/dev/null 2>&1; then
+      echo "Web static assets are out of date. Run 'pnpm run build' and commit updated web_static output." >&2
+      git diff --stat -- src/codex_autorunner/web_static >&2
       exit 1
     fi
   fi
