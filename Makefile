@@ -13,14 +13,6 @@ PORT ?= 4173
 # `make serve-onboarding`: temp hub; default port avoids clashing with `make serve`.
 ONBOARDING_HOST ?= $(HOST)
 ONBOARDING_PORT ?= 4174
-# Web UI screenshot pack (`make ui-qa-screens`): one full-page shot per `uiMock` scenario
-# in `static_src/uiMockScenarios.ts` (plus optional repo tab strip if a repo is in the manifest);
-# see scripts/ui_qa/generate_manifest.py. Set `UI_QA_UI_MOCKS=0` for a single unmocked hub shot only.
-UI_QA_HOST ?= $(HOST)
-UI_QA_PORT ?= $(PORT)
-UI_QA_OUT ?= .codex-autorunner/render/ui_qa
-UI_QA_VIEWPORT ?= 1400x900
-UI_QA_READY_TIMEOUT ?= 120
 PMA_UI_SCREEN_MODE ?= fixture
 PMA_UI_SCREEN_OUT ?= .codex-autorunner/render/pma_ui_samples/latest
 PMA_UI_SCREEN_VIEWPORT ?=
@@ -44,21 +36,12 @@ PIPX_ROOT ?= $(HOME)/.local/pipx
 PIPX_VENV ?= $(PIPX_ROOT)/venvs/codex-autorunner
 PIPX_PYTHON ?= $(PIPX_VENV)/bin/python
 
-.PHONY: install dev hooks build pma-build legacy-ui-build legacy-ui-check test test-fast test-full test-chat-platform-contract test-chat-surface-lab test-managed-thread-cutover check check-full check-extended preflight-hub-startup format serve serve-dev serve-legacy-ui serve-onboarding ui-qa-screens pma-ui-screens launchd-hub deadcode-baseline venv venv-dev setup npm-install car-artifacts lint-html dom-check frontend-check _inject-static-banners agent-compatibility-check agent-compatibility-refresh protocol-schemas-check protocol-schemas-refresh typecheck-strict perf-idle-cpu perf-chat-latency-budgets perf-chat-seeded-exploration
-
-_inject-static-banners:
-	pnpm legacy:postbuild
+.PHONY: install dev hooks build pma-build test test-fast test-full test-chat-platform-contract test-chat-surface-lab test-managed-thread-cutover check check-full check-extended preflight-hub-startup format serve serve-dev serve-onboarding pma-ui-screens launchd-hub deadcode-baseline venv venv-dev setup npm-install car-artifacts agent-compatibility-check agent-compatibility-refresh protocol-schemas-check protocol-schemas-refresh typecheck-strict perf-idle-cpu perf-chat-latency-budgets perf-chat-seeded-exploration
 
 build: pma-build
 
 pma-build: npm-install
 	pnpm pma:build
-
-legacy-ui-build: npm-install
-	pnpm legacy:build
-
-legacy-ui-check: legacy-ui-build frontend-check
-	pnpm legacy:test
 
 install:
 	$(PYTHON) -m pip install .
@@ -165,14 +148,6 @@ check-extended: check-full
 preflight-hub-startup:
 	$(PYTHON) -m pytest -q tests/test_hub_app_context.py::test_hub_lifespan_reaper_uses_config_root
 
-lint-html: npm-install
-	pnpm lint:html
-
-dom-check: npm-install
-	pnpm test:dom
-
-frontend-check: lint-html dom-check
-
 protocol-schemas-check:
 	$(MAKE) agent-compatibility-check PYTHON="$(PYTHON)"
 
@@ -190,11 +165,6 @@ agent-compatibility-refresh:
 format:
 	$(PYTHON) -m black src tests
 	$(PYTHON) -m ruff check --fix src tests
-	@if [ -d node_modules ]; then \
-		echo "Fixing JS files (eslint)..."; \
-		./node_modules/.bin/eslint --fix "src/codex_autorunner/static_src/**/*.ts" || true; \
-	fi
-	$(MAKE) _inject-static-banners
 
 deadcode-baseline:
 	$(PYTHON) scripts/deadcode.py --update-baseline
@@ -211,17 +181,8 @@ serve: pma-build
 serve-dev: venv-dev pma-build
 	cd "$(CAR_ROOT)" && CAR_DEV_INCLUDE_ROOT_REPO=1 "$(PYTHON_ABS)" -m uvicorn codex_autorunner.server:create_hub_app --factory --reload --host $(HOST) --port $(PORT) --reload-dir "$(CURDIR)/src" --reload-include '*.py' --reload-include '*.js' --reload-include '*.css' --reload-include '*.html' --reload-include '*.json' --reload-exclude '**/worktrees/**' --reload-exclude '**/.codex-autorunner/**' --reload-exclude '.codex-autorunner/**' --timeout-graceful-shutdown 1
 
-serve-legacy-ui: legacy-ui-build
-	@PORT_PID=$$(lsof -t -nP -iTCP:$(PORT) -sTCP:LISTEN 2>/dev/null | head -n 1); \
-	if [ -n "$$PORT_PID" ]; then \
-		echo "Port $(PORT) is already in use by PID $$PORT_PID. Stop the existing server before running \`make serve-legacy-ui\`." >&2; \
-		lsof -nP -iTCP:$(PORT) -sTCP:LISTEN >&2 || true; \
-		exit 1; \
-	fi
-	CAR_ENABLE_LEGACY_UI=1 $(PYTHON) -m codex_autorunner.cli hub serve --path "$(CAR_ROOT)" --host $(HOST) --port $(PORT)
-
 # Hub initialized with `car init --mode hub` in a new temp directory (no repos, clean manifest).
-# Prints URLs for real-server onboarding and optional client-mocked PMA (see `static_src/walkthrough.ts` `?carOnboarding=1`).
+# Prints URLs for real-server onboarding and optional client-mocked PMA.
 serve-onboarding: pma-build
 	@set -e; \
 	PORT_PID=$$(lsof -t -nP -iTCP:$(ONBOARDING_PORT) -sTCP:LISTEN 2>/dev/null | head -n 1); \
@@ -243,23 +204,6 @@ serve-onboarding: pma-build
 	echo "      $$BASE/?uiMock=onboarding&view=pma&carOnboarding=1&uiMockStrip=1"; \
 	echo ""; \
 	cd "$$ROOT" && exec "$(PYTHON_ABS)" -m codex_autorunner.cli serve --host $(ONBOARDING_HOST) --port $(ONBOARDING_PORT)
-
-# Playwright full-page: all hub ui-mock states (see generate_manifest) plus each repo tab under /repos/{id}/?tab=... when a repo is available.
-# Requires: pip install '.[browser]' and `python -m playwright install chromium` (and `make legacy-ui-build` for uiMock order from generated JS).
-# If no repo is in .codex-autorunner/manifest.yml, set UI_QA_REPO_ID. Output directory: $(UI_QA_OUT) (see .gitignore).
-ui-qa-screens: legacy-ui-build
-	@mkdir -p $(UI_QA_OUT)
-	@set -e; \
-	UI_QA_HUB_ROOT='$(CURDIR)'; export UI_QA_HUB_ROOT; \
-	GEN="$$($(PYTHON) scripts/ui_qa/generate_manifest.py)"; \
-	$(PYTHON) -m codex_autorunner.cli render demo \
-		--serve-cmd '$(PYTHON) -m codex_autorunner.cli serve --host $(UI_QA_HOST) --port $(UI_QA_PORT)' \
-		--ready-url 'http://$(UI_QA_HOST):$(UI_QA_PORT)/health' \
-		--ready-timeout-seconds $(UI_QA_READY_TIMEOUT) \
-		--path / \
-		--script "$$GEN" \
-		--out-dir '$(UI_QA_OUT)' \
-		--viewport '$(UI_QA_VIEWPORT)'
 
 pma-ui-screens: pma-build
 	@set --; \

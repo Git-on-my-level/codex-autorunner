@@ -13,7 +13,6 @@ Notes for running codex-autorunner inside containerized or cloud-provisioned VMs
 | Full validation | `./scripts/check.sh --full` or `make check-full` | Runs all lanes plus extended checks |
 | Linting | `black --check src tests`, `ruff check src tests`, `make typecheck-strict` | Individual linters for targeted runs |
 | PMA Hub build | `pnpm run build` or `make build` | Builds the default Svelte UI in `src/codex_autorunner/pma_frontend/` → `src/codex_autorunner/pma_static/`; always rebuild after PMA UI changes |
-| Legacy UI build | `make legacy-ui-build` | Builds the old reference UI in `src/codex_autorunner/static_src/` → `src/codex_autorunner/static/generated/`; use only for legacy benchmarking/reference |
 
 ## Startup caveats
 

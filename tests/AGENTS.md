@@ -14,8 +14,6 @@ Use this directory as the router for frontend and web-ui validation.
 ## Quick Selection
 
 - PMA UI behavior: start with `pnpm pma:test`
-- Legacy UI behavior: removed (legacy source deleted)
-- HTML or DOM contract changes: run `make frontend-check`
 - Web route/service changes: run `python -m pytest -q tests/surfaces/web ...`
 - Static asset loading, caching, or auth/base-path changes: include the matching root web-ui tests
 

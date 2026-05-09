@@ -21,7 +21,6 @@ EXCLUDED_PARTS = {
     "__pycache__",
     "pma_static",
     "static",
-    "static_src",
 }
 
 STATE_MACHINE_PATH_PARTS = {

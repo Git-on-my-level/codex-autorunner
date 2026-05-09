@@ -11,13 +11,12 @@ import time
 from contextlib import ExitStack
 from importlib import resources
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Iterable, Optional
 from uuid import uuid4
 
 from ...core.logging_utils import safe_log
 
 _ASSET_VERSION_TOKEN = "__CAR_ASSET_VERSION__"
-_ASSET_MANIFEST = "assets.json"
 
 
 class StaticAssetProvenance(enum.Enum):
@@ -26,40 +25,10 @@ class StaticAssetProvenance(enum.Enum):
     EXISTING_CACHE_FALLBACK = "existing_cache_fallback"
 
 
-def _load_asset_manifest(static_dir: Path) -> Optional[dict[str, Any]]:
-    manifest_path = static_dir / _ASSET_MANIFEST
-    try:
-        if manifest_path.exists():
-            with manifest_path.open("r", encoding="utf-8") as f:
-                payload = json.load(f)
-                return payload if isinstance(payload, dict) else None
-    except (json.JSONDecodeError, OSError):
-        pass
-    return None
-
-
-def _get_assets_from_manifest(manifest: dict[str, Any]) -> set[str]:
-    assets: set[str] = set()
-    for entry in manifest.get("generated", []):
-        assets.add(entry["path"])
-    for entry in manifest.get("manual", []):
-        assets.add(entry["path"])
-    return assets
-
-
 _REQUIRED_STATIC_ASSETS: tuple[str, ...] = ()
 
 
 def missing_static_assets(static_dir: Path) -> list[str]:
-    manifest = _load_asset_manifest(static_dir)
-    if manifest:
-        assets = _get_assets_from_manifest(manifest)
-        missing_assets: list[str] = []
-        for asset in assets:
-            if not (static_dir / asset).exists():
-                missing_assets.append(asset)
-        return missing_assets
-
     missing: list[str] = []
     for rel_path in _REQUIRED_STATIC_ASSETS:
         try:
@@ -122,61 +91,6 @@ def resolve_pma_static_dir() -> tuple[Path, Optional[ExitStack]]:
     stack.close()
     fallback = Path(__file__).resolve().parent.parent / "pma_static"
     return fallback, None
-
-
-def _iter_static_source_files(source_dir: Path) -> Iterable[Path]:
-    try:
-        for path in source_dir.rglob("*.ts"):
-            try:
-                if path.name.endswith(".d.ts"):
-                    continue
-                if path.is_dir():
-                    continue
-                yield path
-            except OSError:
-                continue
-    except OSError:
-        return
-
-
-def _stale_static_sources(source_dir: Path, static_dir: Path) -> list[str]:
-    stale: list[str] = []
-    for source in _iter_static_source_files(source_dir):
-        try:
-            rel_path = source.relative_to(source_dir)
-        except ValueError:
-            rel_path = Path(source.name)
-        target = (static_dir / rel_path).with_suffix(".js")
-        try:
-            source_mtime = source.stat().st_mtime
-        except OSError:
-            continue
-        try:
-            target_mtime = target.stat().st_mtime
-        except OSError:
-            stale.append(rel_path.as_posix())
-            continue
-        if source_mtime > target_mtime:
-            stale.append(rel_path.as_posix())
-    return stale
-
-
-def warn_on_stale_static_assets(static_dir: Path, logger: logging.Logger) -> None:
-    source_dir = Path(__file__).resolve().parent.parent / "static_src"
-    if not source_dir.exists():
-        return
-    stale = _stale_static_sources(source_dir, static_dir)
-    if not stale:
-        return
-    preview = ", ".join(stale[:5])
-    suffix = f" (+{len(stale) - 5} more)" if len(stale) > 5 else ""
-    safe_log(
-        logger,
-        logging.WARNING,
-        "Legacy UI static assets appear stale; run `make legacy-ui-build`. Newer sources: %s%s",
-        preview,
-        suffix,
-    )
 
 
 def _iter_asset_files(static_dir: Path) -> Iterable[Path]:
@@ -667,7 +581,6 @@ def materialize_static_assets(
 def require_static_assets(static_dir: Path, logger: logging.Logger) -> None:
     missing = missing_static_assets(static_dir)
     if not missing:
-        warn_on_stale_static_assets(static_dir, logger)
         return
     safe_log(
         logger,

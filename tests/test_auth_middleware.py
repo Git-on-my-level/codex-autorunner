@@ -36,7 +36,7 @@ def _ws_scope(headers: Optional[list[tuple[bytes, bytes]]] = None) -> dict:
         ("/hub/repos", True),
         ("/repos/demo", True),
         ("/repos/demo/", True),
-        ("/repos/demo/static/generated/app.js", False),
+        ("/repos/demo/static/assets/app.js", False),
         ("/repos/demo/ws", True),
     ],
 )

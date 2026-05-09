@@ -8,32 +8,14 @@
     "pnpm": ">=9.15.0"
   },
   "scripts": {
-    "lint:js": "eslint \"src/codex_autorunner/static/generated/**/*.js\" \"src/codex_autorunner/static/vendor/**/*.js\"",
-    "lint:ts": "eslint \"src/codex_autorunner/static_src/**/*.ts\"",
-    "lint:html": "html-validate \"src/codex_autorunner/static/index.html\"",
     "lint": "pnpm pma:lint",
     "typecheck": "pnpm pma:typecheck",
     "build": "pnpm pma:build",
-    "legacy:postbuild": "node scripts/version-generated-imports.js && node scripts/add-static-banner.js && node scripts/generate-asset-manifest.mjs",
-    "legacy:build": "tsc -p tsconfig.json && pnpm legacy:postbuild",
-    "legacy:test": "node --test tests/js/*.test.js",
     "pma:dev": "pnpm --filter @codex-autorunner/pma-hub dev",
     "pma:build": "pnpm --filter @codex-autorunner/pma-hub build",
     "pma:typecheck": "pnpm --filter @codex-autorunner/pma-hub typecheck",
     "pma:lint": "pnpm --filter @codex-autorunner/pma-hub lint",
     "pma:test": "pnpm --filter @codex-autorunner/pma-hub test",
-    "pma:smoke:hub": ".venv/bin/python scripts/pma_live_hub_smoke.py",
-    "test:dom": "node scripts/check_dom_structure.mjs",
-    "test:markdown": "pnpm legacy:test"
-  },
-  "devDependencies": {
-    "@eslint/js": "^10.0.1",
-    "eslint": "^10.2.1",
-    "glob": "^13.0.6",
-    "globals": "^17.5.0",
-    "html-validate": "^10.13.1",
-    "jsdom": "^29.1.0",
-    "typescript": "^6.0.3",
-    "typescript-eslint": "^8.59.1"
+    "pma:smoke:hub": ".venv/bin/python scripts/pma_live_hub_smoke.py"
   }
 }

@@ -1,4 +1,3 @@
-import json
 import logging
 import shutil
 from dataclasses import dataclass
@@ -21,14 +20,14 @@ def _write_required_assets(static_dir: Path) -> None:
         "<html>__CAR_ASSET_VERSION__</html>", encoding="utf-8"
     )
     (static_dir / "styles.css").write_text("body { }", encoding="utf-8")
-    generated_dir = static_dir / "generated"
-    generated_dir.mkdir(parents=True, exist_ok=True)
-    (generated_dir / "bootstrap.js").write_text(
+    assets_dir = static_dir / "assets"
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    (assets_dir / "bootstrap.js").write_text(
         "console.log('bootstrap');", encoding="utf-8"
     )
-    (generated_dir / "loader.js").write_text("console.log('loader');", encoding="utf-8")
-    (generated_dir / "app.js").write_text("console.log('app');", encoding="utf-8")
-    (generated_dir / "github.js").write_text("console.log('github');", encoding="utf-8")
+    (assets_dir / "loader.js").write_text("console.log('loader');", encoding="utf-8")
+    (assets_dir / "app.js").write_text("console.log('app');", encoding="utf-8")
+    (assets_dir / "github.js").write_text("console.log('github');", encoding="utf-8")
     vendor_dir = static_dir / "vendor"
     vendor_dir.mkdir(parents=True, exist_ok=True)
     (vendor_dir / "xterm.js").write_text("console.log('xterm');", encoding="utf-8")
@@ -36,23 +35,6 @@ def _write_required_assets(static_dir: Path) -> None:
         "console.log('fit');", encoding="utf-8"
     )
     (vendor_dir / "xterm.css").write_text("body { }", encoding="utf-8")
-    manifest = {
-        "version": "test",
-        "generated": [
-            {"path": "generated/bootstrap.js", "hash": "test"},
-            {"path": "generated/loader.js", "hash": "test"},
-            {"path": "generated/app.js", "hash": "test"},
-            {"path": "generated/github.js", "hash": "test"},
-        ],
-        "manual": [
-            {"path": "index.html", "hash": "test"},
-            {"path": "styles.css", "hash": "test"},
-            {"path": "vendor/xterm.js", "hash": "test"},
-            {"path": "vendor/xterm-addon-fit.js", "hash": "test"},
-            {"path": "vendor/xterm.css", "hash": "test"},
-        ],
-    }
-    (static_dir / "assets.json").write_text(json.dumps(manifest), encoding="utf-8")
 
 
 @dataclass(frozen=True)
@@ -186,21 +168,20 @@ def test_static_assets_cached_and_compressed(
 ) -> None:
     source_dir = tmp_path / "source_static"
     _write_required_assets(source_dir)
-    (source_dir / "generated" / "big.js").write_text("a" * 2048, encoding="utf-8")
+    (source_dir / "assets" / "big.js").write_text("a" * 2048, encoding="utf-8")
     monkeypatch.setattr(static_assets, "resolve_static_dir", lambda: (source_dir, None))
     app = create_hub_app(_static_hub_env.hub_root)
     client = TestClient(app)
-    cache_res = client.get(f"/repos/{_static_hub_env.repo_id}/static/generated/app.js")
+    cache_res = client.get(f"/repos/{_static_hub_env.repo_id}/static/assets/app.js")
     assert cache_res.status_code == 200
     cache_control = cache_res.headers.get("Cache-Control", "")
-    assert "must-revalidate" in cache_control
-    assert "max-age=0" in cache_control
-    assert "no-store" in cache_control
+    assert "max-age=31536000" in cache_control
+    assert "immutable" in cache_control
     vendor_res = client.get(f"/repos/{_static_hub_env.repo_id}/static/vendor/xterm.js")
     assert vendor_res.status_code == 200
     assert "max-age=31536000" in vendor_res.headers.get("Cache-Control", "")
     gzip_res = client.get(
-        f"/repos/{_static_hub_env.repo_id}/static/generated/big.js",
+        f"/repos/{_static_hub_env.repo_id}/static/assets/big.js",
         headers={"Accept-Encoding": "gzip"},
     )
     assert gzip_res.status_code == 200
@@ -315,16 +296,6 @@ class TestStaticAssetCacheProvenance:
         assert first_provenance == StaticAssetProvenance.SOURCE_MATERIALIZE
         assert second_provenance == StaticAssetProvenance.FINGERPRINT_CACHE_HIT
         assert not any(cache_root.glob(".lock-*"))
-
-    def test_missing_static_assets_checks_manifest(self, tmp_path: Path) -> None:
-
-        static_dir = tmp_path / "with_manifest"
-        _write_required_assets(static_dir)
-        assert static_assets.missing_static_assets(static_dir) == []
-
-        (static_dir / "generated" / "app.js").unlink()
-        missing = static_assets.missing_static_assets(static_dir)
-        assert "generated/app.js" in missing
 
     def test_missing_static_assets_falls_back_to_required_list(
         self, tmp_path: Path

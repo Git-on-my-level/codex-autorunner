@@ -17,12 +17,25 @@ def test_classify_core_lane_for_core_paths() -> None:
 
 def test_classify_web_ui_lane_for_web_paths() -> None:
     selection = classify_changed_files(
-        ["src/codex_autorunner/static_src/updateTargets.ts"]
+        ["src/codex_autorunner/pma_frontend/src/routes/+page.svelte"]
     )
 
     assert selection.lane == "web-ui"
     assert selection.reason == "single-lane-diff"
     assert selection.lanes_touched == ("web-ui",)
+
+
+def test_deleted_legacy_ui_paths_no_longer_select_web_ui_lane() -> None:
+    selection = classify_changed_files(
+        ["src/codex_autorunner/static_src/updateTargets.ts"]
+    )
+
+    assert selection.lane == "aggregate"
+    assert selection.reason == "unknown-path"
+    assert selection.lanes_touched == ()
+    assert selection.unknown_paths == (
+        "src/codex_autorunner/static_src/updateTargets.ts",
+    )
 
 
 def test_classify_chat_apps_lane_for_chat_paths() -> None:
@@ -106,7 +119,7 @@ def test_multi_lane_diff_forces_aggregate() -> None:
     selection = classify_changed_files(
         [
             "src/codex_autorunner/core/update_targets.py",
-            "src/codex_autorunner/static_src/updateTargets.ts",
+            "src/codex_autorunner/pma_frontend/src/routes/+page.svelte",
         ]
     )
 
@@ -115,14 +128,14 @@ def test_multi_lane_diff_forces_aggregate() -> None:
     assert selection.lanes_touched == ("core", "web-ui")
     assert selection.lane_paths == (
         ("core", ("src/codex_autorunner/core/update_targets.py",)),
-        ("web-ui", ("src/codex_autorunner/static_src/updateTargets.ts",)),
+        ("web-ui", ("src/codex_autorunner/pma_frontend/src/routes/+page.svelte",)),
     )
 
 
 def test_classification_is_deterministic_for_same_input_set() -> None:
     first = classify_changed_files(
         [
-            "src/codex_autorunner/static_src/updateTargets.ts",
+            "src/codex_autorunner/pma_frontend/src/routes/+page.svelte",
             "src/codex_autorunner/core/update_targets.py",
             "src/codex_autorunner/core/update_targets.py",
         ]
@@ -130,7 +143,7 @@ def test_classification_is_deterministic_for_same_input_set() -> None:
     second = classify_changed_files(
         [
             "src/codex_autorunner/core/update_targets.py",
-            "src/codex_autorunner/static_src/updateTargets.ts",
+            "src/codex_autorunner/pma_frontend/src/routes/+page.svelte",
         ]
     )
 

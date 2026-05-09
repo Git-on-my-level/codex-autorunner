@@ -206,46 +206,6 @@ def test_hub_repo_list_rewrites_stale_runner_last_run_to_authoritative_flow_run(
     assert repo_entry["canonical_state_v1"]["latest_run_id"] == "newer-completed"
 
 
-def test_hub_ui_exposes_destination_and_channel_directory_controls() -> None:
-    repo_root = Path(__file__).resolve().parents[3]
-    index_html = (
-        repo_root / "src" / "codex_autorunner" / "static" / "index.html"
-    ).read_text(encoding="utf-8")
-    assert 'id="hub-repo-search"' in index_html
-    assert 'id="hub-refresh"' in index_html
-    assert 'id="hub-new-repo"' in index_html
-    assert 'id="hub-scan"' not in index_html
-    assert 'id="hub-quick-scan"' not in index_html
-    assert 'id="hub-channel-query"' not in index_html
-    assert 'id="hub-channel-search"' not in index_html
-    assert 'id="hub-channel-refresh"' not in index_html
-    assert "Channel Directory" not in index_html
-    assert "Copy Ref copies a channel ref" not in index_html
-
-    static_src = repo_root / "src" / "codex_autorunner" / "static_src"
-    hub_dom = (static_src / "hubDomBindings.ts").read_text(encoding="utf-8")
-    assert 'action === "set_destination"' in hub_dom
-    assert "hubRepoSearchInput" in hub_dom
-    hub_modals = (static_src / "hubModals.ts").read_text(encoding="utf-8")
-    assert "/hub/repos/${encodeURIComponent(repo.id)}/destination" in hub_modals
-    assert "await startHubJob(`/hub/jobs/repos/${repoId}/remove`" in hub_modals
-    hub_refresh = (static_src / "hubRefresh.ts").read_text(encoding="utf-8")
-    assert "/hub/chat/channels?limit=1000" in hub_refresh
-    hub_cards = (static_src / "hubRepoCards.ts").read_text(encoding="utf-8")
-    assert "hub-chat-binding-row" in hub_cards
-    assert "export function renderReposWithScroll" in hub_cards
-    assert "container_name" in hub_modals
-    assert "profile" in hub_modals
-    assert "workdir" in hub_modals
-    assert "env_passthrough" in hub_modals
-    assert "body.env =" in hub_modals
-    assert "mounts" in hub_modals
-    assert "read_only" in hub_modals
-    assert 'header.textContent = "Channels"' not in hub_dom
-    assert "copy_channel_key" not in hub_dom
-    assert "Copied channel ref" not in hub_dom
-
-
 def test_hub_repo_list_includes_last_run_duration_seconds(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     supervisor = create_test_hub_supervisor(hub_root)

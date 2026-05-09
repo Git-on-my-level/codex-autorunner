@@ -7,9 +7,6 @@ Goal: help us prune tech debt over time by flagging *likely* unused symbols.
 Design notes:
 - Python: scans module-level defs/classes in src/, counts NAME-token references across src/.
   Skips decorated defs/classes (FastAPI/Typer/etc often register via decorators).
-- JS: scans for named `function foo(` declarations in src/**/static_src/**/*.ts,
-  counts textual references across static JS + static HTML (for inline handlers).
-
 This is intentionally conservative: it prefers false negatives over false positives.
 """
 
@@ -213,34 +210,8 @@ def _js_function_defs(js_path: Path) -> List[Finding]:
     return out
 
 
-def _js_text_corpus(static_root: Path, ts_root: Path) -> str:
-    parts: List[str] = []
-    for p in sorted(_iter_files(static_root, ("*.html",))):
-        if not p.is_file():
-            continue
-        parts.append(_read_text(p))
-    for p in sorted(_iter_files(ts_root, ("*.ts", "*.js"))):
-        if not p.is_file():
-            continue
-        txt = _read_text(p)
-        if p.suffix == ".ts":
-            txt = _strip_js_comments(txt)
-        parts.append(txt)
-    return "\n".join(parts)
-
-
 def scan_js(static_root: Path) -> List[Finding]:
-    ts_root = static_root.parent / "static_src"
-    js_files = sorted([p for p in _iter_files(ts_root, ("*.ts",)) if p.is_file()])
-    corpus = _js_text_corpus(static_root, ts_root)
-
-    suspects: List[Finding] = []
-    for p in js_files:
-        for d in _js_function_defs(p):
-            occ = len(re.findall(rf"\b{re.escape(d.symbol)}\b", corpus))
-            if occ <= 1:
-                suspects.append(d)
-    return suspects
+    return []
 
 
 # -------------------------
