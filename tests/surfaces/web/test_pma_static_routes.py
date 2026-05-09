@@ -18,12 +18,16 @@ from codex_autorunner.surfaces.web.static_assets import (
 
 PMA_MANUAL_SCREENSHOT_ROUTES = (
     "/chats",
+    "/hub",
     "/repos",
-    "/repos/example",
-    "/repos/example/tickets",
-    "/repos/example/tickets/TICKET-100",
+    "/repos/smoke-repo",
+    "/repos/smoke-repo/tickets",
+    "/repos/smoke-repo/tickets/TICKET-350-smoke-fixture",
+    "/repos/smoke-repo/worktrees/smoke-repo--review",
+    "/repos/smoke-repo/worktrees/smoke-repo--review/contextspace",
+    "/repos/smoke-repo/worktrees/smoke-repo--review/tickets",
     "/tickets",
-    "/tickets/TICKET-100",
+    "/tickets/TICKET-350-smoke-fixture",
     "/settings",
 )
 
@@ -61,6 +65,9 @@ def _seed_manifest_worktree(hub_root: Path, *, base_id: str, worktree_id: str) -
 def test_pma_top_level_routes_serve_new_spa(tmp_path):
     hub_root = tmp_path / "hub"
     seed_hub_files(hub_root, force=True)
+    _seed_manifest_worktree(
+        hub_root, base_id="smoke-repo", worktree_id="smoke-repo--review"
+    )
     client = TestClient(create_hub_app(hub_root))
 
     for path in PMA_MANUAL_SCREENSHOT_ROUTES:

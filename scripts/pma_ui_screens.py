@@ -33,12 +33,22 @@ DEFAULT_OUTBOX_DIR = REPO_ROOT / ".codex-autorunner" / "filebox" / "outbox"
 
 DEFAULT_ROUTES: tuple[tuple[str, str], ...] = (
     ("pma-chat", "/chats"),
-    ("dashboard", "/dashboard"),
+    ("hub", "/hub"),
     ("repos", "/repos"),
     ("repo-detail", "/repos/smoke-repo"),
-    ("worktree-detail", "/worktrees/smoke-repo--review"),
+    ("repo-tickets", "/repos/smoke-repo/tickets"),
+    ("repo-ticket-detail", "/repos/smoke-repo/tickets/TICKET-350-smoke-fixture"),
+    ("worktree-detail", "/repos/smoke-repo/worktrees/smoke-repo--review"),
+    (
+        "worktree-contextspace",
+        "/repos/smoke-repo/worktrees/smoke-repo--review/contextspace",
+    ),
+    (
+        "worktree-tickets",
+        "/repos/smoke-repo/worktrees/smoke-repo--review/tickets",
+    ),
     ("tickets", "/tickets"),
-    ("ticket-detail", "/tickets/350"),
+    ("ticket-detail", "/tickets/TICKET-350-smoke-fixture"),
     ("worktrees", "/worktrees"),
     ("contextspace", "/contextspace/local"),
     ("settings", "/settings"),
@@ -54,7 +64,6 @@ PRIMARY_LOADING_MARKERS = (
     "Loading tickets",
     "Loading contextspace docs",
     "Loading settings",
-    "Loading dashboard",
     "Loading models",
 )
 
@@ -324,9 +333,13 @@ def capture_screenshots(
                 f"capturing {viewport_label(viewport)} {item.name}: {url}",
                 flush=True,
             )
-            page.goto(
+            response = page.goto(
                 url, wait_until="domcontentloaded", timeout=timeout_seconds * 1000
             )
+            if response is None:
+                errors.append("route did not return a browser navigation response")
+            elif response.status >= 400:
+                errors.append(f"route returned HTTP {response.status}")
             try:
                 page.wait_for_function(
                     """(loadingMarkers) => {

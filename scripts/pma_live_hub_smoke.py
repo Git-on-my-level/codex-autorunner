@@ -48,7 +48,6 @@ PRIMARY_LOADING_MARKERS = (
     "Loading tickets",
     "Loading contextspace docs",
     "Loading settings",
-    "Loading dashboard",
 )
 
 CONTROL_PROMPT = """<CAR_TICKET_FLOW_PROMPT>

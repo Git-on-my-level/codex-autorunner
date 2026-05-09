@@ -28,10 +28,30 @@ def test_default_routes_cover_primary_pma_pages() -> None:
     mod = _load_module()
     routes = mod.parse_routes([])
     assert [(route.name, route.path) for route in routes] == list(mod.DEFAULT_ROUTES)
+    assert ("hub", "/hub") in mod.DEFAULT_ROUTES
     assert ("repo-detail", "/repos/smoke-repo") in mod.DEFAULT_ROUTES
-    assert ("worktree-detail", "/worktrees/smoke-repo--review") in mod.DEFAULT_ROUTES
-    assert ("ticket-detail", "/tickets/350") in mod.DEFAULT_ROUTES
+    assert (
+        "worktree-detail",
+        "/repos/smoke-repo/worktrees/smoke-repo--review",
+    ) in mod.DEFAULT_ROUTES
+    assert (
+        "ticket-detail",
+        "/tickets/TICKET-350-smoke-fixture",
+    ) in mod.DEFAULT_ROUTES
     assert ("contextspace", "/contextspace/local") in mod.DEFAULT_ROUTES
+    assert ("dashboard", "/dashboard") not in mod.DEFAULT_ROUTES
+
+
+def test_default_routes_match_pma_ui_qa_docs() -> None:
+    mod = _load_module()
+    docs = (_repo_root() / "docs" / "ops" / "pma-ui-qa.md").read_text(encoding="utf-8")
+    documented_routes = [
+        line.strip()[3:-1]
+        for line in docs.splitlines()
+        if line.strip().startswith("- `/") and line.strip().endswith("`")
+    ]
+
+    assert documented_routes == [path for _name, path in mod.DEFAULT_ROUTES]
 
 
 def test_custom_route_parsing() -> None:
