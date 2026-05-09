@@ -32,6 +32,7 @@ STATE_MACHINE_PATH_PARTS = {
 }
 
 STATE_MACHINE_PATH_PREFIXES = (
+    ("adapters", "app_server"),
     ("agents", "acp"),
     ("adapters", "chat"),
     ("core", "hub_control_plane"),
