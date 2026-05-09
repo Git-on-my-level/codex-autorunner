@@ -109,16 +109,6 @@ def _normalize_workspace_root_input(workspace_root: str) -> PurePosixPath:
     return normalized
 
 
-def _resolve_workspace_from_repo_id(request: Request, repo_id: str) -> Path:
-    snapshot = _resolve_repo_snapshot(request, repo_id)
-    repo_path = getattr(snapshot, "path", None)
-    if isinstance(repo_path, str):
-        repo_path = Path(repo_path)
-    if isinstance(repo_path, Path):
-        return repo_path.absolute()
-    raise HTTPException(status_code=404, detail=f"Repo not found: {repo_id}")
-
-
 def _resolve_pr_upstream_repo_id(request: Request, repo_id: str) -> str:
     snapshot = _resolve_repo_snapshot(request, repo_id)
     kind = normalize_optional_text(getattr(snapshot, "kind", None))
