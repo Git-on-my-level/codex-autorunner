@@ -39,5 +39,5 @@ viewer.
 ## Tests
 
 - Primary web surface tests: `tests/surfaces/web/`
-- Web-ui lane tests also include root files such as `tests/test_static_asset_cache.py`, `tests/test_auth_middleware.py`, `tests/test_hub_ui_escape.py`, and `tests/test_voice_ui.py`.
+- Web-ui lane tests also include root files such as `tests/test_static_asset_cache.py` and `tests/test_auth_middleware.py`.
 - For broader test routing, read `tests/AGENTS.md`.

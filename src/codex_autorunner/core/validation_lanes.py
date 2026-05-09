@@ -66,10 +66,8 @@ _LANE_GLOBS: dict[ScopedValidationLane, tuple[str, ...]] = {
         "tests/test_auth_middleware.py",
         "tests/test_base_path*.py",
         "tests/test_browser_docs.py",
-        "tests/test_hub_ui*.py",
         "tests/test_static*.py",
         "tests/test_ticket_flow_ui*.py",
-        "tests/test_voice_ui.py",
     ),
     "chat-apps": (
         "tests/test_chat*.py",

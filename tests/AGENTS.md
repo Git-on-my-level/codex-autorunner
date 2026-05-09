@@ -5,11 +5,10 @@ Use this directory as the router for frontend and web-ui validation.
 ## Frontend Test Map
 
 - `src/codex_autorunner/pma_frontend/src/**/*.test.ts`: default Svelte PMA Hub tests
-- `tests/js/`: browserless legacy UI tests (removed — legacy source deleted)
 - `tests/surfaces/web/`: FastAPI route and web-service tests for `src/codex_autorunner/surfaces/web/`
 - `tests/surfaces/web/test_pma_static_routes.py`: PMA `index.html` shell for hub UI paths (manual deep-link examples)
 - `tests/surfaces/web/test_pma_spa_shell_contract.py`: shell coverage for every `pma_frontend/src/routes/**/+page.svelte` probe (see `scripts/check_pma_hub_spa_shell.py`)
-- Root web-ui tests: `tests/test_static_asset_cache.py`, `tests/test_auth_middleware.py`, `tests/test_hub_ui_escape.py`, `tests/test_voice_ui.py`, plus the `tests/test_app_server*.py`, `tests/test_base_path*.py`, and `tests/test_static*.py` families
+- Root web-ui tests: `tests/test_static_asset_cache.py`, `tests/test_auth_middleware.py`, plus the `tests/test_app_server*.py`, `tests/test_base_path*.py`, and `tests/test_static*.py` families
 
 ## Quick Selection
 

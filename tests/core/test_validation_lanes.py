@@ -74,15 +74,6 @@ def test_classify_web_ui_lane_for_ticket_flow_ui_integration_test() -> None:
     )
 
 
-def test_classify_web_ui_lane_for_root_level_voice_ui_test() -> None:
-    selection = classify_changed_files(["tests/test_voice_ui.py"])
-
-    assert selection.lane == "web-ui"
-    assert selection.reason == "single-lane-diff"
-    assert selection.lanes_touched == ("web-ui",)
-    assert selection.lane_paths == (("web-ui", ("tests/test_voice_ui.py",)),)
-
-
 def test_shared_risk_paths_force_aggregate() -> None:
     selection = classify_changed_files(["scripts/check.sh"])
 
