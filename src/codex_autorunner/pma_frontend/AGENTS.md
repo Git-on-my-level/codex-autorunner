@@ -15,8 +15,6 @@ hubs serve by default.
   comment block in `../surfaces/web/app.py`). Prefer documenting a new deep path in
   `tests/surfaces/web/test_pma_static_routes.py`.
 - Design system: `DESIGN.md`
-- Legacy/reference UI: `../static_src/` and `../static/`; run it with
-  `make serve-legacy-ui` or `CAR_ENABLE_LEGACY_UI=1`.
 - PMA chat renders the backend canonical timeline (`/hub/pma/threads/{id}/timeline`). Frontend helpers may map canonical items to cards and reconcile temporary optimistic items by stable backend IDs, but must not compose `/turns` into a parallel transcript or own final-delivery state.
 
 ## Validation

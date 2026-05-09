@@ -11,7 +11,7 @@ This surface owns FastAPI routes, web-specific services, and static asset servin
 
 - Route handlers live under `routes/`; prefer extending the closest route package before growing `app.py`.
 - Shared web-specific logic belongs in `services/`, `static_assets.py`, `static_refresh.py`, or nearby helpers.
-- Legacy UI source: `../../static_src/`; compiled legacy assets: `../../static/`. PMA Hub default UI: `../../pma_frontend/` → `../../pma_static/`.
+- PMA Hub UI: `../../pma_frontend/` → `../../pma_static/`.
 - PMA managed-thread chat routes expose backend-owned timeline, progress, queue, and delivery state from `adapters/chat/` and `core/orchestration/`. Do not add web-local transcript composition or delivery state machines.
 - Broader surface overview: `README.md`.
 

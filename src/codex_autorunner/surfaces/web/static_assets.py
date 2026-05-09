@@ -47,17 +47,7 @@ def _get_assets_from_manifest(manifest: dict[str, Any]) -> set[str]:
     return assets
 
 
-_REQUIRED_STATIC_ASSETS = (
-    "index.html",
-    "styles.css",
-    "generated/bootstrap.js",
-    "generated/loader.js",
-    "generated/app.js",
-    "vendor/xterm.js",
-    "vendor/xterm-addon-fit.js",
-    "vendor/xterm.css",
-    "assets.json",
-)
+_REQUIRED_STATIC_ASSETS: tuple[str, ...] = ()
 
 
 def missing_static_assets(static_dir: Path) -> list[str]:
@@ -495,6 +485,18 @@ def materialize_static_assets(
     logger: logging.Logger,
 ) -> tuple[Path, Optional[ExitStack], StaticAssetProvenance]:
     static_dir, static_context = resolve_static_dir()
+    if not static_dir.exists():
+        if static_context is not None:
+            static_context.close()
+        target_dir = cache_root / "_no_legacy_static"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        safe_log(
+            logger,
+            logging.DEBUG,
+            "static_assets: [%s] legacy static dir removed; using empty placeholder",
+            StaticAssetProvenance.EXISTING_CACHE_FALLBACK.value,
+        )
+        return target_dir, None, StaticAssetProvenance.EXISTING_CACHE_FALLBACK
     existing_cache = _select_latest_valid_cache(cache_root)
     missing_source = missing_static_assets(static_dir)
     if missing_source:
