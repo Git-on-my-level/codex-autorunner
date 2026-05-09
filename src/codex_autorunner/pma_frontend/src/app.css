@@ -1741,7 +1741,7 @@ textarea:hover {
 .message-attachments {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: var(--space-2);
   margin: 8px 0 0;
   padding: 0;
   list-style: none;
@@ -1751,63 +1751,67 @@ textarea:hover {
 .message-attachment-pill {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 3px 10px 3px 8px;
-  border-radius: 999px;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border-subtle);
+  gap: var(--space-2);
+  max-width: 100%;
+  min-height: 28px;
+  padding: 2px var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-2);
+  background: var(--color-panel-tint);
   font-size: var(--font-size-0);
   line-height: 1.4;
   color: var(--color-ink);
-  max-width: 100%;
-  transition: background 0.15s ease, border-color 0.15s ease;
+  text-decoration: none;
+  transition: border-color 0.15s ease, background 0.15s ease;
 }
 
 .message-attachment-pill:hover {
+  border-color: var(--color-border-strong, var(--color-border));
   background: var(--color-surface-muted);
-  border-color: var(--color-border);
 }
 
-.message-attachment-pill .attachment-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  border-radius: 4px;
-  flex-shrink: 0;
+.message-attachment-pill .attachment-kind {
+  text-transform: lowercase;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--color-ink-faint);
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-subtle);
 }
 
-.message-attachment-pill .attachment-icon.kind-image {
+.message-attachment-pill.kind-image .attachment-kind,
+.message-attachment-pill.kind-link .attachment-kind {
   color: var(--color-accent);
+  border-color: color-mix(in srgb, var(--color-accent) 30%, transparent);
 }
 
-.message-attachment-pill .attachment-icon.kind-link {
-  color: var(--color-accent);
-}
-
-.message-attachment-pill .attachment-icon.kind-file {
-  color: var(--color-ink-muted);
-}
-
-.message-attachment-pill a,
-.message-attachment-pill > span:not(.attachment-icon):not(.attachment-size) {
-  color: var(--color-ink);
-  text-decoration: none;
+.message-attachment-pill strong {
+  max-width: 240px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 240px;
-  font-weight: 500;
+  font-weight: 600;
+  color: var(--color-ink);
 }
 
-.message-attachment-pill a:hover {
+.message-attachment-pill a {
+  display: inline-flex;
+  align-items: center;
+  color: var(--color-ink);
+  text-decoration: none;
+}
+
+.message-attachment-pill a:hover strong {
   color: var(--color-accent);
 }
 
-.message-attachment-pill .attachment-size {
-  color: var(--color-ink-muted);
+.message-attachment-pill em {
+  font-style: normal;
   font-size: 11px;
+  color: var(--color-ink-faint);
   font-variant-numeric: tabular-nums;
 }
 

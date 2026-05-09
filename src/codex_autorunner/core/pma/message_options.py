@@ -10,7 +10,10 @@ from ..car_context import (
     normalize_car_context_profile,
 )
 from ..text_utils import _normalize_optional_text
-from .attachments import normalize_managed_thread_attachments
+from .attachments import (
+    build_managed_thread_attachment_execution_context,
+    normalize_managed_thread_attachments,
+)
 from .policies import BusyPolicy, normalize_busy_policy, validate_max_text_chars
 from .prompts import (
     ManagedThreadPromptRequest,
@@ -57,6 +60,7 @@ class ManagedThreadMessageOptions:
     sandbox_policy: Optional[Any]
     live_backend_thread_id: str
     execution_prompt: str
+    execution_input_items: Optional[list[dict[str, Any]]]
     delivery_payload: dict[str, Any]
 
 
@@ -71,6 +75,13 @@ def resolve_managed_thread_message_options(
     validate_max_text_chars(message, max_text_chars)
 
     attachments = normalize_managed_thread_attachments(input.attachments)
+    attachment_context = build_managed_thread_attachment_execution_context(
+        attachments,
+        hub_root=input.hub_root,
+    )
+    execution_message = message
+    if attachment_context is not None:
+        execution_message = f"{message}\n\n{attachment_context.prompt_text}"
     model = _normalize_optional_text(input.model) or input.defaults.get("model")
     reasoning = _normalize_optional_text(input.reasoning) or input.defaults.get(
         "reasoning"
@@ -97,7 +108,7 @@ def resolve_managed_thread_message_options(
             runtime_cwd=input.runtime_cwd,
             stored_backend_id=input.live_backend_thread_id,
             compact_seed=compact_seed,
-            message=message,
+            message=execution_message,
             context_bundle=context_bundle,
         )
     )
@@ -123,6 +134,9 @@ def resolve_managed_thread_message_options(
         sandbox_policy=input.sandbox_policy,
         live_backend_thread_id=input.live_backend_thread_id,
         execution_prompt=execution_prompt,
+        execution_input_items=(
+            attachment_context.input_items if attachment_context is not None else None
+        ),
         delivery_payload=delivery_payload,
     )
 

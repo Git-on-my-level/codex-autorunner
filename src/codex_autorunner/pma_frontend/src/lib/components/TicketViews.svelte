@@ -17,17 +17,9 @@
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import { statusLabel } from '$lib/viewModels/pmaChat';
   import type { JsonRecord, PartialPageIssue } from '$lib/api/client';
-  import {
-    agentCanListModels,
-    agentRecordForId,
-    modelLabel,
-    modelValue
-  } from '$lib/viewModels/modelPickers';
-  import {
-    PMA_REASONING_EFFORT_VALUES,
-    type PmaReasoningEffortValue,
-    agentIdsFromPmaAgentsPayload
-  } from '$lib/viewModels/ticketSettingsContract';
+  import AgentModelReasoningPicker from '$lib/components/AgentModelReasoningPicker.svelte';
+  import { agentCanListModels, agentRecordForId } from '$lib/viewModels/modelPickers';
+  import { agentIdsFromPmaAgentsPayload } from '$lib/viewModels/ticketSettingsContract';
 
   let {
     state: viewState,
@@ -143,6 +135,15 @@
   let lastSettingsSignature = $state<string | null>(null);
   let settingsSaveTimer: ReturnType<typeof setTimeout> | null = null;
   let queueOpen = $state(false);
+  let repairOpen = $state(initialDetail?.needsRepair ?? false);
+  let lastRepairTicketId = $state<string | null>(initialDetail?.id ?? null);
+  $effect(() => {
+    if (!detail) return;
+    if (detail.id !== lastRepairTicketId) {
+      lastRepairTicketId = detail.id;
+      repairOpen = detail.needsRepair;
+    }
+  });
   let dragSourceRouteId = $state<string | null>(null);
   let dragTargetRouteId = $state<string | null>(null);
   let dragPlaceAfter = $state(false);
@@ -159,9 +160,10 @@
   const agentOptions = $derived(agents.length > 0 ? agentIdsFromPmaAgentsPayload(agents) : supportedAgentIds);
   const selectedAgentRecord = $derived(agentRecordForId(agents, editAgent));
   const selectedAgentCanListModels = $derived(agentCanListModels(selectedAgentRecord));
-  const selectedModelCatalog = $derived(selectedAgentCanListModels ? modelCatalogs[editAgent] ?? [] : []);
-  const selectedModelsLoading = $derived(Boolean(selectedAgentCanListModels && modelCatalogs[editAgent] === undefined));
-  const reasoningOptions = $derived(PMA_REASONING_EFFORT_VALUES);
+  const catalogRaw = $derived(selectedAgentCanListModels ? modelCatalogs[editAgent] : undefined);
+  const selectedModelCatalog = $derived(Array.isArray(catalogRaw) ? catalogRaw : []);
+  const selectedModelsLoading = $derived(Boolean(selectedAgentCanListModels && catalogRaw === undefined));
+  const modelCatalogError = $derived(catalogRaw === null ? 'Could not load models' : null);
 
   onDestroy(() => {
     if (settingsSaveTimer) clearTimeout(settingsSaveTimer);
@@ -410,6 +412,9 @@
       {:else}
         <div class="ticket-card-list" role="list" aria-label="Ticket queue">
           {#each visibleRows as row}
+            {@const numberDigits = row.numberLabel.replace(/^#/, '')}
+            {@const hasNumber = numberDigits !== row.numberLabel}
+            {@const agentText = row.agentLabel && row.agentLabel !== 'Unassigned' ? row.agentLabel : null}
             <article
               class={`ticket-card ${row.status} ${dragSourceRouteId === row.routeId ? 'drag-source' : ''} ${dragTargetRouteId === row.routeId && !dragPlaceAfter && dragSourceRouteId !== row.routeId ? 'drop-before' : ''} ${dragTargetRouteId === row.routeId && dragPlaceAfter && dragSourceRouteId !== row.routeId ? 'drop-after' : ''}`}
               class:current={row.isCurrent}
@@ -431,7 +436,13 @@
                 <span aria-hidden="true">☰</span>
               </button>
               <a class="ticket-card-body" href={href(row.href)} data-sveltekit-preload-data="tap">
-                <span class="ticket-card-num">{row.numberLabel}</span>
+                <span class="ticket-card-num" aria-label={hasNumber ? `Ticket ${numberDigits}` : row.numberLabel}>
+                  {#if hasNumber}
+                    <span class="ticket-card-num-hash" aria-hidden="true">#</span><span class="ticket-card-num-value">{numberDigits}</span>
+                  {:else}
+                    <span class="ticket-card-num-value">{row.numberLabel}</span>
+                  {/if}
+                </span>
                 <div class="ticket-card-main">
                   <div class="ticket-card-title-row">
                     <strong class="ticket-card-title">{row.title}</strong>
@@ -446,17 +457,21 @@
                   </div>
                   <div class="ticket-card-meta">
                     {#if row.bodyPreview}<span class="ticket-card-preview">{row.bodyPreview}</span>{/if}
-                    {#if (row.agentLabel && row.agentLabel !== 'Unassigned') || row.modelLabel}
-                      <span class="ticket-card-agent">
-                        {#if row.agentLabel && row.agentLabel !== 'Unassigned'}{row.agentLabel}{/if}
-                        {#if row.modelLabel}<span class="ticket-card-model">{row.modelLabel}</span>{/if}
-                      </span>
-                    {/if}
                     {#if row.diffLabel}<span class="diff-label">{row.diffLabel}</span>{/if}
                     {#if row.durationLabel}<span>{row.durationLabel}</span>{/if}
                     {#if row.updatedAt}<span>{rowRelativeTime(row)}</span>{/if}
                   </div>
                 </div>
+                {#if agentText || row.modelLabel}
+                  <div class="ticket-card-side" aria-label="Agent and model">
+                    {#if agentText}
+                      <span class="ticket-card-agent">{agentText}</span>
+                    {/if}
+                    <span class="ticket-card-model" class:placeholder={!row.modelLabel}>
+                      {row.modelLabel ?? 'default model'}
+                    </span>
+                  </div>
+                {/if}
               </a>
             </article>
           {/each}
@@ -483,6 +498,41 @@
             />
           </span>
         </h1>
+      </div>
+
+      <div class="ticket-settings-bar" aria-label="Ticket settings">
+        {#if detail.needsRepair}
+          <button
+            type="button"
+            class="status-pill invalid status-pill-button"
+            aria-expanded={repairOpen}
+            aria-controls="ticket-repair-panel"
+            title="Show what needs repair"
+            onclick={() => (repairOpen = !repairOpen)}
+          >{statusLabel('invalid')}</button>
+        {:else if detail.status !== 'idle'}
+          <span class="status-pill {detail.status}">{statusLabel(detail.status)}</span>
+        {/if}
+        <AgentModelReasoningPicker
+          variant="ticket"
+          {agents}
+          fallbackAgentIds={agentOptions}
+          bind:agentValue={editAgent}
+          bind:modelValue={editModel}
+          bind:reasoningValue={editReasoning}
+          models={selectedModelCatalog}
+          loading={selectedModelsLoading}
+          modelCatalogError={modelCatalogError}
+          allowEmptyModelOption={true}
+          onchange={() => scheduleSettingsSave(0)}
+        />
+        <label class="ticket-inline-field ticket-inline-done">
+          <input type="checkbox" bind:checked={editDone} onchange={() => scheduleSettingsSave(0)} />
+          <span>Done</span>
+        </label>
+      </div>
+
+      <div class="ticket-hero-footer" aria-label="Ticket navigation and metadata">
         <div class="ticket-hero-controls">
           {#if detail.sourceTickets.length > 0}
             <button
@@ -498,73 +548,56 @@
           {/if}
           {#if detail.previousTicketHref}
             <a class="ghost-button ticket-nav-btn" href={href(detail.previousTicketHref)} aria-label="Previous ticket">
-              <span>‹ Prev</span>
               <span class="kbd">[</span>
+              <span>‹ Prev</span>
             </a>
           {/if}
           {#if detail.nextTicketHref}
             <a class="ghost-button ticket-nav-btn" href={href(detail.nextTicketHref)} aria-label="Next ticket">
-              <span class="kbd">]</span>
               <span>Next ›</span>
+              <span class="kbd">]</span>
             </a>
+          {/if}
+        </div>
+        <div class="ticket-hero-meta">
+          {#if detail.updatedLabel && detail.updatedLabel !== '—'}
+            {@const hasActivity = detail.updatedLabel !== 'No activity yet'}
+            <span class="ticket-inline-meta" class:muted={!hasActivity} title={hasActivity ? 'Last updated' : 'No run activity yet'}>
+              {hasActivity ? `Updated ${detail.updatedLabel}` : 'Not started'}
+            </span>
+          {/if}
+          {#if detail.pathLabel}
+            <span class="ticket-inline-path" title={detail.pathLabel}>{detail.pathLabel}</span>
           {/if}
         </div>
       </div>
 
-      <div class="ticket-settings-bar" aria-label="Ticket settings">
-        {#if detail.status !== 'idle'}
-          <span class="status-pill {detail.status}">{statusLabel(detail.status)}</span>
-        {/if}
-        <label class="ticket-inline-field">
-          <span>Agent</span>
-          <select bind:value={editAgent} onchange={() => scheduleSettingsSave(0)}>
-            {#if editAgent && (agentOptions.length === 0 || !agentOptions.includes(editAgent))}
-              <option value={editAgent}>{editAgent}</option>
-            {/if}
-            {#each agentOptions as optionAgentId (optionAgentId)}
-              <option value={optionAgentId}>{optionAgentId}</option>
-            {/each}
-          </select>
-        </label>
-        {#if selectedAgentCanListModels}
-          <label class="ticket-inline-field">
-            <span>Model</span>
-            <select bind:value={editModel} onchange={() => scheduleSettingsSave(0)} disabled={selectedModelsLoading}>
-              <option value="">default</option>
-              {#each selectedModelCatalog as modelRecord (modelValue(modelRecord))}
-                <option value={modelValue(modelRecord)}>{modelLabel(modelRecord)}</option>
-              {/each}
-              {#if editModel && !selectedModelCatalog.some((m) => modelValue(m) === editModel)}
-                <option value={editModel}>{editModel}</option>
-              {/if}
-            </select>
-          </label>
-          {#if selectedAgentCanListModels}
-            <label class="ticket-inline-field">
-              <span>Reasoning</span>
-              <select bind:value={editReasoning} onchange={() => scheduleSettingsSave(0)}>
-                <option value="">default</option>
-                {#each reasoningOptions as effort (effort)}
-                  <option value={effort}>{effort}</option>
-                {/each}
-                {#if editReasoning && !reasoningOptions.includes(editReasoning as PmaReasoningEffortValue)}
-                  <option value={editReasoning}>{editReasoning}</option>
-                {/if}
-              </select>
-            </label>
+      {#if detail.needsRepair && repairOpen}
+        <div id="ticket-repair-panel" class="ticket-repair-banner" role="region" aria-label="Ticket repair details">
+          <div class="ticket-repair-header">
+            <strong>This ticket needs repair before it can run.</strong>
+            <button type="button" class="ghost-button ticket-repair-close" onclick={() => (repairOpen = false)} aria-label="Close repair panel">Dismiss</button>
+          </div>
+          {#if detail.errors.length > 0}
+            <ul class="ticket-repair-errors">
+              {#each detail.errors as err}<li>{err}</li>{/each}
+            </ul>
+          {:else}
+            <p class="ticket-repair-hint">Frontmatter validation failed. Fix the keys below, then save.</p>
           {/if}
-        {/if}
-        <label class="ticket-inline-field ticket-inline-done">
-          <input type="checkbox" bind:checked={editDone} onchange={() => scheduleSettingsSave(0)} />
-          <span>Done</span>
-        </label>
-        {#if detail.updatedLabel && detail.updatedLabel !== '—'}
-          <span class="ticket-inline-meta" title="Last updated">{detail.updatedLabel}</span>
-        {/if}
-        {#if detail.pathLabel}
-          <span class="ticket-inline-path" title={detail.pathLabel}>{detail.pathLabel}</span>
-        {/if}
-      </div>
+          <details class="ticket-repair-frontmatter" open>
+            <summary>Frontmatter</summary>
+            {#if detail.frontmatterYaml.trim()}
+              <pre><code>{detail.frontmatterYaml}</code></pre>
+            {:else}
+              <p class="ticket-repair-hint">No frontmatter parsed. Add a YAML block (e.g. <code>agent: codex</code>) to the top of the ticket body.</p>
+            {/if}
+            {#if detail.pathLabel}
+              <p class="ticket-repair-path">Edit <code>{detail.pathLabel}</code>, or update the body below — frontmatter saves with the ticket.</p>
+            {/if}
+          </details>
+        </div>
+      {/if}
 
       {#if primaryActions.length > 0}
         <div class="ticket-hero-actions">
@@ -795,8 +828,8 @@
 
   .ticket-card-body {
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    align-items: start;
+    grid-template-columns: 4.5ch minmax(0, 1fr) auto;
+    align-items: center;
     gap: var(--space-3);
     min-width: 0;
     text-decoration: none;
@@ -804,33 +837,70 @@
   }
 
   .ticket-card-num {
+    display: inline-flex;
+    align-items: baseline;
+    justify-content: flex-end;
+    gap: 0;
     color: var(--color-accent);
     font-weight: 600;
     font-variant-numeric: tabular-nums;
-    padding-top: 2px;
-    min-width: 3ch;
+    line-height: 1.2;
+    white-space: nowrap;
+  }
+  .ticket-card-num-hash {
+    color: var(--color-ink-faint);
+    font-weight: 500;
+    margin-right: 1px;
+  }
+  .ticket-card-num-value {
+    color: var(--color-accent);
+  }
+
+  .ticket-card-side {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+    white-space: nowrap;
     text-align: right;
     flex-shrink: 0;
+    font-size: var(--font-size-0);
+    line-height: 1.25;
   }
 
   .ticket-card-agent {
-    display: inline-flex;
-    align-items: baseline;
-    gap: var(--space-1);
-    color: var(--color-ink-muted);
-    white-space: nowrap;
+    color: var(--color-ink-soft);
+    font-weight: 500;
   }
 
   .ticket-card-model {
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, 'Courier New', monospace;
     font-size: 11px;
     color: var(--color-ink-faint);
+    letter-spacing: 0.01em;
+    max-width: 14rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
-  .ticket-card-model::before {
-    content: '·';
-    margin-right: var(--space-1);
-    color: var(--color-ink-faint);
-    opacity: 0.7;
+  .ticket-card-model.placeholder {
+    font-style: italic;
+    opacity: 0.75;
+  }
+
+  @media (max-width: 640px) {
+    .ticket-card-body {
+      grid-template-columns: 4.5ch minmax(0, 1fr);
+    }
+    .ticket-card-side {
+      grid-column: 2 / -1;
+      flex-direction: row;
+      justify-content: flex-start;
+      align-items: baseline;
+      gap: var(--space-2);
+    }
+    .ticket-card-model {
+      max-width: none;
+    }
   }
 
   .ticket-card-main {
@@ -989,7 +1059,95 @@
     border-bottom: 1px solid var(--color-border-subtle);
   }
 
-  .ticket-inline-field {
+  .ticket-settings-bar :global(.status-pill) {
+    align-self: center;
+    padding: 2px 8px;
+    line-height: 1.4;
+  }
+
+  .status-pill-button {
+    border: none;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .status-pill-button:hover,
+  .status-pill-button:focus-visible {
+    filter: brightness(1.08);
+    outline: none;
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-warning) 35%, transparent);
+  }
+
+  .ticket-inline-meta.muted {
+    color: var(--color-ink-faint);
+    font-style: italic;
+  }
+
+  .ticket-repair-banner {
+    display: grid;
+    gap: var(--space-2);
+    padding: var(--space-3);
+    border: 1px solid color-mix(in srgb, var(--color-warning) 40%, var(--color-border-subtle));
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--color-warning) 8%, var(--color-surface));
+  }
+  .ticket-repair-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+  }
+  .ticket-repair-close {
+    flex-shrink: 0;
+  }
+  .ticket-repair-errors {
+    margin: 0;
+    padding-left: var(--space-4);
+    color: var(--color-warning);
+    font-size: var(--font-size-0);
+    display: grid;
+    gap: 2px;
+  }
+  .ticket-repair-hint {
+    margin: 0;
+    color: var(--color-ink-muted);
+    font-size: var(--font-size-0);
+  }
+  .ticket-repair-frontmatter > summary {
+    cursor: pointer;
+    color: var(--color-ink-muted);
+    font-size: var(--font-size-0);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-weight: 600;
+    padding: 2px 0;
+  }
+  .ticket-repair-frontmatter pre {
+    margin: var(--space-2) 0 0;
+    padding: var(--space-2) var(--space-3);
+    background: var(--color-surface-muted);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 6px;
+    overflow-x: auto;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, 'Courier New', monospace;
+    font-size: var(--font-size-0);
+    line-height: 1.5;
+    color: var(--color-ink);
+  }
+  .ticket-repair-path {
+    margin: var(--space-2) 0 0;
+    color: var(--color-ink-muted);
+    font-size: var(--font-size-0);
+  }
+  .ticket-repair-path code,
+  .ticket-repair-hint code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, 'Courier New', monospace;
+    font-size: 12px;
+    background: var(--color-surface-muted);
+    padding: 1px 4px;
+    border-radius: 4px;
+  }
+
+  .ticket-settings-bar :global(.ticket-inline-field) {
     display: inline-flex;
     align-items: center;
     gap: 6px;
@@ -997,13 +1155,13 @@
     font-size: var(--font-size-0);
     color: var(--color-ink-muted);
   }
-  .ticket-inline-field > span {
+  .ticket-settings-bar :global(.ticket-inline-field > span) {
     text-transform: uppercase;
     letter-spacing: 0.04em;
     font-weight: 600;
     font-size: 10px;
   }
-  .ticket-inline-field :is(input:not([type='checkbox']), select) {
+  .ticket-settings-bar :global(.ticket-inline-field :is(input:not([type='checkbox']), select)) {
     background: transparent;
     border: 1px solid transparent;
     border-radius: 6px;
@@ -1013,10 +1171,10 @@
     min-width: 0;
     max-width: 12rem;
   }
-  .ticket-inline-field :is(input:not([type='checkbox']), select):hover {
+  .ticket-settings-bar :global(.ticket-inline-field :is(input:not([type='checkbox']), select):hover) {
     background: var(--color-surface-muted);
   }
-  .ticket-inline-field :is(input:not([type='checkbox']), select):focus {
+  .ticket-settings-bar :global(.ticket-inline-field :is(input:not([type='checkbox']), select):focus) {
     outline: none;
     background: var(--color-surface);
     border-color: var(--color-border);
@@ -1038,7 +1196,34 @@
   .ticket-inline-meta {
     color: var(--color-ink-muted);
     font-size: var(--font-size-0);
+  }
+
+  .ticket-hero-footer {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    row-gap: var(--space-2);
+  }
+  .ticket-hero-footer .ticket-hero-controls {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+  .ticket-hero-meta {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-3);
     margin-left: auto;
+    min-width: 0;
+  }
+  @media (max-width: 760px) {
+    .ticket-hero-meta {
+      margin-left: 0;
+      width: 100%;
+    }
   }
 
   .ticket-inline-path {

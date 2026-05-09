@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import AutoDismissNotice from '$lib/components/AutoDismissNotice.svelte';
   import RepoWorktreeViews from '$lib/components/RepoWorktreeViews.svelte';
+  import { confirmAndArchiveState, confirmAndCleanupWorktree, type ActionNotice } from '$lib/actions/repoWorktreeActions';
   import { dataOr, partialPageIssue, pmaApi, type ApiError, type PartialPageIssue } from '$lib/api/client';
   import {
     buildRepoWorktreeIndexViewModel,
@@ -11,6 +13,7 @@
   let loading = $state(true);
   let error = $state<ApiError | null>(null);
   let sectionIssues = $state<PartialPageIssue[]>([]);
+  let notice = $state<ActionNotice | null>(null);
 
   onMount(() => {
     void loadRepos();
@@ -48,13 +51,30 @@
     });
     loading = false;
   }
+
+  async function handleCleanupWorktree(target: Parameters<typeof confirmAndCleanupWorktree>[0]): Promise<void> {
+    const result = await confirmAndCleanupWorktree(target);
+    if (!result) return;
+    notice = result;
+    if (result.tone === 'success') await loadRepos();
+  }
+
+  async function handleArchiveState(target: Parameters<typeof confirmAndArchiveState>[0]): Promise<void> {
+    const result = await confirmAndArchiveState(target);
+    if (!result) return;
+    notice = result;
+    if (result.tone === 'success') await loadRepos();
+  }
 </script>
 
+<AutoDismissNotice message={notice?.message ?? null} tone={notice?.tone ?? 'neutral'} />
 <RepoWorktreeViews
   state={loading ? 'loading' : error ? 'error' : 'ready'}
   mode="index"
   {index}
   {sectionIssues}
   onRetry={loadRepos}
+  onCleanupWorktree={handleCleanupWorktree}
+  onArchiveState={handleArchiveState}
   errorMessage={error?.message ?? null}
 />

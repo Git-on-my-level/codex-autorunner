@@ -18,7 +18,9 @@
     detail = null,
     errorMessage = null,
     sectionIssues = [],
-    onRetry = undefined
+    onRetry = undefined,
+    onCleanupWorktree = undefined,
+    onArchiveState = undefined
   }: {
     state: 'loading' | 'error' | 'ready';
     mode: 'index' | 'detail';
@@ -27,6 +29,8 @@
     errorMessage?: string | null;
     sectionIssues?: PartialPageIssue[];
     onRetry?: (() => void) | undefined;
+    onCleanupWorktree?: ((worktree: { id: string; label: string; chatBound: boolean; cleanupBlockedByChatBinding: boolean }) => void | Promise<void>) | undefined;
+    onArchiveState?: ((target: { kind: 'repo' | 'worktree'; id: string; label: string; hasCarState: boolean; unboundManagedThreadCount: number }) => void | Promise<void>) | undefined;
   } = $props();
 
   const currentRunIssues = $derived(sectionIssues.filter((issue) => issue.id === 'current_run'));
@@ -96,6 +100,28 @@
 
   function repoFilterLabel(key: RepoWorktreeIndexFilter): string {
     return key === 'all' ? 'All' : key.charAt(0).toUpperCase() + key.slice(1);
+  }
+
+  function canArchiveState(target: { hasCarState: boolean; unboundManagedThreadCount: number }): boolean {
+    return target.hasCarState || target.unboundManagedThreadCount > 0;
+  }
+
+  function handleCleanupClick(
+    event: MouseEvent,
+    worktree: { id: string; label: string; chatBound: boolean; cleanupBlockedByChatBinding: boolean }
+  ): void {
+    event.preventDefault();
+    event.stopPropagation();
+    void onCleanupWorktree?.(worktree);
+  }
+
+  function handleArchiveClick(
+    event: MouseEvent,
+    target: { kind: 'repo' | 'worktree'; id: string; label: string; hasCarState: boolean; unboundManagedThreadCount: number }
+  ): void {
+    event.preventDefault();
+    event.stopPropagation();
+    void onArchiveState?.(target);
   }
 </script>
 
@@ -187,13 +213,45 @@
                 </div>
               {/if}
             </a>
-            {#if row.signalWaiting > 0 || row.signalFailed > 0 || row.signalActive > 0}
+            {#if row.signalWaiting > 0 || row.signalFailed > 0 || row.signalActive > 0 || (onArchiveState && canArchiveState(row)) || (row.kind === 'worktree' && onCleanupWorktree)}
               <div class="repo-row-toolbar">
                 <div class="repo-signal-pills" aria-label="Scoped PMA chats and runs">
                   {#if row.signalWaiting > 0}<span class="signal-pill waiting">{row.signalWaiting} waiting</span>{/if}
                   {#if row.signalFailed > 0}<span class="signal-pill failed">{row.signalFailed} failed</span>{/if}
                   {#if row.signalActive > 0}<span class="signal-pill active">{row.signalActive} active</span>{/if}
                 </div>
+                {#if (onArchiveState && canArchiveState(row)) || (row.kind === 'worktree' && onCleanupWorktree)}
+                  <div class="repo-action-buttons" aria-label={`Actions for ${row.label}`}>
+                    {#if onArchiveState && canArchiveState(row)}
+                      <button
+                        class="icon-action archive"
+                        type="button"
+                        title="Archive CAR state without deleting git files"
+                        aria-label={`Archive CAR state for ${row.label}`}
+                        onclick={(event) => handleArchiveClick(event, {
+                          kind: row.kind,
+                          id: row.id,
+                          label: row.label,
+                          hasCarState: row.hasCarState,
+                          unboundManagedThreadCount: row.unboundManagedThreadCount
+                        })}
+                      >
+                        {@render broomIcon()}
+                      </button>
+                    {/if}
+                    {#if row.kind === 'worktree' && onCleanupWorktree}
+                      <button
+                        class="icon-action cleanup"
+                        type="button"
+                        title="Cleanup worktree: archive a snapshot, then delete the checkout"
+                        aria-label={`Cleanup worktree ${row.label}`}
+                        onclick={(event) => handleCleanupClick(event, row)}
+                      >
+                        {@render trashIcon()}
+                      </button>
+                    {/if}
+                  </div>
+                {/if}
               </div>
             {/if}
 
@@ -256,6 +314,38 @@
                           {/if}
                         </div>
                       {/if}
+                      {#if onCleanupWorktree || (onArchiveState && canArchiveState(worktree))}
+                        <div class="repo-action-buttons" aria-label={`Actions for ${worktree.label}`}>
+                          {#if onArchiveState && canArchiveState(worktree)}
+                            <button
+                              class="icon-action archive"
+                              type="button"
+                              title="Archive CAR state without deleting git files"
+                              aria-label={`Archive CAR state for ${worktree.label}`}
+                              onclick={(event) => handleArchiveClick(event, {
+                                kind: 'worktree',
+                                id: worktree.id,
+                                label: worktree.label,
+                                hasCarState: worktree.hasCarState,
+                                unboundManagedThreadCount: worktree.unboundManagedThreadCount
+                              })}
+                            >
+                              {@render broomIcon()}
+                            </button>
+                          {/if}
+                          {#if onCleanupWorktree}
+                            <button
+                              class="icon-action cleanup"
+                              type="button"
+                              title="Cleanup worktree: archive a snapshot, then delete the checkout"
+                              aria-label={`Cleanup worktree ${worktree.label}`}
+                              onclick={(event) => handleCleanupClick(event, worktree)}
+                            >
+                              {@render trashIcon()}
+                            </button>
+                          {/if}
+                        </div>
+                      {/if}
                     </div>
                   </li>
                 {/each}
@@ -286,7 +376,45 @@
         </div>
       </section>
     {:else}
-    <PageHero title={shortDetailTitle} subtitle={detailSubtitle} />
+    <PageHero title={shortDetailTitle} subtitle={detailSubtitle}>
+      {#snippet actions()}
+        {#if onArchiveState && canArchiveState(detail)}
+          <button
+            class="hero-action icon-hero-action"
+            type="button"
+            title="Archive CAR state without deleting git files"
+            aria-label={`Archive CAR state for ${detail.title}`}
+            onclick={(event) => handleArchiveClick(event, {
+              kind: detail.kind,
+              id: detail.id,
+              label: shortDetailTitle,
+              hasCarState: detail.hasCarState,
+              unboundManagedThreadCount: detail.unboundManagedThreadCount
+            })}
+          >
+            {@render broomIcon()}
+            <span>Archive</span>
+          </button>
+        {/if}
+        {#if detail.kind === 'worktree' && onCleanupWorktree}
+          <button
+            class="hero-action icon-hero-action danger"
+            type="button"
+            title="Cleanup worktree: archive a snapshot, then delete the checkout"
+            aria-label={`Cleanup worktree ${detail.title}`}
+            onclick={(event) => handleCleanupClick(event, {
+              id: detail.id,
+              label: shortDetailTitle,
+              chatBound: detail.chatBound,
+              cleanupBlockedByChatBinding: detail.cleanupBlockedByChatBinding
+            })}
+          >
+            {@render trashIcon()}
+            <span>Cleanup</span>
+          </button>
+        {/if}
+      {/snippet}
+    </PageHero>
 
     {#if detail.gitStatus}
       {@const git = detail.gitStatus}
@@ -554,6 +682,26 @@
   {/each}
 {/snippet}
 
+{#snippet broomIcon()}
+  <svg viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M14 4l6 6" />
+    <path d="M12.5 5.5l6 6" />
+    <path d="M7 16l9.5-9.5" />
+    <path d="M4.5 18.5c2.5 2.5 6.7 2.2 9.5-.7l-4-4c-2.9 2.8-3.2 7-.7 9.5" />
+    <path d="M3 21c2.4-.1 4.5-.8 6.3-2.2" />
+  </svg>
+{/snippet}
+
+{#snippet trashIcon()}
+  <svg viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M3 6h18" />
+    <path d="M8 6V4h8v2" />
+    <path d="M6 6l1 15h10l1-15" />
+    <path d="M10 10v7" />
+    <path d="M14 10v7" />
+  </svg>
+{/snippet}
+
 <style>
   .repos-index-v2 {
     gap: var(--space-3);
@@ -619,6 +767,64 @@
     padding: var(--space-2) var(--space-5) var(--space-3);
     border-top: 1px solid var(--color-border-subtle);
     background: var(--color-surface-muted);
+  }
+
+  .repo-action-buttons {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 0 auto;
+  }
+
+  .icon-action {
+    display: inline-grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    border: 1px solid var(--color-border-subtle);
+    background: var(--color-surface);
+    color: var(--color-ink-muted);
+    cursor: pointer;
+    transition: color var(--transition-fast), border-color var(--transition-fast), background-color var(--transition-fast);
+  }
+
+  .icon-action:hover {
+    color: var(--color-ink);
+    border-color: var(--color-border-strong);
+    background: var(--color-surface-muted);
+  }
+
+  .icon-action.cleanup:hover,
+  .icon-hero-action.danger:hover {
+    color: var(--color-danger);
+    border-color: color-mix(in srgb, var(--color-danger) 40%, var(--color-border));
+  }
+
+  .icon-action svg {
+    width: 16px;
+    height: 16px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .icon-hero-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .icon-hero-action svg {
+    width: 15px;
+    height: 15px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
   }
 
   .repo-signal-pills {
@@ -828,7 +1034,7 @@
   .worktree-card {
     position: relative;
     display: grid;
-    grid-template-columns: 28px minmax(0, 1fr) auto;
+    grid-template-columns: 28px minmax(0, 1fr) auto auto;
     align-items: center;
     gap: var(--space-3);
     padding: var(--space-2) 0 var(--space-2) 8px;
@@ -961,6 +1167,10 @@
     }
     .worktree-card-counts {
       grid-column: 2;
+    }
+    .worktree-card > .repo-action-buttons {
+      grid-column: 2;
+      justify-self: start;
     }
   }
 

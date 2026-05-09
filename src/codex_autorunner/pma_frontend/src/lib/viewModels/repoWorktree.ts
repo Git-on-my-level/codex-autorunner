@@ -47,6 +47,10 @@ export type RepoWorktreeIndexRow = {
   pmaChatHref: string;
   /** Deep-link into chats with the new-chat scope picker preset for direct agent control. */
   codingAgentChatHref: string;
+  hasCarState: boolean;
+  unboundManagedThreadCount: number;
+  chatBound: boolean;
+  cleanupBlockedByChatBinding: boolean;
 };
 
 export type RepoWorktreeChildRow = {
@@ -70,6 +74,10 @@ export type RepoWorktreeChildRow = {
   signalWaiting: number;
   signalFailed: number;
   signalActive: number;
+  hasCarState: boolean;
+  unboundManagedThreadCount: number;
+  chatBound: boolean;
+  cleanupBlockedByChatBinding: boolean;
 };
 
 export type RepoWorktreeRunCard = {
@@ -215,6 +223,10 @@ export type RepoWorktreeDetailViewModel = {
   pmaChatHref: string;
   codingAgentChatHref: string;
   gitStatus: GitStatusSummary | null;
+  hasCarState: boolean;
+  unboundManagedThreadCount: number;
+  chatBound: boolean;
+  cleanupBlockedByChatBinding: boolean;
 };
 
 export type RepoWorktreeTicketOverview = {
@@ -353,7 +365,11 @@ export function buildRepoWorktreeDetailViewModel(
     missingIndexLabel: kind === 'repo' ? 'Back to repos' : 'Back to worktrees',
     pmaChatHref: scopedChatHref(kind, id, 'pma'),
     codingAgentChatHref: scopedChatHref(kind, id, 'agent'),
-    gitStatus: resource.gitStatus ?? null
+    gitStatus: resource.gitStatus ?? null,
+    hasCarState: boolFromRaw(resource.raw, 'has_car_state'),
+    unboundManagedThreadCount: numberFromRaw(resource.raw, 'unbound_managed_thread_count'),
+    chatBound: boolFromRaw(resource.raw, 'chat_bound'),
+    cleanupBlockedByChatBinding: boolFromRaw(resource.raw, 'cleanup_blocked_by_chat_binding')
   };
 }
 
@@ -413,7 +429,11 @@ function missingDetailViewModel(kind: RepoWorktreeKind, id: string): RepoWorktre
     missingIndexLabel: kind === 'repo' ? 'Back to repos' : 'Back to worktrees',
     pmaChatHref: '/chats',
     codingAgentChatHref: '/chats',
-    gitStatus: null
+    gitStatus: null,
+    hasCarState: false,
+    unboundManagedThreadCount: 0,
+    chatBound: false,
+    cleanupBlockedByChatBinding: false
   };
 }
 
@@ -447,7 +467,11 @@ function repoToIndexRow(repo: RepoSummary, worktrees: WorktreeSummary[], source:
     signalFailed: 0,
     signalActive: 0,
     pmaChatHref: scopedChatHref('repo', repo.id, 'pma'),
-    codingAgentChatHref: scopedChatHref('repo', repo.id, 'agent')
+    codingAgentChatHref: scopedChatHref('repo', repo.id, 'agent'),
+    hasCarState: boolFromRaw(repo.raw, 'has_car_state'),
+    unboundManagedThreadCount: numberFromRaw(repo.raw, 'unbound_managed_thread_count'),
+    chatBound: boolFromRaw(repo.raw, 'chat_bound'),
+    cleanupBlockedByChatBinding: boolFromRaw(repo.raw, 'cleanup_blocked_by_chat_binding')
   };
 }
 
@@ -470,7 +494,11 @@ function worktreeToIndexRow(worktree: WorktreeSummary, _source: RepoWorktreeSour
     signalFailed: 0,
     signalActive: 0,
     pmaChatHref: scopedChatHref('worktree', worktree.id, 'pma'),
-    codingAgentChatHref: scopedChatHref('worktree', worktree.id, 'agent')
+    codingAgentChatHref: scopedChatHref('worktree', worktree.id, 'agent'),
+    hasCarState: boolFromRaw(worktree.raw, 'has_car_state'),
+    unboundManagedThreadCount: numberFromRaw(worktree.raw, 'unbound_managed_thread_count'),
+    chatBound: boolFromRaw(worktree.raw, 'chat_bound'),
+    cleanupBlockedByChatBinding: boolFromRaw(worktree.raw, 'cleanup_blocked_by_chat_binding')
   };
 }
 
@@ -521,7 +549,11 @@ function worktreeToChildRow(
     codingAgentChatHref: scopedChatHref('worktree', worktree.id, 'agent'),
     signalWaiting: signals.waiting,
     signalFailed: signals.failed,
-    signalActive: signals.active
+    signalActive: signals.active,
+    hasCarState: boolFromRaw(worktree.raw, 'has_car_state'),
+    unboundManagedThreadCount: numberFromRaw(worktree.raw, 'unbound_managed_thread_count'),
+    chatBound: boolFromRaw(worktree.raw, 'chat_bound'),
+    cleanupBlockedByChatBinding: boolFromRaw(worktree.raw, 'cleanup_blocked_by_chat_binding')
   };
 }
 
@@ -814,6 +846,15 @@ function stringFromRaw(raw: Record<string, unknown>, keys: string[]): string | n
     if (typeof value === 'number' && Number.isFinite(value)) return String(value);
   }
   return null;
+}
+
+function boolFromRaw(raw: Record<string, unknown>, key: string): boolean {
+  return raw[key] === true;
+}
+
+function numberFromRaw(raw: Record<string, unknown>, key: string): number {
+  const value = raw[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

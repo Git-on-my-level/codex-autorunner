@@ -43,6 +43,32 @@ describe('RepoWorktreeViews', () => {
     expect(body).toContain('1 waiting');
   });
 
+  it('renders archive and cleanup actions for repo and worktree rows', () => {
+    const index = buildRepoWorktreeIndexViewModel({
+      repos: [{ ...mockRepoSummary, raw: { has_car_state: true } }],
+      worktrees: [{ ...mockWorktreeSummary, raw: { has_car_state: true, chat_bound: true, cleanup_blocked_by_chat_binding: true } }],
+      runs: [],
+      chats: [],
+      tickets: [],
+      artifacts: []
+    });
+    const { body } = render(RepoWorktreeViews, {
+      props: {
+        state: 'ready',
+        mode: 'index',
+        index,
+        onCleanupWorktree: () => undefined,
+        onArchiveState: () => undefined
+      }
+    });
+
+    expect(body).toContain('Archive CAR state for codex-autorunner');
+    expect(body).toContain('Archive CAR state for discord-5');
+    expect(body).toContain('Cleanup worktree discord-5');
+    expect(body).toContain('icon-action cleanup');
+    expect(body).toContain('icon-action archive');
+  });
+
   it('renders sparse repo index empty-state copy', () => {
     const index = buildRepoWorktreeIndexViewModel({
       repos: [],

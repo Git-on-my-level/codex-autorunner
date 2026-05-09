@@ -2,7 +2,9 @@
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
   import { onDestroy, onMount } from 'svelte';
+  import AutoDismissNotice from '$lib/components/AutoDismissNotice.svelte';
   import RepoWorktreeViews from '$lib/components/RepoWorktreeViews.svelte';
+  import { confirmAndArchiveState, confirmAndCleanupWorktree, type ActionNotice } from '$lib/actions/repoWorktreeActions';
   import { dataOr, partialPageIssue, pmaApi, type ApiError, type PartialPageIssue } from '$lib/api/client';
   import { stripRuntimeBasePath, withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import {
@@ -17,6 +19,7 @@
   let loading = $state(true);
   let error = $state<ApiError | null>(null);
   let sectionIssues = $state<PartialPageIssue[]>([]);
+  let notice = $state<ActionNotice | null>(null);
   let refreshTimer: ReturnType<typeof setInterval> | null = null;
 
   onMount(() => {
@@ -87,13 +90,30 @@
     detail = buildRepoWorktreeDetailViewModel({ ...baseSource, artifacts }, 'worktree', worktreeId);
     loading = false;
   }
+
+  async function handleCleanupWorktree(target: Parameters<typeof confirmAndCleanupWorktree>[0]): Promise<void> {
+    const result = await confirmAndCleanupWorktree(target);
+    if (!result) return;
+    notice = result;
+    if (result.tone === 'success') await loadWorktreeDetail();
+  }
+
+  async function handleArchiveState(target: Parameters<typeof confirmAndArchiveState>[0]): Promise<void> {
+    const result = await confirmAndArchiveState(target);
+    if (!result) return;
+    notice = result;
+    if (result.tone === 'success') await loadWorktreeDetail();
+  }
 </script>
 
+<AutoDismissNotice message={notice?.message ?? null} tone={notice?.tone ?? 'neutral'} />
 <RepoWorktreeViews
   state={loading ? 'loading' : error ? 'error' : 'ready'}
   mode="detail"
   {detail}
   {sectionIssues}
   onRetry={() => loadWorktreeDetail()}
+  onCleanupWorktree={handleCleanupWorktree}
+  onArchiveState={handleArchiveState}
   errorMessage={error?.message ?? null}
 />

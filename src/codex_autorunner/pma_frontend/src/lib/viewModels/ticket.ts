@@ -179,6 +179,12 @@ export type TicketDetailViewModel = {
   settingsSyncSignature: string;
   done: boolean;
   frontmatter: Record<string, unknown>;
+  /** Serialized YAML view of `frontmatter` for read-only inspection (e.g. repair banner). */
+  frontmatterYaml: string;
+  /** Validation errors reported by the backend for this ticket; empty when valid. */
+  errors: string[];
+  /** True when the ticket cannot run until its frontmatter is fixed. */
+  needsRepair: boolean;
   updatedLabel: string;
   goal: string | null;
   contractSections: TicketContractSection[];
@@ -370,6 +376,9 @@ export function buildTicketDetailViewModel(
     settingsSyncSignature,
     done: Boolean(frontmatter.done),
     frontmatter,
+    frontmatterYaml: serializeFrontmatter(frontmatter),
+    errors: [...detail.errors],
+    needsRepair: detail.errors.length > 0 || (run?.status ?? detail.status) === 'invalid',
     updatedLabel: formatRelativeTime(detail.updatedAt ?? run?.lastEventAt ?? null, now),
     goal,
     contractSections: sections,

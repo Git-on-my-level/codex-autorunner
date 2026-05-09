@@ -20,6 +20,8 @@
     modelAriaLabel = 'Model',
     reasoningAriaLabel = 'Effort',
     emptyModelLabel = 'Configured model',
+    unsetModelLabel = 'default',
+    allowEmptyModelOption = false,
     defaultReasoningLabel = 'Default',
     showModel = true,
     showReasoning = true,
@@ -36,6 +38,10 @@
     modelAriaLabel?: string;
     reasoningAriaLabel?: string;
     emptyModelLabel?: string;
+    /** Label for the explicit blank model choice when `allowEmptyModelOption` is true. */
+    unsetModelLabel?: string;
+    /** When true and the catalog is non-empty, prepend a `value=""` option (tickets: hub default model). */
+    allowEmptyModelOption?: boolean;
     defaultReasoningLabel?: string;
     showModel?: boolean;
     showReasoning?: boolean;
@@ -66,6 +72,9 @@
       {#if models.length === 0}
         <option value="">{emptyModelLabel}</option>
       {:else}
+        {#if allowEmptyModelOption}
+          <option value="">{unsetModelLabel}</option>
+        {/if}
         {#each models as model (modelValue(model))}
           <option value={modelValue(model)}>{modelLabel(model)}</option>
         {/each}

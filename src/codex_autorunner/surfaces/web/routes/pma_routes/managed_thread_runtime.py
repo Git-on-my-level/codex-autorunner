@@ -890,6 +890,7 @@ def build_managed_thread_runtime_routes(
                 reasoning=options.reasoning,
                 approval_mode=options.approval_policy,
                 context_profile=options.context_profile,
+                input_items=options.execution_input_items,
                 metadata=merge_bound_chat_execution_metadata(
                     {
                         "runtime_prompt": options.execution_prompt,

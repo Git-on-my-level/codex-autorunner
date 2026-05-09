@@ -53,6 +53,21 @@ export type PartialPageIssue = {
 
 export type JsonRecord = Record<string, unknown>;
 
+export type WorktreeCleanupRequest = {
+  worktreeRepoId: string;
+  archive?: boolean;
+  force?: boolean;
+  forceAttestation?: string | null;
+  forceArchive?: boolean;
+  archiveNote?: string | null;
+};
+
+export type RepoStateArchiveRequest = {
+  kind: 'repo' | 'worktree';
+  id: string;
+  archiveNote?: string | null;
+};
+
 export type RequestOptions = Omit<RequestInit, 'body'> & {
   body?: unknown;
 };
@@ -311,7 +326,30 @@ export class PmaApiClient {
     listWorktrees: async (): Promise<ApiResult<WorktreeSummary[]>> =>
       mapResult(await this.getJson<JsonRecord>('/hub/repos'), (payload) =>
         asArray(payload.worktrees ?? payload.repos ?? payload.items).filter(isWorktreeItem).map(mapWorktreeSummary)
-      )
+      ),
+    cleanupWorktree: async (request: WorktreeCleanupRequest): Promise<ApiResult<JsonRecord>> =>
+      this.requestJson<JsonRecord>('/hub/worktrees/cleanup', {
+        method: 'POST',
+        body: {
+          worktreeRepoId: request.worktreeRepoId,
+          archive: request.archive ?? true,
+          force: request.force ?? false,
+          forceAttestation: request.forceAttestation ?? null,
+          forceArchive: request.forceArchive ?? false,
+          archiveNote: request.archiveNote ?? null
+        }
+      }),
+    archiveState: async (request: RepoStateArchiveRequest): Promise<ApiResult<JsonRecord>> => {
+      const path = request.kind === 'repo' ? '/hub/repos/archive-state' : '/hub/worktrees/archive-state';
+      const idKey = request.kind === 'repo' ? 'repoId' : 'worktreeRepoId';
+      return this.requestJson<JsonRecord>(path, {
+        method: 'POST',
+        body: {
+          [idKey]: request.id,
+          archiveNote: request.archiveNote ?? null
+        }
+      });
+    }
   };
 
   ticketFlow = {

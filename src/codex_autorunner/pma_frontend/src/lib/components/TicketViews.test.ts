@@ -250,6 +250,35 @@ Users can browse tickets.
     expect(body).not.toContain('Ticket implementation is in progress.');
   });
 
+  it('hides reasoning picker when the catalog model disables reasoning support', () => {
+    const glmModels = [
+      {
+        id: 'zai-coding-plan/glm-4.7',
+        label: 'GLM 4.7',
+        supports_reasoning: false,
+        reasoning_options: ['minimal', 'high']
+      }
+    ];
+    const detail = buildTicketDetailViewModel(
+      {
+        ...mockTicketDetail,
+        raw: { frontmatter: { agent: 'codex', model: 'zai-coding-plan/glm-4.7' } }
+      },
+      { tickets: [mockTicketSummary], runs: [], chats: [], artifacts: [] }
+    );
+    const { body } = render(TicketViews, {
+      props: {
+        state: 'ready',
+        mode: 'detail',
+        detail,
+        agents: [codexAgent],
+        modelCatalogs: { codex: glmModels }
+      }
+    });
+    expect(body).toContain('Model');
+    expect(body).not.toContain('<span>Reasoning</span>');
+  });
+
   it('hides ticket model and reasoning pickers when the selected agent lacks model-listing support', () => {
     const detail = buildTicketDetailViewModel(
       {

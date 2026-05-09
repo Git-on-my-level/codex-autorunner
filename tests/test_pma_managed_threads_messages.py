@@ -166,6 +166,11 @@ def test_send_message_round_trips_structured_attachments(hub_env) -> None:
 
     fake_client = FakeClient(sequential=True)
     fake_supervisor = FakeSupervisor(fake_client)
+    inbox_file = (
+        hub_env.hub_root / ".codex-autorunner" / "filebox" / "inbox" / "screen.png"
+    )
+    inbox_file.parent.mkdir(parents=True, exist_ok=True)
+    inbox_file.write_bytes(b"png")
 
     attachments = [
         {
@@ -209,6 +214,15 @@ def test_send_message_round_trips_structured_attachments(hub_env) -> None:
 
     turns = messages_resp.json()["turns"]
     assert turns[0]["prompt"] == "review attached assets"
+    runtime_prompt = str(fake_supervisor.client.turn_start_calls[0]["prompt"])
+    assert "review attached assets" in runtime_prompt
+    assert "PMA File Inbox:" in runtime_prompt
+    assert "- screen.png" in runtime_prompt
+    assert f"  Saved to: {inbox_file}" in runtime_prompt
+    assert "  URL: /hub/pma/files/inbox/screen.png" in runtime_prompt
+    assert fake_supervisor.client.turn_start_calls[0]["turn_kwargs"]["input_items"] == [
+        {"type": "localImage", "path": str(inbox_file)}
+    ]
     assert turns[0]["attachments"] == [
         {
             "intent": "attach_uploaded_file",

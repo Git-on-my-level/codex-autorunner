@@ -5,7 +5,7 @@
   import MasterDetail from '$lib/components/MasterDetail.svelte';
   import ChatTranscriptCards from '$lib/components/ChatTranscriptCards.svelte';
   import AutoDismissNotice from '$lib/components/AutoDismissNotice.svelte';
-  import ModelReasoningPicker from '$lib/components/ModelReasoningPicker.svelte';
+  import AgentModelReasoningPicker from '$lib/components/AgentModelReasoningPicker.svelte';
   import VoiceComposerButton from '$lib/components/VoiceComposerButton.svelte';
   import { pmaApi, type ApiError, type JsonRecord } from '$lib/api/client';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
@@ -1093,29 +1093,16 @@
         </div>
       {:else if showStartPicker}
         <div class="start-picker" aria-label="Start of chat configuration">
-          {#if showAgentSelector}
-            <label class="start-picker-row">
-              <span>agent</span>
-              <select
-                aria-label="Agent"
-                bind:value={selectedAgent}
-                onchange={handleAgentChange}
-              >
-                {#each agents as agent}
-                  <option value={agentId(agent)}>
-                    {agentLabel(agent)}
-                  </option>
-                {/each}
-              </select>
-            </label>
-          {/if}
-          <ModelReasoningPicker
+          <AgentModelReasoningPicker
+            {agents}
+            bind:agentValue={selectedAgent}
             bind:modelValue={selectedModel}
             bind:reasoningValue={selectedReasoning}
             {models}
             loading={loadingModels}
-            showModel={showModelSelector}
-            showReasoning={showEffortSelector}
+            variant="chat"
+            showAgent={showAgentSelector}
+            onAgentChange={handleAgentChange}
           />
         </div>
       {:else}
