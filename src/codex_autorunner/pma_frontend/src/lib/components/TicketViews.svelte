@@ -98,6 +98,26 @@
     list ? list.filters.filter((filter) => filter.count > 0 || filter.id === selectedFilter) : []
   );
   const queueActions = $derived(list?.queueActions ?? []);
+  const heroPageTitle = $derived(list ? (list.scopedOwner ? 'Tickets' : list.title) : 'Tickets');
+  const heroFlowActive = $derived(
+    list ? list.flowStatus.signal !== 'idle' && list.flowStatus.signal !== 'done' : false
+  );
+  const heroFlowSignalClass = $derived.by(() => {
+    if (!list) return '';
+    const s = list.flowStatus.signal;
+    if (s === 'active') return 'active';
+    if (s === 'waiting') return 'waiting';
+    if (s === 'blocked' || s === 'failed' || s === 'invalid') return 'danger';
+    return '';
+  });
+  // Only show the flow line when the queue is actively doing something.
+  // The current ticket is already highlighted in the list (Working badge,
+  // accent border), so a separate "Current: #N" line was duplicated signal.
+  const showFlowLine = $derived.by(() => {
+    if (!list?.scopedOwner) return false;
+    const s = list.flowStatus.signal;
+    return s !== 'idle' && s !== 'done';
+  });
   const contractIssues = $derived(sectionIssues.filter((issue) => issue.id === 'ticket_contract'));
   const timelineIssues = $derived(sectionIssues.filter((issue) => issue.id === 'timeline'));
   const chatIssues = $derived(sectionIssues.filter((issue) => issue.id === 'linked_chat'));
@@ -289,9 +309,39 @@
   </section>
 {:else if mode === 'list' && list}
   <section class="page-stack ticket-page">
-    {#if !list.scopedOwner}
-      <PageHero title={list.title} subtitle={list.subtitle} />
-    {/if}
+    <PageHero title={heroPageTitle}>
+      {#snippet stats()}
+        {#if list.scopedOwner && heroFlowActive}
+          <dl class="hero-stats" aria-label="Ticket queue summary">
+            <div class={heroFlowSignalClass}>
+              <dd>{list.flowStatus.statusLabel}</dd>
+              <dt>Queue</dt>
+            </div>
+          </dl>
+        {/if}
+      {/snippet}
+      {#snippet actions()}
+        {#if list.scopedOwner}
+          <div class="ticket-queue-actions" role="group" aria-label="Ticket flow controls">
+            {#each (['start', 'stop', 'restart'] as const) as action}
+              {#if queueActionEnabled(action)}
+                <button
+                  type="button"
+                  class={action === 'start' ? 'primary-button hero-action' : 'ghost-button hero-action'}
+                  title={queueActionReason(action)}
+                  onclick={() => onQueueCommand?.(action)}
+                >
+                  {queueActionLabel(action)}
+                </button>
+              {/if}
+            {/each}
+          </div>
+        {/if}
+        {#if newTicketHref}
+          <a class="ghost-button hero-action" href={href(newTicketHref)} data-sveltekit-preload-data="tap">+ New ticket</a>
+        {/if}
+      {/snippet}
+    </PageHero>
 
     <header class="ticket-controls">
       <label class="search-field ticket-search">
@@ -317,60 +367,34 @@
 
     <AutoDismissNotice message={actionStatus} tone={noticeTone(actionStatus)} />
 
-    <section class="page-panel ticket-list-panel">
-      <div class="panel-heading-row">
-        {#if !list.scopedOwner}
-          <h2>{list.queueTitle}</h2>
-        {:else}
-          <span></span>
-        {/if}
-        <div class="queue-heading-actions">
-          {#if newTicketHref}
-            <a class="ghost-button" href={href(newTicketHref)} data-sveltekit-preload-data="tap">+ New ticket</a>
+    <section class="ticket-list-section">
+      {#if showFlowLine}
+        <p class={`ticket-flow-line ${list.flowStatus.signal}`} aria-label="Ticket flow status">
+          <span class="status-pill {list.flowStatus.signal}">{list.flowStatus.statusLabel}</span>
+          {#if list.flowStatus.currentTicketLabel !== 'None'}
+            <span class="flow-line-current">
+              Current:
+              {#if list.flowStatus.currentTicketHref}
+                <a href={href(list.flowStatus.currentTicketHref)}>{list.flowStatus.currentTicketLabel}</a>
+              {:else}
+                {list.flowStatus.currentTicketLabel}
+              {/if}
+            </span>
           {/if}
-          {#if list.scopedOwner}
-            <div class="queue-actions-inline" role="group" aria-label="Ticket flow controls">
-              {#each (['start', 'stop', 'restart'] as const) as action}
-                {#if queueActionEnabled(action)}
-                  <button
-                    type="button"
-                    class="ghost-button"
-                    title={queueActionReason(action)}
-                    onclick={() => onQueueCommand?.(action)}
-                  >
-                    {queueActionLabel(action)}
-                  </button>
-                {/if}
-              {/each}
-            </div>
+          {#if list.flowStatus.turnsLabel !== 'Unknown'}
+            <span class="flow-line-meta">{list.flowStatus.turnsLabel} turns</span>
           {/if}
-        </div>
-      </div>
-      <p class={`ticket-flow-line ${list.flowStatus.signal}`} aria-label="Ticket flow status">
-        <span class="status-pill {list.flowStatus.signal}">{list.flowStatus.statusLabel}</span>
-        <span class="flow-line-meta">{list.flowStatus.progressLabel} done</span>
-        {#if list.flowStatus.turnsLabel !== 'Unknown'}
-          <span class="flow-line-meta">{list.flowStatus.turnsLabel} turns</span>
-        {/if}
-        {#if list.flowStatus.elapsedLabel !== 'Unknown'}
-          <span class="flow-line-meta">{list.flowStatus.elapsedLabel}</span>
-        {/if}
-        {#if list.flowStatus.lastActivityLabel && list.flowStatus.lastActivityLabel !== 'No activity yet'}
-          <span class="flow-line-meta">last activity {list.flowStatus.lastActivityLabel}</span>
-        {/if}
-        <span class="flow-line-divider" aria-hidden="true">·</span>
-        <span class="flow-line-current">
-          Current:
-          {#if list.flowStatus.currentTicketHref}
-            <a href={href(list.flowStatus.currentTicketHref)}>{list.flowStatus.currentTicketLabel}</a>
-          {:else}
-            {list.flowStatus.currentTicketLabel}
+          {#if list.flowStatus.elapsedLabel !== 'Unknown'}
+            <span class="flow-line-meta">{list.flowStatus.elapsedLabel}</span>
           {/if}
-        </span>
-        {#if list.flowStatus.reasonLabel && list.flowStatus.reasonLabel !== 'No reason reported'}
-          <span class="flow-line-meta flow-line-reason">— {list.flowStatus.reasonLabel}</span>
-        {/if}
-      </p>
+          {#if list.flowStatus.lastActivityLabel && list.flowStatus.lastActivityLabel !== 'No activity yet'}
+            <span class="flow-line-meta">last activity {list.flowStatus.lastActivityLabel}</span>
+          {/if}
+          {#if list.flowStatus.reasonLabel && list.flowStatus.reasonLabel !== 'No reason reported'}
+            <span class="flow-line-meta flow-line-reason">— {list.flowStatus.reasonLabel}</span>
+          {/if}
+        </p>
+      {/if}
       {@render degradedIssues(timelineIssues)}
       {@render degradedIssues(chatIssues)}
       {#if visibleRows.length === 0}
@@ -422,7 +446,12 @@
                   </div>
                   <div class="ticket-card-meta">
                     {#if row.bodyPreview}<span class="ticket-card-preview">{row.bodyPreview}</span>{/if}
-                    {#if row.agentLabel && row.agentLabel !== 'Unassigned'}<span>{row.agentLabel}</span>{/if}
+                    {#if (row.agentLabel && row.agentLabel !== 'Unassigned') || row.modelLabel}
+                      <span class="ticket-card-agent">
+                        {#if row.agentLabel && row.agentLabel !== 'Unassigned'}{row.agentLabel}{/if}
+                        {#if row.modelLabel}<span class="ticket-card-model">{row.modelLabel}</span>{/if}
+                      </span>
+                    {/if}
                     {#if row.diffLabel}<span class="diff-label">{row.diffLabel}</span>{/if}
                     {#if row.durationLabel}<span>{row.durationLabel}</span>{/if}
                     {#if row.updatedAt}<span>{rowRelativeTime(row)}</span>{/if}
@@ -676,8 +705,19 @@
     }
   }
 
+  .ticket-list-section {
+    display: grid;
+    gap: var(--space-3);
+  }
+
   .ticket-card-list {
     display: grid;
+    gap: var(--space-2);
+  }
+
+  .ticket-queue-actions {
+    display: inline-flex;
+    align-items: center;
     gap: var(--space-2);
   }
 
@@ -768,6 +808,29 @@
     font-weight: 600;
     font-variant-numeric: tabular-nums;
     padding-top: 2px;
+    min-width: 3ch;
+    text-align: right;
+    flex-shrink: 0;
+  }
+
+  .ticket-card-agent {
+    display: inline-flex;
+    align-items: baseline;
+    gap: var(--space-1);
+    color: var(--color-ink-muted);
+    white-space: nowrap;
+  }
+
+  .ticket-card-model {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, 'Courier New', monospace;
+    font-size: 11px;
+    color: var(--color-ink-faint);
+  }
+  .ticket-card-model::before {
+    content: '·';
+    margin-right: var(--space-1);
+    color: var(--color-ink-faint);
+    opacity: 0.7;
   }
 
   .ticket-card-main {

@@ -236,7 +236,11 @@ export function buildPmaCards(
   chat: PmaChatSummary | null,
   artifacts: SurfaceArtifact[]
 ): PmaCard[] {
-  const cards: PmaCard[] = timeline.flatMap(timelineItemToCard);
+  const messageAttachmentKeys = collectMessageAttachmentKeys(timeline);
+  const timelineCards = timeline
+    .flatMap(timelineItemToCard)
+    .filter((card) => !isMessageAttachmentArtifactCard(card, messageAttachmentKeys));
+  const cards: PmaCard[] = [...timelineCards];
 
   if (chat?.ticketId) {
     cards.push({
@@ -248,11 +252,52 @@ export function buildPmaCards(
     });
   }
 
-  for (const artifact of filterArtifactsForActiveChat(artifacts, chat, null).slice(0, 4)) {
+  const remainingArtifacts = filterArtifactsForActiveChat(artifacts, chat, null).filter(
+    (artifact) => !artifactKeysFor(artifact).some((key) => messageAttachmentKeys.has(key))
+  );
+  for (const artifact of remainingArtifacts.slice(0, 4)) {
     cards.push({ kind: 'artifact', id: `artifact-${artifact.id}`, artifact });
   }
 
   return cards;
+}
+
+function isMessageAttachmentArtifactCard(card: PmaCard, messageAttachmentKeys: Set<string>): boolean {
+  if (card.kind !== 'artifact') return false;
+  return artifactKeysFor(card.artifact).some((key) => messageAttachmentKeys.has(key));
+}
+
+function collectMessageAttachmentKeys(timeline: PmaTimelineItem[]): Set<string> {
+  const keys = new Set<string>();
+  for (const item of timeline) {
+    if (item.kind !== 'user_message' && item.kind !== 'assistant_message') continue;
+    for (const raw of asRecordArray(item.payload.attachments)) {
+      for (const key of artifactKeysFor(mapTimelineArtifact(raw))) keys.add(key);
+    }
+  }
+  return keys;
+}
+
+function artifactKeysFor(artifact: SurfaceArtifact): string[] {
+  const keys = new Set<string>();
+  const add = (value: string | null | undefined) => {
+    if (!value) return;
+    const normalized = value.toLowerCase().trim();
+    if (!normalized) return;
+    keys.add(normalized);
+    const slash = normalized.lastIndexOf('/');
+    if (slash >= 0 && slash < normalized.length - 1) keys.add(normalized.slice(slash + 1));
+  };
+  add(artifact.url);
+  add(artifact.title);
+  add(artifact.id);
+  const raw = artifact.raw;
+  if (raw && typeof raw === 'object') {
+    add(typeof raw.name === 'string' ? raw.name : null);
+    add(typeof raw.rel_path === 'string' ? raw.rel_path : null);
+    add(typeof raw.uploadedName === 'string' ? raw.uploadedName : null);
+  }
+  return [...keys];
 }
 
 export function buildPmaTranscriptCards(
@@ -798,8 +843,7 @@ function timelineItemToCard(item: PmaTimelineItem): PmaCard[] {
           artifacts: attachments,
           raw: item.raw
         }
-      },
-      ...attachments.map((artifact) => ({ kind: 'artifact' as const, id: `${item.id}:artifact:${artifact.id}`, artifact }))
+      }
     ];
   }
   if (item.kind === 'intermediate') {
@@ -1122,16 +1166,9 @@ export function pendingAttachmentToIntent(attachment: PendingAttachment): Docume
 
 export function composeMessageWithAttachments(
   draft: string,
-  attachments: PendingAttachment[]
+  _attachments: PendingAttachment[]
 ): string {
-  const message = draft.trim();
-  const lines = attachments.map((attachment) => {
-    const label = attachment.kind === 'image' ? 'Image' : attachment.kind === 'link' ? 'Link' : 'File';
-    const target = attachment.url || attachment.uploadedName || attachment.title;
-    return `- ${label}: ${attachment.title}${target && target !== attachment.title ? ` (${target})` : ''}`;
-  });
-  if (!lines.length) return message;
-  return [message, 'Attachments:', ...lines].filter(Boolean).join('\n');
+  return draft.trim();
 }
 
 export function buildManagedThreadCreatePayload(
@@ -1241,7 +1278,14 @@ export type PmaChatScopeTagView = {
   kindKey: PmaChatScopeUiKind;
   kindLabel: string;
   detail: string;
+  /** Full path / id for tooltip when `detail` is shortened (hub workspace basename). */
+  detailFull?: string;
 };
+
+function workspacePathBasename(path: string): string {
+  const parts = path.split(/[\\/]/).filter(Boolean);
+  return parts.at(-1) ?? path;
+}
 
 /** Scope line split into a kind chip plus detail for chat list cards. */
 export function pmaChatScopeTagView(
@@ -1269,7 +1313,13 @@ export function pmaChatScopeTagView(
   }
   const workspaceRoot = stringValue(chat.raw.workspace_root);
   if (workspaceRoot && workspaceRoot !== '.') {
-    return { kindKey: 'hub', kindLabel: 'Hub', detail: workspaceRoot };
+    const base = workspacePathBasename(workspaceRoot);
+    return {
+      kindKey: 'hub',
+      kindLabel: 'Hub',
+      detail: base,
+      detailFull: workspaceRoot
+    };
   }
   return { kindKey: 'local', kindLabel: 'Local', detail: 'Hub workspace' };
 }

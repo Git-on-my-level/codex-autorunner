@@ -26,8 +26,8 @@ describe('MemoryView', () => {
     const vm = buildMemoryViewModel({ kind: 'hub' }, []);
     const { body } = render(MemoryView, { props: { state: 'ready', vm } });
 
-    expect(body).toContain('>0<');
-    expect(body).toContain('>of 3<');
+    expect(body).toContain('3 missing');
+    expect(body).toContain('3 of 3 docs missing');
     expect(body).toContain('has no content');
     expect(body).toContain('PMA has not written content to this memory document yet.');
   });

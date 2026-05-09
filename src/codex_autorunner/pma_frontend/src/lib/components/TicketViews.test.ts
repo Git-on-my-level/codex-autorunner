@@ -33,8 +33,7 @@ describe('TicketViews', () => {
       props: { state: 'ready', mode: 'list', list, selectedFilter: 'active' }
     });
 
-    expect(body).toContain('All tickets');
-    expect(body).toContain('known repos and worktrees');
+    expect(body).toContain('Tickets');
     expect(body).toContain('#110');
     expect(body).toContain('Implement typed UI API client and view models');
     expect(body).toContain('running');
@@ -54,7 +53,6 @@ describe('TicketViews', () => {
 
     expect(body).toContain('No tickets in this view');
     expect(body).toContain('Switch filters or ask PMA to create the next scoped ticket for the current CAR work.');
-    expect(body).toContain('Tickets without a registered owner are flagged for ownership repair');
   });
 
   it('renders scoped queue status, create, reorder, and row affordances', () => {
@@ -104,8 +102,6 @@ describe('TicketViews', () => {
     expect(body).toContain('href="/repos/repo-1/tickets/new"');
 
     expect(body).toContain('Ticket flow controls');
-    expect(body).toContain('0/2 done');
-    expect(body).toContain('4');
     expect(body).toContain('+ New ticket');
     expect(body).toContain('working-badge');
     expect(body).toContain('Implement the current ticket body preview.');

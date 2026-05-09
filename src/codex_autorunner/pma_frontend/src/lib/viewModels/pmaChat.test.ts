@@ -153,7 +153,8 @@ describe('PMA chat view helpers', () => {
     expect(pmaChatScopeTagView({ ...baseChat, repoId: null, worktreeId: null, raw: { workspace_root: '/tmp/hub' } })).toEqual({
       kindKey: 'hub',
       kindLabel: 'Hub',
-      detail: '/tmp/hub'
+      detail: 'hub',
+      detailFull: '/tmp/hub'
     });
     expect(pmaChatScopeTagView({ ...baseChat, repoId: null, worktreeId: null, raw: {} })).toEqual({
       kindKey: 'local',
@@ -195,11 +196,14 @@ describe('PMA chat view helpers', () => {
 
     expect(cards.map((card) => card.kind)).toEqual([
       'message',
-      'artifact',
       'ticket',
       'artifact'
     ]);
     expect(cards.at(-1)).toMatchObject({ artifact: { id: 'scoped-artifact' } });
+    const messageCard = cards[0];
+    if (messageCard.kind !== 'message') throw new Error('expected message card');
+    expect(messageCard.message.artifacts).toHaveLength(1);
+    expect(messageCard.message.artifacts[0]).toMatchObject({ id: 'message-attachment' });
   });
 
   it('filters active-chat artifacts by durable associations', () => {
@@ -896,8 +900,9 @@ describe('PMA chat view helpers', () => {
       }
     ];
 
-    expect(composeMessageWithAttachments('Review these', attachments)).toContain('Attachments:');
-    expect(composeMessageWithAttachments('', attachments)).toContain('Image: screen.png');
+    expect(composeMessageWithAttachments('Review these', attachments)).toBe('Review these');
+    expect(composeMessageWithAttachments('  draft  ', attachments)).toBe('draft');
+    expect(composeMessageWithAttachments('', attachments)).toBe('');
     expect(removePendingAttachment(attachments, 'att-1')).toMatchObject([{ id: 'att-2' }]);
   });
 

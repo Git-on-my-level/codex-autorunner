@@ -86,12 +86,22 @@
         <h1>{title}</h1>
         <p>{description}</p>
       </div>
-      <dl class="doc-viewer-stats" aria-label="Document summary">
-        <div class={presentCount === docs.length ? 'is-complete' : 'is-partial'}>
-          <dt>Docs</dt>
-          <dd><strong>{presentCount}</strong><span>of {docs.length}</span></dd>
-        </div>
-      </dl>
+      {#if docs.length > 0}
+        {@const missing = docs.length - presentCount}
+        <span
+          class="doc-viewer-doc-count"
+          class:is-partial={missing > 0}
+          aria-label={missing > 0
+            ? `${missing} of ${docs.length} docs missing`
+            : `All ${docs.length} docs present`}
+        >
+          {#if missing > 0}
+            {missing} missing <span class="doc-viewer-doc-count-total">· {docs.length} docs</span>
+          {:else}
+            {docs.length} docs
+          {/if}
+        </span>
+      {/if}
     </header>
 
     <nav class="doc-viewer-tabs" aria-label={ariaLabel}>
@@ -112,10 +122,12 @@
       <header class="doc-viewer-reader-head">
         <div class="doc-viewer-reader-title">
           <span class="doc-viewer-reader-filename">{activeDoc.filename}</span>
-          <span class={`doc-viewer-reader-status ${activeDoc.isMissing ? 'is-missing' : 'is-present'}`}>
-            <span class="doc-viewer-reader-status-dot" aria-hidden="true"></span>
-            {activeDoc.isMissing ? 'Empty' : 'Present'}
-          </span>
+          {#if activeDoc.isMissing}
+            <span class="doc-viewer-reader-status is-missing">
+              <span class="doc-viewer-reader-status-dot" aria-hidden="true"></span>
+              Empty
+            </span>
+          {/if}
         </div>
         <div class="doc-viewer-reader-actions">
           <button class="doc-viewer-copy-button" type="button" onclick={copyActiveDoc} disabled={activeDoc.isMissing}>
@@ -194,52 +206,26 @@
     max-width: 72ch;
   }
 
-  .doc-viewer-stats {
-    display: flex;
-    align-items: stretch;
-    gap: 0;
-    margin: 0;
-    padding: 4px;
-    border: 1px solid var(--color-border-subtle);
-    border-radius: 8px;
-    background: var(--color-surface);
-  }
-
-  .doc-viewer-stats > div {
-    display: flex;
-    align-items: baseline;
-    gap: 6px;
-    padding: 1px var(--space-2);
-  }
-
-  .doc-viewer-stats dt {
-    margin: 0;
+  .doc-viewer-doc-count {
+    flex: 0 0 auto;
+    align-self: center;
     color: var(--color-ink-muted);
-    font-size: 11px;
+    font-size: var(--font-size-0);
     font-weight: 500;
-  }
-
-  .doc-viewer-stats dd {
-    margin: 0;
-    display: inline-flex;
-    align-items: baseline;
-    gap: 4px;
-    color: var(--color-ink);
-    font-size: var(--font-size-2);
-    font-weight: 650;
     font-variant-numeric: tabular-nums;
-    letter-spacing: -0.01em;
+    letter-spacing: 0;
     line-height: 1;
+    white-space: nowrap;
   }
 
-  .doc-viewer-stats dd span {
+  .doc-viewer-doc-count.is-partial {
+    color: var(--color-warning);
+  }
+
+  .doc-viewer-doc-count-total {
     color: var(--color-ink-faint);
     font-weight: 500;
-    font-size: var(--font-size-0);
   }
-
-  .doc-viewer-stats > div.is-complete dd strong { color: var(--color-success); }
-  .doc-viewer-stats > div.is-partial dd strong { color: var(--color-warning); }
 
   .doc-viewer-tabs {
     display: flex;
@@ -361,11 +347,6 @@
     line-height: 1;
   }
 
-  .doc-viewer-reader-status.is-present {
-    background: var(--color-success-soft);
-    color: var(--color-success);
-  }
-
   .doc-viewer-reader-status.is-missing {
     background: var(--color-surface-muted);
     color: var(--color-ink-muted);
@@ -441,7 +422,7 @@
       gap: var(--space-2);
     }
 
-    .doc-viewer-stats {
+    .doc-viewer-doc-count {
       align-self: flex-start;
     }
 

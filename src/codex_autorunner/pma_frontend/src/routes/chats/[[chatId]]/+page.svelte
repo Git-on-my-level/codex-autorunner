@@ -6,6 +6,7 @@
   import ChatTranscriptCards from '$lib/components/ChatTranscriptCards.svelte';
   import AutoDismissNotice from '$lib/components/AutoDismissNotice.svelte';
   import ModelReasoningPicker from '$lib/components/ModelReasoningPicker.svelte';
+  import VoiceComposerButton from '$lib/components/VoiceComposerButton.svelte';
   import { pmaApi, type ApiError, type JsonRecord } from '$lib/api/client';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import { openPmaTailEventSource, type StreamSubscription } from '$lib/api/streaming';
@@ -101,6 +102,43 @@
   let fileInput: HTMLInputElement | null = $state(null);
   let imageInput: HTMLInputElement | null = $state(null);
   let messageStack: HTMLDivElement | null = $state(null);
+  let composerTextarea: HTMLTextAreaElement | null = $state(null);
+  let voiceNotice = $state<string | null>(null);
+
+  const COMPOSER_MAX_PX = 360;
+  function autosizeComposer(): void {
+    const el = composerTextarea;
+    if (!el) return;
+    el.style.height = 'auto';
+    const next = Math.min(el.scrollHeight, COMPOSER_MAX_PX);
+    el.style.height = `${next}px`;
+    el.style.overflowY = el.scrollHeight > COMPOSER_MAX_PX ? 'auto' : 'hidden';
+  }
+
+  function applyTranscript(text: string): void {
+    if (!text) return;
+    voiceNotice = null;
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    const sep = draft && !/\s$/.test(draft) ? ' ' : '';
+    draft = `${draft}${sep}${trimmed}`;
+    queueMicrotask(() => {
+      autosizeComposer();
+      composerTextarea?.focus();
+    });
+  }
+
+  function showVoiceNotice(message: string): void {
+    voiceNotice = message;
+    window.setTimeout(() => {
+      if (voiceNotice === message) voiceNotice = null;
+    }, 3500);
+  }
+
+  $effect(() => {
+    draft;
+    autosizeComposer();
+  });
   let pendingRefreshTimer: number | null = null;
   let lastScrolledChatId: string | null = null;
   let lastScrolledCardCount = 0;
@@ -169,8 +207,11 @@
     return chat.title;
   }
 
-  function chatUsesRepoGlyph(chat: PmaChatSummary): boolean {
-    return Boolean(chat.repoId || chat.worktreeId);
+  /** Label used with `repoAccent` / `repoInitials` for list scope coloring (repo, worktree, or hub basename). */
+  function chatListScopeAccentLabel(chat: PmaChatSummary, scopeTags: ReturnType<typeof pmaChatScopeTagView>): string | null {
+    if (chat.repoId || chat.worktreeId) return chatRepoGlyphLabel(chat);
+    if (scopeTags.kindKey === 'hub') return scopeTags.detail;
+    return null;
   }
 
   function filterChipLabel(key: PmaChatFilter): string {
@@ -300,7 +341,7 @@
   }
 
   function applyNewChatQueryParam(): void {
-    // Scoped repo/worktree launches live on the repo pages; Chats only exposes hub PMA creation by default.
+    // Settings and repo/worktree pages use this URL hook to open an unsent, prefilled chat.
     const raw = page.url.searchParams.get('new');
     if (!raw) return;
     let decoded = raw;
@@ -322,6 +363,9 @@
         selectedScopeId = sid;
         appliedScope = true;
       }
+    } else if (decoded === 'local' || decoded === 'hub') {
+      selectedScopeId = 'local';
+      appliedScope = true;
     }
     const requestedKind = page.url.searchParams.get('kind');
     newChatKind = requestedKind === 'agent' && selectedScopeId !== 'local' ? 'agent' : 'pma';
@@ -866,6 +910,8 @@
             repoLabel: repoLabelForRepoId,
             worktreeLabel: (wid) => worktreeScopeOption(wid)?.label ?? null
           })}
+          {@const listScopeAccent = chatListScopeAccentLabel(chat, scopeTags)}
+          {@const listScopeAccentHex = listScopeAccent ? repoAccent(listScopeAccent) : null}
           {@const listAgentLabel = agentDisplayForChat(agents, chat)}
           <button
             class:active={chat.id === activeChatId}
@@ -873,13 +919,12 @@
             type="button"
             onclick={() => selectChat(chat.id)}
           >
-            {#if chatUsesRepoGlyph(chat)}
-              {@const glabel = chatRepoGlyphLabel(chat)}
+            {#if listScopeAccent && listScopeAccentHex}
               <span
                 class="chat-row-glyph repo-mini-glyph"
-                style={`--glyph-accent: ${repoAccent(glabel)}`}
+                style={`--glyph-accent: ${listScopeAccentHex}`}
                 aria-hidden="true"
-              >{repoInitials(glabel)}</span>
+              >{repoInitials(listScopeAccent)}</span>
             {:else}
               <span class="chat-row-glyph pma-glyph" aria-hidden="true">P</span>
             {/if}
@@ -891,6 +936,7 @@
                   {/if}
                   <span class="chat-title-text-badge">
                     <strong>{chat.title}</strong>
+                    <span class={`chat-scope-kind-tag ${scopeTags.kindKey}`}>{scopeTags.kindLabel}</span>
                     <span class={`chat-kind-badge ${pmaChatKind(chat)}`}>{pmaChatKindLabel(pmaChatKind(chat))}</span>
                   </span>
                 </span>
@@ -905,8 +951,11 @@
               </span>
               <span class="chat-meta-row">
                 <span class="chat-scope-tags">
-                  <span class={`chat-scope-kind-tag ${scopeTags.kindKey}`}>{scopeTags.kindLabel}</span>
-                  <span class="chat-scope-detail-tag" title={scopeTags.detail}>{scopeTags.detail}</span>
+                  <span
+                    class="chat-scope-detail-tag"
+                    style={listScopeAccentHex ? `color: ${listScopeAccentHex}` : undefined}
+                    title={scopeTags.detailFull ?? scopeTags.detail}
+                  >{scopeTags.detail}</span>
                 </span>
                 {#if chat.ticketId}
                   <span class="chat-meta-dot" aria-hidden="true">·</span>
@@ -1124,6 +1173,11 @@
           </svg>
           <span class="sr-only">Attach link</span>
         </button>
+        <VoiceComposerButton
+          disabled={!activeChat || sending}
+          onTranscript={applyTranscript}
+          onError={showVoiceNotice}
+        />
       </div>
       {#if pendingAttachments.length > 0}
         <div class="pending-attachments" aria-label="Pending attachments">
@@ -1138,11 +1192,14 @@
         </div>
       {/if}
       <textarea
+        bind:this={composerTextarea}
         aria-label={activeChat ? `Message ${composerRecipientLabel(activeChat)}` : 'Message chat'}
         bind:value={draft}
         disabled={!activeChat || sending}
         placeholder={activeChat ? `Message ${composerRecipientLabel(activeChat)}...` : 'Create or select a chat'}
         onkeydown={handleComposerKeydown}
+        oninput={autosizeComposer}
+        rows="1"
       ></textarea>
       <button class="send-button" type="submit" disabled={!activeChat || (!draft.trim() && pendingAttachments.length === 0) || sending}>
         {sending ? 'Sending' : 'Send'}
@@ -1184,6 +1241,7 @@
       </div>
     {/if}
     <AutoDismissNotice message={composeError?.message ?? null} tone="danger" />
+    <AutoDismissNotice message={voiceNotice} tone="warning" />
   </div>
   {/snippet}
 </MasterDetail>

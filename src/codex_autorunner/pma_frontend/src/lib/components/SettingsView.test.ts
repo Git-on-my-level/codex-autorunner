@@ -46,22 +46,34 @@ describe('settings page component', () => {
   it('renders the required settings sections with useful status', () => {
     const { body } = render(SettingsView, { props: { state: 'ready', view } });
 
-    expect(body).toContain('Hub');
     expect(body).toContain('PMA memory');
-    expect(body).toContain('PMA agent');
-    expect(body).toContain('Coding agents');
-    expect(body).toContain('Integrations');
-    expect(body).toContain('Attachments');
-    expect(body).toContain('Secrets');
-    expect(body).toContain('Advanced');
+    expect(body).toContain('Setup with PMA');
+    expect(body).toContain('Telegram');
+    expect(body).toContain('Discord');
+    expect(body).toContain('Notifications');
+    expect(body).toContain('GitHub automation');
+    expect(body).toContain('Runner overrides');
+    expect(body).toContain('Agents');
     expect(body).toContain('Hermes');
-    expect(body).toContain('1 models');
-    expect(body).toContain('Model listing unsupported');
-    expect(body).toContain('Unavailable in PMA settings');
+    expect(body).toContain('Codex');
+    expect(body).toContain('Model override');
+    expect(body).toContain('Reasoning override');
     expect(body).toContain('Approval policy');
     expect(body).toContain('Sandbox mode');
     expect(body).toContain('Workspace-write network');
-    expect(body).toContain('Agent-native approvals apply during agent turns');
+    expect(body).toContain('Voice transcription');
+    expect(body).toContain('Enable with PMA');
+    // The flat redesign drops the noisy default-state hub status block, the
+    // duplicated advanced/debug list, the empty Secrets section, and
+    // boilerplate prose next to the form.
+    expect(body).not.toContain('Direct save');
+    expect(body).not.toContain('Hub mode');
+    expect(body).not.toContain('Runtime settings API');
+    expect(body).not.toContain('Secrets');
+    expect(body).not.toContain('External integrations');
+    expect(body).not.toContain('Coding');
+    expect(body).not.toContain('Attachments');
+    expect(body).not.toContain('Agent-native approvals apply during agent turns');
     expect(body).not.toContain('Analytics');
   });
 

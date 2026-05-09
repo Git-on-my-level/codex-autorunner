@@ -1,5 +1,3 @@
-import type { SurfaceArtifact } from './domain';
-
 type JsonRecord = Record<string, unknown>;
 
 export type SettingsSessionState = {
@@ -15,7 +13,6 @@ export type SettingsAgentStatus = {
   id: string;
   name: string;
   capabilities: string[];
-  role: 'pma' | 'coding';
   modelStatus: 'available' | 'unsupported' | 'unavailable';
   modelCount: number;
   modelLabel: string;
@@ -31,28 +28,34 @@ export type SettingsStatusItem = {
 export type SettingsViewModel = {
   hub: SettingsStatusItem[];
   session: SettingsSessionState;
-  pmaAgents: SettingsAgentStatus[];
-  codingAgents: SettingsAgentStatus[];
+  agents: SettingsAgentStatus[];
   integrations: SettingsStatusItem[];
-  filebox: SettingsStatusItem[];
   secrets: SettingsStatusItem[];
   advanced: SettingsStatusItem[];
+  voice: SettingsVoiceStatus;
+};
+
+export type SettingsVoiceStatus = {
+  enabled: boolean;
+  configured: boolean;
+  provider: string;
+  apiKeyEnv: string | null;
+  hasApiKey: boolean;
+  hint: string | null;
+  rows: SettingsStatusItem[];
 };
 
 export type SettingsBuildInput = {
   session?: JsonRecord | null;
   agents?: JsonRecord[];
   modelCatalogs?: Record<string, JsonRecord[] | null>;
-  fileArtifacts?: SurfaceArtifact[];
+  voiceConfig?: JsonRecord | null;
 };
 
 export function buildSettingsViewModel(input: SettingsBuildInput): SettingsViewModel {
   const agents = input.agents ?? [];
   const modelCatalogs = input.modelCatalogs ?? {};
   const agentStatuses = agents.map((agent) => mapAgentStatus(agent, modelCatalogs));
-  const pmaAgents = agentStatuses.filter((agent) => agent.role === 'pma');
-  const codingAgents = agentStatuses.filter((agent) => agent.role === 'coding');
-  const fileArtifacts = input.fileArtifacts ?? [];
   const session = mapSession(input.session ?? {});
 
   return {
@@ -70,8 +73,7 @@ export function buildSettingsViewModel(input: SettingsBuildInput): SettingsViewM
       }
     ],
     session,
-    pmaAgents,
-    codingAgents,
+    agents: agentStatuses,
     integrations: [
       {
         label: 'Agent capability discovery',
@@ -79,23 +81,9 @@ export function buildSettingsViewModel(input: SettingsBuildInput): SettingsViewM
         tone: agents.length > 0 ? 'ok' : 'warning'
       },
       {
-        label: 'External integrations',
-        value: integrationLabel(agents),
-        tone: agents.some((agent) => stringValue(agent.id).includes('opencode') || stringValue(agent.id).includes('hermes'))
-          ? 'ok'
-          : 'muted'
-      }
-    ],
-    filebox: [
-      {
-        label: 'Attachments API',
-        value: fileArtifacts.length > 0 ? `${fileArtifacts.length} surfaced files` : 'Available, no files surfaced',
-        tone: 'ok'
-      },
-      {
-        label: 'Supported inputs',
-        value: 'Files, images, links',
-        tone: 'ok'
+        label: 'Chat setup',
+        value: 'Configure Discord, Telegram, and notifications with PMA guidance',
+        tone: 'muted'
       }
     ],
     secrets: [
@@ -126,7 +114,68 @@ export function buildSettingsViewModel(input: SettingsBuildInput): SettingsViewM
         value: session.workspaceWriteNetwork === null ? 'Default' : session.workspaceWriteNetwork ? 'Enabled' : 'Disabled',
         tone: 'muted'
       }
-    ]
+    ],
+    voice: mapVoiceStatus(input.voiceConfig ?? null)
+  };
+}
+
+function mapVoiceStatus(raw: JsonRecord | null): SettingsVoiceStatus {
+  const enabled = raw?.enabled === true;
+  const provider = stringValue(raw?.provider) || 'local_whisper';
+  const apiKeyEnv = stringValue(raw?.api_key_env) || null;
+  const hasApiKey = raw?.has_api_key === true;
+  const missingExtra = stringValue(raw?.missing_extra);
+  const isLocal = provider.startsWith('local') || provider.startsWith('mlx');
+
+  let hint: string | null = null;
+  if (!raw) {
+    hint = 'Voice config could not be loaded from the hub.';
+  } else if (!enabled) {
+    if (missingExtra) {
+      hint = `Install voice runtime: \`pip install '.[${missingExtra}]'\``;
+    } else if (apiKeyEnv && !hasApiKey) {
+      hint = `Set ${apiKeyEnv} in your hub environment to enable Whisper transcription.`;
+    } else if (isLocal) {
+      hint = 'Local Whisper provider is configured but disabled. Enable `voice.enabled: true` in your hub config.';
+    } else {
+      hint = 'Voice transcription is disabled. Configure a provider in `voice` config.yml.';
+    }
+  }
+
+  const rows: SettingsStatusItem[] = [
+    {
+      label: 'Voice transcription',
+      value: !raw
+        ? 'Status unavailable'
+        : enabled
+          ? 'Enabled'
+          : apiKeyEnv && !hasApiKey
+            ? `Disabled · ${apiKeyEnv} not set`
+            : 'Disabled',
+      tone: !raw ? 'muted' : enabled ? 'ok' : 'warning'
+    },
+    {
+      label: 'Provider',
+      value: provider,
+      tone: 'muted'
+    }
+  ];
+  if (apiKeyEnv) {
+    rows.push({
+      label: 'API key env',
+      value: hasApiKey ? `${apiKeyEnv} (set)` : `${apiKeyEnv} (unset)`,
+      tone: hasApiKey ? 'ok' : 'warning'
+    });
+  }
+
+  return {
+    enabled,
+    configured: Boolean(raw),
+    provider,
+    apiKeyEnv,
+    hasApiKey,
+    hint,
+    rows
   };
 }
 
@@ -164,7 +213,6 @@ function mapAgentStatus(agent: JsonRecord, modelCatalogs: Record<string, JsonRec
     id,
     name: stringValue(agent.name) || id,
     capabilities,
-    role: isPmaAgent(id, capabilities) ? 'pma' : 'coding',
     modelStatus,
     modelCount,
     modelLabel:
@@ -187,10 +235,6 @@ function capabilityGate(agent: JsonRecord, action: string): { allowed: boolean; 
   };
 }
 
-function isPmaAgent(id: string, capabilities: string[]): boolean {
-  return id === 'hermes' || capabilities.includes('managed_threads') || capabilities.includes('durable_threads');
-}
-
 function providerLabel(agent: JsonRecord): string {
   const profile = stringValue(agent.default_profile ?? agent.metadata_profile);
   const version = stringValue(agent.version ?? agent.protocol_version);
@@ -198,12 +242,6 @@ function providerLabel(agent: JsonRecord): string {
   if (profile) return profile;
   if (version) return version;
   return 'Configured locally';
-}
-
-function integrationLabel(agents: JsonRecord[]): string {
-  const ids = agents.map((agent) => stringValue(agent.id)).filter(Boolean);
-  const visible = ids.filter((id) => ['hermes', 'opencode', 'codex'].includes(id));
-  return visible.length > 0 ? visible.join(', ') : 'No integration status exposed';
 }
 
 function stringValue(value: unknown): string {

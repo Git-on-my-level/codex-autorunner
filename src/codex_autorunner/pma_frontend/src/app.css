@@ -1104,6 +1104,10 @@ a.scope-chip-label:hover {
   flex: 1;
 }
 
+.chat-title-text-badge .chat-scope-kind-tag {
+  flex-shrink: 0;
+}
+
 .chat-title-text-badge .chat-kind-badge {
   flex-shrink: 0;
 }
@@ -1732,6 +1736,79 @@ textarea:hover {
   background: transparent;
   padding: var(--space-3) 0;
   color: var(--color-ink);
+}
+
+.message-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  justify-content: flex-end;
+}
+
+.message-attachment-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px 3px 8px;
+  border-radius: 999px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-subtle);
+  font-size: var(--font-size-0);
+  line-height: 1.4;
+  color: var(--color-ink);
+  max-width: 100%;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.message-attachment-pill:hover {
+  background: var(--color-surface-muted);
+  border-color: var(--color-border);
+}
+
+.message-attachment-pill .attachment-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.message-attachment-pill .attachment-icon.kind-image {
+  color: var(--color-accent);
+}
+
+.message-attachment-pill .attachment-icon.kind-link {
+  color: var(--color-accent);
+}
+
+.message-attachment-pill .attachment-icon.kind-file {
+  color: var(--color-ink-muted);
+}
+
+.message-attachment-pill a,
+.message-attachment-pill > span:not(.attachment-icon):not(.attachment-size) {
+  color: var(--color-ink);
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 240px;
+  font-weight: 500;
+}
+
+.message-attachment-pill a:hover {
+  color: var(--color-accent);
+}
+
+.message-attachment-pill .attachment-size {
+  color: var(--color-ink-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 
 .artifact-card,
@@ -2934,19 +3011,63 @@ textarea:hover {
   color: var(--color-danger);
 }
 
+/* Top-right toast stack — single shared container appended to <body> by
+   AutoDismissNotice. Multiple notices stack vertically; the stack itself
+   does not capture pointer events so the page below stays clickable. */
+.toast-stack {
+  position: fixed;
+  top: var(--space-3);
+  right: var(--space-3);
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  align-items: flex-end;
+  pointer-events: none;
+  max-width: min(420px, calc(100vw - var(--space-4)));
+}
+
 .auto-dismiss-notice {
   display: inline-flex;
-  align-items: center;
-  justify-self: start;
-  gap: var(--space-2);
-  max-width: min(520px, 100%);
-  padding: 7px var(--space-3);
+  align-items: flex-start;
+  gap: var(--space-3);
+  max-width: 100%;
+  padding: var(--space-3) var(--space-4);
+  padding-right: var(--space-3);
   border: 1px solid var(--color-border-subtle);
-  border-radius: 999px;
+  border-radius: 10px;
   background: var(--color-surface);
-  color: var(--color-ink-muted);
-  box-shadow: var(--shadow-1);
-  font-size: var(--font-size-0);
+  color: var(--color-ink);
+  box-shadow:
+    0 12px 28px -16px rgb(15 15 20 / 0.32),
+    0 2px 6px -3px rgb(15 15 20 / 0.12);
+  font-size: var(--font-size-1);
+  font-weight: 500;
+  line-height: 1.4;
+  pointer-events: auto;
+  animation: toast-slide-in var(--transition-base) var(--ease-out);
+}
+
+.auto-dismiss-notice > span {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+@keyframes toast-slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auto-dismiss-notice {
+    animation: none;
+  }
 }
 
 .auto-dismiss-notice.success {
@@ -2970,13 +3091,23 @@ textarea:hover {
 .auto-dismiss-notice button {
   display: inline-grid;
   place-items: center;
-  width: 18px;
-  height: 18px;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
   border: 0;
-  border-radius: 999px;
+  border-radius: 6px;
   background: transparent;
   color: currentColor;
+  opacity: 0.6;
+  font-size: 16px;
+  line-height: 1;
   cursor: pointer;
+  transition: background var(--transition-fast), opacity var(--transition-fast);
+}
+
+.auto-dismiss-notice button:hover {
+  opacity: 1;
+  background: color-mix(in srgb, currentColor 12%, transparent);
 }
 
 .loading-state {
@@ -3129,7 +3260,13 @@ textarea {
   box-shadow: none !important;
   outline: none;
   min-height: 28px;
+  /* Auto-resize JS sets explicit height; this max acts as a fallback ceiling
+     and matches the JS `COMPOSER_MAX_PX` so the textarea never blows past
+     ~50% of viewport before scrolling internally. */
+  max-height: min(50vh, 360px);
+  overflow-y: hidden;
   font-size: var(--font-size-2);
+  line-height: 1.5;
 }
 
 .composer textarea:focus-visible {
@@ -5255,7 +5392,7 @@ textarea:disabled {
 }
 
 .ghost-button {
-  min-height: 28px;
+  min-height: 32px;
   padding: 0 var(--space-3);
   border: 1px solid var(--color-border);
   border-radius: 6px;

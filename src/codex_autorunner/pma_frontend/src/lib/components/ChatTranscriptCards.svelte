@@ -1,9 +1,25 @@
 <script lang="ts">
   import SurfaceArtifactCard from '$lib/components/SurfaceArtifactCard.svelte';
+  import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import { renderMarkdownToHtml } from '$lib/viewModels/contextspace';
   import type { PmaCard } from '$lib/viewModels/pmaChat';
+  import type { SurfaceArtifact } from '$lib/viewModels/domain';
 
   let { cards }: { cards: PmaCard[] } = $props();
+
+  function attachmentKindClass(kind: SurfaceArtifact['kind']): string {
+    if (kind === 'image' || kind === 'screenshot') return 'image';
+    if (kind === 'link' || kind === 'preview_url') return 'link';
+    return 'file';
+  }
+
+  function attachmentSizeLabel(artifact: SurfaceArtifact): string | null {
+    const raw = artifact.raw as Record<string, unknown> | null | undefined;
+    if (!raw) return null;
+    const size = raw.size_label ?? raw.sizeLabel ?? raw.size;
+    if (typeof size === 'string' && size.trim()) return size;
+    return null;
+  }
 </script>
 
 {#each cards as card (card.id)}
@@ -13,6 +29,43 @@
       <div class="message-markdown markdown-body">
         {@html renderMarkdownToHtml(card.message.text)}
       </div>
+      {#if card.message.role === 'user' && card.message.artifacts.length > 0}
+        <ul class="message-attachments" aria-label="Attachments">
+          {#each card.message.artifacts as artifact (artifact.id)}
+            {@const kindClass = attachmentKindClass(artifact.kind)}
+            {@const sizeLabel = attachmentSizeLabel(artifact)}
+            <li class={`message-attachment-pill kind-${kindClass}`}>
+              <span class={`attachment-icon kind-${kindClass}`} aria-hidden="true">
+                {#if kindClass === 'image'}
+                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="3" y="5" width="18" height="14" rx="2" />
+                    <circle cx="8.5" cy="10" r="1.5" />
+                    <path d="m21 16-5-5L5 19" />
+                  </svg>
+                {:else if kindClass === 'link'}
+                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M10 13a5 5 0 0 0 7.1.1l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1" />
+                    <path d="M14 11a5 5 0 0 0-7.1-.1l-2 2a5 5 0 0 0 7.1 7.1l1.1-1.1" />
+                  </svg>
+                {:else}
+                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7z" />
+                    <path d="M14 2v5h5" />
+                  </svg>
+                {/if}
+              </span>
+              {#if artifact.url}
+                <a href={href(artifact.url)} target="_blank" rel="noopener" title={artifact.title}>{artifact.title}</a>
+              {:else}
+                <span title={artifact.title}>{artifact.title}</span>
+              {/if}
+              {#if sizeLabel}
+                <span class="attachment-size">{sizeLabel}</span>
+              {/if}
+            </li>
+          {/each}
+        </ul>
+      {/if}
     </article>
   {:else if card.kind === 'intermediate'}
     <details class="intermediate-card" aria-label="PMA intermediate output">

@@ -1,0 +1,1 @@
+import"../chunks/Cmx0SbVU.js";import{p as t,a,g as s,u as n}from"../chunks/BXJKd759.js";import{p as e}from"../chunks/CDL2d78R.js";import{S as m}from"../chunks/BAN1txxC.js";function g(o,r){t(r,!0);const p=n(()=>({kind:"worktree",id:e.params.worktreeId??"unknown-worktree",parentRepoId:e.params.repoId??""}));m(o,{get scope(){return s(p)}}),a()}export{g as component};

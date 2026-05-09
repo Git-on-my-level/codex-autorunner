@@ -24,7 +24,8 @@
     saving = false,
     onSessionChange,
     onSavePreferences,
-    onOpenPmaMemory
+    onOpenPmaMemory,
+    onOpenSetupChat
   }: {
     state: 'loading' | 'error' | 'ready';
     view?: SettingsViewModel | null;
@@ -34,8 +35,11 @@
     onSessionChange?: (session: SettingsSessionState) => void;
     onSavePreferences?: () => void;
     onOpenPmaMemory?: () => void;
+    onOpenSetupChat?: (kind: SetupPromptKind) => void;
     sessionBaselineEpoch?: number;
   } = $props();
+
+  type SetupPromptKind = 'telegram' | 'discord' | 'notifications' | 'github' | 'voice';
 
   let savedSession: SettingsSessionState | null = $state(null);
   let themePreference = $state<ThemePreference>('system');
@@ -74,6 +78,14 @@
     );
   });
 
+  // Surface only the *interesting* hub rows: a degraded runtime API. The
+  // canonical-default rows (Hub mode = local, Settings changes = direct save)
+  // communicate "nothing is happening" and are suppressed per DESIGN.md.
+  const degradedHub = $derived.by<SettingsStatusItem[]>(() => {
+    if (!view) return [];
+    return view.hub.filter((item) => item.tone === 'warning');
+  });
+
   function patchSession(key: keyof SettingsSessionState, value: SettingsSessionState[keyof SettingsSessionState]): void {
     if (!view) return;
     onSessionChange?.({ ...view.session, [key]: value });
@@ -85,50 +97,52 @@
 </script>
 
 <section class="page-stack settings-page">
-  <PageHero
-    title="Settings"
-    subtitle="Hub status, agent readiness, attachments, and sensitive CAR actions."
-  >
+  <PageHero title="Settings" subtitle="Hub, agents, and CAR session preferences.">
     {#snippet stats()}
-      {#if view}
-        <dl class="hero-stats" aria-label="Settings summary">
-          <div>
-            <dd>{view.hub.find((item) => item.label.toLowerCase().includes('mode'))?.value ?? 'Local'}</dd>
-            <dt>Hub mode</dt>
-          </div>
-          <div class="neutral">
-            <dd>{sessionDirty ? 'Unsaved' : 'Saved'}</dd>
+      {#if sessionDirty}
+        <dl class="hero-stats" aria-label="Settings status">
+          <div class="waiting">
+            <dd>Unsaved</dd>
             <dt>Preferences</dt>
           </div>
         </dl>
       {/if}
     {/snippet}
+    {#snippet actions()}
+      <button type="button" class="ghost-button" onclick={() => onOpenPmaMemory?.()}>
+        PMA memory
+      </button>
+    {/snippet}
   </PageHero>
 
   {#if viewState === 'loading'}
-    <div class="state-panel">Loading settings...</div>
+    <div class="state-panel loading-state">Loading settings…</div>
   {:else if viewState === 'error'}
     <div class="state-panel error">Could not load settings. {errorMessage}</div>
   {:else if view}
+    {#if degradedHub.length > 0}
+      <div class="state-panel error" role="status">
+        {#each degradedHub as item}
+          <div><strong>{item.label}:</strong> {item.value}</div>
+        {/each}
+      </div>
+    {/if}
+
     <section class="settings-section">
       <h2 class="settings-section-title">Appearance</h2>
-      <p class="permission-note">
-        Color theme applies across PMA Hub in this browser.
-        <strong>System (match OS)</strong> uses the hub default light/dark palettes, not the IDE presets below.
-      </p>
       <label class="theme-select-field">
         <span>Theme</span>
         <select aria-label="Color theme" value={themePreference} onchange={onThemeSelectChange}>
           <optgroup label="PMA Hub default">
+            <option value="system">System (match OS)</option>
             <option value="light">Light</option>
             <option value="dark">Dark</option>
-            <option value="system">System (match OS)</option>
           </optgroup>
           <optgroup label="Solarized">
             <option value="solarized-light">Solarized Light</option>
             <option value="solarized-dark">Solarized Dark</option>
           </optgroup>
-          <optgroup label="Popular (IDE-style)">
+          <optgroup label="IDE-style">
             <option value="dracula">Dracula</option>
             <option value="nord">Nord</option>
             <option value="one-dark">One Dark</option>
@@ -140,31 +154,54 @@
     </section>
 
     <section class="settings-section">
-      <div class="settings-section-head">
-        <h2 class="settings-section-title">Hub</h2>
-        <button type="button" class="ghost-button" onclick={() => onOpenPmaMemory?.()}>
-          PMA memory
+      <h2 class="settings-section-title">Setup with PMA</h2>
+      <div class="settings-action-grid">
+        <button type="button" class="setup-action" onclick={() => onOpenSetupChat?.('telegram')}>
+          <strong>Telegram</strong>
+          <span>Interactive mobile chat, topics, allowlists</span>
+        </button>
+        <button type="button" class="setup-action" onclick={() => onOpenSetupChat?.('discord')}>
+          <strong>Discord</strong>
+          <span>Slash commands, PMA mode, voice, channels</span>
+        </button>
+        <button type="button" class="setup-action" onclick={() => onOpenSetupChat?.('notifications')}>
+          <strong>Notifications</strong>
+          <span>Run finished, run error, idle alerts</span>
+        </button>
+        <button type="button" class="setup-action" onclick={() => onOpenSetupChat?.('github')}>
+          <strong>GitHub automation</strong>
+          <span>Webhooks, PR bindings, review workflows</span>
         </button>
       </div>
-      {@render statusList(view.hub)}
     </section>
 
     <section class="settings-section">
-      <h2 class="settings-section-title">PMA agent &amp; model</h2>
+      <div class="settings-section-head">
+        <h2 class="settings-section-title">Runner overrides</h2>
+        <button
+          type="button"
+          class="ghost-button"
+          class:dirty={sessionDirty}
+          disabled={!sessionDirty || saving}
+          onclick={() => onSavePreferences?.()}
+        >
+          {saving ? 'Saving…' : sessionDirty ? 'Save preferences' : 'Saved'}
+        </button>
+      </div>
       <div class="settings-form-grid">
         <label>
           <span>Model override</span>
           <input
             value={view.session.modelOverride}
-            placeholder="Use server default"
+            placeholder="Use agent default"
             oninput={(event) => patchSession('modelOverride', event.currentTarget.value)}
           />
         </label>
         <label>
-          <span>Reasoning effort</span>
+          <span>Reasoning override</span>
           <input
             value={view.session.effortOverride}
-            placeholder="Use server default"
+            placeholder="Use agent default"
             oninput={(event) => patchSession('effortOverride', event.currentTarget.value)}
           />
         </label>
@@ -211,51 +248,44 @@
           </select>
         </label>
       </div>
-      <div class="settings-form-footer">
-        <p class="permission-note">Agent-native approvals apply during agent turns according to the selected policy and sandbox mode.</p>
-        <button
-          type="button"
-          class="ghost-button"
-          class:dirty={sessionDirty}
-          disabled={!sessionDirty || saving}
-          onclick={() => onSavePreferences?.()}
-        >
-          {saving ? 'Saving' : sessionDirty ? 'Save preferences' : 'Saved'}
-        </button>
-      </div>
       <AutoDismissNotice message={saveError} tone="danger" />
-      <h3 class="settings-subtitle">PMA-capable agents</h3>
-      {@render agentList(view.pmaAgents, 'No PMA-capable agents are visible from the server.')}
-      <h3 class="settings-subtitle">Coding agents</h3>
-      {@render agentList(view.codingAgents, 'No additional coding agents are visible from the server.')}
     </section>
 
-    <div class="settings-grid">
-      <section class="settings-section">
-        <h2 class="settings-section-title">Integrations</h2>
-        {@render statusList(view.integrations)}
-      </section>
+    <section class="settings-section">
+      <h2 class="settings-section-title">Agents</h2>
+      {@render agentList(view.agents, 'No agents are visible from the server.')}
+    </section>
 
-      <section class="settings-section">
-        <h2 class="settings-section-title">Attachments</h2>
-        {@render statusList(view.filebox)}
-      </section>
-
-      <section class="settings-section">
-        <h2 class="settings-section-title">Secrets</h2>
-        {@render statusList(view.secrets)}
-      </section>
-    </div>
-
-    <details class="settings-section advanced-panel">
-      <summary>Advanced / debug</summary>
-      {@render statusList(view.advanced)}
-    </details>
+    <section class="settings-section">
+      <div class="settings-section-head">
+        <h2 class="settings-section-title">Voice transcription</h2>
+        <div class="settings-section-actions">
+          {#if view.voice.enabled}
+            <span class="status-pill done">enabled</span>
+          {:else}
+            <span class="status-pill waiting">disabled</span>
+            <button type="button" class="ghost-button" onclick={() => onOpenSetupChat?.('voice')}>
+              Enable with PMA
+            </button>
+          {/if}
+        </div>
+      </div>
+      {@render statusList(view.voice.rows)}
+      {#if view.voice.hint}
+        <p class="voice-hint">{view.voice.hint}</p>
+      {/if}
+      {#if !view.voice.enabled && view.voice.apiKeyEnv}
+        <p class="voice-hint voice-hint-cmd">
+          Set the env var, then restart the hub:
+          <code>export {view.voice.apiKeyEnv}=…</code>
+        </p>
+      {/if}
+    </section>
   {/if}
 </section>
 
-{#snippet statusList(items: SettingsStatusItem[], compact = false)}
-  <dl class:compact class="settings-status-list">
+{#snippet statusList(items: SettingsStatusItem[])}
+  <dl class="settings-status-list">
     {#each items as item}
       <div class={item.tone}>
         <dt>{item.label}</dt>
@@ -275,15 +305,131 @@
     <div class="agent-status-list">
       {#each agents as agent}
         <article class="agent-status-row">
-          <div>
+          <div class="agent-status-id">
             <strong>{agent.name}</strong>
-            <span>{agent.id} · {agent.providerLabel}</span>
+            <span><code>{agent.id}</code> · {agent.providerLabel}</span>
           </div>
-          <span class={`status-pill ${agent.modelStatus === 'available' ? 'done' : agent.modelStatus === 'unavailable' ? 'waiting' : 'idle'}`}>
-            {agent.modelLabel}
-          </span>
+          {#if agent.modelStatus === 'available'}
+            <span class="count-chip is-active" title={agent.modelLabel}>
+              <strong>{agent.modelCount}</strong><em>{agent.modelCount === 1 ? 'model' : 'models'}</em>
+            </span>
+          {:else if agent.modelStatus === 'unavailable'}
+            <span class="status-pill waiting">unavailable</span>
+          {:else}
+            <span class="status-pill idle">no listing</span>
+          {/if}
         </article>
       {/each}
     </div>
   {/if}
 {/snippet}
+
+<style>
+  .settings-page :global(.page-hero-actions) {
+    align-self: flex-end;
+  }
+
+  .agent-status-id strong {
+    font-size: var(--font-size-1);
+    font-weight: 600;
+  }
+
+  .agent-status-id span {
+    font-size: var(--font-size-0);
+    color: var(--color-ink-muted);
+  }
+
+  .agent-status-id code {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    color: var(--color-ink-soft);
+  }
+
+  .count-chip {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 4px;
+    min-height: 24px;
+    padding: 2px 10px;
+    border-radius: 999px;
+    background: var(--color-surface-muted);
+    color: var(--color-ink-muted);
+    font-size: var(--font-size-0);
+    font-weight: 500;
+    line-height: 1.2;
+    white-space: nowrap;
+  }
+
+  .count-chip strong {
+    color: var(--color-ink);
+    font-weight: 650;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .count-chip em {
+    font-style: normal;
+    color: var(--color-ink-muted);
+  }
+
+  .count-chip.is-active {
+    background: var(--color-success-soft);
+    color: var(--color-success);
+  }
+
+  .count-chip.is-active strong,
+  .count-chip.is-active em {
+    color: var(--color-success);
+  }
+
+  .settings-action-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+    gap: var(--space-3);
+  }
+
+  .setup-action {
+    display: grid;
+    gap: var(--space-1);
+    min-width: 0;
+    padding: var(--space-3);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    background: var(--color-surface);
+    color: var(--color-ink);
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .setup-action:hover {
+    border-color: var(--color-border-strong);
+    background: var(--color-surface-muted);
+  }
+
+  .setup-action strong {
+    font-size: var(--font-size-1);
+    font-weight: 650;
+  }
+
+  .setup-action span {
+    color: var(--color-ink-muted);
+    font-size: var(--font-size-0);
+    line-height: 1.35;
+  }
+
+  .voice-hint {
+    margin: 0;
+    color: var(--color-ink-muted);
+    font-size: var(--font-size-0);
+    line-height: 1.5;
+  }
+
+  .voice-hint-cmd code {
+    display: inline-block;
+    margin-top: 4px;
+    padding: 2px 8px;
+    border-radius: 6px;
+    background: var(--color-surface-muted);
+    color: var(--color-ink);
+    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: var(--font-size-0);
+  }
+</style>

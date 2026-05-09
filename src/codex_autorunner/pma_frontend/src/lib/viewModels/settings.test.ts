@@ -34,8 +34,15 @@ describe('settings view model', () => {
 
     expect(view.hub.map((item) => item.label)).toContain('Runtime settings API');
     expect(view.hub).toContainEqual({ label: 'Settings changes', value: 'Direct save', tone: 'ok' });
-    expect(view.pmaAgents).toMatchObject([{ id: 'hermes', modelStatus: 'available', modelCount: 1 }]);
-    expect(view.codingAgents).toMatchObject([{ id: 'codex', modelStatus: 'unsupported' }]);
+    expect(view.agents).toMatchObject([
+      { id: 'hermes', modelStatus: 'available', modelCount: 1 },
+      { id: 'codex', modelStatus: 'unsupported' }
+    ]);
+    expect(view.integrations).toContainEqual({
+      label: 'Chat setup',
+      value: 'Configure Discord, Telegram, and notifications with PMA guidance',
+      tone: 'muted'
+    });
     expect(view.secrets[0]).toMatchObject({ value: 'Unavailable in PMA settings' });
     expect(view.advanced).toContainEqual({ label: 'Approval policy', value: 'never', tone: 'muted' });
     expect(view.advanced).toContainEqual({ label: 'Sandbox mode', value: 'dangerFullAccess', tone: 'muted' });

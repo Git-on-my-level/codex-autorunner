@@ -472,6 +472,15 @@ export class PmaApiClient {
       this.requestJson<JsonRecord>('/api/session/settings', { method: 'POST', body })
   };
 
+  voice = {
+    getConfig: async (): Promise<ApiResult<JsonRecord>> => this.getJson<JsonRecord>('/api/voice/config'),
+    transcribe: async (audio: Blob, filename = 'voice.webm'): Promise<ApiResult<JsonRecord>> => {
+      const form = new FormData();
+      form.append('file', audio, filename);
+      return this.uploadForm<JsonRecord>('/api/voice/transcribe', form);
+    }
+  };
+
 }
 
 export function mapResult<T, U>(result: ApiResult<T>, mapper: (data: T) => U): ApiResult<U> {

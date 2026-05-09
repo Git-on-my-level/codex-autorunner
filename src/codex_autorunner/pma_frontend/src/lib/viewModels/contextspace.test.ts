@@ -57,12 +57,14 @@ describe('contextspace view models', () => {
   });
 
   it('renders readable safe markdown html', () => {
-    const html = renderMarkdownToHtml('# Title\n\n- **Decision**\n\n`code` <script>');
+    const html = renderMarkdownToHtml('# Title\n\n- **Decision**\n\n`code` <script>alert(1)</script>');
 
     expect(html).toContain('<h1>Title</h1>');
     expect(html).toContain('<li><strong>Decision</strong></li>');
     expect(html).toContain('<code>code</code>');
-    expect(html).toContain('&lt;script&gt;');
+    // Sanitizer must strip raw <script> blocks entirely.
+    expect(html).not.toContain('<script');
+    expect(html).not.toContain('alert(1)');
   });
 
   it('renders safe markdown links without enabling script URLs', () => {
