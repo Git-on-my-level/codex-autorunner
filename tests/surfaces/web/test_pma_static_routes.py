@@ -185,6 +185,8 @@ def test_pma_static_assets_are_served_without_legacy_static_by_default(tmp_path)
     assert "max-age=31536000" in asset_response.headers.get("Cache-Control", "")
     assert client.get("/legacy").status_code == 404
     assert client.get("/static/generated/app.js").status_code == 404
+    assert client.get("/hub/usage").status_code == 404
+    assert client.get("/hub/usage/series").status_code == 404
 
 
 def test_pma_index_csp_allows_sveltekit_bootstrap(tmp_path):

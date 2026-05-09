@@ -20,7 +20,6 @@ from pydantic import (
 from ...adapters.chat.approval_modes import normalize_approval_mode
 from ...core.car_context import CarContextProfile
 from ...core.text_utils import _normalize_text
-from ...flows.review.models import ReviewStateSnapshot, ReviewStatus
 from ._schema_normalization import (
     merge_normalized_filter,
     normalize_filter_payload,
@@ -428,11 +427,7 @@ __all__ = [
     "PmaSessionResetRequest",
     "PmaStopRequest",
     "PmaThreadResetRequest",
-    "RepoUsageResponse",
     "ResponseModel",
-    "ReviewControlResponse",
-    "ReviewStartRequest",
-    "ReviewStatusResponse",
     "RunControlRequest",
     "RunControlResponse",
     "RunResetResponse",
@@ -468,9 +463,6 @@ __all__ = [
     "TicketReorderResponse",
     "TicketResponse",
     "TicketUpdateRequest",
-    "TokenTotalsResponse",
-    "UsageSeriesEntryResponse",
-    "UsageSeriesResponse",
 ]
 
 
@@ -728,48 +720,6 @@ class AppServerThreadResetAllResponse(ResponseModel):
     cleared: bool
 
 
-class TokenTotalsResponse(ResponseModel):
-    input_tokens: int
-    cached_input_tokens: int
-    output_tokens: int
-    reasoning_output_tokens: int
-    total_tokens: int
-
-
-class RepoUsageResponse(ResponseModel):
-    mode: str
-    repo: str
-    codex_home: str
-    since: Optional[str]
-    until: Optional[str]
-    status: str
-    events: int
-    totals: TokenTotalsResponse
-    latest_rate_limits: Optional[Dict[str, Any]]
-    source_confidence: Optional[Dict[str, Any]] = None
-
-
-class UsageSeriesEntryResponse(ResponseModel):
-    key: str
-    model: Optional[str]
-    token_type: Optional[str]
-    total: int
-    values: List[int]
-
-
-class UsageSeriesResponse(ResponseModel):
-    mode: str
-    repo: str
-    codex_home: str
-    since: Optional[str]
-    until: Optional[str]
-    status: str
-    bucket: str
-    segment: str
-    buckets: List[str]
-    series: List[UsageSeriesEntryResponse]
-
-
 class SystemHealthResponse(ResponseModel):
     status: str
     mode: str
@@ -799,27 +749,6 @@ class SystemUpdateCheckResponse(ResponseModel):
     message: str
     local_commit: Optional[str] = None
     remote_commit: Optional[str] = None
-
-
-class ReviewStartRequest(Payload):
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
-
-    agent: Optional[str] = None
-    model: Optional[str] = None
-    reasoning: Optional[str] = None
-    max_wallclock_seconds: Optional[int] = Field(
-        default=None,
-        validation_alias=AliasChoices("max_wallclock_seconds", "maxWallclockSeconds"),
-    )
-
-
-class ReviewStatusResponse(ResponseModel):
-    review: ReviewStateSnapshot
-
-
-class ReviewControlResponse(ResponseModel):
-    status: ReviewStatus
-    detail: Optional[str] = None
 
 
 # Ticket CRUD schemas

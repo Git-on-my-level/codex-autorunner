@@ -524,8 +524,6 @@ class RequestIdMiddleware:
             "/api/contextspace",
             "/api/contextspace/spec/ingest",
             "/api/file-chat",
-            "/api/usage",
-            "/hub/usage",
             "/hub/repos",
         )
         return any(path_lower.startswith(prefix) for prefix in heavy_prefixes)
