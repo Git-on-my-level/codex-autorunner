@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import html as html_lib
 import logging
 from collections.abc import Callable, Iterable
 from contextlib import AbstractAsyncContextManager
@@ -18,7 +17,7 @@ from .....core.logging_utils import safe_log
 if TYPE_CHECKING:
     from ...app_state import HubAppContext
 
-_LEGACY_FRONTEND_TABS = {
+_REMOVED_REPO_FRONTEND_TABS = {
     "workspace",
     "tickets",
     "messages",
@@ -29,13 +28,6 @@ _LEGACY_FRONTEND_TABS = {
     "terminal",
     "settings",
 }
-
-
-def _is_legacy_frontend_opt_in(query_string: bytes) -> bool:
-    return any(
-        part in {b"legacy=1", b"legacy=true", b"debug=1", b"debug=true"}
-        for part in query_string.split(b"&")
-    )
 
 
 async def _send_redirect(send, location: str) -> None:
@@ -49,37 +41,6 @@ async def _send_redirect(send, location: str) -> None:
     await send({"type": "http.response.body", "body": b""})
 
 
-async def _send_legacy_debug_page(send, *, location: str, legacy_location: str) -> None:
-    location_attr = html_lib.escape(location, quote=True)
-    legacy_location_attr = html_lib.escape(legacy_location, quote=True)
-    body = f"""<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <title>Legacy CAR UI</title>
-  </head>
-  <body>
-    <main>
-      <h1>Legacy/debug route</h1>
-      <p>This old CAR UI route is retained for migration and debugging only.</p>
-      <p><a href="{location_attr}">Open the PMA Hub route</a></p>
-      <p><a href="{legacy_location_attr}">Open this legacy screen</a></p>
-    </main>
-  </body>
-</html>
-"""
-    await send(
-        {
-            "type": "http.response.start",
-            "status": 200,
-            "headers": [(b"content-type", b"text/html; charset=utf-8")],
-        }
-    )
-    await send(
-        {"type": "http.response.body", "body": body.encode("utf-8", errors="replace")}
-    )
-
-
 class _LazyRepoApp:
     """Build and start a repo sub-app on first use instead of at hub startup."""
 
@@ -91,14 +52,12 @@ class _LazyRepoApp:
         build_repo_app: Callable[[Path], ASGIApp],
         logger: logging.Logger,
         hub_started: Callable[[], bool],
-        legacy_ui_enabled: bool = False,
     ) -> None:
         self.prefix = prefix
         self.repo_path = repo_path
         self._build_repo_app = build_repo_app
         self._logger = logger
         self._hub_started = hub_started
-        self._legacy_ui_enabled = legacy_ui_enabled
         self._build_lock: Optional[asyncio.Lock] = None
         self._sub_app: Optional[ASGIApp] = None
         self._lifespan: Optional[AbstractAsyncContextManager[Any]] = None
@@ -165,44 +124,14 @@ class _LazyRepoApp:
     async def __call__(self, scope, receive, send) -> None:
         if scope.get("type") == "http":
             path = str(scope.get("path") or "")
-            query_string = scope.get("query_string") or b""
             root_path = str(scope.get("root_path") or f"/repos/{self.prefix}")
             pma_repo_location = root_path.rstrip("/") or f"/repos/{self.prefix}"
             tab = path.strip("/").split("/", 1)[0]
-            legacy_mount = root_path.rstrip("/").endswith(
-                f"/legacy/repos/{self.prefix}"
-            )
-            if (
-                not legacy_mount
-                and path in {"", "/"}
-                and not _is_legacy_frontend_opt_in(query_string)
-            ):
+            if path in {"", "/"}:
                 await _send_redirect(send, pma_repo_location)
                 return
-            if (
-                not legacy_mount
-                and not self._legacy_ui_enabled
-                and tab in _LEGACY_FRONTEND_TABS
-            ):
+            if tab in _REMOVED_REPO_FRONTEND_TABS:
                 await _send_redirect(send, pma_repo_location)
-                return
-            if (
-                not legacy_mount
-                and self._legacy_ui_enabled
-                and tab in _LEGACY_FRONTEND_TABS
-                and not _is_legacy_frontend_opt_in(query_string)
-            ):
-                query_text = query_string.decode("utf-8", errors="replace")
-                legacy_location = (
-                    f"{root_path}{path}?{query_text}&legacy=1"
-                    if query_text
-                    else f"{root_path}{path}?legacy=1"
-                )
-                await _send_legacy_debug_page(
-                    send,
-                    location=pma_repo_location,
-                    legacy_location=legacy_location,
-                )
                 return
         try:
             sub_app = await self._ensure_ready()
@@ -240,13 +169,10 @@ class HubMountManager:
         app: FastAPI,
         context: HubAppContext,
         build_repo_app: Callable[[Path], ASGIApp],
-        *,
-        legacy_ui_enabled: bool = False,
     ) -> None:
         self.app = app
         self.context = context
         self._build_repo_app = build_repo_app
-        self._legacy_ui_enabled = legacy_ui_enabled
 
         self._mounted_repos: set[str] = set()
         self._mount_errors: dict[str, str] = {}
@@ -341,8 +267,8 @@ class HubMountManager:
                     exc=exc2,
                 )
 
-    def _mount_paths(self, prefix: str) -> tuple[str, str]:
-        return (f"/repos/{prefix}", f"/legacy/repos/{prefix}")
+    def _mount_paths(self, prefix: str) -> tuple[str]:
+        return (f"/repos/{prefix}",)
 
     def _mount_path(self, prefix: str) -> str:
         return f"/repos/{prefix}"
@@ -375,7 +301,6 @@ class HubMountManager:
                 build_repo_app=self._build_repo_app,
                 logger=self.app.state.logger,
                 hub_started=lambda: bool(getattr(self.app.state, "hub_started", False)),
-                legacy_ui_enabled=self._legacy_ui_enabled,
             )
         except ConfigError as exc:
             self._mount_errors[prefix] = str(exc)
@@ -410,8 +335,6 @@ class HubMountManager:
             return False
 
         self.app.mount(self._mount_path(prefix), sub_app)
-        if self._legacy_ui_enabled:
-            self.app.mount(f"/legacy/repos/{prefix}", sub_app)
         self._mounted_repos.add(prefix)
         self._repo_apps[prefix] = sub_app
         if prefix not in self._mount_order:

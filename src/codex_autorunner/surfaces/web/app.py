@@ -1,7 +1,5 @@
 import asyncio
-import html as html_lib
 import logging
-import os
 import sqlite3
 import threading
 import time
@@ -11,7 +9,7 @@ from types import SimpleNamespace
 from typing import Optional, Protocol, cast
 from urllib.parse import quote
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.types import ASGIApp
@@ -81,9 +79,7 @@ from .routes.settings import build_settings_routes
 from .routes.system import build_system_routes
 from .services.pma import create_pma_application_container
 from .static_assets import (
-    index_response_headers,
     pma_index_response_headers,
-    render_index_html,
     render_pma_index_html,
     resolve_pma_static_dir,
 )
@@ -93,22 +89,15 @@ __all__ = ["create_app", "create_hub_app", "create_repo_app"]
 _DEFAULT_HUB_FLOW_SWEEP_INTERVAL_SECONDS = float(
     parse_flow_retention_config(None).sweep_interval_seconds
 )
-_LEGACY_REPO_FRONTEND_TABS = {
+_REMOVED_REPO_TAB_PATHS = {
     "workspace",
-    "tickets",
     "messages",
     "inbox",
-    "contextspace",
     "archive",
     "analytics",
     "terminal",
     "settings",
 }
-_LEGACY_UI_ENV = "CAR_ENABLE_LEGACY_UI"
-
-
-def _legacy_ui_enabled() -> bool:
-    return os.getenv(_LEGACY_UI_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 class _IdlePrunable(Protocol):
@@ -217,7 +206,6 @@ def create_hub_app(
     context = build_hub_context(hub_root, base_path)
     app = FastAPI(redirect_slashes=False)
     apply_hub_context(app, context)
-    legacy_ui_enabled = _legacy_ui_enabled()
     repo_context = build_app_context(
         context.config.root, context.base_path, context.config
     )
@@ -225,13 +213,9 @@ def create_hub_app(
     app.state.manager = repo_context.manager
     app.state.app_server_threads = repo_context.app_server_threads
     app.add_middleware(GZipMiddleware, minimum_size=500)
-    static_files = CacheStaticFiles(directory=context.static_dir)
-    app.state.static_files = static_files
     app.state.static_assets_lock = threading.Lock()
     app.state.hub_static_assets = None
     app.state.orchestration_housekeeping = None
-    if legacy_ui_enabled:
-        app.mount("/static", static_files, name="legacy-static")
     pma_static_dir, pma_static_context = resolve_pma_static_dir()
     app.state.pma_static_dir = pma_static_dir
     app.state.pma_static_assets_context = pma_static_context
@@ -286,7 +270,6 @@ def create_hub_app(
             server_overrides=repo_server_overrides,
             hub_config=context.config,
         ),
-        legacy_ui_enabled=legacy_ui_enabled,
     )
 
     # Mount lightweight placeholders immediately so repo URLs remain routable
@@ -901,15 +884,6 @@ def create_hub_app(
     app.include_router(build_hub_messages_routes(context))
     app.include_router(build_hub_repo_routes(context, mount_manager))
 
-    def _legacy_index_response():
-        index_path = context.static_dir / "index.html"
-        if not index_path.exists():
-            raise HTTPException(
-                status_code=500, detail="Static UI assets missing; reinstall package"
-            )
-        html = render_index_html(context.static_dir, app.state.asset_version)
-        return HTMLResponse(html, headers=index_response_headers())
-
     def _pma_index_response():
         index_path = pma_static_dir / "index.html"
         if not index_path.exists():
@@ -934,12 +908,6 @@ def create_hub_app(
     def hub_index():
         target = f"{context.base_path}/chats" if context.base_path else "/chats"
         return RedirectResponse(target, status_code=307)
-
-    if legacy_ui_enabled:
-
-        @app.get("/legacy", include_in_schema=False)
-        def legacy_hub_index():
-            return _legacy_index_response()
 
     @app.get("/chats", include_in_schema=False)
     @app.get("/chats/{rest:path}", include_in_schema=False)
@@ -1050,53 +1018,19 @@ def create_hub_app(
         _require_worktree_scope(repo_id, worktree_id)
         return _pma_index_response()
 
-    def legacy_repo_frontend_gate(repo_id: str, request: Request, *, legacy_tab: str):
-        query = request.url.query
+    def removed_repo_tab_redirect(repo_id: str):
         encoded_repo_id = quote(repo_id, safe="")
-        pma_target = (
+        target = (
             f"{context.base_path}/repos/{encoded_repo_id}"
             if context.base_path
             else f"/repos/{encoded_repo_id}"
         )
-        if not legacy_ui_enabled:
-            return RedirectResponse(pma_target, status_code=307)
-        legacy_target = (
-            f"{context.base_path}/legacy/repos/{encoded_repo_id}/{legacy_tab}"
-            if context.base_path
-            else f"/legacy/repos/{encoded_repo_id}/{legacy_tab}"
-        )
-        if query:
-            legacy_target = f"{legacy_target}?{query}"
-        legacy_target_attr = html_lib.escape(legacy_target, quote=True)
-        pma_target_attr = html_lib.escape(pma_target, quote=True)
-        html = f"""<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <title>Legacy CAR UI</title>
-  </head>
-  <body>
-    <main>
-      <h1>Legacy/debug route</h1>
-      <p>This old CAR UI route is retained for migration and debugging only.</p>
-      <p><a href="{pma_target_attr}">Open the PMA Hub route</a></p>
-      <p><a href="{legacy_target_attr}">Open this legacy screen</a></p>
-    </main>
-  </body>
-</html>
-"""
-        return HTMLResponse(html, headers=index_response_headers())
+        return RedirectResponse(target, status_code=307)
 
-    def _legacy_repo_frontend_endpoint(tab: str):
-        def endpoint(repo_id: str, request: Request):
-            return legacy_repo_frontend_gate(repo_id, request, legacy_tab=tab)
-
-        return endpoint
-
-    for legacy_tab in sorted(_LEGACY_REPO_FRONTEND_TABS):
+    for removed_tab in sorted(_REMOVED_REPO_TAB_PATHS):
         app.add_api_route(
-            f"/repos/{{repo_id}}/{legacy_tab}",
-            _legacy_repo_frontend_endpoint(legacy_tab),
+            f"/repos/{{repo_id}}/{removed_tab}",
+            removed_repo_tab_redirect,
             methods=["GET"],
             include_in_schema=False,
         )

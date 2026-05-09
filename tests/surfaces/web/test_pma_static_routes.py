@@ -198,14 +198,16 @@ def test_pma_index_csp_allows_sveltekit_bootstrap(tmp_path):
     assert "'unsafe-inline'" not in pma_csp.split("script-src", 1)[1].split(";", 1)[0]
 
 
-def test_legacy_hub_ui_is_env_opt_in(tmp_path, monkeypatch):
+def test_legacy_hub_ui_env_flag_has_no_effect(tmp_path, monkeypatch):
     hub_root = tmp_path / "hub"
     seed_hub_files(hub_root, force=True)
     monkeypatch.setenv("CAR_ENABLE_LEGACY_UI", "1")
     client = TestClient(create_hub_app(hub_root))
 
     legacy_response = client.get("/legacy")
-    assert legacy_response.status_code in (200, 404, 500)
+    legacy_static_response = client.get("/static/generated/app.js")
+    assert legacy_response.status_code == 404
+    assert legacy_static_response.status_code == 404
 
 
 def test_inline_script_hashes_match_mixed_case_script_tags():
@@ -268,18 +270,23 @@ def test_repo_mount_frontend_routes_redirect_to_pma_by_default(hub_env):
     assert legacy_terminal.status_code == 404
 
 
-def test_repo_mount_legacy_reference_routes_are_env_opt_in(hub_env, monkeypatch):
+def test_repo_mount_legacy_reference_routes_stay_removed_with_env_flag(
+    hub_env, monkeypatch
+):
     monkeypatch.setenv("CAR_ENABLE_LEGACY_UI", "1")
     client = TestClient(create_hub_app(hub_env.hub_root), follow_redirects=False)
     repo_id = hub_env.repo_id
 
     legacy_prompt = client.get(f"/repos/{repo_id}/terminal")
-    assert legacy_prompt.status_code == 200
-    assert "Legacy/debug route" in legacy_prompt.text
-    assert f"/legacy/repos/{repo_id}/terminal" in legacy_prompt.text
+    assert legacy_prompt.status_code == 307
+    assert legacy_prompt.headers["location"] == f"/repos/{repo_id}"
 
     legacy_terminal = client.get(f"/legacy/repos/{repo_id}/terminal")
-    assert legacy_terminal.status_code in (200, 404, 500)
+    assert legacy_terminal.status_code == 404
+
+    query_opt_in = client.get(f"/repos/{repo_id}/terminal?legacy=1&debug=1")
+    assert query_opt_in.status_code == 307
+    assert query_opt_in.headers["location"] == f"/repos/{repo_id}"
 
 
 def test_pma_index_base_path_rewrites_asset_urls(tmp_path):
@@ -308,29 +315,20 @@ def test_inline_script_hashes_match_malformed_end_tag_spacing():
     ]
 
 
-def test_legacy_repo_gate_escapes_repo_and_query_derived_href_values(
-    hub_env, monkeypatch
-):
-    monkeypatch.setenv("CAR_ENABLE_LEGACY_UI", "1")
+def test_removed_repo_gate_redirects_encoded_repo_and_query_values(hub_env):
     client = TestClient(create_hub_app(hub_env.hub_root), follow_redirects=False)
     payload = "%22%3E%3Cimg%20src=x%20onerror=alert(1)%3E"
 
     response = client.get(f"/repos/{payload}/terminal?next=%22%3E%3Cimg%20src=x%3E")
 
-    assert response.status_code == 200
+    assert response.status_code == 307
     assert (
-        'href="/repos/%22%3E%3Cimg%20src%3Dx%20onerror%3Dalert%281%29%3E"'
-        in response.text
+        response.headers["location"]
+        == "/repos/%22%3E%3Cimg%20src%3Dx%20onerror%3Dalert%281%29%3E"
     )
-    assert (
-        'href="/legacy/repos/%22%3E%3Cimg%20src%3Dx%20onerror%3Dalert%281%29%3E/terminal'
-        in response.text
-    )
-    assert "<img src=x onerror=alert(1)>" not in response.text
-    assert 'next="><img src=x>' not in response.text
 
 
-async def test_legacy_repo_mount_debug_page_escapes_deep_path_query_href_values(
+async def test_removed_repo_mount_debug_query_redirects_without_building_repo_app(
     hub_env,
 ):
     repo_id = hub_env.repo_id
@@ -340,10 +338,10 @@ async def test_legacy_repo_mount_debug_page_escapes_deep_path_query_href_values(
         sent.append(message)
 
     async def receive():
-        raise AssertionError("legacy debug page should not read request body")
+        raise AssertionError("redirect should not read request body")
 
     def build_repo_app(_repo_path):
-        raise AssertionError("legacy debug page should not build the repo app")
+        raise AssertionError("redirect should not build the repo app")
 
     app = _LazyRepoApp(
         prefix=repo_id,
@@ -351,7 +349,6 @@ async def test_legacy_repo_mount_debug_page_escapes_deep_path_query_href_values(
         build_repo_app=build_repo_app,
         logger=None,
         hub_started=lambda: False,
-        legacy_ui_enabled=True,
     )
 
     await app(
@@ -365,13 +362,6 @@ async def test_legacy_repo_mount_debug_page_escapes_deep_path_query_href_values(
         send,
     )
 
-    assert sent[0]["status"] == 200
-    body = sent[1]["body"].decode("utf-8")
-    assert "Legacy/debug route" in body
-    assert f'href="/repos/{repo_id}"' in body
-    assert (
-        f'href="/repos/{repo_id}/terminal/subpath?next=&quot;&gt;&lt;img src=x&gt;'
-        f'&amp;legacy=1"'
-    ) in body
-    assert 'next="><img src=x>' not in body
-    assert "<img src=x>" not in body
+    assert sent[0]["status"] == 307
+    assert sent[0]["headers"] == [(b"location", f"/repos/{repo_id}".encode())]
+    assert sent[1]["body"] == b""
