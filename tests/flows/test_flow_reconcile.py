@@ -47,6 +47,7 @@ def test_reconcile_pending_stop_requested_without_worker_marks_stopped(
     assert updated is True
     assert locked is False
 
+
 def test_recover_paused_run_when_inner_running(monkeypatch, tmp_path: Path) -> None:
     db = tmp_path / "flows.db"
     store = FlowStore(db)

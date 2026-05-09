@@ -39,7 +39,7 @@ describe('RepoWorktreeViews', () => {
     expect(body).not.toContain('Analytics');
   });
 
-  it('renders scoped signal badges on child worktrees', () => {
+  it('keeps child worktree rows as navigation without scoped signal badges on the repo page', () => {
     const index = buildRepoWorktreeIndexViewModel({
       repos: [{ ...mockRepoSummary, status: 'idle', activeRuns: 0 }],
       worktrees: [{ ...mockWorktreeSummary, status: 'idle', activeRuns: 0 }],
@@ -50,11 +50,12 @@ describe('RepoWorktreeViews', () => {
     });
     const { body } = render(RepoWorktreeViews, { props: { state: 'ready', mode: 'index', index } });
 
-    expect(body).toContain('Scoped PMA chats or runs waiting for attention');
-    expect(body).toContain('1 waiting');
+    expect(body).toContain('discord-5');
+    expect(body).not.toContain('Scoped PMA chats or runs waiting for attention');
+    expect(body).not.toContain('1 waiting');
   });
 
-  it('renders archive and cleanup actions for repo and worktree rows', () => {
+  it('renders repo archive and child navigation cleanup without worktree archive state', () => {
     const index = buildRepoWorktreeIndexViewModel({
       repos: [{ ...mockRepoSummary, raw: { has_car_state: true } }],
       worktrees: [{ ...mockWorktreeSummary, raw: { has_car_state: true, chat_bound: true, cleanup_blocked_by_chat_binding: true } }],
@@ -74,7 +75,7 @@ describe('RepoWorktreeViews', () => {
     });
 
     expect(body).toContain('Archive CAR state for codex-autorunner');
-    expect(body).toContain('Archive CAR state for discord-5');
+    expect(body).not.toContain('Archive CAR state for discord-5');
     expect(body).toContain('Cleanup worktree discord-5');
     expect(body).toContain('icon-action cleanup');
     expect(body).toContain('icon-action archive');

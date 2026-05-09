@@ -666,14 +666,11 @@ class ReviewService:
                 status_code=400,
             ) from exc
 
-        model = (
-            payload.get("model")
-            or resolve_model_for_agent(
-                "opencode",
-                state=runner_state,
-                config=config,
-                configured_default=review_cfg.get("model"),
-            )
+        model = payload.get("model") or resolve_model_for_agent(
+            "opencode",
+            state=runner_state,
+            config=config,
+            configured_default=review_cfg.get("model"),
         )
         reasoning = payload.get("reasoning") or review_cfg.get("reasoning")
         max_wallclock_seconds = payload.get("max_wallclock_seconds") or review_cfg.get(

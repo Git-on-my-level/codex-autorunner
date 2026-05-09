@@ -107,6 +107,33 @@ def _active_or_paused_run(records: list[FlowRunRecord]) -> Optional[FlowRunRecor
     return None
 
 
+def _sync_record_current_ticket_state(
+    state: dict[str, object], rel_map: dict[str, str]
+) -> tuple[dict[str, object], bool]:
+    next_state = dict(state)
+    changed = False
+
+    current_ticket = next_state.get("current_ticket")
+    if isinstance(current_ticket, str):
+        updated = rel_map.get(current_ticket)
+        if isinstance(updated, str) and updated != current_ticket:
+            next_state["current_ticket"] = updated
+            changed = True
+
+    ticket_engine = next_state.get("ticket_engine")
+    if isinstance(ticket_engine, dict):
+        next_ticket_engine = dict(ticket_engine)
+        current_ticket = next_ticket_engine.get("current_ticket")
+        if isinstance(current_ticket, str):
+            updated = rel_map.get(current_ticket)
+            if isinstance(updated, str) and updated != current_ticket:
+                next_ticket_engine["current_ticket"] = updated
+                next_state["ticket_engine"] = next_ticket_engine
+                changed = True
+
+    return next_state, changed
+
+
 def sync_active_run_current_ticket_paths_after_reorder(
     repo_root: Path,
     renamed_paths: list[tuple[Path, Path]],
@@ -123,38 +150,30 @@ def sync_active_run_current_ticket_paths_after_reorder(
         return
     try:
         records = store.list_flow_runs(flow_type="ticket_flow")
-        active = active_or_paused_run_selector(records)
-        if active is None or not isinstance(active.state, dict):
-            return
         rel_map: dict[str, str] = {}
         for old_path, new_path in renamed_paths:
             rel_map[safe_relpath(old_path, repo_root)] = safe_relpath(
                 new_path, repo_root
             )
-        next_state = dict(active.state)
-        changed = False
 
-        current_ticket = next_state.get("current_ticket")
-        if isinstance(current_ticket, str):
-            updated = rel_map.get(current_ticket)
-            if isinstance(updated, str) and updated != current_ticket:
-                next_state["current_ticket"] = updated
-                changed = True
+        if active_or_paused_run_selector is _active_or_paused_run:
+            candidates = [
+                record
+                for record in records
+                if record.status in (FlowRunStatus.RUNNING, FlowRunStatus.PAUSED)
+            ]
+        else:
+            selected = active_or_paused_run_selector(records)
+            candidates = [selected] if selected is not None else []
 
-        ticket_engine = next_state.get("ticket_engine")
-        if isinstance(ticket_engine, dict):
-            next_ticket_engine = dict(ticket_engine)
-            current_ticket = next_ticket_engine.get("current_ticket")
-            if isinstance(current_ticket, str):
-                updated = rel_map.get(current_ticket)
-                if isinstance(updated, str) and updated != current_ticket:
-                    next_ticket_engine["current_ticket"] = updated
-                    next_state["ticket_engine"] = next_ticket_engine
-                    changed = True
-
-        if not changed:
-            return
-        store.update_flow_run_status(active.id, active.status, state=next_state)
+        for record in candidates:
+            if not isinstance(record.state, dict):
+                continue
+            next_state, changed = _sync_record_current_ticket_state(
+                record.state, rel_map
+            )
+            if changed:
+                store.update_flow_run_status(record.id, record.status, state=next_state)
     except (sqlite3.Error, RuntimeError) as exc:
         log.warning("Failed to sync current_ticket after reorder: %s", exc)
     finally:

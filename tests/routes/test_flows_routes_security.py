@@ -28,6 +28,26 @@ def _seed_paused_run(repo_root: Path, run_id: str) -> None:
     store.update_flow_run_status(run_id, FlowRunStatus.PAUSED)
 
 
+def _seed_paused_run_with_workspace_root(
+    repo_root: Path, run_id: str, workspace_root: Path
+) -> None:
+    db_path = repo_root / ".codex-autorunner" / "flows.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    store = FlowStore(db_path)
+    store.initialize()
+    store.create_flow_run(
+        run_id,
+        "ticket_flow",
+        input_data={
+            "workspace_root": str(workspace_root),
+            "runs_dir": ".codex-autorunner/runs",
+        },
+        state={},
+        metadata={},
+    )
+    store.update_flow_run_status(run_id, FlowRunStatus.PAUSED)
+
+
 def _create_reply_file(
     repo_root: Path, run_id: str, seq: str, filename: str, content: str = "test content"
 ) -> Path:
@@ -59,6 +79,25 @@ def test_reply_history_valid_file(tmp_path, monkeypatch):
         resp = client.get(f"/api/flows/{run_id}/reply_history/{seq}/{filename}")
         assert resp.status_code == 200
         assert resp.content == b"Hello, World!"
+
+
+def test_reply_history_rejects_run_workspace_outside_repo_root(tmp_path, monkeypatch):
+    repo_root = tmp_path / "repo"
+    outside_root = tmp_path / "worktree"
+    repo_root.mkdir()
+    outside_root.mkdir()
+    run_id = "12121212-1212-1212-1212-121212121212"
+
+    _seed_paused_run_with_workspace_root(repo_root, run_id, outside_root)
+    monkeypatch.setattr(flows_routes, "find_repo_root", lambda: repo_root)
+
+    app = FastAPI()
+    app.include_router(flows_routes.build_flow_routes())
+
+    with TestClient(app) as client:
+        resp = client.get(f"/api/flows/{run_id}/reply_history/0001/test.txt")
+
+    assert resp.status_code == 409
 
 
 def test_reply_history_rejects_parent_traversal(tmp_path, monkeypatch):

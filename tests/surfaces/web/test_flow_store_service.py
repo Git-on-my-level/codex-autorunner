@@ -59,6 +59,68 @@ def test_sync_current_ticket_paths_updates_active_run_state(tmp_path) -> None:
     assert ticket_engine.get("current_ticket") == moved_ticket
 
 
+def test_sync_current_ticket_paths_updates_matching_active_run_not_first_active_run(
+    tmp_path,
+) -> None:
+    repo_root = Path(tmp_path)
+    db_path = repo_root / ".codex-autorunner" / "flows.db"
+    unrelated_ticket = ".codex-autorunner/tickets/TICKET-009.md"
+    original_ticket = ".codex-autorunner/tickets/TICKET-003.md"
+    moved_ticket = ".codex-autorunner/tickets/TICKET-001.md"
+
+    with FlowStore(db_path) as store:
+        store.create_flow_run(
+            run_id="run-unrelated",
+            flow_type="ticket_flow",
+            input_data={},
+            state={"current_ticket": unrelated_ticket},
+        )
+        store.update_flow_run_status(
+            "run-unrelated",
+            FlowRunStatus.RUNNING,
+            state={"current_ticket": unrelated_ticket},
+        )
+        store.create_flow_run(
+            run_id="run-matching",
+            flow_type="ticket_flow",
+            input_data={},
+            state={
+                "current_ticket": original_ticket,
+                "ticket_engine": {"current_ticket": original_ticket},
+            },
+        )
+        store.update_flow_run_status(
+            "run-matching",
+            FlowRunStatus.PAUSED,
+            state={
+                "current_ticket": original_ticket,
+                "ticket_engine": {"current_ticket": original_ticket},
+            },
+        )
+
+    flow_store_service.sync_active_run_current_ticket_paths_after_reorder(
+        repo_root,
+        [
+            (
+                repo_root / ".codex-autorunner" / "tickets" / "TICKET-003.md",
+                repo_root / ".codex-autorunner" / "tickets" / "TICKET-001.md",
+            )
+        ],
+    )
+
+    with FlowStore(db_path) as store:
+        unrelated = store.get_flow_run("run-unrelated")
+        matching = store.get_flow_run("run-matching")
+
+    assert unrelated is not None
+    assert unrelated.state.get("current_ticket") == unrelated_ticket
+    assert matching is not None
+    assert matching.state.get("current_ticket") == moved_ticket
+    ticket_engine = matching.state.get("ticket_engine")
+    assert isinstance(ticket_engine, dict)
+    assert ticket_engine.get("current_ticket") == moved_ticket
+
+
 def test_safe_list_flow_runs_reconcile_path_calls_reconciler(tmp_path, monkeypatch):
     repo_root = Path(tmp_path)
     db_path = repo_root / ".codex-autorunner" / "flows.db"

@@ -31,7 +31,9 @@ def _state_default_model(agent: str, state: Any) -> Optional[str]:
         if model:
             return model
     if agent == "codex":
-        return _normalize_optional_text(getattr(state, "autorunner_model_override", None))
+        return _normalize_optional_text(
+            getattr(state, "autorunner_model_override", None)
+        )
     return None
 
 
@@ -74,7 +76,9 @@ def configured_default_model_for_agent(
         if codex_model:
             return codex_model
 
-    return builtin_default_model_for_agent(normalized_agent) if include_builtin else None
+    return (
+        builtin_default_model_for_agent(normalized_agent) if include_builtin else None
+    )
 
 
 def resolve_model_for_agent(

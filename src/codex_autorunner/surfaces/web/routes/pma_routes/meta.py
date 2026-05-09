@@ -171,11 +171,7 @@ def build_pma_meta_routes(
         )
         payload: dict[str, Any] = {"agents": agents, "default": default_agent}
         payload["agents"] = enriched_agents
-        if (
-            defaults.get("profile")
-            or default_model
-            or defaults.get("reasoning")
-        ):
+        if defaults.get("profile") or default_model or defaults.get("reasoning"):
             payload["defaults"] = {
                 key: value
                 for key, value in {

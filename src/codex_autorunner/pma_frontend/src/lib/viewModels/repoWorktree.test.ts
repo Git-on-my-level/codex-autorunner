@@ -33,7 +33,7 @@ describe('repo/worktree view models', () => {
     expect(vm.rows.map((row) => row.id)).toEqual(['repo-1']);
     expect(vm.title).toBe('Repos');
     expect(vm.eyebrow).toBe('Repo ownership');
-    expect(vm.activeCount).toBe(2);
+    expect(vm.activeCount).toBe(1);
     expect(vm.openTicketCount).toBe(1);
     expect(vm.rows[0]).toMatchObject({
       href: '/repos/repo-1',
@@ -52,12 +52,12 @@ describe('repo/worktree view models', () => {
           href: '/repos/repo-1/worktrees/worktree-1',
           pmaChatHref: '/chats?new=worktree:worktree-1&kind=pma',
           codingAgentChatHref: '/chats?new=worktree:worktree-1&kind=agent',
-          signalActive: 1,
+          signalActive: 0,
           openTickets: 0,
           totalTickets: 0,
           doneTickets: 0,
-          currentTicketId: 'TICKET-110',
-          currentRunTitle: 'Hub rewrite foundation'
+          currentTicketId: null,
+          currentRunTitle: null
         }
       ]
     });
@@ -193,7 +193,7 @@ describe('repo/worktree view models', () => {
     expect(vm.rows[0].detail).toBeNull();
   });
 
-  it('filters nested worktrees by status the same way search filters nested worktrees', () => {
+  it('keeps repo-page child worktrees searchable as navigation rows without promoting their status', () => {
     const activeWorktree = {
       ...mockWorktreeSummary,
       id: 'worktree-active',
@@ -219,15 +219,15 @@ describe('repo/worktree view models', () => {
       artifacts: []
     });
 
-    expect(filterRepoWorktreeIndexRows(vm.rows, '', 'active').map((row) => row.id)).toEqual(['repo-1']);
-    expect(visibleRepoWorktreeChildren(vm.rows[0], '', 'active').map((child) => child.id)).toEqual([
+    expect(filterRepoWorktreeIndexRows(vm.rows, '', 'active').map((row) => row.id)).toEqual([]);
+    expect(visibleRepoWorktreeChildren(vm.rows[0], 'active', 'all').map((child) => child.id)).toEqual([
       'worktree-active'
     ]);
     expect(countRepoWorktreeIndexEntities(vm.rows)).toBe(3);
-    expect(vm.activeCount).toBe(2);
+    expect(vm.activeCount).toBe(0);
   });
 
-  it('carries PMA signal badges on child worktrees', () => {
+  it('does not carry worktree PMA signal badges onto repo-page child navigation rows', () => {
     const vm = buildRepoWorktreeIndexViewModel({
       repos: [{ ...mockRepoSummary, status: 'idle', activeRuns: 0 }],
       worktrees: [{ ...mockWorktreeSummary, status: 'idle', activeRuns: 0 }],
@@ -238,7 +238,7 @@ describe('repo/worktree view models', () => {
     });
 
     expect(vm.rows[0].signalWaiting).toBe(0);
-    expect(vm.rows[0].childWorktrees[0]).toMatchObject({ signalWaiting: 1, signalFailed: 0, signalActive: 0 });
+    expect(vm.rows[0].childWorktrees[0]).toMatchObject({ signalWaiting: 0, signalFailed: 0, signalActive: 0 });
   });
 
   it('builds active current-run detail with scoped sections and artifacts', () => {
@@ -291,9 +291,9 @@ describe('repo/worktree view models', () => {
     expect(vm.childWorktrees).toHaveLength(1);
     expect(vm.childWorktrees[0]).toMatchObject({
       href: '/repos/repo-1/worktrees/worktree-1',
-      currentTicketId: 'TICKET-110',
-      openTickets: 1,
-      activeRuns: 1
+      currentTicketId: null,
+      openTickets: 0,
+      activeRuns: 0
     });
   });
 

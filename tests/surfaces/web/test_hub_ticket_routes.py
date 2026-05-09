@@ -190,7 +190,9 @@ def test_hub_tickets_marks_duplicate_ticket_numbers_invalid(tmp_path: Path) -> N
     )
 
 
-def test_hub_tickets_repo_and_worktree_filters_do_not_mix_owners(tmp_path: Path) -> None:
+def test_hub_tickets_repo_and_worktree_filters_do_not_mix_owners(
+    tmp_path: Path,
+) -> None:
     hub_root = tmp_path / "hub"
     supervisor = create_test_hub_supervisor(hub_root)
     base = supervisor.create_repo("base")

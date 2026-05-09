@@ -117,6 +117,7 @@ def test_list_runs_forwards_reconcile_to_fallback_safe_listing(tmp_path, monkeyp
     monkeypatch.setattr(flow_routes, "_require_flow_store", lambda _repo_root: None)
 
     observed: dict[str, object] = {}
+
     def fake_safe_list_runs(
         root: Path, flow_type: str | None = None, *, recover_stuck: bool = False
     ):
@@ -298,6 +299,45 @@ def test_list_runs_keeps_ticket_engine_contract_in_cached_payload(
         "reason": "Waiting on a long-running check.",
         "reason_details": "The current turn is still collecting output.",
     }
+
+
+def test_list_runs_cache_is_scoped_by_repo_root(tmp_path, monkeypatch):
+    repo_a = tmp_path / "repo-a"
+    repo_b = tmp_path / "repo-b"
+    current = {"root": repo_a}
+    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: current["root"])
+
+    for repo_root, run_id in (
+        (repo_a, "11111111-1111-1111-1111-111111111111"),
+        (repo_b, "22222222-2222-2222-2222-222222222222"),
+    ):
+        db_path = repo_root / ".codex-autorunner" / "flows.db"
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        with FlowStore(db_path) as store:
+            store.create_flow_run(
+                run_id,
+                "ticket_flow",
+                input_data={},
+                state={},
+                metadata={},
+            )
+
+    app = FastAPI()
+    app.include_router(flow_routes.build_flow_routes())
+
+    with TestClient(app) as client:
+        first = client.get("/api/flows/runs?flow_type=ticket_flow&reconcile=false")
+        current["root"] = repo_b
+        second = client.get("/api/flows/runs?flow_type=ticket_flow&reconcile=false")
+
+    assert first.status_code == 200
+    assert [row["id"] for row in first.json()] == [
+        "11111111-1111-1111-1111-111111111111"
+    ]
+    assert second.status_code == 200
+    assert [row["id"] for row in second.json()] == [
+        "22222222-2222-2222-2222-222222222222"
+    ]
 
 
 def test_sync_current_ticket_paths_closes_store_after_internal_error(

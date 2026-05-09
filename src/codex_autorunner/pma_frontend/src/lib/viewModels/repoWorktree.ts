@@ -586,51 +586,6 @@ function shortenWorktreeLabel(name: string, repoName: string | null): string {
   return name.startsWith(prefix) ? name.slice(prefix.length) : name;
 }
 
-function worktreeToChildRow(
-  worktree: WorktreeSummary,
-  source: RepoWorktreeSourceData,
-  repoName: string | null = null
-): RepoWorktreeChildRow {
-  const listLoaded = hubTicketListLoaded(source);
-  const run = mergeRunCards(
-    source.runs.filter((candidate) => runMatchesResource(candidate, 'worktree', worktree.id)),
-    source.chats.filter((candidate) => chatMatchesResource(candidate, 'worktree', worktree.id)),
-    'worktree',
-    worktree.id,
-    worktree.repoId
-  )[0];
-  const allTickets = ticketsForResource(source.tickets, 'worktree', worktree.id);
-  const openQueue = allTickets.filter((ticket) => ticket.status !== 'done');
-  const rollup = listLoaded ? ticketIndexRollup(allTickets) : { open: 0, total: 0, done: 0 };
-  const currentTicketId = run?.ticketId ?? openQueue[0]?.id ?? null;
-  const signals = scopedSignals(source, 'worktree', worktree.id);
-  return {
-    id: worktree.id,
-    label: shortenWorktreeLabel(worktree.name, repoName),
-    status: run?.status ?? worktree.status,
-    branch: worktree.branch,
-    path: worktree.path,
-    activeRuns: worktree.activeRuns || (run && ['running', 'waiting', 'blocked'].includes(run.status) ? 1 : 0),
-    openTickets: rollup.open,
-    totalTickets: rollup.total,
-    doneTickets: rollup.done,
-    currentRunTitle: run?.title ?? null,
-    currentTicketId,
-    lastActivityAt: worktree.lastActivityAt,
-    href: worktreeRoute(worktree.id, worktree.repoId),
-    ticketHref: worktreeTicketRoute(worktree.id, worktree.repoId),
-    pmaChatHref: scopedChatHref('worktree', worktree.id, 'pma'),
-    codingAgentChatHref: scopedChatHref('worktree', worktree.id, 'agent'),
-    signalWaiting: signals.waiting,
-    signalFailed: signals.failed,
-    signalActive: signals.active,
-    hasCarState: boolFromRaw(worktree.raw, 'has_car_state'),
-    unboundManagedThreadCount: numberFromRaw(worktree.raw, 'unbound_managed_thread_count'),
-    chatBound: boolFromRaw(worktree.raw, 'chat_bound'),
-    cleanupBlockedByChatBinding: boolFromRaw(worktree.raw, 'cleanup_blocked_by_chat_binding')
-  };
-}
-
 function mergeRunCards(
   runs: PmaRunProgress[],
   chats: PmaChatSummary[],
@@ -1032,22 +987,6 @@ function byChildActiveThenLabel(left: RepoWorktreeChildRow, right: RepoWorktreeC
   const rightTime = Date.parse(right.lastActivityAt ?? '') || 0;
   if (leftTime !== rightTime) return rightTime - leftTime;
   return left.label.localeCompare(right.label);
-}
-
-function mostRecent(values: (string | null)[]): string | null {
-  return values
-    .filter((value): value is string => Boolean(value))
-    .sort((left, right) => (Date.parse(right) || 0) - (Date.parse(left) || 0))[0] ?? null;
-}
-
-function aggregateStatus(base: WorkStatus, children: WorkStatus[]): WorkStatus {
-  const statuses = [base, ...children];
-  if (statuses.includes('running')) return 'running';
-  if (statuses.includes('blocked')) return 'blocked';
-  if (statuses.includes('waiting')) return 'waiting';
-  if (statuses.includes('failed')) return 'failed';
-  if (statuses.includes('idle')) return 'idle';
-  return base;
 }
 
 function rowMatchesNeedle(row: RepoWorktreeIndexRow, needle: string): boolean {

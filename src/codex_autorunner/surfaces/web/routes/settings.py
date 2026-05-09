@@ -167,7 +167,8 @@ def _thread_reset_required(normalized: dict[str, Any], state: RunnerState) -> bo
     return any(
         (
             normalized["autorunner_model_override"] != state.autorunner_model_override,
-            normalized["autorunner_model_overrides"] != state.autorunner_model_overrides,
+            normalized["autorunner_model_overrides"]
+            != state.autorunner_model_overrides,
             normalized["autorunner_effort_override"]
             != state.autorunner_effort_override,
             normalized["autorunner_approval_policy"]

@@ -21,9 +21,7 @@ class RunnerState:
     last_run_finished_at: Optional[str]
     autorunner_agent_override: Optional[str] = None
     autorunner_model_override: Optional[str] = None
-    autorunner_model_overrides: dict[str, str] = dataclasses.field(
-        default_factory=dict
-    )
+    autorunner_model_overrides: dict[str, str] = dataclasses.field(default_factory=dict)
     autorunner_effort_override: Optional[str] = None
     autorunner_approval_policy: Optional[str] = None
     autorunner_sandbox_mode: Optional[str] = None

@@ -6,7 +6,11 @@ from codex_autorunner.surfaces.web.schemas import RunControlRequest
 
 
 def _request_for_state(path):
-    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(engine=SimpleNamespace(state_path=path))))
+    return SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(engine=SimpleNamespace(state_path=path))
+        )
+    )
 
 
 def _idle_state(**kwargs) -> RunnerState:
