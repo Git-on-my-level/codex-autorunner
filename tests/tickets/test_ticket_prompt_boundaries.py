@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 from codex_autorunner.tickets.files import read_ticket
 from codex_autorunner.tickets.models import TicketRunConfig
 from codex_autorunner.tickets.runner_prompt import (
@@ -11,6 +13,7 @@ from codex_autorunner.tickets.runner_prompt import (
     CAR_HUD_MAX_LINES,
     build_prompt,
 )
+from codex_autorunner.tickets.runner_prompt_support import REQUIRED_PROMPT_MARKERS
 
 
 def _make_outbox(workspace_root: Path) -> MagicMock:
@@ -100,6 +103,45 @@ def test_ticket_flow_prompt_boundaries(tmp_path: Path) -> None:
     section = prompt[start:end]
     path_marker = "PATH: .codex-autorunner/tickets/TICKET-001.md"
     assert path_marker in section
+
+
+@pytest.mark.parametrize(
+    ("agent_line", "expected_agent"),
+    [
+        ("agent: codex", "agent: codex"),
+        ('agent: "codex"', 'agent: "codex"'),
+        ("agent: opencode", "agent: opencode"),
+    ],
+)
+def test_ticket_flow_prompt_shape_is_not_agent_specific(
+    tmp_path: Path, agent_line: str, expected_agent: str
+) -> None:
+    workspace_root = tmp_path
+    ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    ticket_path = ticket_dir / "TICKET-001.md"
+    ticket_path.write_text(
+        f"---\n{agent_line}\ndone: false\n---\nGoal: Test agent prompt shape\n",
+        encoding="utf-8",
+    )
+
+    ticket_doc, errors = read_ticket(ticket_path)
+    assert errors == []
+    prompt = build_prompt(
+        ticket_path=ticket_path,
+        workspace_root=workspace_root,
+        ticket_doc=ticket_doc,
+        last_agent_output=None,
+        outbox_paths=_make_outbox(workspace_root),
+        lint_errors=None,
+    )
+
+    assert "<CAR_HUD>" in prompt
+    assert "<CAR_REQUESTED_CONTEXT>" in prompt
+    assert expected_agent in prompt
+    for marker in REQUIRED_PROMPT_MARKERS:
+        assert marker in prompt
+    assert "Ticket-first fallback prompt" not in prompt
 
 
 def test_prompt_no_apps_installed_omits_apps_section(tmp_path: Path) -> None:
