@@ -731,12 +731,12 @@ def _decode_action_payload(action: dict[str, Any]) -> dict[str, Any]:
 
 def _turn_merge_timestamp(turn: dict[str, Any]) -> Optional[str]:
     """Timestamp used to interleave compaction lifecycle rows with turns."""
-    return _normalize_optional_text(
-        turn.get("started_at") or turn.get("created_at")
-    )
+    return _normalize_optional_text(turn.get("started_at") or turn.get("created_at"))
 
 
-def _sorted_compact_actions(thread_store: Any, managed_thread_id: str) -> list[dict[str, Any]]:
+def _sorted_compact_actions(
+    thread_store: Any, managed_thread_id: str
+) -> list[dict[str, Any]]:
     list_actions = getattr(thread_store, "list_thread_actions", None)
     if not callable(list_actions):
         return []
