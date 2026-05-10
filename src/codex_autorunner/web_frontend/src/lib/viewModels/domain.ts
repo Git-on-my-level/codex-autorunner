@@ -595,6 +595,8 @@ function normalizeMessageText(raw: JsonRecord, role: PmaChatMessage['role']): st
 
 function readableThreadTitle(raw: JsonRecord, fallback: string, ticketId: string | null): string {
   const explicit = stringValue(raw.display_name ?? raw.name ?? raw.title, fallback);
+  const chatDisplayName = nullableString(raw.chat_display_name);
+  if (chatDisplayName && isChatSurfaceIdTitle(explicit, raw)) return chatDisplayName;
   if (
     !isGenericChatTitle(explicit) &&
     !isGenericTicketFlowTitle(explicit) &&
@@ -628,6 +630,14 @@ function readableThreadTitle(raw: JsonRecord, fallback: string, ticketId: string
 function isGenericChatTitle(value: string): boolean {
   const text = value.trim().toLowerCase();
   return text === 'new pma chat' || text === 'new chat' || text === 'untitled chat' || text === '';
+}
+
+function isChatSurfaceIdTitle(value: string, raw: JsonRecord): boolean {
+  const text = value.trim().toLowerCase();
+  if (!/^(discord|telegram):\S+$/.test(text)) return false;
+  const bindingKind = nullableString(raw.binding_kind)?.toLowerCase();
+  if (bindingKind === 'discord' || bindingKind === 'telegram') return true;
+  return raw.chat_bound === true;
 }
 
 function firstUserMessageExcerpt(raw: JsonRecord): string | null {

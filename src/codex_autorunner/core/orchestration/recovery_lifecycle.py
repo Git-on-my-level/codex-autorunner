@@ -27,6 +27,7 @@ MISSING_BACKEND_THREAD_ERROR = (
     "Running execution could not be reattached after restart because no backend "
     "thread binding was persisted"
 )
+_RESTART_WAIT_AND_SEE_AGENTS = frozenset({"codex"})
 logger = logging.getLogger(__name__)
 
 
@@ -374,6 +375,32 @@ class _ThreadRecoveryHelper:
                 else None
             )
         )
+        has_backend_turn_id = isinstance(execution.backend_id, str) and bool(
+            execution.backend_id.strip()
+        )
+        has_live_runtime_binding = (
+            runtime_binding is not None
+            and isinstance(runtime_binding.backend_thread_id, str)
+            and bool(runtime_binding.backend_thread_id.strip())
+        )
+        agent_id = str(thread.agent_id or "").strip().lower()
+        if (
+            agent_id in _RESTART_WAIT_AND_SEE_AGENTS
+            and has_backend_turn_id
+            and has_live_runtime_binding
+        ):
+            log_event(
+                logger,
+                logging.INFO,
+                "orchestration.thread.restart_recovery_deferred",
+                thread_target_id=thread_target_id,
+                execution_id=execution.execution_id,
+                backend_thread_id=backend_thread_id,
+                backend_turn_id=execution.backend_id,
+                agent_id=thread.agent_id,
+                reason="agent_batches_events_until_turn_completion",
+            )
+            return None
         return self.recover_lost_backend_execution(
             thread_target_id=thread_target_id,
             execution=execution,

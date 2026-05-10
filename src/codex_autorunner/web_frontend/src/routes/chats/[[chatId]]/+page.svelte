@@ -27,11 +27,13 @@
     buildPmaStatusBar,
     chooseActiveChatId,
     composeMessageWithAttachments,
+    countTicketRunGroups,
     filterPmaChatEntries,
     formatBytes,
     formatRelativeTime,
     localPmaChatScopeOption,
     PMA_CHAT_FILTER_ORDER,
+    PMA_CHAT_TICKET_RUNS_FILTER,
     pmaChatKind,
     pmaChatKindLabel,
     pmaChatHeaderScopeLine,
@@ -118,14 +120,49 @@
   let voiceNotice = $state<string | null>(null);
   let composerEditVersion = 0;
 
-  const COMPOSER_MAX_PX = 360;
+  const COMPOSER_DEFAULT_MAX_PX = 360;
+  const COMPOSER_MIN_MAX_PX = 120;
+  let composerMaxPx = $state(COMPOSER_DEFAULT_MAX_PX);
+  function composerCeiling(): number {
+    if (typeof window === 'undefined') return 720;
+    return Math.max(COMPOSER_MIN_MAX_PX + 40, Math.round(window.innerHeight * 0.8));
+  }
   function autosizeComposer(): void {
     const el = composerTextarea;
     if (!el) return;
     el.style.height = 'auto';
-    const next = Math.min(el.scrollHeight, COMPOSER_MAX_PX);
+    const cap = composerMaxPx;
+    const next = Math.min(el.scrollHeight, cap);
     el.style.height = `${next}px`;
-    el.style.overflowY = el.scrollHeight > COMPOSER_MAX_PX ? 'auto' : 'hidden';
+    el.style.overflowY = el.scrollHeight > cap ? 'auto' : 'hidden';
+  }
+  function handleComposerResizeStart(event: PointerEvent): void {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    const target = event.currentTarget as HTMLElement;
+    target.setPointerCapture(event.pointerId);
+    const startY = event.clientY;
+    const startMax = composerMaxPx;
+    const ceiling = composerCeiling();
+    const onMove = (ev: PointerEvent) => {
+      const delta = startY - ev.clientY; // dragging up = bigger composer
+      const next = Math.min(ceiling, Math.max(COMPOSER_MIN_MAX_PX, startMax + delta));
+      composerMaxPx = next;
+      autosizeComposer();
+    };
+    const onUp = (ev: PointerEvent) => {
+      target.releasePointerCapture(ev.pointerId);
+      target.removeEventListener('pointermove', onMove);
+      target.removeEventListener('pointerup', onUp);
+      target.removeEventListener('pointercancel', onUp);
+    };
+    target.addEventListener('pointermove', onMove);
+    target.addEventListener('pointerup', onUp);
+    target.addEventListener('pointercancel', onUp);
+  }
+  function resetComposerHeight(): void {
+    composerMaxPx = COMPOSER_DEFAULT_MAX_PX;
+    autosizeComposer();
   }
 
   function applyTranscript(text: string): void {
@@ -176,12 +213,11 @@
   const filteredEntries = $derived(filterPmaChatEntries(chatListEntries, filter, search, lastSeenMap));
   const filterCounts = $derived(summarizeFilterCounts(chats, lastSeenMap));
   const surfaceFilterChips = $derived(pmaChatSurfaceFilterOptions(chats));
+  const ticketRunGroupCount = $derived(countTicketRunGroups(chats));
 
   function isGroupExpanded(group: PmaChatRunGroup): boolean {
     if (group.key in expandedRunGroups) return expandedRunGroups[group.key];
-    // Default-expanded when there is something demanding attention.
-    if (group.unreadCount > 0 || group.waitingCount > 0) return true;
-    // Default-expanded if the active chat lives inside this group.
+    // Default collapsed; expand only when the active chat lives inside this group.
     if (activeChatId && group.chats.some((chat) => chat.id === activeChatId)) return true;
     return false;
   }
@@ -1068,7 +1104,7 @@
     </div>
 
     <div class="chat-filter-bar">
-      <div class="filter-row" aria-label="Chat status filters">
+      <div class="filter-row chat-filter-chips-row" aria-label="Chat filters">
         {#each PMA_CHAT_FILTER_ORDER as item}
           {#if item !== 'unread' || filterCounts.unread > 0 || filter === 'unread'}
             <button
@@ -1082,24 +1118,31 @@
             </button>
           {/if}
         {/each}
+        {#if ticketRunGroupCount > 0 || filter === PMA_CHAT_TICKET_RUNS_FILTER}
+          <button
+            class:active={filter === PMA_CHAT_TICKET_RUNS_FILTER}
+            class="chip"
+            type="button"
+            onclick={() => (filter = PMA_CHAT_TICKET_RUNS_FILTER)}
+          >
+            Ticket Runs
+            <span>{ticketRunGroupCount}</span>
+          </button>
+        {/if}
+        {#each surfaceFilterChips as surf (surf.slug)}
+          {#if surf.count > 0 || filter === pmaChatSurfaceFilterToken(surf.slug)}
+            <button
+              class:active={filter === pmaChatSurfaceFilterToken(surf.slug)}
+              class="chip"
+              type="button"
+              onclick={() => (filter = pmaChatSurfaceFilterToken(surf.slug))}
+            >
+              {surf.label}
+              <span>{surf.count}</span>
+            </button>
+          {/if}
+        {/each}
       </div>
-      {#if surfaceFilterChips.length > 0}
-        <div class="filter-row chat-surface-filter-row" aria-label="Messenger surface filters">
-          {#each surfaceFilterChips as surf (surf.slug)}
-            {#if surf.count > 0 || filter === pmaChatSurfaceFilterToken(surf.slug)}
-              <button
-                class:active={filter === pmaChatSurfaceFilterToken(surf.slug)}
-                class="chip"
-                type="button"
-                onclick={() => (filter = pmaChatSurfaceFilterToken(surf.slug))}
-              >
-                {surf.label}
-                <span>{surf.count}</span>
-              </button>
-            {/if}
-          {/each}
-        </div>
-      {/if}
       {#if filter === 'unread' && filterCounts.unread > 0}
         <button
           class="new-chat-button"
@@ -1148,7 +1191,9 @@
                 {#if !nested}
                   <span class={`chat-scope-kind-tag ${scopeTags.kindKey}`}>{scopeTags.kindLabel}</span>
                 {/if}
-                <span class={`chat-kind-badge ${pmaChatKind(chat)}`}>{pmaChatKindLabel(pmaChatKind(chat))}</span>
+                {#if pmaChatKind(chat) === 'coding_agent'}
+                  <span class={`chat-kind-badge ${pmaChatKind(chat)}`}>{pmaChatKindLabel(pmaChatKind(chat))}</span>
+                {/if}
                 {#if messengerSurface}
                   <span class={`chat-surface-badge ${messengerSurface.badgeClass}`}>{messengerSurface.label}</span>
                 {/if}
@@ -1245,7 +1290,8 @@
                         <span class="chat-unread-dot" aria-label={`${group.unreadCount} unread`}></span>
                       {/if}
                       <span class="chat-title-text-badge">
-                        <strong>Run · {group.scopeLabel}</strong>
+                        <strong>{group.scopeLabel}</strong>
+                        <span class="chat-scope-kind-tag tickets">Tickets</span>
                         <span class={`chat-scope-kind-tag ${group.scopeKind}`}>{group.scopeKind === 'worktree' ? 'WORKTREE' : 'REPO'}</span>
                         <span class="chat-run-count-chip"><strong>{group.totalCount}</strong> {group.totalCount === 1 ? 'chat' : 'chats'}</span>
                       </span>
@@ -1433,6 +1479,15 @@
         void sendMessage();
       }}
     >
+      <div
+        class="composer-resize-grip"
+        role="separator"
+        aria-orientation="horizontal"
+        aria-label="Drag to resize composer"
+        title="Drag to resize · double-click to reset"
+        onpointerdown={handleComposerResizeStart}
+        ondblclick={resetComposerHeight}
+      ><span class="composer-resize-grip-bar" aria-hidden="true"></span></div>
       <input
         bind:this={fileInput}
         class="sr-only"
@@ -1553,7 +1608,12 @@
           Interrupt
         </button>
       {/if}
-      <button class="send-button" type="submit" disabled={!hasRunnableDraft}>
+      <button
+        class="send-button"
+        type="submit"
+        disabled={!hasRunnableDraft}
+        title="Send (⌘/Ctrl+Enter)"
+      >
         {sending ? 'Queueing' : progress?.status === 'running' ? 'Queue' : 'Send'}
       </button>
     </form>

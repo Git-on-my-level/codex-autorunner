@@ -1663,7 +1663,7 @@ async def test_stop_thread_marks_interrupted_when_runtime_binding_is_lost_after_
     assert outcome.execution.error is None
 
 
-async def test_recover_running_execution_after_restart_marks_restart_reattach_failure(
+async def test_recover_running_execution_after_restart_marks_codex_error_without_live_binding(
     tmp_path: Path,
 ) -> None:
     harness = _FakeHarness()
@@ -1691,7 +1691,37 @@ async def test_recover_running_execution_after_restart_marks_restart_reattach_fa
     assert recovered.status == "error"
     assert recovered.error == "Running execution could not be reattached after restart"
     assert _thread_runtime_binding(restarted_service, thread.thread_target_id) is None
-    assert restarted_service.get_running_execution(thread.thread_target_id) is None
+
+
+async def test_recover_running_execution_after_restart_defers_codex_with_live_binding(
+    tmp_path: Path,
+) -> None:
+    harness = _FakeHarness()
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+    execution = await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="Need an answer",
+        )
+    )
+
+    restarted_service = _build_service(tmp_path, harness)
+
+    recovered = restarted_service.recover_running_execution_after_restart(
+        thread.thread_target_id
+    )
+
+    assert recovered is None
+    running = restarted_service.get_running_execution(thread.thread_target_id)
+    assert running is not None
+    assert running.execution_id == execution.execution_id
+    assert (
+        _thread_runtime_binding(restarted_service, thread.thread_target_id) is not None
+    )
 
 
 async def test_recover_running_execution_after_restart_without_binding_stays_restart_specific(

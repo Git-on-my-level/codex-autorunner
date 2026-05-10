@@ -14,8 +14,11 @@ import { surfaceRefFromThreadRaw } from './thread';
 /** Status chips (All / Waiting / …) on the chat list. */
 export type PmaChatStatusFilter = 'all' | 'active' | 'waiting' | 'unread';
 
-/** Full list filter, including optional `surface:<slug>` messenger filters. */
-export type PmaChatFilter = PmaChatStatusFilter | `surface:${string}`;
+/** Full list filter: status chips, grouped ticket runs, or `surface:<slug>` messenger filters. */
+export type PmaChatFilter = PmaChatStatusFilter | 'ticket_runs' | `surface:${string}`;
+
+/** Token for the chats sidebar filter that lists only ticket-flow run groups (collapsed headers). */
+export const PMA_CHAT_TICKET_RUNS_FILTER = 'ticket_runs' as const satisfies PmaChatFilter;
 
 /** Synthetic list selection id for pinned PMA Memory in the chats sidebar. */
 export const PMA_MEMORY_LIST_ID = '__memory__';
@@ -277,6 +280,7 @@ export function filterPmaChats(
         const slug = filter.slice('surface:'.length);
         return pmaChatMessengerSurface(chat)?.slug === slug;
       }
+      if (filter === 'ticket_runs') return pmaChatRunGroupKey(chat) !== null;
       if (filter === 'active') return activeStatuses.includes(chat.status);
       if (filter === 'waiting') return waitingStatuses.includes(chat.status);
       if (filter === 'unread') {
@@ -363,6 +367,16 @@ export function pmaChatRunGroupKey(chat: PmaChatSummary): string | null {
   if (chat.worktreeId) return `worktree:${chat.worktreeId}`;
   if (chat.repoId) return `repo:${chat.repoId}`;
   return null;
+}
+
+/** Number of distinct repo/worktree ticket-flow runs (same cardinality as run-group rows). */
+export function countTicketRunGroups(chats: PmaChatSummary[]): number {
+  const keys = new Set<string>();
+  for (const chat of chats) {
+    const key = pmaChatRunGroupKey(chat);
+    if (key) keys.add(key);
+  }
+  return keys.size;
 }
 
 function isUnread(chat: PmaChatSummary, lastSeen: Record<string, string>): boolean {

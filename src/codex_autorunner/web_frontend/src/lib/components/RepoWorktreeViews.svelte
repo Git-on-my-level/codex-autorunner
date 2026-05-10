@@ -22,6 +22,8 @@
     onRetry = undefined,
     onCleanupWorktree = undefined,
     onArchiveState = undefined,
+    onSyncRepo = undefined,
+    syncRepoBusy = false,
     onCreateRepo = undefined,
     onCreateWorktree = undefined
   }: {
@@ -34,6 +36,8 @@
     onRetry?: (() => void) | undefined;
     onCleanupWorktree?: ((worktree: { id: string; label: string; chatBound: boolean; cleanupBlockedByChatBinding: boolean }) => void | Promise<void>) | undefined;
     onArchiveState?: ((target: { kind: 'repo' | 'worktree'; id: string; label: string; hasCarState: boolean; unboundManagedThreadCount: number }) => void | Promise<void>) | undefined;
+    onSyncRepo?: (() => void | Promise<void>) | undefined;
+    syncRepoBusy?: boolean;
     onCreateRepo?: (() => void) | undefined;
     onCreateWorktree?: ((target: { id: string; label: string }) => void) | undefined;
   } = $props();
@@ -593,6 +597,24 @@
           {/if}
           {#if git.behind !== null && git.behind > 0}
             <span class="git-chip git-chip-behind">↓ {git.behind} behind</span>
+            {#if onSyncRepo}
+              <button
+                type="button"
+                class="git-sync-btn"
+                disabled={syncRepoBusy || git.dirty}
+                title={git.dirty
+                  ? 'Commit or stash changes before syncing'
+                  : 'Fetch and fast-forward the default branch from origin'}
+                aria-busy={syncRepoBusy ? 'true' : undefined}
+                onclick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  void onSyncRepo?.();
+                }}
+              >
+                {syncRepoBusy ? 'Syncing…' : 'Sync'}
+              </button>
+            {/if}
           {/if}
         {/if}
       </div>
@@ -802,7 +824,8 @@
                   >{initials}</span>
                   <span class="scoped-chat-run-main">
                     <span class="scoped-chat-run-title-row">
-                      <strong>Run · {group.scopeLabel}</strong>
+                      <strong>{group.scopeLabel}</strong>
+                      <span class="chat-scope-kind-tag tickets">Tickets</span>
                       <span class="chat-run-count-chip"><strong>{group.totalCount}</strong> {group.totalCount === 1 ? 'chat' : 'chats'}</span>
                       {#if group.status !== 'idle' && group.status !== 'done'}
                         <span class={`status-pill ${group.status}`}>{statusLabel(group.status)}</span>
@@ -1874,6 +1897,33 @@
     color: var(--color-warning);
     border-color: color-mix(in srgb, var(--color-warning) 32%, transparent);
     background: color-mix(in srgb, var(--color-warning) 12%, transparent);
+  }
+
+  .git-sync-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 22px;
+    padding: 0 10px;
+    border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--color-accent) 35%, var(--color-border));
+    background: var(--color-accent-soft);
+    color: var(--color-accent);
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color var(--transition-fast), border-color var(--transition-fast), opacity var(--transition-fast);
+    white-space: nowrap;
+  }
+
+  .git-sync-btn:hover:not(:disabled) {
+    border-color: color-mix(in srgb, var(--color-accent) 55%, var(--color-border));
+    background: color-mix(in srgb, var(--color-accent) 22%, transparent);
+  }
+
+  .git-sync-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
   }
 
   .git-chip-warn {

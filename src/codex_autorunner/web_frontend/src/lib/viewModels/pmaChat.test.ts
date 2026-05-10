@@ -13,7 +13,9 @@ import {
   buildPmaTranscriptCards,
   chooseActiveChatId,
   composeMessageWithAttachments,
+  countTicketRunGroups,
   filterPmaChats,
+  filterPmaChatEntries,
   filterArtifactsForActiveChat,
   formatRelativeTime,
   isPrimaryProgressArtifact,
@@ -124,6 +126,29 @@ describe('PMA chat view helpers', () => {
       expect(entries[0].group.totalCount).toBe(3);
     }
   });
+
+  it('counts distinct ticket run groups and filters ticket_runs to grouped flows only', () => {
+    const standalone = {
+      ...baseChat,
+      id: 'solo',
+      title: 'hub chat',
+      ticketId: null,
+      isTicketFlow: false,
+      repoId: null,
+      worktreeId: null
+    };
+    const runA = { ...baseChat, id: 'r-a', isTicketFlow: true, worktreeId: 'wt-1', repoId: 'repo-1' };
+    const runB = { ...baseChat, id: 'r-b', isTicketFlow: true, worktreeId: 'wt-1', repoId: 'repo-1' };
+    const runOther = { ...baseChat, id: 'r-c', isTicketFlow: true, worktreeId: 'wt-2', repoId: 'repo-1' };
+    const chats = [standalone, runA, runB, runOther];
+    expect(countTicketRunGroups(chats)).toBe(2);
+    expect(filterPmaChats(chats, 'ticket_runs', '', {}).map((c) => c.id).sort()).toEqual(['r-a', 'r-b', 'r-c']);
+    const entries = buildPmaChatListEntries(chats, { groupRuns: true });
+    const filtered = filterPmaChatEntries(entries, 'ticket_runs', '', {});
+    expect(filtered).toHaveLength(2);
+    expect(filtered.every((e) => e.kind === 'group')).toBe(true);
+  });
+
   it('filters chat list by status and scoped search text', () => {
     const chats: PmaChatSummary[] = [
       baseChat,

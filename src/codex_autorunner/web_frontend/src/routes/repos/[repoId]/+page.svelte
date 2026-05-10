@@ -17,6 +17,7 @@
   let error = $state<ApiError | null>(null);
   let sectionIssues = $state<PartialPageIssue[]>([]);
   let notice = $state<ActionNotice | null>(null);
+  let syncRepoBusy = $state(false);
   let refreshTimer: ReturnType<typeof setInterval> | null = null;
 
   onMount(() => {
@@ -94,6 +95,22 @@
     notice = result;
     if (result.tone === 'success') await loadRepoDetail();
   }
+
+  async function handleSyncRepo(): Promise<void> {
+    if (syncRepoBusy) return;
+    syncRepoBusy = true;
+    try {
+      const result = await pmaApi.hub.syncRepoMain(repoId);
+      if (!result.ok) {
+        notice = { tone: 'danger', message: result.error.message };
+        return;
+      }
+      notice = { tone: 'success', message: 'Synced default branch with origin.' };
+      await loadRepoDetail(false);
+    } finally {
+      syncRepoBusy = false;
+    }
+  }
 </script>
 
 <AutoDismissNotice message={notice?.message ?? null} tone={notice?.tone ?? 'neutral'} />
@@ -105,5 +122,7 @@
   onRetry={() => loadRepoDetail()}
   onCleanupWorktree={handleCleanupWorktree}
   onArchiveState={handleArchiveState}
+  onSyncRepo={handleSyncRepo}
+  syncRepoBusy={syncRepoBusy}
   errorMessage={error?.message ?? null}
 />

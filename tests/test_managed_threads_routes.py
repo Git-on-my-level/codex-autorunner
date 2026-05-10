@@ -8,6 +8,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from codex_autorunner.adapters.chat.channel_directory import ChannelDirectoryStore
 from codex_autorunner.agents.registry import AgentDescriptor
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.managed_thread_store import ManagedThreadStore
@@ -973,6 +974,12 @@ def test_managed_thread_routes_expose_chat_binding_metadata(hub_env) -> None:
             repo_id=hub_env.repo_id,
             mode="reuse",
         )
+        ChannelDirectoryStore(hub_env.hub_root).record_seen(
+            platform="telegram",
+            chat_id=-1001,
+            thread_id=None,
+            display="CAR Workspace / Hermes",
+        )
 
         get_resp = client.get(f"/hub/pma/threads/{thread_id}")
         list_resp = client.get(
@@ -985,9 +992,11 @@ def test_managed_thread_routes_expose_chat_binding_metadata(hub_env) -> None:
     assert fetched["chat_bound"] is True
     assert fetched["binding_kind"] == "telegram"
     assert fetched["binding_id"] == "telegram:-1001:root"
+    assert fetched["chat_display_name"] == "CAR Workspace / Hermes"
     assert fetched["binding_count"] == 1
     assert fetched["binding_kinds"] == ["telegram"]
     assert fetched["binding_ids"] == ["telegram:-1001:root"]
+    assert fetched["chat_display_names"] == ["CAR Workspace / Hermes"]
     assert fetched["cleanup_protected"] is True
 
     listed = next(
@@ -997,6 +1006,7 @@ def test_managed_thread_routes_expose_chat_binding_metadata(hub_env) -> None:
     )
     assert listed["chat_bound"] is True
     assert listed["binding_kind"] == "telegram"
+    assert listed["chat_display_name"] == "CAR Workspace / Hermes"
     assert listed["cleanup_protected"] is True
     assert fetched["repo_id"] == hub_env.repo_id
     assert fetched["resource_kind"] == "repo"

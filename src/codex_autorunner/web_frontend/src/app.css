@@ -622,6 +622,13 @@ a {
   width: 100%;
 }
 
+.chat-filter-bar > .chat-filter-chips-row {
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
 .chat-filter-bar .filter-row {
   flex: 1 1 auto;
   min-width: 0;
@@ -3292,6 +3299,7 @@ textarea:hover {
 .composer {
   display: grid;
   grid-template-areas:
+    "grip grip grip"
     "queue queue queue"
     "attachments attachments attachments"
     "textarea textarea textarea"
@@ -3299,7 +3307,7 @@ textarea:hover {
   grid-template-columns: 1fr auto auto;
   gap: var(--space-2);
   align-items: center;
-  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
+  padding: 0 var(--space-2) var(--space-2) var(--space-3);
   margin-top: var(--space-3);
   border: 1px solid var(--color-border);
   border-radius: 12px;
@@ -3315,11 +3323,39 @@ textarea:hover {
 
 .composer.composer-has-hermes-profile {
   grid-template-areas:
+    "grip grip grip"
     "queue queue queue"
     "attachments attachments attachments"
     "hermes-profile hermes-profile hermes-profile"
     "textarea textarea textarea"
     "actions interrupt send";
+}
+
+.composer-resize-grip {
+  grid-area: grip;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 12px;
+  margin: 0 calc(var(--space-3) * -1) 0 calc(var(--space-3) * -1);
+  cursor: ns-resize;
+  touch-action: none;
+  color: var(--color-ink-faint);
+}
+
+.composer-resize-grip-bar {
+  display: block;
+  width: 36px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--color-border);
+  transition: background var(--transition-fast), width var(--transition-fast);
+}
+
+.composer-resize-grip:hover .composer-resize-grip-bar,
+.composer-resize-grip:active .composer-resize-grip-bar {
+  background: var(--color-border-strong);
+  width: 56px;
 }
 
 .composer-hermes-profile {
@@ -3485,10 +3521,10 @@ textarea {
   box-shadow: none !important;
   outline: none;
   min-height: 28px;
-  /* Auto-resize JS sets explicit height; this max acts as a fallback ceiling
-     and matches the JS `COMPOSER_MAX_PX` so the textarea never blows past
-     ~50% of viewport before scrolling internally. */
-  max-height: min(50vh, 360px);
+  /* Auto-resize JS sets explicit height + overflow; this max is a fallback
+     ceiling for SSR / pre-hydration and is intentionally generous so the
+     drag-grip can expand the composer up to ~80% of viewport. */
+  max-height: 80vh;
   overflow-y: hidden;
   font-size: var(--font-size-2);
   line-height: 1.5;
@@ -5949,6 +5985,12 @@ textarea:disabled {
   background: color-mix(in srgb, var(--color-ink-muted) 10%, transparent);
 }
 
+.chat-scope-kind-tag.tickets {
+  color: color-mix(in srgb, var(--color-warning) 82%, var(--color-ink));
+  border-color: color-mix(in srgb, var(--color-warning) 38%, var(--color-border));
+  background: color-mix(in srgb, var(--color-warning) 12%, var(--color-surface-muted));
+}
+
 .chat-scope-detail-tag {
   font-size: 11px;
   color: var(--color-ink-muted);
@@ -6013,15 +6055,15 @@ textarea:disabled {
 }
 
 .chat-surface-badge.surface-discord {
-  color: var(--color-accent);
-  border-color: color-mix(in srgb, var(--color-accent) 28%, var(--color-border));
-  background: var(--color-accent-soft);
+  color: color-mix(in srgb, #5865f2 82%, var(--color-ink));
+  border-color: color-mix(in srgb, #5865f2 38%, var(--color-border));
+  background: color-mix(in srgb, #5865f2 14%, var(--color-surface-muted));
 }
 
 .chat-surface-badge.surface-telegram {
-  color: var(--color-success);
-  border-color: color-mix(in srgb, var(--color-success) 28%, var(--color-border));
-  background: color-mix(in srgb, var(--color-success) 12%, var(--color-surface));
+  color: color-mix(in srgb, #229ed9 85%, var(--color-ink));
+  border-color: color-mix(in srgb, #229ed9 38%, var(--color-border));
+  background: color-mix(in srgb, #229ed9 13%, var(--color-surface-muted));
 }
 
 .chat-card .chat-meta-row code {

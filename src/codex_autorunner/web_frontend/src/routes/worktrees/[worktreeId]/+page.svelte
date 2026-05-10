@@ -20,6 +20,8 @@
   let error = $state<ApiError | null>(null);
   let sectionIssues = $state<PartialPageIssue[]>([]);
   let notice = $state<ActionNotice | null>(null);
+  let syncRepoBusy = $state(false);
+  let backingRepoId = $state<string | null>(null);
   let refreshTimer: ReturnType<typeof setInterval> | null = null;
 
   onMount(() => {
@@ -35,6 +37,7 @@
     if (showLoading) loading = true;
     error = null;
     sectionIssues = [];
+    backingRepoId = null;
     const [repos, worktrees, runs, chats, tickets] = await Promise.all([
       pmaApi.hub.listRepos(),
       pmaApi.hub.listWorktrees(),
@@ -55,6 +58,7 @@
       await goto(href(redirectTo), { replaceState: true });
       return;
     }
+    backingRepoId = matchedWorktree?.repoId ?? null;
     const contextspace = await pmaApi.contextspace.listDocuments(worktreeId);
     const baseIssues = [
       !runs.ok ? partialPageIssue('current_run', 'Active runs unavailable', runs.error) : null,
@@ -104,6 +108,27 @@
     notice = result;
     if (result.tone === 'success') await loadWorktreeDetail();
   }
+
+  async function handleSyncRepo(): Promise<void> {
+    if (syncRepoBusy) return;
+    const repoId = backingRepoId;
+    if (!repoId) {
+      notice = { tone: 'danger', message: 'Could not resolve parent repo for sync.' };
+      return;
+    }
+    syncRepoBusy = true;
+    try {
+      const result = await pmaApi.hub.syncRepoMain(repoId);
+      if (!result.ok) {
+        notice = { tone: 'danger', message: result.error.message };
+        return;
+      }
+      notice = { tone: 'success', message: 'Synced default branch with origin.' };
+      await loadWorktreeDetail(false);
+    } finally {
+      syncRepoBusy = false;
+    }
+  }
 </script>
 
 <AutoDismissNotice message={notice?.message ?? null} tone={notice?.tone ?? 'neutral'} />
@@ -115,5 +140,7 @@
   onRetry={() => loadWorktreeDetail()}
   onCleanupWorktree={handleCleanupWorktree}
   onArchiveState={handleArchiveState}
+  onSyncRepo={handleSyncRepo}
+  syncRepoBusy={syncRepoBusy}
   errorMessage={error?.message ?? null}
 />

@@ -1,0 +1,1 @@
+import{w as i}from"./-N29r1Mg.js";const r=i(null);function s(e){return new Promise(n=>{r.set({...e,resolve:o=>n(!!o)})})}function l(e){return new Promise(n=>{r.set({...e,resolve:o=>n(typeof o=="string"?o:null)})})}export{l as a,r as b,s as c};

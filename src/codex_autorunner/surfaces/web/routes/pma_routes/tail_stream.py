@@ -403,7 +403,10 @@ async def _build_managed_thread_tail_snapshot(
     activity = "idle"
     if turn_status == "running":
         is_stalled, _ = _running_turn_stall_flags(
-            idle_seconds=idle_seconds, last_event_at=None
+            idle_seconds=idle_seconds,
+            last_event_at=last_activity_at,
+            agent_id=getattr(thread, "agent_id", None),
+            has_visible_events=bool(tail_events),
         )
         activity = "stalled" if is_stalled else "running"
     elif turn_status == "ok":
@@ -418,6 +421,7 @@ async def _build_managed_thread_tail_snapshot(
         stream_available=stream_available,
         events=tail_events,
         idle_seconds=idle_seconds,
+        agent_id=getattr(thread, "agent_id", None),
     )
     snapshot: dict[str, Any] = {
         "managed_thread_id": managed_thread_id,
@@ -701,6 +705,7 @@ def build_managed_thread_tail_routes(
                             if isinstance(event, dict)
                         ],
                         idle_seconds=elapsed,
+                        agent_id=snapshot.get("agent"),
                     )
                     active_turn_diagnostics = _refresh_active_turn_diagnostics(
                         snapshot,

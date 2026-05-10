@@ -414,7 +414,11 @@ export class PmaApiClient {
           archiveNote: request.archiveNote ?? null
         }
       });
-    }
+    },
+    syncRepoMain: async (repoId: string): Promise<ApiResult<JsonRecord>> =>
+      this.requestJson<JsonRecord>(`/hub/repos/${encodeURIComponent(repoId)}/sync-main`, {
+        method: 'POST'
+      })
   };
 
   ticketFlow = {
