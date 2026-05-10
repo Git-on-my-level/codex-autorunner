@@ -729,46 +729,123 @@ def _decode_action_payload(action: dict[str, Any]) -> dict[str, Any]:
     return dict(payload) if isinstance(payload, dict) else {}
 
 
-def _append_lifecycle_action_items(
-    items: list[ManagedThreadTimelineItem],
-    *,
-    thread_store: Any,
-    managed_thread_id: str,
-    sequence: int,
-) -> int:
+def _turn_merge_timestamp(turn: dict[str, Any]) -> Optional[str]:
+    """Timestamp used to interleave compaction lifecycle rows with turns."""
+    return _normalize_optional_text(
+        turn.get("started_at") or turn.get("created_at")
+    )
+
+
+def _sorted_compact_actions(thread_store: Any, managed_thread_id: str) -> list[dict[str, Any]]:
     list_actions = getattr(thread_store, "list_thread_actions", None)
     if not callable(list_actions):
-        return sequence
+        return []
+    actions: list[dict[str, Any]] = []
     for action in list_actions(managed_thread_id):
-        action_type = str(action.get("action_type") or "")
-        if action_type != "managed_thread_compact":
+        if str(action.get("action_type") or "") != "managed_thread_compact":
             continue
         action_id = str(action.get("action_id") or "")
-        if not action_id:
-            continue
-        payload = _decode_action_payload(action)
-        timestamp = _normalize_optional_text(action.get("created_at"))
-        item_id = f"action:{action_id}:compact"
-        items.append(
-            ManagedThreadTimelineItem(
-                item_id=item_id,
-                kind="lifecycle",
-                order_key=_order_key(timestamp, sequence, item_id),
-                timestamp=timestamp,
-                managed_thread_id=managed_thread_id,
-                managed_turn_id=None,
-                status="recorded",
-                payload={
-                    "lifecycle_kind": "chat_compacted",
-                    "title": "Chat compacted",
-                    "text": "Chat compacted. The next message starts a fresh backend session with the compacted context.",
-                    "action_id": action_id,
-                    "action_type": action_type,
-                    **payload,
-                },
-            )
+        if action_id:
+            actions.append(action)
+    actions.sort(
+        key=lambda a: (
+            _normalize_optional_text(a.get("created_at")) or "\uffff",
+            str(a.get("action_id") or ""),
         )
-        sequence += 1
+    )
+    return actions
+
+
+def _append_compact_lifecycle_item(
+    items: list[ManagedThreadTimelineItem],
+    *,
+    managed_thread_id: str,
+    action: dict[str, Any],
+    sequence: int,
+) -> int:
+    action_type = str(action.get("action_type") or "")
+    action_id = str(action.get("action_id") or "")
+    payload = _decode_action_payload(action)
+    timestamp = _normalize_optional_text(action.get("created_at"))
+    item_id = f"action:{action_id}:compact"
+    items.append(
+        ManagedThreadTimelineItem(
+            item_id=item_id,
+            kind="lifecycle",
+            order_key=_order_key(timestamp, sequence, item_id),
+            timestamp=timestamp,
+            managed_thread_id=managed_thread_id,
+            managed_turn_id=None,
+            status="recorded",
+            payload={
+                **payload,
+                "lifecycle_kind": "chat_compacted",
+                "title": "Chat compacted",
+                "text": "Chat compacted. The next message starts a fresh backend session with the compacted context.",
+                "action_id": action_id,
+                "action_type": action_type,
+            },
+        )
+    )
+    return sequence + 1
+
+
+def _append_turn_timeline_items(
+    items: list[ManagedThreadTimelineItem],
+    *,
+    hub_root: Any,
+    managed_thread_id: str,
+    turn: dict[str, Any],
+    sequence: int,
+) -> int:
+    managed_turn_id = str(turn.get("managed_turn_id") or "").strip()
+    if not managed_turn_id:
+        return sequence
+    entries = list_turn_timeline(hub_root, execution_id=managed_turn_id)
+    sequence = _append_user_message(
+        items,
+        managed_thread_id=managed_thread_id,
+        turn=turn,
+        sequence=sequence,
+    )
+    if str(turn.get("status") or "") in {"queued", "running"}:
+        sequence = _append_status(
+            items,
+            managed_thread_id=managed_thread_id,
+            turn=turn,
+            sequence=sequence,
+        )
+    sequence = _append_timeline_event_items(
+        items,
+        managed_thread_id=managed_thread_id,
+        managed_turn_id=managed_turn_id,
+        entries=entries,
+        sequence=sequence,
+    )
+    sequence = _append_assistant_message(
+        items,
+        managed_thread_id=managed_thread_id,
+        turn=turn,
+        entries=entries,
+        sequence=sequence,
+    )
+    if str(turn.get("status") or "") not in {"queued", "running"}:
+        sequence = _append_status(
+            items,
+            managed_thread_id=managed_thread_id,
+            turn=turn,
+            sequence=sequence,
+            terminal_timestamp=(
+                _terminal_timestamp_from_timeline(entries)
+                or _normalize_optional_text(turn.get("finished_at"))
+            ),
+        )
+    sequence = _append_attachment_artifacts(
+        items,
+        managed_thread_id=managed_thread_id,
+        turn=turn,
+        sequence=sequence,
+    )
     return sequence
 
 
@@ -790,66 +867,57 @@ def build_managed_thread_timeline(
     turns = list(
         reversed(thread_store.list_turns(normalized_thread_id, limit=bounded_limit))
     )
+    compact_actions = _sorted_compact_actions(thread_store, normalized_thread_id)
     items: list[ManagedThreadTimelineItem] = []
     sequence = 1
-    for turn in turns:
-        managed_turn_id = str(turn.get("managed_turn_id") or "").strip()
-        if not managed_turn_id:
-            continue
-        entries = list_turn_timeline(hub_root, execution_id=managed_turn_id)
-        sequence = _append_user_message(
-            items,
-            managed_thread_id=normalized_thread_id,
-            turn=turn,
-            sequence=sequence,
-        )
-        if str(turn.get("status") or "") in {"queued", "running"}:
-            sequence = _append_status(
+    turn_index = 0
+    action_index = 0
+    while turn_index < len(turns) and action_index < len(compact_actions):
+        turn = turns[turn_index]
+        action = compact_actions[action_index]
+        turn_ts = _turn_merge_timestamp(turn)
+        act_ts = _normalize_optional_text(action.get("created_at"))
+        if turn_ts is None or act_ts is None:
+            emit_turn_first = True
+        else:
+            emit_turn_first = act_ts >= turn_ts
+        if emit_turn_first:
+            sequence = _append_turn_timeline_items(
                 items,
+                hub_root=hub_root,
                 managed_thread_id=normalized_thread_id,
                 turn=turn,
                 sequence=sequence,
             )
-        sequence = _append_timeline_event_items(
-            items,
-            managed_thread_id=normalized_thread_id,
-            managed_turn_id=managed_turn_id,
-            entries=entries,
-            sequence=sequence,
-        )
-        sequence = _append_assistant_message(
-            items,
-            managed_thread_id=normalized_thread_id,
-            turn=turn,
-            entries=entries,
-            sequence=sequence,
-        )
-        if str(turn.get("status") or "") not in {"queued", "running"}:
-            sequence = _append_status(
+            turn_index += 1
+        else:
+            sequence = _append_compact_lifecycle_item(
                 items,
                 managed_thread_id=normalized_thread_id,
-                turn=turn,
+                action=action,
                 sequence=sequence,
-                terminal_timestamp=(
-                    _terminal_timestamp_from_timeline(entries)
-                    or _normalize_optional_text(turn.get("finished_at"))
-                ),
             )
-        sequence = _append_attachment_artifacts(
+            action_index += 1
+    while turn_index < len(turns):
+        sequence = _append_turn_timeline_items(
             items,
+            hub_root=hub_root,
             managed_thread_id=normalized_thread_id,
-            turn=turn,
+            turn=turns[turn_index],
             sequence=sequence,
         )
+        turn_index += 1
+    while action_index < len(compact_actions):
+        sequence = _append_compact_lifecycle_item(
+            items,
+            managed_thread_id=normalized_thread_id,
+            action=compact_actions[action_index],
+            sequence=sequence,
+        )
+        action_index += 1
     sequence = _append_delivery_state_items(
         items,
         hub_root=hub_root,
-        managed_thread_id=normalized_thread_id,
-        sequence=sequence,
-    )
-    sequence = _append_lifecycle_action_items(
-        items,
-        thread_store=thread_store,
         managed_thread_id=normalized_thread_id,
         sequence=sequence,
     )
