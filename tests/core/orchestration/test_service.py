@@ -1663,7 +1663,7 @@ async def test_stop_thread_marks_interrupted_when_runtime_binding_is_lost_after_
     assert outcome.execution.error is None
 
 
-async def test_recover_running_execution_after_restart_marks_restart_reattach_failure(
+async def test_recover_running_execution_after_restart_defers_codex_with_backend_ids(
     tmp_path: Path,
 ) -> None:
     harness = _FakeHarness()
@@ -1686,12 +1686,11 @@ async def test_recover_running_execution_after_restart_marks_restart_reattach_fa
         thread.thread_target_id
     )
 
-    assert recovered is not None
-    assert recovered.execution_id == execution.execution_id
-    assert recovered.status == "error"
-    assert recovered.error == "Running execution could not be reattached after restart"
+    assert recovered is None
+    running = restarted_service.get_running_execution(thread.thread_target_id)
+    assert running is not None
+    assert running.execution_id == execution.execution_id
     assert _thread_runtime_binding(restarted_service, thread.thread_target_id) is None
-    assert restarted_service.get_running_execution(thread.thread_target_id) is None
 
 
 async def test_recover_running_execution_after_restart_without_binding_stays_restart_specific(

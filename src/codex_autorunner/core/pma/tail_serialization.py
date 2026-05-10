@@ -93,13 +93,22 @@ def _should_suppress_tail_event(message: Any) -> bool:
 _NO_STREAM_AVAILABLE_IDLE_SECONDS = 15
 _LIKELY_HUNG_IDLE_SECONDS = 90
 _STALL_IDLE_SECONDS = 30
+_BATCHED_INITIAL_EVENT_AGENTS = frozenset({"codex"})
+
+
+def _agent_batches_initial_events(agent_id: Any) -> bool:
+    text = normalize_optional_text(agent_id)
+    return bool(text and text.lower() in _BATCHED_INITIAL_EVENT_AGENTS)
 
 
 def _running_turn_stall_flags(
     *,
     idle_seconds: Optional[int],
     last_event_at: Optional[str],
+    agent_id: Any = None,
 ) -> tuple[bool, Optional[str]]:
+    if last_event_at is None and _agent_batches_initial_events(agent_id):
+        return (False, None)
     stalled = idle_seconds is not None and idle_seconds >= _STALL_IDLE_SECONDS
     if not stalled:
         return (False, None)
@@ -383,6 +392,7 @@ def _derive_progress_phase(
     stream_available: bool,
     events: list[dict[str, Any]],
     idle_seconds: Optional[int],
+    agent_id: Any = None,
 ) -> tuple[str, str, str, dict[str, Any] | None]:
     last_tool = _derive_last_tool(events)
     if turn_status == "ok":
@@ -419,6 +429,13 @@ def _derive_progress_phase(
             )
 
     idle = int(idle_seconds or 0)
+    if not events and _agent_batches_initial_events(agent_id):
+        return (
+            "model_running",
+            "agent_event_batching",
+            "Agent is running; progress events may arrive when the turn completes.",
+            last_tool,
+        )
     if not stream_available:
         if idle >= _LIKELY_HUNG_IDLE_SECONDS:
             return (
@@ -588,7 +605,9 @@ def _derive_active_turn_diagnostics(
     last_event_at = normalize_optional_text(snapshot.get("last_event_at"))
     stalled, stall_reason = (
         _running_turn_stall_flags(
-            idle_seconds=idle_seconds, last_event_at=last_event_at
+            idle_seconds=idle_seconds,
+            last_event_at=last_event_at,
+            agent_id=snapshot.get("agent"),
         )
         if turn_status == "running"
         else (False, None)
@@ -664,7 +683,9 @@ def _refresh_active_turn_diagnostics(
                 resolved_idle = max(0, int(snapshot.get("idle_seconds") or 0))
     stalled, stall_reason = (
         _running_turn_stall_flags(
-            idle_seconds=resolved_idle, last_event_at=resolved_last_event_at
+            idle_seconds=resolved_idle,
+            last_event_at=resolved_last_event_at,
+            agent_id=snapshot.get("agent"),
         )
         if resolved_status == "running"
         else (False, None)

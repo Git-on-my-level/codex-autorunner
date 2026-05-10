@@ -19,6 +19,7 @@ from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.routes.pma_routes import tail_stream
 from codex_autorunner.surfaces.web.routes.pma_routes.managed_thread_tail_serializers import (
     _refresh_active_turn_diagnostics,
+    _running_turn_stall_flags,
 )
 from tests.pma_support import _enable_pma
 
@@ -941,6 +942,35 @@ def test_refresh_active_turn_diagnostics_recomputes_idle_without_events() -> Non
     assert refreshed is not None
     assert refreshed["stalled"] is True
     assert refreshed["stall_reason"] == "no_events_yet"
+
+
+def test_codex_active_turn_diagnostics_do_not_mark_initial_event_gap_hung() -> None:
+    started_at = (datetime.now(timezone.utc) - timedelta(seconds=180)).isoformat()
+    snapshot = {
+        "agent": "codex",
+        "turn_status": "running",
+        "started_at": started_at,
+        "last_event_at": None,
+        "phase": "model_running",
+        "guidance": "Agent is running.",
+        "events": [],
+        "active_turn_diagnostics": {
+            "managed_turn_id": "managed-turn-1",
+            "stalled": False,
+            "stall_reason": None,
+        },
+    }
+
+    refreshed = _refresh_active_turn_diagnostics(snapshot, turn_status="running")
+
+    assert refreshed is not None
+    assert refreshed["stalled"] is False
+    assert refreshed["stall_reason"] is None
+    assert _running_turn_stall_flags(
+        idle_seconds=180,
+        last_event_at=None,
+        agent_id="codex",
+    ) == (False, None)
 
 
 def test_managed_thread_tail_stream_resumes_with_last_event_id(hub_env) -> None:

@@ -195,15 +195,11 @@ def test_interrupt_managed_thread_recovers_when_runtime_binding_is_lost_after_re
             f"/hub/pma/threads/{managed_thread_id}/interrupt",
         )
 
-    assert interrupt_resp.status_code == 409
-    assert "running turn" in (interrupt_resp.json().get("detail") or "").lower()
+    assert interrupt_resp.status_code == 200
     updated_turn = store.get_turn(managed_thread_id, managed_turn_id)
     assert updated_turn is not None
-    assert updated_turn["status"] == "error"
-    assert (
-        updated_turn["error"]
-        == "Running execution could not be reattached after restart"
-    )
+    assert updated_turn["status"] == "interrupted"
+    assert updated_turn["error"] is None
 
 
 @pytest.mark.slow
