@@ -7,7 +7,7 @@
   import AutoDismissNotice from '$lib/components/AutoDismissNotice.svelte';
   import AgentModelReasoningPicker from '$lib/components/AgentModelReasoningPicker.svelte';
   import VoiceComposerButton from '$lib/components/VoiceComposerButton.svelte';
-  import { pmaApi, type ApiError, type JsonRecord } from '$lib/api/client';
+  import { pmaApi, type ApiError, type JsonRecord, type PmaQueuedTurn } from '$lib/api/client';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import { openPmaTailEventSource, type StreamSubscription } from '$lib/api/streaming';
   import { repoRoute, worktreeRoute } from '$lib/viewModels/routes';
@@ -40,10 +40,12 @@
     pmaChatSurfaceFilterOptions,
     pmaChatSurfaceFilterToken,
     progressPercent,
+    optimisticUserTimelineItemFromSend,
     reconcilePmaTimeline,
     removePendingAttachment,
     statusLabel,
     summarizeFilterCounts,
+    type DocumentFileIntentPayload,
     type PendingAttachment,
     type PmaCard,
     type PmaChatFilter,
@@ -80,6 +82,7 @@
   let timeline = $state<PmaTimelineItem[]>([]);
   let progress = $state<PmaRunProgress | null>(null);
   let artifacts = $state<SurfaceArtifact[]>([]);
+  let queuedTurns = $state<PmaQueuedTurn[]>([]);
   let agents = $state<JsonRecord[]>([]);
   let models = $state<JsonRecord[]>([]);
   let scopeOptions = $state<PmaChatScopeOption[]>(buildPmaChatScopeOptions([], []));
@@ -113,6 +116,7 @@
   let messageStack: HTMLDivElement | null = $state(null);
   let composerTextarea: HTMLTextAreaElement | null = $state(null);
   let voiceNotice = $state<string | null>(null);
+  let composerEditVersion = 0;
 
   const COMPOSER_MAX_PX = 360;
   function autosizeComposer(): void {
@@ -131,6 +135,7 @@
     if (!trimmed) return;
     const sep = draft && !/\s$/.test(draft) ? ' ' : '';
     draft = `${draft}${sep}${trimmed}`;
+    markComposerEdited();
     queueMicrotask(() => {
       autosizeComposer();
       composerTextarea?.focus();
@@ -266,9 +271,15 @@
         (hermesProfileChoices.length > 0 || Boolean(selectedProfile.trim()))
     )
   );
+  const hasRunnableDraft = $derived(Boolean(activeChat && (draft.trim() || pendingAttachments.length > 0)));
+  const canInterruptWithDraft = $derived(Boolean(activeChat && progress?.status === 'running' && hasRunnableDraft));
   const selectedAgentLabel = $derived(selectedAgentRecord ? agentLabel(selectedAgentRecord) : selectedAgent || 'Agent');
   const selectedModelLabel = $derived(selectedModelRecord ? modelLabel(selectedModelRecord) : selectedModel || '');
   const selectedEffortLabel = $derived(selectedReasoning || 'default');
+
+  function markComposerEdited(): void {
+    composerEditVersion += 1;
+  }
 
   function repoLabelForRepoId(repoId: string): string | null {
     const opt = scopeOptions.find((scope) => scope.kind === 'repo' && scope.resourceId === repoId);
@@ -328,6 +339,7 @@
         activeChatId = null;
         timeline = [];
         progress = null;
+        queuedTurns = [];
         detailMode = 'list';
       }
       return;
@@ -494,6 +506,7 @@
     activeChatId = chatId;
     timeline = [];
     progress = null;
+    queuedTurns = [];
     detailMode = 'detail';
     syncSelectorsToActiveChat();
     markActiveChatRead();
@@ -519,6 +532,7 @@
     activeChatId = chatId;
     timeline = [];
     progress = null;
+    queuedTurns = [];
     detailMode = 'detail';
     syncSelectorsToActiveChat();
     markActiveChatRead();
@@ -558,10 +572,11 @@
       loadingActive = true;
       activeError = null;
     }
-    const [messageResult, tailResult, statusResult] = await Promise.all([
+    const [messageResult, tailResult, statusResult, queueResult] = await Promise.all([
       pmaApi.pma.getTimeline(chatId),
       pmaApi.pma.getTail(chatId),
-      pmaApi.pma.getStatus(chatId)
+      pmaApi.pma.getStatus(chatId),
+      pmaApi.pma.getQueue(chatId)
     ]);
 
     if (activeChatId !== chatId) return;
@@ -571,6 +586,8 @@
     if (tailResult.ok) updateProgress(tailResult.data);
     else if (statusResult.ok) updateProgress(statusResult.data);
     else if (!options.quiet) activeError = tailResult.error;
+
+    if (queueResult.ok) queuedTurns = queueResult.data.queuedTurns;
 
     loadingActive = false;
   }
@@ -789,7 +806,7 @@
     creating = false;
   }
 
-  async function sendMessage(): Promise<void> {
+  async function sendMessage(busyPolicy: 'queue' | 'interrupt' | null = null): Promise<void> {
     if ((!draft.trim() && pendingAttachments.length === 0) || !activeChatId) return;
     const draftSnapshot = draft;
     const attachmentsSnapshot = pendingAttachments;
@@ -819,6 +836,8 @@
     };
     timeline = reconcilePmaTimeline(timeline, [optimisticPlaceholder]);
     draft = '';
+    pendingAttachments = [];
+    const composerVersionAtClear = composerEditVersion;
     sending = true;
     composeError = null;
 
@@ -827,17 +846,18 @@
     };
     const restoreDraft = () => {
       removeOptimistic();
+      if (composerEditVersion !== composerVersionAtClear) return;
       draft = draftSnapshot;
       pendingAttachments = attachmentsSnapshot;
     };
 
-    const uploaded = await ensureAttachmentsUploaded();
+    const uploaded = await ensureAttachmentsUploaded(attachmentsSnapshot);
     if (!uploaded) {
       restoreDraft();
       sending = false;
       return;
     }
-    const attachmentsForMessage = pendingAttachments;
+    const attachmentsForMessage = uploaded;
     const message = composeMessageWithAttachments(draftSnapshot, attachmentsForMessage);
     const targetChatId = await ensureChatForSelectedAgent();
     if (!targetChatId) {
@@ -845,7 +865,8 @@
       sending = false;
       return;
     }
-    const targetIsRunning = targetChatId === activeChatId && activeChat?.status === 'running';
+    const targetIsRunning = targetChatId === activeChatId && progress?.status === 'running';
+    const resolvedBusyPolicy = busyPolicy ?? (targetIsRunning ? 'queue' : null);
     const result = await pmaApi.pma.sendMessage(
       targetChatId,
       buildManagedThreadMessagePayload(
@@ -854,13 +875,19 @@
         targetIsRunning,
         attachmentsForMessage,
         selectedReasoning,
-        selectedProfile
+        selectedProfile,
+        resolvedBusyPolicy
       )
     );
     if (result.ok) {
+      const optimisticFromBackend = optimisticUserTimelineItemFromSend(
+        result.data.raw,
+        draftSnapshot,
+        targetChatId
+      );
+      if (optimisticFromBackend) timeline = reconcilePmaTimeline(timeline, [optimisticFromBackend]);
       await refreshActive(targetChatId, { quiet: true });
       removeOptimistic();
-      pendingAttachments = [];
       if (selectedAgent === 'hermes' && selectedProfile.trim()) {
         const stamped = selectedProfile.trim();
         chats = chats.map((row) => (row.id === targetChatId ? { ...row, agentProfile: stamped } : row));
@@ -870,6 +897,58 @@
       composeError = result.error;
     }
     sending = false;
+  }
+
+  async function interruptWithDraft(): Promise<void> {
+    if (!canInterruptWithDraft) return;
+    await sendMessage('interrupt');
+  }
+
+  async function cancelQueuedTurn(turn: PmaQueuedTurn): Promise<void> {
+    if (!activeChatId || !turn.managedTurnId) return;
+    composeError = null;
+    const result = await pmaApi.pma.cancelQueuedTurn(activeChatId, turn.managedTurnId);
+    if (result.ok) {
+      queuedTurns = queuedTurns.filter((item) => item.managedTurnId !== turn.managedTurnId);
+      await refreshActive(activeChatId, { quiet: true });
+    } else {
+      composeError = result.error;
+    }
+  }
+
+  async function interruptWithQueuedTurn(turn: PmaQueuedTurn): Promise<void> {
+    if (!activeChatId || !turn.prompt.trim()) return;
+    const chatId = activeChatId;
+    composeError = null;
+    const cancelResult = await pmaApi.pma.cancelQueuedTurn(chatId, turn.managedTurnId);
+    if (!cancelResult.ok) {
+      composeError = cancelResult.error;
+      return;
+    }
+    queuedTurns = queuedTurns.filter((item) => item.managedTurnId !== turn.managedTurnId);
+    const result = await pmaApi.pma.sendMessage(
+      chatId,
+      buildManagedThreadMessagePayload(
+        turn.prompt,
+        turn.model ?? selectedModel,
+        true,
+        turn.attachments as DocumentFileIntentPayload[],
+        turn.reasoning ?? selectedReasoning,
+        selectedProfile,
+        'interrupt'
+      )
+    );
+    if (result.ok) {
+      const optimisticFromBackend = optimisticUserTimelineItemFromSend(
+        result.data.raw,
+        turn.prompt,
+        chatId
+      );
+      if (optimisticFromBackend) timeline = reconcilePmaTimeline(timeline, [optimisticFromBackend]);
+      await refreshActive(chatId, { quiet: true });
+    } else {
+      composeError = result.error;
+    }
   }
 
   function addFiles(fileList: FileList | File[], kindOverride?: 'image'): void {
@@ -884,6 +963,7 @@
       file
     }));
     pendingAttachments = [...pendingAttachments, ...next];
+    markComposerEdited();
   }
 
   function openLinkDialog(): void {
@@ -911,11 +991,13 @@
         uploadState: 'uploaded'
       }
     ];
+    markComposerEdited();
     cancelLinkDialog();
   }
 
   function removeAttachment(attachmentId: string): void {
     pendingAttachments = removePendingAttachment(pendingAttachments, attachmentId);
+    markComposerEdited();
   }
 
   function handlePaste(event: ClipboardEvent): void {
@@ -930,9 +1012,14 @@
     }
   }
 
-  async function ensureAttachmentsUploaded(): Promise<boolean> {
+  function handleComposerInput(): void {
+    markComposerEdited();
+    autosizeComposer();
+  }
+
+  async function ensureAttachmentsUploaded(attachments: PendingAttachment[]): Promise<PendingAttachment[] | null> {
     const uploaded: PendingAttachment[] = [];
-    for (const attachment of pendingAttachments) {
+    for (const attachment of attachments) {
       const file = (attachment as PendingAttachment & { file?: File }).file;
       if (!file || attachment.uploadedName) {
         uploaded.push(attachment);
@@ -943,10 +1030,7 @@
         composeError = result.ok
           ? { kind: 'parse', status: null, code: 'upload_missing_file', message: 'Upload did not return a file name.' }
           : result.error;
-        pendingAttachments = pendingAttachments.map((item) =>
-          item.id === attachment.id ? { ...item, uploadState: 'error' } : item
-        );
-        return false;
+        return null;
       }
       const uploadedName = result.data[0];
       uploaded.push({
@@ -956,8 +1040,7 @@
         uploadState: 'uploaded'
       });
     }
-    pendingAttachments = uploaded;
-    return true;
+    return uploaded;
   }
 
 </script>
@@ -1393,11 +1476,40 @@
           <span class="sr-only">Attach link</span>
         </button>
         <VoiceComposerButton
-          disabled={!activeChat || sending}
+          disabled={!activeChat}
           onTranscript={applyTranscript}
           onError={showVoiceNotice}
         />
       </div>
+      {#if queuedTurns.length > 0}
+        <div class="queued-message-list" aria-label="Queued messages">
+          {#each queuedTurns as turn (turn.managedTurnId)}
+            <div class="queued-message-row">
+              <span class="queued-message-position">#{turn.position}</span>
+              <span class="queued-message-copy" title={turn.prompt}>{turn.promptPreview || turn.prompt}</span>
+              <span class="queued-message-state">{turn.state || 'queued'}</span>
+              <button
+                class="queued-message-action"
+                type="button"
+                aria-label={`Interrupt with queued message ${turn.position}`}
+                title="Interrupt with this queued message"
+                onclick={() => interruptWithQueuedTurn(turn)}
+              >
+                Interrupt
+              </button>
+              <button
+                class="queued-message-action subtle"
+                type="button"
+                aria-label={`Cancel queued message ${turn.position}`}
+                title="Cancel queued message"
+                onclick={() => cancelQueuedTurn(turn)}
+              >
+                Cancel
+              </button>
+            </div>
+          {/each}
+        </div>
+      {/if}
       {#if pendingAttachments.length > 0}
         <div class="pending-attachments" aria-label="Pending attachments">
           {#each pendingAttachments as attachment (attachment.id)}
@@ -1430,14 +1542,19 @@
         bind:this={composerTextarea}
         aria-label={activeChat ? `Message ${composerRecipientLabel(activeChat)}` : 'Message chat'}
         bind:value={draft}
-        disabled={!activeChat || sending}
+        disabled={!activeChat}
         placeholder={activeChat ? `Message ${composerRecipientLabel(activeChat)}...` : 'Create or select a chat'}
         onkeydown={handleComposerKeydown}
-        oninput={autosizeComposer}
+        oninput={handleComposerInput}
         rows="1"
       ></textarea>
-      <button class="send-button" type="submit" disabled={!activeChat || (!draft.trim() && pendingAttachments.length === 0) || sending}>
-        {sending ? 'Sending' : 'Send'}
+      {#if canInterruptWithDraft}
+        <button class="send-button interrupt-send-button" type="button" onclick={interruptWithDraft}>
+          Interrupt
+        </button>
+      {/if}
+      <button class="send-button" type="submit" disabled={!hasRunnableDraft}>
+        {sending ? 'Queueing' : progress?.status === 'running' ? 'Queue' : 'Send'}
       </button>
     </form>
     {#if linkDialogOpen}

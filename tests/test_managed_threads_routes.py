@@ -1755,6 +1755,16 @@ def test_managed_thread_queue_routes_list_cancel_and_clear(hub_env) -> None:
             "message_text": "Reply: queue-B-r3",
             "kind": "message",
             "busy_policy": "queue",
+            "metadata": {
+                "attachments": [
+                    {
+                        "intent": "attach_uploaded_file",
+                        "source": "upload",
+                        "title": "trace.txt",
+                        "uploadedName": "trace.txt",
+                    }
+                ]
+            },
         }
     }
     queued_b = store.create_turn(
@@ -1793,6 +1803,14 @@ def test_managed_thread_queue_routes_list_cancel_and_clear(hub_env) -> None:
         ]
         assert [item["position"] for item in queue_payload["queued_turns"]] == [1, 2]
         assert queue_payload["queued_turns"][0]["prompt"] == "Reply: queue-B-r3"
+        assert queue_payload["queued_turns"][0]["attachments"] == [
+            {
+                "intent": "attach_uploaded_file",
+                "source": "upload",
+                "title": "trace.txt",
+                "uploadedName": "trace.txt",
+            }
+        ]
 
         cancel_resp = client.post(
             f"/threads/{managed_thread_id}/queue/{queued_b['managed_turn_id']}/cancel"

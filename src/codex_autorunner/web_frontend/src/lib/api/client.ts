@@ -53,6 +53,25 @@ export type PartialPageIssue = {
 
 export type JsonRecord = Record<string, unknown>;
 
+export type PmaQueuedTurn = {
+  managedTurnId: string;
+  position: number;
+  state: string;
+  prompt: string;
+  promptPreview: string;
+  attachments: JsonRecord[];
+  model: string | null;
+  reasoning: string | null;
+  enqueuedAt: string | null;
+  raw: JsonRecord;
+};
+
+export type PmaThreadQueue = {
+  managedThreadId: string;
+  queueDepth: number;
+  queuedTurns: PmaQueuedTurn[];
+};
+
 export type WorktreeCleanupRequest = {
   worktreeRepoId: string;
   archive?: boolean;
@@ -264,6 +283,13 @@ export class PmaApiClient {
       mapResult(await this.getJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}/tail`), mapPmaRunProgress),
     getStatus: async (chatId: string): Promise<ApiResult<PmaRunProgress>> =>
       mapResult(await this.getJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}/status`), mapPmaRunProgress),
+    getQueue: async (chatId: string): Promise<ApiResult<PmaThreadQueue>> =>
+      mapResult(await this.getJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}/queue`), mapPmaThreadQueue),
+    cancelQueuedTurn: async (chatId: string, turnId: string): Promise<ApiResult<JsonRecord>> =>
+      this.requestJson<JsonRecord>(
+        `/hub/pma/threads/${encodeURIComponent(chatId)}/queue/${encodeURIComponent(turnId)}/cancel`,
+        { method: 'POST' }
+      ),
     listFiles: async (): Promise<ApiResult<SurfaceArtifact[]>> =>
       mapResult(await this.getJson<JsonRecord>('/hub/pma/files'), (payload) =>
         [...asArray(payload.inbox), ...asArray(payload.outbox)].map(mapSurfaceArtifact)
@@ -601,6 +627,44 @@ function asRecord(value: unknown): JsonRecord {
 
 function asArray(value: unknown): JsonRecord[] {
   return Array.isArray(value) ? value.filter((item): item is JsonRecord => Boolean(item) && typeof item === 'object') : [];
+}
+
+function mapPmaThreadQueue(raw: JsonRecord): PmaThreadQueue {
+  return {
+    managedThreadId: stringValue(raw.managed_thread_id ?? raw.managedThreadId, ''),
+    queueDepth: numberValue(raw.queue_depth ?? raw.queueDepth, 0),
+    queuedTurns: asArray(raw.queued_turns ?? raw.queuedTurns).map(mapPmaQueuedTurn)
+  };
+}
+
+function mapPmaQueuedTurn(raw: JsonRecord): PmaQueuedTurn {
+  return {
+    managedTurnId: stringValue(raw.managed_turn_id ?? raw.managedTurnId, ''),
+    position: numberValue(raw.position, 0),
+    state: stringValue(raw.state, ''),
+    prompt: stringValue(raw.prompt, ''),
+    promptPreview: stringValue(raw.prompt_preview ?? raw.promptPreview ?? raw.prompt, ''),
+    attachments: asArray(raw.attachments),
+    model: nullableString(raw.model),
+    reasoning: nullableString(raw.reasoning),
+    enqueuedAt: nullableString(raw.enqueued_at ?? raw.enqueuedAt),
+    raw
+  };
+}
+
+function stringValue(value: unknown, fallback: string): string {
+  return typeof value === 'string' ? value : fallback;
+}
+
+function nullableString(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+function numberValue(value: unknown, fallback: number): number {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 function isWorktreeItem(item: JsonRecord): boolean {
