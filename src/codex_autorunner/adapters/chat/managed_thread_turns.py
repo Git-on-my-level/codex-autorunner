@@ -739,10 +739,6 @@ def managed_thread_session_metadata(
     )
 
 
-def _normalized_non_whitespace(value: str) -> str:
-    return "".join(ch for ch in value if not ch.isspace())
-
-
 def _whitespace_insensitive_prefix_end(value: str, prefix: str) -> Optional[int]:
     value_index = 0
     prefix_index = 0
