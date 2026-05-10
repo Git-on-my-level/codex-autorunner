@@ -349,7 +349,31 @@ describe('PMA chat view helpers', () => {
       state: 'running',
       phase: 'testing',
       elapsedLabel: '2m 5s elapsed',
-      queueDepthLabel: 'queue 2'
+      queueDepthLabel: 'queue 2',
+      tokenUsageLabel: null,
+      contextRemainingLabel: null,
+      contextRemainingPercent: null
+    });
+  });
+
+  it('adds token usage and context remaining metadata to the status bar', () => {
+    expect(
+      buildPmaStatusBar(
+        {
+          ...baseProgress,
+          raw: {
+            token_usage: {
+              last: { totalTokens: 123390, inputTokens: 122709, outputTokens: 681 },
+              modelContextWindow: 256000
+            }
+          }
+        },
+        baseChat
+      )
+    ).toMatchObject({
+      tokenUsageLabel: 'tokens 123,390 total · 122,709 in · 681 out',
+      contextRemainingLabel: 'ctx 52%',
+      contextRemainingPercent: 52
     });
   });
 

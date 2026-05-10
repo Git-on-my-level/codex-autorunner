@@ -41,6 +41,7 @@ class TestManagedThreadStatusShape:
         assert "queue_depth" in payload
         assert "queued_turns" in payload
         assert "recent_progress" in payload
+        assert "token_usage" in payload
         assert "latest_turn_id" in payload
         assert "latest_turn_status" in payload
         assert "latest_assistant_text" in payload
@@ -73,6 +74,7 @@ class TestManagedThreadStatusShape:
         assert "started_at" in turn
         assert "finished_at" in turn
         assert "lifecycle_events" in turn
+        assert "token_usage" in turn
 
     def test_status_endpoint_returns_404_for_missing_thread(self, hub_env) -> None:
         _enable_pma(hub_env.hub_root)

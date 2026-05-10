@@ -29,6 +29,7 @@ from .managed_thread_tail_serializers import (
     _derive_active_turn_diagnostics,
     _derive_progress_phase,
     _event_received_at_iso,
+    _latest_token_usage_from_timeline_entries,
     _record_serialized_tail_event,
     _refresh_active_turn_diagnostics,
     _running_turn_stall_flags,
@@ -321,6 +322,7 @@ async def _build_managed_thread_tail_snapshot(
     )
     tail_events: list[dict[str, Any]] = []
     raw_last_activity_at: Optional[str] = None
+    token_usage = _latest_token_usage_from_timeline_entries(persisted_timeline_entries)
     tail_events, raw_last_activity_at = _serialize_persisted_timeline_tail_events(
         persisted_timeline_entries,
         level=level,
@@ -445,6 +447,7 @@ async def _build_managed_thread_tail_snapshot(
         "phase_source": phase_source,
         "guidance": guidance,
         "last_tool": last_tool,
+        "token_usage": token_usage,
     }
     lifecycle = build_managed_thread_stream_lifecycle(
         managed_turn_id=managed_turn_id,

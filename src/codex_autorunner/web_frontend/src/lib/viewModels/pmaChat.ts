@@ -215,6 +215,9 @@ export type PmaStatusBar = {
   phase: string;
   elapsedLabel: string;
   queueDepthLabel: string;
+  tokenUsageLabel: string | null;
+  contextRemainingLabel: string | null;
+  contextRemainingPercent: number | null;
 };
 
 export type ManagedThreadCreatePayload = {
@@ -994,14 +997,77 @@ export function buildPmaLiveActivity(progress: PmaRunProgress | null): PmaLiveAc
 export function buildPmaStatusBar(progress: PmaRunProgress | null, chat: PmaChatSummary | null): PmaStatusBar | null {
   if (!progress && !chat) return null;
   const state = progress?.status ?? chat?.status ?? 'idle';
+  const tokenUsage = extractTokenUsage(progress?.raw) ?? extractTokenUsage(chat?.raw);
+  const contextRemainingPercent = contextRemainingPercentFromUsage(tokenUsage);
   return {
     state,
     phase: progress?.phase?.replace(/_/g, ' ') || statusLabel(state),
     elapsedLabel: progress?.elapsedSeconds === null || progress?.elapsedSeconds === undefined
       ? 'elapsed n/a'
       : `${formatDuration(progress.elapsedSeconds)} elapsed`,
-    queueDepthLabel: `queue ${progress?.queueDepth ?? 0}`
+    queueDepthLabel: `queue ${progress?.queueDepth ?? 0}`,
+    tokenUsageLabel: formatTokenUsageLabel(tokenUsage),
+    contextRemainingLabel:
+      contextRemainingPercent === null ? null : `ctx ${contextRemainingPercent}%`,
+    contextRemainingPercent
   };
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function numberValue(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function tokenNumber(source: Record<string, unknown> | null, ...keys: string[]): number | null {
+  if (!source) return null;
+  for (const key of keys) {
+    const value = numberValue(source[key]);
+    if (value !== null) return value;
+  }
+  return null;
+}
+
+function extractTokenUsage(source: unknown): Record<string, unknown> | null {
+  const raw = recordValue(source);
+  if (!raw) return null;
+  for (const candidate of [raw.token_usage, raw.tokenUsage, recordValue(raw.turn)?.token_usage, recordValue(raw.snapshot)?.token_usage]) {
+    const usage = recordValue(candidate);
+    if (usage && Object.keys(usage).length > 0) return usage;
+  }
+  return null;
+}
+
+function usageBucket(tokenUsage: Record<string, unknown> | null): Record<string, unknown> | null {
+  if (!tokenUsage) return null;
+  return recordValue(tokenUsage.last) ?? recordValue(tokenUsage.total) ?? tokenUsage;
+}
+
+function contextRemainingPercentFromUsage(tokenUsage: Record<string, unknown> | null): number | null {
+  const bucket = usageBucket(tokenUsage);
+  const totalTokens = tokenNumber(bucket, 'totalTokens', 'total_tokens');
+  const contextWindow = tokenNumber(tokenUsage, 'modelContextWindow', 'context_window', 'contextWindow') ??
+    tokenNumber(bucket, 'modelContextWindow', 'context_window', 'contextWindow');
+  if (totalTokens === null || contextWindow === null || contextWindow <= 0) return null;
+  return Math.max(0, Math.min(100, 100 - Math.round((totalTokens / contextWindow) * 100)));
+}
+
+function formatCompactNumber(value: number): string {
+  return Math.round(value).toLocaleString('en-US');
+}
+
+function formatTokenUsageLabel(tokenUsage: Record<string, unknown> | null): string | null {
+  const bucket = usageBucket(tokenUsage);
+  const totalTokens = tokenNumber(bucket, 'totalTokens', 'total_tokens');
+  if (totalTokens === null) return null;
+  const inputTokens = tokenNumber(bucket, 'inputTokens', 'input_tokens');
+  const outputTokens = tokenNumber(bucket, 'outputTokens', 'output_tokens');
+  const parts = [`tokens ${formatCompactNumber(totalTokens)} total`];
+  if (inputTokens !== null) parts.push(`${formatCompactNumber(inputTokens)} in`);
+  if (outputTokens !== null) parts.push(`${formatCompactNumber(outputTokens)} out`);
+  return parts.join(' · ');
 }
 
 export function isPrimaryProgressArtifact(artifact: SurfaceArtifact): boolean {

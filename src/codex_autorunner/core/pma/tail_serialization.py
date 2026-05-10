@@ -787,6 +787,22 @@ def _serialize_persisted_timeline_tail_events(
     return serialized, last_activity_at
 
 
+def _latest_token_usage_from_timeline_entries(
+    timeline_entries: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    latest: dict[str, Any] | None = None
+    for entry in timeline_entries:
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("event_type") or "").strip().lower() != "token_usage":
+            continue
+        event = coerce_dict(entry.get("event"))
+        usage = event.get("usage")
+        if isinstance(usage, dict) and usage:
+            latest = dict(usage)
+    return latest
+
+
 async def _serialize_runtime_raw_tail_events(
     raw_event: Any,
     state: RuntimeThreadRunEventState,
@@ -907,7 +923,9 @@ def build_managed_thread_status_response(
             "started_at": snapshot.get("started_at"),
             "finished_at": snapshot.get("finished_at"),
             "lifecycle_events": snapshot.get("lifecycle_events"),
+            "token_usage": snapshot.get("token_usage"),
         },
+        "token_usage": snapshot.get("token_usage"),
         "queue_depth": queue_depth,
         "queued_turns": [
             {
@@ -956,6 +974,7 @@ __all__ = [
     "_runtime_raw_payload",
     "_runtime_terminal_tail_event",
     "_running_turn_stall_flags",
+    "_latest_token_usage_from_timeline_entries",
     "_serialize_persisted_timeline_tail_events",
     "_serialize_runtime_raw_tail_events",
     "_should_suppress_tail_event",

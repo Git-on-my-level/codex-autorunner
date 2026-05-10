@@ -2186,6 +2186,41 @@ textarea:hover {
   background: var(--color-danger);
 }
 
+.composer-status-bar {
+  max-width: none;
+  width: 100%;
+  margin-top: var(--space-3);
+  border-radius: 8px;
+}
+
+.context-meter {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.context-meter-label {
+  color: var(--color-ink);
+  font-weight: 650;
+}
+
+.context-meter-track {
+  display: inline-block;
+  width: 76px;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--color-border-subtle);
+}
+
+.context-meter-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--color-accent);
+  transition: width var(--transition-fast);
+}
+
 .live-activity {
   display: grid;
   gap: var(--space-3);
