@@ -143,6 +143,13 @@ def test_trim_cumulative_assistant_text_removes_exact_prior_prefix() -> None:
     )
 
 
+def test_trim_cumulative_assistant_text_removes_short_prior_prefix() -> None:
+    assert (
+        managed_thread_turns_module.trim_cumulative_assistant_text("ABCZYX", "ABC")
+        == "ZYX"
+    )
+
+
 def test_trim_cumulative_assistant_text_handles_collapsed_whitespace_prefix() -> None:
     previous = (
         "CLI is outdated. Let me upgrade it first.\n\n"
@@ -1729,11 +1736,13 @@ class _FakeTranscriptStore:
 
 
 class _FakeHubPersistenceClient:
-    def __init__(self) -> None:
+    def __init__(self, transcript_history: list[dict[str, Any]] | None = None) -> None:
         self.timeline_requests: list[Any] = []
         self.trace_requests: list[Any] = []
         self.transcript_requests: list[Any] = []
         self.activity_requests: list[Any] = []
+        self.transcript_history_requests: list[Any] = []
+        self.transcript_history = list(transcript_history or [])
 
     async def persist_execution_timeline(self, request: Any) -> Any:
         self.timeline_requests.append(request)
@@ -1752,6 +1761,10 @@ class _FakeHubPersistenceClient:
     async def write_transcript(self, request: Any) -> Any:
         self.transcript_requests.append(request)
         return SimpleNamespace(turn_id=request.turn_id)
+
+    async def get_transcript_history(self, request: Any) -> Any:
+        self.transcript_history_requests.append(request)
+        return SimpleNamespace(entries=list(self.transcript_history))
 
     async def record_thread_activity(self, request: Any) -> None:
         self.activity_requests.append(request)
@@ -1973,6 +1986,130 @@ async def test_finalize_managed_thread_execution_trims_cumulative_terminal_outpu
     assert result.assistant_text == new_answer
     assert recorded_results[-1]["assistant_text"] == new_answer
     assert fake_hub_client.transcript_requests[-1].assistant_text == new_answer
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    (
+        "surface_kind",
+        "log_label",
+        "surface_key",
+        "public_error",
+        "timeout_error",
+        "interrupted_error",
+    ),
+    [
+        (
+            "discord",
+            "Discord",
+            "discord:chan-1",
+            "Discord PMA execution failed",
+            "Discord PMA turn timed out",
+            "Discord PMA turn interrupted",
+        ),
+        (
+            "telegram",
+            "Telegram",
+            "telegram:-1001:101",
+            "Telegram PMA execution failed",
+            "Telegram PMA turn timed out",
+            "Telegram PMA turn interrupted",
+        ),
+    ],
+)
+async def test_finalize_managed_thread_execution_trims_short_cumulative_history_for_chat_surfaces(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    surface_kind: str,
+    log_label: str,
+    surface_key: str,
+    public_error: str,
+    timeout_error: str,
+    interrupted_error: str,
+) -> None:
+    recorded_results: list[dict[str, Any]] = []
+    fake_hub_client = _FakeHubPersistenceClient(
+        transcript_history=[
+            {
+                "managed_turn_id": "previous-2",
+                "content": "User:\nsecond\n\nAssistant:\nABCZYX",
+            },
+            {
+                "managed_turn_id": "previous-1",
+                "content": "User:\nfirst\n\nAssistant:\nABC",
+            },
+        ]
+    )
+    started = _started_execution_with_backend_ids(tmp_path)
+
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "harness_supports_event_streaming",
+        lambda _harness: False,
+    )
+
+    async def _successful_outcome(*args: Any, **kwargs: Any) -> RuntimeThreadOutcome:
+        _ = args, kwargs
+        return RuntimeThreadOutcome(
+            status="ok",
+            assistant_text="ABCZYX123",
+            error=None,
+            backend_thread_id="session-1",
+            backend_turn_id="turn-1",
+        )
+
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "await_runtime_thread_outcome",
+        _successful_outcome,
+    )
+
+    orchestration_service = SimpleNamespace(
+        get_thread_target=lambda managed_thread_id: SimpleNamespace(
+            backend_thread_id="session-1",
+            repo_id="repo-1",
+            resource_kind="repo",
+            resource_id="repo-1",
+            agent_id="hermes",
+            workspace_root=str(tmp_path),
+        ),
+        get_thread_runtime_binding=lambda managed_thread_id: SimpleNamespace(
+            backend_thread_id="session-1"
+        ),
+        get_previous_completed_execution=(
+            lambda managed_thread_id, *, exclude_execution_id=None: None
+        ),
+        record_execution_result=lambda *args, **kwargs: (
+            recorded_results.append(dict(kwargs))
+            or SimpleNamespace(status="ok", error=None)
+        ),
+    )
+
+    result = await managed_thread_turns_module.finalize_managed_thread_execution(
+        orchestration_service=orchestration_service,
+        started=started,
+        state_root=tmp_path,
+        hub_client=fake_hub_client,
+        raw_config={},
+        surface=managed_thread_turns_module.ManagedThreadSurfaceInfo(
+            log_label=log_label,
+            surface_kind=surface_kind,
+            surface_key=surface_key,
+        ),
+        errors=managed_thread_turns_module.ManagedThreadErrorMessages(
+            public_execution_error=public_error,
+            timeout_error=timeout_error,
+            interrupted_error=interrupted_error,
+            timeout_seconds=5,
+        ),
+        logger=logging.getLogger(f"test.managed_thread.{surface_kind}.short_trim"),
+        turn_preview="hello",
+    )
+
+    assert result.assistant_text == "123"
+    assert recorded_results[-1]["assistant_text"] == "123"
+    assert fake_hub_client.transcript_requests[-1].assistant_text == "123"
+    assert fake_hub_client.transcript_history_requests[-1].limit == 0
 
 
 @pytest.mark.anyio

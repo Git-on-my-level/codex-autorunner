@@ -784,8 +784,6 @@ def trim_cumulative_assistant_text(
     previous = str(previous_assistant_text or "")
     if not current.strip() or not previous.strip():
         return current
-    if len(_normalized_non_whitespace(previous)) < 80:
-        return current
     if current == previous:
         return current
     if current.startswith(previous):
