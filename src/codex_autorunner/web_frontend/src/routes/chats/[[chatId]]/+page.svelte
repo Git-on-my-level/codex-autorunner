@@ -10,7 +10,14 @@
   import { pmaApi, type ApiError, type JsonRecord, type PmaQueuedTurn } from '$lib/api/client';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import { openPmaTailEventSource, type StreamSubscription } from '$lib/api/streaming';
-  import { repoRoute, worktreeRoute } from '$lib/viewModels/routes';
+  import {
+    repoContextspaceRoute,
+    repoRoute,
+    repoTicketRoute,
+    worktreeContextspaceRoute,
+    worktreeRoute,
+    worktreeTicketRoute
+  } from '$lib/viewModels/routes';
   import { mapPmaRunProgress, mapPmaTimelineItem } from '$lib/viewModels/domain';
   import type {
     PmaChatSummary,
@@ -79,6 +86,16 @@
     pickerReasoningOptions,
     stringField
   } from '$lib/viewModels/modelPickers';
+  import {
+    buildSlashCommandSuggestions,
+    parseSlashCommand,
+    WEB_SLASH_COMMANDS,
+    type SlashCommandSpec,
+    type SlashCommandSuggestion
+  } from '$lib/viewModels/slashCommands';
+
+  const COMPACT_SUMMARY_PROMPT =
+    'Summarize the conversation so far into a concise context block I can paste into a new thread. Include goals, constraints, decisions, and current state.';
 
   let chats = $state<PmaChatSummary[]>([]);
   let timeline = $state<PmaTimelineItem[]>([]);
@@ -118,6 +135,9 @@
   let messageStack: HTMLDivElement | null = $state(null);
   let composerTextarea: HTMLTextAreaElement | null = $state(null);
   let voiceNotice = $state<string | null>(null);
+  let commandNotice = $state<string | null>(null);
+  let slashSelectedIndex = $state(0);
+  let composerFocused = $state(false);
   let composerEditVersion = 0;
 
   const COMPOSER_DEFAULT_MAX_PX = 360;
@@ -186,9 +206,20 @@
     }, 3500);
   }
 
+  function showCommandNotice(message: string): void {
+    commandNotice = message;
+    window.setTimeout(() => {
+      if (commandNotice === message) commandNotice = null;
+    }, 3500);
+  }
+
   $effect(() => {
     draft;
     autosizeComposer();
+  });
+  $effect(() => {
+    slashSuggestions;
+    slashSelectedIndex = Math.min(slashSelectedIndex, Math.max(slashSuggestions.length - 1, 0));
   });
   let pendingRefreshTimer: number | null = null;
   let lastScrolledChatId: string | null = null;
@@ -309,6 +340,15 @@
   );
   const hasRunnableDraft = $derived(Boolean(activeChat && (draft.trim() || pendingAttachments.length > 0)));
   const canInterruptWithDraft = $derived(Boolean(activeChat && progress?.status === 'running' && hasRunnableDraft));
+  const slashSuggestions = $derived<SlashCommandSuggestion[]>(
+    buildSlashCommandSuggestions(draft, {
+      hasActiveChat: Boolean(activeChat),
+      hasScopedWorkspace: selectedScope.kind !== 'local',
+      isRunning: progress?.status === 'running',
+      queueDepth: queuedTurns.length || progress?.queueDepth || 0
+    })
+  );
+  const showSlashCommandMenu = $derived(slashSuggestions.length > 0 && composerFocused);
   const selectedAgentLabel = $derived(selectedAgentRecord ? agentLabel(selectedAgentRecord) : selectedAgent || 'Agent');
   const selectedModelLabel = $derived(selectedModelRecord ? modelLabel(selectedModelRecord) : selectedModel || '');
   const selectedEffortLabel = $derived(selectedReasoning || 'default');
@@ -813,6 +853,22 @@
     return null;
   }
 
+  function activeScopedRoute(kind: 'tickets' | 'contextspace'): string | null {
+    if (!activeChat) return null;
+    if (activeChat.worktreeId) {
+      const parentRepoId = worktreeScopeOption(activeChat.worktreeId)?.parentRepoId ?? activeChat.repoId ?? null;
+      return kind === 'tickets'
+        ? worktreeTicketRoute(activeChat.worktreeId, parentRepoId)
+        : worktreeContextspaceRoute(activeChat.worktreeId, parentRepoId);
+    }
+    if (activeChat.repoId) {
+      return kind === 'tickets'
+        ? repoTicketRoute(activeChat.repoId)
+        : repoContextspaceRoute(activeChat.repoId);
+    }
+    return null;
+  }
+
   function isMessageStackNearBottom(): boolean {
     if (!messageStack) return true;
     const distanceFromBottom = messageStack.scrollHeight - messageStack.scrollTop - messageStack.clientHeight;
@@ -834,7 +890,7 @@
     if (result.ok) {
       chats = [result.data, ...chats.filter((chat) => chat.id !== result.data.id)];
       await selectChat(result.data.id);
-      selectedScopeId = 'local';
+      selectedScopeId = scopeIdForChat(result.data) ?? 'local';
       newChatKind = 'pma';
     } else {
       composeError = result.error;
@@ -987,6 +1043,264 @@
     }
   }
 
+  async function autoCompactActiveThread(chatId: string): Promise<void> {
+    sending = true;
+    showCommandNotice('Generating compact summary...');
+    const summaryResult = await pmaApi.pma.sendMessage(
+      chatId,
+      {
+        ...buildManagedThreadMessagePayload(
+          COMPACT_SUMMARY_PROMPT,
+          selectedModel,
+          false,
+          [],
+          selectedReasoning,
+          selectedProfile,
+          null
+        ),
+        wait_for_confirmation: true,
+        defer_execution: false
+      }
+    );
+    if (!summaryResult.ok) {
+      composeError = summaryResult.error;
+      sending = false;
+      return;
+    }
+    const summary = summaryResult.data.text.trim();
+    if (!summary) {
+      showCommandNotice('Compaction returned an empty summary; current chat was left unchanged.');
+      sending = false;
+      await refreshActive(chatId, { quiet: true });
+      return;
+    }
+    const compactResult = await pmaApi.pma.compactThread(chatId, summary);
+    if (!compactResult.ok) {
+      composeError = compactResult.error;
+      sending = false;
+      return;
+    }
+    chats = chats.map((chat) => (chat.id === compactResult.data.id ? compactResult.data : chat));
+    showCommandNotice('Compact summary generated and saved.');
+    sending = false;
+    await refreshActive(chatId, { quiet: true });
+    clearSlashDraft();
+  }
+
+  function clearSlashDraft(): void {
+    draft = '';
+    markComposerEdited();
+    queueMicrotask(() => autosizeComposer());
+  }
+
+  function applySlashCommand(spec: SlashCommandSpec): void {
+    draft = `/${spec.name}${spec.id === 'compact' || spec.id === 'cancel' || spec.id === 'agent' || spec.id === 'model' || spec.id === 'reasoning' || spec.id === 'profile' || spec.id === 'new' ? ' ' : ''}`;
+    markComposerEdited();
+    queueMicrotask(() => {
+      autosizeComposer();
+      composerTextarea?.focus();
+    });
+  }
+
+  async function executeSlashCommand(specOverride?: SlashCommandSpec): Promise<boolean> {
+    const parsed = parseSlashCommand(draft);
+    const spec = specOverride ?? parsed?.spec ?? null;
+    if (!parsed || !spec) return false;
+    const disabled = slashSuggestions.find((item) => item.spec.id === spec.id)?.disabledReason ?? null;
+    if (disabled) {
+      showCommandNotice(disabled);
+      return true;
+    }
+    const args = parsed.args.trim();
+    composeError = null;
+
+    if (spec.id === 'help') {
+      showCommandNotice(WEB_SLASH_COMMANDS.map((command) => command.usage).join('  '));
+      clearSlashDraft();
+      return true;
+    }
+    if (spec.id === 'new') {
+      const kind = args.toLowerCase();
+      newChatKind = kind === 'agent' || kind === 'coding-agent' || kind === 'newt' ? 'agent' : 'pma';
+      await createChat();
+      clearSlashDraft();
+      return true;
+    }
+    if (spec.id === 'newt') {
+      newChatKind = 'agent';
+      await createChat();
+      showCommandNotice('Started a fresh coding chat.');
+      clearSlashDraft();
+      return true;
+    }
+    if (spec.id === 'agent') {
+      const next = args.toLowerCase();
+      const known = agents.find((record) => agentId(record) === next);
+      if (!next || !known) {
+        showCommandNotice(`Known agents: ${agents.map((record) => agentId(record)).filter(Boolean).join(', ') || 'none loaded'}`);
+        return true;
+      }
+      selectedAgent = next;
+      handleAgentChange();
+      showCommandNotice(`Agent set to ${agentLabel(known)}.`);
+      clearSlashDraft();
+      return true;
+    }
+    if (spec.id === 'model') {
+      const next = args;
+      if (!next || next.toLowerCase() === 'default') selectedModel = '';
+      else if (!modelExists(models, next)) {
+        showCommandNotice(`Known models: ${models.map((record) => modelLabel(record)).join(', ') || 'none loaded'}`);
+        return true;
+      } else selectedModel = next;
+      showCommandNotice(selectedModel ? `Model set to ${selectedModel}.` : 'Model override cleared.');
+      clearSlashDraft();
+      return true;
+    }
+    if (spec.id === 'reasoning') {
+      const next = args.toLowerCase();
+      if (!next || next === 'default') selectedReasoning = '';
+      else if (!reasoningOptions.includes(next)) {
+        showCommandNotice(`Reasoning options: ${reasoningOptions.join(', ') || 'none for this model'}`);
+        return true;
+      } else selectedReasoning = next;
+      showCommandNotice(selectedReasoning ? `Reasoning set to ${selectedReasoning}.` : 'Reasoning override cleared.');
+      clearSlashDraft();
+      return true;
+    }
+    if (spec.id === 'profile') {
+      const next = args.trim();
+      const profileIds = hermesProfileChoices.map((entry) => entry.id);
+      if (!next || next.toLowerCase() === 'default') selectedProfile = '';
+      else if (!profileIds.includes(next)) {
+        showCommandNotice(`Hermes profiles: ${profileIds.join(', ') || 'none loaded'}`);
+        return true;
+      } else selectedProfile = next;
+      showCommandNotice(selectedProfile ? `Profile set to ${selectedProfile}.` : 'Profile cleared.');
+      clearSlashDraft();
+      return true;
+    }
+
+    if (spec.id === 'pma') {
+      const mode = args.toLowerCase();
+      if (mode === 'off' || mode === 'disable') {
+        showCommandNotice('Web chat is always PMA-backed. Open Settings to change hub PMA configuration.');
+      } else {
+        if (activeChatId) await refreshActive(activeChatId, { quiet: true });
+        showCommandNotice('PMA web chat is active.');
+      }
+      clearSlashDraft();
+      return true;
+    }
+
+    if (!activeChatId) return false;
+    if (spec.destructive && !window.confirm(`Run ${spec.usage}?`)) return true;
+
+    if (spec.id === 'status' || spec.id === 'queue') {
+      await refreshActive(activeChatId, { quiet: true });
+      showCommandNotice(spec.id === 'queue' ? 'Queue refreshed.' : 'Status refreshed.');
+      clearSlashDraft();
+      return true;
+    }
+    if (spec.id === 'reset') {
+      newChatKind = 'pma';
+      await createChat();
+      showCommandNotice('Started a fresh replacement chat.');
+      clearSlashDraft();
+      return true;
+    }
+    if (spec.id === 'tickets' || spec.id === 'contextspace') {
+      const route = activeScopedRoute(spec.id);
+      if (!route) {
+        showCommandNotice('Select a repo or worktree chat first.');
+        return true;
+      }
+      clearSlashDraft();
+      await goto(href(route));
+      return true;
+    }
+    if (spec.id === 'files') {
+      const result = await pmaApi.pma.listFiles();
+      if (!result.ok) composeError = result.error;
+      else {
+        artifacts = result.data;
+        showCommandNotice(result.data.length ? `Files refreshed (${result.data.length}).` : 'No PMA files yet.');
+        clearSlashDraft();
+      }
+      return true;
+    }
+    if (spec.id === 'interrupt') {
+      const result = await pmaApi.pma.interruptThread(activeChatId);
+      if (!result.ok) composeError = result.error;
+      else {
+        showCommandNotice('Interrupt requested.');
+        await refreshActive(activeChatId, { quiet: true });
+        clearSlashDraft();
+      }
+      return true;
+    }
+    if (spec.id === 'resume') {
+      const result = await pmaApi.pma.resumeThread(activeChatId);
+      if (!result.ok) composeError = result.error;
+      else {
+        chats = chats.map((chat) => (chat.id === result.data.id ? result.data : chat));
+        showCommandNotice('Thread resumed.');
+        await refreshActive(activeChatId, { quiet: true });
+        clearSlashDraft();
+      }
+      return true;
+    }
+    if (spec.id === 'compact') {
+      if (!args) {
+        await autoCompactActiveThread(activeChatId);
+        return true;
+      }
+      const result = await pmaApi.pma.compactThread(activeChatId, args);
+      if (!result.ok) composeError = result.error;
+      else {
+        chats = chats.map((chat) => (chat.id === result.data.id ? result.data : chat));
+        showCommandNotice('Compaction seed saved.');
+        await refreshActive(activeChatId, { quiet: true });
+        clearSlashDraft();
+      }
+      return true;
+    }
+    if (spec.id === 'archive') {
+      const archivedId = activeChatId;
+      const result = await pmaApi.pma.archiveThread(archivedId);
+      if (!result.ok) composeError = result.error;
+      else {
+        chats = chats.map((chat) => (chat.id === result.data.id ? result.data : chat));
+        showCommandNotice('Thread archived.');
+        clearSlashDraft();
+        await goto(href('/chats'));
+      }
+      return true;
+    }
+    if (spec.id === 'cancel') {
+      const turn = queuedTurns.find((item) => String(item.position) === args || item.managedTurnId === args);
+      if (!turn) {
+        showCommandNotice('Use /cancel with a queued position or turn id.');
+        return true;
+      }
+      await cancelQueuedTurn(turn);
+      clearSlashDraft();
+      return true;
+    }
+    if (spec.id === 'clearqueue') {
+      const result = await pmaApi.pma.clearQueue(activeChatId);
+      if (!result.ok) composeError = result.error;
+      else {
+        queuedTurns = [];
+        showCommandNotice('Queue cleared.');
+        await refreshActive(activeChatId, { quiet: true });
+        clearSlashDraft();
+      }
+      return true;
+    }
+    return false;
+  }
+
   function addFiles(fileList: FileList | File[], kindOverride?: 'image'): void {
     const next = Array.from(fileList).map((file) => ({
       id: `file-${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -1042,9 +1356,28 @@
   }
 
   function handleComposerKeydown(event: KeyboardEvent): void {
+    if (showSlashCommandMenu && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+      event.preventDefault();
+      const delta = event.key === 'ArrowDown' ? 1 : -1;
+      slashSelectedIndex = (slashSelectedIndex + delta + slashSuggestions.length) % slashSuggestions.length;
+      return;
+    }
+    if (showSlashCommandMenu && event.key === 'Tab') {
+      const selected = slashSuggestions[slashSelectedIndex]?.spec;
+      if (selected) {
+        event.preventDefault();
+        applySlashCommand(selected);
+      }
+      return;
+    }
+    if (event.key === 'Escape' && showSlashCommandMenu) {
+      event.preventDefault();
+      slashSelectedIndex = 0;
+      return;
+    }
     if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
       event.preventDefault();
-      void sendMessage();
+      void (parseSlashCommand(draft)?.spec ? executeSlashCommand() : sendMessage());
     }
   }
 
@@ -1476,7 +1809,7 @@
       onpaste={handlePaste}
       onsubmit={(event) => {
         event.preventDefault();
-        void sendMessage();
+        void (parseSlashCommand(draft)?.spec ? executeSlashCommand() : sendMessage());
       }}
     >
       <div
@@ -1593,6 +1926,29 @@
           </label>
         </div>
       {/if}
+      {#if showSlashCommandMenu}
+        <div class="slash-command-menu" role="listbox" aria-label="Slash commands">
+          {#each slashSuggestions as item, index (item.spec.id)}
+            <button
+              type="button"
+              class:active={index === slashSelectedIndex}
+              disabled={Boolean(item.disabledReason)}
+              role="option"
+              aria-selected={index === slashSelectedIndex}
+              title={item.disabledReason ?? item.spec.usage}
+              onmousedown={(event) => event.preventDefault()}
+              onclick={() => item.disabledReason ? showCommandNotice(item.disabledReason) : applySlashCommand(item.spec)}
+            >
+              <span class="slash-command-name">/{item.spec.name}</span>
+              <span class="slash-command-copy">
+                <strong>{item.spec.title}</strong>
+                <em>{item.disabledReason ?? item.spec.description}</em>
+              </span>
+              <kbd>{item.spec.group}</kbd>
+            </button>
+          {/each}
+        </div>
+      {/if}
       <textarea
         bind:this={composerTextarea}
         aria-label={activeChat ? `Message ${composerRecipientLabel(activeChat)}` : 'Message chat'}
@@ -1601,6 +1957,8 @@
         placeholder={activeChat ? `Message ${composerRecipientLabel(activeChat)}...` : 'Create or select a chat'}
         onkeydown={handleComposerKeydown}
         oninput={handleComposerInput}
+        onfocus={() => (composerFocused = true)}
+        onblur={() => window.setTimeout(() => (composerFocused = false), 120)}
         rows="1"
       ></textarea>
       {#if canInterruptWithDraft}
@@ -1654,6 +2012,7 @@
     {/if}
     <AutoDismissNotice message={composeError?.message ?? null} tone="danger" />
     <AutoDismissNotice message={voiceNotice} tone="warning" />
+    <AutoDismissNotice message={commandNotice} tone="success" />
   </div>
   {/snippet}
 </MasterDetail>

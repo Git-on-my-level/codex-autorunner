@@ -3302,6 +3302,7 @@ textarea:hover {
     "grip grip grip"
     "queue queue queue"
     "attachments attachments attachments"
+    "commands commands commands"
     "textarea textarea textarea"
     "actions interrupt send";
   grid-template-columns: 1fr auto auto;
@@ -3327,6 +3328,7 @@ textarea:hover {
     "queue queue queue"
     "attachments attachments attachments"
     "hermes-profile hermes-profile hermes-profile"
+    "commands commands commands"
     "textarea textarea textarea"
     "actions interrupt send";
 }
@@ -3373,6 +3375,82 @@ textarea:hover {
 
 .composer textarea {
   grid-area: textarea;
+}
+
+.slash-command-menu {
+  grid-area: commands;
+  display: grid;
+  gap: 2px;
+  max-height: 260px;
+  overflow: auto;
+  padding: 4px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-sm);
+}
+
+.slash-command-menu button {
+  display: grid;
+  grid-template-columns: minmax(92px, auto) minmax(0, 1fr) auto;
+  gap: var(--space-3);
+  align-items: center;
+  min-height: 46px;
+  padding: var(--space-2);
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-ink);
+  text-align: left;
+}
+
+.slash-command-menu button:hover,
+.slash-command-menu button.active {
+  background: var(--color-surface-muted);
+}
+
+.slash-command-menu button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.slash-command-name {
+  font-family: var(--font-mono);
+  color: var(--color-accent);
+  font-weight: 760;
+}
+
+.slash-command-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.slash-command-copy strong,
+.slash-command-copy em {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.slash-command-copy strong {
+  font-size: 0.86rem;
+}
+
+.slash-command-copy em {
+  color: var(--color-ink-muted);
+  font-size: 0.76rem;
+  font-style: normal;
+}
+
+.slash-command-menu kbd {
+  padding: 2px 6px;
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  color: var(--color-ink-muted);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 700;
 }
 
 .attachment-actions {

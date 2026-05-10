@@ -115,6 +115,30 @@ describe('API client error handling', () => {
     }
   });
 
+  it('calls managed-thread slash command action endpoints', async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/resume') || url.endsWith('/compact') || url.endsWith('/archive')) {
+        return Response.json({ thread: { thread_target_id: 'thread-1', display_name: 'PMA room' } });
+      }
+      return Response.json({ status: 'ok' });
+    }) as unknown as typeof fetch;
+    const client = new PmaApiClient(fetcher);
+
+    await client.pma.interruptThread('thread-1');
+    await client.pma.resumeThread('thread-1');
+    await client.pma.compactThread('thread-1', 'summary');
+    await client.pma.archiveThread('thread-1');
+    await client.pma.clearQueue('thread-1');
+
+    expect(fetcher).toHaveBeenCalledWith('/hub/pma/threads/thread-1/interrupt', expect.objectContaining({ method: 'POST' }));
+    expect(fetcher).toHaveBeenCalledWith(
+      '/hub/pma/threads/thread-1/compact',
+      expect.objectContaining({ body: JSON.stringify({ summary: 'summary', reset_backend: true }) })
+    );
+    expect(fetcher).toHaveBeenCalledWith('/hub/pma/threads/thread-1/queue/clear', expect.objectContaining({ method: 'POST' }));
+  });
+
   it('prefixes API requests with the runtime hub base path when configured', async () => {
     const fetcher = vi.fn(async () =>
       Response.json({

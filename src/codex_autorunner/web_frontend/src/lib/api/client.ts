@@ -285,11 +285,38 @@ export class PmaApiClient {
       mapResult(await this.getJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}/status`), mapPmaRunProgress),
     getQueue: async (chatId: string): Promise<ApiResult<PmaThreadQueue>> =>
       mapResult(await this.getJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}/queue`), mapPmaThreadQueue),
+    interruptThread: async (chatId: string): Promise<ApiResult<JsonRecord>> =>
+      this.requestJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}/interrupt`, { method: 'POST' }),
+    resumeThread: async (chatId: string): Promise<ApiResult<PmaChatSummary>> =>
+      mapResult(
+        await this.requestJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}/resume`, {
+          method: 'POST',
+          body: {}
+        }),
+        (payload) => mapPmaChatSummary(asRecord(payload.thread))
+      ),
+    compactThread: async (chatId: string, summary: string): Promise<ApiResult<PmaChatSummary>> =>
+      mapResult(
+        await this.requestJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}/compact`, {
+          method: 'POST',
+          body: { summary, reset_backend: true }
+        }),
+        (payload) => mapPmaChatSummary(asRecord(payload.thread))
+      ),
+    archiveThread: async (chatId: string): Promise<ApiResult<PmaChatSummary>> =>
+      mapResult(
+        await this.requestJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}/archive`, {
+          method: 'POST'
+        }),
+        (payload) => mapPmaChatSummary(asRecord(payload.thread))
+      ),
     cancelQueuedTurn: async (chatId: string, turnId: string): Promise<ApiResult<JsonRecord>> =>
       this.requestJson<JsonRecord>(
         `/hub/pma/threads/${encodeURIComponent(chatId)}/queue/${encodeURIComponent(turnId)}/cancel`,
         { method: 'POST' }
       ),
+    clearQueue: async (chatId: string): Promise<ApiResult<JsonRecord>> =>
+      this.requestJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}/queue/clear`, { method: 'POST' }),
     listFiles: async (): Promise<ApiResult<SurfaceArtifact[]>> =>
       mapResult(await this.getJson<JsonRecord>('/hub/pma/files'), (payload) =>
         [...asArray(payload.inbox), ...asArray(payload.outbox)].map(mapSurfaceArtifact)
