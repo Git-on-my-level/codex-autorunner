@@ -829,6 +829,71 @@ def _previous_completed_assistant_text(
     return str(getattr(previous, "output_text", "") or "")
 
 
+def _record_assistant_text(record: Any) -> str:
+    if isinstance(record, Mapping):
+        return str(record.get("output_text") or record.get("assistant_text") or "")
+    return str(
+        getattr(record, "output_text", None)
+        or getattr(record, "assistant_text", None)
+        or ""
+    )
+
+
+def _record_status(record: Any) -> str:
+    if isinstance(record, Mapping):
+        return str(record.get("status") or "")
+    return str(getattr(record, "status", "") or "")
+
+
+def _record_turn_id(record: Any) -> str:
+    if isinstance(record, Mapping):
+        return str(record.get("execution_id") or record.get("managed_turn_id") or "")
+    return str(
+        getattr(record, "execution_id", None)
+        or getattr(record, "managed_turn_id", None)
+        or ""
+    )
+
+
+def _prior_completed_assistant_text_prefix(
+    orchestration_service: Any,
+    *,
+    managed_thread_id: str,
+    managed_turn_id: str,
+) -> str:
+    owners = (
+        orchestration_service,
+        getattr(orchestration_service, "thread_store", None),
+        getattr(orchestration_service, "_store", None),
+    )
+    for owner in owners:
+        lister = getattr(owner, "list_turns", None)
+        if not callable(lister):
+            continue
+        try:
+            turns = lister(managed_thread_id, limit=50)
+        except (RuntimeError, TypeError, ValueError, AttributeError, OSError):
+            continue
+        if not isinstance(turns, (list, tuple)):
+            continue
+        prefix = ""
+        for record in reversed(turns):
+            if _record_turn_id(record).strip() == managed_turn_id:
+                continue
+            if _record_status(record).strip() != "ok":
+                continue
+            assistant_text = _record_assistant_text(record)
+            if not assistant_text.strip():
+                continue
+            if _assistant_text_extends_prefix(assistant_text, prefix):
+                prefix = assistant_text
+            else:
+                prefix += assistant_text
+        if prefix.strip():
+            return prefix
+    return ""
+
+
 def _assistant_text_from_transcript_content(content: str) -> str:
     text = str(content or "").strip()
     marker = "\n\nAssistant:\n"
@@ -925,6 +990,13 @@ async def _prior_assistant_text_candidates(
     )
     if transcript_text:
         candidates.append(transcript_text)
+    prior_prefix = _prior_completed_assistant_text_prefix(
+        orchestration_service,
+        managed_thread_id=managed_thread_id,
+        managed_turn_id=managed_turn_id,
+    )
+    if prior_prefix and prior_prefix not in candidates:
+        candidates.append(prior_prefix)
     previous_text = _previous_completed_assistant_text(
         orchestration_service,
         managed_thread_id=managed_thread_id,

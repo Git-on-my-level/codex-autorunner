@@ -3298,8 +3298,8 @@ textarea:hover {
 
 .composer {
   display: grid;
+  /* Grip is omitted from the template until it is rendered (content hit max height). */
   grid-template-areas:
-    "grip grip grip"
     "queue queue queue"
     "attachments attachments attachments"
     "commands commands commands"
@@ -3317,20 +3317,19 @@ textarea:hover {
   transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
 }
 
-.composer:focus-within {
-  border-color: var(--color-border-strong);
-  box-shadow: 0 0 0 3px var(--color-accent-ring);
-}
-
-.composer.composer-has-hermes-profile {
+.composer:has(> .composer-resize-grip) {
   grid-template-areas:
     "grip grip grip"
     "queue queue queue"
     "attachments attachments attachments"
-    "hermes-profile hermes-profile hermes-profile"
     "commands commands commands"
     "textarea textarea textarea"
     "actions interrupt send";
+}
+
+.composer:focus-within {
+  border-color: var(--color-border-strong);
+  box-shadow: 0 0 0 3px var(--color-accent-ring);
 }
 
 .composer-resize-grip {
@@ -3358,19 +3357,6 @@ textarea:hover {
 .composer-resize-grip:active .composer-resize-grip-bar {
   background: var(--color-border-strong);
   width: 56px;
-}
-
-.composer-hermes-profile {
-  grid-area: hermes-profile;
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding-bottom: 2px;
-}
-
-.composer-hermes-profile .start-picker-row {
-  flex: 1;
-  margin: 0;
 }
 
 .composer textarea {
