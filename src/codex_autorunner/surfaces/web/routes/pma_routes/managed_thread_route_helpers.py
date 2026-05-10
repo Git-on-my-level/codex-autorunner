@@ -299,7 +299,7 @@ def _ticket_flow_thread_fields(
     )
     if not is_ticket_flow:
         return {}
-    return {
+    fields: dict[str, Any] = {
         "flow_type": flow_type or "ticket_flow",
         "thread_kind": thread_kind,
         "run_id": run_id,
@@ -309,6 +309,7 @@ def _ticket_flow_thread_fields(
             workspace_root=workspace_root, ticket_path=ticket_path
         ),
     }
+    return {key: value for key, value in fields.items() if value is not None}
 
 
 def _chat_binding_defaults() -> dict[str, Any]:

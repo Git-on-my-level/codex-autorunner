@@ -394,6 +394,7 @@ function rollupGroupStatus(group: PmaChatRunGroup): WorkStatus {
 }
 
 function chatCountsDoneForRun(chat: PmaChatSummary): boolean {
+  if (chat.status === 'failed' || chat.status === 'invalid') return false;
   return chat.ticketDone === true || chat.status === 'done';
 }
 
