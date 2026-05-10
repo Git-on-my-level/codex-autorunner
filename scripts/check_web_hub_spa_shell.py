@@ -66,6 +66,29 @@ def segment_to_probe_slug(segment: str) -> str:
     return segment
 
 
+def _route_segment_probe_variants(rel_parent: Path) -> list[list[str]]:
+    """Path segment lists for each +page URL variant (e.g. optional ``[[param]]`` omitted)."""
+    raw_parts = list(rel_parent.parts)
+    non_group = [p for p in raw_parts if not (p.startswith("(") and p.endswith(")"))]
+    if not non_group:
+        return []
+    slug_parts = [segment_to_probe_slug(p) for p in non_group]
+    opt_run = 0
+    for p in reversed(non_group):
+        if re.fullmatch(r"\[\[([^\]]+)\]\]", p):
+            opt_run += 1
+        else:
+            break
+    if opt_run == 0:
+        return [slug_parts]
+    variants: list[list[str]] = []
+    for drop in range(0, opt_run + 1):
+        variant = slug_parts[: len(slug_parts) - drop]
+        if variant:
+            variants.append(variant)
+    return variants
+
+
 def collect_probe_paths(routes: Path) -> list[str]:
     """Return sorted unique URL paths (e.g. /chats/uuid) for every +page.svelte."""
     if not routes.is_dir():
@@ -79,12 +102,8 @@ def collect_probe_paths(routes: Path) -> list[str]:
         if rel_parent == Path("."):
             # Root layout page; hub serves / with a redirect — checked separately.
             continue
-        parts = [segment_to_probe_slug(p) for p in rel_parent.parts]
-        # SvelteKit (group) segments — not present in URLs.
-        parts = [p for p in parts if not (p.startswith("(") and p.endswith(")"))]
-        if not parts:
-            continue
-        urls.add("/" + "/".join(parts))
+        for parts in _route_segment_probe_variants(rel_parent):
+            urls.add("/" + "/".join(parts))
 
     # /hub and / are not always inferred the way we want; force-check.
     urls.add("/hub")

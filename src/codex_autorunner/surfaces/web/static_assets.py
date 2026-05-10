@@ -42,11 +42,14 @@ def missing_static_assets(static_dir: Path) -> list[str]:
 def resolve_static_dir() -> tuple[Path, Optional[ExitStack]]:
     """Locate packaged static assets."""
 
+    # Fallback must reach the `codex_autorunner` package root (`.../surfaces/web` → parents[2]).
+    _pkg_root = Path(__file__).resolve().parents[2]
+
     static_root = resources.files("codex_autorunner").joinpath("static")
     if isinstance(static_root, Path):
         if static_root.exists():
             return static_root, None
-        fallback = Path(__file__).resolve().parent.parent / "static"
+        fallback = _pkg_root / "static"
         return fallback, None
 
     stack = ExitStack()
@@ -56,22 +59,24 @@ def resolve_static_dir() -> tuple[Path, Optional[ExitStack]]:
         Exception
     ):  # intentional: importlib.resources can raise varied errors across Python versions
         stack.close()
-        fallback = Path(__file__).resolve().parent.parent / "static"
+        fallback = _pkg_root / "static"
         return fallback, None
     if static_path.exists():
         return static_path, stack
 
     stack.close()
-    fallback = Path(__file__).resolve().parent.parent / "static"
+    fallback = _pkg_root / "static"
     return fallback, None
 
 
 def resolve_web_static_dir() -> tuple[Path, Optional[ExitStack]]:
     """Locate the packaged Web Hub SvelteKit static assets when built."""
 
+    _pkg_root = Path(__file__).resolve().parents[2]
+
     static_root = resources.files("codex_autorunner").joinpath("web_static")
     if isinstance(static_root, Path):
-        fallback = Path(__file__).resolve().parent.parent / "web_static"
+        fallback = _pkg_root / "web_static"
         if static_root.exists():
             return static_root, None
         return fallback, None
@@ -83,13 +88,13 @@ def resolve_web_static_dir() -> tuple[Path, Optional[ExitStack]]:
         Exception
     ):  # intentional: importlib.resources can raise varied errors across Python versions
         stack.close()
-        fallback = Path(__file__).resolve().parent.parent / "web_static"
+        fallback = _pkg_root / "web_static"
         return fallback, None
     if static_path.exists():
         return static_path, stack
 
     stack.close()
-    fallback = Path(__file__).resolve().parent.parent / "web_static"
+    fallback = _pkg_root / "web_static"
     return fallback, None
 
 

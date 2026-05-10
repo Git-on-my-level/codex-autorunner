@@ -161,8 +161,8 @@ def lint_ticket_frontmatter(
         profile = canonical.profile
         try:
             validate_agent_id(agent)
-        except ValueError as exc:
-            errors.append(f"frontmatter.agent is invalid: {exc}")
+        except ValueError:
+            errors.append("frontmatter.agent is invalid")
 
     context, context_errors = _parse_context_entries(data.get("context"))
     errors.extend(context_errors)

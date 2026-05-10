@@ -127,10 +127,17 @@ def check_ticket_frontmatter(
     ticket_path: Path,
 ) -> tuple[Optional[Any], Optional[list[str]]]:
     fm, errors = read_ticket_frontmatter(ticket_path)
-    if errors and any(err.startswith("Failed to read ticket:") for err in errors):
+    if errors and any(
+        err == "Failed to read ticket" or err.startswith("Failed to read ticket:")
+        for err in errors
+    ):
         return None, [
-            err.replace(
-                "Failed to read ticket:", "Failed to read ticket after turn:", 1
+            (
+                err.replace(
+                    "Failed to read ticket:", "Failed to read ticket after turn:", 1
+                )
+                if err.startswith("Failed to read ticket:")
+                else "Failed to read ticket after turn."
             )
             for err in errors
         ]

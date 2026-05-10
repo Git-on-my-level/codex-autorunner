@@ -100,6 +100,38 @@ _REMOVED_REPO_TAB_PATHS = {
 }
 
 
+def _require_safe_redirect_path_segment(value: str, *, field: str) -> None:
+    """Reject values that cannot appear in a single URL path segment or could smuggle headers."""
+    if not value or any(c in value for c in "\r\n\x00"):
+        raise HTTPException(status_code=400, detail=f"Invalid {field}")
+    if "/" in value or "\\" in value:
+        raise HTTPException(status_code=400, detail=f"Invalid {field}")
+    if value in (".", "..") or value.startswith(".."):
+        raise HTTPException(status_code=400, detail=f"Invalid {field}")
+
+
+def _safe_legacy_worktree_rest_suffix(rest: str) -> str:
+    """Build a safe trailing path for legacy worktree redirects (no open redirects)."""
+    if not rest:
+        return ""
+    if any(c in rest for c in "\r\n\x00"):
+        raise HTTPException(status_code=400, detail="Invalid path")
+    body = rest.strip("/")
+    if not body:
+        return ""
+    if "://" in body:
+        raise HTTPException(status_code=400, detail="Invalid path")
+    segments = body.split("/")
+    encoded: list[str] = []
+    for seg in segments:
+        if not seg or seg in (".", ".."):
+            raise HTTPException(status_code=400, detail="Invalid path")
+        if "\\" in seg or "://" in seg or seg.startswith("//"):
+            raise HTTPException(status_code=400, detail="Invalid path")
+        encoded.append(quote(seg, safe=""))
+    return "/" + "/".join(encoded)
+
+
 class _IdlePrunable(Protocol):
     async def prune_idle(self) -> None: ...
 
@@ -971,10 +1003,11 @@ def create_hub_app(
     @app.get("/worktrees/{worktree_id}", include_in_schema=False)
     @app.get("/worktrees/{worktree_id}/{rest:path}", include_in_schema=False)
     def legacy_worktree_redirect(worktree_id: str, rest: str = ""):
+        _require_safe_redirect_path_segment(worktree_id, field="worktree_id")
         parent_repo_id = _resolve_worktree_parent_repo_id(worktree_id)
         encoded_parent_repo_id = quote(parent_repo_id, safe="")
         encoded_worktree_id = quote(worktree_id, safe="")
-        suffix = f"/{rest}" if rest else ""
+        suffix = _safe_legacy_worktree_rest_suffix(rest)
         target = (
             f"{context.base_path}/repos/{encoded_parent_repo_id}/worktrees/{encoded_worktree_id}{suffix}"
             if context.base_path
@@ -984,6 +1017,7 @@ def create_hub_app(
 
     @app.get("/contextspace/{workspace_id}", include_in_schema=False)
     def legacy_contextspace_redirect(workspace_id: str):
+        _require_safe_redirect_path_segment(workspace_id, field="workspace_id")
         encoded_workspace_id = quote(workspace_id, safe="")
         target = (
             f"{context.base_path}/repos/{encoded_workspace_id}/contextspace"

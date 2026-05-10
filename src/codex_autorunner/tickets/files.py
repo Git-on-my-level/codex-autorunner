@@ -32,8 +32,8 @@ def read_ticket(path: Path) -> tuple[Optional[TicketDoc], list[str]]:
 
     try:
         raw = path.read_text(encoding="utf-8")
-    except OSError as exc:
-        return None, [f"Failed to read ticket: {exc}"]
+    except OSError:
+        return None, ["Failed to read ticket"]
 
     data, body = parse_markdown_frontmatter(raw)
     idx = parse_ticket_index(path.name)
@@ -57,8 +57,8 @@ def read_ticket_frontmatter(
 ) -> tuple[Optional[TicketFrontmatter], list[str]]:
     try:
         raw = path.read_text(encoding="utf-8")
-    except OSError as exc:
-        return None, [f"Failed to read ticket: {exc}"]
+    except OSError:
+        return None, ["Failed to read ticket"]
     data, _ = parse_markdown_frontmatter(raw)
     frontmatter, errors = lint_ticket_frontmatter(
         data,
