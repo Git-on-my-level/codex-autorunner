@@ -51,6 +51,7 @@ from .hermes_supervisors import resolve_cached_hermes_supervisor
 from .managed_thread_route_helpers import (
     _apply_chat_binding_fields,
     _attach_latest_execution_fields,
+    _enrich_chat_binding_metadata_with_channel_names,
     _serialize_managed_thread,
     _serialize_thread_target,
     provision_managed_thread_workspace,
@@ -67,12 +68,13 @@ _logger = logging.getLogger(__name__)
 
 def _load_chat_binding_metadata_by_thread(hub_root):
     try:
-        return active_chat_binding_metadata_by_thread(hub_root=hub_root)
+        metadata = active_chat_binding_metadata_by_thread(hub_root=hub_root)
     except Exception as exc:  # intentional: non-critical metadata load
         _logger.warning(
             "Could not load PMA chat-binding metadata for thread response: %s", exc
         )
         return {}
+    return _enrich_chat_binding_metadata_with_channel_names(metadata, hub_root=hub_root)
 
 
 def _subscription_request_has_explicit_routing(payload: dict[str, Any]) -> bool:
