@@ -259,7 +259,7 @@ export type ManagedThreadMessagePayload = {
   model?: string;
   reasoning?: string;
   profile?: string;
-  busy_policy?: 'queue' | 'interrupt';
+  busy_policy?: 'queue' | 'interrupt' | 'reject';
   defer_execution?: boolean;
   wait_for_confirmation?: boolean;
 };
@@ -1671,7 +1671,7 @@ export function buildManagedThreadMessagePayload(
   attachments: Array<PendingAttachment | DocumentFileIntentPayload> = [],
   reasoning = '',
   profile = '',
-  busyPolicy: 'queue' | 'interrupt' | null = isRunning ? 'queue' : null
+  busyPolicy: 'queue' | 'interrupt' | 'reject' | null = isRunning ? 'queue' : null
 ): ManagedThreadMessagePayload {
   const trimmed = profile.trim();
   return {

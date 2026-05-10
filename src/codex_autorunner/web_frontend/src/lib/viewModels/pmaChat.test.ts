@@ -1061,6 +1061,10 @@ describe('PMA chat view helpers', () => {
       busy_policy: 'interrupt',
       wait_for_confirmation: false
     });
+    expect(buildManagedThreadMessagePayload('Summarize only if idle', '', false, [], '', '', 'reject')).toMatchObject({
+      busy_policy: 'reject',
+      wait_for_confirmation: false
+    });
     expect(
       buildManagedThreadMessagePayload(
         'Queued attachment',

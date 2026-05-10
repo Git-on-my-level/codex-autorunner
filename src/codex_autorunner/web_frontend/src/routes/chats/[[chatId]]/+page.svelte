@@ -1049,6 +1049,10 @@
   }
 
   async function autoCompactActiveThread(chatId: string): Promise<void> {
+    if (progress?.status === 'running') {
+      showCommandNotice('Wait for the current turn to finish before auto-compacting.');
+      return;
+    }
     sending = true;
     showCommandNotice('Generating compact summary...');
     const summaryResult = await pmaApi.pma.sendMessage(
@@ -1061,7 +1065,7 @@
           [],
           selectedReasoning,
           selectedProfile,
-          null
+          'reject'
         ),
         wait_for_confirmation: true,
         defer_execution: false
