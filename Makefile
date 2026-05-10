@@ -206,7 +206,7 @@ serve-onboarding: web-build
 	echo "==> B) Client mocks: empty hub + PMA without server PMA config: Open"; \
 	echo "      $$BASE/?uiMock=onboarding&view=pma&carOnboarding=1&uiMockStrip=1"; \
 	echo ""; \
-	cd "$$ROOT" && exec "$(PYTHON_ABS)" -m codex_autorunner.cli serve --host $(ONBOARDING_HOST) --port $(ONBOARDING_PORT)
+	exec "$(PYTHON_ABS)" -m codex_autorunner.cli hub serve --path "$$ROOT" --host $(ONBOARDING_HOST) --port $(ONBOARDING_PORT)
 
 web-ui-screens: web-build
 	@set --; \
