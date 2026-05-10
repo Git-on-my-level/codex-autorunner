@@ -235,7 +235,6 @@ def preserve_ticket_structure(ticket_block: str, max_bytes: int) -> str:
     suffix_start = ticket_block.find("\n</TICKET_MARKDOWN>", preserve_end)
     suffix = ticket_block[suffix_start:] if suffix_start != -1 else ""
     suffix_bytes = len(suffix.encode("utf-8"))
-    marker_bytes = len(TRUNCATION_MARKER.encode("utf-8"))
     remaining_bytes = max(max_bytes - preserved_bytes - suffix_bytes, 0)
 
     if remaining_bytes > 0:
@@ -244,8 +243,7 @@ def preserve_ticket_structure(ticket_block: str, max_bytes: int) -> str:
             if suffix_start != -1
             else ticket_block[preserve_end:]
         )
-        body_budget = max(remaining_bytes - marker_bytes, 0)
-        return preserved_part + truncate_text_by_bytes(body, body_budget) + suffix
+        return preserved_part + truncate_text_by_bytes(body, remaining_bytes) + suffix
 
     return truncate_text_by_bytes(ticket_block, max_bytes)
 
@@ -536,9 +534,6 @@ def reduce_ticket_flow_prompt_to_budget(
     model: TicketFlowPromptModel, *, max_bytes: int
 ) -> TicketFlowPromptModel:
     """Shrink optional prompt sections without changing the prompt contract."""
-    if len(render_ticket_flow_prompt(model).encode("utf-8")) > max_bytes:
-        model = model.with_instructions(COMPACT_TICKET_FLOW_INSTRUCTIONS)
-        model = model.without_optional_static_blocks()
     work_model = model
     sections = work_model.sections.as_dict()
 
@@ -548,36 +543,8 @@ def reduce_ticket_flow_prompt_to_budget(
     def current_prompt() -> str:
         return render_ticket_flow_prompt(current_model())
 
-    prompt = current_prompt()
-    if len(prompt.encode("utf-8")) <= max_bytes:
-        return current_model()
-
-    marker_bytes = len(TRUNCATION_MARKER.encode("utf-8"))
-    for policy in SECTION_REDUCTION_POLICY:
-        key = policy.key
-        if not _section_key_affects_render_size(
-            key, include_optional_sections=work_model.include_optional_sections
-        ):
-            continue
-        value = sections.get(key, "")
-        if not value:
-            continue
-        prompt = current_prompt()
-        if len(prompt.encode("utf-8")) <= max_bytes:
-            break
-        overflow = len(prompt.encode("utf-8")) - max_bytes
-        value_bytes = len(value.encode("utf-8"))
-        new_limit = max(value_bytes - overflow, 0)
-        if 0 < new_limit < value_bytes:
-            new_limit = max(new_limit - marker_bytes, 0)
-        if new_limit == 0 and value_bytes > 0 and policy.required:
-            new_limit = min(value_bytes, marker_bytes + 1)
-        if policy.required:
-            new_limit = max(new_limit, _minimum_section_bytes(key, value))
-        sections[key] = _truncate_section(key, value, new_limit)
-
-    while len(current_prompt().encode("utf-8")) > max_bytes:
-        progressed = False
+    def shrink_rendered_sections() -> None:
+        marker_bytes = len(TRUNCATION_MARKER.encode("utf-8"))
         for policy in SECTION_REDUCTION_POLICY:
             key = policy.key
             if not _section_key_affects_render_size(
@@ -587,49 +554,69 @@ def reduce_ticket_flow_prompt_to_budget(
             value = sections.get(key, "")
             if not value:
                 continue
-            if not policy.required:
-                sections[key] = ""
-            else:
-                value_bytes = len(value.encode("utf-8"))
-                minimum_bytes = _minimum_section_bytes(key, value)
-                if value_bytes <= minimum_bytes:
+            prompt = current_prompt()
+            if len(prompt.encode("utf-8")) <= max_bytes:
+                break
+            overflow = len(prompt.encode("utf-8")) - max_bytes
+            value_bytes = len(value.encode("utf-8"))
+            new_limit = max(value_bytes - overflow, 0)
+            if 0 < new_limit < value_bytes:
+                new_limit = max(new_limit - marker_bytes, 0)
+            if new_limit == 0 and value_bytes > 0 and policy.required:
+                new_limit = min(value_bytes, marker_bytes + 1)
+            if policy.required:
+                new_limit = max(new_limit, _minimum_section_bytes(key, value))
+            sections[key] = _truncate_section(key, value, new_limit)
+
+        while len(current_prompt().encode("utf-8")) > max_bytes:
+            progressed = False
+            for policy in SECTION_REDUCTION_POLICY:
+                key = policy.key
+                if not _section_key_affects_render_size(
+                    key, include_optional_sections=work_model.include_optional_sections
+                ):
                     continue
+                value = sections.get(key, "")
+                if not value:
+                    continue
+                if not policy.required:
+                    sections[key] = ""
                 else:
-                    sections[key] = _truncate_section(
-                        key, value, max(value_bytes // 2, minimum_bytes)
-                    )
-            progressed = True
-            break
-        if not progressed:
-            break
+                    value_bytes = len(value.encode("utf-8"))
+                    minimum_bytes = _minimum_section_bytes(key, value)
+                    if value_bytes <= minimum_bytes:
+                        continue
+                    else:
+                        sections[key] = _truncate_section(
+                            key, value, max(value_bytes // 2, minimum_bytes)
+                        )
+                progressed = True
+                break
+            if not progressed:
+                break
+
+    if len(current_prompt().encode("utf-8")) <= max_bytes:
+        return current_model()
+
+    shrink_rendered_sections()
+    if len(current_prompt().encode("utf-8")) <= max_bytes:
+        return current_model()
+
+    work_model = work_model.with_instructions(COMPACT_TICKET_FLOW_INSTRUCTIONS)
+    work_model = work_model.without_optional_static_blocks()
+    shrink_rendered_sections()
 
     while len(current_prompt().encode("utf-8")) > max_bytes:
-        progressed = False
         if work_model.checkpoint_block:
             work_model = replace(work_model, checkpoint_block="")
-            progressed = True
         elif work_model.commit_block:
             work_model = replace(work_model, commit_block="")
-            progressed = True
         elif work_model.lint_block:
             work_model = replace(work_model, lint_block="")
-            progressed = True
         elif work_model.loop_guard_block:
             work_model = replace(work_model, loop_guard_block="")
-            progressed = True
-        if progressed:
-            continue
-        tb = sections.get("ticket_block", "")
-        if not tb:
+        else:
             break
-        prompt_len = len(current_prompt().encode("utf-8"))
-        overflow = prompt_len - max_bytes
-        tb_bytes = len(tb.encode("utf-8"))
-        new_limit = max(tb_bytes - overflow - marker_bytes, 1)
-        new_tb = truncate_text_by_bytes(tb, new_limit)
-        if new_tb == tb:
-            break
-        sections["ticket_block"] = new_tb
 
     return current_model()
 

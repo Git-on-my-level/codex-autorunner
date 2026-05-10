@@ -192,3 +192,81 @@ def test_prompt_with_installed_apps_includes_hint(tmp_path: Path) -> None:
     assert "</CAR_INSTALLED_APPS>" in prompt
     assert "test.app v1.2.3" in prompt
     assert "car apps run test.app run -- ..." in prompt
+
+
+def test_prompt_budget_trims_previous_output_before_compacting(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path
+    ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    ticket_path = ticket_dir / "TICKET-001.md"
+    ticket_path.write_text(
+        "---\nagent: codex\ndone: false\n---\nGoal: Preserve replies\n",
+        encoding="utf-8",
+    )
+    ticket_doc, errors = read_ticket(ticket_path)
+    assert errors == []
+    base_prompt = build_prompt(
+        ticket_path=ticket_path,
+        workspace_root=workspace_root,
+        ticket_doc=ticket_doc,
+        last_agent_output=None,
+        outbox_paths=_make_outbox(workspace_root),
+        lint_errors=None,
+        reply_context="KEEP_REPLY",
+        requested_context="KEEP_REQUESTED_CONTEXT",
+    )
+    budget = len(base_prompt.encode("utf-8")) + 100
+
+    prompt = build_prompt(
+        ticket_path=ticket_path,
+        workspace_root=workspace_root,
+        ticket_doc=ticket_doc,
+        last_agent_output="z" * 500_000,
+        outbox_paths=_make_outbox(workspace_root),
+        lint_errors=None,
+        reply_context="KEEP_REPLY",
+        requested_context="KEEP_REQUESTED_CONTEXT",
+        prompt_max_bytes=budget,
+    )
+
+    assert len(prompt.encode("utf-8")) <= budget
+    assert "KEEP_REPLY" in prompt
+    assert "KEEP_REQUESTED_CONTEXT" in prompt
+    assert "<CAR_HUMAN_REPLIES>" in prompt
+    assert "[... TRUNCATED ...]" in prompt
+
+
+def test_prompt_budget_can_drop_static_warnings_without_crashing(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path
+    ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    ticket_path = ticket_dir / "TICKET-001.md"
+    ticket_path.write_text(
+        "---\nagent: codex\ndone: false\n---\nGoal: Tight static warnings\n",
+        encoding="utf-8",
+    )
+    ticket_doc, errors = read_ticket(ticket_path)
+    assert errors == []
+
+    prompt = build_prompt(
+        ticket_path=ticket_path,
+        workspace_root=workspace_root,
+        ticket_doc=ticket_doc,
+        last_agent_output="z" * 500_000,
+        last_checkpoint_error="checkpoint failed: " + ("x" * 20_000),
+        commit_required=True,
+        commit_attempt=1,
+        commit_max_attempts=2,
+        outbox_paths=_make_outbox(workspace_root),
+        lint_errors=["bad frontmatter: " + ("y" * 20_000)],
+        prior_no_change_turns=3,
+        prompt_max_bytes=1200,
+    )
+
+    assert len(prompt.encode("utf-8")) <= 1200
+    for marker in REQUIRED_PROMPT_MARKERS:
+        assert marker in prompt
