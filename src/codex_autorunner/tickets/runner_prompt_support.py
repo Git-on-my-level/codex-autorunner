@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
 
@@ -85,6 +85,15 @@ SECTION_REDUCTION_POLICY = (
     PromptSectionPolicy("ticket_block", required=True, preserve_ticket_structure=True),
 )
 MAIN_SECTION_ORDER = [policy.key for policy in SECTION_REDUCTION_POLICY]
+
+
+def _section_key_affects_render_size(
+    key: str, *, include_optional_sections: bool
+) -> bool:
+    """Return whether mutating this section key can change rendered prompt size."""
+    if include_optional_sections:
+        return True
+    return key == "ticket_block"
 
 
 @dataclass(frozen=True)
@@ -530,21 +539,26 @@ def reduce_ticket_flow_prompt_to_budget(
     if len(render_ticket_flow_prompt(model).encode("utf-8")) > max_bytes:
         model = model.with_instructions(COMPACT_TICKET_FLOW_INSTRUCTIONS)
         model = model.without_optional_static_blocks()
-    sections = model.sections.as_dict()
+    work_model = model
+    sections = work_model.sections.as_dict()
 
     def current_model() -> TicketFlowPromptModel:
-        return model.with_sections(TicketFlowPromptSections.from_dict(sections))
+        return work_model.with_sections(TicketFlowPromptSections.from_dict(sections))
 
     def current_prompt() -> str:
         return render_ticket_flow_prompt(current_model())
 
     prompt = current_prompt()
     if len(prompt.encode("utf-8")) <= max_bytes:
-        return model
+        return current_model()
 
     marker_bytes = len(TRUNCATION_MARKER.encode("utf-8"))
     for policy in SECTION_REDUCTION_POLICY:
         key = policy.key
+        if not _section_key_affects_render_size(
+            key, include_optional_sections=work_model.include_optional_sections
+        ):
+            continue
         value = sections.get(key, "")
         if not value:
             continue
@@ -566,6 +580,10 @@ def reduce_ticket_flow_prompt_to_budget(
         progressed = False
         for policy in SECTION_REDUCTION_POLICY:
             key = policy.key
+            if not _section_key_affects_render_size(
+                key, include_optional_sections=work_model.include_optional_sections
+            ):
+                continue
             value = sections.get(key, "")
             if not value:
                 continue
@@ -584,6 +602,34 @@ def reduce_ticket_flow_prompt_to_budget(
             break
         if not progressed:
             break
+
+    while len(current_prompt().encode("utf-8")) > max_bytes:
+        progressed = False
+        if work_model.checkpoint_block:
+            work_model = replace(work_model, checkpoint_block="")
+            progressed = True
+        elif work_model.commit_block:
+            work_model = replace(work_model, commit_block="")
+            progressed = True
+        elif work_model.lint_block:
+            work_model = replace(work_model, lint_block="")
+            progressed = True
+        elif work_model.loop_guard_block:
+            work_model = replace(work_model, loop_guard_block="")
+            progressed = True
+        if progressed:
+            continue
+        tb = sections.get("ticket_block", "")
+        if not tb:
+            break
+        prompt_len = len(current_prompt().encode("utf-8"))
+        overflow = prompt_len - max_bytes
+        tb_bytes = len(tb.encode("utf-8"))
+        new_limit = max(tb_bytes - overflow - marker_bytes, 1)
+        new_tb = truncate_text_by_bytes(tb, new_limit)
+        if new_tb == tb:
+            break
+        sections["ticket_block"] = new_tb
 
     return current_model()
 

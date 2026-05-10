@@ -151,5 +151,7 @@ def build_prompt(
     )
     model = reduce_ticket_flow_prompt_to_budget(model, max_bytes=prompt_max_bytes)
     prompt = render_ticket_flow_prompt(model)
+    if len(prompt.encode("utf-8")) > prompt_max_bytes:
+        prompt = _truncate_text_by_bytes(prompt, prompt_max_bytes)
     validate_ticket_flow_prompt(prompt, max_bytes=prompt_max_bytes)
     return prompt
