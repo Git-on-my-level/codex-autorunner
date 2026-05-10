@@ -1219,7 +1219,10 @@ function isHiddenLifecycleTimelineItem(item: PmaTimelineItem): boolean {
   if (isDecodeFailureTimelineItem(item)) return true;
   const intermediateKind = stringValue(item.payload.intermediate_kind).toLowerCase();
   const eventType = stringValue(item.payload.event_type).toLowerCase();
-  if (eventType === 'output_delta' && ['assistant_stream', 'assistant_message'].includes(intermediateKind)) {
+  if (
+    eventType === 'output_delta' &&
+    ['assistant_stream', 'assistant_message', 'log_line'].includes(intermediateKind)
+  ) {
     return true;
   }
   const event = asRecord(item.payload.event);

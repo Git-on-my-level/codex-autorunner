@@ -654,7 +654,7 @@ describe('PMA chat view helpers', () => {
     ).toEqual([]);
   });
 
-  it('drops persisted assistant answer deltas and internal journal notices from visible trace cards', () => {
+  it('drops persisted assistant answer deltas, log lines, and internal journal notices from visible trace cards', () => {
     const cards = buildPmaCards(
       [
         timelineItem('turn:one:intermediate:journal', 'intermediate', {
@@ -676,6 +676,11 @@ describe('PMA chat view helpers', () => {
           intermediate_kind: 'assistant_message',
           event_type: 'output_delta',
           text: 'Final answer'
+        }),
+        timelineItem('turn:one:intermediate:log-line', 'intermediate', {
+          intermediate_kind: 'log_line',
+          event_type: 'output_delta',
+          text: 'raw command stdout that belongs in the tool trace'
         }),
         timelineItem('turn:one:intermediate:thinking', 'intermediate', {
           intermediate_kind: 'thinking',
