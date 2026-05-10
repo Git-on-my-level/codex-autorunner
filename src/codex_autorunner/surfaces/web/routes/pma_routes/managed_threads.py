@@ -602,6 +602,7 @@ def build_managed_thread_crud_routes(
                 {
                     "old_backend_thread_id": old_backend_thread_id,
                     "summary_length": len(summary),
+                    "summary_preview": _truncate_text(summary, 240),
                     "reset_backend": reset_backend,
                 },
                 ensure_ascii=True,

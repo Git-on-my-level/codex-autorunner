@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
 
@@ -717,6 +718,60 @@ def _append_delivery_state_items(
     return sequence
 
 
+def _decode_action_payload(action: dict[str, Any]) -> dict[str, Any]:
+    payload_json = action.get("payload_json")
+    if not isinstance(payload_json, str) or not payload_json.strip():
+        return {}
+    try:
+        payload = json.loads(payload_json)
+    except json.JSONDecodeError:
+        return {"payload_decode_error": True, "payload_json": payload_json}
+    return dict(payload) if isinstance(payload, dict) else {}
+
+
+def _append_lifecycle_action_items(
+    items: list[ManagedThreadTimelineItem],
+    *,
+    thread_store: Any,
+    managed_thread_id: str,
+    sequence: int,
+) -> int:
+    list_actions = getattr(thread_store, "list_thread_actions", None)
+    if not callable(list_actions):
+        return sequence
+    for action in list_actions(managed_thread_id):
+        action_type = str(action.get("action_type") or "")
+        if action_type != "managed_thread_compact":
+            continue
+        action_id = str(action.get("action_id") or "")
+        if not action_id:
+            continue
+        payload = _decode_action_payload(action)
+        timestamp = _normalize_optional_text(action.get("created_at"))
+        item_id = f"action:{action_id}:compact"
+        items.append(
+            ManagedThreadTimelineItem(
+                item_id=item_id,
+                kind="lifecycle",
+                order_key=_order_key(timestamp, sequence, item_id),
+                timestamp=timestamp,
+                managed_thread_id=managed_thread_id,
+                managed_turn_id=None,
+                status="recorded",
+                payload={
+                    "lifecycle_kind": "chat_compacted",
+                    "title": "Chat compacted",
+                    "text": "Chat compacted. The next message starts a fresh backend session with the compacted context.",
+                    "action_id": action_id,
+                    "action_type": action_type,
+                    **payload,
+                },
+            )
+        )
+        sequence += 1
+    return sequence
+
+
 def build_managed_thread_timeline(
     hub_root: Any,
     *,
@@ -789,6 +844,12 @@ def build_managed_thread_timeline(
     sequence = _append_delivery_state_items(
         items,
         hub_root=hub_root,
+        managed_thread_id=normalized_thread_id,
+        sequence=sequence,
+    )
+    sequence = _append_lifecycle_action_items(
+        items,
+        thread_store=thread_store,
         managed_thread_id=normalized_thread_id,
         sequence=sequence,
     )

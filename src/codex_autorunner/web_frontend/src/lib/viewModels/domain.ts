@@ -47,7 +47,8 @@ export type PmaTimelineItemKind =
   | 'status'
   | 'approval'
   | 'artifact'
-  | 'delivery_state';
+  | 'delivery_state'
+  | 'lifecycle';
 
 /** Backend-owned PMA chat timeline item with stable reconciliation identity. */
 export type PmaTimelineItem = {
@@ -578,6 +579,7 @@ function normalizeTimelineKind(value: unknown): PmaTimelineItemKind {
   if (text === 'approval') return 'approval';
   if (text === 'artifact') return 'artifact';
   if (text === 'delivery_state') return 'delivery_state';
+  if (text === 'lifecycle') return 'lifecycle';
   return 'intermediate';
 }
 

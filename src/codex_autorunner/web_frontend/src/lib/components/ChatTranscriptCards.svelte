@@ -186,6 +186,17 @@
         <pre class="timeline-detail">{card.detail}</pre>
       {/if}
     </details>
+  {:else if card.kind === 'lifecycle'}
+    <article class="timeline-divider-card">
+      <div></div>
+      <section>
+        <strong>{card.title}</strong>
+        <div class="message-markdown markdown-body">
+          {@html renderMarkdownToHtml(card.text)}
+        </div>
+      </section>
+      <div></div>
+    </article>
   {:else if card.kind === 'ticket'}
     <article class="artifact-card ticket-card">
       <span class="artifact-type">Ticket</span>

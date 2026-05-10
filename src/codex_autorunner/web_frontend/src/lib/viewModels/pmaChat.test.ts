@@ -899,6 +899,28 @@ describe('PMA chat view helpers', () => {
     ).toEqual([]);
   });
 
+  it('renders compaction lifecycle timeline items as visible dividers', () => {
+    const cards = buildPmaCards(
+      [
+        timelineItem('action:1:compact', 'lifecycle', {
+          lifecycle_kind: 'chat_compacted',
+          title: 'Chat compacted',
+          text: 'Chat compacted. The next message starts a fresh backend session with the compacted context.',
+          summary_preview: 'Keep the current goal and constraints.'
+        })
+      ],
+      null,
+      []
+    );
+
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({
+      kind: 'lifecycle',
+      title: 'Chat compacted',
+      text: expect.stringContaining('Keep the current goal and constraints.')
+    });
+  });
+
   it('reconciles optimistic sends with backend timeline IDs in order', () => {
     const optimistic = optimisticUserTimelineItemFromSend(
       {

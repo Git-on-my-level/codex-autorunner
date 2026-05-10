@@ -176,6 +176,7 @@ export type PmaCard =
   | { kind: 'tool_group'; id: string; tools: PmaToolCallCard[]; turnId: string | null; orderKey: string; timestamp: string | null }
   | { kind: 'turn_summary'; id: string; title: string; cards: PmaCard[]; turnId: string | null; orderKey: string; timestamp: string | null }
   | { kind: 'approval'; id: string; title: string; summary: string; detail: string | null; turnId: string | null; orderKey: string; timestamp: string | null }
+  | { kind: 'lifecycle'; id: string; title: string; text: string; detail: string | null; turnId: string | null; orderKey: string; timestamp: string | null }
   | { kind: 'ticket'; id: string; title: string; summary: string | null; ticketId: string }
   | { kind: 'artifact'; id: string; artifact: SurfaceArtifact };
 
@@ -1264,6 +1265,21 @@ function timelineItemToCard(item: PmaTimelineItem): PmaCard[] {
       id: item.id,
       title: 'Approval requested',
       summary: title,
+      detail: timelineDetail(item),
+      turnId: item.turnId,
+      orderKey: item.orderKey,
+      timestamp: item.timestamp
+    }];
+  }
+  if (item.kind === 'lifecycle') {
+    const title = stringValue(item.payload.title) || 'Chat compacted';
+    const preview = stringValue(item.payload.summary_preview);
+    const text = stringValue(item.payload.text) || 'Chat compacted.';
+    return [{
+      kind: 'lifecycle',
+      id: item.id,
+      title,
+      text: preview ? `${text}\n\n${preview}` : text,
       detail: timelineDetail(item),
       turnId: item.turnId,
       orderKey: item.orderKey,

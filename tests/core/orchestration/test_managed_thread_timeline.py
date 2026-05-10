@@ -344,6 +344,32 @@ def test_timeline_includes_delivery_state_items(tmp_path: Path) -> None:
     assert delivery[0]["payload"]["state"] == "pending"
 
 
+def test_timeline_includes_compaction_lifecycle_item(tmp_path: Path) -> None:
+    hub_root, store, thread_id = _store(tmp_path)
+    store.append_action(
+        "managed_thread_compact",
+        managed_thread_id=thread_id,
+        payload_json=(
+            '{"summary_length": 42, "summary_preview": "Keep the current goal.", '
+            '"reset_backend": true}'
+        ),
+    )
+
+    payload = build_managed_thread_timeline(
+        hub_root,
+        thread_store=store,
+        managed_thread_id=thread_id,
+    )
+
+    lifecycle = [item for item in payload["items"] if item["kind"] == "lifecycle"]
+    assert len(lifecycle) == 1
+    assert lifecycle[0]["item_id"] == "action:1:compact"
+    assert lifecycle[0]["payload"]["lifecycle_kind"] == "chat_compacted"
+    assert lifecycle[0]["payload"]["title"] == "Chat compacted"
+    assert lifecycle[0]["payload"]["summary_preview"] == "Keep the current goal."
+    assert lifecycle[0]["payload"]["reset_backend"] is True
+
+
 def test_timeline_projects_equivalent_delivery_state_for_chat_surfaces(
     tmp_path: Path,
 ) -> None:

@@ -1698,6 +1698,32 @@ class ManagedThreadStore:
                 )
         return next_id
 
+    def list_thread_actions(
+        self,
+        managed_thread_id: str,
+        *,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        bounded_limit = min(max(int(limit or 500), 1), 1000)
+        with self._read_conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT action_id,
+                       thread_target_id,
+                       execution_id,
+                       action_type,
+                       payload_json,
+                       created_at
+                  FROM orch_thread_actions
+                 WHERE thread_target_id = ?
+                 ORDER BY CAST(action_id AS INTEGER) ASC,
+                          action_id ASC
+                 LIMIT ?
+                """,
+                (managed_thread_id, bounded_limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
 
 __all__ = [
     "PMA_THREADS_DB_FILENAME",
