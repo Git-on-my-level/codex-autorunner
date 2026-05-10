@@ -35,7 +35,10 @@
     pmaChatKind,
     pmaChatKindLabel,
     pmaChatHeaderScopeLine,
+    pmaChatMessengerSurface,
     pmaChatScopeTagView,
+    pmaChatSurfaceFilterOptions,
+    pmaChatSurfaceFilterToken,
     progressPercent,
     reconcilePmaTimeline,
     removePendingAttachment,
@@ -44,6 +47,7 @@
     type PendingAttachment,
     type PmaCard,
     type PmaChatFilter,
+    type PmaChatStatusFilter,
     type PmaChatListEntry,
     type PmaChatRunGroup,
     type PmaChatScopeOption
@@ -166,6 +170,7 @@
   );
   const filteredEntries = $derived(filterPmaChatEntries(chatListEntries, filter, search, lastSeenMap));
   const filterCounts = $derived(summarizeFilterCounts(chats, lastSeenMap));
+  const surfaceFilterChips = $derived(pmaChatSurfaceFilterOptions(chats));
 
   function isGroupExpanded(group: PmaChatRunGroup): boolean {
     if (group.key in expandedRunGroups) return expandedRunGroups[group.key];
@@ -223,6 +228,15 @@
   const canStartCodingAgentChat = $derived(selectedScope.kind !== 'local');
   const activeChatKind = $derived(pmaChatKind(activeChat));
   const activeChatKindLabel = $derived(pmaChatKindLabel(activeChatKind));
+  const chatAgentDisplayLabel = $derived.by(() => {
+    if (!activeChat) return 'Assistant';
+    const fromCatalog = agentDisplayForChat(agents, activeChat);
+    if (fromCatalog) return fromCatalog;
+    const rawId = activeChat.agentId?.trim();
+    if (rawId) return rawId;
+    return activeChatKindLabel;
+  });
+  const activeMessengerSurface = $derived(pmaChatMessengerSurface(activeChat));
   const activeRepoIngress = $derived(repoIngressForChat(activeChat));
   const createChatLabel = $derived(
     creating ? 'Creating...' : newChatKind === 'agent' && canStartCodingAgentChat ? '+ Coding agent' : '+ PMA chat'
@@ -280,7 +294,7 @@
     return null;
   }
 
-  function filterChipLabel(key: PmaChatFilter): string {
+  function filterChipLabel(key: PmaChatStatusFilter): string {
     return key === 'all' ? 'All' : key.charAt(0).toUpperCase() + key.slice(1);
   }
 
@@ -986,6 +1000,23 @@
           {/if}
         {/each}
       </div>
+      {#if surfaceFilterChips.length > 0}
+        <div class="filter-row chat-surface-filter-row" aria-label="Messenger surface filters">
+          {#each surfaceFilterChips as surf (surf.slug)}
+            {#if surf.count > 0 || filter === pmaChatSurfaceFilterToken(surf.slug)}
+              <button
+                class:active={filter === pmaChatSurfaceFilterToken(surf.slug)}
+                class="chip"
+                type="button"
+                onclick={() => (filter = pmaChatSurfaceFilterToken(surf.slug))}
+              >
+                {surf.label}
+                <span>{surf.count}</span>
+              </button>
+            {/if}
+          {/each}
+        </div>
+      {/if}
       {#if filter === 'unread' && filterCounts.unread > 0}
         <button
           class="new-chat-button"
@@ -1003,6 +1034,7 @@
         repoLabel: repoLabelForRepoId,
         worktreeLabel: (wid) => worktreeScopeOption(wid)?.label ?? null
       })}
+      {@const messengerSurface = pmaChatMessengerSurface(chat)}
       {@const listScopeAccent = chatListScopeAccentLabel(chat, scopeTags)}
       {@const listScopeAccentHex = listScopeAccent ? repoAccent(listScopeAccent) : null}
       {@const listAgentLabel = agentDisplayForChat(agents, chat)}
@@ -1034,6 +1066,9 @@
                   <span class={`chat-scope-kind-tag ${scopeTags.kindKey}`}>{scopeTags.kindLabel}</span>
                 {/if}
                 <span class={`chat-kind-badge ${pmaChatKind(chat)}`}>{pmaChatKindLabel(pmaChatKind(chat))}</span>
+                {#if messengerSurface}
+                  <span class={`chat-surface-badge ${messengerSurface.badgeClass}`}>{messengerSurface.label}</span>
+                {/if}
               </span>
             </span>
             <span class="chat-title-trailing">
@@ -1178,7 +1213,7 @@
         {#if filteredEntries.length === 0}
           <div class="state-panel empty-state compact-empty chat-filter-empty">
             <strong>No chats match this filter</strong>
-            <p>Clear the search or choose another status.</p>
+            <p>Clear the search or try another filter.</p>
           </div>
         {/if}
       {/if}
@@ -1220,7 +1255,10 @@
             {/if}
           </div>
           <p class="chat-header-subtitle">
-            <span class={`chat-kind-badge ${activeChatKind}`}>{activeChatKindLabel}</span>
+            <span class={`chat-kind-badge ${activeChatKind}`}>{chatAgentDisplayLabel}</span>
+            {#if activeMessengerSurface}
+              <span class={`chat-surface-badge ${activeMessengerSurface.badgeClass}`}>{activeMessengerSurface.label}</span>
+            {/if}
             {#if activeChat.status === 'done' && progress?.elapsedSeconds !== null && progress?.elapsedSeconds !== undefined && statusBar}
               <span class={`status-dot status-${activeChat.status}`} aria-hidden="true"></span>
               <strong class="chat-header-status-strong">{statusLabel(activeChat.status)}</strong>
@@ -1299,7 +1337,7 @@
           />
         </div>
       {:else}
-        <ChatTranscriptCards cards={activeCards} />
+        <ChatTranscriptCards cards={activeCards} assistantLabel={chatAgentDisplayLabel} />
       {/if}
     </div>
 

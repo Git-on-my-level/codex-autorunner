@@ -88,10 +88,38 @@
   let search = $state('');
   let filter = $state<RepoWorktreeIndexFilter>('all');
 
+  // Per-repo collapse state. Tracks IDs whose state DIFFERS from the global default.
+  let globalCollapsed = $state(false);
+  let toggledRepoIds = $state<Record<string, true>>({});
+
+  function isRepoCollapsed(repoId: string): boolean {
+    const flipped = toggledRepoIds[repoId] === true;
+    return flipped ? !globalCollapsed : globalCollapsed;
+  }
+
+  function toggleRepoCollapsed(repoId: string): void {
+    if (toggledRepoIds[repoId]) {
+      const next = { ...toggledRepoIds };
+      delete next[repoId];
+      toggledRepoIds = next;
+    } else {
+      toggledRepoIds = { ...toggledRepoIds, [repoId]: true };
+    }
+  }
+
+  function setAllCollapsed(value: boolean): void {
+    globalCollapsed = value;
+    toggledRepoIds = {};
+  }
+
   const indexRows = $derived(index?.rows ?? []);
   const ticketMetricsReady = $derived(index?.ticketIndexMetricsAvailable ?? false);
 
   const filteredRows = $derived(filterRepoWorktreeIndexRows(indexRows, search, filter));
+
+  const collapsibleRepoCount = $derived(
+    indexRows.filter((row) => row.kind === 'repo' && row.totalWorktrees > 0).length
+  );
 
   function visibleChildren(row: RepoWorktreeIndexViewModel['rows'][number]) {
     return visibleRepoWorktreeChildren(row, search, filter);
@@ -165,6 +193,23 @@
               <span>{repoFilterCount(item)}</span>
             </button>
           {/each}
+          {#if collapsibleRepoCount > 0}
+            <button
+              class="chip collapse-all-chip"
+              type="button"
+              title={globalCollapsed ? 'Expand all repos' : 'Collapse all repos'}
+              aria-label={globalCollapsed ? 'Expand all repos' : 'Collapse all repos'}
+              onclick={() => setAllCollapsed(!globalCollapsed)}
+            >
+              {#if globalCollapsed}
+                {@render expandAllIcon()}
+                <span>Expand all</span>
+              {:else}
+                {@render collapseAllIcon()}
+                <span>Collapse all</span>
+              {/if}
+            </button>
+          {/if}
         </div>
       </header>
     {/if}
@@ -191,8 +236,26 @@
       <ul class="repos-list" role="list">
         {#each filteredRows as row}
           {@const accent = repoAccent(row.label)}
-          <li class={`repo-item status-${row.status}`} class:has-children={row.childWorktrees.length > 0} style={`--repo-accent: ${accent};`}>
+          {@const collapsible = row.kind === 'repo' && row.totalWorktrees > 0}
+          {@const collapsed = collapsible && isRepoCollapsed(row.id)}
+          <li class={`repo-item status-${row.status}`} class:has-children={row.childWorktrees.length > 0} class:is-collapsed={collapsed} style={`--repo-accent: ${accent};`}>
             <div class="repo-head">
+            {#if collapsible}
+              <button
+                class="repo-collapse-toggle"
+                type="button"
+                aria-expanded={!collapsed}
+                aria-label={collapsed ? `Expand worktrees for ${row.label}` : `Collapse worktrees for ${row.label}`}
+                title={collapsed ? 'Show worktrees' : 'Hide worktrees'}
+                onclick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  toggleRepoCollapsed(row.id);
+                }}
+              >
+                {@render chevronIcon()}
+              </button>
+            {/if}
             <div class="repo-card">
               <a class="repo-card-main" href={href(row.href)} aria-label={`Open ${row.label} detail`}>
                 <span class="repo-avatar" aria-hidden="true">{repoInitials(row.label)}</span>
@@ -227,8 +290,18 @@
                   style:--progress={`${pct}%`}
                 ></span>
               {/if}
-              {#if row.activeRuns > 0 || (ticketMetricsReady && row.openTickets > 0)}
+              {#if row.activeRuns > 0 || (ticketMetricsReady && row.openTickets > 0) || (collapsed && row.totalWorktrees > 0)}
                 <div class="repo-card-counts" aria-label="Activity counts">
+                  {#if collapsed && row.totalWorktrees > 0}
+                    {@const dirtyLabel = row.dirtyWorktrees > 0 ? `${row.dirtyWorktrees} dirty, ` : ''}
+                    <span
+                      class="count-chip is-in-use"
+                      class:idle={row.inUseWorktrees === 0}
+                      title={`${dirtyLabel}${row.inUseWorktrees} of ${row.totalWorktrees} worktrees in use`}
+                    >
+                      <strong>{row.inUseWorktrees}</strong><em>/{row.totalWorktrees} in use</em>
+                    </span>
+                  {/if}
                   {#if row.activeRuns > 0}
                     <a
                       class="count-chip count-chip-link is-active"
@@ -318,7 +391,7 @@
               </div>
             {/if}
 
-            {#if visibleChildren(row).length > 0}
+            {#if !collapsed && visibleChildren(row).length > 0}
               <ul class="worktree-list" role="list" aria-label={`Worktrees owned by ${row.label}`}>
                 {#each visibleChildren(row) as worktree}
                   <li class={`worktree-item status-${worktree.status}`}>
@@ -863,6 +936,26 @@
   </svg>
 {/snippet}
 
+{#snippet chevronIcon()}
+  <svg viewBox="0 0 24 24" aria-hidden="true" class="chevron-svg">
+    <path d="M8 10l4 4 4-4" />
+  </svg>
+{/snippet}
+
+{#snippet collapseAllIcon()}
+  <svg viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M7 14l5-5 5 5" />
+    <path d="M7 19l5-5 5 5" />
+  </svg>
+{/snippet}
+
+{#snippet expandAllIcon()}
+  <svg viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M7 5l5 5 5-5" />
+    <path d="M7 10l5 5 5-5" />
+  </svg>
+{/snippet}
+
 <style>
   .repos-index-v2 {
     gap: var(--space-3);
@@ -940,6 +1033,77 @@
     align-items: center;
     gap: var(--space-3);
     padding-right: var(--space-5);
+  }
+
+  .repo-collapse-toggle {
+    display: inline-grid;
+    place-items: center;
+    flex: 0 0 auto;
+    width: 24px;
+    height: 24px;
+    margin-left: var(--space-3);
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--color-ink-muted);
+    cursor: pointer;
+    transition: background-color var(--transition-fast), color var(--transition-fast);
+  }
+  .repo-collapse-toggle:hover {
+    background: var(--color-surface-muted);
+    color: var(--color-ink);
+  }
+  .repo-collapse-toggle:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--color-accent) 55%, transparent);
+    outline-offset: 2px;
+  }
+  .repo-collapse-toggle .chevron-svg {
+    width: 14px;
+    height: 14px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    transition: transform var(--transition-base);
+  }
+  .repo-item.is-collapsed .repo-collapse-toggle .chevron-svg {
+    transform: rotate(-90deg);
+  }
+
+  .collapse-all-chip {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .collapse-all-chip svg {
+    width: 12px;
+    height: 12px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .count-chip.is-in-use {
+    background: color-mix(in srgb, var(--color-warning) 12%, transparent);
+    color: var(--color-warning);
+    border: 1px solid color-mix(in srgb, var(--color-warning) 28%, transparent);
+  }
+  .count-chip.is-in-use strong,
+  .count-chip.is-in-use em {
+    color: var(--color-warning);
+  }
+  .count-chip.is-in-use.idle {
+    background: var(--color-surface-muted);
+    color: var(--color-ink-muted);
+    border-color: var(--color-border-subtle);
+  }
+  .count-chip.is-in-use.idle strong,
+  .count-chip.is-in-use.idle em {
+    color: var(--color-ink-muted);
   }
 
   .repo-card {

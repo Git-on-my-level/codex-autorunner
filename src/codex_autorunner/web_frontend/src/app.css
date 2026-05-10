@@ -1153,6 +1153,10 @@ a.scope-chip-label:hover {
   flex-shrink: 0;
 }
 
+.chat-title-text-badge .chat-surface-badge {
+  flex-shrink: 0;
+}
+
 .chat-title-main {
   display: inline-flex;
   align-items: center;
@@ -1689,7 +1693,6 @@ textarea:hover {
   line-height: 1.65;
 }
 
-.intermediate-card,
 .tool-call-bar {
   max-width: 720px;
   min-width: 0;
@@ -1730,7 +1733,7 @@ textarea:hover {
 }
 
 .message .markdown-body,
-.intermediate-card .markdown-body {
+.message.commentary .markdown-body {
   max-width: none;
   margin-top: 0;
 }
@@ -1738,19 +1741,19 @@ textarea:hover {
 .message .markdown-body p,
 .message .markdown-body ul,
 .message .markdown-body pre,
-.intermediate-card .markdown-body p,
-.intermediate-card .markdown-body ul,
-.intermediate-card .markdown-body pre {
+.message.commentary .markdown-body p,
+.message.commentary .markdown-body ul,
+.message.commentary .markdown-body pre {
   margin-bottom: var(--space-3);
 }
 
 .message .markdown-body > :last-child,
-.intermediate-card .markdown-body > :last-child {
+.message.commentary .markdown-body > :last-child {
   margin-bottom: 0;
 }
 
 .message .markdown-body a,
-.intermediate-card .markdown-body a {
+.message.commentary .markdown-body a {
   color: var(--color-accent);
   font-weight: 650;
   overflow-wrap: anywhere;
@@ -1777,6 +1780,42 @@ textarea:hover {
   background: transparent;
   padding: var(--space-3) 0;
   color: var(--color-ink);
+}
+
+.message-stack .message.assistant:not(.commentary) {
+  max-width: none;
+  width: 100%;
+}
+
+.message.commentary {
+  align-self: flex-start;
+  max-width: min(520px, 94%);
+  margin-right: auto;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 10px 10px 10px 4px;
+  background: color-mix(in srgb, var(--color-surface-muted) 88%, var(--color-bg));
+}
+
+.message.commentary.nested-commentary {
+  margin-top: 2px;
+}
+
+.message.commentary .commentary-kind {
+  display: block;
+  margin-bottom: var(--space-1);
+  font-size: var(--font-size-0);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-ink-faint);
+  opacity: 1;
+}
+
+.message.commentary .message-markdown {
+  padding: 0;
+  color: var(--color-ink-soft);
+  font-size: var(--font-size-1);
 }
 
 .message-attachments {
@@ -1888,7 +1927,6 @@ textarea:hover {
   border-left-color: var(--color-accent);
 }
 
-.intermediate-card,
 .tool-call-bar {
   border: 0;
   background: transparent;
@@ -1897,7 +1935,6 @@ textarea:hover {
   box-shadow: none;
 }
 
-.intermediate-card summary,
 .tool-call-bar summary {
   display: flex;
   align-items: center;
@@ -1911,17 +1948,14 @@ textarea:hover {
   transition: color 120ms ease;
 }
 
-.intermediate-card summary:hover,
 .tool-call-bar summary:hover {
   color: var(--color-ink);
 }
 
-.intermediate-card summary::-webkit-details-marker,
 .tool-call-bar summary::-webkit-details-marker {
   display: none;
 }
 
-.intermediate-card summary::before,
 .tool-call-bar summary::before {
   content: '';
   display: inline-block;
@@ -1933,19 +1967,16 @@ textarea:hover {
   flex-shrink: 0;
 }
 
-.intermediate-card[open] summary::before,
 .tool-call-bar[open] summary::before {
   transform: rotate(90deg);
 }
 
-.intermediate-card summary > span,
 .tool-call-bar summary > span {
   color: var(--color-ink-faint);
   font-weight: 600;
   letter-spacing: 0.02em;
 }
 
-.intermediate-card summary strong,
 .tool-call-bar summary strong {
   min-width: 0;
   flex: 1 1 auto;
@@ -1954,12 +1985,6 @@ textarea:hover {
   font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.intermediate-card .message-markdown {
-  padding: var(--space-2) 0 var(--space-2) calc(8px + var(--space-2));
-  color: var(--color-ink-muted);
-  font-size: 13px;
 }
 
 .approval-card summary {
@@ -5877,6 +5902,33 @@ textarea:disabled {
 }
 
 .chat-kind-badge.coding_agent {
+  color: var(--color-success);
+  border-color: color-mix(in srgb, var(--color-success) 28%, var(--color-border));
+  background: color-mix(in srgb, var(--color-success) 12%, var(--color-surface));
+}
+
+.chat-surface-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border-subtle);
+  background: var(--color-surface-muted);
+  color: var(--color-ink-muted);
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.chat-surface-badge.surface-discord {
+  color: var(--color-accent);
+  border-color: color-mix(in srgb, var(--color-accent) 28%, var(--color-border));
+  background: var(--color-accent-soft);
+}
+
+.chat-surface-badge.surface-telegram {
   color: var(--color-success);
   border-color: color-mix(in srgb, var(--color-success) 28%, var(--color-border));
   background: color-mix(in srgb, var(--color-success) 12%, var(--color-surface));

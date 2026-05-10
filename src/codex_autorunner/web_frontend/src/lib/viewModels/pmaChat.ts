@@ -9,13 +9,114 @@ import type {
   WorkStatus
 } from './domain';
 import { normalizeOptionalWorkStatus } from './domain';
+import { surfaceRefFromThreadRaw } from './thread';
 
-export type PmaChatFilter = 'all' | 'active' | 'waiting' | 'unread';
+/** Status chips (All / Waiting / …) on the chat list. */
+export type PmaChatStatusFilter = 'all' | 'active' | 'waiting' | 'unread';
+
+/** Full list filter, including optional `surface:<slug>` messenger filters. */
+export type PmaChatFilter = PmaChatStatusFilter | `surface:${string}`;
 
 /** Synthetic list selection id for pinned PMA Memory in the chats sidebar. */
 export const PMA_MEMORY_LIST_ID = '__memory__';
 
-export const PMA_CHAT_FILTER_ORDER: PmaChatFilter[] = ['all', 'waiting', 'active', 'unread'];
+export const PMA_CHAT_FILTER_ORDER: PmaChatStatusFilter[] = ['all', 'waiting', 'active', 'unread'];
+
+const INTERNAL_MESSENGER_SURFACE_KINDS = new Set([
+  'managed_thread',
+  'web',
+  'hub',
+  'local',
+  'api'
+]);
+
+function rawString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value : null;
+}
+
+function normalizeMessengerSlug(kind: string): string {
+  const slug = kind
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  return slug || 'external';
+}
+
+function messengerSurfaceLabel(slug: string): string {
+  const map: Record<string, string> = {
+    discord: 'Discord',
+    telegram: 'Telegram',
+    slack: 'Slack',
+    mattermost: 'Mattermost',
+    msteams: 'Microsoft Teams',
+    teams: 'Teams'
+  };
+  if (map[slug]) return map[slug];
+  return slug
+    .split('_')
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
+
+function messengerBadgeClass(slug: string): string {
+  const safe = slug.replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'external';
+  return `surface-${safe}`;
+}
+
+/** Badge + filter slug for chats bound to an external messenger surface (Discord, Telegram, …). */
+export function pmaChatMessengerSurface(
+  chat: PmaChatSummary | null
+): { slug: string; label: string; badgeClass: string } | null {
+  if (!chat) return null;
+  const raw = chat.raw as Record<string, unknown>;
+  const ref = surfaceRefFromThreadRaw(raw);
+  if (ref) {
+    const kindLower = ref.kind.trim().toLowerCase();
+    if (!INTERNAL_MESSENGER_SURFACE_KINDS.has(kindLower)) {
+      const slug = normalizeMessengerSlug(ref.kind);
+      return { slug, label: messengerSurfaceLabel(slug), badgeClass: messengerBadgeClass(slug) };
+    }
+  }
+  const kindOnly = rawString(raw.surface_kind ?? raw.channel_kind)?.toLowerCase() ?? '';
+  if (kindOnly && !INTERNAL_MESSENGER_SURFACE_KINDS.has(kindOnly)) {
+    const slug = normalizeMessengerSlug(kindOnly);
+    return { slug, label: messengerSurfaceLabel(slug), badgeClass: messengerBadgeClass(slug) };
+  }
+  const title = chat.title.trim().toLowerCase();
+  if (title.startsWith('discord:')) {
+    return { slug: 'discord', label: 'Discord', badgeClass: 'surface-discord' };
+  }
+  if (title.startsWith('telegram:')) {
+    return { slug: 'telegram', label: 'Telegram', badgeClass: 'surface-telegram' };
+  }
+  return null;
+}
+
+export function pmaChatSurfaceFilterToken(slug: string): PmaChatFilter {
+  return `surface:${slug}`;
+}
+
+export function isPmaChatSurfaceFilter(filter: PmaChatFilter): filter is `surface:${string}` {
+  return filter.startsWith('surface:');
+}
+
+export function pmaChatSurfaceFilterOptions(
+  chats: PmaChatSummary[]
+): { slug: string; label: string; count: number }[] {
+  const counts = new Map<string, { label: string; count: number }>();
+  for (const chat of chats) {
+    const surf = pmaChatMessengerSurface(chat);
+    if (!surf) continue;
+    const prev = counts.get(surf.slug);
+    if (prev) prev.count += 1;
+    else counts.set(surf.slug, { label: surf.label, count: 1 });
+  }
+  return [...counts.entries()]
+    .map(([slug, value]) => ({ slug, label: value.label, count: value.count }))
+    .sort((left, right) => left.label.localeCompare(right.label));
+}
 
 export type PendingAttachmentKind = 'file' | 'image' | 'link';
 
@@ -170,6 +271,10 @@ export function filterPmaChats(
   const needle = query.trim().toLowerCase();
   return chats
     .filter((chat) => {
+      if (isPmaChatSurfaceFilter(filter)) {
+        const slug = filter.slice('surface:'.length);
+        return pmaChatMessengerSurface(chat)?.slug === slug;
+      }
       if (filter === 'active') return activeStatuses.includes(chat.status);
       if (filter === 'waiting') return waitingStatuses.includes(chat.status);
       if (filter === 'unread') {
@@ -181,6 +286,7 @@ export function filterPmaChats(
     })
     .filter((chat) => {
       if (!needle) return true;
+      const surfaceLabel = pmaChatMessengerSurface(chat)?.label;
       return [
         chat.title,
         chat.repoId,
@@ -188,6 +294,7 @@ export function filterPmaChats(
         chat.ticketId,
         chat.agentId,
         chat.model,
+        surfaceLabel,
         chat.raw.resource_kind,
         chat.raw.resource_id
       ]
@@ -212,7 +319,7 @@ export function sortChatsWaitingFirst(chats: PmaChatSummary[]): PmaChatSummary[]
 export function summarizeFilterCounts(
   chats: PmaChatSummary[],
   lastSeen: Record<string, string> = {}
-): Record<PmaChatFilter, number> {
+): Record<PmaChatStatusFilter, number> {
   return {
     all: chats.length,
     active: chats.filter((chat) => activeStatuses.includes(chat.status)).length,

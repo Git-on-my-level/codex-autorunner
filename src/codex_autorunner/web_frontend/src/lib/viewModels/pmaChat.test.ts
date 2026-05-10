@@ -25,8 +25,11 @@ import {
   pmaChatKind,
   pmaChatKindLabel,
   pmaChatHeaderScopeLine,
+  pmaChatMessengerSurface,
   pmaChatScopeLabelFromChat,
   pmaChatScopeTagView,
+  pmaChatSurfaceFilterOptions,
+  pmaChatSurfaceFilterToken,
   progressPercent,
   reconcilePmaTimeline,
   removePendingAttachment,
@@ -121,6 +124,40 @@ describe('PMA chat view helpers', () => {
       'chat-3'
     ]);
     expect(summarizeFilterCounts(chats, lastSeen)).toEqual({ all: 3, active: 1, waiting: 1, unread: 2 });
+  });
+
+  it('detects messenger surface from API fields and title prefix', () => {
+    expect(
+      pmaChatMessengerSurface({
+        ...baseChat,
+        title: 'discord:123',
+        raw: {}
+      })
+    ).toEqual({ slug: 'discord', label: 'Discord', badgeClass: 'surface-discord' });
+
+    expect(
+      pmaChatMessengerSurface({
+        ...baseChat,
+        title: 'General',
+        raw: { surface_kind: 'discord', surface_key: 'ch-1' }
+      })
+    ).toEqual({ slug: 'discord', label: 'Discord', badgeClass: 'surface-discord' });
+
+    expect(
+      pmaChatMessengerSurface({
+        ...baseChat,
+        title: 'side thread',
+        raw: { managed_thread_id: 't1', surface_urn: 'managed_thread:t1' }
+      })
+    ).toBeNull();
+  });
+
+  it('filters chats by messenger surface slug', () => {
+    const discordChat = { ...baseChat, id: 'd1', title: 'discord:999', raw: {} };
+    const hubChat = { ...baseChat, id: 'h1', title: 'Chat · repo', raw: {} };
+    const list = [discordChat, hubChat];
+    expect(filterPmaChats(list, pmaChatSurfaceFilterToken('discord'), '')).toEqual([discordChat]);
+    expect(pmaChatSurfaceFilterOptions(list)).toEqual([{ slug: 'discord', label: 'Discord', count: 1 }]);
   });
 
   it('sorts waiting chats ahead of others then by recent updates', () => {

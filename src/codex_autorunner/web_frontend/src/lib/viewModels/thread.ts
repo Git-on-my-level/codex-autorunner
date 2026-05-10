@@ -28,7 +28,7 @@ export function mapThreadSummary(raw: Record<string, unknown>): ThreadSummary {
     'unknown-thread'
   );
   const scope = scopeFromApiPayload(raw);
-  const surface = surfaceFromThreadRaw(raw);
+  const surface = surfaceRefFromThreadRaw(raw);
   const latest = asRecord(raw.latest_execution ?? raw.latest_turn ?? raw.turn);
   const resourceKind = nullableString(raw.resource_kind);
   const resourceId = nullableString(raw.resource_id);
@@ -67,7 +67,7 @@ export function mapThreadDetail(raw: Record<string, unknown>): ThreadDetail {
   };
 }
 
-function surfaceFromThreadRaw(raw: Record<string, unknown>): SurfaceRef | null {
+export function surfaceRefFromThreadRaw(raw: Record<string, unknown>): SurfaceRef | null {
   const surfaceUrn = nullableString(raw.surface_urn);
   if (surfaceUrn) {
     const colonPos = surfaceUrn.indexOf(':');

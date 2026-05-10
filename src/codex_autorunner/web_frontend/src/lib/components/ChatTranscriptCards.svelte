@@ -5,7 +5,7 @@
   import type { PmaCard } from '$lib/viewModels/pmaChat';
   import type { SurfaceArtifact } from '$lib/viewModels/domain';
 
-  let { cards }: { cards: PmaCard[] } = $props();
+  let { cards, assistantLabel = 'Assistant' }: { cards: PmaCard[]; assistantLabel?: string } = $props();
 
   function attachmentKindLabel(kind: SurfaceArtifact['kind']): string {
     if (kind === 'image' || kind === 'screenshot') return 'image';
@@ -25,7 +25,7 @@
 {#each cards as card (card.id)}
   {#if card.kind === 'message'}
     <article class={`message ${card.message.role === 'user' ? 'user' : 'assistant'}`}>
-      <span>{card.message.role === 'user' ? 'You' : 'PMA'}</span>
+      <span>{card.message.role === 'user' ? 'You' : assistantLabel}</span>
       <div class="message-markdown markdown-body">
         {@html renderMarkdownToHtml(card.message.text)}
       </div>
@@ -51,17 +51,12 @@
       {/if}
     </article>
   {:else if card.kind === 'intermediate'}
-    <details class="intermediate-card" aria-label="PMA intermediate output">
-      <summary>
-        <strong>{card.title}</strong>
-      </summary>
+    <article class="message commentary">
+      <span class="commentary-kind">{card.title}</span>
       <div class="message-markdown markdown-body">
         {@html renderMarkdownToHtml(card.text)}
       </div>
-      {#if card.detail}
-        <pre class="timeline-detail">{card.detail}</pre>
-      {/if}
-    </details>
+    </article>
   {:else if card.kind === 'tool_group'}
     {@const headlineTool = card.tools[0]}
     <details class="tool-call-bar">
@@ -98,17 +93,12 @@
       <div class="turn-summary-trace">
         {#each card.cards as traceCard (traceCard.id)}
           {#if traceCard.kind === 'intermediate'}
-            <details class="intermediate-card nested-trace" aria-label="PMA intermediate output">
-              <summary>
-                <strong>{traceCard.title}</strong>
-              </summary>
+            <article class="message commentary nested-commentary">
+              <span class="commentary-kind">{traceCard.title}</span>
               <div class="message-markdown markdown-body">
                 {@html renderMarkdownToHtml(traceCard.text)}
               </div>
-              {#if traceCard.detail}
-                <pre class="timeline-detail">{traceCard.detail}</pre>
-              {/if}
-            </details>
+            </article>
           {:else if traceCard.kind === 'tool_group'}
             {@const traceHeadlineTool = traceCard.tools[0]}
             <details class="tool-call-bar nested-trace">

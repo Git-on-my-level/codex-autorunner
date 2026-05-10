@@ -54,6 +54,12 @@ export type RepoWorktreeIndexRow = {
   unboundManagedThreadCount: number;
   chatBound: boolean;
   cleanupBlockedByChatBinding: boolean;
+  /** Total worktree children for this repo (zero for worktree rows). */
+  totalWorktrees: number;
+  /** Worktrees considered "in use": dirty, running, or with active/waiting/failed signals. */
+  inUseWorktrees: number;
+  /** Subset of in-use that are dirty (used for tooltip detail). */
+  dirtyWorktrees: number;
 };
 
 export type RepoWorktreeChildRow = {
@@ -511,6 +517,18 @@ function repoToIndexRow(repo: RepoSummary, worktrees: WorktreeSummary[], source:
     .sort(byChildActiveThenLabel);
   const repoScoped = ticketsForResource(source.tickets, 'repo', repo.id);
   const rollup = listLoaded ? ticketIndexRollup(repoScoped) : { open: 0, total: 0, done: 0 };
+  let dirtyWorktrees = 0;
+  let inUseWorktrees = 0;
+  for (const worktree of worktrees) {
+    const dirty = worktree.gitStatus?.dirty === true;
+    if (dirty) dirtyWorktrees += 1;
+    let inUse = dirty || (worktree.activeRuns ?? 0) > 0 || worktree.status === 'running';
+    if (!inUse) {
+      const sig = scopedSignals(source, 'worktree', worktree.id);
+      inUse = sig.active > 0 || sig.waiting > 0 || sig.failed > 0;
+    }
+    if (inUse) inUseWorktrees += 1;
+  }
   return {
     id: repo.id,
     kind: 'repo',
@@ -538,7 +556,10 @@ function repoToIndexRow(repo: RepoSummary, worktrees: WorktreeSummary[], source:
     hasCarState: boolFromRaw(repo.raw, 'has_car_state'),
     unboundManagedThreadCount: numberFromRaw(repo.raw, 'unbound_managed_thread_count'),
     chatBound: boolFromRaw(repo.raw, 'chat_bound'),
-    cleanupBlockedByChatBinding: boolFromRaw(repo.raw, 'cleanup_blocked_by_chat_binding')
+    cleanupBlockedByChatBinding: boolFromRaw(repo.raw, 'cleanup_blocked_by_chat_binding'),
+    totalWorktrees: childWorktrees.length,
+    inUseWorktrees,
+    dirtyWorktrees
   };
 }
 
@@ -606,7 +627,10 @@ function worktreeToIndexRow(worktree: WorktreeSummary, source: RepoWorktreeSourc
     hasCarState: boolFromRaw(worktree.raw, 'has_car_state'),
     unboundManagedThreadCount: numberFromRaw(worktree.raw, 'unbound_managed_thread_count'),
     chatBound: boolFromRaw(worktree.raw, 'chat_bound'),
-    cleanupBlockedByChatBinding: boolFromRaw(worktree.raw, 'cleanup_blocked_by_chat_binding')
+    cleanupBlockedByChatBinding: boolFromRaw(worktree.raw, 'cleanup_blocked_by_chat_binding'),
+    totalWorktrees: 0,
+    inUseWorktrees: 0,
+    dirtyWorktrees: 0
   };
 }
 
