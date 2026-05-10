@@ -2093,6 +2093,18 @@ textarea:hover {
   padding: var(--space-1) 0 var(--space-2) calc(8px + var(--space-2));
 }
 
+.thinking-trace-body {
+  min-width: 0;
+  margin: 0;
+  padding: var(--space-1) 0 var(--space-2) calc(8px + var(--space-2));
+  color: var(--color-ink-muted);
+  font-size: var(--font-size-1);
+}
+
+.thinking-trace-body > :last-child {
+  margin-bottom: 0;
+}
+
 .nested-trace {
   margin: 0;
 }
