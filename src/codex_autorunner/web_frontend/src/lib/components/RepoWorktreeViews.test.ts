@@ -55,7 +55,7 @@ describe('RepoWorktreeViews', () => {
     expect(body).not.toContain('1 waiting');
   });
 
-  it('renders repo archive and child navigation cleanup without worktree archive state', () => {
+  it('renders repo archive plus child worktree archive and cleanup actions', () => {
     const index = buildRepoWorktreeIndexViewModel({
       repos: [{ ...mockRepoSummary, raw: { has_car_state: true } }],
       worktrees: [{ ...mockWorktreeSummary, raw: { has_car_state: true, chat_bound: true, cleanup_blocked_by_chat_binding: true } }],
@@ -75,7 +75,7 @@ describe('RepoWorktreeViews', () => {
     });
 
     expect(body).toContain('Archive CAR state for codex-autorunner');
-    expect(body).not.toContain('Archive CAR state for discord-5');
+    expect(body).toContain('Archive CAR state for discord-5');
     expect(body).toContain('Cleanup worktree discord-5');
     expect(body).toContain('icon-action cleanup');
     expect(body).toContain('icon-action archive');

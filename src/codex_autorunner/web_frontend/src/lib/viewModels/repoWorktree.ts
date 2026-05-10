@@ -591,10 +591,10 @@ function worktreeToNavChildRow(
     signalWaiting: 0,
     signalFailed: 0,
     signalActive: 0,
-    hasCarState: false,
-    unboundManagedThreadCount: 0,
-    chatBound: false,
-    cleanupBlockedByChatBinding: false
+    hasCarState: boolFromRaw(worktree.raw, 'has_car_state'),
+    unboundManagedThreadCount: numberFromRaw(worktree.raw, 'unbound_managed_thread_count'),
+    chatBound: boolFromRaw(worktree.raw, 'chat_bound'),
+    cleanupBlockedByChatBinding: boolFromRaw(worktree.raw, 'cleanup_blocked_by_chat_binding')
   };
 }
 

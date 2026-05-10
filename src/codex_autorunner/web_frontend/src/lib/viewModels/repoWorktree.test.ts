@@ -152,6 +152,34 @@ describe('repo/worktree view models', () => {
     });
   });
 
+  it('preserves archive eligibility flags on repo child worktree rows', () => {
+    const vm = buildRepoWorktreeIndexViewModel({
+      repos: [mockRepoSummary],
+      worktrees: [
+        {
+          ...mockWorktreeSummary,
+          raw: {
+            has_car_state: true,
+            unbound_managed_thread_count: 2,
+            chat_bound: true,
+            cleanup_blocked_by_chat_binding: true
+          }
+        }
+      ],
+      runs: [],
+      chats: [],
+      tickets: [],
+      artifacts: []
+    });
+
+    expect(vm.rows[0].childWorktrees[0]).toMatchObject({
+      hasCarState: true,
+      unboundManagedThreadCount: 2,
+      chatBound: true,
+      cleanupBlockedByChatBinding: true
+    });
+  });
+
   it('keeps known child worktrees under their owning repo and only promotes orphan worktrees', () => {
     const vm = buildRepoWorktreeIndexViewModel({
       repos: [mockRepoSummary],
