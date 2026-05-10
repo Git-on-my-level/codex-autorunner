@@ -24,6 +24,11 @@
   function isThinkingTrace(card: Extract<PmaCard, { kind: 'intermediate' }>): boolean {
     return card.title.trim().toLowerCase() === 'thinking';
   }
+
+  function thinkingTraceLabel(card: Extract<PmaCard, { kind: 'intermediate' }>): string {
+    const count = card.detail?.split('·', 1)[0]?.trim();
+    return count || 'Reasoning trace';
+  }
 </script>
 
 {#each cards as card (card.id)}
@@ -59,7 +64,7 @@
       <details class="tool-call-bar thinking-trace">
         <summary>
           <span>Thinking</span>
-          <strong>{card.detail ?? 'Reasoning trace'}</strong>
+          <strong>{thinkingTraceLabel(card)}</strong>
         </summary>
         <div class="thinking-trace-body markdown-body">
           {@html renderMarkdownToHtml(card.text)}
@@ -113,7 +118,7 @@
               <details class="tool-call-bar thinking-trace nested-trace">
                 <summary>
                   <span>Thinking</span>
-                  <strong>{traceCard.detail ?? 'Reasoning trace'}</strong>
+                  <strong>{thinkingTraceLabel(traceCard)}</strong>
                 </summary>
                 <div class="thinking-trace-body markdown-body">
                   {@html renderMarkdownToHtml(traceCard.text)}

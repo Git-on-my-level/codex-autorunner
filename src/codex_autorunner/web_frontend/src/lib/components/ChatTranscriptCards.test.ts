@@ -19,7 +19,7 @@ describe('ChatTranscriptCards', () => {
         id: 'thinking-1',
         title: 'thinking',
         text: 'Private chain-of-thought style text',
-        detail: '1 thinking update'
+        detail: '1 thinking update · source events turn:one:intermediate:think-1'
       },
       {
         ...baseTrace,
@@ -36,6 +36,8 @@ describe('ChatTranscriptCards', () => {
     expect(body).toContain('class="tool-call-bar thinking-trace"');
     expect(body).toContain('<span>Thinking</span>');
     expect(body).toContain('<strong>1 thinking update</strong>');
+    expect(body).not.toContain('source events');
+    expect(body).not.toContain('turn:one:intermediate:think-1');
     expect(body).toContain('Private chain-of-thought style text');
     expect(body).toContain('class="message commentary"');
     expect(body).toContain('Visible progress update.');
@@ -57,7 +59,7 @@ describe('ChatTranscriptCards', () => {
             id: 'thinking-1',
             title: 'thinking',
             text: 'Nested private trace',
-            detail: '2 thinking updates'
+            detail: '2 thinking updates · source events turn:one:intermediate:think-1, turn:one:intermediate:think-2'
           },
           {
             ...baseTrace,
@@ -75,6 +77,8 @@ describe('ChatTranscriptCards', () => {
 
     expect(body).toContain('class="tool-call-bar thinking-trace nested-trace"');
     expect(body).toContain('<strong>2 thinking updates</strong>');
+    expect(body).not.toContain('source events');
+    expect(body).not.toContain('turn:one:intermediate:think-1');
     expect(body).toContain('Nested private trace');
     expect(body).toContain('class="message commentary nested-commentary"');
     expect(body).toContain('Nested visible update.');
