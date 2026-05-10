@@ -600,35 +600,3 @@ def validate_ticket_flow_prompt(prompt: str, *, max_bytes: int) -> None:
         raise ValueError(
             "ticket-flow prompt missing required marker(s): " + ", ".join(missing)
         )
-
-
-def render_full_prompt(
-    *,
-    rel_ticket: str,
-    rel_dispatch_dir: str,
-    rel_dispatch_path: str,
-    car_hud: str,
-    apps_hint: str,
-    checkpoint_block: str,
-    commit_block: str,
-    lint_block: str,
-    loop_guard_block: str,
-    sections: dict[str, str],
-) -> str:
-    """Compatibility wrapper for older tests and callers."""
-    return render_ticket_flow_prompt(
-        TicketFlowPromptModel(
-            instructions=FULL_TICKET_FLOW_INSTRUCTIONS,
-            include_optional_sections=True,
-            rel_ticket=rel_ticket,
-            rel_dispatch_dir=rel_dispatch_dir,
-            rel_dispatch_path=rel_dispatch_path,
-            car_hud=car_hud,
-            apps_hint=apps_hint,
-            checkpoint_block=checkpoint_block,
-            commit_block=commit_block,
-            lint_block=lint_block,
-            loop_guard_block=loop_guard_block,
-            sections=TicketFlowPromptSections.from_dict(sections),
-        )
-    )
