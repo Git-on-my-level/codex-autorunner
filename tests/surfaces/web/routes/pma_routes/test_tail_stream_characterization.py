@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 from fastapi.testclient import TestClient
 from tests.pma_support import _enable_pma
 
 from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.server import create_hub_app
+from codex_autorunner.surfaces.web.routes.pma_routes import tail_stream
 
 pytestmark = pytest.mark.slow
 
@@ -402,6 +405,93 @@ class TestTailSnapshotEnumContracts:
         }
         if payload["turn_status"] is not None:
             assert payload["phase"] in valid_phases
+
+    async def test_tail_snapshot_captures_token_usage_from_runtime_fallback(
+        self, monkeypatch, hub_env
+    ) -> None:
+        class Harness:
+            def supports(self, capability: str) -> bool:
+                return capability == "event_streaming"
+
+            def allows_parallel_event_stream(self) -> bool:
+                return True
+
+            async def list_progress_events(
+                self,
+                _backend_thread_id: str,
+                _backend_turn_id: str,
+                *,
+                after_id: int,
+                limit: int,
+            ) -> list[dict[str, object]]:
+                assert after_id == 0
+                assert limit == 50
+                return [
+                    {
+                        "id": 1,
+                        "received_at": 1_762_000_000_000,
+                        "message": {
+                            "method": "token/usage",
+                            "params": {
+                                "usage": {
+                                    "totalTokens": 123,
+                                    "inputTokens": 100,
+                                    "outputTokens": 23,
+                                    "modelContextWindow": 1000,
+                                }
+                            },
+                        },
+                    }
+                ]
+
+        monkeypatch.setattr(
+            tail_stream,
+            "get_pma_request_context",
+            lambda _request: SimpleNamespace(
+                hub_root=hub_env.hub_root,
+                thread_store=lambda: object(),
+            ),
+        )
+        monkeypatch.setattr(
+            tail_stream,
+            "_load_managed_thread_tail_store_state",
+            lambda **_kwargs: (
+                SimpleNamespace(
+                    agent_id="codex",
+                    backend_thread_id="backend-thread-1",
+                    status="running",
+                    lifecycle_status="active",
+                ),
+                SimpleNamespace(
+                    execution_id="turn-1",
+                    status="running",
+                    started_at="2026-05-10T17:00:00+00:00",
+                    finished_at=None,
+                    backend_id="backend-turn-1",
+                ),
+                [],
+                None,
+            ),
+        )
+
+        payload = await tail_stream._build_managed_thread_tail_snapshot(
+            request=object(),
+            service=object(),
+            managed_thread_id="thread-1",
+            harness=Harness(),
+            limit=50,
+            level="info",
+            since_ms=None,
+            resume_after=0,
+        )
+
+        assert payload["events"] == []
+        assert payload["token_usage"] == {
+            "totalTokens": 123,
+            "inputTokens": 100,
+            "outputTokens": 23,
+            "modelContextWindow": 1000,
+        }
 
 
 class TestStatusDoesNotSynthesizeState:

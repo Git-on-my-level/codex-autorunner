@@ -363,6 +363,8 @@ async def _build_managed_thread_tail_snapshot(
                     since_ms=since_ms,
                     projection_state=projection_state,
                 )
+                if isinstance(state.token_usage, dict) and state.token_usage:
+                    token_usage = dict(state.token_usage)
                 for entry in serialized_entries:
                     tail_events.append(entry)
                     event_id_start = int(entry.get("event_id") or event_id_start)
