@@ -91,6 +91,7 @@ _PERMISSION_NOTIFICATION_METHODS = (
 )
 _ACP_PROTOCOL_VERSION = 1
 _ACP_STDOUT_NOISE_PREFIXES = (
+    "Password (hidden):",
     "┊",
     "╎",
     "│",

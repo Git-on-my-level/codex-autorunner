@@ -143,6 +143,7 @@ class FakeACPServer:
         )
         if prompt == "stdout noise":
             _write_raw_stdout(self._lock, "\n")
+            _write_raw_stdout(self._lock, "  Password (hidden): \n")
             _write_raw_stdout(
                 self._lock,
                 "  ┊ 💻 $ curl -fsS http://127.0.0.1:4517/car/hub... 0.3s\n",
@@ -357,6 +358,7 @@ class FakeACPServer:
         )
         if prompt == "stdout noise":
             _write_raw_stdout(self._lock, "\n")
+            _write_raw_stdout(self._lock, "  Password (hidden): \n")
             _write_raw_stdout(
                 self._lock,
                 "  ┊ 💻 $ curl -fsS http://127.0.0.1:4517/car/hub... 0.3s\n",
