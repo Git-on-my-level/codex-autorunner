@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING, Any, Optional, cast
 from fastapi import Request
 from fastapi.encoders import jsonable_encoder
 
+from .....core.utils import RepoNotFoundError
+
 if TYPE_CHECKING:
     from . import FlowRouteDependencies
 
@@ -141,7 +143,10 @@ def list_flow_runs_payload(
     flow_target_id: Optional[str],
     reconcile: bool,
 ) -> list[dict[str, Any]]:
-    repo_root = deps.find_repo_root()
+    try:
+        repo_root = deps.find_repo_root()
+    except RepoNotFoundError:
+        return []
     if repo_root is None:
         return []
     cache_key = (str(repo_root.resolve()), flow_type or "", flow_target_id or "")

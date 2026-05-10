@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from codex_autorunner.core.orchestration.models import FlowRunTarget
+from codex_autorunner.core.utils import RepoNotFoundError
 from codex_autorunner.surfaces.web.routes.flow_routes.dependencies import (
     FlowRouteDependencies,
 )
@@ -188,6 +189,32 @@ def test_extracted_status_history_routes_support_reconcile_requests(
         "logger": True,
     }
     assert store.close_calls == 1
+
+
+def test_extracted_list_runs_returns_empty_when_no_repo_root() -> None:
+    deps = FlowRouteDependencies(
+        find_repo_root=lambda: (_ for _ in ()).throw(RepoNotFoundError("no repo")),
+        build_flow_orchestration_service=lambda *_args, **_kwargs: None,
+        require_flow_store=lambda _repo_root: None,
+        safe_list_flow_runs=lambda *args, **kwargs: [],
+        build_flow_status_response=lambda *args, **kwargs: {},
+        get_flow_record=lambda _repo_root, _run_id: None,
+        get_flow_controller=lambda *args, **kwargs: None,
+        start_flow_worker=lambda *args, **kwargs: None,
+        recover_flow_store_if_possible=lambda *args, **kwargs: None,
+        bootstrap_check=lambda *args, **kwargs: None,
+        seed_issue=lambda *args, **kwargs: {},
+    )
+
+    router, _ = build_status_history_routes(deps)
+    app = FastAPI()
+    app.include_router(router)
+
+    with TestClient(app) as client:
+        response = client.get("/api/flows/runs?flow_type=ticket_flow")
+
+    assert response.status_code == 200
+    assert response.json() == []
 
 
 def test_extracted_status_history_routes_use_orchestration_service_for_status(
