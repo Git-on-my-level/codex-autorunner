@@ -1285,12 +1285,8 @@ function summarizeCompletedTurnActivity(cards: PmaCard[], progress: PmaRunProgre
   }
   const summaryByTurn = new Map<string, PmaCard>();
   for (const [turnId, group] of byTurn) {
-    const trace = group.filter(isTraceCard);
+    const trace = group.filter(isCollapsibleTraceCard);
     if (!trace.length) continue;
-    const hasAssistantMessage = group.some((card) => card.kind === 'message' && card.message.role === 'assistant');
-    if (!hasAssistantMessage) continue;
-    const isCurrentRunning = progress?.id === turnId && !progress.terminal && progress.status === 'running';
-    if (isCurrentRunning) continue;
     const firstTrace = trace[0];
     summaryByTurn.set(turnId, {
       kind: 'turn_summary',
@@ -1306,7 +1302,7 @@ function summarizeCompletedTurnActivity(cards: PmaCard[], progress: PmaRunProgre
   const inserted = new Set<string>();
   for (const card of cards) {
     const turnId = cardTurnId(card);
-    if (turnId && summaryByTurn.has(turnId) && isTraceCard(card)) {
+    if (turnId && summaryByTurn.has(turnId) && isCollapsibleTraceCard(card)) {
       if (!inserted.has(turnId)) {
         output.push(summaryByTurn.get(turnId)!);
         inserted.add(turnId);
@@ -1329,6 +1325,16 @@ function turnElapsedLabel(turnId: string, cards: PmaCard[], progress: PmaRunProg
 
 function isTraceCard(card: PmaCard): card is Extract<PmaCard, { kind: 'intermediate' | 'tool_group' | 'approval' }> {
   return card.kind === 'intermediate' || card.kind === 'tool_group' || card.kind === 'approval';
+}
+
+function isCollapsibleTraceCard(card: PmaCard): card is Extract<PmaCard, { kind: 'intermediate' | 'tool_group' | 'approval' }> {
+  return isTraceCard(card) && !isCommentaryTraceCard(card);
+}
+
+function isCommentaryTraceCard(card: PmaCard): boolean {
+  if (card.kind !== 'intermediate') return false;
+  const title = card.title.trim().toLowerCase();
+  return title === 'commentary';
 }
 
 function cardTurnId(card: PmaCard): string | null {

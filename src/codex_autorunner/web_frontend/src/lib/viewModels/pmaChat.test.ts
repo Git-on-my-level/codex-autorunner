@@ -514,7 +514,7 @@ describe('PMA chat view helpers', () => {
     });
   });
 
-  it('keeps current running activity expanded until the assistant message lands', () => {
+  it('accumulates current running raw activity in a turn summary until the assistant message lands', () => {
     const cards = buildPmaTranscriptCards(
       [
         timelineItem('turn:one:user', 'user_message', { text: 'Create tickets' }, '001'),
@@ -525,7 +525,111 @@ describe('PMA chat view helpers', () => {
       { ...baseProgress, id: 'one', terminal: false, status: 'running', events: [] }
     );
 
-    expect(cards.map((card) => card.kind)).toEqual(['message', 'intermediate']);
+    expect(cards.map((card) => card.kind)).toEqual(['message', 'turn_summary']);
+    expect(cards[1]).toMatchObject({
+      kind: 'turn_summary',
+      title: 'Worked for 1m 35s',
+      cards: [{ kind: 'intermediate', text: 'Inspecting repo state.' }]
+    });
+  });
+
+  it('keeps commentary as chat bubbles while folding running raw progress under the turn summary', () => {
+    const cards = buildPmaTranscriptCards(
+      [
+        timelineItem('turn:one:user', 'user_message', { text: 'Summarize this thread' }, '00000001')
+      ],
+      null,
+      [],
+      {
+        ...baseProgress,
+        id: 'one',
+        terminal: false,
+        status: 'running',
+        elapsedSeconds: 21,
+        events: [
+          {
+            ...baseArtifact,
+            id: 'raw-progress-1',
+            kind: 'progress',
+            createdAt: '2026-05-04T00:00:11Z',
+            summary: 'The',
+            raw: {
+              managed_turn_id: 'one',
+              progress_item: { kind: 'notice', title: 'Progress', summary: 'The', event_ids: [11] }
+            }
+          },
+          {
+            ...baseArtifact,
+            id: 'commentary-1',
+            kind: 'progress',
+            createdAt: '2026-05-04T00:00:12Z',
+            summary: 'I am checking the latest context.',
+            raw: {
+              managed_turn_id: 'one',
+              progress_item: { kind: 'notice', title: 'Commentary', summary: 'I am checking the latest context.', event_ids: [12] }
+            }
+          },
+          {
+            ...baseArtifact,
+            id: 'raw-progress-2',
+            kind: 'progress',
+            createdAt: '2026-05-04T00:00:13Z',
+            summary: 'current',
+            raw: {
+              managed_turn_id: 'one',
+              progress_item: { kind: 'notice', title: 'Progress', summary: 'current', event_ids: [13] }
+            }
+          }
+        ]
+      }
+    );
+
+    expect(cards.map((card) => card.kind)).toEqual(['message', 'turn_summary', 'intermediate']);
+    expect(cards[1]).toMatchObject({
+      kind: 'turn_summary',
+      title: 'Worked for 21s',
+      cards: [
+        { kind: 'intermediate', title: 'Progress', text: 'The' },
+        { kind: 'intermediate', title: 'Progress', text: 'current' }
+      ]
+    });
+    expect(cards[2]).toMatchObject({
+      kind: 'intermediate',
+      title: 'Commentary',
+      text: 'I am checking the latest context.'
+    });
+  });
+
+  it('folds failed and interrupted turn notices under a summary instead of chat bubbles', () => {
+    const cards = buildPmaTranscriptCards(
+      [
+        timelineItem('turn:failed:user', 'user_message', { text: 'Run the check' }, '00000001'),
+        timelineItem(
+          'turn:failed:intermediate:1',
+          'intermediate',
+          { intermediate_kind: 'turn_failed', text: 'Turn failed.' },
+          '00000002'
+        ),
+        timelineItem(
+          'turn:failed:intermediate:2',
+          'intermediate',
+          { intermediate_kind: 'thinking', text: 'Collected failure context.' },
+          '00000003'
+        )
+      ],
+      null,
+      [],
+      { ...baseProgress, id: 'other-turn', terminal: true, status: 'done', events: [] }
+    );
+
+    expect(cards.map((card) => card.kind)).toEqual(['message', 'turn_summary']);
+    expect(cards[1]).toMatchObject({
+      kind: 'turn_summary',
+      cards: [
+        { kind: 'intermediate', title: 'turn failed', text: 'Turn failed.' },
+        { kind: 'intermediate', title: 'thinking', text: 'Collected failure context.' }
+      ]
+    });
   });
 
   it('dedupes live activity against canonical source event ids and preserves chronological order', () => {
