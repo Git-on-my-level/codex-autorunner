@@ -201,6 +201,45 @@ def test_trim_cumulative_assistant_text_from_candidates_uses_full_transcript_pre
     assert matched == first + second
 
 
+def test_prior_completed_assistant_text_prefix_reconstructs_trimmed_history() -> None:
+    service = SimpleNamespace(
+        thread_store=SimpleNamespace(
+            list_turns=lambda _thread_id, *, limit: [
+                {
+                    "execution_id": "turn-current",
+                    "status": "running",
+                    "assistant_text": "",
+                },
+                {
+                    "execution_id": "turn-2",
+                    "status": "ok",
+                    "assistant_text": "second answer",
+                },
+                {
+                    "execution_id": "turn-1",
+                    "status": "ok",
+                    "assistant_text": "first answer",
+                },
+            ]
+        )
+    )
+
+    prefix = managed_thread_turns_module._prior_completed_assistant_text_prefix(
+        service,
+        managed_thread_id="thread-1",
+        managed_turn_id="turn-current",
+    )
+
+    assert prefix == "first answersecond answer"
+    assert (
+        managed_thread_turns_module.trim_cumulative_assistant_text(
+            "first answersecond answerthird answer",
+            prefix,
+        )
+        == "third answer"
+    )
+
+
 def test_build_assistant_transcript_prefix_collapses_legacy_cumulative_rows() -> None:
     first = "First assistant answer " * 5
     second = "Second assistant answer " * 5
