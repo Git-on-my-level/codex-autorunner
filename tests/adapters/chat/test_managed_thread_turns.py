@@ -1989,6 +1989,114 @@ async def test_finalize_managed_thread_execution_trims_cumulative_terminal_outpu
 
 
 @pytest.mark.anyio
+async def test_finalize_managed_thread_execution_trims_cumulative_streamed_terminal_output_when_outcome_is_empty(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    previous_answer = (
+        "Earlier Hermes PMA answer with enough detail to resemble a real "
+        "multi-paragraph Discord response. " * 40
+    )
+    new_answer = "Fresh answer for only the current turn."
+    cumulative_answer = previous_answer + "\n\n" + new_answer
+    recorded_results: list[dict[str, Any]] = []
+    fake_hub_client = _FakeHubPersistenceClient()
+    started = _started_execution_with_backend_ids(tmp_path)
+
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "harness_supports_event_streaming",
+        lambda _harness: True,
+    )
+
+    async def _progress_stream(*args: Any, **kwargs: Any):
+        _ = args, kwargs
+        yield {
+            "message": {
+                "method": "prompt/completed",
+                "params": {
+                    "status": "completed",
+                    "finalOutput": cumulative_answer,
+                },
+            }
+        }
+
+    async def _empty_successful_outcome(
+        *args: Any, **kwargs: Any
+    ) -> RuntimeThreadOutcome:
+        _ = args, kwargs
+        return RuntimeThreadOutcome(
+            status="ok",
+            assistant_text="",
+            error=None,
+            backend_thread_id="session-1",
+            backend_turn_id="turn-1",
+        )
+
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "harness_progress_event_stream",
+        _progress_stream,
+    )
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "await_runtime_thread_outcome",
+        _empty_successful_outcome,
+    )
+
+    orchestration_service = SimpleNamespace(
+        get_thread_target=lambda managed_thread_id: SimpleNamespace(
+            backend_thread_id="session-1",
+            repo_id="repo-1",
+            resource_kind="repo",
+            resource_id="repo-1",
+            agent_id="hermes",
+            workspace_root=str(tmp_path),
+        ),
+        get_thread_runtime_binding=lambda managed_thread_id: SimpleNamespace(
+            backend_thread_id="session-1"
+        ),
+        get_previous_completed_execution=lambda managed_thread_id, *, exclude_execution_id=None: ExecutionRecord(
+            execution_id="previous-exec",
+            target_id=managed_thread_id,
+            target_kind="thread",
+            status="ok",
+            output_text=previous_answer,
+        ),
+        record_execution_result=lambda *args, **kwargs: (
+            recorded_results.append(dict(kwargs))
+            or SimpleNamespace(status="ok", error=None)
+        ),
+    )
+
+    result = await managed_thread_turns_module.finalize_managed_thread_execution(
+        orchestration_service=orchestration_service,
+        started=started,
+        state_root=tmp_path,
+        hub_client=fake_hub_client,
+        raw_config={},
+        surface=managed_thread_turns_module.ManagedThreadSurfaceInfo(
+            log_label="Discord",
+            surface_kind="discord",
+            surface_key="discord:chan-1",
+        ),
+        errors=managed_thread_turns_module.ManagedThreadErrorMessages(
+            public_execution_error="Discord PMA execution failed",
+            timeout_error="Discord PMA turn timed out",
+            interrupted_error="Discord PMA turn interrupted",
+            timeout_seconds=5,
+        ),
+        logger=logging.getLogger("test.managed_thread.trim_streamed_cumulative"),
+        turn_preview="hello",
+    )
+
+    assert result.assistant_text == new_answer
+    assert recorded_results[-1]["assistant_text"] == new_answer
+    assert fake_hub_client.transcript_requests[-1].assistant_text == new_answer
+    assert result.token_usage is None
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize(
     (
         "surface_kind",

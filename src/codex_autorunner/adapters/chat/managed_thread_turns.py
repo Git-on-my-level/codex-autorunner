@@ -3034,6 +3034,9 @@ async def finalize_managed_thread_execution(
         outcome = recovered_outcome
 
     if outcome.status == "ok":
+        assistant_text_for_normalization = (
+            outcome.assistant_text or event_state.best_assistant_text()
+        )
         prior_assistant_candidates = await _prior_assistant_text_candidates(
             orchestration_service,
             hub_client=resolved_hub_client,
@@ -3044,10 +3047,13 @@ async def finalize_managed_thread_execution(
             normalized_assistant_text,
             matched_prior_assistant_text,
         ) = trim_cumulative_assistant_text_from_candidates(
-            outcome.assistant_text,
+            assistant_text_for_normalization,
             prior_assistant_candidates,
         )
-        if normalized_assistant_text != outcome.assistant_text:
+        terminal_evidence_updates: dict[str, Any] = {}
+        if not outcome.assistant_text and assistant_text_for_normalization:
+            terminal_evidence_updates["assistant_text_from_event_state"] = True
+        if normalized_assistant_text != assistant_text_for_normalization:
             log_event(
                 logger,
                 logging.WARNING,
@@ -3060,18 +3066,20 @@ async def finalize_managed_thread_execution(
                     or started.execution.backend_id,
                     surface=surface,
                 ),
-                original_assistant_chars=len(outcome.assistant_text),
+                original_assistant_chars=len(assistant_text_for_normalization),
                 previous_assistant_chars=len(matched_prior_assistant_text),
                 trimmed_assistant_chars=len(normalized_assistant_text),
                 prior_assistant_candidate_count=len(prior_assistant_candidates),
                 **runtime_trace_fields(event_state),
                 **terminal_evidence_trace_fields(outcome),
             )
+            terminal_evidence_updates["assistant_text_trimmed_from_cumulative"] = True
+        if normalized_assistant_text != outcome.assistant_text:
             outcome = replace(
                 outcome,
                 assistant_text=normalized_assistant_text,
                 terminal_evidence=dict(outcome.terminal_evidence)
-                | {"assistant_text_trimmed_from_cumulative": True},
+                | terminal_evidence_updates,
             )
 
     terminal_event = terminal_run_event_from_outcome(outcome, event_state)
