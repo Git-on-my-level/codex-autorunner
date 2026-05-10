@@ -201,6 +201,8 @@ class TestApplyChatBindingFields:
         assert result["chat_bound"] is False
         assert result["binding_count"] == 0
         assert result["binding_ids"] == []
+        assert result["chat_display_name"] is None
+        assert result["chat_display_names"] == []
 
     def test_binds_metadata_to_payload(self) -> None:
         payload: dict[str, Any] = {"managed_thread_id": "t-1"}
@@ -209,9 +211,11 @@ class TestApplyChatBindingFields:
                 "chat_bound": True,
                 "binding_kind": "discord",
                 "binding_id": "b-1",
+                "chat_display_name": "CAR Workspace / #hermes",
                 "binding_count": 1,
                 "binding_kinds": ["discord"],
                 "binding_ids": ["b-1"],
+                "chat_display_names": ["CAR Workspace / #hermes"],
                 "cleanup_protected": True,
             }
         }
@@ -222,7 +226,9 @@ class TestApplyChatBindingFields:
         )
         assert result["chat_bound"] is True
         assert result["binding_kind"] == "discord"
+        assert result["chat_display_name"] == "CAR Workspace / #hermes"
         assert result["binding_count"] == 1
+        assert result["chat_display_names"] == ["CAR Workspace / #hermes"]
         assert result["cleanup_protected"] is True
 
 

@@ -68,6 +68,34 @@ describe('view model mappers', () => {
     });
   });
 
+  it('uses chat channel display names instead of surface id fallback titles', () => {
+    const vm = mapPmaChatSummary({
+      thread_target_id: 'thread-1',
+      display_name: 'discord:1488827014600331415',
+      chat_bound: true,
+      binding_kind: 'discord',
+      binding_id: '1488827014600331415',
+      chat_display_name: 'CAR Workspace / #hermes',
+      normalized_status: 'idle'
+    });
+
+    expect(vm.title).toBe('CAR Workspace / #hermes');
+  });
+
+  it('keeps explicit user-managed thread titles even when channel display exists', () => {
+    const vm = mapPmaChatSummary({
+      thread_target_id: 'thread-1',
+      display_name: 'Chat-bound thread',
+      chat_bound: true,
+      binding_kind: 'telegram',
+      binding_id: '-1001:root',
+      chat_display_name: 'Ops / Deploys',
+      normalized_status: 'idle'
+    });
+
+    expect(vm.title).toBe('Chat-bound thread');
+  });
+
   it('maps managed thread agent_profile into chat summaries', () => {
     const vm = mapPmaChatSummary({
       managed_thread_id: 'thread-h',

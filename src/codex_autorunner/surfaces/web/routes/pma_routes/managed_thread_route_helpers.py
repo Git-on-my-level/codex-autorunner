@@ -10,6 +10,10 @@ from typing import Any, Optional
 from fastapi import HTTPException, Request
 
 from .....adapters.chat.approval_modes import normalize_approval_mode
+from .....adapters.chat.channel_directory import (
+    ChannelDirectoryStore,
+    channel_entry_key,
+)
 from .....adapters.chat.pma_context_selection import (
     PmaContextSelectionError,
     normalize_pma_resource_owner,
@@ -256,21 +260,128 @@ def _chat_binding_defaults() -> dict[str, Any]:
         "chat_bound": False,
         "binding_kind": None,
         "binding_id": None,
+        "chat_display_name": None,
         "binding_count": 0,
         "binding_kinds": [],
         "binding_ids": [],
+        "chat_display_names": [],
         "cleanup_protected": False,
     }
 
 
 def _load_chat_binding_metadata_by_thread(hub_root: Path) -> dict[str, dict[str, Any]]:
     try:
-        return active_chat_binding_metadata_by_thread(hub_root=hub_root)
+        metadata = active_chat_binding_metadata_by_thread(hub_root=hub_root)
     except Exception as exc:  # intentional: non-critical metadata load
         _logger.warning(
             "Could not load PMA chat-binding metadata for thread response: %s", exc
         )
         return {}
+    return _enrich_chat_binding_metadata_with_channel_names(metadata, hub_root=hub_root)
+
+
+def _enrich_chat_binding_metadata_with_channel_names(
+    metadata_by_thread: dict[str, dict[str, Any]], *, hub_root: Path
+) -> dict[str, dict[str, Any]]:
+    if not metadata_by_thread:
+        return metadata_by_thread
+    try:
+        entries = ChannelDirectoryStore(hub_root).list_entries(limit=None)
+    except Exception as exc:  # intentional: optional display-name enrichment
+        _logger.warning(
+            "Could not load chat channel directory for thread response: %s", exc
+        )
+        return metadata_by_thread
+    display_by_key = {
+        key: display
+        for entry in entries
+        if (key := channel_entry_key(entry))
+        and (display := normalize_optional_text(entry.get("display")))
+    }
+    if not display_by_key:
+        return metadata_by_thread
+
+    enriched: dict[str, dict[str, Any]] = {}
+    for thread_id, metadata in metadata_by_thread.items():
+        if not isinstance(metadata, dict):
+            continue
+        item = dict(metadata)
+        binding_kind = normalize_optional_text(item.get("binding_kind"))
+        binding_id = normalize_optional_text(item.get("binding_id"))
+        display_name = _chat_binding_display_name(
+            binding_kind, binding_id, display_by_key
+        )
+        binding_displays: list[str] = []
+        for raw_id in item.get("binding_ids") or []:
+            raw_text = normalize_optional_text(raw_id)
+            if not raw_text:
+                continue
+            raw_kind = _surface_kind_for_binding_id(raw_text, item)
+            raw_display = _chat_binding_display_name(raw_kind, raw_text, display_by_key)
+            if raw_display and raw_display not in binding_displays:
+                binding_displays.append(raw_display)
+        item["chat_display_name"] = display_name
+        item["chat_display_names"] = binding_displays
+        enriched[thread_id] = item
+    return enriched
+
+
+def _surface_kind_for_binding_id(
+    binding_id: str, binding_metadata: dict[str, Any]
+) -> Optional[str]:
+    lowered = binding_id.lower()
+    if lowered.startswith("discord:"):
+        return "discord"
+    if lowered.startswith("telegram:"):
+        return "telegram"
+    kinds = [
+        str(kind).strip().lower()
+        for kind in binding_metadata.get("binding_kinds") or []
+        if str(kind).strip()
+    ]
+    if len(kinds) == 1:
+        return kinds[0]
+    return normalize_optional_text(binding_metadata.get("binding_kind"))
+
+
+def _chat_binding_display_name(
+    surface_kind: Optional[str],
+    binding_id: Optional[str],
+    display_by_key: dict[str, str],
+) -> Optional[str]:
+    if not surface_kind or not binding_id:
+        return None
+    for key in _chat_directory_keys_for_binding(surface_kind, binding_id):
+        display = display_by_key.get(key)
+        if display:
+            return display
+    return None
+
+
+def _chat_directory_keys_for_binding(
+    surface_kind: str, binding_id: str
+) -> tuple[str, ...]:
+    kind = surface_kind.strip().lower()
+    raw = binding_id.strip()
+    if not kind or not raw:
+        return ()
+    body = raw[len(kind) + 1 :] if raw.lower().startswith(f"{kind}:") else raw
+    candidates = [f"{kind}:{body}", raw]
+    if kind == "telegram":
+        parts = body.split(":", 2)
+        if len(parts) >= 2:
+            chat_id, thread_id = parts[0].strip(), parts[1].strip()
+            if chat_id and thread_id and thread_id != "root":
+                candidates.append(f"telegram:{chat_id}:{thread_id}")
+            if chat_id:
+                candidates.append(f"telegram:{chat_id}")
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for candidate in candidates:
+        if candidate and candidate not in seen:
+            seen.add(candidate)
+            ordered.append(candidate)
+    return tuple(ordered)
 
 
 def _apply_chat_binding_fields(
@@ -292,9 +403,15 @@ def _apply_chat_binding_fields(
                 binding_metadata.get("binding_kind")
             ),
             "binding_id": normalize_optional_text(binding_metadata.get("binding_id")),
+            "chat_display_name": normalize_optional_text(
+                binding_metadata.get("chat_display_name")
+            ),
             "binding_count": int(binding_metadata.get("binding_count") or 0),
             "binding_kinds": list(binding_metadata.get("binding_kinds") or []),
             "binding_ids": list(binding_metadata.get("binding_ids") or []),
+            "chat_display_names": list(
+                binding_metadata.get("chat_display_names") or []
+            ),
             "cleanup_protected": bool(binding_metadata.get("cleanup_protected")),
         }
     )
