@@ -1,1 +1,0 @@
-import"../chunks/BttRj4J5.js";import{p as e,a as r,g as s,u as t}from"../chunks/BIPpm_r2.js";import{p as c}from"../chunks/K3iq08qU.js";import{S as m}from"../chunks/DBTClPCB.js";function u(o,p){e(p,!0);const a=t(()=>c.params.workspaceId??"local");m(o,{get workspaceId(){return s(a)}}),r()}export{u as component};

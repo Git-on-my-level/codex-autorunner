@@ -83,8 +83,23 @@ def _subscription_request_has_explicit_routing(payload: dict[str, Any]) -> bool:
 
 
 def _serialize_managed_thread_queue_item(
-    item: dict[str, Any], *, position: int
+    item: dict[str, Any],
+    *,
+    position: int,
+    queue_payload: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
+    attachments: list[dict[str, Any]] = []
+    request_payload = (
+        queue_payload.get("request") if isinstance(queue_payload, dict) else None
+    )
+    metadata = (
+        request_payload.get("metadata") if isinstance(request_payload, dict) else None
+    )
+    raw_attachments = (
+        metadata.get("attachments") if isinstance(metadata, dict) else None
+    )
+    if isinstance(raw_attachments, list):
+        attachments = [dict(item) for item in raw_attachments if isinstance(item, dict)]
     return {
         "managed_turn_id": item.get("managed_turn_id"),
         "request_kind": item.get("request_kind"),
@@ -96,6 +111,7 @@ def _serialize_managed_thread_queue_item(
         "prompt_preview": _truncate_text(item.get("prompt") or "", 120),
         "model": item.get("model"),
         "reasoning": item.get("reasoning"),
+        "attachments": attachments,
         "client_turn_id": item.get("client_turn_id"),
         "queue_item_id": item.get("queue_item_id"),
     }
@@ -900,7 +916,14 @@ def build_managed_thread_crud_routes(
             "managed_thread_id": managed_thread_id,
             "queue_depth": store.get_queue_depth(managed_thread_id),
             "queued_turns": [
-                _serialize_managed_thread_queue_item(item, position=index)
+                _serialize_managed_thread_queue_item(
+                    item,
+                    position=index,
+                    queue_payload=store.get_queued_turn_queue_payload(
+                        managed_thread_id,
+                        str(item.get("managed_turn_id") or ""),
+                    ),
+                )
                 for index, item in enumerate(queued_items, start=1)
             ],
         }

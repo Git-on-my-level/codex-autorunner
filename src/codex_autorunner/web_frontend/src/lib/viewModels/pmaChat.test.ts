@@ -984,7 +984,9 @@ describe('PMA chat view helpers', () => {
       ],
       model: 'gpt-5.2',
       reasoning: undefined,
-      busy_policy: 'queue'
+      busy_policy: 'queue',
+      defer_execution: true,
+      wait_for_confirmation: false
     });
     expect(buildManagedThreadMessagePayload('Continue', 'gpt-5.2', false, [], '', 'planning')).toEqual({
       message: 'Continue',
@@ -992,7 +994,9 @@ describe('PMA chat view helpers', () => {
       model: 'gpt-5.2',
       reasoning: undefined,
       profile: 'planning',
-      busy_policy: undefined
+      busy_policy: undefined,
+      defer_execution: true,
+      wait_for_confirmation: false
     });
     expect(buildManagedThreadMessagePayload('Continue', 'gpt-5.2', false, [], 'high')).toMatchObject({
       message: 'Continue',
@@ -1004,8 +1008,43 @@ describe('PMA chat view helpers', () => {
       attachments: undefined,
       model: undefined,
       reasoning: undefined,
-      busy_policy: undefined
+      busy_policy: undefined,
+      defer_execution: true,
+      wait_for_confirmation: false
     });
+    expect(buildManagedThreadMessagePayload('Replace current work', '', true, [], '', '', 'interrupt')).toMatchObject({
+      busy_policy: 'interrupt',
+      wait_for_confirmation: false
+    });
+    expect(
+      buildManagedThreadMessagePayload(
+        'Queued attachment',
+        '',
+        true,
+        [
+          {
+            intent: 'include_link',
+            source: 'link',
+            id: 'queued-link',
+            kind: 'link',
+            title: 'https://example.test',
+            url: 'https://example.test'
+          }
+        ],
+        '',
+        '',
+        'interrupt'
+      ).attachments
+    ).toEqual([
+      {
+        intent: 'include_link',
+        source: 'link',
+        id: 'queued-link',
+        kind: 'link',
+        title: 'https://example.test',
+        url: 'https://example.test'
+      }
+    ]);
   });
 
   it('summarizes model selector loading, empty, error, and loaded states', () => {

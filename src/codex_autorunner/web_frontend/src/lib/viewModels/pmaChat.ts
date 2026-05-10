@@ -256,7 +256,9 @@ export type ManagedThreadMessagePayload = {
   model?: string;
   reasoning?: string;
   profile?: string;
-  busy_policy?: 'queue';
+  busy_policy?: 'queue' | 'interrupt';
+  defer_execution?: boolean;
+  wait_for_confirmation?: boolean;
 };
 
 const activeStatuses: WorkStatus[] = ['running'];
@@ -1447,7 +1449,8 @@ export function removePendingAttachment(
   return attachments.filter((attachment) => attachment.id !== attachmentId);
 }
 
-export function pendingAttachmentToIntent(attachment: PendingAttachment): DocumentFileIntentPayload {
+export function pendingAttachmentToIntent(attachment: PendingAttachment | DocumentFileIntentPayload): DocumentFileIntentPayload {
+  if ('intent' in attachment) return attachment as DocumentFileIntentPayload;
   const intent = attachment.kind === 'link' ? 'include_link' : 'attach_uploaded_file';
   return {
     intent,
@@ -1648,9 +1651,10 @@ export function buildManagedThreadMessagePayload(
   message: string,
   model: string,
   isRunning: boolean,
-  attachments: PendingAttachment[] = [],
+  attachments: Array<PendingAttachment | DocumentFileIntentPayload> = [],
   reasoning = '',
-  profile = ''
+  profile = '',
+  busyPolicy: 'queue' | 'interrupt' | null = isRunning ? 'queue' : null
 ): ManagedThreadMessagePayload {
   const trimmed = profile.trim();
   return {
@@ -1659,7 +1663,9 @@ export function buildManagedThreadMessagePayload(
     model: model || undefined,
     reasoning: reasoning || undefined,
     ...(trimmed ? { profile: trimmed } : {}),
-    busy_policy: isRunning ? 'queue' : undefined
+    busy_policy: busyPolicy ?? undefined,
+    defer_execution: true,
+    wait_for_confirmation: false
   };
 }
 

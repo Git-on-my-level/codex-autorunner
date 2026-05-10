@@ -3286,10 +3286,11 @@ textarea:hover {
 .composer {
   display: grid;
   grid-template-areas:
-    "attachments attachments"
-    "textarea textarea"
-    "actions send";
-  grid-template-columns: 1fr auto;
+    "queue queue queue"
+    "attachments attachments attachments"
+    "textarea textarea textarea"
+    "actions interrupt send";
+  grid-template-columns: 1fr auto auto;
   gap: var(--space-2);
   align-items: center;
   padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
@@ -3308,10 +3309,11 @@ textarea:hover {
 
 .composer.composer-has-hermes-profile {
   grid-template-areas:
-    "attachments attachments"
-    "hermes-profile hermes-profile"
-    "textarea textarea"
-    "actions send";
+    "queue queue queue"
+    "attachments attachments attachments"
+    "hermes-profile hermes-profile hermes-profile"
+    "textarea textarea textarea"
+    "actions interrupt send";
 }
 
 .composer-hermes-profile {
@@ -3366,6 +3368,62 @@ textarea:hover {
   gap: var(--space-2);
   padding-bottom: 2px;
   border-bottom: 1px dashed var(--color-border-subtle);
+}
+
+.queued-message-list {
+  grid-area: queue;
+  display: grid;
+  gap: var(--space-1);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px dashed var(--color-border-subtle);
+}
+
+.queued-message-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 28px;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-3);
+  background: var(--color-surface-muted);
+}
+
+.queued-message-position,
+.queued-message-state {
+  color: var(--color-ink-faint);
+  font-size: var(--font-size-0);
+  font-weight: 650;
+  text-transform: lowercase;
+}
+
+.queued-message-copy {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-ink-soft);
+  font-size: var(--font-size-1);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queued-message-action {
+  min-height: 22px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-2);
+  background: var(--color-surface);
+  color: var(--color-accent);
+  font-size: var(--font-size-0);
+  font-weight: 700;
+}
+
+.queued-message-action:hover:not(:disabled) {
+  border-color: var(--color-accent);
+}
+
+.queued-message-action.subtle {
+  color: var(--color-ink-muted);
 }
 
 .pending-attachment {
@@ -3446,6 +3504,13 @@ textarea {
   font-size: var(--font-size-0);
   border-radius: 8px;
   box-shadow: none;
+}
+
+.interrupt-send-button {
+  grid-area: interrupt;
+  border-color: color-mix(in srgb, var(--color-warning) 55%, var(--color-border));
+  background: var(--color-warning-soft);
+  color: var(--color-warning);
 }
 
 .send-button:hover:not(:disabled),
