@@ -8,17 +8,19 @@ from ..core.apps.prompt_hints import build_installed_apps_prompt_hint
 from . import runner_prompt_support as _support
 from .files import safe_relpath
 from .runner_prompt_support import (
-    MAIN_SECTION_ORDER,
+    FULL_TICKET_FLOW_INSTRUCTIONS,
+    TicketFlowPromptModel,
+    TicketFlowPromptSections,
     build_checkpoint_block,
     build_commit_block,
     build_lint_block,
     build_loop_guard_block,
     build_previous_ticket_block,
     build_ticket_block,
-    build_ticket_first_fallback_prompt,
     build_workspace_block,
-    prompt_has_ticket_control_plane,
-    render_full_prompt,
+    reduce_ticket_flow_prompt_to_budget,
+    render_ticket_flow_prompt,
+    validate_ticket_flow_prompt,
 )
 
 _logger = logging.getLogger(__name__)
@@ -61,6 +63,56 @@ def _build_apps_hint(workspace_root: Path) -> str:
         return ""
 
 
+def _build_prompt_model(
+    *,
+    ticket_path: Path,
+    workspace_root: Path,
+    last_agent_output: Optional[str],
+    last_checkpoint_error: Optional[str],
+    commit_required: bool,
+    commit_attempt: int,
+    commit_max_attempts: int,
+    outbox_paths: Any,
+    lint_errors: Optional[list[str]],
+    reply_context: Optional[str],
+    requested_context: Optional[str],
+    previous_ticket_content: Optional[str],
+    prior_no_change_turns: int,
+    prompt_max_bytes: int,
+) -> TicketFlowPromptModel:
+    rel_ticket = safe_relpath(ticket_path, workspace_root)
+    prev_block = last_agent_output or ""
+    if prev_block:
+        cap = max(prompt_max_bytes - _PREVIOUS_OUTPUT_HEADROOM_BYTES, 1)
+        if len(prev_block.encode("utf-8")) > cap:
+            prev_block = _truncate_text_by_bytes(prev_block, cap)
+    return TicketFlowPromptModel(
+        instructions=FULL_TICKET_FLOW_INSTRUCTIONS,
+        include_optional_sections=True,
+        rel_ticket=rel_ticket,
+        rel_dispatch_dir=safe_relpath(outbox_paths.dispatch_dir, workspace_root),
+        rel_dispatch_path=safe_relpath(outbox_paths.dispatch_path, workspace_root),
+        car_hud=_build_car_hud(),
+        apps_hint=_build_apps_hint(workspace_root),
+        checkpoint_block=build_checkpoint_block(last_checkpoint_error),
+        commit_block=build_commit_block(
+            commit_required=commit_required,
+            commit_attempt=commit_attempt,
+            commit_max_attempts=commit_max_attempts,
+        ),
+        lint_block=build_lint_block(lint_errors),
+        loop_guard_block=build_loop_guard_block(prior_no_change_turns),
+        sections=TicketFlowPromptSections(
+            prev_block=prev_block,
+            prev_ticket_block=build_previous_ticket_block(previous_ticket_content),
+            reply_block=reply_context or "",
+            requested_context_block=requested_context or "",
+            workspace_block=build_workspace_block(workspace_root),
+            ticket_block=build_ticket_block(ticket_path, rel_ticket),
+        ),
+    )
+
+
 def build_prompt(
     *,
     ticket_path: Path,
@@ -80,64 +132,24 @@ def build_prompt(
     prompt_max_bytes: int = 5 * 1024 * 1024,
 ) -> str:
     """Build the full prompt for an agent turn."""
-    rel_ticket = safe_relpath(ticket_path, workspace_root)
-    rel_dispatch_dir = safe_relpath(outbox_paths.dispatch_dir, workspace_root)
-    rel_dispatch_path = safe_relpath(outbox_paths.dispatch_path, workspace_root)
-    checkpoint_block = build_checkpoint_block(last_checkpoint_error)
-    apps_hint = _build_apps_hint(workspace_root)
-    commit_block = build_commit_block(
+    _ = ticket_doc
+    model = _build_prompt_model(
+        ticket_path=ticket_path,
+        workspace_root=workspace_root,
+        last_agent_output=last_agent_output,
+        last_checkpoint_error=last_checkpoint_error,
         commit_required=commit_required,
         commit_attempt=commit_attempt,
         commit_max_attempts=commit_max_attempts,
+        outbox_paths=outbox_paths,
+        lint_errors=lint_errors,
+        reply_context=reply_context,
+        requested_context=requested_context,
+        previous_ticket_content=previous_ticket_content,
+        prior_no_change_turns=prior_no_change_turns,
+        prompt_max_bytes=prompt_max_bytes,
     )
-    lint_block = build_lint_block(lint_errors)
-    loop_guard_block = build_loop_guard_block(prior_no_change_turns)
-    ticket_block = build_ticket_block(ticket_path, rel_ticket)
-    prev_block = last_agent_output or ""
-    if prev_block:
-        cap = max(prompt_max_bytes - _PREVIOUS_OUTPUT_HEADROOM_BYTES, 1)
-        if len(prev_block.encode("utf-8")) > cap:
-            prev_block = _truncate_text_by_bytes(prev_block, cap)
-    sections = {
-        "prev_block": prev_block,
-        "prev_ticket_block": build_previous_ticket_block(previous_ticket_content),
-        "workspace_block": build_workspace_block(workspace_root),
-        "reply_block": reply_context or "",
-        "requested_context_block": requested_context or "",
-        "ticket_block": ticket_block,
-    }
-    prompt = _shrink_prompt(
-        max_bytes=prompt_max_bytes,
-        render=lambda: render_full_prompt(
-            rel_ticket=rel_ticket,
-            rel_dispatch_dir=rel_dispatch_dir,
-            rel_dispatch_path=rel_dispatch_path,
-            car_hud=_build_car_hud(),
-            apps_hint=apps_hint,
-            checkpoint_block=checkpoint_block,
-            commit_block=commit_block,
-            lint_block=lint_block,
-            loop_guard_block=loop_guard_block,
-            sections=sections,
-        ),
-        sections=sections,
-        order=MAIN_SECTION_ORDER,
-    )
-    if not prompt_has_ticket_control_plane(prompt, ticket_doc):
-        cap = max(prompt_max_bytes - _PREVIOUS_OUTPUT_HEADROOM_BYTES, 1)
-        fallback_prev = sections["prev_block"]
-        raw_prev = last_agent_output if isinstance(last_agent_output, str) else ""
-        if raw_prev and len(raw_prev.encode("utf-8")) > cap:
-            fallback_prev = _truncate_text_by_bytes(raw_prev, cap)
-        prompt = build_ticket_first_fallback_prompt(
-            max_bytes=prompt_max_bytes,
-            rel_ticket=rel_ticket,
-            rel_dispatch_path=rel_dispatch_path,
-            prev_block=fallback_prev,
-            checkpoint_block=checkpoint_block,
-            commit_block=commit_block,
-            lint_block=lint_block,
-            loop_guard_block=loop_guard_block,
-            ticket_block=ticket_block,
-        )
+    model = reduce_ticket_flow_prompt_to_budget(model, max_bytes=prompt_max_bytes)
+    prompt = render_ticket_flow_prompt(model)
+    validate_ticket_flow_prompt(prompt, max_bytes=prompt_max_bytes)
     return prompt

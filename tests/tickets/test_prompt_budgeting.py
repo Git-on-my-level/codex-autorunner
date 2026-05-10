@@ -13,6 +13,7 @@ from codex_autorunner.tickets.runner_prompt import (
     _shrink_prompt,
     _truncate_text_by_bytes,
 )
+from codex_autorunner.tickets.runner_prompt_support import REQUIRED_PROMPT_MARKERS
 
 
 def _write_ticket(
@@ -180,6 +181,8 @@ async def test_oversize_ticket_body_is_truncated(tmp_path: Path) -> None:
         # Prompt should be truncated to fit budget
         assert len(req.prompt.encode("utf-8")) <= 1024
         assert "[... TRUNCATED ...]" in req.prompt
+        for marker in REQUIRED_PROMPT_MARKERS:
+            assert marker in req.prompt
         return AgentTurnResult(
             agent_id=req.agent_id,
             conversation_id="conv",
@@ -243,147 +246,8 @@ class TestPreserveTicketStructure:
         assert "[... TRUNCATED" in result
 
 
-class TestPromptHasTicketControlPlane:
-    def test_detects_valid_prompt(self) -> None:
-        from codex_autorunner.tickets.models import TicketDoc, TicketFrontmatter
-        from codex_autorunner.tickets.runner_prompt_support import (
-            prompt_has_ticket_control_plane,
-        )
-
-        fm = TicketFrontmatter(ticket_id="t1", agent="codex", done=False)
-        doc = TicketDoc(path=Path("t.md"), index=1, frontmatter=fm, body="")
-        prompt = (
-            "<CAR_CURRENT_TICKET_FILE>\n"
-            "<TICKET_MARKDOWN>\n"
-            "agent: codex\n"
-            "done: false\n"
-            "</TICKET_MARKDOWN>\n"
-            "</CAR_CURRENT_TICKET_FILE>"
-        )
-        assert prompt_has_ticket_control_plane(prompt, doc) is True
-
-    def test_rejects_prompt_missing_ticket_file_tag(self) -> None:
-        from codex_autorunner.tickets.models import TicketDoc, TicketFrontmatter
-        from codex_autorunner.tickets.runner_prompt_support import (
-            prompt_has_ticket_control_plane,
-        )
-
-        fm = TicketFrontmatter(ticket_id="t1", agent="codex", done=False)
-        doc = TicketDoc(path=Path("t.md"), index=1, frontmatter=fm, body="")
-        assert prompt_has_ticket_control_plane("no tags here", doc) is False
-
-    def test_rejects_prompt_missing_agent_line(self) -> None:
-        from codex_autorunner.tickets.models import TicketDoc, TicketFrontmatter
-        from codex_autorunner.tickets.runner_prompt_support import (
-            prompt_has_ticket_control_plane,
-        )
-
-        fm = TicketFrontmatter(ticket_id="t1", agent="codex", done=False)
-        doc = TicketDoc(path=Path("t.md"), index=1, frontmatter=fm, body="")
-        prompt = (
-            "<CAR_CURRENT_TICKET_FILE>\n"
-            "<TICKET_MARKDOWN>\n"
-            "done: false\n"
-            "</TICKET_MARKDOWN>\n"
-            "</CAR_CURRENT_TICKET_FILE>"
-        )
-        assert prompt_has_ticket_control_plane(prompt, doc) is False
-
-    def test_rejects_prompt_missing_done_line(self) -> None:
-        from codex_autorunner.tickets.models import TicketDoc, TicketFrontmatter
-        from codex_autorunner.tickets.runner_prompt_support import (
-            prompt_has_ticket_control_plane,
-        )
-
-        fm = TicketFrontmatter(ticket_id="t1", agent="codex", done=True)
-        doc = TicketDoc(path=Path("t.md"), index=1, frontmatter=fm, body="")
-        prompt = (
-            "<CAR_CURRENT_TICKET_FILE>\n"
-            "<TICKET_MARKDOWN>\n"
-            "agent: codex\n"
-            "</TICKET_MARKDOWN>\n"
-            "</CAR_CURRENT_TICKET_FILE>"
-        )
-        assert prompt_has_ticket_control_plane(prompt, doc) is False
-
-
-class TestBuildTicketFirstFallbackPrompt:
-    def test_fallback_contains_ticket_shell(self, tmp_path: Path) -> None:
-        from codex_autorunner.tickets.runner_prompt_support import (
-            build_ticket_first_fallback_prompt,
-        )
-
-        ticket_block = (
-            "<CAR_CURRENT_TICKET_FILE>\n"
-            "PATH: tickets/TICKET-001.md\n"
-            "<TICKET_MARKDOWN>\n"
-            "---\n"
-            "agent: codex\n"
-            "done: false\n"
-            "title: Test\n"
-            "---\n\n"
-            "Do the thing\n"
-            "</TICKET_MARKDOWN>\n"
-            "</CAR_CURRENT_TICKET_FILE>"
-        )
-
-        result = build_ticket_first_fallback_prompt(
-            max_bytes=50000,
-            rel_ticket="tickets/TICKET-001.md",
-            rel_dispatch_path="dispatch/DISPATCH.md",
-            prev_block="",
-            checkpoint_block="",
-            commit_block="",
-            lint_block="",
-            loop_guard_block="",
-            ticket_block=ticket_block,
-        )
-
-        assert "<CAR_TICKET_FLOW_PROMPT>" in result
-        assert "<CAR_TICKET_FLOW_INSTRUCTIONS>" in result
-        assert "<CAR_CURRENT_TICKET_FILE>" in result
-        assert "<TICKET_MARKDOWN>" in result
-        assert "agent: codex" in result
-        assert "done: false" in result
-
-    def test_fallback_preserves_ticket_when_over_budget(self, tmp_path: Path) -> None:
-        from codex_autorunner.tickets.runner_prompt_support import (
-            build_ticket_first_fallback_prompt,
-        )
-
-        ticket_block = (
-            "<CAR_CURRENT_TICKET_FILE>\n"
-            "PATH: tickets/TICKET-001.md\n"
-            "<TICKET_MARKDOWN>\n"
-            "---\n"
-            "agent: codex\n"
-            "done: false\n"
-            "title: Test\n"
-            "---\n\n"
-            "Do the thing\n"
-            "</TICKET_MARKDOWN>\n"
-            "</CAR_CURRENT_TICKET_FILE>"
-        )
-
-        small_budget = 200
-        result = build_ticket_first_fallback_prompt(
-            max_bytes=small_budget,
-            rel_ticket="tickets/TICKET-001.md",
-            rel_dispatch_path="dispatch/DISPATCH.md",
-            prev_block="x" * 50000,
-            checkpoint_block="",
-            commit_block="",
-            lint_block="",
-            loop_guard_block="",
-            ticket_block=ticket_block,
-        )
-
-        assert len(result.encode("utf-8")) <= small_budget
-        assert "agent: codex" in result or "[... TRUNCATED" in result
-
-
 @pytest.mark.asyncio
-async def test_aggressive_shrink_triggers_fallback_prompt(tmp_path: Path) -> None:
+async def test_aggressive_shrink_uses_full_prompt_path(tmp_path: Path) -> None:
     workspace_root = tmp_path
     ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
     ticket_dir.mkdir(parents=True, exist_ok=True)
@@ -401,8 +265,9 @@ async def test_aggressive_shrink_triggers_fallback_prompt(tmp_path: Path) -> Non
 
     def handler(req: AgentTurnRequest) -> AgentTurnResult:
         assert len(req.prompt.encode("utf-8")) <= 800
-        if "<CAR_TICKET_FLOW_PROMPT>" in req.prompt:
-            assert "<TICKET_MARKDOWN>" in req.prompt or "[... TRUNCATED" in req.prompt
+        assert "Ticket-first fallback prompt" not in req.prompt
+        for marker in REQUIRED_PROMPT_MARKERS:
+            assert marker in req.prompt
         return AgentTurnResult(
             agent_id=req.agent_id,
             conversation_id="conv",
@@ -504,111 +369,3 @@ async def test_ticket_frontmatter_preserved_on_truncation(tmp_path: Path) -> Non
 
     result = await runner.step({})
     assert result.status == "continue"
-
-
-class TestTicketFirstFallbackPromptContract:
-    def test_fallback_contains_required_control_plane_tags(
-        self, tmp_path: Path
-    ) -> None:
-        from codex_autorunner.tickets.runner_prompt_support import (
-            build_ticket_first_fallback_prompt,
-        )
-
-        ticket_block = (
-            "<CAR_CURRENT_TICKET_FILE>\n"
-            "PATH: tickets/TICKET-001.md\n"
-            "<TICKET_MARKDOWN>\n"
-            "---\n"
-            "agent: codex\n"
-            "done: false\n"
-            "title: Test\n"
-            "---\n\nDo the thing\n"
-            "</TICKET_MARKDOWN>\n"
-            "</CAR_CURRENT_TICKET_FILE>"
-        )
-
-        result = build_ticket_first_fallback_prompt(
-            max_bytes=50000,
-            rel_ticket="tickets/TICKET-001.md",
-            rel_dispatch_path="dispatch/DISPATCH.md",
-            prev_block="",
-            checkpoint_block="",
-            commit_block="",
-            lint_block="",
-            loop_guard_block="",
-            ticket_block=ticket_block,
-        )
-
-        assert "<CAR_TICKET_FLOW_PROMPT>" in result
-        assert "<CAR_TICKET_FLOW_INSTRUCTIONS>" in result
-        assert "<CAR_CURRENT_TICKET_FILE>" in result
-        assert "agent: codex" in result
-        assert "done: false" in result
-
-    def test_fallback_drops_nonessential_blocks_under_budget(
-        self, tmp_path: Path
-    ) -> None:
-        from codex_autorunner.tickets.runner_prompt_support import (
-            build_ticket_first_fallback_prompt,
-        )
-
-        ticket_block = (
-            "<CAR_CURRENT_TICKET_FILE>\n"
-            "PATH: tickets/TICKET-001.md\n"
-            "<TICKET_MARKDOWN>\n"
-            "---\n"
-            "agent: codex\n"
-            "done: false\n"
-            "---\n\nBody\n"
-            "</TICKET_MARKDOWN>\n"
-            "</CAR_CURRENT_TICKET_FILE>"
-        )
-
-        result = build_ticket_first_fallback_prompt(
-            max_bytes=500,
-            rel_ticket="tickets/TICKET-001.md",
-            rel_dispatch_path="dispatch/DISPATCH.md",
-            prev_block="x" * 50000,
-            checkpoint_block="y" * 50000,
-            commit_block="z" * 50000,
-            lint_block="w" * 50000,
-            loop_guard_block="v" * 50000,
-            ticket_block=ticket_block,
-        )
-
-        assert len(result.encode("utf-8")) <= 500
-        assert "agent: codex" in result or "[... TRUNCATED" in result
-
-    def test_fallback_preserves_ticket_under_severe_budget(
-        self, tmp_path: Path
-    ) -> None:
-        from codex_autorunner.tickets.runner_prompt_support import (
-            build_ticket_first_fallback_prompt,
-        )
-
-        ticket_block = (
-            "<CAR_CURRENT_TICKET_FILE>\n"
-            "PATH: tickets/TICKET-001.md\n"
-            "<TICKET_MARKDOWN>\n"
-            "---\n"
-            "agent: codex\n"
-            "done: false\n"
-            "---\n\nBody\n"
-            "</TICKET_MARKDOWN>\n"
-            "</CAR_CURRENT_TICKET_FILE>"
-        )
-
-        result = build_ticket_first_fallback_prompt(
-            max_bytes=1000,
-            rel_ticket="tickets/TICKET-001.md",
-            rel_dispatch_path="dispatch/DISPATCH.md",
-            prev_block="x" * 50000,
-            checkpoint_block="",
-            commit_block="",
-            lint_block="",
-            loop_guard_block="",
-            ticket_block=ticket_block,
-        )
-
-        assert "<CAR_TICKET_FLOW_PROMPT>" in result
-        assert len(result.encode("utf-8")) <= 1000

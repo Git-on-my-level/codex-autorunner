@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable
 
 from ..contextspace.paths import contextspace_doc_path
 from .files import safe_relpath
@@ -12,22 +13,184 @@ _logger = logging.getLogger(__name__)
 WORKSPACE_DOC_MAX_CHARS = 4000
 PREVIOUS_TICKET_MAX_BYTES = 16384
 TRUNCATION_MARKER = "\n\n[... TRUNCATED ...]\n\n"
-MAIN_SECTION_ORDER = [
-    "prev_block",
-    "prev_ticket_block",
-    "reply_block",
-    "requested_context_block",
-    "workspace_block",
-    "ticket_block",
-]
-FALLBACK_SECTION_ORDER = [
-    "prev_block",
-    "checkpoint_block",
-    "commit_block",
-    "lint_block",
-    "loop_guard_block",
-    "ticket_block",
-]
+FULL_TICKET_FLOW_INSTRUCTIONS = (
+    "You are running inside Codex Autorunner (CAR) in a ticket-based workflow.\n\n"
+    "Your job in this turn:\n"
+    "- Read the current ticket file.\n"
+    "- Make the required repo changes.\n"
+    "- Update the ticket file to reflect progress.\n"
+    "- Set `done: true` in the ticket YAML frontmatter only when the ticket is truly complete.\n\n"
+    "CAR orientation (80/20):\n"
+    "- `.codex-autorunner/tickets/` is the queue that drives the flow (files named `TICKET-###*.md`, processed in numeric order).\n"
+    "- `.codex-autorunner/contextspace/` holds durable context shared across ticket turns (especially `active_context.md` and `spec.md`).\n"
+    "- `.codex-autorunner/ABOUT_CAR.md` is the repo-local briefing (what CAR auto-generates + helper scripts) if you need operational details.\n\n"
+    "Communicating with the user (optional):\n"
+    "- To send a message or request input, write to the dispatch directory:\n"
+    "  1) write any attachments to the dispatch directory\n"
+    "  2) write `DISPATCH.md` last\n"
+    "- `DISPATCH.md` YAML supports `mode: notify|pause`.\n"
+    "  - `pause` waits for user input; `notify` continues without waiting.\n"
+    "  - Example:\n"
+    "    ---\n"
+    "    mode: pause\n"
+    "    ---\n"
+    "    Need clarification on X before proceeding.\n"
+    '- You do not need a "final" dispatch when you finish; the runner will archive your turn output automatically. Dispatch only if you want something to stand out or you need user input.\n\n'
+    "If blocked:\n"
+    "- Dispatch with `mode: pause` rather than guessing.\n\n"
+    "Creating follow-up tickets (optional):\n"
+    "- New tickets live under `.codex-autorunner/tickets/` and follow the `TICKET-###*.md` naming pattern.\n"
+    "- If present, `.codex-autorunner/bin/ticket_tool.py` can create/insert/move tickets; `.codex-autorunner/bin/lint_tickets.py` is the canonical ticket linter and `ticket_tool.py lint` is only a compatibility wrapper (see `.codex-autorunner/ABOUT_CAR.md`).\n"
+    "Using ticket templates (optional):\n"
+    "- If you need a standard ticket pattern, prefer: `car templates fetch <repo_id>:<path>[@<ref>]`\n"
+    "  - Trusted repos skip scanning; untrusted repos are scanned (cached by blob SHA).\n\n"
+    "Workspace docs:\n"
+    "- You may update or add context under `.codex-autorunner/contextspace/` so future ticket turns have durable context.\n"
+    '- Prefer referencing these docs instead of creating duplicate "shadow" docs elsewhere.\n\n'
+    "Repo hygiene:\n"
+    "- Do not add new `.codex-autorunner/` artifacts to git unless they are already tracked."
+)
+COMPACT_TICKET_FLOW_INSTRUCTIONS = (
+    "CAR ticket flow: read ticket, change repo, update ticket, set "
+    "`done: true` only when complete. If blocked, write DISPATCH.md "
+    "`mode: pause`."
+)
+REQUIRED_PROMPT_MARKERS = (
+    "<CAR_TICKET_FLOW_PROMPT>",
+    "</CAR_TICKET_FLOW_PROMPT>",
+    "<CAR_TICKET_FLOW_INSTRUCTIONS>",
+    "</CAR_TICKET_FLOW_INSTRUCTIONS>",
+    "<CAR_RUNTIME_PATHS>",
+    "</CAR_RUNTIME_PATHS>",
+    "<CAR_CURRENT_TICKET_FILE>",
+    "</CAR_CURRENT_TICKET_FILE>",
+    "<TICKET_MARKDOWN>",
+    "</TICKET_MARKDOWN>",
+)
+
+
+@dataclass(frozen=True)
+class PromptSectionPolicy:
+    key: str
+    required: bool = False
+    preserve_ticket_structure: bool = False
+
+
+SECTION_REDUCTION_POLICY = (
+    PromptSectionPolicy("prev_block"),
+    PromptSectionPolicy("prev_ticket_block"),
+    PromptSectionPolicy("reply_block"),
+    PromptSectionPolicy("requested_context_block"),
+    PromptSectionPolicy("workspace_block"),
+    PromptSectionPolicy("ticket_block", required=True, preserve_ticket_structure=True),
+)
+MAIN_SECTION_ORDER = [policy.key for policy in SECTION_REDUCTION_POLICY]
+
+
+def _section_key_affects_render_size(
+    key: str, *, include_optional_sections: bool
+) -> bool:
+    """Return whether mutating this section key can change rendered prompt size."""
+    if include_optional_sections:
+        return True
+    return key == "ticket_block"
+
+
+@dataclass(frozen=True)
+class TicketFlowPromptSections:
+    prev_block: str
+    prev_ticket_block: str
+    reply_block: str
+    requested_context_block: str
+    workspace_block: str
+    ticket_block: str
+
+    def as_dict(self) -> dict[str, str]:
+        return {
+            "prev_block": self.prev_block,
+            "prev_ticket_block": self.prev_ticket_block,
+            "reply_block": self.reply_block,
+            "requested_context_block": self.requested_context_block,
+            "workspace_block": self.workspace_block,
+            "ticket_block": self.ticket_block,
+        }
+
+    @classmethod
+    def from_dict(cls, values: dict[str, str]) -> TicketFlowPromptSections:
+        return cls(
+            prev_block=values.get("prev_block", ""),
+            prev_ticket_block=values.get("prev_ticket_block", ""),
+            reply_block=values.get("reply_block", ""),
+            requested_context_block=values.get("requested_context_block", ""),
+            workspace_block=values.get("workspace_block", ""),
+            ticket_block=values.get("ticket_block", ""),
+        )
+
+
+@dataclass(frozen=True)
+class TicketFlowPromptModel:
+    instructions: str
+    include_optional_sections: bool
+    rel_ticket: str
+    rel_dispatch_dir: str
+    rel_dispatch_path: str
+    car_hud: str
+    apps_hint: str
+    checkpoint_block: str
+    commit_block: str
+    lint_block: str
+    loop_guard_block: str
+    sections: TicketFlowPromptSections
+
+    def with_sections(
+        self, sections: TicketFlowPromptSections
+    ) -> TicketFlowPromptModel:
+        return TicketFlowPromptModel(
+            instructions=self.instructions,
+            include_optional_sections=self.include_optional_sections,
+            rel_ticket=self.rel_ticket,
+            rel_dispatch_dir=self.rel_dispatch_dir,
+            rel_dispatch_path=self.rel_dispatch_path,
+            car_hud=self.car_hud,
+            apps_hint=self.apps_hint,
+            checkpoint_block=self.checkpoint_block,
+            commit_block=self.commit_block,
+            lint_block=self.lint_block,
+            loop_guard_block=self.loop_guard_block,
+            sections=sections,
+        )
+
+    def with_instructions(self, instructions: str) -> TicketFlowPromptModel:
+        return TicketFlowPromptModel(
+            instructions=instructions,
+            include_optional_sections=self.include_optional_sections,
+            rel_ticket=self.rel_ticket,
+            rel_dispatch_dir=self.rel_dispatch_dir,
+            rel_dispatch_path=self.rel_dispatch_path,
+            car_hud=self.car_hud,
+            apps_hint=self.apps_hint,
+            checkpoint_block=self.checkpoint_block,
+            commit_block=self.commit_block,
+            lint_block=self.lint_block,
+            loop_guard_block=self.loop_guard_block,
+            sections=self.sections,
+        )
+
+    def without_optional_static_blocks(self) -> TicketFlowPromptModel:
+        return TicketFlowPromptModel(
+            instructions=self.instructions,
+            include_optional_sections=False,
+            rel_ticket=self.rel_ticket,
+            rel_dispatch_dir=self.rel_dispatch_dir,
+            rel_dispatch_path=self.rel_dispatch_path,
+            car_hud="",
+            apps_hint="",
+            checkpoint_block=self.checkpoint_block,
+            commit_block=self.commit_block,
+            lint_block=self.lint_block,
+            loop_guard_block=self.loop_guard_block,
+            sections=self.sections,
+        )
 
 
 def truncate_text_by_bytes(text: str, max_bytes: int) -> str:
@@ -69,15 +232,54 @@ def preserve_ticket_structure(ticket_block: str, max_bytes: int) -> str:
     preserve_end = second_marker_idx + len(marker)
     preserved_part = ticket_block[:preserve_end]
     preserved_bytes = len(preserved_part.encode("utf-8"))
-    marker_bytes = len(TRUNCATION_MARKER.encode("utf-8"))
-    remaining_bytes = max(max_bytes - preserved_bytes, 0)
+    suffix_start = ticket_block.find("\n</TICKET_MARKDOWN>", preserve_end)
+    suffix = ticket_block[suffix_start:] if suffix_start != -1 else ""
+    suffix_bytes = len(suffix.encode("utf-8"))
+    remaining_bytes = max(max_bytes - preserved_bytes - suffix_bytes, 0)
 
     if remaining_bytes > 0:
-        body = ticket_block[preserve_end:]
-        body_budget = max(remaining_bytes - marker_bytes, 0)
-        return preserved_part + truncate_text_by_bytes(body, body_budget)
+        body = (
+            ticket_block[preserve_end:suffix_start]
+            if suffix_start != -1
+            else ticket_block[preserve_end:]
+        )
+        return preserved_part + truncate_text_by_bytes(body, remaining_bytes) + suffix
 
     return truncate_text_by_bytes(ticket_block, max_bytes)
+
+
+def _minimum_ticket_section_bytes(ticket_block: str) -> int:
+    marker = "\n---\n"
+    ticket_md_idx = ticket_block.find("<TICKET_MARKDOWN>")
+    if ticket_md_idx == -1:
+        return 1
+    first_marker_idx = ticket_block.find(marker, ticket_md_idx)
+    if first_marker_idx == -1:
+        return 1
+    second_marker_idx = ticket_block.find(marker, first_marker_idx + 1)
+    if second_marker_idx == -1:
+        return 1
+    preserve_end = second_marker_idx + len(marker)
+    suffix_start = ticket_block.find("\n</TICKET_MARKDOWN>", preserve_end)
+    suffix = ticket_block[suffix_start:] if suffix_start != -1 else ""
+    minimum = (ticket_block[:preserve_end] + TRUNCATION_MARKER + suffix).encode("utf-8")
+    return len(minimum)
+
+
+def _minimum_section_bytes(key: str, value: str) -> int:
+    if key == "ticket_block":
+        return _minimum_ticket_section_bytes(value)
+    return 1
+
+
+def _truncate_section(key: str, value: str, max_bytes: int) -> str:
+    policy = next(
+        (candidate for candidate in SECTION_REDUCTION_POLICY if candidate.key == key),
+        PromptSectionPolicy(key),
+    )
+    if policy.preserve_ticket_structure:
+        return preserve_ticket_structure(value, max_bytes)
+    return truncate_text_by_bytes(value, max_bytes)
 
 
 def shrink_prompt(
@@ -106,11 +308,7 @@ def shrink_prompt(
             new_limit = max(new_limit - marker_bytes, 0)
         if new_limit == 0 and value_bytes > 0:
             new_limit = min(value_bytes, marker_bytes + 1)
-        sections[key] = (
-            preserve_ticket_structure(value, new_limit)
-            if key == "ticket_block"
-            else truncate_text_by_bytes(value, new_limit)
-        )
+        sections[key] = _truncate_section(key, value, new_limit)
         prompt = render()
 
     # Never tail-truncate the assembled prompt: the ticket shell places
@@ -129,11 +327,7 @@ def shrink_prompt(
                 sections[key] = ""
             else:
                 new_limit = max(value_bytes // 2, 1)
-                sections[key] = (
-                    preserve_ticket_structure(value, new_limit)
-                    if key == "ticket_block"
-                    else truncate_text_by_bytes(value, new_limit)
-                )
+                sections[key] = _truncate_section(key, value, new_limit)
             prompt = render()
             progressed = True
             break
@@ -285,158 +479,157 @@ def _apps_hint_block(apps_hint: str) -> str:
     return f"<CAR_INSTALLED_APPS>\n{apps_hint}\n</CAR_INSTALLED_APPS>"
 
 
-def render_full_prompt(
-    *,
-    rel_ticket: str,
-    rel_dispatch_dir: str,
-    rel_dispatch_path: str,
-    car_hud: str,
-    apps_hint: str,
-    checkpoint_block: str,
-    commit_block: str,
-    lint_block: str,
-    loop_guard_block: str,
-    sections: dict[str, str],
-) -> str:
+def render_ticket_flow_prompt(model: TicketFlowPromptModel) -> str:
+    """Render the canonical ticket-flow prompt contract."""
+    sections = model.sections
+    optional_sections = ""
+    if model.include_optional_sections:
+        optional_sections = (
+            "<CAR_REQUESTED_CONTEXT>\n"
+            f"{sections.requested_context_block}\n"
+            "</CAR_REQUESTED_CONTEXT>\n\n"
+            "<CAR_WORKSPACE_DOCS>\n"
+            f"{sections.workspace_block}\n"
+            "</CAR_WORKSPACE_DOCS>\n\n"
+            "<CAR_HUMAN_REPLIES>\n"
+            f"{sections.reply_block}\n"
+            "</CAR_HUMAN_REPLIES>\n\n"
+            "<CAR_PREVIOUS_TICKET_REFERENCE>\n"
+            f"{sections.prev_ticket_block}\n"
+            "</CAR_PREVIOUS_TICKET_REFERENCE>\n\n"
+        )
+    previous_agent_output = ""
+    if model.include_optional_sections:
+        previous_agent_output = (
+            "\n\n<CAR_PREVIOUS_AGENT_OUTPUT>\n"
+            f"{sections.prev_block}\n"
+            "</CAR_PREVIOUS_AGENT_OUTPUT>"
+        )
     return (
         "<CAR_TICKET_FLOW_PROMPT>\n\n"
         "<CAR_TICKET_FLOW_INSTRUCTIONS>\n"
-        "You are running inside Codex Autorunner (CAR) in a ticket-based workflow.\n\n"
-        "Your job in this turn:\n"
-        "- Read the current ticket file.\n"
-        "- Make the required repo changes.\n"
-        "- Update the ticket file to reflect progress.\n"
-        "- Set `done: true` in the ticket YAML frontmatter only when the ticket is truly complete.\n\n"
-        "CAR orientation (80/20):\n"
-        "- `.codex-autorunner/tickets/` is the queue that drives the flow (files named `TICKET-###*.md`, processed in numeric order).\n"
-        "- `.codex-autorunner/contextspace/` holds durable context shared across ticket turns (especially `active_context.md` and `spec.md`).\n"
-        "- `.codex-autorunner/ABOUT_CAR.md` is the repo-local briefing (what CAR auto-generates + helper scripts) if you need operational details.\n\n"
-        "Communicating with the user (optional):\n"
-        "- To send a message or request input, write to the dispatch directory:\n"
-        "  1) write any attachments to the dispatch directory\n"
-        "  2) write `DISPATCH.md` last\n"
-        "- `DISPATCH.md` YAML supports `mode: notify|pause`.\n"
-        "  - `pause` waits for user input; `notify` continues without waiting.\n"
-        "  - Example:\n"
-        "    ---\n"
-        "    mode: pause\n"
-        "    ---\n"
-        "    Need clarification on X before proceeding.\n"
-        '- You do not need a "final" dispatch when you finish; the runner will archive your turn output automatically. Dispatch only if you want something to stand out or you need user input.\n\n'
-        "If blocked:\n"
-        "- Dispatch with `mode: pause` rather than guessing.\n\n"
-        "Creating follow-up tickets (optional):\n"
-        "- New tickets live under `.codex-autorunner/tickets/` and follow the `TICKET-###*.md` naming pattern.\n"
-        "- If present, `.codex-autorunner/bin/ticket_tool.py` can create/insert/move tickets; `.codex-autorunner/bin/lint_tickets.py` is the canonical ticket linter and `ticket_tool.py lint` is only a compatibility wrapper (see `.codex-autorunner/ABOUT_CAR.md`).\n"
-        "Using ticket templates (optional):\n"
-        "- If you need a standard ticket pattern, prefer: `car templates fetch <repo_id>:<path>[@<ref>]`\n"
-        "  - Trusted repos skip scanning; untrusted repos are scanned (cached by blob SHA).\n\n"
-        "Workspace docs:\n"
-        "- You may update or add context under `.codex-autorunner/contextspace/` so future ticket turns have durable context.\n"
-        '- Prefer referencing these docs instead of creating duplicate "shadow" docs elsewhere.\n\n'
-        "Repo hygiene:\n"
-        "- Do not add new `.codex-autorunner/` artifacts to git unless they are already tracked.\n"
+        f"{model.instructions}\n"
         "</CAR_TICKET_FLOW_INSTRUCTIONS>\n\n"
         "<CAR_RUNTIME_PATHS>\n"
-        f"Current ticket file: {rel_ticket}\n"
-        f"Dispatch directory: {rel_dispatch_dir}\n"
-        f"DISPATCH.md path: {rel_dispatch_path}\n"
+        f"Current ticket file: {model.rel_ticket}\n"
+        f"Dispatch directory: {model.rel_dispatch_dir}\n"
+        f"DISPATCH.md path: {model.rel_dispatch_path}\n"
         "</CAR_RUNTIME_PATHS>\n\n"
         "<CAR_HUD>\n"
-        f"{car_hud}\n"
+        f"{model.car_hud}\n"
         "</CAR_HUD>\n\n"
-        f"{_apps_hint_block(apps_hint)}\n\n"
-        f"{checkpoint_block}\n\n"
-        f"{commit_block}\n\n"
-        f"{lint_block}\n\n"
-        f"{loop_guard_block}\n\n"
-        "<CAR_REQUESTED_CONTEXT>\n"
-        f"{sections['requested_context_block']}\n"
-        "</CAR_REQUESTED_CONTEXT>\n\n"
-        "<CAR_WORKSPACE_DOCS>\n"
-        f"{sections['workspace_block']}\n"
-        "</CAR_WORKSPACE_DOCS>\n\n"
-        "<CAR_HUMAN_REPLIES>\n"
-        f"{sections['reply_block']}\n"
-        "</CAR_HUMAN_REPLIES>\n\n"
-        "<CAR_PREVIOUS_TICKET_REFERENCE>\n"
-        f"{sections['prev_ticket_block']}\n"
-        "</CAR_PREVIOUS_TICKET_REFERENCE>\n\n"
-        f"{sections['ticket_block']}\n\n"
-        "<CAR_PREVIOUS_AGENT_OUTPUT>\n"
-        f"{sections['prev_block']}\n"
-        "</CAR_PREVIOUS_AGENT_OUTPUT>\n\n"
+        f"{_apps_hint_block(model.apps_hint)}\n\n"
+        f"{model.checkpoint_block}\n\n"
+        f"{model.commit_block}\n\n"
+        f"{model.lint_block}\n\n"
+        f"{model.loop_guard_block}\n\n"
+        f"{optional_sections}"
+        f"{sections.ticket_block}\n\n"
+        f"{previous_agent_output}\n\n"
         "</CAR_TICKET_FLOW_PROMPT>"
     )
 
 
-def build_ticket_first_fallback_prompt(
-    *,
-    max_bytes: int,
-    rel_ticket: str,
-    rel_dispatch_path: str,
-    prev_block: str,
-    checkpoint_block: str,
-    commit_block: str,
-    lint_block: str,
-    loop_guard_block: str,
-    ticket_block: str,
-) -> str:
-    sections = {
-        "prev_block": prev_block,
-        "checkpoint_block": checkpoint_block,
-        "commit_block": commit_block,
-        "lint_block": lint_block,
-        "loop_guard_block": loop_guard_block,
-        "ticket_block": ticket_block,
-    }
+def reduce_ticket_flow_prompt_to_budget(
+    model: TicketFlowPromptModel, *, max_bytes: int
+) -> TicketFlowPromptModel:
+    """Shrink optional prompt sections without changing the prompt contract."""
+    work_model = model
+    sections = work_model.sections.as_dict()
 
-    def render() -> str:
-        parts = [
-            "<CAR_TICKET_FLOW_PROMPT>",
-            (
-                "<CAR_TICKET_FLOW_INSTRUCTIONS>\n"
-                "Ticket-first fallback prompt: treat the current ticket file below as the control plane.\n"
-                "Make the required repo changes, update the ticket, and only set `done: true` when the ticket is truly complete.\n"
-                "</CAR_TICKET_FLOW_INSTRUCTIONS>"
-            ),
-            (
-                "<CAR_RUNTIME_PATHS>\n"
-                f"Current ticket file: {rel_ticket}\n"
-                f"DISPATCH.md path: {rel_dispatch_path}\n"
-                "</CAR_RUNTIME_PATHS>"
-            ),
-        ]
-        for key in FALLBACK_SECTION_ORDER:
-            value = sections[key]
-            if value:
-                parts.append(value)
-        parts.append("</CAR_TICKET_FLOW_PROMPT>")
-        return "\n\n".join(parts)
+    def current_model() -> TicketFlowPromptModel:
+        return work_model.with_sections(TicketFlowPromptSections.from_dict(sections))
 
-    prompt = shrink_prompt(
-        max_bytes=max_bytes,
-        render=render,
-        sections=sections,
-        order=FALLBACK_SECTION_ORDER,
-    )
-    if (
-        len(prompt.encode("utf-8")) <= max_bytes
-        and "<CAR_CURRENT_TICKET_FILE>" in prompt
-        and "<TICKET_MARKDOWN>" in prompt
-    ):
-        return prompt
+    def current_prompt() -> str:
+        return render_ticket_flow_prompt(current_model())
 
-    return preserve_ticket_structure(ticket_block, max_bytes)
+    def shrink_rendered_sections() -> None:
+        marker_bytes = len(TRUNCATION_MARKER.encode("utf-8"))
+        for policy in SECTION_REDUCTION_POLICY:
+            key = policy.key
+            if not _section_key_affects_render_size(
+                key, include_optional_sections=work_model.include_optional_sections
+            ):
+                continue
+            value = sections.get(key, "")
+            if not value:
+                continue
+            prompt = current_prompt()
+            if len(prompt.encode("utf-8")) <= max_bytes:
+                break
+            overflow = len(prompt.encode("utf-8")) - max_bytes
+            value_bytes = len(value.encode("utf-8"))
+            new_limit = max(value_bytes - overflow, 0)
+            if 0 < new_limit < value_bytes:
+                new_limit = max(new_limit - marker_bytes, 0)
+            if new_limit == 0 and value_bytes > 0 and policy.required:
+                new_limit = min(value_bytes, marker_bytes + 1)
+            if policy.required:
+                new_limit = max(new_limit, _minimum_section_bytes(key, value))
+            sections[key] = _truncate_section(key, value, new_limit)
+
+        while len(current_prompt().encode("utf-8")) > max_bytes:
+            progressed = False
+            for policy in SECTION_REDUCTION_POLICY:
+                key = policy.key
+                if not _section_key_affects_render_size(
+                    key, include_optional_sections=work_model.include_optional_sections
+                ):
+                    continue
+                value = sections.get(key, "")
+                if not value:
+                    continue
+                if not policy.required:
+                    sections[key] = ""
+                else:
+                    value_bytes = len(value.encode("utf-8"))
+                    minimum_bytes = _minimum_section_bytes(key, value)
+                    if value_bytes <= minimum_bytes:
+                        continue
+                    else:
+                        sections[key] = _truncate_section(
+                            key, value, max(value_bytes // 2, minimum_bytes)
+                        )
+                progressed = True
+                break
+            if not progressed:
+                break
+
+    if len(current_prompt().encode("utf-8")) <= max_bytes:
+        return current_model()
+
+    shrink_rendered_sections()
+    if len(current_prompt().encode("utf-8")) <= max_bytes:
+        return current_model()
+
+    work_model = work_model.with_instructions(COMPACT_TICKET_FLOW_INSTRUCTIONS)
+    work_model = work_model.without_optional_static_blocks()
+    shrink_rendered_sections()
+
+    while len(current_prompt().encode("utf-8")) > max_bytes:
+        if work_model.checkpoint_block:
+            work_model = replace(work_model, checkpoint_block="")
+        elif work_model.commit_block:
+            work_model = replace(work_model, commit_block="")
+        elif work_model.lint_block:
+            work_model = replace(work_model, lint_block="")
+        elif work_model.loop_guard_block:
+            work_model = replace(work_model, loop_guard_block="")
+        else:
+            break
+
+    return current_model()
 
 
-def prompt_has_ticket_control_plane(prompt: str, ticket_doc: Any) -> bool:
-    required_ticket_lines = (
-        f"agent: {ticket_doc.frontmatter.agent}",
-        f"done: {str(bool(ticket_doc.frontmatter.done)).lower()}",
-    )
-    return (
-        "<CAR_CURRENT_TICKET_FILE>" in prompt
-        and "<TICKET_MARKDOWN>" in prompt
-        and all(line in prompt for line in required_ticket_lines)
-    )
+def validate_ticket_flow_prompt(prompt: str, *, max_bytes: int) -> None:
+    """Assert the rendered prompt preserves the ticket-flow prompt contract."""
+    prompt_bytes = len(prompt.encode("utf-8"))
+    if prompt_bytes > max_bytes:
+        raise ValueError(
+            f"ticket-flow prompt exceeds budget: {prompt_bytes} > {max_bytes}"
+        )
+    missing = [marker for marker in REQUIRED_PROMPT_MARKERS if marker not in prompt]
+    if missing:
+        raise ValueError(
+            "ticket-flow prompt missing required marker(s): " + ", ".join(missing)
+        )
