@@ -93,6 +93,7 @@ def _should_suppress_tail_event(message: Any) -> bool:
 _NO_STREAM_AVAILABLE_IDLE_SECONDS = 15
 _LIKELY_HUNG_IDLE_SECONDS = 90
 _STALL_IDLE_SECONDS = 30
+_BATCHED_INITIAL_EVENT_GRACE_SECONDS = 5 * 60
 _BATCHED_INITIAL_EVENT_AGENTS = frozenset({"codex"})
 
 
@@ -106,13 +107,16 @@ def _running_turn_stall_flags(
     idle_seconds: Optional[int],
     last_event_at: Optional[str],
     agent_id: Any = None,
-    has_visible_tail_events: bool = True,
+    has_visible_events: Optional[bool] = None,
 ) -> tuple[bool, Optional[str]]:
-    # Align with `_derive_progress_phase`: codex may emit raw traffic that is
-    # suppressed from the serialized tail; treat "no visible events" like the
-    # initial batching window for stall purposes.
-    if _agent_batches_initial_events(agent_id) and (
-        last_event_at is None or not has_visible_tail_events
+    has_no_visible_events = (
+        has_visible_events is False if has_visible_events is not None else False
+    )
+    idle = int(idle_seconds or 0)
+    if (
+        (last_event_at is None or has_no_visible_events)
+        and _agent_batches_initial_events(agent_id)
+        and idle < _BATCHED_INITIAL_EVENT_GRACE_SECONDS
     ):
         return (False, None)
     stalled = idle_seconds is not None and idle_seconds >= _STALL_IDLE_SECONDS
@@ -120,7 +124,7 @@ def _running_turn_stall_flags(
         return (False, None)
     reason = (
         "no_events_yet"
-        if last_event_at is None
+        if last_event_at is None or has_no_visible_events
         else "no_new_events_since_last_progress"
     )
     return (True, reason)
@@ -435,7 +439,11 @@ def _derive_progress_phase(
             )
 
     idle = int(idle_seconds or 0)
-    if not events and _agent_batches_initial_events(agent_id):
+    if (
+        not events
+        and _agent_batches_initial_events(agent_id)
+        and idle < _BATCHED_INITIAL_EVENT_GRACE_SECONDS
+    ):
         return (
             "model_running",
             "agent_event_batching",
@@ -614,7 +622,7 @@ def _derive_active_turn_diagnostics(
             idle_seconds=idle_seconds,
             last_event_at=last_event_at,
             agent_id=snapshot.get("agent"),
-            has_visible_tail_events=bool(event_list),
+            has_visible_events=bool(event_list),
         )
         if turn_status == "running"
         else (False, None)
@@ -693,7 +701,7 @@ def _refresh_active_turn_diagnostics(
             idle_seconds=resolved_idle,
             last_event_at=resolved_last_event_at,
             agent_id=snapshot.get("agent"),
-            has_visible_tail_events=bool(event_list),
+            has_visible_events=bool(event_list),
         )
         if resolved_status == "running"
         else (False, None)

@@ -971,6 +971,36 @@ def test_codex_active_turn_diagnostics_do_not_mark_initial_event_gap_hung() -> N
         last_event_at=None,
         agent_id="codex",
     ) == (False, None)
+    assert _running_turn_stall_flags(
+        idle_seconds=180,
+        last_event_at=datetime.now(timezone.utc).isoformat(),
+        agent_id="codex",
+        has_visible_events=False,
+    ) == (False, None)
+
+
+def test_codex_active_turn_diagnostics_restore_timeout_after_batching_grace() -> None:
+    started_at = (datetime.now(timezone.utc) - timedelta(seconds=360)).isoformat()
+    snapshot = {
+        "agent": "codex",
+        "turn_status": "running",
+        "started_at": started_at,
+        "last_event_at": None,
+        "phase": "likely_hung",
+        "guidance": "No recent activity.",
+        "events": [],
+        "active_turn_diagnostics": {
+            "managed_turn_id": "managed-turn-1",
+            "stalled": False,
+            "stall_reason": None,
+        },
+    }
+
+    refreshed = _refresh_active_turn_diagnostics(snapshot, turn_status="running")
+
+    assert refreshed is not None
+    assert refreshed["stalled"] is True
+    assert refreshed["stall_reason"] == "no_events_yet"
 
 
 def test_managed_thread_tail_stream_resumes_with_last_event_id(hub_env) -> None:

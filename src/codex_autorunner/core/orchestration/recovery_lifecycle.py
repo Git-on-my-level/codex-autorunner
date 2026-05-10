@@ -378,8 +378,17 @@ class _ThreadRecoveryHelper:
         has_backend_turn_id = isinstance(execution.backend_id, str) and bool(
             execution.backend_id.strip()
         )
+        has_live_runtime_binding = (
+            runtime_binding is not None
+            and isinstance(runtime_binding.backend_thread_id, str)
+            and bool(runtime_binding.backend_thread_id.strip())
+        )
         agent_id = str(thread.agent_id or "").strip().lower()
-        if agent_id in _RESTART_WAIT_AND_SEE_AGENTS and has_backend_turn_id:
+        if (
+            agent_id in _RESTART_WAIT_AND_SEE_AGENTS
+            and has_backend_turn_id
+            and has_live_runtime_binding
+        ):
             log_event(
                 logger,
                 logging.INFO,
