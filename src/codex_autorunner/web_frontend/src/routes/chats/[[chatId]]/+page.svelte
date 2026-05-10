@@ -5,7 +5,7 @@
   import MasterDetail from '$lib/components/MasterDetail.svelte';
   import ChatTranscriptCards from '$lib/components/ChatTranscriptCards.svelte';
   import AutoDismissNotice from '$lib/components/AutoDismissNotice.svelte';
-  import AgentModelReasoningPicker from '$lib/components/AgentModelReasoningPicker.svelte';
+  import ChatThreadPreMessagePickers from '$lib/components/ChatThreadPreMessagePickers.svelte';
   import VoiceComposerButton from '$lib/components/VoiceComposerButton.svelte';
   import { pmaApi, type ApiError, type JsonRecord, type PmaQueuedTurn } from '$lib/api/client';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
@@ -70,7 +70,6 @@
     agentDisplayForChat,
     agentId,
     agentLabel,
-    agentProfileEntriesForRecord,
     agentRecordForId,
     firstModelValue,
     modelExists,
@@ -123,18 +122,25 @@
   const COMPOSER_DEFAULT_MAX_PX = 360;
   const COMPOSER_MIN_MAX_PX = 120;
   let composerMaxPx = $state(COMPOSER_DEFAULT_MAX_PX);
+  /** True when draft content wants at least composerMaxPx height (auto-grow hit the cap). */
+  let showComposerResizeGrip = $state(false);
   function composerCeiling(): number {
     if (typeof window === 'undefined') return 720;
     return Math.max(COMPOSER_MIN_MAX_PX + 40, Math.round(window.innerHeight * 0.8));
   }
   function autosizeComposer(): void {
     const el = composerTextarea;
-    if (!el) return;
+    if (!el) {
+      showComposerResizeGrip = false;
+      return;
+    }
     el.style.height = 'auto';
     const cap = composerMaxPx;
-    const next = Math.min(el.scrollHeight, cap);
+    const natural = el.scrollHeight;
+    showComposerResizeGrip = natural >= cap;
+    const next = Math.min(natural, cap);
     el.style.height = `${next}px`;
-    el.style.overflowY = el.scrollHeight > cap ? 'auto' : 'hidden';
+    el.style.overflowY = natural > cap ? 'auto' : 'hidden';
   }
   function handleComposerResizeStart(event: PointerEvent): void {
     if (event.button !== 0) return;
@@ -188,6 +194,7 @@
 
   $effect(() => {
     draft;
+    composerMaxPx;
     autosizeComposer();
   });
   let pendingRefreshTimer: number | null = null;
@@ -260,7 +267,6 @@
   const selectedScope = $derived(scopeOptions.find((scope) => scope.id === selectedScopeId) ?? localPmaChatScopeOption());
   const selectedAgentRecord = $derived(agentRecordForId(agents, selectedAgent));
   const selectedAgentCanListModels = $derived(agentCanListModels(selectedAgentRecord));
-  const hermesProfileChoices = $derived(agentProfileEntriesForRecord(agentRecordForId(agents, 'hermes')));
   const selectedModelRecord = $derived(modelRecordForValue(models, selectedModel));
   const reasoningOptions = $derived(pickerReasoningOptions(models, selectedModel));
   const showAgentSelector = $derived(Boolean(activeChat && agents.length > 0));
@@ -299,14 +305,6 @@
   );
   const chatHasActivity = $derived(activeCards.length > 0 || showStatusBar);
   const showStartPicker = $derived(Boolean(activeChat) && !loadingActive && !activeError && !chatHasActivity);
-  const showComposerHermesProfile = $derived(
-    Boolean(
-      activeChat &&
-        !showStartPicker &&
-        selectedAgent === 'hermes' &&
-        (hermesProfileChoices.length > 0 || Boolean(selectedProfile.trim()))
-    )
-  );
   const hasRunnableDraft = $derived(Boolean(activeChat && (draft.trim() || pendingAttachments.length > 0)));
   const canInterruptWithDraft = $derived(Boolean(activeChat && progress?.status === 'running' && hasRunnableDraft));
   const selectedAgentLabel = $derived(selectedAgentRecord ? agentLabel(selectedAgentRecord) : selectedAgent || 'Agent');
@@ -1452,7 +1450,7 @@
         </div>
       {:else if showStartPicker}
         <div class="start-picker" aria-label="Start of chat configuration">
-          <AgentModelReasoningPicker
+          <ChatThreadPreMessagePickers
             {agents}
             bind:agentValue={selectedAgent}
             bind:profileValue={selectedProfile}
@@ -1460,7 +1458,6 @@
             bind:reasoningValue={selectedReasoning}
             {models}
             loading={loadingModels}
-            variant="chat"
             showAgent={showAgentSelector}
             onAgentChange={handleAgentChange}
           />
@@ -1472,22 +1469,23 @@
 
     <form
       class="composer"
-      class:composer-has-hermes-profile={showComposerHermesProfile}
       onpaste={handlePaste}
       onsubmit={(event) => {
         event.preventDefault();
         void sendMessage();
       }}
     >
-      <div
-        class="composer-resize-grip"
-        role="separator"
-        aria-orientation="horizontal"
-        aria-label="Drag to resize composer"
-        title="Drag to resize · double-click to reset"
-        onpointerdown={handleComposerResizeStart}
-        ondblclick={resetComposerHeight}
-      ><span class="composer-resize-grip-bar" aria-hidden="true"></span></div>
+      {#if showComposerResizeGrip}
+        <div
+          class="composer-resize-grip"
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="Drag to resize composer"
+          title="Drag to resize · double-click to reset"
+          onpointerdown={handleComposerResizeStart}
+          ondblclick={resetComposerHeight}
+        ><span class="composer-resize-grip-bar" aria-hidden="true"></span></div>
+      {/if}
       <input
         bind:this={fileInput}
         class="sr-only"
@@ -1575,22 +1573,6 @@
               <button type="button" aria-label={`Remove ${attachment.title}`} onclick={() => removeAttachment(attachment.id)}>x</button>
             </span>
           {/each}
-        </div>
-      {/if}
-      {#if showComposerHermesProfile}
-        <div class="composer-hermes-profile">
-          <label class="start-picker-row">
-            <span>profile</span>
-            <select aria-label="Hermes profile" bind:value={selectedProfile}>
-              <option value="">Default</option>
-              {#if selectedProfile && !hermesProfileChoices.some((entry) => entry.id === selectedProfile)}
-                <option value={selectedProfile}>{selectedProfile}</option>
-              {/if}
-              {#each hermesProfileChoices as entry (entry.id)}
-                <option value={entry.id}>{entry.label}</option>
-              {/each}
-            </select>
-          </label>
         </div>
       {/if}
       <textarea

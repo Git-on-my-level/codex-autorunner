@@ -1,4 +1,11 @@
 <script lang="ts">
+  /**
+   * Shared agent + optional Hermes profile + model + reasoning ("effort") rows.
+   *
+   * **Hub chat threads:** before the first message, render via `ChatThreadPreMessagePickers`
+   * in the transcript stack only — do not embed profile (or duplicate these rows) inside the
+   * chat composer form.
+   */
   import ModelReasoningPicker from '$lib/components/ModelReasoningPicker.svelte';
   import {
     agentCanListModels,
