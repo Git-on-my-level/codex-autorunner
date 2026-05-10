@@ -335,11 +335,13 @@
     Boolean(
       statusBar &&
         statusBar.state !== 'idle' &&
-        ((progress?.elapsedSeconds !== null && progress?.elapsedSeconds !== undefined) ||
-          (progress?.queueDepth ?? 0) > 0 ||
-          statusBar.tokenUsageLabel ||
-          statusBar.contextRemainingLabel ||
-          ['running', 'waiting', 'blocked', 'failed'].includes(statusBar.state))
+        (statusBar.state === 'done'
+          ? Boolean(statusBar.tokenUsageLabel || statusBar.contextRemainingLabel)
+          : (progress?.elapsedSeconds !== null && progress?.elapsedSeconds !== undefined) ||
+            (progress?.queueDepth ?? 0) > 0 ||
+            statusBar.tokenUsageLabel ||
+            statusBar.contextRemainingLabel ||
+            ['running', 'waiting', 'blocked', 'failed'].includes(statusBar.state))
     )
   );
   const chatHasActivity = $derived(activeCards.length > 0 || showStatusBar);
