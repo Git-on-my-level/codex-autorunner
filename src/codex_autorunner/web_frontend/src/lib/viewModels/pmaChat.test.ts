@@ -127,6 +127,22 @@ describe('PMA chat view helpers', () => {
     }
   });
 
+  it('counts archived ticket-flow chats with done ticket files as run progress done', () => {
+    const chats: PmaChatSummary[] = [
+      { ...baseChat, id: 'tf-1', status: 'done', ticketId: 'TICKET-001', ticketDone: true },
+      { ...baseChat, id: 'tf-2', status: 'idle', ticketId: 'TICKET-002', ticketDone: true },
+      { ...baseChat, id: 'tf-3', status: 'running', ticketId: 'TICKET-003', ticketDone: false }
+    ];
+    const entries = buildPmaChatListEntries(chats, { groupRuns: true });
+    expect(entries).toHaveLength(1);
+    expect(entries[0].kind).toBe('group');
+    if (entries[0].kind === 'group') {
+      expect(entries[0].group.totalCount).toBe(3);
+      expect(entries[0].group.doneCount).toBe(2);
+      expect(entries[0].group.activeCount).toBe(1);
+    }
+  });
+
   it('counts distinct ticket run groups and filters ticket_runs to grouped flows only', () => {
     const standalone = {
       ...baseChat,

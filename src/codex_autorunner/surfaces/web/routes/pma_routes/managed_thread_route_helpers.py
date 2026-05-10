@@ -31,6 +31,7 @@ from .....core.managed_thread_status import derive_managed_thread_operator_statu
 from .....core.orchestration import ActiveWorkSummary
 from .....core.orchestration.models import Binding, ThreadTarget
 from .....core.text_utils import _truncate_text
+from .....tickets.files import ticket_is_done
 from ...schemas import ManagedThreadCreateRequest
 from ...services.pma import get_pma_request_context
 from ...services.pma.managed_thread_followup import (
@@ -247,12 +248,67 @@ def _serialize_managed_thread(thread: dict[str, Any]) -> dict[str, Any]:
         thread.get("agent_profile") or metadata.get("agent_profile")
     )
     payload.update(
+        _ticket_flow_thread_fields(
+            metadata=metadata,
+            workspace_root=normalize_optional_text(thread.get("workspace_root")),
+            display_name=normalize_optional_text(
+                thread.get("name") or thread.get("display_name")
+            ),
+        )
+    )
+    payload.update(
         _build_operator_status_fields(
             normalized_status=payload["normalized_status"],
             lifecycle_status=lifecycle_status,
         )
     )
     return payload
+
+
+def _ticket_done_from_path(
+    *, workspace_root: Optional[str], ticket_path: Optional[str]
+) -> Optional[bool]:
+    if not workspace_root or not ticket_path:
+        return None
+    try:
+        path = Path(ticket_path)
+        if not path.is_absolute():
+            path = Path(workspace_root) / path
+        if not path.is_file():
+            return None
+        return bool(ticket_is_done(path))
+    except (OSError, ValueError):
+        return None
+
+
+def _ticket_flow_thread_fields(
+    *,
+    metadata: dict[str, Any],
+    workspace_root: Optional[str],
+    display_name: Optional[str],
+) -> dict[str, Any]:
+    flow_type = normalize_optional_text(metadata.get("flow_type"))
+    thread_kind = normalize_optional_text(metadata.get("thread_kind"))
+    ticket_id = normalize_optional_text(metadata.get("ticket_id"))
+    ticket_path = normalize_optional_text(metadata.get("ticket_path"))
+    run_id = normalize_optional_text(metadata.get("run_id"))
+    is_ticket_flow = (
+        flow_type == "ticket_flow"
+        or thread_kind == "ticket_flow"
+        or bool(display_name and display_name.startswith("ticket-flow:"))
+    )
+    if not is_ticket_flow:
+        return {}
+    return {
+        "flow_type": flow_type or "ticket_flow",
+        "thread_kind": thread_kind,
+        "run_id": run_id,
+        "ticket_id": ticket_id,
+        "ticket_path": ticket_path,
+        "ticket_done": _ticket_done_from_path(
+            workspace_root=workspace_root, ticket_path=ticket_path
+        ),
+    }
 
 
 def _chat_binding_defaults() -> dict[str, Any]:
@@ -514,6 +570,13 @@ def _serialize_thread_target(
         "approval_mode": normalize_approval_mode(thread.approval_mode, default="yolo"),
         "accepts_messages": thread.lifecycle_status == "active",
     }
+    payload.update(
+        _ticket_flow_thread_fields(
+            metadata=dict(thread.metadata or {}),
+            workspace_root=thread.workspace_root,
+            display_name=thread.display_name,
+        )
+    )
     updated_at_value = normalize_optional_text(thread.updated_at)
     if not updated_at_value:
         updated_at_value = normalize_optional_text(thread.status_changed_at)

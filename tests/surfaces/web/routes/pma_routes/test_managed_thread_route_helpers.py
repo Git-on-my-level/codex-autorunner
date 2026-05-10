@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 from fastapi import HTTPException
 
+from codex_autorunner.core.orchestration.models import ThreadTarget
 from codex_autorunner.surfaces.web.routes.pma_routes.managed_thread_route_helpers import (
     _apply_chat_binding_fields,
     _attach_latest_execution_fields,
@@ -13,6 +14,7 @@ from codex_autorunner.surfaces.web.routes.pma_routes.managed_thread_route_helper
     _normalize_resource_owner,
     _normalize_workspace_root_input,
     _serialize_managed_thread,
+    _serialize_thread_target,
     resolve_managed_thread_list_query,
     serialize_managed_thread_turn_summary,
 )
@@ -192,6 +194,70 @@ class TestSerializeManagedThread:
         payload = _serialize_managed_thread(raw)
         assert payload["status"] == "active"
         assert payload["normalized_status"] == "active"
+
+    def test_ticket_flow_metadata_exposes_ticket_done(self, tmp_path) -> None:
+        ticket_path = tmp_path / ".codex-autorunner" / "tickets" / "TICKET-001.md"
+        ticket_path.parent.mkdir(parents=True)
+        ticket_path.write_text(
+            "---\n"
+            "ticket_id: tkt_done_ticket\n"
+            "agent: codex\n"
+            "done: true\n"
+            "---\n"
+            "Done ticket\n",
+            encoding="utf-8",
+        )
+        raw = {
+            "managed_thread_id": "thread-1",
+            "lifecycle_status": "archived",
+            "normalized_status": "archived",
+            "workspace_root": str(tmp_path),
+            "name": "ticket-flow:codex",
+            "metadata": {
+                "flow_type": "ticket_flow",
+                "thread_kind": "ticket_flow",
+                "run_id": "run-1",
+                "ticket_id": "tkt_done_ticket",
+                "ticket_path": ".codex-autorunner/tickets/TICKET-001.md",
+            },
+        }
+        payload = _serialize_managed_thread(raw)
+        assert payload["flow_type"] == "ticket_flow"
+        assert payload["run_id"] == "run-1"
+        assert payload["ticket_id"] == "tkt_done_ticket"
+        assert payload["ticket_done"] is True
+
+    def test_thread_target_metadata_exposes_ticket_done(self, tmp_path) -> None:
+        ticket_path = tmp_path / ".codex-autorunner" / "tickets" / "TICKET-001.md"
+        ticket_path.parent.mkdir(parents=True)
+        ticket_path.write_text(
+            "---\n"
+            "ticket_id: tkt_done_ticket\n"
+            "agent: codex\n"
+            "done: true\n"
+            "---\n"
+            "Done ticket\n",
+            encoding="utf-8",
+        )
+        thread = ThreadTarget.from_mapping(
+            {
+                "managed_thread_id": "thread-1",
+                "agent": "codex",
+                "lifecycle_status": "archived",
+                "normalized_status": "archived",
+                "workspace_root": str(tmp_path),
+                "name": "ticket-flow:codex",
+                "metadata": {
+                    "flow_type": "ticket_flow",
+                    "run_id": "run-1",
+                    "ticket_id": "tkt_done_ticket",
+                    "ticket_path": ".codex-autorunner/tickets/TICKET-001.md",
+                },
+            }
+        )
+        payload = _serialize_thread_target(thread)
+        assert payload["ticket_done"] is True
+        assert payload["ticket_id"] == "tkt_done_ticket"
 
 
 class TestApplyChatBindingFields:

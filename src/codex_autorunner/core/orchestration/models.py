@@ -156,6 +156,7 @@ class ThreadTarget:
     thread_kind: Optional[str] = None
     context_profile: Optional[CarContextProfile] = None
     approval_mode: Optional[str] = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any]) -> "ThreadTarget":
@@ -232,6 +233,7 @@ class ThreadTarget:
             approval_mode=_normalize_optional_text(
                 data.get("approval_mode") or metadata.get("approval_mode")
             ),
+            metadata=dict(metadata),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -266,6 +268,7 @@ class ThreadTarget:
             "thread_kind": self.thread_kind,
             "context_profile": self.context_profile,
             "approval_mode": self.approval_mode,
+            "metadata": dict(self.metadata),
         }
 
 

@@ -14,6 +14,10 @@ export type PmaChatSummary = {
   repoId: string | null;
   worktreeId: string | null;
   ticketId: string | null;
+  ticketDone?: boolean | null;
+  ticketPath?: string | null;
+  runId?: string | null;
+  flowType?: string | null;
   /** True when the chat originates from a ticket-flow run (raw name like `ticket-flow:codex`,
    * a CAR_TICKET_FLOW_PROMPT control message, or a populated current_ticket_id). Used to
    * collapse run rows by repo/worktree even when a specific ticket id isn't surfaced. */
@@ -232,6 +236,10 @@ export function mapPmaChatSummary(raw: JsonRecord): PmaChatSummary {
     repoId,
     worktreeId,
     ticketId,
+    ticketDone: booleanOrNull(raw.ticket_done ?? raw.ticketDone),
+    ticketPath: nullableString(raw.ticket_path ?? raw.ticketPath),
+    runId: nullableString(raw.run_id ?? raw.runId),
+    flowType: nullableString(raw.flow_type ?? raw.flowType),
     isTicketFlow,
     progressPercent: numberOrNull(raw.progress_percent ?? raw.progress),
     updatedAt: dateString(
@@ -533,6 +541,11 @@ export function normalizeWorkStatus(value: unknown): WorkStatus {
   return 'idle';
 }
 
+function booleanOrNull(value: unknown): boolean | null {
+  if (typeof value === 'boolean') return value;
+  return null;
+}
+
 function normalizeResourceWorkStatus(value: unknown): WorkStatus {
   const text = String(value ?? '').trim().toLowerCase();
   // Repo/worktree cards should only say "waiting" for true attention states.
@@ -671,7 +684,7 @@ function detectTicketFlowChat(raw: JsonRecord, ticketId: string | null): boolean
   if (ticketId) return true;
   const name = nullableString(raw.name ?? raw.display_name ?? raw.title);
   if (name && isGenericTicketFlowTitle(name)) return true;
-  const flowKind = nullableString(raw.flow_kind ?? raw.flow ?? raw.kind);
+  const flowKind = nullableString(raw.flow_type ?? raw.flow_kind ?? raw.flow ?? raw.kind ?? raw.thread_kind);
   if (flowKind && /ticket[-_]?flow/i.test(flowKind)) return true;
   const prompt = firstText(raw.prompt_preview, raw.prompt, raw.prompt_text, raw.last_message_preview);
   if (prompt && isCarTicketFlowControlPrompt(prompt)) return true;
