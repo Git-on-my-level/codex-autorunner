@@ -2,9 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from codex_autorunner.core.hub import AgentWorkspaceSnapshot
 from codex_autorunner.core.hub_control_plane import (
-    AgentWorkspaceListRequest,
     AutomationRequest,
     ExecutionBackendIdUpdateRequest,
     ExecutionCancelAllRequest,
@@ -33,33 +31,21 @@ from codex_autorunner.core.hub_control_plane import (
     WorkspaceSetupCommandRequest,
     serialize_run_event,
 )
+from codex_autorunner.core.managed_thread_store import (
+    ManagedThreadStore,
+    prepare_managed_thread_store,
+)
 from codex_autorunner.core.orchestration.cold_trace_store import ColdTraceStore
 from codex_autorunner.core.orchestration.sqlite import prepare_orchestration_sqlite
 from codex_autorunner.core.pma_notification_store import PmaNotificationStore
-from codex_autorunner.core.pma_thread_store import (
-    PmaThreadStore,
-    prepare_pma_thread_store,
-)
 from codex_autorunner.core.pma_transcripts import PmaTranscriptStore
 from codex_autorunner.core.ports.run_event import Completed, Started
 
 
 class _SupervisorStub:
-    def __init__(self, workspace_snapshot: AgentWorkspaceSnapshot) -> None:
-        self._workspace_snapshot = workspace_snapshot
+    def __init__(self) -> None:
         self.setup_calls: list[tuple[Path, str | None]] = []
         self.automation_calls: list[tuple[bool, int]] = []
-
-    def list_agent_workspaces(
-        self, *, use_cache: bool = True
-    ) -> list[AgentWorkspaceSnapshot]:
-        assert use_cache is False
-        return [self._workspace_snapshot]
-
-    def get_agent_workspace_snapshot(self, workspace_id: str) -> AgentWorkspaceSnapshot:
-        if workspace_id != self._workspace_snapshot.id:
-            raise ValueError(f"Unknown workspace id: {workspace_id}")
-        return self._workspace_snapshot
 
     def run_setup_commands_for_workspace(
         self, workspace_root: Path, *, repo_id_hint: str | None = None
@@ -79,19 +65,11 @@ class _SupervisorStub:
 
 def _build_service(tmp_path: Path) -> tuple[HubSharedStateService, str]:
     hub_root = tmp_path / "hub"
-    workspace_root = hub_root / "agent-workspaces" / "zeroclaw" / "wksp-1"
+    workspace_root = hub_root / "repos" / "repo-1"
     workspace_root.mkdir(parents=True, exist_ok=True)
     prepare_orchestration_sqlite(hub_root, durable=False)
-    prepare_pma_thread_store(hub_root, durable=False)
-    workspace_snapshot = AgentWorkspaceSnapshot(
-        id="wksp-1",
-        runtime="zeroclaw",
-        path=workspace_root,
-        display_name="Workspace One",
-        enabled=True,
-        exists_on_disk=True,
-    )
-    supervisor = _SupervisorStub(workspace_snapshot)
+    prepare_managed_thread_store(hub_root, durable=False)
+    supervisor = _SupervisorStub()
     service = HubSharedStateService(
         hub_root=hub_root,
         supervisor=supervisor,
@@ -99,15 +77,15 @@ def _build_service(tmp_path: Path) -> tuple[HubSharedStateService, str]:
         hub_build_version="build-1",
         durable_writes=False,
     )
-    thread = PmaThreadStore(
+    thread = ManagedThreadStore(
         hub_root, durable=False, bootstrap_on_init=False
     ).create_thread(
         "codex",
         workspace_root,
         repo_id="repo-1",
-        resource_kind="agent_workspace",
-        resource_id="wksp-1",
-        name="Workspace Thread",
+        resource_kind="repo",
+        resource_id="repo-1",
+        name="Repo Thread",
     )
     thread_target_id = str(thread["managed_thread_id"])
     return service, thread_target_id
@@ -124,16 +102,12 @@ def test_shared_state_service_handshake_and_listing(tmp_path: Path) -> None:
             }
         )
     )
-    workspaces = service.list_agent_workspaces(
-        AgentWorkspaceListRequest.from_mapping({"include_disabled": True})
-    )
 
     assert handshake.api_version == "1.0.0"
     assert handshake.minimum_client_api_version == "1.0.0"
     assert handshake.hub_build_version == "build-1"
     assert handshake.hub_asset_version == "web-asset-1"
     assert "notification_reply_targets" in handshake.capabilities
-    assert workspaces.workspaces[0].workspace_id == "wksp-1"
 
 
 def test_shared_state_service_thread_listing_accepts_status_alias(
@@ -165,9 +139,7 @@ def test_shared_state_service_reply_lookup_and_binding_idempotency(
         surface_key="chat:1",
         delivery_record_id="delivery-1",
         repo_id="repo-1",
-        workspace_root=str(
-            tmp_path / "hub" / "agent-workspaces" / "zeroclaw" / "wksp-1"
-        ),
+        workspace_root=str(tmp_path / "hub" / "repos" / "repo-1"),
         notification_id="notif-1",
     )
     notification_store.mark_delivered(
@@ -182,8 +154,8 @@ def test_shared_state_service_reply_lookup_and_binding_idempotency(
             "thread_target_id": thread_target_id,
             "agent_id": "codex",
             "repo_id": "repo-1",
-            "resource_kind": "agent_workspace",
-            "resource_id": "wksp-1",
+            "resource_kind": "repo",
+            "resource_id": "repo-1",
             "mode": "reuse",
         }
     )
@@ -211,8 +183,8 @@ def test_shared_state_service_lists_surface_bindings_with_filters(
     tmp_path: Path,
 ) -> None:
     service, thread_target_id = _build_service(tmp_path)
-    workspace_root = tmp_path / "hub" / "agent-workspaces" / "zeroclaw" / "wksp-1"
-    second_thread = PmaThreadStore(
+    workspace_root = tmp_path / "hub" / "repos" / "repo-1"
+    second_thread = ManagedThreadStore(
         tmp_path / "hub", durable=False, bootstrap_on_init=False
     ).create_thread(
         "opencode",
@@ -231,8 +203,8 @@ def test_shared_state_service_lists_surface_bindings_with_filters(
                 "thread_target_id": thread_target_id,
                 "agent_id": "codex",
                 "repo_id": "repo-1",
-                "resource_kind": "agent_workspace",
-                "resource_id": "wksp-1",
+                "resource_kind": "repo",
+                "resource_id": "repo-1",
                 "mode": "reuse",
             }
         )
@@ -258,8 +230,8 @@ def test_shared_state_service_lists_surface_bindings_with_filters(
         SurfaceBindingListRequest.from_mapping(
             {
                 "repo_id": "repo-1",
-                "resource_kind": "agent_workspace",
-                "resource_id": "wksp-1",
+                "resource_kind": "repo",
+                "resource_id": "repo-1",
                 "agent_id": "codex",
                 "surface_kind": "telegram",
                 "thread_target_id": thread_target_id,
@@ -296,11 +268,7 @@ def test_shared_state_service_workspace_setup_and_automation(tmp_path: Path) -> 
 
     setup_result = service.run_workspace_setup_commands(
         WorkspaceSetupCommandRequest.from_mapping(
-            {
-                "workspace_root": str(
-                    tmp_path / "hub" / "agent-workspaces" / "zeroclaw" / "wksp-1"
-                )
-            }
+            {"workspace_root": str(tmp_path / "hub" / "repos" / "repo-1")}
         )
     )
     automation_result = service.request_automation(
@@ -349,8 +317,8 @@ def test_shared_state_service_persists_timeline_transcript_and_cold_trace(
                 "target_kind": "thread_target",
                 "target_id": thread_target_id,
                 "repo_id": "repo-1",
-                "resource_kind": "agent_workspace",
-                "resource_id": "wksp-1",
+                "resource_kind": "repo",
+                "resource_id": "repo-1",
                 "metadata": {"status": "ok", "surface_kind": "discord"},
                 "events": list(events),
                 "start_index": 1,

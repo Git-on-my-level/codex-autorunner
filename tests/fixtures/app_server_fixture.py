@@ -44,22 +44,28 @@ class FixtureServer:
         self,
         turn_id: str,
         *,
+        thread_id: Optional[str] = None,
         status: str = "completed",
         approval_decision: Optional[str] = None,
     ) -> None:
+        item_params = {
+            "turnId": turn_id,
+            "item": {
+                "type": "agentMessage",
+                "text": "fixture reply",
+            },
+        }
+        if thread_id is not None:
+            item_params["threadId"] = thread_id
         self.send(
             {
                 "method": "item/completed",
-                "params": {
-                    "turnId": turn_id,
-                    "item": {
-                        "type": "agentMessage",
-                        "text": "fixture reply",
-                    },
-                },
+                "params": item_params,
             }
         )
         params = {"turnId": turn_id, "status": status}
+        if thread_id is not None:
+            params["threadId"] = thread_id
         if approval_decision is not None:
             params["approvalDecision"] = approval_decision
         self.send({"method": "turn/completed", "params": params})
@@ -264,6 +270,9 @@ class FixtureServer:
             else:
                 self.send({"id": req_id, "result": {"id": thread_id}})
             return
+        if method == "thread/name/set":
+            self.send({"id": req_id, "result": {}})
+            return
         if method == "turn/start":
             turn_id = f"turn-{self._next_turn}"
             self._next_turn += 1
@@ -412,7 +421,14 @@ class FixtureServer:
                     }
                 )
                 return
-            self._send_turn_completed(turn_id)
+            self._send_turn_completed(
+                turn_id,
+                thread_id=(
+                    params.get("threadId")
+                    if isinstance(params.get("threadId"), str)
+                    else None
+                ),
+            )
             return
         if method == "review/start":
             turn_id = f"turn-{self._next_turn}"

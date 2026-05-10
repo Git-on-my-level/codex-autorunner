@@ -20,6 +20,10 @@ from .models import (
     ThreadTarget,
 )
 from .runtime_bindings import RuntimeThreadBinding, get_runtime_thread_binding
+from .thread_titles import (
+    choose_owned_thread_title,
+    provider_title_metadata,
+)
 from .transcript_mirror import TranscriptMirrorStore
 
 _MISSING_THREAD_MARKERS = (
@@ -95,6 +99,69 @@ def _truncate_rehydration_text(value: str, limit: int = _REHYDRATION_TEXT_LIMIT)
     if limit <= 3:
         return stripped[:limit]
     return stripped[: limit - 3] + "..."
+
+
+def _refresh_thread_target(
+    thread_store: ThreadExecutionStore, thread: ThreadTarget
+) -> ThreadTarget:
+    getter = getattr(thread_store, "get_thread_target", None)
+    if not callable(getter):
+        return thread
+    refreshed = getter(thread.thread_target_id)
+    return refreshed if isinstance(refreshed, ThreadTarget) else thread
+
+
+def _update_owned_thread_title_best_effort(
+    thread_store: ThreadExecutionStore,
+    thread: ThreadTarget,
+    *,
+    title: Optional[str],
+    metadata: Optional[dict[str, Any]] = None,
+) -> tuple[ThreadTarget, Optional[str]]:
+    current_thread = _refresh_thread_target(thread_store, thread)
+    before_title = current_thread.display_name
+    updater = getattr(thread_store, "update_thread_title", None)
+    if callable(updater):
+        try:
+            updated = updater(
+                current_thread.thread_target_id,
+                title,
+                metadata=metadata,
+                only_if_generic=True,
+            )
+        except (AttributeError, TypeError, RuntimeError, OSError, ValueError):
+            logger.debug("Failed to update managed thread title", exc_info=True)
+            return current_thread, None
+        if isinstance(updated, ThreadTarget):
+            after_title = updated.display_name
+            changed_title = after_title if after_title != before_title else None
+            return updated, changed_title
+    metadata_updater = getattr(thread_store, "update_thread_metadata", None)
+    if metadata and callable(metadata_updater):
+        try:
+            metadata_updater(current_thread.thread_target_id, metadata)
+        except (AttributeError, TypeError, RuntimeError, OSError, ValueError):
+            logger.debug(
+                "Failed to update managed thread title metadata", exc_info=True
+            )
+    return current_thread, None
+
+
+async def _set_runtime_conversation_title_best_effort(
+    harness: RuntimeThreadHarness,
+    workspace_root: Path,
+    conversation_id: str,
+    title: Optional[str],
+) -> None:
+    if not title:
+        return
+    setter = getattr(harness, "set_conversation_title", None)
+    if not callable(setter):
+        return
+    try:
+        await setter(workspace_root, conversation_id, title)
+    except (AttributeError, TypeError, RuntimeError, OSError, ValueError):
+        logger.debug("Failed to set runtime conversation title", exc_info=True)
 
 
 @dataclass(frozen=True)
@@ -391,6 +458,42 @@ class _ThreadExecutionLifecycle:
                             conversation_id,
                             backend_runtime_instance_id=runtime_instance_id,
                         )
+                    provider_metadata = provider_title_metadata(
+                        provider_title=getattr(conversation, "title", None),
+                        provider_summary=getattr(conversation, "summary", None),
+                    )
+                    if provider_metadata.get("provider_conversation_title"):
+                        provider_metadata["car_title_source"] = "provider"
+                    thread, provider_title_changed = (
+                        _update_owned_thread_title_best_effort(
+                            self.thread_store,
+                            thread,
+                            title=getattr(conversation, "title", None),
+                            metadata=provider_metadata,
+                        )
+                    )
+                    message_title = choose_owned_thread_title(
+                        thread.display_name,
+                        message_preview=request.message_text,
+                    )
+                    thread, message_title_changed = (
+                        _update_owned_thread_title_best_effort(
+                            self.thread_store,
+                            thread,
+                            title=message_title,
+                        )
+                    )
+                    await _set_runtime_conversation_title_best_effort(
+                        harness,
+                        workspace_root,
+                        conversation_id,
+                        message_title_changed
+                        or provider_title_changed
+                        or choose_owned_thread_title(
+                            None,
+                            message_preview=thread.display_name,
+                        ),
+                    )
                     provisional_turn_id = f"{conversation_id}:{int(time.time() * 1000)}"
                     self.thread_store.set_execution_backend_id(
                         execution.execution_id,

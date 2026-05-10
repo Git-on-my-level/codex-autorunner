@@ -43,11 +43,10 @@ All durable artifacts must live under one of these roots:
 
 **Location**: `<hub_root>/.codex-autorunner/`
 
-**Purpose**: Hub-level state for typed managed resources (`repo` plus
-`agent_workspace`), orchestration metadata, and cross-resource coordination.
+**Purpose**: Hub-level state for typed managed resources (`repos[]`), orchestration metadata, and cross-resource coordination.
 
 **Contents**:
-- `manifest.yml` - Managed hub resources list (`repos:` plus `agent_workspaces:` and their `destination` config)
+- `manifest.yml` - Managed hub resources list (`repos:` and per-repo `destination` config)
 - `hub_state.json` - Hub state
 - `config.yml` - Hub config
 - `codex-autorunner-hub.log` - Hub logs
@@ -64,7 +63,7 @@ The `orchestration.sqlite3` database is the canonical store for:
 
 - **Thread/binding metadata**: Durable CAR thread registrations plus external
   channel bindings (Discord channel IDs, Telegram chat IDs) to consistent thread
-  targets under repos or agent workspaces
+  targets under repos, worktrees, or filesystem-scoped roots
 - **Execution state**: Active/running/queued orchestration work items
 - **Transcript mirrors**: Plain-text user/assistant message copies for search, previews, and debugging
 - **Event projections**: Aggregated views of automation events, flow executions
@@ -77,27 +76,18 @@ The `orchestration.sqlite3` database is the canonical store for:
 
 **Resolution**: `resolve_hub_orchestration_db_path(hub_root)` in `core/state_roots.py`
 
-#### Managed Agent Workspace Roots
+#### Managed runtime roots (hub)
 
-CAR-managed agent workspaces live under:
+CAR may allocate hub-local directories for runtime-specific durable files under:
 
-- `<hub_root>/.codex-autorunner/runtimes/<runtime>/<workspace_id>/`
+- `<hub_root>/.codex-autorunner/runtimes/<runtime>/`
 
-This root is reserved for first-class `agent_workspace` hub resources. In v1,
-CAR allocates these paths itself and does not accept arbitrary external runtime
-paths for managed agent workspaces.
-
-The durable identity hierarchy is:
-
-- `runtime binary -> agent workspace -> CAR thread -> live process`
-
-The runtime binary is detected/configured separately. CAR does not install the
-runtime as part of the state-root contract.
+Use `resolve_hub_runtimes_root` and `resolve_hub_runtime_root` for path authority.
+CAR does not install third-party runtimes as part of the state-root contract.
 
 **Resolution**:
 - `resolve_hub_runtimes_root(hub_root)`
 - `resolve_hub_runtime_root(hub_root, runtime=...)`
-- `resolve_hub_agent_workspace_root(hub_root, runtime=..., workspace_id=...)`
 
 ### 3. Global Root
 
@@ -289,7 +279,7 @@ audit visibility and ad-hoc tooling, but they are **not** the source of truth:
 Deleting any mirror file does not affect correctness; SQLite remains
 authoritative and mirrors are regenerated on the next write.
 
-Separate from persistence mirrors, `PmaStateStore` owns PMA UI runtime state
+Separate from persistence mirrors, `PmaStateStore` owns PMA runtime state
 in `.codex-autorunner/pma/state.json`. This file is not part of the canonical
 queue/thread/automation persistence path.
 
@@ -346,11 +336,6 @@ def resolve_hub_runtimes_root(hub_root: Path) -> Path:
 
 def resolve_hub_runtime_root(hub_root: Path, *, runtime: str) -> Path:
     """Return the managed root for one runtime under the hub."""
-
-def resolve_hub_agent_workspace_root(
-    hub_root: Path, *, runtime: str, workspace_id: str
-) -> Path:
-    """Return the canonical root for a managed agent workspace."""
 ```
 
 ### Usage Pattern

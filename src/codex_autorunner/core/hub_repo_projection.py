@@ -6,6 +6,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Optional, cast
+from urllib.parse import quote
 
 from .hub_projection_store import (
     REPO_RUNTIME_PROJECTION_NAMESPACE,
@@ -106,7 +107,146 @@ class HubRepoProjectionService:
             path_stat_fingerprint(car_root),
             path_stat_fingerprint(car_root / "tickets"),
             path_stat_fingerprint(car_root / "runs"),
+            path_stat_fingerprint(car_root / "runs" / str(snapshot.last_run_id)),
         )
+
+    def _collect_current_run_artifacts(
+        self, snapshot: Any, run_record: Any, *, limit: int = 6
+    ) -> list[dict[str, Any]]:
+        from ..tickets.files import safe_relpath
+        from ..tickets.outbox import resolve_outbox_paths
+        from .flows.workspace_root import resolve_ticket_flow_workspace_root
+
+        try:
+            workspace_root = resolve_ticket_flow_workspace_root(
+                dict(getattr(run_record, "input_data", {}) or {}),
+                snapshot.path,
+            )
+            history_dir = resolve_outbox_paths(
+                workspace_root=workspace_root,
+                run_id=str(run_record.id),
+            ).dispatch_history_dir
+        except (OSError, ValueError, RuntimeError):
+            return []
+        if not history_dir.exists() or not history_dir.is_dir():
+            return []
+
+        artifacts: list[dict[str, Any]] = []
+        for entry in sorted(
+            [path for path in history_dir.iterdir() if path.is_dir()],
+            key=lambda path: path.name,
+            reverse=True,
+        ):
+            for child in sorted(entry.rglob("*")):
+                if child.name == "DISPATCH.md" or child.is_dir():
+                    continue
+                rel = child.relative_to(entry).as_posix()
+                if any(part.startswith(".") for part in rel.split("/")):
+                    continue
+                try:
+                    stat = child.stat()
+                except OSError:
+                    continue
+                artifacts.append(
+                    {
+                        "id": f"{run_record.id}:{entry.name}:{rel}",
+                        "name": child.name,
+                        "title": child.name,
+                        "rel_path": rel,
+                        "path": safe_relpath(child, snapshot.path),
+                        "size": stat.st_size,
+                        "url": f"api/flows/{quote(str(run_record.id))}/dispatch_history/{entry.name}/{quote(rel)}",
+                        "created_at": getattr(run_record, "finished_at", None)
+                        or getattr(run_record, "started_at", None),
+                    }
+                )
+                if len(artifacts) >= limit:
+                    return artifacts
+        return artifacts
+
+    def _compute_git_status(self, snapshot: Any) -> Optional[dict[str, Any]]:
+        """Compact git status snapshot for repo/worktree cards.
+
+        Cheap and best-effort: any git failure returns None so the UI degrades silently.
+        Cached upstream by `_repo_state_payload` so this only runs at most once per
+        repo every ~45s.
+        """
+        from .git_utils import (
+            git_available,
+            git_branch,
+            git_diff_stats,
+            git_status_porcelain,
+            git_upstream_status,
+        )
+
+        if not getattr(snapshot, "exists_on_disk", False):
+            return None
+        repo_root = snapshot.path
+        try:
+            if not git_available(repo_root):
+                return None
+        except Exception:
+            return None
+
+        files_changed = 0
+        untracked = 0
+        staged = 0
+        try:
+            porcelain = git_status_porcelain(repo_root)
+        except Exception:
+            porcelain = None
+        if porcelain is not None:
+            for raw_line in porcelain.splitlines():
+                line = raw_line.rstrip("\n")
+                if not line:
+                    continue
+                files_changed += 1
+                if line.startswith("??"):
+                    untracked += 1
+                elif len(line) >= 2 and line[0] != " " and line[0] != "?":
+                    staged += 1
+
+        diff = None
+        try:
+            diff = git_diff_stats(repo_root)
+        except Exception:
+            diff = None
+
+        upstream = None
+        try:
+            upstream = git_upstream_status(repo_root)
+        except Exception:
+            upstream = None
+
+        branch_name: Optional[str]
+        try:
+            branch_name = git_branch(repo_root)
+        except Exception:
+            branch_name = None
+
+        dirty = files_changed > 0
+        return {
+            "branch": branch_name,
+            "dirty": dirty,
+            "files_changed": files_changed,
+            "untracked": untracked,
+            "staged": staged,
+            "insertions": (diff or {}).get("insertions"),
+            "deletions": (diff or {}).get("deletions"),
+            "has_upstream": (upstream or {}).get("has_upstream"),
+            "ahead": (upstream or {}).get("ahead"),
+            "behind": (upstream or {}).get("behind"),
+        }
+
+    @staticmethod
+    def _ticket_flow_progress_percent(ticket_flow: Any) -> Optional[int]:
+        if not isinstance(ticket_flow, dict):
+            return None
+        total = ticket_flow.get("total_count")
+        done = ticket_flow.get("done_count")
+        if not isinstance(total, int) or not isinstance(done, int) or total <= 0:
+            return None
+        return max(0, min(100, round((done / total) * 100)))
 
     def _compute_repo_state_payload(
         self,
@@ -130,7 +270,9 @@ class HubRepoProjectionService:
             "ticket_flow": None,
             "ticket_flow_display": None,
             "run_state": None,
+            "current_run_artifacts": [],
             "canonical_state_v1": None,
+            "git_status": self._compute_git_status(snapshot),
         }
         if not (snapshot.initialized and snapshot.exists_on_disk):
             return payload
@@ -159,6 +301,7 @@ class HubRepoProjectionService:
                     "is_active": ticket_flow.get("is_active"),
                     "done_count": ticket_flow.get("done_count"),
                     "total_count": ticket_flow.get("total_count"),
+                    "progress_percent": self._ticket_flow_progress_percent(ticket_flow),
                     "run_id": ticket_flow.get("run_id"),
                 }
             else:
@@ -185,6 +328,9 @@ class HubRepoProjectionService:
                 payload["last_run_finished_at"] = run_record.finished_at
                 payload["last_run_duration_seconds"] = flow_run_duration_seconds(
                     run_record
+                )
+                payload["current_run_artifacts"] = self._collect_current_run_artifacts(
+                    snapshot, run_record
                 )
             payload["canonical_state_v1"] = build_canonical_state_v1(
                 repo_root=snapshot.path,

@@ -289,11 +289,11 @@ def _build_ticket_flow_queue_items(
 
 
 def _build_thread_queue_items(
-    pma_threads: list[dict[str, Any]],
+    managed_threads: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     rank, label = _queue_precedence("managed_thread_followup")
-    for entry in pma_threads:
+    for entry in managed_threads:
         if not isinstance(entry, dict):
             continue
         status = (
@@ -562,7 +562,7 @@ def _is_strong_action_queue_item(item: Mapping[str, Any]) -> bool:
 def build_pma_action_queue(
     *,
     inbox: list[dict[str, Any]],
-    pma_threads: list[dict[str, Any]],
+    managed_threads: list[dict[str, Any]],
     pma_files_detail: Mapping[str, list[dict[str, Any]]],
     automation: Mapping[str, Any],
     generated_at: Optional[str] = None,
@@ -572,7 +572,7 @@ def build_pma_action_queue(
     resolved_stale_threshold = resolve_stale_threshold_seconds(stale_threshold_seconds)
     items = [
         *_build_ticket_flow_queue_items(inbox),
-        *_build_thread_queue_items(pma_threads),
+        *_build_thread_queue_items(managed_threads),
         *_build_file_queue_items(pma_files_detail),
         *_build_automation_queue_items(
             automation,

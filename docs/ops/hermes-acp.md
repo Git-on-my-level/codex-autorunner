@@ -9,7 +9,7 @@ Hermes is a repo-backed ACP runtime in CAR. CAR launches Hermes in ACP mode,
 stores the Hermes session id as the backend thread binding, and reuses that
 binding across PMA, Telegram, Discord, web, and ticket-flow turns.
 
-Hermes is not a CAR-managed `agent_workspace` runtime in v1. CAR does not
+Hermes is not a separate hub-managed runtime catalog entry in v1. CAR does not
 create per-thread Hermes homes, and it does not inspect Hermes internal state
 files directly.
 

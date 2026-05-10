@@ -19,6 +19,16 @@ class ModelSpec:
     supports_reasoning: bool
     reasoning_options: list[str]
 
+    def __post_init__(self) -> None:
+        options = [
+            option.strip()
+            for option in self.reasoning_options
+            if isinstance(option, str) and option.strip()
+        ]
+        if not self.supports_reasoning:
+            options = []
+        object.__setattr__(self, "reasoning_options", list(dict.fromkeys(options)))
+
 
 @dataclass(frozen=True)
 class ModelCatalog:

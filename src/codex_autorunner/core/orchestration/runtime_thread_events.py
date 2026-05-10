@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
 
@@ -198,7 +199,7 @@ async def decode_runtime_raw_messages(raw_event: Any) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = []
     async for sse_event in _parse_runtime_thread_sse(text):
         payload = _load_json_object(sse_event.data)
-        if sse_event.event in {"app-server", "event", "zeroclaw"}:
+        if sse_event.event in {"app-server", "event"}:
             message = payload.get("message")
             if isinstance(message, dict):
                 messages.append(dict(message))
@@ -626,7 +627,7 @@ def _normalize_sse_event(
     timestamp: Optional[str] = None,
 ) -> list[RunEvent]:
     payload = _load_json_object(sse_event.data)
-    if sse_event.event in {"app-server", "event", "zeroclaw"}:
+    if sse_event.event in {"app-server", "event"}:
         message = payload.get("message")
         if isinstance(message, dict):
             return normalize_runtime_thread_message(
@@ -662,6 +663,15 @@ def _log_decode_failure(
         reason=reason,
         **fields,
     )
+
+
+def _should_emit_decode_failure_notice() -> bool:
+    value = (
+        str(os.environ.get("CAR_RUNTIME_DECODE_FAILURE_NOTICES") or "").strip().lower()
+    )
+    if value in {"1", "true", "yes", "on", "debug"}:
+        return True
+    return "PYTEST_CURRENT_TEST" in os.environ
 
 
 def normalize_runtime_thread_message(
@@ -706,6 +716,8 @@ def normalize_runtime_thread_message(
             method=method,
             payload_keys=tuple(params.keys()) if isinstance(params, dict) else None,
         )
+        if not _should_emit_decode_failure_notice():
+            return []
         return [
             RunNotice(
                 timestamp=event_timestamp,

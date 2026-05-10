@@ -30,13 +30,13 @@ def _ws_scope(headers: Optional[list[tuple[bytes, bytes]]] = None) -> dict:
     ("path", "requires_auth"),
     [
         ("/", False),
-        ("/static/generated/app.js", False),
+        ("/_app/version.json", False),
         ("/health", False),
         ("/cat", False),
         ("/hub/repos", True),
         ("/repos/demo", True),
         ("/repos/demo/", True),
-        ("/repos/demo/static/generated/app.js", False),
+        ("/repos/demo/static/assets/app.js", True),
         ("/repos/demo/ws", True),
     ],
 )

@@ -5,14 +5,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from codex_autorunner.bootstrap import seed_hub_files
-from codex_autorunner.integrations.telegram.adapter import (
+from codex_autorunner.adapters.telegram.adapter import TelegramChatAdapter
+from codex_autorunner.adapters.telegram.client import (
     TelegramMessage,
     TelegramUpdatePoller,
 )
-from codex_autorunner.integrations.telegram.chat_adapter import TelegramChatAdapter
-from codex_autorunner.integrations.telegram.config import TelegramBotConfig
-from codex_autorunner.integrations.telegram.service import TelegramBotService
+from codex_autorunner.adapters.telegram.config import TelegramBotConfig
+from codex_autorunner.adapters.telegram.service import TelegramBotService
+from codex_autorunner.bootstrap import seed_hub_files
 from tests.chat_surface_lab.backend_runtime import app_server_fixture_command
 from tests.chat_surface_lab.telegram_simulator import TelegramSurfaceSimulator
 

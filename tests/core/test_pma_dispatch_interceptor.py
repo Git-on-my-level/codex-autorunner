@@ -6,13 +6,13 @@ from pathlib import Path
 
 import pytest
 
+from codex_autorunner.adapters.discord.state import DiscordStateStore
 from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.flows import FlowStore
 from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.core.lifecycle_events import LifecycleEvent, LifecycleEventType
 from codex_autorunner.core.pma_dispatch_interceptor import PmaDispatchInterceptor
-from codex_autorunner.integrations.discord.state import DiscordStateStore
 from tests.conftest import write_test_config
 
 

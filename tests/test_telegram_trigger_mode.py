@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from codex_autorunner.integrations.telegram.adapter import TelegramMessage
-from codex_autorunner.integrations.telegram.trigger_mode import should_trigger_run
+from codex_autorunner.adapters.telegram.client import TelegramMessage
+from codex_autorunner.adapters.telegram.trigger_mode import should_trigger_run
 
 
 def _base_message(**kwargs) -> TelegramMessage:

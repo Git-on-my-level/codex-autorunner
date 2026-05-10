@@ -29,12 +29,23 @@ from ..acp import (
     ACPSessionCapabilities,
     ACPSubprocessSupervisor,
 )
-from ..managed_runtime import RuntimePreflightResult
 from ..types import TerminalTurnResult
 
 _logger = logging.getLogger(__name__)
 
 HERMES_RUNTIME_ID = "hermes"
+
+
+@dataclass(frozen=True)
+class RuntimePreflightResult:
+    runtime_id: str
+    status: str
+    version: Optional[str]
+    launch_mode: Optional[str]
+    message: str
+    fix: str
+
+
 HERMES_ACP_COMMAND = "acp"
 HERMES_APPROVAL_TIMEOUT_SECONDS = 300.0
 
@@ -1183,6 +1194,7 @@ def hermes_runtime_preflight(
             f"Hermes {version or 'version unknown'} supports ACP mode and "
             "uses Hermes-native durable sessions."
         ),
+        fix="",
     )
 
 

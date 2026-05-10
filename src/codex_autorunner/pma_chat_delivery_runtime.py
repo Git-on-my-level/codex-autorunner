@@ -5,6 +5,16 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
+from .adapters.chat.bound_live_progress import (
+    build_bound_chat_live_progress_session,
+)
+from .adapters.chat.pma_delivery import (
+    PmaChatDeliveryAdapter,
+    PmaChatDeliveryAdapterResult,
+    PmaChatDeliveryRecord,
+)
+from .adapters.discord.pma_delivery import DiscordPmaChatDeliveryAdapter
+from .adapters.telegram.pma_delivery import TelegramPmaChatDeliveryAdapter
 from .core.chat_bindings import (
     normalize_workspace_path,
     orchestration_surface_targets_for_thread,
@@ -17,16 +27,6 @@ from .core.chat_bindings import (
 from .core.pma_chat_delivery import PmaChatDeliveryIntent
 from .core.pma_notification_store import PmaNotificationStore
 from .core.text_utils import _normalize_optional_text
-from .integrations.chat.bound_live_progress import (
-    build_bound_chat_live_progress_session,
-)
-from .integrations.chat.pma_delivery import (
-    PmaChatDeliveryAdapter,
-    PmaChatDeliveryAdapterResult,
-    PmaChatDeliveryRecord,
-)
-from .integrations.discord.pma_delivery import DiscordPmaChatDeliveryAdapter
-from .integrations.telegram.pma_delivery import TelegramPmaChatDeliveryAdapter
 
 _DEFAULT_PMA_CHAT_DELIVERY_ADAPTERS: dict[str, PmaChatDeliveryAdapter] = {
     "discord": DiscordPmaChatDeliveryAdapter(),
@@ -90,7 +90,7 @@ async def _resolve_bound_progress_targets(
         workspace_root=workspace_root,
     ):
         if surface_kind == "discord":
-            from .integrations.discord.state import DiscordStateStore
+            from .adapters.discord.state import DiscordStateStore
 
             discord_store = DiscordStateStore(
                 resolve_discord_state_path(hub_root, raw_config)
@@ -121,7 +121,7 @@ async def _resolve_bound_progress_targets(
             finally:
                 await discord_store.close()
         elif surface_kind == "telegram":
-            from .integrations.telegram.state import TelegramStateStore, parse_topic_key
+            from .adapters.telegram.state import TelegramStateStore, parse_topic_key
 
             telegram_store = TelegramStateStore(
                 resolve_telegram_state_path(hub_root, raw_config)

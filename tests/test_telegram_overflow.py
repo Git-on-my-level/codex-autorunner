@@ -1,7 +1,7 @@
-from codex_autorunner.integrations.telegram.constants import (
+from codex_autorunner.adapters.telegram.constants import (
     SHELL_OUTPUT_TRUNCATION_SUFFIX,
 )
-from codex_autorunner.integrations.telegram.overflow import (
+from codex_autorunner.adapters.telegram.overflow import (
     split_markdown_message,
     trim_markdown_message,
 )

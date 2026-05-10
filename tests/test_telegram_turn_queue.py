@@ -8,21 +8,21 @@ from typing import Optional
 
 import pytest
 
-from codex_autorunner.integrations.chat.queue_status import (
+from codex_autorunner.adapters.chat.queue_status import (
     coerce_queue_status_items,
     format_queue_status_text,
 )
-from codex_autorunner.integrations.telegram.adapter import TelegramMessage
-from codex_autorunner.integrations.telegram.constants import (
+from codex_autorunner.adapters.telegram.client import TelegramMessage
+from codex_autorunner.adapters.telegram.constants import (
     PLACEHOLDER_TEXT,
     QUEUED_PLACEHOLDER_TEXT,
 )
-from codex_autorunner.integrations.telegram.handlers.commands_runtime import (
+from codex_autorunner.adapters.telegram.handlers.commands_runtime import (
     TelegramCommandHandlers,
     _RuntimeStub,
 )
-from codex_autorunner.integrations.telegram.helpers import _format_turn_metrics
-from codex_autorunner.integrations.telegram.state import TelegramTopicRecord
+from codex_autorunner.adapters.telegram.helpers import _format_turn_metrics
+from codex_autorunner.adapters.telegram.state import TelegramTopicRecord
 
 
 class _TurnResult:

@@ -1,12 +1,12 @@
+from codex_autorunner.adapters.chat.runtime_thread_errors import (
+    format_public_error,
+    sanitize_runtime_thread_error,
+)
 from codex_autorunner.core.orchestration.runtime_threads import (
     RUNTIME_THREAD_INTERRUPTED_ERROR,
     RUNTIME_THREAD_TIMEOUT_ERROR,
 )
 from codex_autorunner.core.redaction import redact_text
-from codex_autorunner.integrations.chat.runtime_thread_errors import (
-    format_public_error,
-    sanitize_runtime_thread_error,
-)
 
 
 def test_redaction_scrubs_common_tokens() -> None:

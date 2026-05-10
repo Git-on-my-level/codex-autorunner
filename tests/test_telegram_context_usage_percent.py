@@ -1,4 +1,4 @@
-from codex_autorunner.integrations.telegram.helpers import (
+from codex_autorunner.adapters.telegram.helpers import (
     _extract_context_usage_percent,
     _format_tui_token_usage,
 )

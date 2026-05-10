@@ -170,13 +170,6 @@ Local provider:
 | `CAR_PMA_INBOX_AUTO_DISMISS_GRACE_SECONDS` | Grace period (seconds) before auto-dismissing PMA inbox items. | `3600` |
 | `CAR_LEGACY_MIRROR_ENABLED` | Enable legacy one-way sync mirror from orchestration SQLite to old `threads.sqlite3` schema. Set to `"true"` to enable. | `""` (disabled). |
 
-## ZeroClaw agent runtime
-
-| Env var | Purpose | Default |
-| --- | --- | --- |
-| `ZEROCLAW_WORKSPACE` | Workspace root for the ZeroClaw runtime. Set at launch to the managed workspace path. | Set by managed runtime launcher. |
-| `ZEROCLAW_CONFIG_DIR` | Configuration directory for the ZeroClaw runtime. | `$HOME/.zeroclaw` |
-
 ## Test / CI tuning (`scripts/check.sh`)
 
 | Env var | Purpose | Default |
@@ -204,6 +197,5 @@ These may exist at runtime but are often set by tooling rather than hand-edited 
 
 - `CAR_HUB_ROOT` from CLI `--hub`
 - `CAR_DEV_INCLUDE_ROOT_REPO` for repo-development flows
-- `ZEROCLAW_WORKSPACE` and `ZEROCLAW_CONFIG_DIR` for ZeroClaw launches
 - `VISUAL` and `EDITOR` for `car edit`
 - `CODEX_BIN` and `OPENCODE_BIN` for protocol/schema tooling

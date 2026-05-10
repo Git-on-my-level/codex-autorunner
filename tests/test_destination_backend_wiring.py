@@ -6,6 +6,11 @@ import logging
 from pathlib import Path
 from types import SimpleNamespace
 
+from codex_autorunner.adapters.agents.destination_wrapping import WrappedCommand
+from codex_autorunner.adapters.agents.wiring import (
+    AgentBackendFactory,
+    build_app_server_supervisor_factory,
+)
 from codex_autorunner.core.agent_config import AgentProfileConfig
 from codex_autorunner.core.config import (
     CONFIG_FILENAME,
@@ -15,11 +20,6 @@ from codex_autorunner.core.config import (
     load_repo_config,
 )
 from codex_autorunner.core.state import RunnerState
-from codex_autorunner.integrations.agents.destination_wrapping import WrappedCommand
-from codex_autorunner.integrations.agents.wiring import (
-    AgentBackendFactory,
-    build_app_server_supervisor_factory,
-)
 from codex_autorunner.manifest import load_manifest, save_manifest
 from tests.conftest import write_test_config
 
@@ -49,11 +49,11 @@ def test_build_app_server_supervisor_factory_local_command_unchanged(
             captured["state_root"] = kwargs.get("state_root")
 
     monkeypatch.setattr(
-        "codex_autorunner.integrations.agents.wiring.WorkspaceAppServerSupervisor",
+        "codex_autorunner.adapters.agents.wiring.WorkspaceAppServerSupervisor",
         _FakeSupervisor,
     )
     monkeypatch.setattr(
-        "codex_autorunner.integrations.agents.wiring.wrap_command_for_destination",
+        "codex_autorunner.adapters.agents.wiring.wrap_command_for_destination",
         lambda **_: (_ for _ in ()).throw(AssertionError("should not wrap local")),
     )
 
@@ -79,11 +79,11 @@ def test_build_app_server_supervisor_factory_docker_wraps_command(
             captured["state_root"] = kwargs.get("state_root")
 
     monkeypatch.setattr(
-        "codex_autorunner.integrations.agents.wiring.WorkspaceAppServerSupervisor",
+        "codex_autorunner.adapters.agents.wiring.WorkspaceAppServerSupervisor",
         _FakeSupervisor,
     )
     monkeypatch.setattr(
-        "codex_autorunner.integrations.agents.wiring.wrap_command_for_destination",
+        "codex_autorunner.adapters.agents.wiring.wrap_command_for_destination",
         lambda **_: WrappedCommand(
             command=["docker", "exec", "car-ws-123", "codex", "app-server"],
             state_root_override=repo_root
@@ -122,7 +122,7 @@ def test_build_app_server_supervisor_factory_preserves_runtime_policy_settings(
             captured["kwargs"] = dict(kwargs)
 
     monkeypatch.setattr(
-        "codex_autorunner.integrations.agents.wiring.WorkspaceAppServerSupervisor",
+        "codex_autorunner.adapters.agents.wiring.WorkspaceAppServerSupervisor",
         _FakeSupervisor,
     )
 
@@ -173,7 +173,7 @@ def test_build_app_server_supervisor_factory_uses_configured_command(
             captured["command"] = list(command)
 
     monkeypatch.setattr(
-        "codex_autorunner.integrations.agents.wiring.WorkspaceAppServerSupervisor",
+        "codex_autorunner.adapters.agents.wiring.WorkspaceAppServerSupervisor",
         _FakeSupervisor,
     )
 
@@ -198,11 +198,11 @@ def test_agent_backend_factory_codex_supervisor_wraps_for_docker(
             captured["state_root"] = kwargs.get("state_root")
 
     monkeypatch.setattr(
-        "codex_autorunner.integrations.agents.wiring.WorkspaceAppServerSupervisor",
+        "codex_autorunner.adapters.agents.wiring.WorkspaceAppServerSupervisor",
         _FakeSupervisor,
     )
     monkeypatch.setattr(
-        "codex_autorunner.integrations.agents.wiring.wrap_command_for_destination",
+        "codex_autorunner.adapters.agents.wiring.wrap_command_for_destination",
         lambda **_: WrappedCommand(
             command=["docker", "exec", "ctr", "codex", "app-server"],
             state_root_override=repo_root
@@ -231,7 +231,7 @@ def test_agent_backend_factory_passes_docker_override_to_opencode_factory(
     captured: dict[str, object] = {}
 
     monkeypatch.setattr(
-        "codex_autorunner.integrations.agents.wiring.wrap_command_for_destination",
+        "codex_autorunner.adapters.agents.wiring.wrap_command_for_destination",
         lambda **_: WrappedCommand(
             command=["docker", "exec", "ctr", "opencode", "serve"]
         ),
@@ -244,7 +244,7 @@ def test_agent_backend_factory_passes_docker_override_to_opencode_factory(
         return "supervisor"
 
     monkeypatch.setattr(
-        "codex_autorunner.integrations.agents.wiring.build_opencode_supervisor_from_repo_config",
+        "codex_autorunner.adapters.agents.wiring.build_opencode_supervisor_from_repo_config",
         _fake_build_opencode_supervisor_from_repo_config,
     )
 
@@ -289,11 +289,11 @@ def test_agent_backend_factory_reuses_and_closes_cached_supervisors(
         return supervisor
 
     monkeypatch.setattr(
-        "codex_autorunner.integrations.agents.wiring.WorkspaceAppServerSupervisor",
+        "codex_autorunner.adapters.agents.wiring.WorkspaceAppServerSupervisor",
         _fake_workspace_supervisor,
     )
     monkeypatch.setattr(
-        "codex_autorunner.integrations.agents.wiring.build_opencode_supervisor_from_repo_config",
+        "codex_autorunner.adapters.agents.wiring.build_opencode_supervisor_from_repo_config",
         _fake_opencode_supervisor,
     )
 
@@ -332,7 +332,7 @@ def test_agent_backend_factory_reuses_shared_opencode_supervisor_without_owning_
             self.close_calls += 1
 
     monkeypatch.setattr(
-        "codex_autorunner.integrations.agents.wiring.build_opencode_supervisor_from_repo_config",
+        "codex_autorunner.adapters.agents.wiring.build_opencode_supervisor_from_repo_config",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             AssertionError("should not build a new supervisor")
         ),
@@ -375,7 +375,7 @@ def test_agent_backend_factory_uses_alias_backed_opencode_runtime_config(
             return None
 
     monkeypatch.setattr(
-        "codex_autorunner.integrations.agents.wiring.OpenCodeBackend",
+        "codex_autorunner.adapters.agents.wiring.OpenCodeBackend",
         _FakeOpenCodeBackend,
     )
 
@@ -416,11 +416,11 @@ def test_agent_backend_factory_uses_profile_base_url_for_opencode_runtime(
             return None
 
     monkeypatch.setattr(
-        "codex_autorunner.integrations.agents.wiring.OpenCodeBackend",
+        "codex_autorunner.adapters.agents.wiring.OpenCodeBackend",
         _FakeOpenCodeBackend,
     )
     monkeypatch.setattr(
-        "codex_autorunner.integrations.agents.wiring.AgentBackendFactory._ensure_opencode_supervisor",
+        "codex_autorunner.adapters.agents.wiring.AgentBackendFactory._ensure_opencode_supervisor",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             AssertionError("profile base_url should avoid supervisor mode")
         ),
@@ -466,7 +466,7 @@ def test_agent_backend_factory_partitions_opencode_backends_by_runtime_profile(
             return None
 
     monkeypatch.setattr(
-        "codex_autorunner.integrations.agents.wiring.OpenCodeBackend",
+        "codex_autorunner.adapters.agents.wiring.OpenCodeBackend",
         _FakeOpenCodeBackend,
     )
 
@@ -509,7 +509,7 @@ def test_agent_backend_factory_partitions_opencode_supervisors_by_runtime_profil
         return object()
 
     monkeypatch.setattr(
-        "codex_autorunner.integrations.agents.wiring.build_opencode_supervisor_from_repo_config",
+        "codex_autorunner.adapters.agents.wiring.build_opencode_supervisor_from_repo_config",
         _fake_opencode_supervisor,
     )
 

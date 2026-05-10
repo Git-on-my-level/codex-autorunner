@@ -8,6 +8,7 @@ from typing import Annotated, Any, Optional, cast
 
 from fastapi import APIRouter, Body, HTTPException, Request
 
+from .....adapters.chat.execution_event_journal import list_chat_execution_journal
 from .....agents.registry import (
     get_registered_agents,
     resolve_agent_runtime,
@@ -16,20 +17,22 @@ from .....agents.registry import (
 from .....core.chat_bindings import active_chat_binding_metadata_by_thread
 from .....core.orchestration import build_harness_backed_orchestration_service
 from .....core.orchestration.catalog import RuntimeAgentDescriptor
+from .....core.orchestration.managed_thread_timeline import (
+    build_managed_thread_timeline,
+)
 from .....core.orchestration.turn_timeline import list_turn_timeline
 from .....core.pma_automation_store import PmaAutomationThreadNotFoundError
 from .....core.text_utils import _truncate_text
-from .....integrations.chat.execution_event_journal import list_chat_execution_journal
 from ...schemas import (
+    ManagedThreadBulkArchiveRequest,
+    ManagedThreadCompactRequest,
+    ManagedThreadCreateRequest,
+    ManagedThreadForkRequest,
+    ManagedThreadResumeRequest,
     PmaAutomationSubscriptionCreateRequest,
     PmaAutomationTimerCancelRequest,
     PmaAutomationTimerCreateRequest,
     PmaAutomationTimerTouchRequest,
-    PmaManagedThreadBulkArchiveRequest,
-    PmaManagedThreadCompactRequest,
-    PmaManagedThreadCreateRequest,
-    PmaManagedThreadForkRequest,
-    PmaManagedThreadResumeRequest,
 )
 from ...services.pma import get_pma_request_context
 from ...services.pma.managed_thread_followup import (
@@ -142,20 +145,31 @@ def build_managed_thread_orchestration_service(request: Request):
             profile,
             context=context.agent_context,
         )
-        runtime_agent_id = resolution.runtime_agent_id
-        runtime_profile = resolution.runtime_profile
-        cache_key = (runtime_agent_id, runtime_profile or "")
+        use_logical_profile_descriptor = (
+            profile is not None and resolution.logical_agent_id == agent_id
+        )
+        descriptor_agent_id = (
+            resolution.logical_agent_id
+            if use_logical_profile_descriptor
+            else resolution.runtime_agent_id
+        )
+        descriptor_profile = (
+            resolution.logical_profile
+            if use_logical_profile_descriptor
+            else resolution.runtime_profile
+        )
+        cache_key = (descriptor_agent_id, descriptor_profile or "")
         cached = cache.get(cache_key)
         if cached is not None:
             return cached
-        descriptor = descriptors.get(runtime_agent_id)
+        descriptor = descriptors.get(descriptor_agent_id)
         if descriptor is None:
-            raise KeyError(f"Unknown agent definition '{runtime_agent_id}'")
+            raise KeyError(f"Unknown agent definition '{descriptor_agent_id}'")
         harness = descriptor.make_harness(
             wrap_requested_agent_context(
                 context.agent_context,
-                agent_id=runtime_agent_id,
-                profile=runtime_profile,
+                agent_id=resolution.logical_agent_id,
+                profile=resolution.logical_profile,
             )
         )
         cache[cache_key] = harness
@@ -164,7 +178,7 @@ def build_managed_thread_orchestration_service(request: Request):
     return build_harness_backed_orchestration_service(
         descriptors=cast(dict[str, RuntimeAgentDescriptor], descriptors),
         harness_factory=_make_harness,
-        pma_thread_store=context.thread_store(),
+        managed_thread_store=context.thread_store(),
     )
 
 
@@ -395,7 +409,7 @@ def build_managed_thread_crud_routes(
 
     @router.post("/threads")
     async def create_managed_thread(
-        request: Request, payload: PmaManagedThreadCreateRequest
+        request: Request, payload: ManagedThreadCreateRequest
     ) -> dict[str, Any]:
         context = get_pma_request_context(request)
         hub_root = context.hub_root
@@ -410,15 +424,24 @@ def build_managed_thread_crud_routes(
         service = build_managed_thread_orchestration_service(request)
         try:
             try:
-                thread = service.create_thread_target(
-                    resolved.agent_id,
-                    provisioned_workspace.workspace_root,
-                    repo_id=resolved.repo_id,
-                    resource_kind=resolved.resource_kind,
-                    resource_id=resolved.resource_id,
-                    display_name=normalize_optional_text(payload.name),
-                    metadata=resolved.metadata,
-                )
+                if resolved.scope is not None:
+                    thread = service.create_thread_target(
+                        resolved.agent_id,
+                        provisioned_workspace.workspace_root,
+                        scope=resolved.scope,
+                        display_name=normalize_optional_text(payload.name),
+                        metadata=resolved.metadata,
+                    )
+                else:
+                    thread = service.create_thread_target(
+                        resolved.agent_id,
+                        provisioned_workspace.workspace_root,
+                        repo_id=resolved.repo_id,
+                        resource_kind=resolved.resource_kind,
+                        resource_id=resolved.resource_id,
+                        display_name=normalize_optional_text(payload.name),
+                        metadata=resolved.metadata,
+                    )
             except Exception:
                 await _cleanup_failed_provisioned_worktree(
                     request,
@@ -488,6 +511,16 @@ def build_managed_thread_crud_routes(
             resource_id=query.resource_id,
             limit=query.limit,
         )
+        active_work_by_thread = {
+            summary.thread_target_id: summary
+            for summary in service.list_active_work_summaries(
+                agent_id=query.agent_id,
+                repo_id=query.repo_id,
+                resource_kind=query.resource_kind,
+                resource_id=query.resource_id,
+                limit=max(query.limit, len(threads), 1),
+            )
+        }
         binding_metadata = _load_chat_binding_metadata_by_thread(
             get_pma_request_context(request).hub_root
         )
@@ -496,6 +529,9 @@ def build_managed_thread_crud_routes(
                 _serialize_thread_target(
                     thread,
                     binding_metadata_by_thread=binding_metadata,
+                    active_work_summary=active_work_by_thread.get(
+                        thread.thread_target_id
+                    ),
                 )
                 for thread in threads
             ]
@@ -526,7 +562,7 @@ def build_managed_thread_crud_routes(
     def compact_managed_thread(
         managed_thread_id: str,
         request: Request,
-        payload: PmaManagedThreadCompactRequest,
+        payload: ManagedThreadCompactRequest,
     ) -> dict[str, Any]:
         summary = (payload.summary or "").strip()
         if not summary:
@@ -582,7 +618,7 @@ def build_managed_thread_crud_routes(
     async def fork_managed_thread(
         managed_thread_id: str,
         request: Request,
-        payload: PmaManagedThreadForkRequest,
+        payload: ManagedThreadForkRequest,
     ) -> dict[str, Any]:
         service = build_managed_thread_orchestration_service(request)
         source_thread = service.get_thread_target(managed_thread_id)
@@ -626,7 +662,7 @@ def build_managed_thread_crud_routes(
                 or source_thread.display_name
                 or source_thread.thread_target_id,
                 metadata={
-                    "flow_type": "pma_managed_thread_fork",
+                    "flow_type": "managed_thread_fork",
                     "managed_thread_id": managed_thread_id,
                     "source_backend_thread_id": source_session_id,
                 },
@@ -692,7 +728,7 @@ def build_managed_thread_crud_routes(
     async def resume_managed_thread(
         managed_thread_id: str,
         request: Request,
-        payload: PmaManagedThreadResumeRequest,
+        payload: ManagedThreadResumeRequest,
     ) -> dict[str, Any]:
         service = build_managed_thread_orchestration_service(request)
         thread = service.get_thread_target(managed_thread_id)
@@ -756,7 +792,7 @@ def build_managed_thread_crud_routes(
 
     @router.post("/threads/archive")
     def archive_managed_threads(
-        payload: PmaManagedThreadBulkArchiveRequest, request: Request
+        payload: ManagedThreadBulkArchiveRequest, request: Request
     ) -> dict[str, Any]:
         service = build_managed_thread_orchestration_service(request)
         context = get_pma_request_context(request)
@@ -818,6 +854,29 @@ def build_managed_thread_crud_routes(
         return {
             "turns": [serialize_managed_thread_turn_summary(turn) for turn in turns]
         }
+
+    @router.get("/threads/{managed_thread_id}/timeline")
+    def get_managed_thread_timeline(
+        managed_thread_id: str,
+        request: Request,
+        limit: int = 500,
+    ) -> dict[str, Any]:
+        if limit <= 0:
+            raise HTTPException(status_code=400, detail="limit must be greater than 0")
+
+        context = get_pma_request_context(request)
+        store = context.thread_store()
+        try:
+            return build_managed_thread_timeline(
+                context.hub_root,
+                thread_store=store,
+                managed_thread_id=managed_thread_id,
+                limit=limit,
+            )
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=404, detail="Managed thread not found"
+            ) from exc
 
     @router.get("/threads/{managed_thread_id}/queue")
     def list_managed_thread_queue(

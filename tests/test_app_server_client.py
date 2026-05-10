@@ -8,13 +8,13 @@ from typing import Any
 
 import pytest
 
-from codex_autorunner.integrations.app_server import client as app_server_client
-from codex_autorunner.integrations.app_server.client import (
+from codex_autorunner.adapters.app_server import client as app_server_client
+from codex_autorunner.adapters.app_server.client import (
     CodexAppServerClient,
     CodexAppServerDisconnected,
     CodexAppServerResponseError,
 )
-from codex_autorunner.integrations.app_server.protocol_helpers import (
+from codex_autorunner.adapters.app_server.protocol_helpers import (
     _extract_agent_message_text,
 )
 

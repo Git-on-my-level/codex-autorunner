@@ -1,0 +1,414 @@
+from __future__ import annotations
+
+from typing import Any
+
+import httpx
+import pytest
+
+from codex_autorunner.adapters.discord.errors import (
+    DiscordAPIError,
+    DiscordPermanentError,
+    DiscordTransientError,
+)
+from codex_autorunner.adapters.discord.rest import DiscordRestClient
+from codex_autorunner.core.exceptions import CircuitOpenError
+
+
+async def _configure_mock_client(
+    client: DiscordRestClient, transport: httpx.MockTransport
+) -> None:
+    await client._client.aclose()
+    client._client = httpx.AsyncClient(
+        base_url="https://discord.test/api/v10",
+        transport=transport,
+        timeout=10.0,
+    )
+
+
+@pytest.mark.anyio
+async def test_discord_rest_client_sets_authorization_header() -> None:
+    observed: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed["authorization"] = request.headers.get("Authorization")
+        observed["path"] = request.url.path
+        return httpx.Response(200, json={"url": "wss://gateway.discord.gg"})
+
+    client = DiscordRestClient(
+        bot_token="abc123", base_url="https://discord.test/api/v10"
+    )
+    await _configure_mock_client(client, httpx.MockTransport(handler))
+    try:
+        payload = await client.get_gateway_bot()
+    finally:
+        await client.close()
+
+    assert payload["url"] == "wss://gateway.discord.gg"
+    assert observed["authorization"] == "Bot abc123"
+    assert observed["path"] == "/api/v10/gateway/bot"
+
+
+@pytest.mark.anyio
+async def test_command_routes_global_and_guild() -> None:
+    observed_paths: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed_paths.append((request.method, request.url.path))
+        if request.method == "PUT":
+            return httpx.Response(200, json=[{"id": "cmd-1"}])
+        return httpx.Response(200, json=[])
+
+    client = DiscordRestClient(
+        bot_token="abc123", base_url="https://discord.test/api/v10"
+    )
+    await _configure_mock_client(client, httpx.MockTransport(handler))
+    try:
+        await client.list_application_commands(application_id="app-1")
+        await client.list_application_commands(
+            application_id="app-1", guild_id="guild-2"
+        )
+        await client.bulk_overwrite_application_commands(
+            application_id="app-1",
+            commands=[{"name": "ping"}],
+        )
+        await client.bulk_overwrite_application_commands(
+            application_id="app-1",
+            guild_id="guild-2",
+            commands=[{"name": "pong"}],
+        )
+    finally:
+        await client.close()
+
+    assert observed_paths == [
+        ("GET", "/api/v10/applications/app-1/commands"),
+        ("GET", "/api/v10/applications/app-1/guilds/guild-2/commands"),
+        ("PUT", "/api/v10/applications/app-1/commands"),
+        ("PUT", "/api/v10/applications/app-1/guilds/guild-2/commands"),
+    ]
+
+
+@pytest.mark.anyio
+async def test_trigger_typing_posts_to_channel_typing_route() -> None:
+    observed: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed["authorization"] = request.headers.get("Authorization")
+        observed["method"] = request.method
+        observed["path"] = request.url.path
+        return httpx.Response(204)
+
+    client = DiscordRestClient(
+        bot_token="abc123", base_url="https://discord.test/api/v10"
+    )
+    await _configure_mock_client(client, httpx.MockTransport(handler))
+    try:
+        await client.trigger_typing(channel_id="chan-1")
+    finally:
+        await client.close()
+
+    assert observed == {
+        "authorization": "Bot abc123",
+        "method": "POST",
+        "path": "/api/v10/channels/chan-1/typing",
+    }
+
+
+@pytest.mark.anyio
+async def test_rate_limit_retry_after_retries_and_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts = {"count": 0}
+    sleeps: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(
+        "codex_autorunner.adapters.discord.rest.asyncio.sleep", fake_sleep
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        attempts["count"] += 1
+        if attempts["count"] < 3:
+            return httpx.Response(429, headers={"Retry-After": "0.25"}, json={})
+        return httpx.Response(200, json={"id": "msg-1"})
+
+    client = DiscordRestClient(
+        bot_token="abc123", base_url="https://discord.test/api/v10"
+    )
+    await _configure_mock_client(client, httpx.MockTransport(handler))
+    try:
+        payload = await client.create_channel_message(
+            channel_id="chan-1",
+            payload={"content": "hello"},
+        )
+    finally:
+        await client.close()
+
+    assert payload == {"id": "msg-1"}
+    assert attempts["count"] == 3
+    assert sleeps == [0.25, 0.25]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("status_code", [401, 403])
+async def test_auth_failures_raise_permanent_error_without_retry(
+    status_code: int,
+) -> None:
+    attempts = {"count": 0}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        attempts["count"] += 1
+        return httpx.Response(status_code, json={"message": "Unauthorized"})
+
+    client = DiscordRestClient(
+        bot_token="abc123", base_url="https://discord.test/api/v10"
+    )
+    await _configure_mock_client(client, httpx.MockTransport(handler))
+    try:
+        with pytest.raises(DiscordPermanentError):
+            await client.get_gateway_bot()
+    finally:
+        await client.close()
+
+    assert attempts["count"] == 1
+    breaker = client._circuit_breakers["gateway"]
+    assert breaker._state.failure_count == 0
+    assert breaker._state.state.value == "closed"
+
+
+@pytest.mark.anyio
+async def test_download_attachment_rejects_untrusted_url() -> None:
+    client = DiscordRestClient(
+        bot_token="abc123", base_url="https://discord.test/api/v10"
+    )
+    try:
+        with pytest.raises(DiscordAPIError, match="untrusted URL"):
+            await client.download_attachment(url="https://example.com/file.png")
+    finally:
+        await client.close()
+
+
+@pytest.mark.anyio
+async def test_download_attachment_streaming_enforces_max_size() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host in {"cdn.discordapp.com", "media.discordapp.net"}:
+            return httpx.Response(200, content=b"1234567890")
+        return httpx.Response(404, json={})
+
+    client = DiscordRestClient(
+        bot_token="abc123", base_url="https://discord.test/api/v10"
+    )
+    await _configure_mock_client(client, httpx.MockTransport(handler))
+    try:
+        with pytest.raises(DiscordAPIError, match="too large"):
+            await client.download_attachment(
+                url="https://cdn.discordapp.com/attachments/demo.bin",
+                max_size_bytes=4,
+            )
+    finally:
+        await client.close()
+
+
+@pytest.mark.anyio
+async def test_interaction_4xx_does_not_open_shared_breaker() -> None:
+    attempts = {"count": 0}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        attempts["count"] += 1
+        return httpx.Response(
+            404,
+            json={"message": "Unknown interaction", "code": 10062},
+        )
+
+    client = DiscordRestClient(
+        bot_token="abc123",
+        base_url="https://discord.test/api/v10",
+        max_retries=0,
+    )
+    await _configure_mock_client(client, httpx.MockTransport(handler))
+    try:
+        for _ in range(6):
+            with pytest.raises(DiscordPermanentError, match="status=404"):
+                await client.create_interaction_response(
+                    interaction_id="123",
+                    interaction_token="token",
+                    payload={"type": 5},
+                )
+    finally:
+        await client.close()
+
+    assert attempts["count"] == 6
+    breaker = client._circuit_breakers["interactions"]
+    assert breaker._state.failure_count == 0
+    assert breaker._state.state.value == "closed"
+
+
+@pytest.mark.anyio
+async def test_interaction_callback_does_not_retry_transient_network_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts = {"count": 0}
+    sleeps: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(
+        "codex_autorunner.adapters.discord.rest.asyncio.sleep",
+        fake_sleep,
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise httpx.ConnectError("boom", request=request)
+        return httpx.Response(204)
+
+    client = DiscordRestClient(
+        bot_token="abc123",
+        base_url="https://discord.test/api/v10",
+        max_retries=0,
+    )
+    await _configure_mock_client(client, httpx.MockTransport(handler))
+    try:
+        with pytest.raises(DiscordTransientError, match="network error"):
+            await client.create_interaction_response(
+                interaction_id="123",
+                interaction_token="token",
+                payload={"type": 5},
+            )
+    finally:
+        await client.close()
+
+    assert attempts["count"] == 1
+    assert sleeps == []
+
+
+@pytest.mark.anyio
+async def test_rate_limit_exhaustion_does_not_open_shared_breaker() -> None:
+    attempts = {"count": 0}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        attempts["count"] += 1
+        return httpx.Response(429, headers={"Retry-After": "0"}, json={})
+
+    client = DiscordRestClient(
+        bot_token="abc123",
+        base_url="https://discord.test/api/v10",
+        max_retries=0,
+    )
+    await _configure_mock_client(client, httpx.MockTransport(handler))
+    try:
+        for _ in range(6):
+            with pytest.raises(DiscordTransientError, match="rate limit"):
+                await client.create_interaction_response(
+                    interaction_id="123",
+                    interaction_token="token",
+                    payload={"type": 5},
+                )
+    finally:
+        await client.close()
+
+    assert attempts["count"] == 6
+    breaker = client._circuit_breakers["interactions"]
+    assert breaker._state.failure_count == 0
+    assert breaker._state.state.value == "closed"
+
+
+@pytest.mark.anyio
+async def test_repeated_5xx_fail_fast_callbacks_do_not_open_shared_breaker() -> None:
+    attempts = {"count": 0}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        attempts["count"] += 1
+        return httpx.Response(500, json={"message": "server exploded"})
+
+    client = DiscordRestClient(
+        bot_token="abc123",
+        base_url="https://discord.test/api/v10",
+        max_retries=0,
+    )
+    await _configure_mock_client(client, httpx.MockTransport(handler))
+    try:
+        for _ in range(6):
+            with pytest.raises(DiscordTransientError, match="server error"):
+                await client.create_interaction_response(
+                    interaction_id="123",
+                    interaction_token="token",
+                    payload={"type": 5},
+                )
+    finally:
+        await client.close()
+
+    assert attempts["count"] == 6
+    breaker = client._circuit_breakers["interactions"]
+    assert breaker._state.failure_count == 0
+    assert breaker._state.state.value == "closed"
+
+
+@pytest.mark.anyio
+async def test_repeated_5xx_non_callback_interactions_open_shared_breaker() -> None:
+    attempts = {"count": 0}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        attempts["count"] += 1
+        return httpx.Response(500, json={"message": "server exploded"})
+
+    client = DiscordRestClient(
+        bot_token="abc123",
+        base_url="https://discord.test/api/v10",
+        max_retries=0,
+    )
+    await _configure_mock_client(client, httpx.MockTransport(handler))
+    try:
+        for _ in range(5):
+            with pytest.raises(DiscordTransientError, match="server error"):
+                await client._request("GET", "/interactions/123")
+        with pytest.raises(CircuitOpenError):
+            await client._request("GET", "/interactions/123")
+    finally:
+        await client.close()
+
+    assert attempts["count"] == 5
+    breaker = client._circuit_breakers["interactions"]
+    assert breaker._state.failure_count == 5
+    assert breaker._state.state.value == "open"
+
+
+@pytest.mark.anyio
+async def test_interaction_response_is_fail_fast_without_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts = {"count": 0}
+    sleeps: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(
+        "codex_autorunner.adapters.discord.rest.asyncio.sleep", fake_sleep
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        attempts["count"] += 1
+        return httpx.Response(500, json={"message": "temporary outage"})
+
+    client = DiscordRestClient(
+        bot_token="abc123",
+        base_url="https://discord.test/api/v10",
+        max_retries=2,
+    )
+    await _configure_mock_client(client, httpx.MockTransport(handler))
+    try:
+        with pytest.raises(DiscordTransientError, match="server error"):
+            await client.create_interaction_response(
+                interaction_id="123",
+                interaction_token="token",
+                payload={"type": 5},
+            )
+    finally:
+        await client.close()
+
+    assert attempts["count"] == 1
+    assert sleeps == []

@@ -5,6 +5,9 @@ import uuid
 from pathlib import Path
 from typing import Any, Optional
 
+from .....adapters.chat.execution_event_journal import (
+    make_chat_execution_journal_notice,
+)
 from .....core.orchestration.cold_trace_store import ColdTraceWriter
 from .....core.orchestration.turn_timeline import (
     append_turn_events_to_cold_trace,
@@ -17,9 +20,6 @@ from .....core.pma_transcripts import PmaTranscriptStore
 from .....core.ports.run_event import RunEvent
 from .....core.text_utils import _normalize_optional_text, _truncate_text
 from .....core.time_utils import now_iso
-from .....integrations.chat.execution_event_journal import (
-    make_chat_execution_journal_notice,
-)
 from ...services.pma import get_pma_request_context
 from .runtime_state import PmaRuntimeState
 

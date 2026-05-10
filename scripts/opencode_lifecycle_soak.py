@@ -15,6 +15,8 @@ from pathlib import Path
 from typing import Any, Optional
 
 import yaml
+
+from codex_autorunner.adapters.agents.opencode_backend import OpenCodeBackend
 from codex_autorunner.agents.opencode.run_prompt import (
     OpenCodeRunConfig,
     run_opencode_prompt,
@@ -24,7 +26,6 @@ from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.core.config import REPO_OVERRIDE_FILENAME, load_repo_config
 from codex_autorunner.core.managed_processes import list_process_records
 from codex_autorunner.core.runtime import summarize_opencode_lifecycle
-from codex_autorunner.integrations.agents.opencode_backend import OpenCodeBackend
 
 
 def _quiet_logger() -> logging.Logger:

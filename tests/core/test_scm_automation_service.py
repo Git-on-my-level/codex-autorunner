@@ -997,7 +997,7 @@ def test_ingest_event_batches_review_comment_enqueue_for_15_seconds(
             "author_type": "User",
             "issue_author_login": "pr-author",
             "body": "**<sub><sub>!P1 Badge</sub></sub>** Surface startup timeouts as fallback regressions.",
-            "path": "src/codex_autorunner/integrations/discord/message_turns.py",
+            "path": "src/codex_autorunner/adapters/discord/message_turns.py",
             "line": 942,
             "html_url": "https://github.com/acme/widgets/pull/42#discussion_r2844",
         },

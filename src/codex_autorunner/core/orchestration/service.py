@@ -7,9 +7,10 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping, Optional
 
 from ..car_context import CarContextProfile, normalize_car_context_profile
+from ..domain.refs import ScopeRef
 from ..logging_utils import log_event
+from ..managed_thread_store import ManagedThreadStore
 from ..pma_automation_store import PmaAutomationStore
-from ..pma_thread_store import PmaThreadStore
 from ..text_utils import _truncate_text
 from .bindings import ActiveWorkSummary, OrchestrationBindingStore
 from .catalog import MappingAgentDefinitionCatalog, RuntimeAgentDescriptor
@@ -47,6 +48,7 @@ from .models import (
 )
 from .recovery_lifecycle import BusyInterruptFailedError, _ThreadRecoveryHelper
 from .runtime_bindings import RuntimeThreadBinding
+from .thread_titles import choose_owned_thread_title
 from .threads import SurfaceThreadMessageRequest, ThreadControlRequest
 
 MessagePreviewLimit = 120
@@ -82,7 +84,7 @@ def _thread_target_from_store_row(record: Mapping[str, Any]) -> ThreadTarget:
 
 
 def _thread_target_from_store_row_with_runtime_binding(
-    store: PmaThreadStore, record: Mapping[str, Any]
+    store: ManagedThreadStore, record: Mapping[str, Any]
 ) -> ThreadTarget:
     thread_record = dict(record)
     managed_thread_id = str(thread_record.get("managed_thread_id") or "").strip()
@@ -158,10 +160,10 @@ def _execution_record_from_store_row(record: Mapping[str, Any]) -> ExecutionReco
     return ExecutionRecord.from_mapping(record)
 
 
-class PmaThreadExecutionStore(ThreadExecutionStore):
+class ManagedThreadExecutionStore(ThreadExecutionStore):
     """Adapter that hides PMA thread-store details behind orchestration nouns."""
 
-    def __init__(self, store: PmaThreadStore) -> None:
+    def __init__(self, store: ManagedThreadStore) -> None:
         self._store = store
         self._execution_results = ExecutionResultCoordinator(
             get_execution=self.get_execution,
@@ -186,6 +188,7 @@ class PmaThreadExecutionStore(ThreadExecutionStore):
         repo_id: Optional[str] = None,
         resource_kind: Optional[str] = None,
         resource_id: Optional[str] = None,
+        scope: Optional[ScopeRef] = None,
         display_name: Optional[str] = None,
         backend_thread_id: Optional[str] = None,
         context_profile: Optional[CarContextProfile] = None,
@@ -198,6 +201,7 @@ class PmaThreadExecutionStore(ThreadExecutionStore):
         created = self._store.create_thread(
             agent_id,
             workspace_root,
+            scope=scope,
             repo_id=repo_id,
             resource_kind=resource_kind,
             resource_id=resource_id,
@@ -305,17 +309,23 @@ class PmaThreadExecutionStore(ThreadExecutionStore):
         metadata: Optional[dict[str, Any]] = None,
         queue_payload: Optional[dict[str, Any]] = None,
     ) -> ExecutionRecord:
-        created = self._store.create_turn(
-            thread_target_id,
-            prompt=prompt,
-            request_kind=request_kind,
-            busy_policy=busy_policy,
-            model=model,
-            reasoning=reasoning,
-            client_turn_id=client_request_id,
-            metadata=metadata,
-            queue_payload=queue_payload,
-        )
+        create_kwargs: dict[str, Any] = {
+            "prompt": prompt,
+            "request_kind": request_kind,
+            "busy_policy": busy_policy,
+            "model": model,
+            "reasoning": reasoning,
+            "client_turn_id": client_request_id,
+            "metadata": metadata,
+            "queue_payload": queue_payload,
+        }
+        try:
+            created = self._store.create_turn(thread_target_id, **create_kwargs)
+        except TypeError as exc:
+            if "metadata" not in str(exc):
+                raise
+            create_kwargs.pop("metadata", None)
+            created = self._store.create_turn(thread_target_id, **create_kwargs)
         return _execution_record_from_store_row(created)
 
     def get_execution(
@@ -459,6 +469,34 @@ class PmaThreadExecutionStore(ThreadExecutionStore):
             last_turn_id=execution_id,
             last_message_preview=message_preview,
         )
+        self.update_thread_title(
+            thread_target_id,
+            choose_owned_thread_title(None, message_preview=message_preview),
+            metadata={"car_title_source": "message_preview"},
+        )
+
+    def update_thread_title(
+        self,
+        thread_target_id: str,
+        title: Optional[str],
+        *,
+        metadata: Optional[dict[str, Any]] = None,
+        only_if_generic: bool = True,
+    ) -> Optional[ThreadTarget]:
+        updater = getattr(self._store, "update_thread_title", None)
+        if not callable(updater):
+            if metadata:
+                self._store.update_thread_metadata(thread_target_id, metadata)
+            return self.get_thread_target(thread_target_id)
+        updated = updater(
+            thread_target_id,
+            title,
+            metadata=metadata,
+            only_if_generic=only_if_generic,
+        )
+        if updated is None:
+            return None
+        return _thread_target_from_store_row(updated)
 
 
 @dataclass
@@ -502,6 +540,7 @@ class _ThreadRuntimeAdapter:
         repo_id: Optional[str] = None,
         resource_kind: Optional[str] = None,
         resource_id: Optional[str] = None,
+        scope: Optional[ScopeRef] = None,
         display_name: Optional[str] = None,
         backend_thread_id: Optional[str] = None,
         context_profile: Optional[CarContextProfile] = None,
@@ -517,6 +556,7 @@ class _ThreadRuntimeAdapter:
         return self.thread_store.create_thread_target(
             agent_id,
             workspace_root,
+            scope=scope,
             repo_id=repo_id,
             resource_kind=resource_kind,
             resource_id=resource_id,
@@ -535,6 +575,7 @@ class _ThreadRuntimeAdapter:
         repo_id: Optional[str] = None,
         resource_kind: Optional[str] = None,
         resource_id: Optional[str] = None,
+        scope: Optional[ScopeRef] = None,
         display_name: Optional[str] = None,
         backend_thread_id: Optional[str] = None,
         context_profile: Optional[CarContextProfile] = None,
@@ -548,6 +589,7 @@ class _ThreadRuntimeAdapter:
         return self.create_thread_target(
             agent_id,
             workspace_root,
+            scope=scope,
             repo_id=repo_id,
             resource_kind=resource_kind,
             resource_id=resource_id,
@@ -849,6 +891,7 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         repo_id: Optional[str] = None,
         resource_kind: Optional[str] = None,
         resource_id: Optional[str] = None,
+        scope: Optional[ScopeRef] = None,
         display_name: Optional[str] = None,
         backend_thread_id: Optional[str] = None,
         context_profile: Optional[CarContextProfile] = None,
@@ -857,6 +900,7 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         return self._runtime_adapter.create_thread_target(
             agent_id,
             workspace_root,
+            scope=scope,
             repo_id=repo_id,
             resource_kind=resource_kind,
             resource_id=resource_id,
@@ -1695,20 +1739,20 @@ def build_harness_backed_orchestration_service(
     descriptors: Mapping[str, RuntimeAgentDescriptor],
     harness_factory: HarnessFactory,
     thread_store: Optional[ThreadExecutionStore] = None,
-    pma_thread_store: Optional[PmaThreadStore] = None,
+    managed_thread_store: Optional[ManagedThreadStore] = None,
     definition_catalog: Optional[AgentDefinitionCatalog] = None,
     binding_store: Optional[OrchestrationBindingStore] = None,
 ) -> HarnessBackedOrchestrationService:
     """Build the default runtime-thread orchestration service for current PMA state."""
 
     if thread_store is None:
-        if pma_thread_store is None:
-            raise ValueError("thread_store or pma_thread_store is required")
-        thread_store = PmaThreadExecutionStore(pma_thread_store)
+        if managed_thread_store is None:
+            raise ValueError("thread_store or managed_thread_store is required")
+        thread_store = ManagedThreadExecutionStore(managed_thread_store)
     if definition_catalog is None:
         definition_catalog = MappingAgentDefinitionCatalog(descriptors)
-    if binding_store is None and pma_thread_store is not None:
-        hub_root = getattr(pma_thread_store, "_hub_root", None)
+    if binding_store is None and managed_thread_store is not None:
+        hub_root = getattr(managed_thread_store, "_hub_root", None)
         if isinstance(hub_root, Path):
             binding_store = OrchestrationBindingStore(hub_root)
     return HarnessBackedOrchestrationService(
@@ -1736,7 +1780,7 @@ __all__ = [
     "FlowBackedOrchestrationService",
     "HarnessBackedOrchestrationService",
     "MessagePreviewLimit",
-    "PmaThreadExecutionStore",
+    "ManagedThreadExecutionStore",
     "SurfaceIngressResult",
     "SurfaceOrchestrationIngress",
     "build_harness_backed_orchestration_service",

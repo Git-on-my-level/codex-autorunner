@@ -59,8 +59,9 @@ class TestNormalizeTicketFlowApprovalMode:
     def test_review(self) -> None:
         assert _normalize_ticket_flow_approval_mode("review", scope="test") == "review"
 
-    def test_safe_alias_maps_to_review(self) -> None:
-        assert _normalize_ticket_flow_approval_mode("safe", scope="test") == "review"
+    def test_safe_alias_removed_raises(self) -> None:
+        with pytest.raises(ConfigError, match="must be one of"):
+            _normalize_ticket_flow_approval_mode("safe", scope="test")
 
     def test_case_insensitive(self) -> None:
         assert _normalize_ticket_flow_approval_mode("YOLO", scope="test") == "yolo"

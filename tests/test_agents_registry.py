@@ -60,24 +60,6 @@ def app_ctx_missing_supervisors():
 
     return MockContext()
 
-
-@pytest.fixture
-def app_ctx_zeroclaw_ready():
-    class MockConfig:
-        @staticmethod
-        def agent_binary(_agent_id: str) -> str:
-            return "zeroclaw"
-
-    class MockContext:
-        app_server_supervisor = None
-        app_server_events = None
-        opencode_supervisor = None
-        config = MockConfig()
-
-    return MockContext()
-
-
-class TestValidateAgentId:
     def test_valid_agent_ids(self):
         assert validate_agent_id("codex") == "codex"
         assert validate_agent_id("opencode") == "opencode"
@@ -139,13 +121,6 @@ class TestHasCapability:
     def test_opencode_doesnt_have_approvals(self):
         assert has_capability("opencode", "approvals") is False
 
-    def test_zeroclaw_advertises_only_durable_thread_capabilities_it_proves(self):
-        assert has_capability("zeroclaw", "durable_threads") is True
-        assert has_capability("zeroclaw", "message_turns") is True
-        assert has_capability("zeroclaw", "active_thread_discovery") is True
-        assert has_capability("zeroclaw", "event_streaming") is True
-        assert has_capability("zeroclaw", "interrupt") is False
-
     def test_hermes_advertises_acp_capabilities(self):
         assert has_capability("hermes", "durable_threads") is True
         assert has_capability("hermes", "message_turns") is True
@@ -204,8 +179,7 @@ class TestGetRegisteredAgents:
         assert "codex" in agents
         assert "opencode" in agents
         assert "hermes" in agents
-        assert "zeroclaw" in agents
-        assert len(agents) >= 4
+        assert len(agents) >= 3
 
     def test_concurrent_reload_and_access_no_exceptions(self):
         exceptions = []

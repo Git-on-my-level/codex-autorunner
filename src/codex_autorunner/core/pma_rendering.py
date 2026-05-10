@@ -503,41 +503,6 @@ def _render_repos_section(
     lines.append("")
 
 
-def _render_agent_workspaces_section(
-    snapshot: dict[str, Any],
-    lines: list[str],
-    *,
-    max_repos: int,
-    max_field_chars: int,
-) -> None:
-    agent_workspaces = snapshot.get("agent_workspaces") or []
-    if not agent_workspaces:
-        return
-    lines.append("Agent Workspaces:")
-    for workspace in list(agent_workspaces)[: max(0, max_repos)]:
-        workspace_id = _truncate(str(workspace.get("id", "")), max_field_chars)
-        display_name = _truncate(
-            str(workspace.get("display_name", "")), max_field_chars
-        )
-        runtime = _truncate(str(workspace.get("runtime", "")), max_field_chars)
-        enabled = str(bool(workspace.get("enabled"))).lower()
-        exists_on_disk = str(bool(workspace.get("exists_on_disk"))).lower()
-        destination_text = _render_destination_summary(
-            workspace.get("effective_destination"), max_field_chars=max_field_chars
-        )
-        lines.append(
-            f"- {workspace_id} ({display_name}): runtime={runtime} "
-            f"destination={destination_text} enabled={enabled} "
-            f"exists_on_disk={exists_on_disk}"
-        )
-        freshness_summary = _render_freshness_summary(
-            workspace.get("freshness"), max_field_chars=max_field_chars
-        )
-        if freshness_summary:
-            lines.append(f"  freshness: {freshness_summary}")
-    lines.append("")
-
-
 def _render_templates_section(
     snapshot: dict[str, Any],
     lines: list[str],
@@ -634,18 +599,18 @@ def _render_pma_files_section(
     lines.append("")
 
 
-def _render_pma_threads_section(
+def _render_managed_threads_section(
     snapshot: dict[str, Any],
     lines: list[str],
     *,
-    max_pma_threads: int,
+    max_managed_threads: int,
     max_field_chars: int,
 ) -> None:
-    pma_threads = snapshot.get("pma_threads") or []
-    if not pma_threads:
+    managed_threads = snapshot.get("managed_threads") or []
+    if not managed_threads:
         return
     lines.append("PMA Managed Threads:")
-    for thread in list(pma_threads)[: max(0, max_pma_threads)]:
+    for thread in list(managed_threads)[: max(0, max_managed_threads)]:
         managed_thread_id = _truncate(
             str(thread.get("managed_thread_id", "")), max_field_chars
         )
@@ -887,7 +852,7 @@ def _render_hub_snapshot(
     max_field_chars: int = PMA_MAX_TEMPLATE_FIELD_CHARS,
     max_pma_files: int = PMA_MAX_PMA_FILES,
     max_lifecycle_events: int = PMA_MAX_LIFECYCLE_EVENTS,
-    max_pma_threads: int = PMA_MAX_PMA_THREADS,
+    max_managed_threads: int = PMA_MAX_PMA_THREADS,
     max_automation_items: int = PMA_MAX_AUTOMATION_ITEMS,
 ) -> str:
     lines: list[str] = []
@@ -922,17 +887,14 @@ def _render_hub_snapshot(
         max_field_chars=fc,
         max_text_chars=max_text_chars,
     )
-    _render_agent_workspaces_section(
-        snapshot, lines, max_repos=max_repos, max_field_chars=fc
-    )
     _render_templates_section(
         snapshot, lines, max_template_repos=max_template_repos, max_field_chars=fc
     )
     _render_pma_files_section(
         snapshot, lines, max_pma_files=max_pma_files, max_field_chars=fc
     )
-    _render_pma_threads_section(
-        snapshot, lines, max_pma_threads=max_pma_threads, max_field_chars=fc
+    _render_managed_threads_section(
+        snapshot, lines, max_managed_threads=max_managed_threads, max_field_chars=fc
     )
     _render_automation_section(
         snapshot, lines, max_automation_items=max_automation_items, max_field_chars=fc

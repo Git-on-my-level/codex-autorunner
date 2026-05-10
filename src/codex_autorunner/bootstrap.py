@@ -231,6 +231,13 @@ def ensure_pma_docs(hub_root: Path, force: bool = False) -> None:
     )
     for filename, content_fn in seeds:
         canonical_path = docs_dir / filename
+        legacy_path = base_dir / filename
+        if not force and not canonical_path.exists() and legacy_path.exists():
+            try:
+                legacy_path.replace(canonical_path)
+                continue
+            except OSError:
+                pass
         content = content_fn()
         if content and not content.endswith("\n"):
             content += "\n"
@@ -286,7 +293,7 @@ You are an **abstraction layer, not an executor**. Coordinate tickets and flows 
 - Use CAR-native artifacts (tickets, ticket_flow, dispatch, PMA inbox/outbox).
 - Ask questions when requirements are ambiguous; keep updates concise.
 - Treat this prompt as code: keep it short and stable.
-- See `.codex-autorunner/pma/docs/ABOUT_CAR.md` for operational how-to.
+- See the hub-scoped PMA operations guide advertised in the prompt preamble for operational how-to.
 
 ## Managed Threads vs Ticket Flows
 
@@ -298,10 +305,10 @@ You are an **abstraction layer, not an executor**. Coordinate tickets and flows 
   fresh hub-owned worktree from `origin/<default-branch>` (or `--pr-base-ref`),
   runs configured worktree setup commands, and fails instead of falling back to
   the original workspace when isolation cannot be provisioned.
-- Do not launch runtime CLIs directly (`codex`, `opencode`, `zeroclaw`, etc.) for PMA-managed work when a managed thread fits; use `car pma thread spawn` and `car pma thread send` so CAR can track lifecycle and progress.
+- Do not launch runtime CLIs directly (`codex`, `opencode`, etc.) for PMA-managed work when a managed thread fits; use `car pma thread spawn` and `car pma thread send` so CAR can track lifecycle and progress.
 - Do not write ticket files as scaffolding for managed-thread work.
 - Use ticket flows for larger structured work: cross-repo changes, 3+ planned tickets, explicit acceptance criteria tracking, or work that benefits from pause/resume/review handoffs.
-- Managed thread state is visible in `hub_snapshot.pma_threads`.
+- Managed thread state is visible in `hub_snapshot.managed_threads`.
 - For hub-scoped PMA CLI commands, include `--path <hub_root>` so they resolve the
   intended hub config instead of relying on the current working directory.
 - CLI primitives:
@@ -331,7 +338,7 @@ You are an **abstraction layer, not an executor**. Coordinate tickets and flows 
   - ticket flow: `flow_paused`, `flow_completed`, `flow_failed`, `flow_stopped`
   - managed thread: `managed_thread_completed`, `managed_thread_failed`
 - Durable state is stored at `.codex-autorunner/pma/automation_store.json`.
-- Practical recipes are in `.codex-autorunner/pma/docs/ABOUT_CAR.md` under “PMA automation wake-ups”.
+- Practical recipes are in the hub-scoped PMA operations guide under “PMA automation wake-ups”.
 
 ## Destinations (execution runtime)
 
@@ -381,9 +388,9 @@ You are an **abstraction layer, not an executor**. Coordinate tickets and flows 
 
 ## PMA durable workspace
 
-Prefer writing durable guidance and recurring best-practices to `.codex-autorunner/pma/docs/AGENTS.md`.
-Keep short-lived working context in `.codex-autorunner/pma/docs/active_context.md` and prune it when it grows.
-When pruning, append the prior context to `.codex-autorunner/pma/docs/context_log.md` with a timestamp.
+Prefer writing durable guidance and recurring best-practices to the hub PMA `AGENTS.md`.
+Keep short-lived working context in the hub PMA `active_context.md` and prune it when it grows.
+When pruning, append the prior context to the hub PMA `context_log.md` with a timestamp.
 """
     )
 

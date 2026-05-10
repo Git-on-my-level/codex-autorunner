@@ -1,4 +1,4 @@
-from codex_autorunner.integrations.chat.media import (
+from codex_autorunner.adapters.chat.media import (
     audio_content_type_for_input,
     audio_extension_for_input,
     is_audio_mime_or_path,

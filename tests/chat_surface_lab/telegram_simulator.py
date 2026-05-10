@@ -5,12 +5,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
-from codex_autorunner.browser.runtime import BrowserRuntime
-from codex_autorunner.integrations.telegram.adapter import (
+from codex_autorunner.adapters.telegram.client import (
     TelegramAPIError,
     TelegramUpdate,
     chunk_message,
 )
+from codex_autorunner.browser.runtime import BrowserRuntime
 
 from .artifact_manifests import ArtifactManifest
 from .evidence_artifacts import write_surface_evidence_artifacts

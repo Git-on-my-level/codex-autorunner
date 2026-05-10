@@ -11,14 +11,14 @@ from typing import Any, Awaitable, Callable, Optional
 
 import typer
 
+from ....adapters.discord.command_registry import sync_commands
+from ....adapters.discord.commands import build_application_commands
+from ....adapters.discord.config import DiscordBotConfig, DiscordBotConfigError
+from ....adapters.discord.rest import DiscordRestClient
+from ....adapters.discord.service import create_discord_bot_service
 from ....core.config import ACTIVE_HUB_ROOT_ENV, ConfigError, load_hub_config
 from ....core.logging_utils import setup_rotating_logger
 from ....core.redaction import redact_text
-from ....integrations.discord.command_registry import sync_commands
-from ....integrations.discord.commands import build_application_commands
-from ....integrations.discord.config import DiscordBotConfig, DiscordBotConfigError
-from ....integrations.discord.rest import DiscordRestClient
-from ....integrations.discord.service import create_discord_bot_service
 from ._log_trace_common import (
     LogTraceMatch,
     collect_log_paths,

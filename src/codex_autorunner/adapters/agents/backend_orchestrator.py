@@ -1,0 +1,335 @@
+"""
+Backend orchestrator that manages protocol-agnostic backend lifecycle.
+
+Ownership boundaries (TICKET-1170):
+
+- **Supervisors** (WorkspaceAppServerSupervisor, OpenCodeSupervisor) own
+  runtime process startup, caching, idle eviction, and workspace-scoped
+  client lifecycle.  They are the single source of truth for *process*
+  state.
+
+- **AgentBackendFactory** (wiring.py) owns supervisor creation/caching and
+  backend adapter creation/caching.  It is the single owner of the
+  supervisor instances and the backend cache.
+
+- **Backend adapters** (CodexAppServerBackend, OpenCodeBackend) own
+  protocol-specific session/turn state (_session_id, _turn_id,
+  _thread_info).  They delegate process lifecycle to supervisors via
+  _ensure_client() and active-turn counting via mark_turn_started/finished.
+
+- **BackendOrchestrator** (this class) owns Engine-facing thread-id
+  persistence (AppServerThreadRegistry) and a lightweight BackendContext
+  that tracks the agent_id and session_id for the current run.  It does
+  *not* own process lifecycle or supervisor instances.  All process
+  lifecycle is delegated to AgentBackendFactory and its supervisors.
+
+The orchestrator sits between the Engine and backend adapters, handling
+session/thread tracking while exposing a clean, protocol-neutral interface
+to the Engine.
+"""
+
+import asyncio
+import logging
+import threading
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, AsyncGenerator, Optional
+
+from ...core.agent_model_defaults import resolve_model_for_agent
+from ...core.config import RepoConfig
+from ...core.managed_thread_identity import (
+    FILE_CHAT_OPENCODE_KEY,
+    FILE_CHAT_OPENCODE_PREFIX,
+    PMA_OPENCODE_KEY,
+    AppServerThreadRegistry,
+    default_app_server_threads_path,
+)
+from ...core.ports.agent_backend import AgentBackend
+from ...core.ports.backend_orchestrator import (
+    BackendOrchestrator as BackendOrchestratorProtocol,
+)
+from ...core.ports.run_event import RunEvent
+from ...core.state import RunnerState
+from ...core.types import NotificationHandler
+from .wiring import AgentBackendFactory, BackendFactory
+
+
+@dataclass
+class BackendContext:
+    """Context for a backend run.
+
+    Only tracks orchestrator-level state (agent_id and session_id).
+    Turn ID and thread info are owned by the backend adapters and
+    queried via get_last_turn_id() / get_last_thread_info().
+    """
+
+    agent_id: str
+    session_id: Optional[str]
+
+
+class BackendOrchestrator:
+    """
+    Orchestrates backend operations, keeping Engine protocol-agnostic.
+
+    Ownership:
+    - Delegates process/supervisor lifecycle to AgentBackendFactory.
+    - Delegates session/turn state to backend adapters.
+    - Owns Engine-facing thread-id persistence (AppServerThreadRegistry).
+    - Tracks the current run's agent_id and session_id via BackendContext.
+    """
+
+    def __init__(
+        self,
+        repo_root: Path,
+        config: RepoConfig,
+        *,
+        notification_handler: Optional[NotificationHandler] = None,
+        logger: Optional[logging.Logger] = None,
+        shared_opencode_supervisor: Optional[Any] = None,
+    ):
+        from .wiring import build_agent_backend_factory
+
+        self._repo_root = repo_root
+        self._config = config
+        self._logger = logger or logging.getLogger("codex_autorunner.backend")
+        self._notification_handler = notification_handler
+
+        # Backend factory manages creation and caching of backends
+        self._backend_factory: BackendFactory = build_agent_backend_factory(
+            repo_root,
+            config,
+            shared_opencode_supervisor=shared_opencode_supervisor,
+        )
+
+        # Active backend for current run
+        self._active_backend: Optional[AgentBackend] = None
+
+        # Context tracking
+        self._context: Optional[BackendContext] = None
+
+        # Session registry for backend-specific session tracking
+        self._app_server_threads = AppServerThreadRegistry(
+            default_app_server_threads_path(repo_root)
+        )
+        self._app_server_threads_lock = threading.Lock()
+
+    async def get_backend(
+        self,
+        agent_id: str,
+        state: RunnerState,
+    ) -> AgentBackend:
+        """Get a backend instance for the given agent."""
+        backend = self._backend_factory(agent_id, state, self._notification_handler)
+        self._active_backend = backend
+        return backend
+
+    async def start_session(
+        self,
+        agent_id: str,
+        state: RunnerState,
+        session_id: Optional[str] = None,
+        workspace_root: Optional[Path] = None,
+    ) -> str:
+        """
+        Start a backend session.
+
+        Returns the session/thread ID.
+        """
+        backend = await self.get_backend(agent_id, state)
+
+        effective_workspace = workspace_root or self._repo_root
+        context: dict[str, Any] = {"workspace": str(effective_workspace)}
+        context["reuse_session"] = bool(
+            getattr(self._config, "autorunner_reuse_session", False)
+        )
+        if session_id:
+            context["session_id"] = session_id
+
+        target = {"workspace": str(effective_workspace)}
+
+        session = await backend.start_session(target, context)
+
+        # Track context
+        self._context = BackendContext(
+            agent_id=agent_id,
+            session_id=session,
+        )
+
+        return session
+
+    async def run_turn(
+        self,
+        agent_id: str,
+        state: RunnerState,
+        prompt: str,
+        *,
+        input_items: Optional[list[dict[str, Any]]] = None,
+        model: Optional[str] = None,
+        reasoning: Optional[str] = None,
+        session_key: Optional[str] = None,
+        session_id: Optional[str] = None,
+        workspace_root: Optional[Path] = None,
+    ) -> AsyncGenerator[RunEvent, None]:
+        """
+        Run a turn on the backend.
+
+        Yields RunEvent objects.
+        """
+        reuse_session = bool(getattr(self._config, "autorunner_reuse_session", False))
+        effective_session_id = session_id
+        if reuse_session and session_key and not effective_session_id:
+            effective_session_id = self.get_thread_id(session_key)
+        if reuse_session and effective_session_id is None and self._context is not None:
+            effective_session_id = self._context.session_id
+
+        effective_session_id = await self.start_session(
+            agent_id,
+            state,
+            session_id=effective_session_id,
+            workspace_root=workspace_root,
+        )
+        if reuse_session and session_key and effective_session_id:
+            self.set_thread_id(session_key, effective_session_id)
+
+        backend = self._active_backend
+        assert backend is not None, "backend should be initialized before run_turn"
+        app_server_cfg = getattr(self._config, "app_server", None)
+        turn_timeout_seconds = getattr(app_server_cfg, "turn_timeout_seconds", None)
+
+        effective_model = resolve_model_for_agent(
+            agent_id,
+            model,
+            state=state,
+            config=self._config,
+        )
+
+        backend.configure(
+            approval_policy=state.autorunner_approval_policy,
+            approval_policy_default="never",
+            sandbox_policy=state.autorunner_sandbox_mode,
+            sandbox_policy_default="dangerFullAccess",
+            reuse_session=reuse_session,
+            model=effective_model,
+            reasoning=reasoning,
+            reasoning_effort=reasoning,
+            turn_timeout_seconds=turn_timeout_seconds,
+            notification_handler=self._notification_handler,
+            default_approval_decision=self._config.ticket_flow.default_approval_decision,
+        )
+
+        event_stream: AsyncGenerator[RunEvent, None]
+        if input_items is None:
+            event_stream = backend.run_turn_events(effective_session_id, prompt)
+        else:
+            event_stream = backend.run_turn_events(
+                effective_session_id,
+                prompt,
+                input_items=input_items,
+            )
+        async for event in event_stream:
+            yield event
+
+    async def interrupt(self, agent_id: str, state: RunnerState) -> None:
+        """Interrupt the current backend session."""
+        if self._context and self._context.session_id:
+            backend = await self.get_backend(agent_id, state)
+            await backend.interrupt(self._context.session_id)
+
+    def get_context(self) -> Optional[BackendContext]:
+        """Get the current backend context."""
+        return self._context
+
+    def get_last_turn_id(self) -> Optional[str]:
+        """Get the last turn ID from the active backend."""
+        if self._active_backend:
+            return getattr(self._active_backend, "last_turn_id", None)
+        return None
+
+    def get_last_thread_info(self) -> Optional[dict[str, Any]]:
+        """Get the last thread info from the active backend."""
+        if self._active_backend:
+            return getattr(self._active_backend, "last_thread_info", None)
+        return None
+
+    def get_last_token_total(self) -> Optional[dict[str, Any]]:
+        """Get the last token total from the active backend."""
+        if self._active_backend:
+            return getattr(self._active_backend, "last_token_total", None)
+        return None
+
+    async def close_all(self) -> None:
+        """Close all backends and clean up resources."""
+        close_all = getattr(self._backend_factory, "close_all", None)
+        if close_all:
+            result = close_all()
+            if asyncio.iscoroutine(result):
+                await result
+        self._active_backend = None
+        self._context = None
+
+    def get_thread_id(self, session_key: str) -> Optional[str]:
+        """Get the thread ID for a given session key."""
+        with self._app_server_threads_lock:
+            return self._app_server_threads.get_thread_id(session_key)
+
+    def set_thread_id(self, session_key: str, thread_id: str) -> None:
+        """Set the thread ID for a given session key."""
+        with self._app_server_threads_lock:
+            self._app_server_threads.set_thread_id(session_key, thread_id)
+
+    def reset_thread_id(self, session_key: str) -> bool:
+        """Reset the persisted thread ID for a given session key."""
+        target_agent = self._agent_for_session_key(session_key)
+        self._clear_runtime_session_state(agent_id=target_agent)
+        with self._app_server_threads_lock:
+            return self._app_server_threads.reset_thread(session_key)
+
+    def _agent_backend_factory(self) -> Optional[AgentBackendFactory]:
+        if isinstance(self._backend_factory, AgentBackendFactory):
+            return self._backend_factory
+        return None
+
+    @staticmethod
+    def _agent_for_session_key(session_key: str) -> Optional[str]:
+        normalized = session_key.strip().lower() if isinstance(session_key, str) else ""
+        if not normalized:
+            return None
+        if (
+            normalized == PMA_OPENCODE_KEY
+            or normalized == FILE_CHAT_OPENCODE_KEY
+            or normalized.startswith(FILE_CHAT_OPENCODE_PREFIX)
+            or normalized.endswith(".opencode")
+        ):
+            return "opencode"
+        return "codex"
+
+    def _clear_runtime_session_state(self, *, agent_id: Optional[str]) -> None:
+        if self._context is not None and (
+            agent_id is None or self._context.agent_id == agent_id
+        ):
+            self._context.session_id = None
+
+        factory = self._agent_backend_factory()
+        if factory is not None:
+            factory.reset_session_state(agent_id=agent_id)
+
+
+def build_backend_orchestrator(
+    repo_root: Path, config: RepoConfig
+) -> BackendOrchestratorProtocol:
+    """
+    Build a BackendOrchestrator for protocol-agnostic backend management.
+    """
+    return BackendOrchestrator(
+        repo_root=repo_root,
+        config=config,
+        notification_handler=None,
+        logger=logging.getLogger("codex_autorunner.backend"),
+    )
+
+
+__all__ = [
+    "BackendContext",
+    "BackendOrchestrator",
+    "build_backend_orchestrator",
+]

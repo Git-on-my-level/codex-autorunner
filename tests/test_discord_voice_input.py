@@ -16,14 +16,14 @@ def _load_discord_service_module():
     root = Path(__file__).resolve().parents[1] / "src" / "codex_autorunner"
 
     for name, path in (
-        ("codex_autorunner.integrations.chat", root / "integrations" / "chat"),
-        ("codex_autorunner.integrations.discord", root / "integrations" / "discord"),
+        ("codex_autorunner.adapters.chat", root / "adapters" / "chat"),
+        ("codex_autorunner.adapters.discord", root / "adapters" / "discord"),
     ):
         package = types.ModuleType(name)
         package.__path__ = [str(path)]
         sys.modules[name] = package
 
-    return importlib.import_module("codex_autorunner.integrations.discord.service")
+    return importlib.import_module("codex_autorunner.adapters.discord.service")
 
 
 def _make_service(*, voice_service):

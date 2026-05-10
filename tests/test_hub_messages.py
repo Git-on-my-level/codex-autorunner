@@ -23,7 +23,7 @@ from codex_autorunner.core.hub_inbox_resolution import (
     record_message_resolution,
 )
 from codex_autorunner.core.hub_lifecycle import HubLifecycleWorker
-from codex_autorunner.core.pma_thread_store import PmaThreadStore
+from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.state import RunnerState, save_state
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.cli.commands.dispatch import (
@@ -1146,7 +1146,7 @@ class TestIssue975CharacterizationHubMessageFreshness:
         inbox_dir.mkdir(parents=True, exist_ok=True)
         (inbox_dir / "ticket-pack.md").write_text("ticket payload\n", encoding="utf-8")
 
-        PmaThreadStore(hub_env.hub_root).create_thread(
+        ManagedThreadStore(hub_env.hub_root).create_thread(
             "codex",
             hub_env.repo_root,
             repo_id=hub_env.repo_id,
@@ -1182,10 +1182,10 @@ class TestIssue975CharacterizationHubMessageFreshness:
             assert item["supersession"]["is_primary"] is True
 
 
-def test_hub_messages_sections_can_return_only_pma_threads(
+def test_hub_messages_sections_can_return_only_managed_threads(
     hub_env, monkeypatch
 ) -> None:
-    PmaThreadStore(hub_env.hub_root).create_thread(
+    ManagedThreadStore(hub_env.hub_root).create_thread(
         "codex",
         hub_env.repo_root,
         repo_id=hub_env.repo_id,
@@ -1194,13 +1194,13 @@ def test_hub_messages_sections_can_return_only_pma_threads(
 
     app = _build_hub_messages_app(hub_env.hub_root, monkeypatch)
     with TestClient(app) as client:
-        res = client.get("/hub/messages?sections=pma_threads")
+        res = client.get("/hub/messages?sections=managed_threads")
 
     assert res.status_code == 200
     payload = res.json()
-    assert "pma_threads" in payload
+    assert "managed_threads" in payload
     assert "items" not in payload
-    assert payload["pma_threads"][0]["name"] == "section-thread"
+    assert payload["managed_threads"][0]["name"] == "section-thread"
 
 
 def test_hub_messages_freshness_only_uses_underlying_inbox_counts(
@@ -1261,7 +1261,7 @@ def test_hub_messages_default_inbox_avoids_full_action_queue_collectors(
     def _unexpected(*args, **kwargs):  # type: ignore[no-untyped-def]
         raise AssertionError("unexpected full action-queue collector call")
 
-    monkeypatch.setattr(hub_gather_service, "_collect_pma_threads", _unexpected)
+    monkeypatch.setattr(hub_gather_service, "_collect_managed_threads", _unexpected)
     monkeypatch.setattr(hub_gather_service, "_collect_pma_files_detail", _unexpected)
     monkeypatch.setattr(hub_gather_service, "_snapshot_pma_automation", _unexpected)
 

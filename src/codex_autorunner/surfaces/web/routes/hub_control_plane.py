@@ -7,8 +7,6 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
 from ....core.hub_control_plane import (
-    AgentWorkspaceListRequest,
-    AgentWorkspaceLookupRequest,
     AutomationRequest,
     ExecutionBackendIdUpdateRequest,
     ExecutionCancelAllRequest,
@@ -580,26 +578,6 @@ def build_hub_control_plane_routes() -> APIRouter:
         return await _run_control_plane_call(
             request_factory=lambda: None,
             operation=lambda _: service.get_pma_snapshot(),
-        )
-
-    @router.get("/agent-workspaces")
-    async def list_agent_workspaces(request: Request, include_disabled: bool = True):
-        service = _require_control_plane_service(request)
-        return await _run_control_plane_call(
-            request_factory=lambda: AgentWorkspaceListRequest.from_mapping(
-                {"include_disabled": include_disabled}
-            ),
-            operation=service.list_agent_workspaces,
-        )
-
-    @router.get("/agent-workspaces/{workspace_id}")
-    async def get_agent_workspace(request: Request, workspace_id: str):
-        service = _require_control_plane_service(request)
-        return await _run_control_plane_call(
-            request_factory=lambda: AgentWorkspaceLookupRequest.from_mapping(
-                {"workspace_id": workspace_id}
-            ),
-            operation=service.get_agent_workspace,
         )
 
     @router.post("/workspace-setup-commands")

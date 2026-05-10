@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from codex_autorunner.core.pma_thread_store import PmaThreadStore
+from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.ports.run_event import TokenUsage
 from codex_autorunner.surfaces.web.routes.pma_routes.publish import (
     build_publish_correlation_id,
@@ -262,7 +262,7 @@ class TestResolvePublishWorkspaceRoot:
         workspace = (hub_root / "worktrees" / "repo-1").resolve()
         workspace.mkdir(parents=True, exist_ok=True)
 
-        thread = PmaThreadStore(hub_root).create_thread("codex", workspace)
+        thread = ManagedThreadStore(hub_root).create_thread("codex", workspace)
         thread_id = str(thread["managed_thread_id"])
         request = SimpleNamespace(
             app=SimpleNamespace(

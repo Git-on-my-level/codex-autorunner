@@ -213,7 +213,7 @@ def resolve_hub_pma_root(hub_root: Path) -> Path:
     return resolve_hub_state_root(hub_root) / "pma"
 
 
-def resolve_hub_pma_threads_db_path(hub_root: Path) -> Path:
+def resolve_hub_managed_threads_db_path(hub_root: Path) -> Path:
     """Return the PMA compatibility SQLite path."""
     return resolve_hub_pma_root(hub_root) / PMA_THREADS_DB_FILENAME
 
@@ -269,22 +269,6 @@ def resolve_hub_runtime_root(hub_root: Path, *, runtime: str) -> Path:
     root = resolve_hub_runtimes_root(hub_root)
     path = root / runtime_id
     validate_path_within_roots(path, allowed_roots=[root], resolve=False)
-    return path
-
-
-def resolve_hub_agent_workspace_root(
-    hub_root: Path,
-    *,
-    runtime: str,
-    workspace_id: str,
-) -> Path:
-    """Return the canonical root for a managed agent workspace."""
-    runtime_root = resolve_hub_runtime_root(hub_root, runtime=runtime)
-    workspace_segment = _validate_hub_resource_segment(
-        workspace_id, label="workspace_id"
-    )
-    path = runtime_root / workspace_segment
-    validate_path_within_roots(path, allowed_roots=[runtime_root], resolve=False)
     return path
 
 
@@ -415,12 +399,11 @@ __all__ = [
     "resolve_cache_root",
     "resolve_global_state_root",
     "resolve_global_github_broker_db_path",
-    "resolve_hub_agent_workspace_root",
     "resolve_hub_apps_root",
     "resolve_hub_manifest_path",
     "resolve_hub_orchestration_db_path",
     "resolve_hub_pma_root",
-    "resolve_hub_pma_threads_db_path",
+    "resolve_hub_managed_threads_db_path",
     "resolve_hub_projection_db_path",
     "resolve_hub_runtime_root",
     "resolve_hub_runtimes_root",

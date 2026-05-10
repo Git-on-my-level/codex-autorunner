@@ -44,7 +44,7 @@ _STUB_HANDSHAKE_PATH_SEGMENTS = (
     "chat_surface_harness",
     "chat_surface_integration",
     "chat_surface_lab",
-    os.sep + "integrations" + os.sep + "chat" + os.sep,
+    os.sep + "adapters" + os.sep + "chat" + os.sep,
 )
 
 
@@ -147,16 +147,16 @@ def _stub_surface_startup_handshakes_for_non_handshake_tests(
     if not any(seg in path_str for seg in _STUB_HANDSHAKE_PATH_SEGMENTS):
         return
 
+    from codex_autorunner.adapters.discord.service import DiscordBotService
+    from codex_autorunner.adapters.telegram.service import TelegramBotService
     from codex_autorunner.core.hub_control_plane import HubSharedStateService
     from codex_autorunner.core.hub_control_plane.http_client import (
         HttpHubControlPlaneClient,
     )
     from codex_autorunner.core.hub_control_plane.models import HandshakeCompatibility
+    from codex_autorunner.core.managed_thread_store import prepare_managed_thread_store
     from codex_autorunner.core.orchestration.sqlite import prepare_orchestration_sqlite
     from codex_autorunner.core.pma_context import build_hub_snapshot
-    from codex_autorunner.core.pma_thread_store import prepare_pma_thread_store
-    from codex_autorunner.integrations.discord.service import DiscordBotService
-    from codex_autorunner.integrations.telegram.service import TelegramBotService
 
     def _install_inprocess_hub_client(service: object, hub_root: Path) -> None:
         current = getattr(service, "_hub_client", None)
@@ -167,13 +167,6 @@ def _stub_surface_startup_handshakes_for_non_handshake_tests(
         )
 
     class _NoopSupervisor:
-        def list_agent_workspaces(self, *, use_cache: bool = True) -> list[object]:
-            _ = use_cache
-            return []
-
-        def get_agent_workspace_snapshot(self, workspace_id: str) -> object:
-            raise ValueError(f"Unknown workspace id: {workspace_id}")
-
         def run_setup_commands_for_workspace(
             self, workspace_root: Path, *, repo_id_hint: str | None = None
         ) -> int:
@@ -192,7 +185,7 @@ def _stub_surface_startup_handshakes_for_non_handshake_tests(
         def __init__(self, hub_root: Path) -> None:
             self._hub_root = Path(hub_root)
             prepare_orchestration_sqlite(self._hub_root, durable=False)
-            prepare_pma_thread_store(self._hub_root, durable=False)
+            prepare_managed_thread_store(self._hub_root, durable=False)
             self._service = HubSharedStateService(
                 hub_root=self._hub_root,
                 supervisor=_NoopSupervisor(),
@@ -310,12 +303,6 @@ def _stub_surface_startup_handshakes_for_non_handshake_tests(
                 (),
                 {"snapshot": await build_hub_snapshot(None, hub_root=self._hub_root)},
             )()
-
-        async def get_agent_workspace(self, request):
-            return self._service.get_agent_workspace(request)
-
-        async def list_agent_workspaces(self, request):
-            return self._service.list_agent_workspaces(request)
 
         async def run_workspace_setup_commands(self, request):
             return self._service.run_workspace_setup_commands(request)
@@ -579,7 +566,7 @@ def _cleanup_codex_app_server_clients(_cleanup_pytest_temp_runs_session) -> None
     # Import lazily to avoid impacting non-app-server test collection time.
     import anyio
 
-    from codex_autorunner.integrations.app_server.client import _close_all_clients
+    from codex_autorunner.adapters.app_server.client import _close_all_clients
 
     anyio.run(_close_all_clients)
 
@@ -659,7 +646,7 @@ def _cleanup_codex_app_server_clients_sync_per_test(
     yield
     import anyio
 
-    from codex_autorunner.integrations.app_server.client import _close_all_clients
+    from codex_autorunner.adapters.app_server.client import _close_all_clients
 
     anyio.run(_close_all_clients)
 
@@ -671,7 +658,7 @@ async def _cleanup_codex_app_server_clients_per_test() -> None:
     for an async test tears down (avoids \"Task was destroyed\" noise).
     """
     yield
-    from codex_autorunner.integrations.app_server.client import _close_all_clients
+    from codex_autorunner.adapters.app_server.client import _close_all_clients
 
     await _close_all_clients()
     pending_restart_tasks = [

@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
+from ...adapters.agents import build_backend_orchestrator
+from ...adapters.agents.build_agent_pool import build_agent_pool
 from ...core.config import find_nearest_hub_config_path, load_repo_config
 from ...core.flows import FlowController, archive_flow_run_artifacts
 from ...core.flows.models import FlowRunRecord, FlowRunStatus
@@ -33,8 +35,6 @@ from ...core.ticket_flow_operator import ensure_flow_worker
 from ...core.ticket_flow_operator import (
     ticket_flow_inbox_preflight as _ticket_flow_inbox_preflight,
 )
-from ...integrations.agents import build_backend_orchestrator
-from ...integrations.agents.build_agent_pool import build_agent_pool
 from ...tickets import DEFAULT_MAX_TOTAL_TURNS
 from ...tickets.files import list_ticket_paths
 from ...tickets.frontmatter import generate_ticket_id

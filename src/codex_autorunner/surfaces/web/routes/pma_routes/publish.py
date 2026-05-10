@@ -6,6 +6,13 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
+from .....adapters.chat.execution_event_journal import (
+    append_chat_execution_journal_notices,
+    extract_token_usage_from_journal_events,
+    journal_events_from_run_events,
+    make_chat_execution_journal_notice,
+)
+from .....adapters.chat.turn_metrics import format_turn_footer
 from .....core.chat_bindings import (
     resolve_chat_state_path as resolve_configured_chat_state_path,
 )
@@ -14,13 +21,6 @@ from .....core.pma_chat_delivery import deliver_pma_notification
 from .....core.pma_domain.models import PublishNoticeContext
 from .....core.pma_domain.publish_policy import build_publish_notice_message
 from .....core.ports.run_event import TokenUsage
-from .....integrations.chat.execution_event_journal import (
-    append_chat_execution_journal_notices,
-    extract_token_usage_from_journal_events,
-    journal_events_from_run_events,
-    make_chat_execution_journal_notice,
-)
-from .....integrations.chat.turn_metrics import format_turn_footer
 from ...services.pma import get_pma_request_context
 
 if TYPE_CHECKING:

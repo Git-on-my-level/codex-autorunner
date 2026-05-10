@@ -25,24 +25,24 @@ from typing import Any, Optional
 
 import pytest
 
-from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
-from codex_autorunner.integrations.telegram.adapter import (
+from codex_autorunner.adapters.telegram.client import (
     TelegramDocument,
     TelegramForwardOrigin,
     TelegramMessage,
     TelegramPhotoSize,
 )
-from codex_autorunner.integrations.telegram.config import PauseDispatchNotifications
-from codex_autorunner.integrations.telegram.handlers import (
+from codex_autorunner.adapters.telegram.config import PauseDispatchNotifications
+from codex_autorunner.adapters.telegram.handlers import (
     messages as telegram_messages_module,
 )
-from codex_autorunner.integrations.telegram.handlers.messages import (
+from codex_autorunner.adapters.telegram.handlers.messages import (
     should_bypass_topic_queue,
 )
-from codex_autorunner.integrations.telegram.state import TelegramTopicRecord
-from codex_autorunner.integrations.telegram.ticket_flow_bridge import (
+from codex_autorunner.adapters.telegram.state import TelegramTopicRecord
+from codex_autorunner.adapters.telegram.ticket_flow_bridge import (
     TelegramTicketFlowBridge,
 )
+from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
 from tests.fixtures.telegram_command_helpers import (
     bot_command_entity,
     make_command_spec,
@@ -158,7 +158,7 @@ class TestCollaborationAdmissionInvariants:
         A private chat message without any collaboration policy overlay must
         evaluate as a non-command with should_start_turn=True (the DM easy path).
         """
-        from codex_autorunner.integrations.telegram.handlers.messages import (
+        from codex_autorunner.adapters.telegram.handlers.messages import (
             _evaluate_message_policy,
         )
 
@@ -184,7 +184,7 @@ class TestCollaborationAdmissionInvariants:
         assert result.command_allowed is True
 
     def test_supergroup_text_evaluates_collaboration_for_non_command(self) -> None:
-        from codex_autorunner.integrations.telegram.handlers.messages import (
+        from codex_autorunner.adapters.telegram.handlers.messages import (
             _evaluate_message_policy,
         )
 
@@ -212,7 +212,7 @@ class TestCollaborationAdmissionInvariants:
     def test_explicit_command_evaluates_collaboration_with_is_command_flag(
         self,
     ) -> None:
-        from codex_autorunner.integrations.telegram.handlers.messages import (
+        from codex_autorunner.adapters.telegram.handlers.messages import (
             _evaluate_message_policy,
         )
 
@@ -246,7 +246,7 @@ class TestCollaborationAdmissionInvariants:
         When the collaboration evaluator is not callable, commands are allowed
         but should_start_turn stays False.
         """
-        from codex_autorunner.integrations.telegram.handlers.messages import (
+        from codex_autorunner.adapters.telegram.handlers.messages import (
             _evaluate_message_policy,
         )
 
@@ -376,7 +376,7 @@ class TestOrdinaryTurnRoutingInvariants:
                 await kwargs["submit_thread_message"](request)
                 return SimpleNamespace(route="thread", thread_result=None)
 
-        import codex_autorunner.integrations.telegram.handlers.surface_ingress as _si_mod
+        import codex_autorunner.adapters.telegram.handlers.surface_ingress as _si_mod
 
         monkeypatch.setattr(
             _si_mod,
@@ -459,7 +459,7 @@ class TestOrdinaryTurnRoutingInvariants:
                 captured["workspace_root"] = request.workspace_root
                 return SimpleNamespace(route="thread", thread_result=None)
 
-        import codex_autorunner.integrations.telegram.handlers.media_ingress as _mi_mod
+        import codex_autorunner.adapters.telegram.handlers.media_ingress as _mi_mod
 
         monkeypatch.setattr(
             _mi_mod,
@@ -626,7 +626,7 @@ class TestPlaceholderDeliveryInvariants:
 
     @pytest.mark.anyio
     async def test_queued_placeholder_text_is_promoted_to_working(self) -> None:
-        from codex_autorunner.integrations.telegram.constants import (
+        from codex_autorunner.adapters.telegram.constants import (
             PLACEHOLDER_TEXT,
             QUEUED_PLACEHOLDER_TEXT,
         )
@@ -657,7 +657,7 @@ class TestPlaceholderDeliveryInvariants:
             placeholder_events={2: second_placeholder},
         )
 
-        from codex_autorunner.integrations.telegram.handlers.commands_runtime import (
+        from codex_autorunner.adapters.telegram.handlers.commands_runtime import (
             _RuntimeStub,
         )
         from tests.test_telegram_turn_queue import _message as _qmsg
@@ -709,7 +709,7 @@ class TestPlaceholderDeliveryInvariants:
             records=records,
         )
 
-        from codex_autorunner.integrations.telegram.handlers.commands_runtime import (
+        from codex_autorunner.adapters.telegram.handlers.commands_runtime import (
             _RuntimeStub,
         )
         from tests.test_telegram_turn_queue import _message as _qmsg
@@ -884,7 +884,7 @@ class TestSessionRecoveryInvariants:
         from codex_autorunner.core.orchestration.runtime_bindings import (
             clear_runtime_thread_binding,
         )
-        from tests import telegram_pma_managed_thread_support as support
+        from tests import telegram_managed_thread_support as support
 
         support.patch_sqlite_connection_cache(monkeypatch)
 
@@ -954,7 +954,7 @@ class TestSessionRecoveryInvariants:
     async def test_consecutive_turns_without_restart_do_not_emit_recovery_notice(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from tests import telegram_pma_managed_thread_support as support
+        from tests import telegram_managed_thread_support as support
 
         support.patch_sqlite_connection_cache(monkeypatch)
 

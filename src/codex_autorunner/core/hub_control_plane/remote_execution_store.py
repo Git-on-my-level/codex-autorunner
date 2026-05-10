@@ -7,12 +7,14 @@ from pathlib import Path
 from typing import Any, Callable, Coroutine, Optional, TypeVar
 
 from ..car_context import CarContextProfile, normalize_car_context_profile
+from ..domain.refs import ScopeRef
 from ..orchestration.interfaces import ThreadExecutionStore
 from ..orchestration.models import (
     BusyThreadPolicy,
     ExecutionRecord,
     MessageRequestKind,
     ThreadTarget,
+    owner_fields_from_scope_ref,
 )
 from ..orchestration.runtime_bindings import RuntimeThreadBinding
 from .background_runner import BackgroundRunnerSaturated, BoundedBackgroundRunner
@@ -193,11 +195,29 @@ class RemoteThreadExecutionStore(ThreadExecutionStore):
         repo_id: Optional[str] = None,
         resource_kind: Optional[str] = None,
         resource_id: Optional[str] = None,
+        scope: Optional[ScopeRef] = None,
         display_name: Optional[str] = None,
         backend_thread_id: Optional[str] = None,
         context_profile: Optional[CarContextProfile] = None,
         metadata: Optional[dict[str, Any]] = None,
     ) -> ThreadTarget:
+        if scope is not None:
+            if (
+                repo_id is not None
+                or resource_kind is not None
+                or resource_id is not None
+            ):
+                raise ValueError(
+                    "scope cannot be combined with repo_id/resource_kind/resource_id"
+                )
+            scope_repo_id, scope_resource_kind, scope_resource_id, scope_workspace = (
+                owner_fields_from_scope_ref(scope)
+            )
+            repo_id = scope_repo_id
+            resource_kind = scope_resource_kind
+            resource_id = scope_resource_id
+            if scope_workspace is not None:
+                workspace_root = Path(scope_workspace)
         metadata_payload = dict(metadata or {})
         normalized_context_profile = normalize_car_context_profile(context_profile)
         if normalized_context_profile is not None:

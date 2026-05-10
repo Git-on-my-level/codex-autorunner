@@ -20,7 +20,7 @@ class RunnerState:
     last_run_started_at: Optional[str]
     last_run_finished_at: Optional[str]
     autorunner_agent_override: Optional[str] = None
-    autorunner_model_override: Optional[str] = None
+    autorunner_model_overrides: dict[str, str] = dataclasses.field(default_factory=dict)
     autorunner_effort_override: Optional[str] = None
     autorunner_approval_policy: Optional[str] = None
     autorunner_sandbox_mode: Optional[str] = None
@@ -38,7 +38,7 @@ class RunnerState:
             "last_run_started_at": self.last_run_started_at,
             "last_run_finished_at": self.last_run_finished_at,
             "autorunner_agent_override": self.autorunner_agent_override,
-            "autorunner_model_override": self.autorunner_model_override,
+            "autorunner_model_overrides": dict(self.autorunner_model_overrides),
             "autorunner_effort_override": self.autorunner_effort_override,
             "autorunner_approval_policy": self.autorunner_approval_policy,
             "autorunner_sandbox_mode": self.autorunner_sandbox_mode,
@@ -143,8 +143,10 @@ def _encode_overrides(state: RunnerState) -> Optional[str]:
     overrides: dict[str, Any] = {}
     if state.autorunner_agent_override is not None:
         overrides["autorunner_agent_override"] = state.autorunner_agent_override
-    if state.autorunner_model_override is not None:
-        overrides["autorunner_model_override"] = state.autorunner_model_override
+    if state.autorunner_model_overrides:
+        overrides["autorunner_model_overrides"] = dict(
+            sorted(state.autorunner_model_overrides.items())
+        )
     if state.autorunner_effort_override is not None:
         overrides["autorunner_effort_override"] = state.autorunner_effort_override
     if state.autorunner_approval_policy is not None:
@@ -174,9 +176,31 @@ def _apply_overrides(state: RunnerState, raw: Optional[str]) -> None:
     agent = data.get("autorunner_agent_override")
     if isinstance(agent, str):
         state.autorunner_agent_override = agent
-    model = data.get("autorunner_model_override")
-    if isinstance(model, str):
-        state.autorunner_model_override = model
+    model_overrides = data.get("autorunner_model_overrides")
+    if isinstance(model_overrides, dict):
+        state.autorunner_model_overrides = {
+            str(agent).strip().lower(): model.strip()
+            for agent, model in model_overrides.items()
+            if isinstance(agent, str)
+            and agent.strip()
+            and isinstance(model, str)
+            and model.strip()
+        }
+    legacy_model_override = data.get("autorunner_model_override")
+    if isinstance(legacy_model_override, str):
+        legacy_model_override = legacy_model_override.strip()
+    else:
+        legacy_model_override = None
+    if legacy_model_override and "autorunner_model_overrides" not in data:
+        target_agent = "codex"
+        if isinstance(state.autorunner_agent_override, str):
+            candidate_agent = state.autorunner_agent_override.strip().lower()
+            if candidate_agent:
+                target_agent = candidate_agent
+        state.autorunner_model_overrides = {
+            **state.autorunner_model_overrides,
+            target_agent: legacy_model_override,
+        }
     effort = data.get("autorunner_effort_override")
     if isinstance(effort, str):
         state.autorunner_effort_override = effort

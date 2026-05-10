@@ -14,6 +14,7 @@ from ...agents.opencode.run_prompt import OpenCodeRunConfig, run_opencode_prompt
 from ...agents.opencode.runtime import PERMISSION_ALLOW
 from ...agents.opencode.supervisor import OpenCodeSupervisor
 from ...agents.registry import has_capability, validate_agent_id
+from ...core.agent_model_defaults import resolve_model_for_agent
 from ...core.config import RepoConfig
 from ...core.locks import (
     FileLock,
@@ -23,9 +24,8 @@ from ...core.locks import (
     read_lock_info,
 )
 from ...core.runtime import RuntimeContext
-from ...core.state import now_iso
+from ...core.state import load_state, now_iso
 from ...core.utils import atomic_write, read_json
-from ...integrations.chat.agents import DEFAULT_CHAT_AGENT_MODELS
 from .models import (
     ACTIVE_REVIEW_STATUSES,
     ReviewPromptKind,
@@ -651,6 +651,10 @@ class ReviewService:
         prompt_kind: ReviewPromptKind | str = ReviewPromptKind.CODE,
     ) -> ReviewState:
         config = self._repo_config()
+        try:
+            runner_state = load_state(self.ctx.state_path)
+        except (OSError, ValueError, AttributeError):
+            runner_state = None
         review_cfg = config.raw.get("review") or {}
         run_id = uuid.uuid4().hex[:12]
         agent_input = payload.get("agent") or review_cfg.get("agent") or "opencode"
@@ -662,10 +666,11 @@ class ReviewService:
                 status_code=400,
             ) from exc
 
-        model = (
-            payload.get("model")
-            or review_cfg.get("model")
-            or DEFAULT_CHAT_AGENT_MODELS.get("opencode")
+        model = payload.get("model") or resolve_model_for_agent(
+            "opencode",
+            state=runner_state,
+            config=config,
+            configured_default=review_cfg.get("model"),
         )
         reasoning = payload.get("reasoning") or review_cfg.get("reasoning")
         max_wallclock_seconds = payload.get("max_wallclock_seconds") or review_cfg.get(

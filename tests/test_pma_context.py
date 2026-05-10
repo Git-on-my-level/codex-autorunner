@@ -12,6 +12,7 @@ from tests.pma_context_support import (
     test_format_pma_prompt_includes_context_log_tail,
     test_format_pma_prompt_includes_hub_snapshot_and_message,
     test_format_pma_prompt_includes_workspace_docs,
+    test_format_pma_prompt_labels_hub_scoped_absolute_docs,
     test_format_pma_prompt_load_failure_still_includes_fastpath,
     test_format_pma_prompt_with_custom_agent_content,
     test_format_pma_prompt_without_hub_root,

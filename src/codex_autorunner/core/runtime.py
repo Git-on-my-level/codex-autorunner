@@ -23,7 +23,6 @@ from ..voice.provider_catalog import (
 from .config import HubConfig, RepoConfig, load_repo_config
 from .destinations import (
     probe_docker_readiness,
-    resolve_effective_agent_workspace_destination,
     resolve_effective_repo_destination,
 )
 from .locks import DEFAULT_RUNNER_CMD_HINTS, assess_lock, process_command_matches
@@ -970,7 +969,7 @@ def _configured_agent_ids(
                 for agent_id in raw_agents
                 if str(agent_id).strip()
             }
-    return {"codex", "opencode", "hermes", "zeroclaw"}
+    return {"codex", "opencode", "hermes"}
 
 
 def hub_worktree_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
@@ -1052,7 +1051,7 @@ def hub_destination_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
     for issue in manifest_issues:
         issues_by_repo.setdefault(issue.repo_id, []).append(issue.message)
 
-    if not manifest.repos and not manifest.agent_workspaces:
+    if not manifest.repos:
         checks.append(
             DoctorCheck(
                 name="Hub destination configuration",
@@ -1102,48 +1101,8 @@ def hub_destination_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
                 )
             )
 
-    for workspace in manifest.agent_workspaces:
-        resolution = resolve_effective_agent_workspace_destination(workspace)
-        kind = resolution.destination.kind
-        source = resolution.source
-        if kind == "docker":
-            docker_targets.append(f"agent_workspace:{workspace.id}")
-        checks.append(
-            DoctorCheck(
-                name=f"Hub destination ({workspace.id})",
-                passed=True,
-                message=(
-                    f"{workspace.id}: effective destination '{kind}' (source={source})"
-                ),
-                severity="info",
-                check_id="hub.destination",
-            )
-        )
-
-        workspace_issue_messages: list[str] = []
-        workspace_issue_messages.extend(list(resolution.issues))
-        workspace_issue_messages.extend(issues_by_repo.get(workspace.id, []))
-        deduped_messages = list(dict.fromkeys(workspace_issue_messages))
-        for message in deduped_messages:
-            checks.append(
-                DoctorCheck(
-                    name=f"Hub destination ({workspace.id})",
-                    passed=False,
-                    message=f"{workspace.id}: {message}",
-                    severity="warning",
-                    check_id="hub.destination",
-                    fix=(
-                        "Update destination config for this agent workspace in "
-                        f"{hub_config.manifest_path}"
-                    ),
-                )
-            )
-
     for repo_id, messages in sorted(issues_by_repo.items()):
-        if (
-            repo_id in known_repo_ids
-            or manifest.get_agent_workspace(repo_id) is not None
-        ):
+        if repo_id in known_repo_ids:
             continue
         for message in list(dict.fromkeys(messages)):
             checks.append(
@@ -1207,92 +1166,11 @@ def hub_destination_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
     return checks
 
 
-def zeroclaw_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
-    """Report ZeroClaw runtime compatibility when managed ZeroClaw usage exists."""
-    checks: list[DoctorCheck] = []
-    try:
-        manifest = load_manifest(hub_config.manifest_path, hub_config.root)
-    except (ValueError, TypeError, OSError, RuntimeError, AttributeError):
-        manifest = None
-
-    enabled_workspaces: list[str] = []
-    if manifest is not None:
-        enabled_workspaces = sorted(
-            workspace.id
-            for workspace in manifest.agent_workspaces
-            if workspace.enabled and workspace.runtime.strip().lower() == "zeroclaw"
-        )
-
-    try:
-        configured_binary = hub_config.agent_binary("zeroclaw").strip()
-    except (ValueError, TypeError, OSError, RuntimeError, AttributeError):
-        configured_binary = ""
-
-    explicit_binary_override = bool(
-        configured_binary and configured_binary != "zeroclaw"
-    )
-    if not enabled_workspaces and not explicit_binary_override:
-        return checks
-
-    workspace_suffix = ""
-    if enabled_workspaces:
-        workspace_suffix = f" for enabled workspaces: {', '.join(enabled_workspaces)}"
-    result = _run_agent_runtime_preflight("zeroclaw", context=hub_config)
-    severity = (
-        "info"
-        if result.status == "ready"
-        else ("error" if enabled_workspaces else "warning")
-    )
-    fix = result.fix
-    message = result.message
-    if workspace_suffix:
-        message = f"{message.rstrip('.')}{workspace_suffix}."
-    if result.status == "ready":
-        detail_parts = []
-        if result.version:
-            detail_parts.append(result.version)
-        if result.launch_mode:
-            detail_parts.append(f"launch_mode={result.launch_mode}")
-        suffix = f" ({', '.join(detail_parts)})" if detail_parts else ""
-        checks.append(
-            DoctorCheck(
-                name="ZeroClaw runtime availability",
-                passed=True,
-                message=f"{message.rstrip('.')}{suffix}.",
-                severity="info",
-                check_id="hub.zeroclaw.binary",
-            )
-        )
-        return checks
-
-    checks.append(
-        DoctorCheck(
-            name="ZeroClaw runtime availability",
-            passed=False,
-            message=message,
-            severity=severity,
-            check_id="hub.zeroclaw.binary",
-            fix=fix,
-        )
-    )
-    return checks
-
-
 def hermes_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
     """Report Hermes runtime compatibility when managed Hermes usage exists."""
     checks: list[DoctorCheck] = []
-    try:
-        manifest = load_manifest(hub_config.manifest_path, hub_config.root)
-    except (ValueError, TypeError, OSError, RuntimeError, AttributeError):
-        manifest = None
 
     enabled_workspaces: list[str] = []
-    if manifest is not None:
-        enabled_workspaces = sorted(
-            workspace.id
-            for workspace in manifest.agent_workspaces
-            if workspace.enabled and workspace.runtime.strip().lower() == "hermes"
-        )
 
     workspace_suffix = ""
     if enabled_workspaces:
@@ -1758,5 +1636,4 @@ __all__ = [
     "hub_destination_doctor_checks",
     "hub_worktree_doctor_checks",
     "pma_doctor_checks",
-    "zeroclaw_doctor_checks",
 ]

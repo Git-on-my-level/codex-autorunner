@@ -4,6 +4,7 @@ from typing import Any, Optional
 
 import pytest
 
+from codex_autorunner.adapters.agents.agent_pool_impl import DefaultAgentPool
 from codex_autorunner.agents.registry import AgentDescriptor
 from codex_autorunner.agents.types import (
     ConversationRef,
@@ -20,7 +21,6 @@ from codex_autorunner.core.config_parsers import (
     _parse_app_server_config,
     _parse_opencode_config,
 )
-from codex_autorunner.integrations.agents.agent_pool_impl import DefaultAgentPool
 from codex_autorunner.tickets.agent_pool import AgentTurnRequest
 
 

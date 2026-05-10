@@ -473,7 +473,7 @@ def test_scm_webhook_accepts_pull_request_review_comment_event(tmp_path: Path) -
             "html_url": "https://github.com/acme/widgets/pull/42#discussion_r444",
             "created_at": "2026-03-24T14:05:00Z",
             "updated_at": "2026-03-24T14:05:00Z",
-            "path": "src/codex_autorunner/integrations/github/webhooks.py",
+            "path": "src/codex_autorunner/adapters/github/webhooks.py",
             "line": 284,
             "user": {"login": "reviewer", "type": "User"},
         },
@@ -505,8 +505,7 @@ def test_scm_webhook_accepts_pull_request_review_comment_event(tmp_path: Path) -
     assert len(events) == 1
     assert events[0].event_type == "pull_request_review_comment"
     assert (
-        events[0].payload["path"]
-        == "src/codex_autorunner/integrations/github/webhooks.py"
+        events[0].payload["path"] == "src/codex_autorunner/adapters/github/webhooks.py"
     )
 
 

@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 
+from codex_autorunner.adapters.agents.opencode_backend import OpenCodeBackend
 from codex_autorunner.agents.opencode.runtime import OpenCodeTurnOutput
 from codex_autorunner.core.ports.run_event import Completed
-from codex_autorunner.integrations.agents.opencode_backend import OpenCodeBackend
 
 
 class _SessionClientStub:
@@ -31,7 +31,7 @@ class _SessionClientStub:
 async def test_opencode_backend_uses_approval_policy_default_when_not_explicit(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    from codex_autorunner.integrations.agents import opencode_backend as backend_module
+    from codex_autorunner.adapters.agents import opencode_backend as backend_module
 
     backend = OpenCodeBackend(base_url="http://localhost:8080", workspace_root=tmp_path)
     backend._client = _SessionClientStub()

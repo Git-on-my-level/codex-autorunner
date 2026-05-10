@@ -23,13 +23,13 @@ def _base_path_app(tmp_path_factory):
     yield create_hub_app(hub_root, base_path="/car")
 
 
-def test_static_assets_served_with_base_path(_base_path_app) -> None:
+def test_web_static_assets_served_with_base_path(_base_path_app) -> None:
     client = TestClient(_base_path_app)
-    res = client.get("/car/static/styles.css")
+    res = client.get("/car/chats")
     assert res.status_code == 200
-    assert "body" in res.text
-    js_res = client.get("/car/static/generated/app.js")
-    assert js_res.status_code == 200
+    asset_path = res.text.split('href="/car/_app/', 1)[1].split('"', 1)[0]
+    asset_res = client.get(f"/car/_app/{asset_path}")
+    assert asset_res.status_code == 200
 
 
 def test_repo_root_trailing_slash_does_not_redirect(_base_path_app) -> None:
@@ -40,19 +40,19 @@ def test_repo_root_trailing_slash_does_not_redirect(_base_path_app) -> None:
 
 def test_static_redirects_to_base_path(_base_path_app) -> None:
     client = TestClient(_base_path_app, follow_redirects=False)
-    res = client.get("/static/generated/app.js")
+    res = client.get("/_app/version.json")
     assert res.status_code == 308
-    assert res.headers.get("location") == "/car/static/generated/app.js"
+    assert res.headers.get("location") == "/car/_app/version.json"
 
 
 def test_root_path_proxy_serves_static(_base_path_app) -> None:
     client = TestClient(_base_path_app, root_path="/car", follow_redirects=False)
-    res = client.get("/static/generated/app.js")
+    res = client.get("/_app/version.json")
     assert res.status_code == 200
 
 
 def test_hub_routes_under_base_path(_base_path_app) -> None:
     client = TestClient(_base_path_app)
     assert client.get("/car/hub/version").status_code == 200
+    assert client.get("/car/api/flows/runs?flow_type=ticket_flow").status_code == 200
     assert client.get("/car/repos/demo/api/version").status_code == 200
-    assert client.get("/car/repos/demo/static/generated/app.js").status_code == 200

@@ -39,17 +39,17 @@ from .hub_projection_store import (
     path_stat_fingerprint,
 )
 from .logging_utils import safe_log
+from .managed_thread_store import default_managed_threads_db_path
 from .orchestration.sqlite import resolve_orchestration_sqlite_path
 from .pma_context import (
     PMA_MAX_TEXT,
     _gather_inbox,
+    _snapshot_managed_threads,
     _snapshot_pma_automation,
     _snapshot_pma_files,
-    _snapshot_pma_threads,
     build_pma_action_queue,
     enrich_pma_file_inbox_entry,
 )
-from .pma_thread_store import default_pma_threads_db_path
 from .ticket_flow_operator import (
     latest_ticket_flow_dispatch as _latest_ticket_flow_dispatch,
 )
@@ -61,7 +61,7 @@ _REPO_CAPABILITY_HINT_PROJECTION_MAX_AGE_SECONDS = 60.0
 _REPO_LISTING_RESPONSE_CACHE_TTL_SECONDS = 20.0
 _HUB_LISTING_PROJECTION_MAX_AGE_SECONDS = 60.0
 
-REPO_LISTING_SECTIONS = frozenset({"repos", "agent_workspaces", "freshness"})
+REPO_LISTING_SECTIONS = frozenset({"repos", "freshness"})
 
 
 class RepoProjectionProvider(Protocol):
@@ -129,7 +129,6 @@ class HubRepoListingProjection:
     last_scan_at: Any
     pinned_parent_repo_ids: list[Any]
     repos: list[dict[str, Any]]
-    agent_workspaces: list[dict[str, Any]]
 
     def to_payload(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -153,18 +152,10 @@ class HubRepoListingProjection:
                             else None
                         ),
                     ),
-                    "agent_workspaces": summarize_section_freshness(
-                        self.agent_workspaces,
-                        generated_at=self.generated_at,
-                        stale_threshold_seconds=self.stale_threshold_seconds,
-                        extractor=lambda _item: None,
-                    ),
                 },
             }
         if "repos" in self.requested:
             payload["repos"] = self.repos
-        if "agent_workspaces" in self.requested:
-            payload["agent_workspaces"] = self.agent_workspaces
         return payload
 
 
@@ -255,13 +246,13 @@ def _collect_pma_files_detail(
     }
 
 
-def _collect_pma_threads(
+def _collect_managed_threads(
     hub_root: Path,
     *,
     generated_at: str,
     stale_threshold_seconds: int,
 ) -> list[dict[str, Any]]:
-    return _snapshot_pma_threads(
+    return _snapshot_managed_threads(
         hub_root,
         generated_at=generated_at,
         stale_threshold_seconds=stale_threshold_seconds,
@@ -351,7 +342,7 @@ def _hub_snapshot_fingerprint(
             [
                 str(root_path),
                 path_stat_fingerprint(root_path / ".codex-autorunner" / "filebox"),
-                path_stat_fingerprint(default_pma_threads_db_path(root_path)),
+                path_stat_fingerprint(default_managed_threads_db_path(root_path)),
                 path_stat_fingerprint(orchestration_db_path),
                 path_stat_fingerprint(Path(f"{orchestration_db_path}-wal")),
             ]
@@ -644,7 +635,7 @@ def _serialize_hub_snapshot(
     generated_at: str,
     requested: set[str],
     messages: list[dict[str, Any]],
-    pma_threads: list[dict[str, Any]],
+    managed_threads: list[dict[str, Any]],
     pma_files_detail: dict[str, list[dict[str, Any]]],
     automation: dict[str, Any],
     filtered_action_queue: list[dict[str, Any]],
@@ -653,8 +644,8 @@ def _serialize_hub_snapshot(
     payload: dict[str, Any] = {"generated_at": generated_at}
     if "inbox" in requested:
         payload["items"] = messages
-    if "pma_threads" in requested:
-        payload["pma_threads"] = pma_threads
+    if "managed_threads" in requested:
+        payload["managed_threads"] = managed_threads
     if "pma_files_detail" in requested:
         payload["pma_files_detail"] = pma_files_detail
     if "automation" in requested:
@@ -733,7 +724,6 @@ class HubReadModelService:
         requested: set[str],
         stale_threshold_seconds: int,
         repos: list[Any],
-        agent_workspaces: list[Any],
     ) -> tuple[Any, ...]:
         supervisor_state = getattr(self._context.supervisor, "state", None)
         pinned_parent_repo_ids = (
@@ -754,17 +744,6 @@ class HubReadModelService:
                     snap, stale_threshold_seconds=stale_threshold_seconds
                 )
                 for snap in repos
-            ),
-            tuple(
-                (
-                    workspace.id,
-                    workspace.runtime,
-                    str(workspace.path),
-                    workspace.display_name,
-                    workspace.enabled,
-                    workspace.exists_on_disk,
-                )
-                for workspace in agent_workspaces
             ),
         )
 
@@ -841,25 +820,14 @@ class HubReadModelService:
                 payload=copy.deepcopy(payload),
             )
 
-    async def _current_topology_snapshots(
-        self, *, needs_repos: bool, needs_agent_workspaces: bool
-    ) -> tuple[list[Any], list[Any]]:
+    async def _current_topology_snapshots(self, *, needs_repos: bool) -> list[Any]:
         supervisor_state = getattr(self._context.supervisor, "state", None)
         snapshots = list(getattr(supervisor_state, "repos", []) or [])
-        agent_workspaces = list(getattr(supervisor_state, "agent_workspaces", []) or [])
         if needs_repos and not snapshots:
             snapshots = list(
                 await asyncio.to_thread(self._context.supervisor.list_repos)
             )
-            supervisor_state = getattr(self._context.supervisor, "state", None)
-            agent_workspaces = list(
-                getattr(supervisor_state, "agent_workspaces", []) or agent_workspaces
-            )
-        if needs_agent_workspaces and not agent_workspaces:
-            agent_workspaces = list(
-                await asyncio.to_thread(self._context.supervisor.list_agent_workspaces)
-            )
-        return snapshots, agent_workspaces
+        return snapshots
 
     def _force_list_repos(self) -> list[Any]:
         try:
@@ -867,40 +835,17 @@ class HubReadModelService:
         except TypeError:
             return list(self._context.supervisor.list_repos())
 
-    def _force_list_agent_workspaces(self) -> list[Any]:
-        try:
-            return list(self._context.supervisor.list_agent_workspaces(use_cache=False))
-        except TypeError:
-            return list(self._context.supervisor.list_agent_workspaces())
-
     async def _load_topology_snapshots(
         self,
         *,
         needs_repos: bool,
-        needs_agent_workspaces: bool,
         force_refresh: bool,
-    ) -> tuple[list[Any], list[Any]]:
+    ) -> list[Any]:
         if force_refresh:
             if needs_repos:
-                snapshots = await asyncio.to_thread(self._force_list_repos)
-                supervisor_state = getattr(self._context.supervisor, "state", None)
-                agent_workspaces = list(
-                    getattr(supervisor_state, "agent_workspaces", []) or []
-                )
-                if needs_agent_workspaces and not agent_workspaces:
-                    agent_workspaces = await asyncio.to_thread(
-                        self._force_list_agent_workspaces
-                    )
-                return list(snapshots), list(agent_workspaces)
-            if needs_agent_workspaces:
-                agent_workspaces = await asyncio.to_thread(
-                    self._force_list_agent_workspaces
-                )
-                return [], list(agent_workspaces)
-        return await self._current_topology_snapshots(
-            needs_repos=needs_repos,
-            needs_agent_workspaces=needs_agent_workspaces,
-        )
+                return list(await asyncio.to_thread(self._force_list_repos))
+            return []
+        return await self._current_topology_snapshots(needs_repos=needs_repos)
 
     def _schedule_response_refresh(
         self,
@@ -915,12 +860,8 @@ class HubReadModelService:
 
             async def _refresh() -> None:
                 needs_repos = bool(requested & {"repos", "freshness"})
-                needs_agent_workspaces = bool(
-                    requested & {"agent_workspaces", "freshness"}
-                )
-                snapshots, agent_workspaces = await self._load_topology_snapshots(
+                snapshots = await self._load_topology_snapshots(
                     needs_repos=needs_repos,
-                    needs_agent_workspaces=needs_agent_workspaces,
                     force_refresh=True,
                 )
                 stale_threshold_seconds = self._stale_threshold_seconds()
@@ -928,12 +869,10 @@ class HubReadModelService:
                     requested=requested,
                     stale_threshold_seconds=stale_threshold_seconds,
                     repos=snapshots,
-                    agent_workspaces=agent_workspaces,
                 )
                 payload = await self._build_listing_payload(
                     sections=requested,
                     snapshots=snapshots,
-                    agent_workspaces=agent_workspaces,
                 )
                 self._store_response_cache(
                     cache_key=cache_key,
@@ -979,12 +918,10 @@ class HubReadModelService:
         *,
         sections: Optional[set[str]] = None,
         snapshots: Optional[list[Any]] = None,
-        agent_workspaces: Optional[list[Any]] = None,
     ) -> dict[str, Any]:
         projection = await self._build_listing_projection(
             sections=sections,
             snapshots=snapshots,
-            agent_workspaces=agent_workspaces,
         )
         return projection.to_payload()
 
@@ -993,25 +930,16 @@ class HubReadModelService:
         *,
         sections: Optional[set[str]] = None,
         snapshots: Optional[list[Any]] = None,
-        agent_workspaces: Optional[list[Any]] = None,
     ) -> HubRepoListingProjection:
         safe_log(self._context.logger, logging.INFO, "Hub list_repos")
         requested = set(sections or REPO_LISTING_SECTIONS)
         needs_repos = bool(requested & {"repos", "freshness"})
-        needs_agent_workspaces = bool(requested & {"agent_workspaces", "freshness"})
         snapshots_provided = snapshots is not None
-        agent_workspaces_provided = agent_workspaces is not None
         snapshots = list(snapshots or [])
         repos: list[dict[str, Any]] = []
-        agent_workspaces = list(agent_workspaces or [])
         if needs_repos:
-            if not snapshots_provided or (
-                needs_agent_workspaces and not agent_workspaces_provided
-            ):
-                snapshots, agent_workspaces = await self._current_topology_snapshots(
-                    needs_repos=True,
-                    needs_agent_workspaces=needs_agent_workspaces,
-                )
+            if not snapshots_provided:
+                snapshots = await self._current_topology_snapshots(needs_repos=True)
             await self._prepare_snapshots(snapshots)
             chat_binding_counts_by_source = await asyncio.to_thread(
                 self._active_chat_binding_counts_by_source
@@ -1027,26 +955,6 @@ class HubReadModelService:
                 chat_binding_counts_by_source,
                 unbound_thread_counts,
             )
-            if needs_agent_workspaces:
-                agent_workspaces = [
-                    workspace.to_dict(self._context.config.root)
-                    for workspace in agent_workspaces
-                ]
-        elif needs_agent_workspaces:
-            if not agent_workspaces_provided:
-                _, agent_workspace_snaps = await self._current_topology_snapshots(
-                    needs_repos=False,
-                    needs_agent_workspaces=True,
-                )
-                agent_workspaces = [
-                    workspace.to_dict(self._context.config.root)
-                    for workspace in agent_workspace_snaps
-                ]
-            else:
-                agent_workspaces = [
-                    workspace.to_dict(self._context.config.root)
-                    for workspace in agent_workspaces
-                ]
 
         generated_at = iso_now()
         supervisor_state = self._context.supervisor.state
@@ -1059,7 +967,6 @@ class HubReadModelService:
                 getattr(supervisor_state, "pinned_parent_repo_ids", []) or []
             ),
             repos=repos,
-            agent_workspaces=agent_workspaces,
         )
 
     async def list_repos(
@@ -1070,10 +977,8 @@ class HubReadModelService:
         cache_key = tuple(sorted(requested))
         durable_cache_key = f"hub_listing:{','.join(cache_key)}"
         needs_repos = bool(requested & {"repos", "freshness"})
-        needs_agent_workspaces = bool(requested & {"agent_workspaces", "freshness"})
-        snapshots, agent_workspaces = await self._load_topology_snapshots(
+        snapshots = await self._load_topology_snapshots(
             needs_repos=needs_repos,
-            needs_agent_workspaces=needs_agent_workspaces,
             force_refresh=False,
         )
         supervisor_state = getattr(self._context.supervisor, "state", None)
@@ -1083,17 +988,11 @@ class HubReadModelService:
             and getattr(supervisor_state, "last_scan_at", None) is None
         ):
             snapshots = await asyncio.to_thread(self._context.supervisor.scan)
-            if needs_agent_workspaces:
-                agent_workspaces = await asyncio.to_thread(
-                    self._context.supervisor.list_agent_workspaces,
-                    use_cache=False,
-                )
         stale_threshold_seconds = self._stale_threshold_seconds()
         fingerprint = self._listing_fingerprint(
             requested=requested,
             stale_threshold_seconds=stale_threshold_seconds,
             repos=snapshots,
-            agent_workspaces=agent_workspaces,
         )
         now = _monotonic()
         with self._response_cache_lock:
@@ -1103,16 +1002,14 @@ class HubReadModelService:
                 return copy.deepcopy(cached.payload)
             self._schedule_response_refresh(cache_key=cache_key, requested=requested)
             return copy.deepcopy(cached.payload)
-        snapshots, agent_workspaces = await self._load_topology_snapshots(
+        snapshots = await self._load_topology_snapshots(
             needs_repos=needs_repos,
-            needs_agent_workspaces=needs_agent_workspaces,
             force_refresh=True,
         )
         fingerprint = self._listing_fingerprint(
             requested=requested,
             stale_threshold_seconds=stale_threshold_seconds,
             repos=snapshots,
-            agent_workspaces=agent_workspaces,
         )
         projection_store = self._projection_store()
         if projection_store is not None:
@@ -1136,7 +1033,6 @@ class HubReadModelService:
         payload = await self._build_listing_payload(
             sections=requested,
             snapshots=snapshots,
-            agent_workspaces=agent_workspaces,
         )
         self._store_response_cache(
             cache_key=cache_key,
@@ -1159,24 +1055,21 @@ class HubReadModelService:
         self._require_repo_projection_provider()
         safe_log(self._context.logger, logging.INFO, "Hub scan_repos")
         snapshots = await asyncio.to_thread(self._context.supervisor.scan)
-        agent_workspace_snapshots = await asyncio.to_thread(
-            self._context.supervisor.list_agent_workspaces, use_cache=False
-        )
         projection = await self._build_listing_projection(
             sections=set(REPO_LISTING_SECTIONS),
             snapshots=list(snapshots),
-            agent_workspaces=list(agent_workspace_snapshots),
         )
         payload = projection.to_payload()
         stale_threshold_seconds = projection.stale_threshold_seconds
+        listing_cache_key = tuple(sorted(REPO_LISTING_SECTIONS))
+        durable_listing_key = f"hub_listing:{','.join(listing_cache_key)}"
         listing_fingerprint = self._listing_fingerprint(
             requested=set(REPO_LISTING_SECTIONS),
             stale_threshold_seconds=stale_threshold_seconds,
             repos=snapshots,
-            agent_workspaces=agent_workspace_snapshots,
         )
         self._store_response_cache(
-            cache_key=tuple(sorted(REPO_LISTING_SECTIONS)),
+            cache_key=listing_cache_key,
             fingerprint=listing_fingerprint,
             payload=payload,
         )
@@ -1184,7 +1077,7 @@ class HubReadModelService:
         if projection_store is not None:
             try:
                 projection_store.set_cache(
-                    "hub_listing:agent_workspaces,freshness,repos",
+                    durable_listing_key,
                     listing_fingerprint,
                     payload,
                     namespace=HUB_LISTING_PROJECTION_NAMESPACE,
@@ -1259,7 +1152,7 @@ class HubReadModelService:
             if sections is not None
             else {
                 "inbox",
-                "pma_threads",
+                "managed_threads",
                 "pma_files_detail",
                 "automation",
                 "action_queue",
@@ -1318,7 +1211,7 @@ class HubReadModelService:
 
         hub_root = getattr(getattr(self._context, "config", None), "root", None)
         pma_files_detail: dict[str, list[dict[str, Any]]] = empty_listing()
-        pma_threads: list[dict[str, Any]] = []
+        managed_threads: list[dict[str, Any]] = []
         automation = (
             _snapshot_pma_automation(self._context.supervisor)
             if requested & {"automation"} or settings.include_full_action_queue_context
@@ -1335,10 +1228,10 @@ class HubReadModelService:
                     stale_threshold_seconds=settings.stale_threshold_seconds,
                 )
             if (
-                requested & {"pma_threads"}
+                requested & {"managed_threads"}
                 or settings.include_full_action_queue_context
             ):
-                pma_threads = _collect_pma_threads(
+                managed_threads = _collect_managed_threads(
                     hub_root,
                     generated_at=settings.generated_at,
                     stale_threshold_seconds=settings.stale_threshold_seconds,
@@ -1351,7 +1244,7 @@ class HubReadModelService:
         ):
             action_queue = build_pma_action_queue(
                 inbox=inbox,
-                pma_threads=pma_threads,
+                managed_threads=managed_threads,
                 pma_files_detail=pma_files_detail,
                 automation=automation,
                 generated_at=settings.generated_at,
@@ -1380,7 +1273,7 @@ class HubReadModelService:
             generated_at=settings.generated_at,
             requested=requested,
             messages=messages,
-            pma_threads=pma_threads,
+            managed_threads=managed_threads,
             pma_files_detail=pma_files_detail,
             automation=automation,
             filtered_action_queue=filtered_action_queue,
@@ -1457,7 +1350,7 @@ __all__ = [
     "_HubSnapshotCacheEntry",
     "_RepoCapabilityHintCacheEntry",
     "_collect_pma_files_detail",
-    "_collect_pma_threads",
+    "_collect_managed_threads",
     "_gather_inbox",
     "_hub_snapshot_cache",
     "_repo_capability_hint_cache",

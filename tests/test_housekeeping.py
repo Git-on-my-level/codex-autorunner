@@ -7,6 +7,11 @@ import time
 from pathlib import Path
 from unittest.mock import patch
 
+from codex_autorunner.adapters.docker.runtime import (
+    DockerManagedContainerAction,
+    DockerManagedContainerReapResult,
+    DockerRuntimeError,
+)
 from codex_autorunner.housekeeping import (
     DEFAULT_MANAGED_DOCKER_CONTAINER_TTL_SECONDS,
     HousekeepingConfig,
@@ -14,11 +19,6 @@ from codex_autorunner.housekeeping import (
     reap_managed_docker_containers,
     run_housekeeping_for_roots,
     run_housekeeping_once,
-)
-from codex_autorunner.integrations.docker.runtime import (
-    DockerManagedContainerAction,
-    DockerManagedContainerReapResult,
-    DockerRuntimeError,
 )
 
 

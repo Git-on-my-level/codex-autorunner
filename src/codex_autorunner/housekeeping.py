@@ -222,7 +222,7 @@ def reap_managed_docker_containers(
     command_timeout_seconds: float = 5.0,
     now: Optional[dt.datetime] = None,
 ) -> HousekeepingRuleResult:
-    from .integrations.docker.runtime import (
+    from .adapters.docker.runtime import (
         DockerRuntime,
         DockerRuntimeError,
         DockerUnavailableError,

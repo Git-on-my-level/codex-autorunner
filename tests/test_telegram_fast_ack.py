@@ -7,7 +7,7 @@ from typing import Optional
 
 import pytest
 
-from codex_autorunner.integrations.chat.immediate_feedback import (
+from codex_autorunner.adapters.chat.immediate_feedback import (
     INTERRUPT_REQUESTED_TEXT,
     QUEUED_NOTICE_TEXT,
     ImmediateAckResult,
@@ -19,31 +19,31 @@ from codex_autorunner.integrations.chat.immediate_feedback import (
     publish_interrupt_notice,
     publish_queued_notice,
 )
-from codex_autorunner.integrations.chat.models import (
+from codex_autorunner.adapters.chat.models import (
     ChatAction,
     ChatInteractionRef,
     ChatMessageRef,
     ChatThreadRef,
 )
-from codex_autorunner.integrations.chat.queue_status import (
+from codex_autorunner.adapters.chat.queue_status import (
     coerce_queue_status_items,
     format_queue_status_text,
 )
-from codex_autorunner.integrations.telegram.adapter import (
+from codex_autorunner.adapters.telegram.client import (
     InlineButton,
     TelegramCallbackQuery,
     TelegramMessage,
     build_inline_keyboard,
     encode_cancel_callback,
 )
-from codex_autorunner.integrations.telegram.dispatch import (
+from codex_autorunner.adapters.telegram.dispatch import (
     _dispatch_callback,
     _dispatch_message,
 )
-from codex_autorunner.integrations.telegram.state import (
+from codex_autorunner.adapters.telegram.state import (
     TelegramTopicRecord,
 )
-from codex_autorunner.integrations.telegram.topic_router import (
+from codex_autorunner.adapters.telegram.topic_router import (
     TopicRouter,
 )
 

@@ -16,12 +16,12 @@ from .hub_projection_store import (
     HubProjectionStore,
     path_stat_fingerprint,
 )
+from .managed_thread_store import ManagedThreadStore, default_managed_threads_db_path
 from .orchestration.sqlite import (
     open_orchestration_sqlite,
     resolve_orchestration_sqlite_path,
 )
 from .path_utils import resolve_config_path
-from .pma_thread_store import PmaThreadStore, default_pma_threads_db_path
 from .sqlite_utils import open_sqlite
 from .state_roots import (
     REPO_STATE_DIR,
@@ -77,7 +77,7 @@ def _chat_binding_counts_fingerprint(
     orchestration_db_path = resolve_orchestration_sqlite_path(hub_root)
     return (
         path_stat_fingerprint(_resolve_manifest_path(hub_root, raw_config)),
-        path_stat_fingerprint(default_pma_threads_db_path(hub_root)),
+        path_stat_fingerprint(default_managed_threads_db_path(hub_root)),
         path_stat_fingerprint(orchestration_db_path),
         path_stat_fingerprint(Path(f"{orchestration_db_path}-wal")),
         _chat_surface_enabled(raw_config, "discord_bot"),
@@ -665,12 +665,12 @@ def _orchestration_binding_timestamps_by_workspace(
     return latest_by_workspace
 
 
-def _active_pma_thread_counts(
+def _active_managed_thread_counts(
     hub_root: Path, repo_id_by_workspace: Mapping[str, str]
 ) -> dict[str, int]:
     counts: Counter[str] = Counter()
     try:
-        store = PmaThreadStore.connect_readonly(hub_root)
+        store = ManagedThreadStore.connect_readonly(hub_root)
         raw_counts = store.count_threads_by_repo(status="active")
     except (OSError, RuntimeError, ValueError, sqlite3.OperationalError):
         raw_counts = {}
@@ -759,7 +759,7 @@ def active_chat_binding_counts_by_source(
             repo_counts = source_counts.setdefault(repo_id, {})
             repo_counts[source] = int(repo_counts.get(source, 0)) + int(count)
 
-    _merge_counts("pma", _active_pma_thread_counts(hub_root, repo_id_by_workspace))
+    _merge_counts("pma", _active_managed_thread_counts(hub_root, repo_id_by_workspace))
     orchestration_counts = _orchestration_binding_counts_by_source(
         hub_root=hub_root,
         repo_id_by_workspace=repo_id_by_workspace,

@@ -7,27 +7,27 @@ from typing import Any, Optional
 
 import pytest
 
-from codex_autorunner.integrations.telegram.adapter import (
+from codex_autorunner.adapters.telegram.client import (
     AgentProfileCallback,
     TelegramCallbackQuery,
     TelegramMessage,
 )
-from codex_autorunner.integrations.telegram.handlers.commands import (
+from codex_autorunner.adapters.telegram.handlers.commands import (
     execution as execution_commands_module,
 )
-from codex_autorunner.integrations.telegram.handlers.commands.agent_model_utils import (
+from codex_autorunner.adapters.telegram.handlers.commands.agent_model_utils import (
     _build_agent_options,
     _build_agent_profile_options,
 )
-from codex_autorunner.integrations.telegram.handlers.commands_runtime import (
+from codex_autorunner.adapters.telegram.handlers.commands_runtime import (
     TelegramCommandHandlers,
     _RuntimeStub,
 )
-from codex_autorunner.integrations.telegram.handlers.selections import (
+from codex_autorunner.adapters.telegram.handlers.selections import (
     TelegramSelectionHandlers,
 )
-from codex_autorunner.integrations.telegram.state import TelegramTopicRecord
-from codex_autorunner.integrations.telegram.types import SelectionState
+from codex_autorunner.adapters.telegram.state import TelegramTopicRecord
+from codex_autorunner.adapters.telegram.types import SelectionState
 
 
 class _RouterStub:

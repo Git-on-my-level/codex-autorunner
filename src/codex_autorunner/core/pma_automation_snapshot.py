@@ -80,6 +80,10 @@ def snapshot_pma_automation(
     pending_wakeups = _call_automation_list(
         getattr(store, "list_wakeups", None), key="wakeups", state_filter="pending"
     )
+    queued_wakeups = _call_automation_list(
+        getattr(store, "list_wakeups", None), key="wakeups", state_filter="queued"
+    )
+    pending_wakeups = [*pending_wakeups, *queued_wakeups]
     if not pending_wakeups:
         pending_wakeups = _call_automation_list(
             getattr(store, "list_pending_wakeups", None), key="wakeups"
@@ -94,6 +98,12 @@ def snapshot_pma_automation(
         key="wakeups",
         state_filter="dispatched",
     )
+    worker_started_wakeups = _call_automation_list(
+        getattr(store, "list_wakeups", None),
+        key="wakeups",
+        state_filter="worker_started",
+    )
+    dispatched_wakeups = [*dispatched_wakeups, *worker_started_wakeups]
 
     def _pick(entry: dict[str, Any], fields: tuple[str, ...]) -> dict[str, Any]:
         picked: dict[str, Any] = {}

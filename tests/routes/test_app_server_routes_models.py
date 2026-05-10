@@ -7,7 +7,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from codex_autorunner.integrations.app_server.client import (
+from codex_autorunner.adapters.app_server.client import (
     CodexAppServerResponseError,
 )
 from codex_autorunner.surfaces.web.routes.app_server import build_app_server_routes

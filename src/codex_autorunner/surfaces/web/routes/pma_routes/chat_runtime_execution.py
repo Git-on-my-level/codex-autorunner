@@ -20,7 +20,6 @@ from .....agents.registry import (
     resolve_agent_runtime,
     wrap_requested_agent_context,
 )
-from .....core.orchestration import FreshConversationRequiredError
 from .....core.orchestration.runtime_thread_events import (
     RuntimeThreadRunEventState,
     merge_runtime_thread_raw_events,
@@ -28,25 +27,21 @@ from .....core.orchestration.runtime_thread_events import (
     normalize_runtime_thread_raw_event,
 )
 from .....core.orchestration.turn_timeline import iso_from_epoch_millis
+from .....core.pma.runtime_results import (
+    DEFAULT_PMA_TIMEOUT_SECONDS,
+    DEFAULT_PMA_WALL_CLOCK_TIMEOUT_SECONDS,
+    classify_runtime_turn_result,
+    requires_fresh_pma_conversation,
+    timeline_has_assistant_output,
+)
 from .....core.ports.run_event import (
-    RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
-    RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
     Completed,
-    OutputDelta,
     RunEvent,
 )
 from .....core.time_utils import now_iso
-from .....integrations.app_server import is_missing_thread_error
 from ...services.pma import get_pma_request_context
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_PMA_TIMEOUT_SECONDS = 1800
-# Hard asyncio.sleep caps for runtimes without idle-based reset (harness uses idle timeout).
-DEFAULT_PMA_WALL_CLOCK_TIMEOUT_SECONDS = 7200
-SUCCESSFUL_COMPLETION_STATUSES = frozenset(
-    {"ok", "completed", "complete", "done", "success"}
-)
 
 
 class _TurnActivityTracker:
@@ -74,12 +69,6 @@ async def _wait_for_idle_timeout(
         await asyncio.sleep(min(remaining, 0.25))
 
 
-def requires_fresh_pma_conversation(exc: Exception) -> bool:
-    if isinstance(exc, FreshConversationRequiredError):
-        return True
-    return is_missing_thread_error(exc)
-
-
 def cancel_background_task(task: asyncio.Task[Any], *, name: str) -> None:
     def _on_done(done_task: asyncio.Future[Any]) -> None:
         if isinstance(done_task, asyncio.Task):
@@ -96,36 +85,6 @@ def cancel_background_task(task: asyncio.Task[Any], *, name: str) -> None:
 
     task.add_done_callback(_on_done)
     task.cancel()
-
-
-def timeline_has_assistant_output(events: list[RunEvent]) -> bool:
-    return any(
-        isinstance(event, OutputDelta)
-        and event.delta_type
-        in {
-            RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
-            RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
-        }
-        for event in events
-    )
-
-
-def raw_events_show_completion(raw_events: tuple[Any, ...]) -> bool:
-    for raw_event in raw_events:
-        if not isinstance(raw_event, dict):
-            continue
-        method = str(raw_event.get("method") or "").strip().lower()
-        if not method:
-            message = raw_event.get("message")
-            if isinstance(message, dict):
-                method = str(message.get("method") or "").strip().lower()
-        if method in {
-            "turn/completed",
-            "prompt/completed",
-            "session.idle",
-        }:
-            return True
-    return False
 
 
 def build_runtime_harness(
@@ -364,6 +323,7 @@ async def execute_harness_turn(
         _wait_for_idle_timeout(activity_tracker, resolved_timeout_seconds)
     )
     interrupt_task = asyncio.create_task(interrupt_event.wait())
+    turn_completed_normally = False
     try:
         done, _ = await asyncio.wait(
             {turn_task, timeout_task, interrupt_task},
@@ -396,17 +356,32 @@ async def execute_harness_turn(
             cancel_background_task(turn_task, name="pma.runtime.turn.wait")
             return {"status": "interrupted", "detail": "PMA chat interrupted"}
         turn_result = await turn_task
+        turn_completed_normally = True
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     finally:
         cancel_background_task(timeout_task, name="pma.runtime.timeout.wait")
         cancel_background_task(interrupt_task, name="pma.runtime.interrupt.wait")
         if stream_task is not None:
-            stream_task.cancel()
-            try:
-                await stream_task
-            except asyncio.CancelledError:
-                pass
+            if turn_completed_normally:
+                try:
+                    await asyncio.wait_for(stream_task, timeout=0.5)
+                except asyncio.TimeoutError:
+                    stream_task.cancel()
+                    try:
+                        await stream_task
+                    except asyncio.CancelledError:
+                        pass
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    logger.debug("PMA runtime event collector failed", exc_info=True)
+            else:
+                stream_task.cancel()
+                try:
+                    await stream_task
+                except asyncio.CancelledError:
+                    pass
 
     raw_events = tuple(getattr(turn_result, "raw_events", ()) or ())
     merged_raw_events = tuple(
@@ -420,52 +395,32 @@ async def execute_harness_turn(
 
     status = str(getattr(turn_result, "status", "") or "").strip().lower()
     errors = tuple(getattr(turn_result, "errors", ()) or ())
-    successful_completion = status in SUCCESSFUL_COMPLETION_STATUSES
-    if errors:
-        detail = next(
-            (str(error or "").strip() for error in errors if str(error or "").strip()),
-            "",
-        )
-        if (
-            assistant_text
-            and (successful_completion or timeline_state.completed_seen)
-            and (
-                timeline_state.completed_seen
-                or raw_events_show_completion(merged_raw_events)
-            )
-        ):
+    classification = classify_runtime_turn_result(
+        status=status,
+        errors=errors,
+        assistant_text=assistant_text,
+        completed_seen=timeline_state.completed_seen,
+        raw_events=merged_raw_events,
+    )
+    if classification["status"] == "ok":
+        if errors and assistant_text:
             timeline_events.append(
                 Completed(timestamp=now_iso(), final_message=assistant_text)
             )
-            return {
-                "status": "ok",
-                "message": assistant_text,
-                "thread_id": resolved_conversation_id,
-                "backend_thread_id": resolved_conversation_id,
-                "turn_id": turn_id,
-                "raw_events": list(merged_raw_events),
-                "timeline_events": timeline_events,
-            }
-        return {"status": "error", "detail": detail or "PMA chat failed"}
-
-    if status in {"interrupted", "cancelled", "canceled", "aborted"}:
-        return {"status": "interrupted", "detail": "PMA chat interrupted"}
-    if status and not successful_completion:
-        return {"status": "error", "detail": "PMA chat failed"}
-
-    if assistant_text:
-        timeline_events.append(
-            Completed(timestamp=now_iso(), final_message=assistant_text)
-        )
-    return {
-        "status": "ok",
-        "message": assistant_text,
-        "thread_id": resolved_conversation_id,
-        "backend_thread_id": resolved_conversation_id,
-        "turn_id": turn_id,
-        "raw_events": list(merged_raw_events),
-        "timeline_events": timeline_events,
-    }
+        elif not errors and assistant_text:
+            timeline_events.append(
+                Completed(timestamp=now_iso(), final_message=assistant_text)
+            )
+        return {
+            "status": "ok",
+            "message": assistant_text,
+            "thread_id": resolved_conversation_id,
+            "backend_thread_id": resolved_conversation_id,
+            "turn_id": turn_id,
+            "raw_events": list(merged_raw_events),
+            "timeline_events": timeline_events,
+        }
+    return classification
 
 
 async def execute_app_server(

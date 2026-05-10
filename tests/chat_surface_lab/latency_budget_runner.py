@@ -10,13 +10,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence
 
-from codex_autorunner.core.utils import atomic_write
-from codex_autorunner.integrations.chat.ux_regression_contract import (
+from codex_autorunner.adapters.chat.ux_regression_contract import (
     CHAT_UX_LATENCY_BUDGETS,
     REQUIRED_CHAT_UX_LATENCY_BUDGET_IDS,
     REQUIRED_CHAT_UX_REGRESSION_SCENARIO_IDS,
     campaign_north_star_status,
 )
+from codex_autorunner.core.utils import atomic_write
 from tests.chat_surface_lab.scenario_runner import (
     ChatSurfaceScenarioRunner,
     ScenarioDefinition,
@@ -57,9 +57,9 @@ def apply_hermes_runtime_patch_for_lab(runtime: Any) -> None:
     def _registered(_context: Any = None) -> dict[str, Any]:
         return runtime.registered_agents()
 
+    import codex_autorunner.adapters.discord.message_turns as discord_turns
+    import codex_autorunner.adapters.telegram.handlers.commands.execution as telegram_execution
     import codex_autorunner.agents.registry as agent_registry
-    import codex_autorunner.integrations.discord.message_turns as discord_turns
-    import codex_autorunner.integrations.telegram.handlers.commands.execution as telegram_execution
 
     agent_registry.get_registered_agents = _registered
     discord_turns.get_registered_agents = _registered
@@ -482,22 +482,15 @@ def _install_inprocess_hub_client_stubs_for_lab() -> None:
     if _HUB_PATCH_INSTALLED:
         return
 
+    from codex_autorunner.adapters.discord.service import DiscordBotService
+    from codex_autorunner.adapters.telegram.service import TelegramBotService
     from codex_autorunner.core.hub_control_plane import HubSharedStateService
     from codex_autorunner.core.hub_control_plane.models import HandshakeCompatibility
+    from codex_autorunner.core.managed_thread_store import prepare_managed_thread_store
     from codex_autorunner.core.orchestration.sqlite import prepare_orchestration_sqlite
     from codex_autorunner.core.pma_context import build_hub_snapshot
-    from codex_autorunner.core.pma_thread_store import prepare_pma_thread_store
-    from codex_autorunner.integrations.discord.service import DiscordBotService
-    from codex_autorunner.integrations.telegram.service import TelegramBotService
 
     class _NoopSupervisor:
-        def list_agent_workspaces(self, *, use_cache: bool = True) -> list[object]:
-            _ = use_cache
-            return []
-
-        def get_agent_workspace_snapshot(self, workspace_id: str) -> object:
-            raise ValueError(f"Unknown workspace id: {workspace_id}")
-
         def run_setup_commands_for_workspace(
             self, workspace_root: Path, *, repo_id_hint: Optional[str] = None
         ) -> int:
@@ -516,7 +509,7 @@ def _install_inprocess_hub_client_stubs_for_lab() -> None:
         def __init__(self, hub_root: Path) -> None:
             self._hub_root = Path(hub_root)
             prepare_orchestration_sqlite(self._hub_root, durable=False)
-            prepare_pma_thread_store(self._hub_root, durable=False)
+            prepare_managed_thread_store(self._hub_root, durable=False)
             self._service = HubSharedStateService(
                 hub_root=self._hub_root,
                 supervisor=_NoopSupervisor(),
@@ -636,12 +629,6 @@ def _install_inprocess_hub_client_stubs_for_lab() -> None:
                 (),
                 {"snapshot": await build_hub_snapshot(None, hub_root=self._hub_root)},
             )()
-
-        async def get_agent_workspace(self, request: Any) -> Any:
-            return self._service.get_agent_workspace(request)
-
-        async def list_agent_workspaces(self, request: Any) -> Any:
-            return self._service.list_agent_workspaces(request)
 
         async def run_workspace_setup_commands(self, request: Any) -> Any:
             return self._service.run_workspace_setup_commands(request)

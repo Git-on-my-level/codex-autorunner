@@ -13,9 +13,9 @@ from ...core.filebox_lifecycle import (
     list_consumed_files,
     unconsume_inbox_file,
 )
+from .hub_control_plane_client import resolve_hub_path
 from .hub_path_option import hub_root_path_option
 from .output import echo_json, exit_with_error
-from .pma_control_plane import resolve_hub_path
 
 
 def register_file_commands(app: typer.Typer) -> None:

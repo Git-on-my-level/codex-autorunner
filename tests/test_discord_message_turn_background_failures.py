@@ -8,17 +8,17 @@ from typing import Any
 
 import pytest
 
-import codex_autorunner.integrations.discord.managed_thread_routing as discord_managed_thread_routing_module
-import codex_autorunner.integrations.discord.message_turns as discord_message_turns_module
-import codex_autorunner.integrations.discord.progress_leases as discord_progress_leases_module
-import codex_autorunner.integrations.discord.service as discord_service_module
-import codex_autorunner.integrations.discord.service_lifecycle as discord_service_lifecycle_module
-from codex_autorunner.integrations.chat.dispatcher import build_dispatch_context
-from codex_autorunner.integrations.discord.service import (
+import codex_autorunner.adapters.discord.managed_thread_routing as discord_managed_thread_routing_module
+import codex_autorunner.adapters.discord.message_turns as discord_message_turns_module
+import codex_autorunner.adapters.discord.progress_leases as discord_progress_leases_module
+import codex_autorunner.adapters.discord.service as discord_service_module
+import codex_autorunner.adapters.discord.service_lifecycle as discord_service_lifecycle_module
+from codex_autorunner.adapters.chat.dispatcher import build_dispatch_context
+from codex_autorunner.adapters.discord.service import (
     DiscordBotService,
     DiscordMessageTurnResult,
 )
-from codex_autorunner.integrations.discord.state import DiscordStateStore
+from codex_autorunner.adapters.discord.state import DiscordStateStore
 from tests.discord_message_turns_support import (
     _config,
     _FakeGateway,

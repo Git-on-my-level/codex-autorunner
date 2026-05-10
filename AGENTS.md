@@ -19,7 +19,7 @@ This repo dogfoods codex-autorunner. Start here, then prefer the nearest nested 
 ## Fast Routing
 
 - Core engine and config: `src/codex_autorunner/core/`, `docs/car_constitution/10_CODEBASE_CONSTITUTION.md`, `20_ARCHITECTURE_MAP.md`, `30_ENGINEERING_STANDARDS.md`.
-- Web UI frontend: `src/codex_autorunner/static_src/AGENTS.md`, then `src/codex_autorunner/static/AGENTS.md`.
+- Web UI frontend: `src/codex_autorunner/web_frontend/AGENTS.md`.
 - Web backend and static asset serving: `src/codex_autorunner/surfaces/web/AGENTS.md`.
 - Frontend and web tests: `tests/AGENTS.md`.
 - Agent protocol work: `src/codex_autorunner/agents/acp/AGENTS.md`.
@@ -35,7 +35,7 @@ This repo dogfoods codex-autorunner. Start here, then prefer the nearest nested 
 ## Repo Defaults
 
 - Python: use the project venv, usually via `.venv/bin/python`; run `make setup` if needed.
-- Frontend JS: edit `src/codex_autorunner/static_src/*.ts`, not `src/codex_autorunner/static/generated/*.js`; run `pnpm run build` after TS changes.
+- Frontend JS: edit `src/codex_autorunner/web_frontend/src/`; use `make serve` for Vite HMR against the local hub, or `pnpm run build` / `make build` to refresh `web_static/`.
 - Prefer `make` targets for common checks.
 - Use `gh` for GitHub operations when possible.
 - Use a 300 second timeout for `git commit`; avoid `--no-verify` unless the user approves.

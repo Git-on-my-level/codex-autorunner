@@ -7,9 +7,13 @@ from typing import Any, Optional, cast
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
+from .....adapters.github.context_injection import (
+    maybe_inject_github_context as maybe_inject_github_context,
+)
 from .....agents.base import harness_supports_event_streaming
 from .....agents.codex.harness import CodexHarness
 from .....agents.registry import get_registered_agents as _get_registered_agents
+from .....core.agent_model_defaults import resolve_model_for_agent
 from .....core.orchestration import (
     build_surface_orchestration_ingress as _build_surface_orchestration_ingress,
 )
@@ -19,17 +23,15 @@ from .....core.pma_context import load_pma_prompt as load_pma_prompt
 from .....core.pma_lifecycle import PmaLifecycleRouter
 from .....core.pma_queue import QueueItemState
 from .....core.sse import format_sse
+from .....core.state import load_state
 from .....core.text_utils import _normalize_optional_text
-from .....integrations.github.context_injection import (
-    maybe_inject_github_context as maybe_inject_github_context,
-)
 from ...schemas import (
+    ManagedThreadResetRequest,
     PmaChatRequest,
     PmaHistoryCompactRequest,
     PmaNewSessionRequest,
     PmaSessionResetRequest,
     PmaStopRequest,
-    PmaThreadResetRequest,
 )
 from ...services.pma import get_pma_request_context
 from ...services.pma.common import (
@@ -60,6 +62,26 @@ _execute_opencode = execute_opencode
 
 def _get_pma_config(request: Request) -> dict[str, Any]:
     return get_pma_request_context(request).pma_config
+
+
+def _resolve_pma_default_model(
+    request: Request,
+    *,
+    agent: Optional[str],
+    configured_default: Optional[str],
+) -> Optional[str]:
+    try:
+        state = load_state(request.app.state.engine.state_path)
+    except (OSError, ValueError, AttributeError):
+        state = None
+    pma_config = _get_pma_config(request)
+    return resolve_model_for_agent(
+        agent or pma_config.get("default_agent") or "codex",
+        state=state,
+        config=request.app.state.config,
+        configured_default=configured_default,
+        include_builtin=False,
+    )
 
 
 def _pma_turn_idle_timeout_seconds(request: Request) -> float:
@@ -381,6 +403,12 @@ def build_chat_runtime_router(
         queue = runtime.get_pma_queue(hub_root)
 
         lane_id = "pma:default"
+        model = model or _resolve_pma_default_model(
+            request,
+            agent=agent,
+            configured_default=pma_config.get("model"),
+        )
+
         idempotency_key = _build_idempotency_key(
             lane_id=lane_id,
             agent=agent,
@@ -552,8 +580,8 @@ def build_chat_runtime_router(
         }
 
     @router.post("/thread/reset")
-    async def reset_pma_thread(
-        request: Request, payload: Optional[PmaThreadResetRequest] = None
+    async def reset_managed_thread(
+        request: Request, payload: Optional[ManagedThreadResetRequest] = None
     ) -> dict[str, Any]:
         context = get_pma_request_context(request)
         raw_agent = ((payload.agent if payload else None) or "").strip().lower()

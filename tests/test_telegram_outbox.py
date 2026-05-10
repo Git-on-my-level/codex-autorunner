@@ -8,13 +8,17 @@ from typing import Optional
 import httpx
 import pytest
 
-from codex_autorunner.core.state import now_iso
-from codex_autorunner.integrations.telegram import outbox as outbox_module
-from codex_autorunner.integrations.telegram.outbox import TelegramOutboxManager
-from codex_autorunner.integrations.telegram.state import (
+from codex_autorunner.adapters.telegram import outbox as outbox_module
+from codex_autorunner.adapters.telegram.outbox import (
+    OUTBOX_OPERATION_SEND_DELETE_PLACEHOLDER,
+    OUTBOX_OPERATION_SEND_KEEP_PLACEHOLDER,
+    TelegramOutboxManager,
+)
+from codex_autorunner.adapters.telegram.state import (
     OutboxRecord,
     TelegramStateStore,
 )
+from codex_autorunner.core.state import now_iso
 
 
 @pytest.mark.anyio
@@ -113,7 +117,7 @@ async def test_outbox_coalescing_collapses_edits(
         )
         manager.start()
 
-        from codex_autorunner.integrations.telegram.outbox import _outbox_key
+        from codex_autorunner.adapters.telegram.outbox import _outbox_key
 
         outbox_key = _outbox_key(123, 456, 789, "edit")
 
@@ -720,6 +724,122 @@ async def test_outbox_give_up_invokes_delivery_callback_with_none(
         await manager._flush(await store.list_outbox())
 
         assert callbacks == [("give-up", None)]
+        assert await store.list_outbox() == []
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_send_delete_placeholder_removes_placeholder_on_delivery(
+    tmp_path: Path,
+) -> None:
+    store = TelegramStateStore(tmp_path / "telegram_state.sqlite3")
+    deleted: list[tuple[int, int, Optional[int]]] = []
+    try:
+
+        async def send_message(
+            _chat_id: int,
+            _text: str,
+            *,
+            thread_id: Optional[int] = None,
+            reply_to: Optional[int] = None,
+        ) -> int:
+            _ = thread_id, reply_to
+            return 321
+
+        async def edit_message_text(*_args, **_kwargs) -> bool:
+            return True
+
+        async def delete_message(
+            chat_id: int,
+            message_id: int,
+            thread_id: Optional[int],
+        ) -> bool:
+            deleted.append((chat_id, message_id, thread_id))
+            return True
+
+        manager = TelegramOutboxManager(
+            store,
+            send_message=send_message,
+            edit_message_text=edit_message_text,
+            delete_message=delete_message,
+            logger=logging.getLogger("test"),
+        )
+        manager.start()
+
+        delivered = await manager.send_message_with_outbox(
+            OutboxRecord(
+                record_id="delete-placeholder",
+                chat_id=123,
+                thread_id=456,
+                reply_to_message_id=None,
+                placeholder_message_id=999,
+                text="hello",
+                created_at=now_iso(),
+                operation=OUTBOX_OPERATION_SEND_DELETE_PLACEHOLDER,
+            )
+        )
+
+        assert delivered is True
+        assert deleted == [(123, 999, 456)]
+        assert await store.list_outbox() == []
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_send_keep_placeholder_leaves_placeholder_on_delivery(
+    tmp_path: Path,
+) -> None:
+    store = TelegramStateStore(tmp_path / "telegram_state.sqlite3")
+    deleted: list[tuple[int, int, Optional[int]]] = []
+    try:
+
+        async def send_message(
+            _chat_id: int,
+            _text: str,
+            *,
+            thread_id: Optional[int] = None,
+            reply_to: Optional[int] = None,
+        ) -> int:
+            _ = thread_id, reply_to
+            return 321
+
+        async def edit_message_text(*_args, **_kwargs) -> bool:
+            return True
+
+        async def delete_message(
+            chat_id: int,
+            message_id: int,
+            thread_id: Optional[int],
+        ) -> bool:
+            deleted.append((chat_id, message_id, thread_id))
+            return True
+
+        manager = TelegramOutboxManager(
+            store,
+            send_message=send_message,
+            edit_message_text=edit_message_text,
+            delete_message=delete_message,
+            logger=logging.getLogger("test"),
+        )
+        manager.start()
+
+        delivered = await manager.send_message_with_outbox(
+            OutboxRecord(
+                record_id="keep-placeholder",
+                chat_id=123,
+                thread_id=456,
+                reply_to_message_id=None,
+                placeholder_message_id=999,
+                text="hello",
+                created_at=now_iso(),
+                operation=OUTBOX_OPERATION_SEND_KEEP_PLACEHOLDER,
+            )
+        )
+
+        assert delivered is True
+        assert deleted == []
         assert await store.list_outbox() == []
     finally:
         await store.close()

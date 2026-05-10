@@ -7,7 +7,7 @@ delivery, and recovery, and the current branch now reflects that replacement.
 
 This is an adapter-layer contract. It must remain consistent with
 `docs/ARCHITECTURE_BOUNDARIES.md`: Discord stays in
-`src/codex_autorunner/integrations/discord/`, does not become a source of
+`src/codex_autorunner/adapters/discord/`, does not become a source of
 business truth, and continues to translate Discord events into CAR-owned
 runtime actions.
 
@@ -36,19 +36,19 @@ single runtime-owned admission and execution path.
 
 | Area | Current seam | Current role | Why it must change |
 | --- | --- | --- | --- |
-| Gateway ingress | `src/codex_autorunner/integrations/discord/service.py` via `_on_dispatch()` | Handles `INTERACTION_CREATE`, calls `InteractionIngress.process_raw_payload()`, builds one runtime admission envelope, applies any dispatch-time ack, then submits to `CommandRunner` | This is now the single gateway admission path. |
-| Raw normalization + authz | `src/codex_autorunner/integrations/discord/ingress.py` via `InteractionIngress.process_raw_payload()` | Normalizes payloads, resolves command contract metadata, performs authz, and records timing inputs | Ingress no longer mutates Discord ack state. |
-| Background execution | `src/codex_autorunner/integrations/discord/command_runner.py` | Runs admitted interactions off the hot path, preserves conversation order, and applies queue-wait ack policy from the runtime admission envelope when needed | Scheduling is now driven by the admitted envelope instead of service-specific fast-ack callbacks. |
-| Post-admission execution path | `src/codex_autorunner/integrations/discord/interaction_dispatch.py:execute_ingressed_interaction()` | Executes already-admitted interactions from `CommandRunner` | This is now the only interaction execution path. |
-| Command-family dispatch | `src/codex_autorunner/integrations/discord/car_command_dispatch.py` | Routes `/car ...` subcommands to service handlers | This can remain, but it must become a pure business dispatcher that does not influence ack or response state. |
+| Gateway ingress | `src/codex_autorunner/adapters/discord/service.py` via `_on_dispatch()` | Handles `INTERACTION_CREATE`, calls `InteractionIngress.process_raw_payload()`, builds one runtime admission envelope, applies any dispatch-time ack, then submits to `CommandRunner` | This is now the single gateway admission path. |
+| Raw normalization + authz | `src/codex_autorunner/adapters/discord/ingress.py` via `InteractionIngress.process_raw_payload()` | Normalizes payloads, resolves command contract metadata, performs authz, and records timing inputs | Ingress no longer mutates Discord ack state. |
+| Background execution | `src/codex_autorunner/adapters/discord/command_runner.py` | Runs admitted interactions off the hot path, preserves conversation order, and applies queue-wait ack policy from the runtime admission envelope when needed | Scheduling is now driven by the admitted envelope instead of service-specific fast-ack callbacks. |
+| Post-admission execution path | `src/codex_autorunner/adapters/discord/interaction_dispatch.py:execute_ingressed_interaction()` | Executes already-admitted interactions from `CommandRunner` | This is now the only interaction execution path. |
+| Command-family dispatch | `src/codex_autorunner/adapters/discord/car_command_dispatch.py` | Routes `/car ...` subcommands to service handlers | This can remain, but it must become a pure business dispatcher that does not influence ack or response state. |
 
 ### Current response-state owners
 
 | Area | Current seam | Current ownership |
 | --- | --- | --- |
-| Ack + response session | `src/codex_autorunner/integrations/discord/interaction_session.py` plus `src/codex_autorunner/integrations/discord/response_helpers.py:DiscordResponder` | The responder/session pair owns initial callbacks, followups, original edits, component updates, autocomplete, and modal opens. |
-| Handler-facing runtime boundary | `src/codex_autorunner/integrations/discord/interaction_runtime.py` plus `src/codex_autorunner/integrations/discord/effects.py:DiscordEffectServiceProxy` | Handler-facing modules route through typed runtime helpers and effect buffering instead of touching raw Discord primitives directly. |
-| Composition root | `src/codex_autorunner/integrations/discord/service.py` | Service wires ingress, scheduler, ledger, responder, and effect sink together, while raw callback mutations are delegated through the responder/effect path. |
+| Ack + response session | `src/codex_autorunner/adapters/discord/interaction_session.py` plus `src/codex_autorunner/adapters/discord/response_helpers.py:DiscordResponder` | The responder/session pair owns initial callbacks, followups, original edits, component updates, autocomplete, and modal opens. |
+| Handler-facing runtime boundary | `src/codex_autorunner/adapters/discord/interaction_runtime.py` plus `src/codex_autorunner/adapters/discord/effects.py:DiscordEffectServiceProxy` | Handler-facing modules route through typed runtime helpers and effect buffering instead of touching raw Discord primitives directly. |
+| Composition root | `src/codex_autorunner/adapters/discord/service.py` | Service wires ingress, scheduler, ledger, responder, and effect sink together, while raw callback mutations are delegated through the responder/effect path. |
 
 ## Follow-up Hardening
 
@@ -92,7 +92,7 @@ Runtime v2 keeps Discord in the adapter layer and narrows module ownership.
 After v2, only these modules may touch raw Discord interaction response
 primitives:
 
-- `src/codex_autorunner/integrations/discord/rest.py`
+- `src/codex_autorunner/adapters/discord/rest.py`
 - a dedicated runtime responder module that replaces the mutable parts of
   `response_helpers.py` and owns all calls to:
   - `create_interaction_response()`
@@ -101,11 +101,11 @@ primitives:
 
 The following modules must not call those raw primitives after cutover:
 
-- `src/codex_autorunner/integrations/discord/service.py`
-- `src/codex_autorunner/integrations/discord/interaction_dispatch.py`
-- `src/codex_autorunner/integrations/discord/car_command_dispatch.py`
+- `src/codex_autorunner/adapters/discord/service.py`
+- `src/codex_autorunner/adapters/discord/interaction_dispatch.py`
+- `src/codex_autorunner/adapters/discord/car_command_dispatch.py`
 - any command handler module under
-  `src/codex_autorunner/integrations/discord/car_handlers/`
+  `src/codex_autorunner/adapters/discord/car_handlers/`
 
 Those modules may request response operations only through the runtime
 responder/state-machine interface.
@@ -113,7 +113,7 @@ responder/state-machine interface.
 Handler-facing rule after cutover:
 
 - business handlers and command modules must go through
-  `src/codex_autorunner/integrations/discord/interaction_runtime.py` for
+  `src/codex_autorunner/adapters/discord/interaction_runtime.py` for
   defer-state checks and runtime defer/followup transitions
 - low-level service helpers such as `_defer_*`,
   `_send_followup_*`, and `_interaction_has_initial_response()` stay owned by
@@ -262,7 +262,7 @@ Rules:
   and must not re-run business logic.
 
 Durable state belongs in Discord transport state, not in service-local memory.
-The natural home is `src/codex_autorunner/integrations/discord/state.py` backed
+The natural home is `src/codex_autorunner/adapters/discord/state.py` backed
 by `.codex-autorunner/discord_state.sqlite3`, which already owns Discord
 delivery state.
 
@@ -291,7 +291,7 @@ Each interaction lease record must persist at least:
 
 In the current implementation this lease lives in
 `interaction_ledger` inside
-`src/codex_autorunner/integrations/discord/state.py` and carries both
+`src/codex_autorunner/adapters/discord/state.py` and carries both
 execution state (`received`, `acknowledged`, `running`, `completed`, etc.)
 and scheduler state (`dispatch_ready`, `waiting_on_resources`,
 `executing`, `delivery_pending`, `delivery_replaying`, `completed`,

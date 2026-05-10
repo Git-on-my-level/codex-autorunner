@@ -36,6 +36,8 @@ def test_ticket_browser_uses_short_stable_document_ids(tmp_path: Path) -> None:
     assert document is not None
     assert document.document_id == "2"
     assert document.rel_path == ".codex-autorunner/tickets/TICKET-002.md"
+    assert document.intent.to_payload()["intent"] == "reference_path"
+    assert document.intent.to_payload()["source"] == "tickets"
     assert "Beta body" in document.content
 
 
@@ -90,6 +92,7 @@ def test_contextspace_browser_reads_existing_and_missing_docs(tmp_path: Path) ->
     assert spec is not None
     assert spec.exists is True
     assert spec.rel_path == ".codex-autorunner/contextspace/spec.md"
+    assert spec.intent.to_payload()["source"] == "contextspace"
     assert spec.content == "Spec body\n"
 
     active = read_document_browser_document(repo_root, "contextspace", "active_context")

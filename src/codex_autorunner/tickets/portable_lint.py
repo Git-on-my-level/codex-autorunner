@@ -18,7 +18,7 @@ __all__ = ["run_ticket_lint"]
 
 _TICKET_NAME_RE = re.compile(r"^TICKET-(\d{3,})(?:[^/]*)\.md$", re.IGNORECASE)
 _TICKET_ID_RE = re.compile(r"^[A-Za-z0-9._-]{6,128}$")
-_KNOWN_AGENT_IDS = ("codex", "hermes", "opencode", "user", "zeroclaw")
+_KNOWN_AGENT_IDS = ("codex", "hermes", "opencode", "user")
 _IGNORED_NON_TICKET_FILENAMES = {"AGENTS.md", "ingest_state.json"}
 
 

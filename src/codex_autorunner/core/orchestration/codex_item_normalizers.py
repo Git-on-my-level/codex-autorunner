@@ -45,8 +45,8 @@ def normalize_tool_name(
     if item_type == "tool":
         name = item_dict.get("name") or item_dict.get("tool") or item_dict.get("id")
         if isinstance(name, str) and name:
-            return name, {}
-        return "tool", {}
+            return name, _extract_structured_tool_input(item_dict, params)
+        return "tool", _extract_structured_tool_input(item_dict, params)
 
     tool_call = _coerce_dict(item_dict.get("toolCall") or item_dict.get("tool_call"))
     name = tool_call.get("name") or params.get("toolName") or params.get("tool_name")
@@ -59,6 +59,28 @@ def normalize_tool_name(
             return name, input_payload
         return name, {}
     return "", {}
+
+
+def _extract_structured_tool_input(
+    item_dict: dict[str, Any],
+    params: dict[str, Any],
+) -> dict[str, Any]:
+    for source in (item_dict, params):
+        for key in ("input", "args", "arguments", "params", "toolInput", "tool_input"):
+            value = source.get(key)
+            if isinstance(value, dict):
+                return dict(value)
+            if isinstance(value, str) and value.strip():
+                return {"input": value.strip()}
+    state = item_dict.get("state")
+    if isinstance(state, dict):
+        for key in ("input", "args", "arguments", "params"):
+            value = state.get(key)
+            if isinstance(value, dict):
+                return dict(value)
+            if isinstance(value, str) and value.strip():
+                return {"input": value.strip()}
+    return {}
 
 
 def extract_agent_message_text(item: dict[str, Any]) -> str:

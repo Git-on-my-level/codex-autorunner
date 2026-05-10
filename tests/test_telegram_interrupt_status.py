@@ -1,4 +1,4 @@
-from codex_autorunner.integrations.telegram.helpers import is_interrupt_status
+from codex_autorunner.adapters.telegram.helpers import is_interrupt_status
 
 
 def test_is_interrupt_status_matches_known_values() -> None:

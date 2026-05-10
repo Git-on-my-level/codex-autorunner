@@ -14,6 +14,12 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+from ....adapters.agents.build_agent_pool import build_agent_pool
+from ....adapters.chat.surface_action_manifest import (
+    SurfaceActionManifestContext,
+    build_surface_action_manifest,
+)
+from ....adapters.github.service import GitHubError, GitHubService
 from ....agents.hermes_identity import canonicalize_hermes_identity
 from ....core.apps import resolve_registered_app_artifact_path
 from ....core.config import load_repo_config
@@ -23,6 +29,7 @@ from ....core.file_chat_keys import (
     ticket_stable_id,
 )
 from ....core.flows import (
+    FlowActionPolicySnapshot,
     FlowController,
     FlowDefinition,
     FlowEventType,
@@ -30,6 +37,7 @@ from ....core.flows import (
     FlowRunStatus,
     FlowStore,
     archive_flow_run_artifacts,
+    build_flow_action_policy_payload,
     flow_run_duration_seconds,
     parse_flow_timestamp,
 )
@@ -43,6 +51,7 @@ from ....core.flows.ux_helpers import (
     build_flow_status_snapshot,
     ensure_worker,
     issue_md_path,
+    resolve_ticket_flow_archive_mode,
     seed_issue_from_github,
     seed_issue_from_text,
 )
@@ -69,8 +78,6 @@ from ....flows.ticket_flow.runtime_helpers import (
     normalize_ticket_flow_input_data,
     seed_bootstrap_ticket_if_needed,
 )
-from ....integrations.agents.build_agent_pool import build_agent_pool
-from ....integrations.github.service import GitHubError, GitHubService
 from ....tickets import DEFAULT_MAX_TOTAL_TURNS
 from ....tickets.bulk import (
     bulk_clear_model_pin,
@@ -352,6 +359,16 @@ def _get_flow_record(repo_root: Path, run_id: str) -> FlowRunRecord:
 _active_or_paused_run = select_active_or_paused_run
 
 
+def _ticket_dir_has_open_tickets(ticket_dir: Path) -> bool:
+    for path in list_ticket_paths(ticket_dir):
+        ticket, errors = read_ticket(path)
+        if errors or ticket is None:
+            continue
+        if ticket.frontmatter.done is not True:
+            return True
+    return False
+
+
 def _coerce_ticket_diff_ref(value: object) -> Optional[str]:
     if not isinstance(value, str):
         return None
@@ -538,6 +555,7 @@ class FlowStatusResponse(BaseModel):
     active_tool: Optional[Dict[str, Any]] = None
     freshness: Optional[Dict[str, Any]] = None
     worker_health: Optional[FlowWorkerHealthResponse] = None
+    action_policy: list[Dict[str, Any]] = Field(default_factory=list)
 
     @classmethod
     def from_record(
@@ -660,6 +678,30 @@ def _build_flow_status_response(
         freshness=snapshot.get("freshness"),
     )
     resp.ticket_progress = snapshot.get("ticket_progress")
+    ticket_progress = snapshot.get("ticket_progress")
+    total_tickets = (
+        ticket_progress.get("total") if isinstance(ticket_progress, dict) else None
+    )
+    done_tickets = (
+        ticket_progress.get("done") if isinstance(ticket_progress, dict) else None
+    )
+    has_open_tickets = (
+        isinstance(total_tickets, int)
+        and isinstance(done_tickets, int)
+        and total_tickets > done_tickets
+    )
+    worker_health = snapshot.get("worker_health")
+    resp.action_policy = build_flow_action_policy_payload(
+        FlowActionPolicySnapshot(
+            status=record.status,
+            worker_health_status=(
+                worker_health.status if worker_health is not None else None
+            ),
+            archive_mode=resolve_ticket_flow_archive_mode(record),
+            has_run=True,
+            has_open_tickets=has_open_tickets,
+        )
+    )
     if lite:
         resp.state = _build_lite_flow_state(record, snapshot, resp.status)
     elif snapshot.get("state") is not None:
@@ -989,6 +1031,47 @@ def build_flow_routes() -> APIRouter:
             github_available=result.github_available,
             repo=result.repo_slug,
         )
+
+    @router.get("/ticket_flow/action-manifest")
+    async def get_ticket_flow_action_manifest(
+        request: Request,
+        ui_kind: str = "pma_web",
+        resource_kind: Optional[str] = None,
+        resource_id: Optional[str] = None,
+    ):
+        repo_root = find_repo_root()
+        records = _safe_list_flow_runs(
+            repo_root, flow_type="ticket_flow", recover_stuck=True
+        )
+        run = _active_or_paused_run(records) or (records[0] if records else None)
+        worker_health = check_worker_health(repo_root, run.id) if run else None
+        manifest = build_surface_action_manifest(
+            SurfaceActionManifestContext(
+                surface_kind="web",
+                ui_kind="pma_web" if ui_kind == "pma_web" else "generic",
+                target_kind="ticket_flow",
+                workspace_id=resource_id,
+                run_id=run.id if run else None,
+                resource_kind=resource_kind,
+                resource_id=resource_id,
+                lifecycle_state=run.status.value if run else None,
+                worker_health_status=(
+                    worker_health.status if worker_health is not None else None
+                ),
+                archive_mode=(
+                    resolve_ticket_flow_archive_mode(run) if run else "blocked"
+                ),
+                has_run=run is not None,
+                has_open_tickets=_ticket_dir_has_open_tickets(
+                    repo_root / ".codex-autorunner" / "tickets"
+                ),
+                capabilities=frozenset({"ticket_flow"}),
+                route_prefix=str(request.url.path).removesuffix(
+                    "/ticket_flow/action-manifest"
+                ),
+            )
+        )
+        return manifest.to_dict()
 
     @router.post("/ticket_flow/seed-issue")
     async def seed_issue(request: SeedIssueRequest):
@@ -1528,6 +1611,35 @@ def build_flow_routes() -> APIRouter:
         finally:
             if store:
                 store.close()
+
+    @router.post("/{run_id}/restart", response_model=FlowStatusResponse)
+    async def restart_flow(http_request: Request, run_id: str):
+        state = _ensure_state_in_app(http_request)
+        run_id = _normalize_run_id(run_id)
+        repo_root = find_repo_root()
+        record = _get_flow_record(repo_root, run_id)
+        if record.flow_type != "ticket_flow":
+            raise HTTPException(status_code=400, detail="Only ticket_flow can restart")
+
+        if record.status in {
+            FlowRunStatus.PENDING,
+            FlowRunStatus.RUNNING,
+            FlowRunStatus.STOPPING,
+            FlowRunStatus.PAUSED,
+        }:
+            service = _build_flow_orchestration_service(repo_root, record.flow_type)
+            _stop_worker(run_id, state)
+            try:
+                await service.stop_flow_run(run_id)
+            except ValueError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        return await _start_flow(
+            "ticket_flow",
+            FlowStartRequest(metadata={"force_new": True}),
+            state,
+            force_new=True,
+        )
 
     @router.post("/{run_id}/resume", response_model=FlowStatusResponse)
     async def resume_flow(http_request: Request, run_id: str, force: bool = False):

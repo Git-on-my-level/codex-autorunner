@@ -5,16 +5,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from codex_autorunner.bootstrap import seed_hub_files
-from codex_autorunner.integrations.chat.collaboration_policy import CollaborationPolicy
-from codex_autorunner.integrations.discord.config import (
+from codex_autorunner.adapters.chat.collaboration_policy import CollaborationPolicy
+from codex_autorunner.adapters.discord.config import (
     DiscordBotConfig,
     DiscordBotMediaConfig,
     DiscordBotShellConfig,
     DiscordCommandRegistration,
 )
-from codex_autorunner.integrations.discord.service import DiscordBotService
-from codex_autorunner.integrations.discord.state import DiscordStateStore
+from codex_autorunner.adapters.discord.service import DiscordBotService
+from codex_autorunner.adapters.discord.state import DiscordStateStore
+from codex_autorunner.bootstrap import seed_hub_files
 from tests.chat_surface_lab.discord_simulator import DiscordSurfaceSimulator
 
 from .hermes import logger_for

@@ -57,27 +57,27 @@ STANDARD_FILE_BUDGETS = (
         reason="The PMA composition entrypoint should remain a small router assembler.",
     ),
     FileBudget(
-        path="src/codex_autorunner/integrations/chat/command_diagnostics.py",
+        path="src/codex_autorunner/adapters/chat/command_diagnostics.py",
         max_lines=180,
         reason="Shared diagnostics commands should stay concentrated in the extracted adapter seam.",
     ),
     FileBudget(
-        path="src/codex_autorunner/integrations/discord/pma_commands.py",
+        path="src/codex_autorunner/adapters/discord/pma_commands.py",
         max_lines=250,
         reason="The Discord PMA command slice owns the PMA routing chain and should stay bounded.",
     ),
     FileBudget(
-        path="src/codex_autorunner/integrations/chat/progress_primitives.py",
+        path="src/codex_autorunner/adapters/chat/progress_primitives.py",
         max_lines=550,
         reason="Cross-surface progress rendering should live in one bounded helper module.",
     ),
     FileBudget(
-        path="src/codex_autorunner/integrations/telegram/progress_stream.py",
+        path="src/codex_autorunner/adapters/telegram/progress_stream.py",
         max_lines=20,
         reason="Telegram progress_stream is now a compatibility re-export and should stay thin.",
     ),
     FileBudget(
-        path="src/codex_autorunner/integrations/telegram/handlers/utils.py",
+        path="src/codex_autorunner/adapters/telegram/handlers/utils.py",
         max_lines=150,
         reason="Telegram OpenCode usage helpers should remain centralized in one small module.",
     ),
@@ -140,55 +140,55 @@ STANDARD_FUNCTION_BUDGETS = (
         reason="The PMA router entrypoint should remain a thin composition function.",
     ),
     FunctionBudget(
-        path="src/codex_autorunner/integrations/chat/command_diagnostics.py",
+        path="src/codex_autorunner/adapters/chat/command_diagnostics.py",
         qualname="build_status_text",
         max_lines=60,
         reason="Shared status text assembly should stay extracted and focused.",
     ),
     FunctionBudget(
-        path="src/codex_autorunner/integrations/chat/command_diagnostics.py",
+        path="src/codex_autorunner/adapters/chat/command_diagnostics.py",
         qualname="build_debug_text",
         max_lines=55,
         reason="Shared debug text assembly should stay extracted and focused.",
     ),
     FunctionBudget(
-        path="src/codex_autorunner/integrations/chat/command_diagnostics.py",
+        path="src/codex_autorunner/adapters/chat/command_diagnostics.py",
         qualname="build_ids_text",
         max_lines=40,
         reason="Shared ids text assembly should stay extracted and focused.",
     ),
     FunctionBudget(
-        path="src/codex_autorunner/integrations/discord/pma_commands.py",
+        path="src/codex_autorunner/adapters/discord/pma_commands.py",
         qualname="handle_pma_on",
         max_lines=50,
         reason="PMA subcommands should stay small after extraction.",
     ),
     FunctionBudget(
-        path="src/codex_autorunner/integrations/discord/pma_commands.py",
+        path="src/codex_autorunner/adapters/discord/pma_commands.py",
         qualname="handle_pma_off",
         max_lines=50,
         reason="PMA subcommands should stay small after extraction.",
     ),
     FunctionBudget(
-        path="src/codex_autorunner/integrations/discord/pma_commands.py",
+        path="src/codex_autorunner/adapters/discord/pma_commands.py",
         qualname="handle_pma_status",
         max_lines=45,
         reason="PMA subcommands should stay small after extraction.",
     ),
     FunctionBudget(
-        path="src/codex_autorunner/integrations/chat/progress_primitives.py",
+        path="src/codex_autorunner/adapters/chat/progress_primitives.py",
         qualname="render_progress_text",
         max_lines=210,
         reason="Cross-surface progress rendering should stay centralized without regrowing another monolith.",
     ),
     FunctionBudget(
-        path="src/codex_autorunner/integrations/chat/progress_primitives.py",
+        path="src/codex_autorunner/adapters/chat/progress_primitives.py",
         qualname="TurnProgressTracker.add_action",
         max_lines=60,
         reason="Progress tracker mutation should stay compact and auditable.",
     ),
     FunctionBudget(
-        path="src/codex_autorunner/integrations/telegram/handlers/utils.py",
+        path="src/codex_autorunner/adapters/telegram/handlers/utils.py",
         qualname="_build_opencode_token_usage",
         max_lines=60,
         reason="Telegram OpenCode usage normalization should stay centralized in one helper.",
@@ -254,27 +254,27 @@ TEST_FILE_CAPS = (
         reason="Telegram command test helpers should stay as a tiny shared fixture seam.",
     ),
     FileBudget(
-        path="tests/integrations/discord/test_message_turns.py",
+        path="tests/adapters/discord/test_message_turns.py",
         max_lines=60,
         reason="The Discord message-turn wrapper should stay a thin import-only entrypoint over the shared support module.",
     ),
     FileBudget(
-        path="tests/integrations/discord/test_message_turns_routing.py",
+        path="tests/adapters/discord/test_message_turns_routing.py",
         max_lines=60,
         reason="The Discord routing wrapper should stay a thin import-only entrypoint over the shared support module.",
     ),
     FileBudget(
-        path="tests/integrations/discord/test_message_turns_message_flow.py",
+        path="tests/adapters/discord/test_message_turns_message_flow.py",
         max_lines=60,
         reason="The Discord message-flow wrapper should stay a thin import-only entrypoint over the shared support module.",
     ),
     FileBudget(
-        path="tests/integrations/discord/test_message_turns_streaming.py",
+        path="tests/adapters/discord/test_message_turns_streaming.py",
         max_lines=60,
         reason="The Discord streaming wrapper should stay a thin import-only entrypoint over the shared support module.",
     ),
     FileBudget(
-        path="tests/integrations/discord/test_message_turns_managed_threads.py",
+        path="tests/adapters/discord/test_message_turns_managed_threads.py",
         max_lines=50,
         reason="The Discord managed-thread wrapper should stay a thin import-only entrypoint over the shared support module.",
     ),
@@ -284,7 +284,7 @@ TEST_FILE_CAPS = (
         reason="The Telegram PMA routing wrapper should stay a thin import-only entrypoint over the shared support module.",
     ),
     FileBudget(
-        path="tests/test_telegram_pma_managed_threads.py",
+        path="tests/test_telegram_managed_threads.py",
         max_lines=40,
         reason="The Telegram PMA managed-thread wrapper should stay a thin import-only entrypoint over the shared support module.",
     ),
@@ -297,37 +297,37 @@ TEST_FILE_CAPS = (
 
 DISCORD_EXTRACTED_SEAM_BUDGETS = (
     FileBudget(
-        path="src/codex_autorunner/integrations/discord/service_lifecycle.py",
+        path="src/codex_autorunner/adapters/discord/service_lifecycle.py",
         max_lines=600,
         reason="Service lifecycle helpers should not re-grow service.py responsibilities.",
     ),
     FileBudget(
-        path="src/codex_autorunner/integrations/discord/outbox.py",
+        path="src/codex_autorunner/adapters/discord/outbox.py",
         max_lines=500,
         reason="Outbox delivery loop must stay focused on retry/delivery, not interaction lifecycle.",
     ),
     FileBudget(
-        path="src/codex_autorunner/integrations/discord/progress_leases.py",
+        path="src/codex_autorunner/adapters/discord/progress_leases.py",
         max_lines=900,
         reason="Progress lease helpers should stay bounded after extraction from message_turns.",
     ),
     FileBudget(
-        path="src/codex_autorunner/integrations/discord/managed_thread_routing.py",
+        path="src/codex_autorunner/adapters/discord/managed_thread_routing.py",
         max_lines=530,
         reason="Managed thread routing must delegate to shared helpers, not re-grow Discord-local logic.",
     ),
     FileBudget(
-        path="src/codex_autorunner/integrations/discord/interaction_dispatch.py",
+        path="src/codex_autorunner/adapters/discord/interaction_dispatch.py",
         max_lines=300,
         reason="Post-admission dispatch must stay a thin routing layer over registry and handlers.",
     ),
     FileBudget(
-        path="src/codex_autorunner/integrations/discord/interaction_slash_builders.py",
+        path="src/codex_autorunner/adapters/discord/interaction_slash_builders.py",
         max_lines=580,
         reason="Slash builders must stay focused on option schema and handler shims.",
     ),
     FileBudget(
-        path="src/codex_autorunner/integrations/discord/interaction_component_handlers.py",
+        path="src/codex_autorunner/adapters/discord/interaction_component_handlers.py",
         max_lines=510,
         reason="Component handler shims must stay thin delegation to service methods.",
     ),
@@ -345,12 +345,12 @@ LEGACY_FILE_CAPS = (
         reason="Legacy file-chat composition owner until the remaining route wrappers migrate fully to file_chat_routes/.",
     ),
     FileBudget(
-        path="src/codex_autorunner/integrations/discord/commands.py",
+        path="src/codex_autorunner/adapters/discord/commands.py",
         max_lines=560,
         reason="Discord slash-command payload still lives in one registry builder pending a later breakup.",
     ),
     FileBudget(
-        path="src/codex_autorunner/integrations/discord/car_command_dispatch.py",
+        path="src/codex_autorunner/adapters/discord/car_command_dispatch.py",
         max_lines=475,
         reason="Discord car command routing is still centralized while migrated command slices accumulate.",
     ),
@@ -387,13 +387,13 @@ LEGACY_FUNCTION_CAPS = (
         reason="Managed-thread PMA routing is still a legacy hotspot pending a dedicated extraction pass.",
     ),
     FunctionBudget(
-        path="src/codex_autorunner/integrations/discord/commands.py",
+        path="src/codex_autorunner/adapters/discord/commands.py",
         qualname="build_application_commands",
         max_lines=560,
         reason="The slash-command schema builder is still centralized, but obvious regrowth should fail.",
     ),
     FunctionBudget(
-        path="src/codex_autorunner/integrations/discord/car_command_dispatch.py",
+        path="src/codex_autorunner/adapters/discord/car_command_dispatch.py",
         qualname="handle_car_command",
         max_lines=475,
         reason="The Discord car command dispatcher is still centralized, but obvious regrowth should fail.",
@@ -408,7 +408,7 @@ LEGACY_FUNCTION_CAPS = (
 
 HELPER_OWNERSHIP_RULES = (
     HelperOwnershipRule(
-        owner_path="src/codex_autorunner/integrations/chat/progress_primitives.py",
+        owner_path="src/codex_autorunner/adapters/chat/progress_primitives.py",
         helper_names=(
             "format_elapsed",
             "_normalize_inline_text",
@@ -418,19 +418,19 @@ HELPER_OWNERSHIP_RULES = (
             "_output_matches_final_message",
         ),
         scan_roots=(
-            "src/codex_autorunner/integrations/chat",
-            "src/codex_autorunner/integrations/telegram",
+            "src/codex_autorunner/adapters/chat",
+            "src/codex_autorunner/adapters/telegram",
         ),
         reason="Progress rendering helpers should have one cross-surface owner.",
     ),
     HelperOwnershipRule(
-        owner_path="src/codex_autorunner/integrations/telegram/handlers/utils.py",
+        owner_path="src/codex_autorunner/adapters/telegram/handlers/utils.py",
         helper_names=(
             "_flatten_opencode_tokens",
             "_extract_opencode_usage_payload",
             "_build_opencode_token_usage",
         ),
-        scan_roots=("src/codex_autorunner/integrations/telegram/handlers",),
+        scan_roots=("src/codex_autorunner/adapters/telegram/handlers",),
         reason="Telegram OpenCode usage helpers should stay centralized in handlers/utils.py.",
     ),
     HelperOwnershipRule(

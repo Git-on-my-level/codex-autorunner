@@ -45,6 +45,17 @@ from ._notifications import (
     NotificationRecordResponse,
     NotificationReplyTargetLookupRequest,
 )
+from ._pma_operations import (
+    AutomationRequest,
+    AutomationResult,
+    PmaSnapshotResponse,
+    TranscriptHistoryRequest,
+    TranscriptHistoryResponse,
+    TranscriptWriteRequest,
+    TranscriptWriteResponse,
+    WorkspaceSetupCommandRequest,
+    WorkspaceSetupCommandResult,
+)
 from ._run_events import deserialize_run_event, serialize_run_event
 from ._surface_bindings import (
     SurfaceBindingListRequest,
@@ -67,29 +78,8 @@ from ._thread_targets import (
     ThreadTargetResumeRequest,
     resolve_thread_target_list_status_fields,
 )
-from ._workspaces import (
-    AgentWorkspaceDescriptor,
-    AgentWorkspaceListRequest,
-    AgentWorkspaceListResponse,
-    AgentWorkspaceLookupRequest,
-    AgentWorkspaceResponse,
-    AutomationRequest,
-    AutomationResult,
-    PmaSnapshotResponse,
-    TranscriptHistoryRequest,
-    TranscriptHistoryResponse,
-    TranscriptWriteRequest,
-    TranscriptWriteResponse,
-    WorkspaceSetupCommandRequest,
-    WorkspaceSetupCommandResult,
-)
 
 __all__ = [
-    "AgentWorkspaceDescriptor",
-    "AgentWorkspaceListRequest",
-    "AgentWorkspaceListResponse",
-    "AgentWorkspaceLookupRequest",
-    "AgentWorkspaceResponse",
     "AutomationRequest",
     "AutomationResult",
     "Binding",

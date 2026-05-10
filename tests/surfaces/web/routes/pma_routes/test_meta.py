@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from codex_autorunner.core.state import RunnerState, save_state
 from codex_autorunner.surfaces.web.routes.pma_routes.meta import build_pma_meta_routes
 
 _TEST_HUB_ROOT = "/workspace/test-hub"
@@ -23,7 +24,7 @@ def _build_client(with_supervisors: bool = False) -> TestClient:
         app.state.config = SimpleNamespace(
             root=_TEST_HUB_ROOT,
             raw={"pma": {"enabled": True}},
-            agent_binary=lambda _agent_id: "zeroclaw",
+            agent_binary=lambda _agent_id: "hermes",
         )
         app.state.engine = SimpleNamespace(repo_root=_TEST_REPO_ROOT)
 
@@ -70,6 +71,9 @@ def test_pma_agents_includes_hermes_when_available(monkeypatch) -> None:
         assert "interrupt" in hermes_caps
         assert "event_streaming" in hermes_caps
         assert "model_listing" not in hermes_caps
+        assert agents["hermes"]["capability_projection"]["actions"]["list_models"][
+            "missing_capabilities"
+        ] == ["model_listing"]
 
 
 def test_pma_models_endpoint_returns_capability_error_for_hermes(monkeypatch) -> None:
@@ -133,7 +137,7 @@ def test_pma_agents_includes_profile_defaults(monkeypatch) -> None:
         root=_TEST_HUB_ROOT,
         raw={"pma": {"enabled": True, "profile": "m4"}},
         agent_binary=lambda _agent_id, profile=None: (
-            "hermes" if profile else "zeroclaw"
+            "hermes" if profile else "opencode"
         ),
         agent_profiles=lambda agent_id: (
             {"m4": SimpleNamespace(display_name="M4 PMA")}
@@ -162,3 +166,49 @@ def test_pma_agents_includes_profile_defaults(monkeypatch) -> None:
     assert payload["defaults"] == {"profile": "m4"}
     agents = {agent["id"]: agent for agent in payload["agents"]}
     assert agents["hermes"]["default_profile"] == "m4"
+
+
+def test_pma_agents_defaults_include_settings_default_model(tmp_path) -> None:
+    app = FastAPI()
+    router = app.router
+    state_path = tmp_path / "state.sqlite3"
+    save_state(
+        state_path,
+        RunnerState(
+            last_run_id=None,
+            status="idle",
+            last_exit_code=None,
+            last_run_started_at=None,
+            last_run_finished_at=None,
+            autorunner_model_overrides={"codex": "gpt-settings-default"},
+        ),
+    )
+    app.state.app_server_supervisor = MagicMock()
+    app.state.opencode_supervisor = MagicMock()
+    app.state.app_server_events = MagicMock()
+    app.state.config = SimpleNamespace(
+        root=_TEST_HUB_ROOT,
+        raw={"pma": {"enabled": True, "model": "gpt-pma-config-default"}},
+        codex_model="gpt-config-default",
+        agent_binary=lambda _agent_id: "codex",
+    )
+    app.state.engine = SimpleNamespace(
+        repo_root=_TEST_REPO_ROOT,
+        state_path=state_path,
+    )
+
+    def get_runtime_state():
+        return SimpleNamespace(
+            get_safety_checker=lambda _hub_root, _request: MagicMock(
+                _audit_log=MagicMock(list_recent=lambda limit: []),
+                get_stats=lambda: {},
+            )
+        )
+
+    build_pma_meta_routes(router, get_runtime_state)
+
+    with TestClient(app) as client:
+        response = client.get("/agents")
+
+    assert response.status_code == 200
+    assert response.json()["defaults"]["model"] == "gpt-settings-default"

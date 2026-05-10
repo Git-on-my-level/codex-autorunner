@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from codex_autorunner.integrations.telegram.commands_registry import (
+from codex_autorunner.adapters.telegram.commands_registry import (
     build_command_payloads,
     diff_command_lists,
 )
-from codex_autorunner.integrations.telegram.handlers.commands import (
+from codex_autorunner.adapters.telegram.handlers.commands import (
     WorkspaceCommands,
     WorkspaceCommandsMixin,
 )

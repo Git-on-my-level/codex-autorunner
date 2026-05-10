@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from ....agents.registry import get_agent_descriptor, get_available_agents
+from ....core.agent_capability_projection import project_agent_capabilities
 from ....core.orchestration.catalog import map_agent_capabilities
 from ....core.sse import format_sse
 from .agents_helpers import (
@@ -39,6 +40,11 @@ def _available_agents(request: Request) -> tuple[list[dict[str, Any]], str]:
             "name": descriptor.name,
             "capabilities": sorted(map_agent_capabilities(descriptor.capabilities)),
         }
+        projection = project_agent_capabilities(
+            agent_id,
+            agent_data["capabilities"],
+        )
+        agent_data["capability_projection"] = projection.to_dict()
         agent_profiles = _serialize_agent_profiles(request, agent_id)
         if agent_profiles["profiles"]:
             agent_data.update(agent_profiles)
@@ -97,7 +103,7 @@ def _serialize_agent_profiles(request: Request, agent_id: str) -> dict[str, Any]
     hermes_profile_options: Iterable[Any] = ()
     if agent_id == "hermes":
         try:
-            from ....integrations.chat.agents import chat_hermes_profile_options
+            from ....adapters.chat.agents import chat_hermes_profile_options
 
             hermes_profile_options = chat_hermes_profile_options(request.app.state)
         except Exception:  # intentional: optional hermes integration
@@ -134,9 +140,16 @@ def build_agents_routes() -> APIRouter:
         if descriptor is None:
             raise HTTPException(status_code=404, detail="Unknown agent")
         if "model_listing" not in descriptor.capabilities:
+            gate = project_agent_capabilities(
+                agent_id,
+                descriptor.capabilities,
+            ).gate("list_models")
             raise HTTPException(
                 status_code=400,
-                detail=f"Agent '{agent_id}' does not support capability 'model_listing'",
+                detail=(
+                    f"Agent '{agent_id}' does not support capability 'model_listing'"
+                    + (f" ({gate.reason})" if gate.reason else "")
+                ),
             )
         try:
             harness = descriptor.make_harness(request.app.state)

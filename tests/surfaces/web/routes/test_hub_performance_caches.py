@@ -93,7 +93,6 @@ def test_hub_repo_listing_projection_shapes_freshness_without_route_setup() -> N
                 },
             },
         ],
-        agent_workspaces=[],
     )
 
     payload = projection.to_payload()
@@ -102,10 +101,8 @@ def test_hub_repo_listing_projection_shapes_freshness_without_route_setup() -> N
     assert payload["last_scan_at"] == "2026-04-05T00:00:00+00:00"
     assert payload["pinned_parent_repo_ids"] == ["base"]
     assert "repos" not in payload
-    assert "agent_workspaces" not in payload
     assert payload["freshness"]["stale_threshold_seconds"] == 600
     assert payload["freshness"]["sections"]["repos"]["entity_count"] == 1
-    assert payload["freshness"]["sections"]["agent_workspaces"]["entity_count"] == 0
 
 
 def test_hub_repo_enricher_reuses_cached_repo_state(
@@ -781,7 +778,6 @@ def test_hub_repo_listing_service_reuses_durable_projection_across_instances(
                     last_scan_at="2026-04-05T00:00:00Z",
                     pinned_parent_repo_ids=[],
                     repos=[snapshot],
-                    agent_workspaces=[],
                 ),
             ),
             logger=logging.getLogger(__name__),
@@ -842,7 +838,7 @@ def test_active_chat_binding_counts_by_source_reuses_durable_projection(
         calls["telegram"] += 1
         return {"demo": 3}
 
-    monkeypatch.setattr(chat_bindings_module, "_active_pma_thread_counts", fake_pma)
+    monkeypatch.setattr(chat_bindings_module, "_active_managed_thread_counts", fake_pma)
     monkeypatch.setattr(
         chat_bindings_module,
         "_orchestration_binding_counts_by_source",

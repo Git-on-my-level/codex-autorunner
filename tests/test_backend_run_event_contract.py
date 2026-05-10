@@ -8,6 +8,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from codex_autorunner.adapters.agents.codex_backend import CodexAppServerBackend
+from codex_autorunner.adapters.agents.opencode_backend import OpenCodeBackend
 from codex_autorunner.core.ports.run_event import (
     RUN_EVENT_DELTA_TYPES,
     ApprovalRequested,
@@ -21,8 +23,6 @@ from codex_autorunner.core.ports.run_event import (
     is_terminal_run_event,
 )
 from codex_autorunner.core.sse import SSEEvent
-from codex_autorunner.integrations.agents.codex_backend import CodexAppServerBackend
-from codex_autorunner.integrations.agents.opencode_backend import OpenCodeBackend
 
 
 def _fixture_path(name: str) -> Path:

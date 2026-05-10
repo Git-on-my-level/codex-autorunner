@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Literal, Mapping, Optional
 
 from ..car_context import CarContextProfile, normalize_car_context_profile
+from ..domain.refs import AgentRef, ScopeRef, ScopeRefError, SurfaceRef
 from ..text_utils import _json_loads_object, _normalize_optional_text
 
 TargetCapability = Literal[
@@ -64,6 +65,50 @@ def normalize_resource_owner_fields(
     return normalized_resource_kind, normalized_resource_id, normalized_repo_id
 
 
+def scope_ref_from_owner_fields(
+    *,
+    scope_urn: Any = None,
+    resource_kind: Any = None,
+    resource_id: Any = None,
+    repo_id: Any = None,
+    workspace_root: Any = None,
+) -> ScopeRef:
+    normalized_scope_urn = _normalize_optional_text(scope_urn)
+    if normalized_scope_urn is not None:
+        return ScopeRef.from_urn(normalized_scope_urn)
+    normalized_resource_kind, normalized_resource_id, normalized_repo_id = (
+        normalize_resource_owner_fields(
+            resource_kind=resource_kind,
+            resource_id=resource_id,
+            repo_id=repo_id,
+        )
+    )
+    if normalized_resource_kind is not None:
+        if normalized_resource_id is None:
+            raise ScopeRefError("resource scope requires a resource_id")
+        if normalized_resource_kind == "worktree":
+            raise ScopeRefError("worktree scope requires parent_repo_id")
+        return ScopeRef(kind=normalized_resource_kind, id=normalized_resource_id)
+    if normalized_repo_id is not None:
+        return ScopeRef(kind="repo", id=normalized_repo_id)
+    normalized_workspace_root = _normalize_optional_text(workspace_root)
+    if normalized_workspace_root is not None:
+        return ScopeRef(kind="filesystem", path=normalized_workspace_root)
+    return ScopeRef(kind="hub")
+
+
+def owner_fields_from_scope_ref(
+    scope: ScopeRef,
+) -> tuple[Optional[str], Optional[str], Optional[str], Optional[str]]:
+    if scope.kind == "hub":
+        return None, None, None, None
+    if scope.kind == "repo":
+        return scope.id, "repo", scope.id, None
+    if scope.kind == "filesystem":
+        return None, None, None, scope.path
+    return None, scope.kind, scope.id, None
+
+
 @dataclass(frozen=True)
 class AgentDefinition:
     """Orchestration-visible logical agent identity."""
@@ -96,6 +141,7 @@ class ThreadTarget:
     resource_id: Optional[str] = None
     workspace_root: Optional[str] = None
     display_name: Optional[str] = None
+    model: Optional[str] = None
     status: Optional[str] = None
     lifecycle_status: Optional[str] = None
     status_reason: Optional[str] = None
@@ -153,6 +199,7 @@ class ThreadTarget:
             display_name=_normalize_optional_text(
                 data.get("name") or data.get("display_name")
             ),
+            model=_normalize_optional_text(data.get("model") or metadata.get("model")),
             status=_normalize_optional_text(
                 data.get("normalized_status") or data.get("status")
             ),
@@ -201,6 +248,7 @@ class ThreadTarget:
             "workspace_root": self.workspace_root,
             "name": self.display_name,
             "display_name": self.display_name,
+            "model": self.model,
             "status": self.status,
             "lifecycle_status": self.lifecycle_status,
             "status_reason": self.status_reason,
@@ -218,6 +266,179 @@ class ThreadTarget:
             "thread_kind": self.thread_kind,
             "context_profile": self.context_profile,
             "approval_mode": self.approval_mode,
+        }
+
+
+@dataclass(frozen=True)
+class BackendBinding:
+    backend_thread_id: Optional[str] = None
+    backend_runtime_instance_id: Optional[str] = None
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, Any]) -> "BackendBinding":
+        return cls(
+            backend_thread_id=_normalize_optional_text(data.get("backend_thread_id")),
+            backend_runtime_instance_id=_normalize_optional_text(
+                data.get("backend_runtime_instance_id")
+            ),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class Thread:
+    """Canonical managed-thread domain projection with legacy wire aliases."""
+
+    id: str
+    scope: ScopeRef
+    agent: AgentRef
+    surface: Optional[SurfaceRef] = None
+    backend_binding: BackendBinding = field(default_factory=BackendBinding)
+    display_name: Optional[str] = None
+    lifecycle_status: str = "active"
+    runtime_status: str = "idle"
+    status_reason: Optional[str] = None
+    status_changed_at: Optional[str] = None
+    status_terminal: bool = False
+    status_turn_id: Optional[str] = None
+    last_execution_id: Optional[str] = None
+    last_message_preview: Optional[str] = None
+    compact_seed: Optional[str] = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, Any]) -> "Thread":
+        metadata = data.get("metadata")
+        if not isinstance(metadata, dict):
+            metadata = _json_loads_object(data.get("metadata_json"))
+        thread_id = _normalize_optional_text(
+            data.get("id")
+            or data.get("managed_thread_id")
+            or data.get("thread_target_id")
+        )
+        if thread_id is None:
+            raise ValueError("Thread requires an id")
+        agent_data = data.get("agent_ref") or data.get("agent")
+        agent = (
+            agent_data
+            if isinstance(agent_data, AgentRef)
+            else AgentRef.from_mapping(
+                {
+                    "agent_id": data.get("agent_id") or data.get("agent"),
+                    "agent_profile": metadata.get("agent_profile"),
+                }
+            )
+        )
+        scope_data = data.get("scope")
+        scope = (
+            scope_data
+            if isinstance(scope_data, ScopeRef)
+            else scope_ref_from_owner_fields(
+                scope_urn=data.get("scope_urn"),
+                resource_kind=data.get("resource_kind"),
+                resource_id=data.get("resource_id"),
+                repo_id=data.get("repo_id"),
+                workspace_root=data.get("workspace_root"),
+            )
+        )
+        surface_data = data.get("surface")
+        surface_urn = _normalize_optional_text(data.get("surface_urn"))
+        surface: Optional[SurfaceRef]
+        if isinstance(surface_data, SurfaceRef):
+            surface = surface_data
+        elif isinstance(surface_data, Mapping):
+            surface = SurfaceRef.from_mapping(surface_data)
+        elif surface_urn is not None:
+            surface = SurfaceRef.from_urn(surface_urn)
+        else:
+            surface = None
+        binding_data = data.get("backend_binding")
+        backend_binding = (
+            binding_data
+            if isinstance(binding_data, BackendBinding)
+            else BackendBinding.from_mapping(
+                binding_data if isinstance(binding_data, Mapping) else data
+            )
+        )
+        return cls(
+            id=thread_id,
+            scope=scope,
+            agent=agent,
+            surface=surface,
+            backend_binding=backend_binding,
+            display_name=_normalize_optional_text(
+                data.get("display_name") or data.get("name")
+            ),
+            lifecycle_status=_normalize_optional_text(
+                data.get("lifecycle_status") or data.get("status")
+            )
+            or "active",
+            runtime_status=_normalize_optional_text(
+                data.get("runtime_status") or data.get("normalized_status")
+            )
+            or "idle",
+            status_reason=_normalize_optional_text(
+                data.get("status_reason") or data.get("status_reason_code")
+            ),
+            status_changed_at=_normalize_optional_text(
+                data.get("status_changed_at") or data.get("status_updated_at")
+            ),
+            status_terminal=bool(data.get("status_terminal")),
+            status_turn_id=_normalize_optional_text(data.get("status_turn_id")),
+            last_execution_id=_normalize_optional_text(
+                data.get("last_execution_id") or data.get("last_turn_id")
+            ),
+            last_message_preview=_normalize_optional_text(
+                data.get("last_message_preview")
+            ),
+            compact_seed=_normalize_optional_text(data.get("compact_seed")),
+            metadata=dict(metadata),
+            created_at=_normalize_optional_text(data.get("created_at")),
+            updated_at=_normalize_optional_text(data.get("updated_at")),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        surface_urn = self.surface.to_urn() if self.surface is not None else None
+        backend_binding = self.backend_binding.to_dict()
+        return {
+            "id": self.id,
+            "managed_thread_id": self.id,
+            "thread_target_id": self.id,
+            "scope": self.scope.to_dict(),
+            "scope_urn": self.scope.to_urn(),
+            "surface": self.surface.to_dict() if self.surface is not None else None,
+            "surface_urn": surface_urn,
+            "agent": self.agent.agent_id,
+            "agent_id": self.agent.agent_id,
+            "agent_ref": self.agent.to_dict(),
+            "backend_binding": backend_binding,
+            "backend_thread_id": backend_binding["backend_thread_id"],
+            "backend_runtime_instance_id": backend_binding[
+                "backend_runtime_instance_id"
+            ],
+            "name": self.display_name,
+            "display_name": self.display_name,
+            "status": self.runtime_status,
+            "normalized_status": self.runtime_status,
+            "runtime_status": self.runtime_status,
+            "lifecycle_status": self.lifecycle_status,
+            "status_reason": self.status_reason,
+            "status_reason_code": self.status_reason,
+            "status_changed_at": self.status_changed_at,
+            "status_updated_at": self.status_changed_at,
+            "status_terminal": self.status_terminal,
+            "status_turn_id": self.status_turn_id,
+            "last_execution_id": self.last_execution_id,
+            "last_turn_id": self.last_execution_id,
+            "last_message_preview": self.last_message_preview,
+            "compact_seed": self.compact_seed,
+            "metadata": dict(self.metadata),
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
         }
 
 

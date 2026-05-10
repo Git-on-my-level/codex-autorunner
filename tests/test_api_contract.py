@@ -47,18 +47,23 @@ def test_repo_openapi_contract_has_core_paths(hub_env, monkeypatch) -> None:
         "/api/run/start": {"post"},
         "/api/run/stop": {"post"},
         "/api/sessions": {"get"},
-        "/api/usage": {"get"},
-        "/api/usage/series": {"get"},
         "/api/terminal/image": {"post"},
         "/api/voice/config": {"get"},
         "/api/voice/transcribe": {"post"},
-        "/api/review/status": {"get"},
-        "/api/review/start": {"post"},
-        "/api/review/stop": {"post"},
-        "/api/review/reset": {"post"},
-        "/api/review/artifact": {"get"},
     }
 
     for path, methods in expected.items():
         assert path in paths
         assert methods.issubset(set(paths[path].keys()))
+
+    removed_old_ui_only = {
+        "/api/review/status",
+        "/api/review/start",
+        "/api/review/stop",
+        "/api/review/reset",
+        "/api/review/artifact",
+        "/api/usage",
+        "/api/usage/series",
+        "/api/analytics/summary",
+    }
+    assert removed_old_ui_only.isdisjoint(paths)

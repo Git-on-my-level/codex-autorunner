@@ -10,8 +10,8 @@ from typer.testing import CliRunner
 from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.core.filebox import BOXES
 from codex_autorunner.surfaces.cli import pma_cli
+from codex_autorunner.surfaces.cli.hub_control_plane_client import resolve_hub_path
 from codex_autorunner.surfaces.cli.pma_cli import pma_app
-from codex_autorunner.surfaces.cli.pma_control_plane import resolve_hub_path
 
 
 def test_pma_cli_has_required_commands():

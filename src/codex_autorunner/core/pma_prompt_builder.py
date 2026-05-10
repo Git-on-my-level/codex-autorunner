@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence, TypedDict
 
 from .pma_context_shared import PMA_MAX_MESSAGES, PMA_MAX_REPOS, PMA_MAX_TEXT
@@ -46,13 +47,12 @@ First-turn routine:
     - Always include the item.open_url so the user can jump to the repo Inbox tab.
 3) BRANCH B - Managed threads vs ticket flows:
     - Managed threads are the default for straightforward work in one managed resource: exploratory work, reviews, bug fixes, focused refactors, and single-feature PRs that fit in one clear prompt.
-    - If `hub_snapshot.pma_threads` has a relevant active thread, resume it instead of spawning a new one.
+    - If `hub_snapshot.managed_threads` has a relevant active thread, resume it instead of spawning a new one.
     - Treat `chat_bound=true` managed threads as continuity artifacts protected from cleanup by default. Broad requests like "clean up workspace" do not authorize archiving or removing them; only explicit user direction does.
     - For hub-scoped PMA CLI commands, include `--path <hub_root>` so they resolve the intended hub config instead of relying on the current working directory.
-    - Do not launch runtime CLIs directly (`codex`, `opencode`, `zeroclaw`, etc.) for PMA-managed work when a managed thread fits. Use CAR managed threads so lifecycle, progress, subscriptions, and wake-ups stay visible to PMA.
+    - Do not launch runtime CLIs directly (`codex`, `opencode`, etc.) for PMA-managed work when a managed thread fits. Use CAR managed threads so lifecycle, progress, subscriptions, and wake-ups stay visible to PMA.
     - If no suitable thread exists, spawn one, run work, and keep it compact:
       - `car pma thread spawn --agent codex --repo <repo_id> --name <label> --path <hub_root>`
-      - `car pma thread spawn --resource-kind agent_workspace --resource-id <workspace_id> --name <label> --path <hub_root>`
       - `car pma thread send --id <managed_thread_id> --message "..." --path <hub_root>`
       - `car pma thread send --id <managed_thread_id> --message-file prompt.md --path <hub_root>`
       - `car pma thread send --id <managed_thread_id> --message "..." --watch --path <hub_root>` only when you intentionally want synchronous foreground babysitting
@@ -91,7 +91,7 @@ First-turn routine:
       - watchdog (`timer_type=watchdog`, `idle_seconds`; touch/cancel as progress changes)
       - Endpoints: `/hub/pma/timers`, `/hub/pma/timers/{timer_id}/touch`, `/hub/pma/timers/{timer_id}/cancel`
     - Prefer idempotency keys and lane-specific routing (`lane_id`) for chainable plans.
-    - Consult `.codex-autorunner/pma/docs/ABOUT_CAR.md` section "PMA automation wake-ups" for recipes.
+    - Consult the hub-scoped PMA operations guide section "PMA automation wake-ups" for recipes.
 6) If the request is new work (not inbox/file processing):
     - Identify the target managed resource(s): repo(s) and/or agent workspace(s).
     - Prefer hub-owned worktrees for changes.
@@ -143,18 +143,48 @@ class PmaPromptRenderLimits:
 
 def render_pma_discoverability_preamble(
     pma_docs: Optional[Mapping[str, Any]] = None,
+    *,
+    hub_root: Optional[Path] = None,
+    runtime_cwd: Optional[Path] = None,
 ) -> str:
-    prompt = (
-        "Ops guide: `.codex-autorunner/pma/docs/ABOUT_CAR.md`.\n"
-        "Durable guidance: `.codex-autorunner/pma/docs/AGENTS.md`.\n"
-        "Working context: `.codex-autorunner/pma/docs/active_context.md`.\n"
-        "History: `.codex-autorunner/pma/docs/context_log.md`.\n"
-        "Automation quickstart: `/hub/pma/subscriptions` (event triggers) and `/hub/pma/timers` (one-shot/watchdog).\n"
-        'Automation recipes: `.codex-autorunner/pma/docs/ABOUT_CAR.md` -> "PMA automation wake-ups".\n'
-        "Ticket templates: pass `--repo <path>` (a git worktree) for every `car templates` subcommand; add `--path <hub_root>` when the shell cwd is not inside the hub tree. Examples: `car templates list --repo <path>`, `car templates search <query> --repo <path>`, `car templates show <id> --repo <path>`, `car templates apply <id> --repo <path>`.\n"
-        "To send a file to the user, write it to `.codex-autorunner/filebox/outbox/`.\n"
-        "User uploaded files are in `.codex-autorunner/filebox/inbox/`.\n\n"
-    )
+    if hub_root is not None:
+        resolved_hub = hub_root.expanduser().resolve()
+        pma_docs_dir = resolved_hub / ".codex-autorunner" / "pma" / "docs"
+        runtime_text = (
+            f"Runtime cwd: `{runtime_cwd.expanduser().resolve()}`.\n"
+            if runtime_cwd is not None
+            else ""
+        )
+        prompt = (
+            f"Hub root: `{resolved_hub}`.\n"
+            f"{runtime_text}"
+            "Hub PMA docs are hub-scoped; do not resolve these paths relative to a repo runtime cwd.\n"
+            f"Ops guide: `{pma_docs_dir / 'ABOUT_CAR.md'}`.\n"
+            f"Durable guidance: `{pma_docs_dir / 'AGENTS.md'}`.\n"
+            f"Hub PMA working context: `{pma_docs_dir / 'active_context.md'}`.\n"
+            f"Hub PMA history: `{pma_docs_dir / 'context_log.md'}`.\n"
+            f"Docs discovery: `car docs list --path {resolved_hub}` and `car docs search <query> --path {resolved_hub}`.\n"
+            "Automation quickstart: `/hub/pma/subscriptions` (event triggers) and `/hub/pma/timers` (one-shot/watchdog).\n"
+            f'Automation recipes: `{pma_docs_dir / "ABOUT_CAR.md"}` -> "PMA automation wake-ups".\n'
+            "Ticket templates: pass `--repo <path>` (a git worktree) for every `car templates` subcommand; add `--path <hub_root>` when the shell cwd is not inside the hub tree. Examples: `car templates list --repo <path>`, `car templates search <query> --repo <path>`, `car templates show <id> --repo <path>`, `car templates apply <id> --repo <path>`.\n"
+            f"To send a file to the user, write it to `{resolved_hub / '.codex-autorunner' / 'filebox' / 'outbox'}`.\n"
+            f"User uploaded files are in `{resolved_hub / '.codex-autorunner' / 'filebox' / 'inbox'}`.\n\n"
+        )
+    else:
+        prompt = (
+            "Hub root: unavailable in this prompt render.\n"
+            "PMA docs are hub-scoped under `<hub_root>/.codex-autorunner/pma/docs/`.\n"
+            "Ops guide: `<hub_root>/.codex-autorunner/pma/docs/ABOUT_CAR.md`.\n"
+            "Durable guidance: `<hub_root>/.codex-autorunner/pma/docs/AGENTS.md`.\n"
+            "Hub PMA working context: `<hub_root>/.codex-autorunner/pma/docs/active_context.md`.\n"
+            "Hub PMA history: `<hub_root>/.codex-autorunner/pma/docs/context_log.md`.\n"
+            "Docs discovery: `car docs list --path <hub_root>` and `car docs search <query> --path <hub_root>`.\n"
+            "Automation quickstart: `/hub/pma/subscriptions` (event triggers) and `/hub/pma/timers` (one-shot/watchdog).\n"
+            'Automation recipes: `<hub_root>/.codex-autorunner/pma/docs/ABOUT_CAR.md` -> "PMA automation wake-ups".\n'
+            "Ticket templates: pass `--repo <path>` (a git worktree) for every `car templates` subcommand; add `--path <hub_root>` when the shell cwd is not inside the hub tree. Examples: `car templates list --repo <path>`, `car templates search <query>`, `car templates show <id>`, `car templates apply <id>`.\n"
+            "To send a file to the user, write it to `<hub_root>/.codex-autorunner/filebox/outbox/`.\n"
+            "User uploaded files are in `<hub_root>/.codex-autorunner/filebox/inbox/`.\n\n"
+        )
     if pma_docs:
         prompt += _render_pma_workspace_docs(pma_docs)
     return prompt
@@ -258,7 +288,7 @@ def _render_pma_actionable_state(
     if action_queue:
         actionable_snapshot["action_queue"] = action_queue
     else:
-        for key in ("inbox", "pma_threads", "pma_files_detail", "automation"):
+        for key in ("inbox", "managed_threads", "pma_files_detail", "automation"):
             value = snapshot.get(key)
             if value:
                 actionable_snapshot[key] = value

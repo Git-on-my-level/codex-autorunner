@@ -35,6 +35,7 @@ Issues = "https://github.com/Git-on-my-level/codex-autorunner/issues"
 [project.optional-dependencies]
 dev = [
   "black==25.11.0",
+  "hypothesis>=6.92",
   "mypy>=1.10",
   "pytest>=7.0",
   "pytest-asyncio>=0.23",
@@ -75,15 +76,9 @@ include-package-data = true
 
 [tool.setuptools.package-data]
 codex_autorunner = [
-  "static/generated/*.js",
-  "static/*.css",
-  "static/*.html",
-  "static/vendor/**",
-  "static/assets.json",
+  "web_static/**",
+  "docs/*.md",
 ]
-
-[tool.setuptools.exclude-package-data]
-codex_autorunner = ["static_src/*", "static_src/**/*"]
 
 [tool.typer]
 completions = true
@@ -120,27 +115,28 @@ ignore = ["E501"]
 [tool.ruff.lint.per-file-ignores]
 "src/codex_autorunner/cli.py" = ["B008"]
 "src/codex_autorunner/surfaces/cli/pma_cli.py" = ["B008"]
-"src/codex_autorunner/surfaces/cli/pma_thread_commands.py" = ["B008"]
+"src/codex_autorunner/surfaces/cli/managed_thread_commands.py" = ["B008"]
 "src/codex_autorunner/surfaces/cli/pma_docs_commands.py" = ["B008"]
 "src/codex_autorunner/surfaces/cli/pma_context_commands.py" = ["B008"]
 "src/codex_autorunner/surfaces/cli/pma_binding_commands.py" = ["B008"]
 "src/codex_autorunner/surfaces/cli/pma_file_commands.py" = ["B008"]
 "src/codex_autorunner/surfaces/cli/cli.py" = ["B008"]
 "src/codex_autorunner/surfaces/cli/commands/*.py" = ["B008"]
+"src/codex_autorunner/adapters/telegram/adapter.py" = ["F401"]
 "src/codex_autorunner/surfaces/web/routes/terminal_images.py" = ["B008"]
 "src/codex_autorunner/surfaces/web/routes/voice.py" = ["B008"]
-"tests/integrations/chat/test_parity_checker.py" = ["E402"]
-"tests/integrations/discord/test_flow_archive.py" = ["E402"]
-"tests/integrations/discord/test_flow_handlers.py" = ["E402"]
-"tests/integrations/discord/test_pma_commands.py" = ["E402"]
-"tests/integrations/discord/test_service_routing.py" = ["E402"]
-"tests/integrations/github/test_polling.py" = ["E402"]
+"tests/adapters/chat/test_parity_checker.py" = ["E402"]
+"tests/adapters/discord/test_flow_archive.py" = ["E402"]
+"tests/adapters/discord/test_flow_handlers.py" = ["E402"]
+"tests/adapters/discord/test_pma_commands.py" = ["E402"]
+"tests/adapters/discord/test_service_routing.py" = ["E402"]
+"tests/adapters/github/test_polling.py" = ["E402"]
 "tests/routes/test_scm_webhooks.py" = ["E402"]
 "tests/test_hub_app_context.py" = ["E402"]
 "tests/test_hub_issue_1266.py" = ["E402"]
 "tests/test_hub_messages.py" = ["E402"]
 "tests/test_pma_context_snapshot.py" = ["E402"]
-"tests/test_telegram_pma_managed_threads.py" = ["E402"]
+"tests/test_telegram_managed_threads.py" = ["E402"]
 "tests/test_telegram_pma_workspace_commands.py" = ["E402"]
 "tests/tickets/test_ticket_runner.py" = ["E402"]
 
@@ -161,14 +157,14 @@ ignore_errors = false
 
 [[tool.mypy.overrides]]
 module = [
-  "codex_autorunner.integrations.app_server",
-  "codex_autorunner.integrations.app_server.*",
+  "codex_autorunner.adapters.app_server",
+  "codex_autorunner.adapters.app_server.*",
 ]
 ignore_errors = false
 
 [[tool.mypy.overrides]]
 module = [
-  "codex_autorunner.integrations.telegram",
-  "codex_autorunner.integrations.telegram.*",
+  "codex_autorunner.adapters.telegram",
+  "codex_autorunner.adapters.telegram.*",
 ]
 ignore_errors = true

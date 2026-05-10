@@ -1,0 +1,916 @@
+from __future__ import annotations
+
+import dataclasses
+import datetime as dt
+import fnmatch
+import json
+import logging
+import os
+import re
+import shlex
+import subprocess
+from pathlib import Path
+from typing import Any, Callable, Mapping, Optional, Sequence
+
+from ...core.destinations import DockerReadiness, probe_docker_readiness
+from ...core.utils import subprocess_env
+from .profile_contracts import (
+    DockerProfileContract,
+    resolve_docker_profile_contract,
+)
+
+logger = logging.getLogger("codex_autorunner.adapters.docker.runtime")
+
+
+class DockerRuntimeError(RuntimeError):
+    """Raised when a docker command fails."""
+
+
+class DockerUnavailableError(DockerRuntimeError):
+    """Raised when docker is not installed or cannot be executed."""
+
+
+RunFn = Callable[..., subprocess.CompletedProcess[str]]
+
+
+@dataclasses.dataclass(frozen=True)
+class DockerMount:
+    source: str
+    target: str
+    read_only: bool = False
+
+    def to_bind_spec(self) -> str:
+        mode = ":ro" if self.read_only else ""
+        return f"{self.source}:{self.target}{mode}"
+
+
+@dataclasses.dataclass(frozen=True)
+class DockerContainerSpec:
+    name: str
+    image: str
+    mounts: tuple[DockerMount, ...]
+    env: dict[str, str]
+    workdir: str
+
+
+@dataclasses.dataclass(frozen=True)
+class DockerContainerMountInfo:
+    source: str
+    target: str
+    type: str
+
+
+@dataclasses.dataclass(frozen=True)
+class DockerContainerInfo:
+    name: str
+    running: bool
+    status: str
+    created_at: Optional[dt.datetime]
+    started_at: Optional[dt.datetime]
+    mounts: tuple[DockerContainerMountInfo, ...]
+    labels: Mapping[str, str]
+
+
+@dataclasses.dataclass(frozen=True)
+class DockerManagedContainerAction:
+    name: str
+    reason: str
+
+
+@dataclasses.dataclass(frozen=True)
+class DockerManagedContainerReapResult:
+    scanned_count: int
+    eligible_count: int
+    removed: tuple[DockerManagedContainerAction, ...]
+    errors: tuple[str, ...] = ()
+
+    @property
+    def removed_count(self) -> int:
+        return len(self.removed)
+
+
+def _expand_template(value: str, *, repo_root: Path, home_dir: Path) -> str:
+    out = str(value)
+    out = out.replace("${REPO_ROOT}", str(repo_root.resolve()))
+    out = out.replace("${HOME}", str(home_dir))
+    return out
+
+
+def select_passthrough_env(
+    patterns: Sequence[str],
+    *,
+    source_env: Optional[Mapping[str, str]] = None,
+) -> dict[str, str]:
+    src: Mapping[str, str] = source_env if source_env is not None else os.environ
+    selected: dict[str, str] = {}
+    normalized_patterns = [str(p).strip() for p in patterns if str(p).strip()]
+    if not normalized_patterns:
+        return selected
+    for key in sorted(src.keys()):
+        if not isinstance(key, str):
+            continue
+        value = src.get(key)
+        if value is None:
+            continue
+        for pattern in normalized_patterns:
+            if fnmatch.fnmatchcase(key, pattern):
+                selected[key] = value
+                break
+    return selected
+
+
+def _dedupe_strings(values: Sequence[str]) -> tuple[str, ...]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for item in values:
+        normalized = str(item).strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(normalized)
+    return tuple(deduped)
+
+
+def _merge_env_passthrough_patterns(
+    profile_contract: Optional[DockerProfileContract],
+    user_patterns: Optional[Sequence[str]],
+) -> tuple[str, ...]:
+    defaults = (
+        profile_contract.default_env_passthrough if profile_contract is not None else ()
+    )
+    return _dedupe_strings([*defaults, *(user_patterns or ())])
+
+
+def _normalize_mount_candidate(
+    mount: DockerMount | Mapping[str, Any],
+) -> Optional[DockerMount | dict[str, Any]]:
+    if isinstance(mount, DockerMount):
+        if not mount.source.strip() or not mount.target.strip():
+            return None
+        return DockerMount(
+            source=mount.source.strip(),
+            target=mount.target.strip(),
+            read_only=bool(mount.read_only),
+        )
+    if not isinstance(mount, Mapping):
+        return None
+    source = mount.get("source")
+    target = mount.get("target")
+    if not isinstance(source, str) or not source.strip():
+        return None
+    if not isinstance(target, str) or not target.strip():
+        return None
+    read_only = bool(mount.get("read_only", False))
+    return {
+        "source": source.strip(),
+        "target": target.strip(),
+        "read_only": read_only,
+    }
+
+
+def _merge_mounts(
+    profile_contract: Optional[DockerProfileContract],
+    user_mounts: Optional[Sequence[DockerMount | Mapping[str, Any]]],
+    *,
+    repo_root: Path,
+    home_dir: Path,
+) -> tuple[DockerMount | Mapping[str, Any], ...]:
+    merged: list[DockerMount | Mapping[str, Any]] = []
+    index_by_pair: dict[tuple[str, str], int] = {}
+
+    defaults: list[DockerMount | Mapping[str, Any]] = []
+    if profile_contract is not None:
+        defaults = [
+            {
+                "source": mount.source,
+                "target": mount.target,
+                "read_only": mount.read_only,
+            }
+            for mount in profile_contract.default_mounts
+        ]
+
+    for raw_mount in [*defaults, *(user_mounts or ())]:
+        normalized = _normalize_mount_candidate(raw_mount)
+        if normalized is None:
+            continue
+        if isinstance(normalized, DockerMount):
+            pair = (normalized.source, normalized.target)
+        else:
+            pair = (
+                str(normalized.get("source", "")),
+                str(normalized.get("target", "")),
+            )
+        pair = (
+            _expand_template(pair[0], repo_root=repo_root, home_dir=home_dir),
+            _expand_template(pair[1], repo_root=repo_root, home_dir=home_dir),
+        )
+        existing_idx = index_by_pair.get(pair)
+        if existing_idx is None:
+            index_by_pair[pair] = len(merged)
+            merged.append(normalized)
+            continue
+        # User mounts should override defaults when source/target collide.
+        merged[existing_idx] = normalized
+    return tuple(merged)
+
+
+def _build_preflight_script(
+    *,
+    required_binaries: Sequence[str],
+    required_readable_files: Sequence[str],
+    workdir: Optional[str],
+) -> str:
+    binaries = _dedupe_strings(required_binaries)
+    readable_files = _dedupe_strings(required_readable_files)
+
+    script_lines: list[str] = ["set -eu", "missing_binaries=''", "missing_files=''"]
+    if binaries:
+        script_lines.append(
+            f"for binary in {' '.join(shlex.quote(item) for item in binaries)}; do"
+        )
+        script_lines.extend(
+            [
+                '  if ! command -v "$binary" >/dev/null 2>&1; then',
+                '    if [ -n "$missing_binaries" ]; then',
+                '      missing_binaries="$missing_binaries,$binary"',
+                "    else",
+                '      missing_binaries="$binary"',
+                "    fi",
+                "  fi",
+                "done",
+            ]
+        )
+
+    if readable_files:
+        script_lines.append(
+            f"for required_file in {' '.join(shlex.quote(item) for item in readable_files)}; do"
+        )
+        script_lines.extend(
+            [
+                '  if [ ! -r "$required_file" ]; then',
+                '    if [ -n "$missing_files" ]; then',
+                '      missing_files="$missing_files,$required_file"',
+                "    else",
+                '      missing_files="$required_file"',
+                "    fi",
+                "  fi",
+                "done",
+            ]
+        )
+
+    script_lines.append(f"workdir_path={shlex.quote(str(workdir or ''))}")
+    script_lines.extend(
+        [
+            "unwritable_workdir=''",
+            'if [ -n "$workdir_path" ] && [ ! -w "$workdir_path" ]; then',
+            '  unwritable_workdir="$workdir_path"',
+            "fi",
+            "printf 'MISSING_BINARIES=%s\\n' \"$missing_binaries\"",
+            "printf 'MISSING_FILES=%s\\n' \"$missing_files\"",
+            "printf 'UNWRITABLE_WORKDIR=%s\\n' \"$unwritable_workdir\"",
+        ]
+    )
+    return "\n".join(script_lines)
+
+
+def _parse_preflight_field(output: str, key: str) -> str:
+    prefix = f"{key}="
+    for line in output.splitlines():
+        if line.startswith(prefix):
+            return line[len(prefix) :].strip()
+    return ""
+
+
+def _split_preflight_csv(value: str) -> tuple[str, ...]:
+    if not value.strip():
+        return ()
+    return tuple(part.strip() for part in value.split(",") if part.strip())
+
+
+def _parse_docker_datetime(value: object) -> Optional[dt.datetime]:
+    raw = str(value or "").strip()
+    if not raw or raw.startswith("0001-01-01T00:00:00"):
+        return None
+    # Docker commonly emits RFC3339Nano timestamps, but Python only accepts
+    # microsecond precision. Truncate the fractional component to 6 digits.
+    normalized = re.sub(
+        r"\.(\d{6})\d+(?=(?:Z|[+-]\d{2}:\d{2})$)",
+        r".\1",
+        raw,
+    )
+    try:
+        parsed = dt.datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=dt.timezone.utc)
+    return parsed
+
+
+def normalize_mounts(
+    repo_root: Path,
+    mounts: Optional[Sequence[DockerMount | Mapping[str, Any]]] = None,
+) -> tuple[DockerMount, ...]:
+    repo_path = str(repo_root.resolve())
+    normalized: list[DockerMount] = [DockerMount(source=repo_path, target=repo_path)]
+    seen = {(repo_path, repo_path, False)}
+    home_dir = Path.home()
+    for mount in mounts or ():
+        if isinstance(mount, DockerMount):
+            candidate = mount
+        elif isinstance(mount, Mapping):
+            source = mount.get("source")
+            target = mount.get("target")
+            if not isinstance(source, str) or not source.strip():
+                continue
+            if not isinstance(target, str) or not target.strip():
+                continue
+            read_only = bool(mount.get("read_only", False))
+            candidate = DockerMount(
+                source=_expand_template(
+                    source.strip(), repo_root=repo_root, home_dir=home_dir
+                ),
+                target=_expand_template(
+                    target.strip(), repo_root=repo_root, home_dir=home_dir
+                ),
+                read_only=read_only,
+            )
+        else:
+            continue
+        key = (candidate.source, candidate.target, candidate.read_only)
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(candidate)
+    return tuple(normalized)
+
+
+def build_docker_container_spec(
+    *,
+    name: str,
+    image: str,
+    repo_root: Path,
+    profile: Optional[str] = None,
+    mounts: Optional[Sequence[DockerMount | Mapping[str, Any]]] = None,
+    env_passthrough_patterns: Optional[Sequence[str]] = None,
+    explicit_env: Optional[Mapping[str, str]] = None,
+    source_env: Optional[Mapping[str, str]] = None,
+    workdir: Optional[str] = None,
+) -> DockerContainerSpec:
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("container name is required")
+    if not isinstance(image, str) or not image.strip():
+        raise ValueError("docker image is required")
+
+    repo_abs = repo_root.resolve()
+    home_dir = Path.home()
+    profile_contract = resolve_docker_profile_contract(profile)
+    merged_mounts = _merge_mounts(
+        profile_contract,
+        mounts,
+        repo_root=repo_abs,
+        home_dir=home_dir,
+    )
+    merged_patterns = _merge_env_passthrough_patterns(
+        profile_contract,
+        env_passthrough_patterns,
+    )
+    passthrough = select_passthrough_env(
+        merged_patterns,
+        source_env=source_env,
+    )
+    merged_env = dict(sorted(passthrough.items()))
+    explicit_items: list[tuple[str, object]] = []
+    if isinstance(explicit_env, Mapping):
+        explicit_items.extend((key, value) for key, value in explicit_env.items())
+    elif explicit_env is not None:
+        logger.warning(
+            "Ignoring docker explicit env because value is not a mapping (got %s)",
+            type(explicit_env).__name__,
+        )
+    for key, value in explicit_items:
+        if not isinstance(key, str) or not key.strip():
+            continue
+        if value is None:
+            continue
+        merged_env[key.strip()] = str(value)
+    return DockerContainerSpec(
+        name=name.strip(),
+        image=image.strip(),
+        mounts=normalize_mounts(repo_abs, merged_mounts),
+        env=merged_env,
+        workdir=(
+            _expand_template(str(workdir), repo_root=repo_abs, home_dir=home_dir)
+            if workdir
+            else str(repo_abs)
+        ),
+    )
+
+
+class DockerRuntime:
+    def __init__(
+        self,
+        *,
+        docker_binary: str = "docker",
+        run_fn: RunFn = subprocess.run,
+    ) -> None:
+        self._docker_binary = docker_binary
+        self._run_fn = run_fn
+
+    def _run(
+        self,
+        args: Sequence[str],
+        *,
+        check: bool = True,
+        timeout_seconds: Optional[float] = None,
+    ) -> subprocess.CompletedProcess[str]:
+        cmd = [self._docker_binary, *[str(a) for a in args]]
+        try:
+            proc = self._run_fn(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+                env=subprocess_env(),
+                timeout=timeout_seconds,
+            )
+        except FileNotFoundError as exc:
+            raise DockerUnavailableError(
+                f"Docker binary '{self._docker_binary}' not found"
+            ) from exc
+        if check and proc.returncode != 0:
+            details = (proc.stderr or proc.stdout or "").strip() or "unknown error"
+            raise DockerRuntimeError(
+                f"Docker command failed ({proc.returncode}): {' '.join(cmd)} :: {details}"
+            )
+        return proc
+
+    def is_available(self) -> bool:
+        return self.probe_readiness().binary_available
+
+    def probe_readiness(self, *, timeout_seconds: float = 10.0) -> DockerReadiness:
+        return probe_docker_readiness(
+            docker_binary=self._docker_binary,
+            run_fn=self._run_fn,
+            timeout_seconds=timeout_seconds,
+        )
+
+    def ensure_container_running(self, spec: DockerContainerSpec) -> None:
+        inspect_proc = self._run(
+            ["inspect", "--format", "{{.State.Running}}", spec.name],
+            check=False,
+            timeout_seconds=15,
+        )
+        if inspect_proc.returncode == 0:
+            running = (inspect_proc.stdout or "").strip().lower() == "true"
+            if running:
+                return
+            self._run(["start", spec.name], timeout_seconds=30)
+            return
+
+        details = (inspect_proc.stderr or inspect_proc.stdout or "").lower()
+        if "no such object" not in details and "no such container" not in details:
+            raise DockerRuntimeError(
+                f"Unable to inspect container {spec.name}: "
+                f"{(inspect_proc.stderr or inspect_proc.stdout or '').strip()}"
+            )
+
+        cmd: list[str] = [
+            "run",
+            "-d",
+            "--name",
+            spec.name,
+            "--label",
+            "ca.managed=true",
+        ]
+        for mount in spec.mounts:
+            cmd.extend(["-v", mount.to_bind_spec()])
+        for key, value in sorted(spec.env.items()):
+            cmd.extend(["-e", f"{key}={value}"])
+        if spec.workdir:
+            cmd.extend(["-w", spec.workdir])
+        cmd.extend([spec.image, "tail", "-f", "/dev/null"])
+        run_proc = self._run(cmd, check=False, timeout_seconds=120)
+        if run_proc.returncode == 0:
+            return
+        run_details = (run_proc.stderr or run_proc.stdout or "").lower()
+        if "already in use by container" in run_details:
+            self._run(["start", spec.name], timeout_seconds=30)
+            return
+        raise DockerRuntimeError(
+            f"Failed to create container {spec.name}: "
+            f"{(run_proc.stderr or run_proc.stdout or '').strip()}"
+        )
+
+    def build_exec_command(
+        self,
+        container_name: str,
+        command: Sequence[str],
+        *,
+        workdir: Optional[str] = None,
+        env: Optional[Mapping[str, str]] = None,
+    ) -> list[str]:
+        if not command:
+            raise ValueError("command must not be empty")
+        cmd: list[str] = [self._docker_binary, "exec"]
+        if workdir:
+            cmd.extend(["-w", str(workdir)])
+        for key, value in sorted((env or {}).items()):
+            if not key:
+                continue
+            cmd.extend(["-e", f"{key}={value}"])
+        cmd.append(container_name)
+        cmd.extend([str(part) for part in command])
+        return cmd
+
+    def run_exec(
+        self,
+        container_name: str,
+        command: Sequence[str],
+        *,
+        workdir: Optional[str] = None,
+        env: Optional[Mapping[str, str]] = None,
+        timeout_seconds: Optional[float] = None,
+        check: bool = True,
+    ) -> subprocess.CompletedProcess[str]:
+        args = self.build_exec_command(
+            container_name,
+            command,
+            workdir=workdir,
+            env=env,
+        )
+        try:
+            proc = self._run_fn(
+                args,
+                capture_output=True,
+                text=True,
+                check=False,
+                env=subprocess_env(),
+                timeout=timeout_seconds,
+            )
+        except FileNotFoundError as exc:
+            raise DockerUnavailableError(
+                f"Docker binary '{self._docker_binary}' not found"
+            ) from exc
+        if check and proc.returncode != 0:
+            details = (proc.stderr or proc.stdout or "").strip() or "unknown error"
+            raise DockerRuntimeError(
+                f"Docker exec failed ({proc.returncode}) in {container_name}: {details}"
+            )
+        return proc
+
+    def preflight_container(
+        self,
+        container_name: str,
+        *,
+        required_binaries: Sequence[str] = (),
+        required_readable_files: Sequence[str] = (),
+        workdir: Optional[str] = None,
+        timeout_seconds: float = 15.0,
+    ) -> None:
+        script = _build_preflight_script(
+            required_binaries=required_binaries,
+            required_readable_files=required_readable_files,
+            workdir=workdir,
+        )
+        proc = self.run_exec(
+            container_name,
+            ["sh", "-lc", script],
+            timeout_seconds=timeout_seconds,
+            check=False,
+        )
+        if proc.returncode != 0:
+            details = (proc.stderr or proc.stdout or "").strip() or "unknown error"
+            raise DockerRuntimeError(
+                f"Docker preflight command failed in {container_name}: {details}"
+            )
+
+        missing_binaries = _split_preflight_csv(
+            _parse_preflight_field(proc.stdout or "", "MISSING_BINARIES")
+        )
+        missing_files = _split_preflight_csv(
+            _parse_preflight_field(proc.stdout or "", "MISSING_FILES")
+        )
+        unwritable_workdir = _parse_preflight_field(
+            proc.stdout or "",
+            "UNWRITABLE_WORKDIR",
+        )
+        errors: list[str] = []
+        if missing_binaries:
+            errors.append(
+                "missing required binaries: " + ", ".join(sorted(missing_binaries))
+            )
+        if missing_files:
+            errors.append(
+                "unreadable required auth files: " + ", ".join(sorted(missing_files))
+            )
+        if unwritable_workdir:
+            errors.append(f"workdir is not writable: {unwritable_workdir}")
+        if errors:
+            detail = "; ".join(errors)
+            raise DockerRuntimeError(
+                f"Docker preflight failed in {container_name}: {detail}"
+            )
+
+    def stop_container(
+        self,
+        container_name: str,
+        *,
+        remove: bool = True,
+        timeout_seconds: int = 10,
+        command_timeout_seconds: float = 30,
+    ) -> bool:
+        inspect_proc = self._run(
+            ["inspect", "--format", "{{.State.Running}}", container_name],
+            check=False,
+            timeout_seconds=min(15, command_timeout_seconds),
+        )
+        if inspect_proc.returncode != 0:
+            details = (inspect_proc.stderr or inspect_proc.stdout or "").lower()
+            if "no such object" in details or "no such container" in details:
+                return False
+            raise DockerRuntimeError(
+                f"Unable to inspect container {container_name}: "
+                f"{(inspect_proc.stderr or inspect_proc.stdout or '').strip()}"
+            )
+
+        running = (inspect_proc.stdout or "").strip().lower() == "true"
+        if running:
+            stop_budget = max(10, float(timeout_seconds) + 5)
+            stop_timeout = max(stop_budget, float(command_timeout_seconds))
+            self._run(
+                ["stop", "-t", str(timeout_seconds), container_name],
+                timeout_seconds=stop_timeout,
+            )
+        if remove:
+            self._run(
+                ["rm", "-f", container_name],
+                timeout_seconds=command_timeout_seconds,
+            )
+        return True
+
+    def remove_container(
+        self,
+        container_name: str,
+        *,
+        force: bool = False,
+        command_timeout_seconds: float = 30,
+    ) -> bool:
+        inspect_proc = self._run(
+            ["inspect", "--format", "{{.Id}}", container_name],
+            check=False,
+            timeout_seconds=min(15, command_timeout_seconds),
+        )
+        if inspect_proc.returncode != 0:
+            details = (inspect_proc.stderr or inspect_proc.stdout or "").lower()
+            if "no such object" in details or "no such container" in details:
+                return False
+            raise DockerRuntimeError(
+                f"Unable to inspect container {container_name}: "
+                f"{(inspect_proc.stderr or inspect_proc.stdout or '').strip()}"
+            )
+
+        cmd = ["rm"]
+        if force:
+            cmd.append("-f")
+        cmd.append(container_name)
+        self._run(cmd, timeout_seconds=command_timeout_seconds)
+        return True
+
+    def list_container_names(
+        self,
+        *,
+        all_containers: bool = False,
+        filters: Sequence[str] = (),
+        command_timeout_seconds: float = 30,
+    ) -> tuple[str, ...]:
+        args: list[str] = ["ps"]
+        if all_containers:
+            args.append("-a")
+        for item in filters:
+            value = str(item).strip()
+            if not value:
+                continue
+            args.extend(["--filter", value])
+        args.extend(["--format", "{{.Names}}"])
+        proc = self._run(args, timeout_seconds=command_timeout_seconds)
+        names = [
+            line.strip() for line in (proc.stdout or "").splitlines() if line.strip()
+        ]
+        return tuple(names)
+
+    def inspect_container(
+        self,
+        container_name: str,
+        *,
+        command_timeout_seconds: float = 30,
+    ) -> Optional[DockerContainerInfo]:
+        proc = self._run(
+            ["inspect", container_name],
+            check=False,
+            timeout_seconds=command_timeout_seconds,
+        )
+        if proc.returncode != 0:
+            details = (proc.stderr or proc.stdout or "").lower()
+            if "no such object" in details or "no such container" in details:
+                return None
+            raise DockerRuntimeError(
+                f"Unable to inspect container {container_name}: "
+                f"{(proc.stderr or proc.stdout or '').strip()}"
+            )
+        try:
+            payload = json.loads(proc.stdout or "[]")
+        except json.JSONDecodeError as exc:
+            raise DockerRuntimeError(
+                f"Unable to parse docker inspect output for {container_name}: {exc}"
+            ) from exc
+        if not isinstance(payload, list) or not payload:
+            return None
+        data = payload[0]
+        if not isinstance(data, Mapping):
+            raise DockerRuntimeError(
+                f"Unexpected docker inspect payload for {container_name}: {type(data).__name__}"
+            )
+        state_raw = data.get("State")
+        state = state_raw if isinstance(state_raw, Mapping) else {}
+        config_raw = data.get("Config")
+        config = config_raw if isinstance(config_raw, Mapping) else {}
+        labels_raw = config.get("Labels")
+        labels = labels_raw if isinstance(labels_raw, Mapping) else {}
+        mounts_raw = data.get("Mounts")
+        mounts: list[DockerContainerMountInfo] = []
+        if isinstance(mounts_raw, list):
+            for item in mounts_raw:
+                if not isinstance(item, Mapping):
+                    continue
+                mounts.append(
+                    DockerContainerMountInfo(
+                        source=str(item.get("Source") or "").strip(),
+                        target=str(item.get("Destination") or "").strip(),
+                        type=str(item.get("Type") or "").strip(),
+                    )
+                )
+        return DockerContainerInfo(
+            name=container_name,
+            running=bool(state.get("Running", False)),
+            status=str(state.get("Status") or "").strip(),
+            created_at=_parse_docker_datetime(data.get("Created")),
+            started_at=_parse_docker_datetime(state.get("StartedAt")),
+            mounts=tuple(mounts),
+            labels={
+                str(key): str(value)
+                for key, value in labels.items()
+                if isinstance(key, str) and value is not None
+            },
+        )
+
+    def reap_managed_containers(
+        self,
+        *,
+        ttl_seconds: int,
+        now: Optional[dt.datetime] = None,
+        label: str = "ca.managed=true",
+        command_timeout_seconds: float = 30,
+    ) -> DockerManagedContainerReapResult:
+        names = self.list_container_names(
+            all_containers=True,
+            filters=[f"label={label}"],
+            command_timeout_seconds=command_timeout_seconds,
+        )
+        if ttl_seconds <= 0 and not names:
+            return DockerManagedContainerReapResult(
+                scanned_count=0,
+                eligible_count=0,
+                removed=(),
+            )
+
+        now_dt = now or dt.datetime.now(dt.timezone.utc)
+        if now_dt.tzinfo is None:
+            now_dt = now_dt.replace(tzinfo=dt.timezone.utc)
+
+        eligible_count = 0
+        removed: list[DockerManagedContainerAction] = []
+        errors: list[str] = []
+        for name in names:
+            try:
+                info = self.inspect_container(
+                    name,
+                    command_timeout_seconds=command_timeout_seconds,
+                )
+            except DockerRuntimeError as exc:
+                errors.append(str(exc))
+                continue
+            if info is None:
+                continue
+
+            missing_sources = sorted(
+                {
+                    mount.source
+                    for mount in info.mounts
+                    if mount.type == "bind"
+                    and mount.source
+                    and not Path(mount.source).exists()
+                }
+            )
+            reason: Optional[str] = None
+            if missing_sources:
+                reason = "missing_mount"
+            elif not info.running and ttl_seconds > 0:
+                reference_time = info.started_at or info.created_at
+                if reference_time is not None:
+                    age_seconds = (now_dt - reference_time).total_seconds()
+                    if age_seconds >= float(ttl_seconds):
+                        reason = "stopped_ttl"
+            if reason is None:
+                continue
+
+            eligible_count += 1
+            try:
+                if info.running:
+                    self.stop_container(
+                        name,
+                        remove=True,
+                        command_timeout_seconds=command_timeout_seconds,
+                    )
+                else:
+                    self.remove_container(
+                        name,
+                        force=True,
+                        command_timeout_seconds=command_timeout_seconds,
+                    )
+            except DockerRuntimeError as exc:
+                errors.append(str(exc))
+                continue
+            removed.append(DockerManagedContainerAction(name=name, reason=reason))
+
+        return DockerManagedContainerReapResult(
+            scanned_count=len(names),
+            eligible_count=eligible_count,
+            removed=tuple(removed),
+            errors=tuple(errors),
+        )
+
+    def reap_container_if_expired(
+        self,
+        container_name: str,
+        *,
+        ttl_seconds: int,
+        now: Optional[dt.datetime] = None,
+    ) -> bool:
+        if ttl_seconds <= 0:
+            return False
+
+        started_proc = self._run(
+            ["inspect", "--format", "{{.State.StartedAt}}", container_name],
+            check=False,
+            timeout_seconds=15,
+        )
+        if started_proc.returncode != 0:
+            details = (started_proc.stderr or started_proc.stdout or "").lower()
+            if "no such object" in details or "no such container" in details:
+                return False
+            raise DockerRuntimeError(
+                f"Unable to inspect container {container_name} start time: "
+                f"{(started_proc.stderr or started_proc.stdout or '').strip()}"
+            )
+
+        started_raw = (started_proc.stdout or "").strip()
+        if not started_raw:
+            return False
+        try:
+            started_at = dt.datetime.fromisoformat(started_raw.replace("Z", "+00:00"))
+        except ValueError:
+            logger.warning(
+                "Invalid docker started-at value for %s: %r",
+                container_name,
+                started_raw,
+            )
+            return False
+        if started_at.tzinfo is None:
+            started_at = started_at.replace(tzinfo=dt.timezone.utc)
+        now_dt = now or dt.datetime.now(dt.timezone.utc)
+        if now_dt.tzinfo is None:
+            now_dt = now_dt.replace(tzinfo=dt.timezone.utc)
+        age_seconds = (now_dt - started_at).total_seconds()
+        if age_seconds < float(ttl_seconds):
+            return False
+
+        self.stop_container(container_name, remove=True)
+        return True
+
+
+__all__ = [
+    "DockerContainerInfo",
+    "DockerContainerMountInfo",
+    "DockerContainerSpec",
+    "DockerManagedContainerAction",
+    "DockerManagedContainerReapResult",
+    "DockerMount",
+    "DockerReadiness",
+    "DockerRuntime",
+    "DockerRuntimeError",
+    "DockerUnavailableError",
+    "build_docker_container_spec",
+    "normalize_mounts",
+    "select_passthrough_env",
+]

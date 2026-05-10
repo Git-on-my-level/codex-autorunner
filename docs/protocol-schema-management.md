@@ -138,7 +138,7 @@ part types, and output deltas from the nested `properties` envelope structure.
 
 ### App-server protocol helpers
 
-**`src/codex_autorunner/integrations/app_server/protocol_helpers.py`**
+**`src/codex_autorunner/adapters/app_server/protocol_helpers.py`**
 
 Normalizes raw app-server JSON-RPC responses/requests/notifications. Owns
 response envelope parsing and resume-payload snapshot recovery.

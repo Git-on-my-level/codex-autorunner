@@ -14,6 +14,7 @@ from codex_autorunner.core.orchestration.runtime_thread_decoders import (
     PermissionDecoder,
     SessionUpdateDecoder,
     StreamDeltaDecoder,
+    TurnDiffDecoder,
     UsageDecoder,
     build_default_decoder_registry,
 )
@@ -93,7 +94,7 @@ class TestDecoderRegistry:
 
     def test_all_decoders_registered(self) -> None:
         registry = build_default_decoder_registry()
-        assert len(registry._decoders) == 9
+        assert len(registry._decoders) == 10
 
 
 class TestLifecycleBoundaryDecoder:
@@ -129,6 +130,7 @@ class TestCodexItemDecoder:
         methods = self.decoder.methods()
         assert "item/started" in methods
         assert "item/reasoning/summaryTextDelta" in methods
+        assert "item/reasoning/summaryPartAdded" in methods
         assert "item/completed" in methods
         assert "item/agentMessage/delta" in methods
         assert "item/toolCall/start" in methods
@@ -196,6 +198,22 @@ class TestCodexItemDecoder:
         assert isinstance(events[0], RunNotice)
         assert events[0].kind == "thinking"
         assert events[0].message == "thinking"
+
+    def test_reasoning_summary_part_added(self) -> None:
+        state, ctx = _ctx(
+            "item/reasoning/summaryPartAdded",
+            {"itemId": "r1", "part": {"text": "Looked through files"}},
+        )
+        events = self.decoder.decode(
+            "item/reasoning/summaryPartAdded",
+            {"itemId": "r1", "part": {"text": "Looked through files"}},
+            state,
+            ctx,
+        )
+        assert len(events) == 1
+        assert isinstance(events[0], RunNotice)
+        assert events[0].kind == "thinking"
+        assert events[0].message == "Looked through files"
 
     def test_item_completed_agent_message(self) -> None:
         state, ctx = _ctx(
@@ -470,6 +488,28 @@ class TestACPPromptTurnDecoder:
         assert isinstance(events[0], RunNotice)
         assert events[0].kind == "commentary"
         assert state.best_assistant_text() == ""
+
+
+class TestTurnDiffDecoder:
+    def setup_method(self) -> None:
+        self.decoder = TurnDiffDecoder()
+
+    def test_methods_cover_known_noisy_runtime_notifications(self) -> None:
+        for method in [
+            "turn/diff/updated",
+            "server.connected",
+            "server.heartbeat",
+            "session.updated",
+            "session.diff",
+        ]:
+            assert self.decoder.can_decode(method)
+
+    def test_turn_diff_family_is_silently_consumed(self) -> None:
+        state, ctx = _ctx("turn/diff/created", {"patch": "diff"})
+        assert (
+            self.decoder.decode("turn/diff/created", {"patch": "diff"}, state, ctx)
+            == []
+        )
 
 
 class TestPermissionDecoder:

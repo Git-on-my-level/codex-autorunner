@@ -20,6 +20,13 @@ import codex_autorunner.core.hub_repo_manager as repo_manager_module
 import codex_autorunner.core.hub_runner_orchestrator as orch_module
 import codex_autorunner.core.hub_topology as hub_topology_module
 import codex_autorunner.core.hub_worktree_manager as wtm_module
+from codex_autorunner.adapters.agents.backend_orchestrator import (
+    build_backend_orchestrator,
+)
+from codex_autorunner.adapters.agents.wiring import (
+    build_agent_backend_factory,
+    build_app_server_supervisor_factory,
+)
 from codex_autorunner.bootstrap import seed_repo_files
 from codex_autorunner.core.config import (
     CONFIG_FILENAME,
@@ -38,17 +45,10 @@ from codex_autorunner.core.hub_topology import (
     RepoStatus,
 )
 from codex_autorunner.core.hub_worktree_manager import WorktreeManager
+from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration.bindings import OrchestrationBindingStore
-from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.runner_controller import ProcessRunnerController
 from codex_autorunner.core.state import RunnerState, save_state
-from codex_autorunner.integrations.agents.backend_orchestrator import (
-    build_backend_orchestrator,
-)
-from codex_autorunner.integrations.agents.wiring import (
-    build_agent_backend_factory,
-    build_app_server_supervisor_factory,
-)
 from codex_autorunner.manifest import load_manifest, sanitize_repo_id, save_manifest
 from codex_autorunner.server import create_hub_app
 from tests.conftest import write_test_config
@@ -278,12 +278,12 @@ def test_list_repos_refreshes_after_startup_state_cache_ttl(
     assert second[0].display_name == "demo"
 
 
-def test_scan_writes_pma_threads_artifact(tmp_path: Path) -> None:
+def test_scan_writes_managed_threads_artifact(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     _write_default_hub_config(hub_root)
     repo_dir = hub_root / "demo"
     (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
-    PmaThreadStore(hub_root).create_thread(
+    ManagedThreadStore(hub_root).create_thread(
         "codex",
         repo_dir,
         repo_id="demo",
@@ -300,13 +300,13 @@ def test_scan_writes_pma_threads_artifact(tmp_path: Path) -> None:
     finally:
         supervisor.shutdown()
 
-    artifact_path = hub_root / ".codex-autorunner" / "pma_threads.json"
+    artifact_path = hub_root / ".codex-autorunner" / "managed_threads.json"
     payload = json.loads(artifact_path.read_text(encoding="utf-8"))
     assert payload["generated_at"]
     assert payload["threads"][0]["name"] == "demo-thread"
 
 
-def test_list_repos_does_not_refresh_pma_threads_artifact(
+def test_list_repos_does_not_refresh_managed_threads_artifact(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     hub_root = tmp_path / "hub"
@@ -322,7 +322,7 @@ def test_list_repos_does_not_refresh_pma_threads_artifact(
 
     monkeypatch.setattr(
         hub_topology_module,
-        "refresh_pma_threads_artifact",
+        "refresh_managed_threads_artifact",
         _record_artifact_call,
     )
     try:
@@ -346,7 +346,6 @@ def test_hub_repos_sections_filter_excludes_unrequested_fields(tmp_path: Path) -
     assert resp.status_code == 200
     payload = resp.json()
     assert "repos" in payload
-    assert "agent_workspaces" not in payload
     assert "freshness" not in payload
 
 
@@ -363,7 +362,6 @@ def test_hub_repos_freshness_only_uses_underlying_repo_counts(tmp_path: Path) ->
     assert resp.status_code == 200
     payload = resp.json()
     assert "repos" not in payload
-    assert "agent_workspaces" not in payload
     assert payload["freshness"]["sections"]["repos"]["entity_count"] == 1
 
 
@@ -406,537 +404,8 @@ def test_hub_api_lists_repos(tmp_path: Path):
     data = resp.json()
     assert data["repos"][0]["id"] == "demo"
     assert data["repos"][0]["effective_destination"] == {"kind": "local"}
-    assert data["agent_workspaces"] == []
 
 
-def test_hub_supervisor_can_create_list_and_remove_agent_workspaces(tmp_path: Path):
-    hub_root = tmp_path / "hub"
-    supervisor = _make_basic_supervisor(hub_root)
-    workspace = supervisor.create_agent_workspace(
-        workspace_id="zc-main",
-        runtime="zeroclaw",
-        display_name="ZeroClaw Main",
-        enabled=False,
-    )
-    assert workspace.runtime == "zeroclaw"
-    assert workspace.display_name == "ZeroClaw Main"
-    assert workspace.path == (
-        hub_root / ".codex-autorunner" / "runtimes" / "zeroclaw" / "zc-main"
-    )
-    assert workspace.path.exists()
-    assert workspace.resource_kind == "agent_workspace"
-
-    listed = supervisor.list_agent_workspaces(use_cache=False)
-    assert [item.id for item in listed] == ["zc-main"]
-    assert listed[0].path == workspace.path
-
-    manifest = load_manifest(hub_root / ".codex-autorunner" / "manifest.yml", hub_root)
-    manifest_workspace = manifest.get_agent_workspace("zc-main")
-    assert manifest_workspace is not None
-    assert manifest_workspace.path == Path(
-        ".codex-autorunner/runtimes/zeroclaw/zc-main"
-    )
-
-    state_path = hub_root / ".codex-autorunner" / "hub_state.json"
-    payload = json.loads(state_path.read_text(encoding="utf-8"))
-    assert payload["agent_workspaces"][0]["id"] == "zc-main"
-    assert payload["agent_workspaces"][0]["resource_kind"] == "agent_workspace"
-
-    supervisor.remove_agent_workspace("zc-main")
-    assert workspace.path.exists() is False
-    assert supervisor.list_agent_workspaces(use_cache=False) == []
-
-
-def test_get_agent_workspace_snapshot_refreshes_repo_listing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    hub_root = tmp_path / "hub"
-    supervisor = _make_basic_supervisor(hub_root)
-    supervisor.create_agent_workspace(
-        workspace_id="zc-main",
-        runtime="zeroclaw",
-        display_name="ZeroClaw Main",
-        enabled=False,
-    )
-
-    calls: list[bool] = []
-    original = supervisor.list_repos
-
-    def _wrapped(*, use_cache: bool = True):  # type: ignore[no-untyped-def]
-        calls.append(use_cache)
-        return original(use_cache=use_cache)
-
-    monkeypatch.setattr(supervisor, "list_repos", _wrapped)
-
-    snapshot = supervisor.get_agent_workspace_snapshot("zc-main")
-    assert snapshot.id == "zc-main"
-    assert calls == [False]
-
-
-def test_agent_workspace_mutations_refresh_startup_cached_state(
-    tmp_path: Path,
-) -> None:
-    hub_root = tmp_path / "hub"
-    _write_default_hub_config(hub_root)
-    repo_dir = hub_root / "demo"
-    (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
-
-    initial_supervisor = HubSupervisor(load_hub_config(hub_root))
-    try:
-        initial_supervisor.scan()
-    finally:
-        initial_supervisor.shutdown()
-
-    supervisor = HubSupervisor(load_hub_config(hub_root))
-    try:
-        supervisor.create_agent_workspace(
-            workspace_id="zc-main",
-            runtime="zeroclaw",
-            display_name="ZeroClaw Main",
-            enabled=False,
-        )
-    finally:
-        supervisor.shutdown()
-
-    restarted = HubSupervisor(load_hub_config(hub_root))
-    try:
-        listed = restarted.list_agent_workspaces()
-        assert [item.id for item in listed] == ["zc-main"]
-        assert listed[0].display_name == "ZeroClaw Main"
-    finally:
-        restarted.shutdown()
-
-    supervisor = HubSupervisor(load_hub_config(hub_root))
-    try:
-        supervisor.update_agent_workspace("zc-main", display_name="Renamed Workspace")
-        supervisor.set_agent_workspace_destination(
-            "zc-main",
-            {"kind": "docker", "image": "ghcr.io/acme/zeroclaw:latest"},
-        )
-    finally:
-        supervisor.shutdown()
-
-    restarted = HubSupervisor(load_hub_config(hub_root))
-    try:
-        listed = restarted.list_agent_workspaces()
-        assert [item.id for item in listed] == ["zc-main"]
-        assert listed[0].display_name == "Renamed Workspace"
-        assert listed[0].effective_destination == {
-            "kind": "docker",
-            "image": "ghcr.io/acme/zeroclaw:latest",
-        }
-    finally:
-        restarted.shutdown()
-
-
-def test_hub_supervisor_rejects_unknown_agent_workspace_runtime(tmp_path: Path) -> None:
-    hub_root = tmp_path / "hub"
-    supervisor = _make_basic_supervisor(hub_root)
-
-    with pytest.raises(ValueError, match="Unknown agent workspace runtime"):
-        supervisor.create_agent_workspace(
-            workspace_id="unknown-main",
-            runtime="bogus",
-        )
-
-
-def test_hub_supervisor_blocks_agent_workspace_create_on_failed_preflight(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    hub_root = tmp_path / "hub"
-    _write_default_hub_config(hub_root)
-
-    monkeypatch.setattr(
-        hub_module,
-        "probe_agent_workspace_runtime",
-        lambda _config, _workspace: {
-            "status": "incompatible",
-            "message": "ZeroClaw CLI is incompatible",
-            "fix": "Install a compatible ZeroClaw build.",
-        },
-    )
-
-    supervisor = HubSupervisor(load_hub_config(hub_root))
-    with pytest.raises(ValueError, match="ZeroClaw CLI is incompatible"):
-        supervisor.create_agent_workspace(
-            workspace_id="zc-main",
-            runtime="zeroclaw",
-        )
-
-    manifest = load_manifest(hub_root / ".codex-autorunner" / "manifest.yml", hub_root)
-    assert manifest.agent_workspaces == []
-
-
-def test_hub_supervisor_blocks_enabling_agent_workspace_on_failed_preflight(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    hub_root = tmp_path / "hub"
-    supervisor = _make_basic_supervisor(hub_root)
-    supervisor.create_agent_workspace(
-        workspace_id="zc-main",
-        runtime="zeroclaw",
-        enabled=False,
-    )
-
-    monkeypatch.setattr(
-        hub_module,
-        "probe_agent_workspace_runtime",
-        lambda _config, _workspace: {
-            "status": "incompatible",
-            "message": "ZeroClaw CLI is incompatible",
-        },
-    )
-
-    with pytest.raises(ValueError, match="ZeroClaw CLI is incompatible"):
-        supervisor.update_agent_workspace("zc-main", enabled=True)
-
-
-def test_hub_api_lists_agent_workspaces_as_typed_resources(tmp_path: Path):
-    hub_root = tmp_path / "hub"
-    supervisor = _make_basic_supervisor(hub_root)
-    supervisor.create_agent_workspace(
-        workspace_id="zc-main",
-        runtime="zeroclaw",
-        display_name="ZeroClaw Main",
-        enabled=False,
-    )
-
-    client = TestClient(create_hub_app(hub_root))
-    response = client.get("/hub/repos")
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["repos"] == []
-    workspace = payload["agent_workspaces"][0]
-    assert workspace["id"] == "zc-main"
-    assert workspace["runtime"] == "zeroclaw"
-    assert workspace["path"] == ".codex-autorunner/runtimes/zeroclaw/zc-main"
-    assert workspace["resource_kind"] == "agent_workspace"
-    assert workspace["effective_destination"] == {"kind": "local"}
-
-
-def test_hub_repos_sections_use_fresh_agent_workspace_listing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    hub_root = tmp_path / "hub"
-    _write_default_hub_config(hub_root)
-
-    class _Workspace:
-        id = "fresh-ws"
-        runtime = "codex"
-        path = Path(".codex-autorunner/agent-workspaces/fresh-ws")
-        display_name = None
-        enabled = True
-        exists_on_disk = True
-
-        def to_dict(self, _root: Path) -> dict[str, str]:
-            return {"id": "fresh-ws", "resource_kind": "agent_workspace"}
-
-    monkeypatch.setattr(
-        HubSupervisor,
-        "list_agent_workspaces",
-        lambda self, *, use_cache=True: [_Workspace()],
-    )
-
-    client = TestClient(create_hub_app(hub_root))
-    response = client.get("/hub/repos?sections=repos,agent_workspaces")
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["repos"] == []
-    assert payload["agent_workspaces"] == [
-        {"id": "fresh-ws", "resource_kind": "agent_workspace"}
-    ]
-
-
-def test_hub_agent_workspace_crud_routes_support_remove_and_delete(
-    tmp_path: Path,
-) -> None:
-    hub_root = tmp_path / "hub"
-    _write_default_hub_config(hub_root)
-
-    client = TestClient(create_hub_app(hub_root))
-
-    create_resp = client.post(
-        "/hub/agent-workspaces",
-        json={
-            "id": "zc-main",
-            "runtime": "zeroclaw",
-            "display_name": "ZeroClaw Main",
-            "enabled": False,
-        },
-    )
-    assert create_resp.status_code == 200
-    created = create_resp.json()
-    assert set(created) == {
-        "id",
-        "runtime",
-        "path",
-        "display_name",
-        "enabled",
-        "exists_on_disk",
-        "effective_destination",
-        "resource_kind",
-    }
-    assert created["id"] == "zc-main"
-    assert created["runtime"] == "zeroclaw"
-    assert created["display_name"] == "ZeroClaw Main"
-    workspace_path = (
-        hub_root / ".codex-autorunner" / "runtimes" / "zeroclaw" / "zc-main"
-    )
-    assert workspace_path.exists()
-
-    list_resp = client.get("/hub/agent-workspaces")
-    assert list_resp.status_code == 200
-    list_payload = list_resp.json()
-    assert set(list_payload["agent_workspaces"][0]) == {
-        "id",
-        "runtime",
-        "path",
-        "display_name",
-        "enabled",
-        "exists_on_disk",
-        "effective_destination",
-        "resource_kind",
-    }
-    assert [item["id"] for item in list_payload["agent_workspaces"]] == ["zc-main"]
-
-    detail_resp = client.get("/hub/agent-workspaces/zc-main")
-    assert detail_resp.status_code == 200
-    detail_payload = detail_resp.json()
-    assert set(detail_payload) == {
-        "id",
-        "runtime",
-        "path",
-        "display_name",
-        "enabled",
-        "exists_on_disk",
-        "effective_destination",
-        "resource_kind",
-        "configured_destination",
-        "source",
-        "issues",
-    }
-    assert detail_payload["configured_destination"] is None
-    assert detail_payload["source"] == "default"
-    assert detail_payload["path"] == ".codex-autorunner/runtimes/zeroclaw/zc-main"
-
-    update_resp = client.patch(
-        "/hub/agent-workspaces/zc-main",
-        json={"enabled": False},
-    )
-    assert update_resp.status_code == 200
-    assert update_resp.json()["enabled"] is False
-
-    destination_resp = client.post(
-        "/hub/agent-workspaces/zc-main/destination",
-        json={"kind": "docker", "image": "ghcr.io/acme/zeroclaw:latest"},
-    )
-    assert destination_resp.status_code == 200
-    destination_payload = destination_resp.json()
-    assert destination_payload["effective_destination"] == {
-        "kind": "docker",
-        "image": "ghcr.io/acme/zeroclaw:latest",
-    }
-    assert destination_payload["source"] == "configured"
-
-    remove_resp = client.post("/hub/agent-workspaces/zc-main/remove", json={})
-    assert remove_resp.status_code == 200
-    assert remove_resp.json() == {
-        "status": "ok",
-        "workspace_id": "zc-main",
-        "delete_dir": False,
-    }
-    assert workspace_path.exists()
-    assert client.get("/hub/agent-workspaces/zc-main").status_code == 404
-
-    recreate_resp = client.post(
-        "/hub/agent-workspaces",
-        json={"id": "zc-main", "runtime": "zeroclaw", "enabled": False},
-    )
-    assert recreate_resp.status_code == 200
-
-
-def test_hub_agent_workspace_destination_route_accepts_mounts(tmp_path: Path) -> None:
-    hub_root = tmp_path / "hub"
-    _write_default_hub_config(hub_root)
-
-    client = TestClient(create_hub_app(hub_root))
-    create_resp = client.post(
-        "/hub/agent-workspaces",
-        json={"id": "zc-main", "runtime": "zeroclaw"},
-    )
-    assert create_resp.status_code == 200
-    workspace_path = (
-        hub_root / ".codex-autorunner" / "runtimes" / "zeroclaw" / "zc-main"
-    )
-
-    destination_resp = client.post(
-        "/hub/agent-workspaces/zc-main/destination",
-        json={
-            "kind": "docker",
-            "image": "ghcr.io/acme/zeroclaw:latest",
-            "mounts": [
-                {"source": "/tmp/src", "target": "/workspace/src"},
-                {
-                    "source": "/tmp/cache",
-                    "target": "/workspace/cache",
-                    "readOnly": True,
-                },
-            ],
-        },
-    )
-
-    assert destination_resp.status_code == 200
-    destination_payload = destination_resp.json()
-    assert destination_payload["configured_destination"] == {
-        "kind": "docker",
-        "image": "ghcr.io/acme/zeroclaw:latest",
-        "mounts": [
-            {"source": "/tmp/src", "target": "/workspace/src"},
-            {
-                "source": "/tmp/cache",
-                "target": "/workspace/cache",
-                "read_only": True,
-            },
-        ],
-    }
-    assert destination_payload["effective_destination"] == {
-        "kind": "docker",
-        "image": "ghcr.io/acme/zeroclaw:latest",
-        "mounts": [
-            {"source": "/tmp/src", "target": "/workspace/src"},
-            {
-                "source": "/tmp/cache",
-                "target": "/workspace/cache",
-                "read_only": True,
-            },
-        ],
-    }
-
-    delete_resp = client.post("/hub/agent-workspaces/zc-main/delete", json={})
-    assert delete_resp.status_code == 200
-    assert delete_resp.json() == {
-        "status": "ok",
-        "workspace_id": "zc-main",
-        "delete_dir": True,
-    }
-    assert not workspace_path.exists()
-
-
-def test_hub_agent_workspace_create_route_rejects_unknown_keys(
-    tmp_path: Path,
-) -> None:
-    hub_root = tmp_path / "hub"
-    _write_default_hub_config(hub_root)
-
-    client = TestClient(create_hub_app(hub_root))
-    response = client.post(
-        "/hub/agent-workspaces",
-        json={
-            "id": "zc-main",
-            "runtime": "zeroclaw",
-            "display_name": "ZeroClaw Main",
-            "unexpected": "value",
-        },
-    )
-
-    assert response.status_code == 422
-    detail = response.json()["detail"]
-    assert any(item["loc"][-1] == "unexpected" for item in detail)
-
-
-def test_hub_agent_workspace_update_route_rejects_unknown_keys(
-    tmp_path: Path,
-) -> None:
-    hub_root = tmp_path / "hub"
-    _write_default_hub_config(hub_root)
-
-    client = TestClient(create_hub_app(hub_root))
-    create_resp = client.post(
-        "/hub/agent-workspaces",
-        json={"id": "zc-main", "runtime": "zeroclaw"},
-    )
-    assert create_resp.status_code == 200
-
-    response = client.patch(
-        "/hub/agent-workspaces/zc-main",
-        json={"enabled": False, "unexpected": "value"},
-    )
-
-    assert response.status_code == 422
-    detail = response.json()["detail"]
-    assert any(item["loc"][-1] == "unexpected" for item in detail)
-
-
-def test_hub_agent_workspace_job_routes_submit_expected_kinds(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    hub_root = tmp_path / "hub"
-    _write_default_hub_config(hub_root)
-
-    app = create_hub_app(hub_root)
-    submissions: list[dict[str, object]] = []
-
-    async def _fake_submit(kind: str, func, *, request_id: Optional[str] = None):
-        result = await func()
-        submissions.append({"kind": kind, "request_id": request_id, "result": result})
-
-        class _Job:
-            def to_dict(self) -> dict[str, object]:
-                return {
-                    "job_id": f"job-{len(submissions)}",
-                    "kind": kind,
-                    "status": "succeeded",
-                    "created_at": "2026-03-08T00:00:00Z",
-                    "started_at": "2026-03-08T00:00:00Z",
-                    "finished_at": "2026-03-08T00:00:01Z",
-                    "result": result if isinstance(result, dict) else None,
-                    "error": None,
-                }
-
-        return _Job()
-
-    monkeypatch.setattr(app.state.job_manager, "submit", _fake_submit)
-
-    client = TestClient(app)
-
-    create_resp = client.post(
-        "/hub/jobs/agent-workspaces",
-        json={"id": "zc-main", "runtime": "zeroclaw", "enabled": False},
-    )
-    assert create_resp.status_code == 200
-    assert create_resp.json()["kind"] == "hub.create_agent_workspace"
-    workspace_path = (
-        hub_root / ".codex-autorunner" / "runtimes" / "zeroclaw" / "zc-main"
-    )
-    assert workspace_path.exists()
-
-    remove_resp = client.post("/hub/jobs/agent-workspaces/zc-main/remove", json={})
-    assert remove_resp.status_code == 200
-    assert remove_resp.json()["kind"] == "hub.remove_agent_workspace"
-    assert workspace_path.exists()
-
-    recreate_resp = client.post(
-        "/hub/jobs/agent-workspaces",
-        json={"id": "zc-main", "runtime": "zeroclaw", "enabled": False},
-    )
-    assert recreate_resp.status_code == 200
-    assert recreate_resp.json()["kind"] == "hub.create_agent_workspace"
-
-    delete_resp = client.post("/hub/jobs/agent-workspaces/zc-main/delete", json={})
-    assert delete_resp.status_code == 200
-    assert delete_resp.json()["kind"] == "hub.delete_agent_workspace"
-    assert not workspace_path.exists()
-
-    assert [item["kind"] for item in submissions] == [
-        "hub.create_agent_workspace",
-        "hub.remove_agent_workspace",
-        "hub.create_agent_workspace",
-        "hub.delete_agent_workspace",
-    ]
-
-
-@pytest.mark.slow
-@pytest.mark.docker_managed_cleanup
 def test_hub_api_exposes_effective_destination_inherited_from_base(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = _default_hub_config()
@@ -995,7 +464,7 @@ def test_hub_api_marks_chat_bound_worktrees(tmp_path: Path):
         branch="feature/chat-bound",
         start_point="HEAD",
     )
-    store = PmaThreadStore(hub_root)
+    store = ManagedThreadStore(hub_root)
     store.create_thread("codex", worktree.path, repo_id=worktree.id)
 
     app = create_hub_app(hub_root)
@@ -1042,11 +511,11 @@ def test_hub_api_marks_chat_bound_worktrees_without_thread_list_cap(
         assert status == "active"
         return {worktree.id: 1, "noise-repo": 9001}
 
-    monkeypatch.setattr(PmaThreadStore, "list_threads", _fail_list_threads)
+    monkeypatch.setattr(ManagedThreadStore, "list_threads", _fail_list_threads)
     monkeypatch.setattr(
-        PmaThreadStore, "count_threads_by_repo", _fake_count_threads_by_repo
+        ManagedThreadStore, "count_threads_by_repo", _fake_count_threads_by_repo
     )
-    PmaThreadStore(hub_root)
+    ManagedThreadStore(hub_root)
 
     app = create_hub_app(hub_root)
     client = TestClient(app)
@@ -1091,7 +560,7 @@ def test_hub_archive_state_endpoint_archives_and_resets_runtime_state(tmp_path: 
     dispatch_dir = worktree_car / "runs" / "run-1" / "dispatch"
     dispatch_dir.mkdir(parents=True, exist_ok=True)
     (dispatch_dir / "DISPATCH.md").write_text("dispatch", encoding="utf-8")
-    store = PmaThreadStore(hub_root)
+    store = ManagedThreadStore(hub_root)
     created = store.create_thread("codex", worktree.path, repo_id=worktree.id)
 
     app = create_hub_app(hub_root)
@@ -1168,7 +637,7 @@ def test_hub_archive_repo_state_endpoint_archives_and_resets_base_repo_runtime_s
         base_car / "state.sqlite3",
         RunnerState(1, "idle", None, None, None),
     )
-    store = PmaThreadStore(hub_root)
+    store = ManagedThreadStore(hub_root)
     created = store.create_thread("codex", base.path, repo_id=base.id)
     bound = store.create_thread(
         "codex",
@@ -1347,7 +816,7 @@ def test_hub_archive_repo_state_endpoint_archives_threads_when_state_is_clean(
     )
     supervisor.archive_repo_state(repo_id=base.id)
 
-    store = PmaThreadStore(hub_root)
+    store = ManagedThreadStore(hub_root)
     created = store.create_thread("codex", base.path, repo_id=base.id, name="scratch")
     bound = store.create_thread(
         "codex",
@@ -1441,7 +910,7 @@ def test_hub_api_cleanup_repo_threads_archives_only_unbound_threads(
     _init_git_repo(base.path)
     _init_git_repo(other.path)
 
-    store = PmaThreadStore(hub_root)
+    store = ManagedThreadStore(hub_root)
     unbound = store.create_thread("codex", base.path, repo_id=base.id, name="scratch")
     bound = store.create_thread(
         "codex",
@@ -1498,7 +967,7 @@ def test_hub_repo_listing_includes_unbound_managed_thread_count(tmp_path: Path):
         branch="feature/unbound-count",
         start_point="HEAD",
     )
-    store = PmaThreadStore(hub_root)
+    store = ManagedThreadStore(hub_root)
     store.create_thread("codex", base.path, repo_id=base.id, name="scratch")
 
     app = create_hub_app(hub_root)
@@ -1534,7 +1003,7 @@ def test_hub_api_cleanup_all_repo_threads_archives_unbound_threads_and_reports_d
 
     (base_two.path / "DIRTY.txt").write_text("dirty\n", encoding="utf-8")
 
-    store = PmaThreadStore(hub_root)
+    store = ManagedThreadStore(hub_root)
     base_one_unbound = store.create_thread(
         "codex", base_one.path, repo_id=base_one.id, name="scratch-one"
     )
@@ -1607,7 +1076,7 @@ def test_hub_supervisor_cleanup_all_dry_run_does_not_archive_threads(
     )
     base = supervisor.create_repo("base")
     _init_git_repo(base.path)
-    store = PmaThreadStore(hub_root)
+    store = ManagedThreadStore(hub_root)
     thread = store.create_thread(
         "codex", base.path, repo_id=base.id, name="scratch-preview"
     )
@@ -1932,9 +1401,14 @@ def test_hub_home_served_and_repo_mounted(tmp_path: Path):
 
     app = create_hub_app(hub_root)
     client = TestClient(app)
-    resp = client.get("/")
-    assert resp.status_code == 200
-    assert b'id="hub-shell"' in resp.content
+    resp = client.get("/", follow_redirects=False)
+    assert resp.status_code == 307
+    assert resp.headers["location"] == "/chats"
+    pma_resp = client.get("/chats")
+    assert pma_resp.status_code == 200
+    assert b"<title>Web Hub</title>" in pma_resp.content
+    legacy_resp = client.get("/legacy")
+    assert legacy_resp.status_code == 404
 
     # Hub repo lifespans start in a background task; scan mounts repos and starts
     # lifespans so the repo runtime creates state without racing GET / alone.
@@ -2987,7 +2461,7 @@ def test_cleanup_worktree_allows_pma_only_bound_without_force(tmp_path: Path):
         branch="feature/chat-guard",
         start_point="HEAD",
     )
-    store = PmaThreadStore(hub_root)
+    store = ManagedThreadStore(hub_root)
     created = store.create_thread("codex", worktree.path, repo_id=worktree.id)
 
     supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=True)
@@ -2997,7 +2471,7 @@ def test_cleanup_worktree_allows_pma_only_bound_without_force(tmp_path: Path):
     assert thread["lifecycle_status"] == "archived"
 
 
-def test_cleanup_worktree_failure_keeps_bound_pma_threads_active(
+def test_cleanup_worktree_failure_keeps_bound_managed_threads_active(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     hub_root = tmp_path / "hub"
@@ -3016,7 +2490,7 @@ def test_cleanup_worktree_failure_keeps_bound_pma_threads_active(
         branch="feature/chat-guard-failure",
         start_point="HEAD",
     )
-    store = PmaThreadStore(hub_root)
+    store = ManagedThreadStore(hub_root)
     created = store.create_thread("codex", worktree.path, repo_id=worktree.id)
     original_run_git = wtm_module.run_git
 
@@ -3164,7 +2638,7 @@ def test_cleanup_worktree_refreshes_topology_listing(tmp_path: Path) -> None:
     assert refreshed_ids == [base.id]
 
 
-def test_cleanup_worktree_archives_pma_threads_before_manifest_removal(
+def test_cleanup_worktree_archives_managed_threads_before_manifest_removal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     hub_root = tmp_path / "hub"
@@ -3200,7 +2674,7 @@ def test_cleanup_worktree_archives_pma_threads_before_manifest_removal(
 
     monkeypatch.setattr(
         supervisor._worktree_manager,
-        "_archive_bound_pma_threads",
+        "_archive_bound_managed_threads",
         _record_manifest_state,
     )
 
@@ -3212,7 +2686,7 @@ def test_cleanup_worktree_archives_pma_threads_before_manifest_removal(
     assert not worktree.path.exists()
 
 
-def test_archive_worktree_archives_bound_pma_threads(tmp_path: Path):
+def test_archive_worktree_archives_bound_managed_threads(tmp_path: Path):
     hub_root = tmp_path / "hub"
     _write_default_hub_config(hub_root)
 
@@ -3229,7 +2703,7 @@ def test_archive_worktree_archives_bound_pma_threads(tmp_path: Path):
         branch="feature/archive-pma-threads",
         start_point="HEAD",
     )
-    store = PmaThreadStore(hub_root)
+    store = ManagedThreadStore(hub_root)
     repo_bound = store.create_thread("codex", worktree.path, repo_id=worktree.id)
     workspace_bound = store.create_thread("opencode", worktree.path)
     other = store.create_thread("codex", base.path, repo_id=base.id)
@@ -3265,7 +2739,7 @@ def test_cleanup_worktree_allows_mixed_chat_bound_with_force(tmp_path: Path):
         branch="feature/chat-guard-force",
         start_point="HEAD",
     )
-    store = PmaThreadStore(hub_root)
+    store = ManagedThreadStore(hub_root)
     store.create_thread("codex", worktree.path, repo_id=worktree.id)
     _write_discord_binding(
         hub_root, channel_id="discord-chan-force", repo_id=worktree.id
@@ -3301,7 +2775,7 @@ def test_cleanup_worktree_rejects_mixed_chat_bound_without_force(tmp_path: Path)
         branch="feature/chat-guard-mixed",
         start_point="HEAD",
     )
-    store = PmaThreadStore(hub_root)
+    store = ManagedThreadStore(hub_root)
     store.create_thread("codex", worktree.path, repo_id=worktree.id)
     _write_discord_binding(
         hub_root, channel_id="discord-chan-mixed", repo_id=worktree.id
@@ -3597,47 +3071,6 @@ def test_create_repo_returns_authoritative_snapshot_after_refresh(
     assert supervisor.state.repos[0].display_name == "authoritative-demo"
 
 
-def test_update_agent_workspace_returns_authoritative_snapshot_after_refresh(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    hub_root = tmp_path / "hub"
-    _write_default_hub_config(hub_root)
-    supervisor = _make_supervisor(hub_root)
-    supervisor.create_agent_workspace(
-        workspace_id="zc-main",
-        runtime="zeroclaw",
-        display_name="ZeroClaw Main",
-        enabled=False,
-    )
-
-    original_list_repos = supervisor.list_repos
-
-    def _wrapped(*, use_cache: bool = True):  # type: ignore[no-untyped-def]
-        snapshots = original_list_repos(use_cache=use_cache)
-        authoritative = dataclasses.replace(
-            supervisor.state.agent_workspaces[0],
-            display_name="Authoritative Workspace",
-        )
-        supervisor.state = dataclasses.replace(
-            supervisor.state,
-            repos=list(snapshots),
-            agent_workspaces=[authoritative],
-        )
-        return snapshots
-
-    monkeypatch.setattr(supervisor, "list_repos", _wrapped)
-
-    snapshot = supervisor.update_agent_workspace(
-        "zc-main",
-        display_name="Renamed Workspace",
-    )
-
-    assert snapshot.display_name == "Authoritative Workspace"
-    assert (
-        supervisor.state.agent_workspaces[0].display_name == "Authoritative Workspace"
-    )
-
-
 def test_stop_repo_delegates_to_orchestrator(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     _write_default_hub_config(hub_root)
@@ -3696,70 +3129,6 @@ def test_kill_repo_delegates_to_orchestrator(tmp_path: Path) -> None:
     snap = supervisor.kill_repo("demo")
     assert killed == ["demo"]
     assert snap.id == "demo"
-
-
-def test_create_agent_workspace_rejects_empty_workspace_id(tmp_path: Path) -> None:
-    hub_root = tmp_path / "hub"
-    supervisor = _make_basic_supervisor(hub_root)
-    with pytest.raises(ValueError, match="workspace_id is required"):
-        supervisor.create_agent_workspace(workspace_id="  ", runtime="zeroclaw")
-
-
-def test_create_agent_workspace_rejects_empty_runtime(tmp_path: Path) -> None:
-    hub_root = tmp_path / "hub"
-    supervisor = _make_basic_supervisor(hub_root)
-    with pytest.raises(ValueError, match="runtime is required"):
-        supervisor.create_agent_workspace(workspace_id="zc-main", runtime="")
-
-
-def test_create_agent_workspace_rejects_duplicate_with_different_runtime(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    hub_root = tmp_path / "hub"
-    supervisor = _make_basic_supervisor(hub_root)
-    monkeypatch.setattr(
-        hub_module,
-        "known_agent_workspace_runtime_ids",
-        lambda: ("zeroclaw", "otherclaw"),
-    )
-    supervisor.create_agent_workspace(
-        workspace_id="zc-main", runtime="zeroclaw", enabled=False
-    )
-    with pytest.raises(ValueError, match="already exists"):
-        supervisor.create_agent_workspace(
-            workspace_id="zc-main", runtime="otherclaw", enabled=False
-        )
-
-
-def test_remove_agent_workspace_rejects_missing(tmp_path: Path) -> None:
-    hub_root = tmp_path / "hub"
-    supervisor = _make_basic_supervisor(hub_root)
-    with pytest.raises(ValueError, match="not found"):
-        supervisor.remove_agent_workspace("nope")
-
-
-def test_update_agent_workspace_rejects_missing(tmp_path: Path) -> None:
-    hub_root = tmp_path / "hub"
-    supervisor = _make_basic_supervisor(hub_root)
-    with pytest.raises(ValueError, match="not found"):
-        supervisor.update_agent_workspace("nope", enabled=True)
-
-
-def test_update_agent_workspace_rejects_empty_display_name(tmp_path: Path) -> None:
-    hub_root = tmp_path / "hub"
-    supervisor = _make_basic_supervisor(hub_root)
-    supervisor.create_agent_workspace(
-        workspace_id="zc-main", runtime="zeroclaw", enabled=False
-    )
-    with pytest.raises(ValueError, match="display_name must be non-empty"):
-        supervisor.update_agent_workspace("zc-main", display_name="   ")
-
-
-def test_set_agent_workspace_destination_rejects_missing(tmp_path: Path) -> None:
-    hub_root = tmp_path / "hub"
-    supervisor = _make_basic_supervisor(hub_root)
-    with pytest.raises(ValueError, match="not found"):
-        supervisor.set_agent_workspace_destination("nope", {"kind": "local"})
 
 
 def test_set_parent_repo_pinned_rejects_missing_repo(tmp_path: Path) -> None:
@@ -4094,6 +3463,7 @@ def test_drain_pma_automation_wakeups_processes_pending(
             "list_pending_wakeups",
             lambda limit=100, **_kwargs: wakeups,
         )
+        monkeypatch.setattr(store, "mark_wakeup_queued", lambda wid: True)
         monkeypatch.setattr(store, "mark_wakeup_dispatched", lambda wid: True)
         drained = supervisor.drain_pma_automation_wakeups()
         assert drained == 1
@@ -4486,19 +3856,6 @@ def test_repo_snapshot_to_dict_handles_non_relative_path() -> None:
     assert d["path"] == str(Path("/absolute/outside/path"))
 
 
-def test_agent_workspace_snapshot_to_dict_handles_non_relative_path() -> None:
-    snap = hub_module.AgentWorkspaceSnapshot(
-        id="ws1",
-        runtime="zeroclaw",
-        path=Path("/absolute/outside/ws"),
-        display_name="ws",
-        enabled=True,
-        exists_on_disk=False,
-    )
-    d = snap.to_dict(Path("/hub"))
-    assert d["path"] == str(Path("/absolute/outside/ws"))
-
-
 def test_load_hub_state_handles_malformed_repo_entry(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     hub_root.mkdir(parents=True, exist_ok=True)
@@ -4509,7 +3866,6 @@ def test_load_hub_state_handles_malformed_repo_entry(tmp_path: Path) -> None:
             {
                 "last_scan_at": "2025-01-01T00:00:00Z",
                 "repos": [{"id": "good"}, {"bad_key": "no_id"}],
-                "agent_workspaces": [{"id": "good_ws"}, {"bad_key": "no_id"}],
             }
         ),
         encoding="utf-8",
@@ -4517,8 +3873,6 @@ def test_load_hub_state_handles_malformed_repo_entry(tmp_path: Path) -> None:
     state = hub_module.load_hub_state(state_path, hub_root)
     assert len(state.repos) >= 1
     assert state.repos[0].id == "good"
-    assert len(state.agent_workspaces) >= 1
-    assert state.agent_workspaces[0].id == "good_ws"
 
 
 def test_normalize_pinned_parent_repo_ids_filters() -> None:
@@ -4565,13 +3919,6 @@ def test_git_failure_detail() -> None:
         stdout = None
 
     assert git_failure_detail(_Proc3()) == "exit 3"
-
-
-def test_get_agent_workspace_runtime_readiness_rejects_missing(tmp_path: Path) -> None:
-    hub_root = tmp_path / "hub"
-    supervisor = _make_basic_supervisor(hub_root)
-    with pytest.raises(ValueError, match="not found"):
-        supervisor.get_agent_workspace_runtime_readiness("nope")
 
 
 def test_derive_repo_status_covers_all_branches() -> None:

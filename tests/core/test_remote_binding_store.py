@@ -126,8 +126,8 @@ def test_remote_surface_binding_store_lists_bindings_from_hub_authoritatively() 
                 surface_key="chat:1",
                 thread_target_id="thread-hub",
                 repo_id="repo-2",
-                resource_kind="agent_workspace",
-                resource_id="wksp-1",
+                resource_kind="repo",
+                resource_id="repo-2",
                 agent_id="opencode",
             )
         ]
@@ -140,16 +140,16 @@ def test_remote_surface_binding_store_lists_bindings_from_hub_authoritatively() 
             surface_key="chat:1",
             thread_target_id="thread-cache",
             repo_id="repo-2",
-            resource_kind="agent_workspace",
-            resource_id="wksp-1",
+            resource_kind="repo",
+            resource_id="repo-2",
             agent_id="opencode",
         )
     )
 
     listed = store.list_bindings(
         repo_id="repo-2",
-        resource_kind="agent_workspace",
-        resource_id="wksp-1",
+        resource_kind="repo",
+        resource_id="repo-2",
         agent_id="opencode",
         surface_kind="telegram",
         limit=5,
@@ -159,8 +159,8 @@ def test_remote_surface_binding_store_lists_bindings_from_hub_authoritatively() 
     assert client.calls[0].to_dict() == {
         "thread_target_id": None,
         "repo_id": "repo-2",
-        "resource_kind": "agent_workspace",
-        "resource_id": "wksp-1",
+        "resource_kind": "repo",
+        "resource_id": "repo-2",
         "agent_id": "opencode",
         "surface_kind": "telegram",
         "include_disabled": False,

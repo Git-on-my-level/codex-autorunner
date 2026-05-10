@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from codex_autorunner.integrations.github.service import GitHubService, RepoInfo
+from codex_autorunner.adapters.github.service import GitHubService, RepoInfo
 
 
 def _configure_service(monkeypatch: pytest.MonkeyPatch, service: GitHubService) -> None:

@@ -47,8 +47,9 @@ The codebase is organized into four layers, from most stable (left) to most vola
 - Tolerate retries, restarts, partial failures
 
 **Module prefixes:**
-- `codex_autorunner.integrations*` - External integrations (Telegram, Discord, GitHub, Docker, Chat, App Server, templates). See `10_CODEBASE_CONSTITUTION.md` for the canonical list.
-- `codex_autorunner.agents*` - Agent implementations (codex, opencode, hermes, zeroclaw). See `10_CODEBASE_CONSTITUTION.md` for the canonical list.
+- `codex_autorunner.adapters*` - External adapters (Telegram, Discord, GitHub, Docker, Chat, App Server, templates). See `10_CODEBASE_CONSTITUTION.md` for the canonical list.
+- `codex_autorunner.agents*` - Agent implementations (codex, opencode, hermes, acp). See `10_CODEBASE_CONSTITUTION.md` for the canonical list.
+- `codex_autorunner.flows*` - Flow composition roots that wire agent/adapter implementations to control-plane flow APIs while leaving the protocol-agnostic engine in `codex_autorunner.core.flows*`.
 
 **Non-responsibilities:**
 - Avoid owning business logic; keep logic in engine/control plane
@@ -89,6 +90,8 @@ Surfaces → Adapters → Control Plane → Engine
 
 Ordinary Telegram and Discord chat turns have one lifecycle authority:
 orchestration-managed thread targets in hub `orchestration.sqlite3`.
+See `docs/architecture/unified-chat-ownership.md` for the full cross-surface
+timeline, binding, adapter, and delivery-ledger contract.
 
 - Shared ingress decides whether an inbound message targets a paused flow or a
   managed thread.
@@ -135,7 +138,7 @@ VIOLATION: src/codex_autorunner/core/utils.py
 
 ### Adding a new Adapter
 
-1. Create the module under `src/codex_autorunner/integrations/` or `src/codex_autorunner/agents/`
+1. Create the module under `src/codex_autorunner/adapters/` or `src/codex_autorunner/agents/`
 2. Import from Control Plane or Engine layers as needed
 3. Do NOT import from Surfaces
 4. Run the boundary test to verify

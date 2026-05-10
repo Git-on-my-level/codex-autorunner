@@ -1,0 +1,112 @@
+from __future__ import annotations
+
+import dataclasses
+import logging
+from pathlib import Path
+from typing import Mapping, Optional, Sequence
+
+from ...core.destinations import (
+    Destination,
+    DockerDestination,
+    LocalDestination,
+    default_car_docker_container_name,
+    parse_destination_config,
+)
+from ...core.utils import is_within
+from ..docker.profile_contracts import (
+    expand_profile_paths,
+    resolve_docker_profile_contract,
+)
+from ..docker.runtime import DockerRuntime, build_docker_container_spec
+
+logger = logging.getLogger("codex_autorunner.adapters.agents.destination_wrapping")
+
+
+@dataclasses.dataclass(frozen=True)
+class WrappedCommand:
+    command: list[str]
+    state_root_override: Optional[Path] = None
+
+
+def resolve_destination_from_config(raw_destination: object) -> Destination:
+    parsed = parse_destination_config(raw_destination, context="effective destination")
+    if not parsed.valid:
+        for err in parsed.errors:
+            logger.warning("Invalid effective destination config; using local: %s", err)
+    return parsed.destination
+
+
+def wrap_command_for_destination(
+    *,
+    command: Sequence[str],
+    destination: Destination,
+    repo_root: Path,
+    command_workdir: Optional[Path] = None,
+    extra_env: Optional[Mapping[str, str]] = None,
+    docker_runtime: Optional[DockerRuntime] = None,
+) -> WrappedCommand:
+    if not command:
+        raise ValueError("command must not be empty")
+
+    if isinstance(destination, LocalDestination):
+        return WrappedCommand(command=[str(part) for part in command])
+    if not isinstance(destination, DockerDestination):
+        return WrappedCommand(command=[str(part) for part in command])
+
+    runtime = docker_runtime or DockerRuntime()
+    repo_abs = repo_root.resolve()
+    exec_workdir = (
+        command_workdir.resolve() if isinstance(command_workdir, Path) else repo_abs
+    )
+    container_name = destination.container_name or default_car_docker_container_name(
+        repo_abs
+    )
+
+    spec = build_docker_container_spec(
+        name=container_name,
+        image=destination.image,
+        repo_root=repo_abs,
+        profile=destination.profile,
+        mounts=[mount.to_dict() for mount in destination.mounts],
+        env_passthrough_patterns=destination.env_passthrough,
+        explicit_env=destination.env,
+        workdir=destination.workdir,
+    )
+    runtime.ensure_container_running(spec)
+    profile_contract = resolve_docker_profile_contract(destination.profile)
+    if profile_contract is not None:
+        required_auth_files = expand_profile_paths(
+            profile_contract.required_auth_files,
+            repo_root=repo_abs,
+        )
+        runtime.preflight_container(
+            container_name,
+            required_binaries=profile_contract.required_binaries,
+            required_readable_files=required_auth_files,
+            workdir=str(exec_workdir),
+        )
+    merged_env = dict(spec.env)
+    for key, value in (extra_env or {}).items():
+        normalized_key = str(key or "").strip()
+        if not normalized_key or value is None:
+            continue
+        merged_env[normalized_key] = str(value)
+    wrapped = runtime.build_exec_command(
+        container_name,
+        command,
+        workdir=str(exec_workdir),
+        env=merged_env,
+    )
+
+    # Docker destination runs inside repo mount, so keep supervisor state under repo state root.
+    state_root = repo_abs / ".codex-autorunner" / "app_server_workspaces"
+    if not is_within(root=repo_abs, target=state_root):
+        state_root = repo_abs / ".codex-autorunner" / "app_server_workspaces"
+    return WrappedCommand(command=wrapped, state_root_override=state_root)
+
+
+__all__ = [
+    "WrappedCommand",
+    "resolve_destination_from_config",
+    "wrap_command_for_destination",
+]

@@ -15,11 +15,12 @@ from codex_autorunner.core.hub_control_plane import (
     RemoteThreadExecutionStore,
     ThreadTargetResponse,
 )
+from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration import (
     HarnessBackedOrchestrationService,
+    ManagedThreadExecutionStore,
     MappingAgentDefinitionCatalog,
     MessageRequest,
-    PmaThreadExecutionStore,
 )
 from codex_autorunner.core.orchestration import (
     runtime_threads as runtime_threads_module,
@@ -32,7 +33,6 @@ from codex_autorunner.core.orchestration.runtime_threads import (
     begin_runtime_thread_execution,
     stream_runtime_thread_events,
 )
-from codex_autorunner.core.pma_thread_store import PmaThreadStore
 
 
 @dataclass
@@ -305,13 +305,13 @@ def _build_service(
     descriptors = {agent_id: _make_descriptor(agent_id, name=name)}
     return HarnessBackedOrchestrationService(
         definition_catalog=MappingAgentDefinitionCatalog(descriptors),
-        thread_store=PmaThreadExecutionStore(PmaThreadStore(tmp_path / "hub")),
+        thread_store=ManagedThreadExecutionStore(ManagedThreadStore(tmp_path / "hub")),
         harness_factory=lambda resolved_agent_id: harness,
     )
 
 
 class _SerializedHubClient:
-    def __init__(self, store: PmaThreadExecutionStore) -> None:
+    def __init__(self, store: ManagedThreadExecutionStore) -> None:
         self._store = store
 
     @staticmethod
@@ -465,7 +465,7 @@ async def test_runtime_threads_begin_and_wait_via_serialized_remote_store(
     harness = _HarnessWithWait()
     workspace_root = tmp_path / "workspace"
     workspace_root.mkdir()
-    local_store = PmaThreadExecutionStore(PmaThreadStore(tmp_path / "hub"))
+    local_store = ManagedThreadExecutionStore(ManagedThreadStore(tmp_path / "hub"))
     remote_store = RemoteThreadExecutionStore(_SerializedHubClient(local_store))
     descriptors = {"codex": _make_descriptor("codex")}
     service = HarnessBackedOrchestrationService(

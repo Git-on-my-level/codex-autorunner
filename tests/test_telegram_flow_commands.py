@@ -1,10 +1,10 @@
+from codex_autorunner.adapters.telegram.handlers.commands.flows import (
+    _split_flow_action,
+)
 from codex_autorunner.core.flows import (
     FLOW_ACTION_TOKENS,
     FLOW_ACTIONS_WITH_RUN_PICKER,
     normalize_flow_action,
-)
-from codex_autorunner.integrations.telegram.handlers.commands.flows import (
-    _split_flow_action,
 )
 
 

@@ -8,52 +8,38 @@ Canonical reference for hub manifests at:
 Top-level collections:
 
 - `repos[]`
-- `agent_workspaces[]`
 
 ## Hub Resource Model
 
-Manifest version `3` is a typed hub resource catalog, not a repo-only list.
+Manifest version `3` catalogs Git-backed repos and worktrees registered with the hub.
 
-- `repos[]` model Git-backed code/worktree resources.
-- `agent_workspaces[]` model CAR-managed durable runtime state that is not a
-  repo.
+- `repos[]` entries describe base repos and optional worktrees (`kind: base|worktree`),
+  including optional `destination` execution configuration.
 
-Use an `agent_workspace` when the durable thing CAR manages is runtime memory,
-instructions, and session state rather than project code. CAR chat surfaces bind
-to a durable CAR thread under that resource; they do not bind directly to shared
-workspace memory.
+CAR binds PMA and chat surfaces to durable thread targets scoped to those repos,
+explicit filesystem paths, or hub scope as modeled in orchestration—not via a
+parallel manifest resource collection.
 
-## Agent Workspace Shape
+## Repo Shape
 
-`agent_workspaces[]` entries are first-class hub resources with:
+`repos[]` entries include:
 
 - `id`: required string identifier
-- `runtime`: required string runtime id
-- `path`: required managed relative path
+- `path`: required repo-relative path
 - `enabled`: optional boolean, defaults to `true`
-- `display_name`: optional string
+- `kind`: `base` or `worktree`
+- `worktree_of`, `branch`, `display_name`, `worktree_setup_commands`: optional
 - `destination`: optional destination object
 
-Notes:
-
-- Agent workspaces are explicitly created hub resources; CAR does not lazily
-  invent them from first message ingress.
-- `runtime` identifies a configured runtime/binary CAR knows how to detect and
-  launch. The manifest does not install that runtime for you.
-
-In v1, `path` must point at the CAR-managed runtime root:
-
-- `.codex-autorunner/runtimes/<runtime>/<workspace_id>`
-
-CAR creates and removes managed agent workspaces under that root instead of
-accepting arbitrary external runtime paths.
+Managed hub runtime directories under `.codex-autorunner/runtimes/` are created by
+launchers for Codex, OpenCode, or Hermes as needed; they are not separate manifest
+rows.
 
 ## Destination Schema
 
 Canonical reference for:
 
 - `repos[].destination`
-- `agent_workspaces[].destination`
 
 ## Destination Shape
 

@@ -1,0 +1,261 @@
+/* IDE- / terminal-style palettes. Keep tokens aligned with :root / [data-theme="dark"] in app.css.
+ *
+ * Terminal themes use very dim greys for “comments”; we still borrow their hues and accents, but
+ * --color-ink-muted / --color-ink-faint are biased brighter so product UI (meta, labels, timestamps)
+ * stays readable on --color-surface / --color-bg, not just monospaced code at 14px.
+ */
+
+[data-theme="solarized-light"] {
+  color-scheme: light;
+  --color-bg: #fdf6e3;
+  --color-surface: #eee8d5;
+  --color-surface-muted: #e8e0cd;
+  --color-surface-sunken: #f4ecda;
+  --color-ink: #586e75;
+  --color-ink-soft: #5f6f76;
+  --color-ink-muted: #5a6a72;
+  --color-ink-faint: #7a878e;
+  --color-border: #d3cbb8;
+  --color-border-strong: #b8b09c;
+  --color-border-subtle: #e9e2d2;
+  --color-accent: #268bd2;
+  --color-accent-hover: #1f74b5;
+  --color-accent-soft: rgb(38 139 210 / 0.14);
+  --color-accent-ring: rgb(38 139 210 / 0.28);
+  --color-success: #859900;
+  --color-success-soft: rgb(133 153 0 / 0.14);
+  --color-warning: #b58900;
+  --color-warning-soft: rgb(181 137 0 / 0.14);
+  --color-danger: #dc322f;
+  --color-danger-soft: rgb(220 50 47 / 0.14);
+  --color-idle: #93a1a1;
+  --shadow-1: 0 1px 2px rgb(88 110 117 / 0.07), 0 1px 1px rgb(88 110 117 / 0.04);
+  --shadow-2: 0 12px 32px -8px rgb(88 110 117 / 0.14), 0 4px 12px -4px rgb(88 110 117 / 0.08);
+  --shadow-focus: 0 0 0 3px var(--color-accent-ring);
+  --color-panel-tint: #f5edd6;
+  --color-scrim: rgb(0 43 54 / 0.28);
+  --color-topbar-fill: color-mix(in srgb, var(--color-bg) 86%, transparent);
+  --glyph-mix-base: #fdf6e3;
+  --scrollbar-thumb: rgb(88 110 117 / 0.22);
+  --scrollbar-thumb-hover: rgb(88 110 117 / 0.38);
+  --scrollbar-track-strong: rgb(88 110 117 / 0.18);
+}
+
+[data-theme="solarized-dark"] {
+  color-scheme: dark;
+  --color-bg: #002b36;
+  --color-surface: #073642;
+  --color-surface-muted: #0d3c4a;
+  --color-surface-sunken: #001f27;
+  /* Brighter than stock base0/base00 so rows and meta labels don’t disappear on #073642 */
+  --color-ink: #b8c8cc;
+  --color-ink-soft: #a8babf;
+  --color-ink-muted: #93abb1;
+  --color-ink-faint: #7d959c;
+  --color-border: #104e5f;
+  --color-border-strong: #1a6578;
+  --color-border-subtle: #06303c;
+  --color-accent: #268bd2;
+  --color-accent-hover: #4a9ade;
+  --color-accent-soft: rgb(38 139 210 / 0.18);
+  --color-accent-ring: rgb(38 139 210 / 0.32);
+  --color-success: #859900;
+  --color-success-soft: rgb(133 153 0 / 0.16);
+  --color-warning: #b58900;
+  --color-warning-soft: rgb(181 137 0 / 0.16);
+  --color-danger: #dc322f;
+  --color-danger-soft: rgb(220 50 47 / 0.16);
+  --color-idle: #7d959c;
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.35), 0 1px 1px rgb(0 0 0 / 0.22);
+  --shadow-2: 0 16px 40px -12px rgb(0 0 0 / 0.5), 0 8px 16px -8px rgb(0 0 0 / 0.38);
+  --shadow-focus: 0 0 0 3px var(--color-accent-ring);
+  --color-panel-tint: #063542;
+  --color-scrim: rgb(0 0 0 / 0.5);
+  --color-topbar-fill: color-mix(in srgb, var(--color-bg) 90%, transparent);
+  --glyph-mix-base: #073642;
+  --scrollbar-thumb: rgb(255 255 255 / 0.12);
+  --scrollbar-thumb-hover: rgb(255 255 255 / 0.22);
+  --scrollbar-track-strong: rgb(255 255 255 / 0.14);
+}
+
+[data-theme="dracula"] {
+  color-scheme: dark;
+  --color-bg: #282a36;
+  --color-surface: #343746;
+  --color-surface-muted: #3d4154;
+  --color-surface-sunken: #21222c;
+  --color-ink: #f8f8f2;
+  --color-ink-soft: #e8e8e2;
+  /* Comment purple (#6272a4) is too dim for UI chrome — keep a hint of blue in faint */
+  --color-ink-muted: #b8bbd0;
+  --color-ink-faint: #9399b8;
+  --color-border: #44475a;
+  --color-border-strong: #6272a4;
+  --color-border-subtle: #343746;
+  --color-accent: #bd93f9;
+  --color-accent-hover: #cba5ff;
+  --color-accent-soft: rgb(189 147 249 / 0.16);
+  --color-accent-ring: rgb(189 147 249 / 0.3);
+  --color-success: #50fa7b;
+  --color-success-soft: rgb(80 250 123 / 0.14);
+  --color-warning: #ffb86c;
+  --color-warning-soft: rgb(255 184 108 / 0.14);
+  --color-danger: #ff5555;
+  --color-danger-soft: rgb(255 85 85 / 0.16);
+  --color-idle: #a0a2b8;
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.4), 0 1px 1px rgb(0 0 0 / 0.28);
+  --shadow-2: 0 16px 40px -12px rgb(0 0 0 / 0.55), 0 8px 16px -8px rgb(0 0 0 / 0.42);
+  --shadow-focus: 0 0 0 3px var(--color-accent-ring);
+  --color-panel-tint: #303241;
+  --color-scrim: rgb(0 0 0 / 0.55);
+  --color-topbar-fill: color-mix(in srgb, var(--color-bg) 90%, transparent);
+  --glyph-mix-base: #343746;
+  --scrollbar-thumb: rgb(255 255 255 / 0.12);
+  --scrollbar-thumb-hover: rgb(255 255 255 / 0.22);
+  --scrollbar-track-strong: rgb(255 255 255 / 0.14);
+}
+
+[data-theme="nord"] {
+  color-scheme: dark;
+  --color-bg: #2e3440;
+  --color-surface: #3b4252;
+  --color-surface-muted: #434c5e;
+  --color-surface-sunken: #242933;
+  --color-ink: #eceff4;
+  --color-ink-soft: #e5e9f0;
+  --color-ink-muted: #bdc8da;
+  /* Polar Night #4c566a is for gutter UI in editors, not 12px labels on cards */
+  --color-ink-faint: #8b95a8;
+  --color-border: #4c566a;
+  --color-border-strong: #616e88;
+  --color-border-subtle: #3b4252;
+  --color-accent: #88c0d0;
+  --color-accent-hover: #9cd0de;
+  --color-accent-soft: rgb(136 192 208 / 0.18);
+  --color-accent-ring: rgb(136 192 208 / 0.32);
+  --color-success: #a3be8c;
+  --color-success-soft: rgb(163 190 140 / 0.16);
+  --color-warning: #ebcb8b;
+  --color-warning-soft: rgb(235 203 139 / 0.16);
+  --color-danger: #bf616a;
+  --color-danger-soft: rgb(191 97 106 / 0.16);
+  --color-idle: #9aa8bc;
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.32), 0 1px 1px rgb(0 0 0 / 0.2);
+  --shadow-2: 0 16px 40px -12px rgb(0 0 0 / 0.48), 0 8px 16px -8px rgb(0 0 0 / 0.36);
+  --shadow-focus: 0 0 0 3px var(--color-accent-ring);
+  --color-panel-tint: #363d4d;
+  --color-scrim: rgb(0 0 0 / 0.52);
+  --color-topbar-fill: color-mix(in srgb, var(--color-bg) 90%, transparent);
+  --glyph-mix-base: #3b4252;
+  --scrollbar-thumb: rgb(236 239 244 / 0.14);
+  --scrollbar-thumb-hover: rgb(236 239 244 / 0.24);
+  --scrollbar-track-strong: rgb(236 239 244 / 0.18);
+}
+
+[data-theme="one-dark"] {
+  color-scheme: dark;
+  --color-bg: #282c34;
+  --color-surface: #21252b;
+  --color-surface-muted: #2c323c;
+  --color-surface-sunken: #1e2227;
+  --color-ink: #c8cdd5;
+  --color-ink-soft: #b8bec9;
+  --color-ink-muted: #9aa3b0;
+  --color-ink-faint: #7e8795;
+  --color-border: #3e4451;
+  --color-border-strong: #535965;
+  --color-border-subtle: #2c313a;
+  --color-accent: #61afef;
+  --color-accent-hover: #7bb7f0;
+  --color-accent-soft: rgb(97 175 239 / 0.16);
+  --color-accent-ring: rgb(97 175 239 / 0.3);
+  --color-success: #98c379;
+  --color-success-soft: rgb(152 195 121 / 0.14);
+  --color-warning: #e5c07b;
+  --color-warning-soft: rgb(229 192 123 / 0.14);
+  --color-danger: #e06c75;
+  --color-danger-soft: rgb(224 108 117 / 0.16);
+  --color-idle: #9299a6;
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.38), 0 1px 1px rgb(0 0 0 / 0.24);
+  --shadow-2: 0 16px 40px -12px rgb(0 0 0 / 0.52), 0 8px 16px -8px rgb(0 0 0 / 0.4);
+  --shadow-focus: 0 0 0 3px var(--color-accent-ring);
+  --color-panel-tint: #2a2f38;
+  --color-scrim: rgb(0 0 0 / 0.54);
+  --color-topbar-fill: color-mix(in srgb, var(--color-bg) 90%, transparent);
+  --glyph-mix-base: #21252b;
+  --scrollbar-thumb: rgb(255 255 255 / 0.1);
+  --scrollbar-thumb-hover: rgb(255 255 255 / 0.2);
+  --scrollbar-track-strong: rgb(255 255 255 / 0.14);
+}
+
+[data-theme="github-light"] {
+  color-scheme: light;
+  --color-bg: #ffffff;
+  --color-surface: #ffffff;
+  --color-surface-muted: #f6f8fa;
+  --color-surface-sunken: #f6f8fa;
+  --color-ink: #1f2328;
+  --color-ink-soft: #24292f;
+  --color-ink-muted: #545c66;
+  --color-ink-faint: #6e7781;
+  --color-border: #d0d7de;
+  --color-border-strong: #afb8c1;
+  --color-border-subtle: #eaeef2;
+  --color-accent: #0969da;
+  --color-accent-hover: #0550ae;
+  --color-accent-soft: rgb(9 105 218 / 0.1);
+  --color-accent-ring: rgb(9 105 218 / 0.22);
+  --color-success: #1a7f37;
+  --color-success-soft: rgb(26 127 55 / 0.1);
+  --color-warning: #9a6700;
+  --color-warning-soft: rgb(154 103 0 / 0.12);
+  --color-danger: #cf222e;
+  --color-danger-soft: rgb(207 34 46 / 0.1);
+  --color-idle: #656d76;
+  --shadow-1: 0 1px 2px rgb(31 35 40 / 0.04), 0 1px 1px rgb(31 35 40 / 0.02);
+  --shadow-2: 0 12px 32px -8px rgb(31 35 40 / 0.12), 0 4px 12px -4px rgb(31 35 40 / 0.06);
+  --shadow-focus: 0 0 0 3px var(--color-accent-ring);
+  --color-panel-tint: #f6f8fa;
+  --color-scrim: rgb(31 35 40 / 0.32);
+  --color-topbar-fill: color-mix(in srgb, var(--color-bg) 86%, transparent);
+  --glyph-mix-base: #ffffff;
+  --scrollbar-thumb: rgb(31 35 40 / 0.16);
+  --scrollbar-thumb-hover: rgb(31 35 40 / 0.28);
+  --scrollbar-track-strong: rgb(31 35 40 / 0.2);
+}
+
+[data-theme="github-dark"] {
+  color-scheme: dark;
+  --color-bg: #0d1117;
+  --color-surface: #161b22;
+  --color-surface-muted: #21262d;
+  --color-surface-sunken: #010409;
+  --color-ink: #e6edf3;
+  --color-ink-soft: #d8dee4;
+  --color-ink-muted: #acb6c0;
+  --color-ink-faint: #8d97a3;
+  --color-border: #30363d;
+  --color-border-strong: #484f58;
+  --color-border-subtle: #21262d;
+  --color-accent: #58a6ff;
+  --color-accent-hover: #79b8ff;
+  --color-accent-soft: rgb(88 166 255 / 0.14);
+  --color-accent-ring: rgb(88 166 255 / 0.28);
+  --color-success: #3fb950;
+  --color-success-soft: rgb(63 185 80 / 0.14);
+  --color-warning: #d29922;
+  --color-warning-soft: rgb(210 153 34 / 0.14);
+  --color-danger: #f85149;
+  --color-danger-soft: rgb(248 81 73 / 0.14);
+  --color-idle: #9aa4ae;
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.38), 0 1px 1px rgb(0 0 0 / 0.24);
+  --shadow-2: 0 16px 40px -12px rgb(0 0 0 / 0.55), 0 8px 16px -8px rgb(0 0 0 / 0.42);
+  --shadow-focus: 0 0 0 3px var(--color-accent-ring);
+  --color-panel-tint: #161b22;
+  --color-scrim: rgb(0 0 0 / 0.55);
+  --color-topbar-fill: color-mix(in srgb, var(--color-bg) 90%, transparent);
+  --glyph-mix-base: #161b22;
+  --scrollbar-thumb: rgb(255 255 255 / 0.12);
+  --scrollbar-thumb-hover: rgb(255 255 255 / 0.22);
+  --scrollbar-track-strong: rgb(255 255 255 / 0.16);
+}

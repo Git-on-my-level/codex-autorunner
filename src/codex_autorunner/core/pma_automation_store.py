@@ -16,6 +16,7 @@ from .chat_bindings import (
 from .config import load_hub_config
 from .config_contract import ConfigError
 from .locks import file_lock
+from .managed_thread_store import ManagedThreadStore
 from .orchestration.sqlite import open_orchestration_sqlite
 from .pma_automation_types import (
     DEFAULT_PMA_LANE_ID,
@@ -45,6 +46,7 @@ from .pma_domain.automation_reducer import (
     reduce_dequeue_due_timers,
     reduce_timer_touch,
     reduce_wakeup_dispatch,
+    reduce_wakeup_queued,
 )
 from .pma_domain.models import PmaSubscription, PmaTimer, PmaWakeup
 from .pma_domain.subscription_reducer import (
@@ -55,7 +57,6 @@ from .pma_domain.subscription_reducer import (
     reduce_transition,
 )
 from .pma_origin import extract_pma_origin_metadata, merge_pma_origin_metadata
-from .pma_thread_store import PmaThreadStore
 from .text_utils import _normalize_pma_delivery_target, lock_path_for
 
 logger = logging.getLogger(__name__)
@@ -94,7 +95,7 @@ def _repo_scoped_subscription_warning(
     if normalized_repo_id is None or normalized_thread_id is not None:
         return None
     thread_count = (
-        PmaThreadStore(hub_root)
+        ManagedThreadStore(hub_root)
         .count_threads_by_repo(status="active")
         .get(
             normalized_repo_id,
@@ -1051,7 +1052,7 @@ class PmaAutomationStore:
         workspace_root: Optional[Path] = None
         if wakeup.thread_id:
             try:
-                thread_store = PmaThreadStore(self._hub_root)
+                thread_store = ManagedThreadStore(self._hub_root)
                 thread = thread_store.get_thread(wakeup.thread_id)
                 if isinstance(thread, dict):
                     raw_ws = _normalize_text(thread.get("workspace_root"))
@@ -1275,7 +1276,7 @@ class PmaAutomationStore:
         return parsed
 
     def _resolve_thread_lane_id(self, *, thread_id: str) -> str:
-        thread_store = PmaThreadStore(self._hub_root)
+        thread_store = ManagedThreadStore(self._hub_root)
         thread = thread_store.get_thread(thread_id)
         if thread is None:
             raise PmaAutomationThreadNotFoundError(thread_id)
@@ -1295,7 +1296,7 @@ class PmaAutomationStore:
     def _resolve_thread_delivery_target(
         self, *, thread_id: str
     ) -> Optional[dict[str, str]]:
-        thread_store = PmaThreadStore(self._hub_root)
+        thread_store = ManagedThreadStore(self._hub_root)
         thread = thread_store.get_thread(thread_id)
         if thread is None:
             raise PmaAutomationThreadNotFoundError(thread_id)
@@ -2188,7 +2189,9 @@ class PmaAutomationStore:
             return []
         state = self.load()
         wakeups = self._normalize_wakeups(state.get("wakeups"))
-        pending = [entry.to_dict() for entry in wakeups if entry.state == "pending"]
+        pending = [
+            entry.to_dict() for entry in wakeups if entry.state in {"pending", "queued"}
+        ]
         if require_dispatch_decision:
             pending = [
                 d
@@ -2284,6 +2287,29 @@ class PmaAutomationStore:
             "timestamp": timestamp,
         }
 
+    def mark_wakeup_queued(
+        self, wakeup_id: str, *, queued_at: Optional[str] = None
+    ) -> bool:
+        target_id = _normalize_text(wakeup_id)
+        if target_id is None:
+            return False
+        stamp = _normalize_text(queued_at) or _iso_now()
+        with file_lock(self._lock_path()):
+            state, subscriptions, timers, wakeups = self._load_structured_unlocked()
+            changed = False
+            for entry in wakeups:
+                if entry.wakeup_id != target_id:
+                    continue
+                domain_wakeup = self._store_wakeup_to_domain(entry)
+                result = reduce_wakeup_queued(domain_wakeup, stamp)
+                if result.queued and result.updated_wakeup is not None:
+                    self._apply_domain_wakeup_to_store(entry, result.updated_wakeup)
+                    changed = True
+                break
+            if changed:
+                self._save_structured_unlocked(state, subscriptions, timers, wakeups)
+            return changed
+
     def notify_timer_fired(
         self, timer: dict[str, Any]
     ) -> tuple[Optional[PmaAutomationWakeup], bool]:
@@ -2367,7 +2393,7 @@ class PmaAutomationStore:
                 if entry.wakeup_id != target_id:
                     retained.append(entry)
                     continue
-                if require_inactive and entry.state == "pending":
+                if require_inactive and entry.state in {"pending", "queued"}:
                     retained.append(entry)
                     continue
                 removed = True

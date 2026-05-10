@@ -1,4 +1,4 @@
-from codex_autorunner.integrations.telegram.helpers import (
+from codex_autorunner.adapters.telegram.helpers import (
     _extract_first_user_preview,
     _extract_thread_preview_parts,
     _format_resume_summary,

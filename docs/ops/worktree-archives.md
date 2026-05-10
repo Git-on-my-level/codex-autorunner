@@ -67,7 +67,7 @@ out of archive listings and retention pruning.
   visible snapshots.
 
 ## Viewing archives in the UI
-Open the repo web UI and select the **Archive** tab. You can:
+Archive snapshots can be browsed in the Web Hub. You can:
 - browse snapshots by worktree ID and timestamp
 - view snapshot metadata and `META.json`
 - open archived files (tickets, contextspace, runs, flows, and any optional

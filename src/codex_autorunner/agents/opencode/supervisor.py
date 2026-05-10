@@ -13,6 +13,7 @@ from typing import Any, Mapping, Optional, Sequence
 
 import httpx
 
+from ...adapters.app_server.env import _workspace_car_path_prefixes
 from ...core.locks import file_lock, process_command_matches
 from ...core.logging_utils import log_event
 from ...core.managed_processes.registry import (
@@ -30,7 +31,6 @@ from ...core.utils import (
     resolve_opencode_auth_path,
     subprocess_env,
 )
-from ...integrations.app_server.env import _workspace_car_path_prefixes
 from ...workspace import canonical_workspace_root, workspace_id_for_path
 from .client import OpenCodeClient, OpenCodeProtocolError
 

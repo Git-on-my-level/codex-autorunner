@@ -5,7 +5,7 @@ from typing import Optional
 
 import pytest
 
-from codex_autorunner.integrations.telegram.handlers.commands.shared import (
+from codex_autorunner.adapters.telegram.handlers.commands.shared import (
     TelegramCommandSupportMixin,
 )
 

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Check that core/* does not import from integrations/* or agents/* implementations.
+Check that core/* does not import from adapters/* or agents/* implementations.
 
 This enforces one-way dependencies: adapters can import core, but core cannot
 import adapter implementations. Core should only depend on the AgentBackend/RunEvent
-interfaces defined in integrations/agents/.
+interfaces defined in adapters/agents/.
 """
 
 import ast
@@ -131,14 +131,14 @@ def is_forbidden_import(
 
     Returns (is_forbidden, reason).
     """
-    # Core can import from integrations/agents interfaces
-    if module.startswith("codex_autorunner.integrations.agents"):
+    # Core can import from adapters/agents interfaces
+    if module.startswith("codex_autorunner.adapters.agents"):
         # Check if it's importing from interface files only
         allowed_interfaces = {
             "agent_backend",
             "run_event",
         }
-        # Allowed interface symbols that core can import from integrations/agents package
+        # Allowed interface symbols that core can import from adapters/agents package
         allowed_interface_symbols = {
             "AgentBackend",
             "AgentEvent",
@@ -154,20 +154,20 @@ def is_forbidden_import(
         }
         parts = module.split(".")
         if len(parts) >= 4:
-            # codex_autorunner.integrations.agents.<something>
+            # codex_autorunner.adapters.agents.<something>
             impl_module = parts[3]
             if impl_module in allowed_interfaces:
                 return False, ""
             return (
                 True,
-                f"forbidden import from integrations/agents/{impl_module} (implementation)",
+                f"forbidden import from adapters/agents/{impl_module} (implementation)",
             )
-        elif module == "codex_autorunner.integrations.agents":
+        elif module == "codex_autorunner.adapters.agents":
             # Package-level import: only allow interface symbols explicitly.
             if not imported_names:
                 return (
                     True,
-                    "forbidden import from integrations/agents package (imported module)",
+                    "forbidden import from adapters/agents package (imported module)",
                 )
             forbidden_names = [
                 name for name in imported_names if name not in allowed_interface_symbols
@@ -175,14 +175,14 @@ def is_forbidden_import(
             if forbidden_names:
                 return (
                     True,
-                    "forbidden import from integrations/agents "
+                    "forbidden import from adapters/agents "
                     f"(implementation symbols: {', '.join(forbidden_names)})",
                 )
         return False, ""
 
-    # Core cannot import from integrations/app_server implementations
-    if module.startswith("codex_autorunner.integrations.app_server"):
-        return True, "forbidden import from integrations/app_server (implementation)"
+    # Core cannot import from adapters/app_server implementations
+    if module.startswith("codex_autorunner.adapters.app_server"):
+        return True, "forbidden import from adapters/app_server (implementation)"
 
     # Core cannot import from agents implementations
     if module.startswith("codex_autorunner.agents"):
@@ -268,8 +268,8 @@ def main():
         print("Error: core/ files have forbidden imports from adapter implementations:")
         for error in sorted(unallowlisted):
             print(f"  {error}")
-        print("\nCore should only import from integrations/agents/agent_backend.py")
-        print("and integrations/agents/run_event.py (the interface definitions).")
+        print("\nCore should only import from adapters/agents/agent_backend.py")
+        print("and adapters/agents/run_event.py (the interface definitions).")
         sys.exit(1)
 
     print("OK: No forbidden imports found in core/")

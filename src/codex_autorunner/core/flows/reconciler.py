@@ -43,6 +43,7 @@ from .workspace_root import resolve_ticket_flow_workspace_root
 _logger = logging.getLogger(__name__)
 
 _ACTIVE_STATUSES = (
+    FlowRunStatus.PENDING,
     FlowRunStatus.RUNNING,
     FlowRunStatus.STOPPING,
     FlowRunStatus.PAUSED,
@@ -357,7 +358,13 @@ def reconcile_flow_run(
         with file_lock(lock_path, blocking=False):
             health = check_worker_health(repo_root, record.id)
             crash_info = None
-            if health.status in {"dead", "invalid", "mismatch"}:
+            pending_stop_requested = (
+                record.status == FlowRunStatus.PENDING and record.stop_requested
+            )
+            if (
+                health.status in {"dead", "invalid", "mismatch"}
+                and not pending_stop_requested
+            ):
                 crash_info = _ensure_crash_payload(repo_root, record, store, health)
 
             now = now_iso()
@@ -446,6 +453,8 @@ def reconcile_flow_run(
                 "status": result.status,
                 "state": state,
             }
+            if result.current_step is not NO_CHANGE:
+                update_kwargs["current_step"] = result.current_step
             if result.error_message is not NO_CHANGE:
                 update_kwargs["error_message"] = result.error_message
             if result.finished_at is not NO_CHANGE:

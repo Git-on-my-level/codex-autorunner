@@ -7,6 +7,7 @@ from pathlib import Path
 import typer
 from typer.testing import CliRunner
 
+from codex_autorunner.adapters.app_server.retention import WorkspacePruneSummary
 from codex_autorunner.core.archive_retention import ArchivePruneSummary
 from codex_autorunner.core.config import CONFIG_FILENAME, ConfigError
 from codex_autorunner.core.filebox_retention import FileBoxPruneSummary
@@ -21,7 +22,6 @@ from codex_autorunner.housekeeping import (
     HousekeepingRuleResult,
     HousekeepingSummary,
 )
-from codex_autorunner.integrations.app_server.retention import WorkspacePruneSummary
 from codex_autorunner.manifest import load_manifest, save_manifest
 from codex_autorunner.surfaces.cli.commands import cleanup as cleanup_cmd
 from tests.conftest import write_test_config
@@ -646,7 +646,6 @@ class TestCleanupStateGlobalCleanup:
             "codex_autorunner.surfaces.cli.commands.cleanup.load_manifest",
             lambda manifest_path, root: types.SimpleNamespace(
                 repos=[],
-                agent_workspaces=[],
             ),
         )
 
@@ -699,7 +698,6 @@ class TestCleanupStateGlobalCleanup:
             "codex_autorunner.surfaces.cli.commands.cleanup.load_manifest",
             lambda manifest_path, root: types.SimpleNamespace(
                 repos=[],
-                agent_workspaces=[],
             ),
         )
 
@@ -759,7 +757,6 @@ class TestCleanupStateGlobalCleanup:
             "codex_autorunner.surfaces.cli.commands.cleanup.load_manifest",
             lambda manifest_path, root: types.SimpleNamespace(
                 repos=[],
-                agent_workspaces=[],
             ),
         )
 
@@ -829,7 +826,6 @@ class TestCleanupStateGlobalCleanup:
             "codex_autorunner.surfaces.cli.commands.cleanup.load_manifest",
             lambda manifest_path, root: types.SimpleNamespace(
                 repos=[],
-                agent_workspaces=[],
             ),
         )
 
@@ -894,7 +890,6 @@ class TestCleanupStateGlobalCleanup:
             "codex_autorunner.surfaces.cli.commands.cleanup.load_manifest",
             lambda manifest_path, root: types.SimpleNamespace(
                 repos=[],
-                agent_workspaces=[],
             ),
         )
 
@@ -985,7 +980,6 @@ class TestCleanupStateGlobalCleanup:
             "codex_autorunner.surfaces.cli.commands.cleanup.load_manifest",
             lambda manifest_path, root: types.SimpleNamespace(
                 repos=[],
-                agent_workspaces=[],
             ),
         )
 
@@ -1403,7 +1397,7 @@ class TestCleanupStateScope:
         def _fake_prune_workspace_root(
             workspace_root, *, policy, dry_run=False, **kwargs
         ):
-            from codex_autorunner.integrations.app_server.retention import (
+            from codex_autorunner.adapters.app_server.retention import (
                 resolve_global_workspace_root,
             )
 
@@ -1485,7 +1479,7 @@ class TestCleanupStateScope:
         def _fake_prune_workspace_root(
             workspace_root, *, policy, dry_run=False, **kwargs
         ):
-            from codex_autorunner.integrations.app_server.retention import (
+            from codex_autorunner.adapters.app_server.retention import (
                 resolve_repo_workspace_root,
             )
 
@@ -1554,7 +1548,6 @@ class TestCleanupStateScope:
             "codex_autorunner.surfaces.cli.commands.cleanup.load_manifest",
             lambda manifest_path, root: types.SimpleNamespace(
                 repos=[],
-                agent_workspaces=[],
             ),
         )
 
@@ -1589,7 +1582,7 @@ class TestCleanupStateScope:
         def _fake_prune_workspace_root(
             workspace_root, *, policy, dry_run=False, **kwargs
         ):
-            from codex_autorunner.integrations.app_server.retention import (
+            from codex_autorunner.adapters.app_server.retention import (
                 resolve_repo_workspace_root,
             )
 

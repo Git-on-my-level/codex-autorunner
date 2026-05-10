@@ -1,4 +1,4 @@
-"""PMA UI/runtime state store.
+"""PMA runtime state store.
 
 This module owns ``.codex-autorunner/pma/state.json``, which holds ephemeral
 PMA web-route and chat-runtime state (active flag, current turn info, last
@@ -42,7 +42,7 @@ def default_pma_state_path(hub_root: Path) -> Path:
 
 
 class PmaStateStore:
-    """Persistent store for PMA UI/runtime state (``state.json``).
+    """Persistent store for PMA runtime state (``state.json``).
 
     This store is scoped exclusively to web-route and chat-runtime ephemeral
     state.  It must not be used for thread, queue, automation, or debounce

@@ -595,7 +595,7 @@ wheel_path = sys.argv[1]
 required_prefixes = {
     "codex_autorunner/workspace/",
     "codex_autorunner/tickets/",
-    "codex_autorunner/integrations/docker/",
+    "codex_autorunner/adapters/docker/",
 }
 with zipfile.ZipFile(wheel_path) as zf:
     names = set(PurePosixPath(name).as_posix() for name in zf.namelist())
@@ -676,7 +676,7 @@ import importlib.util
 required_modules = (
     "codex_autorunner.workspace",
     "codex_autorunner.tickets",
-    "codex_autorunner.integrations.docker",
+    "codex_autorunner.adapters.docker",
 )
 for module_name in required_modules:
     if importlib.util.find_spec(module_name) is None:
@@ -715,7 +715,7 @@ echo "Smoke-checking telegram module..."
 import importlib.util
 import py_compile
 
-spec = importlib.util.find_spec("codex_autorunner.integrations.telegram.service")
+spec = importlib.util.find_spec("codex_autorunner.adapters.telegram.service")
 if spec is None or spec.origin is None:
     raise SystemExit("telegram service module not found in staged venv")
 py_compile.compile(spec.origin, doraise=True)
@@ -1616,12 +1616,12 @@ if [[ -z "${HEALTH_PATH}" ]]; then
   if [[ -n "${base_path}" ]]; then
     HEALTH_PATH="${base_path}/health"
     if [[ -z "${HEALTH_STATIC_PATH}" ]]; then
-      HEALTH_STATIC_PATH="${base_path}/static/generated/app.js"
+      HEALTH_STATIC_PATH="${base_path}/_app/version.json"
     fi
   else
     HEALTH_PATH="/health"
     if [[ -z "${HEALTH_STATIC_PATH}" ]]; then
-      HEALTH_STATIC_PATH="/static/generated/app.js"
+      HEALTH_STATIC_PATH="/_app/version.json"
     fi
   fi
 fi

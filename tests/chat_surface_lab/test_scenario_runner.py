@@ -27,7 +27,7 @@ async def test_runner_executes_first_visible_feedback_and_emits_artifacts(
     result = await runner.run_scenario(scenario)
     assert result.skipped is False
     assert result.summary_path is not None and result.summary_path.exists()
-    assert len(result.surface_results) == 2
+    assert len(result.surface_results) == 3
     assert len(result.observed_budgets) == 4
     for surface in result.surface_results:
         assert surface.execution_status == "ok"
@@ -36,6 +36,14 @@ async def test_runner_executes_first_visible_feedback_and_emits_artifacts(
         assert artifact_paths
         for path in artifact_paths:
             assert path.exists()
+    web_pma = next(
+        surface
+        for surface in result.surface_results
+        if surface.surface.value == "web_pma"
+    )
+    assert web_pma.transcript.metadata["pending_interaction_count"] == 1
+    assert web_pma.transcript.metadata["final_delivery_status"] == "ok"
+    assert "approve_interaction" in web_pma.transcript.metadata["available_actions"]
 
     summary_payload = json.loads(result.summary_path.read_text(encoding="utf-8"))
     assert summary_payload["scenario_id"] == "first_visible_feedback"
@@ -298,11 +306,11 @@ async def test_runner_executes_newt_reset_parity(
         )
 
     monkeypatch.setattr(
-        "codex_autorunner.integrations.discord.car_handlers.session_commands.run_newt_branch_reset",
+        "codex_autorunner.adapters.discord.car_handlers.session_commands.run_newt_branch_reset",
         _fake_reset,
     )
     monkeypatch.setattr(
-        "codex_autorunner.integrations.telegram.handlers.commands.workspace_session_commands.run_newt_branch_reset",
+        "codex_autorunner.adapters.telegram.handlers.commands.workspace_session_commands.run_newt_branch_reset",
         _fake_reset,
     )
 

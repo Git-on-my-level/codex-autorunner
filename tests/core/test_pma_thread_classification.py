@@ -18,18 +18,21 @@ from codex_autorunner.core.pma_thread_classification import (
 
 
 class TestIsPmaSelfThread:
-    def test_pma_agent_with_agent_workspace(self) -> None:
-        assert is_pma_self_thread(
+    def test_managed_thread_kind(self) -> None:
+        assert is_pma_self_thread({"thread_kind": "pma"})
+
+    def test_non_managed_thread_kind(self) -> None:
+        assert not is_pma_self_thread({"thread_kind": "codex"})
+
+    def test_entry_without_thread_kind_is_not_self(self) -> None:
+        assert not is_pma_self_thread(
             {
                 "agent": "hermes-m4-pma",
-                "resource_kind": "agent_workspace",
+                "resource_kind": "repo",
             }
         )
 
-    def test_pma_thread_kind(self) -> None:
-        assert is_pma_self_thread({"thread_kind": "pma"})
-
-    def test_non_pma_agent(self) -> None:
+    def test_non_pma_agent_repo_binding(self) -> None:
         assert not is_pma_self_thread(
             {
                 "agent": "codex",
@@ -37,24 +40,8 @@ class TestIsPmaSelfThread:
             }
         )
 
-    def test_non_pma_agent_workspace(self) -> None:
-        assert not is_pma_self_thread(
-            {
-                "agent": "codex",
-                "resource_kind": "agent_workspace",
-            }
-        )
-
     def test_empty_entry(self) -> None:
         assert not is_pma_self_thread({})
-
-    def test_agent_id_fallback(self) -> None:
-        assert is_pma_self_thread(
-            {
-                "agent_id": "test-pma",
-                "resource_kind": "agent_workspace",
-            }
-        )
 
 
 class TestIsThreadCleanupProtected:

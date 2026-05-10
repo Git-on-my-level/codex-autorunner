@@ -6,8 +6,8 @@ from ....core import hub_read_model as _core_hub_read_model
 from ....core.hub_read_model import (
     HUB_SNAPSHOT_PROJECTION_NAMESPACE,
     REPO_CAPABILITY_HINT_PROJECTION_NAMESPACE,
+    _collect_managed_threads,
     _collect_pma_files_detail,
-    _collect_pma_threads,
     _gather_inbox,
     _hub_snapshot_cache,
     _HubSnapshotCacheEntry,
@@ -26,7 +26,7 @@ from ....core.hub_read_model import (
 def _sync_core_dependencies() -> None:
     _core_hub_read_model._gather_inbox = _gather_inbox
     _core_hub_read_model._collect_pma_files_detail = _collect_pma_files_detail
-    _core_hub_read_model._collect_pma_threads = _collect_pma_threads
+    _core_hub_read_model._collect_managed_threads = _collect_managed_threads
     _core_hub_read_model._snapshot_pma_automation = _snapshot_pma_automation
     _core_hub_read_model.build_hub_capability_hints = build_hub_capability_hints
     _core_hub_read_model.build_repo_capability_hints = build_repo_capability_hints
@@ -54,7 +54,7 @@ __all__ = [
     "_HubSnapshotCacheEntry",
     "_RepoCapabilityHintCacheEntry",
     "_collect_pma_files_detail",
-    "_collect_pma_threads",
+    "_collect_managed_threads",
     "_gather_inbox",
     "_hub_snapshot_cache",
     "_repo_capability_hint_cache",

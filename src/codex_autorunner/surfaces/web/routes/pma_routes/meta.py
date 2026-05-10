@@ -5,7 +5,10 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 
 from .....agents.registry import get_agent_descriptor, get_available_agents
+from .....core.agent_capability_projection import project_agent_capabilities
+from .....core.agent_model_defaults import resolve_model_for_agent
 from .....core.orchestration.catalog import map_agent_capabilities
+from .....core.state import load_state
 from ...services.pma import get_pma_request_context
 from ..agents import (
     _available_agents,
@@ -44,6 +47,10 @@ def build_pma_meta_routes(
             "name": descriptor.name,
             "capabilities": sorted(map_agent_capabilities(descriptor.capabilities)),
         }
+        agent_payload["capability_projection"] = project_agent_capabilities(
+            descriptor.id,
+            agent_payload["capabilities"],
+        ).to_dict()
         agent_profiles = _serialize_agent_profiles(request, "hermes")
         if agent_profiles.get("profiles") or agent_profiles.get("default_profile"):
             agent_payload.update(agent_profiles)
@@ -151,18 +158,25 @@ def build_pma_meta_routes(
                         include_supervisor_metadata=False,
                     )
                 )
+        try:
+            state = load_state(request.app.state.engine.state_path)
+        except (OSError, ValueError, AttributeError):
+            state = None
+        default_model = resolve_model_for_agent(
+            default_agent,
+            state=state,
+            config=request.app.state.config,
+            configured_default=defaults.get("model"),
+            include_builtin=False,
+        )
         payload: dict[str, Any] = {"agents": agents, "default": default_agent}
         payload["agents"] = enriched_agents
-        if (
-            defaults.get("profile")
-            or defaults.get("model")
-            or defaults.get("reasoning")
-        ):
+        if defaults.get("profile") or default_model or defaults.get("reasoning"):
             payload["defaults"] = {
                 key: value
                 for key, value in {
                     "profile": defaults.get("profile"),
-                    "model": defaults.get("model"),
+                    "model": default_model,
                     "reasoning": defaults.get("reasoning"),
                 }.items()
                 if value
@@ -203,10 +217,17 @@ def build_pma_meta_routes(
         descriptor = get_agent_descriptor(agent_id, context.agent_context)
         if descriptor is None:
             raise HTTPException(status_code=404, detail="Unknown agent")
-        if "model_listing" not in descriptor.capabilities:
+        model_gate = project_agent_capabilities(
+            agent_id,
+            descriptor.capabilities,
+        ).gate("list_models")
+        if not model_gate.allowed:
             raise HTTPException(
                 status_code=400,
-                detail=f"Agent '{agent_id}' does not support capability 'model_listing'",
+                detail=(
+                    f"Agent '{agent_id}' does not support capability 'model_listing'"
+                    + (f" ({model_gate.reason})" if model_gate.reason else "")
+                ),
             )
         try:
             harness = descriptor.make_harness(context.agent_context)

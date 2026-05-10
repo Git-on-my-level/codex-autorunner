@@ -6,8 +6,8 @@ from typing import Any, Optional
 
 import pytest
 
-from codex_autorunner.integrations.discord import message_turns as discord_message_turns
-from codex_autorunner.integrations.telegram.handlers.commands import (
+from codex_autorunner.adapters.discord import message_turns as discord_message_turns
+from codex_autorunner.adapters.telegram.handlers.commands import (
     execution as telegram_execution,
 )
 from tests.chat_surface_lab.scenario_runner import (

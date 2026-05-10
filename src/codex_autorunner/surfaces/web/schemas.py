@@ -17,10 +17,9 @@ from pydantic import (
     model_validator,
 )
 
+from ...adapters.chat.approval_modes import normalize_approval_mode
 from ...core.car_context import CarContextProfile
 from ...core.text_utils import _normalize_text
-from ...flows.review.models import ReviewStateSnapshot, ReviewStatus
-from ...integrations.chat.approval_modes import normalize_approval_mode
 from ._schema_normalization import (
     merge_normalized_filter,
     normalize_filter_payload,
@@ -29,7 +28,6 @@ from ._schema_normalization import (
 from .serializers import (
     OrchestrationHealthPayload,
     SectionFreshnessSummary,
-    WorkspaceDestinationPayload,
 )
 
 
@@ -146,47 +144,6 @@ class HubRemoveRepoRequest(Payload):
     delete_worktrees: bool = False
 
 
-class HubCreateAgentWorkspaceRequest(Payload):
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
-
-    workspace_id: Optional[str] = Field(
-        default=None,
-        validation_alias=AliasChoices("workspace_id", "workspaceId", "id"),
-    )
-    runtime: str
-    enabled: bool = True
-    display_name: Optional[str] = Field(
-        default=None,
-        validation_alias=AliasChoices("display_name", "displayName", "name"),
-    )
-
-
-class HubUpdateAgentWorkspaceRequest(Payload):
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
-
-    enabled: Optional[bool] = None
-    display_name: Optional[str] = Field(
-        default=None,
-        validation_alias=AliasChoices("display_name", "displayName", "name"),
-    )
-
-
-class HubRemoveAgentWorkspaceRequest(Payload):
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
-
-    delete_dir: bool = Field(
-        default=False, validation_alias=AliasChoices("delete_dir", "deleteDir")
-    )
-
-
-class HubDeleteAgentWorkspaceRequest(Payload):
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
-
-    delete_dir: bool = Field(
-        default=True, validation_alias=AliasChoices("delete_dir", "deleteDir")
-    )
-
-
 class HubCreateWorktreeRequest(Payload):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
@@ -294,12 +251,15 @@ class AppServerThreadArchiveRequest(Payload):
     thread_id: str = Field(validation_alias=AliasChoices("thread_id", "threadId", "id"))
 
 
-class PmaManagedThreadCreateRequest(Payload):
+class ManagedThreadCreateRequest(Payload):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     agent: Optional[str] = None
     profile: Optional[str] = None
-    resource_kind: Optional[Literal["repo", "agent_workspace"]] = Field(
+    scope_urn: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("scope_urn", "scopeUrn")
+    )
+    resource_kind: Optional[Literal["repo", "worktree"]] = Field(
         default=None, validation_alias=AliasChoices("resource_kind", "resourceKind")
     )
     resource_id: Optional[str] = Field(
@@ -312,6 +272,7 @@ class PmaManagedThreadCreateRequest(Payload):
     )
     workspace_root: Optional[str] = None
     name: Optional[str] = None
+    model: Optional[str] = None
     pr_mode: bool = Field(
         default=False,
         validation_alias=AliasChoices("pr_mode", "prMode", "pr_intent", "prIntent"),
@@ -364,11 +325,6 @@ class PmaManagedThreadCreateRequest(Payload):
         if not isinstance(value, dict):
             return value
         payload = dict(value)
-        repo_id = payload.get("repo_id", payload.get("repoId"))
-        if repo_id is not None:
-            raise ValueError(
-                "repo_id is not supported; use resource_kind='repo' with resource_id"
-            )
         payload["notify_on_explicit"] = any(
             key in value for key in ("notify_on", "notifyOn")
         )
@@ -387,12 +343,19 @@ class PmaManagedThreadCreateRequest(Payload):
 class SessionSettingsRequest(Payload):
     model_config = ConfigDict(extra="forbid")
 
-    autorunner_model_override: Optional[str] = None
+    autorunner_model_overrides: Optional[Dict[str, Optional[str]]] = None
     autorunner_effort_override: Optional[str] = None
     autorunner_approval_policy: Optional[str] = None
     autorunner_sandbox_mode: Optional[str] = None
-    autorunner_workspace_write_network: Optional[bool] = None
+    autorunner_workspace_write_network: Optional[StrictBool] = None
     runner_stop_after_runs: Optional[int] = None
+
+
+class InteractionPromptResponseRequest(Payload):
+    model_config = ConfigDict(extra="forbid")
+
+    actor_user_id: Optional[str] = None
+    response: Dict[str, Any]
 
 
 class GithubIssueRequest(Payload):
@@ -428,30 +391,23 @@ __all__ = [
     "GithubContextRequest",
     "GithubIssueRequest",
     "GithubPrSyncRequest",
-    "HubAgentWorkspaceListResponse",
-    "HubAgentWorkspaceMutationResponse",
-    "HubAgentWorkspaceResponse",
-    "HubAgentWorkspaceSummaryResponse",
     "HubArchiveRepoStateRequest",
     "HubArchiveRepoStateResponse",
     "HubArchiveWorktreeRequest",
     "HubArchiveWorktreeResponse",
     "HubArchiveWorktreeStateResponse",
     "HubCleanupWorktreeRequest",
-    "HubCreateAgentWorkspaceRequest",
     "HubCreateRepoRequest",
     "HubCreateWorktreeRequest",
-    "HubDeleteAgentWorkspaceRequest",
     "HubDestinationMountRequest",
     "HubDestinationSetRequest",
     "HubJobResponse",
+    "InteractionPromptResponseRequest",
     "HubMessageSnapshotResponse",
     "HubMessagesFreshnessResponse",
     "HubMessagesResponse",
     "HubPinRepoRequest",
-    "HubRemoveAgentWorkspaceRequest",
     "HubRemoveRepoRequest",
-    "HubUpdateAgentWorkspaceRequest",
     "LocalRunArchiveSummary",
     "LocalRunArchivesResponse",
     "Payload",
@@ -461,21 +417,17 @@ __all__ = [
     "PmaAutomationTimerTouchRequest",
     "PmaChatRequest",
     "PmaHistoryCompactRequest",
-    "PmaManagedThreadBulkArchiveRequest",
-    "PmaManagedThreadCompactRequest",
-    "PmaManagedThreadCreateRequest",
-    "PmaManagedThreadForkRequest",
-    "PmaManagedThreadMessageRequest",
-    "PmaManagedThreadResumeRequest",
+    "ManagedThreadBulkArchiveRequest",
+    "ManagedThreadCompactRequest",
+    "ManagedThreadCreateRequest",
+    "ManagedThreadForkRequest",
+    "ManagedThreadMessageRequest",
+    "ManagedThreadResumeRequest",
     "PmaNewSessionRequest",
     "PmaSessionResetRequest",
     "PmaStopRequest",
-    "PmaThreadResetRequest",
-    "RepoUsageResponse",
+    "ManagedThreadResetRequest",
     "ResponseModel",
-    "ReviewControlResponse",
-    "ReviewStartRequest",
-    "ReviewStatusResponse",
     "RunControlRequest",
     "RunControlResponse",
     "RunResetResponse",
@@ -511,9 +463,6 @@ __all__ = [
     "TicketReorderResponse",
     "TicketResponse",
     "TicketUpdateRequest",
-    "TokenTotalsResponse",
-    "UsageSeriesEntryResponse",
-    "UsageSeriesResponse",
 ]
 
 
@@ -562,37 +511,10 @@ class HubDestinationSetRequest(Payload):
         return self.model_dump(exclude_none=True)
 
 
-class HubAgentWorkspaceSummaryResponse(ResponseModel):
-    id: str
-    runtime: str
-    path: str
-    display_name: str
-    enabled: bool
-    exists_on_disk: bool
-    effective_destination: WorkspaceDestinationPayload
-    resource_kind: str
-
-
-class HubAgentWorkspaceResponse(HubAgentWorkspaceSummaryResponse):
-    configured_destination: Optional[WorkspaceDestinationPayload] = None
-    source: Optional[str] = None
-    issues: List[str] = Field(default_factory=list)
-
-
-class HubAgentWorkspaceListResponse(ResponseModel):
-    agent_workspaces: List[HubAgentWorkspaceSummaryResponse]
-
-
-class HubAgentWorkspaceMutationResponse(ResponseModel):
-    status: str
-    workspace_id: str
-    delete_dir: bool
-
-
 class HubMessageSnapshotResponse(ResponseModel):
     generated_at: str
     items: Optional[List[Dict[str, Any]]] = None
-    pma_threads: Optional[List[Dict[str, Any]]] = None
+    managed_threads: Optional[List[Dict[str, Any]]] = None
     pma_files_detail: Optional[Dict[str, List[Dict[str, Any]]]] = None
     automation: Optional[Dict[str, Any]] = None
     action_queue: Optional[List[Dict[str, Any]]] = None
@@ -610,7 +532,7 @@ class HubMessagesResponse(ResponseModel):
     generated_at: str
     items: Optional[List[Dict[str, Any]]] = None
     freshness: Optional[HubMessagesFreshnessResponse] = None
-    pma_threads: Optional[List[Dict[str, Any]]] = None
+    managed_threads: Optional[List[Dict[str, Any]]] = None
     pma_files_detail: Optional[Dict[str, List[Dict[str, Any]]]] = None
     automation: Optional[Dict[str, Any]] = None
     action_queue: Optional[List[Dict[str, Any]]] = None
@@ -726,7 +648,7 @@ class HubJobResponse(ResponseModel):
 
 
 class SessionSettingsResponse(ResponseModel):
-    autorunner_model_override: Optional[str]
+    autorunner_model_overrides: Dict[str, str]
     autorunner_effort_override: Optional[str]
     autorunner_approval_policy: Optional[str]
     autorunner_sandbox_mode: Optional[str]
@@ -798,54 +720,11 @@ class AppServerThreadResetAllResponse(ResponseModel):
     cleared: bool
 
 
-class TokenTotalsResponse(ResponseModel):
-    input_tokens: int
-    cached_input_tokens: int
-    output_tokens: int
-    reasoning_output_tokens: int
-    total_tokens: int
-
-
-class RepoUsageResponse(ResponseModel):
-    mode: str
-    repo: str
-    codex_home: str
-    since: Optional[str]
-    until: Optional[str]
-    status: str
-    events: int
-    totals: TokenTotalsResponse
-    latest_rate_limits: Optional[Dict[str, Any]]
-    source_confidence: Optional[Dict[str, Any]] = None
-
-
-class UsageSeriesEntryResponse(ResponseModel):
-    key: str
-    model: Optional[str]
-    token_type: Optional[str]
-    total: int
-    values: List[int]
-
-
-class UsageSeriesResponse(ResponseModel):
-    mode: str
-    repo: str
-    codex_home: str
-    since: Optional[str]
-    until: Optional[str]
-    status: str
-    bucket: str
-    segment: str
-    buckets: List[str]
-    series: List[UsageSeriesEntryResponse]
-
-
 class SystemHealthResponse(ResponseModel):
     status: str
     mode: str
     base_path: str
     asset_version: Optional[str] = None
-    static_asset_provenance: Optional[str] = None
     hub_startup_phase: Optional[str] = None
     hub_deferred_startup_complete: Optional[bool] = None
     orchestration: Optional[OrchestrationHealthPayload] = None
@@ -869,27 +748,6 @@ class SystemUpdateCheckResponse(ResponseModel):
     message: str
     local_commit: Optional[str] = None
     remote_commit: Optional[str] = None
-
-
-class ReviewStartRequest(Payload):
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
-
-    agent: Optional[str] = None
-    model: Optional[str] = None
-    reasoning: Optional[str] = None
-    max_wallclock_seconds: Optional[int] = Field(
-        default=None,
-        validation_alias=AliasChoices("max_wallclock_seconds", "maxWallclockSeconds"),
-    )
-
-
-class ReviewStatusResponse(ResponseModel):
-    review: ReviewStateSnapshot
-
-
-class ReviewControlResponse(ResponseModel):
-    status: ReviewStatus
-    detail: Optional[str] = None
 
 
 # Ticket CRUD schemas
@@ -985,10 +843,11 @@ class TicketBulkUpdateResponse(ResponseModel):
     lint_errors: list[str] = []
 
 
-class PmaManagedThreadMessageRequest(Payload):
+class ManagedThreadMessageRequest(Payload):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     message: str
+    attachments: list[dict[str, Any]] = Field(default_factory=list)
     busy_policy: Optional[Literal["queue", "interrupt", "reject"]] = Field(
         default=None, validation_alias=AliasChoices("busy_policy", "busyPolicy")
     )
@@ -1044,18 +903,18 @@ class PmaManagedThreadMessageRequest(Payload):
         return payload
 
 
-class PmaManagedThreadCompactRequest(Payload):
+class ManagedThreadCompactRequest(Payload):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     summary: str
     reset_backend: bool = True
 
 
-class PmaManagedThreadResumeRequest(Payload):
+class ManagedThreadResumeRequest(Payload):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
 
-class PmaManagedThreadBulkArchiveRequest(Payload):
+class ManagedThreadBulkArchiveRequest(Payload):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     thread_ids: List[str] = Field(
@@ -1078,7 +937,7 @@ class PmaManagedThreadBulkArchiveRequest(Payload):
         return normalized
 
 
-class PmaManagedThreadForkRequest(Payload):
+class ManagedThreadForkRequest(Payload):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     name: Optional[str] = None
@@ -1133,7 +992,7 @@ class PmaHistoryCompactRequest(Payload):
     )
 
 
-class PmaThreadResetRequest(Payload):
+class ManagedThreadResetRequest(Payload):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     agent: Optional[str] = None

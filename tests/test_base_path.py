@@ -40,7 +40,7 @@ def test_strips_base_and_sets_root_path():
     resp = client.get("/car/api/ping")
     assert resp.status_code == 200
     payload = resp.json()
-    assert payload["path"] == "/car/api/ping"
+    assert payload["path"] == "/api/ping"
     assert payload["root_path"] == "/car"
 
 

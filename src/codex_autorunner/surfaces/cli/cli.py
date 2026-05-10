@@ -2,15 +2,16 @@ import logging
 
 import typer
 
+from ...adapters.agents.build_agent_pool import build_agent_pool
 from ...core.config import load_repo_config
 from ...flows.ticket_flow import build_ticket_flow_definition
-from ...integrations.agents.build_agent_pool import build_agent_pool
 from .commands.apps import register_apps_commands
 from .commands.chat import register_chat_commands
 from .commands.cleanup import register_cleanup_commands
 from .commands.describe import register_describe_commands
 from .commands.discord import register_discord_commands
 from .commands.dispatch import register_dispatch_commands
+from .commands.docs import register_docs_commands
 from .commands.doctor import (
     register_doctor_commands,
 )
@@ -83,8 +84,8 @@ from .commands.utils import (
     resolve_hub_config_path_for_cli as _resolve_hub_config_path_for_cli,
 )
 from .commands.worktree import register_worktree_commands
+from .hub_control_plane_client import resolve_hub_path as _resolve_pma_hub_path
 from .pma_cli import pma_app as pma_cli_app
-from .pma_control_plane import resolve_hub_path as _resolve_pma_hub_path
 
 logger = logging.getLogger("codex_autorunner.cli")
 
@@ -120,6 +121,7 @@ cleanup_app = typer.Typer(
     add_completion=False, help="Cleanup managed processes and report artifacts."
 )
 chat_app = typer.Typer(add_completion=False, help="Inspect shared chat metadata.")
+docs_app = typer.Typer(add_completion=False, help="Discover and search CAR docs.")
 worktree_app = typer.Typer(
     add_completion=False, help="Create, list, archive, and cleanup hub worktrees."
 )
@@ -129,7 +131,7 @@ hub_tickets_app = typer.Typer(
 doctor_app = typer.Typer(
     add_completion=False,
     invoke_without_command=True,
-    help="Run health checks for repo, hub, and integrations.",
+    help="Run health checks for repo, hub, and adapters.",
 )
 flow_app = typer.Typer(
     add_completion=False, help="Flow lifecycle commands (worker + ticket_flow)."
@@ -231,6 +233,8 @@ app.add_typer(apps_app, name="apps")
 app.add_typer(templates_app, name="templates")
 app.add_typer(cleanup_app, name="cleanup")
 app.add_typer(chat_app, name="chat")
+app.add_typer(docs_app, name="docs")
+register_docs_commands(docs_app)
 register_apps_commands(
     apps_app,
     require_repo_config=_require_repo_config,

@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from codex_autorunner.integrations.telegram.topic_queue import (
+from codex_autorunner.adapters.telegram.topic_queue import (
     TopicQueue,
     TopicRuntime,
 )

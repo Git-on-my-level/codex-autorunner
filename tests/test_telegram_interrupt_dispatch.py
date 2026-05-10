@@ -7,7 +7,7 @@ from typing import Optional
 
 import pytest
 
-from codex_autorunner.integrations.telegram.service import TelegramBotService
+from codex_autorunner.adapters.telegram.service import TelegramBotService
 
 
 class _RouterStub:

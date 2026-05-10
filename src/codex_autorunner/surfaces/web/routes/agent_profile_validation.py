@@ -34,7 +34,7 @@ def resolve_requested_agent_profile(
         if agent_id == "hermes":
             hermes_valid = set(available_profiles.keys())
             try:
-                from ....integrations.chat.agents import chat_hermes_profile_options
+                from ....adapters.chat.agents import chat_hermes_profile_options
 
                 hermes_valid |= {
                     opt.profile
@@ -66,7 +66,7 @@ def resolve_requested_agent_profile(
     fallback_keys: set[str] = set(available_profiles.keys())
     if agent_id == "hermes":
         try:
-            from ....integrations.chat.agents import chat_hermes_profile_options
+            from ....adapters.chat.agents import chat_hermes_profile_options
 
             fallback_keys |= {
                 opt.profile for opt in chat_hermes_profile_options(request.app.state)

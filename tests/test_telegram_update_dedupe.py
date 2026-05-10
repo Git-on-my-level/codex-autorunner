@@ -2,18 +2,18 @@ from pathlib import Path
 
 import pytest
 
-from codex_autorunner.core.orchestration import ChatOperationState
-from codex_autorunner.integrations.telegram.adapter import (
+from codex_autorunner.adapters.telegram.client import (
     TelegramCallbackQuery,
     TelegramMessage,
     TelegramUpdate,
 )
-from codex_autorunner.integrations.telegram.config import TelegramBotConfig
-from codex_autorunner.integrations.telegram.constants import (
+from codex_autorunner.adapters.telegram.config import TelegramBotConfig
+from codex_autorunner.adapters.telegram.constants import (
     UPDATE_ID_PERSIST_INTERVAL_SECONDS,
 )
-from codex_autorunner.integrations.telegram.dispatch import dispatch_update
-from codex_autorunner.integrations.telegram.service import TelegramBotService
+from codex_autorunner.adapters.telegram.dispatch import dispatch_update
+from codex_autorunner.adapters.telegram.service import TelegramBotService
+from codex_autorunner.core.orchestration import ChatOperationState
 
 
 @pytest.mark.anyio
@@ -43,7 +43,7 @@ async def test_update_dedupe_skips_frequent_persist(
             calls.append(1)
 
         monkeypatch.setattr(
-            "codex_autorunner.integrations.telegram.service.time.monotonic",
+            "codex_autorunner.adapters.telegram.service.time.monotonic",
             lambda: now,
         )
         service._store.update_topic = fake_update_topic  # type: ignore[assignment]
@@ -80,7 +80,7 @@ async def test_update_dedupe_persists_after_interval(
             calls.append(1)
 
         monkeypatch.setattr(
-            "codex_autorunner.integrations.telegram.service.time.monotonic",
+            "codex_autorunner.adapters.telegram.service.time.monotonic",
             lambda: now,
         )
         service._store.update_topic = fake_update_topic  # type: ignore[assignment]
@@ -156,7 +156,7 @@ async def test_dispatch_update_uses_shared_ledger_to_reject_restart_duplicate_me
         env={"CAR_TELEGRAM_BOT_TOKEN": "test-token"},
     )
     monkeypatch.setattr(
-        "codex_autorunner.integrations.telegram.service.time.monotonic",
+        "codex_autorunner.adapters.telegram.service.time.monotonic",
         lambda: 0.0,
     )
     message = TelegramMessage(
@@ -219,7 +219,7 @@ async def test_dispatch_update_uses_shared_ledger_to_reject_restart_duplicate_ca
         env={"CAR_TELEGRAM_BOT_TOKEN": "test-token"},
     )
     monkeypatch.setattr(
-        "codex_autorunner.integrations.telegram.service.time.monotonic",
+        "codex_autorunner.adapters.telegram.service.time.monotonic",
         lambda: 0.0,
     )
     callback = TelegramCallbackQuery(

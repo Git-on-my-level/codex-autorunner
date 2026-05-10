@@ -7,6 +7,9 @@ from typing import Any, Mapping, Optional, cast
 
 from .config_contract import ConfigError
 from .hub import HubSupervisor
+from .managed_thread_snapshot import (
+    snapshot_managed_threads as _snapshot_managed_threads,
+)
 from .pma_active_context import (
     PMA_ACTIVE_CONTEXT_MAX_LINES,
     get_active_context_auto_prune_meta,
@@ -46,7 +49,6 @@ from .pma_snapshot_builder import (
     _snapshot_pma_files,
     build_hub_snapshot_payload,
 )
-from .pma_thread_snapshot import snapshot_pma_threads as _snapshot_pma_threads
 from .pma_workspace_docs import load_pma_prompt, load_pma_workspace_docs
 from .state import now_iso
 
@@ -64,15 +66,23 @@ class PmaPromptVariants:
 def format_pma_discoverability_preamble(
     *,
     hub_root: Optional[Path] = None,
+    runtime_cwd: Optional[Path] = None,
     pma_docs: Optional[Mapping[str, Any]] = None,
+    include_workspace_docs: bool = True,
 ) -> str:
     resolved_docs = pma_docs
-    if resolved_docs is None and hub_root is not None:
+    if include_workspace_docs and resolved_docs is None and hub_root is not None:
         try:
             resolved_docs = load_pma_workspace_docs(hub_root)
         except (OSError, ValueError, TypeError, RuntimeError, ConfigError) as exc:
             _logger.warning("Could not load PMA workspace docs: %s", exc)
-    return render_pma_discoverability_preamble(resolved_docs)
+    if not include_workspace_docs:
+        resolved_docs = None
+    return render_pma_discoverability_preamble(
+        resolved_docs,
+        hub_root=hub_root,
+        runtime_cwd=runtime_cwd,
+    )
 
 
 def format_pma_prompt(
@@ -97,7 +107,11 @@ def format_pma_prompt(
         render_hub_snapshot=_render_hub_snapshot,
         limits=limits,
     )
-    discoverability_text = format_pma_discoverability_preamble(hub_root=None)
+    discoverability_text = format_pma_discoverability_preamble(
+        hub_root=hub_root,
+        runtime_cwd=hub_root,
+        include_workspace_docs=False,
+    )
     pma_docs: Optional[Mapping[str, Any]] = None
     if hub_root is not None:
         try:
@@ -268,7 +282,7 @@ __all__ = [
     "_resolve_pma_freshness_threshold_seconds",
     "_snapshot_pma_automation",
     "_snapshot_pma_files",
-    "_snapshot_pma_threads",
+    "_snapshot_managed_threads",
     "_tail_lines",
     "_ticket_flow_inbox_item_type_and_next_action",
     "_trim_extra",

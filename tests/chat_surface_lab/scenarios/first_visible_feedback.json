@@ -1,10 +1,11 @@
 {
   "schema_version": 1,
   "scenario_id": "first_visible_feedback",
-  "description": "Both surfaces show first visible feedback quickly, then transition to the fixture reply.",
+  "description": "Discord, Telegram, and PMA web expose shared first-feedback, timeline, action, approval, and final-delivery semantics.",
   "surfaces": [
     "discord",
-    "telegram"
+    "telegram",
+    "web_pma"
   ],
   "runtime_fixture": {
     "kind": "hermes",
@@ -12,7 +13,8 @@
   },
   "harness_timeouts": {
     "discord": 8.0,
-    "telegram": 8.0
+    "telegram": 8.0,
+    "web_pma": 8.0
   },
   "actions": [
     {
@@ -20,6 +22,18 @@
       "actor": "user",
       "payload": {
         "text": "echo hello world"
+      }
+    },
+    {
+      "kind": "seed_web_pma_approval",
+      "actor": "system",
+      "surfaces": [
+        "web_pma"
+      ],
+      "payload": {
+        "request_id": "approval-web-pma-1",
+        "description": "Approve PMA web parity command",
+        "command": "pytest -q"
       }
     }
   ],
@@ -56,6 +70,24 @@
       }
     },
     {
+      "kind": "contains_text",
+      "surfaces": [
+        "web_pma"
+      ],
+      "params": {
+        "text": "fixture reply"
+      }
+    },
+    {
+      "kind": "contains_text",
+      "surfaces": [
+        "web_pma"
+      ],
+      "params": {
+        "text": "Approve PMA web parity command"
+      }
+    },
+    {
       "kind": "text_order",
       "surfaces": [
         "discord"
@@ -73,6 +105,84 @@
       "params": {
         "first_text": "Working...",
         "second_text": "fixture reply"
+      }
+    },
+    {
+      "kind": "text_order",
+      "surfaces": [
+        "web_pma"
+      ],
+      "params": {
+        "first_text": "echo hello world",
+        "second_text": "fixture reply"
+      }
+    },
+    {
+      "kind": "surface_attr_equals",
+      "surfaces": [
+        "web_pma"
+      ],
+      "params": {
+        "attr": "pending_interaction_count",
+        "value": 1
+      }
+    },
+    {
+      "kind": "surface_attr_equals",
+      "surfaces": [
+        "web_pma"
+      ],
+      "params": {
+        "attr": "available_actions",
+        "value": [
+          "send_message",
+          "archive_thread",
+          "approve_interaction",
+          "reject_interaction"
+        ]
+      }
+    },
+    {
+      "kind": "surface_attr_equals",
+      "surfaces": [
+        "web_pma"
+      ],
+      "params": {
+        "attr": "timeline_item_kinds",
+        "value": [
+          "user_message",
+          "intermediate",
+          "approval",
+          "assistant_message",
+          "status"
+        ]
+      }
+    },
+    {
+      "kind": "surface_attr_equals",
+      "surfaces": [
+        "web_pma"
+      ],
+      "params": {
+        "attr": "surface_timeline_kinds",
+        "value": [
+          "canonical_timeline",
+          "progress_status",
+          "available_actions",
+          "pending_interactions",
+          "queue_state",
+          "final_delivery_state"
+        ]
+      }
+    },
+    {
+      "kind": "surface_attr_equals",
+      "surfaces": [
+        "web_pma"
+      ],
+      "params": {
+        "attr": "final_delivery_status",
+        "value": "ok"
       }
     }
   ],

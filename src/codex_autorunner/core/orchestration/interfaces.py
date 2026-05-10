@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Optional, Protocol, runtime_checkable
 
 from ..car_context import CarContextProfile
+from ..domain.refs import ScopeRef
 from .models import (
     AgentDefinition,
     BusyThreadPolicy,
@@ -156,6 +157,7 @@ class ThreadExecutionStore(Protocol):
         repo_id: Optional[str] = None,
         resource_kind: Optional[str] = None,
         resource_id: Optional[str] = None,
+        scope: Optional[ScopeRef] = None,
         display_name: Optional[str] = None,
         backend_thread_id: Optional[str] = None,
         context_profile: Optional[CarContextProfile] = None,
@@ -314,6 +316,7 @@ class OrchestrationThreadService(Protocol):
         repo_id: Optional[str] = None,
         resource_kind: Optional[str] = None,
         resource_id: Optional[str] = None,
+        scope: Optional[ScopeRef] = None,
         display_name: Optional[str] = None,
         backend_thread_id: Optional[str] = None,
         context_profile: Optional[CarContextProfile] = None,

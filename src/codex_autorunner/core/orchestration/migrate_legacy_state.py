@@ -91,8 +91,8 @@ def backfill_legacy_thread_state(hub_root: Path, conn: Any) -> dict[str, int]:
 
     counts = {"threads": 0, "turns": 0, "actions": 0}
     with open_sqlite(legacy_path) as legacy_conn:
-        if _table_exists(legacy_conn, "pma_managed_threads"):
-            rows = legacy_conn.execute("SELECT * FROM pma_managed_threads").fetchall()
+        if _table_exists(legacy_conn, "managed_threads"):
+            rows = legacy_conn.execute("SELECT * FROM managed_threads").fetchall()
             for row in rows:
                 resource_kind, resource_id = _legacy_resource_owner(row["repo_id"])
                 if (

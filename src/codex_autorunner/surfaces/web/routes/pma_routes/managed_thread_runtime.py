@@ -10,7 +10,35 @@ from typing import Any, Callable, Optional
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from .....adapters.chat.bound_chat_execution_metadata import (
+    bound_chat_progress_targets_from_execution_mapping,
+    merge_bound_chat_execution_metadata,
+)
+from .....adapters.chat.bound_live_progress import (
+    build_bound_chat_queue_execution_controller,
+    cleanup_bound_chat_live_progress_failure,
+    cleanup_bound_chat_live_progress_success,
+)
+from .....adapters.chat.managed_thread_turns import (
+    ManagedThreadCoordinatorHooks,
+    ManagedThreadDurableDeliveryHooks,
+    ManagedThreadErrorMessages,
+    ManagedThreadExecutionHooks,
+    ManagedThreadFinalizationResult,
+    ManagedThreadStatus,
+    ManagedThreadSurfaceInfo,
+    ManagedThreadTurnCoordinator,
+    build_managed_thread_delivery_intent,
+)
+from .....adapters.github.managed_thread_pr_binding import (
+    self_claim_and_arm_pr_binding,
+)
 from .....core.config import ConfigError, load_repo_config
+from .....core.managed_thread_store import (
+    ManagedThreadAlreadyHasRunningTurnError,
+    ManagedThreadNotActiveError,
+    ManagedThreadStore,
+)
 from .....core.orchestration import (
     ManagedThreadDeliveryAttemptResult,
     ManagedThreadDeliveryOutcome,
@@ -23,36 +51,8 @@ from .....core.orchestration.runtime_threads import (
     begin_runtime_thread_execution,
 )
 from .....core.orchestration.service import BusyInterruptFailedError
-from .....core.pma_thread_store import (
-    ManagedThreadAlreadyHasRunningTurnError,
-    ManagedThreadNotActiveError,
-    PmaThreadStore,
-)
 from .....core.text_utils import _truncate_text
-from .....integrations.chat.bound_chat_execution_metadata import (
-    bound_chat_progress_targets_from_execution_mapping,
-    merge_bound_chat_execution_metadata,
-)
-from .....integrations.chat.bound_live_progress import (
-    build_bound_chat_queue_execution_controller,
-    cleanup_bound_chat_live_progress_failure,
-    cleanup_bound_chat_live_progress_success,
-)
-from .....integrations.chat.managed_thread_turns import (
-    ManagedThreadCoordinatorHooks,
-    ManagedThreadDurableDeliveryHooks,
-    ManagedThreadErrorMessages,
-    ManagedThreadExecutionHooks,
-    ManagedThreadFinalizationResult,
-    ManagedThreadStatus,
-    ManagedThreadSurfaceInfo,
-    ManagedThreadTurnCoordinator,
-    build_managed_thread_delivery_intent,
-)
-from .....integrations.github.managed_thread_pr_binding import (
-    self_claim_and_arm_pr_binding,
-)
-from ...schemas import PmaManagedThreadMessageRequest
+from ...schemas import ManagedThreadMessageRequest
 from ...services.pma.managed_thread_followup import (
     ManagedThreadAutomationClient,
     ManagedThreadAutomationUnavailable,
@@ -80,7 +80,6 @@ from .managed_thread_runtime_payloads import (
     build_started_execution_error_payload,
     resolve_managed_thread_message_options,
     sanitize_managed_thread_result_error,
-    sync_zeroclaw_context_if_needed,
 )
 from .managed_thread_runtime_payloads import (
     get_live_thread_runtime_binding as _get_live_thread_runtime_binding,
@@ -107,7 +106,10 @@ def _build_managed_thread_orchestration_service(
 
 def _build_managed_thread_orchestration_service_for_app(
     app: Any,
+    *,
+    thread_store: Any = None,
 ) -> Any:
+    _ = thread_store
     return _build_managed_thread_orchestration_service(
         _managed_thread_request_for_app(app)
     )
@@ -131,10 +133,10 @@ def _pma_turn_idle_timeout_seconds(request: Request) -> float:
 
 
 def _managed_thread_task_pool(app: Any) -> set[asyncio.Task[Any]]:
-    task_pool = getattr(app.state, "pma_managed_thread_tasks", None)
+    task_pool = getattr(app.state, "managed_thread_tasks", None)
     if not isinstance(task_pool, set):
         task_pool = set()
-        app.state.pma_managed_thread_tasks = task_pool
+        app.state.managed_thread_tasks = task_pool
     return task_pool
 
 
@@ -170,7 +172,7 @@ async def _recover_pma_bound_chat_execution(
     app: Any,
     *,
     service: Any,
-    thread_store: PmaThreadStore,
+    thread_store: ManagedThreadStore,
     managed_thread_id: str,
     thread: Any,
     execution: Any,
@@ -256,7 +258,7 @@ def _resolve_repo_raw_config_for_workspace(
 def _self_claim_pr_bindings_for_managed_thread(
     request: Request,
     *,
-    thread_store: PmaThreadStore,
+    thread_store: ManagedThreadStore,
     thread: dict[str, Any],
     managed_thread_id: str,
     workspace_root: Path,
@@ -355,7 +357,7 @@ async def _run_managed_thread_execution(
     request: Request,
     *,
     service: Any,
-    thread_store: PmaThreadStore,
+    thread_store: ManagedThreadStore,
     thread: dict[str, Any],
     started: RuntimeThreadExecution,
     fallback_backend_thread_id: Optional[str] = None,
@@ -382,7 +384,7 @@ async def _run_managed_thread_execution(
         ),
         retain_completed_surface_targets=True,
     )
-    coordinator = _build_pma_managed_thread_coordinator(
+    coordinator = _build_managed_thread_coordinator(
         request,
         service=service,
         managed_thread_id=managed_thread_id,
@@ -420,7 +422,7 @@ def _pma_finalization_errors(request: Request) -> ManagedThreadErrorMessages:
     )
 
 
-def _build_pma_managed_thread_coordinator(
+def _build_managed_thread_coordinator(
     request: Request,
     *,
     service: Any,
@@ -432,7 +434,7 @@ def _build_pma_managed_thread_coordinator(
         state_root=request.app.state.config.root,
         surface=ManagedThreadSurfaceInfo(
             log_label="PMA",
-            surface_kind="pma_web",
+            surface_kind="web",
             surface_key=managed_thread_id,
         ),
         errors=_pma_finalization_errors(request),
@@ -451,7 +453,7 @@ async def _finalize_managed_thread_execution(
     request: Request,
     *,
     service: Any,
-    thread_store: PmaThreadStore,
+    thread_store: ManagedThreadStore,
     thread: dict[str, Any],
     started: RuntimeThreadExecution,
     fallback_backend_thread_id: Optional[str] = None,
@@ -466,7 +468,7 @@ async def _finalize_managed_thread_execution(
     if not managed_thread_id:
         raise RuntimeError("Managed-thread execution is missing thread_target_id")
     _ = thread_store
-    coordinator = _build_pma_managed_thread_coordinator(
+    coordinator = _build_managed_thread_coordinator(
         request,
         service=service,
         managed_thread_id=managed_thread_id,
@@ -487,7 +489,7 @@ async def _finalize_managed_thread_execution(
 async def _deliver_managed_thread_execution_result(
     request: Request,
     *,
-    thread_store: PmaThreadStore,
+    thread_store: ManagedThreadStore,
     thread: dict[str, Any],
     finalized: ManagedThreadFinalizationResult,
     response_payload: dict[str, Any],
@@ -504,7 +506,9 @@ async def _deliver_managed_thread_execution_result(
         thread_store.update_thread_after_turn(
             managed_thread_id,
             last_turn_id=managed_turn_id,
-            last_message_preview=_truncate_text(finalized_result.assistant_text, 120),
+            last_message_preview=normalize_optional_text(
+                current_thread_row.get("last_message_preview")
+            ),
         )
         workspace_root_text = normalize_optional_text(
             current_thread_row.get("workspace_root")
@@ -642,21 +646,21 @@ async def _deliver_managed_thread_execution_result(
 def _build_pma_queue_delivery_hooks(
     request: Request,
     *,
-    thread_store: PmaThreadStore,
+    thread_store: ManagedThreadStore,
     thread: dict[str, Any],
     managed_thread_id: str,
     queue_progress: Any,
 ) -> ManagedThreadDurableDeliveryHooks:
     surface = ManagedThreadSurfaceInfo(
         log_label="PMA",
-        surface_kind="pma_web",
+        surface_kind="web",
         surface_key=managed_thread_id,
     )
 
     class _PmaQueueDeliveryAdapter:
         @property
         def adapter_key(self) -> str:
-            return "pma_web"
+            return "web"
 
         async def deliver_managed_thread_record(
             self, record: Any, *, claim: Any
@@ -757,7 +761,7 @@ async def _cleanup_progress_targets_after_delivery_failure(
 
 def ensure_managed_thread_queue_worker(app: Any, managed_thread_id: str) -> None:
     request = _managed_thread_request_for_app(app)
-    thread_store = PmaThreadStore(app.state.config.root)
+    thread_store = ManagedThreadStore(app.state.config.root)
     current_thread_row = thread_store.get_thread(managed_thread_id) or {}
 
     def _resolve_surface_targets(_started: Any) -> tuple[tuple[str, str], ...]:
@@ -839,10 +843,10 @@ def build_managed_thread_runtime_routes(
     async def send_managed_thread_message(
         managed_thread_id: str,
         request: Request,
-        payload: PmaManagedThreadMessageRequest,
+        payload: ManagedThreadMessageRequest,
     ) -> Any:
         hub_root = request.app.state.config.root
-        thread_store = PmaThreadStore(hub_root)
+        thread_store = ManagedThreadStore(hub_root)
         thread = thread_store.get_thread(managed_thread_id)
         if thread is None:
             raise HTTPException(status_code=404, detail="Managed thread not found")
@@ -869,7 +873,6 @@ def build_managed_thread_runtime_routes(
                     or "",
                 ),
             )
-        sync_zeroclaw_context_if_needed(thread=thread, options=options)
         prepared_execution = None
         try:
             progress_targets = _resolve_pma_chat_bound_surface_targets(
@@ -887,12 +890,20 @@ def build_managed_thread_runtime_routes(
                 reasoning=options.reasoning,
                 approval_mode=options.approval_policy,
                 context_profile=options.context_profile,
+                input_items=options.execution_input_items,
                 metadata=merge_bound_chat_execution_metadata(
                     {
                         "runtime_prompt": options.execution_prompt,
                         "execution_error_message": MANAGED_THREAD_PUBLIC_EXECUTION_ERROR,
+                        **(
+                            {"attachments": options.delivery_payload["attachments"]}
+                            if options.delivery_payload.get("attachments")
+                            else {}
+                        ),
                     },
-                    origin_kind="pma_web",
+                    origin_kind="surface",
+                    origin_surface_kind="web",
+                    origin_surface_key=managed_thread_id,
                     progress_targets=progress_targets,
                 ),
             )

@@ -1,4 +1,4 @@
-from codex_autorunner.integrations.telegram.helpers import (
+from codex_autorunner.adapters.telegram.helpers import (
     _coerce_model_options,
     _format_model_list,
 )

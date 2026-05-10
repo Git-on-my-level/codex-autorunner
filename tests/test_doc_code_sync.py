@@ -1,7 +1,7 @@
 """Doc-code sync tests.
 
 Asserts that key documentation stays in sync with the actual codebase:
-1. Integration directories appear in the constitution/glossary
+1. Adapter directories appear in the constitution/glossary
 2. Surface directories exist on disk
 3. Architecture map references valid paths
 4. Key doc files don't reference dead paths
@@ -14,7 +14,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SRC_ROOT = REPO_ROOT / "src" / "codex_autorunner"
-INTEGRATIONS_DIR = SRC_ROOT / "integrations"
+ADAPTERS_DIR = SRC_ROOT / "adapters"
 SURFACES_DIR = SRC_ROOT / "surfaces"
 AGENTS_DIR = SRC_ROOT / "agents"
 CONSTITUTION = REPO_ROOT / "docs" / "car_constitution" / "10_CODEBASE_CONSTITUTION.md"
@@ -39,8 +39,8 @@ def _read_doc(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-class TestIntegrationSync:
-    def test_integration_dirs_exist_on_disk(self):
+class TestAdapterSync:
+    def test_adapter_dirs_exist_on_disk(self):
         expected = {
             "telegram",
             "discord",
@@ -51,9 +51,9 @@ class TestIntegrationSync:
             "templates",
             "agents",
         }
-        actual = _actual_dirs(INTEGRATIONS_DIR)
+        actual = _actual_dirs(ADAPTERS_DIR)
         for name in expected:
-            assert name in actual, f"Integration dir missing from disk: {name}"
+            assert name in actual, f"Adapter dir missing from disk: {name}"
 
     def test_constitution_lists_all_surfaces(self):
         text = _read_doc(CONSTITUTION)
@@ -62,13 +62,13 @@ class TestIntegrationSync:
 
     def test_constitution_lists_all_backends(self):
         text = _read_doc(CONSTITUTION)
-        for backend in ("Codex", "OpenCode", "Hermes", "ZeroClaw"):
+        for backend in ("Codex", "OpenCode", "Hermes"):
             assert backend in text, f"Constitution missing backend: {backend}"
 
 
 class TestSurfaceSync:
     def test_surface_dirs_exist_on_disk(self):
-        # Chat platforms live under integrations/; surfaces/ is web + CLI only (see surfaces/README.md).
+        # Chat platforms live under adapters/; surfaces/ is web + CLI only (see surfaces/README.md).
         expected = {"web", "cli"}
         actual = _actual_dirs(SURFACES_DIR)
         for name in expected:
@@ -84,7 +84,7 @@ class TestSurfaceSync:
 
 class TestAgentSync:
     def test_agent_dirs_exist_on_disk(self):
-        expected = {"codex", "opencode", "hermes", "zeroclaw", "acp"}
+        expected = {"codex", "opencode", "hermes", "acp"}
         actual = _actual_dirs(AGENTS_DIR)
         for name in expected:
             assert name in actual, f"Agent dir missing from disk: {name}"
@@ -165,7 +165,6 @@ class TestDesignConfigSections:
         text = _read_doc(DESIGN_MD)
         for section in (
             "hermes",
-            "zeroclaw",
             "discord_bot",
             "telegram_bot",
             "agents",

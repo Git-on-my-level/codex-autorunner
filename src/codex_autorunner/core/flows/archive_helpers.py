@@ -53,7 +53,7 @@ from ..archive_retention import (
     resolve_run_archive_retention_policy,
 )
 from ..config import ConfigError, load_repo_config
-from ..pma_thread_store import PmaThreadStore
+from ..managed_thread_store import ManagedThreadStore
 from ..sqlite_utils import connect_sqlite
 from ..state_lifecycle import (
     DEFAULT_STATE_LIFECYCLE_CONTROLLER,
@@ -315,15 +315,17 @@ def _resolve_repo_id(repo_root: Path, hub_root: Path) -> Optional[str]:
     return entry.id.strip()
 
 
-def _archive_ticket_flow_pma_threads(repo_root: Path, run_id: str) -> dict[str, Any]:
+def _archive_ticket_flow_managed_threads(
+    repo_root: Path, run_id: str
+) -> dict[str, Any]:
     hub_root = _find_hub_root(repo_root)
     if not _has_hub_manifest(hub_root):
         return {
-            "archived_pma_threads": 0,
-            "archived_pma_thread_ids": [],
-            "archived_pma_threads_skipped": "hub_manifest_missing",
+            "archived_managed_threads": 0,
+            "archived_managed_thread_ids": [],
+            "archived_managed_threads_skipped": "hub_manifest_missing",
         }
-    store = PmaThreadStore(hub_root)
+    store = ManagedThreadStore(hub_root)
     repo_id = _resolve_repo_id(repo_root, hub_root)
     archived_thread_ids: list[str] = []
     matched_workspace_threads = False
@@ -369,15 +371,15 @@ def _archive_ticket_flow_pma_threads(repo_root: Path, run_id: str) -> dict[str, 
 
     if hub_root != repo_root and repo_id is None and not matched_workspace_threads:
         return {
-            "archived_pma_threads": 0,
-            "archived_pma_thread_ids": [],
-            "archived_pma_threads_skipped": "hub_manifest_missing",
+            "archived_managed_threads": 0,
+            "archived_managed_thread_ids": [],
+            "archived_managed_threads_skipped": "hub_manifest_missing",
         }
 
     return {
-        "archived_pma_threads": len(archived_thread_ids),
-        "archived_pma_thread_ids": archived_thread_ids,
-        "archived_pma_threads_skipped": None,
+        "archived_managed_threads": len(archived_thread_ids),
+        "archived_managed_thread_ids": archived_thread_ids,
+        "archived_managed_threads_skipped": None,
     }
 
 
@@ -595,7 +597,7 @@ def archive_terminal_flow_runs(
     ]
     archived_run_ids: list[str] = []
     archived_run_summaries: list[dict[str, Any]] = []
-    archived_pma_thread_ids: list[str] = []
+    archived_managed_thread_ids: list[str] = []
     deleted_run_ids: list[str] = []
     failed_runs: list[dict[str, str]] = []
     for record in records:
@@ -618,7 +620,7 @@ def archive_terminal_flow_runs(
         archived_run_ids.append(record.id)
         archived_run_summaries.append(run_summary)
         try:
-            pma_summary = _archive_ticket_flow_pma_threads(repo_root, record.id)
+            pma_summary = _archive_ticket_flow_managed_threads(repo_root, record.id)
         except Exception as exc:  # intentional: best-effort sibling PMA cleanup
             logger.warning(
                 "Failed to archive PMA threads for terminal sibling run %s",
@@ -626,8 +628,8 @@ def archive_terminal_flow_runs(
                 exc_info=exc,
             )
         else:
-            archived_pma_thread_ids.extend(
-                pma_summary.get("archived_pma_thread_ids", []) or []
+            archived_managed_thread_ids.extend(
+                pma_summary.get("archived_managed_thread_ids", []) or []
             )
         if delete_run and store.delete_flow_run(record.id):
             deleted_run_ids.append(record.id)
@@ -643,8 +645,8 @@ def archive_terminal_flow_runs(
         "archived_run_count": len(archived_run_ids),
         "deleted_run_ids": deleted_run_ids,
         "deleted_run_count": len(deleted_run_ids),
-        "archived_pma_thread_ids": archived_pma_thread_ids,
-        "archived_pma_thread_count": len(archived_pma_thread_ids),
+        "archived_managed_thread_ids": archived_managed_thread_ids,
+        "archived_managed_thread_count": len(archived_managed_thread_ids),
         "archived_runs": archived_run_summaries,
         "failed_runs": failed_runs,
         "failed_run_count": len(failed_runs),
@@ -706,10 +708,10 @@ def archive_flow_run_artifacts(
             "archived_app_artifacts": 0,
             "archived_app_artifact_paths": [],
             "app_archive_cleanup": {"entries": [], "failed": False},
-            "archived_pma_threads": 0,
-            "archived_pma_thread_ids": [],
-            "archived_pma_threads_skipped": None,
-            "archived_pma_threads_error": None,
+            "archived_managed_threads": 0,
+            "archived_managed_thread_ids": [],
+            "archived_managed_threads_skipped": None,
+            "archived_managed_threads_error": None,
             "archived_paths": [],
         }
         execution = execute_archive_entries(entries, worktree_root=repo_root)
@@ -788,9 +790,9 @@ def archive_flow_run_artifacts(
 
         seed_repo_files(repo_root, force=False, git_required=False)
         try:
-            summary.update(_archive_ticket_flow_pma_threads(repo_root, record.id))
+            summary.update(_archive_ticket_flow_managed_threads(repo_root, record.id))
         except Exception as exc:  # intentional: non-critical PMA thread archiving
-            summary["archived_pma_threads_error"] = (
+            summary["archived_managed_threads_error"] = (
                 str(exc).strip() or exc.__class__.__name__
             )
 
@@ -820,7 +822,7 @@ def archive_flow_run_artifacts(
         # the active-thread query parameters during cleanup.
         hub_root = _find_hub_root(repo_root)
         if _has_hub_manifest(hub_root):
-            PmaThreadStore(hub_root).list_threads(status="active", limit=None)
+            ManagedThreadStore(hub_root).list_threads(status="active", limit=None)
 
         return summary
 

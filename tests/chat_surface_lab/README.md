@@ -2,11 +2,10 @@
 
 Shared contracts for the chat-surface lab initiative.
 
-This package is the discoverable home for the test-only models that later
-tickets will use to build a deterministic Telegram and Discord surface lab. The
-goal is to keep future work anchored to one obvious package instead of
-recreating scenario, transcript, and artifact contracts inside individual test
-files.
+This package is the discoverable home for the test-only models used to exercise
+Telegram, Discord, PMA web, and future chat-style surfaces. The goal is to keep
+future work anchored to one obvious package instead of recreating scenario,
+transcript, and artifact contracts inside individual test files.
 
 ## Current scope
 
@@ -39,6 +38,17 @@ TICKET-140 adds a declarative scenario corpus and runner:
 - `test_scenario_runner.py` validates real scenario execution and artifact
   outputs
 
+TICKET-010 extends the runner to PMA web parity:
+
+- `web_pma_simulator.py` drives PMA web through FastAPI `TestClient` routes and
+  normalizes route-backed timeline, status, action, interaction, and delivery
+  projections into the same transcript/artifact shape as Discord and Telegram
+- the `web_pma` surface target participates in shared scenarios without a
+  separate PMA-only scenario contract
+- `first_visible_feedback` now asserts Discord/Telegram expectations alongside
+  PMA web API output for canonical timeline, action availability, pending
+  approval, progress/status, and final delivery state
+
 TICKET-150 adds evidence artifact rendering and indexing:
 
 - `transcript_renderer.py` renders deterministic `transcript.html` pages from
@@ -57,7 +67,7 @@ TICKET-160 adds a deterministic latency budget suite runner:
 
 - `latency_budget_runner.py` executes named lab scenarios and enforces the
   shared UX latency budgets from
-  `src/codex_autorunner/integrations/chat/ux_regression_contract.py`
+  `src/codex_autorunner/adapters/chat/ux_regression_contract.py`
 - the runner writes machine-readable artifacts under
   `.codex-autorunner/diagnostics/chat-latency-budgets/` with
   `latest.json`, `history/*`, and per-run `runs/<run_id>/suite_report.json`
@@ -86,7 +96,7 @@ TICKET-170 adds seeded exploration and incident replay tooling:
 TICKET-012 strengthens the campaign gate:
 
 - The campaign north star is formalized in
-  `src/codex_autorunner/integrations/chat/ux_regression_contract.py` via
+  `src/codex_autorunner/adapters/chat/ux_regression_contract.py` via
   `CAMPAIGN_NORTH_STAR_LATENCY_THRESHOLDS`,
   `CAMPAIGN_CRITICAL_SCENARIO_MATRIX`, `campaign_north_star_status()`, and
   `format_campaign_scorecard()`.
@@ -165,7 +175,7 @@ Scenarios are JSON files under `tests/chat_surface_lab/scenarios/` with these
 high-signal fields:
 
 - `scenario_id`: explicit stable ID used by corpus and tests
-- `surfaces`: one or more of `discord` / `telegram`
+- `surfaces`: one or more of `discord` / `telegram` / `web_pma`
 - `runtime_fixture`: backend fixture kind + fixture scenario
 - `actions`: declarative inbound flow (`send_message`, `start_message`,
   `wait_for_running_execution`, `submit_active_message`,
@@ -177,7 +187,7 @@ high-signal fields:
 - `transcript_invariants`: transcript and log assertions
 - `latency_budgets`: budget assertions bound to concrete timing log fields
 - `contract_links`: optional mapping to
-  `src/codex_autorunner/integrations/chat/ux_regression_contract.py`
+  `src/codex_autorunner/adapters/chat/ux_regression_contract.py`
 - `execution_mode`: `surface_harness` (default) or `reference_only`
 
 ## Running the corpus
@@ -235,3 +245,13 @@ Stable artifact filenames:
 4. Extend runner support if a new action kind is required.
 5. Keep assertions at transcript/log level so scenarios stay reusable across
    surface-specific test files.
+
+## Adding Future UI Surfaces
+
+Future UI surfaces should plug into the same scenario contract by adding a
+`SurfaceKind`, a small lab adapter that emits `TranscriptTimeline` plus
+`write_surface_evidence_artifacts`, and action handlers in `scenario_runner.py`.
+Prefer route- or service-backed adapters that project the surface's canonical
+timeline, progress/status, available actions, pending interactions, and final
+delivery state into deterministic artifacts. Do not add a parallel UI-specific
+scenario DSL unless the shared contract cannot represent the behavior.

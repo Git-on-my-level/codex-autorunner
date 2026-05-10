@@ -310,7 +310,7 @@ class TestPmaBaseKeyHelper:
 
     def test_returns_agent_scoped_key_for_other_runtimes(self) -> None:
         assert pma_base_key("hermes") == "pma.hermes"
-        assert pma_base_key("zeroclaw") == "pma.zeroclaw"
+        assert pma_base_key("extra-runtime") == "pma.extra-runtime"
         assert pma_base_key("codex-alt") == "pma.codex-alt"
 
     def test_profile_suffix_appended_to_codex_family(self) -> None:
@@ -514,7 +514,7 @@ class TestPmaPrefixForAgent:
 
     def test_returns_agent_scoped_prefix_for_other_runtimes(self) -> None:
         assert pma_prefix_for_agent("hermes") == "pma.hermes."
-        assert pma_prefix_for_agent("zeroclaw") == "pma.zeroclaw."
+        assert pma_prefix_for_agent("extra-runtime") == "pma.extra-runtime."
         assert pma_prefix_for_agent("codex-alt") == "pma.codex-alt."
 
     def test_profile_scoped_prefix_for_opencode(self) -> None:
@@ -541,7 +541,7 @@ class TestPmaPrefixesForReset:
 
     def test_returns_agent_scoped_prefix_for_other_runtimes(self) -> None:
         assert pma_prefixes_for_reset("hermes") == ["pma.hermes."]
-        assert pma_prefixes_for_reset("zeroclaw") == ["pma.zeroclaw."]
+        assert pma_prefixes_for_reset("extra-runtime") == ["pma.extra-runtime."]
 
     def test_returns_codex_family_prefix_for_all_or_none(self) -> None:
         for agent in (None, "all", ""):

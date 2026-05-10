@@ -19,7 +19,7 @@ Recommended focused runs:
 
 ```bash
 pytest tests/agents/hermes/test_hermes_supervisor_official_prompt_hang.py -q
-pytest tests/integrations/chat/test_hermes_official_completion.py -q
+pytest tests/adapters/chat/test_hermes_official_completion.py -q
 ```
 
 The harness is intentionally in `tests/chat_surface_harness/` so future agents

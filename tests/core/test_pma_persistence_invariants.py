@@ -13,11 +13,11 @@ from pathlib import Path
 
 import pytest
 
+from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.core.pma_automation_store import PmaAutomationStore
 from codex_autorunner.core.pma_queue import PmaQueue
 from codex_autorunner.core.pma_reactive import PmaReactiveStore
-from codex_autorunner.core.pma_thread_store import PmaThreadStore
 
 
 def _automation_json_mirror_path(hub_root: Path) -> Path:
@@ -38,7 +38,7 @@ def _legacy_thread_db_path(hub_root: Path) -> Path:
 
 
 def _create_thread(hub_root: Path) -> str:
-    store = PmaThreadStore(hub_root)
+    store = ManagedThreadStore(hub_root)
     thread = store.create_thread("codex", hub_root)
     return str(thread["managed_thread_id"])
 
@@ -398,7 +398,7 @@ class TestQueueCanonicalInvariants:
 class TestThreadStoreQueueRowShape:
     def test_create_turn_with_running_status_no_queue_row(self, tmp_path: Path) -> None:
         hub_root = tmp_path / "hub"
-        store = PmaThreadStore(hub_root)
+        store = ManagedThreadStore(hub_root)
         thread = store.create_thread("codex", hub_root)
         thread_id = str(thread["managed_thread_id"])
         store.create_turn(thread_id, prompt="hello")
@@ -411,7 +411,7 @@ class TestThreadStoreQueueRowShape:
 
     def test_create_queued_turn_produces_queue_row(self, tmp_path: Path) -> None:
         hub_root = tmp_path / "hub"
-        store = PmaThreadStore(hub_root)
+        store = ManagedThreadStore(hub_root)
         thread = store.create_thread("codex", hub_root)
         thread_id = str(thread["managed_thread_id"])
         store.create_turn(thread_id, prompt="first")
@@ -437,7 +437,7 @@ class TestThreadStoreQueueRowShape:
 
     def test_mark_turn_finished_completes_running_turn(self, tmp_path: Path) -> None:
         hub_root = tmp_path / "hub"
-        store = PmaThreadStore(hub_root)
+        store = ManagedThreadStore(hub_root)
         thread = store.create_thread("codex", hub_root)
         thread_id = str(thread["managed_thread_id"])
         turn = store.create_turn(thread_id, prompt="hello")
@@ -461,7 +461,7 @@ class TestThreadStoreQueueRowShape:
 
     def test_claim_queued_turn_promotes_queue_row(self, tmp_path: Path) -> None:
         hub_root = tmp_path / "hub"
-        store = PmaThreadStore(hub_root)
+        store = ManagedThreadStore(hub_root)
         thread = store.create_thread("codex", hub_root)
         thread_id = str(thread["managed_thread_id"])
         turn1 = store.create_turn(thread_id, prompt="first")
@@ -490,7 +490,7 @@ class TestThreadStoreQueueRowShape:
 
     def test_mark_turn_interrupted_updates_queue_row(self, tmp_path: Path) -> None:
         hub_root = tmp_path / "hub"
-        store = PmaThreadStore(hub_root)
+        store = ManagedThreadStore(hub_root)
         thread = store.create_thread("codex", hub_root)
         thread_id = str(thread["managed_thread_id"])
         turn1 = store.create_turn(thread_id, prompt="first")
@@ -515,7 +515,7 @@ class TestThreadStoreQueueRowShape:
         self, tmp_path: Path
     ) -> None:
         hub_root = tmp_path / "hub"
-        store = PmaThreadStore(hub_root)
+        store = ManagedThreadStore(hub_root)
         thread = store.create_thread("codex", hub_root)
         thread_id = str(thread["managed_thread_id"])
         turn1 = store.create_turn(thread_id, prompt="first")
@@ -637,7 +637,7 @@ class TestReactiveCanonicalInvariants:
 class TestLegacyThreadMirrorInvariant:
     def test_legacy_threads_db_not_bootstrapped(self, tmp_path: Path) -> None:
         hub_root = tmp_path / "hub"
-        store = PmaThreadStore(hub_root)
+        store = ManagedThreadStore(hub_root)
         thread = store.create_thread("codex", hub_root)
         thread_id = str(thread["managed_thread_id"])
         store.create_turn(thread_id, prompt="hello")
@@ -655,7 +655,7 @@ class TestLegacyThreadMirrorInvariant:
         self, tmp_path: Path
     ) -> None:
         hub_root = tmp_path / "hub"
-        store = PmaThreadStore(hub_root)
+        store = ManagedThreadStore(hub_root)
         thread = store.create_thread("codex", hub_root)
         thread_id = str(thread["managed_thread_id"])
         store.create_turn(thread_id, prompt="hello")
@@ -845,7 +845,7 @@ class TestThreadStoreCanonicalVsRuntimeBinding:
         hub_root = tmp_path / "hub"
         workspace = tmp_path / "workspace"
         workspace.mkdir()
-        store = PmaThreadStore(hub_root)
+        store = ManagedThreadStore(hub_root)
         store.create_thread("codex", workspace, backend_thread_id="backend-1")
 
         with open_orchestration_sqlite(hub_root, durable=False) as conn:
@@ -861,7 +861,7 @@ class TestThreadStoreCanonicalVsRuntimeBinding:
         hub_root = tmp_path / "hub"
         workspace = tmp_path / "workspace"
         workspace.mkdir()
-        store = PmaThreadStore(hub_root)
+        store = ManagedThreadStore(hub_root)
         created = store.create_thread(
             "codex",
             workspace,
@@ -885,7 +885,7 @@ class TestThreadStoreCanonicalVsRuntimeBinding:
         hub_root = tmp_path / "hub"
         workspace = tmp_path / "workspace"
         workspace.mkdir()
-        store = PmaThreadStore(hub_root)
+        store = ManagedThreadStore(hub_root)
         created = store.create_thread("codex", workspace)
         thread_id = str(created["managed_thread_id"])
         store.create_turn(thread_id, prompt="hello")
@@ -895,7 +895,7 @@ class TestThreadStoreCanonicalVsRuntimeBinding:
         if legacy_path.exists():
             legacy_path.unlink()
 
-        restarted = PmaThreadStore(hub_root)
+        restarted = ManagedThreadStore(hub_root)
         fetched = restarted.get_thread(thread_id)
         assert fetched is not None
         assert fetched["managed_thread_id"] == thread_id
@@ -910,7 +910,7 @@ class TestThreadStoreCanonicalVsRuntimeBinding:
         hub_root = tmp_path / "hub"
         workspace = tmp_path / "workspace"
         workspace.mkdir()
-        store = PmaThreadStore(hub_root)
+        store = ManagedThreadStore(hub_root)
         created = store.create_thread("codex", workspace)
         thread_id = created["managed_thread_id"]
 
@@ -991,7 +991,7 @@ class TestThreadStoreTurnLifecycleCanonicalInvariants:
         hub_root = tmp_path / "hub"
         workspace = tmp_path / "workspace"
         workspace.mkdir()
-        store = PmaThreadStore(hub_root)
+        store = ManagedThreadStore(hub_root)
         created = store.create_thread("codex", workspace)
         thread_id = created["managed_thread_id"]
         turn = store.create_turn(thread_id, prompt="hello")
@@ -1009,7 +1009,7 @@ class TestThreadStoreTurnLifecycleCanonicalInvariants:
         hub_root = tmp_path / "hub"
         workspace = tmp_path / "workspace"
         workspace.mkdir()
-        store = PmaThreadStore(hub_root)
+        store = ManagedThreadStore(hub_root)
         created = store.create_thread("codex", workspace)
         thread_id = created["managed_thread_id"]
         turn = store.create_turn(thread_id, prompt="hello")
@@ -1024,7 +1024,7 @@ class TestThreadStoreTurnLifecycleCanonicalInvariants:
         hub_root = tmp_path / "hub"
         workspace = tmp_path / "workspace"
         workspace.mkdir()
-        store = PmaThreadStore(hub_root)
+        store = ManagedThreadStore(hub_root)
         created = store.create_thread("codex", workspace)
         thread_id = created["managed_thread_id"]
         turn = store.create_turn(thread_id, prompt="hello")
@@ -1037,7 +1037,7 @@ class TestThreadStoreTurnLifecycleCanonicalInvariants:
         hub_root = tmp_path / "hub"
         workspace = tmp_path / "workspace"
         workspace.mkdir()
-        store = PmaThreadStore(hub_root)
+        store = ManagedThreadStore(hub_root)
         created = store.create_thread("codex", workspace)
         thread_id = created["managed_thread_id"]
         turn = store.create_turn(thread_id, prompt="hello")

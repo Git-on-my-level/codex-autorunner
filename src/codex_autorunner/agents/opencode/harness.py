@@ -19,6 +19,7 @@ from typing import Any, AsyncIterator, Awaitable, Callable, Optional
 
 import httpx
 
+from ...core.agent_model_defaults import resolve_model_for_agent
 from ...core.logging_utils import log_event
 from ...core.orchestration.interfaces import FreshConversationRequiredError
 from ...core.orchestration.runtime_thread_events import (
@@ -26,7 +27,6 @@ from ...core.orchestration.runtime_thread_events import (
 )
 from ...core.orchestration.turn_event_buffer import TurnEventBuffer
 from ...core.sse import SSEEvent
-from ...integrations.chat.agents import DEFAULT_CHAT_AGENT_MODELS
 from ..base import AgentHarness
 from ..types import (
     AgentId,
@@ -69,6 +69,14 @@ from .supervisor_protocol import OpenCodeHarnessSupervisorProtocol
 
 _logger = logging.getLogger(__name__)
 _GLOB_META_RE = re.compile(r"[*?\[\]{}]")
+
+
+def _first_text_field(entry: dict[str, Any], keys: tuple[str, ...]) -> Optional[str]:
+    for key in keys:
+        value = entry.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
 
 
 @dataclass
@@ -497,12 +505,13 @@ class OpenCodeHarness(AgentHarness):
                     supports_reasoning = bool(capabilities.get("reasoning"))
                 variants = model.get("variants")
                 reasoning_options: list[str] = []
-                if isinstance(variants, dict):
+                if supports_reasoning and isinstance(variants, dict):
+                    # OpenCode provider variants are not reasoning efforts by
+                    # themselves. Only expose them through CAR's effort control
+                    # when the provider marks the model as reasoning-capable.
                     reasoning_options = [
                         key for key in variants.keys() if isinstance(key, str)
                     ]
-                    if reasoning_options:
-                        supports_reasoning = True
                 models.append(
                     ModelSpec(
                         id=f"{provider_id}/{model_id}",
@@ -532,7 +541,14 @@ class OpenCodeHarness(AgentHarness):
                 raise ValueError("OpenCode did not return a session id")
             if reserved_workspace is not None:
                 self._reserved_conversations[session_id] = reserved_workspace
-            return ConversationRef(agent=AgentId("opencode"), id=session_id)
+            conversation = self._conversation_ref_from_session(
+                result,
+                fallback_id=session_id,
+                fallback_title=title,
+            )
+            if conversation is None:
+                raise ValueError("OpenCode did not return a session id")
+            return conversation
         except (
             RuntimeError,
             OSError,
@@ -556,11 +572,9 @@ class OpenCodeHarness(AgentHarness):
             sessions = [entry for entry in result if isinstance(entry, dict)]
         conversations: list[ConversationRef] = []
         for entry in sessions:
-            session_id = extract_session_id(entry) or entry.get("id")
-            if isinstance(session_id, str) and session_id:
-                conversations.append(
-                    ConversationRef(agent=AgentId("opencode"), id=session_id)
-                )
+            conversation = self._conversation_ref_from_session(entry)
+            if conversation is not None:
+                conversations.append(conversation)
         return conversations
 
     async def resume_conversation(
@@ -588,7 +602,50 @@ class OpenCodeHarness(AgentHarness):
         session_id = extract_session_id(result) or conversation_id
         if reserved_workspace is not None:
             self._reserved_conversations[session_id] = reserved_workspace
-        return ConversationRef(agent=AgentId("opencode"), id=session_id)
+        conversation = self._conversation_ref_from_session(
+            result,
+            fallback_id=session_id,
+        )
+        if conversation is None:
+            raise ValueError("OpenCode did not return a session id")
+        return conversation
+
+    def _conversation_ref_from_session(
+        self,
+        session: Any,
+        *,
+        fallback_id: Optional[str] = None,
+        fallback_title: Optional[str] = None,
+    ) -> Optional[ConversationRef]:
+        entry = session if isinstance(session, dict) else {}
+        session_id = extract_session_id(entry) or entry.get("id") or fallback_id
+        if not isinstance(session_id, str) or not session_id:
+            return None
+        title = _first_text_field(
+            entry,
+            ("title", "name", "displayName", "summary"),
+        )
+        return ConversationRef(
+            agent=AgentId("opencode"),
+            id=session_id,
+            title=title or fallback_title,
+            summary=_first_text_field(
+                entry,
+                ("summary", "description", "subtitle"),
+            ),
+        )
+
+    async def set_conversation_title(
+        self, workspace_root: Path, conversation_id: str, title: str
+    ) -> None:
+        client = await self._supervisor.get_client(workspace_root)
+        updater = getattr(client, "update_session", None)
+        if not callable(updater):
+            return
+        try:
+            await updater(conversation_id, title=title)
+        except Exception:  # best-effort compatibility with older OpenCode servers
+            _logger.debug("Failed to set OpenCode session title", exc_info=True)
 
     async def start_turn(
         self,
@@ -625,7 +682,7 @@ class OpenCodeHarness(AgentHarness):
             await self._release_turn_client(reserved_workspace)
             raise
         if model is None:
-            model = DEFAULT_CHAT_AGENT_MODELS.get("opencode")
+            model = resolve_model_for_agent("opencode")
         model_payload = split_model_id(model)
         pre_connected_event_seen = asyncio.Event()
         event_queue, stream_task = await _pre_connect_event_stream(
@@ -750,7 +807,7 @@ class OpenCodeHarness(AgentHarness):
             await self._release_turn_client(reserved_workspace)
             raise
         if model is None:
-            model = DEFAULT_CHAT_AGENT_MODELS.get("opencode")
+            model = resolve_model_for_agent("opencode")
         arguments = prompt if prompt else ""
         pre_connected_event_seen = asyncio.Event()
         event_queue, stream_task = await _pre_connect_event_stream(

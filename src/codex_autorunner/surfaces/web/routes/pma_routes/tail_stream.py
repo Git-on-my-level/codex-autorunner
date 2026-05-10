@@ -13,11 +13,15 @@ from .....agents.base import (
     harness_progress_event_stream,
     harness_supports_event_streaming,
 )
+from .....core.managed_thread_store import ManagedThreadStore
+from .....core.orchestration.managed_thread_timeline import (
+    timeline_item_from_tail_event,
+)
+from .....core.orchestration.progress_projection import ProgressProjectionState
 from .....core.orchestration.runtime_thread_events import (
     RuntimeThreadRunEventState,
 )
 from .....core.orchestration.turn_timeline import list_turn_timeline
-from .....core.pma_thread_store import PmaThreadStore
 from ...services.pma import get_pma_request_context
 from ..shared import SSE_HEADERS
 from .automation_adapter import normalize_optional_text
@@ -31,6 +35,7 @@ from .managed_thread_tail_serializers import (
     _serialize_persisted_timeline_tail_events,
     _serialize_runtime_raw_tail_events,
     build_managed_thread_status_response,
+    build_managed_thread_stream_lifecycle,
     parse_iso_datetime,
 )
 from .managed_threads import (
@@ -131,7 +136,7 @@ def _managed_thread_harness(service: Any, agent_id: str) -> Any:
 def _load_managed_thread_tail_store_state(
     *,
     hub_root: Path,
-    thread_store: PmaThreadStore,
+    thread_store: ManagedThreadStore,
     service: Any,
     managed_thread_id: str,
 ) -> tuple[Any, Any, list[dict[str, Any]], Any]:
@@ -160,7 +165,7 @@ def _load_managed_thread_tail_store_state(
 def _load_managed_thread_status_state(
     *,
     service: Any,
-    thread_store: PmaThreadStore,
+    thread_store: ManagedThreadStore,
     managed_thread_id: str,
     limit: int,
 ) -> tuple[Any, dict[str, Any] | None, list[dict[str, Any]], int]:
@@ -194,6 +199,41 @@ def _poll_managed_thread_execution_state(
     return turn, status, refreshed_thread
 
 
+def _stream_lifecycle_fields(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "work_status": payload.get("work_status"),
+        "operator_status": payload.get("operator_status"),
+        "terminal": payload.get("terminal"),
+        "stream_should_close": payload.get("stream_should_close"),
+        "stream_close_reason": payload.get("stream_close_reason"),
+        "stream_lifecycle": payload.get("stream_lifecycle"),
+    }
+
+
+def _timeline_stream_frame(
+    *,
+    managed_thread_id: str,
+    managed_turn_id: Any,
+    tail_event: dict[str, Any],
+) -> str | None:
+    item = timeline_item_from_tail_event(
+        managed_thread_id=managed_thread_id,
+        managed_turn_id=str(managed_turn_id or ""),
+        tail_event=tail_event,
+    )
+    if item is None:
+        return None
+    event_id = tail_event.get("event_id")
+    event_id_line = (
+        f"id: {event_id}\n" if isinstance(event_id, int) and event_id > 0 else ""
+    )
+    return (
+        f"event: timeline\n"
+        f"{event_id_line}"
+        f"data: {json.dumps(item, ensure_ascii=True)}\n\n"
+    )
+
+
 async def _build_managed_thread_orchestration_service_async(request: Request) -> Any:
     return await asyncio.to_thread(build_managed_thread_orchestration_service, request)
 
@@ -220,6 +260,14 @@ async def _build_managed_thread_tail_snapshot(
     if thread is None:
         raise HTTPException(status_code=404, detail="Managed thread not found")
     if turn is None:
+        lifecycle = build_managed_thread_stream_lifecycle(
+            managed_turn_id=None,
+            turn_status=None,
+            thread_status=getattr(thread, "status", None),
+            lifecycle_status=getattr(thread, "lifecycle_status", None),
+            stream_available=False,
+            queue_depth=0,
+        )
         return {
             "managed_thread_id": managed_thread_id,
             "managed_turn_id": None,
@@ -232,6 +280,12 @@ async def _build_managed_thread_tail_snapshot(
             "idle_seconds": None,
             "activity": "idle",
             "stream_available": False,
+            "work_status": lifecycle["work_status"],
+            "operator_status": lifecycle["operator_status"],
+            "terminal": lifecycle["terminal"],
+            "stream_should_close": lifecycle["stream_should_close"],
+            "stream_close_reason": lifecycle["stream_close_reason"],
+            "stream_lifecycle": lifecycle,
         }
 
     managed_turn_id = str(turn.execution_id or "")
@@ -250,7 +304,7 @@ async def _build_managed_thread_tail_snapshot(
     lifecycle_events = ["turn_started"]
     if turn_status == "ok":
         lifecycle_events.append("turn_completed")
-    elif turn_status == "error":
+    elif turn_status in {"error", "failed"}:
         lifecycle_events.append("turn_failed")
     elif turn_status == "interrupted":
         lifecycle_events.append("turn_interrupted")
@@ -288,6 +342,7 @@ async def _build_managed_thread_tail_snapshot(
             ):  # intentional: dynamic harness method - exception types depend on backend
                 raw_events = []
             state = RuntimeThreadRunEventState()
+            projection_state = ProgressProjectionState()
             event_id_start = int(resume_after or 0)
             for raw_event in raw_events:
                 if isinstance(raw_event, dict):
@@ -304,6 +359,7 @@ async def _build_managed_thread_tail_snapshot(
                     level=level,
                     event_id_start=event_id_start,
                     since_ms=since_ms,
+                    projection_state=projection_state,
                 )
                 for entry in serialized_entries:
                     tail_events.append(entry)
@@ -354,7 +410,7 @@ async def _build_managed_thread_tail_snapshot(
         activity = "completed"
     elif turn_status == "interrupted":
         activity = "interrupted"
-    elif turn_status == "error":
+    elif turn_status in {"error", "failed"}:
         activity = "failed"
 
     phase, phase_source, guidance, last_tool = _derive_progress_phase(
@@ -386,6 +442,24 @@ async def _build_managed_thread_tail_snapshot(
         "guidance": guidance,
         "last_tool": last_tool,
     }
+    lifecycle = build_managed_thread_stream_lifecycle(
+        managed_turn_id=managed_turn_id,
+        turn_status=turn_status,
+        thread_status=getattr(thread, "status", None),
+        lifecycle_status=getattr(thread, "lifecycle_status", None),
+        stream_available=stream_available,
+        queue_depth=0,
+    )
+    snapshot.update(
+        {
+            "work_status": lifecycle["work_status"],
+            "operator_status": lifecycle["operator_status"],
+            "terminal": lifecycle["terminal"],
+            "stream_should_close": lifecycle["stream_should_close"],
+            "stream_close_reason": lifecycle["stream_close_reason"],
+            "stream_lifecycle": lifecycle,
+        }
+    )
     snapshot["active_turn_diagnostics"] = _derive_active_turn_diagnostics(
         snapshot=snapshot,
         turn_record=turn_record,
@@ -511,8 +585,15 @@ def build_managed_thread_tail_routes(
                     f"{event_id_line}"
                     f"data: {json.dumps(event, ensure_ascii=True)}\n\n"
                 )
+                timeline_frame = _timeline_stream_frame(
+                    managed_thread_id=managed_thread_id,
+                    managed_turn_id=snapshot.get("managed_turn_id"),
+                    tail_event=event,
+                )
+                if timeline_frame is not None:
+                    yield timeline_frame
 
-            if snapshot.get("turn_status") != "running":
+            if snapshot.get("stream_should_close"):
                 return
             if not snapshot.get("stream_available"):
                 while True:
@@ -524,9 +605,26 @@ def build_managed_thread_tail_routes(
                         managed_turn_id=str(snapshot.get("managed_turn_id") or ""),
                     )
                     if status != "running":
+                        lifecycle = build_managed_thread_stream_lifecycle(
+                            managed_turn_id=snapshot.get("managed_turn_id"),
+                            turn_status=status or "unknown",
+                            thread_status=getattr(refreshed_thread, "status", None),
+                            lifecycle_status=getattr(
+                                refreshed_thread, "lifecycle_status", None
+                            ),
+                            stream_available=False,
+                            queue_depth=0,
+                        )
+                        state_payload = {
+                            "managed_thread_id": managed_thread_id,
+                            "managed_turn_id": snapshot.get("managed_turn_id"),
+                            "turn_status": status or "unknown",
+                            **lifecycle,
+                            "stream_lifecycle": lifecycle,
+                        }
                         yield (
                             "event: state\ndata: "
-                            f"{json.dumps({'turn_status': status or 'unknown'}, ensure_ascii=True)}\n\n"
+                            f"{json.dumps(state_payload, ensure_ascii=True)}\n\n"
                         )
                         return
 
@@ -580,6 +678,13 @@ def build_managed_thread_tail_routes(
                                 f"{event_id_line}"
                                 f"data: {json.dumps(event, ensure_ascii=True)}\n\n"
                             )
+                            timeline_frame = _timeline_stream_frame(
+                                managed_thread_id=managed_thread_id,
+                                managed_turn_id=snapshot.get("managed_turn_id"),
+                                tail_event=event,
+                            )
+                            if timeline_frame is not None:
+                                yield timeline_frame
                         break
 
                     now = datetime.now(timezone.utc)
@@ -604,9 +709,21 @@ def build_managed_thread_tail_routes(
                         phase=phase,
                         guidance=guidance,
                     )
+                    progress_payload = {
+                        "managed_thread_id": managed_thread_id,
+                        "managed_turn_id": snapshot.get("managed_turn_id"),
+                        "turn_status": "running",
+                        "elapsed_seconds": elapsed,
+                        "phase": phase,
+                        "phase_source": phase_source,
+                        "guidance": guidance,
+                        "last_tool": last_tool,
+                        "active_turn_diagnostics": active_turn_diagnostics,
+                        **_stream_lifecycle_fields(snapshot),
+                    }
                     yield (
                         "event: progress\ndata: "
-                        f"{json.dumps({'managed_thread_id': managed_thread_id, 'managed_turn_id': snapshot.get('managed_turn_id'), 'turn_status': 'running', 'elapsed_seconds': elapsed, 'phase': phase, 'phase_source': phase_source, 'guidance': guidance, 'last_tool': last_tool, 'active_turn_diagnostics': active_turn_diagnostics}, ensure_ascii=True)}\n\n"
+                        f"{json.dumps(progress_payload, ensure_ascii=True)}\n\n"
                     )
 
             workspace_root = (
@@ -621,6 +738,7 @@ def build_managed_thread_tail_routes(
 
             workspace_path = Path(workspace_root) if workspace_root else Path(".")
             state = RuntimeThreadRunEventState()
+            projection_state = ProgressProjectionState()
             initial_last_event_id = int(snapshot.get("last_event_id") or 0)
             last_event_id = initial_last_event_id
             async for raw_event in harness_progress_event_stream(
@@ -643,6 +761,7 @@ def build_managed_thread_tail_routes(
                     level=normalized_level,
                     event_id_start=last_event_id,
                     since_ms=since_ms,
+                    projection_state=projection_state,
                 )
                 for serialized_entry in serialized_entries:
                     entry_id = int(serialized_entry.get("event_id") or 0)
@@ -656,6 +775,13 @@ def build_managed_thread_tail_routes(
                         f"id: {event_id}\n"
                         f"data: {json.dumps(serialized_entry, ensure_ascii=True)}\n\n"
                     )
+                    timeline_frame = _timeline_stream_frame(
+                        managed_thread_id=managed_thread_id,
+                        managed_turn_id=snapshot.get("managed_turn_id"),
+                        tail_event=serialized_entry,
+                    )
+                    if timeline_frame is not None:
+                        yield timeline_frame
 
             refreshed = await _build_managed_thread_tail_snapshot(
                 request=request,
@@ -667,9 +793,22 @@ def build_managed_thread_tail_routes(
                 since_ms=since_ms,
                 resume_after=None,
             )
+            progress_payload = {
+                "managed_thread_id": managed_thread_id,
+                "managed_turn_id": refreshed.get("managed_turn_id"),
+                "turn_status": refreshed.get("turn_status") or "running",
+                "elapsed_seconds": refreshed.get("elapsed_seconds"),
+                "idle_seconds": refreshed.get("idle_seconds"),
+                "phase": refreshed.get("phase"),
+                "phase_source": refreshed.get("phase_source"),
+                "guidance": refreshed.get("guidance"),
+                "last_tool": refreshed.get("last_tool"),
+                "active_turn_diagnostics": refreshed.get("active_turn_diagnostics"),
+                **_stream_lifecycle_fields(refreshed),
+            }
             yield (
                 "event: progress\ndata: "
-                f"{json.dumps({'managed_thread_id': managed_thread_id, 'managed_turn_id': refreshed.get('managed_turn_id'), 'turn_status': refreshed.get('turn_status') or 'running', 'elapsed_seconds': refreshed.get('elapsed_seconds'), 'idle_seconds': refreshed.get('idle_seconds'), 'phase': refreshed.get('phase'), 'phase_source': refreshed.get('phase_source'), 'guidance': refreshed.get('guidance'), 'last_tool': refreshed.get('last_tool'), 'active_turn_diagnostics': refreshed.get('active_turn_diagnostics')}, ensure_ascii=True)}\n\n"
+                f"{json.dumps(progress_payload, ensure_ascii=True)}\n\n"
             )
             return
 

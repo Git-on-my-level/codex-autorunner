@@ -46,10 +46,10 @@ def build_flow_definition(
         if cached_definition is not None:
             return cached_definition
 
+    from ....adapters.agents.build_agent_pool import build_agent_pool
     from ....core.config import load_repo_config
     from ....core.runtime import RuntimeContext
     from ....flows.ticket_flow import build_ticket_flow_definition
-    from ....integrations.agents.build_agent_pool import build_agent_pool
     from ....tickets import DEFAULT_MAX_TOTAL_TURNS
 
     if flow_type == "ticket_flow":

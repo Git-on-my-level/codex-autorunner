@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from codex_autorunner.integrations.chat.ux_regression_contract import (
+from codex_autorunner.adapters.chat.ux_regression_contract import (
     CAMPAIGN_CRITICAL_SCENARIO_MATRIX,
     CAMPAIGN_NORTH_STAR_LATENCY_THRESHOLDS,
     REQUIRED_CHAT_UX_LATENCY_BUDGET_IDS,

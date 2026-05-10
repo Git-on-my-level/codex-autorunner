@@ -18,6 +18,17 @@ if TYPE_CHECKING:
     from ...app_state import HubAppContext
 
 
+async def _send_redirect(send, location: str) -> None:
+    await send(
+        {
+            "type": "http.response.start",
+            "status": 307,
+            "headers": [(b"location", location.encode("utf-8", errors="replace"))],
+        }
+    )
+    await send({"type": "http.response.body", "body": b""})
+
+
 class _LazyRepoApp:
     """Build and start a repo sub-app on first use instead of at hub startup."""
 
@@ -99,6 +110,16 @@ class _LazyRepoApp:
             )
 
     async def __call__(self, scope, receive, send) -> None:
+        if scope.get("type") == "http":
+            path = str(scope.get("path") or "")
+            root_path = str(scope.get("root_path") or f"/repos/{self.prefix}")
+            pma_repo_location = root_path.rstrip("/") or f"/repos/{self.prefix}"
+            if path in {"", "/"}:
+                await _send_redirect(send, pma_repo_location)
+                return
+            if path == "/terminal" or path.startswith("/terminal/"):
+                await _send_redirect(send, pma_repo_location)
+                return
         try:
             sub_app = await self._ensure_ready()
         except Exception:
@@ -233,12 +254,18 @@ class HubMountManager:
                     exc=exc2,
                 )
 
+    def _mount_paths(self, prefix: str) -> tuple[str]:
+        return (f"/repos/{prefix}",)
+
+    def _mount_path(self, prefix: str) -> str:
+        return f"/repos/{prefix}"
+
     def _detach_mount_locked(self, prefix: str) -> None:
-        mount_path = f"/repos/{prefix}"
+        mount_paths = set(self._mount_paths(prefix))
         self.app.router.routes = [
             route
             for route in self.app.router.routes
-            if not (isinstance(route, Mount) and route.path == mount_path)
+            if not (isinstance(route, Mount) and route.path in mount_paths)
         ]
         self._mounted_repos.discard(prefix)
         self._repo_apps.pop(prefix, None)
@@ -294,7 +321,7 @@ class HubMountManager:
                 )
             return False
 
-        self.app.mount(f"/repos/{prefix}", sub_app)
+        self.app.mount(self._mount_path(prefix), sub_app)
         self._mounted_repos.add(prefix)
         self._repo_apps[prefix] = sub_app
         if prefix not in self._mount_order:

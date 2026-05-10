@@ -34,10 +34,15 @@ class BasePathRouterMiddleware:
             known_prefixes
             or (
                 "/",
+                "/_app",
                 "/api",
                 "/hub",
+                "/chats",
                 "/repos",
-                "/static",
+                "/worktrees",
+                "/tickets",
+                "/contextspace",
+                "/settings",
                 "/health",
                 "/cat",
             )
@@ -105,10 +110,18 @@ class BasePathRouterMiddleware:
                 scope["root_path"] = self.base_path
                 root_path = self.base_path
 
-            # Starlette expects scope["path"] to include scope["root_path"] for
-            # mounted sub-apps (including /repos/* and /static/*). If we detect
-            # an already-stripped path (e.g., behind a proxy), re-prefix it.
-            if root_path and not path.startswith(root_path):
+            # Most mounted static/repo routes in this app expect path to include
+            # root_path. Plain FastAPI /api routes are different: direct browser
+            # requests arrive as /<base>/api/* and must be matched as /api/*.
+            if path == f"{self.base_path}/api" or path.startswith(
+                f"{self.base_path}/api/"
+            ):
+                stripped = path[len(self.base_path) :]
+                scope["path"] = stripped or "/"
+                raw_path = scope.get("raw_path")
+                if raw_path and raw_path.startswith(self.base_path_bytes):
+                    scope["raw_path"] = raw_path[len(self.base_path_bytes) :] or b"/"
+            elif root_path and not path.startswith(root_path):
                 if path == "/":
                     scope["path"] = root_path
                 else:
@@ -140,7 +153,7 @@ class AuthTokenMiddleware:
         self.app = app
         self.token = token
         self.base_path = normalize_base_path(base_path)
-        self.public_prefixes = ("/static", "/health", "/cat")
+        self.public_prefixes = ("/_app", "/health", "/cat")
 
     def __getattr__(self, name):
         return getattr(self.app, name)
@@ -510,8 +523,6 @@ class RequestIdMiddleware:
             "/api/contextspace",
             "/api/contextspace/spec/ingest",
             "/api/file-chat",
-            "/api/usage",
-            "/hub/usage",
             "/hub/repos",
         )
         return any(path_lower.startswith(prefix) for prefix in heavy_prefixes)

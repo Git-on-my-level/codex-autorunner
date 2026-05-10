@@ -2,11 +2,11 @@ from typing import Any, Dict, Optional
 
 import pytest
 
-from codex_autorunner.integrations.app_server.client import CodexAppServerResponseError
-from codex_autorunner.integrations.telegram.handlers.commands.agent_model_utils import (
+from codex_autorunner.adapters.app_server.client import CodexAppServerResponseError
+from codex_autorunner.adapters.telegram.handlers.commands.agent_model_utils import (
     _model_list_with_agent_compat,
 )
-from codex_autorunner.integrations.telegram.handlers.commands.workspace import (
+from codex_autorunner.adapters.telegram.handlers.commands.workspace import (
     _model_list_all_with_agent_compat,
 )
 

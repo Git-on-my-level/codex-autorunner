@@ -4,14 +4,7 @@ import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from codex_autorunner.core.state_retention import (
-    CleanupAction,
-    CleanupReason,
-    RetentionBucket,
-    RetentionClass,
-    RetentionScope,
-)
-from codex_autorunner.integrations.app_server.retention import (
+from codex_autorunner.adapters.app_server.retention import (
     DEFAULT_WORKSPACE_MAX_AGE_DAYS,
     WorkspacePruneSummary,
     WorkspaceRetentionPolicy,
@@ -23,8 +16,15 @@ from codex_autorunner.integrations.app_server.retention import (
     resolve_repo_workspace_root,
     resolve_workspace_retention_policy,
 )
-from codex_autorunner.integrations.app_server.supervisor import (
+from codex_autorunner.adapters.app_server.supervisor import (
     WorkspaceAppServerSupervisor,
+)
+from codex_autorunner.core.state_retention import (
+    CleanupAction,
+    CleanupReason,
+    RetentionBucket,
+    RetentionClass,
+    RetentionScope,
 )
 
 
@@ -310,7 +310,7 @@ class TestExecuteWorkspaceRetention:
             raise OSError("boom")
 
         monkeypatch.setattr(
-            "codex_autorunner.integrations.app_server.retention._remove_tree",
+            "codex_autorunner.adapters.app_server.retention._remove_tree",
             _fail_remove,
         )
 

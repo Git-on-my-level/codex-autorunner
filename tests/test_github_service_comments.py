@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from codex_autorunner.integrations.github.service import GitHubService
+from codex_autorunner.adapters.github.service import GitHubService
 
 
 def test_issue_comments_pages_through_all_pr_comment_results(

@@ -283,29 +283,23 @@ if [[ "$RUN_WEB_UI" == true ]]; then
   need_cmd node
   need_cmd pnpm
 
-  if [ -x "./node_modules/.bin/eslint" ]; then
-    ESLINT_BIN="./node_modules/.bin/eslint"
-  elif command -v eslint >/dev/null 2>&1; then
-    ESLINT_BIN="eslint"
-  else
-    echo "Missing required command: eslint. Install dev deps via 'pnpm install'." >&2
-    exit 1
-  fi
+  echo "Linting Web Hub frontend..."
+  pnpm web:lint
 
-  echo "Linting JS/TS (eslint)..."
-  "$ESLINT_BIN" "src/codex_autorunner/static_src/**/*.ts"
-
-  echo "Build static assets (pnpm run build)..."
+  echo "Build Web Hub static assets (pnpm run build)..."
   pnpm run build
 
-  echo "Running frontend JS tests (pnpm test:markdown)..."
-  pnpm test:markdown
+  echo "Running Web Hub frontend tests..."
+  pnpm web:test
 
-  echo "Checking asset manifest is committed..."
-  if [ -f src/codex_autorunner/static/assets.json ]; then
-    if ! git diff --exit-code -- src/codex_autorunner/static/assets.json >/dev/null 2>&1; then
-      echo "Asset manifest is out of date. Run 'pnpm run build' and commit updated manifest." >&2
-      git diff --stat -- src/codex_autorunner/static/assets.json >&2
+  echo "Checking Web Hub SPA shell routes vs SvelteKit pages..."
+  "$PYTHON_BIN" scripts/check_web_hub_spa_shell.py
+
+  echo "Checking Web static assets are committed..."
+  if [ -d src/codex_autorunner/web_static ]; then
+    if ! git diff --exit-code -- src/codex_autorunner/web_static >/dev/null 2>&1; then
+      echo "Web static assets are out of date. Run 'pnpm run build' and commit updated web_static output." >&2
+      git diff --stat -- src/codex_autorunner/web_static >&2
       exit 1
     fi
   fi

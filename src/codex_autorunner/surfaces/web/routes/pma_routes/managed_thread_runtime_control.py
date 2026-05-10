@@ -6,39 +6,38 @@ import json
 import logging
 import sqlite3
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import HTTPException, Request
 
+from .....adapters.app_server.event_buffer import AppServerEventBuffer
+from .....adapters.chat.bound_chat_execution_metadata import (
+    bound_chat_progress_targets_from_execution_mapping,
+    execution_mapping_has_chat_surface_origin,
+)
+from .....adapters.chat.bound_live_progress import (
+    build_bound_chat_progress_cleanup_metadata,
+)
+from .....adapters.chat.managed_thread_turns import (
+    ManagedThreadCoordinatorHooks,
+    ManagedThreadQueueWorkerHooks,
+)
+from .....adapters.chat.managed_thread_turns import (
+    ensure_managed_thread_queue_worker as ensure_shared_managed_thread_queue_worker,
+)
+from .....adapters.discord.rendering import format_discord_message
+from .....adapters.discord.state import DiscordStateStore
+from .....adapters.discord.state import OutboxRecord as DiscordOutboxRecord
+from .....adapters.telegram.state import OutboxRecord as TelegramOutboxRecord
+from .....adapters.telegram.state import TelegramStateStore, parse_topic_key
 from .....core.chat_bindings import (
     DISCORD_STATE_FILE_DEFAULT,
     TELEGRAM_STATE_FILE_DEFAULT,
 )
+from .....core.managed_thread_store import ManagedThreadStore
 from .....core.orchestration import OrchestrationBindingStore
 from .....core.orchestration.cold_trace_store import ColdTraceStore
-from .....core.pma_thread_store import PmaThreadStore
 from .....core.time_utils import now_iso
-from .....integrations.app_server.event_buffer import AppServerEventBuffer
-from .....integrations.chat.bound_chat_execution_metadata import (
-    bound_chat_progress_targets_from_execution_mapping,
-    execution_mapping_has_chat_surface_origin,
-)
-from .....integrations.chat.bound_live_progress import (
-    build_bound_chat_progress_cleanup_metadata,
-)
-from .....integrations.chat.managed_thread_turns import (
-    ManagedThreadCoordinatorHooks,
-    ManagedThreadQueueWorkerHooks,
-)
-from .....integrations.chat.managed_thread_turns import (
-    ensure_managed_thread_queue_worker as ensure_shared_managed_thread_queue_worker,
-)
-from .....integrations.discord.rendering import format_discord_message
-from .....integrations.discord.state import DiscordStateStore
-from .....integrations.discord.state import OutboxRecord as DiscordOutboxRecord
-from .....integrations.telegram.state import OutboxRecord as TelegramOutboxRecord
-from .....integrations.telegram.state import TelegramStateStore, parse_topic_key
 from .automation_adapter import (
     first_callable,
     get_automation_store,
@@ -92,10 +91,10 @@ async def interrupt_managed_thread_via_orchestration(
     notify_transition: Any,
 ) -> dict[str, Any]:
     from .....agents.registry import get_available_agents
-    from .....core.orchestration.catalog import map_agent_capabilities
+    from .....core.agent_capability_projection import project_thread_capabilities
 
     hub_root = request.app.state.config.root
-    store = PmaThreadStore(hub_root)
+    store = ManagedThreadStore(hub_root)
     thread = store.get_thread(managed_thread_id)
     if thread is None:
         raise HTTPException(status_code=404, detail="Managed thread not found")
@@ -105,13 +104,18 @@ async def interrupt_managed_thread_via_orchestration(
         available = get_available_agents(request.app.state)
         descriptor = available.get(agent)
         if descriptor is not None:
-            capabilities = map_agent_capabilities(descriptor.capabilities)
-            if "interrupt" not in capabilities:
+            gate = project_thread_capabilities(
+                thread_id=managed_thread_id,
+                agent_id=agent,
+                capabilities=descriptor.capabilities,
+                has_running_turn=True,
+            ).gate("interrupt_thread")
+            if not gate.allowed:
                 raise HTTPException(
                     status_code=403,
                     detail=(
-                        f"Agent '{agent}' does not support interrupt "
-                        "(missing capability: interrupt)"
+                        f"Agent '{agent}' does not support interrupt"
+                        + (f" ({gate.reason})" if gate.reason else "")
                     ),
                 )
 
@@ -245,12 +249,12 @@ def ensure_queue_worker(
     track_managed_thread_task: Any,
     hooks: ManagedThreadQueueWorkerHooks | ManagedThreadCoordinatorHooks,
 ) -> None:
-    task_map = getattr(app.state, "pma_managed_thread_queue_tasks", None)
+    task_map = getattr(app.state, "managed_thread_queue_tasks", None)
     if not isinstance(task_map, dict):
         task_map = {}
-        app.state.pma_managed_thread_queue_tasks = task_map
+        app.state.managed_thread_queue_tasks = task_map
     request = managed_thread_request_for_app(app)
-    thread_store = PmaThreadStore(app.state.config.root)
+    thread_store = ManagedThreadStore(app.state.config.root)
     service = build_service_for_app(
         app,
         thread_store=thread_store,
@@ -308,7 +312,7 @@ async def restart_queue_workers(
     *,
     ensure_queue_worker_callback: Any,
 ) -> None:
-    thread_store = PmaThreadStore(app.state.config.root)
+    thread_store = ManagedThreadStore(app.state.config.root)
     for managed_thread_id in thread_store.list_thread_ids_with_pending_queue(
         limit=None
     ):
@@ -319,7 +323,7 @@ def _has_owning_bound_chat_surface(
     binding_store: OrchestrationBindingStore,
     managed_thread_id: str,
     *,
-    thread_store: PmaThreadStore,
+    thread_store: ManagedThreadStore,
 ) -> bool:
     running_turn = thread_store.get_running_turn(managed_thread_id)
     progress_targets = set(
@@ -352,7 +356,7 @@ def _has_owning_bound_chat_surface(
 
 
 def _is_chat_origin_running_execution(
-    thread_store: PmaThreadStore, managed_thread_id: str
+    thread_store: ManagedThreadStore, managed_thread_id: str
 ) -> bool:
     running_turn = thread_store.get_running_turn(managed_thread_id)
     return execution_mapping_has_chat_surface_origin(running_turn)
@@ -364,7 +368,7 @@ async def recover_orphaned_executions(
     build_service_for_app: Any,
     recover_bound_progress_execution: Any | None = None,
 ) -> None:
-    thread_store = PmaThreadStore(app.state.config.root)
+    thread_store = ManagedThreadStore(app.state.config.root)
     checkpoint_store = ColdTraceStore(app.state.config.root)
     binding_store = OrchestrationBindingStore(app.state.config.root)
     service = build_service_for_app(
@@ -442,31 +446,6 @@ async def recover_orphaned_executions(
                     getattr(app_server_events, "list_events", None)
                 ) or callable(getattr(app_server_events, "stream_entries", None)):
                     continue
-            if (
-                str(thread.agent_id or "").strip().lower() == "zeroclaw"
-                and thread.workspace_root
-                and thread.backend_thread_id
-                and execution.backend_id
-            ):
-                zeroclaw_supervisor = getattr(app.state, "zeroclaw_supervisor", None)
-                list_turn_events = getattr(
-                    zeroclaw_supervisor, "list_turn_events", None
-                )
-                if callable(list_turn_events):
-                    try:
-                        live_events = await list_turn_events(
-                            Path(str(thread.workspace_root)),
-                            thread.backend_thread_id,
-                            execution.backend_id,
-                        )
-                    except (
-                        AttributeError,
-                        TypeError,
-                        RuntimeError,
-                    ):  # intentional: defensive fallback for dynamic supervisor call
-                        live_events = []
-                    if live_events:
-                        continue
             service.recover_running_execution_after_restart(managed_thread_id)
         except (
             RuntimeError,

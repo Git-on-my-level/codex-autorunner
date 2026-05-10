@@ -1,0 +1,64 @@
+# Telegram Surface
+
+Telegram bot and adapters.
+
+## Responsibilities
+
+- Telegram bot interface
+- Message routing and handlers
+- Telegram-specific ergonomics
+- Telegram state management
+
+## Allowed Dependencies
+
+- `core.*` (engine, config, state, etc.)
+- `adapters.*` (telegram, app_server, etc.)
+- Third-party Telegram libraries (python-telegram-bot, etc.)
+
+## Key Components
+
+- Telegram bot entry points and handlers are in `adapters/telegram/`
+- Telegram-specific rendering code lives in `adapters/telegram/rendering.py`
+
+## Ticket Flow Commands
+
+Use `/flow ...` to control ticket flow for a bound workspace, or view hub overview
+for `status`/`runs` in PMA or unbound contexts.
+
+Note: Telegram currently exposes the superset of flow controls across chat surfaces.
+
+Unbound but allowlisted chats and topics now stay quiet for ordinary conversation.
+This is intentional: plain-text turns only start after the chat is activated with
+`/pma on` or bound with `/bind`.
+
+Command reference:
+- `/flow` or `/flow help`
+- `/flow status [run_id]`
+- `/flow runs [N]`
+- `/flow bootstrap [--force-new]`
+- `/flow issue <issue#|url>`
+- `/flow plan <text>`
+- `/flow resume [run_id]`
+- `/flow stop [run_id]`
+- `/flow recover [run_id]`
+- `/flow restart`
+- `/flow archive [run_id] [--force]`
+- `/flow reply <message>`
+
+Aliases:
+- `/reply` (legacy alias for `/flow reply`)
+
+Examples:
+- Bootstrap from GitHub issue:
+  - `/flow bootstrap` then send `https://github.com/org/repo/issues/123`
+  - `/flow issue 123`
+- Bootstrap from plan text: `/flow plan <text>`
+- Status + buttons: `/flow status` (use Resume/Stop/Recover/Restart/Archive/Refresh buttons)
+- Reply to a pause: `/flow reply <message>`, then `/flow resume`
+
+## Integration Harness
+
+For cross-surface PMA regressions, use
+`tests/chat_surface_integration/README.md`. It drives Telegram message ingress
+through `TelegramBotService` with the same subprocess-backed Hermes fixture used
+for Discord parity tests.

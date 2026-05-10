@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from codex_autorunner.integrations.chat.service import ChatBotServiceCore
+from codex_autorunner.adapters.chat.service import ChatBotServiceCore
 
 
 class _NeverEndingManager:
@@ -179,7 +179,7 @@ async def test_telegram_poll_failures_use_persistent_backoff(
         sleep_delays.append(delay)
 
     monkeypatch.setattr(
-        "codex_autorunner.integrations.chat.service.asyncio.sleep",
+        "codex_autorunner.adapters.chat.service.asyncio.sleep",
         _fake_sleep,
     )
 

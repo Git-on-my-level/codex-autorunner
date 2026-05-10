@@ -34,8 +34,8 @@ from .git_utils import (
     run_git,
 )
 from .hub_topology import HubTopologyRepository
+from .managed_thread_store import ManagedThreadStore
 from .orchestration.sqlite import open_orchestration_sqlite
-from .pma_thread_store import PmaThreadStore
 from .utils import is_within
 
 if TYPE_CHECKING:
@@ -535,7 +535,7 @@ class RepoManager:
         if not base_repo_paths:
             return {}
 
-        store = PmaThreadStore(self._hub_config.root)
+        store = ManagedThreadStore(self._hub_config.root)
         bound_thread_ids = self._bound_thread_target_ids()
         seen_ids: set[str] = set()
         workspace_to_repo_id = {
@@ -582,7 +582,7 @@ class RepoManager:
         if not thread_ids:
             return []
 
-        store = PmaThreadStore(self._hub_config.root)
+        store = ManagedThreadStore(self._hub_config.root)
         archived_thread_ids: list[str] = []
         for managed_thread_id in thread_ids:
             store.archive_thread(managed_thread_id)

@@ -8,6 +8,13 @@ from typing import Any, Optional
 
 import typer
 
+from ....adapters.chat.doctor import (
+    chat_doctor_checks,
+    chat_surface_lab_doctor_checks,
+    chat_ux_timing_diagnostic_checks,
+)
+from ....adapters.discord.doctor import discord_doctor_checks
+from ....adapters.telegram.doctor import telegram_doctor_checks
 from ....core.config import ConfigError, RepoConfig, derive_repo_config, load_hub_config
 from ....core.diagnostics.process_snapshot import (
     collect_processes,
@@ -27,7 +34,6 @@ from ....core.runtime import (
     hub_worktree_doctor_checks,
     pma_doctor_checks,
     summarize_opencode_lifecycle,
-    zeroclaw_doctor_checks,
 )
 from ....core.utils import (
     RepoNotFoundError,
@@ -35,13 +41,6 @@ from ....core.utils import (
     is_within,
     resolve_executable,
 )
-from ....integrations.chat.doctor import (
-    chat_doctor_checks,
-    chat_surface_lab_doctor_checks,
-    chat_ux_timing_diagnostic_checks,
-)
-from ....integrations.discord.doctor import discord_doctor_checks
-from ....integrations.telegram.doctor import telegram_doctor_checks
 from .utils import get_car_version, raise_exit
 
 logger = logging.getLogger(__name__)
@@ -332,7 +331,6 @@ def register_doctor_commands(
                 + pma_checks
                 + hub_worktree_checks
                 + hub_destination_checks
-                + zeroclaw_doctor_checks(hub_config)
                 + hermes_doctor_checks(hub_config)
                 + chat_checks
                 + chat_lab_checks

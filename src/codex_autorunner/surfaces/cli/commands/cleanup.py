@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 import dataclasses
+import logging
 from pathlib import Path
 from typing import Callable, Optional
 
 import typer
 
+from ....adapters.app_server.retention import (
+    prune_workspace_root,
+    resolve_global_workspace_root,
+    resolve_repo_workspace_root,
+    resolve_workspace_retention_policy,
+)
 from ....core.archive_retention import (
     prune_run_archive_root,
     prune_worktree_archive_root,
@@ -68,15 +75,11 @@ from ....housekeeping import (
     resolve_housekeeping_rule,
     run_housekeeping_once,
 )
-from ....integrations.app_server.retention import (
-    prune_workspace_root,
-    resolve_global_workspace_root,
-    resolve_repo_workspace_root,
-    resolve_workspace_retention_policy,
-)
 from ....manifest import load_manifest
 from ....workspace import workspace_id_for_path
 from ..hub_path_option import hub_root_path_option
+
+logger = logging.getLogger(__name__)
 
 
 def _build_force_attestation(
@@ -747,8 +750,6 @@ def register_cleanup_commands(
 
         for entry in manifest.repos:
             roots.add((hub_config.root / entry.path).resolve())
-        for workspace in manifest.agent_workspaces:
-            roots.add((hub_config.root / workspace.path).resolve())
 
         return tuple(sorted(roots, key=lambda path: str(path)))
 

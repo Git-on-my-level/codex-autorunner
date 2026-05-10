@@ -354,7 +354,6 @@ def _runner_state_is_dirty(path: Path) -> bool:
         return True
     override_values = (
         state.autorunner_agent_override,
-        state.autorunner_model_override,
         state.autorunner_effort_override,
         state.autorunner_approval_policy,
         state.autorunner_sandbox_mode,
@@ -784,8 +783,8 @@ def archive_workspace_managed_threads(
     import sqlite3
 
     from .config import find_nearest_hub_config_path
+    from .managed_thread_store import ManagedThreadStore
     from .orchestration.sqlite import open_orchestration_sqlite
-    from .pma_thread_store import PmaThreadStore
 
     resolved_hub_root = hub_root
     if resolved_hub_root is None:
@@ -817,7 +816,7 @@ def archive_workspace_managed_threads(
                 if isinstance(row["target_id"], str) and row["target_id"].strip()
             }
 
-    store = PmaThreadStore(resolved_hub_root)
+    store = ManagedThreadStore(resolved_hub_root)
     archived_thread_ids: list[str] = []
     seen_ids: set[str] = set()
     canonical_worktree = worktree_path.resolve()

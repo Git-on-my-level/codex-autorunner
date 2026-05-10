@@ -6,11 +6,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
-from codex_autorunner.browser.runtime import BrowserRuntime
-from codex_autorunner.integrations.discord.errors import (
+from codex_autorunner.adapters.discord.errors import (
     DiscordPermanentError,
     DiscordTransientError,
 )
+from codex_autorunner.browser.runtime import BrowserRuntime
 
 from .artifact_manifests import ArtifactManifest
 from .evidence_artifacts import write_surface_evidence_artifacts

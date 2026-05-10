@@ -347,7 +347,7 @@ def test_route_scm_reactions_routes_pull_request_review_comment() -> None:
             "author_type": "User",
             "issue_author_login": "pr-author",
             "body": "Please cover the inline review-comment webhook path too.",
-            "path": "src/codex_autorunner/integrations/github/webhooks.py",
+            "path": "src/codex_autorunner/adapters/github/webhooks.py",
             "line": 284,
         },
     )
@@ -444,7 +444,7 @@ def test_route_scm_reactions_skips_non_whitelisted_bot_pull_request_review_comme
             "author_type": "Bot",
             "issue_author_login": "pr-author",
             "body": "Please cover the bot-authored inline review path.",
-            "path": "src/codex_autorunner/integrations/github/webhooks.py",
+            "path": "src/codex_autorunner/adapters/github/webhooks.py",
             "line": 305,
         },
     )

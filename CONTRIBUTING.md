@@ -19,7 +19,7 @@ Thanks for helping improve codex-autorunner.
 - Force full validation: `./scripts/check.sh --full` (or `make check-full`)
 - JS lint (UI): `pnpm run lint:js`
 - Format: `python -m black src tests`
-- Build static assets: `pnpm run build` (source is `src/codex_autorunner/static_src/`, output is `src/codex_autorunner/static/`)
+- Build Web Hub frontend: `pnpm run build` (source is `src/codex_autorunner/web_frontend/`, output is `src/codex_autorunner/web_static/`)
 
 ## Validation lanes
 The pre-commit hook and CI use lane-based validation to avoid running unnecessary checks:

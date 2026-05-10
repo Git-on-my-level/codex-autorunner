@@ -10,6 +10,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
+from .....adapters.chat.channel_directory import (
+    ChannelDirectoryStore,
+    channel_entry_key,
+)
+from .....adapters.telegram.state import topic_key
 from .....core.chat_bindings import (
     DISCORD_STATE_FILE_DEFAULT,
     TELEGRAM_STATE_FILE_DEFAULT,
@@ -27,16 +32,11 @@ from .....core.managed_thread_identity import (
 from .....core.pma_context import (
     get_latest_ticket_flow_run_state_with_record,
 )
-from .....integrations.chat.channel_directory import (
-    ChannelDirectoryStore,
-    channel_entry_key,
-)
-from .....integrations.telegram.state import topic_key
 from .channel_source_readers import (
     canonical_workspace_path,
     coerce_int,
     normalize_agent,
-    read_active_pma_threads,
+    read_active_managed_threads,
     read_discord_bindings,
     read_orchestration_bindings,
     read_telegram_bindings,
@@ -67,10 +67,10 @@ class HubChannelService:
         self._context = context
         self._channel_dir_cache: Optional[_ChannelDirectoryCacheEntry] = None
 
-    def _resolve_pma_managed_thread_id(
+    def _resolve_managed_thread_id(
         self,
         *,
-        pma_threads: list[dict[str, Any]],
+        managed_threads: list[dict[str, Any]],
         repo_id: Any,
         workspace_path: Any,
         agent: str,
@@ -84,7 +84,7 @@ class HubChannelService:
             if isinstance(workspace_path, str) and workspace_path
             else None
         )
-        if not pma_threads:
+        if not managed_threads:
             return None
 
         def _matches(
@@ -126,7 +126,7 @@ class HubChannelService:
         ):
             candidates = [
                 thread
-                for thread in pma_threads
+                for thread in managed_threads
                 if _matches(
                     thread,
                     exact_agent=exact_agent,
@@ -387,8 +387,8 @@ class HubChannelService:
             surface_kind="telegram",
             context=self._context,
         )
-        pma_threads_task = asyncio.to_thread(
-            read_active_pma_threads,
+        managed_threads_task = asyncio.to_thread(
+            read_active_managed_threads,
             self._context.config.root,
             repo_id_by_workspace,
             context=self._context,
@@ -398,13 +398,13 @@ class HubChannelService:
             telegram_bindings,
             discord_thread_bindings,
             telegram_thread_bindings,
-            pma_threads,
+            managed_threads,
         ) = await asyncio.gather(
             discord_bindings_task,
             telegram_bindings_task,
             discord_thread_bindings_task,
             telegram_thread_bindings_task,
-            pma_threads_task,
+            managed_threads_task,
             return_exceptions=False,
         )
         run_cache: dict[str, dict[str, Any]] = {}
@@ -478,16 +478,16 @@ class HubChannelService:
                             ):
                                 managed_thread_id = thread_target_id.strip()
                         if managed_thread_id is None:
-                            managed_thread_id = self._resolve_pma_managed_thread_id(
-                                pma_threads=pma_threads,
+                            managed_thread_id = self._resolve_managed_thread_id(
+                                managed_threads=managed_threads,
                                 repo_id=repo_id,
                                 workspace_path=workspace_path,
                                 agent=agent,
                                 agent_profile=binding.get("agent_profile"),
                             )
-                        row["source"] = "pma_thread"
+                        row["source"] = "managed_thread"
                         row["provenance"] = {
-                            "source": "pma_thread",
+                            "source": "managed_thread",
                             "platform": platform,
                             "agent": agent,
                             "resource_kind": resource_kind,
@@ -601,13 +601,13 @@ class HubChannelService:
                         exc=exc,
                     )
             rows.append(row)
-        for thread in pma_threads:
+        for thread in managed_threads:
             managed_thread_id = thread.get("managed_thread_id")
             if not isinstance(managed_thread_id, str) or not managed_thread_id:
                 continue
             if managed_thread_id in represented_managed_thread_ids:
                 continue
-            key = f"pma_thread:{managed_thread_id}"
+            key = f"managed_thread:{managed_thread_id}"
             if key in seen_keys:
                 continue
             seen_keys.add(key)
@@ -645,14 +645,14 @@ class HubChannelService:
                     "run_id": metadata.get("run_id"),
                 },
                 "entry": {
-                    "platform": "pma_thread",
+                    "platform": "managed_thread",
                     "thread_id": managed_thread_id,
                     "agent": agent,
                     "status": normalized_status,
                 },
-                "source": "pma_thread",
+                "source": "managed_thread",
                 "provenance": {
-                    "source": "pma_thread",
+                    "source": "managed_thread",
                     "managed_thread_id": managed_thread_id,
                     "agent": agent,
                     "status": normalized_status,

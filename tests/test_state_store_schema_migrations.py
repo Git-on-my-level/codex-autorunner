@@ -4,15 +4,15 @@ import sqlite3
 
 import pytest
 
-from codex_autorunner.core.sqlite_utils import read_schema_version
-from codex_autorunner.integrations.discord.state import (
+from codex_autorunner.adapters.discord.state import (
     DISCORD_STATE_SCHEMA_VERSION,
     DiscordStateStore,
 )
-from codex_autorunner.integrations.telegram.state import (
+from codex_autorunner.adapters.telegram.state import (
     TELEGRAM_SCHEMA_VERSION,
     TelegramStateStore,
 )
+from codex_autorunner.core.sqlite_utils import read_schema_version
 
 
 def _column_names(conn: sqlite3.Connection, table_name: str) -> set[str]:

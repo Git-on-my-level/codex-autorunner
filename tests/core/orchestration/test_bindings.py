@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration import (
     OrchestrationBindingStore,
     initialize_orchestration_sqlite,
 )
-from codex_autorunner.core.pma_thread_store import PmaThreadStore
 
 
 def _create_thread(
@@ -16,11 +16,11 @@ def _create_thread(
     repo_id: str = "repo-1",
     workspace_name: str = "workspace",
     name: str = "Thread",
-    thread_store: PmaThreadStore | None = None,
+    thread_store: ManagedThreadStore | None = None,
 ) -> str:
     workspace_root = hub_root / workspace_name
     workspace_root.mkdir(parents=True, exist_ok=True)
-    store = thread_store or PmaThreadStore(hub_root)
+    store = thread_store or ManagedThreadStore(hub_root)
     created = store.create_thread(
         agent,
         workspace_root,
@@ -33,7 +33,7 @@ def _create_thread(
 def test_binding_store_replaces_active_binding_for_same_surface(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     initialize_orchestration_sqlite(hub_root, durable=False)
-    thread_store = PmaThreadStore(hub_root)
+    thread_store = ManagedThreadStore(hub_root)
     bindings = OrchestrationBindingStore(hub_root, durable=False)
     first_thread_id = _create_thread(
         hub_root, workspace_name="repo-a-1", thread_store=thread_store
@@ -85,7 +85,7 @@ def test_binding_store_replaces_active_binding_for_same_surface(tmp_path: Path) 
 def test_binding_store_disable_and_active_thread_lookup(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     initialize_orchestration_sqlite(hub_root, durable=False)
-    thread_store = PmaThreadStore(hub_root)
+    thread_store = ManagedThreadStore(hub_root)
     bindings = OrchestrationBindingStore(hub_root, durable=False)
     thread_id = _create_thread(hub_root, thread_store=thread_store)
     binding = bindings.upsert_binding(
@@ -131,7 +131,7 @@ def test_binding_store_lists_bindings_and_active_work_by_agent_and_repo(
 ) -> None:
     hub_root = tmp_path / "hub"
     initialize_orchestration_sqlite(hub_root, durable=False)
-    thread_store = PmaThreadStore(hub_root)
+    thread_store = ManagedThreadStore(hub_root)
     bindings = OrchestrationBindingStore(hub_root, durable=False)
     codex_thread_id = _create_thread(
         hub_root,
@@ -170,7 +170,7 @@ def test_binding_store_lists_bindings_and_active_work_by_agent_and_repo(
         agent_id="opencode",
         repo_id="repo-2",
     )
-    store = PmaThreadStore(hub_root)
+    store = ManagedThreadStore(hub_root)
     running_turn = store.create_turn(codex_thread_id, prompt="busy")
 
     repo_bindings = bindings.list_bindings(repo_id="repo-1")
@@ -193,7 +193,7 @@ def test_binding_store_lists_bindings_and_active_work_by_agent_and_repo(
 def test_binding_store_active_work_by_agent(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     initialize_orchestration_sqlite(hub_root, durable=False)
-    thread_store = PmaThreadStore(hub_root)
+    thread_store = ManagedThreadStore(hub_root)
     bindings = OrchestrationBindingStore(hub_root, durable=False)
     codex_thread_id = _create_thread(
         hub_root,
@@ -243,7 +243,7 @@ def test_binding_store_active_work_by_agent(tmp_path: Path) -> None:
 def test_binding_store_filters_by_thread_target_id(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     initialize_orchestration_sqlite(hub_root, durable=False)
-    thread_store = PmaThreadStore(hub_root)
+    thread_store = ManagedThreadStore(hub_root)
     bindings = OrchestrationBindingStore(hub_root, durable=False)
     first_thread_id = _create_thread(
         hub_root, workspace_name="repo-a-1", thread_store=thread_store
@@ -277,7 +277,7 @@ def test_binding_store_filters_by_thread_target_id(tmp_path: Path) -> None:
 def test_binding_store_active_work_by_repo(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     initialize_orchestration_sqlite(hub_root, durable=False)
-    thread_store = PmaThreadStore(hub_root)
+    thread_store = ManagedThreadStore(hub_root)
     bindings = OrchestrationBindingStore(hub_root, durable=False)
     thread1_id = _create_thread(
         hub_root,
@@ -327,7 +327,7 @@ def test_binding_store_active_work_by_repo(tmp_path: Path) -> None:
 def test_binding_store_active_work_includes_queue_depth(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     initialize_orchestration_sqlite(hub_root, durable=False)
-    thread_store = PmaThreadStore(hub_root)
+    thread_store = ManagedThreadStore(hub_root)
     bindings = OrchestrationBindingStore(hub_root, durable=False)
     thread_id = _create_thread(
         hub_root, repo_id="repo-1", workspace_name="repo-1", thread_store=thread_store
@@ -360,7 +360,7 @@ def test_binding_store_active_work_excludes_idle_completed_and_archived_threads(
 ) -> None:
     hub_root = tmp_path / "hub"
     initialize_orchestration_sqlite(hub_root, durable=False)
-    thread_store = PmaThreadStore(hub_root)
+    thread_store = ManagedThreadStore(hub_root)
     bindings = OrchestrationBindingStore(hub_root, durable=False)
     idle_thread_id = _create_thread(
         hub_root,
@@ -493,7 +493,7 @@ def test_binding_store_active_work_excludes_idle_completed_and_archived_threads(
 def test_binding_store_list_bindings_by_surface_kind(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     initialize_orchestration_sqlite(hub_root, durable=False)
-    thread_store = PmaThreadStore(hub_root)
+    thread_store = ManagedThreadStore(hub_root)
     bindings = OrchestrationBindingStore(hub_root, durable=False)
     thread_id = _create_thread(hub_root, thread_store=thread_store)
 
@@ -529,48 +529,45 @@ def test_binding_store_list_bindings_by_surface_kind(tmp_path: Path) -> None:
     assert {b.surface_key for b in telegram_bindings} == {"123:root", "123:chat"}
 
 
-def test_binding_store_supports_agent_workspace_owners(tmp_path: Path) -> None:
+def test_binding_store_supports_repo_resource_owner_queries(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     initialize_orchestration_sqlite(hub_root, durable=False)
     bindings = OrchestrationBindingStore(hub_root, durable=False)
-    workspace_root = hub_root / "runtimes" / "zeroclaw" / "zc-main"
+    workspace_root = hub_root / "workspace-main"
     workspace_root.mkdir(parents=True, exist_ok=True)
-    store = PmaThreadStore(hub_root)
+    store = ManagedThreadStore(hub_root)
     created = store.create_thread(
         "codex",
         workspace_root,
-        resource_kind="agent_workspace",
-        resource_id="zc-main",
-        name="Workspace thread",
+        repo_id="hub-repo",
+        name="Repo scoped thread",
     )
     thread_id = str(created["managed_thread_id"])
 
     binding = bindings.upsert_binding(
         surface_kind="discord",
-        surface_key="chan-zc",
+        surface_key="chan-repo",
         thread_target_id=thread_id,
         agent_id="codex",
-        resource_kind="agent_workspace",
-        resource_id="zc-main",
+        repo_id="hub-repo",
     )
     store.create_turn(thread_id, prompt="busy")
 
     listed = bindings.list_bindings(
-        resource_kind="agent_workspace",
-        resource_id="zc-main",
+        resource_kind="repo",
+        resource_id="hub-repo",
     )
     active = bindings.list_active_work_summaries(
-        resource_kind="agent_workspace",
-        resource_id="zc-main",
+        resource_kind="repo",
+        resource_id="hub-repo",
     )
 
-    assert binding.resource_kind == "agent_workspace"
-    assert binding.resource_id == "zc-main"
-    assert binding.repo_id is None
+    assert binding.resource_kind == "repo"
+    assert binding.resource_id == "hub-repo"
+    assert binding.repo_id == "hub-repo"
     assert len(listed) == 1
-    assert listed[0].resource_kind == "agent_workspace"
-    assert listed[0].resource_id == "zc-main"
+    assert listed[0].resource_kind == "repo"
+    assert listed[0].resource_id == "hub-repo"
     assert len(active) == 1
-    assert active[0].resource_kind == "agent_workspace"
-    assert active[0].resource_id == "zc-main"
-    assert active[0].repo_id is None
+    assert active[0].resource_kind == "repo"
+    assert active[0].resource_id == "hub-repo"

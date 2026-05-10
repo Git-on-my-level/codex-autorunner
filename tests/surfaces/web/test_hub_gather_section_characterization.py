@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
-from codex_autorunner.core.pma_thread_store import PmaThreadStore
+from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.surfaces.web.services import hub_gather as hub_gather_service
 
 
@@ -22,20 +22,20 @@ def test_gather_hub_message_snapshot_excludes_unrequested_inbox_items(
 
     snapshot = hub_gather_service.gather_hub_message_snapshot(
         context,
-        sections={"pma_threads"},
+        sections={"managed_threads"},
     )
 
     assert "items" not in snapshot
-    assert "pma_threads" in snapshot
+    assert "managed_threads" in snapshot
 
 
-def test_gather_hub_message_snapshot_excludes_unrequested_pma_threads(
+def test_gather_hub_message_snapshot_excludes_unrequested_managed_threads(
     tmp_path,
 ) -> None:
     hub_root = Path(tmp_path)
     repo_root = hub_root / "repo"
     repo_root.mkdir(parents=True, exist_ok=True)
-    PmaThreadStore(hub_root).create_thread(
+    ManagedThreadStore(hub_root).create_thread(
         "codex",
         repo_root,
         repo_id="repo",
@@ -53,7 +53,7 @@ def test_gather_hub_message_snapshot_excludes_unrequested_pma_threads(
         sections={"inbox"},
     )
 
-    assert "pma_threads" not in snapshot
+    assert "managed_threads" not in snapshot
 
 
 def test_gather_hub_message_snapshot_includes_generated_at_always(
@@ -97,7 +97,7 @@ def test_gather_hub_message_snapshot_does_not_fabricate_inbox_on_supervisor_erro
     assert any(d["section"] == "inbox" for d in diag)
 
 
-def test_gather_hub_message_snapshot_returns_empty_pma_threads_not_missing(
+def test_gather_hub_message_snapshot_returns_empty_managed_threads_not_missing(
     tmp_path,
 ) -> None:
     hub_root = Path(tmp_path)
@@ -108,11 +108,11 @@ def test_gather_hub_message_snapshot_returns_empty_pma_threads_not_missing(
 
     snapshot = hub_gather_service.gather_hub_message_snapshot(
         context,
-        sections={"pma_threads"},
+        sections={"managed_threads"},
     )
 
-    assert "pma_threads" in snapshot
-    assert isinstance(snapshot["pma_threads"], list)
+    assert "managed_threads" in snapshot
+    assert isinstance(snapshot["managed_threads"], list)
 
 
 def test_gather_hub_message_snapshot_does_not_fabricate_automation_when_not_requested(

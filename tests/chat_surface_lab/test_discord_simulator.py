@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from codex_autorunner.integrations.discord.errors import (
+from codex_autorunner.adapters.discord.errors import (
     DiscordPermanentError,
     DiscordTransientError,
 )

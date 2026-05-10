@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from codex_autorunner.integrations.telegram.commands_registry import (
+from codex_autorunner.adapters.telegram.commands_registry import (
     TelegramCommandDiff,
     build_command_payloads,
     diff_command_lists,
 )
-from codex_autorunner.integrations.telegram.handlers.commands_spec import CommandSpec
+from codex_autorunner.adapters.telegram.handlers.commands_spec import CommandSpec
 
 
 async def _dummy_handler(message: Any, args: str, handlers: Any) -> None:

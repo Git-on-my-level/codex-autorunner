@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from codex_autorunner.integrations.telegram.state_types import (
+from codex_autorunner.adapters.telegram.state_types import (
     STATE_VERSION,
     OutboxRecord,
     PendingApprovalRecord,

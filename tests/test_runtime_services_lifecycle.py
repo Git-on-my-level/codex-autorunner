@@ -144,7 +144,6 @@ async def test_repo_app_lifespan_closes_runtime_services(
         housekeeping=SimpleNamespace(enabled=False, interval_seconds=1)
     )
     app.state.runtime_services = runtime_services
-    app.state.static_assets_context = None
 
     lifespan = _app_lifespan(context)
     async with lifespan(app):

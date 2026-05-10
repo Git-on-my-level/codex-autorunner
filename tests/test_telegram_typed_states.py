@@ -5,27 +5,27 @@ from pathlib import Path
 
 import pytest
 
-from codex_autorunner.integrations.telegram.adapter import (
+from codex_autorunner.adapters.telegram.client import (
     CompactCallback,
     EffortCallback,
     TelegramCallbackQuery,
     UpdateConfirmCallback,
 )
-from codex_autorunner.integrations.telegram.handlers.commands.agent_model_utils import (
+from codex_autorunner.adapters.telegram.handlers.commands.agent_model_utils import (
     _send_agent_picker,
 )
-from codex_autorunner.integrations.telegram.handlers.commands.execution import (
+from codex_autorunner.adapters.telegram.handlers.commands.execution import (
     ExecutionCommands,
     _TurnDeliveryState,
 )
-from codex_autorunner.integrations.telegram.handlers.commands_runtime import (
+from codex_autorunner.adapters.telegram.handlers.commands_runtime import (
     TelegramCommandHandlers,
 )
-from codex_autorunner.integrations.telegram.handlers.selections import (
+from codex_autorunner.adapters.telegram.handlers.selections import (
     TelegramSelectionHandlers,
 )
-from codex_autorunner.integrations.telegram.helpers import ModelOption
-from codex_autorunner.integrations.telegram.types import (
+from codex_autorunner.adapters.telegram.helpers import ModelOption
+from codex_autorunner.adapters.telegram.types import (
     CompactState,
     CompactStatusState,
     ModelPendingState,
@@ -33,7 +33,7 @@ from codex_autorunner.integrations.telegram.types import (
     TelegramNoticeContext,
     UpdateConfirmState,
 )
-from codex_autorunner.integrations.telegram.ui_state import TelegramUiState
+from codex_autorunner.adapters.telegram.ui_state import TelegramUiState
 
 
 class _ExecutionProgressHandler(ExecutionCommands):

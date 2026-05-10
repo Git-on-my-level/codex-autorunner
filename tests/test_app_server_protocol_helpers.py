@@ -1,10 +1,10 @@
-from codex_autorunner.integrations.app_server.protocol_helpers import (
+from codex_autorunner.adapters.app_server.protocol_helpers import (
     normalize_approval_request,
     normalize_notification_envelope,
     normalize_response,
     normalize_response_result,
 )
-from codex_autorunner.integrations.app_server.protocol_types import (
+from codex_autorunner.adapters.app_server.protocol_types import (
     ApprovalRequest,
     TurnCompletedNotification,
 )

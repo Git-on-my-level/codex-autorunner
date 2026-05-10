@@ -3,11 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+from codex_autorunner.adapters.github.service import RepoInfo
 from codex_autorunner.core import ticket_flow_operator
 from codex_autorunner.core.flows import ux_helpers
 from codex_autorunner.core.flows.models import FlowRunRecord, FlowRunStatus
 from codex_autorunner.core.flows.worker_process import FlowWorkerHealth
-from codex_autorunner.integrations.github.service import RepoInfo
 
 
 def test_bootstrap_check_ready_when_tickets_exist(tmp_path):

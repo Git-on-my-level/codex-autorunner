@@ -7,12 +7,12 @@ from typing import Any
 
 import pytest
 
-from codex_autorunner.core.managed_processes.registry import ProcessRecord
-from codex_autorunner.integrations.app_server import client as app_server_client
-from codex_autorunner.integrations.app_server.client import CodexAppServerClient
-from codex_autorunner.integrations.app_server.supervisor import (
+from codex_autorunner.adapters.app_server import client as app_server_client
+from codex_autorunner.adapters.app_server.client import CodexAppServerClient
+from codex_autorunner.adapters.app_server.supervisor import (
     WorkspaceAppServerSupervisor,
 )
+from codex_autorunner.core.managed_processes.registry import ProcessRecord
 
 
 @pytest.mark.anyio
@@ -151,7 +151,7 @@ async def test_app_server_supervisor_passes_workspace_id_to_client(
             return
 
     monkeypatch.setattr(
-        "codex_autorunner.integrations.app_server.supervisor.CodexAppServerClient",
+        "codex_autorunner.adapters.app_server.supervisor.CodexAppServerClient",
         _FakeClient,
     )
 

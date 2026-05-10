@@ -6,17 +6,17 @@ from typing import Any
 
 import pytest
 
+from codex_autorunner.adapters.telegram.handlers.commands import (
+    execution as execution_commands_module,
+)
+from codex_autorunner.adapters.telegram.state_types import TelegramTopicRecord
 from codex_autorunner.core.orchestration.chat_operation_ledger import (
     SQLiteChatOperationLedger,
 )
 from codex_autorunner.core.orchestration.chat_operation_state import (
     ChatOperationState,
 )
-from codex_autorunner.integrations.telegram.handlers.commands import (
-    execution as execution_commands_module,
-)
-from codex_autorunner.integrations.telegram.state_types import TelegramTopicRecord
-from tests.telegram_pma_managed_thread_support import _ManagedThreadPMAHandler
+from tests.telegram_managed_thread_support import _ManagedThreadPMAHandler
 
 
 @pytest.mark.anyio

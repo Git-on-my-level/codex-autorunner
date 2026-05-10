@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from codex_autorunner.integrations.chat.callbacks import LogicalCallback
-from codex_autorunner.integrations.telegram.chat_callbacks import (
+from codex_autorunner.adapters.chat.callbacks import LogicalCallback
+from codex_autorunner.adapters.telegram.chat_callbacks import (
     TelegramCallbackCodec,
     TelegramCallbackContractScenario,
     cataloged_telegram_callback_contract_scenarios,
@@ -119,7 +119,7 @@ async def test_wire_parse_returns_expected_kind(
 async def test_flow_callback_with_repo_id_round_trips(
     codec: TelegramCallbackCodec,
 ) -> None:
-    from codex_autorunner.integrations.chat.callbacks import CALLBACK_FLOW
+    from codex_autorunner.adapters.chat.callbacks import CALLBACK_FLOW
 
     original = LogicalCallback(
         callback_id=CALLBACK_FLOW,
@@ -137,7 +137,7 @@ async def test_flow_callback_with_repo_id_round_trips(
 async def test_flow_callback_action_only_round_trips(
     codec: TelegramCallbackCodec,
 ) -> None:
-    from codex_autorunner.integrations.chat.callbacks import CALLBACK_FLOW
+    from codex_autorunner.adapters.chat.callbacks import CALLBACK_FLOW
 
     original = LogicalCallback(
         callback_id=CALLBACK_FLOW,

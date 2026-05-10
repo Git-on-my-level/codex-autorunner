@@ -7,7 +7,7 @@ It is intentionally aligned with `docs/ARCHITECTURE_BOUNDARIES.md`:
 - durable operation truth belongs to the control plane under
   `src/codex_autorunner/core/orchestration/`
 - shared chat UX semantics belong to the adapter layer under
-  `src/codex_autorunner/integrations/chat/`
+  `src/codex_autorunner/adapters/chat/`
 - transport-specific modules continue to own protocol parsing, delivery, and
   platform limitations only
 
@@ -81,10 +81,10 @@ control-plane state machine.
 
 Authoritative modules:
 
-- `src/codex_autorunner/integrations/chat/ux_contract.py`
+- `src/codex_autorunner/adapters/chat/ux_contract.py`
   Shared presentation metadata for state labels, phases, spinner policy, and
   user-facing affordances
-- existing adapter contracts under `src/codex_autorunner/integrations/chat/`
+- existing adapter contracts under `src/codex_autorunner/adapters/chat/`
   Normalized event, renderer, transport, and callback contracts
 
 Adapter rules:
@@ -204,9 +204,9 @@ modules.
 - `src/codex_autorunner/core/orchestration/chat_operation_ledger.py`
   Provide the first orchestration-backed store implementation and recovery
   planning boundary without moving lifecycle authority out of the control plane
-- `src/codex_autorunner/integrations/chat/ux_contract.py`
+- `src/codex_autorunner/adapters/chat/ux_contract.py`
   Introduce shared presentation metadata derived from the control-plane states
-- `src/codex_autorunner/integrations/chat/immediate_feedback.py`
+- `src/codex_autorunner/adapters/chat/immediate_feedback.py`
   Use the shared control-plane states when adapters ack, create anchors, queue,
   and interrupt, while keeping transport mechanics local
 

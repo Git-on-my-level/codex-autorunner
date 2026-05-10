@@ -15,9 +15,10 @@ from .flow_telemetry_hooks import (
     build_store_event_emitter,
     handle_run_terminal_side_effects,
 )
+from .lifecycle_reducer import FlowTrigger, TriggerKind, reduce_flow_lifecycle
 from .models import FlowEvent, FlowRunRecord, FlowRunStatus
 from .runtime import FlowRuntime
-from .store import FlowStore
+from .store import FlowStore, now_iso
 from .workspace_root import (
     normalize_ticket_flow_input_data,
     resolve_ticket_flow_workspace_root,
@@ -165,6 +166,28 @@ class FlowController:
         record = self.store.set_stop_requested(run_id, True)
         if not record:
             raise ValueError(f"Flow run {run_id} not found")
+
+        if record.status == FlowRunStatus.PENDING:
+            runtime = FlowRuntime(
+                definition=self.definition,
+                store=self.store,
+                emit_event=self._emit_event,
+                emit_lifecycle_event=self._emit_lifecycle,
+            )
+            result = reduce_flow_lifecycle(
+                record.status,
+                record.state,
+                FlowTrigger(kind=TriggerKind.STOP_REQUESTED),
+                now=now_iso(),
+                current_step=record.current_step,
+                initial_step=self.definition.initial_step,
+            )
+            return runtime._apply_transition(
+                record,
+                result,
+                run_id,
+                trigger_kind="stop_requested",
+            )
 
         if record.status == FlowRunStatus.RUNNING:
             updated = self.store.update_flow_run_status(

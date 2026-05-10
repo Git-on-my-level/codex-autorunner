@@ -4,8 +4,19 @@ import types
 import httpx
 import pytest
 
-from codex_autorunner.core.exceptions import CircuitOpenError
-from codex_autorunner.integrations.telegram.adapter import (
+from codex_autorunner.adapters.telegram.api_schemas import (
+    TelegramCallbackQuerySchema,
+    TelegramDocumentSchema,
+    TelegramMessageEntitySchema,
+    TelegramMessageSchema,
+    TelegramPhotoSizeSchema,
+    TelegramUpdateSchema,
+    TelegramVoiceSchema,
+    parse_callback_query_payload,
+    parse_message_payload,
+    parse_update_payload,
+)
+from codex_autorunner.adapters.telegram.client import (
     TELEGRAM_MAX_MESSAGE_LENGTH,
     ApprovalCallback,
     BindCallback,
@@ -55,18 +66,7 @@ from codex_autorunner.integrations.telegram.adapter import (
     parse_command,
     parse_update,
 )
-from codex_autorunner.integrations.telegram.api_schemas import (
-    TelegramCallbackQuerySchema,
-    TelegramDocumentSchema,
-    TelegramMessageEntitySchema,
-    TelegramMessageSchema,
-    TelegramPhotoSizeSchema,
-    TelegramUpdateSchema,
-    TelegramVoiceSchema,
-    parse_callback_query_payload,
-    parse_message_payload,
-    parse_update_payload,
-)
+from codex_autorunner.core.exceptions import CircuitOpenError
 from tests.fixtures.telegram_command_helpers import bot_command_entity
 
 # Cross-cutting command/registration invariants live in
@@ -699,7 +699,7 @@ async def test_request_retries_on_rate_limit(monkeypatch: pytest.MonkeyPatch) ->
         sleeps.append(delay)
 
     monkeypatch.setattr(
-        "codex_autorunner.integrations.telegram.adapter.asyncio.sleep",
+        "codex_autorunner.adapters.telegram.client.asyncio.sleep",
         fake_sleep,
     )
     try:
@@ -748,7 +748,7 @@ async def test_rate_limit_scope_does_not_block_other_methods(
         sleeps.append(delay)
 
     monkeypatch.setattr(
-        "codex_autorunner.integrations.telegram.adapter.asyncio.sleep",
+        "codex_autorunner.adapters.telegram.client.asyncio.sleep",
         fake_sleep,
     )
     try:

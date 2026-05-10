@@ -34,7 +34,7 @@ determine whether the campaign north star is green or red:
    and all required scenario IDs are covered.
 3. Alternatively, import and call
    `campaign_north_star_status()` from
-   `src/codex_autorunner/integrations/chat/ux_regression_contract.py`
+   `src/codex_autorunner/adapters/chat/ux_regression_contract.py`
    with observed budgets and scenario IDs.
 
 ### Campaign north star thresholds
@@ -149,7 +149,7 @@ Workflow:
 Python callers can import the campaign scorecard directly:
 
 ```python
-from codex_autorunner.integrations.chat.ux_regression_contract import (
+from codex_autorunner.adapters.chat.ux_regression_contract import (
     campaign_north_star_status,
     format_campaign_scorecard,
 )

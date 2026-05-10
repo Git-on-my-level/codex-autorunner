@@ -6,7 +6,7 @@ Ownership boundaries:
   owner of publish retry state, dedupe keys, and attempt history.
 - This module owns the runtime dispatch loop, retry-delay resolution, and
   reconciliation of partial-success (``effect_applied``) operations.
-- Provider-specific adapters (e.g. ``integrations/github/publisher.py``)
+- Provider-specific adapters (e.g. ``adapters/github/publisher.py``)
   implement ``PublishActionExecutor`` and must **not** carry their own retry
   counters or deduplication state.
 - Mutation-policy evaluation is delegated to ``mutation_policy.py``; this

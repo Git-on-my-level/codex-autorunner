@@ -81,6 +81,26 @@ def flow_controller(temp_dir, flow_definition):
 
 
 @pytest.mark.asyncio
+async def test_flow_controller_stop_pending_flow_finishes_immediately(flow_controller):
+    record = await flow_controller.start_flow(input_data={"value": 0})
+    assert record.status == FlowRunStatus.PENDING
+
+    stopped_record = await flow_controller.stop_flow(record.id)
+
+    assert stopped_record.status == FlowRunStatus.STOPPED
+    assert stopped_record.finished_at is not None
+    assert stopped_record.current_step is None
+    assert stopped_record.state.get("reason_code") == "user_stop"
+    persisted = flow_controller.store.get_flow_run(record.id)
+    assert persisted is not None
+    assert persisted.status == FlowRunStatus.STOPPED
+    event_types = [
+        event.event_type.value for event in flow_controller.store.get_events(record.id)
+    ]
+    assert "flow_stopped" in event_types
+
+
+@pytest.mark.asyncio
 async def test_flow_controller_stop_flow(flow_controller):
     """Test stopping a flow."""
     # Start a slow flow that takes longer to stop

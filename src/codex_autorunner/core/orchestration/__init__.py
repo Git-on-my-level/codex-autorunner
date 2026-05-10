@@ -26,6 +26,12 @@ from .chat_operation_recovery import (
     ChatOperationRecoveryAction,
     plan_chat_operation_recovery,
 )
+from .chat_operation_scheduler_projection import (
+    discord_execution_status_to_chat_operation_state,
+    discord_interaction_has_pending_delivery,
+    discord_scheduler_state_to_chat_operation_state,
+    discord_scheduler_terminal_outcome,
+)
 from .chat_operation_state import (
     ChatOperationSnapshot,
     ChatOperationState,
@@ -77,11 +83,13 @@ from .migrations import (
 )
 from .models import (
     AgentDefinition,
+    BackendBinding,
     Binding,
     ExecutionRecord,
     FlowTarget,
     MessageRequest,
     MessageRequestKind,
+    Thread,
     ThreadStopOutcome,
     ThreadTarget,
 )
@@ -96,7 +104,7 @@ if TYPE_CHECKING:
     from . import runtime_threads as runtime_threads_module
     from .service import (
         HarnessBackedOrchestrationService,
-        PmaThreadExecutionStore,
+        ManagedThreadExecutionStore,
         build_harness_backed_orchestration_service,
         build_surface_orchestration_ingress,
         build_ticket_flow_orchestration_service,
@@ -108,7 +116,7 @@ _LAZY_EXPORTS = {
         ".service",
         "HarnessBackedOrchestrationService",
     ),
-    "PmaThreadExecutionStore": (".service", "PmaThreadExecutionStore"),
+    "ManagedThreadExecutionStore": (".service", "ManagedThreadExecutionStore"),
     "build_harness_backed_orchestration_service": (
         ".service",
         "build_harness_backed_orchestration_service",
@@ -144,6 +152,7 @@ __all__ = [
     "ActiveWorkSummary",
     "AgentDefinition",
     "AgentDefinitionCatalog",
+    "BackendBinding",
     "Binding",
     "ChatOperationDuplicateAction",
     "ChatOperationRecoveryAction",
@@ -173,13 +182,14 @@ __all__ = [
     "OrchestrationFlowService",
     "OrchestrationThreadService",
     "PausedFlowTarget",
-    "PmaThreadExecutionStore",
+    "ManagedThreadExecutionStore",
     "RuntimeThreadHarness",
     "SQLiteChatOperationLedger",
     "SQLiteManagedThreadDeliveryEngine",
     "SQLiteManagedThreadDeliveryLedger",
     "SurfaceThreadMessageRequest",
     "ThreadExecutionStore",
+    "Thread",
     "ThreadStopOutcome",
     "ThreadTarget",
     "WorkspaceRuntimeAcquisition",
@@ -194,6 +204,10 @@ __all__ = [
     "build_ticket_flow_orchestration_service",
     "compact_completed_execution_history",
     "current_orchestration_schema_version",
+    "discord_execution_status_to_chat_operation_state",
+    "discord_interaction_has_pending_delivery",
+    "discord_scheduler_state_to_chat_operation_state",
+    "discord_scheduler_terminal_outcome",
     "export_execution_history_bundle",
     "get_agent_definition",
     "initialize_orchestration_sqlite",

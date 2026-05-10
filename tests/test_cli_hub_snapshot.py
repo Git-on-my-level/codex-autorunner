@@ -260,7 +260,7 @@ def test_hub_snapshot_section_uses_requested_timeout_and_filters(tmp_path) -> No
                 request=request,
                 json={
                     "generated_at": "2026-04-02T00:00:00Z",
-                    "pma_threads": [{"managed_thread_id": "thr-1"}],
+                    "managed_threads": [{"managed_thread_id": "thr-1"}],
                 },
             )
         return httpx.Response(
@@ -276,7 +276,7 @@ def test_hub_snapshot_section_uses_requested_timeout_and_filters(tmp_path) -> No
                 "--path",
                 str(tmp_path),
                 "--section",
-                "pma_threads",
+                "managed_threads",
                 "--timeout",
                 "22",
                 "--json",
@@ -285,17 +285,17 @@ def test_hub_snapshot_section_uses_requested_timeout_and_filters(tmp_path) -> No
 
     assert result.exit_code == 0
     payload = json.loads(result.output)
-    assert payload["pma_threads"][0]["managed_thread_id"] == "thr-1"
+    assert payload["managed_threads"][0]["managed_thread_id"] == "thr-1"
     assert len(calls) == 1
-    assert "sections=pma_threads" in str(calls[0]["url"])
+    assert "sections=managed_threads" in str(calls[0]["url"])
     assert calls[0]["timeout"] == 22.0
 
 
-def test_hub_snapshot_pma_threads_falls_back_to_artifact_when_hub_unreachable(
+def test_hub_snapshot_managed_threads_falls_back_to_artifact_when_hub_unreachable(
     tmp_path,
 ) -> None:
     seed_hub_files(tmp_path, force=True)
-    artifact_path = tmp_path / ".codex-autorunner" / "pma_threads.json"
+    artifact_path = tmp_path / ".codex-autorunner" / "managed_threads.json"
     artifact_path.write_text(
         '{"generated_at":"2026-04-02T00:00:00Z","threads":[{"managed_thread_id":"local-thr"}]}\n',
         encoding="utf-8",
@@ -310,14 +310,14 @@ def test_hub_snapshot_pma_threads_falls_back_to_artifact_when_hub_unreachable(
                 "--path",
                 str(tmp_path),
                 "--section",
-                "pma_threads",
+                "managed_threads",
                 "--json",
             ],
         )
 
     assert result.exit_code == 0
     payload = json.loads(result.output)
-    assert payload["pma_threads"][0]["managed_thread_id"] == "local-thr"
+    assert payload["managed_threads"][0]["managed_thread_id"] == "local-thr"
 
 
 def test_hub_snapshot_returns_partial_results_when_one_endpoint_times_out(
@@ -349,7 +349,7 @@ def test_hub_snapshot_returns_partial_results_when_one_endpoint_times_out(
                 "--section",
                 "repos",
                 "--section",
-                "pma_threads",
+                "managed_threads",
                 "--json",
             ],
         )
@@ -357,10 +357,10 @@ def test_hub_snapshot_returns_partial_results_when_one_endpoint_times_out(
     assert result.exit_code == 0
     payload = json.loads(result.output)
     assert payload["repos"][0]["id"] == "demo"
-    assert payload["pma_threads"] is None
+    assert payload["managed_threads"] is None
     assert len(payload["errors"]) == 1
     assert payload["errors"][0]["target"] == "messages"
     assert payload["errors"][0]["error"] == "messages timed out"
     assert payload["errors"][0]["url"].endswith(
-        "/hub/messages?limit=50&sections=pma_threads"
+        "/hub/messages?limit=50&sections=managed_threads"
     )

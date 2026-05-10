@@ -1,4 +1,4 @@
-from codex_autorunner.integrations.telegram.helpers import (
+from codex_autorunner.adapters.telegram.helpers import (
     CodexFeatureRow,
     derive_codex_features_command,
     format_codex_features,

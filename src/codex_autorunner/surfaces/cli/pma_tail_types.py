@@ -1,6 +1,6 @@
 """PMA tail event types, rendering helpers, and status snapshot dataclasses.
 
-Extracted from ``pma_thread_commands.py`` to reduce complexity in the command
+Extracted from ``managed_thread_commands.py`` to reduce complexity in the command
 module while keeping all tail-event schema-drift normalization in one place.
 """
 
@@ -10,10 +10,10 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Optional
 
-from .pma_control_plane import (
+from .hub_control_plane_client import (
     coerce_optional_int as _coerce_optional_int,
 )
-from .pma_control_plane import (
+from .hub_control_plane_client import (
     format_resource_owner_label as _format_resource_owner_label,
 )
 
@@ -504,7 +504,7 @@ class PmaQueuedTurnSnapshot:
 
 
 @dataclass(frozen=True)
-class PmaThreadStatusSnapshot:
+class ManagedThreadStatusSnapshot:
     managed_thread_id: str
     agent: str
     owner_label: str
@@ -530,7 +530,7 @@ class PmaThreadStatusSnapshot:
     queued_turns: tuple[PmaQueuedTurnSnapshot, ...]
 
     @classmethod
-    def from_dict(cls, data: Any) -> "PmaThreadStatusSnapshot":
+    def from_dict(cls, data: Any) -> "ManagedThreadStatusSnapshot":
         from ...core.managed_thread_status import derive_managed_thread_operator_status
 
         payload = data if isinstance(data, dict) else {}

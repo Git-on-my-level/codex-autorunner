@@ -6,13 +6,13 @@ from typing import Any
 
 import pytest
 
-from codex_autorunner.core.hub_control_plane import HubControlPlaneError
-from codex_autorunner.core.managed_thread_identity import AppServerThreadRegistry
-from codex_autorunner.integrations.telegram.adapter import TelegramMessage
-from codex_autorunner.integrations.telegram.handlers.commands import (
+from codex_autorunner.adapters.telegram.client import TelegramMessage
+from codex_autorunner.adapters.telegram.handlers.commands import (
     execution as execution_commands_module,
 )
-from codex_autorunner.integrations.telegram.state import TelegramTopicRecord
+from codex_autorunner.adapters.telegram.state import TelegramTopicRecord
+from codex_autorunner.core.hub_control_plane import HubControlPlaneError
+from codex_autorunner.core.managed_thread_identity import AppServerThreadRegistry
 from tests.telegram_pma_workspace_support import _PMAWorkspaceHandler
 
 

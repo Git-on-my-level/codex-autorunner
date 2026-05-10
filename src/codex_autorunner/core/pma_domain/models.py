@@ -20,6 +20,8 @@ from .constants import (
     VALID_SURFACE_KINDS,
     WAKEUP_STATE_DISPATCHED,
     WAKEUP_STATE_PENDING,
+    WAKEUP_STATE_QUEUED,
+    WAKEUP_STATE_WORKER_STARTED,
 )
 
 
@@ -225,10 +227,10 @@ class PmaWakeup:
     metadata: dict[str, Any] = field(default_factory=dict, hash=False)
 
     def is_pending(self) -> bool:
-        return self.state == WAKEUP_STATE_PENDING
+        return self.state in {WAKEUP_STATE_PENDING, WAKEUP_STATE_QUEUED}
 
     def is_dispatched(self) -> bool:
-        return self.state == WAKEUP_STATE_DISPATCHED
+        return self.state in {WAKEUP_STATE_DISPATCHED, WAKEUP_STATE_WORKER_STARTED}
 
 
 @dataclass(frozen=True)

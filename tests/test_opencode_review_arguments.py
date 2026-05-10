@@ -1,4 +1,4 @@
-import codex_autorunner.integrations.telegram.handlers.commands.command_utils as command_utils
+import codex_autorunner.adapters.telegram.handlers.commands.command_utils as command_utils
 
 
 def test_opencode_review_arguments_uncommitted() -> None:

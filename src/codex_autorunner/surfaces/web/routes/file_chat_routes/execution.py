@@ -7,11 +7,11 @@ from typing import Any, Callable, Dict, Optional
 
 from fastapi import Request
 
+from .....adapters.chat.agents import resolve_chat_agent_and_profile
 from .....agents.registry import has_capability, validate_agent_id
 from .....core import drafts as draft_utils
 from .....core.managed_thread_identity import file_chat_target_key
 from .....core.utils import atomic_write
-from .....integrations.chat.agents import resolve_chat_agent_and_profile
 from ..agent_profile_validation import resolve_requested_agent_profile
 from .draft_state import load_draft_snapshot, persist_draft, relative_to_repo
 from .execution_agents import execute_app_server as _execute_app_server_impl

@@ -17,7 +17,7 @@ previous Dict[str, Any] pass-through behavior.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, ConfigDict, model_serializer
 
@@ -31,24 +31,6 @@ class _ExcludeNoneModel(BaseModel):
     def _exclude_none_serialization(self, handler: Any) -> Dict[str, Any]:
         result = handler(self)
         return {k: v for k, v in result.items() if v is not None}
-
-
-class WorkspaceDestinationPayload(_ExcludeNoneModel):
-    """Tagged union over local/docker workspace destinations.
-
-    Serializes without None-valued fields so that a local destination
-    produces ``{"kind": "local"}`` and a docker destination only includes
-    the fields that are actually set.
-    """
-
-    kind: Literal["local", "docker"]
-    image: Optional[str] = None
-    container_name: Optional[str] = None
-    workdir: Optional[str] = None
-    profile: Optional[str] = None
-    env_passthrough: Optional[List[str]] = None
-    env: Optional[Dict[str, str]] = None
-    mounts: Optional[List[Dict[str, Any]]] = None
 
 
 class SectionFreshnessSummary(_ExcludeNoneModel):

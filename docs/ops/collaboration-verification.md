@@ -28,16 +28,16 @@ Or run the collaboration-specific subset:
 
 ```bash
 ./.venv/bin/pytest \
-  tests/integrations/chat/test_collaboration_policy.py \
+  tests/adapters/chat/test_collaboration_policy.py \
   tests/test_telegram_trigger_mode.py \
   tests/test_telegram_bot_integration.py \
   tests/test_doctor_checks.py \
-  tests/integrations/discord/test_message_turns.py \
-  tests/integrations/discord/test_message_turns_transient_progress.py \
-  tests/integrations/discord/test_service_routing.py \
-  tests/integrations/discord/test_doctor_checks.py \
-  tests/integrations/discord/test_config.py \
-  tests/integrations/discord/test_allowlist.py \
+  tests/adapters/discord/test_message_turns.py \
+  tests/adapters/discord/test_message_turns_transient_progress.py \
+  tests/adapters/discord/test_service_routing.py \
+  tests/adapters/discord/test_doctor_checks.py \
+  tests/adapters/discord/test_config.py \
+  tests/adapters/discord/test_allowlist.py \
   tests/test_cross_surface_parity.py
 ```
 
@@ -87,11 +87,11 @@ If you changed Python files in the collaboration area, also run:
 
 ```bash
 ./.venv/bin/ruff check \
-  src/codex_autorunner/integrations/chat \
-  src/codex_autorunner/integrations/telegram \
-  src/codex_autorunner/integrations/discord \
-  tests/integrations/chat \
-  tests/integrations/discord \
+  src/codex_autorunner/adapters/chat \
+  src/codex_autorunner/adapters/telegram \
+  src/codex_autorunner/adapters/discord \
+  tests/adapters/chat \
+  tests/adapters/discord \
   tests/test_telegram_bot_integration.py \
   tests/test_doctor_checks.py
 ```
@@ -114,7 +114,7 @@ across runtime threads, bindings, PMA shims, and flow targets:
   tests/browser/test_orchestration.py \
   tests/test_pma_routes.py \
   tests/test_pma_cli.py \
-  tests/integrations/discord/test_service_routing.py \
+  tests/adapters/discord/test_service_routing.py \
   tests/test_telegram_pma_routing.py \
   tests/routes/test_flows_route_characterization.py \
   tests/routes/test_flow_status_history_routes_extracted.py \
@@ -133,7 +133,7 @@ across runtime threads, bindings, PMA shims, and flow targets:
   does not collapse into a normal chat thread.
 - **Observability**: Thread and flow targets share discovery and observability
   surfaces without losing their distinct identities.
-- **Capability filtering**: ZeroClaw and Hermes capability differences, plus
+- **Capability filtering**: Codex, OpenCode, and Hermes capability differences, plus
   capability-aware filtering, continue to work inside the integrated build.
 
 ### Acceptance criteria
@@ -152,7 +152,7 @@ across runtime threads, bindings, PMA shims, and flow targets:
    routing decisions; ordinary chat routing must resolve through shared
    orchestration-managed thread targets.
 
-### Hermes and ZeroClaw capability verification
+### Hermes capability verification
 
 Verify that richer adapter capabilities remain visible and are not flattened to
 the weakest common interface:

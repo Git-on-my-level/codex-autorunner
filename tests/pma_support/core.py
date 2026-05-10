@@ -9,23 +9,23 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from codex_autorunner.adapters.app_server.client import (
+    CodexAppServerResponseError,
+)
+from codex_autorunner.adapters.discord.state import DiscordStateStore
+from codex_autorunner.adapters.telegram.state import TelegramStateStore, topic_key
 from codex_autorunner.agents.opencode.runtime import OpenCodeTurnOutput
 from codex_autorunner.agents.registry import AgentDescriptor
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.managed_thread_identity import PMA_KEY, PMA_OPENCODE_KEY
+from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration import (
     ColdTraceStore,
     ExecutionRecord,
     ThreadTarget,
 )
 from codex_autorunner.core.pma_queue import PmaQueue, QueueItemState
-from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.pma_transcripts import PmaTranscriptStore
-from codex_autorunner.integrations.app_server.client import (
-    CodexAppServerResponseError,
-)
-from codex_autorunner.integrations.discord.state import DiscordStateStore
-from codex_autorunner.integrations.telegram.state import TelegramStateStore, topic_key
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.routes import pma as pma_routes
 from codex_autorunner.surfaces.web.routes.pma_routes import (
@@ -412,7 +412,7 @@ async def test_pma_chat_returns_completed_queue_result_when_future_is_registered
     }
 
 
-def test_pma_thread_status_includes_queued_turns(hub_env) -> None:
+def test_managed_thread_status_includes_queued_turns(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
 
@@ -428,7 +428,7 @@ def test_pma_thread_status_includes_queued_turns(hub_env) -> None:
         assert create_resp.status_code == 200
         managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
 
-    store = PmaThreadStore(hub_env.hub_root)
+    store = ManagedThreadStore(hub_env.hub_root)
     running_turn = store.create_turn(managed_thread_id, prompt="first")
     queued_turn = store.create_turn(
         managed_thread_id,
@@ -451,6 +451,44 @@ def test_pma_thread_status_includes_queued_turns(hub_env) -> None:
     assert payload["queued_turns"][0]["request_kind"] == "message"
     assert payload["queued_turns"][0]["state"] == "queued"
     assert payload["queued_turns"][0]["prompt_preview"] == "second"
+
+
+def test_managed_thread_create_defaults_to_hub_context(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", "name": "Hub PMA"},
+        )
+
+    assert create_resp.status_code == 200
+    thread = create_resp.json()["thread"]
+    assert thread["workspace_root"] == str(hub_env.hub_root.resolve())
+    assert thread.get("repo_id") is None
+    assert thread.get("resource_kind") is None
+    assert thread.get("resource_id") is None
+
+
+def test_managed_thread_create_local_workspace_root_defaults_to_hub_context(
+    hub_env,
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", "workspace_root": "."},
+        )
+
+    assert create_resp.status_code == 200
+    thread = create_resp.json()["thread"]
+    assert thread["workspace_root"] == str(hub_env.hub_root.resolve())
+    assert thread.get("repo_id") is None
+    assert thread.get("resource_kind") is None
+    assert thread.get("resource_id") is None
 
 
 def test_pma_chat_rejects_oversize_message(hub_env) -> None:
@@ -1744,7 +1782,7 @@ def test_pma_active_clears_on_prompt_build_error(hub_env, monkeypatch) -> None:
     assert active["current"] == {}
 
 
-def test_pma_thread_reset_clears_registry(hub_env) -> None:
+def test_managed_thread_reset_clears_registry(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
     registry = app.state.app_server_threads
@@ -2335,7 +2373,7 @@ def test_pma_turn_events_stream_opencode_returns_empty_stream_without_pending_tu
     assert resp.text == ""
 
 
-def test_pma_managed_thread_status_and_tail_use_orchestration_service(
+def test_managed_thread_status_and_tail_use_orchestration_service(
     hub_env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     class FakeService:
@@ -2417,12 +2455,20 @@ def test_pma_managed_thread_status_and_tail_use_orchestration_service(
         status_payload["latest_output_excerpt"] == "assistant output from orchestration"
     )
     assert status_payload["stream_available"] is False
+    assert status_payload["work_status"] == "ok"
+    assert status_payload["terminal"] is True
+    assert status_payload["stream_should_close"] is True
+    assert status_payload["stream_close_reason"] == "terminal:ok"
 
     tail_payload = tail_resp.json()
     assert tail_payload["managed_thread_id"] == "thread-1"
     assert tail_payload["managed_turn_id"] == "turn-1"
     assert tail_payload["turn_status"] == "ok"
     assert tail_payload["backend_turn_id"] == "backend-turn-1"
+    assert tail_payload["work_status"] == "ok"
+    assert tail_payload["terminal"] is True
+    assert tail_payload["stream_should_close"] is True
+    assert tail_payload["stream_close_reason"] == "terminal:ok"
 
     assert fake_service.calls[:4] == [
         ("get_thread_target", "thread-1"),
@@ -2520,7 +2566,7 @@ async def test_pma_queue_endpoint_provides_lane_items_for_thread_info(hub_env) -
     assert summary_payload["lanes"][lane_id]["by_state"]["pending"] == 3
 
 
-def test_pma_managed_thread_status_includes_phase_and_guidance(hub_env) -> None:
+def test_managed_thread_status_includes_phase_and_guidance(hub_env) -> None:
     _enable_pma(hub_root=hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
 
@@ -2536,7 +2582,7 @@ def test_pma_managed_thread_status_includes_phase_and_guidance(hub_env) -> None:
         assert create_resp.status_code == 200
         managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
 
-    store = PmaThreadStore(hub_env.hub_root)
+    store = ManagedThreadStore(hub_env.hub_root)
     store.create_turn(managed_thread_id, prompt="test phase")
 
     client = TestClient(app)

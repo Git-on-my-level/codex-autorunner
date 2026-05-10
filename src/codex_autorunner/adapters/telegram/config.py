@@ -1,0 +1,901 @@
+from __future__ import annotations
+
+import logging
+import os
+import re
+import shlex
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Iterable, Optional
+
+from ...core.app_server_command import (
+    DEFAULT_APP_SERVER_COMMAND as CORE_DEFAULT_APP_SERVER_COMMAND,
+)
+from ...core.app_server_command import resolve_app_server_command_with_source
+from ..chat.approval_modes import resolve_approval_mode_policies
+from ..chat.collaboration_policy import (
+    CollaborationPolicy,
+    CollaborationPolicyError,
+    build_telegram_collaboration_policy,
+)
+from .client import TelegramAllowlist
+from .constants import (
+    CACHE_CLEANUP_INTERVAL_SECONDS,
+    COALESCE_BUFFER_TTL_SECONDS,
+    DEFAULT_AGENT_TURN_TIMEOUT_SECONDS,
+    MEDIA_BATCH_BUFFER_TTL_SECONDS,
+    MODEL_PENDING_TTL_SECONDS,
+    OVERSIZE_WARNING_TTL_SECONDS,
+    PENDING_APPROVAL_TTL_SECONDS,
+    PENDING_QUESTION_TTL_SECONDS,
+    PROGRESS_STREAM_TTL_SECONDS,
+    REASONING_BUFFER_TTL_SECONDS,
+    SELECTION_STATE_TTL_SECONDS,
+    TELEGRAM_MAX_MESSAGE_LENGTH,
+    TURN_PREVIEW_TTL_SECONDS,
+    UPDATE_ID_PERSIST_INTERVAL_SECONDS,
+)
+from .state import APPROVAL_MODE_YOLO, normalize_approval_mode
+
+_TELEGRAM_CONFIG_LOGGER = logging.getLogger("codex_autorunner.telegram.config")
+
+DEFAULT_ALLOWED_UPDATES = ("message", "edited_message", "callback_query")
+DEFAULT_POLL_TIMEOUT_SECONDS = 30
+DEFAULT_POLL_REQUEST_TIMEOUT_SECONDS: Optional[float] = None
+DEFAULT_SAFE_APPROVAL_POLICY = "on-request"
+DEFAULT_SAFE_SANDBOX_POLICY = "workspaceWrite"
+DEFAULT_YOLO_APPROVAL_POLICY = "never"
+DEFAULT_YOLO_SANDBOX_POLICY = "dangerFullAccess"
+DEFAULT_PARSE_MODE = "HTML"
+DEFAULT_TRIGGER_MODE = "all"
+TRIGGER_MODE_OPTIONS = {"all", "mentions"}
+DEFAULT_STATE_FILE = ".codex-autorunner/telegram_state.sqlite3"
+DEFAULT_APP_SERVER_COMMAND = list(CORE_DEFAULT_APP_SERVER_COMMAND)
+DEFAULT_APP_SERVER_MAX_HANDLES = 20
+DEFAULT_APP_SERVER_IDLE_TTL_SECONDS = 3600
+DEFAULT_OPENCODE_MAX_HANDLES = 4
+DEFAULT_OPENCODE_IDLE_TTL_SECONDS = 900
+DEFAULT_APP_SERVER_START_TIMEOUT_SECONDS = 30
+DEFAULT_APP_SERVER_START_MAX_ATTEMPTS: Optional[int] = None
+DEFAULT_APP_SERVER_TURN_TIMEOUT_SECONDS = 7200
+DEFAULT_APPROVAL_TIMEOUT_SECONDS = 300.0
+DEFAULT_MEDIA_MAX_IMAGE_BYTES = 10 * 1024 * 1024
+DEFAULT_MEDIA_MAX_VOICE_BYTES = 10 * 1024 * 1024
+DEFAULT_MEDIA_MAX_FILE_BYTES = 100 * 1024 * 1024
+DEFAULT_MEDIA_IMAGE_PROMPT = (
+    "The user sent an image with no caption. Use it to continue the "
+    "conversation; if no clear task, describe the image and ask what they want."
+)
+DEFAULT_MEDIA_BATCH_UPLOADS = True
+DEFAULT_MEDIA_BATCH_WINDOW_SECONDS = 1.0
+DEFAULT_COALESCE_WINDOW_SECONDS = 0.5
+DEFAULT_SHELL_TIMEOUT_MS = 120_000
+DEFAULT_SHELL_MAX_OUTPUT_CHARS = 3800
+DEFAULT_PROGRESS_STREAM_ENABLED = True
+DEFAULT_PROGRESS_STREAM_MAX_ACTIONS = 5
+DEFAULT_PROGRESS_STREAM_MAX_OUTPUT_CHARS = TELEGRAM_MAX_MESSAGE_LENGTH
+DEFAULT_PROGRESS_STREAM_MIN_EDIT_INTERVAL_SECONDS = 1.0
+DEFAULT_MESSAGE_OVERFLOW = "document"
+MESSAGE_OVERFLOW_OPTIONS = {"document", "split", "trim"}
+DEFAULT_METRICS_MODE = "append_to_response"
+METRICS_MODE_OPTIONS = {"separate", "append_to_response", "append_to_progress"}
+DEFAULT_PAUSE_DISPATCH_MAX_FILE_BYTES = 50 * 1024 * 1024
+
+PARSE_MODE_ALIASES = {
+    "html": "HTML",
+    "markdown": "Markdown",
+    "markdownv2": "MarkdownV2",
+}
+
+
+class TelegramBotConfigError(Exception):
+    """Raised when telegram bot config is invalid."""
+
+
+class TelegramBotLockError(Exception):
+    """Raised when another telegram bot instance already holds the lock."""
+
+
+class AppServerUnavailableError(Exception):
+    """Raised when the app-server is unavailable after timeout."""
+
+
+@dataclass(frozen=True)
+class TelegramBotDefaults:
+    approval_mode: str
+    approval_policy: Optional[str]
+    sandbox_policy: Optional[str]
+    yolo_approval_policy: str
+    yolo_sandbox_policy: str
+
+    def policies_for_mode(self, mode: str) -> tuple[Optional[str], Optional[str]]:
+        normalized = normalize_approval_mode(mode, default=APPROVAL_MODE_YOLO)
+        if normalized == APPROVAL_MODE_YOLO:
+            return self.yolo_approval_policy, self.yolo_sandbox_policy
+        if normalized == "safe":
+            return self.approval_policy, self.sandbox_policy
+        approval_policy, sandbox_policy = resolve_approval_mode_policies(normalized)
+        return approval_policy, sandbox_policy
+
+
+@dataclass(frozen=True)
+class TelegramBotConcurrency:
+    max_parallel_turns: int
+    per_topic_queue: bool
+
+
+@dataclass(frozen=True)
+class TelegramBotMediaConfig:
+    enabled: bool
+    images: bool
+    voice: bool
+    files: bool
+    max_image_bytes: int
+    max_voice_bytes: int
+    max_file_bytes: int
+    image_prompt: str
+    batch_uploads: bool
+    batch_window_seconds: float
+
+
+@dataclass(frozen=True)
+class TelegramBotShellConfig:
+    enabled: bool
+    timeout_ms: int
+    max_output_chars: int
+
+
+@dataclass(frozen=True)
+class TelegramBotCacheConfig:
+    cleanup_interval_seconds: float
+    coalesce_buffer_ttl_seconds: float
+    media_batch_buffer_ttl_seconds: float
+    model_pending_ttl_seconds: float
+    pending_approval_ttl_seconds: float
+    pending_question_ttl_seconds: float
+    reasoning_buffer_ttl_seconds: float
+    selection_state_ttl_seconds: float
+    turn_preview_ttl_seconds: float
+    progress_stream_ttl_seconds: float
+    oversize_warning_ttl_seconds: float
+    update_id_persist_interval_seconds: float
+
+
+@dataclass(frozen=True)
+class TelegramBotCommandScope:
+    scope: dict[str, Any]
+    language_code: str
+
+
+@dataclass(frozen=True)
+class TelegramBotCommandRegistration:
+    enabled: bool
+    scopes: list[TelegramBotCommandScope]
+
+
+@dataclass(frozen=True)
+class TelegramBotProgressStreamConfig:
+    enabled: bool
+    max_actions: int
+    max_output_chars: int
+    min_edit_interval_seconds: float
+
+
+@dataclass(frozen=True)
+class PauseDispatchNotifications:
+    enabled: bool
+    send_attachments: bool
+    max_file_size_bytes: int
+    chunk_long_messages: bool
+
+
+@dataclass(frozen=True)
+class TelegramMediaCandidate:
+    kind: str
+    file_id: str
+    file_name: Optional[str]
+    mime_type: Optional[str]
+    file_size: Optional[int]
+    duration: Optional[int] = None
+
+
+@dataclass(frozen=True)
+class TelegramBotConfig:
+    root: Path
+    enabled: bool
+    mode: str
+    bot_token_env: str
+    chat_id_env: str
+    parse_mode: Optional[str]
+    debug_prefix_context: bool
+    bot_token: Optional[str]
+    allowed_chat_ids: set[int]
+    allowed_user_ids: set[int]
+    require_topics: bool
+    trigger_mode: str
+    defaults: TelegramBotDefaults
+    concurrency: TelegramBotConcurrency
+    media: TelegramBotMediaConfig
+    shell: TelegramBotShellConfig
+    cache: TelegramBotCacheConfig
+    progress_stream: TelegramBotProgressStreamConfig
+    command_registration: TelegramBotCommandRegistration
+    opencode_command: list[str]
+    state_file: Path
+    app_server_command: list[str]
+    app_server_max_handles: Optional[int]
+    app_server_idle_ttl_seconds: Optional[int]
+    opencode_max_handles: Optional[int]
+    opencode_idle_ttl_seconds: Optional[int]
+    app_server_start_timeout_seconds: float
+    app_server_start_max_attempts: Optional[int]
+    app_server_turn_timeout_seconds: Optional[float]
+    agent_turn_timeout_seconds: dict[str, Optional[float]]
+    poll_timeout_seconds: int
+    poll_request_timeout_seconds: Optional[float]
+    poll_allowed_updates: list[str]
+    message_overflow: str
+    metrics_mode: str
+    coalesce_window_seconds: float
+    agent_binaries: dict[str, str]
+    ticket_flow_auto_resume: bool
+    pause_dispatch_notifications: PauseDispatchNotifications
+    default_notification_chat_id: Optional[int]
+    collaboration_policy: Optional[CollaborationPolicy] = None
+
+    @classmethod
+    def from_raw(
+        cls,
+        raw: Optional[dict[str, Any]],
+        *,
+        root: Path,
+        agent_binaries: Optional[dict[str, str]] = None,
+        env: Optional[dict[str, str]] = None,
+        collaboration_raw: Optional[dict[str, Any]] = None,
+        opencode_raw: Optional[dict[str, Any]] = None,
+    ) -> "TelegramBotConfig":
+        env = env or dict(os.environ)
+        cfg: dict[str, Any] = raw if isinstance(raw, dict) else {}
+
+        def _positive_float(value: Any, default: float) -> float:
+            try:
+                parsed = float(value)
+            except (TypeError, ValueError):
+                return default
+            if parsed <= 0:
+                return default
+            return parsed
+
+        enabled = bool(cfg.get("enabled", False))
+        mode = str(cfg.get("mode", "polling"))
+        bot_token_env = str(cfg.get("bot_token_env", "CAR_TELEGRAM_BOT_TOKEN"))
+        chat_id_env = str(cfg.get("chat_id_env", "CAR_TELEGRAM_CHAT_ID"))
+        parse_mode_raw = (
+            cfg.get("parse_mode") if "parse_mode" in cfg else DEFAULT_PARSE_MODE
+        )
+        parse_mode = _normalize_parse_mode(parse_mode_raw)
+        debug_raw_value = cfg.get("debug")
+        debug_raw: dict[str, Any] = (
+            debug_raw_value if isinstance(debug_raw_value, dict) else {}
+        )
+        debug_prefix_context = bool(debug_raw.get("prefix_context", False))
+        bot_token = env.get(bot_token_env)
+
+        allowed_chat_ids = set(_parse_int_list(cfg.get("allowed_chat_ids")))
+        allowed_chat_ids.update(_parse_int_list(env.get(chat_id_env)))
+        allowed_user_ids = set(_parse_int_list(cfg.get("allowed_user_ids")))
+
+        require_topics = bool(cfg.get("require_topics", False))
+
+        trigger_mode = (
+            str(cfg.get("trigger_mode", DEFAULT_TRIGGER_MODE)).strip().lower()
+        )
+
+        defaults_raw_value = cfg.get("defaults")
+        defaults_raw: dict[str, Any] = (
+            defaults_raw_value if isinstance(defaults_raw_value, dict) else {}
+        )
+        approval_mode = normalize_approval_mode(
+            defaults_raw.get("approval_mode"), default=APPROVAL_MODE_YOLO
+        )
+        approval_policy = defaults_raw.get(
+            "approval_policy", DEFAULT_SAFE_APPROVAL_POLICY
+        )
+        sandbox_policy = defaults_raw.get("sandbox_policy", DEFAULT_SAFE_SANDBOX_POLICY)
+        if sandbox_policy is not None:
+            sandbox_policy = str(sandbox_policy)
+        yolo_approval_policy = str(
+            defaults_raw.get("yolo_approval_policy", DEFAULT_YOLO_APPROVAL_POLICY)
+        )
+        yolo_sandbox_policy = str(
+            defaults_raw.get("yolo_sandbox_policy", DEFAULT_YOLO_SANDBOX_POLICY)
+        )
+        defaults = TelegramBotDefaults(
+            approval_mode=approval_mode,
+            approval_policy=(
+                str(approval_policy) if approval_policy is not None else None
+            ),
+            sandbox_policy=sandbox_policy,
+            yolo_approval_policy=yolo_approval_policy,
+            yolo_sandbox_policy=yolo_sandbox_policy,
+        )
+
+        concurrency_raw_value = cfg.get("concurrency")
+        concurrency_raw: dict[str, Any] = (
+            concurrency_raw_value if isinstance(concurrency_raw_value, dict) else {}
+        )
+        max_parallel_turns = int(concurrency_raw.get("max_parallel_turns", 4))
+        if max_parallel_turns <= 0:
+            max_parallel_turns = 1
+        per_topic_queue = bool(concurrency_raw.get("per_topic_queue", True))
+        concurrency = TelegramBotConcurrency(
+            max_parallel_turns=max_parallel_turns,
+            per_topic_queue=per_topic_queue,
+        )
+
+        media_raw_value = cfg.get("media")
+        media_raw: dict[str, Any] = (
+            media_raw_value if isinstance(media_raw_value, dict) else {}
+        )
+        media_enabled = bool(media_raw.get("enabled", True))
+        media_images = bool(media_raw.get("images", True))
+        media_voice = bool(media_raw.get("voice", True))
+        media_files = bool(media_raw.get("files", True))
+        max_image_bytes = int(
+            media_raw.get("max_image_bytes", DEFAULT_MEDIA_MAX_IMAGE_BYTES)
+        )
+        if max_image_bytes <= 0:
+            max_image_bytes = DEFAULT_MEDIA_MAX_IMAGE_BYTES
+        max_voice_bytes = int(
+            media_raw.get("max_voice_bytes", DEFAULT_MEDIA_MAX_VOICE_BYTES)
+        )
+        if max_voice_bytes <= 0:
+            max_voice_bytes = DEFAULT_MEDIA_MAX_VOICE_BYTES
+        max_file_bytes = int(
+            media_raw.get("max_file_bytes", DEFAULT_MEDIA_MAX_FILE_BYTES)
+        )
+        if max_file_bytes <= 0:
+            max_file_bytes = DEFAULT_MEDIA_MAX_FILE_BYTES
+        image_prompt = str(
+            media_raw.get("image_prompt", DEFAULT_MEDIA_IMAGE_PROMPT)
+        ).strip()
+        if not image_prompt:
+            image_prompt = DEFAULT_MEDIA_IMAGE_PROMPT
+        media_batch_uploads = bool(
+            media_raw.get("batch_uploads", DEFAULT_MEDIA_BATCH_UPLOADS)
+        )
+        media_batch_window_seconds = float(
+            media_raw.get("batch_window_seconds", DEFAULT_MEDIA_BATCH_WINDOW_SECONDS)
+        )
+        if media_batch_window_seconds <= 0:
+            media_batch_window_seconds = DEFAULT_MEDIA_BATCH_WINDOW_SECONDS
+        media = TelegramBotMediaConfig(
+            enabled=media_enabled,
+            images=media_images,
+            voice=media_voice,
+            files=media_files,
+            max_image_bytes=max_image_bytes,
+            max_voice_bytes=max_voice_bytes,
+            max_file_bytes=max_file_bytes,
+            image_prompt=image_prompt,
+            batch_uploads=media_batch_uploads,
+            batch_window_seconds=media_batch_window_seconds,
+        )
+
+        shell_raw_value = cfg.get("shell")
+        shell_raw: dict[str, Any] = (
+            shell_raw_value if isinstance(shell_raw_value, dict) else {}
+        )
+        shell_enabled = bool(shell_raw.get("enabled", False))
+        shell_timeout_ms = int(shell_raw.get("timeout_ms", DEFAULT_SHELL_TIMEOUT_MS))
+        if shell_timeout_ms <= 0:
+            shell_timeout_ms = DEFAULT_SHELL_TIMEOUT_MS
+        shell_max_output_chars = int(
+            shell_raw.get("max_output_chars", DEFAULT_SHELL_MAX_OUTPUT_CHARS)
+        )
+        if shell_max_output_chars <= 0:
+            shell_max_output_chars = DEFAULT_SHELL_MAX_OUTPUT_CHARS
+        shell = TelegramBotShellConfig(
+            enabled=shell_enabled,
+            timeout_ms=shell_timeout_ms,
+            max_output_chars=shell_max_output_chars,
+        )
+        cache_raw_value = cfg.get("cache")
+        cache_raw: dict[str, Any] = (
+            cache_raw_value if isinstance(cache_raw_value, dict) else {}
+        )
+        cache = TelegramBotCacheConfig(
+            cleanup_interval_seconds=_positive_float(
+                cache_raw.get(
+                    "cleanup_interval_seconds", CACHE_CLEANUP_INTERVAL_SECONDS
+                ),
+                CACHE_CLEANUP_INTERVAL_SECONDS,
+            ),
+            coalesce_buffer_ttl_seconds=_positive_float(
+                cache_raw.get(
+                    "coalesce_buffer_ttl_seconds", COALESCE_BUFFER_TTL_SECONDS
+                ),
+                COALESCE_BUFFER_TTL_SECONDS,
+            ),
+            media_batch_buffer_ttl_seconds=_positive_float(
+                cache_raw.get(
+                    "media_batch_buffer_ttl_seconds", MEDIA_BATCH_BUFFER_TTL_SECONDS
+                ),
+                MEDIA_BATCH_BUFFER_TTL_SECONDS,
+            ),
+            model_pending_ttl_seconds=_positive_float(
+                cache_raw.get("model_pending_ttl_seconds", MODEL_PENDING_TTL_SECONDS),
+                MODEL_PENDING_TTL_SECONDS,
+            ),
+            pending_approval_ttl_seconds=_positive_float(
+                cache_raw.get(
+                    "pending_approval_ttl_seconds", PENDING_APPROVAL_TTL_SECONDS
+                ),
+                PENDING_APPROVAL_TTL_SECONDS,
+            ),
+            pending_question_ttl_seconds=_positive_float(
+                cache_raw.get(
+                    "pending_question_ttl_seconds", PENDING_QUESTION_TTL_SECONDS
+                ),
+                PENDING_QUESTION_TTL_SECONDS,
+            ),
+            reasoning_buffer_ttl_seconds=_positive_float(
+                cache_raw.get(
+                    "reasoning_buffer_ttl_seconds", REASONING_BUFFER_TTL_SECONDS
+                ),
+                REASONING_BUFFER_TTL_SECONDS,
+            ),
+            selection_state_ttl_seconds=_positive_float(
+                cache_raw.get(
+                    "selection_state_ttl_seconds", SELECTION_STATE_TTL_SECONDS
+                ),
+                SELECTION_STATE_TTL_SECONDS,
+            ),
+            turn_preview_ttl_seconds=_positive_float(
+                cache_raw.get("turn_preview_ttl_seconds", TURN_PREVIEW_TTL_SECONDS),
+                TURN_PREVIEW_TTL_SECONDS,
+            ),
+            progress_stream_ttl_seconds=_positive_float(
+                cache_raw.get(
+                    "progress_stream_ttl_seconds", PROGRESS_STREAM_TTL_SECONDS
+                ),
+                PROGRESS_STREAM_TTL_SECONDS,
+            ),
+            oversize_warning_ttl_seconds=_positive_float(
+                cache_raw.get(
+                    "oversize_warning_ttl_seconds", OVERSIZE_WARNING_TTL_SECONDS
+                ),
+                OVERSIZE_WARNING_TTL_SECONDS,
+            ),
+            update_id_persist_interval_seconds=_positive_float(
+                cache_raw.get(
+                    "update_id_persist_interval_seconds",
+                    UPDATE_ID_PERSIST_INTERVAL_SECONDS,
+                ),
+                UPDATE_ID_PERSIST_INTERVAL_SECONDS,
+            ),
+        )
+
+        progress_raw_value = cfg.get("progress_stream")
+        progress_raw: dict[str, Any] = (
+            progress_raw_value if isinstance(progress_raw_value, dict) else {}
+        )
+        progress_enabled = bool(
+            progress_raw.get("enabled", DEFAULT_PROGRESS_STREAM_ENABLED)
+        )
+        progress_max_actions = int(
+            progress_raw.get("max_actions", DEFAULT_PROGRESS_STREAM_MAX_ACTIONS)
+        )
+        if progress_max_actions <= 0:
+            progress_max_actions = DEFAULT_PROGRESS_STREAM_MAX_ACTIONS
+        progress_max_output_chars = int(
+            progress_raw.get(
+                "max_output_chars", DEFAULT_PROGRESS_STREAM_MAX_OUTPUT_CHARS
+            )
+        )
+        if progress_max_output_chars <= 0:
+            progress_max_output_chars = DEFAULT_PROGRESS_STREAM_MAX_OUTPUT_CHARS
+        progress_min_edit_interval_seconds = float(
+            progress_raw.get(
+                "min_edit_interval_seconds",
+                DEFAULT_PROGRESS_STREAM_MIN_EDIT_INTERVAL_SECONDS,
+            )
+        )
+        if progress_min_edit_interval_seconds <= 0:
+            progress_min_edit_interval_seconds = (
+                DEFAULT_PROGRESS_STREAM_MIN_EDIT_INTERVAL_SECONDS
+            )
+        progress_stream = TelegramBotProgressStreamConfig(
+            enabled=progress_enabled,
+            max_actions=progress_max_actions,
+            max_output_chars=progress_max_output_chars,
+            min_edit_interval_seconds=progress_min_edit_interval_seconds,
+        )
+
+        message_overflow = str(
+            cfg.get("message_overflow", DEFAULT_MESSAGE_OVERFLOW)
+        ).strip()
+        if message_overflow:
+            message_overflow = message_overflow.lower()
+        if message_overflow not in MESSAGE_OVERFLOW_OPTIONS:
+            message_overflow = DEFAULT_MESSAGE_OVERFLOW
+
+        metrics_raw_value = cfg.get("metrics")
+        metrics_raw: dict[str, Any] = (
+            metrics_raw_value if isinstance(metrics_raw_value, dict) else {}
+        )
+        metrics_mode = str(metrics_raw.get("mode", DEFAULT_METRICS_MODE)).strip()
+        if metrics_mode:
+            metrics_mode = metrics_mode.lower()
+        if metrics_mode not in METRICS_MODE_OPTIONS:
+            metrics_mode = DEFAULT_METRICS_MODE
+
+        coalesce_window_seconds = float(
+            cfg.get("coalesce_window_seconds", DEFAULT_COALESCE_WINDOW_SECONDS)
+        )
+        if coalesce_window_seconds <= 0:
+            coalesce_window_seconds = DEFAULT_COALESCE_WINDOW_SECONDS
+
+        ticket_flow_raw = (
+            cfg.get("ticket_flow") if isinstance(cfg.get("ticket_flow"), dict) else {}
+        )
+        ticket_flow_auto_resume = bool(ticket_flow_raw.get("auto_resume", False))
+
+        pause_raw_value = cfg.get("pause_dispatch_notifications")
+        pause_raw: dict[str, Any] = (
+            pause_raw_value if isinstance(pause_raw_value, dict) else {}
+        )
+        pause_enabled = bool(pause_raw.get("enabled", enabled))
+        pause_send_attachments = bool(pause_raw.get("send_attachments", True))
+        pause_max_file_size_bytes = int(
+            pause_raw.get("max_file_size_bytes", DEFAULT_PAUSE_DISPATCH_MAX_FILE_BYTES)
+        )
+        if pause_max_file_size_bytes <= 0:
+            pause_max_file_size_bytes = DEFAULT_PAUSE_DISPATCH_MAX_FILE_BYTES
+        pause_chunk_long_messages = bool(pause_raw.get("chunk_long_messages", True))
+        pause_dispatch_notifications = PauseDispatchNotifications(
+            enabled=pause_enabled,
+            send_attachments=pause_send_attachments,
+            max_file_size_bytes=pause_max_file_size_bytes,
+            chunk_long_messages=pause_chunk_long_messages,
+        )
+
+        default_notification_chat_raw = cfg.get("default_notification_chat_id")
+        default_notification_chat_id: Optional[int] = None
+        env_chat_candidates = _parse_int_list(env.get(chat_id_env))
+        if default_notification_chat_raw is not None:
+            try:
+                default_notification_chat_id = int(default_notification_chat_raw)
+            except (TypeError, ValueError):
+                default_notification_chat_id = None
+        if default_notification_chat_id is None:
+            if env_chat_candidates:
+                default_notification_chat_id = env_chat_candidates[0]
+            elif allowed_chat_ids:
+                default_notification_chat_id = min(allowed_chat_ids)
+
+        agent_binaries = dict(agent_binaries or {})
+        command_reg_raw_value = cfg.get("command_registration")
+        command_reg_raw: dict[str, Any] = (
+            command_reg_raw_value if isinstance(command_reg_raw_value, dict) else {}
+        )
+        command_reg_enabled = bool(command_reg_raw.get("enabled", True))
+        scopes = _parse_command_scopes(command_reg_raw.get("scopes"))
+        command_registration = TelegramBotCommandRegistration(
+            enabled=command_reg_enabled, scopes=scopes
+        )
+
+        opencode_command = _parse_command(cfg.get("opencode_command"))
+
+        state_file = Path(cfg.get("state_file", DEFAULT_STATE_FILE))
+        if not state_file.is_absolute():
+            state_file = (root / state_file).resolve()
+        if state_file.suffix == ".json":
+            raise TelegramBotConfigError(
+                "telegram_bot.state_file must point to a SQLite database "
+                "(.sqlite3). Update your config to .codex-autorunner/telegram_state.sqlite3"
+            )
+
+        app_server_command_env = (
+            str(
+                cfg.get("app_server_command_env", "CAR_CODEX_APP_SERVER_COMMAND")
+            ).strip()
+            or "CAR_CODEX_APP_SERVER_COMMAND"
+        )
+        telegram_app_server_command_env = (
+            str(
+                cfg.get(
+                    "telegram_app_server_command_env",
+                    "CAR_TELEGRAM_APP_SERVER_COMMAND",
+                )
+            ).strip()
+            or "CAR_TELEGRAM_APP_SERVER_COMMAND"
+        )
+        app_server_command = resolve_app_server_command_with_source(
+            cfg.get("app_server_command"),
+            env=env,
+            env_names=(telegram_app_server_command_env, app_server_command_env),
+            ignored_env_names=(),
+            fallback=DEFAULT_APP_SERVER_COMMAND,
+        ).command
+
+        app_server_raw_value = cfg.get("app_server")
+        app_server_raw: dict[str, Any] = (
+            app_server_raw_value if isinstance(app_server_raw_value, dict) else {}
+        )
+        app_server_max_handles = int(
+            app_server_raw.get("max_handles", DEFAULT_APP_SERVER_MAX_HANDLES)
+        )
+        if app_server_max_handles <= 0:
+            app_server_max_handles = None
+        app_server_idle_ttl_seconds = int(
+            app_server_raw.get("idle_ttl_seconds", DEFAULT_APP_SERVER_IDLE_TTL_SECONDS)
+        )
+        if app_server_idle_ttl_seconds <= 0:
+            app_server_idle_ttl_seconds = None
+
+        opencode_section_raw = opencode_raw
+        if not isinstance(opencode_section_raw, dict):
+            opencode_section_raw = (
+                cfg.get("opencode") if isinstance(cfg.get("opencode"), dict) else {}
+            )
+        opencode_max_handles = int(
+            opencode_section_raw.get("max_handles", DEFAULT_OPENCODE_MAX_HANDLES)
+        )
+        if opencode_max_handles <= 0:
+            opencode_max_handles = None
+        opencode_idle_ttl_seconds = int(
+            opencode_section_raw.get(
+                "idle_ttl_seconds", DEFAULT_OPENCODE_IDLE_TTL_SECONDS
+            )
+        )
+        if opencode_idle_ttl_seconds <= 0:
+            opencode_idle_ttl_seconds = None
+        app_server_start_timeout_seconds = float(
+            app_server_raw.get(
+                "start_timeout_seconds", DEFAULT_APP_SERVER_START_TIMEOUT_SECONDS
+            )
+        )
+        if app_server_start_timeout_seconds <= 0:
+            app_server_start_timeout_seconds = DEFAULT_APP_SERVER_START_TIMEOUT_SECONDS
+        app_server_start_max_attempts_raw = app_server_raw.get("max_attempts")
+        if app_server_start_max_attempts_raw is not None:
+            app_server_start_max_attempts = int(app_server_start_max_attempts_raw)
+            if app_server_start_max_attempts <= 0:
+                app_server_start_max_attempts = None
+        else:
+            app_server_start_max_attempts = None
+        app_server_turn_timeout_raw = app_server_raw.get(
+            "turn_timeout_seconds", DEFAULT_APP_SERVER_TURN_TIMEOUT_SECONDS
+        )
+        if app_server_turn_timeout_raw is None:
+            app_server_turn_timeout_seconds = None
+        else:
+            app_server_turn_timeout_seconds = float(app_server_turn_timeout_raw)
+            if app_server_turn_timeout_seconds <= 0:
+                app_server_turn_timeout_seconds = None
+
+        agent_timeouts_raw = cfg.get("agent_timeouts")
+        has_explicit_codex_timeout = False
+        agent_timeouts: dict[str, Optional[float]] = dict(
+            DEFAULT_AGENT_TURN_TIMEOUT_SECONDS
+        )
+        if isinstance(agent_timeouts_raw, dict):
+            for key, value in agent_timeouts_raw.items():
+                if str(key) == "codex":
+                    has_explicit_codex_timeout = True
+                if value is None:
+                    agent_timeouts[str(key)] = None
+                    continue
+                try:
+                    timeout_value = float(value)
+                except (TypeError, ValueError):
+                    continue
+                if timeout_value <= 0:
+                    agent_timeouts[str(key)] = None
+                else:
+                    agent_timeouts[str(key)] = timeout_value
+
+        if not has_explicit_codex_timeout:
+            agent_timeouts["codex"] = app_server_turn_timeout_seconds
+
+        polling_raw_value = cfg.get("polling")
+        polling_raw: dict[str, Any] = (
+            polling_raw_value if isinstance(polling_raw_value, dict) else {}
+        )
+        poll_timeout_seconds = int(
+            polling_raw.get("timeout_seconds", DEFAULT_POLL_TIMEOUT_SECONDS)
+        )
+        poll_request_timeout_seconds = polling_raw.get(
+            "request_timeout_seconds", DEFAULT_POLL_REQUEST_TIMEOUT_SECONDS
+        )
+        if poll_request_timeout_seconds is not None:
+            poll_request_timeout_seconds = float(poll_request_timeout_seconds)
+            if poll_request_timeout_seconds <= 0:
+                poll_request_timeout_seconds = None
+        allowed_updates = polling_raw.get("allowed_updates")
+        if isinstance(allowed_updates, list):
+            poll_allowed_updates = [str(item) for item in allowed_updates if item]
+        else:
+            poll_allowed_updates = list(DEFAULT_ALLOWED_UPDATES)
+
+        try:
+            collaboration_policy = build_telegram_collaboration_policy(
+                allowed_chat_ids=allowed_chat_ids,
+                allowed_user_ids=allowed_user_ids,
+                require_topics=require_topics,
+                trigger_mode=(
+                    trigger_mode
+                    if trigger_mode in TRIGGER_MODE_OPTIONS
+                    else DEFAULT_TRIGGER_MODE
+                ),
+                collaboration_raw=(
+                    collaboration_raw.get("telegram")
+                    if isinstance(collaboration_raw, dict)
+                    else None
+                ),
+                shared_raw=(
+                    collaboration_raw if isinstance(collaboration_raw, dict) else None
+                ),
+            )
+        except CollaborationPolicyError as exc:
+            raise TelegramBotConfigError(str(exc)) from exc
+
+        return cls(
+            root=root,
+            enabled=enabled,
+            mode=mode,
+            bot_token_env=bot_token_env,
+            chat_id_env=chat_id_env,
+            parse_mode=parse_mode,
+            debug_prefix_context=debug_prefix_context,
+            bot_token=bot_token,
+            allowed_chat_ids=allowed_chat_ids,
+            allowed_user_ids=allowed_user_ids,
+            require_topics=require_topics,
+            trigger_mode=trigger_mode,
+            defaults=defaults,
+            concurrency=concurrency,
+            media=media,
+            shell=shell,
+            cache=cache,
+            progress_stream=progress_stream,
+            command_registration=command_registration,
+            opencode_command=opencode_command,
+            state_file=state_file,
+            app_server_command=app_server_command,
+            app_server_max_handles=app_server_max_handles,
+            app_server_idle_ttl_seconds=app_server_idle_ttl_seconds,
+            opencode_max_handles=opencode_max_handles,
+            opencode_idle_ttl_seconds=opencode_idle_ttl_seconds,
+            app_server_start_timeout_seconds=app_server_start_timeout_seconds,
+            app_server_start_max_attempts=app_server_start_max_attempts,
+            app_server_turn_timeout_seconds=app_server_turn_timeout_seconds,
+            agent_turn_timeout_seconds=agent_timeouts,
+            poll_timeout_seconds=poll_timeout_seconds,
+            poll_request_timeout_seconds=poll_request_timeout_seconds,
+            poll_allowed_updates=poll_allowed_updates,
+            message_overflow=message_overflow,
+            metrics_mode=metrics_mode,
+            coalesce_window_seconds=coalesce_window_seconds,
+            agent_binaries=agent_binaries,
+            ticket_flow_auto_resume=ticket_flow_auto_resume,
+            pause_dispatch_notifications=pause_dispatch_notifications,
+            default_notification_chat_id=default_notification_chat_id,
+            collaboration_policy=collaboration_policy,
+        )
+
+    def validate(self) -> None:
+        issues: list[str] = []
+        if not self.bot_token:
+            issues.append(f"missing bot token env '{self.bot_token_env}'")
+        if not self.allowed_chat_ids:
+            issues.append(
+                "no allowed chat ids configured (set allowed_chat_ids or chat_id_env)"
+            )
+        if not self.allowed_user_ids:
+            issues.append("no allowed user ids configured (set allowed_user_ids)")
+        if not self.app_server_command:
+            issues.append("app_server_command must be set")
+        if self.poll_timeout_seconds <= 0:
+            issues.append("poll_timeout_seconds must be greater than 0")
+        if (
+            self.poll_request_timeout_seconds is not None
+            and self.poll_request_timeout_seconds <= self.poll_timeout_seconds
+        ):
+            issues.append(
+                "poll_request_timeout_seconds must be greater than poll_timeout_seconds"
+            )
+        if self.trigger_mode not in TRIGGER_MODE_OPTIONS:
+            issues.append(f"trigger_mode must be one of {sorted(TRIGGER_MODE_OPTIONS)}")
+        if issues:
+            raise TelegramBotConfigError("; ".join(issues))
+
+    def allowlist(self) -> TelegramAllowlist:
+        return TelegramAllowlist(
+            allowed_chat_ids=self.allowed_chat_ids,
+            allowed_user_ids=self.allowed_user_ids,
+            require_topic=self.require_topics,
+        )
+
+
+def _parse_command(raw: Any) -> list[str]:
+    if isinstance(raw, list):
+        return [str(item) for item in raw if item]
+    if isinstance(raw, str):
+        return [part for part in shlex.split(raw) if part]
+    return []
+
+
+def _parse_int_list(raw: Any) -> list[int]:
+    values: list[int] = []
+    if raw is None:
+        return values
+    if isinstance(raw, int):
+        return [raw]
+    if isinstance(raw, str):
+        parts = [part for part in re.split(r"[,\s]+", raw.strip()) if part]
+        for part in parts:
+            try:
+                values.append(int(part))
+            except ValueError:
+                continue
+        return values
+    if isinstance(raw, Iterable):
+        for item in raw:
+            values.extend(_parse_int_list(item))
+    return values
+
+
+def _normalize_parse_mode(raw: Any) -> Optional[str]:
+    if raw is None:
+        return None
+    cleaned = str(raw).strip()
+    if not cleaned:
+        return None
+    return PARSE_MODE_ALIASES.get(cleaned.lower(), cleaned)
+
+
+def _parse_command_scopes(raw: Any) -> list[TelegramBotCommandScope]:
+    scopes: list[TelegramBotCommandScope] = []
+    if raw is None:
+        raw = [
+            {"type": "default", "language_code": ""},
+            {"type": "all_group_chats", "language_code": ""},
+        ]
+    if isinstance(raw, list):
+        for item in raw:
+            scope_payload: dict[str, Any] = {"type": "default"}
+            language_code = ""
+            if isinstance(item, str):
+                scope_payload = {"type": item}
+            elif isinstance(item, dict):
+                if isinstance(item.get("scope"), dict):
+                    scope_payload = dict(item.get("scope", {}))
+                else:
+                    scope_payload = {
+                        "type": (
+                            str(item.get("type", "default"))
+                            if item.get("type") is not None
+                            else "default"
+                        )
+                    }
+                    for key, value in item.items():
+                        if key in ("scope", "type", "language_code"):
+                            continue
+                        scope_payload[key] = value
+                language_code_raw = item.get("language_code", "")
+                if language_code_raw is not None:
+                    language_code = str(language_code_raw)
+            if "type" not in scope_payload:
+                scope_payload["type"] = "default"
+            scopes.append(
+                TelegramBotCommandScope(
+                    scope=scope_payload, language_code=language_code
+                )
+            )
+    if not scopes:
+        scopes.append(
+            TelegramBotCommandScope(scope={"type": "default"}, language_code="")
+        )
+    return scopes

@@ -31,10 +31,6 @@ SCHEMA_BINDINGS = {
             "ticket_flow_display",
         },
     },
-    "AgentWorkspaceSnapshot": {
-        "typescript": "HubAgentWorkspace",
-        "python": "AgentWorkspaceSnapshot",
-    },
     "HubState": {"typescript": "HubData", "python": "HubState"},
 }
 
@@ -148,10 +144,10 @@ def _diff_props(
 
 
 def validate_interfaces(
-    schema_path: Path, ts_path: Path, py_path: Path
+    schema_path: Path, ts_path: Path | None, py_path: Path
 ) -> Tuple[bool, list[str]]:
     schema = _load_schema(schema_path)
-    ts_interfaces = _extract_ts_interfaces(ts_path)
+    ts_interfaces = _extract_ts_interfaces(ts_path) if ts_path and ts_path.exists() else {}
     py_classes, py_to_dict = _extract_python_classes(py_path)
 
     errors: list[str] = []
@@ -163,19 +159,20 @@ def validate_interfaces(
         py_name = binding.get("python", schema_name)
         py_extra = set(binding.get("python_extra", set()))
 
-        ts_props = ts_interfaces.get(ts_name)
-        if ts_props is None:
-            errors.append(f"{schema_name}: missing TypeScript interface '{ts_name}'")
-        else:
-            errors.extend(
-                _diff_props(
-                    schema_name,
-                    f"TypeScript {ts_name}",
-                    ts_props,
-                    required,
-                    schema_props,
+        if ts_interfaces:
+            ts_props = ts_interfaces.get(ts_name)
+            if ts_props is None:
+                errors.append(f"{schema_name}: missing TypeScript interface '{ts_name}'")
+            else:
+                errors.extend(
+                    _diff_props(
+                        schema_name,
+                        f"TypeScript {ts_name}",
+                        ts_props,
+                        required,
+                        schema_props,
+                    )
                 )
-            )
 
         py_props = py_to_dict.get(py_name) or py_classes.get(py_name)
         if py_props is None:
@@ -204,8 +201,8 @@ def main() -> int:
     parser.add_argument(
         "--typescript",
         type=Path,
-        default=Path("src/codex_autorunner/static_src/hubTypes.ts"),
-        help="Path to TypeScript hub interface file.",
+        default=None,
+        help="Path to TypeScript hub interface file (skipped if omitted or missing).",
     )
     parser.add_argument(
         "--python",

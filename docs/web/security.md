@@ -6,8 +6,7 @@ interface and how to secure it.
 
 ## Scope and threat model
 
-- The web server exposes a FastAPI HTTP API and a web UI with a terminal-style
-  Codex TUI embedded over WebSocket.
+- The web server exposes a FastAPI HTTP API and the Web Hub web UI.
 - The UI/API can run code and modify files in bound workspaces.
 - There is no built-in multi-user auth or per-endpoint role separation.
 
@@ -19,7 +18,7 @@ CAR supports a bearer token enforced by middleware when configured:
 - Export the token in the environment before starting the server.
 - All non-public endpoints require `Authorization: Bearer <token>`.
 - WebSockets accept the token via `Sec-WebSocket-Protocol: car-token-b64.<base64url(token)>`.
-  The legacy `?token=...` query string is still accepted for migration.
+  The legacy `?token=...` query string is still accepted for backward compatibility.
 
 When `server.auth_token_env` is set, the web UI can be accessed by visiting:
 
@@ -34,7 +33,10 @@ The UI stores the token in `sessionStorage` and removes it from the URL.
 The following endpoints remain public so health checks and static assets work:
 
 - `/` (UI shell)
-- `/static/*`
+- `/pma`, `/dashboard`, `/repos`, `/worktrees`, `/tickets`, `/contextspace/*`,
+  and `/settings` (Web Hub shell)
+- `/_app/*`
+- `/static/*` (Web Hub assets)
 - `/health`
 - `/cat/*`
 
@@ -73,4 +75,3 @@ Config:
 ## References
 
 - `README.md` (Security and remote access)
-- `docs/terminal-debugging.md`

@@ -488,7 +488,7 @@ class TestCheckTicketFrontmatter:
         fm, errors = check_ticket_frontmatter(ticket_path=nonexistent)
         assert fm is None
         assert errors is not None
-        assert any("Failed to read ticket after turn:" in e for e in errors)
+        assert any("Failed to read ticket after turn" in e for e in errors)
 
     def test_valid_frontmatter_returns_no_errors(self, tmp_path):
         ticket_path = tmp_path / "TICKET-001.md"

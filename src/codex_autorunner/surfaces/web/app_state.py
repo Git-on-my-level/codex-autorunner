@@ -2,16 +2,28 @@ import asyncio
 import logging
 import os
 import shlex
-from contextlib import ExitStack
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping, Optional, cast
 
+from ...adapters.agents import build_backend_orchestrator
+from ...adapters.agents.opencode_supervisor_factory import (
+    build_opencode_supervisor_from_repo_config,
+)
+from ...adapters.agents.wiring import (
+    build_agent_backend_factory,
+    build_app_server_supervisor_factory,
+)
+from ...adapters.app_server.client import ApprovalHandler, NotificationHandler
+from ...adapters.app_server.env import build_app_server_env
+from ...adapters.app_server.event_buffer import AppServerEventBuffer
+from ...adapters.app_server.supervisor import WorkspaceAppServerSupervisor
 from ...agents.opencode.supervisor import OpenCodeSupervisor
 from ...agents.registry import validate_agent_id
 from ...bootstrap import ensure_hub_car_shim
 from ...core import hub_inbox_resolution
 from ...core.config import (
+    ACTIVE_HUB_ROOT_ENV,
     AppServerConfig,
     ConfigError,
     HubConfig,
@@ -27,36 +39,33 @@ from ...core.hub_control_plane.service import HubSharedStateService
 from ...core.hub_projection_store import HubProjectionStore
 from ...core.logging_utils import safe_log, setup_rotating_logger
 from ...core.managed_thread_identity import ManagedThreadIdentityStore
+from ...core.managed_thread_store import prepare_managed_thread_store
 from ...core.optional_dependencies import require_optional_dependencies
 from ...core.orchestration.sqlite import prepare_orchestration_sqlite
-from ...core.pma_thread_store import prepare_pma_thread_store
 from ...core.runtime import RuntimeContext
 from ...core.runtime_services import RuntimeServices
 from ...core.state import load_state
-from ...integrations.agents import build_backend_orchestrator
-from ...integrations.agents.opencode_supervisor_factory import (
-    build_opencode_supervisor_from_repo_config,
-)
-from ...integrations.agents.wiring import (
-    build_agent_backend_factory,
-    build_app_server_supervisor_factory,
-)
-from ...integrations.app_server.client import ApprovalHandler, NotificationHandler
-from ...integrations.app_server.env import build_app_server_env
-from ...integrations.app_server.event_buffer import AppServerEventBuffer
-from ...integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from ...tickets.replies import resolve_reply_paths
 from .hub_jobs import HubJobManager
 from .runner_manager import RunnerManager
 from .static_assets import (
-    StaticAssetProvenance,
     asset_version,
-    materialize_static_assets,
-    require_static_assets,
+    resolve_web_static_dir,
 )
 from .terminal_sessions import parse_tui_idle_seconds, prune_terminal_registry
 
 _DEV_INCLUDE_ROOT_REPO_ENV = "CAR_DEV_INCLUDE_ROOT_REPO"
+
+
+def _hub_config_start_path(hub_root: Optional[Path]) -> Path:
+    """Directory used to locate `.codex-autorunner/config.yml` for the hub."""
+    if hub_root is not None:
+        return hub_root
+    env_root = os.environ.get(ACTIVE_HUB_ROOT_ENV, "").strip()
+    if env_root:
+        return Path(env_root).expanduser().resolve()
+    return Path.cwd()
+
 
 _find_message_resolution = hub_inbox_resolution.find_message_resolution
 _hub_inbox_dismissals_path = hub_inbox_resolution.hub_inbox_dismissals_path
@@ -89,10 +98,7 @@ class AppContext:
     repo_to_session: dict
     session_state_last_write: float
     session_state_dirty: bool
-    static_dir: Path
-    static_assets_context: Optional[object]
     asset_version: str
-    static_asset_provenance: StaticAssetProvenance
     logger: logging.Logger
     tui_idle_seconds: Optional[float]
     tui_idle_check_seconds: Optional[float]
@@ -113,10 +119,7 @@ class HubAppContext:
     runtime_services: RuntimeServices
     projection_store: HubProjectionStore
     shared_state_service: HubSharedStateService
-    static_dir: Path
-    static_assets_context: Optional[object]
     asset_version: str
-    static_asset_provenance: StaticAssetProvenance
     logger: logging.Logger
 
 
@@ -539,53 +542,7 @@ def build_app_context(
             terminal_max_idle_seconds,
         )
 
-    def _load_static_assets(
-        cache_root: Path, max_cache_entries: int, max_cache_age_days: Optional[int]
-    ) -> tuple[Path, Optional[ExitStack], StaticAssetProvenance]:
-        static_dir, static_context, provenance = materialize_static_assets(
-            cache_root,
-            max_cache_entries=max_cache_entries,
-            max_cache_age_days=max_cache_age_days,
-            logger=logger,
-        )
-        try:
-            require_static_assets(static_dir, logger)
-        except RuntimeError as exc:
-            if static_context is not None:
-                static_context.close()
-            safe_log(
-                logger,
-                logging.WARNING,
-                "Static assets requirement check failed",
-                exc=exc,
-            )
-            raise
-        return static_dir, static_context, provenance
-
-    try:
-        static_dir, static_context, static_provenance = _load_static_assets(
-            config.static_assets.cache_root,
-            config.static_assets.max_cache_entries,
-            config.static_assets.max_cache_age_days,
-        )
-    except (OSError, RuntimeError) as exc:
-        if hub_config is None:
-            raise
-        hub_static = hub_config.static_assets
-        if hub_static.cache_root == config.static_assets.cache_root:
-            raise
-        safe_log(
-            logger,
-            logging.WARNING,
-            "Repo static assets unavailable; retrying with hub cache root %s",
-            hub_static.cache_root,
-            exc=exc,
-        )
-        static_dir, static_context, static_provenance = _load_static_assets(
-            hub_static.cache_root,
-            hub_static.max_cache_entries,
-            hub_static.max_cache_age_days,
-        )
+    web_static_dir, _web_static_context = resolve_web_static_dir()
     return AppContext(
         base_path=normalized_base,
         env=env,
@@ -608,10 +565,7 @@ def build_app_context(
         repo_to_session=repo_to_session,
         session_state_last_write=0.0,
         session_state_dirty=False,
-        static_dir=static_dir,
-        static_assets_context=static_context,
-        asset_version=asset_version(static_dir),
-        static_asset_provenance=static_provenance,
+        asset_version=asset_version(web_static_dir),
         logger=logger,
         tui_idle_seconds=tui_idle_seconds,
         tui_idle_check_seconds=tui_idle_check_seconds,
@@ -642,10 +596,7 @@ def apply_app_context(app, context: AppContext) -> None:
     app.state.repo_to_session = context.repo_to_session
     app.state.session_state_last_write = context.session_state_last_write
     app.state.session_state_dirty = context.session_state_dirty
-    app.state.static_dir = context.static_dir
-    app.state.static_assets_context = context.static_assets_context
     app.state.asset_version = context.asset_version
-    app.state.static_asset_provenance = context.static_asset_provenance
 
 
 def build_hub_context(
@@ -653,10 +604,10 @@ def build_hub_context(
 ) -> HubAppContext:
     import sys
 
+    from ...adapters.github.polling import build_hub_scm_poll_processor
     from ...core.hub import HubSupervisor
-    from ...integrations.github.polling import build_hub_scm_poll_processor
 
-    config = load_hub_config(hub_root or Path.cwd())
+    config = load_hub_config(_hub_config_start_path(hub_root))
     dev_include_root_repo = _env_truthy(os.getenv(_DEV_INCLUDE_ROOT_REPO_ENV))
     dev_mode_root_repo_enabled = False
     if (
@@ -673,7 +624,7 @@ def build_hub_context(
     )
     durable_writes = bool(getattr(config, "durable_writes", False))
     prepare_orchestration_sqlite(config.root, durable=durable_writes)
-    prepare_pma_thread_store(config.root, durable=durable_writes)
+    prepare_managed_thread_store(config.root, durable=durable_writes)
     supervisor = HubSupervisor(
         config,
         backend_factory_builder=build_agent_backend_factory,
@@ -759,25 +710,8 @@ def build_hub_context(
         config.root,
         durable=bool(getattr(config, "durable_writes", False)),
     )
-    static_dir, static_context, static_provenance = materialize_static_assets(
-        config.static_assets.cache_root,
-        max_cache_entries=config.static_assets.max_cache_entries,
-        max_cache_age_days=config.static_assets.max_cache_age_days,
-        logger=logger,
-    )
-    try:
-        require_static_assets(static_dir, logger)
-    except RuntimeError as exc:
-        if static_context is not None:
-            static_context.close()
-        safe_log(
-            logger,
-            logging.WARNING,
-            "Static assets requirement check failed",
-            exc=exc,
-        )
-        raise
-    resolved_asset_version = asset_version(static_dir)
+    hub_web_static_dir, _hub_web_static_context = resolve_web_static_dir()
+    resolved_asset_version = asset_version(hub_web_static_dir)
     shared_state_service = HubSharedStateService(
         hub_root=config.root,
         supervisor=supervisor,
@@ -799,10 +733,7 @@ def build_hub_context(
         runtime_services=runtime_services,
         projection_store=projection_store,
         shared_state_service=shared_state_service,
-        static_dir=static_dir,
-        static_assets_context=static_context,
         asset_version=resolved_asset_version,
-        static_asset_provenance=static_provenance,
         logger=logger,
     )
 
@@ -821,8 +752,5 @@ def apply_hub_context(app, context: HubAppContext) -> None:
     app.state.runtime_services = context.runtime_services
     app.state.hub_projection_store = context.projection_store
     app.state.hub_control_plane_service = context.shared_state_service
-    app.state.static_dir = context.static_dir
-    app.state.static_assets_context = context.static_assets_context
     app.state.asset_version = context.asset_version
-    app.state.static_asset_provenance = context.static_asset_provenance
     app.state.hub_supervisor = context.supervisor

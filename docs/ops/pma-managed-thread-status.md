@@ -144,12 +144,11 @@ Every PMA managed thread is a durable CAR thread target owned by a typed
 resource:
 
 - `resource_kind: repo` for repo-backed threads
-- `resource_kind: agent_workspace` for first-class runtime workspaces
+- `resource_kind: filesystem` when the durable scope is an explicit workspace path
 
-Chat-surface bindings resolve to that durable thread target. For agent
-workspaces, this distinction matters: CAR binds Discord/Telegram/web chat to a
-consistent durable CAR thread under the workspace, while the workspace root
-continues to provide shared memory across multiple threads.
+Chat-surface bindings resolve to that durable thread target. Repo-backed threads
+anchor PMA conversations to manifest repos or derived worktrees; filesystem-scoped
+threads anchor execution to the resolved workspace directory CAR runs against.
 
 ## Busy-Thread Delivery
 

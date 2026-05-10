@@ -17,6 +17,7 @@ from .freshness import (
     summarize_section_freshness,
 )
 from .hub import HubSupervisor
+from .managed_thread_snapshot import snapshot_managed_threads
 from .pma_action_queue import build_pma_action_queue
 from .pma_automation_snapshot import snapshot_pma_automation
 from .pma_context_shared import (
@@ -32,7 +33,6 @@ from .pma_file_inbox import (
     _extract_entry_freshness,
     enrich_pma_file_inbox_entry,
 )
-from .pma_thread_snapshot import snapshot_pma_threads
 from .pma_ticket_flow_state import get_latest_ticket_flow_run_state_with_record
 from .state_roots import resolve_hub_templates_root
 from .ticket_flow_projection import build_canonical_state_v1
@@ -192,10 +192,9 @@ def _build_snapshot_freshness_summary(
     generated_at: str,
     stale_threshold_seconds: int,
     repos: list[dict[str, Any]],
-    agent_workspaces: list[dict[str, Any]],
     inbox: list[dict[str, Any]],
     action_queue: list[dict[str, Any]],
-    pma_threads: list[dict[str, Any]],
+    managed_threads: list[dict[str, Any]],
     pma_files_detail: Mapping[str, list[dict[str, Any]]],
 ) -> dict[str, Any]:
     sections = {
@@ -204,11 +203,6 @@ def _build_snapshot_freshness_summary(
             generated_at=generated_at,
             stale_threshold_seconds=stale_threshold_seconds,
             extractor=_extract_entry_freshness,
-        ),
-        "agent_workspaces": summarize_section_freshness(
-            agent_workspaces,
-            generated_at=generated_at,
-            stale_threshold_seconds=stale_threshold_seconds,
         ),
         "inbox": summarize_section_freshness(
             inbox,
@@ -222,8 +216,8 @@ def _build_snapshot_freshness_summary(
             stale_threshold_seconds=stale_threshold_seconds,
             extractor=_extract_entry_freshness,
         ),
-        "pma_threads": summarize_section_freshness(
-            pma_threads,
+        "managed_threads": summarize_section_freshness(
+            managed_threads,
             generated_at=generated_at,
             stale_threshold_seconds=stale_threshold_seconds,
         ),
@@ -345,37 +339,6 @@ def _build_repo_summaries(
     return repos
 
 
-def _build_agent_workspace_summaries(
-    supervisor: HubSupervisor,
-    *,
-    hub_root: Optional[Path],
-    limits: PmaSnapshotLimits,
-) -> list[dict[str, Any]]:
-    list_agent_workspaces = getattr(supervisor, "list_agent_workspaces", None)
-    if not callable(list_agent_workspaces):
-        return []
-    agent_workspace_snapshots = sorted(
-        list_agent_workspaces(), key=lambda snap: snap.id
-    )
-    agent_workspaces: list[dict[str, Any]] = []
-    for workspace in agent_workspace_snapshots[: limits.max_repos]:
-        if hub_root is not None:
-            summary = workspace.to_dict(hub_root)
-        else:
-            summary = {
-                "id": workspace.id,
-                "runtime": workspace.runtime,
-                "path": str(workspace.path),
-                "display_name": workspace.display_name,
-                "enabled": workspace.enabled,
-                "exists_on_disk": workspace.exists_on_disk,
-                "effective_destination": workspace.effective_destination,
-                "resource_kind": workspace.resource_kind,
-            }
-        agent_workspaces.append(summary)
-    return agent_workspaces
-
-
 def _collect_hub_local_artifacts(
     *,
     hub_root: Optional[Path],
@@ -390,13 +353,13 @@ def _collect_hub_local_artifacts(
 ]:
     pma_files: dict[str, list[str]] = {box: [] for box in BOXES}
     pma_files_detail: dict[str, list[dict[str, Any]]] = empty_listing()
-    pma_threads: list[dict[str, Any]] = []
+    managed_threads: list[dict[str, Any]] = []
     automation = snapshot_pma_automation(supervisor)
     if hub_root is None:
-        return pma_files, pma_files_detail, pma_threads, automation
+        return pma_files, pma_files_detail, managed_threads, automation
 
     pma_files, pma_files_detail = _snapshot_pma_files(hub_root)
-    pma_threads = snapshot_pma_threads(
+    managed_threads = snapshot_managed_threads(
         hub_root,
         generated_at=generated_at,
         stale_threshold_seconds=stale_threshold_seconds,
@@ -410,7 +373,7 @@ def _collect_hub_local_artifacts(
             )
             if box == "inbox":
                 pma_files_detail[box][index] = enrich_pma_file_inbox_entry(entry)
-    return pma_files, pma_files_detail, pma_threads, automation
+    return pma_files, pma_files_detail, managed_threads, automation
 
 
 async def build_hub_snapshot_payload(
@@ -435,13 +398,12 @@ async def build_hub_snapshot_payload(
         return {
             "generated_at": generated_at,
             "repos": [],
-            "agent_workspaces": [],
             "inbox": [],
             "action_queue": [],
             "templates": {"enabled": False, "repos": []},
             "lifecycle_events": [],
             "pma_files_detail": empty_files,
-            "pma_threads": [],
+            "managed_threads": [],
             "process_monitor": None,
             "automation": {
                 "subscriptions": {"active_count": 0, "sample": []},
@@ -456,10 +418,9 @@ async def build_hub_snapshot_payload(
                 generated_at=generated_at,
                 stale_threshold_seconds=stale_threshold_seconds,
                 repos=[],
-                agent_workspaces=[],
                 inbox=[],
                 action_queue=[],
-                pma_threads=[],
+                managed_threads=[],
                 pma_files_detail=empty_files,
             ),
         }
@@ -467,7 +428,6 @@ async def build_hub_snapshot_payload(
     limits = PmaSnapshotLimits.from_supervisor(supervisor)
     (
         repos,
-        agent_workspaces,
         inbox,
         lifecycle_events,
         process_monitor,
@@ -476,12 +436,6 @@ async def build_hub_snapshot_payload(
             _build_repo_summaries,
             supervisor,
             stale_threshold_seconds=stale_threshold_seconds,
-            limits=limits,
-        ),
-        asyncio.to_thread(
-            _build_agent_workspace_summaries,
-            supervisor,
-            hub_root=hub_root,
             limits=limits,
         ),
         asyncio.to_thread(
@@ -496,7 +450,7 @@ async def build_hub_snapshot_payload(
     inbox = inbox[: limits.max_messages]
 
     templates = _build_templates_snapshot(supervisor, hub_root=hub_root)
-    pma_files, pma_files_detail, pma_threads, automation = await asyncio.to_thread(
+    pma_files, pma_files_detail, managed_threads, automation = await asyncio.to_thread(
         _collect_hub_local_artifacts,
         hub_root=hub_root,
         generated_at=generated_at,
@@ -505,7 +459,7 @@ async def build_hub_snapshot_payload(
     )
     action_queue = build_pma_action_queue(
         inbox=inbox,
-        pma_threads=pma_threads,
+        managed_threads=managed_threads,
         pma_files_detail=pma_files_detail,
         automation=automation,
         generated_at=generated_at,
@@ -515,23 +469,21 @@ async def build_hub_snapshot_payload(
         generated_at=generated_at,
         stale_threshold_seconds=stale_threshold_seconds,
         repos=repos,
-        agent_workspaces=agent_workspaces,
         inbox=inbox,
         action_queue=action_queue,
-        pma_threads=pma_threads,
+        managed_threads=managed_threads,
         pma_files_detail=pma_files_detail,
     )
 
     return {
         "generated_at": generated_at,
         "repos": repos,
-        "agent_workspaces": agent_workspaces,
         "inbox": inbox,
         "action_queue": action_queue,
         "templates": templates,
         "pma_files": pma_files,
         "pma_files_detail": pma_files_detail,
-        "pma_threads": pma_threads,
+        "managed_threads": managed_threads,
         "process_monitor": process_monitor,
         "automation": automation,
         "lifecycle_events": lifecycle_events,

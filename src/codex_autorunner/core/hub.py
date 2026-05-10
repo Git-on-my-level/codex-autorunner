@@ -1,21 +1,14 @@
 import asyncio
-import importlib
 import logging
-import shutil
 import sqlite3
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from ..discovery import discover_and_init
-from ..manifest import (
-    Manifest,
-    ManifestAgentWorkspace,
-    normalize_manifest_destination,
-    sanitize_repo_id,
-    save_manifest,
-)
+from ..manifest import Manifest
 from .config import (
     HubConfig,
     RepoConfig,
@@ -26,14 +19,13 @@ from .hub_lifecycle import HubLifecycleOrchestrator
 from .hub_repo_manager import RepoManager
 from .hub_runner_orchestrator import RunnerOrchestrator
 from .hub_topology import (
-    AgentWorkspaceSnapshot,
     HubState,
     HubTopologyRepository,
     RepoSnapshot,
     RepoTopologyRecord,
     load_hub_state,
     normalize_pinned_parent_repo_ids,
-    refresh_pma_threads_artifact,
+    refresh_managed_threads_artifact,
     save_hub_state,
 )
 from .hub_worktree_manager import WorktreeManager
@@ -51,12 +43,19 @@ from .ports.backend_orchestrator import (
 from .runner_controller import ProcessRunnerController, SpawnRunnerFn
 from .runtime import RuntimeContext
 from .state import now_iso
-from .state_roots import resolve_hub_agent_workspace_root
 from .types import AppServerSupervisorFactory, BackendFactory
 
 logger = logging.getLogger("codex_autorunner.hub")
 
 _LIST_REPOS_CACHE_TTL_SECONDS = 30.0
+
+
+@dataclass(frozen=True)
+class PmaLaneWorkerStartResult:
+    accepted: bool
+    reason: str
+    lane_id: str
+
 
 BackendFactoryBuilder = Callable[[Path, RepoConfig], BackendFactory]
 AppServerSupervisorFactoryBuilder = Callable[[RepoConfig], AppServerSupervisorFactory]
@@ -126,89 +125,6 @@ class _HubWorktreeBridge:
             repo_id=repo_id,
             unbound_threads_by_repo=unbound_threads_by_repo,
         )
-
-
-def _load_managed_runtime_module() -> Any:
-    try:
-        return importlib.import_module("codex_autorunner.agents.managed_runtime")
-    except (ImportError, ModuleNotFoundError):
-        return None
-
-
-def _coerce_runtime_preflight_payload(result: Any) -> Optional[dict[str, Any]]:
-    if result is None:
-        return None
-    if isinstance(result, dict):
-        return dict(result)
-    payload: dict[str, Any] = {}
-    for field in ("runtime_id", "status", "version", "launch_mode", "message", "fix"):
-        value = getattr(result, field, None)
-        if value is not None:
-            payload[field] = value
-    return payload or None
-
-
-def known_agent_workspace_runtime_ids() -> tuple[str, ...]:
-    module = _load_managed_runtime_module()
-    if module is not None:
-        for attr in (
-            "managed_agent_workspace_runtime_ids",
-            "list_managed_agent_workspace_runtime_ids",
-            "known_agent_workspace_runtime_ids",
-        ):
-            func = getattr(module, attr, None)
-            if not callable(func):
-                continue
-            try:
-                raw_ids = func()
-            except (OSError, ValueError, TypeError, RuntimeError, AttributeError):
-                continue
-            normalized = tuple(
-                sorted(
-                    {
-                        str(item).strip().lower()
-                        for item in (raw_ids or ())
-                        if str(item).strip()
-                    }
-                )
-            )
-            if normalized:
-                return normalized
-    return ("zeroclaw",)
-
-
-def probe_agent_workspace_runtime(
-    hub_config: HubConfig,
-    workspace: ManifestAgentWorkspace,
-) -> Optional[dict[str, Any]]:
-    module = _load_managed_runtime_module()
-    if module is None:
-        return None
-    for attr in (
-        "probe_agent_workspace_runtime",
-        "preflight_agent_workspace_runtime",
-    ):
-        func = getattr(module, attr, None)
-        if not callable(func):
-            continue
-        for kwargs in (
-            {"hub_config": hub_config, "workspace": workspace},
-            {"config": hub_config, "workspace": workspace},
-        ):
-            try:
-                return _coerce_runtime_preflight_payload(func(**kwargs))
-            except TypeError:
-                continue
-    return None
-
-
-def _runtime_preflight_blocks_enable(
-    preflight: Optional[Mapping[str, Any]],
-) -> bool:
-    if not preflight:
-        return False
-    status = str(preflight.get("status") or "").strip().lower()
-    return bool(status and status not in {"ready", "deferred"})
 
 
 class RepoRunner:
@@ -386,7 +302,7 @@ class HubSupervisor:
             records=records,
         )
         save_hub_state(self.state_path, self.state, self.hub_config.root)
-        refresh_pma_threads_artifact(self.hub_config.root)
+        refresh_managed_threads_artifact(self.hub_config.root)
         return list(self.state.repos)
 
     def list_repos(self, *, use_cache: bool = True) -> List[RepoSnapshot]:
@@ -419,12 +335,6 @@ class HubSupervisor:
             self._list_cache_at = time.monotonic()
             return self._list_cache
 
-    def list_agent_workspaces(
-        self, *, use_cache: bool = True
-    ) -> List[AgentWorkspaceSnapshot]:
-        self.list_repos(use_cache=use_cache)
-        return list(self.state.agent_workspaces)
-
     def set_parent_repo_pinned(self, repo_id: str, pinned: bool) -> List[str]:
         manifest = self._topology_repository.load_manifest()
         repo = manifest.get(repo_id)
@@ -443,7 +353,6 @@ class HubSupervisor:
             self.state = HubState(
                 last_scan_at=self.state.last_scan_at,
                 repos=self.state.repos,
-                agent_workspaces=self.state.agent_workspaces,
                 pinned_parent_repo_ids=normalize_pinned_parent_repo_ids(current),
             )
             save_hub_state(
@@ -452,155 +361,6 @@ class HubSupervisor:
                 self.hub_config.root,
             )
             return list(self.state.pinned_parent_repo_ids)
-
-    def create_agent_workspace(
-        self,
-        *,
-        workspace_id: str,
-        runtime: str,
-        display_name: Optional[str] = None,
-        enabled: bool = True,
-    ) -> AgentWorkspaceSnapshot:
-        self._invalidate_list_cache()
-        raw_workspace_id = (workspace_id or "").strip()
-        raw_runtime = (runtime or "").strip()
-        if not raw_workspace_id:
-            raise ValueError("workspace_id is required")
-        if not raw_runtime:
-            raise ValueError("runtime is required")
-        normalized_workspace_id = sanitize_repo_id(raw_workspace_id)
-        normalized_runtime = sanitize_repo_id(raw_runtime)
-        known_runtimes = set(known_agent_workspace_runtime_ids())
-        if normalized_runtime not in known_runtimes:
-            supported = ", ".join(sorted(known_runtimes))
-            raise ValueError(
-                f"Unknown agent workspace runtime '{normalized_runtime}'. "
-                f"Supported runtimes: {supported}"
-            )
-
-        manifest = self._topology_repository.load_manifest()
-        existing = manifest.get_agent_workspace(normalized_workspace_id)
-        target = resolve_hub_agent_workspace_root(
-            self.hub_config.root,
-            runtime=normalized_runtime,
-            workspace_id=normalized_workspace_id,
-        )
-        if existing:
-            existing_path = (self.hub_config.root / existing.path).resolve()
-            if existing.runtime != normalized_runtime or existing_path != target:
-                raise ValueError(
-                    "Agent workspace id %s already exists for runtime %s at %s"
-                    % (normalized_workspace_id, existing.runtime, existing.path)
-                )
-        workspace = manifest.ensure_agent_workspace(
-            self.hub_config.root,
-            workspace_id=normalized_workspace_id,
-            runtime=normalized_runtime,
-            display_name=display_name or workspace_id,
-        )
-        workspace.enabled = bool(enabled)
-        preflight = (
-            probe_agent_workspace_runtime(self.hub_config, workspace)
-            if workspace.enabled
-            else None
-        )
-        if _runtime_preflight_blocks_enable(preflight):
-            assert preflight is not None
-            message = str(preflight.get("message") or "").strip()
-            fix = str(preflight.get("fix") or "").strip()
-            detail = message or "runtime preflight failed"
-            if fix:
-                detail = f"{detail} Fix: {fix}"
-            raise ValueError(detail)
-        target.mkdir(parents=True, exist_ok=True)
-        save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
-        self.list_repos(use_cache=False)
-        return self._snapshot_for_agent_workspace(normalized_workspace_id)
-
-    def remove_agent_workspace(
-        self,
-        workspace_id: str,
-        *,
-        delete_dir: bool = True,
-    ) -> None:
-        self._invalidate_list_cache()
-        manifest = self._topology_repository.load_manifest()
-        workspace = manifest.get_agent_workspace(workspace_id)
-        if not workspace:
-            raise ValueError(f"Agent workspace {workspace_id} not found in manifest")
-
-        workspace_root = (self.hub_config.root / workspace.path).resolve()
-        if delete_dir and workspace_root.exists():
-            shutil.rmtree(workspace_root)
-
-        manifest.agent_workspaces = [
-            entry for entry in manifest.agent_workspaces if entry.id != workspace_id
-        ]
-        save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
-        self.list_repos(use_cache=False)
-
-    def get_agent_workspace_snapshot(self, workspace_id: str) -> AgentWorkspaceSnapshot:
-        return self._snapshot_for_agent_workspace(workspace_id)
-
-    def get_agent_workspace_runtime_readiness(
-        self, workspace_id: str
-    ) -> Optional[dict[str, Any]]:
-        manifest = self._topology_repository.load_manifest()
-        workspace = manifest.get_agent_workspace(workspace_id)
-        if workspace is None:
-            raise ValueError(f"Agent workspace {workspace_id} not found in manifest")
-        return probe_agent_workspace_runtime(self.hub_config, workspace)
-
-    def update_agent_workspace(
-        self,
-        workspace_id: str,
-        *,
-        enabled: Optional[bool] = None,
-        display_name: Optional[str] = None,
-    ) -> AgentWorkspaceSnapshot:
-        self._invalidate_list_cache()
-        manifest = self._topology_repository.load_manifest()
-        workspace = manifest.get_agent_workspace(workspace_id)
-        if not workspace:
-            raise ValueError(f"Agent workspace {workspace_id} not found in manifest")
-
-        if enabled is not None:
-            workspace.enabled = bool(enabled)
-            preflight = (
-                probe_agent_workspace_runtime(self.hub_config, workspace)
-                if workspace.enabled
-                else None
-            )
-            if _runtime_preflight_blocks_enable(preflight):
-                assert preflight is not None
-                message = str(preflight.get("message") or "").strip()
-                fix = str(preflight.get("fix") or "").strip()
-                detail = message or "runtime preflight failed"
-                if fix:
-                    detail = f"{detail} Fix: {fix}"
-                raise ValueError(detail)
-        if display_name is not None:
-            normalized_display_name = str(display_name).strip()
-            if not normalized_display_name:
-                raise ValueError("display_name must be non-empty when provided")
-            workspace.display_name = normalized_display_name
-
-        save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
-        self.list_repos(use_cache=False)
-        return self._snapshot_for_agent_workspace(workspace_id)
-
-    def set_agent_workspace_destination(
-        self, workspace_id: str, destination: Optional[Dict[str, Any]]
-    ) -> AgentWorkspaceSnapshot:
-        self._invalidate_list_cache()
-        manifest = self._topology_repository.load_manifest()
-        workspace = manifest.get_agent_workspace(workspace_id)
-        if not workspace:
-            raise ValueError(f"Agent workspace {workspace_id} not found in manifest")
-        workspace.destination = normalize_manifest_destination(destination)
-        save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
-        self.list_repos(use_cache=False)
-        return self._snapshot_for_agent_workspace(workspace_id)
 
     def _reconcile_startup(self) -> None:
         try:
@@ -728,13 +488,13 @@ class HubSupervisor:
             repo_id_hint=repo_id_hint,
         )
 
-    def _archive_bound_pma_threads(
+    def _archive_bound_managed_threads(
         self,
         *,
         worktree_repo_id: str,
         worktree_path: Path,
     ) -> list[str]:
-        return self._worktree_manager._archive_bound_pma_threads(
+        return self._worktree_manager._archive_bound_managed_threads(
             worktree_repo_id=worktree_repo_id,
             worktree_path=worktree_path,
         )
@@ -874,18 +634,6 @@ class HubSupervisor:
             raise ValueError(f"Repo {repo_id} not found in manifest")
         return snapshot
 
-    def _snapshot_for_agent_workspace(
-        self, workspace_id: str
-    ) -> AgentWorkspaceSnapshot:
-        self.list_repos(use_cache=False)
-        snapshot = next(
-            (item for item in self.state.agent_workspaces if item.id == workspace_id),
-            None,
-        )
-        if snapshot is None:
-            raise ValueError(f"Agent workspace {workspace_id} not found in manifest")
-        return snapshot
-
     def register_invalidation_callback(self, callback: Callable[[], None]) -> None:
         self._invalidation_callbacks.append(callback)
 
@@ -936,21 +684,37 @@ class HubSupervisor:
     ) -> None:
         self._pma_lane_worker_starter = starter
 
-    def _request_pma_lane_worker_start(self, lane_id: Optional[str]) -> None:
+    def _request_pma_lane_worker_start(
+        self, lane_id: Optional[str]
+    ) -> PmaLaneWorkerStartResult:
         starter = self._pma_lane_worker_starter
-        if starter is None:
-            return
         normalized_lane_id = (
             lane_id.strip()
             if isinstance(lane_id, str) and lane_id.strip()
             else DEFAULT_PMA_LANE_ID
         )
+        if starter is None:
+            return PmaLaneWorkerStartResult(
+                accepted=True,
+                reason="no_lane_worker_starter_configured",
+                lane_id=normalized_lane_id,
+            )
         try:
             starter(normalized_lane_id)
+            return PmaLaneWorkerStartResult(
+                accepted=True,
+                reason="accepted",
+                lane_id=normalized_lane_id,
+            )
         except (RuntimeError, OSError, ValueError, TypeError):
             logger.exception(
                 "Failed requesting PMA lane worker startup for lane_id=%s",
                 normalized_lane_id,
+            )
+            return PmaLaneWorkerStartResult(
+                accepted=False,
+                reason="starter_failed",
+                lane_id=normalized_lane_id,
             )
 
     def process_pma_automation_now(
@@ -1115,8 +879,13 @@ class HubSupervisor:
 
         store = self.ensure_pma_automation_store()
         list_pending_wakeups = getattr(store, "list_pending_wakeups", None)
+        mark_wakeup_queued = getattr(store, "mark_wakeup_queued", None)
         mark_wakeup_dispatched = getattr(store, "mark_wakeup_dispatched", None)
-        if not callable(list_pending_wakeups) or not callable(mark_wakeup_dispatched):
+        if (
+            not callable(list_pending_wakeups)
+            or not callable(mark_wakeup_queued)
+            or not callable(mark_wakeup_dispatched)
+        ):
             return 0
         wakeups = list_pending_wakeups(limit=take, require_dispatch_decision=True)
         if not wakeups:
@@ -1205,8 +974,14 @@ class HubSupervisor:
                     and str(wakeup.get("lane_id")).strip()
                     else "pma:default"
                 )
-                _, dupe_reason = queue.enqueue_sync(lane_id, idempotency_key, payload)
-                self._request_pma_lane_worker_start(lane_id)
+                item, created_queue_item = queue.ensure_active_item_sync(
+                    lane_id, idempotency_key, payload
+                )
+                dupe_reason = (
+                    None if created_queue_item else f"duplicate of {item.item_id}"
+                )
+                mark_wakeup_queued(wakeup_id)
+                worker_start_result = self._request_pma_lane_worker_start(lane_id)
             except (sqlite3.Error, OSError, ValueError, TypeError, RuntimeError):
                 logger.exception(
                     "Failed to drain PMA automation wake-up %s into PMA queue",
@@ -1219,6 +994,15 @@ class HubSupervisor:
                     wakeup_id,
                     dupe_reason,
                 )
+            if not worker_start_result.accepted:
+                logger.warning(
+                    "Leaving PMA automation wake-up %s pending because lane worker "
+                    "startup failed for lane_id=%s reason=%s",
+                    wakeup_id,
+                    worker_start_result.lane_id,
+                    worker_start_result.reason,
+                )
+                continue
             if mark_wakeup_dispatched(wakeup_id):
                 drained += 1
         return drained

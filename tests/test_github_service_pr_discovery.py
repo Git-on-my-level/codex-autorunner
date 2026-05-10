@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from codex_autorunner.core.pma_thread_store import PmaThreadStore
+from codex_autorunner.adapters.github.service import GitHubService, RepoInfo
+from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.pr_bindings import PrBindingStore
-from codex_autorunner.integrations.github.service import GitHubService, RepoInfo
 
 
 def test_discover_pr_binding_summary_for_branch_returns_normalized_summary(
@@ -285,7 +285,7 @@ def test_sync_pr_does_not_append_duplicate_close_keyword(
         },
     )
     monkeypatch.setattr(
-        "codex_autorunner.integrations.github.service._run_codex_sync_agent",
+        "codex_autorunner.adapters.github.service._run_codex_sync_agent",
         lambda **_: None,
     )
 
@@ -330,7 +330,7 @@ def test_sync_pr_defaults_to_ready_for_review_when_unset(
     monkeypatch.setattr(service, "current_branch", lambda *, cwd=None: "feature/login")
     monkeypatch.setattr(service, "is_clean", lambda *, cwd=None: True)
     monkeypatch.setattr(
-        "codex_autorunner.integrations.github.service._run_codex_sync_agent",
+        "codex_autorunner.adapters.github.service._run_codex_sync_agent",
         lambda **_: None,
     )
 
@@ -406,7 +406,7 @@ def test_sync_pr_uses_configured_draft_default_when_unset(
     monkeypatch.setattr(service, "current_branch", lambda *, cwd=None: "feature/login")
     monkeypatch.setattr(service, "is_clean", lambda *, cwd=None: True)
     monkeypatch.setattr(
-        "codex_autorunner.integrations.github.service._run_codex_sync_agent",
+        "codex_autorunner.adapters.github.service._run_codex_sync_agent",
         lambda **_: None,
     )
 
@@ -579,7 +579,7 @@ def test_sync_pr_persists_binding_and_keeps_link_state_as_session_cache(
     repo_root.mkdir(parents=True)
     _write_manifest(hub_root, repo_rel="workspace/repo")
 
-    thread = PmaThreadStore(hub_root).create_thread(
+    thread = ManagedThreadStore(hub_root).create_thread(
         "codex",
         repo_root,
         repo_id="repo-1",
@@ -601,7 +601,7 @@ def test_sync_pr_persists_binding_and_keeps_link_state_as_session_cache(
     monkeypatch.setattr(service, "current_branch", lambda *, cwd=None: "feature/login")
     monkeypatch.setattr(service, "is_clean", lambda *, cwd=None: True)
     monkeypatch.setattr(
-        "codex_autorunner.integrations.github.service._run_codex_sync_agent",
+        "codex_autorunner.adapters.github.service._run_codex_sync_agent",
         lambda **_: None,
     )
     monkeypatch.setattr(
@@ -688,7 +688,7 @@ def test_sync_pr_arms_polling_watch_from_hub_root_for_hub_repo(
     monkeypatch.setattr(service, "current_branch", lambda *, cwd=None: "feature/login")
     monkeypatch.setattr(service, "is_clean", lambda *, cwd=None: True)
     monkeypatch.setattr(
-        "codex_autorunner.integrations.github.service._run_codex_sync_agent",
+        "codex_autorunner.adapters.github.service._run_codex_sync_agent",
         lambda **_: None,
     )
     monkeypatch.setattr(
@@ -723,7 +723,7 @@ def test_sync_pr_arms_polling_watch_from_hub_root_for_hub_repo(
         return None
 
     monkeypatch.setattr(
-        "codex_autorunner.integrations.github.polling.GitHubScmPollingService.arm_watch",
+        "codex_autorunner.adapters.github.polling.GitHubScmPollingService.arm_watch",
         _capture_arm_watch,
     )
 

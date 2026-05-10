@@ -17,7 +17,7 @@ def test_classify_core_lane_for_core_paths() -> None:
 
 def test_classify_web_ui_lane_for_web_paths() -> None:
     selection = classify_changed_files(
-        ["src/codex_autorunner/static_src/updateTargets.ts"]
+        ["src/codex_autorunner/web_frontend/src/routes/+page.svelte"]
     )
 
     assert selection.lane == "web-ui"
@@ -61,15 +61,6 @@ def test_classify_web_ui_lane_for_ticket_flow_ui_integration_test() -> None:
     )
 
 
-def test_classify_web_ui_lane_for_root_level_voice_ui_test() -> None:
-    selection = classify_changed_files(["tests/test_voice_ui.py"])
-
-    assert selection.lane == "web-ui"
-    assert selection.reason == "single-lane-diff"
-    assert selection.lanes_touched == ("web-ui",)
-    assert selection.lane_paths == (("web-ui", ("tests/test_voice_ui.py",)),)
-
-
 def test_shared_risk_paths_force_aggregate() -> None:
     selection = classify_changed_files(["scripts/check.sh"])
 
@@ -106,7 +97,7 @@ def test_multi_lane_diff_forces_aggregate() -> None:
     selection = classify_changed_files(
         [
             "src/codex_autorunner/core/update_targets.py",
-            "src/codex_autorunner/static_src/updateTargets.ts",
+            "src/codex_autorunner/web_frontend/src/routes/+page.svelte",
         ]
     )
 
@@ -115,14 +106,14 @@ def test_multi_lane_diff_forces_aggregate() -> None:
     assert selection.lanes_touched == ("core", "web-ui")
     assert selection.lane_paths == (
         ("core", ("src/codex_autorunner/core/update_targets.py",)),
-        ("web-ui", ("src/codex_autorunner/static_src/updateTargets.ts",)),
+        ("web-ui", ("src/codex_autorunner/web_frontend/src/routes/+page.svelte",)),
     )
 
 
 def test_classification_is_deterministic_for_same_input_set() -> None:
     first = classify_changed_files(
         [
-            "src/codex_autorunner/static_src/updateTargets.ts",
+            "src/codex_autorunner/web_frontend/src/routes/+page.svelte",
             "src/codex_autorunner/core/update_targets.py",
             "src/codex_autorunner/core/update_targets.py",
         ]
@@ -130,7 +121,7 @@ def test_classification_is_deterministic_for_same_input_set() -> None:
     second = classify_changed_files(
         [
             "src/codex_autorunner/core/update_targets.py",
-            "src/codex_autorunner/static_src/updateTargets.ts",
+            "src/codex_autorunner/web_frontend/src/routes/+page.svelte",
         ]
     )
 

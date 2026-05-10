@@ -10,6 +10,7 @@ class SurfaceKind(str, Enum):
 
     DISCORD = "discord"
     TELEGRAM = "telegram"
+    WEB_PMA = "web_pma"
 
 
 class RuntimeFixtureKind(str, Enum):

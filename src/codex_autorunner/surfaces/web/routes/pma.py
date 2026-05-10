@@ -9,6 +9,8 @@ from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from ....bootstrap import ensure_pma_docs
+from ....core.utils import atomic_write
 from ..services.pma import (
     PmaApplicationContainer,
     create_pma_application_container,
@@ -16,6 +18,7 @@ from ..services.pma import (
 )
 from .pma_routes import (
     PmaRuntimeState,
+    build_action_manifest_routes,
     build_automation_routes,
     build_chat_runtime_router,
     build_history_files_docs_router,
@@ -49,6 +52,7 @@ def build_pma_routes(*, container: PmaApplicationContainer | None = None) -> API
         return runtime_state
 
     build_automation_routes(router, _get_runtime_state)
+    build_action_manifest_routes(router)
     build_managed_thread_crud_routes(router, _get_runtime_state)
     build_managed_thread_tail_routes(router, _get_runtime_state)
     build_managed_thread_runtime_routes(router, _get_runtime_state)
@@ -73,4 +77,4 @@ def build_pma_routes(*, container: PmaApplicationContainer | None = None) -> API
     return router
 
 
-__all__ = ["build_pma_routes"]
+__all__ = ["atomic_write", "build_pma_routes", "ensure_pma_docs"]

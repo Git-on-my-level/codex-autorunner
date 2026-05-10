@@ -8,17 +8,17 @@ from typing import Any
 
 import pytest
 
-from codex_autorunner.bootstrap import seed_hub_files
-from codex_autorunner.core.hub_control_plane.errors import HubControlPlaneError
-from codex_autorunner.core.orchestration import ORCHESTRATION_SCHEMA_VERSION
-from codex_autorunner.integrations.discord.config import (
+from codex_autorunner.adapters.discord.config import (
     DiscordBotConfig,
     DiscordBotDispatchConfig,
     DiscordBotShellConfig,
     DiscordCommandRegistration,
 )
-from codex_autorunner.integrations.discord.service import DiscordBotService
-from codex_autorunner.integrations.discord.state import DiscordStateStore
+from codex_autorunner.adapters.discord.service import DiscordBotService
+from codex_autorunner.adapters.discord.state import DiscordStateStore
+from codex_autorunner.bootstrap import seed_hub_files
+from codex_autorunner.core.hub_control_plane.errors import HubControlPlaneError
+from codex_autorunner.core.orchestration import ORCHESTRATION_SCHEMA_VERSION
 
 pytestmark = pytest.mark.slow
 
@@ -380,7 +380,7 @@ async def test_discord_handshake_retries_transient_startup_failures(
     try:
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(
-                "codex_autorunner.integrations.discord.service.time.monotonic",
+                "codex_autorunner.adapters.discord.service.time.monotonic",
                 lambda: 0.0,
             )
             with caplog.at_level(logging.INFO, logger=logger.name):

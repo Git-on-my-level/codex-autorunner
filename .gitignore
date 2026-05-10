@@ -20,6 +20,8 @@ __pycache__/
 .Python
 dist/
 lib/
+!src/codex_autorunner/web_frontend/src/lib/
+!src/codex_autorunner/web_frontend/src/lib/**
 include/
 bin/
 *.egg-info/
@@ -28,6 +30,7 @@ bin/
 
 # Testing
 .pytest_cache/
+.hypothesis/
 .coverage
 htmlcov/
 scorecard.png
