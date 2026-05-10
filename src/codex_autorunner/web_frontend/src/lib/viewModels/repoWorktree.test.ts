@@ -114,6 +114,44 @@ describe('repo/worktree view models', () => {
     expect(vm.rows[0].openTickets).toBe(1);
   });
 
+  it('counts tickets for child worktree rows on the repo index', () => {
+    const vm = buildRepoWorktreeIndexViewModel({
+      repos: [{ ...mockRepoSummary, status: 'idle', activeRuns: 0 }],
+      worktrees: [{ ...mockWorktreeSummary, status: 'idle', activeRuns: 0 }],
+      runs: [],
+      chats: [],
+      tickets: [
+        {
+          ...mockTicketSummary,
+          id: 'done-worktree-ticket',
+          workspaceKind: 'worktree',
+          workspaceId: 'worktree-1',
+          repoId: 'repo-1',
+          worktreeId: 'worktree-1',
+          status: 'done'
+        },
+        {
+          ...mockTicketSummary,
+          id: 'open-worktree-ticket',
+          workspaceKind: 'worktree',
+          workspaceId: 'worktree-1',
+          repoId: 'repo-1',
+          worktreeId: 'worktree-1',
+          status: 'idle'
+        }
+      ],
+      artifacts: []
+    });
+
+    expect(vm.openTicketCount).toBe(1);
+    expect(vm.rows[0].openTickets).toBe(0);
+    expect(vm.rows[0].childWorktrees[0]).toMatchObject({
+      openTickets: 1,
+      totalTickets: 2,
+      doneTickets: 1
+    });
+  });
+
   it('keeps known child worktrees under their owning repo and only promotes orphan worktrees', () => {
     const vm = buildRepoWorktreeIndexViewModel({
       repos: [mockRepoSummary],

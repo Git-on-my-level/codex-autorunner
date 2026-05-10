@@ -301,7 +301,13 @@ export function buildRepoWorktreeIndexViewModel(
     activeCount: countRepoWorktreeIndexEntities(rows, 'active'),
     waitingCount: countRepoWorktreeIndexEntities(rows, 'waiting'),
     ticketIndexMetricsAvailable,
-    openTicketCount: ticketIndexMetricsAvailable ? rows.reduce((total, row) => total + row.openTickets, 0) : 0
+    openTicketCount: ticketIndexMetricsAvailable
+      ? rows.reduce(
+          (total, row) =>
+            total + row.openTickets + row.childWorktrees.reduce((childTotal, child) => childTotal + child.openTickets, 0),
+          0
+        )
+      : 0
   };
 }
 
@@ -472,7 +478,7 @@ function ticketIndexRollup(scoped: TicketSummary[]): { open: number; total: numb
 function repoToIndexRow(repo: RepoSummary, worktrees: WorktreeSummary[], source: RepoWorktreeSourceData): RepoWorktreeIndexRow {
   const listLoaded = hubTicketListLoaded(source);
   const childWorktrees = worktrees
-    .map((worktree) => worktreeToNavChildRow(worktree, repo.name))
+    .map((worktree) => worktreeToNavChildRow(worktree, repo.name, source))
     .sort(byChildActiveThenLabel);
   const repoScoped = ticketsForResource(source.tickets, 'repo', repo.id);
   const rollup = listLoaded ? ticketIndexRollup(repoScoped) : { open: 0, total: 0, done: 0 };
@@ -509,8 +515,12 @@ function repoToIndexRow(repo: RepoSummary, worktrees: WorktreeSummary[], source:
 
 function worktreeToNavChildRow(
   worktree: WorktreeSummary,
-  repoName: string | null = null
+  repoName: string | null = null,
+  source: RepoWorktreeSourceData | null = null
 ): RepoWorktreeChildRow {
+  const listLoaded = source ? hubTicketListLoaded(source) : false;
+  const scoped = source ? ticketsForResource(source.tickets, 'worktree', worktree.id) : [];
+  const rollup = listLoaded ? ticketIndexRollup(scoped) : { open: 0, total: 0, done: 0 };
   return {
     id: worktree.id,
     label: shortenWorktreeLabel(worktree.name, repoName),
@@ -518,9 +528,9 @@ function worktreeToNavChildRow(
     branch: worktree.branch,
     path: worktree.path,
     activeRuns: 0,
-    openTickets: 0,
-    totalTickets: 0,
-    doneTickets: 0,
+    openTickets: rollup.open,
+    totalTickets: rollup.total,
+    doneTickets: rollup.done,
     currentRunTitle: null,
     currentTicketId: null,
     lastActivityAt: null,
