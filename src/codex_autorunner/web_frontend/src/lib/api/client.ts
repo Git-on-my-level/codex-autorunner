@@ -331,7 +331,7 @@ export class PmaApiClient {
   hub = {
     getDashboard: async (): Promise<ApiResult<DashboardSummary>> =>
       mapResult(
-        await this.getJson<JsonRecord>('/hub/messages?sections=inbox,pma_threads,pma_files_detail,automation,action_queue,freshness'),
+        await this.getJson<JsonRecord>('/hub/messages?sections=inbox,managed_threads,pma_files_detail,automation,action_queue,freshness'),
         mapDashboardSummary
       ),
     listRepos: async (): Promise<ApiResult<RepoSummary[]>> =>

@@ -14,7 +14,7 @@ from tests.pma_context_support import (
     test_build_hub_snapshot_includes_action_queue_with_supersession,
     test_build_hub_snapshot_includes_automation_summary,
     test_build_hub_snapshot_includes_effective_destination,
-    test_build_hub_snapshot_includes_pma_threads_section,
+    test_build_hub_snapshot_includes_managed_threads_section,
     test_build_hub_snapshot_includes_templates,
     test_build_hub_snapshot_keeps_failed_worker_dead_legacy_run_visible_during_auto_dismiss_grace_when_no_tickets_remain,
     test_build_hub_snapshot_keeps_failed_worker_dead_run_visible_during_auto_dismiss_grace_when_no_tickets_remain,

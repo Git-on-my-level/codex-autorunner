@@ -39,17 +39,17 @@ from .hub_projection_store import (
     path_stat_fingerprint,
 )
 from .logging_utils import safe_log
+from .managed_thread_store import default_managed_threads_db_path
 from .orchestration.sqlite import resolve_orchestration_sqlite_path
 from .pma_context import (
     PMA_MAX_TEXT,
     _gather_inbox,
+    _snapshot_managed_threads,
     _snapshot_pma_automation,
     _snapshot_pma_files,
-    _snapshot_pma_threads,
     build_pma_action_queue,
     enrich_pma_file_inbox_entry,
 )
-from .pma_thread_store import default_pma_threads_db_path
 from .ticket_flow_operator import (
     latest_ticket_flow_dispatch as _latest_ticket_flow_dispatch,
 )
@@ -246,13 +246,13 @@ def _collect_pma_files_detail(
     }
 
 
-def _collect_pma_threads(
+def _collect_managed_threads(
     hub_root: Path,
     *,
     generated_at: str,
     stale_threshold_seconds: int,
 ) -> list[dict[str, Any]]:
-    return _snapshot_pma_threads(
+    return _snapshot_managed_threads(
         hub_root,
         generated_at=generated_at,
         stale_threshold_seconds=stale_threshold_seconds,
@@ -342,7 +342,7 @@ def _hub_snapshot_fingerprint(
             [
                 str(root_path),
                 path_stat_fingerprint(root_path / ".codex-autorunner" / "filebox"),
-                path_stat_fingerprint(default_pma_threads_db_path(root_path)),
+                path_stat_fingerprint(default_managed_threads_db_path(root_path)),
                 path_stat_fingerprint(orchestration_db_path),
                 path_stat_fingerprint(Path(f"{orchestration_db_path}-wal")),
             ]
@@ -635,7 +635,7 @@ def _serialize_hub_snapshot(
     generated_at: str,
     requested: set[str],
     messages: list[dict[str, Any]],
-    pma_threads: list[dict[str, Any]],
+    managed_threads: list[dict[str, Any]],
     pma_files_detail: dict[str, list[dict[str, Any]]],
     automation: dict[str, Any],
     filtered_action_queue: list[dict[str, Any]],
@@ -644,8 +644,8 @@ def _serialize_hub_snapshot(
     payload: dict[str, Any] = {"generated_at": generated_at}
     if "inbox" in requested:
         payload["items"] = messages
-    if "pma_threads" in requested:
-        payload["pma_threads"] = pma_threads
+    if "managed_threads" in requested:
+        payload["managed_threads"] = managed_threads
     if "pma_files_detail" in requested:
         payload["pma_files_detail"] = pma_files_detail
     if "automation" in requested:
@@ -1152,7 +1152,7 @@ class HubReadModelService:
             if sections is not None
             else {
                 "inbox",
-                "pma_threads",
+                "managed_threads",
                 "pma_files_detail",
                 "automation",
                 "action_queue",
@@ -1211,7 +1211,7 @@ class HubReadModelService:
 
         hub_root = getattr(getattr(self._context, "config", None), "root", None)
         pma_files_detail: dict[str, list[dict[str, Any]]] = empty_listing()
-        pma_threads: list[dict[str, Any]] = []
+        managed_threads: list[dict[str, Any]] = []
         automation = (
             _snapshot_pma_automation(self._context.supervisor)
             if requested & {"automation"} or settings.include_full_action_queue_context
@@ -1228,10 +1228,10 @@ class HubReadModelService:
                     stale_threshold_seconds=settings.stale_threshold_seconds,
                 )
             if (
-                requested & {"pma_threads"}
+                requested & {"managed_threads"}
                 or settings.include_full_action_queue_context
             ):
-                pma_threads = _collect_pma_threads(
+                managed_threads = _collect_managed_threads(
                     hub_root,
                     generated_at=settings.generated_at,
                     stale_threshold_seconds=settings.stale_threshold_seconds,
@@ -1244,7 +1244,7 @@ class HubReadModelService:
         ):
             action_queue = build_pma_action_queue(
                 inbox=inbox,
-                pma_threads=pma_threads,
+                managed_threads=managed_threads,
                 pma_files_detail=pma_files_detail,
                 automation=automation,
                 generated_at=settings.generated_at,
@@ -1273,7 +1273,7 @@ class HubReadModelService:
             generated_at=settings.generated_at,
             requested=requested,
             messages=messages,
-            pma_threads=pma_threads,
+            managed_threads=managed_threads,
             pma_files_detail=pma_files_detail,
             automation=automation,
             filtered_action_queue=filtered_action_queue,
@@ -1350,7 +1350,7 @@ __all__ = [
     "_HubSnapshotCacheEntry",
     "_RepoCapabilityHintCacheEntry",
     "_collect_pma_files_detail",
-    "_collect_pma_threads",
+    "_collect_managed_threads",
     "_gather_inbox",
     "_hub_snapshot_cache",
     "_repo_capability_hint_cache",

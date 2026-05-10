@@ -12,7 +12,7 @@ from codex_autorunner.adapters.chat.queue_status import (
     coerce_queue_status_items,
     format_queue_status_text,
 )
-from codex_autorunner.adapters.telegram.adapter import TelegramMessage
+from codex_autorunner.adapters.telegram.client import TelegramMessage
 from codex_autorunner.adapters.telegram.constants import (
     PLACEHOLDER_TEXT,
     QUEUED_PLACEHOLDER_TEXT,

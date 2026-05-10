@@ -17,18 +17,6 @@ from .....core.logging_utils import safe_log
 if TYPE_CHECKING:
     from ...app_state import HubAppContext
 
-_REMOVED_REPO_FRONTEND_TABS = {
-    "workspace",
-    "tickets",
-    "messages",
-    "inbox",
-    "contextspace",
-    "archive",
-    "analytics",
-    "terminal",
-    "settings",
-}
-
 
 async def _send_redirect(send, location: str) -> None:
     await send(
@@ -126,11 +114,10 @@ class _LazyRepoApp:
             path = str(scope.get("path") or "")
             root_path = str(scope.get("root_path") or f"/repos/{self.prefix}")
             pma_repo_location = root_path.rstrip("/") or f"/repos/{self.prefix}"
-            tab = path.strip("/").split("/", 1)[0]
             if path in {"", "/"}:
                 await _send_redirect(send, pma_repo_location)
                 return
-            if tab in _REMOVED_REPO_FRONTEND_TABS:
+            if path == "/terminal" or path.startswith("/terminal/"):
                 await _send_redirect(send, pma_repo_location)
                 return
         try:

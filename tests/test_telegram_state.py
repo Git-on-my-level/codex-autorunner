@@ -12,9 +12,9 @@ from codex_autorunner.adapters.telegram.state import (
 )
 from codex_autorunner.core.chat_bindings import repo_has_active_non_pma_chat_binding
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
+from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration.bindings import OrchestrationBindingStore
 from codex_autorunner.core.orchestration.sqlite import initialize_orchestration_sqlite
-from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.manifest import (
     MANIFEST_VERSION,
     Manifest,
@@ -152,7 +152,7 @@ async def test_telegram_state_no_longer_needs_to_be_binding_authority(
         hub_root,
     )
     initialize_orchestration_sqlite(hub_root)
-    thread = PmaThreadStore(hub_root).create_thread(
+    thread = ManagedThreadStore(hub_root).create_thread(
         "codex",
         workspace_root,
         repo_id="repo-1",

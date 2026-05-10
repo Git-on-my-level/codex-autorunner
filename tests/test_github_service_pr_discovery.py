@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from codex_autorunner.adapters.github.service import GitHubService, RepoInfo
-from codex_autorunner.core.pma_thread_store import PmaThreadStore
+from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.pr_bindings import PrBindingStore
 
 
@@ -579,7 +579,7 @@ def test_sync_pr_persists_binding_and_keeps_link_state_as_session_cache(
     repo_root.mkdir(parents=True)
     _write_manifest(hub_root, repo_rel="workspace/repo")
 
-    thread = PmaThreadStore(hub_root).create_thread(
+    thread = ManagedThreadStore(hub_root).create_thread(
         "codex",
         repo_root,
         repo_id="repo-1",

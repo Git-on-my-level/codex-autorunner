@@ -9,10 +9,10 @@ from fastapi import Request
 from .....adapters.github.context_injection import maybe_inject_github_context
 from .....agents.hermes.supervisor import build_hermes_supervisor_from_config
 from .....bootstrap import ensure_pma_docs
+from .....core.managed_thread_store import ManagedThreadStore
 from .....core.orchestration import OrchestrationBindingStore
 from .....core.orchestration.cold_trace_store import ColdTraceStore
 from .....core.pma_context import build_hub_snapshot
-from .....core.pma_thread_store import PmaThreadStore
 from .....core.pma_transcripts import PmaTranscriptStore
 from .....core.utils import atomic_write
 from .common import pma_config_from_raw
@@ -173,8 +173,8 @@ class PmaRequestContext:
     def managed_thread_queue_tasks(self) -> dict[str, Any]:
         return self.container.managed_thread_queue_tasks
 
-    def thread_store(self) -> PmaThreadStore:
-        return PmaThreadStore(self.hub_root)
+    def thread_store(self) -> ManagedThreadStore:
+        return ManagedThreadStore(self.hub_root)
 
     def transcript_store(self) -> PmaTranscriptStore:
         return PmaTranscriptStore(self.hub_root)

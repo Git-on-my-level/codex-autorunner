@@ -11,6 +11,7 @@ from typing import Any, Callable, Coroutine, Optional, cast
 
 from ..manifest import ManifestError, load_manifest
 from .config import load_hub_config
+from .managed_thread_store import ManagedThreadNotActiveError, ManagedThreadStore
 from .orchestration.models import MessageRequest, MessageRequestKind
 from .pma_chat_delivery import (
     deliver_pma_notification,
@@ -18,7 +19,6 @@ from .pma_chat_delivery import (
     notify_primary_pma_chat_for_repo,
     start_bound_chat_live_progress_for_thread,
 )
-from .pma_thread_store import ManagedThreadNotActiveError, PmaThreadStore
 from .pr_bindings import PrBinding, PrBindingStore
 from .publish_executor import (
     PublishActionExecutor,
@@ -261,7 +261,7 @@ def _managed_turn_start_failure_message(
 
 
 def _running_turn_blocking_queue(
-    thread_store: PmaThreadStore,
+    thread_store: ManagedThreadStore,
     *,
     thread_target_id: str,
     queued_turn_id: str,
@@ -275,7 +275,7 @@ def _running_turn_blocking_queue(
 
 
 def _log_scm_enqueue_managed_turn_queued(
-    store: PmaThreadStore,
+    store: ManagedThreadStore,
     *,
     thread_target_id: str,
     created: dict[str, Any],
@@ -313,7 +313,7 @@ def _resolve_notify_message(
     operation: PublishOperation,
     payload: dict[str, Any],
     journal: PublishJournalStore,
-    thread_store: PmaThreadStore,
+    thread_store: ManagedThreadStore,
 ) -> tuple[str, Optional[tuple[str, str, dict[str, Any]]]]:
     dependency = _normalize_mapping(payload.get("managed_turn_dependency"))
     if not dependency:
@@ -488,7 +488,7 @@ def _resolve_notify_message(
 def _maybe_start_bound_live_progress_for_notify(
     *,
     hub_root: Path,
-    thread_store: PmaThreadStore,
+    thread_store: ManagedThreadStore,
     run_coroutine: Callable[[Coroutine[Any, Any, Any]], Any],
     workspace_root: Optional[Path],
     repo_id: Optional[str],
@@ -530,7 +530,7 @@ def _maybe_start_bound_live_progress_for_notify(
 
 
 def _merge_into_existing_queued_scm_turn(
-    store: PmaThreadStore,
+    store: ManagedThreadStore,
     *,
     thread_target_id: str,
     payload: dict[str, Any],
@@ -602,7 +602,7 @@ def _resolve_scm_event(
 
 
 def _active_thread_record(
-    store: PmaThreadStore,
+    store: ManagedThreadStore,
     thread_target_id: Optional[str],
 ) -> tuple[Optional[str], Optional[dict[str, Any]]]:
     normalized_thread_target_id = _normalize_optional_text(thread_target_id)
@@ -824,7 +824,7 @@ def _build_scm_rebootstrap_request(
 
 def _repair_scm_thread_binding(
     hub_root: Path,
-    store: PmaThreadStore,
+    store: ManagedThreadStore,
     *,
     current_thread_target_id: str,
     request: MessageRequest,
@@ -928,9 +928,9 @@ def _repair_scm_thread_binding(
 def build_enqueue_managed_turn_executor(
     *,
     hub_root: Path,
-    thread_store: Optional[PmaThreadStore] = None,
+    thread_store: Optional[ManagedThreadStore] = None,
 ) -> PublishActionExecutor:
-    store = thread_store or PmaThreadStore(hub_root)
+    store = thread_store or ManagedThreadStore(hub_root)
 
     def executor(operation: PublishOperation) -> dict[str, Any]:
         payload = _normalize_mapping(operation.payload)
@@ -1115,7 +1115,7 @@ def build_enqueue_managed_turn_executor(
 
 
 def _resolve_thread_context(
-    store: PmaThreadStore,
+    store: ManagedThreadStore,
     *,
     payload: dict[str, Any],
 ) -> tuple[Optional[str], Optional[Path]]:
@@ -1141,10 +1141,10 @@ def build_notify_chat_executor(
     *,
     hub_root: Path,
     run_coroutine: Optional[Callable[[Coroutine[Any, Any, Any]], Any]] = None,
-    thread_store: Optional[PmaThreadStore] = None,
+    thread_store: Optional[ManagedThreadStore] = None,
     journal_store: Optional[PublishJournalStore] = None,
 ) -> PublishActionExecutor:
-    store = thread_store or PmaThreadStore(hub_root)
+    store = thread_store or ManagedThreadStore(hub_root)
     journal = journal_store or PublishJournalStore(hub_root)
     coroutine_runner = run_coroutine or _run_coroutine_sync
 

@@ -18,10 +18,10 @@ from codex_autorunner.core.pma_thread_classification import (
 
 
 class TestIsPmaSelfThread:
-    def test_pma_thread_kind(self) -> None:
+    def test_managed_thread_kind(self) -> None:
         assert is_pma_self_thread({"thread_kind": "pma"})
 
-    def test_non_pma_thread_kind(self) -> None:
+    def test_non_managed_thread_kind(self) -> None:
         assert not is_pma_self_thread({"thread_kind": "codex"})
 
     def test_entry_without_thread_kind_is_not_self(self) -> None:

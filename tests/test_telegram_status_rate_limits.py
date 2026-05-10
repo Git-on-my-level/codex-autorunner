@@ -6,7 +6,7 @@ from typing import Optional
 
 import pytest
 
-from codex_autorunner.adapters.telegram.adapter import TelegramMessage
+from codex_autorunner.adapters.telegram.client import TelegramMessage
 from codex_autorunner.adapters.telegram.handlers.commands_runtime import (
     TelegramCommandHandlers,
     _RuntimeStub,

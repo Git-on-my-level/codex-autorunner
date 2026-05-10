@@ -307,7 +307,6 @@ def _build_scan_state() -> Any:
         last_run_started_at=None,
         last_run_finished_at=None,
         autorunner_agent_override="codex",
-        autorunner_model_override=None,
         autorunner_effort_override=None,
         autorunner_approval_policy="never",
         autorunner_sandbox_mode="readOnly",

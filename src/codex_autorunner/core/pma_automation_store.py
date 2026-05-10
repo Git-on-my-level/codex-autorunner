@@ -16,6 +16,7 @@ from .chat_bindings import (
 from .config import load_hub_config
 from .config_contract import ConfigError
 from .locks import file_lock
+from .managed_thread_store import ManagedThreadStore
 from .orchestration.sqlite import open_orchestration_sqlite
 from .pma_automation_types import (
     DEFAULT_PMA_LANE_ID,
@@ -56,7 +57,6 @@ from .pma_domain.subscription_reducer import (
     reduce_transition,
 )
 from .pma_origin import extract_pma_origin_metadata, merge_pma_origin_metadata
-from .pma_thread_store import PmaThreadStore
 from .text_utils import _normalize_pma_delivery_target, lock_path_for
 
 logger = logging.getLogger(__name__)
@@ -95,7 +95,7 @@ def _repo_scoped_subscription_warning(
     if normalized_repo_id is None or normalized_thread_id is not None:
         return None
     thread_count = (
-        PmaThreadStore(hub_root)
+        ManagedThreadStore(hub_root)
         .count_threads_by_repo(status="active")
         .get(
             normalized_repo_id,
@@ -1052,7 +1052,7 @@ class PmaAutomationStore:
         workspace_root: Optional[Path] = None
         if wakeup.thread_id:
             try:
-                thread_store = PmaThreadStore(self._hub_root)
+                thread_store = ManagedThreadStore(self._hub_root)
                 thread = thread_store.get_thread(wakeup.thread_id)
                 if isinstance(thread, dict):
                     raw_ws = _normalize_text(thread.get("workspace_root"))
@@ -1276,7 +1276,7 @@ class PmaAutomationStore:
         return parsed
 
     def _resolve_thread_lane_id(self, *, thread_id: str) -> str:
-        thread_store = PmaThreadStore(self._hub_root)
+        thread_store = ManagedThreadStore(self._hub_root)
         thread = thread_store.get_thread(thread_id)
         if thread is None:
             raise PmaAutomationThreadNotFoundError(thread_id)
@@ -1296,7 +1296,7 @@ class PmaAutomationStore:
     def _resolve_thread_delivery_target(
         self, *, thread_id: str
     ) -> Optional[dict[str, str]]:
-        thread_store = PmaThreadStore(self._hub_root)
+        thread_store = ManagedThreadStore(self._hub_root)
         thread = thread_store.get_thread(thread_id)
         if thread is None:
             raise PmaAutomationThreadNotFoundError(thread_id)

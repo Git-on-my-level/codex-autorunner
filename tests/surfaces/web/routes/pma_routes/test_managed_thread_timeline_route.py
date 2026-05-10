@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 from tests.pma_support import _enable_pma, _repo_owner
 
-from codex_autorunner.core.pma_thread_store import PmaThreadStore
+from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.server import create_hub_app
 
 
@@ -22,7 +22,7 @@ def test_managed_thread_timeline_endpoint_returns_canonical_items(hub_env) -> No
         assert create_resp.status_code == 200
         managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
 
-        store = PmaThreadStore(hub_env.hub_root)
+        store = ManagedThreadStore(hub_env.hub_root)
         turn = store.create_turn(managed_thread_id, prompt="hello timeline")
         assert store.mark_turn_finished(
             str(turn["managed_turn_id"]),

@@ -144,7 +144,7 @@ describe('Frontend-backend scope contract', () => {
 
   describe('SurfaceRef URN matches backend SurfaceRef.to_urn', () => {
     it('round-trips surface ref', () => {
-      const surface = { kind: 'pma_thread', key: 'thread-1' };
+      const surface = { kind: 'managed_thread', key: 'thread-1' };
       expect(parseSurfaceUrn(formatSurfaceUrn(surface))).toEqual(surface);
     });
 

@@ -32,7 +32,7 @@ from ..chat.ticket_flow_artifacts import (
     collect_terminal_wrapup_artifacts,
     render_terminal_notification_with_artifacts,
 )
-from .adapter import chunk_message
+from .client import chunk_message
 from .constants import TELEGRAM_MAX_MESSAGE_LENGTH
 from .state import parse_topic_key
 

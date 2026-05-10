@@ -7,7 +7,7 @@ from typing import Optional
 
 import pytest
 
-from codex_autorunner.adapters.telegram.adapter import (
+from codex_autorunner.adapters.telegram.client import (
     TelegramCallbackQuery,
     TelegramDocument,
     TelegramMessage,

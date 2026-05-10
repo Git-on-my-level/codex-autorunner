@@ -322,7 +322,7 @@ export function mapSurfaceArtifact(raw: JsonRecord): SurfaceArtifact {
 
 export function mapDashboardSummary(raw: JsonRecord): DashboardSummary {
   const items = asArray(raw.items);
-  const threads = asArray(raw.pma_threads ?? raw.threads);
+  const threads = asArray(raw.managed_threads ?? raw.threads);
   const files = [...asArray(raw.pma_files_detail), ...asArray(asRecord(raw.pma_files_detail).inbox)];
   const activeRuns = countByStatus([...items, ...threads], ['running']);
   const waitingForUser = countByStatus([...items, ...threads], ['waiting']);

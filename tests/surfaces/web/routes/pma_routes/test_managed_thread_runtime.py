@@ -12,6 +12,7 @@ from tests.support.web_test_helpers import build_web_hub_app
 from codex_autorunner.adapters.github import (
     managed_thread_pr_binding as managed_thread_pr_binding_module,
 )
+from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration import (
     ColdTraceStore,
     OrchestrationBindingStore,
@@ -23,7 +24,6 @@ from codex_autorunner.core.orchestration.runtime_bindings import (
 from codex_autorunner.core.orchestration.runtime_threads import RuntimeThreadOutcome
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.core.pma_context import format_pma_discoverability_preamble
-from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.pr_bindings import PrBindingStore
 from codex_autorunner.core.scm_polling_watches import ScmPollingWatchStore
 from codex_autorunner.surfaces.web.routes.pma_routes import managed_thread_runtime
@@ -238,7 +238,7 @@ async def test_restart_managed_thread_queue_workers_restores_pending_threads(
     monkeypatch,
 ) -> None:
     app = build_web_hub_app(hub_env.hub_root)
-    store = PmaThreadStore(hub_env.hub_root)
+    store = ManagedThreadStore(hub_env.hub_root)
     created = store.create_thread(
         "codex",
         hub_env.repo_root.resolve(),
@@ -270,7 +270,7 @@ async def test_recover_orphaned_managed_thread_executions_unblocks_restart_queue
     hub_env,
 ) -> None:
     app = build_web_hub_app(hub_env.hub_root)
-    store = PmaThreadStore(hub_env.hub_root)
+    store = ManagedThreadStore(hub_env.hub_root)
     created = store.create_thread(
         "codex",
         hub_env.repo_root.resolve(),
@@ -317,7 +317,7 @@ async def test_recover_orphaned_managed_thread_executions_restores_backend_ids_f
     hub_env,
 ) -> None:
     app = build_web_hub_app(hub_env.hub_root)
-    store = PmaThreadStore(hub_env.hub_root)
+    store = ManagedThreadStore(hub_env.hub_root)
     created = store.create_thread(
         "codex",
         hub_env.repo_root.resolve(),
@@ -369,7 +369,7 @@ async def test_recover_orphaned_managed_thread_executions_skips_chat_bound_threa
     client_turn_id: str,
 ) -> None:
     app = build_web_hub_app(hub_env.hub_root)
-    store = PmaThreadStore(hub_env.hub_root)
+    store = ManagedThreadStore(hub_env.hub_root)
     bindings = OrchestrationBindingStore(hub_env.hub_root)
     created = store.create_thread(
         "codex",
@@ -425,7 +425,7 @@ async def test_recover_orphaned_managed_thread_executions_skips_chat_bound_threa
     surface_key: str,
 ) -> None:
     app = build_web_hub_app(hub_env.hub_root)
-    store = PmaThreadStore(hub_env.hub_root)
+    store = ManagedThreadStore(hub_env.hub_root)
     bindings = OrchestrationBindingStore(hub_env.hub_root)
     created = store.create_thread(
         "codex",
@@ -483,7 +483,7 @@ async def test_recover_orphaned_managed_thread_executions_skips_chat_bound_threa
 
 def test_managed_thread_list_route_filters_by_status(hub_env) -> None:
     app = build_web_hub_app(hub_env.hub_root)
-    store = PmaThreadStore(hub_env.hub_root)
+    store = ManagedThreadStore(hub_env.hub_root)
 
     active = store.create_thread(
         "codex",
@@ -526,7 +526,7 @@ async def test_recover_orphaned_managed_thread_executions_recovers_pma_runs_on_c
     monkeypatch,
 ) -> None:
     app = build_web_hub_app(hub_env.hub_root)
-    store = PmaThreadStore(hub_env.hub_root)
+    store = ManagedThreadStore(hub_env.hub_root)
     bindings = OrchestrationBindingStore(hub_env.hub_root)
     created = store.create_thread(
         "codex",
@@ -594,7 +594,7 @@ def test_managed_thread_message_route_uses_orchestration_service_seam(
     monkeypatch,
 ) -> None:
     app = build_web_hub_app(hub_env.hub_root)
-    store = PmaThreadStore(hub_env.hub_root)
+    store = ManagedThreadStore(hub_env.hub_root)
     created = store.create_thread(
         "codex", hub_env.repo_root.resolve(), repo_id=hub_env.repo_id
     )
@@ -726,7 +726,7 @@ def test_managed_thread_message_route_no_wait_returns_after_enqueue(
     monkeypatch,
 ) -> None:
     app = build_web_hub_app(hub_env.hub_root)
-    store = PmaThreadStore(hub_env.hub_root)
+    store = ManagedThreadStore(hub_env.hub_root)
     created = store.create_thread(
         "codex", hub_env.repo_root.resolve(), repo_id=hub_env.repo_id
     )
@@ -835,7 +835,7 @@ def test_managed_thread_message_route_no_wait_does_not_emit_false_failed_transit
     monkeypatch,
 ) -> None:
     app = build_web_hub_app(hub_env.hub_root)
-    store = PmaThreadStore(hub_env.hub_root)
+    store = ManagedThreadStore(hub_env.hub_root)
     created = store.create_thread(
         "codex", hub_env.repo_root.resolve(), repo_id=hub_env.repo_id
     )
@@ -945,7 +945,7 @@ def test_managed_thread_message_route_no_wait_does_not_emit_false_failed_transit
         _fake_notify,
     )
     monkeypatch.setattr(
-        PmaThreadStore,
+        ManagedThreadStore,
         "get_turn",
         lambda self, thread_target_id, execution_id: (
             {"status": "ok"}
@@ -990,7 +990,7 @@ def test_managed_thread_message_route_uses_bound_progress_controller_for_direct_
     monkeypatch,
 ) -> None:
     app = build_web_hub_app(hub_env.hub_root)
-    store = PmaThreadStore(hub_env.hub_root)
+    store = ManagedThreadStore(hub_env.hub_root)
     created = store.create_thread(
         "codex", hub_env.repo_root.resolve(), repo_id=hub_env.repo_id
     )
@@ -1142,7 +1142,7 @@ async def test_managed_thread_delivery_result_retires_uncovered_progress_after_f
     monkeypatch,
 ) -> None:
     app = build_web_hub_app(hub_env.hub_root)
-    store = PmaThreadStore(hub_env.hub_root)
+    store = ManagedThreadStore(hub_env.hub_root)
     created = store.create_thread(
         "codex", hub_env.repo_root.resolve(), repo_id=hub_env.repo_id
     )
@@ -1214,7 +1214,7 @@ async def test_managed_thread_delivery_result_skips_cleanup_for_covered_progress
     monkeypatch,
 ) -> None:
     app = build_web_hub_app(hub_env.hub_root)
-    store = PmaThreadStore(hub_env.hub_root)
+    store = ManagedThreadStore(hub_env.hub_root)
     created = store.create_thread(
         "codex", hub_env.repo_root.resolve(), repo_id=hub_env.repo_id
     )
@@ -1272,7 +1272,7 @@ async def test_managed_thread_delivery_result_retires_progress_targets_when_deli
     monkeypatch,
 ) -> None:
     app = build_web_hub_app(hub_env.hub_root)
-    store = PmaThreadStore(hub_env.hub_root)
+    store = ManagedThreadStore(hub_env.hub_root)
     created = store.create_thread(
         "codex", hub_env.repo_root.resolve(), repo_id=hub_env.repo_id
     )
@@ -1343,7 +1343,7 @@ def test_pma_queue_worker_uses_contextual_delivery_helper_for_progress_targets(
     monkeypatch,
 ) -> None:
     app = build_web_hub_app(hub_env.hub_root)
-    store = PmaThreadStore(hub_env.hub_root)
+    store = ManagedThreadStore(hub_env.hub_root)
     created = store.create_thread(
         "codex", hub_env.repo_root.resolve(), repo_id=hub_env.repo_id
     )
@@ -1460,7 +1460,7 @@ def test_managed_thread_message_route_persists_pma_bound_chat_execution_metadata
     monkeypatch,
 ) -> None:
     app = build_web_hub_app(hub_env.hub_root)
-    store = PmaThreadStore(hub_env.hub_root)
+    store = ManagedThreadStore(hub_env.hub_root)
     bindings = OrchestrationBindingStore(hub_env.hub_root)
     created = store.create_thread(
         "codex",
@@ -1589,7 +1589,7 @@ def test_managed_thread_message_route_uses_binding_targets_for_queued_pma_execut
     monkeypatch,
 ) -> None:
     app = build_web_hub_app(hub_env.hub_root)
-    store = PmaThreadStore(hub_env.hub_root)
+    store = ManagedThreadStore(hub_env.hub_root)
     bindings = OrchestrationBindingStore(hub_env.hub_root)
     created = store.create_thread(
         "codex",
@@ -1728,7 +1728,7 @@ def test_managed_thread_message_route_honors_explicit_core_context_profile(
     monkeypatch,
 ) -> None:
     app = build_web_hub_app(hub_env.hub_root)
-    store = PmaThreadStore(hub_env.hub_root)
+    store = ManagedThreadStore(hub_env.hub_root)
     created = store.create_thread(
         "codex",
         hub_env.repo_root.resolve(),
@@ -1838,7 +1838,7 @@ def test_managed_thread_message_route_self_claims_existing_pr_binding(
     monkeypatch,
 ) -> None:
     app = build_web_hub_app(hub_env.hub_root, enable_github_polling=True)
-    store = PmaThreadStore(hub_env.hub_root)
+    store = ManagedThreadStore(hub_env.hub_root)
     created = store.create_thread(
         "codex",
         hub_env.repo_root.resolve(),
@@ -1940,7 +1940,7 @@ def test_managed_thread_message_route_self_claims_discovered_pr_binding(
     monkeypatch,
 ) -> None:
     app = build_web_hub_app(hub_env.hub_root, enable_github_polling=True)
-    store = PmaThreadStore(hub_env.hub_root)
+    store = ManagedThreadStore(hub_env.hub_root)
     created = store.create_thread(
         "codex",
         hub_env.repo_root.resolve(),
@@ -2186,7 +2186,7 @@ def test_managed_thread_message_route_injects_core_context_when_profile_is_core(
     monkeypatch,
 ) -> None:
     app = build_web_hub_app(hub_env.hub_root)
-    store = PmaThreadStore(hub_env.hub_root)
+    store = ManagedThreadStore(hub_env.hub_root)
     created = store.create_thread(
         "codex",
         hub_env.repo_root.resolve(),
@@ -2271,7 +2271,7 @@ def test_managed_thread_message_route_uses_live_runtime_binding_for_compact_seed
     monkeypatch,
 ) -> None:
     app = build_web_hub_app(hub_env.hub_root)
-    store = PmaThreadStore(hub_env.hub_root)
+    store = ManagedThreadStore(hub_env.hub_root)
     created = store.create_thread(
         "codex",
         hub_env.repo_root.resolve(),
@@ -2359,7 +2359,7 @@ def test_managed_thread_message_route_queued_send_starts_queue_worker(
     monkeypatch,
 ) -> None:
     app = build_web_hub_app(hub_env.hub_root)
-    store = PmaThreadStore(hub_env.hub_root)
+    store = ManagedThreadStore(hub_env.hub_root)
     created = store.create_thread(
         "codex", hub_env.repo_root.resolve(), repo_id=hub_env.repo_id
     )
@@ -2425,7 +2425,7 @@ def test_managed_thread_message_route_direct_execution_starts_queue_worker_for_f
     monkeypatch,
 ) -> None:
     app = build_web_hub_app(hub_env.hub_root)
-    store = PmaThreadStore(hub_env.hub_root)
+    store = ManagedThreadStore(hub_env.hub_root)
     created = store.create_thread(
         "codex", hub_env.repo_root.resolve(), repo_id=hub_env.repo_id
     )
@@ -2515,7 +2515,7 @@ def test_managed_thread_message_route_preserves_literal_message_whitespace(
     monkeypatch,
 ) -> None:
     app = build_web_hub_app(hub_env.hub_root)
-    store = PmaThreadStore(hub_env.hub_root)
+    store = ManagedThreadStore(hub_env.hub_root)
     created = store.create_thread(
         "codex", hub_env.repo_root.resolve(), repo_id=hub_env.repo_id
     )
@@ -2598,7 +2598,7 @@ def test_managed_thread_message_route_delegates_harness_to_shared_finalization(
     monkeypatch,
 ) -> None:
     app = build_web_hub_app(hub_env.hub_root)
-    store = PmaThreadStore(hub_env.hub_root)
+    store = ManagedThreadStore(hub_env.hub_root)
     created = store.create_thread(
         "codex", hub_env.repo_root.resolve(), repo_id=hub_env.repo_id
     )
@@ -2704,7 +2704,7 @@ def test_opencode_managed_thread_projects_compat_agents_file_for_core_profile(
         hub_env.hub_root / ".codex-autorunner" / "runtimes" / "opencode" / "oc-main"
     )
     workspace_root.mkdir(parents=True, exist_ok=True)
-    store = PmaThreadStore(hub_env.hub_root)
+    store = ManagedThreadStore(hub_env.hub_root)
     created = store.create_thread(
         "opencode",
         workspace_root.resolve(),
@@ -2782,7 +2782,7 @@ def test_managed_thread_interrupt_route_uses_orchestration_service_seam(
     monkeypatch,
 ) -> None:
     app = build_web_hub_app(hub_env.hub_root)
-    store = PmaThreadStore(hub_env.hub_root)
+    store = ManagedThreadStore(hub_env.hub_root)
     created = store.create_thread(
         "codex", hub_env.repo_root.resolve(), repo_id=hub_env.repo_id
     )
@@ -2857,7 +2857,7 @@ def test_interrupt_fails_for_agent_without_interrupt_capability(
     from unittest.mock import MagicMock
 
     app = build_web_hub_app(hub_env.hub_root)
-    store = PmaThreadStore(hub_env.hub_root)
+    store = ManagedThreadStore(hub_env.hub_root)
     created = store.create_thread(
         "codex", hub_env.repo_root.resolve(), repo_id=hub_env.repo_id
     )

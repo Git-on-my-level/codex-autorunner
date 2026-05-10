@@ -466,15 +466,15 @@ def save_hub_state(
     atomic_write(state_path, json.dumps(payload, indent=2) + "\n")
 
 
-def refresh_pma_threads_artifact(hub_root: Path) -> None:
+def refresh_managed_threads_artifact(hub_root: Path) -> None:
     try:
-        from .pma_context import _snapshot_pma_threads
+        from .pma_context import _snapshot_managed_threads
 
         payload = {
             "generated_at": now_iso(),
-            "threads": _snapshot_pma_threads(hub_root),
+            "threads": _snapshot_managed_threads(hub_root),
         }
-        artifact_path = hub_root / ".codex-autorunner" / "pma_threads.json"
+        artifact_path = hub_root / ".codex-autorunner" / "managed_threads.json"
         atomic_write(artifact_path, json.dumps(payload, indent=2) + "\n")
     except (OSError, ValueError, TypeError) as exc:
         logger.warning("Failed to write PMA thread snapshot artifact: %s", exc)

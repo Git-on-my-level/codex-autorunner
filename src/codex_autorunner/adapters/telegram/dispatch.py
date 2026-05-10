@@ -18,11 +18,11 @@ from ..chat.chat_ux_telemetry import (
     emit_chat_ux_timing,
 )
 from ..chat.queue_status import build_queue_item_preview
-from .adapter import (
+from .chat_callbacks import TelegramCallbackCodec
+from .client import (
     TelegramUpdate,
     allowlist_allows,
 )
-from .chat_callbacks import TelegramCallbackCodec
 from .immediate_feedback_bridge import (
     telegram_immediate_callback_ack,
 )

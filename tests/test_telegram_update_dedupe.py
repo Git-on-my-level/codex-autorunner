@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from codex_autorunner.adapters.telegram.adapter import (
+from codex_autorunner.adapters.telegram.client import (
     TelegramCallbackQuery,
     TelegramMessage,
     TelegramUpdate,

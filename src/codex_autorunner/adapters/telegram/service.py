@@ -100,7 +100,11 @@ from ..chat.queue_status import (
 from ..chat.service import ChatBotServiceCore
 from ..chat.turn_policy import PlainTextTurnContext
 from ..chat.update_notifier import ChatUpdateStatusNotifier
-from .adapter import (
+from .adapter import TelegramChatAdapter
+from .cache_manager import TelegramCacheManager
+from .chat_state_store import TelegramChatStateStore
+from .chat_transport import TelegramChatTransport
+from .client import (
     InlineButton,
     TelegramAPIError,
     TelegramBotClient,
@@ -113,10 +117,6 @@ from .adapter import (
     build_inline_keyboard,
     encode_cancel_callback,
 )
-from .cache_manager import TelegramCacheManager
-from .chat_adapter import TelegramChatAdapter
-from .chat_state_store import TelegramChatStateStore
-from .chat_transport import TelegramChatTransport
 from .commands_registry import build_command_payloads, diff_command_lists
 from .config import (
     AppServerUnavailableError,

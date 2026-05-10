@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from codex_autorunner.adapters.telegram.adapter import (
+from codex_autorunner.adapters.telegram.client import (
     TelegramForwardOrigin,
     TelegramMessage,
 )

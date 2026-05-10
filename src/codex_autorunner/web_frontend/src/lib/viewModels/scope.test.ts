@@ -420,7 +420,7 @@ describe('scopeEquals', () => {
 
 describe('SurfaceRef URN round-trip', () => {
   it('formats and parses surface URN', () => {
-    const surface = { kind: 'pma_thread', key: 'thread-1' };
+    const surface = { kind: 'managed_thread', key: 'thread-1' };
     const urn = formatSurfaceUrn(surface);
     expect(parseSurfaceUrn(urn)).toEqual(surface);
   });

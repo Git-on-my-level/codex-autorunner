@@ -436,12 +436,12 @@ def test_save_hub_state_writes_atomic_json(tmp_path: Path) -> None:
     assert loaded["repos"][0]["id"] == "demo"
 
 
-def test_refresh_pma_threads_artifact_failure_is_non_fatal(
+def test_refresh_managed_threads_artifact_failure_is_non_fatal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from codex_autorunner.core.hub_topology import (
         HubState,
-        refresh_pma_threads_artifact,
+        refresh_managed_threads_artifact,
         save_hub_state,
     )
 
@@ -458,12 +458,12 @@ def test_refresh_pma_threads_artifact_failure_is_non_fatal(
 
     monkeypatch.setattr(
         pma_ctx,
-        "_snapshot_pma_threads",
+        "_snapshot_managed_threads",
         lambda _root: (_ for _ in ()).throw(OSError("pma artifact write failed")),
     )
-    refresh_pma_threads_artifact(hub_root)
+    refresh_managed_threads_artifact(hub_root)
 
-    artifact_path = hub_root / ".codex-autorunner" / "pma_threads.json"
+    artifact_path = hub_root / ".codex-autorunner" / "managed_threads.json"
     assert not artifact_path.exists(), "artifact should not be written on failure"
 
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from codex_autorunner.adapters.telegram.adapter import TelegramMessage
+from codex_autorunner.adapters.telegram.client import TelegramMessage
 from codex_autorunner.adapters.telegram.trigger_mode import should_trigger_run
 
 

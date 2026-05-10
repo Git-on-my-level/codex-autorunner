@@ -21,7 +21,7 @@ from codex_autorunner.surfaces.web.routes.pma_routes.managed_thread_runtime_payl
     resolve_managed_thread_message_options,
     sanitize_managed_thread_result_error,
 )
-from codex_autorunner.surfaces.web.schemas import PmaManagedThreadMessageRequest
+from codex_autorunner.surfaces.web.schemas import ManagedThreadMessageRequest
 
 
 class TestSanitizeManagedThreadResultError:
@@ -96,7 +96,7 @@ def test_resolve_message_options_preserves_runtime_cwd_in_prompt(
 
     options = resolve_managed_thread_message_options(
         request,
-        PmaManagedThreadMessageRequest(message="hello from route"),
+        ManagedThreadMessageRequest(message="hello from route"),
         managed_thread_id="thread-1",
         thread={
             "agent": "codex",

@@ -84,8 +84,8 @@ from .commands.utils import (
     resolve_hub_config_path_for_cli as _resolve_hub_config_path_for_cli,
 )
 from .commands.worktree import register_worktree_commands
+from .hub_control_plane_client import resolve_hub_path as _resolve_pma_hub_path
 from .pma_cli import pma_app as pma_cli_app
-from .pma_control_plane import resolve_hub_path as _resolve_pma_hub_path
 
 logger = logging.getLogger("codex_autorunner.cli")
 
@@ -131,7 +131,7 @@ hub_tickets_app = typer.Typer(
 doctor_app = typer.Typer(
     add_completion=False,
     invoke_without_command=True,
-    help="Run health checks for repo, hub, and integrations.",
+    help="Run health checks for repo, hub, and adapters.",
 )
 flow_app = typer.Typer(
     add_completion=False, help="Flow lifecycle commands (worker + ticket_flow)."

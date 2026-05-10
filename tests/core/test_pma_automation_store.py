@@ -4,23 +4,23 @@ import logging
 
 import pytest
 
+from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration import OrchestrationBindingStore
 from codex_autorunner.core.pma_automation_store import (
     PmaAutomationStore,
     PmaAutomationThreadNotFoundError,
 )
 from codex_autorunner.core.pma_domain.models import PmaDispatchDecision
-from codex_autorunner.core.pma_thread_store import PmaThreadStore
 
 
 def _create_managed_thread(
     tmp_path,
     *,
     surface_kind: str | None = None,
-    thread_store: PmaThreadStore | None = None,
+    thread_store: ManagedThreadStore | None = None,
     binding_store: OrchestrationBindingStore | None = None,
 ) -> str:
-    ts = thread_store or PmaThreadStore(tmp_path)
+    ts = thread_store or ManagedThreadStore(tmp_path)
     thread = ts.create_thread("codex", tmp_path)
     thread_id = str(thread["managed_thread_id"])
     if surface_kind is not None:
@@ -267,7 +267,7 @@ def test_create_subscription_accepts_singular_event_type_and_triggers_transition
     tmp_path,
 ) -> None:
     store = PmaAutomationStore(tmp_path, durable=False)
-    ts = PmaThreadStore(tmp_path)
+    ts = ManagedThreadStore(tmp_path)
     thread_id = _create_managed_thread(tmp_path, thread_store=ts)
     subscription = store.create_subscription(
         {
@@ -320,7 +320,7 @@ def test_create_subscription_warns_when_repo_scope_has_multiple_active_threads(
     tmp_path,
 ) -> None:
     store = PmaAutomationStore(tmp_path, durable=False)
-    thread_store = PmaThreadStore(tmp_path)
+    thread_store = ManagedThreadStore(tmp_path)
     thread_store.create_thread("codex", tmp_path, repo_id="repo-1")
     thread_store.create_thread("codex", tmp_path, repo_id="repo-1")
 
@@ -362,7 +362,7 @@ def test_create_subscription_prefers_origin_thread_binding_for_defaults(
     tmp_path,
 ) -> None:
     store = PmaAutomationStore(tmp_path, durable=False)
-    ts = PmaThreadStore(tmp_path)
+    ts = ManagedThreadStore(tmp_path)
     bs = OrchestrationBindingStore(tmp_path, durable=False)
     managed_thread_id = _create_managed_thread(
         tmp_path, thread_store=ts, binding_store=bs
@@ -424,7 +424,7 @@ def test_create_subscription_reuses_covering_auto_subscription_for_auto_keys(
     tmp_path,
 ) -> None:
     store = PmaAutomationStore(tmp_path, durable=False)
-    ts = PmaThreadStore(tmp_path)
+    ts = ManagedThreadStore(tmp_path)
     thread_id = _create_managed_thread(tmp_path, thread_store=ts)
 
     first = store.create_subscription(

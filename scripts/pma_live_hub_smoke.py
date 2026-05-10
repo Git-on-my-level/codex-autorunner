@@ -116,9 +116,10 @@ Fixture ticket used by `scripts/pma_live_hub_smoke.py`.
 
 
 def seed_smoke_hub(evidence_dir: Path) -> Path:
+    from codex_autorunner.core.pma_thread_store import PmaThreadStore
+
     from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
     from codex_autorunner.core.config import load_hub_config
-    from codex_autorunner.core.pma_thread_store import PmaThreadStore
     from codex_autorunner.manifest import load_manifest, save_manifest
 
     hub_root = evidence_dir / "hub"

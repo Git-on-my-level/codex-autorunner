@@ -42,7 +42,7 @@ def test_repo_health_is_ok_when_tickets_dir_exists(tmp_path):
     app.state.config = object()
     app.state.engine = SimpleNamespace(repo_root=Path(tmp_path))
 
-    app.include_router(base_routes.build_base_routes(static_dir=Path(tmp_path)))
+    app.include_router(base_routes.build_base_routes())
 
     with TestClient(app) as client:
         resp = client.get("/api/repo/health")

@@ -64,7 +64,7 @@ from codex_autorunner.core.managed_thread_identity import (
     normalize_feature_key,
     pma_base_key,
 )
-from codex_autorunner.core.pma_thread_store import PmaThreadStore
+from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.ports.run_event import (
     RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
     RUN_EVENT_DELTA_TYPE_LOG_LINE,
@@ -6252,7 +6252,7 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
         assert any("second orchestration reply" in content for content in contents)
         assert rest.typing_calls.count("channel-1") >= 2
 
-        thread_store = PmaThreadStore(tmp_path)
+        thread_store = ManagedThreadStore(tmp_path)
         threads = thread_store.list_threads(limit=10)
         assert len(threads) == 1
         turns = thread_store.list_turns(threads[0]["managed_thread_id"], limit=10)
@@ -6375,7 +6375,7 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
         assert resolved_thread.agent_id == "hermes"
         assert resolved_thread.agent_profile == "m4-pma"
 
-        thread_store = PmaThreadStore(tmp_path)
+        thread_store = ManagedThreadStore(tmp_path)
         turns = thread_store.list_turns(resolved_thread.thread_target_id, limit=10)
         assert len(turns) == 2
         assert [turn["status"] for turn in turns] == ["ok", "ok"]
@@ -6556,7 +6556,7 @@ async def test_pma_message_create_routes_repeated_messages_through_managed_threa
         assert any("first orchestration reply" in content for content in contents)
         assert any("second orchestration reply" in content for content in contents)
 
-        thread_store = PmaThreadStore(tmp_path)
+        thread_store = ManagedThreadStore(tmp_path)
         threads = thread_store.list_threads(limit=10)
         assert len(threads) == 1
         turns = thread_store.list_turns(threads[0]["managed_thread_id"], limit=10)
@@ -6646,7 +6646,7 @@ async def test_pma_message_create_image_attachment_routes_through_managed_thread
         assert "<user_message>" in str(items[0].get("text") or "")
         assert any(item.get("type") == "localImage" for item in items[1:])
 
-        thread_store = PmaThreadStore(tmp_path)
+        thread_store = ManagedThreadStore(tmp_path)
         threads = thread_store.list_threads(limit=10)
         assert len(threads) == 1
         turns = thread_store.list_turns(threads[0]["managed_thread_id"], limit=10)

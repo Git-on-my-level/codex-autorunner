@@ -23,9 +23,9 @@ from codex_autorunner.core.state_roots import (
     resolve_global_github_broker_db_path,
     resolve_global_state_root,
     resolve_hub_apps_root,
+    resolve_hub_managed_threads_db_path,
     resolve_hub_manifest_path,
     resolve_hub_orchestration_db_path,
-    resolve_hub_pma_threads_db_path,
     resolve_hub_runtime_root,
     resolve_hub_runtimes_root,
     resolve_hub_state_root,
@@ -102,7 +102,7 @@ class TestResolveHubStateRoot:
         hub_state = resolve_hub_state_root(hub_root)
         assert resolve_hub_manifest_path(hub_root) == hub_state / HUB_MANIFEST_FILENAME
         assert (
-            resolve_hub_pma_threads_db_path(hub_root)
+            resolve_hub_managed_threads_db_path(hub_root)
             == hub_state / "pma" / PMA_THREADS_DB_FILENAME
         )
 

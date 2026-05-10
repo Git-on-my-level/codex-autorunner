@@ -34,7 +34,7 @@ from ..chat.models import (
     ChatMessageRef,
     ChatThreadRef,
 )
-from .adapter import encode_cancel_callback
+from .client import encode_cancel_callback
 
 
 def _thread_ref(chat_id: Optional[int], thread_id: Optional[int]) -> ChatThreadRef:

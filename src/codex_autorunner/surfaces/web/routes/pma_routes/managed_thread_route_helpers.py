@@ -27,7 +27,7 @@ from .....core.managed_thread_status import derive_managed_thread_operator_statu
 from .....core.orchestration import ActiveWorkSummary
 from .....core.orchestration.models import Binding, ThreadTarget
 from .....core.text_utils import _truncate_text
-from ...schemas import PmaManagedThreadCreateRequest
+from ...schemas import ManagedThreadCreateRequest
 from ...services.pma import get_pma_request_context
 from ...services.pma.managed_thread_followup import (
     ManagedThreadFollowupPolicy,
@@ -169,7 +169,7 @@ def _normalize_resource_owner(
 
 
 def _scope_ref_from_payload(
-    payload: PmaManagedThreadCreateRequest,
+    payload: ManagedThreadCreateRequest,
 ) -> Optional[ScopeRef]:
     scope_urn = normalize_optional_text(payload.scope_urn)
     if scope_urn is None:
@@ -471,7 +471,7 @@ def _resolve_requested_profile(
 
 def resolve_managed_thread_create_resolution(
     request: Request,
-    payload: PmaManagedThreadCreateRequest,
+    payload: ManagedThreadCreateRequest,
 ) -> ManagedThreadCreateResolution:
     context = get_pma_request_context(request)
     hub_root = context.hub_root

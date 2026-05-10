@@ -28,12 +28,5 @@ def test_explicit_model_wins_over_settings_default() -> None:
     )
 
 
-def test_legacy_model_override_is_codex_only() -> None:
-    state = SimpleNamespace(autorunner_model_override="gpt-legacy")
-
-    assert resolve_model_for_agent("codex", state=state) == "gpt-legacy"
-    assert resolve_model_for_agent("opencode", state=state) != "gpt-legacy"
-
-
 def test_callers_can_avoid_builtin_when_blank_should_mean_runtime_default() -> None:
     assert resolve_model_for_agent("codex", include_builtin=False) is None

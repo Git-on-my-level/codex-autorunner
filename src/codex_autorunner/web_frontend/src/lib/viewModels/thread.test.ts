@@ -81,12 +81,12 @@ describe('mapThreadSummary', () => {
   it('extracts surface from surface_urn', () => {
     const vm = mapThreadSummary({
       managed_thread_id: 'thread-surf',
-      surface_urn: 'pma_thread:thread-surf',
+      surface_urn: 'managed_thread:thread-surf',
       agent: 'codex',
       status: 'idle'
     });
 
-    expect(vm.surface).toEqual({ kind: 'pma_thread', key: 'thread-surf' });
+    expect(vm.surface).toEqual({ kind: 'managed_thread', key: 'thread-surf' });
   });
 
   it('extracts surface from surface_kind/surface_key', () => {

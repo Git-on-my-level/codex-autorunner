@@ -6,7 +6,7 @@ import pytest
 
 import codex_autorunner.adapters.telegram.service as telegram_service_module
 from codex_autorunner.adapters.chat.channel_directory import ChannelDirectoryStore
-from codex_autorunner.adapters.telegram.adapter import parse_update
+from codex_autorunner.adapters.telegram.client import parse_update
 from codex_autorunner.adapters.telegram.config import TelegramBotConfig
 from codex_autorunner.adapters.telegram.service import TelegramBotService
 

@@ -838,7 +838,7 @@ def test_active_chat_binding_counts_by_source_reuses_durable_projection(
         calls["telegram"] += 1
         return {"demo": 3}
 
-    monkeypatch.setattr(chat_bindings_module, "_active_pma_thread_counts", fake_pma)
+    monkeypatch.setattr(chat_bindings_module, "_active_managed_thread_counts", fake_pma)
     monkeypatch.setattr(
         chat_bindings_module,
         "_orchestration_binding_counts_by_source",

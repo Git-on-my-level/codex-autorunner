@@ -7,6 +7,9 @@ from typing import Any, Mapping, Optional, cast
 
 from .config_contract import ConfigError
 from .hub import HubSupervisor
+from .managed_thread_snapshot import (
+    snapshot_managed_threads as _snapshot_managed_threads,
+)
 from .pma_active_context import (
     PMA_ACTIVE_CONTEXT_MAX_LINES,
     get_active_context_auto_prune_meta,
@@ -46,7 +49,6 @@ from .pma_snapshot_builder import (
     _snapshot_pma_files,
     build_hub_snapshot_payload,
 )
-from .pma_thread_snapshot import snapshot_pma_threads as _snapshot_pma_threads
 from .pma_workspace_docs import load_pma_prompt, load_pma_workspace_docs
 from .state import now_iso
 
@@ -280,7 +282,7 @@ __all__ = [
     "_resolve_pma_freshness_threshold_seconds",
     "_snapshot_pma_automation",
     "_snapshot_pma_files",
-    "_snapshot_pma_threads",
+    "_snapshot_managed_threads",
     "_tail_lines",
     "_ticket_flow_inbox_item_type_and_next_action",
     "_trim_extra",

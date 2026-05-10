@@ -8,7 +8,7 @@ from typing import Any, Optional
 import pytest
 from tests.telegram_pma_workspace_support import _NewtHandler
 
-from codex_autorunner.adapters.telegram.adapter import TelegramMessage
+from codex_autorunner.adapters.telegram.client import TelegramMessage
 from codex_autorunner.adapters.telegram.state import (
     TelegramTopicRecord,
 )

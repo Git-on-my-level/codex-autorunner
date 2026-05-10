@@ -6,12 +6,8 @@ This package contains surface-specific code for codex-autorunner. Surfaces are r
 
 - `web/`: FastAPI web UI, API routes, and web-specific workflows
 - `cli/`: Command-line interface
-- `discord/`: Discord `SurfacePort` facade and inbound event normalization
-- `telegram/`: Telegram `SurfacePort` facade and inbound event normalization
 
-Chat platform API clients remain in `adapters/` as outbound transport
-adapters. Surface packages own the PMA-facing surface contract and translate
-adapter-normalized inbound events into canonical engine commands.
+Transport adapters remain in `adapters/`. Surface packages own entrypoint-specific UI and routing code; core port contracts live under `core/ports/`.
 
 ## Architecture
 

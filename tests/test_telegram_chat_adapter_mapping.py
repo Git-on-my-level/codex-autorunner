@@ -9,7 +9,8 @@ from codex_autorunner.adapters.chat.models import (
     ChatInteractionEvent,
     ChatMessageEvent,
 )
-from codex_autorunner.adapters.telegram.adapter import (
+from codex_autorunner.adapters.telegram.adapter import TelegramChatAdapter
+from codex_autorunner.adapters.telegram.client import (
     TelegramAudio,
     TelegramCallbackQuery,
     TelegramDocument,
@@ -19,7 +20,6 @@ from codex_autorunner.adapters.telegram.adapter import (
     TelegramUpdate,
     TelegramVoice,
 )
-from codex_autorunner.adapters.telegram.chat_adapter import TelegramChatAdapter
 
 
 class _DummyPoller:

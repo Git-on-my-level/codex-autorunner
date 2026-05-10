@@ -5,13 +5,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 from typer.testing import CliRunner
 
-from codex_autorunner.surfaces.cli.pma_cli import pma_app
-from codex_autorunner.surfaces.cli.pma_control_plane import (
+from codex_autorunner.surfaces.cli.hub_control_plane_client import (
     CAPABILITY_REQUIREMENTS,
     check_capability,
     fetch_agent_capabilities,
     normalize_agent_option,
 )
+from codex_autorunner.surfaces.cli.pma_cli import pma_app
 
 runner = CliRunner()
 
@@ -51,8 +51,10 @@ class TestCheckCapability:
 
 
 class TestFetchAgentCapabilities:
-    @patch("codex_autorunner.surfaces.cli.pma_control_plane.request_json")
-    @patch("codex_autorunner.surfaces.cli.pma_control_plane.build_pma_url")
+    @patch("codex_autorunner.surfaces.cli.hub_control_plane_client.request_json")
+    @patch(
+        "codex_autorunner.surfaces.cli.hub_control_plane_client.build_hub_control_plane_url"
+    )
     def test_fetch_agent_capabilities_returns_mapping(self, mock_url, mock_request):
         mock_request.return_value = {
             "agents": [
@@ -66,15 +68,19 @@ class TestFetchAgentCapabilities:
             "opencode": ["durable_threads"],
         }
 
-    @patch("codex_autorunner.surfaces.cli.pma_control_plane.request_json")
-    @patch("codex_autorunner.surfaces.cli.pma_control_plane.build_pma_url")
+    @patch("codex_autorunner.surfaces.cli.hub_control_plane_client.request_json")
+    @patch(
+        "codex_autorunner.surfaces.cli.hub_control_plane_client.build_hub_control_plane_url"
+    )
     def test_fetch_agent_capabilities_handles_error(self, mock_url, mock_request):
         mock_request.side_effect = Exception("Network error")
         result = fetch_agent_capabilities(MagicMock())
         assert result == {}
 
-    @patch("codex_autorunner.surfaces.cli.pma_control_plane.request_json")
-    @patch("codex_autorunner.surfaces.cli.pma_control_plane.build_pma_url")
+    @patch("codex_autorunner.surfaces.cli.hub_control_plane_client.request_json")
+    @patch(
+        "codex_autorunner.surfaces.cli.hub_control_plane_client.build_hub_control_plane_url"
+    )
     def test_fetch_agent_capabilities_handles_missing_agents(
         self, mock_url, mock_request
     ):
@@ -86,7 +92,7 @@ class TestFetchAgentCapabilities:
 class TestPmaModelsCapabilityCheck:
     @patch("codex_autorunner.surfaces.cli.pma_cli.fetch_agent_capabilities")
     @patch("codex_autorunner.surfaces.cli.pma_cli.load_hub_config")
-    @patch("codex_autorunner.surfaces.cli.pma_cli.build_pma_url")
+    @patch("codex_autorunner.surfaces.cli.pma_cli.build_hub_control_plane_url")
     @patch("codex_autorunner.surfaces.cli.pma_cli.request_json")
     def test_models_command_fails_for_agent_without_model_listing(
         self, mock_request, mock_url, mock_config, mock_caps
@@ -102,11 +108,11 @@ class TestPmaModelsCapabilityCheck:
         assert "model_listing" in result.output
 
 
-class TestPmaThreadSpawnCapabilityCheck:
+class TestManagedThreadSpawnCapabilityCheck:
     @patch(
-        "codex_autorunner.surfaces.cli.pma_thread_commands._fetch_agent_capabilities"
+        "codex_autorunner.surfaces.cli.managed_thread_commands._fetch_agent_capabilities"
     )
-    @patch("codex_autorunner.surfaces.cli.pma_thread_commands.load_hub_config")
+    @patch("codex_autorunner.surfaces.cli.managed_thread_commands.load_hub_config")
     def test_thread_spawn_fails_for_agent_without_durable_threads(
         self, mock_config, mock_caps
     ):

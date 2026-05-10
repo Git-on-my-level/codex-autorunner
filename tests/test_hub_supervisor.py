@@ -45,8 +45,8 @@ from codex_autorunner.core.hub_topology import (
     RepoStatus,
 )
 from codex_autorunner.core.hub_worktree_manager import WorktreeManager
+from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration.bindings import OrchestrationBindingStore
-from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.runner_controller import ProcessRunnerController
 from codex_autorunner.core.state import RunnerState, save_state
 from codex_autorunner.manifest import load_manifest, sanitize_repo_id, save_manifest
@@ -278,12 +278,12 @@ def test_list_repos_refreshes_after_startup_state_cache_ttl(
     assert second[0].display_name == "demo"
 
 
-def test_scan_writes_pma_threads_artifact(tmp_path: Path) -> None:
+def test_scan_writes_managed_threads_artifact(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     _write_default_hub_config(hub_root)
     repo_dir = hub_root / "demo"
     (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
-    PmaThreadStore(hub_root).create_thread(
+    ManagedThreadStore(hub_root).create_thread(
         "codex",
         repo_dir,
         repo_id="demo",
@@ -300,13 +300,13 @@ def test_scan_writes_pma_threads_artifact(tmp_path: Path) -> None:
     finally:
         supervisor.shutdown()
 
-    artifact_path = hub_root / ".codex-autorunner" / "pma_threads.json"
+    artifact_path = hub_root / ".codex-autorunner" / "managed_threads.json"
     payload = json.loads(artifact_path.read_text(encoding="utf-8"))
     assert payload["generated_at"]
     assert payload["threads"][0]["name"] == "demo-thread"
 
 
-def test_list_repos_does_not_refresh_pma_threads_artifact(
+def test_list_repos_does_not_refresh_managed_threads_artifact(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     hub_root = tmp_path / "hub"
@@ -322,7 +322,7 @@ def test_list_repos_does_not_refresh_pma_threads_artifact(
 
     monkeypatch.setattr(
         hub_topology_module,
-        "refresh_pma_threads_artifact",
+        "refresh_managed_threads_artifact",
         _record_artifact_call,
     )
     try:
@@ -464,7 +464,7 @@ def test_hub_api_marks_chat_bound_worktrees(tmp_path: Path):
         branch="feature/chat-bound",
         start_point="HEAD",
     )
-    store = PmaThreadStore(hub_root)
+    store = ManagedThreadStore(hub_root)
     store.create_thread("codex", worktree.path, repo_id=worktree.id)
 
     app = create_hub_app(hub_root)
@@ -511,11 +511,11 @@ def test_hub_api_marks_chat_bound_worktrees_without_thread_list_cap(
         assert status == "active"
         return {worktree.id: 1, "noise-repo": 9001}
 
-    monkeypatch.setattr(PmaThreadStore, "list_threads", _fail_list_threads)
+    monkeypatch.setattr(ManagedThreadStore, "list_threads", _fail_list_threads)
     monkeypatch.setattr(
-        PmaThreadStore, "count_threads_by_repo", _fake_count_threads_by_repo
+        ManagedThreadStore, "count_threads_by_repo", _fake_count_threads_by_repo
     )
-    PmaThreadStore(hub_root)
+    ManagedThreadStore(hub_root)
 
     app = create_hub_app(hub_root)
     client = TestClient(app)
@@ -560,7 +560,7 @@ def test_hub_archive_state_endpoint_archives_and_resets_runtime_state(tmp_path: 
     dispatch_dir = worktree_car / "runs" / "run-1" / "dispatch"
     dispatch_dir.mkdir(parents=True, exist_ok=True)
     (dispatch_dir / "DISPATCH.md").write_text("dispatch", encoding="utf-8")
-    store = PmaThreadStore(hub_root)
+    store = ManagedThreadStore(hub_root)
     created = store.create_thread("codex", worktree.path, repo_id=worktree.id)
 
     app = create_hub_app(hub_root)
@@ -637,7 +637,7 @@ def test_hub_archive_repo_state_endpoint_archives_and_resets_base_repo_runtime_s
         base_car / "state.sqlite3",
         RunnerState(1, "idle", None, None, None),
     )
-    store = PmaThreadStore(hub_root)
+    store = ManagedThreadStore(hub_root)
     created = store.create_thread("codex", base.path, repo_id=base.id)
     bound = store.create_thread(
         "codex",
@@ -816,7 +816,7 @@ def test_hub_archive_repo_state_endpoint_archives_threads_when_state_is_clean(
     )
     supervisor.archive_repo_state(repo_id=base.id)
 
-    store = PmaThreadStore(hub_root)
+    store = ManagedThreadStore(hub_root)
     created = store.create_thread("codex", base.path, repo_id=base.id, name="scratch")
     bound = store.create_thread(
         "codex",
@@ -910,7 +910,7 @@ def test_hub_api_cleanup_repo_threads_archives_only_unbound_threads(
     _init_git_repo(base.path)
     _init_git_repo(other.path)
 
-    store = PmaThreadStore(hub_root)
+    store = ManagedThreadStore(hub_root)
     unbound = store.create_thread("codex", base.path, repo_id=base.id, name="scratch")
     bound = store.create_thread(
         "codex",
@@ -967,7 +967,7 @@ def test_hub_repo_listing_includes_unbound_managed_thread_count(tmp_path: Path):
         branch="feature/unbound-count",
         start_point="HEAD",
     )
-    store = PmaThreadStore(hub_root)
+    store = ManagedThreadStore(hub_root)
     store.create_thread("codex", base.path, repo_id=base.id, name="scratch")
 
     app = create_hub_app(hub_root)
@@ -1003,7 +1003,7 @@ def test_hub_api_cleanup_all_repo_threads_archives_unbound_threads_and_reports_d
 
     (base_two.path / "DIRTY.txt").write_text("dirty\n", encoding="utf-8")
 
-    store = PmaThreadStore(hub_root)
+    store = ManagedThreadStore(hub_root)
     base_one_unbound = store.create_thread(
         "codex", base_one.path, repo_id=base_one.id, name="scratch-one"
     )
@@ -1076,7 +1076,7 @@ def test_hub_supervisor_cleanup_all_dry_run_does_not_archive_threads(
     )
     base = supervisor.create_repo("base")
     _init_git_repo(base.path)
-    store = PmaThreadStore(hub_root)
+    store = ManagedThreadStore(hub_root)
     thread = store.create_thread(
         "codex", base.path, repo_id=base.id, name="scratch-preview"
     )
@@ -2461,7 +2461,7 @@ def test_cleanup_worktree_allows_pma_only_bound_without_force(tmp_path: Path):
         branch="feature/chat-guard",
         start_point="HEAD",
     )
-    store = PmaThreadStore(hub_root)
+    store = ManagedThreadStore(hub_root)
     created = store.create_thread("codex", worktree.path, repo_id=worktree.id)
 
     supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=True)
@@ -2471,7 +2471,7 @@ def test_cleanup_worktree_allows_pma_only_bound_without_force(tmp_path: Path):
     assert thread["lifecycle_status"] == "archived"
 
 
-def test_cleanup_worktree_failure_keeps_bound_pma_threads_active(
+def test_cleanup_worktree_failure_keeps_bound_managed_threads_active(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     hub_root = tmp_path / "hub"
@@ -2490,7 +2490,7 @@ def test_cleanup_worktree_failure_keeps_bound_pma_threads_active(
         branch="feature/chat-guard-failure",
         start_point="HEAD",
     )
-    store = PmaThreadStore(hub_root)
+    store = ManagedThreadStore(hub_root)
     created = store.create_thread("codex", worktree.path, repo_id=worktree.id)
     original_run_git = wtm_module.run_git
 
@@ -2638,7 +2638,7 @@ def test_cleanup_worktree_refreshes_topology_listing(tmp_path: Path) -> None:
     assert refreshed_ids == [base.id]
 
 
-def test_cleanup_worktree_archives_pma_threads_before_manifest_removal(
+def test_cleanup_worktree_archives_managed_threads_before_manifest_removal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     hub_root = tmp_path / "hub"
@@ -2674,7 +2674,7 @@ def test_cleanup_worktree_archives_pma_threads_before_manifest_removal(
 
     monkeypatch.setattr(
         supervisor._worktree_manager,
-        "_archive_bound_pma_threads",
+        "_archive_bound_managed_threads",
         _record_manifest_state,
     )
 
@@ -2686,7 +2686,7 @@ def test_cleanup_worktree_archives_pma_threads_before_manifest_removal(
     assert not worktree.path.exists()
 
 
-def test_archive_worktree_archives_bound_pma_threads(tmp_path: Path):
+def test_archive_worktree_archives_bound_managed_threads(tmp_path: Path):
     hub_root = tmp_path / "hub"
     _write_default_hub_config(hub_root)
 
@@ -2703,7 +2703,7 @@ def test_archive_worktree_archives_bound_pma_threads(tmp_path: Path):
         branch="feature/archive-pma-threads",
         start_point="HEAD",
     )
-    store = PmaThreadStore(hub_root)
+    store = ManagedThreadStore(hub_root)
     repo_bound = store.create_thread("codex", worktree.path, repo_id=worktree.id)
     workspace_bound = store.create_thread("opencode", worktree.path)
     other = store.create_thread("codex", base.path, repo_id=base.id)
@@ -2739,7 +2739,7 @@ def test_cleanup_worktree_allows_mixed_chat_bound_with_force(tmp_path: Path):
         branch="feature/chat-guard-force",
         start_point="HEAD",
     )
-    store = PmaThreadStore(hub_root)
+    store = ManagedThreadStore(hub_root)
     store.create_thread("codex", worktree.path, repo_id=worktree.id)
     _write_discord_binding(
         hub_root, channel_id="discord-chan-force", repo_id=worktree.id
@@ -2775,7 +2775,7 @@ def test_cleanup_worktree_rejects_mixed_chat_bound_without_force(tmp_path: Path)
         branch="feature/chat-guard-mixed",
         start_point="HEAD",
     )
-    store = PmaThreadStore(hub_root)
+    store = ManagedThreadStore(hub_root)
     store.create_thread("codex", worktree.path, repo_id=worktree.id)
     _write_discord_binding(
         hub_root, channel_id="discord-chan-mixed", repo_id=worktree.id

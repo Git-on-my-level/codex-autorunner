@@ -2,7 +2,6 @@ import asyncio
 import logging
 import os
 import shlex
-from contextlib import ExitStack
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping, Optional, cast
@@ -40,27 +39,20 @@ from ...core.hub_control_plane.service import HubSharedStateService
 from ...core.hub_projection_store import HubProjectionStore
 from ...core.logging_utils import safe_log, setup_rotating_logger
 from ...core.managed_thread_identity import ManagedThreadIdentityStore
+from ...core.managed_thread_store import prepare_managed_thread_store
 from ...core.optional_dependencies import require_optional_dependencies
 from ...core.orchestration.sqlite import prepare_orchestration_sqlite
-from ...core.pma_thread_store import prepare_pma_thread_store
-from ...core.ports.surface_port_registry import SurfacePortRegistry
 from ...core.runtime import RuntimeContext
 from ...core.runtime_services import RuntimeServices
 from ...core.state import load_state
 from ...tickets.replies import resolve_reply_paths
-from ..acp_remote import build_acp_remote_surface_port
-from ..discord import build_discord_surface_port
-from ..telegram import build_telegram_surface_port
 from .hub_jobs import HubJobManager
 from .runner_manager import RunnerManager
 from .static_assets import (
-    StaticAssetProvenance,
     asset_version,
-    materialize_static_assets,
-    require_static_assets,
+    resolve_web_static_dir,
 )
 from .terminal_sessions import parse_tui_idle_seconds, prune_terminal_registry
-from .web_surface_port import WebSurfacePort, build_web_surface_port
 
 _DEV_INCLUDE_ROOT_REPO_ENV = "CAR_DEV_INCLUDE_ROOT_REPO"
 
@@ -106,15 +98,10 @@ class AppContext:
     repo_to_session: dict
     session_state_last_write: float
     session_state_dirty: bool
-    static_dir: Path
-    static_assets_context: Optional[object]
     asset_version: str
-    static_asset_provenance: StaticAssetProvenance
     logger: logging.Logger
     tui_idle_seconds: Optional[float]
     tui_idle_check_seconds: Optional[float]
-    surface_port_registry: SurfacePortRegistry
-    web_surface_port: WebSurfacePort
 
 
 @dataclass(frozen=True)
@@ -132,13 +119,8 @@ class HubAppContext:
     runtime_services: RuntimeServices
     projection_store: HubProjectionStore
     shared_state_service: HubSharedStateService
-    static_dir: Path
-    static_assets_context: Optional[object]
     asset_version: str
-    static_asset_provenance: StaticAssetProvenance
     logger: logging.Logger
-    surface_port_registry: SurfacePortRegistry
-    web_surface_port: WebSurfacePort
 
 
 @dataclass(frozen=True)
@@ -560,66 +542,7 @@ def build_app_context(
             terminal_max_idle_seconds,
         )
 
-    def _load_static_assets(
-        cache_root: Path, max_cache_entries: int, max_cache_age_days: Optional[int]
-    ) -> tuple[Path, Optional[ExitStack], StaticAssetProvenance]:
-        static_dir, static_context, provenance = materialize_static_assets(
-            cache_root,
-            max_cache_entries=max_cache_entries,
-            max_cache_age_days=max_cache_age_days,
-            logger=logger,
-        )
-        try:
-            require_static_assets(static_dir, logger)
-        except RuntimeError as exc:
-            if static_context is not None:
-                static_context.close()
-            safe_log(
-                logger,
-                logging.WARNING,
-                "Static assets requirement check failed",
-                exc=exc,
-            )
-            raise
-        return static_dir, static_context, provenance
-
-    try:
-        static_dir, static_context, static_provenance = _load_static_assets(
-            config.static_assets.cache_root,
-            config.static_assets.max_cache_entries,
-            config.static_assets.max_cache_age_days,
-        )
-    except (OSError, RuntimeError) as exc:
-        if hub_config is None:
-            raise
-        hub_static = hub_config.static_assets
-        if hub_static.cache_root == config.static_assets.cache_root:
-            raise
-        safe_log(
-            logger,
-            logging.WARNING,
-            "Repo static assets unavailable; retrying with hub cache root %s",
-            hub_static.cache_root,
-            exc=exc,
-        )
-        static_dir, static_context, static_provenance = _load_static_assets(
-            hub_static.cache_root,
-            hub_static.max_cache_entries,
-            hub_static.max_cache_age_days,
-        )
-    web_port = build_web_surface_port(
-        static_assets_ok=True,
-        logger=logger,
-    )
-    surface_port_registry = SurfacePortRegistry()
-    surface_port_registry.register("web", web_port)
-    surface_port_registry.register("discord", build_discord_surface_port(logger=logger))
-    surface_port_registry.register(
-        "telegram", build_telegram_surface_port(logger=logger)
-    )
-    surface_port_registry.register(
-        "acp_remote", build_acp_remote_surface_port(logger=logger)
-    )
+    web_static_dir, _web_static_context = resolve_web_static_dir()
     return AppContext(
         base_path=normalized_base,
         env=env,
@@ -642,15 +565,10 @@ def build_app_context(
         repo_to_session=repo_to_session,
         session_state_last_write=0.0,
         session_state_dirty=False,
-        static_dir=static_dir,
-        static_assets_context=static_context,
-        asset_version=asset_version(static_dir),
-        static_asset_provenance=static_provenance,
+        asset_version=asset_version(web_static_dir),
         logger=logger,
         tui_idle_seconds=tui_idle_seconds,
         tui_idle_check_seconds=tui_idle_check_seconds,
-        surface_port_registry=surface_port_registry,
-        web_surface_port=web_port,
     )
 
 
@@ -678,12 +596,7 @@ def apply_app_context(app, context: AppContext) -> None:
     app.state.repo_to_session = context.repo_to_session
     app.state.session_state_last_write = context.session_state_last_write
     app.state.session_state_dirty = context.session_state_dirty
-    app.state.static_dir = context.static_dir
-    app.state.static_assets_context = context.static_assets_context
     app.state.asset_version = context.asset_version
-    app.state.static_asset_provenance = context.static_asset_provenance
-    app.state.surface_port_registry = context.surface_port_registry
-    app.state.web_surface_port = context.web_surface_port
 
 
 def build_hub_context(
@@ -711,7 +624,7 @@ def build_hub_context(
     )
     durable_writes = bool(getattr(config, "durable_writes", False))
     prepare_orchestration_sqlite(config.root, durable=durable_writes)
-    prepare_pma_thread_store(config.root, durable=durable_writes)
+    prepare_managed_thread_store(config.root, durable=durable_writes)
     supervisor = HubSupervisor(
         config,
         backend_factory_builder=build_agent_backend_factory,
@@ -797,46 +710,14 @@ def build_hub_context(
         config.root,
         durable=bool(getattr(config, "durable_writes", False)),
     )
-    static_dir, static_context, static_provenance = materialize_static_assets(
-        config.static_assets.cache_root,
-        max_cache_entries=config.static_assets.max_cache_entries,
-        max_cache_age_days=config.static_assets.max_cache_age_days,
-        logger=logger,
-    )
-    try:
-        require_static_assets(static_dir, logger)
-    except RuntimeError as exc:
-        if static_context is not None:
-            static_context.close()
-        safe_log(
-            logger,
-            logging.WARNING,
-            "Static assets requirement check failed",
-            exc=exc,
-        )
-        raise
-    resolved_asset_version = asset_version(static_dir)
+    hub_web_static_dir, _hub_web_static_context = resolve_web_static_dir()
+    resolved_asset_version = asset_version(hub_web_static_dir)
     shared_state_service = HubSharedStateService(
         hub_root=config.root,
         supervisor=supervisor,
         hub_asset_version=resolved_asset_version,
         durable_writes=durable_writes,
         logger=logger,
-    )
-    hub_web_port = build_web_surface_port(
-        static_assets_ok=True,
-        logger=logger,
-    )
-    hub_surface_port_registry = SurfacePortRegistry()
-    hub_surface_port_registry.register("web", hub_web_port)
-    hub_surface_port_registry.register(
-        "discord", build_discord_surface_port(logger=logger)
-    )
-    hub_surface_port_registry.register(
-        "telegram", build_telegram_surface_port(logger=logger)
-    )
-    hub_surface_port_registry.register(
-        "acp_remote", build_acp_remote_surface_port(logger=logger)
     )
     return HubAppContext(
         base_path=normalized_base,
@@ -852,13 +733,8 @@ def build_hub_context(
         runtime_services=runtime_services,
         projection_store=projection_store,
         shared_state_service=shared_state_service,
-        static_dir=static_dir,
-        static_assets_context=static_context,
         asset_version=resolved_asset_version,
-        static_asset_provenance=static_provenance,
         logger=logger,
-        surface_port_registry=hub_surface_port_registry,
-        web_surface_port=hub_web_port,
     )
 
 
@@ -876,10 +752,5 @@ def apply_hub_context(app, context: HubAppContext) -> None:
     app.state.runtime_services = context.runtime_services
     app.state.hub_projection_store = context.projection_store
     app.state.hub_control_plane_service = context.shared_state_service
-    app.state.static_dir = context.static_dir
-    app.state.static_assets_context = context.static_assets_context
     app.state.asset_version = context.asset_version
-    app.state.static_asset_provenance = context.static_asset_provenance
     app.state.hub_supervisor = context.supervisor
-    app.state.surface_port_registry = context.surface_port_registry
-    app.state.web_surface_port = context.web_surface_port

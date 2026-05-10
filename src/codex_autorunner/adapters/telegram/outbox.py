@@ -15,7 +15,7 @@ from ..chat.outbox_kernel import (
     OutboxAttemptResult,
     parse_next_attempt_at,
 )
-from .adapter import TelegramAPIError
+from .client import TelegramAPIError
 from .constants import (
     OUTBOX_IMMEDIATE_RETRY_DELAYS,
     OUTBOX_MAX_ATTEMPTS,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from codex_autorunner.surfaces.cli.pma_control_plane import (
+from codex_autorunner.surfaces.cli.hub_control_plane_client import (
     normalize_scope_urn_to_owner_fields,
 )
 

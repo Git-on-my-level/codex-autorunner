@@ -218,7 +218,7 @@ describe('view model mappers', () => {
   it('maps dashboard summary payloads from hub messages sections', () => {
     const vm = mapDashboardSummary({
       items: [{ status: 'paused' }, { status: 'failed' }],
-      pma_threads: [{ lifecycle_status: 'active', normalized_status: 'idle' }],
+      managed_threads: [{ lifecycle_status: 'active', normalized_status: 'idle' }],
       pma_files_detail: { inbox: [{ name: 'result-report.md', summary: 'Final report' }] },
       repo_count: 3,
       worktree_count: 5

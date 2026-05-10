@@ -32,7 +32,7 @@ from ..services import hub_gather as hub_gather_service
 HUB_MESSAGE_SECTIONS = frozenset(
     {
         "inbox",
-        "pma_threads",
+        "managed_threads",
         "pma_files_detail",
         "automation",
         "action_queue",
@@ -91,8 +91,10 @@ def _build_hub_messages_payload(
             else None
         ),
         items=items if "inbox" in requested_sections else None,
-        pma_threads=(
-            snapshot.pma_threads if "pma_threads" in requested_sections else None
+        managed_threads=(
+            snapshot.managed_threads
+            if "managed_threads" in requested_sections
+            else None
         ),
         pma_files_detail=(
             snapshot.pma_files_detail

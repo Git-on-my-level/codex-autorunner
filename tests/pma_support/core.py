@@ -18,13 +18,13 @@ from codex_autorunner.agents.opencode.runtime import OpenCodeTurnOutput
 from codex_autorunner.agents.registry import AgentDescriptor
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.managed_thread_identity import PMA_KEY, PMA_OPENCODE_KEY
+from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration import (
     ColdTraceStore,
     ExecutionRecord,
     ThreadTarget,
 )
 from codex_autorunner.core.pma_queue import PmaQueue, QueueItemState
-from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.pma_transcripts import PmaTranscriptStore
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.routes import pma as pma_routes
@@ -412,7 +412,7 @@ async def test_pma_chat_returns_completed_queue_result_when_future_is_registered
     }
 
 
-def test_pma_thread_status_includes_queued_turns(hub_env) -> None:
+def test_managed_thread_status_includes_queued_turns(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
 
@@ -428,7 +428,7 @@ def test_pma_thread_status_includes_queued_turns(hub_env) -> None:
         assert create_resp.status_code == 200
         managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
 
-    store = PmaThreadStore(hub_env.hub_root)
+    store = ManagedThreadStore(hub_env.hub_root)
     running_turn = store.create_turn(managed_thread_id, prompt="first")
     queued_turn = store.create_turn(
         managed_thread_id,
@@ -453,7 +453,7 @@ def test_pma_thread_status_includes_queued_turns(hub_env) -> None:
     assert payload["queued_turns"][0]["prompt_preview"] == "second"
 
 
-def test_pma_thread_create_defaults_to_hub_context(hub_env) -> None:
+def test_managed_thread_create_defaults_to_hub_context(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
 
@@ -471,7 +471,7 @@ def test_pma_thread_create_defaults_to_hub_context(hub_env) -> None:
     assert thread.get("resource_id") is None
 
 
-def test_pma_thread_create_local_workspace_root_defaults_to_hub_context(
+def test_managed_thread_create_local_workspace_root_defaults_to_hub_context(
     hub_env,
 ) -> None:
     _enable_pma(hub_env.hub_root)
@@ -1782,7 +1782,7 @@ def test_pma_active_clears_on_prompt_build_error(hub_env, monkeypatch) -> None:
     assert active["current"] == {}
 
 
-def test_pma_thread_reset_clears_registry(hub_env) -> None:
+def test_managed_thread_reset_clears_registry(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
     registry = app.state.app_server_threads
@@ -2373,7 +2373,7 @@ def test_pma_turn_events_stream_opencode_returns_empty_stream_without_pending_tu
     assert resp.text == ""
 
 
-def test_pma_managed_thread_status_and_tail_use_orchestration_service(
+def test_managed_thread_status_and_tail_use_orchestration_service(
     hub_env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     class FakeService:
@@ -2566,7 +2566,7 @@ async def test_pma_queue_endpoint_provides_lane_items_for_thread_info(hub_env) -
     assert summary_payload["lanes"][lane_id]["by_state"]["pending"] == 3
 
 
-def test_pma_managed_thread_status_includes_phase_and_guidance(hub_env) -> None:
+def test_managed_thread_status_includes_phase_and_guidance(hub_env) -> None:
     _enable_pma(hub_root=hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
 
@@ -2582,7 +2582,7 @@ def test_pma_managed_thread_status_includes_phase_and_guidance(hub_env) -> None:
         assert create_resp.status_code == 200
         managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
 
-    store = PmaThreadStore(hub_env.hub_root)
+    store = ManagedThreadStore(hub_env.hub_root)
     store.create_turn(managed_thread_id, prompt="test phase")
 
     client = TestClient(app)

@@ -32,12 +32,12 @@ from codex_autorunner.core.hub_control_plane import (
     serialize_run_event,
 )
 from codex_autorunner.core.hub_control_plane.service import HubSharedStateService
+from codex_autorunner.core.managed_thread_store import (
+    ManagedThreadStore,
+    prepare_managed_thread_store,
+)
 from codex_autorunner.core.orchestration.sqlite import prepare_orchestration_sqlite
 from codex_autorunner.core.pma_notification_store import PmaNotificationStore
-from codex_autorunner.core.pma_thread_store import (
-    PmaThreadStore,
-    prepare_pma_thread_store,
-)
 from codex_autorunner.core.ports.run_event import Completed, Started
 from codex_autorunner.surfaces.web.routes.hub_control_plane import (
     build_hub_control_plane_routes,
@@ -67,7 +67,7 @@ def _build_test_app(tmp_path: Path) -> tuple[FastAPI, str]:
     workspace_root = hub_root / "repos" / "repo-1"
     workspace_root.mkdir(parents=True, exist_ok=True)
     prepare_orchestration_sqlite(hub_root, durable=False)
-    prepare_pma_thread_store(hub_root, durable=False)
+    prepare_managed_thread_store(hub_root, durable=False)
 
     supervisor = _SupervisorStub()
     service = HubSharedStateService(
@@ -77,7 +77,7 @@ def _build_test_app(tmp_path: Path) -> tuple[FastAPI, str]:
         hub_build_version="build-77",
         durable_writes=False,
     )
-    thread = PmaThreadStore(
+    thread = ManagedThreadStore(
         hub_root, durable=False, bootstrap_on_init=False
     ).create_thread(
         "codex",

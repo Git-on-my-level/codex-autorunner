@@ -101,11 +101,11 @@ def test_snapshot_pma_files_includes_size_and_modified_at(tmp_path: Path) -> Non
     assert "T" in inbox_detail[0]["modified_at"]
 
 
-def test_snapshot_pma_threads_includes_operator_status(hub_env) -> None:
-    from codex_autorunner.core.pma_context import _snapshot_pma_threads
-    from codex_autorunner.core.pma_thread_store import PmaThreadStore
+def test_snapshot_managed_threads_includes_operator_status(hub_env) -> None:
+    from codex_autorunner.core.managed_thread_store import ManagedThreadStore
+    from codex_autorunner.core.pma_context import _snapshot_managed_threads
 
-    store = PmaThreadStore(hub_env.hub_root)
+    store = ManagedThreadStore(hub_env.hub_root)
     store.create_thread(
         "codex",
         workspace_root=hub_env.repo_root,
@@ -113,7 +113,7 @@ def test_snapshot_pma_threads_includes_operator_status(hub_env) -> None:
         name="operator-status-test",
     )
 
-    threads = _snapshot_pma_threads(hub_env.hub_root)
+    threads = _snapshot_managed_threads(hub_env.hub_root)
 
     assert len(threads) >= 1
     thread = threads[0]
@@ -121,13 +121,13 @@ def test_snapshot_pma_threads_includes_operator_status(hub_env) -> None:
     assert thread["operator_status"] == "idle"
 
 
-def test_snapshot_pma_threads_includes_operator_status_for_failed(
+def test_snapshot_managed_threads_includes_operator_status_for_failed(
     hub_env,
 ) -> None:
-    from codex_autorunner.core.pma_context import _snapshot_pma_threads
-    from codex_autorunner.core.pma_thread_store import PmaThreadStore
+    from codex_autorunner.core.managed_thread_store import ManagedThreadStore
+    from codex_autorunner.core.pma_context import _snapshot_managed_threads
 
-    store = PmaThreadStore(hub_env.hub_root)
+    store = ManagedThreadStore(hub_env.hub_root)
     thread = store.create_thread(
         "codex",
         workspace_root=hub_env.repo_root,
@@ -140,7 +140,7 @@ def test_snapshot_pma_threads_includes_operator_status_for_failed(
         turn["managed_turn_id"], status="error", assistant_text="fail"
     )
 
-    threads = _snapshot_pma_threads(hub_env.hub_root)
+    threads = _snapshot_managed_threads(hub_env.hub_root)
 
     failed = next(t for t in threads if t["managed_thread_id"] == thread_id)
     assert failed["operator_status"] == "attention_required"

@@ -21,6 +21,7 @@ from codex_autorunner.core.config import (
 )
 from codex_autorunner.core.filebox import ensure_structure, inbox_dir
 from codex_autorunner.core.hub import HubSupervisor
+from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration.bindings import OrchestrationBindingStore
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.core.pma_automation_store import PmaAutomationStore
@@ -29,7 +30,6 @@ from codex_autorunner.core.pma_hygiene import (
     apply_pma_hygiene_report,
     build_pma_hygiene_report,
 )
-from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.manifest import load_manifest
 from codex_autorunner.surfaces.cli.pma_cli import pma_app
 from tests.conftest import write_test_config
@@ -114,7 +114,7 @@ def test_build_pma_hygiene_report_groups_candidates(hub_env) -> None:
     stale_file.write_text("leftover", encoding="utf-8")
     _set_file_mtime(stale_file, stale_at)
 
-    thread_store = PmaThreadStore(hub_root)
+    thread_store = ManagedThreadStore(hub_root)
     unbound = thread_store.create_thread(
         "codex",
         hub_env.repo_root,
@@ -276,7 +276,7 @@ def test_apply_pma_hygiene_report_only_removes_safe_items(hub_env) -> None:
 
 def test_apply_pma_hygiene_report_can_include_reviewed_thread_cleanup(hub_env) -> None:
     hub_root = hub_env.hub_root
-    thread_store = PmaThreadStore(hub_root)
+    thread_store = ManagedThreadStore(hub_root)
     thread = thread_store.create_thread(
         "codex",
         hub_env.repo_root,
@@ -303,7 +303,7 @@ def test_apply_pma_hygiene_report_can_include_reviewed_thread_cleanup(hub_env) -
 
 def test_apply_pma_hygiene_report_revalidates_reviewed_thread_binding(hub_env) -> None:
     hub_root = hub_env.hub_root
-    thread_store = PmaThreadStore(hub_root)
+    thread_store = ManagedThreadStore(hub_root)
     thread = thread_store.create_thread(
         "codex",
         hub_env.repo_root,
@@ -339,7 +339,7 @@ def test_apply_pma_hygiene_report_revalidates_reviewed_thread_busy_state(
     hub_env,
 ) -> None:
     hub_root = hub_env.hub_root
-    thread_store = PmaThreadStore(hub_root)
+    thread_store = ManagedThreadStore(hub_root)
     thread = thread_store.create_thread(
         "codex",
         hub_env.repo_root,
@@ -369,7 +369,7 @@ def test_apply_pma_hygiene_report_revalidates_reviewed_thread_lifecycle(
     hub_env,
 ) -> None:
     hub_root = hub_env.hub_root
-    thread_store = PmaThreadStore(hub_root)
+    thread_store = ManagedThreadStore(hub_root)
     thread = thread_store.create_thread(
         "codex",
         hub_env.repo_root,
@@ -424,7 +424,7 @@ def test_build_pma_hygiene_report_blocks_worktree_purge_when_repo_has_fresh_thre
         branch="feature/mixed-fresh-stale",
         start_point="HEAD",
     )
-    store = PmaThreadStore(hub_root)
+    store = ManagedThreadStore(hub_root)
     stale_thread = store.create_thread(
         "codex",
         worktree.path,
@@ -484,7 +484,7 @@ def test_build_pma_hygiene_report_marks_mixed_idle_followup_stale_worktree_needs
         branch="feature/mixed-followup-states",
         start_point="HEAD",
     )
-    store = PmaThreadStore(hub_root)
+    store = ManagedThreadStore(hub_root)
     idleish = store.create_thread(
         "codex",
         worktree.path,
@@ -555,7 +555,7 @@ def test_build_pma_hygiene_report_marks_clean_stale_worktree_safe(
         branch="feature/stale-clean-worktree",
         start_point="HEAD",
     )
-    PmaThreadStore(hub_root).create_thread(
+    ManagedThreadStore(hub_root).create_thread(
         "codex",
         worktree.path,
         repo_id=worktree.id,
@@ -599,7 +599,7 @@ def test_build_pma_hygiene_report_respects_cleanup_require_archive_false(
         branch="feature/no-archive-policy",
         start_point="HEAD",
     )
-    PmaThreadStore(hub_root).create_thread(
+    ManagedThreadStore(hub_root).create_thread(
         "codex",
         worktree.path,
         repo_id=worktree.id,
@@ -633,7 +633,7 @@ def test_build_pma_hygiene_report_includes_chat_bound_stale_worktree_as_protecte
         branch="feature/chat-bound-worktree",
         start_point="HEAD",
     )
-    PmaThreadStore(hub_root).create_thread(
+    ManagedThreadStore(hub_root).create_thread(
         "codex",
         worktree.path,
         repo_id=worktree.id,
@@ -711,7 +711,7 @@ def test_build_pma_hygiene_report_marks_dirty_stale_worktree_needs_confirmation(
         branch="feature/stale-dirty-worktree",
         start_point="HEAD",
     )
-    PmaThreadStore(hub_root).create_thread(
+    ManagedThreadStore(hub_root).create_thread(
         "codex",
         worktree.path,
         repo_id=worktree.id,
@@ -750,7 +750,7 @@ def test_apply_pma_hygiene_report_purges_safe_worktree_candidate(
         branch="feature/purge-safe-worktree",
         start_point="HEAD",
     )
-    thread_store = PmaThreadStore(hub_root)
+    thread_store = ManagedThreadStore(hub_root)
     created = thread_store.create_thread(
         "codex",
         worktree.path,

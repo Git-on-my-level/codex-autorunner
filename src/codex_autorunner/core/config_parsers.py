@@ -18,7 +18,11 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, cast
 
-from .app_server_command import resolve_app_server_command_with_source
+from .app_server_command import (
+    CODEX_APP_SERVER_COMMAND_ENV,
+    TELEGRAM_APP_SERVER_COMMAND_ENV,
+    resolve_app_server_command_with_source,
+)
 from .config_contract import APP_SERVER_OUTPUT_POLICIES, ConfigError
 from .config_field_schema import (
     APP_SERVER_CLIENT_FIELD_SCHEMAS,
@@ -557,12 +561,16 @@ def _parse_app_server_config(
                 defaults, "command", APP_SERVER_FIELD_SCHEMAS["command"]
             ),
             env=os.environ,
+            env_names=(CODEX_APP_SERVER_COMMAND_ENV,),
+            ignored_env_names=(TELEGRAM_APP_SERVER_COMMAND_ENV,),
             fallback_source="default",
         )
     else:
         resolved_command = resolve_app_server_command_with_source(
             raw_command,
             env=os.environ,
+            env_names=(CODEX_APP_SERVER_COMMAND_ENV,),
+            ignored_env_names=(TELEGRAM_APP_SERVER_COMMAND_ENV,),
             fallback=(),
             fallback_source="empty-config",
         )

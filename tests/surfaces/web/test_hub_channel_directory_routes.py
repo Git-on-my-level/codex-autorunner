@@ -24,11 +24,11 @@ from codex_autorunner.core.managed_thread_identity import (
     PMA_OPENCODE_KEY,
     pma_base_key,
 )
+from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration.bindings import OrchestrationBindingStore
 from codex_autorunner.core.orchestration.sqlite import (
     resolve_orchestration_sqlite_path,
 )
-from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.server import create_hub_app
 
 pytestmark = [
@@ -202,13 +202,13 @@ def test_hub_channel_directory_route_enriches_entries_best_effort(
         },
     )
 
-    pma_store = PmaThreadStore(hub_root)
-    discord_pma_thread = pma_store.create_thread(
+    pma_store = ManagedThreadStore(hub_root)
+    discord_managed_thread = pma_store.create_thread(
         "opencode",
         repo_work.path,
         repo_id="work",
     )
-    telegram_pma_thread = pma_store.create_thread(
+    telegram_managed_thread = pma_store.create_thread(
         "codex",
         repo_work.path,
         repo_id="work",
@@ -224,7 +224,7 @@ def test_hub_channel_directory_route_enriches_entries_best_effort(
     binding_store.upsert_binding(
         surface_kind="discord",
         surface_key="chan-pma",
-        thread_target_id=discord_pma_thread["managed_thread_id"],
+        thread_target_id=discord_managed_thread["managed_thread_id"],
         agent_id="opencode",
         repo_id="work",
         mode="pma",
@@ -233,7 +233,7 @@ def test_hub_channel_directory_route_enriches_entries_best_effort(
     binding_store.upsert_binding(
         surface_kind="telegram",
         surface_key=scoped_key,
-        thread_target_id=telegram_pma_thread["managed_thread_id"],
+        thread_target_id=telegram_managed_thread["managed_thread_id"],
         agent_id="codex",
         repo_id="work",
         mode="pma",
@@ -316,35 +316,35 @@ def test_hub_channel_directory_route_enriches_entries_best_effort(
 
     discord_pma = rows["discord:chan-pma"]
     assert discord_pma["active_thread_id"] == "discord-pma-thread"
-    assert discord_pma["source"] == "pma_thread"
-    assert discord_pma["provenance"]["source"] == "pma_thread"
+    assert discord_pma["source"] == "managed_thread"
+    assert discord_pma["provenance"]["source"] == "managed_thread"
     assert discord_pma["provenance"]["agent"] == "opencode"
     assert (
         discord_pma["provenance"]["managed_thread_id"]
-        == discord_pma_thread["managed_thread_id"]
+        == discord_managed_thread["managed_thread_id"]
     )
     assert (
         discord_pma["provenance"]["managed_thread_id"]
         != discord_pma["active_thread_id"]
     )
-    assert f"pma_thread:{discord_pma_thread['managed_thread_id']}" not in rows
+    assert f"managed_thread:{discord_managed_thread['managed_thread_id']}" not in rows
 
     telegram_pma = rows["telegram:-200:9"]
     assert telegram_pma["active_thread_id"] == "telegram-pma-thread"
-    assert telegram_pma["source"] == "pma_thread"
-    assert telegram_pma["provenance"]["source"] == "pma_thread"
+    assert telegram_pma["source"] == "managed_thread"
+    assert telegram_pma["provenance"]["source"] == "managed_thread"
     assert telegram_pma["provenance"]["agent"] == "codex"
     assert (
         telegram_pma["provenance"]["managed_thread_id"]
-        == telegram_pma_thread["managed_thread_id"]
+        == telegram_managed_thread["managed_thread_id"]
     )
     assert (
         telegram_pma["provenance"]["managed_thread_id"]
         != telegram_pma["active_thread_id"]
     )
-    assert f"pma_thread:{telegram_pma_thread['managed_thread_id']}" not in rows
+    assert f"managed_thread:{telegram_managed_thread['managed_thread_id']}" not in rows
 
-    extra_pma_key = f"pma_thread:{extra_ticket_flow_thread['managed_thread_id']}"
+    extra_pma_key = f"managed_thread:{extra_ticket_flow_thread['managed_thread_id']}"
     assert extra_pma_key in rows
     extra_pma = rows[extra_pma_key]
     assert extra_pma["display"] == "ticket-flow:opencode"
@@ -390,7 +390,7 @@ def test_hub_channel_directory_route_uses_managed_thread_id_for_pma_usage(
         ],
     )
 
-    pma_store = PmaThreadStore(hub_root)
+    pma_store = ManagedThreadStore(hub_root)
     created = pma_store.create_thread(
         "opencode",
         repo.path,
@@ -450,7 +450,7 @@ def test_hub_channel_directory_route_uses_managed_thread_id_for_pma_usage(
     assert response.status_code == 200
     rows = {entry["key"]: entry for entry in response.json()["entries"]}
 
-    standalone_key = f"pma_thread:{managed_thread_id}"
+    standalone_key = f"managed_thread:{managed_thread_id}"
     assert standalone_key in rows
     assert rows[standalone_key]["token_usage"] == {
         "total_tokens": 17,
@@ -507,7 +507,7 @@ def test_hub_channel_directory_route_surfaces_repo_binding_metadata(
     assert row["provenance"]["resource_id"] == "zc-repo"
 
 
-def test_hub_channel_directory_route_includes_pma_managed_threads(
+def test_hub_channel_directory_route_includes_managed_threads(
     tmp_path: Path,
 ) -> None:
     hub_root = tmp_path / "hub"
@@ -520,7 +520,7 @@ def test_hub_channel_directory_route_includes_pma_managed_threads(
         start_point="HEAD",
     )
 
-    store = PmaThreadStore(hub_root)
+    store = ManagedThreadStore(hub_root)
     created = store.create_thread(
         "codex",
         worktree.path,
@@ -539,13 +539,13 @@ def test_hub_channel_directory_route_includes_pma_managed_threads(
     assert response.status_code == 200
     rows = {entry["key"]: entry for entry in response.json()["entries"]}
 
-    pma_key = f"pma_thread:{managed_thread_id}"
+    pma_key = f"managed_thread:{managed_thread_id}"
     assert pma_key in rows
     pma_row = rows[pma_key]
     assert pma_row["repo_id"] == worktree.id
     assert pma_row["workspace_path"] == str(worktree.path)
-    assert pma_row["source"] == "pma_thread"
-    assert pma_row["provenance"]["source"] == "pma_thread"
+    assert pma_row["source"] == "managed_thread"
+    assert pma_row["provenance"]["source"] == "managed_thread"
     assert pma_row["provenance"]["agent"] == "codex"
     assert pma_row["provenance"]["managed_thread_id"] == managed_thread_id
     assert pma_row["provenance"]["thread_kind"] == "ticket_flow"
@@ -590,14 +590,14 @@ def test_hub_channel_directory_route_ignores_repo_mode_binding_for_pma_rows(
         threads={PMA_OPENCODE_KEY: "discord-pma-thread"},
     )
 
-    pma_store = PmaThreadStore(hub_root)
+    pma_store = ManagedThreadStore(hub_root)
     stale_repo_thread = pma_store.create_thread(
         "opencode",
         repo.path,
         repo_id="work",
         name="repo-thread",
     )
-    live_pma_thread = pma_store.create_thread(
+    live_managed_thread = pma_store.create_thread(
         "opencode",
         repo.path,
         repo_id="work",
@@ -621,7 +621,7 @@ def test_hub_channel_directory_route_ignores_repo_mode_binding_for_pma_rows(
                    SET updated_at = ?
                  WHERE thread_target_id = ?
                 """,
-                ("2026-01-01T00:00:05Z", live_pma_thread["managed_thread_id"]),
+                ("2026-01-01T00:00:05Z", live_managed_thread["managed_thread_id"]),
             )
     finally:
         conn.close()
@@ -642,10 +642,10 @@ def test_hub_channel_directory_route_ignores_repo_mode_binding_for_pma_rows(
 
     channel_row = rows["discord:chan-pma"]
     assert channel_row["active_thread_id"] == "discord-pma-thread"
-    assert channel_row["source"] == "pma_thread"
+    assert channel_row["source"] == "managed_thread"
     assert (
         channel_row["provenance"]["managed_thread_id"]
-        == live_pma_thread["managed_thread_id"]
+        == live_managed_thread["managed_thread_id"]
     )
     assert (
         channel_row["provenance"]["managed_thread_id"]
@@ -653,7 +653,7 @@ def test_hub_channel_directory_route_ignores_repo_mode_binding_for_pma_rows(
     )
 
 
-def test_hub_channel_directory_route_keeps_standalone_pending_pma_thread(
+def test_hub_channel_directory_route_keeps_standalone_pending_managed_thread(
     tmp_path: Path,
 ) -> None:
     hub_root = tmp_path / "hub"
@@ -678,7 +678,7 @@ def test_hub_channel_directory_route_keeps_standalone_pending_pma_thread(
         ],
     )
 
-    pma_thread = PmaThreadStore(hub_root).create_thread(
+    managed_thread = ManagedThreadStore(hub_root).create_thread(
         "opencode",
         repo.path,
         repo_id="work",
@@ -687,7 +687,7 @@ def test_hub_channel_directory_route_keeps_standalone_pending_pma_thread(
     OrchestrationBindingStore(hub_root).upsert_binding(
         surface_kind="discord",
         surface_key="chan-pma-pending",
-        thread_target_id=pma_thread["managed_thread_id"],
+        thread_target_id=managed_thread["managed_thread_id"],
         agent_id="opencode",
         repo_id="work",
         mode="pma",
@@ -700,19 +700,19 @@ def test_hub_channel_directory_route_keeps_standalone_pending_pma_thread(
     rows = {entry["key"]: entry for entry in response.json()["entries"]}
 
     channel_row = rows["discord:chan-pma-pending"]
-    assert channel_row["source"] == "pma_thread"
+    assert channel_row["source"] == "managed_thread"
     assert channel_row.get("active_thread_id") is None
     assert channel_row["channel_status"] == "clean"
     assert (
         channel_row["provenance"]["managed_thread_id"]
-        == pma_thread["managed_thread_id"]
+        == managed_thread["managed_thread_id"]
     )
 
-    standalone_key = f"pma_thread:{pma_thread['managed_thread_id']}"
+    standalone_key = f"managed_thread:{managed_thread['managed_thread_id']}"
     assert standalone_key in rows
     standalone_row = rows[standalone_key]
-    assert standalone_row["source"] == "pma_thread"
-    assert standalone_row["active_thread_id"] == pma_thread["managed_thread_id"]
+    assert standalone_row["source"] == "managed_thread"
+    assert standalone_row["active_thread_id"] == managed_thread["managed_thread_id"]
 
 
 def test_hub_channel_directory_route_uses_profiled_pma_registry_key(
@@ -747,7 +747,7 @@ def test_hub_channel_directory_route_uses_profiled_pma_registry_key(
         },
     )
 
-    pma_thread = PmaThreadStore(hub_root).create_thread(
+    managed_thread = ManagedThreadStore(hub_root).create_thread(
         "hermes",
         repo.path,
         repo_id="work",
@@ -761,15 +761,15 @@ def test_hub_channel_directory_route_uses_profiled_pma_registry_key(
     rows = {entry["key"]: entry for entry in response.json()["entries"]}
 
     channel_row = rows["discord:chan-hermes"]
-    assert channel_row["source"] == "pma_thread"
+    assert channel_row["source"] == "managed_thread"
     assert channel_row["active_thread_id"] == "discord-hermes-pma-thread"
     assert channel_row["provenance"]["agent"] == "hermes"
     assert (
         channel_row["provenance"]["managed_thread_id"]
-        == pma_thread["managed_thread_id"]
+        == managed_thread["managed_thread_id"]
     )
 
-    standalone_key = f"pma_thread:{pma_thread['managed_thread_id']}"
+    standalone_key = f"managed_thread:{managed_thread['managed_thread_id']}"
     assert standalone_key not in rows
 
 
@@ -802,7 +802,7 @@ def test_hub_channel_directory_route_falls_back_unknown_agents_to_codex_pma_key(
         threads={pma_base_key("codex", None): "discord-codex-pma-thread"},
     )
 
-    pma_thread = PmaThreadStore(hub_root).create_thread(
+    managed_thread = ManagedThreadStore(hub_root).create_thread(
         "codex",
         repo.path,
         repo_id="work",
@@ -815,13 +815,13 @@ def test_hub_channel_directory_route_falls_back_unknown_agents_to_codex_pma_key(
     rows = {entry["key"]: entry for entry in response.json()["entries"]}
 
     channel_row = rows["discord:chan-stale-agent"]
-    assert channel_row["source"] == "pma_thread"
+    assert channel_row["source"] == "managed_thread"
     assert channel_row["active_thread_id"] == "discord-codex-pma-thread"
     assert channel_row["provenance"]["agent"] == "codex"
     assert (
         channel_row["provenance"]["managed_thread_id"]
-        == pma_thread["managed_thread_id"]
+        == managed_thread["managed_thread_id"]
     )
 
-    standalone_key = f"pma_thread:{pma_thread['managed_thread_id']}"
+    standalone_key = f"managed_thread:{managed_thread['managed_thread_id']}"
     assert standalone_key not in rows

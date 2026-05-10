@@ -12,7 +12,7 @@ const projection = (agent_id: string, allowed: boolean, reason: string | null = 
 
 const view = buildSettingsViewModel({
   session: {
-    autorunner_model_override: 'gpt-5.4',
+    autorunner_model_overrides: { codex: 'gpt-5.4' },
     autorunner_effort_override: 'medium',
     autorunner_approval_policy: 'never',
     autorunner_sandbox_mode: 'dangerFullAccess',

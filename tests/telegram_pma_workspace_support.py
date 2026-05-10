@@ -10,7 +10,7 @@ import pytest
 from codex_autorunner.adapters.app_server.client import (
     CodexAppServerResponseError,
 )
-from codex_autorunner.adapters.telegram.adapter import TelegramMessage
+from codex_autorunner.adapters.telegram.client import TelegramMessage
 from codex_autorunner.adapters.telegram.handlers.commands import (
     build_command_specs,
 )
@@ -35,7 +35,7 @@ from codex_autorunner.core.managed_thread_identity import (
     AppServerThreadRegistry,
 )
 from codex_autorunner.core.pma_context import default_pma_prompt_state_path
-from tests.telegram_pma_managed_thread_support import (
+from tests.telegram_managed_thread_support import (
     _InProcessHubControlPlaneClient,
     _PMAClientStub,
     _PMAHandler,

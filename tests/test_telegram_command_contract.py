@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from codex_autorunner.adapters.telegram.adapter import (
+from codex_autorunner.adapters.telegram.client import (
     TelegramCommand,
     parse_command,
 )

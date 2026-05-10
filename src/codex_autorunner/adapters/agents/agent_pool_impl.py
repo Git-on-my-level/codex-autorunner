@@ -19,6 +19,7 @@ from ...agents.registry import (
     wrap_requested_agent_context,
 )
 from ...core.flows.models import FlowEventType
+from ...core.managed_thread_store import ManagedThreadStore
 from ...core.orchestration import (
     MessageRequest,
     build_harness_backed_orchestration_service,
@@ -37,7 +38,6 @@ from ...core.orchestration.turn_timeline import (
     append_turn_events_to_cold_trace,
     persist_turn_timeline,
 )
-from ...core.pma_thread_store import PmaThreadStore
 from ...core.ports.run_event import (
     Completed,
     Failed,
@@ -174,7 +174,7 @@ class DefaultAgentPool:
         self._repo_root = Path(getattr(config, "root", Path.cwd())).resolve()
         self._hub_root = _find_hub_root(self._repo_root)
         self._repo_id = self._resolve_repo_id()
-        self._thread_store = PmaThreadStore(self._hub_root)
+        self._thread_store = ManagedThreadStore(self._hub_root)
         self._execution_emitters: dict[str, Optional[EmitEventFn]] = {}
         self._execution_waiters: dict[str, asyncio.Future[AgentTurnResult]] = {}
         self._thread_workers: dict[str, asyncio.Task[None]] = {}
@@ -300,7 +300,7 @@ class DefaultAgentPool:
         self._orchestration_service = build_harness_backed_orchestration_service(
             descriptors=cast(Any, descriptors),
             harness_factory=_make_harness,
-            pma_thread_store=self._thread_store,
+            managed_thread_store=self._thread_store,
         )
         return self._orchestration_service
 

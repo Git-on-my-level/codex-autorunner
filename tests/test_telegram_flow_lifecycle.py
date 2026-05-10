@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from codex_autorunner.adapters.telegram.adapter import TelegramMessage
+from codex_autorunner.adapters.telegram.client import TelegramMessage
 from codex_autorunner.adapters.telegram.handlers.commands import (
     flows as flows_module,
 )

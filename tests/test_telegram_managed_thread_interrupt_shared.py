@@ -16,7 +16,7 @@ from codex_autorunner.core.orchestration.chat_operation_ledger import (
 from codex_autorunner.core.orchestration.chat_operation_state import (
     ChatOperationState,
 )
-from tests.telegram_pma_managed_thread_support import _ManagedThreadPMAHandler
+from tests.telegram_managed_thread_support import _ManagedThreadPMAHandler
 
 
 @pytest.mark.anyio

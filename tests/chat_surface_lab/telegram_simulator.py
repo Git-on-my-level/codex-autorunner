@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
-from codex_autorunner.adapters.telegram.adapter import (
+from codex_autorunner.adapters.telegram.client import (
     TelegramAPIError,
     TelegramUpdate,
     chunk_message,

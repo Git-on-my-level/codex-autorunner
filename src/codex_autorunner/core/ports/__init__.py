@@ -21,12 +21,6 @@ from .surface_port import (
     SurfaceHealthStatus,
     SurfacePort,
 )
-from .surface_port_registry import (
-    SurfacePortNotFoundError,
-    SurfacePortRegistrationError,
-    SurfacePortRegistry,
-    build_default_surface_registry,
-)
 from .thread_store import ThreadRecord, ThreadStatus, ThreadStore
 from .ticket_store import TicketRecord, TicketStatus, TicketStore
 
@@ -53,9 +47,6 @@ __all__ = [
     "SurfaceHealth",
     "SurfaceHealthStatus",
     "SurfacePort",
-    "SurfacePortNotFoundError",
-    "SurfacePortRegistrationError",
-    "SurfacePortRegistry",
     "ThreadRecord",
     "ThreadStatus",
     "ThreadStore",
@@ -64,6 +55,5 @@ __all__ = [
     "TicketStore",
     "TokenUsage",
     "ToolCall",
-    "build_default_surface_registry",
     "now_iso",
 ]

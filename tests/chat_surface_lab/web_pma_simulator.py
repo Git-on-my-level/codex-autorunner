@@ -15,8 +15,8 @@ from codex_autorunner.core.config import (
     DEFAULT_HUB_CONFIG,
     load_hub_config,
 )
+from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration.turn_timeline import persist_turn_timeline
-from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.ports.run_event import ApprovalRequested, RunNotice
 from codex_autorunner.manifest import load_manifest, save_manifest
 from codex_autorunner.server import create_hub_app
@@ -100,7 +100,7 @@ class WebPmaSurfaceSimulator:
     ) -> dict[str, Any]:
         managed_thread_id = self._require_thread()
         _ = wait_for_confirmation, busy_policy
-        store = PmaThreadStore(self.hub.hub_root)
+        store = ManagedThreadStore(self.hub.hub_root)
         turn = store.create_turn(managed_thread_id, prompt=message)
         self.managed_turn_id = str(turn.get("managed_turn_id") or "")
         assistant_text = "fixture reply"
@@ -440,5 +440,5 @@ def _build_test_hub(root: Path) -> WebPmaTestHub:
     manifest = load_manifest(hub_config.manifest_path, hub_root)
     manifest.ensure_repo(hub_root, repo_root, repo_id=repo_id, display_name=repo_id)
     save_manifest(hub_config.manifest_path, manifest, hub_root)
-    PmaThreadStore(hub_root)
+    ManagedThreadStore(hub_root)
     return WebPmaTestHub(hub_root=hub_root, repo_id=repo_id, repo_root=repo_root)

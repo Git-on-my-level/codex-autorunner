@@ -1,6 +1,6 @@
 import pytest
 
-from codex_autorunner.adapters.telegram.adapter import (
+from codex_autorunner.adapters.telegram.client import (
     DocumentBrowserCallback,
     TelegramCallbackQuery,
     encode_agent_callback,

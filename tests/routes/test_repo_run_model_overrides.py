@@ -38,7 +38,6 @@ def test_run_model_override_is_scoped_to_selected_agent(tmp_path) -> None:
         "codex": "gpt-5.5",
         "opencode": "zai/settings-default",
     }
-    assert state.autorunner_model_override == "gpt-5.5"
 
 
 def test_run_model_override_clears_only_selected_agent(tmp_path) -> None:
@@ -61,4 +60,3 @@ def test_run_model_override_clears_only_selected_agent(tmp_path) -> None:
 
     state = load_state(state_path)
     assert state.autorunner_model_overrides == {"codex": "gpt-5.5"}
-    assert state.autorunner_model_override == "gpt-5.5"

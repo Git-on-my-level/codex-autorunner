@@ -13,7 +13,7 @@ from codex_autorunner.adapters.discord.message_turns import (
     _resolve_discord_turn_policies,
 )
 from codex_autorunner.adapters.discord.service import DiscordBotService
-from codex_autorunner.adapters.telegram.adapter import TelegramMessage
+from codex_autorunner.adapters.telegram.client import TelegramMessage
 from codex_autorunner.adapters.telegram.config import TelegramBotDefaults
 from codex_autorunner.adapters.telegram.handlers.commands.approvals import (
     ApprovalsCommands,

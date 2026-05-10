@@ -25,19 +25,6 @@ def test_classify_web_ui_lane_for_web_paths() -> None:
     assert selection.lanes_touched == ("web-ui",)
 
 
-def test_deleted_legacy_ui_paths_no_longer_select_web_ui_lane() -> None:
-    selection = classify_changed_files(
-        ["src/codex_autorunner/static_src/updateTargets.ts"]
-    )
-
-    assert selection.lane == "aggregate"
-    assert selection.reason == "unknown-path"
-    assert selection.lanes_touched == ()
-    assert selection.unknown_paths == (
-        "src/codex_autorunner/static_src/updateTargets.ts",
-    )
-
-
 def test_classify_chat_apps_lane_for_chat_paths() -> None:
     selection = classify_changed_files(["tests/test_telegram_flow_status.py"])
 

@@ -10,7 +10,7 @@ _CHECKS: list[tuple[str, str, str]] = [
     (
         "config_validation",
         "import codex_autorunner.core.config_validation as _m",
-        "_m._normalize_ticket_flow_approval_mode('safe', scope='x')",
+        "_m._normalize_ticket_flow_approval_mode('review', scope='x')",
     ),
     (
         "config_parsers",

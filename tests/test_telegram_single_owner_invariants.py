@@ -25,7 +25,7 @@ from typing import Any, Optional
 
 import pytest
 
-from codex_autorunner.adapters.telegram.adapter import (
+from codex_autorunner.adapters.telegram.client import (
     TelegramDocument,
     TelegramForwardOrigin,
     TelegramMessage,
@@ -884,7 +884,7 @@ class TestSessionRecoveryInvariants:
         from codex_autorunner.core.orchestration.runtime_bindings import (
             clear_runtime_thread_binding,
         )
-        from tests import telegram_pma_managed_thread_support as support
+        from tests import telegram_managed_thread_support as support
 
         support.patch_sqlite_connection_cache(monkeypatch)
 
@@ -954,7 +954,7 @@ class TestSessionRecoveryInvariants:
     async def test_consecutive_turns_without_restart_do_not_emit_recovery_notice(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from tests import telegram_pma_managed_thread_support as support
+        from tests import telegram_managed_thread_support as support
 
         support.patch_sqlite_connection_cache(monkeypatch)
 

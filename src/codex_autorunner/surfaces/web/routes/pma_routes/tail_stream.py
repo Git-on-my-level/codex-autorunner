@@ -13,6 +13,7 @@ from .....agents.base import (
     harness_progress_event_stream,
     harness_supports_event_streaming,
 )
+from .....core.managed_thread_store import ManagedThreadStore
 from .....core.orchestration.managed_thread_timeline import (
     timeline_item_from_tail_event,
 )
@@ -21,7 +22,6 @@ from .....core.orchestration.runtime_thread_events import (
     RuntimeThreadRunEventState,
 )
 from .....core.orchestration.turn_timeline import list_turn_timeline
-from .....core.pma_thread_store import PmaThreadStore
 from ...services.pma import get_pma_request_context
 from ..shared import SSE_HEADERS
 from .automation_adapter import normalize_optional_text
@@ -136,7 +136,7 @@ def _managed_thread_harness(service: Any, agent_id: str) -> Any:
 def _load_managed_thread_tail_store_state(
     *,
     hub_root: Path,
-    thread_store: PmaThreadStore,
+    thread_store: ManagedThreadStore,
     service: Any,
     managed_thread_id: str,
 ) -> tuple[Any, Any, list[dict[str, Any]], Any]:
@@ -165,7 +165,7 @@ def _load_managed_thread_tail_store_state(
 def _load_managed_thread_status_state(
     *,
     service: Any,
-    thread_store: PmaThreadStore,
+    thread_store: ManagedThreadStore,
     managed_thread_id: str,
     limit: int,
 ) -> tuple[Any, dict[str, Any] | None, list[dict[str, Any]], int]:

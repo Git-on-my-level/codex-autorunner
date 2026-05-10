@@ -21,8 +21,8 @@ from .....adapters.chat.agents import (
     resolve_chat_agent_and_profile,
 )
 from .....core.logging_utils import safe_log
+from .....core.managed_thread_store import ManagedThreadStore
 from .....core.orchestration.sqlite import resolve_orchestration_sqlite_path
-from .....core.pma_thread_store import PmaThreadStore
 from .....core.text_utils import _coerce_int as _standalone_coerce_int
 from .....core.usage import get_repo_session_usage_ledger
 
@@ -631,7 +631,7 @@ def read_orchestration_bindings(
                 )
 
 
-def read_active_pma_threads(
+def read_active_managed_threads(
     hub_root: Path,
     repo_id_by_workspace: dict[str, str],
     *,
@@ -642,7 +642,7 @@ def read_active_pma_threads(
         return []
     try:
         threads: list[dict[str, Any]] = []
-        for row in PmaThreadStore(hub_root).list_threads(status="active"):
+        for row in ManagedThreadStore(hub_root).list_threads(status="active"):
             managed_thread_id = row.get("managed_thread_id")
             if not isinstance(managed_thread_id, str) or not managed_thread_id.strip():
                 continue

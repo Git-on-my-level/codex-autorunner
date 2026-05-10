@@ -23,7 +23,7 @@ from ....adapters.discord.config import (
     DEFAULT_BOT_TOKEN_ENV as DEFAULT_DISCORD_BOT_TOKEN_ENV,
 )
 from ....adapters.discord.rest import DiscordRestClient
-from ....adapters.telegram.adapter import TelegramBotClient
+from ....adapters.telegram.client import TelegramBotClient
 from ....adapters.telegram.state_types import parse_topic_key
 from ....core.config import ConfigError, load_hub_config
 from ....core.orchestration.sqlite import resolve_orchestration_sqlite_path

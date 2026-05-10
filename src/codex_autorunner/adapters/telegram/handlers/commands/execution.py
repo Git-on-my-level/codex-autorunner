@@ -238,8 +238,8 @@ class _TurnDeliveryState:
 @dataclass(frozen=True)
 class _TelegramTurnThreadContext:
     thread_id: Optional[str]
-    pma_thread_registry: Optional[AppServerThreadRegistry]
-    pma_thread_key: Optional[str]
+    managed_thread_registry: Optional[AppServerThreadRegistry]
+    managed_thread_key: Optional[str]
 
 
 def _try_append_turn_journal(
@@ -398,19 +398,19 @@ def _resolve_telegram_turn_thread_context(
     message: TelegramMessage,
     pma_enabled: bool,
 ) -> _TelegramTurnThreadContext:
-    pma_thread_registry = (
+    managed_thread_registry = (
         getattr(handlers, "_hub_thread_registry", None) if pma_enabled else None
     )
-    pma_thread_key = (
+    managed_thread_key = (
         handlers._pma_registry_key(record, message) if pma_enabled else None
     )
     thread_id = None if pma_enabled else record.active_thread_id
-    if pma_enabled and pma_thread_registry and pma_thread_key:
-        thread_id = pma_thread_registry.get_thread_id(pma_thread_key)
+    if pma_enabled and managed_thread_registry and managed_thread_key:
+        thread_id = managed_thread_registry.get_thread_id(managed_thread_key)
     return _TelegramTurnThreadContext(
         thread_id=thread_id,
-        pma_thread_registry=pma_thread_registry,
-        pma_thread_key=pma_thread_key,
+        managed_thread_registry=managed_thread_registry,
+        managed_thread_key=managed_thread_key,
     )
 
 
@@ -421,8 +421,8 @@ async def _start_telegram_compatibility_thread(
     message: TelegramMessage,
     record: "TelegramTopicRecord",
     pma_mode: bool,
-    pma_thread_registry: Optional[AppServerThreadRegistry],
-    pma_thread_key: Optional[str],
+    managed_thread_registry: Optional[AppServerThreadRegistry],
+    managed_thread_key: Optional[str],
 ) -> tuple["TelegramTopicRecord", Optional[str]]:
     workspace_path = record.workspace_path
     if not workspace_path:
@@ -438,8 +438,8 @@ async def _start_telegram_compatibility_thread(
     new_thread_id = _extract_thread_id(thread)
     if not new_thread_id:
         return record, None
-    if pma_mode and pma_thread_registry and pma_thread_key:
-        pma_thread_registry.set_thread_id(pma_thread_key, new_thread_id)
+    if pma_mode and managed_thread_registry and managed_thread_key:
+        managed_thread_registry.set_thread_id(managed_thread_key, new_thread_id)
         return record, new_thread_id
     updated_record = await handlers._apply_thread_result(
         message.chat_id,
@@ -2014,8 +2014,8 @@ class ExecutionCommands(TelegramCommandSupportMixin):
         missing_thread_message: Optional[str],
         transcript_message_id: Optional[int],
         transcript_text: Optional[str],
-        pma_thread_registry: Optional[AppServerThreadRegistry] = None,
-        pma_thread_key: Optional[str] = None,
+        managed_thread_registry: Optional[AppServerThreadRegistry] = None,
+        managed_thread_key: Optional[str] = None,
     ) -> _TurnRunResult | _TurnRunFailure:
         supervisor = getattr(self, "_opencode_supervisor", None)
         turn_delivery_state = _TurnDeliveryState()
@@ -2069,7 +2069,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                 transcript_text=transcript_text,
             )
 
-        pma_mode = bool(pma_thread_registry and pma_thread_key)
+        pma_mode = bool(managed_thread_registry and managed_thread_key)
         try:
             if not thread_id:
                 if not allow_new_thread:
@@ -2115,7 +2115,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                     )
 
                 if pma_mode:
-                    pma_thread_registry.set_thread_id(pma_thread_key, thread_id)
+                    managed_thread_registry.set_thread_id(managed_thread_key, thread_id)
                 else:
                     record = await self._router.update_topic(
                         message.chat_id, message.thread_id, apply
@@ -2587,8 +2587,8 @@ class ExecutionCommands(TelegramCommandSupportMixin):
         missing_thread_message: Optional[str],
         transcript_message_id: Optional[int],
         transcript_text: Optional[str],
-        pma_thread_registry: Optional[AppServerThreadRegistry] = None,
-        pma_thread_key: Optional[str] = None,
+        managed_thread_registry: Optional[AppServerThreadRegistry] = None,
+        managed_thread_key: Optional[str] = None,
     ) -> _TurnRunResult | _TurnRunFailure:
         turn_handle = None
         turn_key: Optional[TurnKey] = None
@@ -2637,7 +2637,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                 transcript_text=transcript_text,
             )
 
-        pma_mode = bool(pma_thread_registry and pma_thread_key)
+        pma_mode = bool(managed_thread_registry and managed_thread_key)
         try:
             if not thread_id:
                 if not allow_new_thread:
@@ -2659,8 +2659,8 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                     message=message,
                     record=record,
                     pma_mode=pma_mode,
-                    pma_thread_registry=pma_thread_registry,
-                    pma_thread_key=pma_thread_key,
+                    managed_thread_registry=managed_thread_registry,
+                    managed_thread_key=managed_thread_key,
                 )
                 if not thread_id:
                     return await self._maybe_send_failure(
@@ -2793,8 +2793,8 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                     if (
                         pma_mode
                         and _is_missing_thread_error(exc)
-                        and pma_thread_registry
-                        and pma_thread_key
+                        and managed_thread_registry
+                        and managed_thread_key
                     ):
                         log_event(
                             self._logger,
@@ -2806,7 +2806,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                             codex_thread_id=thread_id,
                             reason="thread_not_found",
                         )
-                        pma_thread_registry.reset_thread(pma_thread_key)
+                        managed_thread_registry.reset_thread(managed_thread_key)
                         if not allow_new_thread:
                             failure_message = (
                                 "PMA thread no longer exists. Send a new message to "
@@ -2827,8 +2827,8 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                             message=message,
                             record=record,
                             pma_mode=pma_mode,
-                            pma_thread_registry=pma_thread_registry,
-                            pma_thread_key=pma_thread_key,
+                            managed_thread_registry=managed_thread_registry,
+                            managed_thread_key=managed_thread_key,
                         )
                         if thread_id is None:
                             raise
@@ -3356,8 +3356,8 @@ class ExecutionCommands(TelegramCommandSupportMixin):
             message=message,
             pma_enabled=pma_enabled,
         )
-        pma_thread_registry = thread_context.pma_thread_registry
-        pma_thread_key = thread_context.pma_thread_key
+        managed_thread_registry = thread_context.managed_thread_registry
+        managed_thread_key = thread_context.managed_thread_key
         thread_id = thread_context.thread_id
         prompt_text = (
             text_override if text_override is not None else (message.text or "")
@@ -3498,6 +3498,6 @@ class ExecutionCommands(TelegramCommandSupportMixin):
             missing_thread_message=missing_thread_message,
             transcript_message_id=transcript_message_id,
             transcript_text=transcript_text,
-            pma_thread_registry=pma_thread_registry,
-            pma_thread_key=pma_thread_key,
+            managed_thread_registry=managed_thread_registry,
+            managed_thread_key=managed_thread_key,
         )

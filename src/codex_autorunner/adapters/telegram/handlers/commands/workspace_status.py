@@ -140,10 +140,14 @@ class WorkspaceStatusMixin:
             if registry and hasattr(self, "_pma_registry_key"):
                 try:
                     pma_key = self._pma_registry_key(record, message)
-                    pma_thread_id = registry.get_thread_id(pma_key) if pma_key else None
+                    managed_thread_id = (
+                        registry.get_thread_id(pma_key) if pma_key else None
+                    )
                     require_topics = getattr(self._config, "require_topics", False)
                     scoping = "per-topic" if require_topics else "global (per hub)"
-                    lines.append(f"PMA thread: {pma_thread_id or 'none'} ({scoping})")
+                    lines.append(
+                        f"PMA thread: {managed_thread_id or 'none'} ({scoping})"
+                    )
                 except (OSError, RuntimeError, ValueError, KeyError):
                     self._logger.debug(
                         "status: pma registry lookup failed", exc_info=True

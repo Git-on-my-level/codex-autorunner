@@ -11,9 +11,9 @@ from codex_autorunner.adapters.discord.state import DiscordStateStore
 from codex_autorunner.adapters.telegram.state import TelegramStateStore, topic_key
 from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
+from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration import OrchestrationBindingStore
 from codex_autorunner.core.pma_automation_store import PmaAutomationStore
-from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.surfaces.web.routes.pma_routes.publish import (
     publish_automation_result,
 )
@@ -46,7 +46,7 @@ class SubscriptionDispatchHarness:
         cfg["telegram_bot"]["enabled"] = True
         write_test_config(self.hub_root / CONFIG_FILENAME, cfg)
         self._workspaces: dict[str, Path] = {}
-        self.thread_store = PmaThreadStore(self.hub_root)
+        self.thread_store = ManagedThreadStore(self.hub_root)
         self.binding_store = OrchestrationBindingStore(self.hub_root)
         self.automation_store = PmaAutomationStore(self.hub_root)
 

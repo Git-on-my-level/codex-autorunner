@@ -18,7 +18,7 @@ from ..chat.collaboration_policy import (
     CollaborationPolicyError,
     build_telegram_collaboration_policy,
 )
-from .adapter import TelegramAllowlist
+from .client import TelegramAllowlist
 from .constants import (
     CACHE_CLEANUP_INTERVAL_SECONDS,
     COALESCE_BUFFER_TTL_SECONDS,
@@ -597,14 +597,24 @@ class TelegramBotConfig:
             )
 
         app_server_command_env = (
-            str(cfg.get("app_server_command_env", "CAR_APP_SERVER_COMMAND")).strip()
-            or "CAR_APP_SERVER_COMMAND"
+            str(
+                cfg.get("app_server_command_env", "CAR_CODEX_APP_SERVER_COMMAND")
+            ).strip()
+            or "CAR_CODEX_APP_SERVER_COMMAND"
         )
-        telegram_env_names = (app_server_command_env, "CAR_TELEGRAM_APP_SERVER_COMMAND")
+        telegram_app_server_command_env = (
+            str(
+                cfg.get(
+                    "telegram_app_server_command_env",
+                    "CAR_TELEGRAM_APP_SERVER_COMMAND",
+                )
+            ).strip()
+            or "CAR_TELEGRAM_APP_SERVER_COMMAND"
+        )
         app_server_command = resolve_app_server_command_with_source(
             cfg.get("app_server_command"),
             env=env,
-            env_names=telegram_env_names,
+            env_names=(telegram_app_server_command_env, app_server_command_env),
             ignored_env_names=(),
             fallback=DEFAULT_APP_SERVER_COMMAND,
         ).command

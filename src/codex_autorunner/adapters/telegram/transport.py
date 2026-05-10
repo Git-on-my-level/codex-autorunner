@@ -7,7 +7,7 @@ from typing import Any, Optional
 from ...core.logging_utils import log_event
 from ...core.orchestration import ChatOperationState
 from ...core.state import now_iso
-from .adapter import TelegramAPIError, TelegramCallbackQuery
+from .client import TelegramAPIError, TelegramCallbackQuery
 from .constants import PLACEHOLDER_TEXT, TELEGRAM_MAX_MESSAGE_LENGTH
 from .helpers import (
     _format_turn_metrics,

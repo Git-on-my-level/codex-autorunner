@@ -9,8 +9,8 @@ from typing import Any, Awaitable, Callable, Mapping, Optional
 from ..car_context import CarContextProfile, normalize_car_context_profile
 from ..domain.refs import ScopeRef
 from ..logging_utils import log_event
+from ..managed_thread_store import ManagedThreadStore
 from ..pma_automation_store import PmaAutomationStore
-from ..pma_thread_store import PmaThreadStore
 from ..text_utils import _truncate_text
 from .bindings import ActiveWorkSummary, OrchestrationBindingStore
 from .catalog import MappingAgentDefinitionCatalog, RuntimeAgentDescriptor
@@ -84,7 +84,7 @@ def _thread_target_from_store_row(record: Mapping[str, Any]) -> ThreadTarget:
 
 
 def _thread_target_from_store_row_with_runtime_binding(
-    store: PmaThreadStore, record: Mapping[str, Any]
+    store: ManagedThreadStore, record: Mapping[str, Any]
 ) -> ThreadTarget:
     thread_record = dict(record)
     managed_thread_id = str(thread_record.get("managed_thread_id") or "").strip()
@@ -160,10 +160,10 @@ def _execution_record_from_store_row(record: Mapping[str, Any]) -> ExecutionReco
     return ExecutionRecord.from_mapping(record)
 
 
-class PmaThreadExecutionStore(ThreadExecutionStore):
+class ManagedThreadExecutionStore(ThreadExecutionStore):
     """Adapter that hides PMA thread-store details behind orchestration nouns."""
 
-    def __init__(self, store: PmaThreadStore) -> None:
+    def __init__(self, store: ManagedThreadStore) -> None:
         self._store = store
         self._execution_results = ExecutionResultCoordinator(
             get_execution=self.get_execution,
@@ -1739,20 +1739,20 @@ def build_harness_backed_orchestration_service(
     descriptors: Mapping[str, RuntimeAgentDescriptor],
     harness_factory: HarnessFactory,
     thread_store: Optional[ThreadExecutionStore] = None,
-    pma_thread_store: Optional[PmaThreadStore] = None,
+    managed_thread_store: Optional[ManagedThreadStore] = None,
     definition_catalog: Optional[AgentDefinitionCatalog] = None,
     binding_store: Optional[OrchestrationBindingStore] = None,
 ) -> HarnessBackedOrchestrationService:
     """Build the default runtime-thread orchestration service for current PMA state."""
 
     if thread_store is None:
-        if pma_thread_store is None:
-            raise ValueError("thread_store or pma_thread_store is required")
-        thread_store = PmaThreadExecutionStore(pma_thread_store)
+        if managed_thread_store is None:
+            raise ValueError("thread_store or managed_thread_store is required")
+        thread_store = ManagedThreadExecutionStore(managed_thread_store)
     if definition_catalog is None:
         definition_catalog = MappingAgentDefinitionCatalog(descriptors)
-    if binding_store is None and pma_thread_store is not None:
-        hub_root = getattr(pma_thread_store, "_hub_root", None)
+    if binding_store is None and managed_thread_store is not None:
+        hub_root = getattr(managed_thread_store, "_hub_root", None)
         if isinstance(hub_root, Path):
             binding_store = OrchestrationBindingStore(hub_root)
     return HarnessBackedOrchestrationService(
@@ -1780,7 +1780,7 @@ __all__ = [
     "FlowBackedOrchestrationService",
     "HarnessBackedOrchestrationService",
     "MessagePreviewLimit",
-    "PmaThreadExecutionStore",
+    "ManagedThreadExecutionStore",
     "SurfaceIngressResult",
     "SurfaceOrchestrationIngress",
     "build_harness_backed_orchestration_service",

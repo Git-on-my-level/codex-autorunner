@@ -25,7 +25,7 @@ from .hub_topology import (
     RepoTopologyRecord,
     load_hub_state,
     normalize_pinned_parent_repo_ids,
-    refresh_pma_threads_artifact,
+    refresh_managed_threads_artifact,
     save_hub_state,
 )
 from .hub_worktree_manager import WorktreeManager
@@ -302,7 +302,7 @@ class HubSupervisor:
             records=records,
         )
         save_hub_state(self.state_path, self.state, self.hub_config.root)
-        refresh_pma_threads_artifact(self.hub_config.root)
+        refresh_managed_threads_artifact(self.hub_config.root)
         return list(self.state.repos)
 
     def list_repos(self, *, use_cache: bool = True) -> List[RepoSnapshot]:
@@ -488,13 +488,13 @@ class HubSupervisor:
             repo_id_hint=repo_id_hint,
         )
 
-    def _archive_bound_pma_threads(
+    def _archive_bound_managed_threads(
         self,
         *,
         worktree_repo_id: str,
         worktree_path: Path,
     ) -> list[str]:
-        return self._worktree_manager._archive_bound_pma_threads(
+        return self._worktree_manager._archive_bound_managed_threads(
             worktree_repo_id=worktree_repo_id,
             worktree_path=worktree_path,
         )

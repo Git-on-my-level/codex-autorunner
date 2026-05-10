@@ -207,18 +207,6 @@ def test_pma_index_csp_allows_sveltekit_bootstrap(tmp_path):
     assert "'unsafe-inline'" not in pma_csp.split("script-src", 1)[1].split(";", 1)[0]
 
 
-def test_legacy_hub_ui_env_flag_has_no_effect(tmp_path, monkeypatch):
-    hub_root = tmp_path / "hub"
-    seed_hub_files(hub_root, force=True)
-    monkeypatch.setenv("CAR_ENABLE_LEGACY_UI", "1")
-    client = TestClient(create_hub_app(hub_root))
-
-    legacy_response = client.get("/legacy")
-    legacy_static_response = client.get("/static/generated/app.js")
-    assert legacy_response.status_code == 404
-    assert legacy_static_response.status_code == 404
-
-
 def test_inline_script_hashes_match_mixed_case_script_tags():
     assert _inline_script_hashes("<SCRIPT>alpha()</SCRIPT>") == [
         _script_hash("alpha()")
@@ -277,25 +265,6 @@ def test_repo_mount_frontend_routes_redirect_to_pma_by_default(hub_env):
 
     legacy_terminal = client.get(f"/legacy/repos/{repo_id}/terminal")
     assert legacy_terminal.status_code == 404
-
-
-def test_repo_mount_legacy_reference_routes_stay_removed_with_env_flag(
-    hub_env, monkeypatch
-):
-    monkeypatch.setenv("CAR_ENABLE_LEGACY_UI", "1")
-    client = TestClient(create_hub_app(hub_env.hub_root), follow_redirects=False)
-    repo_id = hub_env.repo_id
-
-    legacy_prompt = client.get(f"/repos/{repo_id}/terminal")
-    assert legacy_prompt.status_code == 307
-    assert legacy_prompt.headers["location"] == f"/repos/{repo_id}"
-
-    legacy_terminal = client.get(f"/legacy/repos/{repo_id}/terminal")
-    assert legacy_terminal.status_code == 404
-
-    query_opt_in = client.get(f"/repos/{repo_id}/terminal?legacy=1&debug=1")
-    assert query_opt_in.status_code == 307
-    assert query_opt_in.headers["location"] == f"/repos/{repo_id}"
 
 
 def test_pma_index_base_path_rewrites_asset_urls(tmp_path):

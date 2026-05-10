@@ -9,7 +9,7 @@ from typing import Any, Callable, Optional
 
 import typer
 
-from ....adapters.telegram.adapter import TelegramAPIError, TelegramBotClient
+from ....adapters.telegram.client import TelegramAPIError, TelegramBotClient
 from ....adapters.telegram.service import (
     TelegramBotConfig,
     TelegramBotConfigError,

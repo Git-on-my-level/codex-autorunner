@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from typing import Optional
 
 from ..chat.collaboration_policy import CollaborationEvaluationResult
-from .adapter import TelegramMessage
+from .client import TelegramMessage
 
 
 def collaboration_probe_text(bot_username: Optional[str]) -> str:

@@ -1,8 +1,7 @@
 """Single source of truth for agent model defaults.
 
 Settings-backed model defaults are per agent because model catalogs are not
-portable across runtimes. The historical ``autorunner_model_override`` field is
-accepted only as a Codex legacy alias; do not treat it as a global default.
+portable across runtimes.
 """
 
 from __future__ import annotations
@@ -30,10 +29,6 @@ def _state_default_model(agent: str, state: Any) -> Optional[str]:
         model = _normalize_optional_text(raw_overrides.get(agent))
         if model:
             return model
-    if agent == "codex":
-        return _normalize_optional_text(
-            getattr(state, "autorunner_model_override", None)
-        )
     return None
 
 

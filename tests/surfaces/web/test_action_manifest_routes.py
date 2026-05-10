@@ -65,7 +65,7 @@ def test_ticket_flow_action_manifest_route_shape(tmp_path: Path, monkeypatch) ->
     assert restart["route"] == "/api/flows/run-1/restart"
 
 
-def test_pma_thread_action_manifest_route_shape(monkeypatch) -> None:
+def test_managed_thread_action_manifest_route_shape(monkeypatch) -> None:
     class Store:
         def get_thread(self, managed_thread_id: str):
             assert managed_thread_id == "thread-1"

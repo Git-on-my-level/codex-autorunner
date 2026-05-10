@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
-from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.publish_executor import PublishOperationProcessor
 from codex_autorunner.core.publish_journal import PublishJournalStore
 from codex_autorunner.core.publish_operation_executors import (
@@ -39,7 +39,7 @@ def test_scm_observability_records_compact_audit_flow_and_propagates_correlation
     hub_root = tmp_path / "hub"
     workspace_root = hub_root / "worktrees" / "feature-observability"
     workspace_root.mkdir(parents=True, exist_ok=True)
-    thread = PmaThreadStore(hub_root).create_thread(
+    thread = ManagedThreadStore(hub_root).create_thread(
         "codex",
         workspace_root,
         repo_id="repo-1",
@@ -98,7 +98,7 @@ def test_scm_observability_records_compact_audit_flow_and_propagates_correlation
     assert processed[0].response["correlation_id"] == "corr-scm-observe-1"
 
     client_request_id = str(processed[0].response["client_request_id"])
-    turn = PmaThreadStore(hub_root).get_turn_by_client_turn_id(
+    turn = ManagedThreadStore(hub_root).get_turn_by_client_turn_id(
         str(thread["managed_thread_id"]),
         client_request_id,
     )

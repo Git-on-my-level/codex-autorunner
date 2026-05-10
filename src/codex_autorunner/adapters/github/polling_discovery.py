@@ -334,7 +334,7 @@ def collect_candidate_workspace_roots(
     parse_optional_iso: Any,
     polling_config: Any,
 ) -> tuple[list[Path], dict[str, list[Path]], dict[str, Path], dict[Path, str]]:
-    from ...core.pma_thread_store import PmaThreadStore
+    from ...core.managed_thread_store import ManagedThreadStore
     from ...core.pr_binding_runtime import thread_head_branch_hint
 
     roots: list[Path] = []
@@ -371,7 +371,7 @@ def collect_candidate_workspace_roots(
         ):
             workspace_branch_hints[resolved_root] = normalized_branch_hint
 
-    thread_store = PmaThreadStore(hub_root)
+    thread_store = ManagedThreadStore(hub_root)
     lookback_cutoff = now - timedelta(
         minutes=max(1, polling_config.discovery_terminal_thread_lookback_minutes)
     )

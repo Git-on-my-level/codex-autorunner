@@ -2,7 +2,7 @@
 
 SSE bodies may nest the real event under a ``payload`` object with the semantic
 ``type`` on the wrapper; :func:`_normalize_sse_event` flattens that shape. Codex
-and Hermes integrations do not use this client or normalization path.
+and Hermes adapters do not use this client or normalization path.
 """
 
 from __future__ import annotations

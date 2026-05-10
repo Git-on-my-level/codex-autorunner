@@ -5,7 +5,7 @@ from typing import Optional
 import pytest
 
 import codex_autorunner.adapters.telegram.handlers.messages as msg_module
-from codex_autorunner.adapters.telegram.adapter import (
+from codex_autorunner.adapters.telegram.client import (
     TelegramAudio,
     TelegramDocument,
     TelegramForwardOrigin,

@@ -10,7 +10,7 @@ from typing import Any, Optional
 
 import pytest
 
-from codex_autorunner.adapters.telegram.adapter import (
+from codex_autorunner.adapters.telegram.client import (
     FlowCallback,
     TelegramCallbackQuery,
     TelegramMessage,

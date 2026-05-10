@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Literal, Optional
 
 from ..chat.turn_policy import PlainTextTurnContext, should_trigger_plain_text_turn
-from .adapter import TelegramMessage
+from .client import TelegramMessage
 
 TriggerMode = Literal["all", "mentions"]
 

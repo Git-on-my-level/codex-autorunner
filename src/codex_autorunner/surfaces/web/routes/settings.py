@@ -41,12 +41,8 @@ def _normalize_model_overrides(value: Any, field_name: str) -> dict[str, str]:
 
 
 def _session_settings_response(state: RunnerState) -> dict[str, Any]:
-    model_overrides = dict(state.autorunner_model_overrides)
-    if state.autorunner_model_override and "codex" not in model_overrides:
-        model_overrides["codex"] = state.autorunner_model_override
     return {
-        "autorunner_model_override": model_overrides.get("codex"),
-        "autorunner_model_overrides": model_overrides,
+        "autorunner_model_overrides": dict(state.autorunner_model_overrides),
         "autorunner_effort_override": state.autorunner_effort_override,
         "autorunner_approval_policy": state.autorunner_approval_policy,
         "autorunner_sandbox_mode": state.autorunner_sandbox_mode,
@@ -58,15 +54,6 @@ def _session_settings_response(state: RunnerState) -> dict[str, Any]:
 def _normalize_session_settings_update(
     updates: dict[str, Any], state: RunnerState
 ) -> dict[str, Any]:
-    model_override = (
-        normalize_optional_string(
-            updates.get("autorunner_model_override"),
-            "autorunner_model_override",
-            allow_blank=True,
-        )
-        if "autorunner_model_override" in updates
-        else state.autorunner_model_override
-    )
     model_overrides = (
         _normalize_model_overrides(
             updates.get("autorunner_model_overrides"),
@@ -75,14 +62,6 @@ def _normalize_session_settings_update(
         if "autorunner_model_overrides" in updates
         else dict(state.autorunner_model_overrides)
     )
-    if "autorunner_model_overrides" not in updates and model_override:
-        model_overrides.setdefault("codex", model_override)
-    if (
-        "autorunner_model_overrides" not in updates
-        and "autorunner_model_override" in updates
-        and model_override is None
-    ):
-        model_overrides.pop("codex", None)
     effort_override = (
         normalize_optional_string(
             updates.get("autorunner_effort_override"),
@@ -153,7 +132,6 @@ def _normalize_session_settings_update(
             detail="runner_stop_after_runs must be a positive integer",
         )
     return {
-        "autorunner_model_override": model_override,
         "autorunner_model_overrides": model_overrides,
         "autorunner_effort_override": effort_override,
         "autorunner_approval_policy": approval_policy,
@@ -166,7 +144,6 @@ def _normalize_session_settings_update(
 def _thread_reset_required(normalized: dict[str, Any], state: RunnerState) -> bool:
     return any(
         (
-            normalized["autorunner_model_override"] != state.autorunner_model_override,
             normalized["autorunner_model_overrides"]
             != state.autorunner_model_overrides,
             normalized["autorunner_effort_override"]
@@ -204,9 +181,6 @@ def _apply_session_settings_update(
             last_run_started_at=state.last_run_started_at,
             last_run_finished_at=state.last_run_finished_at,
             autorunner_agent_override=state.autorunner_agent_override,
-            autorunner_model_override=normalized["autorunner_model_overrides"].get(
-                "codex"
-            ),
             autorunner_model_overrides=normalized["autorunner_model_overrides"],
             autorunner_effort_override=normalized["autorunner_effort_override"],
             autorunner_approval_policy=normalized["autorunner_approval_policy"],

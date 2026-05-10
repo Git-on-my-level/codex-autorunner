@@ -12,11 +12,11 @@ from codex_autorunner.core.chat_bindings import (
     repo_has_active_non_pma_chat_binding,
 )
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
+from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration import (
     OrchestrationBindingStore,
     initialize_orchestration_sqlite,
 )
-from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.manifest import (
     MANIFEST_VERSION,
     Manifest,
@@ -215,7 +215,7 @@ def _write_orchestration_binding(
     initialize_orchestration_sqlite(hub_root, durable=False)
     workspace_root = Path(workspace_path)
     workspace_root.mkdir(parents=True, exist_ok=True)
-    thread_store = PmaThreadStore(hub_root)
+    thread_store = ManagedThreadStore(hub_root)
     thread = thread_store.create_thread(
         agent_id,
         workspace_root,
@@ -239,7 +239,7 @@ def test_active_chat_binding_counts_aggregates_persisted_sources(
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
     write_test_config(hub_root / CONFIG_FILENAME, cfg)
 
-    thread_store = PmaThreadStore(hub_root)
+    thread_store = ManagedThreadStore(hub_root)
     thread_store.create_thread(
         "codex",
         (hub_root / "worktrees" / "repo-a-1").resolve(),
@@ -291,7 +291,7 @@ def test_repo_has_active_chat_binding_uses_configured_state_files(
     telegram_db = hub_root / "state" / "custom-telegram.sqlite3"
     _write_discord_binding(discord_db, channel_id="discord-chan", repo_id="repo-x")
     _write_telegram_binding(telegram_db, topic_key="999:root", repo_id="repo-y")
-    thread_store = PmaThreadStore(hub_root)
+    thread_store = ManagedThreadStore(hub_root)
     thread_store.create_thread(
         "codex",
         (hub_root / "worktrees" / "repo-pma-only").resolve(),
@@ -419,7 +419,7 @@ def test_chat_binding_lookup_resolves_repo_from_workspace_paths(
         repo_id=None,
         workspace_path=workspace_str,
     )
-    thread_store = PmaThreadStore(hub_root)
+    thread_store = ManagedThreadStore(hub_root)
     thread_store.create_thread("codex", workspace, repo_id=None)
 
     counts = active_chat_binding_counts(hub_root=hub_root, raw_config=cfg)

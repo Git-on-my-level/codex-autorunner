@@ -5,11 +5,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from codex_autorunner.adapters.telegram.adapter import (
+from codex_autorunner.adapters.telegram.adapter import TelegramChatAdapter
+from codex_autorunner.adapters.telegram.client import (
     TelegramMessage,
     TelegramUpdatePoller,
 )
-from codex_autorunner.adapters.telegram.chat_adapter import TelegramChatAdapter
 from codex_autorunner.adapters.telegram.config import TelegramBotConfig
 from codex_autorunner.adapters.telegram.service import TelegramBotService
 from codex_autorunner.bootstrap import seed_hub_files

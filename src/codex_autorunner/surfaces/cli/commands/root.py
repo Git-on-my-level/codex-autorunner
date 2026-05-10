@@ -627,7 +627,6 @@ def register_root_commands(app: typer.Typer) -> None:
                 last_run_started_at=state.last_run_started_at,
                 last_run_finished_at=now_iso(),
                 autorunner_agent_override=state.autorunner_agent_override,
-                autorunner_model_override=state.autorunner_model_override,
                 autorunner_model_overrides=state.autorunner_model_overrides,
                 autorunner_effort_override=state.autorunner_effort_override,
                 autorunner_approval_policy=state.autorunner_approval_policy,

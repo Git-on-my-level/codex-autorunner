@@ -17,6 +17,7 @@ from .freshness import (
     summarize_section_freshness,
 )
 from .hub import HubSupervisor
+from .managed_thread_snapshot import snapshot_managed_threads
 from .pma_action_queue import build_pma_action_queue
 from .pma_automation_snapshot import snapshot_pma_automation
 from .pma_context_shared import (
@@ -32,7 +33,6 @@ from .pma_file_inbox import (
     _extract_entry_freshness,
     enrich_pma_file_inbox_entry,
 )
-from .pma_thread_snapshot import snapshot_pma_threads
 from .pma_ticket_flow_state import get_latest_ticket_flow_run_state_with_record
 from .state_roots import resolve_hub_templates_root
 from .ticket_flow_projection import build_canonical_state_v1
@@ -194,7 +194,7 @@ def _build_snapshot_freshness_summary(
     repos: list[dict[str, Any]],
     inbox: list[dict[str, Any]],
     action_queue: list[dict[str, Any]],
-    pma_threads: list[dict[str, Any]],
+    managed_threads: list[dict[str, Any]],
     pma_files_detail: Mapping[str, list[dict[str, Any]]],
 ) -> dict[str, Any]:
     sections = {
@@ -216,8 +216,8 @@ def _build_snapshot_freshness_summary(
             stale_threshold_seconds=stale_threshold_seconds,
             extractor=_extract_entry_freshness,
         ),
-        "pma_threads": summarize_section_freshness(
-            pma_threads,
+        "managed_threads": summarize_section_freshness(
+            managed_threads,
             generated_at=generated_at,
             stale_threshold_seconds=stale_threshold_seconds,
         ),
@@ -353,13 +353,13 @@ def _collect_hub_local_artifacts(
 ]:
     pma_files: dict[str, list[str]] = {box: [] for box in BOXES}
     pma_files_detail: dict[str, list[dict[str, Any]]] = empty_listing()
-    pma_threads: list[dict[str, Any]] = []
+    managed_threads: list[dict[str, Any]] = []
     automation = snapshot_pma_automation(supervisor)
     if hub_root is None:
-        return pma_files, pma_files_detail, pma_threads, automation
+        return pma_files, pma_files_detail, managed_threads, automation
 
     pma_files, pma_files_detail = _snapshot_pma_files(hub_root)
-    pma_threads = snapshot_pma_threads(
+    managed_threads = snapshot_managed_threads(
         hub_root,
         generated_at=generated_at,
         stale_threshold_seconds=stale_threshold_seconds,
@@ -373,7 +373,7 @@ def _collect_hub_local_artifacts(
             )
             if box == "inbox":
                 pma_files_detail[box][index] = enrich_pma_file_inbox_entry(entry)
-    return pma_files, pma_files_detail, pma_threads, automation
+    return pma_files, pma_files_detail, managed_threads, automation
 
 
 async def build_hub_snapshot_payload(
@@ -403,7 +403,7 @@ async def build_hub_snapshot_payload(
             "templates": {"enabled": False, "repos": []},
             "lifecycle_events": [],
             "pma_files_detail": empty_files,
-            "pma_threads": [],
+            "managed_threads": [],
             "process_monitor": None,
             "automation": {
                 "subscriptions": {"active_count": 0, "sample": []},
@@ -420,7 +420,7 @@ async def build_hub_snapshot_payload(
                 repos=[],
                 inbox=[],
                 action_queue=[],
-                pma_threads=[],
+                managed_threads=[],
                 pma_files_detail=empty_files,
             ),
         }
@@ -450,7 +450,7 @@ async def build_hub_snapshot_payload(
     inbox = inbox[: limits.max_messages]
 
     templates = _build_templates_snapshot(supervisor, hub_root=hub_root)
-    pma_files, pma_files_detail, pma_threads, automation = await asyncio.to_thread(
+    pma_files, pma_files_detail, managed_threads, automation = await asyncio.to_thread(
         _collect_hub_local_artifacts,
         hub_root=hub_root,
         generated_at=generated_at,
@@ -459,7 +459,7 @@ async def build_hub_snapshot_payload(
     )
     action_queue = build_pma_action_queue(
         inbox=inbox,
-        pma_threads=pma_threads,
+        managed_threads=managed_threads,
         pma_files_detail=pma_files_detail,
         automation=automation,
         generated_at=generated_at,
@@ -471,7 +471,7 @@ async def build_hub_snapshot_payload(
         repos=repos,
         inbox=inbox,
         action_queue=action_queue,
-        pma_threads=pma_threads,
+        managed_threads=managed_threads,
         pma_files_detail=pma_files_detail,
     )
 
@@ -483,7 +483,7 @@ async def build_hub_snapshot_payload(
         "templates": templates,
         "pma_files": pma_files,
         "pma_files_detail": pma_files_detail,
-        "pma_threads": pma_threads,
+        "managed_threads": managed_threads,
         "process_monitor": process_monitor,
         "automation": automation,
         "lifecycle_events": lifecycle_events,

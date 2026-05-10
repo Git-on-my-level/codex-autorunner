@@ -17,9 +17,9 @@ from codex_autorunner.agents.types import (
 )
 from codex_autorunner.core.config import TicketFlowConfig
 from codex_autorunner.core.flows.models import FlowEventType
+from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration import ColdTraceStore
 from codex_autorunner.core.orchestration.turn_timeline import list_turn_timeline
-from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.tickets.agent_pool import AgentTurnRequest
 
 
@@ -299,7 +299,7 @@ def _make_pool(
     )
     pool = DefaultAgentPool(cfg)  # type: ignore[arg-type]
     pool._hub_root = tmp_path.resolve()  # type: ignore[attr-defined]
-    pool._thread_store = PmaThreadStore(pool._hub_root)  # type: ignore[attr-defined]
+    pool._thread_store = ManagedThreadStore(pool._hub_root)  # type: ignore[attr-defined]
     pool._agent_descriptors_override = descriptors or {  # type: ignore[attr-defined]
         "codex": _build_descriptor("codex"),
         "opencode": _build_descriptor("opencode"),

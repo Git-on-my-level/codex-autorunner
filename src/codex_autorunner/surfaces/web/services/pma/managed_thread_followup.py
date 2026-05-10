@@ -15,7 +15,7 @@ from ...routes.pma_routes.automation_adapter import (
     call_store_create_with_payload,
     get_automation_store,
 )
-from ...schemas import PmaManagedThreadCreateRequest, PmaManagedThreadMessageRequest
+from ...schemas import ManagedThreadCreateRequest, ManagedThreadMessageRequest
 from ...services.pma.common import normalize_optional_text
 
 
@@ -64,7 +64,7 @@ def build_managed_thread_terminal_notify_payload(
 
 
 def resolve_managed_thread_followup_policy(
-    payload: PmaManagedThreadCreateRequest | PmaManagedThreadMessageRequest,
+    payload: ManagedThreadCreateRequest | ManagedThreadMessageRequest,
     *,
     default_terminal_followup: bool,
 ) -> ManagedThreadFollowupPolicy:

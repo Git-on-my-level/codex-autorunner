@@ -8,7 +8,8 @@ from types import SimpleNamespace
 import pytest
 
 from codex_autorunner.adapters.chat.callbacks import LogicalCallback
-from codex_autorunner.adapters.telegram.adapter import (
+from codex_autorunner.adapters.telegram.chat_callbacks import TelegramCallbackCodec
+from codex_autorunner.adapters.telegram.client import (
     ApprovalCallback,
     FlowCallback,
     FlowRunCallback,
@@ -33,7 +34,6 @@ from codex_autorunner.adapters.telegram.adapter import (
     encode_update_confirm_callback,
     parse_callback_data,
 )
-from codex_autorunner.adapters.telegram.chat_callbacks import TelegramCallbackCodec
 from codex_autorunner.adapters.telegram.handlers.commands import (
     flows as flows_module,
 )

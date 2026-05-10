@@ -206,10 +206,6 @@ function mapSession(raw: JsonRecord): SettingsSessionState {
       .map(([agent, model]) => [agent.trim().toLowerCase(), stringValue(model)])
       .filter(([agent, model]) => agent && model)
   );
-  const legacyCodexModel = stringValue(raw.autorunner_model_override);
-  if (legacyCodexModel && !normalizedModelOverrides.codex) {
-    normalizedModelOverrides.codex = legacyCodexModel;
-  }
   return {
     modelOverrides: normalizedModelOverrides,
     effortOverride: stringValue(raw.autorunner_effort_override),

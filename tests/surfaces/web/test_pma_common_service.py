@@ -7,8 +7,8 @@ from fastapi import HTTPException
 
 from codex_autorunner.core.pma_automation_store import PmaAutomationThreadNotFoundError
 from codex_autorunner.surfaces.web.schemas import (
+    ManagedThreadCreateRequest,
     PmaAutomationSubscriptionCreateRequest,
-    PmaManagedThreadCreateRequest,
 )
 from codex_autorunner.surfaces.web.services.pma.common import (
     build_idempotency_key,
@@ -97,7 +97,7 @@ def test_build_idempotency_key_is_deterministic_and_input_sensitive() -> None:
 
 
 def test_managed_thread_create_request_captures_explicit_followup_fields() -> None:
-    payload = PmaManagedThreadCreateRequest.model_validate(
+    payload = ManagedThreadCreateRequest.model_validate(
         {
             "agent": "codex",
             "workspace_root": "/tmp/workspace",
@@ -136,7 +136,7 @@ def test_automation_subscription_request_accepts_idempotency_key_aliases() -> No
 
 
 def test_resolve_managed_thread_followup_policy_uses_defaults_best_effort() -> None:
-    payload = PmaManagedThreadCreateRequest.model_validate(
+    payload = ManagedThreadCreateRequest.model_validate(
         {
             "agent": "codex",
             "workspace_root": "/tmp/workspace",
@@ -158,7 +158,7 @@ def test_resolve_managed_thread_followup_policy_uses_defaults_best_effort() -> N
 def test_resolve_managed_thread_followup_policy_marks_explicit_customization_required() -> (
     None
 ):
-    payload = PmaManagedThreadCreateRequest.model_validate(
+    payload = ManagedThreadCreateRequest.model_validate(
         {
             "agent": "codex",
             "workspace_root": "/tmp/workspace",
@@ -180,7 +180,7 @@ def test_resolve_managed_thread_followup_policy_marks_explicit_customization_req
 
 
 def test_resolve_managed_thread_followup_policy_rejects_conflicting_opt_out() -> None:
-    payload = PmaManagedThreadCreateRequest.model_validate(
+    payload = ManagedThreadCreateRequest.model_validate(
         {
             "agent": "codex",
             "workspace_root": "/tmp/workspace",

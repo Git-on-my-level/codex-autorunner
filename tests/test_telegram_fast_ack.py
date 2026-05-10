@@ -29,7 +29,7 @@ from codex_autorunner.adapters.chat.queue_status import (
     coerce_queue_status_items,
     format_queue_status_text,
 )
-from codex_autorunner.adapters.telegram.adapter import (
+from codex_autorunner.adapters.telegram.client import (
     InlineButton,
     TelegramCallbackQuery,
     TelegramMessage,

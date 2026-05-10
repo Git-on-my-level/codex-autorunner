@@ -1091,7 +1091,7 @@ def register_hub_commands(
             "--section",
             help=(
                 "Return only specific snapshot sections "
-                "(repeatable: repos, inbox, pma_threads, "
+                "(repeatable: repos, inbox, managed_threads, "
                 "pma_files_detail, automation, action_queue)."
             ),
         ),
@@ -1109,7 +1109,7 @@ def register_hub_commands(
             allowed = {
                 "repos",
                 "inbox",
-                "pma_threads",
+                "managed_threads",
                 "pma_files_detail",
                 "automation",
                 "action_queue",
@@ -1140,8 +1140,8 @@ def register_hub_commands(
             separator = "&" if "?" in url else "?"
             return f"{url}{separator}{urlencode(filtered)}"
 
-        def _read_pma_threads_artifact(hub_root: Path) -> Optional[dict[str, Any]]:
-            artifact_path = hub_root / ".codex-autorunner" / "pma_threads.json"
+        def _read_managed_threads_artifact(hub_root: Path) -> Optional[dict[str, Any]]:
+            artifact_path = hub_root / ".codex-autorunner" / "managed_threads.json"
             if not artifact_path.exists():
                 return None
             try:
@@ -1168,7 +1168,7 @@ def register_hub_commands(
             if name
             in {
                 "inbox",
-                "pma_threads",
+                "managed_threads",
                 "pma_files_detail",
                 "automation",
                 "action_queue",
@@ -1235,14 +1235,14 @@ def register_hub_commands(
                 httpx.HTTPError,
             ) as exc:  # intentional: best-effort
                 artifact_fallback = (
-                    _read_pma_threads_artifact(config.root)
-                    if requested_sections == ["pma_threads"]
+                    _read_managed_threads_artifact(config.root)
+                    if requested_sections == ["managed_threads"]
                     else None
                 )
                 if artifact_fallback is not None:
                     messages_response = {
                         "generated_at": artifact_fallback.get("generated_at"),
-                        "pma_threads": artifact_fallback.get("threads", []),
+                        "managed_threads": artifact_fallback.get("threads", []),
                     }
                 else:
                     fetch_errors.append(
@@ -1385,7 +1385,7 @@ def register_hub_commands(
                     _summarize_message(msg) for msg in messages_items
                 ]
             for key in (
-                "pma_threads",
+                "managed_threads",
                 "pma_files_detail",
                 "automation",
                 "action_queue",

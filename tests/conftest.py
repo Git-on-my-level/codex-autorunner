@@ -154,9 +154,9 @@ def _stub_surface_startup_handshakes_for_non_handshake_tests(
         HttpHubControlPlaneClient,
     )
     from codex_autorunner.core.hub_control_plane.models import HandshakeCompatibility
+    from codex_autorunner.core.managed_thread_store import prepare_managed_thread_store
     from codex_autorunner.core.orchestration.sqlite import prepare_orchestration_sqlite
     from codex_autorunner.core.pma_context import build_hub_snapshot
-    from codex_autorunner.core.pma_thread_store import prepare_pma_thread_store
 
     def _install_inprocess_hub_client(service: object, hub_root: Path) -> None:
         current = getattr(service, "_hub_client", None)
@@ -185,7 +185,7 @@ def _stub_surface_startup_handshakes_for_non_handshake_tests(
         def __init__(self, hub_root: Path) -> None:
             self._hub_root = Path(hub_root)
             prepare_orchestration_sqlite(self._hub_root, durable=False)
-            prepare_pma_thread_store(self._hub_root, durable=False)
+            prepare_managed_thread_store(self._hub_root, durable=False)
             self._service = HubSharedStateService(
                 hub_root=self._hub_root,
                 supervisor=_NoopSupervisor(),

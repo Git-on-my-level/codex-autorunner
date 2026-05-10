@@ -251,7 +251,7 @@ class AppServerThreadArchiveRequest(Payload):
     thread_id: str = Field(validation_alias=AliasChoices("thread_id", "threadId", "id"))
 
 
-class PmaManagedThreadCreateRequest(Payload):
+class ManagedThreadCreateRequest(Payload):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     agent: Optional[str] = None
@@ -343,7 +343,6 @@ class PmaManagedThreadCreateRequest(Payload):
 class SessionSettingsRequest(Payload):
     model_config = ConfigDict(extra="forbid")
 
-    autorunner_model_override: Optional[str] = None
     autorunner_model_overrides: Optional[Dict[str, Optional[str]]] = None
     autorunner_effort_override: Optional[str] = None
     autorunner_approval_policy: Optional[str] = None
@@ -418,16 +417,16 @@ __all__ = [
     "PmaAutomationTimerTouchRequest",
     "PmaChatRequest",
     "PmaHistoryCompactRequest",
-    "PmaManagedThreadBulkArchiveRequest",
-    "PmaManagedThreadCompactRequest",
-    "PmaManagedThreadCreateRequest",
-    "PmaManagedThreadForkRequest",
-    "PmaManagedThreadMessageRequest",
-    "PmaManagedThreadResumeRequest",
+    "ManagedThreadBulkArchiveRequest",
+    "ManagedThreadCompactRequest",
+    "ManagedThreadCreateRequest",
+    "ManagedThreadForkRequest",
+    "ManagedThreadMessageRequest",
+    "ManagedThreadResumeRequest",
     "PmaNewSessionRequest",
     "PmaSessionResetRequest",
     "PmaStopRequest",
-    "PmaThreadResetRequest",
+    "ManagedThreadResetRequest",
     "ResponseModel",
     "RunControlRequest",
     "RunControlResponse",
@@ -515,7 +514,7 @@ class HubDestinationSetRequest(Payload):
 class HubMessageSnapshotResponse(ResponseModel):
     generated_at: str
     items: Optional[List[Dict[str, Any]]] = None
-    pma_threads: Optional[List[Dict[str, Any]]] = None
+    managed_threads: Optional[List[Dict[str, Any]]] = None
     pma_files_detail: Optional[Dict[str, List[Dict[str, Any]]]] = None
     automation: Optional[Dict[str, Any]] = None
     action_queue: Optional[List[Dict[str, Any]]] = None
@@ -533,7 +532,7 @@ class HubMessagesResponse(ResponseModel):
     generated_at: str
     items: Optional[List[Dict[str, Any]]] = None
     freshness: Optional[HubMessagesFreshnessResponse] = None
-    pma_threads: Optional[List[Dict[str, Any]]] = None
+    managed_threads: Optional[List[Dict[str, Any]]] = None
     pma_files_detail: Optional[Dict[str, List[Dict[str, Any]]]] = None
     automation: Optional[Dict[str, Any]] = None
     action_queue: Optional[List[Dict[str, Any]]] = None
@@ -649,7 +648,6 @@ class HubJobResponse(ResponseModel):
 
 
 class SessionSettingsResponse(ResponseModel):
-    autorunner_model_override: Optional[str]
     autorunner_model_overrides: Dict[str, str]
     autorunner_effort_override: Optional[str]
     autorunner_approval_policy: Optional[str]
@@ -727,7 +725,6 @@ class SystemHealthResponse(ResponseModel):
     mode: str
     base_path: str
     asset_version: Optional[str] = None
-    static_asset_provenance: Optional[str] = None
     hub_startup_phase: Optional[str] = None
     hub_deferred_startup_complete: Optional[bool] = None
     orchestration: Optional[OrchestrationHealthPayload] = None
@@ -846,7 +843,7 @@ class TicketBulkUpdateResponse(ResponseModel):
     lint_errors: list[str] = []
 
 
-class PmaManagedThreadMessageRequest(Payload):
+class ManagedThreadMessageRequest(Payload):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     message: str
@@ -906,18 +903,18 @@ class PmaManagedThreadMessageRequest(Payload):
         return payload
 
 
-class PmaManagedThreadCompactRequest(Payload):
+class ManagedThreadCompactRequest(Payload):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     summary: str
     reset_backend: bool = True
 
 
-class PmaManagedThreadResumeRequest(Payload):
+class ManagedThreadResumeRequest(Payload):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
 
-class PmaManagedThreadBulkArchiveRequest(Payload):
+class ManagedThreadBulkArchiveRequest(Payload):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     thread_ids: List[str] = Field(
@@ -940,7 +937,7 @@ class PmaManagedThreadBulkArchiveRequest(Payload):
         return normalized
 
 
-class PmaManagedThreadForkRequest(Payload):
+class ManagedThreadForkRequest(Payload):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     name: Optional[str] = None
@@ -995,7 +992,7 @@ class PmaHistoryCompactRequest(Payload):
     )
 
 
-class PmaThreadResetRequest(Payload):
+class ManagedThreadResetRequest(Payload):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     agent: Optional[str] = None

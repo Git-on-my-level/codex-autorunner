@@ -15,14 +15,15 @@ from codex_autorunner.agents.hermes.supervisor import HermesSupervisor
 from codex_autorunner.agents.registry import AgentDescriptor
 from codex_autorunner.agents.types import TerminalTurnResult
 from codex_autorunner.core.hub_control_plane import HubControlPlaneError
+from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration import (
     FreshConversationRequiredError,
     HarnessBackedOrchestrationService,
+    ManagedThreadExecutionStore,
     MappingAgentDefinitionCatalog,
     MessageRequest,
     OrchestrationBindingStore,
     PausedFlowTarget,
-    PmaThreadExecutionStore,
     SurfaceThreadMessageRequest,
 )
 from codex_autorunner.core.orchestration.models import FlowTarget
@@ -36,7 +37,6 @@ from codex_autorunner.core.orchestration.service import (
 )
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.core.orchestration.transcript_mirror import TranscriptMirrorStore
-from codex_autorunner.core.pma_thread_store import PmaThreadStore
 
 FIXTURE_PATH = Path(__file__).resolve().parents[2] / "fixtures" / "fake_acp_server.py"
 
@@ -255,7 +255,7 @@ def _build_service(
 ) -> HarnessBackedOrchestrationService:
     descriptors = {"codex": _make_descriptor()}
     catalog = MappingAgentDefinitionCatalog(descriptors)
-    store = PmaThreadExecutionStore(PmaThreadStore(tmp_path / "hub"))
+    store = ManagedThreadExecutionStore(ManagedThreadStore(tmp_path / "hub"))
     return HarnessBackedOrchestrationService(
         definition_catalog=catalog,
         thread_store=store,
@@ -407,7 +407,7 @@ def test_create_thread_target_supports_durable_hermes_catalog_agent(
         )
     }
     catalog = MappingAgentDefinitionCatalog(descriptors)
-    store = PmaThreadExecutionStore(PmaThreadStore(tmp_path / "hub"))
+    store = ManagedThreadExecutionStore(ManagedThreadStore(tmp_path / "hub"))
     service = HarnessBackedOrchestrationService(
         definition_catalog=catalog,
         thread_store=store,
@@ -1062,7 +1062,7 @@ async def test_send_message_recovers_missing_hermes_session_load_end_to_end(
         make_harness=lambda _ctx: harness,
     )
     catalog = MappingAgentDefinitionCatalog({"hermes": descriptor})
-    store = PmaThreadExecutionStore(PmaThreadStore(tmp_path / "hub"))
+    store = ManagedThreadExecutionStore(ManagedThreadStore(tmp_path / "hub"))
     service = HarnessBackedOrchestrationService(
         definition_catalog=catalog,
         thread_store=store,
@@ -2095,12 +2095,12 @@ def test_builder_wraps_pma_store_with_default_catalog(tmp_path: Path) -> None:
     descriptors = {"codex": _make_descriptor()}
     service = build_harness_backed_orchestration_service(
         descriptors=descriptors,
-        pma_thread_store=PmaThreadStore(tmp_path / "hub"),
+        managed_thread_store=ManagedThreadStore(tmp_path / "hub"),
         harness_factory=lambda agent_id: harness,
     )
 
     assert service.get_agent_definition("codex") is not None
-    assert isinstance(service.thread_store, PmaThreadExecutionStore)
+    assert isinstance(service.thread_store, ManagedThreadExecutionStore)
 
 
 async def test_thread_service_rejects_flow_targets(tmp_path: Path) -> None:
@@ -2190,7 +2190,7 @@ def test_service_exposes_binding_queries_when_binding_store_is_configured(
     hub_root = tmp_path / "hub"
     service = HarnessBackedOrchestrationService(
         definition_catalog=MappingAgentDefinitionCatalog({"codex": _make_descriptor()}),
-        thread_store=PmaThreadExecutionStore(PmaThreadStore(hub_root)),
+        thread_store=ManagedThreadExecutionStore(ManagedThreadStore(hub_root)),
         harness_factory=lambda _agent_id: _FakeHarness(),
         binding_store=OrchestrationBindingStore(hub_root),
     )
@@ -2222,7 +2222,9 @@ def test_service_exposes_binding_queries_when_binding_store_is_configured(
     assert (
         service.get_binding(surface_kind="telegram", surface_key="123:root") is not None
     )
-    turn = PmaThreadStore(hub_root).create_turn(thread.thread_target_id, prompt="busy")
+    turn = ManagedThreadStore(hub_root).create_turn(
+        thread.thread_target_id, prompt="busy"
+    )
     summaries = service.list_active_work_summaries(repo_id="repo-1")
     assert len(summaries) == 1
     assert summaries[0].thread_target_id == thread.thread_target_id

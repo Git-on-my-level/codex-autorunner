@@ -34,6 +34,11 @@ from .....adapters.github.managed_thread_pr_binding import (
     self_claim_and_arm_pr_binding,
 )
 from .....core.config import ConfigError, load_repo_config
+from .....core.managed_thread_store import (
+    ManagedThreadAlreadyHasRunningTurnError,
+    ManagedThreadNotActiveError,
+    ManagedThreadStore,
+)
 from .....core.orchestration import (
     ManagedThreadDeliveryAttemptResult,
     ManagedThreadDeliveryOutcome,
@@ -46,13 +51,8 @@ from .....core.orchestration.runtime_threads import (
     begin_runtime_thread_execution,
 )
 from .....core.orchestration.service import BusyInterruptFailedError
-from .....core.pma_thread_store import (
-    ManagedThreadAlreadyHasRunningTurnError,
-    ManagedThreadNotActiveError,
-    PmaThreadStore,
-)
 from .....core.text_utils import _truncate_text
-from ...schemas import PmaManagedThreadMessageRequest
+from ...schemas import ManagedThreadMessageRequest
 from ...services.pma.managed_thread_followup import (
     ManagedThreadAutomationClient,
     ManagedThreadAutomationUnavailable,
@@ -133,10 +133,10 @@ def _pma_turn_idle_timeout_seconds(request: Request) -> float:
 
 
 def _managed_thread_task_pool(app: Any) -> set[asyncio.Task[Any]]:
-    task_pool = getattr(app.state, "pma_managed_thread_tasks", None)
+    task_pool = getattr(app.state, "managed_thread_tasks", None)
     if not isinstance(task_pool, set):
         task_pool = set()
-        app.state.pma_managed_thread_tasks = task_pool
+        app.state.managed_thread_tasks = task_pool
     return task_pool
 
 
@@ -172,7 +172,7 @@ async def _recover_pma_bound_chat_execution(
     app: Any,
     *,
     service: Any,
-    thread_store: PmaThreadStore,
+    thread_store: ManagedThreadStore,
     managed_thread_id: str,
     thread: Any,
     execution: Any,
@@ -258,7 +258,7 @@ def _resolve_repo_raw_config_for_workspace(
 def _self_claim_pr_bindings_for_managed_thread(
     request: Request,
     *,
-    thread_store: PmaThreadStore,
+    thread_store: ManagedThreadStore,
     thread: dict[str, Any],
     managed_thread_id: str,
     workspace_root: Path,
@@ -357,7 +357,7 @@ async def _run_managed_thread_execution(
     request: Request,
     *,
     service: Any,
-    thread_store: PmaThreadStore,
+    thread_store: ManagedThreadStore,
     thread: dict[str, Any],
     started: RuntimeThreadExecution,
     fallback_backend_thread_id: Optional[str] = None,
@@ -384,7 +384,7 @@ async def _run_managed_thread_execution(
         ),
         retain_completed_surface_targets=True,
     )
-    coordinator = _build_pma_managed_thread_coordinator(
+    coordinator = _build_managed_thread_coordinator(
         request,
         service=service,
         managed_thread_id=managed_thread_id,
@@ -422,7 +422,7 @@ def _pma_finalization_errors(request: Request) -> ManagedThreadErrorMessages:
     )
 
 
-def _build_pma_managed_thread_coordinator(
+def _build_managed_thread_coordinator(
     request: Request,
     *,
     service: Any,
@@ -453,7 +453,7 @@ async def _finalize_managed_thread_execution(
     request: Request,
     *,
     service: Any,
-    thread_store: PmaThreadStore,
+    thread_store: ManagedThreadStore,
     thread: dict[str, Any],
     started: RuntimeThreadExecution,
     fallback_backend_thread_id: Optional[str] = None,
@@ -468,7 +468,7 @@ async def _finalize_managed_thread_execution(
     if not managed_thread_id:
         raise RuntimeError("Managed-thread execution is missing thread_target_id")
     _ = thread_store
-    coordinator = _build_pma_managed_thread_coordinator(
+    coordinator = _build_managed_thread_coordinator(
         request,
         service=service,
         managed_thread_id=managed_thread_id,
@@ -489,7 +489,7 @@ async def _finalize_managed_thread_execution(
 async def _deliver_managed_thread_execution_result(
     request: Request,
     *,
-    thread_store: PmaThreadStore,
+    thread_store: ManagedThreadStore,
     thread: dict[str, Any],
     finalized: ManagedThreadFinalizationResult,
     response_payload: dict[str, Any],
@@ -646,7 +646,7 @@ async def _deliver_managed_thread_execution_result(
 def _build_pma_queue_delivery_hooks(
     request: Request,
     *,
-    thread_store: PmaThreadStore,
+    thread_store: ManagedThreadStore,
     thread: dict[str, Any],
     managed_thread_id: str,
     queue_progress: Any,
@@ -761,7 +761,7 @@ async def _cleanup_progress_targets_after_delivery_failure(
 
 def ensure_managed_thread_queue_worker(app: Any, managed_thread_id: str) -> None:
     request = _managed_thread_request_for_app(app)
-    thread_store = PmaThreadStore(app.state.config.root)
+    thread_store = ManagedThreadStore(app.state.config.root)
     current_thread_row = thread_store.get_thread(managed_thread_id) or {}
 
     def _resolve_surface_targets(_started: Any) -> tuple[tuple[str, str], ...]:
@@ -843,10 +843,10 @@ def build_managed_thread_runtime_routes(
     async def send_managed_thread_message(
         managed_thread_id: str,
         request: Request,
-        payload: PmaManagedThreadMessageRequest,
+        payload: ManagedThreadMessageRequest,
     ) -> Any:
         hub_root = request.app.state.config.root
-        thread_store = PmaThreadStore(hub_root)
+        thread_store = ManagedThreadStore(hub_root)
         thread = thread_store.get_thread(managed_thread_id)
         if thread is None:
             raise HTTPException(status_code=404, detail="Managed thread not found")

@@ -989,12 +989,12 @@ def test_repo_ticket_flow_invalid_approval_mode_fails_fast(tmp_path: Path) -> No
 
     with pytest.raises(
         ConfigError,
-        match="ticket_flow.approval_mode must be one of: yolo, review, safe",
+        match="ticket_flow.approval_mode must be one of: yolo, review",
     ):
         load_repo_config(repo_root, hub_path=hub_root)
 
 
-def test_repo_ticket_flow_safe_alias_normalizes_to_review(tmp_path: Path) -> None:
+def test_repo_ticket_flow_safe_alias_no_longer_accepted(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     hub_root.mkdir()
     write_test_config(
@@ -1007,8 +1007,8 @@ def test_repo_ticket_flow_safe_alias_normalizes_to_review(tmp_path: Path) -> Non
     repo_root = hub_root / "repo"
     repo_root.mkdir()
 
-    config = load_repo_config(repo_root, hub_path=hub_root)
-    assert config.ticket_flow.approval_mode == "review"
+    with pytest.raises(ConfigError, match="must be one of"):
+        load_repo_config(repo_root, hub_path=hub_root)
 
 
 def test_load_repo_config_fails_when_manifest_version_is_unsupported(

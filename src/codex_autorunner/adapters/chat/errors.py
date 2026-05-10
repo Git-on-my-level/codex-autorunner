@@ -1,4 +1,4 @@
-"""Adapter-layer error hierarchy for platform chat integrations.
+"""Adapter-layer error hierarchy for platform chat adapters.
 
 This module is part of the adapter layer and composes shared core error types
 so retry and severity behavior stays consistent across adapters.

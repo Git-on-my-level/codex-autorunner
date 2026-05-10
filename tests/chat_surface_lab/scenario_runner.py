@@ -18,7 +18,7 @@ from codex_autorunner.adapters.chat.ux_regression_contract import (
     CHAT_UX_LATENCY_BUDGETS,
 )
 from codex_autorunner.adapters.discord import message_turns as discord_message_turns
-from codex_autorunner.adapters.telegram.adapter import TelegramUpdate
+from codex_autorunner.adapters.telegram.client import TelegramUpdate
 from codex_autorunner.adapters.telegram.handlers.commands import (
     execution as telegram_execution,
 )
@@ -991,7 +991,7 @@ class ChatSurfaceScenarioRunner:
             context.surface_metadata["subscription_deduped"] = payload.get("deduped")
             return
 
-        if action.kind == "create_web_pma_thread":
+        if action.kind == "create_web_managed_thread":
             if context.surface != SurfaceKind.WEB_PMA:
                 return
             assert isinstance(context.harness, WebPmaSurfaceSimulator)

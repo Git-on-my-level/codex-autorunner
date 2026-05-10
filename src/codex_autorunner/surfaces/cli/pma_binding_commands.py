@@ -7,15 +7,15 @@ import httpx
 import typer
 
 from ...core.config import load_hub_config
-from .hub_path_option import hub_root_path_option
-from .output import echo_json, exit_with_error
-from .pma_control_plane import (
-    build_pma_url,
+from .hub_control_plane_client import (
+    build_hub_control_plane_url,
     format_resource_owner_label,
     normalize_resource_owner_options,
     request_json,
     resolve_hub_path,
 )
+from .hub_path_option import hub_root_path_option
+from .output import echo_json, exit_with_error
 
 
 def register_binding_commands(app: typer.Typer) -> None:
@@ -70,7 +70,7 @@ def pma_binding_list(
         config = load_hub_config(hub_root)
         data = request_json(
             "GET",
-            build_pma_url(config, "/bindings"),
+            build_hub_control_plane_url(config, "/bindings"),
             token_env=config.server_auth_token_env,
             params=params,
         )
@@ -122,7 +122,7 @@ def pma_binding_active(
         config = load_hub_config(hub_root)
         data = request_json(
             "GET",
-            build_pma_url(
+            build_hub_control_plane_url(
                 config,
                 f"/bindings/active?surface_kind={surface_kind}&surface_key={surface_key}",
             ),
@@ -182,7 +182,7 @@ def pma_binding_work(
         config = load_hub_config(hub_root)
         data = request_json(
             "GET",
-            build_pma_url(config, "/bindings/work"),
+            build_hub_control_plane_url(config, "/bindings/work"),
             token_env=config.server_auth_token_env,
             params=params,
         )

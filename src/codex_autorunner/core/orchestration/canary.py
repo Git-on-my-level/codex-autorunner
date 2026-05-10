@@ -11,7 +11,7 @@ from typing import Any, Awaitable, Callable, cast
 from fastapi.testclient import TestClient
 
 from ...bootstrap import seed_hub_files
-from ..pma_thread_store import PmaThreadStore
+from ..managed_thread_store import ManagedThreadStore
 from .bindings import OrchestrationBindingStore
 from .cold_trace_store import ColdTraceStore
 from .execution_history import ExecutionCheckpoint
@@ -384,22 +384,22 @@ async def _run_recovery_validation(
 ) -> dict[str, Any]:
     with TestClient(_CREATE_HUB_APP(hub_root)) as client:
         app = cast(Any, client.app)
-        store = PmaThreadStore(hub_root)
+        store = ManagedThreadStore(hub_root)
         binding_store = OrchestrationBindingStore(hub_root)
         cold_store = ColdTraceStore(hub_root)
 
-        pma_thread = store.create_thread(
+        managed_thread = store.create_thread(
             "codex", workspace_root.resolve(), repo_id="repo-canary"
         )
-        pma_thread_id = str(pma_thread["managed_thread_id"])
-        pma_turn = store.create_turn(pma_thread_id, prompt="recover pma turn")
+        managed_thread_id = str(managed_thread["managed_thread_id"])
+        pma_turn = store.create_turn(managed_thread_id, prompt="recover pma turn")
         pma_turn_id = str(pma_turn["managed_turn_id"])
-        store.set_thread_backend_id(pma_thread_id, None)
+        store.set_thread_backend_id(managed_thread_id, None)
         store.set_turn_backend_turn_id(pma_turn_id, None)
         cold_store.save_checkpoint(
             ExecutionCheckpoint(
                 execution_id=pma_turn_id,
-                thread_target_id=pma_thread_id,
+                thread_target_id=managed_thread_id,
                 status="running",
                 backend_thread_id="checkpoint-thread-pma",
                 backend_turn_id="checkpoint-turn-pma",
@@ -448,15 +448,15 @@ async def _run_recovery_validation(
         await recover_orphaned_executions(app)
         duration = time.monotonic() - start
 
-        pma_updated_turn = store.get_turn(pma_thread_id, pma_turn_id) or {}
-        pma_binding = store.get_thread_runtime_binding(pma_thread_id)
+        pma_updated_turn = store.get_turn(managed_thread_id, pma_turn_id) or {}
+        pma_binding = store.get_thread_runtime_binding(managed_thread_id)
         discord_updated_turn = store.get_turn(discord_thread_id, discord_turn_id) or {}
         discord_binding = store.get_thread_runtime_binding(discord_thread_id)
 
     return {
         "duration_seconds": _round_duration(duration),
         "pma_checkpoint_restore": {
-            "thread_id": pma_thread_id,
+            "thread_id": managed_thread_id,
             "turn_id": pma_turn_id,
             "status": pma_updated_turn.get("status"),
             "backend_turn_id": pma_updated_turn.get("backend_turn_id"),

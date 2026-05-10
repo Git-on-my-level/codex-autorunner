@@ -22,6 +22,7 @@ from .filebox import delete_file, list_filebox
 from .freshness import build_freshness_payload, iso_now, resolve_stale_threshold_seconds
 from .git_utils import git_available, git_is_clean
 from .hub_worktree_manager import worktree_non_metadata_child_names
+from .managed_thread_store import ManagedThreadStore
 from .orchestration.bindings import OrchestrationBindingStore
 from .pma_automation_store import PmaAutomationStore
 from .pma_dispatches import list_pma_dispatches
@@ -30,7 +31,6 @@ from .pma_thread_classification import (
     is_thread_cleanup_protected,
     thread_cleanup_protection_reason,
 )
-from .pma_thread_store import PmaThreadStore
 
 PMA_HYGIENE_CATEGORY_ALIASES = {
     "all": ("files", "threads", "automation", "alerts"),
@@ -193,7 +193,7 @@ def _build_thread_candidates(
             getattr(pma_cfg, "cleanup_require_archive", True)
         )
         manifest = load_manifest(config.manifest_path, hub_root)
-        store = PmaThreadStore(hub_root)
+        store = ManagedThreadStore(hub_root)
         threads = store.list_threads(limit=500)
         busy_ids = set(store.list_thread_ids_with_running_executions(limit=None))
         busy_ids.update(store.list_thread_ids_with_pending_queue(limit=None))
@@ -688,7 +688,7 @@ def _collect_hygiene_apply_items(
 
 
 def _revalidate_managed_thread_cleanup(
-    thread_store: PmaThreadStore,
+    thread_store: ManagedThreadStore,
     binding_store: OrchestrationBindingStore,
     managed_thread_id: str,
 ) -> Optional[str]:
@@ -749,7 +749,7 @@ def apply_pma_hygiene_report(
     )
     automation_store: Optional[PmaAutomationStore] = None
     binding_store: Optional[OrchestrationBindingStore] = None
-    thread_store: Optional[PmaThreadStore] = None
+    thread_store: Optional[ManagedThreadStore] = None
     results: list[dict[str, Any]] = []
     safe_attempted = 0
     reviewed_attempted = 0
@@ -799,7 +799,7 @@ def apply_pma_hygiene_report(
                     dispatch_path.unlink()
                     ok = True
             elif action == "archive_managed_thread":
-                thread_store = thread_store or PmaThreadStore(hub_root)
+                thread_store = thread_store or ManagedThreadStore(hub_root)
                 binding_store = binding_store or OrchestrationBindingStore(hub_root)
                 managed_thread_id = str(target.get("managed_thread_id") or "")
                 blocked_reason = _revalidate_managed_thread_cleanup(

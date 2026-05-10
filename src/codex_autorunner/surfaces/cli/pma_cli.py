@@ -19,18 +19,19 @@ from ...core.pma_hygiene import (
     render_pma_hygiene_report,
 )
 from .commands.utils import build_hub_supervisor
-from .hub_path_option import hub_root_path_option
-from .output import echo_json, exit_with_error
-from .pma_binding_commands import register_binding_commands
-from .pma_context_commands import register_context_commands
-from .pma_control_plane import (
+from .hub_control_plane_client import (
     CAPABILITY_REQUIREMENTS,
-    build_pma_url,
+    build_hub_control_plane_url,
     check_capability,
     fetch_agent_capabilities,
     request_json,
     resolve_hub_path,
 )
+from .hub_path_option import hub_root_path_option
+from .managed_thread_commands import register_thread_commands
+from .output import echo_json, exit_with_error
+from .pma_binding_commands import register_binding_commands
+from .pma_context_commands import register_context_commands
 from .pma_docs_commands import register_docs_commands
 from .pma_file_commands import box_choices_text, register_file_commands
 from .pma_status_contracts import (
@@ -38,7 +39,6 @@ from .pma_status_contracts import (
     PmaInterruptResponse,
     PmaResetResponse,
 )
-from .pma_thread_commands import register_thread_commands
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +127,7 @@ def pma_chat(
         typer.echo(f"Failed to load hub config: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
-    url = build_pma_url(config, "/chat")
+    url = build_hub_control_plane_url(config, "/chat")
     payload: dict[str, Any] = {"message": message, "stream": stream}
     if agent:
         payload["agent"] = agent
@@ -275,7 +275,7 @@ def pma_interrupt(
     except (OSError, ValueError) as exc:
         exit_with_error(f"Failed to load hub config: {exc}", cause=None)
 
-    active_url = build_pma_url(config, "/active")
+    active_url = build_hub_control_plane_url(config, "/active")
     try:
         active_data = request_json(
             "GET", active_url, token_env=config.server_auth_token_env
@@ -294,7 +294,7 @@ def pma_interrupt(
                     cause=None,
                 )
 
-    url = build_pma_url(config, "/interrupt")
+    url = build_hub_control_plane_url(config, "/interrupt")
 
     try:
         data = request_json("POST", url, token_env=config.server_auth_token_env)
@@ -330,7 +330,7 @@ def pma_reset(
     except (OSError, ValueError) as exc:
         exit_with_error(f"Failed to load hub config: {exc}", cause=None)
 
-    url = build_pma_url(config, "/thread/reset")
+    url = build_hub_control_plane_url(config, "/thread/reset")
     payload: dict[str, Any] = {}
     if agent:
         payload["agent"] = agent
@@ -369,7 +369,7 @@ def pma_active(
     except (OSError, ValueError) as exc:
         exit_with_error(f"Failed to load hub config: {exc}", cause=None)
 
-    url = build_pma_url(config, "/active")
+    url = build_hub_control_plane_url(config, "/active")
     params = {}
     if client_turn_id:
         params["client_turn_id"] = client_turn_id
@@ -515,7 +515,7 @@ def pma_agents(
     except (OSError, ValueError) as exc:
         exit_with_error(f"Failed to load hub config: {exc}", cause=None)
 
-    url = build_pma_url(config, "/agents")
+    url = build_hub_control_plane_url(config, "/agents")
 
     try:
         data = request_json("GET", url, token_env=config.server_auth_token_env)
@@ -590,7 +590,7 @@ def pma_models(
             cause=None,
         )
 
-    url = build_pma_url(config, f"/agents/{agent}/models")
+    url = build_hub_control_plane_url(config, f"/agents/{agent}/models")
 
     try:
         data = request_json("GET", url, token_env=config.server_auth_token_env)
@@ -627,7 +627,7 @@ def pma_files(
     except (OSError, ValueError) as exc:
         exit_with_error(f"Failed to load hub config: {exc}", cause=None)
 
-    url = build_pma_url(config, "/files")
+    url = build_hub_control_plane_url(config, "/files")
 
     try:
         data = request_json("GET", url, token_env=config.server_auth_token_env)
@@ -672,7 +672,7 @@ def pma_upload(
     if box not in BOXES:
         exit_with_error(f"Box must be one of: {', '.join(BOXES)}", cause=None)
 
-    url = build_pma_url(config, f"/files/{box}")
+    url = build_hub_control_plane_url(config, f"/files/{box}")
 
     for file_path in files:
         if not file_path.exists():
@@ -729,7 +729,7 @@ def pma_download(
     if box not in BOXES:
         exit_with_error(f"Box must be one of: {', '.join(BOXES)}", cause=None)
 
-    url = build_pma_url(config, f"/files/{box}/{filename}")
+    url = build_hub_control_plane_url(config, f"/files/{box}/{filename}")
 
     try:
         response = httpx.get(url, timeout=30.0)
@@ -765,7 +765,7 @@ def pma_delete(
                 f"Box must be one of: {', '.join(BOXES)} when using --all",
                 cause=None,
             )
-        url = build_pma_url(config, f"/files/{box}")
+        url = build_hub_control_plane_url(config, f"/files/{box}")
         method = "DELETE"
         payload = None
     else:
@@ -773,7 +773,7 @@ def pma_delete(
             exit_with_error("Box and filename are required (or use --all)", cause=None)
         if box not in BOXES:
             exit_with_error(f"Box must be one of: {', '.join(BOXES)}", cause=None)
-        url = build_pma_url(config, f"/files/{box}/{filename}")
+        url = build_hub_control_plane_url(config, f"/files/{box}/{filename}")
         method = "DELETE"
         payload = None
 

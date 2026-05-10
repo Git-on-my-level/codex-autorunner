@@ -26,12 +26,12 @@ from .....core.sse import format_sse
 from .....core.state import load_state
 from .....core.text_utils import _normalize_optional_text
 from ...schemas import (
+    ManagedThreadResetRequest,
     PmaChatRequest,
     PmaHistoryCompactRequest,
     PmaNewSessionRequest,
     PmaSessionResetRequest,
     PmaStopRequest,
-    PmaThreadResetRequest,
 )
 from ...services.pma import get_pma_request_context
 from ...services.pma.common import (
@@ -580,8 +580,8 @@ def build_chat_runtime_router(
         }
 
     @router.post("/thread/reset")
-    async def reset_pma_thread(
-        request: Request, payload: Optional[PmaThreadResetRequest] = None
+    async def reset_managed_thread(
+        request: Request, payload: Optional[ManagedThreadResetRequest] = None
     ) -> dict[str, Any]:
         context = get_pma_request_context(request)
         raw_agent = ((payload.agent if payload else None) or "").strip().lower()

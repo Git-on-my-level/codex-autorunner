@@ -28,7 +28,7 @@ from codex_autorunner.adapters.discord.managed_thread_routing import (
 from codex_autorunner.adapters.discord.outbox import DiscordOutboxManager
 from codex_autorunner.adapters.discord.service import DiscordBotService
 from codex_autorunner.adapters.discord.state import DiscordStateStore
-from codex_autorunner.adapters.telegram.adapter import (
+from codex_autorunner.adapters.telegram.client import (
     TelegramCallbackQuery,
     TelegramMessage,
     TelegramUpdate,

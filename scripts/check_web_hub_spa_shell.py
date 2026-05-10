@@ -159,8 +159,9 @@ def run_checks(*, repo_root: Path) -> tuple[list[str], list[str]]:
         return [str(exc)], []
 
     sys.path.insert(0, str(repo_root / "src"))
-    from codex_autorunner.server import create_hub_app
     from fastapi.testclient import TestClient
+
+    from codex_autorunner.server import create_hub_app
 
     with tempfile.TemporaryDirectory() as tmp:
         hub_root = Path(tmp) / "hub"

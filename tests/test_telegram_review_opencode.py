@@ -11,7 +11,7 @@ from codex_autorunner.adapters.chat.managed_thread_progress import (
     ProgressRuntimeState,
     apply_run_event_to_progress_tracker,
 )
-from codex_autorunner.adapters.telegram.adapter import TelegramMessage
+from codex_autorunner.adapters.telegram.client import TelegramMessage
 from codex_autorunner.adapters.telegram.handlers.commands_runtime import (
     TelegramCommandHandlers,
     _RuntimeStub,

@@ -18,6 +18,7 @@ from codex_autorunner.core.hub_inbox_resolution import (
     record_message_pending_auto_dismiss,
     record_message_resolution,
 )
+from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration import OrchestrationBindingStore
 from codex_autorunner.core.pma_audit import PmaActionType, PmaAuditLog
 from codex_autorunner.core.pma_context import (
@@ -27,7 +28,6 @@ from codex_autorunner.core.pma_context import (
     format_pma_prompt_variants,
     get_active_context_auto_prune_meta,
 )
-from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.state import RunnerState, save_state
 from codex_autorunner.manifest import load_manifest, save_manifest
 
@@ -254,7 +254,7 @@ def test_consumed_pma_files_do_not_appear_in_action_queue(tmp_path: Path) -> Non
     pma_files, pma_files_detail = _snapshot_pma_files(tmp_path)
     queue = build_pma_action_queue(
         inbox=[],
-        pma_threads=[],
+        managed_threads=[],
         pma_files_detail=pma_files_detail,
         automation={},
         generated_at="2026-04-03T00:00:00Z",
@@ -755,7 +755,7 @@ def test_build_hub_snapshot_includes_action_queue_with_supersession(hub_env) -> 
     inbox_dir.mkdir(parents=True, exist_ok=True)
     (inbox_dir / "ticket-pack.md").write_text("ticket payload\n", encoding="utf-8")
 
-    thread_store = PmaThreadStore(hub_env.hub_root)
+    thread_store = ManagedThreadStore(hub_env.hub_root)
     thread = thread_store.create_thread(
         "codex",
         hub_env.repo_root,
@@ -833,7 +833,7 @@ def test_build_hub_snapshot_failed_run_queue_item_recommends_archive_with_repo(
 def test_build_hub_snapshot_prefers_status_change_time_for_thread_freshness(
     hub_env,
 ) -> None:
-    thread_store = PmaThreadStore(hub_env.hub_root)
+    thread_store = ManagedThreadStore(hub_env.hub_root)
     thread = thread_store.create_thread(
         "codex",
         hub_env.repo_root,
@@ -872,7 +872,7 @@ def test_build_hub_snapshot_prefers_status_change_time_for_thread_freshness(
 
     thread_snapshot = next(
         item
-        for item in (snapshot.get("pma_threads") or [])
+        for item in (snapshot.get("managed_threads") or [])
         if item.get("managed_thread_id") == thread_id
     )
     freshness = thread_snapshot.get("freshness") or {}
@@ -896,7 +896,7 @@ def test_render_hub_snapshot_marks_stale_sections_with_warning() -> None:
                         "stale_count": 1,
                         "newest_basis_at": "2026-03-16T11:00:00Z",
                     },
-                    "pma_threads": {
+                    "managed_threads": {
                         "entity_count": 2,
                         "stale_count": 0,
                         "newest_basis_at": "2026-03-16T11:55:00Z",
@@ -910,7 +910,7 @@ def test_render_hub_snapshot_marks_stale_sections_with_warning() -> None:
     assert "1 section stale (repos)" in rendered
     assert "section=repos count=1 stale=1" in rendered
     assert "STALE" in rendered
-    assert "section=pma_threads count=2 stale=0" in rendered
+    assert "section=managed_threads count=2 stale=0" in rendered
 
 
 def test_build_snapshot_freshness_summary_omits_empty_sections_and_adds_summary() -> (
@@ -934,7 +934,7 @@ def test_build_snapshot_freshness_summary_omits_empty_sections_and_adds_summary(
         ],
         inbox=[],
         action_queue=[],
-        pma_threads=[],
+        managed_threads=[],
         pma_files_detail={"inbox": [], "outbox": [], "consumed": [], "dismissed": []},
     )
 
@@ -975,7 +975,7 @@ def test_build_hub_snapshot_ignores_pma_self_thread_hung_noise(hub_env) -> None:
     from codex_autorunner.core.pma_action_queue import build_pma_action_queue
     from codex_autorunner.core.pma_context import build_hub_snapshot
 
-    thread_store = PmaThreadStore(hub_env.hub_root)
+    thread_store = ManagedThreadStore(hub_env.hub_root)
     thread = thread_store.create_thread(
         "hermes-m4-pma",
         hub_env.hub_root,
@@ -1009,7 +1009,7 @@ def test_build_hub_snapshot_ignores_pma_self_thread_hung_noise(hub_env) -> None:
 
     queue = build_pma_action_queue(
         inbox=snapshot.get("inbox") or [],
-        pma_threads=snapshot.get("pma_threads") or [],
+        managed_threads=snapshot.get("managed_threads") or [],
         pma_files_detail=snapshot.get("pma_files_detail")
         or {"inbox": [], "outbox": []},
         automation=snapshot.get("automation") or {},
@@ -1394,10 +1394,10 @@ def test_build_hub_snapshot_clears_stale_exit_code_when_last_run_id_is_rewritten
     assert repo_entry["last_exit_code"] is None
 
 
-def test_build_hub_snapshot_includes_pma_threads_section(hub_env) -> None:
+def test_build_hub_snapshot_includes_managed_threads_section(hub_env) -> None:
     from codex_autorunner.core.pma_context import _render_hub_snapshot
 
-    store = PmaThreadStore(hub_env.hub_root)
+    store = ManagedThreadStore(hub_env.hub_root)
     thread = store.create_thread(
         "codex",
         workspace_root=hub_env.repo_root,
@@ -1423,10 +1423,10 @@ def test_build_hub_snapshot_includes_pma_threads_section(hub_env) -> None:
     finally:
         supervisor.shutdown()
 
-    pma_threads = snapshot.get("pma_threads")
-    assert isinstance(pma_threads, list)
-    assert pma_threads
-    first = pma_threads[0]
+    managed_threads = snapshot.get("managed_threads")
+    assert isinstance(managed_threads, list)
+    assert managed_threads
+    first = managed_threads[0]
     assert first["managed_thread_id"] == managed_thread_id
     assert first["agent"] == "codex"
     assert first["repo_id"] == hub_env.repo_id
@@ -2249,7 +2249,7 @@ class TestIssue975CharacterizationMixedPmaState:
         include_dispatch: bool = True,
         include_failed_run: bool = True,
         include_completed_run: bool = True,
-        include_pma_thread: bool = True,
+        include_managed_thread: bool = True,
         include_pma_file: bool = True,
     ) -> dict:
         """Build a mixed PMA snapshot for characterization tests.
@@ -2373,9 +2373,9 @@ class TestIssue975CharacterizationMixedPmaState:
                 }
             )
 
-        pma_threads: list[dict] = []
-        if include_pma_thread:
-            pma_threads.append(
+        managed_threads: list[dict] = []
+        if include_managed_thread:
+            managed_threads.append(
                 {
                     "managed_thread_id": "thread-idle-1",
                     "agent": "codex",
@@ -2400,7 +2400,7 @@ class TestIssue975CharacterizationMixedPmaState:
                     },
                 }
             )
-            pma_threads.append(
+            managed_threads.append(
                 {
                     "managed_thread_id": "thread-completed-1",
                     "agent": "opencode",
@@ -2450,7 +2450,7 @@ class TestIssue975CharacterizationMixedPmaState:
 
         action_queue = build_pma_action_queue(
             inbox=inbox,
-            pma_threads=pma_threads,
+            managed_threads=managed_threads,
             pma_files_detail=pma_files_detail,
             automation={},
             generated_at="2026-03-16T12:00:00Z",
@@ -2462,7 +2462,7 @@ class TestIssue975CharacterizationMixedPmaState:
             "inbox": inbox,
             "action_queue": action_queue,
             "repos": [],
-            "pma_threads": pma_threads,
+            "managed_threads": managed_threads,
             "pma_files": {"inbox": ["ticket-pack.md"], "outbox": []},
             "pma_files_detail": pma_files_detail,
             "freshness": {
@@ -2494,7 +2494,10 @@ class TestIssue975CharacterizationMixedPmaState:
                             if (item.get("freshness") or {}).get("is_stale", False)
                         ),
                     },
-                    "pma_threads": {"entity_count": len(pma_threads), "stale_count": 0},
+                    "managed_threads": {
+                        "entity_count": len(managed_threads),
+                        "stale_count": 0,
+                    },
                 },
             },
         }
@@ -2636,10 +2639,12 @@ class TestIssue975CharacterizationMixedPmaState:
         assert "followup_state=reusable" in result
         assert "show reusable threads" in result
 
-    def test_snapshot_pma_threads_expose_chat_binding_metadata(self, hub_env) -> None:
-        from codex_autorunner.core.pma_context import _snapshot_pma_threads
+    def test_snapshot_managed_threads_expose_chat_binding_metadata(
+        self, hub_env
+    ) -> None:
+        from codex_autorunner.core.pma_context import _snapshot_managed_threads
 
-        store = PmaThreadStore(hub_env.hub_root)
+        store = ManagedThreadStore(hub_env.hub_root)
         thread = store.create_thread(
             "codex",
             hub_env.repo_root,
@@ -2656,7 +2661,7 @@ class TestIssue975CharacterizationMixedPmaState:
             mode="reuse",
         )
 
-        snapshot_threads = _snapshot_pma_threads(hub_env.hub_root)
+        snapshot_threads = _snapshot_managed_threads(hub_env.hub_root)
         thread_snapshot = next(
             item
             for item in snapshot_threads
@@ -2671,12 +2676,12 @@ class TestIssue975CharacterizationMixedPmaState:
         assert thread_snapshot["binding_ids"] == ["discord:channel-123"]
         assert thread_snapshot["cleanup_protected"] is True
 
-    def test_snapshot_pma_threads_keeps_inventory_when_binding_lookup_fails(
+    def test_snapshot_managed_threads_keeps_inventory_when_binding_lookup_fails(
         self, hub_env
     ) -> None:
-        from codex_autorunner.core.pma_context import _snapshot_pma_threads
+        from codex_autorunner.core.pma_context import _snapshot_managed_threads
 
-        store = PmaThreadStore(hub_env.hub_root)
+        store = ManagedThreadStore(hub_env.hub_root)
         thread = store.create_thread(
             "codex",
             hub_env.repo_root,
@@ -2686,10 +2691,10 @@ class TestIssue975CharacterizationMixedPmaState:
         thread_id = str(thread["managed_thread_id"])
 
         with patch(
-            "codex_autorunner.core.pma_thread_snapshot.active_chat_binding_metadata_by_thread",
+            "codex_autorunner.core.managed_thread_snapshot.active_chat_binding_metadata_by_thread",
             side_effect=RuntimeError("binding db unavailable"),
         ):
-            snapshot_threads = _snapshot_pma_threads(hub_env.hub_root)
+            snapshot_threads = _snapshot_managed_threads(hub_env.hub_root)
 
         thread_snapshot = next(
             item
@@ -2711,10 +2716,10 @@ class TestIssue975CharacterizationMixedPmaState:
             include_completed_run=False,
             include_pma_file=False,
         )
-        pma_threads = snapshot.get("pma_threads") or []
+        managed_threads = snapshot.get("managed_threads") or []
         completed_thread = next(
             item
-            for item in pma_threads
+            for item in managed_threads
             if item.get("managed_thread_id") == "thread-completed-1"
         )
         completed_thread["repo_id"] = "repo-other"
@@ -2724,7 +2729,7 @@ class TestIssue975CharacterizationMixedPmaState:
 
         queue = build_pma_action_queue(
             inbox=[],
-            pma_threads=pma_threads,
+            managed_threads=managed_threads,
             pma_files_detail={"inbox": [], "outbox": []},
             automation={},
             generated_at="2026-03-16T12:00:00Z",
@@ -2753,8 +2758,8 @@ class TestIssue975CharacterizationMixedPmaState:
             include_completed_run=False,
             include_pma_file=False,
         )
-        pma_threads = snapshot.get("pma_threads") or []
-        pma_threads.append(
+        managed_threads = snapshot.get("managed_threads") or []
+        managed_threads.append(
             {
                 "managed_thread_id": "thread-unowned-1",
                 "agent": "codex",
@@ -2784,7 +2789,7 @@ class TestIssue975CharacterizationMixedPmaState:
 
         queue = build_pma_action_queue(
             inbox=snapshot.get("inbox") or [],
-            pma_threads=pma_threads,
+            managed_threads=managed_threads,
             pma_files_detail={"inbox": [], "outbox": []},
             automation={},
             generated_at="2026-03-16T12:00:00Z",
@@ -2812,10 +2817,10 @@ class TestIssue975CharacterizationMixedPmaState:
             include_completed_run=False,
             include_pma_file=False,
         )
-        pma_threads = snapshot.get("pma_threads") or []
+        managed_threads = snapshot.get("managed_threads") or []
         resumed_thread = next(
             item
-            for item in pma_threads
+            for item in managed_threads
             if item.get("managed_thread_id") == "thread-idle-1"
         )
         resumed_thread["status_reason"] = "thread_resumed"
@@ -2826,7 +2831,7 @@ class TestIssue975CharacterizationMixedPmaState:
 
         queue = build_pma_action_queue(
             inbox=[],
-            pma_threads=pma_threads,
+            managed_threads=managed_threads,
             pma_files_detail={"inbox": [], "outbox": []},
             automation={},
             generated_at="2026-03-16T12:00:00Z",
@@ -2878,10 +2883,10 @@ class TestIssue975CharacterizationMixedPmaState:
             include_completed_run=False,
             include_pma_file=False,
         )
-        pma_threads = snapshot.get("pma_threads") or []
+        managed_threads = snapshot.get("managed_threads") or []
         stale_thread = next(
             item
-            for item in pma_threads
+            for item in managed_threads
             if item.get("managed_thread_id") == "thread-completed-1"
         )
         stale_thread["repo_id"] = "repo-other"
@@ -2891,7 +2896,7 @@ class TestIssue975CharacterizationMixedPmaState:
 
         queue = build_pma_action_queue(
             inbox=[],
-            pma_threads=pma_threads,
+            managed_threads=managed_threads,
             pma_files_detail={"inbox": [], "outbox": []},
             automation={},
             generated_at="2026-03-16T12:00:00Z",
@@ -2926,10 +2931,10 @@ class TestIssue975CharacterizationMixedPmaState:
             include_completed_run=False,
             include_pma_file=False,
         )
-        pma_threads = snapshot.get("pma_threads") or []
+        managed_threads = snapshot.get("managed_threads") or []
         stale_thread = next(
             item
-            for item in pma_threads
+            for item in managed_threads
             if item.get("managed_thread_id") == "thread-completed-1"
         )
         stale_thread["chat_bound"] = True
@@ -2942,7 +2947,7 @@ class TestIssue975CharacterizationMixedPmaState:
 
         queue = build_pma_action_queue(
             inbox=[],
-            pma_threads=pma_threads,
+            managed_threads=managed_threads,
             pma_files_detail={"inbox": [], "outbox": []},
             automation={},
             generated_at="2026-03-16T12:00:00Z",
@@ -2990,7 +2995,7 @@ class TestIssue975CharacterizationMixedPmaState:
 
         queue = build_pma_action_queue(
             inbox=snapshot.get("inbox") or [],
-            pma_threads=snapshot.get("pma_threads") or [],
+            managed_threads=snapshot.get("managed_threads") or [],
             pma_files_detail=pma_files_detail,
             automation={},
             generated_at="2026-03-16T12:00:00Z",
@@ -3022,9 +3027,9 @@ class TestIssue975CharacterizationManagedThreadPayload:
     - idle/running/paused/archived -> same
     """
 
-    def test_pma_thread_payload_includes_all_status_fields(self, hub_env) -> None:
+    def test_managed_thread_payload_includes_all_status_fields(self, hub_env) -> None:
         """Document the canonical managed-thread store payload."""
-        store = PmaThreadStore(hub_env.hub_root)
+        store = ManagedThreadStore(hub_env.hub_root)
         thread = store.create_thread(
             "codex",
             hub_env.repo_root,
@@ -3054,7 +3059,7 @@ class TestIssue975CharacterizationManagedThreadPayload:
         but the operator-facing status is 'reusable' which indicates the thread
         can accept another turn.
         """
-        store = PmaThreadStore(hub_env.hub_root)
+        store = ManagedThreadStore(hub_env.hub_root)
         thread = store.create_thread(
             "codex",
             hub_env.repo_root,
@@ -3081,7 +3086,7 @@ class TestIssue975CharacterizationManagedThreadPayload:
         """Document that completed+active threads render as 'status=reusable last_turn=completed'."""
         from codex_autorunner.core.pma_context import _render_hub_snapshot
 
-        store = PmaThreadStore(hub_env.hub_root)
+        store = ManagedThreadStore(hub_env.hub_root)
         thread = store.create_thread(
             "codex",
             hub_env.repo_root,

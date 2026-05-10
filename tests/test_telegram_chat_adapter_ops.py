@@ -18,8 +18,8 @@ from codex_autorunner.adapters.chat.models import (
     ChatMessageRef,
     ChatThreadRef,
 )
-from codex_autorunner.adapters.telegram.adapter import TelegramBotClient
-from codex_autorunner.adapters.telegram.chat_adapter import TelegramChatAdapter
+from codex_autorunner.adapters.telegram.adapter import TelegramChatAdapter
+from codex_autorunner.adapters.telegram.client import TelegramBotClient
 
 
 class _DummyPoller:

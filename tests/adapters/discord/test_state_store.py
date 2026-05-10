@@ -10,11 +10,11 @@ from codex_autorunner.adapters.discord.state import (
     DiscordStateStore,
     OutboxRecord,
 )
+from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration import (
     OrchestrationBindingStore,
     initialize_orchestration_sqlite,
 )
-from codex_autorunner.core.pma_thread_store import PmaThreadStore
 
 
 @pytest.mark.anyio
@@ -133,7 +133,7 @@ async def test_discord_transport_store_remains_metadata_only_for_binding_identit
     workspace_root = (hub_root / "worktrees" / "repo-1").resolve()
     workspace_root.mkdir(parents=True, exist_ok=True)
     initialize_orchestration_sqlite(hub_root)
-    thread = PmaThreadStore(hub_root).create_thread(
+    thread = ManagedThreadStore(hub_root).create_thread(
         "codex",
         workspace_root,
         repo_id="repo-1",

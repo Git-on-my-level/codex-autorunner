@@ -13,6 +13,7 @@ import codex_autorunner.adapters.chat.managed_thread_turns as managed_thread_tur
 from codex_autorunner.adapters.chat.managed_thread_surface_kernel import (
     build_managed_thread_terminal_delivery_hooks,
 )
+from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration.managed_thread_delivery import (
     ManagedThreadDeliveryState,
 )
@@ -30,7 +31,6 @@ from codex_autorunner.core.orchestration.runtime_threads import (
     RuntimeThreadOutcome,
 )
 from codex_autorunner.core.orchestration.turn_timeline import list_turn_timeline
-from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.ports.run_event import RunNotice
 from codex_autorunner.core.pr_bindings import PrBindingStore
 from codex_autorunner.core.scm_polling_watches import ScmPollingWatchStore
@@ -1763,7 +1763,7 @@ async def test_finalize_managed_thread_execution_self_claims_existing_pr_binding
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     binding_store = PrBindingStore(tmp_path)
-    thread_store = PmaThreadStore(tmp_path)
+    thread_store = ManagedThreadStore(tmp_path)
     created = thread_store.create_thread(
         "hermes",
         tmp_path.resolve(),

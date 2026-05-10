@@ -17,8 +17,8 @@ from codex_autorunner.adapters.github.polling import (
 )
 from codex_autorunner.adapters.github.polling_events import emit_new_conditions
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
+from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
-from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.pr_binding_runtime import upsert_pr_binding
 from codex_autorunner.core.pr_bindings import PrBinding, PrBindingStore
 from codex_autorunner.core.publish_executor import PublishOperationProcessor
@@ -1310,7 +1310,7 @@ def test_backfill_binding_thread_targets_claims_active_matching_thread(
     hub_root = tmp_path / "hub"
     workspace_root = tmp_path / "repo"
     workspace_root.mkdir(parents=True)
-    thread = PmaThreadStore(hub_root).create_thread(
+    thread = ManagedThreadStore(hub_root).create_thread(
         "codex",
         workspace_root,
         repo_id="repo-1",
@@ -1350,7 +1350,7 @@ def test_backfill_binding_thread_targets_skips_already_bound_binding(
     hub_root = tmp_path / "hub"
     workspace_root = tmp_path / "repo"
     workspace_root.mkdir(parents=True)
-    thread = PmaThreadStore(hub_root).create_thread(
+    thread = ManagedThreadStore(hub_root).create_thread(
         "codex",
         workspace_root,
         repo_id="repo-1",
@@ -1740,7 +1740,7 @@ def test_process_due_watches_reacts_then_wakes_thread_and_notifies_bound_chat(
         workspace_path=str(workspace_root),
         repo_id="repo-1",
     )
-    _thread_store = PmaThreadStore(hub_root)
+    _thread_store = ManagedThreadStore(hub_root)
     thread = _thread_store.create_thread(
         "codex",
         workspace_root,
@@ -1962,7 +1962,7 @@ def test_process_due_watches_keeps_distinct_bound_notices_for_multiple_review_co
         workspace_path=str(workspace_root),
         repo_id="repo-1",
     )
-    _thread_store = PmaThreadStore(hub_root)
+    _thread_store = ManagedThreadStore(hub_root)
     thread = _thread_store.create_thread(
         "codex",
         workspace_root,
@@ -2808,7 +2808,7 @@ def test_process_uses_managed_thread_head_branch_hint_for_external_pr_discovery(
     hub_root = tmp_path / "hub"
     repo_root = hub_root / "worktrees" / "repo-1--codex-1"
     repo_root.mkdir(parents=True)
-    thread = PmaThreadStore(hub_root).create_thread(
+    thread = ManagedThreadStore(hub_root).create_thread(
         "codex",
         repo_root,
         repo_id="repo-1",

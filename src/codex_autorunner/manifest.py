@@ -209,23 +209,6 @@ def match_base_repo_id(
     return normalized_base
 
 
-def _strip_deprecated_manifest_top_keys(data: Dict[str, Any]) -> List[str]:
-    """Drop removed manifest sections; return human-readable keys removed (for logs)."""
-    removed: List[str] = []
-    _legacy_ws_section = "agent_" + "workspaces"
-    if _legacy_ws_section in data:
-        del data[_legacy_ws_section]
-        removed.append(_legacy_ws_section)
-    agents_block = data.get("agents")
-    _legacy_agent_runtime = "".join(("zero", "claw"))
-    if isinstance(agents_block, dict) and _legacy_agent_runtime in agents_block:
-        del agents_block[_legacy_agent_runtime]
-        removed.append(f"agents.{_legacy_agent_runtime}")
-        if not agents_block:
-            del data["agents"]
-    return removed
-
-
 def _relative_to_hub_root(hub_root: Path, target: Path) -> Path:
     if not target.is_absolute():
         target = (hub_root / target).resolve()
@@ -364,8 +347,6 @@ def load_manifest_with_issues(
         raw_data = {}
     data = cast(Dict[str, Any], raw_data)
 
-    removed_deprecated = _strip_deprecated_manifest_top_keys(data)
-
     version = data.get("version")
     if version not in {2, MANIFEST_VERSION}:
         raise ManifestError(
@@ -379,22 +360,6 @@ def load_manifest_with_issues(
         repos=repos,
         issues=list(issues),
     )
-    if removed_deprecated:
-        try:
-            save_manifest(manifest_path, manifest, hub_root)
-        except OSError as exc:
-            _logger.warning(
-                "Removed deprecated hub manifest keys %s but could not persist %s: %s",
-                ", ".join(removed_deprecated),
-                manifest_path,
-                exc,
-            )
-        else:
-            _logger.info(
-                "Removed deprecated hub manifest keys from %s: %s",
-                manifest_path,
-                ", ".join(removed_deprecated),
-            )
     return manifest, list(issues)
 
 

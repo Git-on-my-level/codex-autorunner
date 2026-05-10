@@ -343,14 +343,14 @@ class TestTraceCheckpointEndpoint:
 
 class TestTurnDetailTraceMetadata:
     def test_turn_detail_includes_trace_metadata(self, hub_env) -> None:
-        from codex_autorunner.core.pma_thread_store import PmaThreadStore
+        from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 
         hub_root = hub_env.hub_root
         _init_orchestration_db(hub_root)
 
         with _make_hub_app(hub_root) as client:
             thread_id = _create_thread(client, hub_env)
-            store = PmaThreadStore(hub_root)
+            store = ManagedThreadStore(hub_root)
             turn = store.create_turn(thread_id, prompt="test prompt")
             managed_turn_id = turn["managed_turn_id"]
 
@@ -370,14 +370,14 @@ class TestTurnDetailTraceMetadata:
             assert meta["checkpoint_available"] is False
 
     def test_turn_detail_with_cold_trace(self, hub_env) -> None:
-        from codex_autorunner.core.pma_thread_store import PmaThreadStore
+        from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 
         hub_root = hub_env.hub_root
         _init_orchestration_db(hub_root)
 
         with _make_hub_app(hub_root) as client:
             thread_id = _create_thread(client, hub_env)
-            store = PmaThreadStore(hub_root)
+            store = ManagedThreadStore(hub_root)
             turn = store.create_turn(thread_id, prompt="test cold trace")
             managed_turn_id = turn["managed_turn_id"]
 

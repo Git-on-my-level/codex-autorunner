@@ -380,7 +380,7 @@ class WorktreeManager:
             )
             return result
 
-    def _archive_bound_pma_threads(
+    def _archive_bound_managed_threads(
         self,
         *,
         worktree_repo_id: str,
@@ -884,7 +884,7 @@ print(
 
         if worktree_path.exists():
             self._ctx.stop_runner(repo_id=entry.id, repo_path=worktree_path)
-        self._archive_bound_pma_threads(
+        self._archive_bound_managed_threads(
             worktree_repo_id=entry.id,
             worktree_path=worktree_path,
         )
@@ -1106,12 +1106,14 @@ print(
         )
         report.add_step("git_remove", "ok")
 
-        archived_thread_ids = self._archive_bound_pma_threads(
+        archived_thread_ids = self._archive_bound_managed_threads(
             worktree_repo_id=worktree_repo_id,
             worktree_path=worktree_path,
         )
         report.add_step(
-            "archive_pma_threads", "ok", detail=f"archived={len(archived_thread_ids)}"
+            "archive_managed_threads",
+            "ok",
+            detail=f"archived={len(archived_thread_ids)}",
         )
 
         orphan_dir_cleanup = self._remove_orphaned_worktree_dir(worktree_path)
@@ -1192,12 +1194,12 @@ print(
         )
         report.add_step("archive_snapshot", "ok")
 
-        archived_thread_ids = self._archive_bound_pma_threads(
+        archived_thread_ids = self._archive_bound_managed_threads(
             worktree_repo_id=worktree_repo_id,
             worktree_path=worktree_path,
         )
         report.add_step(
-            "archive_pma_threads",
+            "archive_managed_threads",
             "ok",
             detail=f"archived={len(archived_thread_ids)}",
         )

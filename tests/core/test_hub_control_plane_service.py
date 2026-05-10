@@ -31,13 +31,13 @@ from codex_autorunner.core.hub_control_plane import (
     WorkspaceSetupCommandRequest,
     serialize_run_event,
 )
+from codex_autorunner.core.managed_thread_store import (
+    ManagedThreadStore,
+    prepare_managed_thread_store,
+)
 from codex_autorunner.core.orchestration.cold_trace_store import ColdTraceStore
 from codex_autorunner.core.orchestration.sqlite import prepare_orchestration_sqlite
 from codex_autorunner.core.pma_notification_store import PmaNotificationStore
-from codex_autorunner.core.pma_thread_store import (
-    PmaThreadStore,
-    prepare_pma_thread_store,
-)
 from codex_autorunner.core.pma_transcripts import PmaTranscriptStore
 from codex_autorunner.core.ports.run_event import Completed, Started
 
@@ -68,7 +68,7 @@ def _build_service(tmp_path: Path) -> tuple[HubSharedStateService, str]:
     workspace_root = hub_root / "repos" / "repo-1"
     workspace_root.mkdir(parents=True, exist_ok=True)
     prepare_orchestration_sqlite(hub_root, durable=False)
-    prepare_pma_thread_store(hub_root, durable=False)
+    prepare_managed_thread_store(hub_root, durable=False)
     supervisor = _SupervisorStub()
     service = HubSharedStateService(
         hub_root=hub_root,
@@ -77,7 +77,7 @@ def _build_service(tmp_path: Path) -> tuple[HubSharedStateService, str]:
         hub_build_version="build-1",
         durable_writes=False,
     )
-    thread = PmaThreadStore(
+    thread = ManagedThreadStore(
         hub_root, durable=False, bootstrap_on_init=False
     ).create_thread(
         "codex",
@@ -184,7 +184,7 @@ def test_shared_state_service_lists_surface_bindings_with_filters(
 ) -> None:
     service, thread_target_id = _build_service(tmp_path)
     workspace_root = tmp_path / "hub" / "repos" / "repo-1"
-    second_thread = PmaThreadStore(
+    second_thread = ManagedThreadStore(
         tmp_path / "hub", durable=False, bootstrap_on_init=False
     ).create_thread(
         "opencode",

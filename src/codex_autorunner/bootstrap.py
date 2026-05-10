@@ -308,7 +308,7 @@ You are an **abstraction layer, not an executor**. Coordinate tickets and flows 
 - Do not launch runtime CLIs directly (`codex`, `opencode`, etc.) for PMA-managed work when a managed thread fits; use `car pma thread spawn` and `car pma thread send` so CAR can track lifecycle and progress.
 - Do not write ticket files as scaffolding for managed-thread work.
 - Use ticket flows for larger structured work: cross-repo changes, 3+ planned tickets, explicit acceptance criteria tracking, or work that benefits from pause/resume/review handoffs.
-- Managed thread state is visible in `hub_snapshot.pma_threads`.
+- Managed thread state is visible in `hub_snapshot.managed_threads`.
 - For hub-scoped PMA CLI commands, include `--path <hub_root>` so they resolve the
   intended hub config instead of relying on the current working directory.
 - CLI primitives:

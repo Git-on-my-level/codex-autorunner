@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration import (
     ManagedThreadDeliveryEnvelope,
     ManagedThreadDeliveryIntent,
@@ -17,7 +18,6 @@ from codex_autorunner.core.orchestration.managed_thread_timeline import (
     timeline_item_from_tail_event,
 )
 from codex_autorunner.core.orchestration.turn_timeline import persist_turn_timeline
-from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.ports.run_event import (
     ApprovalRequested,
     Completed,
@@ -35,11 +35,11 @@ def _hub_root(tmp_path: Path) -> Path:
     return hub_root
 
 
-def _store(tmp_path: Path) -> tuple[Path, PmaThreadStore, str]:
+def _store(tmp_path: Path) -> tuple[Path, ManagedThreadStore, str]:
     hub_root = _hub_root(tmp_path)
     workspace = hub_root / "worktree"
     workspace.mkdir(parents=True)
-    store = PmaThreadStore(hub_root)
+    store = ManagedThreadStore(hub_root)
     thread = store.create_thread("codex", workspace)
     return hub_root, store, str(thread["managed_thread_id"])
 

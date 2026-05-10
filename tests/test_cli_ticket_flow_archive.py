@@ -17,7 +17,7 @@ from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.core.flows.store import FlowStore
 from codex_autorunner.core.force_attestation import FORCE_ATTESTATION_REQUIRED_ERROR
 from codex_autorunner.core.git_utils import run_git
-from codex_autorunner.core.pma_thread_store import PmaThreadStore
+from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 
 runner = CliRunner()
 
@@ -299,14 +299,14 @@ def test_ticket_flow_archive_runs_constrained_app_cleanup(
     assert (app_root / "bundle" / "car-app.yaml").exists()
 
 
-def test_ticket_flow_archive_also_archives_ticket_flow_pma_threads(
+def test_ticket_flow_archive_also_archives_ticket_flow_managed_threads(
     tmp_path: Path,
 ) -> None:
     repo_root = _setup_repo(tmp_path)
     run_id = "12121212-1212-1212-1212-121212121212"
     _seed_repo_run(repo_root, run_id, FlowRunStatus.STOPPED)
 
-    store = PmaThreadStore(tmp_path)
+    store = ManagedThreadStore(tmp_path)
     matching = store.create_thread(
         "codex",
         repo_root.resolve(),
@@ -360,8 +360,8 @@ def test_ticket_flow_archive_also_archives_ticket_flow_pma_threads(
 
     assert result.exit_code == 0, result.output
     payload = json.loads(result.stdout)
-    assert payload["archived_pma_threads"] == 2
-    assert sorted(payload["archived_pma_thread_ids"]) == sorted(
+    assert payload["archived_managed_threads"] == 2
+    assert sorted(payload["archived_managed_thread_ids"]) == sorted(
         [
             matching["managed_thread_id"],
             legacy["managed_thread_id"],
@@ -404,9 +404,9 @@ def test_ticket_flow_archive_skips_pma_archival_without_hub_manifest(
         force=False,
         delete_run=True,
     )
-    assert payload["archived_pma_threads"] == 0
-    assert payload["archived_pma_threads_skipped"] == "hub_manifest_missing"
-    assert payload["archived_pma_threads_error"] is None
+    assert payload["archived_managed_threads"] == 0
+    assert payload["archived_managed_threads_skipped"] == "hub_manifest_missing"
+    assert payload["archived_managed_threads_error"] is None
     assert not (repo_root / ".codex-autorunner" / "orchestration.sqlite3").exists()
 
 
@@ -419,7 +419,7 @@ def test_ticket_flow_archive_tolerates_pma_archive_failures(
     run_dir = repo_root / ".codex-autorunner" / "runs" / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    class _BrokenPmaStore(PmaThreadStore):
+    class _BrokenPmaStore(ManagedThreadStore):
         def archive_thread(self, managed_thread_id: str) -> None:
             raise RuntimeError(f"boom:{managed_thread_id}")
 
@@ -437,7 +437,7 @@ def test_ticket_flow_archive_tolerates_pma_archive_failures(
     )
 
     monkeypatch.setattr(
-        "codex_autorunner.core.flows.archive_helpers.PmaThreadStore",
+        "codex_autorunner.core.flows.archive_helpers.ManagedThreadStore",
         _BrokenPmaStore,
     )
 
@@ -458,10 +458,11 @@ def test_ticket_flow_archive_tolerates_pma_archive_failures(
     payload = json.loads(result.stdout)
     assert payload["archived_runs"] is True
     assert payload["deleted_run"] is True
-    assert payload["archived_pma_threads"] == 0
-    assert payload["archived_pma_thread_ids"] == []
+    assert payload["archived_managed_threads"] == 0
+    assert payload["archived_managed_thread_ids"] == []
     assert (
-        payload["archived_pma_threads_error"] == f"boom:{thread['managed_thread_id']}"
+        payload["archived_managed_threads_error"]
+        == f"boom:{thread['managed_thread_id']}"
     )
 
 
@@ -482,7 +483,7 @@ def test_ticket_flow_archive_searches_full_ancestor_chain_for_hub_manifest(
     run_dir = repo_root / ".codex-autorunner" / "runs" / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    store = PmaThreadStore(hub_root)
+    store = ManagedThreadStore(hub_root)
     thread = store.create_thread(
         "codex",
         repo_root.resolve(),
@@ -501,9 +502,9 @@ def test_ticket_flow_archive_searches_full_ancestor_chain_for_hub_manifest(
         delete_run=True,
     )
 
-    assert payload["archived_pma_threads"] == 1
-    assert payload["archived_pma_threads_skipped"] is None
-    assert payload["archived_pma_thread_ids"] == [thread["managed_thread_id"]]
+    assert payload["archived_managed_threads"] == 1
+    assert payload["archived_managed_threads_skipped"] is None
+    assert payload["archived_managed_thread_ids"] == [thread["managed_thread_id"]]
 
 
 def test_ticket_flow_archive_cleans_related_terminal_runs(
@@ -734,7 +735,7 @@ def test_ticket_flow_archive_scans_all_active_threads(
     matching_thread_id = "matching-thread"
 
     def fake_list_threads(
-        self: PmaThreadStore,
+        self: ManagedThreadStore,
         *,
         agent: str | None = None,
         status: str | None = None,
@@ -773,13 +774,13 @@ def test_ticket_flow_archive_scans_all_active_threads(
         ]
 
     def fake_archive_thread(
-        self: PmaThreadStore,
+        self: ManagedThreadStore,
         managed_thread_id: str,
     ) -> None:
         archived_thread_ids.append(managed_thread_id)
 
-    monkeypatch.setattr(PmaThreadStore, "list_threads", fake_list_threads)
-    monkeypatch.setattr(PmaThreadStore, "archive_thread", fake_archive_thread)
+    monkeypatch.setattr(ManagedThreadStore, "list_threads", fake_list_threads)
+    monkeypatch.setattr(ManagedThreadStore, "archive_thread", fake_archive_thread)
 
     payload = archive_flow_run_artifacts(
         repo_root,
@@ -795,8 +796,8 @@ def test_ticket_flow_archive_scans_all_active_threads(
         and call["limit"] is None
         for call in observed_calls
     )
-    assert payload["archived_pma_threads"] == 1
-    assert payload["archived_pma_thread_ids"] == [matching_thread_id]
+    assert payload["archived_managed_threads"] == 1
+    assert payload["archived_managed_thread_ids"] == [matching_thread_id]
     assert archived_thread_ids == [matching_thread_id]
 
 

@@ -22,7 +22,7 @@ from ..discord.rendering import truncate_for_discord
 from ..discord.rest import DiscordRestClient
 from ..discord.state import DiscordStateStore
 from ..discord.state import OutboxRecord as DiscordOutboxRecord
-from ..telegram.adapter import TelegramBotClient
+from ..telegram.client import TelegramBotClient
 from ..telegram.outbox import _outbox_key as telegram_outbox_key
 from ..telegram.state import OutboxRecord as TelegramOutboxRecord
 from ..telegram.state import TelegramStateStore, parse_topic_key

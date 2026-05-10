@@ -811,7 +811,7 @@ async def test_discord_message_turns_show_busy_placeholder_for_attachment_prep(
 
 
 @pytest.mark.anyio
-async def test_discord_notification_reply_routes_to_pma_thread_with_context(
+async def test_discord_notification_reply_routes_to_managed_thread_with_context(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     notification_workspace = tmp_path / "notification-workspace"
@@ -1305,7 +1305,7 @@ def test_list_discord_thread_targets_for_picker_filters_by_mode(tmp_path: Path) 
         repo_id="repo-1",
         display_name="discord:repo",
     )
-    pma_thread = orchestration_service.create_thread_target(
+    managed_thread = orchestration_service.create_thread_target(
         "codex",
         workspace,
         repo_id="repo-1",
@@ -1329,7 +1329,7 @@ def test_list_discord_thread_targets_for_picker_filters_by_mode(tmp_path: Path) 
     orchestration_service.upsert_binding(
         surface_kind="discord",
         surface_key="pma-channel",
-        thread_target_id=pma_thread.thread_target_id,
+        thread_target_id=managed_thread.thread_target_id,
         agent_id="codex",
         repo_id="repo-1",
         mode="pma",
@@ -1354,7 +1354,7 @@ def test_list_discord_thread_targets_for_picker_filters_by_mode(tmp_path: Path) 
         unbound_thread.thread_target_id,
     }
     assert {thread_id for thread_id, _label in pma_items} == {
-        pma_thread.thread_target_id,
+        managed_thread.thread_target_id,
         unbound_thread.thread_target_id,
     }
 

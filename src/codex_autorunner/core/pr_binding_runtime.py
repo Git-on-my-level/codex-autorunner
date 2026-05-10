@@ -7,7 +7,7 @@ from typing import Any, Optional
 
 from ..manifest import ManifestError, load_manifest
 from .git_utils import git_branch
-from .pma_thread_store import PmaThreadStore
+from .managed_thread_store import ManagedThreadStore
 from .pr_bindings import PrBinding, PrBindingStore
 from .text_utils import _mapping, _normalize_text
 
@@ -171,7 +171,7 @@ def resolve_thread_target_id(
     existing_binding: Optional[PrBinding] = None,
     thread_target_id: Optional[str] = None,
 ) -> Optional[str]:
-    store = PmaThreadStore(hub_root)
+    store = ManagedThreadStore(hub_root)
     explicit = _normalize_text(thread_target_id)
     if explicit is not None and store.get_thread(explicit) is not None:
         return explicit
@@ -296,7 +296,7 @@ def backfill_pr_binding_thread_target_ids(
     include_recent_terminal_threads: bool = True,
     terminal_thread_lookback: timedelta = _RECENT_TERMINAL_THREAD_LOOKBACK,
 ) -> dict[str, int]:
-    store = PmaThreadStore(hub_root)
+    store = ManagedThreadStore(hub_root)
     binding_store = PrBindingStore(hub_root)
     counts = {
         "threads_scanned": 0,

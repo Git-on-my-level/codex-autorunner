@@ -8,8 +8,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional
 
 from ...core.locks import file_lock
+from ...core.managed_thread_store import ManagedThreadStore
 from ...core.orchestration.sqlite import open_orchestration_sqlite
-from ...core.pma_thread_store import PmaThreadStore
 from ...core.pr_binding_runtime import (
     backfill_pr_binding_thread_target_ids,
 )
@@ -846,7 +846,7 @@ class GitHubScmPollingService:
         self,
     ) -> tuple[dict[str, datetime], dict[str, datetime]]:
         try:
-            threads = PmaThreadStore(self._hub_root).list_threads(
+            threads = ManagedThreadStore(self._hub_root).list_threads(
                 status="active",
                 limit=1000,
             )

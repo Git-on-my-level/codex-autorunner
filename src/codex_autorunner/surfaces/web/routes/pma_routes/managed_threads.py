@@ -24,15 +24,15 @@ from .....core.orchestration.turn_timeline import list_turn_timeline
 from .....core.pma_automation_store import PmaAutomationThreadNotFoundError
 from .....core.text_utils import _truncate_text
 from ...schemas import (
+    ManagedThreadBulkArchiveRequest,
+    ManagedThreadCompactRequest,
+    ManagedThreadCreateRequest,
+    ManagedThreadForkRequest,
+    ManagedThreadResumeRequest,
     PmaAutomationSubscriptionCreateRequest,
     PmaAutomationTimerCancelRequest,
     PmaAutomationTimerCreateRequest,
     PmaAutomationTimerTouchRequest,
-    PmaManagedThreadBulkArchiveRequest,
-    PmaManagedThreadCompactRequest,
-    PmaManagedThreadCreateRequest,
-    PmaManagedThreadForkRequest,
-    PmaManagedThreadResumeRequest,
 )
 from ...services.pma import get_pma_request_context
 from ...services.pma.managed_thread_followup import (
@@ -178,7 +178,7 @@ def build_managed_thread_orchestration_service(request: Request):
     return build_harness_backed_orchestration_service(
         descriptors=cast(dict[str, RuntimeAgentDescriptor], descriptors),
         harness_factory=_make_harness,
-        pma_thread_store=context.thread_store(),
+        managed_thread_store=context.thread_store(),
     )
 
 
@@ -409,7 +409,7 @@ def build_managed_thread_crud_routes(
 
     @router.post("/threads")
     async def create_managed_thread(
-        request: Request, payload: PmaManagedThreadCreateRequest
+        request: Request, payload: ManagedThreadCreateRequest
     ) -> dict[str, Any]:
         context = get_pma_request_context(request)
         hub_root = context.hub_root
@@ -562,7 +562,7 @@ def build_managed_thread_crud_routes(
     def compact_managed_thread(
         managed_thread_id: str,
         request: Request,
-        payload: PmaManagedThreadCompactRequest,
+        payload: ManagedThreadCompactRequest,
     ) -> dict[str, Any]:
         summary = (payload.summary or "").strip()
         if not summary:
@@ -618,7 +618,7 @@ def build_managed_thread_crud_routes(
     async def fork_managed_thread(
         managed_thread_id: str,
         request: Request,
-        payload: PmaManagedThreadForkRequest,
+        payload: ManagedThreadForkRequest,
     ) -> dict[str, Any]:
         service = build_managed_thread_orchestration_service(request)
         source_thread = service.get_thread_target(managed_thread_id)
@@ -662,7 +662,7 @@ def build_managed_thread_crud_routes(
                 or source_thread.display_name
                 or source_thread.thread_target_id,
                 metadata={
-                    "flow_type": "pma_managed_thread_fork",
+                    "flow_type": "managed_thread_fork",
                     "managed_thread_id": managed_thread_id,
                     "source_backend_thread_id": source_session_id,
                 },
@@ -728,7 +728,7 @@ def build_managed_thread_crud_routes(
     async def resume_managed_thread(
         managed_thread_id: str,
         request: Request,
-        payload: PmaManagedThreadResumeRequest,
+        payload: ManagedThreadResumeRequest,
     ) -> dict[str, Any]:
         service = build_managed_thread_orchestration_service(request)
         thread = service.get_thread_target(managed_thread_id)
@@ -792,7 +792,7 @@ def build_managed_thread_crud_routes(
 
     @router.post("/threads/archive")
     def archive_managed_threads(
-        payload: PmaManagedThreadBulkArchiveRequest, request: Request
+        payload: ManagedThreadBulkArchiveRequest, request: Request
     ) -> dict[str, Any]:
         service = build_managed_thread_orchestration_service(request)
         context = get_pma_request_context(request)

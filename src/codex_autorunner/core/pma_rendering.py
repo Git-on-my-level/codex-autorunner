@@ -599,18 +599,18 @@ def _render_pma_files_section(
     lines.append("")
 
 
-def _render_pma_threads_section(
+def _render_managed_threads_section(
     snapshot: dict[str, Any],
     lines: list[str],
     *,
-    max_pma_threads: int,
+    max_managed_threads: int,
     max_field_chars: int,
 ) -> None:
-    pma_threads = snapshot.get("pma_threads") or []
-    if not pma_threads:
+    managed_threads = snapshot.get("managed_threads") or []
+    if not managed_threads:
         return
     lines.append("PMA Managed Threads:")
-    for thread in list(pma_threads)[: max(0, max_pma_threads)]:
+    for thread in list(managed_threads)[: max(0, max_managed_threads)]:
         managed_thread_id = _truncate(
             str(thread.get("managed_thread_id", "")), max_field_chars
         )
@@ -852,7 +852,7 @@ def _render_hub_snapshot(
     max_field_chars: int = PMA_MAX_TEMPLATE_FIELD_CHARS,
     max_pma_files: int = PMA_MAX_PMA_FILES,
     max_lifecycle_events: int = PMA_MAX_LIFECYCLE_EVENTS,
-    max_pma_threads: int = PMA_MAX_PMA_THREADS,
+    max_managed_threads: int = PMA_MAX_PMA_THREADS,
     max_automation_items: int = PMA_MAX_AUTOMATION_ITEMS,
 ) -> str:
     lines: list[str] = []
@@ -893,8 +893,8 @@ def _render_hub_snapshot(
     _render_pma_files_section(
         snapshot, lines, max_pma_files=max_pma_files, max_field_chars=fc
     )
-    _render_pma_threads_section(
-        snapshot, lines, max_pma_threads=max_pma_threads, max_field_chars=fc
+    _render_managed_threads_section(
+        snapshot, lines, max_managed_threads=max_managed_threads, max_field_chars=fc
     )
     _render_automation_section(
         snapshot, lines, max_automation_items=max_automation_items, max_field_chars=fc

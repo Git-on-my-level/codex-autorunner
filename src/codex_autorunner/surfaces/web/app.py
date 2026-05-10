@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import sqlite3
-import threading
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -44,7 +43,7 @@ from ...housekeeping import (
     reap_stale_flow_workers,
     run_housekeeping_once,
 )
-from .app_builders import create_app, create_repo_app
+from .app_builders import create_repo_app
 from .app_factory import CacheStaticFiles, resolve_allowed_hosts, resolve_auth_token
 from .app_state import (
     ServerOverrides,
@@ -84,52 +83,11 @@ from .static_assets import (
     web_index_response_headers,
 )
 
-__all__ = ["create_app", "create_hub_app", "create_repo_app"]
+__all__ = ["create_hub_app", "create_repo_app"]
 
 _DEFAULT_HUB_FLOW_SWEEP_INTERVAL_SECONDS = float(
     parse_flow_retention_config(None).sweep_interval_seconds
 )
-_REMOVED_REPO_TAB_PATHS = {
-    "workspace",
-    "messages",
-    "inbox",
-    "archive",
-    "analytics",
-    "terminal",
-    "settings",
-}
-
-
-def _require_safe_redirect_path_segment(value: str, *, field: str) -> None:
-    """Reject values that cannot appear in a single URL path segment or could smuggle headers."""
-    if not value or any(c in value for c in "\r\n\x00"):
-        raise HTTPException(status_code=400, detail=f"Invalid {field}")
-    if "/" in value or "\\" in value:
-        raise HTTPException(status_code=400, detail=f"Invalid {field}")
-    if value in (".", "..") or value.startswith(".."):
-        raise HTTPException(status_code=400, detail=f"Invalid {field}")
-
-
-def _safe_legacy_worktree_rest_suffix(rest: str) -> str:
-    """Build a safe trailing path for legacy worktree redirects (no open redirects)."""
-    if not rest:
-        return ""
-    if any(c in rest for c in "\r\n\x00"):
-        raise HTTPException(status_code=400, detail="Invalid path")
-    body = rest.strip("/")
-    if not body:
-        return ""
-    if "://" in body:
-        raise HTTPException(status_code=400, detail="Invalid path")
-    segments = body.split("/")
-    encoded: list[str] = []
-    for seg in segments:
-        if not seg or seg in (".", ".."):
-            raise HTTPException(status_code=400, detail="Invalid path")
-        if "\\" in seg or "://" in seg or seg.startswith("//"):
-            raise HTTPException(status_code=400, detail="Invalid path")
-        encoded.append(quote(seg, safe=""))
-    return "/" + "/".join(encoded)
 
 
 class _IdlePrunable(Protocol):
@@ -245,8 +203,6 @@ def create_hub_app(
     app.state.manager = repo_context.manager
     app.state.app_server_threads = repo_context.app_server_threads
     app.add_middleware(GZipMiddleware, minimum_size=500)
-    app.state.static_assets_lock = threading.Lock()
-    app.state.hub_static_assets = None
     app.state.orchestration_housekeeping = None
     web_static_dir, web_static_context = resolve_web_static_dir()
     app.state.web_static_dir = web_static_dir
@@ -856,9 +812,6 @@ def create_hub_app(
                                 "Hub opencode shutdown failed",
                                 exc,
                             )
-                static_context = getattr(app.state, "static_assets_context", None)
-                if static_context is not None:
-                    static_context.close()
                 web_static_context = getattr(
                     app.state, "web_static_assets_context", None
                 )
@@ -983,6 +936,46 @@ def create_hub_app(
                 detail=f"Worktree not found in repo scope: {repo_id}/{worktree_id}",
             )
 
+    def _legacy_spa_redirect(target: str) -> RedirectResponse:
+        loc = f"{context.base_path}{target}" if context.base_path else target
+        return RedirectResponse(loc, status_code=308)
+
+    @app.get("/worktrees", include_in_schema=False)
+    def legacy_worktrees_hub_redirect():
+        return _legacy_spa_redirect("/repos")
+
+    @app.get("/worktrees/{worktree_id}/tickets/{ticket_id}", include_in_schema=False)
+    def legacy_worktree_ticket_redirect(worktree_id: str, ticket_id: str):
+        parent_repo_id = _resolve_worktree_parent_repo_id(worktree_id)
+        return _legacy_spa_redirect(
+            f"/repos/{parent_repo_id}/worktrees/{worktree_id}/tickets/{ticket_id}"
+        )
+
+    @app.get("/worktrees/{worktree_id}/tickets", include_in_schema=False)
+    @app.get("/worktrees/{worktree_id}/tickets/", include_in_schema=False)
+    def legacy_worktree_tickets_index_redirect(worktree_id: str):
+        parent_repo_id = _resolve_worktree_parent_repo_id(worktree_id)
+        return _legacy_spa_redirect(
+            f"/repos/{parent_repo_id}/worktrees/{worktree_id}/tickets"
+        )
+
+    @app.get("/worktrees/{worktree_id}", include_in_schema=False)
+    def legacy_worktree_hub_redirect(worktree_id: str):
+        parent_repo_id = _resolve_worktree_parent_repo_id(worktree_id)
+        return _legacy_spa_redirect(f"/repos/{parent_repo_id}/worktrees/{worktree_id}")
+
+    @app.get("/contextspace/{workspace_id}", include_in_schema=False)
+    def legacy_contextspace_redirect(workspace_id: str):
+        return _legacy_spa_redirect(f"/repos/{workspace_id}/contextspace")
+
+    @app.get("/repos/{repo_id}/terminal", include_in_schema=False)
+    @app.get("/repos/{repo_id}/terminal/{rest:path}", include_in_schema=False)
+    def legacy_repo_terminal_redirect(repo_id: str, rest: Optional[str] = None):
+        segment = quote(repo_id, safe="")
+        target = f"/repos/{segment}"
+        loc = f"{context.base_path}{target}" if context.base_path else target
+        return RedirectResponse(loc, status_code=307)
+
     @app.get("/repos/{repo_id}/contextspace", include_in_schema=False)
     def pma_repo_contextspace_shell(repo_id: str):
         return _web_index_response()
@@ -994,37 +987,6 @@ def create_hub_app(
     def pma_worktree_contextspace_shell(repo_id: str, worktree_id: str):
         _require_worktree_scope(repo_id, worktree_id)
         return _web_index_response()
-
-    @app.get("/worktrees", include_in_schema=False)
-    def legacy_worktrees_index_redirect():
-        target = f"{context.base_path}/repos" if context.base_path else "/repos"
-        return RedirectResponse(target, status_code=308)
-
-    @app.get("/worktrees/{worktree_id}", include_in_schema=False)
-    @app.get("/worktrees/{worktree_id}/{rest:path}", include_in_schema=False)
-    def legacy_worktree_redirect(worktree_id: str, rest: str = ""):
-        _require_safe_redirect_path_segment(worktree_id, field="worktree_id")
-        parent_repo_id = _resolve_worktree_parent_repo_id(worktree_id)
-        encoded_parent_repo_id = quote(parent_repo_id, safe="")
-        encoded_worktree_id = quote(worktree_id, safe="")
-        suffix = _safe_legacy_worktree_rest_suffix(rest)
-        target = (
-            f"{context.base_path}/repos/{encoded_parent_repo_id}/worktrees/{encoded_worktree_id}{suffix}"
-            if context.base_path
-            else f"/repos/{encoded_parent_repo_id}/worktrees/{encoded_worktree_id}{suffix}"
-        )
-        return RedirectResponse(target, status_code=308)
-
-    @app.get("/contextspace/{workspace_id}", include_in_schema=False)
-    def legacy_contextspace_redirect(workspace_id: str):
-        _require_safe_redirect_path_segment(workspace_id, field="workspace_id")
-        encoded_workspace_id = quote(workspace_id, safe="")
-        target = (
-            f"{context.base_path}/repos/{encoded_workspace_id}/contextspace"
-            if context.base_path
-            else f"/repos/{encoded_workspace_id}/contextspace"
-        )
-        return RedirectResponse(target, status_code=308)
 
     @app.get("/repos/{repo_id}/", include_in_schema=False)
     def pma_repo_index_slash(repo_id: str):
@@ -1051,23 +1013,6 @@ def create_hub_app(
     def pma_worktree_index(repo_id: str, worktree_id: str):
         _require_worktree_scope(repo_id, worktree_id)
         return _web_index_response()
-
-    def removed_repo_tab_redirect(repo_id: str):
-        encoded_repo_id = quote(repo_id, safe="")
-        target = (
-            f"{context.base_path}/repos/{encoded_repo_id}"
-            if context.base_path
-            else f"/repos/{encoded_repo_id}"
-        )
-        return RedirectResponse(target, status_code=307)
-
-    for removed_tab in sorted(_REMOVED_REPO_TAB_PATHS):
-        app.add_api_route(
-            f"/repos/{{repo_id}}/{removed_tab}",
-            removed_repo_tab_redirect,
-            methods=["GET"],
-            include_in_schema=False,
-        )
 
     app.include_router(build_system_routes())
     mount_manager.mount_initial(initial_snapshots)

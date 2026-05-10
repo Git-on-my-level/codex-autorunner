@@ -33,7 +33,7 @@ def test_session_settings_round_trip_persists_values(_settings_env) -> None:
     client.post(
         "/api/session/settings",
         json={
-            "autorunner_model_override": "",
+            "autorunner_model_overrides": {},
             "autorunner_effort_override": "",
             "autorunner_approval_policy": "",
             "autorunner_sandbox_mode": "",
@@ -45,7 +45,6 @@ def test_session_settings_round_trip_persists_values(_settings_env) -> None:
     initial = client.get("/api/session/settings")
     assert initial.status_code == 200
     assert initial.json() == {
-        "autorunner_model_override": None,
         "autorunner_model_overrides": {},
         "autorunner_effort_override": None,
         "autorunner_approval_policy": None,
@@ -57,7 +56,7 @@ def test_session_settings_round_trip_persists_values(_settings_env) -> None:
     response = client.post(
         "/api/session/settings",
         json={
-            "autorunner_model_override": "gpt-5.4",
+            "autorunner_model_overrides": {"codex": "gpt-5.4"},
             "autorunner_effort_override": "high",
             "autorunner_approval_policy": "never",
             "autorunner_sandbox_mode": "workspaceWrite",
@@ -68,7 +67,6 @@ def test_session_settings_round_trip_persists_values(_settings_env) -> None:
 
     assert response.status_code == 200
     assert response.json() == {
-        "autorunner_model_override": "gpt-5.4",
         "autorunner_model_overrides": {"codex": "gpt-5.4"},
         "autorunner_effort_override": "high",
         "autorunner_approval_policy": "never",
@@ -88,7 +86,7 @@ def test_session_settings_allow_clearing_values(_settings_env) -> None:
     seeded = client.post(
         "/api/session/settings",
         json={
-            "autorunner_model_override": "gpt-5.4",
+            "autorunner_model_overrides": {"codex": "gpt-5.4"},
             "autorunner_effort_override": "high",
             "autorunner_approval_policy": "never",
             "autorunner_sandbox_mode": "workspaceWrite",
@@ -101,7 +99,7 @@ def test_session_settings_allow_clearing_values(_settings_env) -> None:
     cleared = client.post(
         "/api/session/settings",
         json={
-            "autorunner_model_override": "",
+            "autorunner_model_overrides": {},
             "autorunner_effort_override": "",
             "autorunner_approval_policy": "",
             "autorunner_sandbox_mode": "",
@@ -112,7 +110,6 @@ def test_session_settings_allow_clearing_values(_settings_env) -> None:
 
     assert cleared.status_code == 200
     assert cleared.json() == {
-        "autorunner_model_override": None,
         "autorunner_model_overrides": {},
         "autorunner_effort_override": None,
         "autorunner_approval_policy": None,
@@ -129,7 +126,7 @@ def test_session_settings_reject_changes_while_run_is_active(_settings_env) -> N
         running.return_value = True
         response = client.post(
             "/api/session/settings",
-            json={"autorunner_model_override": "gpt-5.4"},
+            json={"autorunner_model_overrides": {"codex": "gpt-5.4"}},
         )
 
     assert response.status_code == 409
@@ -176,7 +173,7 @@ def test_session_settings_apply_all_runtime_preferences_directly(_settings_env) 
     response = client.post(
         "/api/session/settings",
         json={
-            "autorunner_model_override": "gpt-5.5",
+            "autorunner_model_overrides": {"codex": "gpt-5.5"},
             "autorunner_effort_override": "high",
             "autorunner_approval_policy": "unlessTrusted",
             "autorunner_sandbox_mode": "workspaceWrite",
@@ -187,7 +184,6 @@ def test_session_settings_apply_all_runtime_preferences_directly(_settings_env) 
 
     assert response.status_code == 200
     assert response.json() == {
-        "autorunner_model_override": "gpt-5.5",
         "autorunner_model_overrides": {"codex": "gpt-5.5"},
         "autorunner_effort_override": "high",
         "autorunner_approval_policy": "unlessTrusted",
@@ -212,7 +208,6 @@ def test_session_settings_persist_per_agent_model_defaults(_settings_env) -> Non
     )
 
     assert response.status_code == 200
-    assert response.json()["autorunner_model_override"] == "gpt-5.5"
     assert response.json()["autorunner_model_overrides"] == {
         "codex": "gpt-5.5",
         "opencode": "zai-coding-plan/glm-5.1",
@@ -226,7 +221,7 @@ def test_session_settings_approval_routes_are_removed(_settings_env) -> None:
     assert (
         client.post(
             "/api/session/settings/approvals",
-            json={"autorunner_model_override": "gpt-5.4"},
+            json={"autorunner_model_overrides": {"codex": "gpt-5.4"}},
         ).status_code
         == 404
     )

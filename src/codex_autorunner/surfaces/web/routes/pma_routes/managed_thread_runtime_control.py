@@ -34,9 +34,9 @@ from .....core.chat_bindings import (
     DISCORD_STATE_FILE_DEFAULT,
     TELEGRAM_STATE_FILE_DEFAULT,
 )
+from .....core.managed_thread_store import ManagedThreadStore
 from .....core.orchestration import OrchestrationBindingStore
 from .....core.orchestration.cold_trace_store import ColdTraceStore
-from .....core.pma_thread_store import PmaThreadStore
 from .....core.time_utils import now_iso
 from .automation_adapter import (
     first_callable,
@@ -94,7 +94,7 @@ async def interrupt_managed_thread_via_orchestration(
     from .....core.agent_capability_projection import project_thread_capabilities
 
     hub_root = request.app.state.config.root
-    store = PmaThreadStore(hub_root)
+    store = ManagedThreadStore(hub_root)
     thread = store.get_thread(managed_thread_id)
     if thread is None:
         raise HTTPException(status_code=404, detail="Managed thread not found")
@@ -249,12 +249,12 @@ def ensure_queue_worker(
     track_managed_thread_task: Any,
     hooks: ManagedThreadQueueWorkerHooks | ManagedThreadCoordinatorHooks,
 ) -> None:
-    task_map = getattr(app.state, "pma_managed_thread_queue_tasks", None)
+    task_map = getattr(app.state, "managed_thread_queue_tasks", None)
     if not isinstance(task_map, dict):
         task_map = {}
-        app.state.pma_managed_thread_queue_tasks = task_map
+        app.state.managed_thread_queue_tasks = task_map
     request = managed_thread_request_for_app(app)
-    thread_store = PmaThreadStore(app.state.config.root)
+    thread_store = ManagedThreadStore(app.state.config.root)
     service = build_service_for_app(
         app,
         thread_store=thread_store,
@@ -312,7 +312,7 @@ async def restart_queue_workers(
     *,
     ensure_queue_worker_callback: Any,
 ) -> None:
-    thread_store = PmaThreadStore(app.state.config.root)
+    thread_store = ManagedThreadStore(app.state.config.root)
     for managed_thread_id in thread_store.list_thread_ids_with_pending_queue(
         limit=None
     ):
@@ -323,7 +323,7 @@ def _has_owning_bound_chat_surface(
     binding_store: OrchestrationBindingStore,
     managed_thread_id: str,
     *,
-    thread_store: PmaThreadStore,
+    thread_store: ManagedThreadStore,
 ) -> bool:
     running_turn = thread_store.get_running_turn(managed_thread_id)
     progress_targets = set(
@@ -356,7 +356,7 @@ def _has_owning_bound_chat_surface(
 
 
 def _is_chat_origin_running_execution(
-    thread_store: PmaThreadStore, managed_thread_id: str
+    thread_store: ManagedThreadStore, managed_thread_id: str
 ) -> bool:
     running_turn = thread_store.get_running_turn(managed_thread_id)
     return execution_mapping_has_chat_surface_origin(running_turn)
@@ -368,7 +368,7 @@ async def recover_orphaned_executions(
     build_service_for_app: Any,
     recover_bound_progress_execution: Any | None = None,
 ) -> None:
-    thread_store = PmaThreadStore(app.state.config.root)
+    thread_store = ManagedThreadStore(app.state.config.root)
     checkpoint_store = ColdTraceStore(app.state.config.root)
     binding_store = OrchestrationBindingStore(app.state.config.root)
     service = build_service_for_app(

@@ -82,44 +82,6 @@ from ..hub_path_option import hub_root_path_option
 logger = logging.getLogger(__name__)
 
 
-def _prune_legacy_empty_state_subdir(*, dry_run: bool) -> None:
-    legacy_name = "_".join(("agent", "workspaces"))
-    legacy = Path.home() / ".codex-autorunner" / legacy_name
-    if not legacy.exists():
-        return
-    if not legacy.is_dir():
-        logger.warning(
-            "Legacy path %s exists but is not a directory; skipping removal.",
-            legacy,
-        )
-        return
-    try:
-        entries = list(legacy.iterdir())
-    except OSError as exc:
-        logger.warning(
-            "Unable to inspect legacy directory %s: %s",
-            legacy,
-            exc,
-        )
-        return
-    if entries:
-        logger.warning(
-            "Legacy directory %s is not empty (%s entries); "
-            "remove contents manually if appropriate.",
-            legacy,
-            len(entries),
-        )
-        return
-    if dry_run:
-        typer.echo(f"DRY-RUN would remove empty legacy directory {legacy}")
-        return
-    try:
-        legacy.rmdir()
-        typer.echo(f"Removed empty legacy directory {legacy}")
-    except OSError as exc:
-        logger.warning("Failed removing empty legacy directory %s: %s", legacy, exc)
-
-
 def _build_force_attestation(
     force_attestation: Optional[str], *, target_scope: str
 ) -> Optional[dict[str, str]]:
@@ -376,7 +338,6 @@ def register_cleanup_commands(
             _run_repo_cleanup(engine, dry_run, results)
 
         if scope_value in {"global", "all"}:
-            _prune_legacy_empty_state_subdir(dry_run=dry_run)
             _run_global_cleanup(engine, dry_run, results)
 
         _print_cleanup_report(results, dry_run)

@@ -139,7 +139,7 @@ ALLOWED_BOUNDARY_IMPORTS: dict[str, set[str]] = {
         "codex_autorunner.core.archive",
         "codex_autorunner.core.archive_retention",
         "codex_autorunner.core.config",
-        "codex_autorunner.core.pma_thread_store",
+        "codex_autorunner.core.managed_thread_store",
         "codex_autorunner.core.sqlite_utils",
         "codex_autorunner.core.state_lifecycle",
         "codex_autorunner.core.state_roots",
@@ -231,9 +231,6 @@ ALLOWED_BOUNDARY_IMPORTS: dict[str, set[str]] = {
         "codex_autorunner.core.domain.refs",
     },
     "codex_autorunner.core.ports.surface_port": {
-        "codex_autorunner.core.domain.refs",
-    },
-    "codex_autorunner.core.ports.surface_port_registry": {
         "codex_autorunner.core.domain.refs",
     },
     "codex_autorunner.core.ports.thread_store": {
@@ -659,7 +656,7 @@ _FORBIDDEN_SHARED_STATE_PATTERNS: tuple[str, ...] = (
     "open_orchestration_sqlite",
     "PmaAutomationStore",
     "PmaQueue",
-    "PmaThreadStore",
+    "ManagedThreadStore",
     "ScmPollingWatchStore",
 )
 
@@ -688,7 +685,7 @@ _SIDE_PROCESS_BOUNDARY_ALLOWLIST: dict[str, list[str]] = {
         "build_ticket_flow_orchestration_service -- ALLOWED: ticket flow uses per-workspace orchestration SQLite",
     ],
     "adapters/agents/agent_pool_impl.py": [
-        "PmaThreadStore -- ALLOWED: agent pool manages thread execution records in hub context",
+        "ManagedThreadStore -- ALLOWED: agent pool manages thread execution records in hub context",
     ],
     "adapters/agents/backend_orchestrator.py": [
         "AppServerThreadRegistry -- ALLOWED: protocol-local session tracking in backend orchestrator",

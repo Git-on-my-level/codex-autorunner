@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import shlex
 import subprocess
 from dataclasses import dataclass, field
@@ -322,8 +321,6 @@ def _codex_runtime_preflight_details(
         details.append(
             "ignored surface env: " + ", ".join(str(name) for name in ignored_env)
         )
-    elif os.environ.get("CAR_TELEGRAM_APP_SERVER_COMMAND"):
-        details.append("ignored surface env: CAR_TELEGRAM_APP_SERVER_COMMAND")
     return details, resolved
 
 

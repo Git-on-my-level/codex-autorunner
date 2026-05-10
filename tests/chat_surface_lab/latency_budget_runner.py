@@ -486,9 +486,9 @@ def _install_inprocess_hub_client_stubs_for_lab() -> None:
     from codex_autorunner.adapters.telegram.service import TelegramBotService
     from codex_autorunner.core.hub_control_plane import HubSharedStateService
     from codex_autorunner.core.hub_control_plane.models import HandshakeCompatibility
+    from codex_autorunner.core.managed_thread_store import prepare_managed_thread_store
     from codex_autorunner.core.orchestration.sqlite import prepare_orchestration_sqlite
     from codex_autorunner.core.pma_context import build_hub_snapshot
-    from codex_autorunner.core.pma_thread_store import prepare_pma_thread_store
 
     class _NoopSupervisor:
         def run_setup_commands_for_workspace(
@@ -509,7 +509,7 @@ def _install_inprocess_hub_client_stubs_for_lab() -> None:
         def __init__(self, hub_root: Path) -> None:
             self._hub_root = Path(hub_root)
             prepare_orchestration_sqlite(self._hub_root, durable=False)
-            prepare_pma_thread_store(self._hub_root, durable=False)
+            prepare_managed_thread_store(self._hub_root, durable=False)
             self._service = HubSharedStateService(
                 hub_root=self._hub_root,
                 supervisor=_NoopSupervisor(),

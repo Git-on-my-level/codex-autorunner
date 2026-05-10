@@ -34,7 +34,7 @@ from .....core.pma.outbound_payloads import (
 from .....core.pma.policies import normalize_busy_policy as _core_normalize_busy_policy
 from .....core.state import load_state
 from .....core.text_utils import _normalize_optional_text
-from ...schemas import PmaManagedThreadMessageRequest
+from ...schemas import ManagedThreadMessageRequest
 from ...services.pma.common import pma_config_from_raw as shared_pma_config_from_raw
 from ...services.pma.managed_thread_followup import (
     resolve_managed_thread_followup_policy,
@@ -111,7 +111,7 @@ def _resolve_managed_thread_policies(
 
 def resolve_managed_thread_message_options(
     request: Request,
-    payload: PmaManagedThreadMessageRequest,
+    payload: ManagedThreadMessageRequest,
     *,
     managed_thread_id: str,
     thread: dict[str, Any],

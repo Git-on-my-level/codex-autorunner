@@ -18,9 +18,9 @@ from codex_autorunner.adapters.github.publisher import (
 )
 from codex_autorunner.adapters.github.service import RepoInfo
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
+from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration import OrchestrationBindingStore
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
-from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.pr_bindings import PrBindingStore
 from codex_autorunner.core.publish_executor import (
     PublishExecutorRegistry,
@@ -784,7 +784,7 @@ def test_enqueue_managed_turn_executor_reuses_existing_execution_for_same_operat
     tmp_path: Path,
 ) -> None:
     hub_root, workspace_root, repo_id = _publish_hub(tmp_path)
-    thread_store = PmaThreadStore(hub_root)
+    thread_store = ManagedThreadStore(hub_root)
     thread = thread_store.create_thread("codex", workspace_root, repo_id=repo_id)
     journal = PublishJournalStore(hub_root)
     operation, _ = journal.create_operation(
@@ -821,7 +821,7 @@ def test_github_enqueue_managed_turn_publishes_bound_progress_placeholder(
     hub_root, workspace_root, repo_id = _publish_hub(tmp_path)
     discord_state = hub_root / ".codex-autorunner" / "discord_state.json"
     raw_config = {"discord_bot": {"state_file": str(discord_state)}}
-    thread_store = PmaThreadStore(hub_root)
+    thread_store = ManagedThreadStore(hub_root)
     thread = thread_store.create_thread("codex", workspace_root, repo_id=repo_id)
     OrchestrationBindingStore(hub_root).upsert_binding(
         surface_kind="discord",
@@ -899,7 +899,7 @@ def test_enqueue_managed_turn_executor_reuses_reusable_scm_thread_statuses(
     expected_runtime_status: str,
 ) -> None:
     hub_root, workspace_root, repo_id = _publish_hub(tmp_path)
-    thread_store = PmaThreadStore(hub_root)
+    thread_store = ManagedThreadStore(hub_root)
     thread = thread_store.create_thread(
         "codex",
         workspace_root,
@@ -959,7 +959,7 @@ def test_enqueue_managed_turn_executor_queues_on_running_scm_thread(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     hub_root, workspace_root, repo_id = _publish_hub(tmp_path)
-    thread_store = PmaThreadStore(hub_root)
+    thread_store = ManagedThreadStore(hub_root)
     thread = thread_store.create_thread(
         "codex",
         workspace_root,
@@ -1017,7 +1017,7 @@ def test_enqueue_managed_turn_executor_merges_into_existing_queued_scm_turn(
     tmp_path: Path,
 ) -> None:
     hub_root, workspace_root, repo_id = _publish_hub(tmp_path)
-    thread_store = PmaThreadStore(hub_root)
+    thread_store = ManagedThreadStore(hub_root)
     thread = thread_store.create_thread(
         "codex",
         workspace_root,
@@ -1166,7 +1166,7 @@ def test_enqueue_managed_turn_executor_rebinds_instead_of_merging_stale_archived
     tmp_path: Path,
 ) -> None:
     hub_root, workspace_root, repo_id = _publish_hub(tmp_path)
-    thread_store = PmaThreadStore(hub_root)
+    thread_store = ManagedThreadStore(hub_root)
     archived_thread = thread_store.create_thread(
         "codex",
         workspace_root,
@@ -1279,7 +1279,7 @@ def test_enqueue_managed_turn_executor_rebinds_archived_scm_thread_with_bootstra
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     hub_root, workspace_root, repo_id = _publish_hub(tmp_path)
-    thread_store = PmaThreadStore(hub_root)
+    thread_store = ManagedThreadStore(hub_root)
     archived_thread = thread_store.create_thread(
         "codex",
         workspace_root,
@@ -1401,7 +1401,7 @@ def test_enqueue_managed_turn_executor_dedupes_retry_after_scm_rebind_to_new_thr
 ) -> None:
     """If the PR binding moves to a replacement thread, retries must still dedupe."""
     hub_root, workspace_root, repo_id = _publish_hub(tmp_path)
-    thread_store = PmaThreadStore(hub_root)
+    thread_store = ManagedThreadStore(hub_root)
     archived_thread = thread_store.create_thread(
         "codex",
         workspace_root,
@@ -1492,7 +1492,7 @@ def test_process_now_runs_first_publish_operation_types(
     tmp_path: Path,
 ) -> None:
     hub_root, workspace_root, repo_id = _publish_hub(tmp_path)
-    thread_store = PmaThreadStore(hub_root)
+    thread_store = ManagedThreadStore(hub_root)
     thread = thread_store.create_thread("codex", workspace_root, repo_id=repo_id)
 
     async def _seed_binding() -> None:
@@ -1664,7 +1664,7 @@ def test_notify_chat_waits_for_managed_turn_start_confirmation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     hub_root, workspace_root, repo_id = _publish_hub(tmp_path)
-    thread_store = PmaThreadStore(hub_root)
+    thread_store = ManagedThreadStore(hub_root)
     thread = thread_store.create_thread("codex", workspace_root, repo_id=repo_id)
     journal = PublishJournalStore(hub_root)
     enqueue_operation, _ = journal.create_operation(
@@ -1773,7 +1773,7 @@ def test_notify_chat_does_not_exhaust_start_timer_while_turn_is_queued(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     hub_root, workspace_root, repo_id = _publish_hub(tmp_path)
-    thread_store = PmaThreadStore(hub_root)
+    thread_store = ManagedThreadStore(hub_root)
     thread = thread_store.create_thread("codex", workspace_root, repo_id=repo_id)
     blocking_turn = thread_store.create_turn(
         thread["managed_thread_id"], prompt="already running"
@@ -1884,7 +1884,7 @@ def test_notify_chat_reports_failure_when_queued_turn_never_reaches_front(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     hub_root, workspace_root, repo_id = _publish_hub(tmp_path)
-    thread_store = PmaThreadStore(hub_root)
+    thread_store = ManagedThreadStore(hub_root)
     thread = thread_store.create_thread("codex", workspace_root, repo_id=repo_id)
     blocking_turn = thread_store.create_turn(
         thread["managed_thread_id"], prompt="already running"
@@ -1996,7 +1996,7 @@ def test_notify_chat_succeeds_after_queued_turn_reaches_front(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     hub_root, workspace_root, repo_id = _publish_hub(tmp_path)
-    thread_store = PmaThreadStore(hub_root)
+    thread_store = ManagedThreadStore(hub_root)
     thread = thread_store.create_thread("codex", workspace_root, repo_id=repo_id)
     blocking_turn = thread_store.create_turn(
         thread["managed_thread_id"], prompt="already running"
@@ -2099,7 +2099,7 @@ def test_notify_chat_uses_enqueue_thread_target_id_for_bound_delivery(
 ) -> None:
     """Rebound enqueue can return a different thread than ingest-time tracking; delivery must use the response id."""
     hub_root, workspace_root, repo_id = _publish_hub(tmp_path)
-    thread_store = PmaThreadStore(hub_root)
+    thread_store = ManagedThreadStore(hub_root)
     stale_thread = thread_store.create_thread("codex", workspace_root, repo_id=repo_id)
     replacement_thread = thread_store.create_thread(
         "codex-rebound", workspace_root, repo_id=repo_id
@@ -2203,7 +2203,7 @@ def test_notify_chat_reports_failure_when_managed_turn_is_interrupted_before_sta
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     hub_root, workspace_root, repo_id = _publish_hub(tmp_path)
-    thread_store = PmaThreadStore(hub_root)
+    thread_store = ManagedThreadStore(hub_root)
     thread = thread_store.create_thread("codex", workspace_root, repo_id=repo_id)
     journal = PublishJournalStore(hub_root)
     enqueue_operation, _ = journal.create_operation(
@@ -2289,7 +2289,7 @@ def test_notify_chat_caps_start_confirmation_retries_with_runtime_launch_detail(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     hub_root, workspace_root, repo_id = _publish_hub(tmp_path)
-    thread_store = PmaThreadStore(hub_root)
+    thread_store = ManagedThreadStore(hub_root)
     thread = thread_store.create_thread("codex", workspace_root, repo_id=repo_id)
     journal = PublishJournalStore(hub_root)
     enqueue_operation, _ = journal.create_operation(
@@ -2385,7 +2385,7 @@ def test_notify_chat_start_confirmation_exhaustion_ignores_enqueue_wait_retries(
 ) -> None:
     """Post-enqueue retry cap must not consume budget while enqueue is still pending."""
     hub_root, workspace_root, repo_id = _publish_hub(tmp_path)
-    thread_store = PmaThreadStore(hub_root)
+    thread_store = ManagedThreadStore(hub_root)
     thread = thread_store.create_thread("codex", workspace_root, repo_id=repo_id)
     journal = PublishJournalStore(hub_root)
     enqueue_operation, _ = journal.create_operation(

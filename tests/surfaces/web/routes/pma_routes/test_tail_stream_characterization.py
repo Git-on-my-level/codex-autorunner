@@ -4,7 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 from tests.pma_support import _enable_pma
 
-from codex_autorunner.core.pma_thread_store import PmaThreadStore
+from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.server import create_hub_app
 
 pytestmark = pytest.mark.slow
@@ -16,7 +16,7 @@ class TestManagedThreadStatusShape:
     ) -> None:
         _enable_pma(hub_env.hub_root)
         app = create_hub_app(hub_env.hub_root)
-        store = PmaThreadStore(hub_env.hub_root)
+        store = ManagedThreadStore(hub_env.hub_root)
         created = store.create_thread(
             "codex",
             hub_env.repo_root.resolve(),
@@ -86,7 +86,7 @@ class TestManagedThreadStatusShape:
     def test_status_idle_thread_has_no_fabricated_turn(self, hub_env) -> None:
         _enable_pma(hub_env.hub_root)
         app = create_hub_app(hub_env.hub_root)
-        store = PmaThreadStore(hub_env.hub_root)
+        store = ManagedThreadStore(hub_env.hub_root)
         created = store.create_thread(
             "codex",
             hub_env.repo_root.resolve(),
@@ -110,7 +110,7 @@ class TestManagedThreadStatusShape:
     def test_status_idle_thread_activity_is_idle(self, hub_env) -> None:
         _enable_pma(hub_env.hub_root)
         app = create_hub_app(hub_env.hub_root)
-        store = PmaThreadStore(hub_env.hub_root)
+        store = ManagedThreadStore(hub_env.hub_root)
         created = store.create_thread(
             "codex",
             hub_env.repo_root.resolve(),
@@ -128,7 +128,7 @@ class TestManagedThreadStatusShape:
     def test_status_endpoint_exposes_queue_depth_field(self, hub_env) -> None:
         _enable_pma(hub_env.hub_root)
         app = create_hub_app(hub_env.hub_root)
-        store = PmaThreadStore(hub_env.hub_root)
+        store = ManagedThreadStore(hub_env.hub_root)
         created = store.create_thread(
             "codex",
             hub_env.repo_root.resolve(),
@@ -147,7 +147,7 @@ class TestManagedThreadStatusShape:
     def test_status_rejects_zero_limit(self, hub_env) -> None:
         _enable_pma(hub_env.hub_root)
         app = create_hub_app(hub_env.hub_root)
-        store = PmaThreadStore(hub_env.hub_root)
+        store = ManagedThreadStore(hub_env.hub_root)
         created = store.create_thread(
             "codex",
             hub_env.repo_root.resolve(),
@@ -166,7 +166,7 @@ class TestManagedThreadStatusShape:
     def test_status_rejects_invalid_level(self, hub_env) -> None:
         _enable_pma(hub_env.hub_root)
         app = create_hub_app(hub_env.hub_root)
-        store = PmaThreadStore(hub_env.hub_root)
+        store = ManagedThreadStore(hub_env.hub_root)
         created = store.create_thread(
             "codex",
             hub_env.repo_root.resolve(),
@@ -187,7 +187,7 @@ class TestManagedThreadTailShape:
     def test_tail_endpoint_returns_snapshot_with_required_fields(self, hub_env) -> None:
         _enable_pma(hub_env.hub_root)
         app = create_hub_app(hub_env.hub_root)
-        store = PmaThreadStore(hub_env.hub_root)
+        store = ManagedThreadStore(hub_env.hub_root)
         created = store.create_thread(
             "codex",
             hub_env.repo_root.resolve(),
@@ -241,7 +241,7 @@ class TestManagedThreadTailShape:
     def test_tail_endpoint_rejects_negative_since_event_id(self, hub_env) -> None:
         _enable_pma(hub_env.hub_root)
         app = create_hub_app(hub_env.hub_root)
-        store = PmaThreadStore(hub_env.hub_root)
+        store = ManagedThreadStore(hub_env.hub_root)
         created = store.create_thread(
             "codex",
             hub_env.repo_root.resolve(),
@@ -260,7 +260,7 @@ class TestManagedThreadTailShape:
     def test_tail_endpoint_rejects_zero_limit(self, hub_env) -> None:
         _enable_pma(hub_env.hub_root)
         app = create_hub_app(hub_env.hub_root)
-        store = PmaThreadStore(hub_env.hub_root)
+        store = ManagedThreadStore(hub_env.hub_root)
         created = store.create_thread(
             "codex",
             hub_env.repo_root.resolve(),
@@ -279,7 +279,7 @@ class TestManagedThreadTailShape:
     def test_tail_endpoint_rejects_invalid_since_duration(self, hub_env) -> None:
         _enable_pma(hub_env.hub_root)
         app = create_hub_app(hub_env.hub_root)
-        store = PmaThreadStore(hub_env.hub_root)
+        store = ManagedThreadStore(hub_env.hub_root)
         created = store.create_thread(
             "codex",
             hub_env.repo_root.resolve(),
@@ -298,7 +298,7 @@ class TestManagedThreadTailShape:
     def test_tail_endpoint_idle_thread_activity_is_idle(self, hub_env) -> None:
         _enable_pma(hub_env.hub_root)
         app = create_hub_app(hub_env.hub_root)
-        store = PmaThreadStore(hub_env.hub_root)
+        store = ManagedThreadStore(hub_env.hub_root)
         created = store.create_thread(
             "codex",
             hub_env.repo_root.resolve(),
@@ -318,7 +318,7 @@ class TestTailSnapshotEnumContracts:
     def test_tail_event_types_are_from_known_set(self, hub_env) -> None:
         _enable_pma(hub_env.hub_root)
         app = create_hub_app(hub_env.hub_root)
-        store = PmaThreadStore(hub_env.hub_root)
+        store = ManagedThreadStore(hub_env.hub_root)
         created = store.create_thread(
             "codex",
             hub_env.repo_root.resolve(),
@@ -350,7 +350,7 @@ class TestTailSnapshotEnumContracts:
     def test_tail_activity_values_are_from_known_set(self, hub_env) -> None:
         _enable_pma(hub_env.hub_root)
         app = create_hub_app(hub_env.hub_root)
-        store = PmaThreadStore(hub_env.hub_root)
+        store = ManagedThreadStore(hub_env.hub_root)
         created = store.create_thread(
             "codex",
             hub_env.repo_root.resolve(),
@@ -375,7 +375,7 @@ class TestTailSnapshotEnumContracts:
     def test_tail_phase_is_present_when_turn_exists(self, hub_env) -> None:
         _enable_pma(hub_env.hub_root)
         app = create_hub_app(hub_env.hub_root)
-        store = PmaThreadStore(hub_env.hub_root)
+        store = ManagedThreadStore(hub_env.hub_root)
         created = store.create_thread(
             "codex",
             hub_env.repo_root.resolve(),
@@ -408,7 +408,7 @@ class TestStatusDoesNotSynthesizeState:
     ) -> None:
         _enable_pma(hub_env.hub_root)
         app = create_hub_app(hub_env.hub_root)
-        store = PmaThreadStore(hub_env.hub_root)
+        store = ManagedThreadStore(hub_env.hub_root)
         created = store.create_thread(
             "codex",
             hub_env.repo_root.resolve(),
@@ -433,7 +433,7 @@ class TestStatusDoesNotSynthesizeState:
     ) -> None:
         _enable_pma(hub_env.hub_root)
         app = create_hub_app(hub_env.hub_root)
-        store = PmaThreadStore(hub_env.hub_root)
+        store = ManagedThreadStore(hub_env.hub_root)
         created = store.create_thread(
             "codex",
             hub_env.repo_root.resolve(),
@@ -454,7 +454,7 @@ class TestStatusDoesNotSynthesizeState:
     def test_tail_does_not_fabricate_events_for_idle_thread(self, hub_env) -> None:
         _enable_pma(hub_env.hub_root)
         app = create_hub_app(hub_env.hub_root)
-        store = PmaThreadStore(hub_env.hub_root)
+        store = ManagedThreadStore(hub_env.hub_root)
         created = store.create_thread(
             "codex",
             hub_env.repo_root.resolve(),

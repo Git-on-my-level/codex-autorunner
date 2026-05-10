@@ -213,7 +213,7 @@ def resolve_hub_pma_root(hub_root: Path) -> Path:
     return resolve_hub_state_root(hub_root) / "pma"
 
 
-def resolve_hub_pma_threads_db_path(hub_root: Path) -> Path:
+def resolve_hub_managed_threads_db_path(hub_root: Path) -> Path:
     """Return the PMA compatibility SQLite path."""
     return resolve_hub_pma_root(hub_root) / PMA_THREADS_DB_FILENAME
 
@@ -403,7 +403,7 @@ __all__ = [
     "resolve_hub_manifest_path",
     "resolve_hub_orchestration_db_path",
     "resolve_hub_pma_root",
-    "resolve_hub_pma_threads_db_path",
+    "resolve_hub_managed_threads_db_path",
     "resolve_hub_projection_db_path",
     "resolve_hub_runtime_root",
     "resolve_hub_runtimes_root",

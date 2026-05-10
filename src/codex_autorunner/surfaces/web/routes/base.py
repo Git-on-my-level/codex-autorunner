@@ -7,12 +7,10 @@ import json
 import logging
 import time
 import uuid
-from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import (
-    HTMLResponse,
     JSONResponse,
 )
 
@@ -23,8 +21,6 @@ from ....core.state_roots import resolve_repo_flows_db_path, resolve_repo_state_
 from ..pty_session import REPLAY_END, ActiveSession, PTYSession
 from ..schemas import VersionResponse
 from ..services import terminal as terminal_service
-from ..static_assets import index_response_headers, render_index_html
-from ..static_refresh import refresh_static_assets
 from .shared import (
     build_codex_terminal_cmd,
     build_hermes_terminal_cmd,
@@ -36,28 +32,9 @@ _logger = logging.getLogger(__name__)
 ALT_SCREEN_ENTER = b"\x1b[?1049h"
 
 
-def _serve_index(request: Request, static_dir: Path):
-    active_static = getattr(request.app.state, "static_dir", static_dir)
-    index_path = active_static / "index.html"
-    if not index_path.exists():
-        if refresh_static_assets(request.app):
-            active_static = request.app.state.static_dir
-            index_path = active_static / "index.html"
-    if not index_path.exists():
-        raise HTTPException(
-            status_code=500, detail="Static UI assets missing; reinstall package"
-        )
-    html = render_index_html(active_static, request.app.state.asset_version)
-    return HTMLResponse(html, headers=index_response_headers())
-
-
-def build_base_routes(static_dir: Path) -> APIRouter:
+def build_base_routes() -> APIRouter:
     """Build routes for index, state, logs, and terminal WebSocket."""
     router = APIRouter()
-
-    @router.get("/", include_in_schema=False)
-    def index(request: Request):
-        return _serve_index(request, static_dir)
 
     @router.get("/api/version", response_model=VersionResponse)
     def get_version(request: Request):
@@ -594,28 +571,5 @@ def build_base_routes(static_dir: Path) -> APIRouter:
             # Unregister websocket from active set
             if active_websockets is not None:
                 active_websockets.discard(ws)
-
-    return router
-
-
-def build_frontend_routes(static_dir: Path) -> APIRouter:
-    """Build catch-all routes for frontend tabs."""
-    router = APIRouter()
-
-    @router.get("/{tab}", include_in_schema=False)
-    def tab_route(tab: str, request: Request):
-        if tab in {
-            "workspace",
-            "tickets",
-            "messages",
-            "inbox",
-            "contextspace",
-            "archive",
-            "analytics",
-            "terminal",
-            "settings",
-        }:
-            return _serve_index(request, static_dir)
-        raise HTTPException(status_code=404, detail="Not Found")
 
     return router

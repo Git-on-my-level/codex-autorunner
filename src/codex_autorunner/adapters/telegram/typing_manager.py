@@ -6,7 +6,7 @@ from contextlib import suppress
 from typing import Any, Optional
 
 from ...core.logging_utils import log_event
-from .adapter import TelegramAPIError
+from .client import TelegramAPIError
 
 TYPING_HEARTBEAT_INTERVAL_SECONDS = 4.0
 

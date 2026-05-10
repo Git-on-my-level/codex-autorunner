@@ -5,17 +5,17 @@ from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Any, Optional
 
+from ..managed_thread_store import ManagedThreadStore
 from ..orchestration.bindings import OrchestrationBindingStore
 from ..orchestration.cold_trace_store import ColdTraceStore
 from ..orchestration.models import ExecutionRecord, ThreadTarget
-from ..orchestration.service import PmaThreadExecutionStore
+from ..orchestration.service import ManagedThreadExecutionStore
 from ..orchestration.sqlite import read_orchestration_compatibility_metadata
 from ..orchestration.turn_timeline import (
     append_turn_events_to_cold_trace,
     persist_turn_timeline,
 )
 from ..pma_notification_store import NotificationConversation, PmaNotificationStore
-from ..pma_thread_store import PmaThreadStore
 from ..pma_transcripts import PmaTranscriptStore
 from .errors import HubControlPlaneError
 from .models import (
@@ -141,7 +141,7 @@ def _coerce_positive_int(
 
 
 def _thread_target_from_store_row(
-    store: PmaThreadStore, record: dict[str, Any] | None
+    store: ManagedThreadStore, record: dict[str, Any] | None
 ) -> ThreadTarget | None:
     if record is None:
         return None
@@ -203,12 +203,12 @@ class HubSharedStateService:
         self._binding_store = OrchestrationBindingStore(
             self._hub_root, durable=self._durable_writes
         )
-        self._thread_store = PmaThreadStore(
+        self._thread_store = ManagedThreadStore(
             self._hub_root,
             durable=self._durable_writes,
             bootstrap_on_init=False,
         )
-        self._execution_store = PmaThreadExecutionStore(self._thread_store)
+        self._execution_store = ManagedThreadExecutionStore(self._thread_store)
 
     @property
     def capabilities(self) -> tuple[str, ...]:

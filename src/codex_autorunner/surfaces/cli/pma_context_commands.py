@@ -9,8 +9,8 @@ import typer
 
 from ...bootstrap import ensure_pma_docs, pma_doc_path
 from ...core.config import load_hub_config
+from .hub_control_plane_client import resolve_hub_path
 from .hub_path_option import hub_root_path_option
-from .pma_control_plane import resolve_hub_path
 
 logger = logging.getLogger(__name__)
 

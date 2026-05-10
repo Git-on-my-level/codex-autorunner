@@ -284,7 +284,7 @@ TEST_FILE_CAPS = (
         reason="The Telegram PMA routing wrapper should stay a thin import-only entrypoint over the shared support module.",
     ),
     FileBudget(
-        path="tests/test_telegram_pma_managed_threads.py",
+        path="tests/test_telegram_managed_threads.py",
         max_lines=40,
         reason="The Telegram PMA managed-thread wrapper should stay a thin import-only entrypoint over the shared support module.",
     ),

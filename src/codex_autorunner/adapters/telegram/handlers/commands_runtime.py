@@ -2454,12 +2454,12 @@ class TelegramCommandHandlers(
         if pma_enabled:
             registry = getattr(self, "_hub_thread_registry", None)
             pma_key = self._pma_registry_key(record, message)
-            pma_thread_id = (
+            managed_thread_id = (
                 registry.get_thread_id(pma_key)
                 if registry is not None and pma_key
                 else None
             )
-            if not pma_thread_id:
+            if not managed_thread_id:
                 await self._send_message(
                     message.chat_id,
                     "No active PMA thread to compact. Send a message or use /new to start one.",

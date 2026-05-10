@@ -10,6 +10,7 @@ from codex_autorunner.adapters.discord.state import DiscordStateStore
 from codex_autorunner.adapters.telegram.state import TelegramStateStore, topic_key
 from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
+from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration import OrchestrationBindingStore
 from codex_autorunner.core.pma_chat_delivery import (
     deliver_pma_notification,
@@ -20,7 +21,6 @@ from codex_autorunner.core.pma_notification_store import (
     PmaNotificationStore,
     build_notification_context_block,
 )
-from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from tests.conftest import write_test_config
 
 
@@ -58,7 +58,7 @@ def _write_manifest(hub_root: Path, repo_id: str, workspace: Path) -> None:
 def _create_bound_thread(
     hub_root: Path, workspace: Path, *, surface_kind: str, surface_key: str
 ) -> str:
-    thread = PmaThreadStore(hub_root).create_thread("codex", workspace)
+    thread = ManagedThreadStore(hub_root).create_thread("codex", workspace)
     thread_id = str(thread["managed_thread_id"])
     OrchestrationBindingStore(hub_root).upsert_binding(
         surface_kind=surface_kind,

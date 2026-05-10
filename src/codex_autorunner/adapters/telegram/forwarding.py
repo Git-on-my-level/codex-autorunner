@@ -6,7 +6,7 @@ from typing import Optional
 
 from ..chat.forwarding import compose_inbound_message_text
 from ..chat.models import ChatForwardInfo, ChatMessageRef, ChatReplyInfo, ChatThreadRef
-from .adapter import TelegramMessage
+from .client import TelegramMessage
 
 
 def is_forwarded_telegram_message(message: TelegramMessage) -> bool:

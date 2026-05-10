@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from codex_autorunner.adapters.telegram.adapter import (
+from codex_autorunner.adapters.telegram.client import (
     TelegramCommand,
     TelegramMessage,
 )

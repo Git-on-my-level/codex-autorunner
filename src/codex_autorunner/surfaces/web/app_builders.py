@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional, Protocol, cast
@@ -21,7 +20,7 @@ from ...core.logging_utils import safe_log
 from ...core.state import persist_session_registry
 from ...core.utils import reset_repo_root_context, set_repo_root_context
 from ...housekeeping import reap_stale_flow_workers, run_housekeeping_once
-from .app_factory import CacheStaticFiles, resolve_allowed_hosts, resolve_auth_token
+from .app_factory import resolve_allowed_hosts, resolve_auth_token
 from .app_state import AppContext, ServerOverrides, apply_app_context, build_app_context
 from .middleware import (
     AuthTokenMiddleware,
@@ -335,9 +334,6 @@ def _app_lifespan(context: AppContext):
                             "OpenCode shutdown failed",
                             exc,
                         )
-            static_context = getattr(app.state, "static_assets_context", None)
-            if static_context is not None:
-                static_context.close()
 
     return lifespan
 
@@ -367,15 +363,8 @@ def _add_shared_repo_middlewares(
     app.add_middleware(_RepoRootContextMiddleware, repo_root=context.engine.repo_root)
     apply_app_context(app, context)
     app.add_middleware(GZipMiddleware, minimum_size=500)
-    static_files = CacheStaticFiles(directory=context.static_dir)
-    app.state.static_files = static_files
-    app.state.static_assets_lock = threading.Lock()
-    app.state.hub_static_assets = (
-        hub_config.static_assets if hub_config is not None else None
-    )
-    app.mount("/static", static_files, name="static")
     # Route handlers
-    app.include_router(build_repo_router(context.static_dir))
+    app.include_router(build_repo_router())
 
     allowed_hosts = resolve_allowed_hosts(
         context.engine.config.server_host, context.engine.config.server_allowed_hosts
@@ -422,30 +411,6 @@ def create_repo_app(
         server_overrides,
         hub_config=hub_config,
         include_base_path_router=False,
-    )
-
-    return app
-
-
-def create_app(
-    repo_root: Optional[Path] = None,
-    base_path: Optional[str] = None,
-    server_overrides: Optional[ServerOverrides] = None,
-    hub_config: Optional[HubConfig] = None,
-) -> ASGIApp:
-    """
-    Public-facing factory for standalone repo apps (non-hub) retained for backward compatibility.
-    """
-    # Respect provided base_path when running directly; hub passes base_path="".
-    context = build_app_context(repo_root, base_path, hub_config=hub_config)
-    app = FastAPI(redirect_slashes=False, lifespan=_app_lifespan(context))
-
-    _add_shared_repo_middlewares(
-        app,
-        context,
-        server_overrides,
-        hub_config=hub_config,
-        include_base_path_router=True,
     )
 
     return app

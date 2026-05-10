@@ -1,10 +1,8 @@
 import asyncio
 import logging
-from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse
 
 from ....core import update as update_core
 from ....core.config import HubConfig
@@ -35,8 +33,6 @@ from ..schemas import (
     SystemUpdateTargetsResponse,
 )
 from ..serializers import build_orchestration_health
-from ..static_assets import missing_static_assets
-from ..static_refresh import refresh_static_assets
 
 _system_update_worker = update_core._system_update_worker
 _update_lock_active = update_core._update_lock_active
@@ -98,74 +94,11 @@ def build_system_routes() -> APIRouter:
                     last_housekeeping if isinstance(last_housekeeping, dict) else None
                 ),
             )
-        static_dir = getattr(getattr(request.app, "state", None), "static_dir", None)
-        static_asset_provenance_raw = getattr(
-            getattr(request.app, "state", None), "static_asset_provenance", None
-        )
-        static_asset_provenance = (
-            static_asset_provenance_raw.value
-            if static_asset_provenance_raw is not None
-            else None
-        )
-        if not isinstance(static_dir, Path):
-            return JSONResponse(
-                {
-                    "status": "error",
-                    "detail": "Static UI assets missing; reinstall package",
-                    "mode": mode,
-                    "base_path": base_path,
-                    "orchestration": orchestration_health,
-                },
-                status_code=500,
-            )
-        missing = await asyncio.to_thread(missing_static_assets, static_dir)
-        if missing:
-            if refresh_static_assets(request.app):
-                static_dir = getattr(
-                    getattr(request.app, "state", None), "static_dir", None
-                )
-                if isinstance(static_dir, Path):
-                    missing = await asyncio.to_thread(missing_static_assets, static_dir)
-                else:
-                    missing = ["index.html"]
-            if not missing:
-                response: dict = {
-                    "status": "ok",
-                    "mode": mode,
-                    "base_path": base_path,
-                    "asset_version": asset_version,
-                    "static_asset_provenance": static_asset_provenance,
-                    "orchestration": orchestration_health,
-                }
-                if mode == "hub":
-                    supervisor = getattr(request.app.state, "hub_supervisor", None)
-                    if supervisor is not None:
-                        response["hub_startup_phase"] = getattr(
-                            supervisor, "startup_phase", None
-                        )
-                    deferred_done = getattr(
-                        request.app.state, "hub_deferred_startup_complete", None
-                    )
-                    if deferred_done is not None:
-                        response["hub_deferred_startup_complete"] = deferred_done
-                return response
-            return JSONResponse(
-                {
-                    "status": "error",
-                    "detail": "Static UI assets missing; reinstall package",
-                    "missing": missing,
-                    "mode": mode,
-                    "base_path": base_path,
-                    "orchestration": orchestration_health,
-                },
-                status_code=500,
-            )
-        response = {
+        response: dict = {
             "status": "ok",
             "mode": mode,
             "base_path": base_path,
             "asset_version": asset_version,
-            "static_asset_provenance": static_asset_provenance,
             "orchestration": orchestration_health,
         }
         if mode == "hub":

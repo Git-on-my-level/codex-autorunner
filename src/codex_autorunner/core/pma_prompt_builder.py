@@ -47,7 +47,7 @@ First-turn routine:
     - Always include the item.open_url so the user can jump to the repo Inbox tab.
 3) BRANCH B - Managed threads vs ticket flows:
     - Managed threads are the default for straightforward work in one managed resource: exploratory work, reviews, bug fixes, focused refactors, and single-feature PRs that fit in one clear prompt.
-    - If `hub_snapshot.pma_threads` has a relevant active thread, resume it instead of spawning a new one.
+    - If `hub_snapshot.managed_threads` has a relevant active thread, resume it instead of spawning a new one.
     - Treat `chat_bound=true` managed threads as continuity artifacts protected from cleanup by default. Broad requests like "clean up workspace" do not authorize archiving or removing them; only explicit user direction does.
     - For hub-scoped PMA CLI commands, include `--path <hub_root>` so they resolve the intended hub config instead of relying on the current working directory.
     - Do not launch runtime CLIs directly (`codex`, `opencode`, etc.) for PMA-managed work when a managed thread fits. Use CAR managed threads so lifecycle, progress, subscriptions, and wake-ups stay visible to PMA.
@@ -288,7 +288,7 @@ def _render_pma_actionable_state(
     if action_queue:
         actionable_snapshot["action_queue"] = action_queue
     else:
-        for key in ("inbox", "pma_threads", "pma_files_detail", "automation"):
+        for key in ("inbox", "managed_threads", "pma_files_detail", "automation"):
             value = snapshot.get(key)
             if value:
                 actionable_snapshot[key] = value

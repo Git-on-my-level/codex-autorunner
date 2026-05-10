@@ -42,7 +42,7 @@ def test_session_settings_rejects_unknown_keys(_validation_env) -> None:
     response = client.post(
         "/api/session/settings",
         json={
-            "autorunner_model_override": "gpt-5.4",
+            "autorunner_model_overrides": {"codex": "gpt-5.4"},
             "autorunner_model_overide": "typo",
         },
     )
@@ -50,6 +50,21 @@ def test_session_settings_rejects_unknown_keys(_validation_env) -> None:
     assert response.status_code == 422
     detail = response.json()["detail"]
     assert any(item["loc"][-1] == "autorunner_model_overide" for item in detail)
+
+
+def test_session_settings_rejects_legacy_singular_model_override(
+    _validation_env,
+) -> None:
+    client, _repo_root = _validation_env
+
+    response = client.post(
+        "/api/session/settings",
+        json={"autorunner_model_override": "gpt-5.4"},
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert any(item["loc"][-1] == "autorunner_model_override" for item in detail)
 
 
 def test_template_repo_create_rejects_unknown_keys(_validation_env) -> None:

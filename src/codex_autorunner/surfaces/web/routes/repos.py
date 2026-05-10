@@ -55,7 +55,6 @@ def _apply_run_overrides(request: Request, payload: RunControlRequest) -> None:
             autorunner_agent_override=(
                 agent if agent_set else state.autorunner_agent_override
             ),
-            autorunner_model_override=model_overrides.get("codex"),
             autorunner_model_overrides=model_overrides,
             autorunner_effort_override=(
                 reasoning if reasoning_set else state.autorunner_effort_override
@@ -121,7 +120,6 @@ def build_repos_routes() -> APIRouter:
                 last_run_started_at=state.last_run_started_at,
                 last_run_finished_at=now_iso(),
                 autorunner_agent_override=state.autorunner_agent_override,
-                autorunner_model_override=state.autorunner_model_override,
                 autorunner_model_overrides=state.autorunner_model_overrides,
                 autorunner_effort_override=state.autorunner_effort_override,
                 autorunner_approval_policy=state.autorunner_approval_policy,
@@ -189,7 +187,6 @@ def build_repos_routes() -> APIRouter:
                 last_run_started_at=None,
                 last_run_finished_at=None,
                 autorunner_agent_override=current_state.autorunner_agent_override,
-                autorunner_model_override=current_state.autorunner_model_override,
                 autorunner_model_overrides=current_state.autorunner_model_overrides,
                 autorunner_effort_override=current_state.autorunner_effort_override,
                 autorunner_approval_policy=current_state.autorunner_approval_policy,
