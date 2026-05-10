@@ -20,6 +20,10 @@
     if (typeof size === 'string' && size.trim()) return size;
     return null;
   }
+
+  function isThinkingTrace(card: Extract<PmaCard, { kind: 'intermediate' }>): boolean {
+    return card.title.trim().toLowerCase() === 'thinking';
+  }
 </script>
 
 {#each cards as card (card.id)}
@@ -51,12 +55,24 @@
       {/if}
     </article>
   {:else if card.kind === 'intermediate'}
-    <article class="message commentary">
-      <span class="commentary-kind">{card.title}</span>
-      <div class="message-markdown markdown-body">
-        {@html renderMarkdownToHtml(card.text)}
-      </div>
-    </article>
+    {#if isThinkingTrace(card)}
+      <details class="tool-call-bar thinking-trace">
+        <summary>
+          <span>Thinking</span>
+          <strong>{card.detail ?? 'Reasoning trace'}</strong>
+        </summary>
+        <div class="thinking-trace-body markdown-body">
+          {@html renderMarkdownToHtml(card.text)}
+        </div>
+      </details>
+    {:else}
+      <article class="message commentary">
+        <span class="commentary-kind">{card.title}</span>
+        <div class="message-markdown markdown-body">
+          {@html renderMarkdownToHtml(card.text)}
+        </div>
+      </article>
+    {/if}
   {:else if card.kind === 'tool_group'}
     {@const headlineTool = card.tools[0]}
     <details class="tool-call-bar">
@@ -93,12 +109,24 @@
       <div class="turn-summary-trace">
         {#each card.cards as traceCard (traceCard.id)}
           {#if traceCard.kind === 'intermediate'}
-            <article class="message commentary nested-commentary">
-              <span class="commentary-kind">{traceCard.title}</span>
-              <div class="message-markdown markdown-body">
-                {@html renderMarkdownToHtml(traceCard.text)}
-              </div>
-            </article>
+            {#if isThinkingTrace(traceCard)}
+              <details class="tool-call-bar thinking-trace nested-trace">
+                <summary>
+                  <span>Thinking</span>
+                  <strong>{traceCard.detail ?? 'Reasoning trace'}</strong>
+                </summary>
+                <div class="thinking-trace-body markdown-body">
+                  {@html renderMarkdownToHtml(traceCard.text)}
+                </div>
+              </details>
+            {:else}
+              <article class="message commentary nested-commentary">
+                <span class="commentary-kind">{traceCard.title}</span>
+                <div class="message-markdown markdown-body">
+                  {@html renderMarkdownToHtml(traceCard.text)}
+                </div>
+              </article>
+            {/if}
           {:else if traceCard.kind === 'tool_group'}
             {@const traceHeadlineTool = traceCard.tools[0]}
             <details class="tool-call-bar nested-trace">
