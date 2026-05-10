@@ -406,6 +406,7 @@ async def _build_managed_thread_tail_snapshot(
             idle_seconds=idle_seconds,
             last_event_at=last_activity_at,
             agent_id=getattr(thread, "agent_id", None),
+            has_visible_tail_events=bool(tail_events),
         )
         activity = "stalled" if is_stalled else "running"
     elif turn_status == "ok":

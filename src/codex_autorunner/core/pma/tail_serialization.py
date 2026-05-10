@@ -106,8 +106,14 @@ def _running_turn_stall_flags(
     idle_seconds: Optional[int],
     last_event_at: Optional[str],
     agent_id: Any = None,
+    has_visible_tail_events: bool = True,
 ) -> tuple[bool, Optional[str]]:
-    if last_event_at is None and _agent_batches_initial_events(agent_id):
+    # Align with `_derive_progress_phase`: codex may emit raw traffic that is
+    # suppressed from the serialized tail; treat "no visible events" like the
+    # initial batching window for stall purposes.
+    if _agent_batches_initial_events(agent_id) and (
+        last_event_at is None or not has_visible_tail_events
+    ):
         return (False, None)
     stalled = idle_seconds is not None and idle_seconds >= _STALL_IDLE_SECONDS
     if not stalled:
@@ -608,6 +614,7 @@ def _derive_active_turn_diagnostics(
             idle_seconds=idle_seconds,
             last_event_at=last_event_at,
             agent_id=snapshot.get("agent"),
+            has_visible_tail_events=bool(event_list),
         )
         if turn_status == "running"
         else (False, None)
@@ -686,6 +693,7 @@ def _refresh_active_turn_diagnostics(
             idle_seconds=resolved_idle,
             last_event_at=resolved_last_event_at,
             agent_id=snapshot.get("agent"),
+            has_visible_tail_events=bool(event_list),
         )
         if resolved_status == "running"
         else (False, None)
