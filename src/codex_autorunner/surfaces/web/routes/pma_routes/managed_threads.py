@@ -14,7 +14,6 @@ from .....agents.registry import (
     resolve_agent_runtime,
     wrap_requested_agent_context,
 )
-from .....core.chat_bindings import active_chat_binding_metadata_by_thread
 from .....core.orchestration import build_harness_backed_orchestration_service
 from .....core.orchestration.catalog import RuntimeAgentDescriptor
 from .....core.orchestration.managed_thread_timeline import (
@@ -51,7 +50,7 @@ from .hermes_supervisors import resolve_cached_hermes_supervisor
 from .managed_thread_route_helpers import (
     _apply_chat_binding_fields,
     _attach_latest_execution_fields,
-    _enrich_chat_binding_metadata_with_channel_names,
+    _load_chat_binding_metadata_by_thread,
     _serialize_managed_thread,
     _serialize_thread_target,
     provision_managed_thread_workspace,
@@ -64,17 +63,6 @@ from .managed_thread_route_helpers import (
 )
 
 _logger = logging.getLogger(__name__)
-
-
-def _load_chat_binding_metadata_by_thread(hub_root):
-    try:
-        metadata = active_chat_binding_metadata_by_thread(hub_root=hub_root)
-    except Exception as exc:  # intentional: non-critical metadata load
-        _logger.warning(
-            "Could not load PMA chat-binding metadata for thread response: %s", exc
-        )
-        return {}
-    return _enrich_chat_binding_metadata_with_channel_names(metadata, hub_root=hub_root)
 
 
 def _subscription_request_has_explicit_routing(payload: dict[str, Any]) -> bool:
