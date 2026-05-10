@@ -196,6 +196,10 @@ class TestPromptXmlStructure:
         ticket_path = ticket_dir / "TICKET-001.md"
         _write_ticket(ticket_path)
 
+        ctx_dir = workspace_root / ".codex-autorunner" / "contextspace"
+        ctx_dir.mkdir(parents=True, exist_ok=True)
+        (ctx_dir / "active_context.md").write_text("ctx", encoding="utf-8")
+
         outbox_paths = MagicMock()
         outbox_paths.dispatch_dir = (
             workspace_root / ".codex-autorunner" / "runs" / "run-1" / "dispatch"
@@ -217,9 +221,9 @@ class TestPromptXmlStructure:
             commit_max_attempts=2,
             outbox_paths=outbox_paths,
             lint_errors=None,
-            reply_context=None,
-            requested_context=None,
-            previous_ticket_content=None,
+            reply_context="user said hi",
+            requested_context="extra context",
+            previous_ticket_content="---\ntitle: prior\n---\nPrior ticket body.",
             prior_no_change_turns=0,
         )
 
@@ -234,16 +238,16 @@ class TestPromptXmlStructure:
             "</CAR_HUD>",
             "<CAR_REQUESTED_CONTEXT>",
             "</CAR_REQUESTED_CONTEXT>",
-            "<CAR_WORKSPACE_DOCS>",
-            "</CAR_WORKSPACE_DOCS>",
+            "<CAR_CONTEXTSPACE_DOCS>",
+            "</CAR_CONTEXTSPACE_DOCS>",
             "<CAR_HUMAN_REPLIES>",
             "</CAR_HUMAN_REPLIES>",
             "<CAR_PREVIOUS_TICKET_REFERENCE>",
             "</CAR_PREVIOUS_TICKET_REFERENCE>",
             "<CAR_CURRENT_TICKET_FILE>",
             "</CAR_CURRENT_TICKET_FILE>",
-            "<TICKET_MARKDOWN>",
-            "</TICKET_MARKDOWN>",
+            "<CAR_TICKET>",
+            "</CAR_TICKET>",
             "<CAR_PREVIOUS_AGENT_OUTPUT>",
             "</CAR_PREVIOUS_AGENT_OUTPUT>",
         ]
@@ -732,7 +736,7 @@ class TestWorkspaceDocsInPrompt:
 
         result = await runner.step({})
         assert result.status == "continue"
-        assert "<CAR_WORKSPACE_DOCS>" in prompts[0]
+        assert "<CAR_CONTEXTSPACE_DOCS>" in prompts[0]
         assert "Working on invariants." in prompts[0]
 
     @pytest.mark.asyncio
@@ -768,11 +772,7 @@ class TestWorkspaceDocsInPrompt:
 
         result = await runner.step({})
         assert result.status == "continue"
-        assert "<CAR_WORKSPACE_DOCS>" in prompts[0]
-        start = prompts[0].index("<CAR_WORKSPACE_DOCS>") + len("<CAR_WORKSPACE_DOCS>\n")
-        end = prompts[0].index("</CAR_WORKSPACE_DOCS>")
-        section = prompts[0][start:end].strip()
-        assert section == ""
+        assert "<CAR_CONTEXTSPACE_DOCS>" not in prompts[0]
 
 
 class TestLoopGuardIntegrationInvariants:

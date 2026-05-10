@@ -71,7 +71,7 @@ export type TicketListRow = {
   pathLabel: string | null;
   agentLabel: string;
   modelLabel: string | null;
-  diffLabel: string | null;
+  diffStats: TicketSummary['diffStats'];
   durationLabel: string | null;
   bodyPreview: string | null;
   status: WorkStatus;
@@ -127,6 +127,8 @@ export type TicketListViewModel = {
   queueRun: TicketQueueRun | null;
   queueActions: TicketQueueAction[];
   flowStatus: TicketFlowStatusViewModel;
+  /** Managed-thread id of the chat for the currently running ticket, when one exists. */
+  currentChatId: string | null;
   rows: TicketListRow[];
 };
 
@@ -221,6 +223,8 @@ export type TicketDetailViewModel = {
    */
   linkedChats: TicketLinkedChat[];
   chatHref: string | null;
+  /** Flow id for ticket SSE / resume APIs — not a browser navigation target. */
+  flowRunId: string | null;
   runHref: string | null;
   debugHref: string | null;
   actions: TicketAction[];
@@ -254,6 +258,7 @@ export function buildTicketListViewModel(
   const flowStatus = buildTicketFlowStatusViewModel(source.tickets, source.runs, owner);
   const activeCurrentTicketId = isTicketFlowActuallyWorking(flowStatus.status) ? flowStatus.currentTicketId : null;
   const rowsWithCurrent = rows.map((row) => ({ ...row, isCurrent: row.id === activeCurrentTicketId || row.routeId === activeCurrentTicketId }));
+  const currentChatId = pickCurrentChatId(source.chats, flowStatus.currentTicketId);
   return {
     title: owner ? `${ownerLabel} tickets` : 'Tickets',
     eyebrow: owner ? `${owner.kind === 'repo' ? 'Repo' : 'Worktree'} ticket queue` : 'All-ticket projection',
@@ -273,8 +278,24 @@ export function buildTicketListViewModel(
     queueRun,
     queueActions: buildQueueActions(queueRun, source.runs, actionManifest),
     flowStatus,
+    currentChatId,
     rows: rowsWithCurrent
   };
+}
+
+function pickCurrentChatId(chats: PmaChatSummary[], currentTicketId: string | null): string | null {
+  if (!currentTicketId) return null;
+  const matches = chats.filter((chat) => chat.ticketId === currentTicketId);
+  if (matches.length === 0) return null;
+  const activeStatuses: WorkStatus[] = ['running', 'waiting', 'blocked'];
+  const active = matches.find((chat) => activeStatuses.includes(chat.status));
+  if (active) return active.id;
+  const sorted = [...matches].sort((a, b) => {
+    const aTs = a.updatedAt ? new Date(a.updatedAt).getTime() : 0;
+    const bTs = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
+    return bTs - aTs;
+  });
+  return sorted[0]?.id ?? null;
 }
 
 function isTicketFlowActuallyWorking(status: WorkStatus): boolean {
@@ -381,7 +402,8 @@ export function buildTicketDetailViewModel(
   const sections = parseTicketContract(detail.body);
   const goal = sectionText(sections, 'goal') || stringFromRaw(detail.raw, ['frontmatter.goal', 'goal']);
   const progress = run ? progressPercent(chat ?? syntheticChat(detail, run), run) : detail.status === 'done' ? 100 : 0;
-  const runHref = run ? `/api/flows/${encodeURIComponent(run.id)}/status` : detail.runId ? `/api/flows/${encodeURIComponent(detail.runId)}/status` : null;
+  const flowRunId = run?.id ?? detail.runId ?? null;
+  const runHref = flowRunId ? `/api/flows/${encodeURIComponent(flowRunId)}/status` : null;
   const debugHref = run ? `/api/flows/${encodeURIComponent(run.id)}/dispatch_history` : null;
   const chatHref = chat ? `/chats?chat=${encodeURIComponent(chat.id)}` : detail.chatKey ? `/chats?chat=${encodeURIComponent(detail.chatKey)}` : null;
   const linkedChatId = chat?.id ?? null;
@@ -423,16 +445,17 @@ export function buildTicketDetailViewModel(
     updatedLabel: formatRelativeTime(detail.updatedAt ?? run?.lastEventAt ?? null, now),
     goal,
     contractSections: sections,
-    timeline: buildTimeline(detail, run, runArtifacts),
+    timeline: buildTimeline(detail, run, runArtifacts, chatHref),
     progressPercent: progress,
     artifacts: uniqueArtifacts(runArtifacts).slice(0, 8).map(artifactToRow),
     chatTranscriptCards,
     linkedChatId,
     linkedChats: allLinkedChats.map(linkedChatToVm),
     chatHref,
+    flowRunId,
     runHref,
     debugHref,
-    actions: buildActions(runHref, debugHref, run?.status ?? detail.status),
+    actions: buildActions(chatHref, debugHref, run?.status ?? detail.status),
     rawBody: detail.body,
     sourceTickets,
     previousTicketHref: selectedIndex > 0 ? sourceTickets[selectedIndex - 1].href : null,
@@ -567,7 +590,7 @@ function ticketToListRow(ticket: TicketSummary, source: TicketSourceData): Ticke
     pathLabel: ticket.path,
     agentLabel: ticket.agentId ?? chat?.agentId ?? 'Unassigned',
     modelLabel: modelResolved ? modelResolved : null,
-    diffLabel: diffLabel(ticket),
+    diffStats: ticket.diffStats,
     durationLabel: formatDuration(ticket.durationSeconds),
     bodyPreview: bodyPreview(ticket),
     status: ticket.status,
@@ -737,17 +760,6 @@ function byTicketNumberThenTitle(a: TicketListRow, b: TicketListRow): number {
   return a.title.localeCompare(b.title);
 }
 
-function diffLabel(ticket: TicketSummary): string | null {
-  const stats = ticket.diffStats;
-  if (!stats) return null;
-  const parts = [
-    stats.insertions ? `+${stats.insertions}` : null,
-    stats.deletions ? `-${stats.deletions}` : null,
-    stats.filesChanged ? `${stats.filesChanged} files` : null
-  ].filter(Boolean);
-  return parts.length ? parts.join(' ') : null;
-}
-
 function formatDuration(seconds: number | null): string | null {
   if (seconds === null) return null;
   const safeSeconds = Math.max(0, Math.round(seconds));
@@ -794,7 +806,12 @@ function rowMatchesWorkspaceFilter(row: TicketListRow, workspaceFilter: string):
   return `${row.workspaceKind}:${row.workspaceId}` === workspaceFilter;
 }
 
-function buildTimeline(detail: TicketDetail, run: PmaRunProgress | null, artifacts: SurfaceArtifact[]): TicketTimelineItem[] {
+function buildTimeline(
+  detail: TicketDetail,
+  run: PmaRunProgress | null,
+  artifacts: SurfaceArtifact[],
+  chatHref: string | null
+): TicketTimelineItem[] {
   const items: TicketTimelineItem[] = [];
   items.push({
     id: `ticket-${detail.id}`,
@@ -811,7 +828,7 @@ function buildTimeline(detail: TicketDetail, run: PmaRunProgress | null, artifac
       status: run.status,
       summary: [run.phase, run.guidance, run.queueDepth ? `${run.queueDepth} queued` : null].filter(Boolean).join(' · ') || 'Ticket flow run state',
       timestamp: run.lastEventAt,
-      href: `/api/flows/${encodeURIComponent(run.id)}/status`
+      href: chatHref
     });
     for (const event of run.events.slice(-4)) {
       items.push({
@@ -837,9 +854,9 @@ function buildTimeline(detail: TicketDetail, run: PmaRunProgress | null, artifac
   return items;
 }
 
-function buildActions(runHref: string | null, debugHref: string | null, status: WorkStatus): TicketAction[] {
+function buildActions(chatHref: string | null, debugHref: string | null, status: WorkStatus): TicketAction[] {
   const actions: TicketAction[] = [];
-  if (runHref) actions.push({ label: 'Open run', href: runHref, secondary: false, command: null });
+  if (chatHref) actions.push({ label: 'Open chat', href: chatHref, secondary: false, command: null });
   if (status === 'waiting' || status === 'blocked') actions.push({ label: 'Continue run', href: null, secondary: false, command: 'resume' });
   if (status === 'failed') actions.push({ label: 'Retry run', href: null, secondary: false, command: 'bootstrap' });
   if (debugHref) actions.push({ label: 'Raw logs/debug', href: debugHref, secondary: true, command: null });
@@ -940,6 +957,7 @@ function syntheticChat(ticket: TicketDetail, run: PmaRunProgress): PmaChatSummar
     repoId: ticket.repoId,
     worktreeId: ticket.worktreeId,
     ticketId: ticket.id,
+    isTicketFlow: true,
     progressPercent: null,
     updatedAt: ticket.updatedAt,
     raw: {}

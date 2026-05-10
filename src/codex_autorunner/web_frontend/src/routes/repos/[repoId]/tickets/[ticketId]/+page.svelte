@@ -105,7 +105,7 @@
     const [runs, chats] = await Promise.all([pmaApi.ticketFlow.listRuns({ repo: ownerId }), pmaApi.pma.listChats()]);
     const baseIssues = [
       !runs.ok ? partialPageIssue('timeline', 'Run state unavailable', runs.error) : null,
-      !chats.ok ? partialPageIssue('linked_chat', 'PMA chats unavailable', chats.error) : null
+      !chats.ok ? partialPageIssue('linked_chat', 'Chats unavailable', chats.error) : null
     ].filter((issue): issue is PartialPageIssue => Boolean(issue));
     if (!isCurrentRequest()) return;
     await renderTicketDetail(ticketDetail, ticketList, dataOr(runs, []), dataOr(chats, []), baseIssues, ownerId, isCurrentRequest);
@@ -136,7 +136,7 @@
     if (!isCurrentRequest()) return;
     const baseSource = { tickets: ticketList, runs, chats, artifacts: [] as SurfaceArtifact[] };
     const baseDetail = buildTicketDetailViewModel(ticketDetail, baseSource);
-    currentRunId = baseDetail.runHref?.match(/\/api\/flows\/([^/]+)\/status/)?.[1] ?? null;
+    currentRunId = baseDetail.flowRunId;
     detail = baseDetail;
     sectionIssues = baseIssues;
     loading = false;

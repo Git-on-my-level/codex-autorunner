@@ -14,6 +14,10 @@ export type PmaChatSummary = {
   repoId: string | null;
   worktreeId: string | null;
   ticketId: string | null;
+  /** True when the chat originates from a ticket-flow run (raw name like `ticket-flow:codex`,
+   * a CAR_TICKET_FLOW_PROMPT control message, or a populated current_ticket_id). Used to
+   * collapse run rows by repo/worktree even when a specific ticket id isn't surfaced. */
+  isTicketFlow: boolean;
   progressPercent: number | null;
   updatedAt: string | null;
   raw: JsonRecord;
@@ -217,6 +221,7 @@ export function mapPmaChatSummary(raw: JsonRecord): PmaChatSummary {
   const worktreeId =
     nullableString(raw.worktree_repo_id ?? raw.worktree_id) ?? (resourceKind === 'worktree' ? resourceId : null);
   const ticketId = ticketIdFromRaw(raw);
+  const isTicketFlow = detectTicketFlowChat(raw, ticketId);
   return {
     id,
     title: readableThreadTitle(raw, id, ticketId),
@@ -227,6 +232,7 @@ export function mapPmaChatSummary(raw: JsonRecord): PmaChatSummary {
     repoId,
     worktreeId,
     ticketId,
+    isTicketFlow,
     progressPercent: numberOrNull(raw.progress_percent ?? raw.progress),
     updatedAt: dateString(
       raw.updated_at ??
@@ -649,6 +655,17 @@ function isGenericTicketFlowTitle(value: string): boolean {
 function isCarTicketFlowControlPrompt(value: string): boolean {
   const text = value.trim();
   return text.startsWith('<CAR_TICKET_FLOW_PROMPT') || text.includes('<CAR_CURRENT_TICKET_FILE>');
+}
+
+function detectTicketFlowChat(raw: JsonRecord, ticketId: string | null): boolean {
+  if (ticketId) return true;
+  const name = nullableString(raw.name ?? raw.display_name ?? raw.title);
+  if (name && isGenericTicketFlowTitle(name)) return true;
+  const flowKind = nullableString(raw.flow_kind ?? raw.flow ?? raw.kind);
+  if (flowKind && /ticket[-_]?flow/i.test(flowKind)) return true;
+  const prompt = firstText(raw.prompt_preview, raw.prompt, raw.prompt_text, raw.last_message_preview);
+  if (prompt && isCarTicketFlowControlPrompt(prompt)) return true;
+  return false;
 }
 
 function ticketIdFromRaw(raw: JsonRecord): string | null {

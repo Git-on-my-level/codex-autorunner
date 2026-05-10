@@ -1049,7 +1049,7 @@ async def test_ticket_runner_pauses_on_duplicate_ticket_indices(tmp_path: Path) 
 
 @pytest.mark.asyncio
 async def test_previous_ticket_context_excluded_by_default(tmp_path: Path) -> None:
-    """Test that previous ticket content is NOT included in prompt by default."""
+    """Previous ticket content is omitted from the prompt when the knob is off."""
     workspace_root = tmp_path
     ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
     ticket_dir.mkdir(parents=True, exist_ok=True)
@@ -1085,20 +1085,18 @@ async def test_previous_ticket_context_excluded_by_default(tmp_path: Path) -> No
 
     assert result.status == "continue"
     assert len(pool.requests) == 1
-    assert "PREVIOUS TICKET CONTEXT" not in pool.requests[0].prompt
+    assert "<CAR_PREVIOUS_TICKET_REFERENCE>" not in pool.requests[0].prompt
 
 
 @pytest.mark.asyncio
-async def test_previous_ticket_context_not_injected_when_enabled(
-    tmp_path: Path,
-) -> None:
-    """Previous ticket content is no longer injected even when the knob is enabled."""
+async def test_previous_ticket_context_injected_when_enabled(tmp_path: Path) -> None:
+    """When enabled, include the prior queue ticket markdown under CAR_PREVIOUS_TICKET_REFERENCE."""
     workspace_root = tmp_path
     ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
     ticket_dir.mkdir(parents=True, exist_ok=True)
 
     ticket_1 = ticket_dir / "TICKET-001.md"
-    _write_ticket(ticket_1, done=False)
+    _write_ticket(ticket_1, done=False, body="UNIQUE_PREV_TICKET_MARKER")
     _set_ticket_done(ticket_1, done=True)
 
     ticket_2 = ticket_dir / "TICKET-002.md"
@@ -1128,8 +1126,8 @@ async def test_previous_ticket_context_not_injected_when_enabled(
 
     assert result.status == "continue"
     assert len(pool.requests) == 1
-    assert "PREVIOUS TICKET CONTEXT" not in pool.requests[0].prompt
-    assert "agent: codex\ndone: true" not in pool.requests[0].prompt
+    assert "<CAR_PREVIOUS_TICKET_REFERENCE>" in pool.requests[0].prompt
+    assert "UNIQUE_PREV_TICKET_MARKER" in pool.requests[0].prompt
 
 
 def test_is_network_error_detection() -> None:

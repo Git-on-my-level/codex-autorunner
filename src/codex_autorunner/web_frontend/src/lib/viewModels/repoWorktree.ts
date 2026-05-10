@@ -109,7 +109,7 @@ export type RepoWorktreeTicketRow = {
   title: string;
   status: WorkStatus;
   href: string;
-  diffLabel: string | null;
+  diffStats: TicketSummary['diffStats'];
   durationLabel: string | null;
   bodyPreview: string | null;
   isCurrent: boolean;
@@ -776,7 +776,7 @@ function ticketToRow(ticket: TicketSummary, currentTicketId: string | null = nul
     title: ticket.title,
     status: ticket.status,
     href: ticketDetailHref(ticket),
-    diffLabel: ticketDiffLabel(ticket),
+    diffStats: ticket.diffStats,
     durationLabel: formatDuration(ticket.durationSeconds),
     bodyPreview: bodyPreview(ticket),
     isCurrent: ticket.id === currentTicketId || (ticket.number !== null && String(ticket.number) === currentTicketId)
@@ -785,17 +785,6 @@ function ticketToRow(ticket: TicketSummary, currentTicketId: string | null = nul
 
 function isActiveTicketFlowStatus(status: WorkStatus): boolean {
   return status === 'running' || status === 'waiting';
-}
-
-function ticketDiffLabel(ticket: TicketSummary): string | null {
-  const stats = ticket.diffStats;
-  if (!stats) return null;
-  const parts = [
-    stats.insertions ? `+${stats.insertions}` : null,
-    stats.deletions ? `-${stats.deletions}` : null,
-    stats.filesChanged ? `${stats.filesChanged} files` : null
-  ].filter(Boolean);
-  return parts.length ? parts.join(' ') : null;
 }
 
 function formatDuration(seconds: number | null): string | null {

@@ -359,7 +359,7 @@ export type PmaChatListEntry =
   | { kind: 'chat'; chat: PmaChatSummary };
 
 export function pmaChatRunGroupKey(chat: PmaChatSummary): string | null {
-  if (!chat.ticketId) return null;
+  if (!chat.isTicketFlow && !chat.ticketId) return null;
   if (chat.worktreeId) return `worktree:${chat.worktreeId}`;
   if (chat.repoId) return `repo:${chat.repoId}`;
   return null;
@@ -964,9 +964,9 @@ export function buildPmaLiveActivity(progress: PmaRunProgress | null): PmaLiveAc
   const summary =
     progress.guidance ??
     (steps.length
-      ? steps.at(-1)?.summary ?? steps.at(-1)?.title ?? 'PMA is updating the workspace.'
+      ? steps.at(-1)?.summary ?? steps.at(-1)?.title ?? 'Updating the workspace.'
       : status === 'running'
-        ? 'PMA is streaming activity.'
+        ? 'Streaming activity.'
         : `Last update ${formatRelativeTime(progress.lastEventAt)}.`);
   const elapsedLabel = formatElapsedProgress(progress.elapsedSeconds, progress.idleSeconds);
   return { state: status, title, summary, elapsedLabel, steps };
@@ -1025,7 +1025,7 @@ function intermediateTitle(event: SurfaceArtifact): string {
   if (kind === 'assistant_update') return 'Thinking';
   const title = (stringValue(item?.title) || event.title).trim();
   if (title && title.toLowerCase() !== assistantActivityText(event).toLowerCase()) return title;
-  return 'PMA update';
+  return 'Update';
 }
 
 function shouldMergeIntermediate(card: Extract<PmaCard, { kind: 'intermediate' }>, event: SurfaceArtifact): boolean {
@@ -1208,7 +1208,7 @@ function toolCardFromTimeline(item: PmaTimelineItem): PmaToolCallCard {
 
 function intermediateTimelineTitle(item: PmaTimelineItem): string {
   const kind = stringValue(item.payload.intermediate_kind).replace(/_/g, ' ');
-  return kind || 'PMA update';
+  return kind || 'Update';
 }
 
 function isDecodeFailureTimelineItem(item: PmaTimelineItem): boolean {
@@ -1478,7 +1478,7 @@ export function composeMessageWithAttachments(
 export function buildManagedThreadCreatePayload(
   agent: string,
   scope: PmaChatScopeOption = localPmaChatScopeOption(),
-  name = 'New PMA chat',
+  name = 'New chat',
   model = '',
   profile = ''
 ): ManagedThreadCreatePayload {
@@ -1506,7 +1506,7 @@ export function pmaChatKind(chat: PmaChatSummary | null): PmaChatKind {
 }
 
 export function pmaChatKindLabel(kind: PmaChatKind): string {
-  return kind === 'coding_agent' ? 'Coding agent' : 'PMA';
+  return kind === 'coding_agent' ? 'Coding agent' : 'Chat';
 }
 
 export function agentCapabilityAllowed(
@@ -1631,7 +1631,7 @@ export function pmaChatScopeTagView(
   return { kindKey: 'local', kindLabel: 'Local', detail: 'Hub workspace' };
 }
 
-/** One-line scope for the active chat header (`PMA - global` vs repo naming). */
+/** One-line scope for the active chat header (hub workspace vs repo naming). */
 export function pmaChatHeaderScopeLine(
   chat: PmaChatSummary | null,
   repoLabel?: (repoId: string) => string | null
@@ -1647,7 +1647,7 @@ export function pmaChatHeaderScopeLine(
     const repoName = repoLabel?.(chat.repoId) ?? chat.repoId;
     return `Repo - ${repoName}`;
   }
-  return 'PMA - global';
+  return 'Hub workspace';
 }
 
 export function buildManagedThreadMessagePayload(
@@ -1768,7 +1768,7 @@ export function artifactCardView(artifact: SurfaceArtifact): ArtifactCardView {
       };
     case 'final_report':
       return {
-        label: 'PMA final report',
+        label: 'Final report',
         tone: 'success',
         primaryAction: artifact.url ? 'Open report' : null,
         preview: 'text',

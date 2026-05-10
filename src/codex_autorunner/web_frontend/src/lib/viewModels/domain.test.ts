@@ -126,6 +126,31 @@ describe('view model mappers', () => {
       status: 'running'
     });
     expect(vm.title).not.toBe('ticket-flow:codex');
+    expect(vm.isTicketFlow).toBe(true);
+  });
+
+  it('flags ticket-flow chats from raw name even when no ticket id surfaces', () => {
+    const vm = mapPmaChatSummary({
+      managed_thread_id: 'thread-no-ticket',
+      name: 'ticket-flow:codex',
+      agent: 'codex',
+      status: 'running',
+      resource_kind: 'worktree',
+      resource_id: 'organization-autorunner--discord-2'
+    });
+    expect(vm.ticketId).toBeNull();
+    expect(vm.isTicketFlow).toBe(true);
+  });
+
+  it('does not flag plain chats as ticket-flow', () => {
+    const vm = mapPmaChatSummary({
+      managed_thread_id: 'thread-plain',
+      name: 'New chat',
+      agent: 'codex',
+      status: 'idle',
+      repo_id: 'codex-autorunner'
+    });
+    expect(vm.isTicketFlow).toBe(false);
   });
 
   it('maps PMA tail/status payloads into run progress', () => {

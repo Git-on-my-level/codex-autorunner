@@ -9,6 +9,7 @@
   import { statusLabel } from '$lib/viewModels/pmaChat';
   import type { PartialPageIssue } from '$lib/api/client';
   import PageHero from './PageHero.svelte';
+  import TicketDiffStats from './TicketDiffStats.svelte';
   import { repoAccent, repoInitials } from '$lib/viewModels/repoIdentity';
 
   let {
@@ -42,13 +43,6 @@
   const contextspaceIssues = $derived(sectionIssues.filter((issue) => issue.id === 'contextspace'));
   const artifactIssues = $derived(sectionIssues.filter((issue) => issue.id === 'artifacts'));
   const queueTickets = $derived(detail ? [...detail.currentTickets, ...detail.nextTickets] : []);
-
-  function formatGitDiff(insertions: number | null, deletions: number | null): string | null {
-    const parts: string[] = [];
-    if (insertions && insertions > 0) parts.push(`+${insertions}`);
-    if (deletions && deletions > 0) parts.push(`-${deletions}`);
-    return parts.length ? parts.join(' ') : null;
-  }
 
   function pluralize(count: number, singular: string, plural?: string): string {
     return `${count} ${count === 1 ? singular : plural ?? `${singular}s`}`;
@@ -281,15 +275,6 @@
                   </div>
                 </div>
               </a>
-              {#if ticketMetricsReady && row.totalTickets > 0}
-                {@const pct = Math.round((row.doneTickets / row.totalTickets) * 100)}
-                <span
-                  class="ticket-progress"
-                  title={`${row.doneTickets}/${row.totalTickets} tickets done (${pct}%)`}
-                  aria-hidden="true"
-                  style:--progress={`${pct}%`}
-                ></span>
-              {/if}
               {#if row.activeRuns > 0 || (ticketMetricsReady && row.openTickets > 0) || (collapsed && row.totalWorktrees > 0)}
                 <div class="repo-card-counts" aria-label="Activity counts">
                   {#if collapsed && row.totalWorktrees > 0}
@@ -382,9 +367,18 @@
                 {/if}
               </div>
             {/if}
+            {#if ticketMetricsReady && row.totalTickets > 0}
+              {@const pct = Math.round((row.doneTickets / row.totalTickets) * 100)}
+              <span
+                class="ticket-progress ticket-progress--repo-head"
+                title={`${row.doneTickets}/${row.totalTickets} tickets done (${pct}%)`}
+                aria-hidden="true"
+                style:--progress={`${pct}%`}
+              ></span>
+            {/if}
             </div>
             {#if row.signalWaiting > 0 || row.signalFailed > 0 || row.signalActive > 0}
-              <div class="repo-signal-pills" aria-label="Scoped PMA chats and runs">
+              <div class="repo-signal-pills" aria-label="Scoped chats and runs">
                 {#if row.signalWaiting > 0}<span class="signal-pill waiting">{row.signalWaiting} waiting</span>{/if}
                 {#if row.signalFailed > 0}<span class="signal-pill failed">{row.signalFailed} failed</span>{/if}
                 {#if row.signalActive > 0}<span class="signal-pill active">{row.signalActive} active</span>{/if}
@@ -420,13 +414,13 @@
                       {#if worktree.activeRuns > 0 || (ticketMetricsReady && worktree.openTickets > 0) || worktree.signalWaiting > 0 || worktree.signalFailed > 0 || worktree.signalActive > 0}
                         <div class="worktree-card-counts">
                           {#if worktree.signalWaiting > 0}
-                            <span class="signal-pill waiting" title="Scoped PMA chats or runs waiting for attention">{worktree.signalWaiting} waiting</span>
+                            <span class="signal-pill waiting" title="Scoped chats or runs waiting for attention">{worktree.signalWaiting} waiting</span>
                           {/if}
                           {#if worktree.signalFailed > 0}
-                            <span class="signal-pill failed" title="Scoped PMA chats or runs failed">{worktree.signalFailed} failed</span>
+                            <span class="signal-pill failed" title="Scoped chats or runs failed">{worktree.signalFailed} failed</span>
                           {/if}
                           {#if worktree.signalActive > 0}
-                            <span class="signal-pill active" title="Scoped PMA chats or runs active">{worktree.signalActive} active</span>
+                            <span class="signal-pill active" title="Scoped chats or runs active">{worktree.signalActive} active</span>
                           {/if}
                           {#if worktree.activeRuns > 0}
                             <span class="count-chip is-active" title="Active runs">
@@ -569,7 +563,6 @@
 
     {#if detail.gitStatus}
       {@const git = detail.gitStatus}
-      {@const diffLabel = formatGitDiff(git.insertions, git.deletions)}
       <div class="git-status-bar" aria-label="Git status">
         <span class={`git-state-pill ${git.dirty ? 'dirty' : 'clean'}`}>
           <span class="git-state-dot" aria-hidden="true"></span>
@@ -578,9 +571,14 @@
         {#if git.filesChanged !== null && git.filesChanged > 0}
           <span class="git-chip">{pluralize(git.filesChanged, 'file')} changed</span>
         {/if}
-        {#if diffLabel}
-          <span class="git-chip git-chip-diff">{diffLabel}</span>
-        {/if}
+        <TicketDiffStats
+          extraClass="git-chip git-chip-diff"
+          stats={{
+            insertions: git.insertions ?? 0,
+            deletions: git.deletions ?? 0,
+            filesChanged: 0
+          }}
+        />
         {#if git.staged !== null && git.staged > 0}
           <span class="git-chip">{git.staged} staged</span>
         {/if}
@@ -654,13 +652,32 @@
                   </p>
                 </div>
               </div>
-              {#if run.progress !== null}
-                <span class="progress-track" aria-label={`${run.progress} percent complete`}>
+              {#if detail.ticketOverview.total > 0}
+                {@const ticketPct = Math.round((detail.ticketOverview.done / detail.ticketOverview.total) * 100)}
+                <span
+                  class="ticket-progress ticket-progress--detail-run"
+                  title={`${detail.ticketOverview.done}/${detail.ticketOverview.total} tickets done (${ticketPct}%)`}
+                  role="progressbar"
+                  aria-valuemin="0"
+                  aria-valuemax="100"
+                  aria-valuenow={ticketPct}
+                  aria-label={`Tickets ${detail.ticketOverview.done} of ${detail.ticketOverview.total} complete`}
+                  style:--progress={`${ticketPct}%`}
+                ></span>
+              {:else if run.progress !== null}
+                <span
+                  class={`progress-track progress-track--detail-run status-${run.status}`}
+                  aria-label={`${run.progress} percent complete`}
+                  role="progressbar"
+                  aria-valuemin="0"
+                  aria-valuemax="100"
+                  aria-valuenow={Math.round(run.progress)}
+                >
                   <span style={`width: ${run.progress}%`}></span>
                 </span>
               {/if}
               <div class="row-links">
-                {#if run.chatHref}<a href={href(run.chatHref)}>PMA chat</a>{/if}
+                {#if run.chatHref}<a href={href(run.chatHref)}>Chat</a>{/if}
                 {#if run.ticketHref}<a href={href(run.ticketHref)}>Ticket</a>{/if}
               </div>
             </article>
@@ -739,7 +756,7 @@
                 <span>
                   <strong>{ticket.title}</strong>
                   {#if ticket.isCurrent}<em class="working-badge">Working</em>{/if}
-                  {#if ticket.diffLabel}<em>{ticket.diffLabel}</em>{/if}
+                  <TicketDiffStats stats={ticket.diffStats} />
                   {#if ticket.durationLabel}<em>{ticket.durationLabel}</em>{/if}
                   {#if ticket.isCurrent && ticket.bodyPreview}<small>{ticket.bodyPreview}</small>{/if}
                 </span>
@@ -767,7 +784,7 @@
         <div class="panel-heading-row chats-panel-heading">
           <h2>Chats</h2>
           <div class="panel-heading-actions">
-            <a class="chip-button" href={href(detail.pmaChatHref)} data-sveltekit-preload-data="tap">+ PMA chat</a>
+            <a class="chip-button" href={href(detail.pmaChatHref)} data-sveltekit-preload-data="tap">+ Chat</a>
             <a class="chip-button" href={href(detail.codingAgentChatHref)} data-sveltekit-preload-data="tap">+ Coding agent</a>
           </div>
         </div>
@@ -1029,6 +1046,7 @@
   }
 
   .repo-head {
+    position: relative;
     display: flex;
     align-items: center;
     gap: var(--space-3);
@@ -1421,9 +1439,35 @@
     transition: width var(--transition-base);
   }
 
+  /* Match horizontal extent of nested `.worktree-list` rows: list uses the same
+   * horizontal padding; `repo-head` already has matching `padding-right`. */
+  .ticket-progress--repo-head {
+    left: var(--space-5);
+    right: 0;
+    z-index: 1;
+  }
+
   .ticket-progress--worktree {
-    height: 1px;
-    background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+    height: 2px;
+    background: color-mix(in srgb, var(--color-accent) 14%, transparent);
+  }
+
+  /* Repo/worktree detail — active run: same done/total width as index `.ticket-progress`,
+   * thicker rail + success fill (index keeps accent/teal). */
+  .ticket-progress--detail-run {
+    position: relative;
+    left: auto;
+    right: auto;
+    bottom: auto;
+    width: 100%;
+    height: var(--space-2);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--color-success) 16%, transparent);
+    pointer-events: none;
+  }
+
+  .ticket-progress--detail-run::after {
+    background: var(--color-success);
   }
 
   a.count-chip-link {
@@ -1586,6 +1630,15 @@
     }
     .worktree-list {
       padding: 0 var(--space-4) var(--space-3);
+    }
+
+    .repo-head {
+      padding-right: var(--space-4);
+    }
+
+    .ticket-progress--repo-head {
+      left: var(--space-4);
+      right: 0;
     }
     .worktree-card {
       grid-template-columns: 24px minmax(0, 1fr);

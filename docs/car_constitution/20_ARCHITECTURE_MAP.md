@@ -58,7 +58,7 @@ Mapping the conceptual layers to the codebase:
 The ticket-flow orchestration hot path is split across focused submodules under `src/codex_autorunner/tickets/`:
 - **`runner.py`** (`TicketRunner.step`): Step controller that sequences pre-turn planning, execution, and post-turn processing without reimplementing helper contracts inline.
 - **`runner_selection.py`**: Ticket selection (`select_ticket`), validation (`validate_ticket_for_execution`), pre-turn planning (`plan_pre_turn`), reply-context loading (`build_reply_context`), and requested-context resolution (`load_ticket_context_block`).
-- **`runner_prompt.py`**: Prompt assembly (`build_prompt`), budgeting (`_shrink_prompt`), and ticket-frontmatter preservation (`_preserve_ticket_structure`).
+- **`runner_prompt.py`**: Prompt assembly (`build_prompt`), budgeting (`reduce_ticket_flow_prompt_to_budget` in `runner_prompt_support`), and ticket-frontmatter preservation (`preserve_ticket_structure`).
 - **`runner_execution.py`**: Agent turn execution (`execute_turn`), git-state capture, loop-guard computation, and network-error classification.
 - **`runner_post_turn.py`**: Dispatch archival (`archive_dispatch_and_create_summary`), turn-summary creation, frontmatter recheck, checkpoint/commit gating, pause-result construction, and completion-state cleanup.
 - **`runner_commit.py`**: Commit-gating logic for done-but-dirty working trees.

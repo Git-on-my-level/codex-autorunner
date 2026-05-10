@@ -287,6 +287,7 @@ Users can inspect tickets.
     expect(detail.artifacts[0]).toMatchObject({ kind: 'preview_url' });
     expect(detail.linkedChatId).toBe('chat-1');
     expect(detail.actions.map((action) => action.label)).not.toContain('Open PMA chat');
+    expect(detail.actions.map((action) => action.label)).toContain('Open chat');
     expect(detail.actions.map((action) => action.label)).toContain('Continue run');
     expect(detail.actions.find((action) => action.label === 'Raw logs/debug')?.secondary).toBe(true);
   });
@@ -344,8 +345,14 @@ Users can inspect tickets.
       new Date('2026-01-01T00:00:00Z')
     );
 
+    expect(detail.flowRunId).toBe('run-nested');
     expect(detail.runHref).toBe('/api/flows/run-nested/status');
+    expect(detail.chatHref).toBe('/chats?chat=ticket%3ATICKET-110');
+    expect(detail.actions.find((action) => action.label === 'Open chat')).toMatchObject({
+      href: '/chats?chat=ticket%3ATICKET-110'
+    });
     expect(detail.timeline.map((item) => item.id)).toContain('run-run-nested');
+    expect(detail.timeline.find((item) => item.id === 'run-run-nested')?.href).toBe('/chats?chat=ticket%3ATICKET-110');
   });
 
   it('resolves ticket detail route ids emitted by the ticket list', () => {

@@ -116,8 +116,20 @@ def test_hub_tickets_enriches_current_ticket_with_live_run_metadata(
         run_id=run_id,
         status=FlowRunStatus.RUNNING,
         diff_events=[
-            {"insertions": 5, "deletions": 2, "files_changed": 1},
-            {"insertions": 3, "deletions": 0, "files_changed": 2},
+            {
+                "ticket_id": "tkt_base",
+                "ticket_path": ".codex-autorunner/tickets/TICKET-001.md",
+                "insertions": 5,
+                "deletions": 2,
+                "files_changed": 1,
+            },
+            {
+                "ticket_id": "tkt_base",
+                "ticket_path": ".codex-autorunner/tickets/TICKET-001.md",
+                "insertions": 3,
+                "deletions": 0,
+                "files_changed": 2,
+            },
         ],
         started_at="2026-03-13T08:00:00Z",
         state={

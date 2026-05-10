@@ -52,6 +52,7 @@ export const mockChatSummary: PmaChatSummary = {
   repoId: 'codex-autorunner',
   worktreeId: null,
   ticketId: 'TICKET-110',
+  isTicketFlow: true,
   progressPercent: 60,
   updatedAt: '2026-05-04T00:02:00Z',
   raw: {}

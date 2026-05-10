@@ -1194,6 +1194,11 @@ a.scope-chip-label:hover {
   background: rgb(15 15 20 / 0.06);
 }
 
+/* Repo detail active run: align thickness with ticket queue bar when chat progress % is shown alone. */
+.progress-track--detail-run {
+  height: var(--space-2);
+}
+
 .progress-track span {
   display: block;
   height: 100%;
@@ -1281,6 +1286,7 @@ a.scope-chip-label:hover {
   color: var(--color-idle);
 }
 
+.status-pill.active,
 .status-pill.running,
 .status-pill.waiting,
 .status-pill.blocked,
@@ -3836,7 +3842,7 @@ textarea:disabled {
   color: var(--color-ink);
 }
 
-.ticket-flow-line.active { border-left-color: var(--color-success); }
+.ticket-flow-line.active { border-left-color: var(--color-warning); }
 .ticket-flow-line.waiting { border-left-color: var(--color-warning); }
 .ticket-flow-line.blocked,
 .ticket-flow-line.failed { border-left-color: var(--color-danger); }
@@ -4532,8 +4538,27 @@ textarea:disabled {
   white-space: nowrap;
 }
 
-.diff-label {
-  color: var(--color-success) !important;
+/* GitHub-style diff counts (tickets, git bar). */
+.ticket-diff-stats {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35em;
+  font-variant-numeric: tabular-nums;
+}
+
+.ticket-diff-stats .diff-stat-add {
+  color: var(--color-success);
+  font-weight: 600;
+}
+
+.ticket-diff-stats .diff-stat-del {
+  color: var(--color-danger);
+  font-weight: 600;
+}
+
+.ticket-diff-stats .diff-stat-neutral {
+  color: var(--color-ink-muted);
+  font-weight: 500;
 }
 
 .ticket-side {

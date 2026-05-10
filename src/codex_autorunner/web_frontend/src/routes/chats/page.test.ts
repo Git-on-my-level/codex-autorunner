@@ -8,7 +8,7 @@ describe('/chats page', () => {
 
     expect(body).toContain('Chats workspace');
     expect(body).not.toContain('memory-toggle-button');
-    expect(body).toContain('+ PMA chat');
+    expect(body).toContain('+ Chat');
     expect(body).toContain('chat-list');
     expect(body).toContain('Waiting');
     expect(body).toContain('Active');

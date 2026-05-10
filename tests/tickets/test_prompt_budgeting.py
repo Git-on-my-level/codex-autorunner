@@ -224,13 +224,13 @@ class TestPreserveTicketStructure:
         ticket = (
             "<CAR_CURRENT_TICKET_FILE>\n"
             "PATH: tickets/TICKET-001.md\n"
-            "<TICKET_MARKDOWN>\n"
+            "<CAR_TICKET>\n"
             "---\n"
             "agent: codex\n"
             "done: false\n"
             "title: Test\n"
             "---\n\n" + "x" * 5000 + "\n"
-            "</TICKET_MARKDOWN>\n"
+            "</CAR_TICKET>\n"
             "</CAR_CURRENT_TICKET_FILE>"
         )
         budget = 300
@@ -314,7 +314,7 @@ async def test_truncation_order_is_deterministic(tmp_path: Path) -> None:
     def handler(req: AgentTurnRequest) -> AgentTurnResult:
         # Verify that truncation happened in the right order:
         # 1. last_agent_output (should be truncated first)
-        # 2. previous_ticket_content (if still over budget)
+        # 2. prev_ticket_block (if still over budget)
         assert len(req.prompt.encode("utf-8")) <= 2048
         return AgentTurnResult(
             agent_id=req.agent_id,

@@ -115,7 +115,7 @@ describe('RepoWorktreeViews', () => {
     expect(body).toContain('Active run');
     expect(body).toContain('Hub rewrite foundation');
     expect(body).toContain('codex');
-    expect(body).toContain('PMA chat');
+    expect(body).toContain('Chat');
     expect(body).toContain('href="/repos/repo-1/tickets"');
     expect(body).toContain('Contextspace');
     expect(body).toContain('spec.md');
@@ -152,7 +152,9 @@ describe('RepoWorktreeViews', () => {
     expect(body).toContain('workspace-ticket-row running');
     expect(body).toContain('working-badge');
     expect(body).toContain('Scoped worktree body preview.');
-    expect(body).toContain('+80 -5 4 files');
+    expect(body).toContain('+80');
+    expect(body).toContain('-5');
+    expect(body).toMatch(/4\s+files/);
     expect(body).toContain('2m 0s');
     expect(body).not.toContain('contextspace-row-kind');
   });
@@ -239,7 +241,8 @@ describe('RepoWorktreeViews', () => {
 
     expect(body).toContain('Dirty');
     expect(body).toContain('3 files changed');
-    expect(body).toContain('+42 -7');
+    expect(body).toContain('+42');
+    expect(body).toContain('-7');
     expect(body).toContain('1 untracked');
     expect(body).toContain('↑ 2 ahead');
     expect(body).toContain('↓ 1 behind');

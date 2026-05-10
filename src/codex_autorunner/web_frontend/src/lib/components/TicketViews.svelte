@@ -10,6 +10,8 @@
   } from '$lib/viewModels/ticket';
   import EditableMarkdown from '$lib/components/EditableMarkdown.svelte';
   import PageHero from '$lib/components/PageHero.svelte';
+  import CurrentTicketChatStream from '$lib/components/CurrentTicketChatStream.svelte';
+  import TicketDiffStats from '$lib/components/TicketDiffStats.svelte';
   import AutoDismissNotice from '$lib/components/AutoDismissNotice.svelte';
   import { noticeTone } from '$lib/noticeTone';
   import { filterTicketRows, rowRelativeTime } from '$lib/viewModels/ticket';
@@ -94,14 +96,6 @@
   const heroFlowActive = $derived(
     list ? list.flowStatus.signal !== 'idle' && list.flowStatus.signal !== 'done' : false
   );
-  const heroFlowSignalClass = $derived.by(() => {
-    if (!list) return '';
-    const s = list.flowStatus.signal;
-    if (s === 'active') return 'active';
-    if (s === 'waiting') return 'waiting';
-    if (s === 'blocked' || s === 'failed' || s === 'invalid') return 'danger';
-    return '';
-  });
   // Only show the flow line when the queue is actively doing something.
   // The current ticket is already highlighted in the list (Working badge,
   // accent border), so a separate "Current: #N" line was duplicated signal.
@@ -337,12 +331,9 @@
     <PageHero title={heroPageTitle}>
       {#snippet stats()}
         {#if list.scopedOwner && heroFlowActive}
-          <dl class="hero-stats" aria-label="Ticket queue summary">
-            <div class={heroFlowSignalClass}>
-              <dd>{list.flowStatus.statusLabel}</dd>
-              <dt>Queue</dt>
-            </div>
-          </dl>
+          <span class={`hero-queue-pill status-pill ${list.flowStatus.signal}`} aria-label="Queue status" title="Ticket queue status">
+            {list.flowStatus.statusLabel}
+          </span>
         {/if}
       {/snippet}
       {#snippet actions()}
@@ -367,6 +358,16 @@
         {/if}
       {/snippet}
     </PageHero>
+
+    {#if list.currentChatId && heroFlowActive}
+      <CurrentTicketChatStream
+        chatId={list.currentChatId}
+        ticketLabel={list.flowStatus.currentTicketLabel !== 'None' ? list.flowStatus.currentTicketLabel : null}
+        ticketHref={list.flowStatus.currentTicketHref}
+        statusLabel={list.flowStatus.statusLabel}
+        statusSignal={list.flowStatus.signal}
+      />
+    {/if}
 
     <header class="ticket-controls">
       <label class="search-field ticket-search">
@@ -469,7 +470,7 @@
                 <div class="ticket-card-main">
                   <div class="ticket-card-title-row">
                     <strong class="ticket-card-title">{row.title}</strong>
-                    {#if row.isCurrent}<em class="working-badge">Working</em>{/if}
+                    {#if row.isCurrent && row.status === 'idle'}<em class="working-badge">Working</em>{/if}
                     {#if row.workspaceKind === 'unscoped'}<em class="working-badge needs-repair" title="Needs owner repair">Needs owner repair</em>{/if}
                     {#if row.status !== 'idle'}
                       <span class="status-pill {row.status}">{statusLabel(row.status)}</span>
@@ -480,7 +481,7 @@
                   </div>
                   <div class="ticket-card-meta">
                     {#if row.bodyPreview}<span class="ticket-card-preview">{row.bodyPreview}</span>{/if}
-                    {#if row.diffLabel}<span class="diff-label">{row.diffLabel}</span>{/if}
+                    <TicketDiffStats stats={row.diffStats} />
                     {#if row.durationLabel}<span>{row.durationLabel}</span>{/if}
                     {#if row.updatedAt}<span>{rowRelativeTime(row)}</span>{/if}
                   </div>
@@ -737,7 +738,7 @@
               </span>
               <span>
                 <em>{statusLabel(row.status)}</em>
-                {#if row.diffLabel}<em class="diff-label">{row.diffLabel}</em>{/if}
+                <TicketDiffStats stats={row.diffStats} />
               </span>
             </a>
           {/each}
@@ -825,12 +826,23 @@
   }
 
   .ticket-card.current {
-    border-color: color-mix(in srgb, var(--color-success) 48%, var(--color-border-subtle));
-    background: color-mix(in srgb, var(--color-success) 7%, var(--color-surface));
+    border-color: color-mix(in srgb, var(--color-warning) 48%, var(--color-border-subtle));
+    background: color-mix(in srgb, var(--color-warning) 10%, var(--color-surface));
+  }
+
+  .ticket-card.current:hover {
+    border-color: color-mix(in srgb, var(--color-warning) 55%, var(--color-border-strong));
+    background: color-mix(in srgb, var(--color-warning) 14%, var(--color-surface-sunken, var(--color-surface)));
   }
 
   .ticket-card.done {
-    opacity: 0.7;
+    border-color: color-mix(in srgb, var(--color-success) 38%, var(--color-border-subtle));
+    background: var(--color-success-soft);
+  }
+
+  .ticket-card.done:hover {
+    border-color: color-mix(in srgb, var(--color-success) 48%, var(--color-border-strong));
+    background: color-mix(in srgb, var(--color-success-soft) 92%, var(--color-surface-sunken, var(--color-surface)));
   }
 
   .ticket-card.drag-source {
@@ -988,7 +1000,7 @@
     white-space: nowrap;
     flex: 1 1 200px;
   }
-  .ticket-card-meta .diff-label {
+  .ticket-card-meta :global(.ticket-diff-stats) {
     font-variant-numeric: tabular-nums;
   }
 

@@ -10,8 +10,11 @@ from .files import safe_relpath
 
 _logger = logging.getLogger(__name__)
 
-WORKSPACE_DOC_MAX_CHARS = 4000
+CONTEXTSPACE_DOC_MAX_CHARS = 4000
 PREVIOUS_TICKET_MAX_BYTES = 16384
+# Raw ticket markdown lives inside <CAR_CURRENT_TICKET_FILE> under these tags.
+CAR_TICKET_OPEN = "<CAR_TICKET>"
+CAR_TICKET_CLOSE = "</CAR_TICKET>"
 TRUNCATION_MARKER = "\n\n[... TRUNCATED ...]\n\n"
 FULL_TICKET_FLOW_INSTRUCTIONS = (
     "You are running inside Codex Autorunner (CAR) in a ticket-based workflow.\n\n"
@@ -44,7 +47,7 @@ FULL_TICKET_FLOW_INSTRUCTIONS = (
     "Using ticket templates (optional):\n"
     "- If you need a standard ticket pattern, prefer: `car templates fetch <repo_id>:<path>[@<ref>]`\n"
     "  - Trusted repos skip scanning; untrusted repos are scanned (cached by blob SHA).\n\n"
-    "Workspace docs:\n"
+    "Contextspace docs:\n"
     "- You may update or add context under `.codex-autorunner/contextspace/` so future ticket turns have durable context.\n"
     '- Prefer referencing these docs instead of creating duplicate "shadow" docs elsewhere.\n\n'
     "Repo hygiene:\n"
@@ -64,8 +67,8 @@ REQUIRED_PROMPT_MARKERS = (
     "</CAR_RUNTIME_PATHS>",
     "<CAR_CURRENT_TICKET_FILE>",
     "</CAR_CURRENT_TICKET_FILE>",
-    "<TICKET_MARKDOWN>",
-    "</TICKET_MARKDOWN>",
+    CAR_TICKET_OPEN,
+    CAR_TICKET_CLOSE,
 )
 
 
@@ -81,7 +84,7 @@ SECTION_REDUCTION_POLICY = (
     PromptSectionPolicy("prev_ticket_block"),
     PromptSectionPolicy("reply_block"),
     PromptSectionPolicy("requested_context_block"),
-    PromptSectionPolicy("workspace_block"),
+    PromptSectionPolicy("contextspace_block"),
     PromptSectionPolicy("ticket_block", required=True, preserve_ticket_structure=True),
 )
 MAIN_SECTION_ORDER = [policy.key for policy in SECTION_REDUCTION_POLICY]
@@ -102,7 +105,7 @@ class TicketFlowPromptSections:
     prev_ticket_block: str
     reply_block: str
     requested_context_block: str
-    workspace_block: str
+    contextspace_block: str
     ticket_block: str
 
     def as_dict(self) -> dict[str, str]:
@@ -111,7 +114,7 @@ class TicketFlowPromptSections:
             "prev_ticket_block": self.prev_ticket_block,
             "reply_block": self.reply_block,
             "requested_context_block": self.requested_context_block,
-            "workspace_block": self.workspace_block,
+            "contextspace_block": self.contextspace_block,
             "ticket_block": self.ticket_block,
         }
 
@@ -122,7 +125,7 @@ class TicketFlowPromptSections:
             prev_ticket_block=values.get("prev_ticket_block", ""),
             reply_block=values.get("reply_block", ""),
             requested_context_block=values.get("requested_context_block", ""),
-            workspace_block=values.get("workspace_block", ""),
+            contextspace_block=values.get("contextspace_block", ""),
             ticket_block=values.get("ticket_block", ""),
         )
 
@@ -217,7 +220,7 @@ def preserve_ticket_structure(ticket_block: str, max_bytes: int) -> str:
         return ticket_block
 
     marker = "\n---\n"
-    ticket_md_idx = ticket_block.find("<TICKET_MARKDOWN>")
+    ticket_md_idx = ticket_block.find(CAR_TICKET_OPEN)
     if ticket_md_idx == -1:
         return truncate_text_by_bytes(ticket_block, max_bytes)
 
@@ -232,7 +235,7 @@ def preserve_ticket_structure(ticket_block: str, max_bytes: int) -> str:
     preserve_end = second_marker_idx + len(marker)
     preserved_part = ticket_block[:preserve_end]
     preserved_bytes = len(preserved_part.encode("utf-8"))
-    suffix_start = ticket_block.find("\n</TICKET_MARKDOWN>", preserve_end)
+    suffix_start = ticket_block.find(f"\n{CAR_TICKET_CLOSE}", preserve_end)
     suffix = ticket_block[suffix_start:] if suffix_start != -1 else ""
     suffix_bytes = len(suffix.encode("utf-8"))
     remaining_bytes = max(max_bytes - preserved_bytes - suffix_bytes, 0)
@@ -250,7 +253,7 @@ def preserve_ticket_structure(ticket_block: str, max_bytes: int) -> str:
 
 def _minimum_ticket_section_bytes(ticket_block: str) -> int:
     marker = "\n---\n"
-    ticket_md_idx = ticket_block.find("<TICKET_MARKDOWN>")
+    ticket_md_idx = ticket_block.find(CAR_TICKET_OPEN)
     if ticket_md_idx == -1:
         return 1
     first_marker_idx = ticket_block.find(marker, ticket_md_idx)
@@ -260,7 +263,7 @@ def _minimum_ticket_section_bytes(ticket_block: str) -> int:
     if second_marker_idx == -1:
         return 1
     preserve_end = second_marker_idx + len(marker)
-    suffix_start = ticket_block.find("\n</TICKET_MARKDOWN>", preserve_end)
+    suffix_start = ticket_block.find(f"\n{CAR_TICKET_CLOSE}", preserve_end)
     suffix = ticket_block[suffix_start:] if suffix_start != -1 else ""
     minimum = (ticket_block[:preserve_end] + TRUNCATION_MARKER + suffix).encode("utf-8")
     return len(minimum)
@@ -338,7 +341,7 @@ def shrink_prompt(
     # prompt is still over budget, clear variable sections entirely, then tighten
     # the ticket block while preserving frontmatter (never keep only the tail of
     # the rendered prompt — that drops YAML ``agent``/``done`` lines near the
-    # start of ``<TICKET_MARKDOWN>``).
+    # start of ``<CAR_TICKET>``).
     while len(prompt.encode("utf-8")) > max_bytes:
         progressed = False
         for key in order:
@@ -424,8 +427,8 @@ def build_loop_guard_block(prior_no_change_turns: int) -> str:
     )
 
 
-def build_workspace_block(workspace_root: Path) -> str:
-    workspace_docs: list[tuple[str, str, str]] = []
+def build_contextspace_block(workspace_root: Path) -> str:
+    entries: list[tuple[str, str, str]] = []
     for key, label in (
         ("active_context", "Active context"),
         ("decisions", "Decisions"),
@@ -441,24 +444,16 @@ def build_workspace_block(workspace_root: Path) -> str:
             continue
         snippet = (content or "").strip()
         if snippet:
-            workspace_docs.append(
+            entries.append(
                 (
                     label,
                     safe_relpath(path, workspace_root),
-                    snippet[:WORKSPACE_DOC_MAX_CHARS],
+                    snippet[:CONTEXTSPACE_DOC_MAX_CHARS],
                 )
             )
-    if not workspace_docs:
+    if not entries:
         return ""
-    blocks = ["Contextspace docs (truncated; skip if not relevant):"]
-    for label, rel, body in workspace_docs:
-        blocks.append(f"{label} [{rel}]:\n{body}")
-    return "\n\n".join(blocks)
-
-
-def build_previous_ticket_block(previous_ticket_content: str | None) -> str:
-    _ = previous_ticket_content
-    return ""
+    return "\n\n".join(f"{label} [{rel}]:\n{body}" for label, rel, body in entries)
 
 
 def build_ticket_block(ticket_path: Path, rel_ticket: str) -> str:
@@ -466,9 +461,9 @@ def build_ticket_block(ticket_path: Path, rel_ticket: str) -> str:
     return (
         "<CAR_CURRENT_TICKET_FILE>\n"
         f"PATH: {rel_ticket}\n"
-        "<TICKET_MARKDOWN>\n"
+        f"{CAR_TICKET_OPEN}\n"
         f"{ticket_raw_content}\n"
-        "</TICKET_MARKDOWN>\n"
+        f"{CAR_TICKET_CLOSE}\n"
         "</CAR_CURRENT_TICKET_FILE>"
     )
 
@@ -484,20 +479,29 @@ def render_ticket_flow_prompt(model: TicketFlowPromptModel) -> str:
     sections = model.sections
     optional_sections = ""
     if model.include_optional_sections:
-        optional_sections = (
+        chunks: list[str] = [
             "<CAR_REQUESTED_CONTEXT>\n"
             f"{sections.requested_context_block}\n"
-            "</CAR_REQUESTED_CONTEXT>\n\n"
-            "<CAR_WORKSPACE_DOCS>\n"
-            f"{sections.workspace_block}\n"
-            "</CAR_WORKSPACE_DOCS>\n\n"
+            "</CAR_REQUESTED_CONTEXT>\n\n",
+        ]
+        if sections.contextspace_block.strip():
+            chunks.append(
+                "<CAR_CONTEXTSPACE_DOCS>\n"
+                f"{sections.contextspace_block}\n"
+                "</CAR_CONTEXTSPACE_DOCS>\n\n"
+            )
+        chunks.append(
             "<CAR_HUMAN_REPLIES>\n"
             f"{sections.reply_block}\n"
-            "</CAR_HUMAN_REPLIES>\n\n"
-            "<CAR_PREVIOUS_TICKET_REFERENCE>\n"
-            f"{sections.prev_ticket_block}\n"
-            "</CAR_PREVIOUS_TICKET_REFERENCE>\n\n"
+            "</CAR_HUMAN_REPLIES>\n\n",
         )
+        if sections.prev_ticket_block.strip():
+            chunks.append(
+                "<CAR_PREVIOUS_TICKET_REFERENCE>\n"
+                f"{sections.prev_ticket_block}\n"
+                "</CAR_PREVIOUS_TICKET_REFERENCE>\n\n"
+            )
+        optional_sections = "".join(chunks)
     previous_agent_output = ""
     if model.include_optional_sections:
         previous_agent_output = (

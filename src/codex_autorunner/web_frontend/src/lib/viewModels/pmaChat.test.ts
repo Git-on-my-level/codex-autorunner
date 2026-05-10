@@ -34,7 +34,8 @@ import {
   reconcilePmaTimeline,
   removePendingAttachment,
   sortChatsWaitingFirst,
-  summarizeFilterCounts
+  summarizeFilterCounts,
+  buildPmaChatListEntries
 } from './pmaChat';
 
 const baseChat: PmaChatSummary = {
@@ -47,6 +48,7 @@ const baseChat: PmaChatSummary = {
   repoId: 'repo-1',
   worktreeId: 'repo-1--pma',
   ticketId: 'TICKET-120',
+  isTicketFlow: true,
   progressPercent: null,
   updatedAt: '2026-05-04T00:00:00Z',
   raw: {}
@@ -109,6 +111,19 @@ const baseProgress: PmaRunProgress = {
 };
 
 describe('PMA chat view helpers', () => {
+  it('collapses ticket-flow chats sharing a worktree into one run group, even without ticket ids', () => {
+    const chats: PmaChatSummary[] = [
+      { ...baseChat, id: 'tf-1', ticketId: null, isTicketFlow: true, worktreeId: 'wt-A', repoId: 'repo-1' },
+      { ...baseChat, id: 'tf-2', ticketId: null, isTicketFlow: true, worktreeId: 'wt-A', repoId: 'repo-1' },
+      { ...baseChat, id: 'tf-3', ticketId: null, isTicketFlow: true, worktreeId: 'wt-A', repoId: 'repo-1' }
+    ];
+    const entries = buildPmaChatListEntries(chats, { groupRuns: true });
+    expect(entries).toHaveLength(1);
+    expect(entries[0].kind).toBe('group');
+    if (entries[0].kind === 'group') {
+      expect(entries[0].group.totalCount).toBe(3);
+    }
+  });
   it('filters chat list by status and scoped search text', () => {
     const chats: PmaChatSummary[] = [
       baseChat,
@@ -171,7 +186,7 @@ describe('PMA chat view helpers', () => {
 
   it('formats header scope lines for PMA global, repo, and worktree chats', () => {
     expect(pmaChatHeaderScopeLine(null)).toBe('');
-    expect(pmaChatHeaderScopeLine({ ...baseChat, repoId: null, worktreeId: null })).toBe('PMA - global');
+    expect(pmaChatHeaderScopeLine({ ...baseChat, repoId: null, worktreeId: null })).toBe('Hub workspace');
     expect(pmaChatHeaderScopeLine({ ...baseChat, repoId: 'repo-1', worktreeId: null }, () => 'My Repo')).toBe('Repo - My Repo');
     expect(
       pmaChatHeaderScopeLine({ ...baseChat, repoId: 'repo-1', worktreeId: 'wt-9' }, () => 'My Repo')
@@ -878,28 +893,28 @@ describe('PMA chat view helpers', () => {
 
     expect(buildManagedThreadCreatePayload('codex', local)).toEqual({
       agent: 'codex',
-      name: 'New PMA chat',
+      name: 'New chat',
       scope_urn: 'hub'
     });
     expect(buildManagedThreadCreatePayload('codex', repo)).toEqual({
       agent: 'codex',
-      name: 'New PMA chat',
+      name: 'New chat',
       scope_urn: 'repo:repo-1'
     });
     expect(buildManagedThreadCreatePayload('codex', worktree)).toEqual({
       agent: 'codex',
-      name: 'New PMA chat',
+      name: 'New chat',
       scope_urn: 'worktree:repo-1/worktree-1'
     });
-    expect(buildManagedThreadCreatePayload('opencode', local, 'New PMA chat', 'zai/glm')).toEqual({
+    expect(buildManagedThreadCreatePayload('opencode', local, 'New chat', 'zai/glm')).toEqual({
       agent: 'opencode',
       model: 'zai/glm',
-      name: 'New PMA chat',
+      name: 'New chat',
       scope_urn: 'hub'
     });
-    expect(buildManagedThreadCreatePayload('hermes', local, 'New PMA chat', '', 'planning')).toEqual({
+    expect(buildManagedThreadCreatePayload('hermes', local, 'New chat', '', 'planning')).toEqual({
       agent: 'hermes',
-      name: 'New PMA chat',
+      name: 'New chat',
       profile: 'planning',
       scope_urn: 'hub'
     });
@@ -958,7 +973,7 @@ describe('PMA chat view helpers', () => {
   it('builds managed-thread create and send payloads that match backend constraints', () => {
     expect(buildManagedThreadCreatePayload('codex')).toEqual({
       agent: 'codex',
-      name: 'New PMA chat',
+      name: 'New chat',
       scope_urn: 'hub'
     });
     const attachments = [
@@ -1064,6 +1079,7 @@ describe('PMA chat view helpers', () => {
     expect(pmaChatKind({ ...baseChat, raw: { name: 'New coding agent chat' } })).toBe('coding_agent');
     expect(pmaChatKind({ ...baseChat, raw: { chat_kind: 'direct_agent' } })).toBe('coding_agent');
     expect(pmaChatKindLabel('coding_agent')).toBe('Coding agent');
+    expect(pmaChatKindLabel('pma')).toBe('Chat');
     expect(agentCapabilityAllowed({ capability_projection: { actions: { list_models: { allowed: true } } } }, 'list_models')).toBe(true);
     expect(agentCapabilityAllowed({ capability_projection: { actions: { list_models: { allowed: false } } } }, 'list_models')).toBe(false);
     expect(modelReasoningOptions({ reasoning_options: ['low', 'high', 'high'] })).toEqual(['low', 'high']);
@@ -1097,7 +1113,7 @@ describe('PMA chat view helpers', () => {
       'Command summary',
       'Diff summary',
       'PR / link',
-      'PMA final report',
+      'Final report',
       'Error / blocker',
       'Run event'
     ]);

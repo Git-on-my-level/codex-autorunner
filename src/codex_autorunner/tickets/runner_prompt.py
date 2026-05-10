@@ -9,15 +9,15 @@ from . import runner_prompt_support as _support
 from .files import safe_relpath
 from .runner_prompt_support import (
     FULL_TICKET_FLOW_INSTRUCTIONS,
+    PREVIOUS_TICKET_MAX_BYTES,
     TicketFlowPromptModel,
     TicketFlowPromptSections,
     build_checkpoint_block,
     build_commit_block,
+    build_contextspace_block,
     build_lint_block,
     build_loop_guard_block,
-    build_previous_ticket_block,
     build_ticket_block,
-    build_workspace_block,
     reduce_ticket_flow_prompt_to_budget,
     render_ticket_flow_prompt,
     validate_ticket_flow_prompt,
@@ -86,6 +86,12 @@ def _build_prompt_model(
         cap = max(prompt_max_bytes - _PREVIOUS_OUTPUT_HEADROOM_BYTES, 1)
         if len(prev_block.encode("utf-8")) > cap:
             prev_block = _truncate_text_by_bytes(prev_block, cap)
+    prev_ticket_raw = (previous_ticket_content or "").strip()
+    prev_ticket_block = (
+        _truncate_text_by_bytes(prev_ticket_raw, PREVIOUS_TICKET_MAX_BYTES)
+        if prev_ticket_raw
+        else ""
+    )
     return TicketFlowPromptModel(
         instructions=FULL_TICKET_FLOW_INSTRUCTIONS,
         include_optional_sections=True,
@@ -104,10 +110,10 @@ def _build_prompt_model(
         loop_guard_block=build_loop_guard_block(prior_no_change_turns),
         sections=TicketFlowPromptSections(
             prev_block=prev_block,
-            prev_ticket_block=build_previous_ticket_block(previous_ticket_content),
+            prev_ticket_block=prev_ticket_block,
             reply_block=reply_context or "",
             requested_context_block=requested_context or "",
-            workspace_block=build_workspace_block(workspace_root),
+            contextspace_block=build_contextspace_block(workspace_root),
             ticket_block=build_ticket_block(ticket_path, rel_ticket),
         ),
     )

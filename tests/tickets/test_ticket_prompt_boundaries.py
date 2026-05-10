@@ -88,8 +88,8 @@ def test_ticket_flow_prompt_boundaries(tmp_path: Path) -> None:
     assert "</CAR_HUD>" in prompt
     assert "<CAR_CURRENT_TICKET_FILE>" in prompt
     assert "</CAR_CURRENT_TICKET_FILE>" in prompt
-    assert "<TICKET_MARKDOWN>" in prompt
-    assert "</TICKET_MARKDOWN>" in prompt
+    assert "<CAR_TICKET>" in prompt
+    assert "</CAR_TICKET>" in prompt
 
     hud_start = prompt.index("<CAR_HUD>") + len("<CAR_HUD>\n")
     hud_end = prompt.index("</CAR_HUD>")
@@ -134,6 +134,7 @@ def test_ticket_flow_prompt_shape_is_not_agent_specific(
         last_agent_output=None,
         outbox_paths=_make_outbox(workspace_root),
         lint_errors=None,
+        requested_context="(requested context placeholder)",
     )
 
     assert "<CAR_HUD>" in prompt

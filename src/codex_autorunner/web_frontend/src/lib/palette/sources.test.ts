@@ -32,6 +32,7 @@ describe('threadSource', () => {
         repoId: null,
         worktreeId: null,
         ticketId: null,
+        isTicketFlow: false,
         progressPercent: null,
         updatedAt: null,
         raw: {}

@@ -103,9 +103,13 @@ describe('TicketViews', () => {
 
     expect(body).toContain('Ticket flow controls');
     expect(body).toContain('+ New ticket');
-    expect(body).toContain('working-badge');
+    expect(body).toMatch(/ticket-card running[^\n]*\bcurrent\b/);
     expect(body).toContain('Implement the current ticket body preview.');
-    expect(body).toContain('+80 -5 4 files');
+    expect(body).toContain('+80');
+    expect(body).toContain('-5');
+    expect(body).toMatch(/4\s+files/);
+    expect(body).toContain('diff-stat-add');
+    expect(body).toContain('diff-stat-del');
     expect(body).toContain('2m 0s');
     expect(body).toContain('Drag #110 to reorder');
     expect(body).not.toContain('Move #110 down');

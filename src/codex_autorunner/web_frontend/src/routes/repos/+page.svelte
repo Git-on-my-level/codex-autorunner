@@ -44,7 +44,7 @@
     }
     sectionIssues = [
       !runs.ok ? partialPageIssue('current_run', 'Active runs unavailable', runs.error) : null,
-      !chats.ok ? partialPageIssue('current_run', 'PMA chats unavailable', chats.error) : null,
+      !chats.ok ? partialPageIssue('current_run', 'Chats unavailable', chats.error) : null,
       !tickets.ok ? partialPageIssue('tickets', 'Ticket queue unavailable', tickets.error) : null
     ].filter((issue): issue is PartialPageIssue => Boolean(issue));
     index = buildRepoWorktreeIndexViewModel({

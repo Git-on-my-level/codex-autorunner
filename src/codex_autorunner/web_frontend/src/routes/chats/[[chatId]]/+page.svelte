@@ -244,10 +244,10 @@
   const activeMessengerSurface = $derived(pmaChatMessengerSurface(activeChat));
   const activeRepoIngress = $derived(repoIngressForChat(activeChat));
   const createChatLabel = $derived(
-    creating ? 'Creating...' : newChatKind === 'agent' && canStartCodingAgentChat ? '+ Coding agent' : '+ PMA chat'
+    creating ? 'Creating...' : newChatKind === 'agent' && canStartCodingAgentChat ? '+ Coding agent' : '+ Chat'
   );
   const headerScopeLine = $derived(pmaChatHeaderScopeLine(activeChat, repoLabelForRepoId));
-  /** Omit connected “Live · …” — redundant with the PMA turn pill on the scope row. */
+  /** Omit connected “Live · …” — redundant with the turn-status pill on the scope row. */
   const showStreamHealthAside = $derived(
     streamState === 'connecting' || streamState === 'interrupted'
   );
@@ -310,7 +310,7 @@
   }
 
   function composerRecipientLabel(chat: PmaChatSummary | null): string {
-    if (!chat) return 'PMA';
+    if (!chat) return 'Chat';
     if (chat.repoId) {
       const repoLabel = repoLabelForRepoId(chat.repoId);
       return repoLabel ?? chat.repoId;
@@ -319,7 +319,7 @@
       const opt = worktreeScopeOption(chat.worktreeId);
       return opt?.label ?? chat.worktreeId;
     }
-    return 'PMA';
+    return 'Chat';
   }
 
   onMount(() => {
@@ -631,7 +631,7 @@
           return;
         }
         streamState = 'interrupted';
-        streamError = 'Live PMA updates were interrupted. Polling continues in the background.';
+        streamError = 'Live chat updates were interrupted. Polling continues in the background.';
       }
     });
   }
@@ -723,7 +723,7 @@
   function newChatDisplayName(): string {
     return newChatKind === 'agent' && canStartCodingAgentChat
       ? 'New coding agent chat'
-      : 'New PMA chat';
+      : 'New chat';
   }
 
   async function ensureChatForSelectedAgent(): Promise<string | null> {
@@ -1322,7 +1322,7 @@
               {/if}
             </span>
             {#if showStatusBar && statusBar}
-              <div class={`pma-status-bar ${statusBar.state}`} aria-label="PMA turn status">
+              <div class={`pma-status-bar ${statusBar.state}`} aria-label="Turn status">
                 <span class="status-dot" aria-hidden="true"></span>
                 <strong>{statusLabel(statusBar.state)}</strong>
                 {#if statusBar.phase && statusBar.phase.toLowerCase() !== statusLabel(statusBar.state).toLowerCase()}
