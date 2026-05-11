@@ -34,6 +34,7 @@ export const mockRunProgress: PmaRunProgress = {
   guidance: null,
   queueDepth: 0,
   elapsedSeconds: 120,
+  startedAt: '2026-05-04T00:00:00Z',
   idleSeconds: 2,
   lastEventId: 12,
   lastEventAt: '2026-05-04T00:02:00Z',

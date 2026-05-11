@@ -120,6 +120,7 @@ class ChatIndexRow(ReadModelContract):
     ticket_id: Optional[str] = None
     run_id: Optional[str] = None
     agent: Optional[str] = None
+    agent_profile: Optional[str] = None
     model: Optional[str] = None
     group_id: Optional[str] = None
 
@@ -211,6 +212,7 @@ class ChatThreadProjection(ReadModelContract):
     ticket_id: Optional[str] = None
     run_id: Optional[str] = None
     agent: Optional[str] = None
+    agent_profile: Optional[str] = None
     model: Optional[str] = None
     archived: bool = False
 

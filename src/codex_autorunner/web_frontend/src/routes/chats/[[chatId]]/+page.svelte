@@ -269,6 +269,9 @@
     slashSelectedIndex = Math.min(slashSelectedIndex, Math.max(slashSuggestions.length - 1, 0));
   });
   let pendingRefreshTimer: number | null = null;
+  let activeRepairInterval: number | null = null;
+  let activeClockInterval: number | null = null;
+  let clockNowMs = $state(Date.now());
   let lastScrolledChatId: string | null = null;
   let lastScrolledCardCount = 0;
   let lastScrolledEventCount = 0;
@@ -333,8 +336,9 @@
     parts.push(`${group.doneCount}/${group.totalCount} done`);
     return parts;
   }
-  const activeCards = $derived<PmaCard[]>(buildPmaTranscriptCards(timeline, activeChat, artifacts, progress));
-  const statusBar = $derived(buildPmaStatusBar(progress, activeChat));
+  const displayedProgress = $derived(progressWithLiveElapsed(progress, clockNowMs));
+  const activeCards = $derived<PmaCard[]>(buildPmaTranscriptCards(timeline, activeChat, artifacts, displayedProgress));
+  const statusBar = $derived(buildPmaStatusBar(displayedProgress, activeChat));
   const selectedScope = $derived(scopeOptions.find((scope) => scope.id === selectedScopeId) ?? localPmaChatScopeOption());
   const selectedAgentRecord = $derived(agentRecordForId(agents, selectedAgent));
   const hermesProfileChoices = $derived(agentProfileEntriesForRecord(selectedAgentRecord));
@@ -371,8 +375,8 @@
         statusBar.state !== 'idle' &&
         (statusBar.state === 'done'
           ? Boolean(statusBar.tokenUsageLabel || statusBar.contextRemainingLabel)
-          : (progress?.elapsedSeconds !== null && progress?.elapsedSeconds !== undefined) ||
-            (progress?.queueDepth ?? 0) > 0 ||
+            : (displayedProgress?.elapsedSeconds !== null && displayedProgress?.elapsedSeconds !== undefined) ||
+            (displayedProgress?.queueDepth ?? 0) > 0 ||
             statusBar.tokenUsageLabel ||
             statusBar.contextRemainingLabel ||
             ['running', 'waiting', 'blocked', 'failed'].includes(statusBar.state))
@@ -381,13 +385,13 @@
   const chatHasActivity = $derived(activeCards.length > 0 || showStatusBar);
   const showStartPicker = $derived(Boolean(activeChat) && !loadingActive && !activeError && !chatHasActivity);
   const hasRunnableDraft = $derived(Boolean(activeChat && (draft.trim() || pendingAttachments.length > 0)));
-  const canInterruptWithDraft = $derived(Boolean(activeChat && progress?.status === 'running' && hasRunnableDraft));
+  const canInterruptWithDraft = $derived(Boolean(activeChat && displayedProgress?.status === 'running' && hasRunnableDraft));
   const slashSuggestions = $derived<SlashCommandSuggestion[]>(
     buildSlashCommandSuggestions(draft, {
       hasActiveChat: Boolean(activeChat),
       hasScopedWorkspace: selectedScope.kind !== 'local',
-      isRunning: progress?.status === 'running',
-      queueDepth: queuedTurns.length || progress?.queueDepth || 0
+      isRunning: displayedProgress?.status === 'running',
+      queueDepth: queuedTurns.length || displayedProgress?.queueDepth || 0
     })
   );
   const showSlashCommandMenu = $derived(slashSuggestions.length > 0 && composerFocused);
@@ -448,6 +452,12 @@
     draft = page.url.searchParams.get('draft') ?? draft;
     void loadInitial();
     connectChatStream();
+    activeClockInterval = window.setInterval(() => {
+      if (progress?.status === 'running') clockNowMs = Date.now();
+    }, 1000);
+    activeRepairInterval = window.setInterval(() => {
+      if (activeChatId) void refreshActive(activeChatId, { quiet: true });
+    }, 7000);
   });
 
   $effect(() => {
@@ -487,6 +497,8 @@
   onDestroy(() => {
     unsubscribeReadModels?.();
     if (pendingRefreshTimer) window.clearTimeout(pendingRefreshTimer);
+    if (activeRepairInterval) window.clearInterval(activeRepairInterval);
+    if (activeClockInterval) window.clearInterval(activeClockInterval);
     closeStream();
     closeChatStream();
   });
@@ -905,11 +917,24 @@
     if (reconciled.replacementChatId) void selectChat(reconciled.replacementChatId);
   }
 
+  /** Elapsed seconds capped by wall clock while status is running (matches live UI). */
+  function progressElapsedWithLiveWall(value: PmaRunProgress, nowMs: number): number {
+    const base = value.elapsedSeconds ?? 0;
+    if (value.status !== 'running' || !value.startedAt) return base;
+    const startedMs = Date.parse(value.startedAt);
+    if (!Number.isFinite(startedMs)) return base;
+    const wallElapsed = Math.max(0, Math.floor((nowMs - startedMs) / 1000));
+    return Math.max(base, wallElapsed);
+  }
+
   function updateProgress(nextProgress: PmaRunProgress): void {
     syncChatListStatusFromProgress(nextProgress);
     const chatId = nextProgress.chatId ?? activeChatId;
     if (!chatId) return;
+    const nowMs = Date.now();
     if (progress && progress.id === nextProgress.id) {
+      const incomingElapsed = nextProgress.elapsedSeconds ?? 0;
+      const mergedElapsed = Math.max(progressElapsedWithLiveWall(progress, nowMs), incomingElapsed);
       const seen = new Set<string>();
       const merged: SurfaceArtifact[] = [];
       for (const ev of [...progress.events, ...nextProgress.events]) {
@@ -917,10 +942,21 @@
         seen.add(ev.id);
         merged.push(ev);
       }
-      readModelEntityStore.setPmaProgress(chatId, { ...nextProgress, events: merged });
+      readModelEntityStore.setPmaProgress(chatId, {
+        ...nextProgress,
+        startedAt: nextProgress.startedAt ?? progress.startedAt,
+        elapsedSeconds: mergedElapsed,
+        events: merged
+      });
     } else {
       readModelEntityStore.setPmaProgress(chatId, nextProgress);
     }
+  }
+
+  function progressWithLiveElapsed(value: PmaRunProgress | null, nowMs: number): PmaRunProgress | null {
+    if (!value) return value;
+    const elapsedSeconds = progressElapsedWithLiveWall(value, nowMs);
+    return elapsedSeconds === value.elapsedSeconds ? value : { ...value, elapsedSeconds };
   }
 
   function clearActiveDetailState(chatId: string): void {
@@ -1150,7 +1186,7 @@
     const attachmentsForMessage = uploaded;
     const message = composeMessageWithAttachments(draftSnapshot, attachmentsForMessage);
     const targetChatId = activeChatId;
-    const targetIsRunning = progress?.status === 'running';
+    const targetIsRunning = displayedProgress?.status === 'running';
     const profileForSend =
       activeChat?.agentProfile?.trim() || selectedProfile?.trim() || '';
     const commandPlan =
@@ -1266,7 +1302,7 @@
   }
 
   async function autoCompactActiveThread(chatId: string): Promise<void> {
-    if (progress?.status === 'running') {
+    if (displayedProgress?.status === 'running') {
       showCommandNotice('Wait for the current turn to finish before auto-compacting.');
       return;
     }
@@ -1962,7 +1998,7 @@
             {#if activeMessengerSurface}
               <span class={`chat-surface-badge ${activeMessengerSurface.badgeClass}`}>{activeMessengerSurface.label}</span>
             {/if}
-            {#if activeChat.status === 'done' && progress?.elapsedSeconds !== null && progress?.elapsedSeconds !== undefined && statusBar}
+            {#if activeChat.status === 'done' && displayedProgress?.elapsedSeconds !== null && displayedProgress?.elapsedSeconds !== undefined && statusBar}
               <span class={`status-dot status-${activeChat.status}`} aria-hidden="true"></span>
               <strong class="chat-header-status-strong">{statusLabel(activeChat.status)}</strong>
               {#if statusBar.phase && statusBar.phase.toLowerCase() !== statusLabel(activeChat.status).toLowerCase()}
@@ -2062,10 +2098,10 @@
         {#if statusBar.phase && statusBar.phase.toLowerCase() !== statusLabel(statusBar.state).toLowerCase()}
           <span>{statusBar.phase}</span>
         {/if}
-        {#if progress?.elapsedSeconds !== null && progress?.elapsedSeconds !== undefined}
+        {#if displayedProgress?.elapsedSeconds !== null && displayedProgress?.elapsedSeconds !== undefined}
           <span>{statusBar.elapsedLabel}</span>
         {/if}
-        {#if (progress?.queueDepth ?? 0) > 0}
+        {#if (displayedProgress?.queueDepth ?? 0) > 0}
           <span>{statusBar.queueDepthLabel}</span>
         {/if}
         {#if statusBar.tokenUsageLabel}
@@ -2236,7 +2272,7 @@
         disabled={!hasRunnableDraft}
         title="Send (⌘/Ctrl+Enter)"
       >
-        {sending ? 'Queueing' : progress?.status === 'running' ? 'Queue' : 'Send'}
+        {sending ? 'Queueing' : displayedProgress?.status === 'running' ? 'Queue' : 'Send'}
       </button>
     </form>
     {#if linkDialogOpen}

@@ -56,6 +56,7 @@ export type ChatIndexRow = {
   ticketId?: string | null;
   runId?: string | null;
   agent?: string | null;
+  agentProfile?: string | null;
   model?: string | null;
   groupId?: string | null;
 };
@@ -138,6 +139,7 @@ export type ChatThreadProjection = {
   ticketId?: string | null;
   runId?: string | null;
   agent?: string | null;
+  agentProfile?: string | null;
   model?: string | null;
   archived: boolean;
 };

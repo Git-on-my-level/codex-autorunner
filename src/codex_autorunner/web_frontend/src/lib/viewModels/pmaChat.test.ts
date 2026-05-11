@@ -103,6 +103,7 @@ const baseProgress: PmaRunProgress = {
   guidance: 'Running frontend checks.',
   queueDepth: 1,
   elapsedSeconds: 95,
+  startedAt: '2026-05-04T00:00:00Z',
   idleSeconds: 2,
   lastEventId: 7,
   lastEventAt: '2026-05-04T00:00:30Z',

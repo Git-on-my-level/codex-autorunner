@@ -45,6 +45,7 @@ export function pmaChatSummaryToChatIndexRow(chat: PmaChatSummary): ChatIndexRow
     ticketId: chat.ticketId,
     runId: chat.runId ?? null,
     agent: chat.agentId,
+    agentProfile: chat.agentProfile,
     model: chat.model,
     groupId: chat.ticketId ? `ticket:${chat.ticketId}` : chat.runId ? `run:${chat.runId}` : null
   };
@@ -72,6 +73,7 @@ export function legacyChatIndexRecordToChatIndexRow(raw: JsonRecord): ChatIndexR
     ticketId: resourceKind === 'ticket' ? resourceId : stringValue(raw.ticket_id ?? raw.current_ticket_id),
     runId: resourceKind === 'run' || resourceKind === 'ticket_run' ? resourceId : stringValue(raw.run_id),
     agent: stringValue(raw.agent ?? raw.agent_id),
+    agentProfile: stringValue(raw.agent_profile ?? raw.agentProfile),
     model: stringValue(raw.model),
     groupId: stringValue(raw.group_id)
   };
@@ -94,6 +96,7 @@ export function chatIndexRowToPmaChatSummary(row: ChatIndexRow): PmaChatSummary 
     ticket_id: row.ticketId,
     run_id: row.runId,
     agent_id: row.agent,
+    agent_profile: row.agentProfile,
     model: row.model,
     last_activity_at: row.lastActivityAt,
     surface_kind: row.surface
@@ -104,7 +107,7 @@ export function chatIndexRowToPmaChatSummary(row: ChatIndexRow): PmaChatSummary 
     lifecycleStatus: row.status === 'archived' ? 'archived' : 'active',
     status: normalizeWorkStatus(row.status),
     agentId: row.agent ?? null,
-    agentProfile: null,
+    agentProfile: row.agentProfile ?? null,
     model: row.model ?? null,
     repoId: row.repoId ?? null,
     worktreeId: row.worktreeId ?? null,

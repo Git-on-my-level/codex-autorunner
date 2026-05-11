@@ -58,6 +58,7 @@ const chatRow = {
   ticketId: 'TICKET-001',
   runId: 'run-1',
   agent: 'codex',
+  agentProfile: 'm4-pma',
   model: 'gpt-5.3-codex',
   groupId: 'ticket-run:run-1'
 };
@@ -121,6 +122,8 @@ describe('read model contracts', () => {
       worktreeId: 'wt-1',
       ticketId: 'TICKET-001',
       runId: 'run-1',
+      agent: 'hermes',
+      agentProfile: 'm4-pma',
       archived: false
     };
     const snapshot = mapReadModelContract<ChatDetailSnapshot>({
@@ -146,6 +149,7 @@ describe('read model contracts', () => {
     });
 
     expect(snapshot.timelineWindow.limit).toBe(50);
+    expect(snapshot.thread.agentProfile).toBe('m4-pma');
     expect(event.patch.appendedTimeline[0].backendMessageId).toBe('turn-1');
   });
 

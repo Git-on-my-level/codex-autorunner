@@ -78,6 +78,7 @@ export type PmaRunProgress = {
   guidance: string | null;
   queueDepth: number;
   elapsedSeconds: number | null;
+  startedAt: string | null;
   idleSeconds: number | null;
   lastEventId: number | null;
   lastEventAt: string | null;
@@ -308,6 +309,7 @@ export function mapPmaRunProgress(raw: JsonRecord): PmaRunProgress {
     guidance: nullableString(source.guidance),
     queueDepth: numberOrNull(source.queue_depth) ?? 0,
     elapsedSeconds: numberOrNull(source.elapsed_seconds ?? source.duration_seconds),
+    startedAt: dateString(source.started_at ?? source.created_at),
     idleSeconds: numberOrNull(source.idle_seconds),
     lastEventId: numberOrNull(source.last_event_id),
     lastEventAt: dateString(

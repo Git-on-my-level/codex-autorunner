@@ -1,6 +1,5 @@
 <script lang="ts">
   import SurfaceArtifactCard from '$lib/components/SurfaceArtifactCard.svelte';
-  import VirtualList from '$lib/components/VirtualList.svelte';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import { renderMarkdownToHtml } from '$lib/viewModels/contextspace';
   import { formatCompactMessageDateTime, type PmaCard } from '$lib/viewModels/pmaChat';
@@ -32,16 +31,7 @@
   }
 </script>
 
-<VirtualList
-  items={cards}
-  key={(card) => card.id}
-  estimatedItemSize={148}
-  overscan={6}
-  initialCount={48}
-  ariaLabel="Chat timeline cards"
-  class="chat-transcript-virtual-list"
->
-{#snippet children(card)}
+{#each cards as card (card.id)}
   {#if card.kind === 'message'}
     <article class={`message ${card.message.role === 'user' ? 'user' : 'assistant'}`}>
       <span>{card.message.role === 'user' ? 'You' : assistantLabel}</span>
@@ -224,5 +214,4 @@
   {:else}
     <SurfaceArtifactCard artifact={card.artifact} />
   {/if}
-{/snippet}
-</VirtualList>
+{/each}
