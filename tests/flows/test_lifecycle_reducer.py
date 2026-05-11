@@ -560,12 +560,22 @@ class TestReconcileWorkerDead:
         assert len(enrich) == 1
         assert enrich[0].note == "worker_dead"
 
-    def test_rejects_non_running(self):
+    def test_rejects_non_running_or_stopping(self):
         with pytest.raises(InvalidTransition):
             _reduce(
                 FlowRunStatus.PAUSED,
                 FlowTrigger(kind=TriggerKind.RECONCILE_WORKER_DEAD, error_message="x"),
             )
+
+    def test_stopping_to_failed(self):
+        result = _reduce(
+            FlowRunStatus.STOPPING,
+            FlowTrigger(kind=TriggerKind.RECONCILE_WORKER_DEAD, error_message="x"),
+        )
+        assert result.status == FlowRunStatus.FAILED
+        assert result.finished_at == _NOW
+        assert result.current_step is None
+        assert result.note == "worker-dead"
 
 
 class TestReconcileWorkerShutdown:

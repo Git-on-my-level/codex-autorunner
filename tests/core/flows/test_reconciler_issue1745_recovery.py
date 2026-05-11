@@ -122,6 +122,17 @@ async def test_reconcile_after_stale_reaper_preserves_commit_before_advance_for_
     assert reconciled.state["ticket_engine"]["current_ticket"] == (
         ".codex-autorunner/tickets/TICKET-001.md"
     )
+    crash_info = json.loads(
+        (repo / ".codex-autorunner" / "flows" / run_id / "crash.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert crash_info["worker_pid"] == 99123
+    assert crash_info["exit_code"] == -signal.SIGTERM
+    assert crash_info["signal"] == "SIGTERM"
+    assert crash_info["exit_origin"] == "stale_reaper"
+    assert crash_info["exit_kind"] == "reaped_stale"
+    assert crash_info["reap_reason"] == "metadata_age_exceeded"
 
     def handler(req: AgentTurnRequest) -> AgentTurnResult:
         assert "<CAR_COMMIT_REQUIRED>" in req.prompt

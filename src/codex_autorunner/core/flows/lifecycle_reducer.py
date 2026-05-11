@@ -551,7 +551,12 @@ def _reduce_reconcile_worker_dead(
     *,
     now: str,
 ) -> TransitionResult:
-    _require_status(current_status, FlowRunStatus.RUNNING, trigger=trigger.kind)
+    _require_status(
+        current_status,
+        FlowRunStatus.RUNNING,
+        FlowRunStatus.STOPPING,
+        trigger=trigger.kind,
+    )
     state = _merge_state(current_state, trigger)
     state = ensure_reason_summary(
         state, status=FlowRunStatus.FAILED, error_message=trigger.error_message
@@ -736,6 +741,26 @@ def resolve_reconcile_trigger(
 
     if status == FlowRunStatus.STOPPING:
         if not is_alive:
+            exit_origin = getattr(health, "exit_origin", None)
+            exit_kind = getattr(health, "exit_kind", None)
+            if exit_origin == "stale_reaper" or exit_kind == "reaped_stale":
+                error_msg = (
+                    f"Worker died (status={getattr(health, 'status', 'unknown')}"
+                )
+                pid = getattr(health, "pid", None)
+                if pid:
+                    error_msg += f", pid={pid}"
+                reap_reason = getattr(health, "reap_reason", None)
+                if reap_reason:
+                    error_msg += f", reap_reason={reap_reason}"
+                exit_code = getattr(health, "exit_code", None)
+                if isinstance(exit_code, int):
+                    error_msg += f", exit_code={exit_code}"
+                error_msg += ")"
+                return FlowTrigger(
+                    kind=TriggerKind.RECONCILE_WORKER_DEAD,
+                    error_message=error_msg,
+                )
             return FlowTrigger(kind=TriggerKind.RECONCILE_STOPPING_FINALIZE)
         return None
 

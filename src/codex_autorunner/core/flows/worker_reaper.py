@@ -305,12 +305,17 @@ def _terminate_worker(
     *,
     terminate_grace_seconds: float,
 ) -> None:
+    exit_kind = "reaped_stale"
+    reap_reason = worker.reason or worker.classification
     write_worker_exit_info(
         repo_root,
         worker.run_id,
         returncode=-signal.SIGTERM,
-        shutdown_intent=True,
+        shutdown_intent=False,
         exit_origin="stale_reaper",
+        exit_kind=exit_kind,
+        reap_reason=reap_reason,
+        preserve_existing_shutdown_intent=False,
     )
     _send_signal(worker.pid, signal.SIGTERM)
     deadline = time.monotonic() + max(0.0, terminate_grace_seconds)
@@ -323,8 +328,11 @@ def _terminate_worker(
             repo_root,
             worker.run_id,
             returncode=-signal.SIGKILL,
-            shutdown_intent=True,
+            shutdown_intent=False,
             exit_origin="stale_reaper",
+            exit_kind=exit_kind,
+            reap_reason=reap_reason,
+            preserve_existing_shutdown_intent=False,
         )
         _send_signal(worker.pid, signal.SIGKILL)
 

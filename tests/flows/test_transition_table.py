@@ -147,6 +147,20 @@ def test_stale_reaper_shutdown_intent_transitions_to_failed_not_stopped():
     assert "Worker died" in (dec.error_message or "")
 
 
+def test_stopping_stale_reaper_transitions_to_failed_not_stopped():
+    state = {"ticket_engine": {"status": "running"}}
+    health = _health_with_shutdown(alive=False, shutdown_intent=False)
+    health.exit_origin = "stale_reaper"
+    health.exit_kind = "reaped_stale"
+    health.reap_reason = "metadata_age_exceeded"
+
+    dec = _apply(_rec(FlowRunStatus.STOPPING, state), health)
+
+    assert dec.status == FlowRunStatus.FAILED
+    assert dec.note == "worker-dead"
+    assert "reap_reason=metadata_age_exceeded" in (dec.error_message or "")
+
+
 def test_no_shutdown_intent_still_fails():
     state = {"ticket_engine": {"status": "running"}}
     dec = _apply(

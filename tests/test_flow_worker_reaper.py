@@ -112,8 +112,10 @@ def test_reap_stale_flow_workers_writes_exit_info_and_signals(
             encoding="utf-8"
         )
     )
-    assert exit_info["shutdown_intent"] is True
+    assert exit_info["shutdown_intent"] is False
     assert exit_info["exit_origin"] == "stale_reaper"
+    assert exit_info["exit_kind"] == "reaped_stale"
+    assert exit_info["reap_reason"] == "run_completed"
     assert exit_info["returncode"] == -signal.SIGTERM
 
 
@@ -145,8 +147,54 @@ def test_reap_stale_flow_workers_exit_metadata_distinguishes_reaper_from_user_sh
             encoding="utf-8"
         )
     )
-    assert exit_info["shutdown_intent"] is True
+    assert exit_info["shutdown_intent"] is False
     assert exit_info["exit_origin"] == "stale_reaper"
+    assert exit_info["exit_kind"] == "reaped_stale"
+    assert exit_info["reap_reason"] == "metadata_age_exceeded"
+
+
+def test_reap_stale_flow_workers_overrides_prior_shutdown_intent(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repo = _repo(tmp_path)
+    run_id = str(uuid.uuid4())
+    _create_run(repo, run_id, FlowRunStatus.RUNNING)
+    spawned_at = time.time() - 7200
+    _write_worker(repo, run_id, 446, spawned_at)
+    run_dir = repo / ".codex-autorunner" / "flows" / run_id
+    (run_dir / "worker.exit.json").write_text(
+        json.dumps(
+            {
+                "run_id": run_id,
+                "returncode": -signal.SIGTERM,
+                "shutdown_intent": True,
+                "pid": 446,
+                "spawned_at": spawned_at,
+            }
+        ),
+        encoding="utf-8",
+    )
+    signals: list[tuple[int, signal.Signals]] = []
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.worker_reaper._pid_is_running",
+        lambda pid: not signals,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.worker_reaper._send_signal",
+        lambda pid, sig: signals.append((pid, sig)),
+    )
+
+    summary = reap_stale_flow_workers(
+        repo, max_age_seconds=60.0, terminate_grace_seconds=0.01
+    )
+
+    assert summary.pruned_count == 1
+    exit_info = json.loads((run_dir / "worker.exit.json").read_text(encoding="utf-8"))
+    assert exit_info["shutdown_intent"] is False
+    assert exit_info["exit_origin"] == "stale_reaper"
+    assert exit_info["exit_kind"] == "reaped_stale"
+    assert exit_info["reap_reason"] == "metadata_age_exceeded"
 
 
 def test_reap_stale_flow_workers_skips_prune_when_flows_db_unreadable(

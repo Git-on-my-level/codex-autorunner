@@ -245,6 +245,9 @@ def _ensure_crash_payload(
             last_event=last_method,
             stderr_tail=getattr(health, "stderr_tail", None),
             exception=record.error_message,
+            exit_origin=getattr(health, "exit_origin", None),
+            exit_kind=getattr(health, "exit_kind", None),
+            reap_reason=getattr(health, "reap_reason", None),
         )
         if crash_path is not None:
             crash_info = read_worker_crash_info(repo_root, record.id)
