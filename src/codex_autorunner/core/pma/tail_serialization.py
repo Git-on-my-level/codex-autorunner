@@ -816,7 +816,6 @@ async def _serialize_runtime_raw_tail_events(
     received_at_ms = 0
     fallback_dt = parse_iso_datetime(fallback_received_at)
     if fallback_dt is not None:
-        received_at_ms = int(fallback_dt.timestamp() * 1000)
         received_at = fallback_dt.isoformat()
     else:
         received_at = datetime.now(timezone.utc).isoformat()

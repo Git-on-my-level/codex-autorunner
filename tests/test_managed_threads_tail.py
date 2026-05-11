@@ -30,6 +30,9 @@ pytestmark = pytest.mark.slow
 
 def test_runtime_tail_fallback_uses_stable_turn_time_instead_of_read_time() -> None:
     fallback = "2026-04-06T10:00:00+00:00"
+    since_after_fallback = int(
+        (datetime.fromisoformat(fallback) + timedelta(minutes=5)).timestamp() * 1000
+    )
 
     events = asyncio.run(
         _serialize_runtime_raw_tail_events(
@@ -37,6 +40,7 @@ def test_runtime_tail_fallback_uses_stable_turn_time_instead_of_read_time() -> N
             tail_stream.RuntimeThreadRunEventState(),
             level="info",
             event_id_start=0,
+            since_ms=since_after_fallback,
             fallback_received_at=fallback,
         )
     )
