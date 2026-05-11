@@ -58,6 +58,11 @@ def test_hub_tickets_projects_repo_and_worktree_owned_queues(tmp_path: Path) -> 
         }
         == rows["tkt_repo_001"]
     )
+    assert rows["tkt_repo_001"]["frontmatter_yaml"].startswith(
+        'ticket_id: "tkt_repo_001"\n'
+    )
+    assert rows["tkt_repo_001"]["hub_root"] == str(hub_root)
+    assert rows["tkt_repo_001"]["workspace_root"] == str(base.path)
     assert (
         rows["tkt_worktree_002"]
         | {

@@ -463,4 +463,34 @@ Users can inspect tickets.
     expect(md).toContain('"minimal"');
     expect(md).toContain('Body text');
   });
+
+  it('preserves manually edited frontmatter yaml while updating known settings', () => {
+    const detail = buildTicketDetailViewModel(
+      {
+        ...mockTicketDetail,
+        errors: ['frontmatter.done is required and must be a boolean.'],
+        raw: {
+          frontmatter: { title: 'Broken', agent: 'codex', done: 'nope', custom_flag: 'keep' },
+          frontmatter_yaml: 'title: Broken\nagent: codex\ndone: nope\ncustom_flag: keep'
+        }
+      },
+      { tickets: [mockTicketSummary], runs: [], chats: [], artifacts: [] }
+    );
+
+    expect(detail.frontmatterEditableYaml).toContain('done: nope');
+    const md = buildTicketUpdateContent(detail, {
+      title: 'Fixed',
+      agent: 'codex',
+      model: '',
+      reasoning: '',
+      done: false,
+      frontmatterYaml: 'title: Broken\nagent: codex\ndone: nope\ncustom_flag: keep',
+      body: 'Body text'
+    });
+
+    expect(md).toContain('title: "Fixed"');
+    expect(md).toContain('done: false');
+    expect(md).toContain('custom_flag: keep');
+    expect(md).toContain('Body text');
+  });
 });

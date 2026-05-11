@@ -12,6 +12,7 @@ from .....tickets.frontmatter import (
     deterministic_ticket_id,
     parse_markdown_frontmatter,
     sanitize_ticket_id,
+    split_markdown_frontmatter,
 )
 from .....tickets.lint import parse_ticket_index
 
@@ -216,12 +217,20 @@ def _ticket_payload(
     idx = getattr(doc, "index", None) or parse_ticket_index(path.name)
     parsed_frontmatter: dict[str, object] = {}
     parsed_body: str | None = None
+    raw_frontmatter_yaml: str | None = None
     if doc is None:
         try:
             raw_body = path.read_text(encoding="utf-8")
+            raw_frontmatter_yaml, _ = split_markdown_frontmatter(raw_body)
             parsed_frontmatter, parsed_body = parse_markdown_frontmatter(raw_body)
         except (OSError, ValueError):
-            parsed_frontmatter, parsed_body = {}, None
+            parsed_frontmatter, parsed_body, raw_frontmatter_yaml = {}, None, None
+    else:
+        try:
+            raw_body = path.read_text(encoding="utf-8")
+            raw_frontmatter_yaml, _ = split_markdown_frontmatter(raw_body)
+        except OSError:
+            raw_frontmatter_yaml = None
 
     frontmatter = asdict(doc.frontmatter) if doc else parsed_frontmatter
     source_ticket_id = sanitize_ticket_id(
@@ -244,12 +253,15 @@ def _ticket_payload(
         "ticket_number": idx,
         "chat_key": f"ticket:{idx}:{source_ticket_id}" if idx else None,
         "frontmatter": frontmatter,
+        "frontmatter_yaml": raw_frontmatter_yaml,
         "body": doc.body if doc else parsed_body,
         "errors": errors,
         "status": _ticket_status(frontmatter, errors),
         "workspace_kind": workspace_kind,
         "workspace_id": workspace_id,
         "workspace_path": workspace_path,
+        "hub_root": str(hub_root),
+        "workspace_root": str(workspace_root),
         "repo_id": repo_id,
         "worktree_id": worktree_id,
         "base_repo_id": repo_id if workspace_kind == "worktree" else None,

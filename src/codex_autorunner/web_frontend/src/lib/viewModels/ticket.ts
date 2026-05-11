@@ -47,6 +47,7 @@ export type TicketEditPayload = {
   model: string;
   reasoning: string;
   done: boolean;
+  frontmatterYaml?: string;
   body: string;
 };
 
@@ -204,6 +205,8 @@ export type TicketDetailViewModel = {
   frontmatter: Record<string, unknown>;
   /** Serialized YAML view of `frontmatter` for read-only inspection (e.g. repair banner). */
   frontmatterYaml: string;
+  /** Raw editable YAML frontmatter block from the ticket file when available. */
+  frontmatterEditableYaml: string;
   /** Validation errors reported by the backend for this ticket; empty when valid. */
   errors: string[];
   /** True when the ticket cannot run until its frontmatter is fixed. */
@@ -232,6 +235,7 @@ export type TicketDetailViewModel = {
   sourceTickets: TicketListRow[];
   previousTicketHref: string | null;
   nextTicketHref: string | null;
+  raw: Record<string, unknown>;
 };
 
 const filterLabels: Record<TicketFilter, string> = {
@@ -390,6 +394,32 @@ function parseYamlScalarFromBlock(block: string | null, key: string): string | n
   return null;
 }
 
+function ticketFrontmatterYamlFromDetail(detail: TicketDetail, frontmatter: Record<string, unknown>): string {
+  const rawYaml = detail.raw.frontmatter_yaml;
+  if (typeof rawYaml === 'string') return rawYaml;
+  const bodyYaml = extractFrontmatterYamlFromBody(detail.body);
+  if (bodyYaml !== null) return bodyYaml;
+  return serializeFrontmatter(frontmatter).trimEnd();
+}
+
+function upsertYamlScalar(block: string, key: string, value: string | boolean | null): string {
+  const lines = block.replace(/\r\n/g, '\n').split('\n');
+  const keyPattern = new RegExp(`^\\s*${key}\\s*:`);
+  const replacement = value === null ? null : `${key}: ${yamlScalar(value)}`;
+  const nextLines: string[] = [];
+  let replaced = false;
+  for (const line of lines) {
+    if (keyPattern.test(line)) {
+      replaced = true;
+      if (replacement !== null) nextLines.push(replacement);
+    } else {
+      nextLines.push(line);
+    }
+  }
+  if (!replaced && replacement !== null) nextLines.push(replacement);
+  return nextLines.join('\n').trimEnd();
+}
+
 export function buildTicketDetailViewModel(
   detail: TicketDetail,
   source: TicketSourceData,
@@ -440,6 +470,7 @@ export function buildTicketDetailViewModel(
     done: Boolean(frontmatter.done),
     frontmatter,
     frontmatterYaml: serializeFrontmatter(frontmatter),
+    frontmatterEditableYaml: ticketFrontmatterYamlFromDetail(detail, frontmatter),
     errors: [...detail.errors],
     needsRepair: detail.errors.length > 0 || (run?.status ?? detail.status) === 'invalid',
     updatedLabel: formatRelativeTime(detail.updatedAt ?? run?.lastEventAt ?? null, now),
@@ -459,7 +490,8 @@ export function buildTicketDetailViewModel(
     rawBody: detail.body,
     sourceTickets,
     previousTicketHref: selectedIndex > 0 ? sourceTickets[selectedIndex - 1].href : null,
-    nextTicketHref: selectedIndex >= 0 && selectedIndex < sourceTickets.length - 1 ? sourceTickets[selectedIndex + 1].href : null
+    nextTicketHref: selectedIndex >= 0 && selectedIndex < sourceTickets.length - 1 ? sourceTickets[selectedIndex + 1].href : null,
+    raw: detail.raw
   };
 }
 
@@ -483,13 +515,24 @@ export function ticketDetailFromSummary(ticket: TicketSummary): TicketDetail {
 }
 
 export function buildTicketUpdateContent(detail: TicketDetailViewModel, payload: TicketEditPayload): string {
-  const frontmatter = { ...detail.frontmatter };
-  frontmatter.title = payload.title.trim() || detail.title;
-  frontmatter.agent = payload.agent.trim() || 'codex';
-  frontmatter.done = payload.done;
-  setOptional(frontmatter, 'model', payload.model.trim());
-  setOptional(frontmatter, 'reasoning', payload.reasoning.trim());
-  return `---\n${serializeFrontmatter(frontmatter)}---\n\n${payload.body.trimEnd()}\n`;
+  const rawFrontmatter = payload.frontmatterYaml ?? detail.frontmatterEditableYaml;
+  let frontmatterYaml = rawFrontmatter.trim();
+  if (frontmatterYaml) {
+    frontmatterYaml = upsertYamlScalar(frontmatterYaml, 'title', payload.title.trim() || detail.title);
+    frontmatterYaml = upsertYamlScalar(frontmatterYaml, 'agent', payload.agent.trim() || 'codex');
+    frontmatterYaml = upsertYamlScalar(frontmatterYaml, 'done', payload.done);
+    frontmatterYaml = upsertYamlScalar(frontmatterYaml, 'model', payload.model.trim() || null);
+    frontmatterYaml = upsertYamlScalar(frontmatterYaml, 'reasoning', payload.reasoning.trim() || null);
+  } else {
+    const frontmatter = { ...detail.frontmatter };
+    frontmatter.title = payload.title.trim() || detail.title;
+    frontmatter.agent = payload.agent.trim() || 'codex';
+    frontmatter.done = payload.done;
+    setOptional(frontmatter, 'model', payload.model.trim());
+    setOptional(frontmatter, 'reasoning', payload.reasoning.trim());
+    frontmatterYaml = serializeFrontmatter(frontmatter).trimEnd();
+  }
+  return `---\n${frontmatterYaml}\n---\n\n${payload.body.trimEnd()}\n`;
 }
 
 export function mergeTicketRunProgress(runs: PmaRunProgress[], progress: PmaRunProgress | null): PmaRunProgress[] {

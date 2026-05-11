@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { goto } from '$app/navigation';
   import { page } from '$app/state';
   import { onDestroy, onMount } from 'svelte';
   import TicketViews from '$lib/components/TicketViews.svelte';
@@ -17,6 +18,8 @@
   import type { PmaChatSummary, PmaRunProgress, SurfaceArtifact, TicketDetail, TicketSummary } from '$lib/viewModels/domain';
   import { cachedTickets, rememberTickets } from '$lib/viewModels/ticketCache';
   import { agentCanListModels, agentId } from '$lib/viewModels/modelPickers';
+  import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
+  import { buildManagedThreadCreatePayload, buildManagedThreadMessagePayload, type PmaChatScopeOption } from '$lib/viewModels/pmaChat';
 
   const repoId = $derived(page.params.repoId ?? 'unknown-repo');
   const ticketId = $derived(page.params.ticketId ?? 'unknown-ticket');
@@ -203,6 +206,65 @@
     if (result.ok) await loadTicketDetail(false);
     return result.ok;
   }
+
+  function stringField(raw: Record<string, unknown>, key: string): string | null {
+    const value = raw[key];
+    return typeof value === 'string' && value.trim() ? value.trim() : null;
+  }
+
+  function repairChatScope(ticket: TicketDetailViewModel): PmaChatScopeOption {
+    const parentRepoId = stringField(ticket.raw, 'repo_id') ?? stringField(ticket.raw, 'base_repo_id') ?? stringField(ticket.frontmatter, 'repo_id') ?? stringField(ticket.frontmatter, 'base_repo_id');
+    if (ticket.workspaceKind === 'worktree' && ticket.workspaceId) {
+      return {
+        id: `worktree:${ticket.workspaceId}`,
+        kind: 'worktree',
+        label: ticket.workspaceId,
+        detail: `Worktree · ${parentRepoId ?? ticket.workspaceId}`,
+        workspaceRoot: stringField(ticket.raw, 'workspace_root') ?? ticket.workspacePathLabel ?? '.',
+        resourceId: ticket.workspaceId,
+        parentRepoId,
+        scopeUrn: parentRepoId ? `worktree:${parentRepoId}/${ticket.workspaceId}` : `filesystem:${encodeURIComponent(stringField(ticket.raw, 'workspace_root') ?? ticket.workspacePathLabel ?? '.')}`
+      };
+    }
+    if (ticket.workspaceKind === 'repo' && ticket.workspaceId) {
+      return {
+        id: `repo:${ticket.workspaceId}`,
+        kind: 'repo',
+        label: ticket.workspaceId,
+        detail: `Repo · ${ticket.workspaceId}`,
+        resourceKind: 'repo',
+        resourceId: ticket.workspaceId,
+        scopeUrn: `repo:${ticket.workspaceId}`
+      };
+    }
+    return { id: 'local', kind: 'local', label: 'Local hub', detail: 'Current workspace', scopeUrn: 'hub' };
+  }
+
+  function buildRepairPrompt(ticket: TicketDetailViewModel): string {
+    const raw = ticket.raw;
+    const hubRoot = stringField(raw, 'hub_root') ?? '(hub root from the serving CAR instance)';
+    const workspaceRoot = stringField(raw, 'workspace_root') ?? ticket.workspacePathLabel ?? '(unknown workspace root)';
+    const ticketPath = ticket.pathLabel ?? '(unknown ticket path)';
+    const errors = ticket.errors.length ? ticket.errors.map((err) => `- ${err}`).join('\n') : '- Frontmatter validation failed';
+    return `Please repair this CAR ticket frontmatter and lint the ticket queue.\n\nHub root: ${hubRoot}\nWorkspace root: ${workspaceRoot}\nTicket path: ${ticketPath}\nAbsolute ticket path: ${workspaceRoot}/${ticketPath}\n\nValidation errors:\n${errors}\n\nRequirements:\n- Edit only the ticket file unless linting reveals directly related ticket metadata issues.\n- Fix the YAML frontmatter so the ticket can run.\n- Preserve the ticket body content.\n- Run: python3 .codex-autorunner/bin/lint_tickets.py from the workspace root.\n- Report exactly what changed and the lint result.`;
+  }
+
+  async function repairWithPma(ticket: TicketDetailViewModel): Promise<void> {
+    actionStatus = 'Creating PMA repair chat...';
+    const createResult = await pmaApi.pma.createChat(
+      buildManagedThreadCreatePayload('codex', repairChatScope(ticket), `Repair ${ticket.numberLabel} frontmatter`)
+    );
+    if (!createResult.ok) {
+      actionStatus = createResult.error.message;
+      return;
+    }
+    const sendResult = await pmaApi.pma.sendMessage(createResult.data.id, buildManagedThreadMessagePayload(buildRepairPrompt(ticket), '', false));
+    if (!sendResult.ok) {
+      actionStatus = sendResult.error.message;
+      return;
+    }
+    await goto(href(`/chats?chat=${encodeURIComponent(createResult.data.id)}`));
+  }
 </script>
 
 <TicketViews
@@ -217,6 +279,7 @@
   {sectionIssues}
   onRetry={() => loadTicketDetail()}
   onCommand={runCommand}
+  onRepairWithPma={repairWithPma}
   onSave={saveTicket}
   errorMessage={error?.message ?? null}
 />

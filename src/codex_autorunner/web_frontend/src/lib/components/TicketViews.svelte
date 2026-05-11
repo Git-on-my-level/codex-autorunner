@@ -43,6 +43,7 @@
     onCommand = undefined,
     onQueueCommand = undefined,
     onReorderTicket = undefined,
+    onRepairWithPma = undefined,
     onSave = undefined
   }: {
     state: 'loading' | 'error' | 'ready';
@@ -67,6 +68,7 @@
     onCommand?: ((command: 'resume' | 'bootstrap') => void) | undefined;
     onQueueCommand?: ((command: 'start' | 'stop' | 'restart') => void) | undefined;
     onReorderTicket?: ((sourceRouteId: string, destinationRouteId: string, placeAfter: boolean) => boolean | Promise<boolean>) | undefined;
+    onRepairWithPma?: ((detail: TicketDetailViewModel) => void | Promise<void>) | undefined;
     onSave?: ((payload: TicketEditPayload) => boolean | Promise<boolean>) | undefined;
   } = $props();
 
@@ -114,6 +116,7 @@
     model: string;
     reasoning: string;
     done: boolean;
+    frontmatterYaml?: string;
     body: string;
   };
 
@@ -125,6 +128,7 @@
   let editModel = $state(initialDetail?.modelRaw ?? '');
   let editReasoning = $state(initialDetail?.reasoningRaw ?? '');
   let editDone = $state(initialDetail?.done ?? false);
+  let editFrontmatterYaml = $state(initialDetail?.frontmatterEditableYaml ?? '');
   let editBody = $state(initialDetail?.rawBody ?? '');
   let lastSettingsSignature = $state<string | null>(null);
   let settingsSaveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -184,6 +188,7 @@
     editModel = detail.modelRaw;
     editReasoning = detail.reasoningRaw;
     editDone = detail.done;
+    editFrontmatterYaml = detail.frontmatterEditableYaml;
     editBody = detail.rawBody;
   });
 
@@ -224,12 +229,17 @@
 
   async function saveSettings(): Promise<boolean> {
     if (!onSave) return false;
-    return Boolean(await onSave({ title: editTitle, agent: editAgent, model: editModel, reasoning: editReasoning, done: editDone, body: editBody }));
+    return Boolean(await onSave({ title: editTitle, agent: editAgent, model: editModel, reasoning: editReasoning, done: editDone, frontmatterYaml: editFrontmatterYaml, body: editBody }));
   }
 
   async function saveMarkdown(_docId: string, content: string): Promise<boolean> {
     editBody = content;
-    return Boolean(await onSave?.({ title: editTitle, agent: editAgent, model: editModel, reasoning: editReasoning, done: editDone, body: content }));
+    return Boolean(await onSave?.({ title: editTitle, agent: editAgent, model: editModel, reasoning: editReasoning, done: editDone, frontmatterYaml: editFrontmatterYaml, body: content }));
+  }
+
+  async function saveFrontmatter(): Promise<boolean> {
+    if (!onSave) return false;
+    return Boolean(await onSave({ title: editTitle, agent: editAgent, model: editModel, reasoning: editReasoning, done: editDone, frontmatterYaml: editFrontmatterYaml, body: editBody }));
   }
 
   function routeNumber(routeId: string): number | null {
@@ -619,7 +629,12 @@
         <div id="ticket-repair-panel" class="ticket-repair-banner" role="region" aria-label="Ticket repair details">
           <div class="ticket-repair-header">
             <strong>This ticket needs repair before it can run.</strong>
-            <button type="button" class="ghost-button ticket-repair-close" onclick={() => (repairOpen = false)} aria-label="Close repair panel">Dismiss</button>
+            <div class="ticket-repair-actions">
+              {#if onRepairWithPma}
+                <button type="button" class="ghost-button" onclick={() => onRepairWithPma?.(detail)}>Fix with PMA</button>
+              {/if}
+              <button type="button" class="ghost-button ticket-repair-close" onclick={() => (repairOpen = false)} aria-label="Close repair panel">Dismiss</button>
+            </div>
           </div>
           {#if detail.errors.length > 0}
             <ul class="ticket-repair-errors">
@@ -630,13 +645,22 @@
           {/if}
           <details class="ticket-repair-frontmatter" open>
             <summary>Frontmatter</summary>
-            {#if detail.frontmatterYaml.trim()}
-              <pre><code>{detail.frontmatterYaml}</code></pre>
-            {:else}
-              <p class="ticket-repair-hint">No frontmatter parsed. Add a YAML block (e.g. <code>agent: codex</code>) to the top of the ticket body.</p>
-            {/if}
+            <label class="ticket-frontmatter-editor">
+              <span class="sr-only">Ticket frontmatter YAML</span>
+              <textarea
+                bind:value={editFrontmatterYaml}
+                rows="7"
+                spellcheck="false"
+                aria-label="Ticket frontmatter YAML"
+                placeholder={'agent: codex\ndone: false'}
+              ></textarea>
+            </label>
+            <div class="ticket-frontmatter-controls">
+              <button type="button" class="primary-button" disabled={!onSave} onclick={() => void saveFrontmatter()}>Save frontmatter</button>
+              <span class="ticket-repair-hint">Edit the YAML block exactly as it should appear between <code>---</code> delimiters.</span>
+            </div>
             {#if detail.pathLabel}
-              <p class="ticket-repair-path">Edit <code>{detail.pathLabel}</code>, or update the body below — frontmatter saves with the ticket.</p>
+              <p class="ticket-repair-path">Ticket file: <code>{detail.pathLabel}</code>. Body edits below save with this frontmatter.</p>
             {/if}
           </details>
         </div>
@@ -1146,6 +1170,12 @@
     justify-content: space-between;
     gap: var(--space-3);
   }
+  .ticket-repair-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-shrink: 0;
+  }
   .ticket-repair-close {
     flex-shrink: 0;
   }
@@ -1170,6 +1200,35 @@
     letter-spacing: 0.04em;
     font-weight: 600;
     padding: 2px 0;
+  }
+  .ticket-frontmatter-editor {
+    display: block;
+    margin-top: var(--space-2);
+  }
+  .ticket-frontmatter-editor textarea {
+    width: 100%;
+    min-height: 8rem;
+    resize: vertical;
+    padding: var(--space-2) var(--space-3);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 6px;
+    color: var(--color-ink);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, 'Courier New', monospace;
+    font-size: var(--font-size-0);
+    line-height: 1.5;
+  }
+  .ticket-frontmatter-editor textarea:focus {
+    outline: none;
+    border-color: var(--color-border);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 18%, transparent);
+  }
+  .ticket-frontmatter-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
   }
   .ticket-repair-frontmatter pre {
     margin: var(--space-2) 0 0;
