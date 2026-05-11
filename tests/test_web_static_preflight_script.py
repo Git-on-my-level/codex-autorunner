@@ -62,6 +62,12 @@ def test_web_frontend_tests_do_not_require_static_refresh() -> None:
     )
 
 
+def test_package_json_is_build_config_by_default() -> None:
+    assert missing_static_for_paths(
+        ["src/codex_autorunner/web_frontend/package.json"]
+    ) == ("src/codex_autorunner/web_frontend/package.json",)
+
+
 def test_preflight_script_fails_with_actionable_message() -> None:
     result = subprocess.run(
         [

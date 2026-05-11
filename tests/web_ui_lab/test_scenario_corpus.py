@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from tests.web_ui_lab.corpus import SCRIPT_ROUTE_PACK, WEB_UI_SCENARIOS
+from tests.web_ui_lab.runner import run_scenario
 from tests.web_ui_lab.scenario_models import ScenarioTag, SeedFixtureKind
 
 
@@ -95,3 +96,24 @@ def test_browser_scenarios_have_desktop_and_mobile_viewports() -> None:
             continue
         labels = {viewport.artifact_label for viewport in scenario.viewports}
         assert labels == {"1440x1000", "390x844"}, scenario.scenario_id
+
+
+def test_fast_scenarios_execute_and_emit_reports(tmp_path) -> None:
+    executed = []
+    for scenario in WEB_UI_SCENARIOS:
+        if ScenarioTag.FAST not in scenario.tags:
+            continue
+        report = run_scenario(scenario, diagnostics_root=tmp_path)
+        executed.append(report)
+
+        assert report["status"] == "passed"
+        assert report["scenario_id"] == scenario.scenario_id
+        assert report["route_path"] == scenario.route_path
+        assert report["fixture_payload_path"].endswith("fixture_payload.json")
+
+        report_path = tmp_path / scenario.scenario_id / "report.json"
+        fixture_path = tmp_path / scenario.scenario_id / "fixture_payload.json"
+        assert report_path.exists()
+        assert fixture_path.exists()
+
+    assert len(executed) >= 5

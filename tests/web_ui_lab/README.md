@@ -8,7 +8,8 @@ journey runners.
 ## Test Pyramid
 
 1. Fast scenario/contract checks validate route IDs, seed fixture kinds,
-   read-model/API routes, viewport coverage, critical tags, and artifact names.
+   read-model/API routes, viewport coverage, critical tags, artifact names, and
+   fixture-backed normalized screen invariants.
 2. Browser evidence packs should consume the same corpus and write screenshots,
    accessibility snapshots, DOM summaries, console logs, network failures, and
    layout diagnostics for selected routes and viewports.
@@ -39,6 +40,14 @@ future browser evidence tooling:
 ```bash
 .venv/bin/python -m pytest tests/web_ui_lab/test_scenario_corpus.py -q
 ```
+
+Each executed scenario writes:
+
+- `fixture_payload.json`
+- `report.json`
+
+The default diagnostics root is `.codex-autorunner/diagnostics/web_ui_lab/`;
+tests pass a temporary directory so the committed tree stays clean.
 
 If a route is added to `scripts/web_ui_screens.py`, add a matching corpus entry.
 If a screen stops depending on a listed endpoint or mapper, update the scenario
