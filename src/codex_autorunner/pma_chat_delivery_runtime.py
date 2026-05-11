@@ -24,6 +24,7 @@ from .core.chat_bindings import (
     resolve_repo_id_by_workspace_path,
     resolve_telegram_state_path,
 )
+from .core.orchestration.chat_surface_emitters import emit_chat_surface_event
 from .core.pma_chat_delivery import PmaChatDeliveryIntent
 from .core.pma_notification_store import PmaNotificationStore
 from .core.text_utils import _normalize_optional_text
@@ -209,7 +210,7 @@ def _record_notification_deliveries(
         return
     notification_store = PmaNotificationStore(hub_root)
     for record in records:
-        notification_store.record_notification(
+        conversation = notification_store.record_notification(
             correlation_id=intent.correlation_id,
             source_kind=intent.source_kind,
             delivery_mode=record.delivery_mode,
@@ -221,6 +222,32 @@ def _record_notification_deliveries(
             run_id=intent.run_id,
             managed_thread_id=intent.managed_thread_id,
             context=dict(intent.context_payload or {}),
+        )
+        emit_chat_surface_event(
+            hub_root,
+            idempotency_key=(
+                "pma-notification-delivery:"
+                f"{record.surface_kind}:{record.surface_key}:"
+                f"{record.delivery_record_id}:enqueued"
+            ),
+            event_type="delivery.status_changed",
+            surface_kind=record.surface_kind,
+            surface_key=record.surface_key,
+            managed_thread_id=intent.managed_thread_id,
+            external_conversation_id=(f"notification:{conversation.notification_id}"),
+            repo_id=intent.repo_id,
+            workspace_root=record.workspace_root,
+            lifecycle_status="active",
+            status="enqueued",
+            source_kind="pma.notification.delivery",
+            source_id=record.delivery_record_id,
+            payload={
+                "notification_id": conversation.notification_id,
+                "delivery_mode": record.delivery_mode,
+                "correlation_id": intent.correlation_id,
+                "run_id": intent.run_id,
+            },
+            occurred_at=conversation.updated_at,
         )
 
 

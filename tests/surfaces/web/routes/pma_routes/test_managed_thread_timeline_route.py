@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from tests.pma_support import _enable_pma, _repo_owner
 
 from codex_autorunner.core.managed_thread_store import ManagedThreadStore
+from codex_autorunner.core.orchestration import SQLiteChatSurfaceEventJournal
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.server import create_hub_app
 
@@ -71,6 +72,53 @@ def test_managed_thread_chat_events_endpoint_returns_snapshot(hub_env) -> None:
     assert "event: chat_snapshot" in body
     assert f'"managed_thread_id": "{managed_thread_id}"' in body
     assert '"contract_version": "pma_chat_events.v1"' in body
+
+
+def test_managed_thread_chat_events_endpoint_uses_generic_chat_lifecycle(
+    hub_env,
+) -> None:
+    _enable_pma(
+        hub_env.hub_root,
+        managed_thread_terminal_followup_default=False,
+    )
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", **_repo_owner(hub_env)},
+        )
+        assert create_resp.status_code == 200
+        managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+        event = (
+            SQLiteChatSurfaceEventJournal(hub_env.hub_root, durable=True)
+            .append_event(
+                idempotency_key="pma-thread-queued",
+                event_type="queue.state_changed",
+                surface_kind="pma",
+                surface_key=managed_thread_id,
+                managed_thread_id=managed_thread_id,
+                repo_id=hub_env.repo_id,
+                status="queued",
+            )
+            .event
+        )
+
+        events_resp = client.get(
+            "/hub/pma/events",
+            params={"cursor": str(event.cursor - 1), "once": "true"},
+        )
+
+    assert events_resp.status_code == 200
+    snapshot = _first_sse_json_payload(events_resp.text)
+    thread = next(
+        item
+        for item in snapshot["threads"]
+        if item["managed_thread_id"] == managed_thread_id
+    )
+    assert snapshot["cursor"] == event.cursor
+    assert thread["runtime_status"] == "queued"
 
 
 def test_managed_thread_chat_event_revision_tracks_visible_state_without_timestamp_bump(

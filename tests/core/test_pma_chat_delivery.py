@@ -12,6 +12,9 @@ from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration import OrchestrationBindingStore
+from codex_autorunner.core.orchestration.chat_surface_events import (
+    SQLiteChatSurfaceEventJournal,
+)
 from codex_autorunner.core.pma_chat_delivery import (
     deliver_pma_notification,
     notify_preferred_bound_chat_for_workspace,
@@ -238,6 +241,17 @@ async def test_deliver_pma_notification_persists_replyable_context_for_bound_del
         record = outbox[0]
         assert record.channel_id == "repo-f-discord"
         assert record.payload_json.get("content") == "Dispatch needs review"
+        delivery_events = [
+            event
+            for event in SQLiteChatSurfaceEventJournal(hub_root).read_events_since(0)
+            if event.event_type == "delivery.status_changed"
+        ]
+        assert len(delivery_events) == 1
+        assert delivery_events[0].surface_kind == "discord"
+        assert delivery_events[0].surface_key == "repo-f-discord"
+        assert delivery_events[0].managed_thread_id == "thread-123"
+        assert delivery_events[0].status == "enqueued"
+        assert delivery_events[0].payload["delivery_mode"] == "bound"
 
         notification_store = PmaNotificationStore(hub_root)
         delivered = notification_store.mark_delivered(

@@ -14,6 +14,7 @@ from codex_autorunner.core.orchestration import (
     ManagedThreadDeliveryRecoveryAction,
     ManagedThreadDeliveryState,
     ManagedThreadDeliveryTarget,
+    SQLiteChatSurfaceEventJournal,
     build_managed_thread_delivery_idempotency_key,
     initialize_orchestration_sqlite,
     is_valid_managed_thread_delivery_transition,
@@ -596,6 +597,11 @@ class TestEngineRecordAttemptResult:
         assert updated.next_attempt_at is not None
         assert updated.last_error == "transient"
         assert updated.claim_token is None
+        events = SQLiteChatSurfaceEventJournal(_hub_root(tmp_path)).read_history()
+        statuses = [event.status for event in events]
+        assert "pending" in statuses
+        assert "claimed" in statuses
+        assert statuses[-1] == "retry_scheduled"
 
     def test_failed_within_budget_schedules_retry(self, tmp_path: Path) -> None:
         engine = _engine(tmp_path)

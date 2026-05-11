@@ -9,7 +9,7 @@
   import VoiceComposerButton from '$lib/components/VoiceComposerButton.svelte';
   import { pmaApi, type ApiError, type JsonRecord, type PmaQueuedTurn } from '$lib/api/client';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
-  import { openPmaChatEventSource, openPmaTailEventSource, type StreamSubscription } from '$lib/api/streaming';
+  import { openChatSurfaceEventSource, openPmaTailEventSource, type StreamSubscription } from '$lib/api/streaming';
   import {
     repoContextspaceRoute,
     repoRoute,
@@ -18,7 +18,7 @@
     worktreeRoute,
     worktreeTicketRoute
   } from '$lib/viewModels/routes';
-  import { mapPmaChatSummary, mapPmaRunProgress, mapPmaTimelineItem } from '$lib/viewModels/domain';
+  import { mapPmaRunProgress, mapPmaTimelineItem } from '$lib/viewModels/domain';
   import type {
     PmaChatSummary,
     PmaRunProgress,
@@ -40,8 +40,11 @@
     formatRelativeTime,
     isPmaChatArchived,
     localPmaChatScopeOption,
+    mapChatSurfaceSnapshotToPmaChats,
     PMA_CHAT_FILTER_ORDER,
     PMA_CHAT_TICKET_RUNS_FILTER,
+    reconcileChatSurfaceEvent,
+    reconcileChatSurfaceSnapshot,
     pmaChatKind,
     pmaChatKindLabel,
     pmaChatHeaderScopeLine,
@@ -811,14 +814,16 @@
 
   function connectChatStream(): void {
     chatStreamSubscription?.close();
-    chatStreamSubscription = openPmaChatEventSource({
+    chatStreamSubscription = openChatSurfaceEventSource({
       onEvent: (event) => {
-        if (event.kind !== 'chat_snapshot') return;
-        const rawThreads = Array.isArray(event.payload.threads) ? event.payload.threads : [];
-        const nextChats = rawThreads
-          .filter((item): item is JsonRecord => Boolean(item && typeof item === 'object' && !Array.isArray(item)))
-          .map((item) => mapPmaChatSummary(item));
-        reconcileChatSnapshot(nextChats);
+        if (event.kind === 'chat_snapshot') {
+          const nextChats = mapChatSurfaceSnapshotToPmaChats(event.payload);
+          reconcileChatSnapshot(nextChats);
+          return;
+        }
+        if (event.kind === 'chat_event') {
+          chats = reconcileChatSurfaceEvent(chats, event.payload);
+        }
       }
     });
   }
@@ -828,37 +833,10 @@
     chatStreamSubscription = null;
   }
 
-  function chatBindingKey(chat: PmaChatSummary | null): string | null {
-    if (!chat) return null;
-    const kind = typeof chat.raw.binding_kind === 'string' ? chat.raw.binding_kind.trim() : '';
-    const id = typeof chat.raw.binding_id === 'string' ? chat.raw.binding_id.trim() : '';
-    if (kind && id) return `${kind}:${id}`;
-    const titleMatch = /^(telegram|discord):(.+)$/.exec(chat.title.trim());
-    return titleMatch ? `${titleMatch[1]}:${titleMatch[2]}` : null;
-  }
-
-  function isArchivedChat(chat: PmaChatSummary | null): boolean {
-    if (!chat) return false;
-    const lifecycle = typeof chat.raw.lifecycle_status === 'string' ? chat.raw.lifecycle_status.toLowerCase() : '';
-    return lifecycle === 'archived';
-  }
-
   function reconcileChatSnapshot(nextChats: PmaChatSummary[]): void {
-    const priorActiveId = activeChatId;
-    const priorActive = priorActiveId ? chats.find((chat) => chat.id === priorActiveId) ?? null : null;
-    const priorBinding = chatBindingKey(priorActive);
-    const nextActive = priorActiveId ? nextChats.find((chat) => chat.id === priorActiveId) ?? null : null;
-    chats = nextChats;
-
-    if (!priorActiveId) return;
-    if (nextActive && !isArchivedChat(nextActive)) return;
-    if (!priorBinding) return;
-
-    const replacement = nextChats.find(
-      (chat) => chat.id !== priorActiveId && chatBindingKey(chat) === priorBinding && !isArchivedChat(chat)
-    );
-    if (!replacement) return;
-    void selectChat(replacement.id);
+    const reconciled = reconcileChatSurfaceSnapshot(chats, nextChats, activeChatId);
+    chats = reconciled.chats;
+    if (reconciled.replacementChatId) void selectChat(reconciled.replacementChatId);
   }
 
   function updateProgress(nextProgress: PmaRunProgress): void {

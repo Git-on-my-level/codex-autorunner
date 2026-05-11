@@ -17,6 +17,7 @@ from .hub_projection_store import (
     path_stat_fingerprint,
 )
 from .managed_thread_store import ManagedThreadStore, default_managed_threads_db_path
+from .orchestration.chat_surface_emitters import emit_chat_surface_event
 from .orchestration.sqlite import (
     open_orchestration_sqlite,
     resolve_orchestration_sqlite_path,
@@ -352,6 +353,95 @@ def _read_discord_repo_counts(
     return dict(counts)
 
 
+def _emit_legacy_discord_surface_events(
+    *,
+    hub_root: Path,
+    db_path: Path,
+    repo_id_by_workspace: Mapping[str, str],
+) -> int:
+    if not db_path.exists():
+        return 0
+    try:
+        with open_sqlite(db_path) as conn:
+            columns = _table_columns(conn, "channel_bindings")
+            if not columns or "channel_id" not in columns:
+                return 0
+            select_columns = [
+                "channel_id",
+                (
+                    "workspace_path"
+                    if "workspace_path" in columns
+                    else "NULL AS workspace_path"
+                ),
+                "repo_id" if "repo_id" in columns else "NULL AS repo_id",
+                (
+                    "resource_kind"
+                    if "resource_kind" in columns
+                    else "NULL AS resource_kind"
+                ),
+                "resource_id" if "resource_id" in columns else "NULL AS resource_id",
+                "updated_at" if "updated_at" in columns else "NULL AS updated_at",
+            ]
+            if "guild_id" in columns:
+                select_columns.append("guild_id")
+            else:
+                select_columns.append("NULL AS guild_id")
+            rows = conn.execute(
+                f"SELECT {', '.join(select_columns)} FROM channel_bindings"
+            ).fetchall()
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc).lower():
+            return 0
+        raise RuntimeError(
+            f"Failed reading Discord chat bindings from {db_path}: {exc}"
+        ) from exc
+
+    emitted = 0
+    for row in rows:
+        surface_key = _normalize_scope(row["channel_id"])
+        if surface_key is None:
+            continue
+        workspace_root = _normalize_workspace_path(row["workspace_path"])
+        repo_id = _resolve_bound_repo_id(
+            repo_id=row["repo_id"],
+            repo_id_by_workspace=repo_id_by_workspace,
+            workspace_values=((workspace_root,) if workspace_root is not None else ()),
+        )
+        updated_at = _normalize_scope(row["updated_at"])
+        event = emit_chat_surface_event(
+            hub_root,
+            idempotency_key=(
+                "adapter-backfill:discord:"
+                f"{surface_key}:{updated_at or 'unknown'}:{repo_id or ''}:"
+                f"{workspace_root or ''}"
+            ),
+            event_type="surface.bound",
+            surface_kind="discord",
+            surface_key=surface_key,
+            external_conversation_id=(
+                f"guild:{row['guild_id']}:channel:{surface_key}"
+                if _normalize_scope(row["guild_id"]) is not None
+                else surface_key
+            ),
+            repo_id=repo_id,
+            resource_kind=_normalize_scope(row["resource_kind"]),
+            resource_id=_normalize_scope(row["resource_id"]),
+            workspace_root=workspace_root,
+            lifecycle_status="active",
+            status="backfilled",
+            source_kind="discord.adapter.backfill",
+            source_id=surface_key,
+            payload={
+                "adapter_state_path": str(db_path),
+                "guild_id": _normalize_scope(row["guild_id"]),
+            },
+            occurred_at=updated_at,
+        )
+        if event.inserted:
+            emitted += 1
+    return emitted
+
+
 def _latest_discord_binding_timestamps_by_workspace(db_path: Path) -> dict[str, float]:
     if not db_path.exists():
         return {}
@@ -430,6 +520,100 @@ def _latest_current_telegram_binding_timestamps_by_workspace(
         if timestamp > previous:
             latest_by_workspace[workspace_path] = timestamp
     return latest_by_workspace
+
+
+def _emit_legacy_telegram_surface_events(
+    *,
+    hub_root: Path,
+    db_path: Path,
+    repo_id_by_workspace: Mapping[str, str],
+) -> int:
+    if not db_path.exists():
+        return 0
+    try:
+        with open_sqlite(db_path) as conn:
+            columns = _table_columns(conn, "telegram_topics")
+            if not columns or "topic_key" not in columns:
+                return 0
+            select_columns = [
+                "topic_key",
+                "chat_id" if "chat_id" in columns else "NULL AS chat_id",
+                "thread_id" if "thread_id" in columns else "NULL AS thread_id",
+                "scope" if "scope" in columns else "NULL AS scope",
+                (
+                    "workspace_path"
+                    if "workspace_path" in columns
+                    else "NULL AS workspace_path"
+                ),
+                "repo_id" if "repo_id" in columns else "NULL AS repo_id",
+                (
+                    "active_thread_id"
+                    if "active_thread_id" in columns
+                    else "NULL AS active_thread_id"
+                ),
+                "updated_at" if "updated_at" in columns else "NULL AS updated_at",
+                (
+                    "last_active_at"
+                    if "last_active_at" in columns
+                    else "NULL AS last_active_at"
+                ),
+            ]
+            rows = conn.execute(
+                f"SELECT {', '.join(select_columns)} FROM telegram_topics"
+            ).fetchall()
+            scope_map = _read_telegram_current_scope_map(conn)
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc).lower():
+            return 0
+        raise RuntimeError(
+            f"Failed reading Telegram chat bindings from {db_path}: {exc}"
+        ) from exc
+
+    emitted = 0
+    for row in rows:
+        if not _is_current_telegram_topic_row(row=row, scope_map=scope_map):
+            continue
+        surface_key = _normalize_scope(row["topic_key"])
+        if surface_key is None:
+            continue
+        workspace_root = _normalize_workspace_path(row["workspace_path"])
+        repo_id = _resolve_bound_repo_id(
+            repo_id=row["repo_id"],
+            repo_id_by_workspace=repo_id_by_workspace,
+            workspace_values=((workspace_root,) if workspace_root is not None else ()),
+        )
+        updated_at = _normalize_scope(row["updated_at"]) or _normalize_scope(
+            row["last_active_at"]
+        )
+        event = emit_chat_surface_event(
+            hub_root,
+            idempotency_key=(
+                "adapter-backfill:telegram:"
+                f"{surface_key}:{updated_at or 'unknown'}:{repo_id or ''}:"
+                f"{workspace_root or ''}:{_normalize_scope(row['active_thread_id']) or ''}"
+            ),
+            event_type="surface.bound",
+            surface_kind="telegram",
+            surface_key=surface_key,
+            managed_thread_id=_normalize_scope(row["active_thread_id"]),
+            external_conversation_id=surface_key,
+            repo_id=repo_id,
+            workspace_root=workspace_root,
+            lifecycle_status="active",
+            status="backfilled",
+            source_kind="telegram.adapter.backfill",
+            source_id=surface_key,
+            payload={
+                "adapter_state_path": str(db_path),
+                "chat_id": row["chat_id"],
+                "thread_id": row["thread_id"],
+                "scope": _normalize_scope(row["scope"]),
+            },
+            occurred_at=updated_at,
+        )
+        if event.inserted:
+            emitted += 1
+    return emitted
 
 
 def _read_orchestration_binding_rows(
@@ -715,6 +899,116 @@ def _resolve_telegram_state_path(hub_root: Path, raw_config: Mapping[str, Any]) 
     return resolve_configured_telegram_state_path(hub_root, raw_config)
 
 
+def emit_adapter_binding_chat_surface_event(
+    *,
+    hub_root: Path,
+    surface_kind: str,
+    surface_key: str,
+    workspace_root: Any,
+    repo_id: Any = None,
+    resource_kind: Any = None,
+    resource_id: Any = None,
+    previous_workspace_root: Any = None,
+    previous_repo_id: Any = None,
+    previous_resource_kind: Any = None,
+    previous_resource_id: Any = None,
+    managed_thread_id: Any = None,
+    external_conversation_id: Any = None,
+    source_kind: str,
+) -> bool:
+    normalized_workspace = _normalize_workspace_path(workspace_root)
+    normalized_previous_workspace = _normalize_workspace_path(previous_workspace_root)
+    normalized_repo_id = _normalize_repo_id(repo_id)
+    normalized_previous_repo_id = _normalize_repo_id(previous_repo_id)
+    normalized_resource_kind = _normalize_scope(resource_kind)
+    normalized_resource_id = _normalize_scope(resource_id)
+    normalized_previous_resource_kind = _normalize_scope(previous_resource_kind)
+    normalized_previous_resource_id = _normalize_scope(previous_resource_id)
+    previous_known = any(
+        value is not None
+        for value in (
+            normalized_previous_workspace,
+            normalized_previous_repo_id,
+            normalized_previous_resource_kind,
+            normalized_previous_resource_id,
+        )
+    )
+    changed = previous_known and (
+        normalized_previous_workspace != normalized_workspace
+        or normalized_previous_repo_id != normalized_repo_id
+        or normalized_previous_resource_kind != normalized_resource_kind
+        or normalized_previous_resource_id != normalized_resource_id
+    )
+    status = "rebound" if changed else "bound"
+    event = emit_chat_surface_event(
+        hub_root,
+        idempotency_key=(
+            f"adapter-binding:{source_kind}:{surface_kind}:{surface_key}:"
+            f"{status}:{normalized_repo_id or ''}:{normalized_workspace or ''}:"
+            f"{normalized_resource_kind or ''}:{normalized_resource_id or ''}:"
+            f"{normalized_previous_repo_id or ''}:"
+            f"{normalized_previous_workspace or ''}"
+        ),
+        event_type="surface.rebound" if changed else "surface.bound",
+        surface_kind=surface_kind,
+        surface_key=surface_key,
+        managed_thread_id=_normalize_scope(managed_thread_id),
+        external_conversation_id=_normalize_scope(external_conversation_id),
+        repo_id=normalized_repo_id,
+        resource_kind=normalized_resource_kind,
+        resource_id=normalized_resource_id,
+        workspace_root=normalized_workspace,
+        lifecycle_status="active",
+        status=status,
+        source_kind=source_kind,
+        source_id=surface_key,
+        payload={
+            "previous_repo_id": normalized_previous_repo_id,
+            "previous_resource_kind": normalized_previous_resource_kind,
+            "previous_resource_id": normalized_previous_resource_id,
+            "previous_workspace_root": normalized_previous_workspace,
+        },
+    )
+    return event.inserted
+
+
+def emit_adapter_archive_chat_surface_event(
+    *,
+    hub_root: Path,
+    surface_kind: str,
+    surface_key: str,
+    workspace_root: Any = None,
+    repo_id: Any = None,
+    resource_kind: Any = None,
+    resource_id: Any = None,
+    managed_thread_id: Any = None,
+    external_conversation_id: Any = None,
+    source_kind: str,
+) -> bool:
+    event = emit_chat_surface_event(
+        hub_root,
+        idempotency_key=(
+            f"adapter-binding:{source_kind}:{surface_kind}:{surface_key}:archived:"
+            f"{_normalize_repo_id(repo_id) or ''}:"
+            f"{_normalize_workspace_path(workspace_root) or ''}"
+        ),
+        event_type="surface.archived",
+        surface_kind=surface_kind,
+        surface_key=surface_key,
+        managed_thread_id=_normalize_scope(managed_thread_id),
+        external_conversation_id=_normalize_scope(external_conversation_id),
+        repo_id=_normalize_repo_id(repo_id),
+        resource_kind=_normalize_scope(resource_kind),
+        resource_id=_normalize_scope(resource_id),
+        workspace_root=_normalize_workspace_path(workspace_root),
+        lifecycle_status="archived",
+        status="archived",
+        source_kind=source_kind,
+        source_id=surface_key,
+    )
+    return event.inserted
+
+
 def active_chat_binding_counts(
     *, hub_root: Path, raw_config: Mapping[str, Any]
 ) -> dict[str, int]:
@@ -793,6 +1087,28 @@ def active_chat_binding_counts_by_source(
         payload=source_counts,
     )
     return source_counts
+
+
+def backfill_adapter_chat_surface_events(
+    *, hub_root: Path, raw_config: Mapping[str, Any]
+) -> dict[str, int]:
+    """Populate the shared chat-surface journal from durable adapter-local state."""
+
+    repo_id_by_workspace = _repo_id_by_workspace_path(hub_root, raw_config)
+    counts = {"discord": 0, "telegram": 0}
+    if _chat_surface_enabled(raw_config, "discord_bot"):
+        counts["discord"] = _emit_legacy_discord_surface_events(
+            hub_root=hub_root,
+            db_path=_resolve_discord_state_path(hub_root, raw_config),
+            repo_id_by_workspace=repo_id_by_workspace,
+        )
+    if _chat_surface_enabled(raw_config, "telegram_bot"):
+        counts["telegram"] = _emit_legacy_telegram_surface_events(
+            hub_root=hub_root,
+            db_path=_resolve_telegram_state_path(hub_root, raw_config),
+            repo_id_by_workspace=repo_id_by_workspace,
+        )
+    return counts
 
 
 def repo_has_active_chat_binding(
@@ -961,6 +1277,9 @@ __all__ = [
     "active_chat_binding_counts",
     "active_chat_binding_counts_by_source",
     "active_chat_binding_metadata_by_thread",
+    "backfill_adapter_chat_surface_events",
+    "emit_adapter_archive_chat_surface_event",
+    "emit_adapter_binding_chat_surface_event",
     "orchestration_surface_targets_for_thread",
     "preferred_non_pma_chat_notification_source_for_workspace",
     "preferred_non_pma_chat_notification_sources_by_workspace",

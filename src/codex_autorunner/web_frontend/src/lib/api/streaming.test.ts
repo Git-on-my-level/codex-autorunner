@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  normalizeChatSurfaceStreamEvent,
   normalizePmaChatStreamEvent,
   normalizePmaTailStreamEvent,
+  openChatSurfaceEventSource,
   openPmaChatEventSource,
   openPmaTailEventSource,
   parseJsonSseFrame,
@@ -58,6 +60,22 @@ describe('SSE helpers', () => {
     });
   });
 
+  it('normalizes generic chat surface stream events', () => {
+    const snapshot = parseJsonSseFrame('id: 12\nevent: chat.snapshot\ndata: {"surfaces":[{"surface_kind":"discord"}]}\n\n');
+    const event = parseJsonSseFrame('id: 13\nevent: chat.event\ndata: {"event_type":"surface.bound"}\n\n');
+
+    expect(normalizeChatSurfaceStreamEvent(snapshot!)).toEqual({
+      kind: 'chat_snapshot',
+      lastEventId: '12',
+      payload: { surfaces: [{ surface_kind: 'discord' }] }
+    });
+    expect(normalizeChatSurfaceStreamEvent(event!)).toEqual({
+      kind: 'chat_event',
+      lastEventId: '13',
+      payload: { event_type: 'surface.bound' }
+    });
+  });
+
   it('opens PMA tail EventSource under the configured hub base path', () => {
     const close = vi.fn();
     const addEventListener = vi.fn();
@@ -90,6 +108,25 @@ describe('SSE helpers', () => {
       withCredentials: undefined
     });
     expect(addEventListener).toHaveBeenCalledWith('chat_snapshot', expect.any(Function));
+    subscription.close();
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it('opens generic chat surface EventSource under the configured hub base path', () => {
+    const close = vi.fn();
+    const addEventListener = vi.fn();
+    const eventSource = vi.fn(function EventSourceMock() {
+      return { addEventListener, close };
+    });
+    vi.stubGlobal('EventSource', eventSource);
+
+    const subscription = openChatSurfaceEventSource({ onEvent: vi.fn() }, '/car');
+
+    expect(eventSource).toHaveBeenCalledWith('/car/hub/chat/events', {
+      withCredentials: undefined
+    });
+    expect(addEventListener).toHaveBeenCalledWith('chat.snapshot', expect.any(Function));
+    expect(addEventListener).toHaveBeenCalledWith('chat.event', expect.any(Function));
     subscription.close();
     expect(close).toHaveBeenCalledOnce();
   });

@@ -1,0 +1,303 @@
+{
+  "version": 1,
+  "normalized_lifecycle": [
+    {
+      "state": "discovered",
+      "meaning": "A chat-like conversation is known from channel discovery or notification delivery, but it is not yet bound to a managed thread."
+    },
+    {
+      "state": "bound",
+      "meaning": "The surface identity resolves to a durable thread target or continuation target."
+    },
+    {
+      "state": "queued",
+      "meaning": "A user turn has been accepted and is waiting for the managed-thread executor."
+    },
+    {
+      "state": "running",
+      "meaning": "A managed turn is executing and may emit progress."
+    },
+    {
+      "state": "idle",
+      "meaning": "The most recent managed turn reached a successful terminal state and the surface can accept another turn."
+    },
+    {
+      "state": "failed",
+      "meaning": "The most recent managed turn or surface operation failed and needs user or recovery attention."
+    },
+    {
+      "state": "archived",
+      "meaning": "The surface remains inspectable but must not accept new turns without explicit unarchive or rebinding."
+    }
+  ],
+  "required_identity_fields": [
+    "surface_kind",
+    "surface_key",
+    "resource_owner",
+    "lifecycle",
+    "display",
+    "created_at",
+    "updated_at"
+  ],
+  "optional_identity_fields": [
+    "external_conversation_id",
+    "external_thread_id",
+    "managed_thread_id",
+    "notification_id",
+    "delivery_record_id"
+  ],
+  "owner_inventory": [
+    {
+      "area": "orchestration",
+      "owners": [
+        "orch_thread_targets",
+        "orch_thread_executions",
+        "orch_queue_items",
+        "orch_bindings",
+        "orch_chat_operations",
+        "orch_managed_thread_deliveries",
+        "orch_notification_conversations"
+      ],
+      "contract_role": "target",
+      "notes": "This is the target shared owner for normalized identity, lifecycle, turn state, final delivery, and notification reply continuations."
+    },
+    {
+      "area": "pma_managed_threads",
+      "owners": [
+        "ManagedThreadStore",
+        "managed_threads.sqlite3 compatibility path",
+        "PMA /hub/pma/* routes"
+      ],
+      "contract_role": "compatibility_projection",
+      "notes": "PMA routes remain stable, but their chat summaries and streams should project the generic chat surface model."
+    },
+    {
+      "area": "discord_adapter",
+      "owners": [
+        "discord_state.sqlite3 channel_bindings",
+        "discord_state.sqlite3 outbox",
+        "discord_state.sqlite3 turn_progress_leases",
+        "discord_state.sqlite3 interaction_ledger"
+      ],
+      "contract_role": "legacy_transport_owner",
+      "notes": "Discord owns platform ids, preferences, pending Discord API calls, interaction ack/replay cursors, and progress message leases only."
+    },
+    {
+      "area": "telegram_adapter",
+      "owners": [
+        "telegram_state.sqlite3 telegram_topics",
+        "telegram_state.sqlite3 telegram_topic_scopes",
+        "telegram_state.sqlite3 telegram_outbox",
+        "telegram_state.sqlite3 telegram_pending_approvals",
+        "telegram_state.sqlite3 telegram_pending_voice"
+      ],
+      "contract_role": "legacy_transport_owner",
+      "notes": "Telegram owns topic metadata, current topic scope, Telegram API retry state, and pending UI state only."
+    },
+    {
+      "area": "web_hub",
+      "owners": [
+        "file chat draft state",
+        "PMA chat view-model polling",
+        "PMA SSE compatibility stream"
+      ],
+      "contract_role": "projection_consumer",
+      "notes": "Web Hub should render normalized snapshots and subscribe to generic events rather than composing PMA-only chat inventory."
+    },
+    {
+      "area": "notification_replies",
+      "owners": [
+        "orch_notification_conversations",
+        "PmaNotificationStore"
+      ],
+      "contract_role": "target",
+      "notes": "Notification continuations are chat surfaces keyed by notification id until bound to a continuation thread target."
+    },
+    {
+      "area": "channel_directory",
+      "owners": [
+        ".codex-autorunner/chat/channel_directory.json",
+        "ChannelDirectoryStore"
+      ],
+      "contract_role": "discovery_projection",
+      "notes": "Channel directory records discoverable conversations, not lifecycle authority."
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "discord_new_thread",
+      "surface_kind": "discord",
+      "trigger": "/new",
+      "expect_lifecycle": "bound",
+      "expect_events": [
+        "surface.discovered",
+        "surface.bound",
+        "thread.created"
+      ],
+      "required_current_sources": [
+        "orch_thread_targets",
+        "orch_bindings",
+        "discord_state.sqlite3 channel_bindings"
+      ],
+      "legacy_notes": "Discord channel_bindings may still hold selected workspace, repo, model, and approval preferences during migration."
+    },
+    {
+      "id": "telegram_bind_topic",
+      "surface_kind": "telegram",
+      "trigger": "/bind",
+      "expect_lifecycle": "bound",
+      "expect_events": [
+        "surface.discovered",
+        "surface.bound"
+      ],
+      "required_current_sources": [
+        "orch_bindings",
+        "telegram_state.sqlite3 telegram_topics",
+        "telegram_state.sqlite3 telegram_topic_scopes"
+      ],
+      "legacy_notes": "Telegram topic scope chooses the current scoped topic row when multiple scoped rows share the same chat/topic."
+    },
+    {
+      "id": "discord_rebind_channel",
+      "surface_kind": "discord",
+      "trigger": "rebind",
+      "expect_lifecycle": "bound",
+      "expect_events": [
+        "surface.unbound",
+        "surface.bound"
+      ],
+      "required_current_sources": [
+        "orch_bindings",
+        "discord_state.sqlite3 channel_bindings"
+      ],
+      "legacy_notes": "The current orchestration binding store disables the prior active binding row and inserts a replacement for the same surface key."
+    },
+    {
+      "id": "pma_archive_thread",
+      "surface_kind": "pma",
+      "trigger": "archive",
+      "expect_lifecycle": "archived",
+      "expect_events": [
+        "thread.archived",
+        "surface.archived"
+      ],
+      "required_current_sources": [
+        "orch_thread_targets",
+        "ManagedThreadStore"
+      ],
+      "legacy_notes": "PMA compatibility status uses managed-thread lifecycle_status while generic snapshots should expose archived uniformly."
+    },
+    {
+      "id": "web_originated_queued_turn",
+      "surface_kind": "web",
+      "trigger": "send_message",
+      "expect_lifecycle": "queued",
+      "expect_events": [
+        "operation.received",
+        "operation.visible",
+        "turn.queued"
+      ],
+      "required_current_sources": [
+        "orch_chat_operations",
+        "orch_queue_items",
+        "orch_thread_executions"
+      ],
+      "legacy_notes": "Web may keep optimistic client rows, but durable queue state belongs to orchestration."
+    },
+    {
+      "id": "telegram_running_turn",
+      "surface_kind": "telegram",
+      "trigger": "claim_next_queued_turn",
+      "expect_lifecycle": "running",
+      "expect_events": [
+        "turn.started",
+        "operation.running"
+      ],
+      "required_current_sources": [
+        "orch_thread_executions",
+        "orch_chat_operations",
+        "telegram_state.sqlite3 telegram_topics"
+      ],
+      "legacy_notes": "Telegram active_thread_id is correlation metadata and must not override managed-thread execution status."
+    },
+    {
+      "id": "discord_done_turn_delivery",
+      "surface_kind": "discord",
+      "trigger": "managed_turn_completed",
+      "expect_lifecycle": "idle",
+      "expect_events": [
+        "turn.completed",
+        "delivery.pending",
+        "delivery.delivered",
+        "operation.completed"
+      ],
+      "required_current_sources": [
+        "orch_thread_executions",
+        "orch_managed_thread_deliveries",
+        "discord_state.sqlite3 outbox"
+      ],
+      "legacy_notes": "Discord outbox may retry API calls, but terminal delivery truth is the orchestration delivery ledger."
+    },
+    {
+      "id": "pma_failed_turn",
+      "surface_kind": "pma",
+      "trigger": "managed_turn_failed",
+      "expect_lifecycle": "failed",
+      "expect_events": [
+        "turn.failed",
+        "operation.failed"
+      ],
+      "required_current_sources": [
+        "orch_thread_executions",
+        "ManagedThreadStore",
+        "PMA /hub/pma/* routes"
+      ],
+      "legacy_notes": "PMA route payloads may still expose latest_turn_status; generic snapshots should normalize failed."
+    },
+    {
+      "id": "telegram_delivery_retry",
+      "surface_kind": "telegram",
+      "trigger": "delivery_retry",
+      "expect_lifecycle": "idle",
+      "expect_events": [
+        "delivery.retry_scheduled",
+        "delivery.claimed",
+        "delivery.delivering"
+      ],
+      "required_current_sources": [
+        "orch_managed_thread_deliveries",
+        "telegram_state.sqlite3 telegram_outbox"
+      ],
+      "legacy_notes": "Telegram outbox retry rows remain a transport compatibility owner until the delivery worker fully consumes orchestration records."
+    },
+    {
+      "id": "discord_channel_discovery",
+      "surface_kind": "discord",
+      "trigger": "channel_directory_update",
+      "expect_lifecycle": "discovered",
+      "expect_events": [
+        "surface.discovered"
+      ],
+      "required_current_sources": [
+        ".codex-autorunner/chat/channel_directory.json"
+      ],
+      "legacy_notes": "Channel directory data has display and seen_at metadata only; a later bind event must attach owner and managed-thread identity."
+    },
+    {
+      "id": "notification_reply_continuation",
+      "surface_kind": "notification",
+      "trigger": "notification_reply",
+      "expect_lifecycle": "bound",
+      "expect_events": [
+        "surface.discovered",
+        "notification.delivered",
+        "notification.continuation_bound"
+      ],
+      "required_current_sources": [
+        "orch_notification_conversations",
+        "orch_bindings"
+      ],
+      "legacy_notes": "Notification reply contexts are not Discord or Telegram bindings, but they must project as chat surfaces with continuation thread identity."
+    }
+  ]
+}

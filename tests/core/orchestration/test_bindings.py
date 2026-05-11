@@ -5,6 +5,7 @@ from pathlib import Path
 from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration import (
     OrchestrationBindingStore,
+    SQLiteChatSurfaceEventJournal,
     initialize_orchestration_sqlite,
 )
 
@@ -80,6 +81,10 @@ def test_binding_store_replaces_active_binding_for_same_surface(tmp_path: Path) 
         first_thread_id,
     ]
     assert all_rows[1].disabled_at is not None
+    events = SQLiteChatSurfaceEventJournal(hub_root, durable=False).read_history()
+    assert [event.event_type for event in events if event.surface_key == "123:root"][
+        -2:
+    ] == ["surface.bound", "surface.rebound"]
 
 
 def test_binding_store_disable_and_active_thread_lookup(tmp_path: Path) -> None:
@@ -115,6 +120,15 @@ def test_binding_store_disable_and_active_thread_lookup(tmp_path: Path) -> None:
         )
         is None
     )
+    archived_events = [
+        event
+        for event in SQLiteChatSurfaceEventJournal(
+            hub_root, durable=False
+        ).read_history()
+        if event.event_type == "surface.archived"
+    ]
+    assert len(archived_events) == 1
+    assert archived_events[0].source_id == binding.binding_id
 
 
 def test_binding_store_read_apis_initialize_schema_on_fresh_hub(tmp_path: Path) -> None:

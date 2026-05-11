@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Mapping, Optional
 if TYPE_CHECKING:
     from .hub_control_plane.models import NotificationRecord
 
+from .orchestration.chat_surface_emitters import emit_chat_surface_event
 from .orchestration.sqlite import open_orchestration_sqlite
 from .text_utils import (
     _json_dumps,
@@ -222,7 +223,27 @@ class PmaNotificationStore:
                 ).fetchone()
         if row is None:
             raise RuntimeError("notification row missing after insert")
-        return _conversation_from_row(row)
+        conversation = _conversation_from_row(row)
+        emit_chat_surface_event(
+            self._hub_root,
+            idempotency_key=f"notification:{conversation.notification_id}:recorded",
+            event_type="notification.reply_context_changed",
+            surface_kind="notification",
+            surface_key=notification_surface_key(conversation.notification_id),
+            managed_thread_id=conversation.managed_thread_id,
+            external_conversation_id=(
+                f"{conversation.surface_kind}:{conversation.surface_key}"
+            ),
+            repo_id=conversation.repo_id,
+            workspace_root=conversation.workspace_root,
+            lifecycle_status="active",
+            status="recorded",
+            source_kind="notification.reply_context",
+            source_id=conversation.delivery_record_id,
+            payload={"conversation": conversation.to_dict()},
+            occurred_at=conversation.updated_at,
+        )
+        return conversation
 
     def mark_delivered(
         self, *, delivery_record_id: str, delivered_message_id: Any
@@ -251,7 +272,31 @@ class PmaNotificationStore:
                 """,
                 (normalized_record_id,),
             ).fetchone()
-        return _conversation_from_row(row) if row is not None else None
+        conversation = _conversation_from_row(row) if row is not None else None
+        if conversation is not None:
+            emit_chat_surface_event(
+                self._hub_root,
+                idempotency_key=(
+                    f"notification:{conversation.notification_id}:delivered:"
+                    f"{normalized_message_id}"
+                ),
+                event_type="notification.reply_context_changed",
+                surface_kind="notification",
+                surface_key=notification_surface_key(conversation.notification_id),
+                managed_thread_id=conversation.managed_thread_id,
+                external_conversation_id=(
+                    f"{conversation.surface_kind}:{conversation.surface_key}"
+                ),
+                repo_id=conversation.repo_id,
+                workspace_root=conversation.workspace_root,
+                lifecycle_status="active",
+                status="delivered",
+                source_kind="notification.reply_context",
+                source_id=conversation.delivery_record_id,
+                payload={"conversation": conversation.to_dict()},
+                occurred_at=conversation.updated_at,
+            )
+        return conversation
 
     def bind_continuation_thread(
         self, *, notification_id: str, thread_target_id: str
@@ -280,7 +325,31 @@ class PmaNotificationStore:
                 """,
                 (normalized_notification_id,),
             ).fetchone()
-        return _conversation_from_row(row) if row is not None else None
+        conversation = _conversation_from_row(row) if row is not None else None
+        if conversation is not None:
+            emit_chat_surface_event(
+                self._hub_root,
+                idempotency_key=(
+                    f"notification:{conversation.notification_id}:continuation:"
+                    f"{normalized_thread_target_id}"
+                ),
+                event_type="notification.reply_context_changed",
+                surface_kind="notification",
+                surface_key=notification_surface_key(conversation.notification_id),
+                managed_thread_id=conversation.managed_thread_id,
+                external_conversation_id=(
+                    f"{conversation.surface_kind}:{conversation.surface_key}"
+                ),
+                repo_id=conversation.repo_id,
+                workspace_root=conversation.workspace_root,
+                lifecycle_status="active",
+                status="continuation_bound",
+                source_kind="notification.reply_context",
+                source_id=conversation.delivery_record_id,
+                payload={"conversation": conversation.to_dict()},
+                occurred_at=conversation.updated_at,
+            )
+        return conversation
 
     def get_reply_target(
         self,

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from ...core.locks import file_lock
+from ...core.orchestration.chat_surface_emitters import emit_chat_surface_event
 from ...core.text_utils import lock_path_for
 from ...core.time_utils import now_iso
 from ...core.utils import atomic_write
@@ -136,6 +137,7 @@ def _entry_sort_asc(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 class ChannelDirectoryStore:
     def __init__(self, hub_root: Path, *, max_entries: int = 2000) -> None:
+        self._hub_root = Path(hub_root)
         self._path = default_channel_directory_path(hub_root)
         self._max_entries = max(1, int(max_entries))
 
@@ -190,6 +192,24 @@ class ChannelDirectoryStore:
             payload["entries"] = _entry_sort_desc(entries)
             payload["updated_at"] = seen_at
             self._save_unlocked(payload)
+            surface_key = str(normalized["chat_id"])
+            thread_key = normalized.get("thread_id")
+            if isinstance(thread_key, str) and thread_key:
+                surface_key = f"{surface_key}:{thread_key}"
+            emit_chat_surface_event(
+                self._hub_root,
+                idempotency_key=f"channel_directory:{key}:discovered",
+                event_type="channel_directory.discovered",
+                surface_kind=normalized["platform"],
+                surface_key=surface_key,
+                external_conversation_id=key,
+                lifecycle_status="active",
+                status="discovered",
+                source_kind="channel_directory",
+                source_id=key,
+                payload={"entry": normalized, "replaced": replaced},
+                occurred_at=seen_at,
+            )
             return normalized
 
     def list_entries(

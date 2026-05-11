@@ -9,7 +9,7 @@ from ..sqlite_utils import table_columns, table_exists
 from ..time_utils import now_iso
 from .models import OrchestrationTableDefinition
 
-ORCHESTRATION_SCHEMA_VERSION = 29
+ORCHESTRATION_SCHEMA_VERSION = 30
 
 
 @dataclass(frozen=True)
@@ -1511,6 +1511,58 @@ def _apply_v29(conn: sqlite3.Connection) -> None:
         conn.execute(f"DELETE FROM orch_bindings WHERE target_kind = '{_rk_ws}'")
 
 
+def _apply_v30(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS orch_chat_surface_events (
+            event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            event_type TEXT NOT NULL,
+            surface_kind TEXT NOT NULL,
+            surface_key TEXT NOT NULL,
+            managed_thread_id TEXT,
+            external_conversation_id TEXT,
+            repo_id TEXT,
+            resource_kind TEXT,
+            resource_id TEXT,
+            workspace_root TEXT,
+            lifecycle_status TEXT,
+            status TEXT,
+            source_kind TEXT,
+            source_id TEXT,
+            occurred_at TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL DEFAULT '{}'
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_chat_surface_events_cursor
+            ON orch_chat_surface_events(event_id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_chat_surface_events_surface_cursor
+            ON orch_chat_surface_events(surface_kind, surface_key, event_id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_chat_surface_events_thread_cursor
+            ON orch_chat_surface_events(managed_thread_id, event_id)
+         WHERE managed_thread_id IS NOT NULL
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_chat_surface_events_type_cursor
+            ON orch_chat_surface_events(event_type, event_id)
+        """
+    )
+
+
 _MIGRATIONS = (
     _MigrationStep(1, "create_core_orchestration_schema", _apply_v1),
     _MigrationStep(2, "add_binding_and_flow_projection_scaffolding", _apply_v2),
@@ -1557,6 +1609,7 @@ _MIGRATIONS = (
         "purge_removed_workspace_scope_threads_and_bindings",
         _apply_v29,
     ),
+    _MigrationStep(30, "add_chat_surface_event_journal", _apply_v30),
 )
 
 
@@ -1650,6 +1703,11 @@ _TABLE_DEFINITIONS = (
         name="orch_chat_operations",
         role="authoritative",
         description="Shared durable chat operation ledger keyed by surface-visible operation identity rather than transport-local delivery mirrors.",
+    ),
+    OrchestrationTableDefinition(
+        name="orch_chat_surface_events",
+        role="authoritative",
+        description="Durable cursor-readable event journal for shared chat surface lifecycle, binding, queue, execution, delivery, notification, and directory mutations.",
     ),
     OrchestrationTableDefinition(
         name="orch_managed_thread_deliveries",

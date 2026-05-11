@@ -22,6 +22,7 @@ import {
   isPrimaryProgressArtifact,
   mergePmaActivityEvents,
   mergePmaTimelineAndActivityCards,
+  mapChatSurfaceSnapshotToPmaChats,
   modelReasoningOptions,
   modelSelectorState,
   optimisticUserTimelineItemFromSend,
@@ -35,6 +36,8 @@ import {
   pmaChatSurfaceFilterToken,
   progressPercent,
   reconcilePmaTimeline,
+  reconcileChatSurfaceEvent,
+  reconcileChatSurfaceSnapshot,
   removePendingAttachment,
   sortChatsWaitingFirst,
   summarizeFilterCounts,
@@ -221,6 +224,91 @@ describe('PMA chat view helpers', () => {
         raw: { managed_thread_id: 't1', surface_urn: 'managed_thread:t1' }
       })
     ).toBeNull();
+  });
+
+  it('maps generic chat surface snapshots into chat-list rows', () => {
+    const chats = mapChatSurfaceSnapshotToPmaChats({
+      surfaces: [
+        {
+          surface_kind: 'discord',
+          surface_key: 'channel-1',
+          managed_thread_id: 'thread-1',
+          lifecycle: 'running',
+          lifecycle_status: 'active',
+          resource_owner: { repo_id: 'repo-1', resource_kind: 'repo', resource_id: 'repo-1' },
+          display: { display_name: 'Discord Ops' },
+          updated_at: '2026-05-04T01:00:00Z',
+          metadata: { agent_id: 'codex', latest_execution_status: 'running' }
+        },
+        {
+          surface_kind: 'telegram',
+          surface_key: '-100:42',
+          lifecycle: 'discovered',
+          display: { display_name: 'Telegram Topic' }
+        }
+      ]
+    });
+
+    expect(chats).toMatchObject([
+      {
+        id: 'thread-1',
+        title: 'Discord Ops',
+        status: 'running',
+        repoId: 'repo-1',
+        raw: { surface_kind: 'discord', surface_key: 'channel-1', binding_kind: 'discord', binding_id: 'channel-1' }
+      },
+      {
+        id: 'surface:telegram:-100:42',
+        title: 'Telegram Topic',
+        status: 'idle',
+        raw: { surface_kind: 'telegram', surface_key: '-100:42' }
+      }
+    ]);
+  });
+
+  it('reconciles generic chat snapshots with active-thread replacement by surface binding', () => {
+    const current: PmaChatSummary[] = [
+      { ...baseChat, id: 'old-thread', lifecycleStatus: 'active', raw: { binding_kind: 'discord', binding_id: 'channel-1' } }
+    ];
+    const next = [
+      { ...baseChat, id: 'old-thread', lifecycleStatus: 'archived', raw: { binding_kind: 'discord', binding_id: 'channel-1' } },
+      { ...baseChat, id: 'new-thread', lifecycleStatus: 'active', raw: { binding_kind: 'discord', binding_id: 'channel-1' } }
+    ];
+
+    expect(reconcileChatSurfaceSnapshot(current, next, 'old-thread')).toEqual({
+      chats: next,
+      replacementChatId: 'new-thread'
+    });
+  });
+
+  it('applies generic chat events through the same chat-list reconciliation path', () => {
+    const current: PmaChatSummary[] = [
+      {
+        ...baseChat,
+        id: 'thread-1',
+        title: 'Discord Ops',
+        status: 'idle',
+        raw: { binding_kind: 'discord', binding_id: 'channel-1', surface_kind: 'discord', surface_key: 'channel-1' }
+      }
+    ];
+    const next = reconcileChatSurfaceEvent(current, {
+      event_type: 'queue.state_changed',
+      surface: { surface_kind: 'discord', surface_key: 'channel-1' },
+      managed_thread_id: 'thread-1',
+      lifecycle: 'queued',
+      lifecycle_status: 'active',
+      status: 'queued',
+      occurred_at: '2026-05-04T01:00:00Z'
+    });
+
+    expect(next).toMatchObject([
+      {
+        id: 'thread-1',
+        title: 'Discord Ops',
+        status: 'waiting',
+        updatedAt: '2026-05-04T01:00:00Z'
+      }
+    ]);
   });
 
   it('filters chats by messenger surface slug', () => {

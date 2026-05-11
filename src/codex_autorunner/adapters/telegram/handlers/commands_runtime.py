@@ -11,6 +11,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 from ....agents.opencode.supervisor import OpenCodeSupervisorError
+from ....core.chat_bindings import (
+    emit_adapter_archive_chat_surface_event,
+    emit_adapter_binding_chat_surface_event,
+)
 from ....core.coercion import coerce_int
 from ....core.config import load_hub_config
 from ....core.logging_utils import log_event
@@ -1594,7 +1598,13 @@ class TelegramCommandHandlers(
             return
 
         previous_binding_workspace = record.workspace_path if record else None
+        previous_repo_id = record.repo_id if record else None
+        previous_resource_kind = record.resource_kind if record else None
+        previous_resource_id = record.resource_id if record else None
         restored_workspace = record.pma_prev_workspace_path if record else None
+        restored_repo_id = record.pma_prev_repo_id if record else None
+        restored_resource_kind = record.pma_prev_resource_kind if record else None
+        restored_resource_id = record.pma_prev_resource_id if record else None
         pma_workspace_path = None
         pma_repo_id = None
         pma_resource_kind = None
@@ -1678,6 +1688,54 @@ class TelegramCommandHandlers(
             message.thread_id,
             apply_pma,
         )
+        if self._hub_root is not None:
+            if enabled:
+                emit_adapter_binding_chat_surface_event(
+                    hub_root=self._hub_root,
+                    surface_kind="telegram",
+                    surface_key=key,
+                    workspace_root=pma_workspace_path,
+                    repo_id=pma_repo_id,
+                    resource_kind=pma_resource_kind,
+                    resource_id=pma_resource_id,
+                    previous_workspace_root=previous_binding_workspace,
+                    previous_repo_id=previous_repo_id,
+                    previous_resource_kind=previous_resource_kind,
+                    previous_resource_id=previous_resource_id,
+                    managed_thread_id=(
+                        getattr(record, "active_thread_id", None) if record else None
+                    ),
+                    external_conversation_id=key,
+                    source_kind="telegram.adapter.binding",
+                )
+            elif restored_workspace:
+                emit_adapter_binding_chat_surface_event(
+                    hub_root=self._hub_root,
+                    surface_kind="telegram",
+                    surface_key=key,
+                    workspace_root=restored_workspace,
+                    repo_id=restored_repo_id,
+                    resource_kind=restored_resource_kind,
+                    resource_id=restored_resource_id,
+                    previous_workspace_root=previous_binding_workspace,
+                    previous_repo_id=previous_repo_id,
+                    previous_resource_kind=previous_resource_kind,
+                    previous_resource_id=previous_resource_id,
+                    external_conversation_id=key,
+                    source_kind="telegram.adapter.binding",
+                )
+            else:
+                emit_adapter_archive_chat_surface_event(
+                    hub_root=self._hub_root,
+                    surface_kind="telegram",
+                    surface_key=key,
+                    workspace_root=previous_binding_workspace,
+                    repo_id=previous_repo_id,
+                    resource_kind=previous_resource_kind,
+                    resource_id=previous_resource_id,
+                    external_conversation_id=key,
+                    source_kind="telegram.adapter.binding",
+                )
 
         if enabled:
             scope_label = f"repo {pma_repo_id}" if pma_repo_id else "hub"
