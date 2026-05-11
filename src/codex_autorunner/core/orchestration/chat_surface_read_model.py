@@ -628,6 +628,10 @@ def _merge_display(
 def _choose_lifecycle(current: str, candidate: Optional[str]) -> str:
     if candidate is None:
         return current
+    # Journal replay can emit both "running" and "idle" for one execution; taking the
+    # numeric max sticks on "running" after completion. When merging those two, prefer "idle".
+    if {current, candidate} == {"idle", "running"}:
+        return "idle"
     order = {
         "discovered": 0,
         "bound": 1,
