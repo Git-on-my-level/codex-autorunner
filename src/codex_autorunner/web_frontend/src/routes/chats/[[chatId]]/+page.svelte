@@ -1075,23 +1075,28 @@
     const message = composeMessageWithAttachments(draftSnapshot, attachmentsForMessage);
     const targetChatId = activeChatId;
     const targetIsRunning = progress?.status === 'running';
+    const profileForSend =
+      activeChat?.agentProfile?.trim() || selectedProfile?.trim() || '';
     const commandPlan =
       busyPolicy === 'interrupt'
         ? planInterruptExistingChat(targetChatId, message, {
             model: selectedModel,
             attachments: attachmentsForMessage,
-            reasoning: selectedReasoning
+            reasoning: selectedReasoning,
+            profile: profileForSend
           })
         : busyPolicy === 'queue' || targetIsRunning
           ? planQueueExistingChat(targetChatId, message, {
               model: selectedModel,
               attachments: attachmentsForMessage,
-              reasoning: selectedReasoning
+              reasoning: selectedReasoning,
+              profile: profileForSend
             })
           : planSendExistingChat(targetChatId, message, {
               model: selectedModel,
               attachments: attachmentsForMessage,
-              reasoning: selectedReasoning
+              reasoning: selectedReasoning,
+              profile: profileForSend
             });
     const result = await executePmaChatCommandPlan(pmaApi, commandPlan);
     if (result.ok) {
@@ -1137,12 +1142,15 @@
       return;
     }
     queuedTurns = queuedTurns.filter((item) => item.managedTurnId !== turn.managedTurnId);
+    const profileForSend =
+      activeChat?.agentProfile?.trim() || selectedProfile?.trim() || '';
     const result = await executePmaChatCommandPlan(
       pmaApi,
       planInterruptExistingChat(chatId, turn.prompt, {
         model: turn.model ?? selectedModel,
         attachments: turn.attachments as DocumentFileIntentPayload[],
-        reasoning: turn.reasoning ?? selectedReasoning
+        reasoning: turn.reasoning ?? selectedReasoning,
+        profile: profileForSend
       })
     );
     if (result.ok) {
