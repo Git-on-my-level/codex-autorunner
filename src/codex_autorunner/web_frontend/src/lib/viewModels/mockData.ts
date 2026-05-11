@@ -45,6 +45,7 @@ export const mockRunProgress: PmaRunProgress = {
 export const mockChatSummary: PmaChatSummary = {
   id: 'chat-1',
   title: 'Hub rewrite foundation',
+  lifecycleStatus: 'active',
   status: 'running',
   agentId: 'codex',
   agentProfile: null,

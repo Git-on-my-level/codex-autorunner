@@ -950,6 +950,7 @@ function syntheticChat(ticket: TicketDetail, run: PmaRunProgress): PmaChatSummar
   return {
     id: ticket.chatKey ?? ticket.id,
     title: ticket.title,
+    lifecycleStatus: 'active',
     status: run.status,
     agentId: ticket.agentId,
     agentProfile: null,

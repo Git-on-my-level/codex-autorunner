@@ -77,7 +77,7 @@ describe('API client error handling', () => {
 
     const result = await client.pma.listChats();
 
-    expect(fetcher).toHaveBeenCalledWith('/hub/pma/threads', expect.any(Object));
+    expect(fetcher).toHaveBeenCalledWith('/hub/pma/threads?status=active', expect.any(Object));
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.data[0]).toMatchObject({
@@ -149,7 +149,7 @@ describe('API client error handling', () => {
 
     const result = await client.pma.listChats();
 
-    expect(fetcher).toHaveBeenCalledWith('/car/hub/pma/threads', expect.any(Object));
+    expect(fetcher).toHaveBeenCalledWith('/car/hub/pma/threads?status=active', expect.any(Object));
     expect(result.ok).toBe(true);
   });
 

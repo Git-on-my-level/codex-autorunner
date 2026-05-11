@@ -124,14 +124,41 @@ def resolve_resume_after(
     return parsed
 
 
-def _managed_thread_harness(service: Any, agent_id: str) -> Any:
+def _managed_thread_harness(
+    service: Any, agent_id: str, profile: Optional[str] = None
+) -> Any:
     factory = getattr(service, "harness_factory", None)
     if not callable(factory):
         return None
     try:
+        if profile:
+            try:
+                return factory(agent_id, profile)
+            except TypeError as exc:
+                if "positional argument" not in str(exc):
+                    raise
+                return factory(agent_id)
         return factory(agent_id)
     except Exception:  # intentional: dynamic harness factory - exception types unknown
         return None
+
+
+def _managed_thread_agent_profile(thread: Any) -> Optional[str]:
+    profile = normalize_optional_text(getattr(thread, "agent_profile", None))
+    if profile:
+        return profile
+    metadata = getattr(thread, "metadata", None)
+    if isinstance(metadata, dict):
+        return normalize_optional_text(metadata.get("agent_profile"))
+    return None
+
+
+def _managed_thread_harness_for_thread(service: Any, thread: Any) -> Any:
+    agent_id = str(getattr(thread, "agent_id", "") or "")
+    profile = _managed_thread_agent_profile(thread)
+    if profile:
+        return _managed_thread_harness(service, agent_id, profile)
+    return _managed_thread_harness(service, agent_id)
 
 
 def _load_managed_thread_tail_store_state(
@@ -313,7 +340,7 @@ async def _build_managed_thread_tail_snapshot(
     backend_thread_id = normalize_optional_text(thread.backend_thread_id)
     backend_turn_id = normalize_optional_text(turn.backend_id)
     if harness is None:
-        harness = _managed_thread_harness(service, str(thread.agent_id or ""))
+        harness = _managed_thread_harness_for_thread(service, thread)
     has_backend_binding = bool(backend_thread_id) and bool(backend_turn_id)
     stream_available = bool(
         harness is not None
@@ -362,6 +389,7 @@ async def _build_managed_thread_tail_snapshot(
                     event_id_start=event_id_start,
                     since_ms=since_ms,
                     projection_state=projection_state,
+                    fallback_received_at=finished_at,
                 )
                 if isinstance(state.token_usage, dict) and state.token_usage:
                     token_usage = dict(state.token_usage)
@@ -564,9 +592,7 @@ def build_managed_thread_tail_routes(
         )
         harness = None
         if thread_target is not None:
-            harness = _managed_thread_harness(
-                service, str(thread_target.agent_id or "")
-            )
+            harness = _managed_thread_harness_for_thread(service, thread_target)
         snapshot = await _build_managed_thread_tail_snapshot(
             request=request,
             service=service,

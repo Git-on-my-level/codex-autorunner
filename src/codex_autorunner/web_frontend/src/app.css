@@ -808,6 +808,12 @@ a.scope-chip-label:hover {
   color: var(--color-accent-hover);
 }
 
+.chat-filter-bar .archive-all-button {
+  border-color: var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-ink-muted);
+}
+
 .chat-list-header .section-heading {
   display: flex;
   align-items: baseline;
@@ -1340,6 +1346,25 @@ a.scope-chip-label:hover {
   flex-direction: column;
   gap: 2px;
   min-width: 0;
+}
+
+.chat-header-action {
+  flex: 0 0 auto;
+  min-height: 28px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-surface);
+  color: var(--color-ink-muted);
+  cursor: pointer;
+  font-size: var(--font-size-0);
+  font-weight: 600;
+}
+
+.chat-header-action:hover:not(:disabled) {
+  border-color: var(--color-border-strong);
+  background: var(--color-surface-muted);
+  color: var(--color-ink);
 }
 
 .chat-header-subtitle {
@@ -6154,6 +6179,12 @@ textarea:disabled {
   color: color-mix(in srgb, var(--color-warning) 82%, var(--color-ink));
   border-color: color-mix(in srgb, var(--color-warning) 38%, var(--color-border));
   background: color-mix(in srgb, var(--color-warning) 12%, var(--color-surface-muted));
+}
+
+.chat-scope-kind-tag.archived {
+  color: var(--color-ink-faint);
+  border-color: color-mix(in srgb, var(--color-ink-faint) 34%, var(--color-border));
+  background: color-mix(in srgb, var(--color-ink-faint) 10%, transparent);
 }
 
 .chat-scope-detail-tag {

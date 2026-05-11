@@ -12,7 +12,7 @@ import { normalizeOptionalWorkStatus } from './domain';
 import { surfaceRefFromThreadRaw } from './thread';
 
 /** Status chips (All / Waiting / …) on the chat list. */
-export type PmaChatStatusFilter = 'all' | 'active' | 'waiting' | 'unread';
+export type PmaChatStatusFilter = 'all' | 'active' | 'waiting' | 'unread' | 'archived';
 
 /** Full list filter: status chips, grouped ticket runs, or `surface:<slug>` messenger filters. */
 export type PmaChatFilter = PmaChatStatusFilter | 'ticket_runs' | `surface:${string}`;
@@ -23,7 +23,7 @@ export const PMA_CHAT_TICKET_RUNS_FILTER = 'ticket_runs' as const satisfies PmaC
 /** Synthetic list selection id for pinned PMA Memory in the chats sidebar. */
 export const PMA_MEMORY_LIST_ID = '__memory__';
 
-export const PMA_CHAT_FILTER_ORDER: PmaChatStatusFilter[] = ['all', 'waiting', 'active', 'unread'];
+export const PMA_CHAT_FILTER_ORDER: PmaChatStatusFilter[] = ['all', 'waiting', 'active', 'unread', 'archived'];
 
 const INTERNAL_MESSENGER_SURFACE_KINDS = new Set([
   'managed_thread',
@@ -110,6 +110,7 @@ export function pmaChatSurfaceFilterOptions(
 ): { slug: string; label: string; count: number }[] {
   const counts = new Map<string, { label: string; count: number }>();
   for (const chat of chats) {
+    if (isPmaChatArchived(chat)) continue;
     const surf = pmaChatMessengerSurface(chat);
     if (!surf) continue;
     const prev = counts.get(surf.slug);
@@ -271,6 +272,10 @@ export type ManagedThreadMessagePayload = {
 const activeStatuses: WorkStatus[] = ['running'];
 const waitingStatuses: WorkStatus[] = ['waiting', 'blocked'];
 
+export function isPmaChatArchived(chat: PmaChatSummary): boolean {
+  return chat.lifecycleStatus === 'archived';
+}
+
 export function filterPmaChats(
   chats: PmaChatSummary[],
   filter: PmaChatFilter,
@@ -280,6 +285,9 @@ export function filterPmaChats(
   const needle = query.trim().toLowerCase();
   return chats
     .filter((chat) => {
+      const archived = isPmaChatArchived(chat);
+      if (filter === 'archived') return archived;
+      if (archived) return false;
       if (isPmaChatSurfaceFilter(filter)) {
         const slug = filter.slice('surface:'.length);
         return pmaChatMessengerSurface(chat)?.slug === slug;
@@ -330,13 +338,15 @@ export function summarizeFilterCounts(
   chats: PmaChatSummary[],
   lastSeen: Record<string, string> = {}
 ): Record<PmaChatStatusFilter, number> {
+  const activeChats = chats.filter((chat) => !isPmaChatArchived(chat));
   return {
-    all: chats.length,
-    active: chats.filter((chat) => activeStatuses.includes(chat.status)).length,
-    waiting: chats.filter((chat) => waitingStatuses.includes(chat.status)).length,
-    unread: chats.filter(
+    all: activeChats.length,
+    active: activeChats.filter((chat) => activeStatuses.includes(chat.status)).length,
+    waiting: activeChats.filter((chat) => waitingStatuses.includes(chat.status)).length,
+    unread: activeChats.filter(
       (chat) => chat.updatedAt && (!lastSeen[chat.id] || chat.updatedAt > lastSeen[chat.id])
-    ).length
+    ).length,
+    archived: chats.filter(isPmaChatArchived).length
   };
 }
 
@@ -377,6 +387,7 @@ export function pmaChatRunGroupKey(chat: PmaChatSummary): string | null {
 export function countTicketRunGroups(chats: PmaChatSummary[]): number {
   const keys = new Set<string>();
   for (const chat of chats) {
+    if (isPmaChatArchived(chat)) continue;
     const key = pmaChatRunGroupKey(chat);
     if (key) keys.add(key);
   }

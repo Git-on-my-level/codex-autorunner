@@ -6,6 +6,7 @@ export type WorkStatus = 'running' | 'waiting' | 'idle' | 'done' | 'failed' | 'b
 export type PmaChatSummary = {
   id: string;
   title: string;
+  lifecycleStatus: string | null;
   status: WorkStatus;
   agentId: string | null;
   /** Hermes (and similar) runtime profile when set on the managed thread. */
@@ -230,6 +231,7 @@ export function mapPmaChatSummary(raw: JsonRecord): PmaChatSummary {
   return {
     id,
     title: readableThreadTitle(raw, id, ticketId),
+    lifecycleStatus: nullableString(raw.lifecycle_status ?? raw.lifecycleStatus),
     status,
     agentId: nullableString(raw.agent_id ?? raw.agent),
     agentProfile: nullableString(raw.agent_profile ?? raw.agentProfile),

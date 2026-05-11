@@ -72,6 +72,14 @@ export type PmaThreadQueue = {
   queuedTurns: PmaQueuedTurn[];
 };
 
+export type PmaBulkArchiveResult = {
+  threads: PmaChatSummary[];
+  archivedCount: number;
+  requestedCount: number;
+  errorCount: number;
+  errors: JsonRecord[];
+};
+
 export type WorktreeCleanupRequest = {
   worktreeRepoId: string;
   archive?: boolean;
@@ -251,10 +259,12 @@ export class PmaApiClient {
   }
 
   pma = {
-    listChats: async (): Promise<ApiResult<PmaChatSummary[]>> =>
-      mapResult(await this.getJson<JsonRecord>('/hub/pma/threads'), (payload) =>
+    listChats: async (status: 'active' | 'archived' | null = 'active'): Promise<ApiResult<PmaChatSummary[]>> => {
+      const query = status ? `?status=${encodeURIComponent(status)}` : '';
+      return mapResult(await this.getJson<JsonRecord>(`/hub/pma/threads${query}`), (payload) =>
         asArray(payload.threads).map(mapPmaChatSummary)
-      ),
+      );
+    },
     createChat: async (body: unknown): Promise<ApiResult<PmaChatSummary>> =>
       mapResult(
         await this.requestJson<JsonRecord>('/hub/pma/threads', {
@@ -309,6 +319,20 @@ export class PmaApiClient {
           method: 'POST'
         }),
         (payload) => mapPmaChatSummary(asRecord(payload.thread))
+      ),
+    archiveThreads: async (chatIds: string[]): Promise<ApiResult<PmaBulkArchiveResult>> =>
+      mapResult(
+        await this.requestJson<JsonRecord>('/hub/pma/threads/archive', {
+          method: 'POST',
+          body: { thread_ids: chatIds }
+        }),
+        (payload) => ({
+          threads: asArray(payload.threads).map(mapPmaChatSummary),
+          archivedCount: numberValue(payload.archived_count ?? payload.archivedCount, 0),
+          requestedCount: numberValue(payload.requested_count ?? payload.requestedCount, chatIds.length),
+          errorCount: numberValue(payload.error_count ?? payload.errorCount, 0),
+          errors: asArray(payload.errors)
+        })
       ),
     cancelQueuedTurn: async (chatId: string, turnId: string): Promise<ApiResult<JsonRecord>> =>
       this.requestJson<JsonRecord>(

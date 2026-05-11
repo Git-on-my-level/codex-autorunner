@@ -811,15 +811,22 @@ async def _serialize_runtime_raw_tail_events(
     event_id_start: int,
     since_ms: Optional[int] = None,
     projection_state: ProgressProjectionState | None = None,
+    fallback_received_at: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     received_at_ms = 0
-    received_at = datetime.now(timezone.utc).isoformat()
+    fallback_dt = parse_iso_datetime(fallback_received_at)
+    if fallback_dt is not None:
+        received_at = fallback_dt.isoformat()
+    else:
+        received_at = datetime.now(timezone.utc).isoformat()
+    since_ms_from_buffered_timestamp = False
     if isinstance(raw_event, dict):
         msg = raw_event.get("message")
         if isinstance(msg, dict) and _should_suppress_tail_event(msg):
             return []
         rim = int(raw_event.get("received_at") or 0)
         if rim > 0:
+            since_ms_from_buffered_timestamp = True
             received_at_ms = rim
             iso = iso_from_event_ms(rim)
             if iso:
@@ -829,9 +836,15 @@ async def _serialize_runtime_raw_tail_events(
             if published:
                 dt = parse_iso_datetime(published)
                 if dt is not None:
+                    since_ms_from_buffered_timestamp = True
                     received_at_ms = int(dt.timestamp() * 1000)
                     received_at = dt.isoformat()
-    if since_ms is not None and received_at_ms > 0 and received_at_ms < since_ms:
+    if (
+        since_ms is not None
+        and since_ms_from_buffered_timestamp
+        and received_at_ms > 0
+        and received_at_ms < since_ms
+    ):
         return []
     serialized: list[dict[str, Any]] = []
     runtime_events = await normalize_runtime_thread_raw_event(

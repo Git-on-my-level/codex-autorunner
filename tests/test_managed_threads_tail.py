@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
 from datetime import datetime, timedelta, timezone
@@ -20,10 +21,32 @@ from codex_autorunner.surfaces.web.routes.pma_routes import tail_stream
 from codex_autorunner.surfaces.web.routes.pma_routes.managed_thread_tail_serializers import (
     _refresh_active_turn_diagnostics,
     _running_turn_stall_flags,
+    _serialize_runtime_raw_tail_events,
 )
 from tests.pma_support import _enable_pma
 
 pytestmark = pytest.mark.slow
+
+
+def test_runtime_tail_fallback_uses_stable_turn_time_instead_of_read_time() -> None:
+    fallback = "2026-04-06T10:00:00+00:00"
+    since_after_fallback = int(
+        (datetime.fromisoformat(fallback) + timedelta(minutes=5)).timestamp() * 1000
+    )
+
+    events = asyncio.run(
+        _serialize_runtime_raw_tail_events(
+            {"method": "prompt/progress", "params": {"text": "Working..."}},
+            tail_stream.RuntimeThreadRunEventState(),
+            level="info",
+            event_id_start=0,
+            since_ms=since_after_fallback,
+            fallback_received_at=fallback,
+        )
+    )
+
+    assert events
+    assert {event["received_at"] for event in events} == {fallback}
 
 
 def _seed_managed_thread_with_events(hub_env, app) -> tuple[str, str]:

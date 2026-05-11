@@ -44,6 +44,7 @@ import {
 const baseChat: PmaChatSummary = {
   id: 'chat-1',
   title: 'Repo repair',
+  lifecycleStatus: 'active',
   status: 'running',
   agentId: 'codex',
   agentProfile: null,
@@ -180,7 +181,20 @@ describe('PMA chat view helpers', () => {
       'chat-2',
       'chat-3'
     ]);
-    expect(summarizeFilterCounts(chats, lastSeen)).toEqual({ all: 3, active: 1, waiting: 1, unread: 2 });
+    expect(summarizeFilterCounts(chats, lastSeen)).toEqual({ all: 3, active: 1, waiting: 1, unread: 2, archived: 0 });
+  });
+
+  it('keeps archived chats out of the working filters and exposes them through archived', () => {
+    const chats: PmaChatSummary[] = [
+      baseChat,
+      { ...baseChat, id: 'chat-2', title: 'Old support thread', lifecycleStatus: 'archived', status: 'done' },
+      { ...baseChat, id: 'chat-3', title: 'Waiting approval', status: 'waiting' }
+    ];
+
+    expect(filterPmaChats(chats, 'all', '').map((chat) => chat.id)).toEqual(['chat-1', 'chat-3']);
+    expect(filterPmaChats(chats, 'archived', 'support').map((chat) => chat.id)).toEqual(['chat-2']);
+    expect(filterPmaChats(chats, 'unread', '').map((chat) => chat.id).sort()).toEqual(['chat-1', 'chat-3']);
+    expect(summarizeFilterCounts(chats)).toEqual({ all: 2, active: 1, waiting: 1, unread: 2, archived: 1 });
   });
 
   it('detects messenger surface from API fields and title prefix', () => {

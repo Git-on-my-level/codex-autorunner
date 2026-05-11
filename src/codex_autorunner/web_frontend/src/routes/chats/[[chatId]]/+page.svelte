@@ -38,6 +38,7 @@
     filterPmaChatEntries,
     formatBytes,
     formatRelativeTime,
+    isPmaChatArchived,
     localPmaChatScopeOption,
     PMA_CHAT_FILTER_ORDER,
     PMA_CHAT_TICKET_RUNS_FILTER,
@@ -124,6 +125,7 @@
   let loadingActive = $state(false);
   let sending = $state(false);
   let creating = $state(false);
+  let archiving = $state(false);
   let loadingModels = $state(false);
   /** Invalidates in-flight `listAgentModels` results when the user switches agents quickly. */
   let loadModelsSeq = 0;
@@ -262,6 +264,7 @@
   const filterCounts = $derived(summarizeFilterCounts(chats, lastSeenMap));
   const surfaceFilterChips = $derived(pmaChatSurfaceFilterOptions(chats));
   const ticketRunGroupCount = $derived(countTicketRunGroups(chats));
+  const activeChatCount = $derived(chats.filter((chat) => !isPmaChatArchived(chat)).length);
 
   function isGroupExpanded(group: PmaChatRunGroup): boolean {
     if (group.key in expandedRunGroups) return expandedRunGroups[group.key];
@@ -481,26 +484,32 @@
   async function loadInitial(): Promise<void> {
     loadingChats = true;
     chatError = null;
-    const [chatResult, artifactResult, agentResult, repoResult, worktreeResult] = await Promise.all([
-      pmaApi.pma.listChats(),
+    const [activeChatResult, archivedChatResult, artifactResult, agentResult, repoResult, worktreeResult] = await Promise.all([
+      pmaApi.pma.listChats('active'),
+      pmaApi.pma.listChats('archived'),
       pmaApi.pma.listFiles(),
       pmaApi.pma.listAgents(),
       pmaApi.hub.listRepos(),
       pmaApi.hub.listWorktrees()
     ]);
 
-    if (chatResult.ok) {
-      chats = chatResult.data;
+    if (activeChatResult.ok) {
+      chats = [
+        ...activeChatResult.data,
+        ...(archivedChatResult.ok ? archivedChatResult.data : [])
+      ];
       const requestedChat = page.params.chatId ?? page.url.searchParams.get('chat');
-      activeChatId = chooseActiveChatId(chatResult.data, activeChatId, requestedChat);
+      activeChatId = chooseActiveChatId(chats, activeChatId, requestedChat);
       if (activeChatId) {
         detailMode = 'detail';
+        const selected = chats.find((chat) => chat.id === activeChatId);
+        if (selected && isPmaChatArchived(selected)) filter = 'archived';
         syncSelectorsToActiveChat();
         void refreshActive(activeChatId);
         connectStream(activeChatId);
       }
     } else {
-      chatError = chatResult.error;
+      chatError = activeChatResult.error;
     }
 
     if (artifactResult.ok) artifacts = artifactResult.data;
@@ -654,10 +663,53 @@
   }
 
   function markAllUnreadChatsRead(): void {
-    const next = markAllChatsRead(lastSeenMap, chats);
+    const next = markAllChatsRead(lastSeenMap, chats.filter((chat) => !isPmaChatArchived(chat)));
     if (next === lastSeenMap) return;
     lastSeenMap = next;
     saveLastSeenMap(next);
+  }
+
+  async function archiveChat(chatId: string): Promise<void> {
+    if (archiving) return;
+    archiving = true;
+    composeError = null;
+    const result = await pmaApi.pma.archiveThread(chatId);
+    if (result.ok) {
+      chats = chats.map((chat) => (chat.id === result.data.id ? result.data : chat));
+      showCommandNotice('Chat archived.');
+      if (activeChatId === chatId) {
+        closeStream();
+        await goto(href('/chats'));
+      }
+    } else {
+      composeError = result.error;
+    }
+    archiving = false;
+  }
+
+  async function archiveAllActiveChats(): Promise<void> {
+    const targets = chats.filter((chat) => !isPmaChatArchived(chat)).map((chat) => chat.id);
+    if (!targets.length || archiving) return;
+    if (!window.confirm(`Archive ${targets.length} active chat${targets.length === 1 ? '' : 's'}?`)) return;
+    archiving = true;
+    composeError = null;
+    const result = await pmaApi.pma.archiveThreads(targets);
+    if (result.ok) {
+      const archivedById = new Map(result.data.threads.map((chat) => [chat.id, chat]));
+      chats = chats.map((chat) => archivedById.get(chat.id) ?? chat);
+      showCommandNotice(
+        result.data.errorCount > 0
+          ? `Archived ${result.data.archivedCount}; ${result.data.errorCount} failed.`
+          : `Archived ${result.data.archivedCount} chats.`
+      );
+      if (activeChatId && targets.includes(activeChatId)) {
+        closeStream();
+        await goto(href('/chats'));
+      }
+    } else {
+      composeError = result.error;
+    }
+    archiving = false;
   }
 
   async function syncDetailUrl(detailId: string): Promise<void> {
@@ -834,7 +886,10 @@
         ...chat,
         status: nextProgress.status,
         progressPercent: nextProgress.progressPercent ?? chat.progressPercent,
-        updatedAt: nextProgress.lastEventAt ?? chat.updatedAt,
+        updatedAt:
+          nextProgress.lastEventAt && (!chat.updatedAt || nextProgress.lastEventAt > chat.updatedAt)
+            ? nextProgress.lastEventAt
+            : chat.updatedAt,
         raw: {
           ...chat.raw,
           execution_status: nextProgress.status,
@@ -1361,14 +1416,8 @@
     }
     if (spec.id === 'archive') {
       const archivedId = activeChatId;
-      const result = await pmaApi.pma.archiveThread(archivedId);
-      if (!result.ok) composeError = result.error;
-      else {
-        chats = chats.map((chat) => (chat.id === result.data.id ? result.data : chat));
-        showCommandNotice('Thread archived.');
-        clearSlashDraft();
-        await goto(href('/chats'));
-      }
+      await archiveChat(archivedId);
+      clearSlashDraft();
       return true;
     }
     if (spec.id === 'cancel') {
@@ -1580,6 +1629,17 @@
           Mark all as read
         </button>
       {/if}
+      {#if activeChatCount > 0 && filter !== 'archived'}
+        <button
+          class="new-chat-button archive-all-button"
+          type="button"
+          onclick={archiveAllActiveChats}
+          disabled={archiving}
+          aria-label="Archive all active chats"
+        >
+          {archiving ? 'Archiving...' : 'Archive All'}
+        </button>
+      {/if}
     </div>
 
     {#snippet chatRow(chat: import('$lib/viewModels/domain').PmaChatSummary, nested: boolean)}
@@ -1618,6 +1678,9 @@
                 <strong>{nested && chat.ticketId ? chat.ticketId : chat.title}</strong>
                 {#if !nested}
                   <span class={`chat-scope-kind-tag ${scopeTags.kindKey}`}>{scopeTags.kindLabel}</span>
+                {/if}
+                {#if isPmaChatArchived(chat)}
+                  <span class="chat-scope-kind-tag archived">Archived</span>
                 {/if}
                 {#if pmaChatKind(chat) === 'coding_agent'}
                   <span class={`chat-kind-badge ${pmaChatKind(chat)}`}>{pmaChatKindLabel(pmaChatKind(chat))}</span>
@@ -1825,6 +1888,17 @@
           </p>
         {/if}
       </div>
+      {#if activeChat && !isPmaChatArchived(activeChat)}
+        <button
+          class="chat-header-action"
+          type="button"
+          onclick={() => archiveChat(activeChat.id)}
+          disabled={archiving}
+          aria-label="Archive this chat"
+        >
+          {archiving ? 'Archiving...' : 'Archive'}
+        </button>
+      {/if}
       {#if activeChat && showStreamHealthAside}
         <aside class="chat-header-aside" aria-label="Chat stream status">
           <div class={`stream-health ${streamState}`} role="status">
