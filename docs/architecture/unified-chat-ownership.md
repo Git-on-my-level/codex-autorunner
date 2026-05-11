@@ -57,6 +57,46 @@ Binding ownership:
 - Surface adapters own platform identifiers and API calls after the shared
   target has been resolved.
 
+## Current Inventory
+
+This is the contract inventory for the unified chat surface migration. It names
+current state owners before implementation work starts so later tickets can move
+read paths without guessing.
+
+| Area | Current state owners | Target role |
+| --- | --- | --- |
+| Orchestration | `orch_thread_targets`, `orch_thread_executions`, `orch_queue_items`, `orch_bindings`, `orch_chat_operations`, `orch_managed_thread_deliveries`, `orch_notification_conversations` | Shared authority for normalized identity, binding, turn lifecycle, final delivery, and notification reply continuations. |
+| PMA managed threads | `ManagedThreadStore`, managed-thread compatibility DB path, `/hub/pma/*` routes | Compatibility projection over the shared model. PMA route shapes stay stable while their data source converges. |
+| Discord adapter | `discord_state.sqlite3` tables `channel_bindings`, `outbox`, `turn_progress_leases`, `interaction_ledger` | Transport-local preferences, API retry state, progress message leases, and interaction ack/replay cursors. Not lifecycle authority. |
+| Telegram adapter | `telegram_state.sqlite3` tables `telegram_topics`, `telegram_topic_scopes`, `telegram_outbox`, `telegram_pending_approvals`, `telegram_pending_voice` | Transport-local topic metadata, current topic scope, API retry state, and pending UI state. Not lifecycle authority. |
+| Web Hub | PMA chat view-model polling, file-chat draft state, PMA SSE compatibility stream | Projection consumer. The Hub should render normalized snapshots and subscribe to generic chat events. |
+| Notification replies | `orch_notification_conversations`, `PmaNotificationStore` | Replyable chat surface identity keyed by notification id until a continuation thread target is bound. |
+| Channel directory | `.codex-autorunner/chat/channel_directory.json`, `ChannelDirectoryStore` | Discovery projection with display and `seen_at` metadata only. |
+
+## Normalized Lifecycle
+
+The smallest shared lifecycle vocabulary for chat-like surfaces is:
+
+- `discovered`: a conversation is known from channel discovery or notification
+  delivery, but is not yet bound to a durable thread target.
+- `bound`: the surface identity resolves to a durable thread target or
+  continuation target.
+- `queued`: a user turn is accepted and waiting for managed-thread execution.
+- `running`: a managed turn is executing and may emit progress.
+- `idle`: the latest managed turn completed successfully and the surface can
+  accept another turn.
+- `failed`: the latest managed turn or surface operation failed and needs user
+  or recovery attention.
+- `archived`: the surface remains inspectable but does not accept new turns
+  without explicit unarchive or rebinding.
+
+Contract fixtures live in
+`tests/fixtures/chat_surface/lifecycle_contract.json` and are validated by
+`tests/contracts/chat_surface/test_lifecycle_fixture_contract.py`. They cover
+`/new`, bind, rebind, archive, queued, running, done, failed, delivery retry,
+channel discovery, Discord, Telegram, Web-originated, PMA managed-thread, and
+notification continuation scenarios.
+
 ## Delivery Ledger
 
 Final delivery is durable orchestration state, not adapter-local state.
