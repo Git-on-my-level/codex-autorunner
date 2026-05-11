@@ -25,8 +25,9 @@ Thanks for helping improve codex-autorunner.
 The pre-commit hook and CI use lane-based validation to avoid running unnecessary checks:
 - `core`: Backend/logic changes only (no frontend build or JS tests)
 - `web-ui`: Frontend/UI changes (includes core + frontend build + JS lint + JS tests)
+- `web-core-contract`: Scoped core + Web surface contract changes (same checks as `web-ui`, without chat-app validation)
 - `chat-apps`: Chat integration changes (Discord/Telegram adapters and tests)
-- `aggregate`: Full validation (all of the above; used for multi-lane or shared-risk diffs)
+- `aggregate`: Full validation (all of the above; used for broad multi-lane or shared-risk diffs)
 
 Lane is auto-detected from changed files. Force a specific lane with `./scripts/check.sh --lane <lane>`.
 

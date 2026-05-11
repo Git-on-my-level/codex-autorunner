@@ -93,7 +93,7 @@ def test_unknown_paths_force_aggregate() -> None:
     assert selection.unknown_paths == ("README.md",)
 
 
-def test_multi_lane_diff_forces_aggregate() -> None:
+def test_core_web_diff_routes_to_web_core_contract() -> None:
     selection = classify_changed_files(
         [
             "src/codex_autorunner/core/update_targets.py",
@@ -101,13 +101,27 @@ def test_multi_lane_diff_forces_aggregate() -> None:
         ]
     )
 
-    assert selection.lane == "aggregate"
-    assert selection.reason == "multi-lane-diff"
+    assert selection.lane == "web-core-contract"
+    assert selection.reason == "web-core-contract-diff"
     assert selection.lanes_touched == ("core", "web-ui")
     assert selection.lane_paths == (
         ("core", ("src/codex_autorunner/core/update_targets.py",)),
         ("web-ui", ("src/codex_autorunner/web_frontend/src/routes/+page.svelte",)),
     )
+
+
+def test_multi_lane_diff_with_chat_forces_aggregate() -> None:
+    selection = classify_changed_files(
+        [
+            "src/codex_autorunner/core/update_targets.py",
+            "src/codex_autorunner/web_frontend/src/routes/+page.svelte",
+            "tests/test_telegram_flow_status.py",
+        ]
+    )
+
+    assert selection.lane == "aggregate"
+    assert selection.reason == "multi-lane-diff"
+    assert selection.lanes_touched == ("core", "web-ui", "chat-apps")
 
 
 def test_classification_is_deterministic_for_same_input_set() -> None:

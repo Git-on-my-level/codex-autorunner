@@ -12,6 +12,7 @@ Validation is split into lanes so that small, scoped changes don't trigger the f
 |------|-------|-------------|
 | `core` | Backend/logic | Python lint, typecheck, core pytest, dead-code check |
 | `web-ui` | Frontend/UI | Core checks + Web frontend lint, `pnpm run build`, Web frontend tests, `web_static` drift check |
+| `web-core-contract` | Web/API contract changes | Same local checks as `web-ui`; selected for scoped core + Web surface diffs so chat-surface lab work stays out of the first feedback loop |
 | `chat-apps` | Chat integrations | Core checks + deterministic chat-surface lab suite (`make test-chat-surface-lab`) |
 | `aggregate` | Full validation | All lane checks combined |
 
@@ -20,7 +21,8 @@ Validation is split into lanes so that small, scoped changes don't trigger the f
 Changed files are classified by path prefixes and globs defined in `src/codex_autorunner/core/validation_lanes.py`.
 
 - Single-lane diffs route to that lane.
-- Multi-lane diffs, shared-risk files (e.g. `pyproject.toml`, `Makefile`, `scripts/`), or unknown paths route to `aggregate`.
+- Scoped core + Web diffs route to `web-core-contract`.
+- Other multi-lane diffs, shared-risk files (e.g. `pyproject.toml`, `Makefile`, `scripts/`), or unknown paths route to `aggregate`.
 
 ### Local Usage
 
@@ -31,6 +33,7 @@ Changed files are classified by path prefixes and globs defined in `src/codex_au
 # Force a specific lane
 ./scripts/check.sh --lane core
 ./scripts/check.sh --lane web-ui
+./scripts/check.sh --lane web-core-contract
 ./scripts/check.sh --lane chat-apps
 
 # Run the chat-surface lab directly
@@ -39,6 +42,21 @@ make test-chat-surface-lab
 # Force full validation (all lanes)
 ./scripts/check.sh --full
 ```
+
+When staged Web frontend source changes require committed generated assets,
+`scripts/check.sh` runs `scripts/check_web_static_preflight.py` before the
+expensive Web lane. If `src/codex_autorunner/web_static/` is missing from the
+staged diff, refresh it with:
+
+```bash
+pnpm run build
+git add src/codex_autorunner/web_static/
+```
+
+The Web lane also compares `svelte-check` warnings against
+`scripts/svelte_warning_baseline.json`. Known warnings are reported as baseline
+matches; warnings outside the baseline fail the lane so new frontend diagnostics
+are not hidden by existing debt.
 
 The chat-surface lab command is deterministic and does not require live
 Telegram/Discord credentials. It writes budget artifacts to:
@@ -54,6 +72,9 @@ CI (`.github/workflows/ci.yml`) uses the same classifier via `scripts/select_ci_
 1. The `route` job computes changed files and emits `lane`, `run_core`, `run_web_ui`, `run_chat_apps`, `run_aggregate` outputs.
 2. Exactly one lane job runs; others are skipped.
 3. The `check` job asserts the routing contract: exactly one lane selected, it succeeded, and all others were skipped.
+
+`web-core-contract` selects the existing `web-ui` job because that job already
+executes core + Web checks without chat-app validation.
 
 ## Hermetic Test Guarantees
 

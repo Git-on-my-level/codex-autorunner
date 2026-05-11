@@ -96,7 +96,7 @@ def _to_ci_payload(selection_payload: dict[str, object]) -> dict[str, object]:
     payload.update(
         {
             "run_core": lane == "core",
-            "run_web_ui": lane == "web-ui",
+            "run_web_ui": lane in {"web-ui", "web-core-contract"},
             "run_chat_apps": lane == "chat-apps",
             "run_aggregate": lane == "aggregate",
         }

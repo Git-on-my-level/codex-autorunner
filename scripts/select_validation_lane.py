@@ -40,7 +40,7 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Map changed files to one validation lane: "
-            "core, web-ui, chat-apps, or aggregate."
+            "core, web-ui, web-core-contract, chat-apps, or aggregate."
         )
     )
     parser.add_argument(

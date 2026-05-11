@@ -278,6 +278,9 @@ jobs:
             web-ui)
               [[ "${run_web_ui}" == "true" && "${web_ui_result}" == "success" ]] || exit 1
               ;;
+            web-core-contract)
+              [[ "${run_web_ui}" == "true" && "${web_ui_result}" == "success" ]] || exit 1
+              ;;
             chat-apps)
               [[ "${run_chat_apps}" == "true" && "${chat_apps_result}" == "success" ]] || exit 1
               ;;

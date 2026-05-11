@@ -77,6 +77,31 @@ def test_select_ci_validation_jobs_script_writes_github_outputs(tmp_path: Path) 
     }
 
 
+def test_select_ci_validation_jobs_routes_web_core_contract_to_web_ui_job() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(_script_path()),
+            "--format",
+            "json",
+            "src/codex_autorunner/core/update_targets.py",
+            "src/codex_autorunner/web_frontend/src/routes/+page.svelte",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    assert payload["lane"] == "web-core-contract"
+    assert payload["reason"] == "web-core-contract-diff"
+    assert payload["run_core"] is False
+    assert payload["run_web_ui"] is True
+    assert payload["run_chat_apps"] is False
+    assert payload["run_aggregate"] is False
+
+
 def test_select_ci_validation_jobs_script_runs_without_site_packages() -> None:
     result = subprocess.run(
         [
