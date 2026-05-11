@@ -27,6 +27,7 @@ def _seed_thread(
     repo_id: str = "repo-1",
     lifecycle_status: str = "active",
     runtime_status: str = "idle",
+    metadata: dict[str, object] | None = None,
 ) -> None:
     with open_orchestration_sqlite(hub_root, durable=False, migrate=True) as conn:
         conn.execute(
@@ -40,9 +41,10 @@ def _seed_thread(
                 display_name,
                 lifecycle_status,
                 runtime_status,
+                metadata_json,
                 created_at,
                 updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 thread_id,
@@ -53,6 +55,7 @@ def _seed_thread(
                 f"Thread {thread_id}",
                 lifecycle_status,
                 runtime_status,
+                json.dumps(metadata or {}),
                 "2026-05-11T00:00:00Z",
                 "2026-05-11T00:00:10Z",
             ),
@@ -185,6 +188,29 @@ def test_chat_surface_read_model_orders_and_limits_snapshot(tmp_path: Path) -> N
     assert [surface["surface_urn"] for surface in snapshot["surfaces"]] == ["discord:1"]
     assert snapshot["limits"] == {"requested": 1, "returned": 1, "max": 1000}
     assert snapshot["cursor"] == 2
+
+
+def test_chat_surface_read_model_projects_thread_identity_from_metadata_json(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    _seed_thread(
+        hub_root,
+        thread_id="thread-pma-profiled",
+        metadata={"agent_profile": "m4-pma", "model": "gpt-5.5"},
+    )
+
+    snapshot = ChatSurfaceReadService(hub_root, durable=False).snapshot()
+    by_kind_key = {
+        (surface["surface_kind"], surface["surface_key"]): surface
+        for surface in snapshot["surfaces"]
+    }
+
+    surface = by_kind_key[("pma", "thread-pma-profiled")]
+    assert surface["managed_thread_id"] == "thread-pma-profiled"
+    assert surface["metadata"]["agent_id"] == "codex"
+    assert surface["metadata"]["agent_profile"] == "m4-pma"
+    assert surface["metadata"]["model"] == "gpt-5.5"
 
 
 def test_chat_surface_read_model_allows_lifecycle_recovery_events(

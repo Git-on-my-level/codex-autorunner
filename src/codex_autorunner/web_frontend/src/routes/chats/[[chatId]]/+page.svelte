@@ -27,6 +27,7 @@
   } from '$lib/viewModels/domain';
   import {
     buildManagedThreadCreatePayload,
+    buildExistingPmaChatSendPlan,
     buildPmaChatListEntries,
     buildPmaChatScopeOptions,
     buildManagedThreadMessagePayload,
@@ -931,25 +932,6 @@
       : 'New chat';
   }
 
-  async function ensureChatForSelectedAgent(): Promise<string | null> {
-    const activeAgent = activeChat?.agentId?.trim().toLowerCase() ?? '';
-    const requestedAgent = selectedAgent.trim().toLowerCase();
-    const activeProfile = activeChat?.agentProfile?.trim().toLowerCase() ?? '';
-    const requestedProfile = requestedAgent === 'hermes' ? selectedProfile.trim().toLowerCase() : '';
-    const profileMatches = requestedAgent !== 'hermes' || activeProfile === requestedProfile;
-    if (activeAgent && activeAgent === requestedAgent && profileMatches) return activeChatId;
-    const result = await pmaApi.pma.createChat(
-      buildManagedThreadCreatePayload(selectedAgent, selectedScope, newChatDisplayName(), selectedModel, selectedProfile)
-    );
-    if (!result.ok) {
-      composeError = result.error;
-      return null;
-    }
-    chats = [result.data, ...chats.filter((chat) => chat.id !== result.data.id)];
-    await selectChat(result.data.id);
-    return result.data.id;
-  }
-
   function worktreeScopeOption(worktreeId: string): Extract<PmaChatScopeOption, { kind: 'worktree' }> | null {
     return scopeOptions.find(
       (scope): scope is Extract<PmaChatScopeOption, { kind: 'worktree' }> =>
@@ -1085,7 +1067,12 @@
     }
     const attachmentsForMessage = uploaded;
     const message = composeMessageWithAttachments(draftSnapshot, attachmentsForMessage);
-    const targetChatId = await ensureChatForSelectedAgent();
+    const sendPlan = buildExistingPmaChatSendPlan({
+      activeChatId,
+      activeChat,
+      selectedProfile
+    });
+    const targetChatId = sendPlan.targetChatId;
     if (!targetChatId) {
       restoreDraft();
       sending = false;
@@ -1101,7 +1088,7 @@
         targetIsRunning,
         attachmentsForMessage,
         selectedReasoning,
-        selectedProfile,
+        sendPlan.profile,
         resolvedBusyPolicy
       )
     );
@@ -1114,8 +1101,8 @@
       if (optimisticFromBackend) timeline = reconcilePmaTimeline(timeline, [optimisticFromBackend]);
       await refreshActive(targetChatId, { quiet: true });
       removeOptimistic();
-      if (selectedAgent === 'hermes' && selectedProfile.trim()) {
-        const stamped = selectedProfile.trim();
+      if (activeChat?.agentId === 'hermes' && sendPlan.profile.trim()) {
+        const stamped = sendPlan.profile.trim();
         chats = chats.map((row) => (row.id === targetChatId ? { ...row, agentProfile: stamped } : row));
       }
     } else {
