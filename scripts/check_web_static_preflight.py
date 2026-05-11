@@ -4,9 +4,34 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import sys
-from pathlib import PurePosixPath
+from pathlib import Path
 from typing import Sequence
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+_VALIDATION_LANES_PATH = (
+    REPO_ROOT / "src" / "codex_autorunner" / "core" / "validation_lanes.py"
+)
+
+
+def _load_validation_lanes_module():
+    spec = importlib.util.spec_from_file_location(
+        "_car_validation_lanes", _VALIDATION_LANES_PATH
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(
+            f"Unable to load validation lanes from {_VALIDATION_LANES_PATH}"
+        )
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+_VALIDATION_LANES = _load_validation_lanes_module()
+normalize_path = _VALIDATION_LANES.normalize_changed_path
+_matches_prefix = _VALIDATION_LANES._matches_prefix
 
 WEB_FRONTEND_SOURCE_PREFIX = "src/codex_autorunner/web_frontend/src"
 WEB_STATIC_PREFIX = "src/codex_autorunner/web_static"
@@ -25,16 +50,6 @@ WEB_SOURCE_TEST_SUFFIXES = (
     ".spec.ts",
     ".spec.svelte",
 )
-
-
-def normalize_path(raw_path: str) -> str:
-    path = str(raw_path).strip().replace("\\", "/")
-    if not path:
-        return ""
-    normalized = PurePosixPath(path).as_posix()
-    while normalized.startswith("./"):
-        normalized = normalized[2:]
-    return "" if normalized == "." else normalized
 
 
 def needs_web_static_refresh(path: str) -> bool:
@@ -56,10 +71,6 @@ def missing_static_for_paths(paths: Sequence[str]) -> tuple[str, ...]:
     if any(includes_web_static(path) for path in normalized_paths):
         return ()
     return tuple(path for path in normalized_paths if needs_web_static_refresh(path))
-
-
-def _matches_prefix(path: str, prefix: str) -> bool:
-    return path == prefix or path.startswith(f"{prefix}/")
 
 
 def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
