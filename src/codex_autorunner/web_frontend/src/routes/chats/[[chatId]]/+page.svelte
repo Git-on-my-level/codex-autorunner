@@ -8,6 +8,13 @@
   import ChatThreadPreMessagePickers from '$lib/components/ChatThreadPreMessagePickers.svelte';
   import VoiceComposerButton from '$lib/components/VoiceComposerButton.svelte';
   import { pmaApi, type ApiError, type JsonRecord, type PmaQueuedTurn } from '$lib/api/client';
+  import {
+    executePmaChatCommandPlan,
+    planInterruptExistingChat,
+    planQueueExistingChat,
+    planSendExistingChat,
+    planStartChat
+  } from '$lib/application/pmaChatCommands';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import { openChatSurfaceEventSource, openPmaTailEventSource, type StreamSubscription } from '$lib/api/streaming';
   import {
@@ -26,8 +33,6 @@
     SurfaceArtifact
   } from '$lib/viewModels/domain';
   import {
-    buildManagedThreadCreatePayload,
-    buildExistingPmaChatSendPlan,
     buildPmaChatListEntries,
     buildPmaChatScopeOptions,
     buildManagedThreadMessagePayload,
@@ -1000,8 +1005,9 @@
   async function createChat(): Promise<void> {
     creating = true;
     composeError = null;
-    const result = await pmaApi.pma.createChat(
-      buildManagedThreadCreatePayload(selectedAgent, selectedScope, newChatDisplayName(), selectedModel, selectedProfile)
+    const result = await executePmaChatCommandPlan(
+      pmaApi,
+      planStartChat(selectedScope, selectedAgent, selectedProfile, selectedModel, newChatDisplayName())
     );
     if (result.ok) {
       chats = [result.data, ...chats.filter((chat) => chat.id !== result.data.id)];
@@ -1067,31 +1073,32 @@
     }
     const attachmentsForMessage = uploaded;
     const message = composeMessageWithAttachments(draftSnapshot, attachmentsForMessage);
-    const sendPlan = buildExistingPmaChatSendPlan({
-      activeChatId,
-      activeChat,
-      selectedProfile
-    });
-    const targetChatId = sendPlan.targetChatId;
-    if (!targetChatId) {
-      restoreDraft();
-      sending = false;
-      return;
-    }
-    const targetIsRunning = targetChatId === activeChatId && progress?.status === 'running';
-    const resolvedBusyPolicy = busyPolicy ?? (targetIsRunning ? 'queue' : null);
-    const result = await pmaApi.pma.sendMessage(
-      targetChatId,
-      buildManagedThreadMessagePayload(
-        message,
-        selectedModel,
-        targetIsRunning,
-        attachmentsForMessage,
-        selectedReasoning,
-        sendPlan.profile,
-        resolvedBusyPolicy
-      )
-    );
+    const targetChatId = activeChatId;
+    const targetIsRunning = progress?.status === 'running';
+    const profileForSend =
+      activeChat?.agentProfile?.trim() || selectedProfile?.trim() || '';
+    const commandPlan =
+      busyPolicy === 'interrupt'
+        ? planInterruptExistingChat(targetChatId, message, {
+            model: selectedModel,
+            attachments: attachmentsForMessage,
+            reasoning: selectedReasoning,
+            profile: profileForSend
+          })
+        : busyPolicy === 'queue' || targetIsRunning
+          ? planQueueExistingChat(targetChatId, message, {
+              model: selectedModel,
+              attachments: attachmentsForMessage,
+              reasoning: selectedReasoning,
+              profile: profileForSend
+            })
+          : planSendExistingChat(targetChatId, message, {
+              model: selectedModel,
+              attachments: attachmentsForMessage,
+              reasoning: selectedReasoning,
+              profile: profileForSend
+            });
+    const result = await executePmaChatCommandPlan(pmaApi, commandPlan);
     if (result.ok) {
       const optimisticFromBackend = optimisticUserTimelineItemFromSend(
         result.data.raw,
@@ -1101,10 +1108,6 @@
       if (optimisticFromBackend) timeline = reconcilePmaTimeline(timeline, [optimisticFromBackend]);
       await refreshActive(targetChatId, { quiet: true });
       removeOptimistic();
-      if (activeChat?.agentId === 'hermes' && sendPlan.profile.trim()) {
-        const stamped = sendPlan.profile.trim();
-        chats = chats.map((row) => (row.id === targetChatId ? { ...row, agentProfile: stamped } : row));
-      }
     } else {
       restoreDraft();
       composeError = result.error;
@@ -1139,17 +1142,16 @@
       return;
     }
     queuedTurns = queuedTurns.filter((item) => item.managedTurnId !== turn.managedTurnId);
-    const result = await pmaApi.pma.sendMessage(
-      chatId,
-      buildManagedThreadMessagePayload(
-        turn.prompt,
-        turn.model ?? selectedModel,
-        true,
-        turn.attachments as DocumentFileIntentPayload[],
-        turn.reasoning ?? selectedReasoning,
-        selectedProfile,
-        'interrupt'
-      )
+    const profileForSend =
+      activeChat?.agentProfile?.trim() || selectedProfile?.trim() || '';
+    const result = await executePmaChatCommandPlan(
+      pmaApi,
+      planInterruptExistingChat(chatId, turn.prompt, {
+        model: turn.model ?? selectedModel,
+        attachments: turn.attachments as DocumentFileIntentPayload[],
+        reasoning: turn.reasoning ?? selectedReasoning,
+        profile: profileForSend
+      })
     );
     if (result.ok) {
       const optimisticFromBackend = optimisticUserTimelineItemFromSend(
