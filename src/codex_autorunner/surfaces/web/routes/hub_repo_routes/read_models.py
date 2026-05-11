@@ -80,12 +80,6 @@ def _window(*, offset: int, limit: int, total: int) -> PageWindow:
     )
 
 
-def _slice(
-    items: list[dict[str, Any]], *, offset: int, limit: int
-) -> list[dict[str, Any]]:
-    return items[offset : offset + limit]
-
-
 def _dict_value(value: object) -> dict[str, Any]:
     return cast(dict[str, Any], value) if isinstance(value, dict) else {}
 

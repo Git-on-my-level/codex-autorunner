@@ -14,6 +14,46 @@ from pydantic import BaseModel, ConfigDict, Field
 
 READ_MODEL_CONTRACT_VERSION: Literal["web-read-models.v1"] = "web-read-models.v1"
 
+__all__ = [
+    "READ_MODEL_CONTRACT_VERSION",
+    "ChatArtifactSummary",
+    "ChatDetailPatch",
+    "ChatDetailPatchEvent",
+    "ChatDetailSnapshot",
+    "ChatIndexCounters",
+    "ChatIndexGroup",
+    "ChatIndexPatch",
+    "ChatIndexPatchEvent",
+    "ChatIndexRow",
+    "ChatIndexSnapshot",
+    "ChatQueueSummary",
+    "ChatThreadProjection",
+    "ChatTimelineItem",
+    "PageWindow",
+    "ProjectionCursor",
+    "ProjectionRevision",
+    "ReadModelContract",
+    "ReadModelEventEnvelope",
+    "RepairPolicy",
+    "RepoTopology",
+    "RepoWorktreeDetailSnapshot",
+    "RepoWorktreePatch",
+    "RepoWorktreePatchEvent",
+    "RepoWorktreeRuntimeSnapshot",
+    "RepoWorktreeTopologySnapshot",
+    "RunProjection",
+    "RuntimeProjection",
+    "TicketDetailPatch",
+    "TicketDetailPatchEvent",
+    "TicketDetailSnapshot",
+    "TicketProjection",
+    "TicketQueueSibling",
+    "WorktreeTopology",
+    "dump_read_model_contract",
+    "load_read_model_contract",
+    "read_model_now",
+]
+
 
 def _to_camel(value: str) -> str:
     parts = value.split("_")
