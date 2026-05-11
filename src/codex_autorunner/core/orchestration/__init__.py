@@ -62,6 +62,13 @@ from .chat_surface_models import (
     normalize_chat_surface_kind,
     normalize_chat_surface_lifecycle,
 )
+from .chat_surface_read_model import (
+    CHAT_SURFACE_READ_CONTRACT_VERSION,
+    ChatSurfaceProjection,
+    ChatSurfaceReadService,
+    parse_chat_surface_cursor,
+    serialize_chat_surface_event,
+)
 from .cold_trace_store import ColdTraceStore
 from .execution_history_maintenance import (
     audit_execution_history,
@@ -193,8 +200,11 @@ __all__ = [
     "ChatSurfaceExternalConversationId",
     "ChatSurfaceIdentity",
     "ChatSurfaceLifecycle",
+    "ChatSurfaceProjection",
+    "ChatSurfaceReadService",
     "ChatSurfaceResourceOwner",
     "CHAT_SURFACE_EVENT_TYPES",
+    "CHAT_SURFACE_READ_CONTRACT_VERSION",
     "ColdTraceStore",
     "ExecutionRecord",
     "FlowTarget",
@@ -261,6 +271,7 @@ __all__ = [
     "normalize_chat_surface_key",
     "normalize_chat_surface_kind",
     "normalize_chat_surface_lifecycle",
+    "parse_chat_surface_cursor",
     "plan_chat_operation_duplicate",
     "plan_chat_operation_recovery",
     "plan_managed_thread_delivery_recovery",
@@ -268,5 +279,6 @@ __all__ = [
     "record_from_intent",
     "resolve_execution_history_maintenance_policy",
     "resolve_orchestration_sqlite_path",
+    "serialize_chat_surface_event",
     "vacuum_execution_history",
 ]
