@@ -326,8 +326,25 @@
                 </div>
               {/if}
             </div>
-            {#if (onArchiveState && canArchiveState(row)) || (row.kind === 'worktree' && onCleanupWorktree) || (row.kind === 'repo' && onCreateWorktree) || (row.kind === 'repo' && onOpenRepoSettings)}
-              <div class="repo-action-buttons repo-head-actions" aria-label={`Actions for ${row.label}`}>
+            <div class="repo-action-buttons repo-head-actions" aria-label={`Actions for ${row.label}`}>
+              <a
+                class="row-action-button row-action-link"
+                href={href(row.pmaChatHref)}
+                title={`Start a new PMA chat scoped to ${row.label}`}
+                aria-label={`Start PMA chat for ${row.label}`}
+                data-sveltekit-preload-data="tap"
+              >
+                + Chat
+              </a>
+              <a
+                class="row-action-button row-action-link"
+                href={href(row.codingAgentChatHref)}
+                title={`Start a new coding agent chat scoped to ${row.label}`}
+                aria-label={`Start coding agent chat for ${row.label}`}
+                data-sveltekit-preload-data="tap"
+              >
+                + Agent
+              </a>
                 {#if row.kind === 'repo' && onOpenRepoSettings}
                   <button
                     class="icon-action settings"
@@ -391,7 +408,6 @@
                   </button>
                 {/if}
               </div>
-            {/if}
             {#if ticketMetricsReady && row.totalTickets > 0}
               {@const pct = Math.round((row.doneTickets / row.totalTickets) * 100)}
               <span
@@ -484,8 +500,25 @@
                           style:--progress={`${wpct}%`}
                         ></span>
                       {/if}
-                      {#if onCleanupWorktree || (onArchiveState && canArchiveState(worktree))}
-                        <div class="repo-action-buttons" aria-label={`Actions for ${worktree.label}`}>
+                      <div class="repo-action-buttons" aria-label={`Actions for ${worktree.label}`}>
+                        <a
+                          class="row-action-button row-action-link"
+                          href={href(worktree.pmaChatHref)}
+                          title={`Start a new PMA chat scoped to ${worktree.label}`}
+                          aria-label={`Start PMA chat for ${worktree.label}`}
+                          data-sveltekit-preload-data="tap"
+                        >
+                          + Chat
+                        </a>
+                        <a
+                          class="row-action-button row-action-link"
+                          href={href(worktree.codingAgentChatHref)}
+                          title={`Start a new coding agent chat scoped to ${worktree.label}`}
+                          aria-label={`Start coding agent chat for ${worktree.label}`}
+                          data-sveltekit-preload-data="tap"
+                        >
+                          + Agent
+                        </a>
                           {#if onArchiveState && canArchiveState(worktree)}
                             <button
                               class="icon-action archive"
@@ -515,7 +548,6 @@
                             </button>
                           {/if}
                         </div>
-                      {/if}
                     </div>
                   </li>
                 {/each}
@@ -1042,7 +1074,11 @@
   }
 
   .row-action-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     flex: 0 0 auto;
+    min-height: 28px;
     padding: 4px 10px;
     border: 1px solid var(--color-border);
     border-radius: 6px;
@@ -1052,6 +1088,7 @@
     font-size: var(--font-size-0);
     font-weight: 600;
     cursor: pointer;
+    text-decoration: none;
     transition: border-color var(--transition-fast), background-color var(--transition-fast), color var(--transition-fast);
   }
   .row-action-button:hover {
@@ -1554,7 +1591,7 @@
   .worktree-card {
     position: relative;
     display: grid;
-    grid-template-columns: 28px minmax(0, 1fr) auto 70px;
+    grid-template-columns: 28px minmax(0, 1fr) auto auto;
     align-items: center;
     gap: var(--space-3);
     padding: var(--space-2) 0 var(--space-2) 8px;
