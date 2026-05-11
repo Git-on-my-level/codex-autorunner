@@ -561,6 +561,9 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "approval_mode": "yolo",
         "default_approval_decision": "accept",
         "include_previous_ticket_context": False,
+        "restart_recoverable_failures": True,
+        "restart_max_attempts": 2,
+        "restart_backoff_seconds": 0.0,
     },
     "git": {
         "auto_commit": False,

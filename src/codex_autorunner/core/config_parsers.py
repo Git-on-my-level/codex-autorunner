@@ -350,12 +350,48 @@ def _parse_ticket_flow_config(
         ),
         TICKET_FLOW_FIELD_SCHEMAS["max_total_turns"],
     )
+    restart_recoverable_failures = parse_schema_field(
+        cfg.get(
+            "restart_recoverable_failures",
+            default_from_mapping(
+                defaults,
+                "restart_recoverable_failures",
+                TICKET_FLOW_FIELD_SCHEMAS["restart_recoverable_failures"],
+            ),
+        ),
+        TICKET_FLOW_FIELD_SCHEMAS["restart_recoverable_failures"],
+    )
+    restart_max_attempts = parse_schema_field(
+        cfg.get(
+            "restart_max_attempts",
+            default_from_mapping(
+                defaults,
+                "restart_max_attempts",
+                TICKET_FLOW_FIELD_SCHEMAS["restart_max_attempts"],
+            ),
+        ),
+        TICKET_FLOW_FIELD_SCHEMAS["restart_max_attempts"],
+    )
+    restart_backoff_seconds = parse_schema_field(
+        cfg.get(
+            "restart_backoff_seconds",
+            default_from_mapping(
+                defaults,
+                "restart_backoff_seconds",
+                TICKET_FLOW_FIELD_SCHEMAS["restart_backoff_seconds"],
+            ),
+        ),
+        TICKET_FLOW_FIELD_SCHEMAS["restart_backoff_seconds"],
+    )
     return TicketFlowConfig(
         approval_mode=approval_mode,
         default_approval_decision=default_approval_decision,
         include_previous_ticket_context=include_previous_ticket_context,
         auto_resume=auto_resume,
         max_total_turns=max_total_turns,
+        restart_recoverable_failures=restart_recoverable_failures,
+        restart_max_attempts=restart_max_attempts,
+        restart_backoff_seconds=restart_backoff_seconds,
     )
 
 

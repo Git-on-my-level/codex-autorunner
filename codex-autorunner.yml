@@ -72,6 +72,10 @@ repo_defaults:
     # Prefer using contextspace docs (active_context.md, decisions.md, spec.md) for cross-ticket context.
     include_previous_ticket_context: false
     max_total_turns: 150
+    # Restart the same active run after recoverable worker infrastructure failures.
+    restart_recoverable_failures: true
+    restart_max_attempts: 2
+    restart_backoff_seconds: 0.0
 
   git:
     # Auto-commit after a run.

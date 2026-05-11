@@ -1071,6 +1071,22 @@ def _canonical_flow_status_state(
         return None
 
 
+def _extract_restart_status(record: FlowRunRecord) -> Optional[dict[str, Any]]:
+    state = record.state if isinstance(record.state, dict) else {}
+    recovery = state.get("recovery") if isinstance(state, dict) else {}
+    recovery = recovery if isinstance(recovery, dict) else {}
+    restart = recovery.get("restart") if isinstance(recovery, dict) else {}
+    if not isinstance(restart, dict) or not restart:
+        return None
+    return {
+        "count": restart.get("count", 0),
+        "max_attempts": restart.get("max_attempts"),
+        "last_attempted_at": restart.get("last_attempted_at"),
+        "last_failure_reason": restart.get("last_failure_reason"),
+        "exhausted": bool(restart.get("exhausted")),
+    }
+
+
 def _resolve_ticket_path(repo_root: Path, ticket_ref: str) -> Optional[Path]:
     candidate = Path(ticket_ref)
     candidates: list[Path]
@@ -1188,6 +1204,7 @@ def build_ticket_flow_status_snapshot(
             "last_event_at": None,
             "worker_health": None,
             "effective_current_ticket": effective_ticket,
+            "restart": _extract_restart_status(record),
             "app": app_metadata,
             "ticket_progress": None,
             "state": updated_state,
@@ -1231,6 +1248,7 @@ def build_ticket_flow_status_snapshot(
         "active_tool": active_tool_payload,
         "effective_last_activity_at": effective_last_activity_at,
         "effective_current_ticket": effective_ticket,
+        "restart": _extract_restart_status(record),
         "app": app_metadata,
         "ticket_progress": ticket_progress(repo_root),
         "state": updated_state,

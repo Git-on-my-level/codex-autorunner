@@ -109,6 +109,7 @@ class RestartPolicyObservation:
     enabled: bool = False
     attempts: int = 0
     max_attempts: int = 0
+    backoff_ready: bool = True
 
     @property
     def exhausted(self) -> bool:
@@ -120,7 +121,7 @@ class RestartPolicyObservation:
 
     @property
     def can_attempt(self) -> bool:
-        return self.enabled and not self.exhausted
+        return self.enabled and self.backoff_ready and not self.exhausted
 
 
 @dataclass(frozen=True)

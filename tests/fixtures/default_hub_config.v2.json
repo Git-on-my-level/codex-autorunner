@@ -432,7 +432,10 @@
     "ticket_flow": {
       "approval_mode": "yolo",
       "default_approval_decision": "accept",
-      "include_previous_ticket_context": false
+      "include_previous_ticket_context": false,
+      "restart_backoff_seconds": 0.0,
+      "restart_max_attempts": 2,
+      "restart_recoverable_failures": true
     },
     "ui": {
       "editor": "vi"
