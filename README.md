@@ -7,12 +7,13 @@ CAR is a meta-harness for coding agents (Codex, Hermes, OpenCode, anything ACP).
 
 > 🧪 Built for developers comfortable running long-horizon agent workflows on their own machine. If you babysit every agent turn, this isn't the tool for you.
 
-![CAR Hub](docs/screenshots/ticket-3-column.png)
 
 **What you actually do with CAR:**
 - ✍️ Write a plan, or chat with an AI to generate one
 - 🎫 Convert it into CAR tickets (markdown + frontmatter) — use the [CAR Ticket Skill](docs/car-ticket-skill.md) with any assistant
 - 🚶 Walk away. Agents work the queue and notify you (Telegram, Discord, inbox) only when they need input
+
+![Tickets example](docs/screenshots/ticket-list.png)
 
 ---
 
@@ -47,6 +48,8 @@ Then open the web UI and add a repo. Full walkthrough: [AGENT_SETUP_GUIDE.md](do
 ---
 
 ## 🧠 How it works
+
+![Brownian bridge chart](docs/charts-diagrams/brownian-bridge.png)
 
 At its core, CAR is a state machine: while there are incomplete tickets, pick the next one and run it against an agent. Tickets can be pre-written by you, by agents, or on the fly.
 

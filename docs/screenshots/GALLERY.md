@@ -2,31 +2,25 @@
 
 A visual tour of CAR in action.
 
-## Hub & tickets
+## Repos & tickets
 
-Manage many repos and ticket flows from one place.
-![CAR Hub](ticket-3-column.png)
+Browse every connected repository from the Web Hub home.
+![Repos list](repos-list.png)
 
-Build complex features by chaining tickets across agents.
-![Tickets in progress](tickets-in-progress.png)
+Open a repo for worktrees, sync, and repo-scoped tickets.
+![Repo details](repo-details.png)
 
-Tickets are just markdown — you and the agents both edit them.
-![Ticket markdown](ticket-markdown.png)
+Work the global queue or open a single ticket — still markdown for you and your agents.
+![Ticket list](ticket-list.png)
+![Ticket detail](ticket-detail.png)
 
-## Notifications & contextspace
+## Hub chat & PMA
 
-Agents inbox you when they need input — no babysitting.
-![Inbox](inbox.png)
+Use the in-browser hub for long threads and agent runs when you want the full UI.
+![Chat — expanded](chat-expanded.png)
 
-Collaborate with agents in a shared `contextspace/` scratchpad, independent of the codebase.
-![Contextspace](workspace.png)
-![Contextspace new doc](workspace-new-md.png)
-
-## Built-in terminals
-
-Drop into your favorite agent TUI when you need fine-grained control.
-![Terminal — Codex](terminal-codex.png)
-![Terminal — OpenCode](terminal-opencode.png)
+Inspect and adjust what the Project Manager Agent (PMA) keeps in working memory.
+![PMA memory](pma-memory.png)
 
 ## Chat apps
 
