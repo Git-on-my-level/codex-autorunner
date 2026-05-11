@@ -1016,6 +1016,19 @@ def _resolve_hermes_launch(
     )
     configured_name = basename(configured_binary) if configured_binary else ""
     if (
+        normalized_agent_id == HERMES_RUNTIME_ID
+        and normalized_profile is not None
+        and configured_binary
+    ):
+        base_binary = _configured_hermes_binary(config, agent_id=HERMES_RUNTIME_ID)
+        if base_binary and configured_binary == base_binary:
+            return [
+                configured_binary,
+                "-p",
+                normalized_profile,
+                HERMES_ACP_COMMAND,
+            ], configured_binary
+    if (
         normalized_agent_id != HERMES_RUNTIME_ID
         and normalized_profile is None
         and configured_name == normalized_agent_id

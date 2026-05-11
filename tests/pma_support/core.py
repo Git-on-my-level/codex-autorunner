@@ -2196,6 +2196,87 @@ def test_pma_chat_hermes_profile_uses_profile_scoped_registry_binding(
     assert observed["start_turn"][1] == "hermes-session-m4"
 
 
+def test_pma_chat_hermes_inherited_binary_profile_launches_named_hermes_profile(
+    hub_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg.setdefault("pma", {})
+    cfg["pma"]["enabled"] = True
+    cfg["pma"]["default_agent"] = "hermes"
+    cfg["pma"]["profile"] = "pma"
+    cfg.setdefault("agents", {})
+    cfg["agents"]["hermes"] = {
+        "binary": "hermes",
+        "default_profile": "pma",
+        "profiles": {"pma": {"display_name": "PMA"}},
+    }
+    write_test_config(hub_env.hub_root / CONFIG_FILENAME, cfg)
+    observed: dict[str, Any] = {}
+
+    class _FakeHermesSupervisor:
+        def __init__(self, command, **_kwargs):  # type: ignore[no-untyped-def]
+            observed["command"] = list(command)
+
+        async def ensure_ready(self, workspace_root: Path) -> None:
+            _ = workspace_root
+
+        async def create_session(
+            self, workspace_root: Path, title: Optional[str] = None
+        ):
+            _ = workspace_root, title
+            return type("Session", (), {"session_id": "hermes-pma-session"})()
+
+        async def resume_session(self, workspace_root: Path, conversation_id: str):
+            _ = workspace_root
+            return type("Session", (), {"session_id": conversation_id})()
+
+        async def start_turn(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            prompt: str,
+            model: Optional[str] = None,
+            approval_mode: Optional[str] = None,
+        ) -> str:
+            _ = workspace_root, conversation_id, prompt, model, approval_mode
+            return "hermes-pma-turn"
+
+        async def wait_for_turn(self, *_args: Any, **_kwargs: Any):
+            return type(
+                "Result",
+                (),
+                {
+                    "status": "completed",
+                    "assistant_text": "hermes pma reply",
+                    "raw_events": [],
+                    "errors": [],
+                },
+            )()
+
+        async def interrupt_turn(self, *_args: Any, **_kwargs: Any) -> None:
+            return None
+
+        async def stream_turn_events(self, *_args: Any, **_kwargs: Any):
+            if False:
+                yield {}
+
+    monkeypatch.setattr(
+        "codex_autorunner.agents.hermes.supervisor.HermesSupervisor",
+        _FakeHermesSupervisor,
+    )
+
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+    resp = client.post(
+        "/hub/pma/chat",
+        json={"message": "hello inherited pma profile", "agent": "hermes"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["message"] == "hermes pma reply"
+    assert observed["command"] == ["hermes", "-p", "pma", "acp"]
+
+
 def test_pma_chat_codex_ignores_global_profile_default_when_agent_has_no_profiles(
     hub_env,
 ) -> None:

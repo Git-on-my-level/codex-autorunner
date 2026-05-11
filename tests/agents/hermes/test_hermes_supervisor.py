@@ -62,6 +62,14 @@ class _HermesCustomAliasConfig:
         raise AssertionError(f"unexpected agent_id: {agent_id}")
 
 
+class _HermesAliasOnlyConfig:
+    def agent_binary(self, agent_id: str, *, profile: str | None = None) -> str:
+        assert profile is None
+        if agent_id == "hermes-special":
+            return "/opt/hermes/special-launcher"
+        raise KeyError(agent_id)
+
+
 class _HermesProfileBinaryConfig:
     def __init__(self, profile_binary: str) -> None:
         self._profile_binary = profile_binary
@@ -70,6 +78,13 @@ class _HermesProfileBinaryConfig:
         if agent_id == "hermes" and profile == "m4-pma":
             return self._profile_binary
         if agent_id == "hermes":
+            return "hermes"
+        raise AssertionError(f"unexpected agent_id={agent_id!r} profile={profile!r}")
+
+
+class _HermesInheritedProfileBinaryConfig:
+    def agent_binary(self, agent_id: str, *, profile: str | None = None) -> str:
+        if agent_id == "hermes" and profile in {None, "pma"}:
             return "hermes"
         raise AssertionError(f"unexpected agent_id={agent_id!r} profile={profile!r}")
 
@@ -354,6 +369,63 @@ def test_build_hermes_supervisor_preserves_custom_alias_binary(
     assert supervisor is not None
     assert observed["command"] == [
         "/opt/hermes/special-launcher",
+        "acp",
+    ]
+
+
+def test_build_hermes_supervisor_preserves_alias_binary_without_base_hermes_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+
+    class _FakeHermesSupervisor:
+        def __init__(self, command, **kwargs):  # type: ignore[no-untyped-def]
+            observed["command"] = list(command)
+            observed["kwargs"] = dict(kwargs)
+
+    monkeypatch.setattr(
+        "codex_autorunner.agents.hermes.supervisor.HermesSupervisor",
+        _FakeHermesSupervisor,
+    )
+
+    supervisor = build_hermes_supervisor_from_config(
+        _HermesAliasOnlyConfig(),
+        agent_id="hermes-special",
+    )
+
+    assert supervisor is not None
+    assert observed["command"] == [
+        "/opt/hermes/special-launcher",
+        "acp",
+    ]
+
+
+def test_build_hermes_supervisor_uses_hermes_profile_when_profile_inherits_base_binary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+
+    class _FakeHermesSupervisor:
+        def __init__(self, command, **kwargs):  # type: ignore[no-untyped-def]
+            observed["command"] = list(command)
+            observed["kwargs"] = dict(kwargs)
+
+    monkeypatch.setattr(
+        "codex_autorunner.agents.hermes.supervisor.HermesSupervisor",
+        _FakeHermesSupervisor,
+    )
+
+    supervisor = build_hermes_supervisor_from_config(
+        _HermesInheritedProfileBinaryConfig(),
+        agent_id="hermes",
+        profile="pma",
+    )
+
+    assert supervisor is not None
+    assert observed["command"] == [
+        "hermes",
+        "-p",
+        "pma",
         "acp",
     ]
 
