@@ -9,8 +9,6 @@
     buildTicketWorkerActivity,
     buildTicketUpdateContent,
     buildTicketDetailViewModel,
-    buildTicketRepairChatCreatePayload,
-    buildTicketRepairPrompt,
     mergeTicketRunProgress,
     resolveTicketRouteId,
     ticketDetailFromSummary,
@@ -21,7 +19,7 @@
   import { cachedTickets, rememberTickets } from '$lib/viewModels/ticketCache';
   import { agentCanListModels, agentId } from '$lib/viewModels/modelPickers';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
-  import { buildManagedThreadMessagePayload } from '$lib/viewModels/pmaChat';
+  import { repairTicketFrontmatterWithPma } from '$lib/viewModels/ticketRepair';
 
   const repoId = $derived(page.params.repoId ?? 'unknown-repo');
   const ticketId = $derived(page.params.ticketId ?? 'unknown-ticket');
@@ -210,18 +208,9 @@
   }
 
   async function repairWithPma(ticket: TicketDetailViewModel): Promise<void> {
-    actionStatus = 'Creating PMA repair chat...';
-    const createResult = await pmaApi.pma.createChat(buildTicketRepairChatCreatePayload(ticket));
-    if (!createResult.ok) {
-      actionStatus = createResult.error.message;
-      return;
-    }
-    const sendResult = await pmaApi.pma.sendMessage(createResult.data.id, buildManagedThreadMessagePayload(buildTicketRepairPrompt(ticket), '', false));
-    if (!sendResult.ok) {
-      actionStatus = sendResult.error.message;
-      return;
-    }
-    await goto(href(`/chats?chat=${encodeURIComponent(createResult.data.id)}`));
+    await repairTicketFrontmatterWithPma(ticket, { goto, href }, (message) => {
+      actionStatus = message;
+    });
   }
 </script>
 
