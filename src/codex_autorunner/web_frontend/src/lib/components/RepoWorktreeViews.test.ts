@@ -34,6 +34,12 @@ describe('RepoWorktreeViews', () => {
     expect(body).toContain('href="/repos/repo-1"');
     expect(body).toContain('href="/repos/repo-1/tickets"');
     expect(body).toContain('href="/repos/repo-1/worktrees/worktree-1"');
+    expect(body).toContain('href="/chats?new=repo:repo-1&amp;kind=pma"');
+    expect(body).toContain('href="/chats?new=repo:repo-1&amp;kind=agent"');
+    expect(body).toContain('href="/chats?new=worktree:worktree-1&amp;kind=pma"');
+    expect(body).toContain('href="/chats?new=worktree:worktree-1&amp;kind=agent"');
+    expect(body).toContain('Start PMA chat for codex-autorunner');
+    expect(body).toContain('Start coding agent chat for discord-5');
     expect(body).toContain('1 worktree');
     expect(body).not.toContain('Terminal');
     expect(body).not.toContain('Analytics');
