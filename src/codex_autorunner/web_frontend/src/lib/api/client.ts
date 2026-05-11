@@ -293,6 +293,14 @@ export class PmaApiClient {
         }),
         (payload) => mapPmaChatMessage(asRecord(payload.message ?? payload.turn ?? payload))
       ),
+    forkThread: async (chatId: string, body: unknown): Promise<ApiResult<PmaChatSummary>> =>
+      mapResult(
+        await this.requestJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}/fork`, {
+          method: 'POST',
+          body
+        }),
+        (payload) => mapPmaChatSummary(asRecord(payload.thread ?? payload))
+      ),
     getTimeline: async (chatId: string): Promise<ApiResult<PmaTimelineItem[]>> =>
       mapResult(await this.getJson<JsonRecord>(`/hub/pma/threads/${encodeURIComponent(chatId)}/timeline`), (payload) =>
         asArray(payload.items).map(mapPmaTimelineItem)

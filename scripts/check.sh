@@ -6,7 +6,7 @@
 #   ./scripts/check.sh --full           # force full safety suite (all checks)
 #   ./scripts/check.sh --lane <lane>    # run checks for a specific lane
 #
-# Lanes: core, web-ui, chat-apps, aggregate (= full).
+# Lanes: core, web-ui, web-core-contract, chat-apps, aggregate (= full).
 # When no flag is given, staged files are classified via the shared lane
 # classifier (scripts/select_validation_lane.py).
 
@@ -33,7 +33,7 @@ while [[ $# -gt 0 ]]; do
     --lane)
       LANE="${2:-}"
       if [[ -z "$LANE" ]]; then
-        echo "--lane requires an argument (core|web-ui|chat-apps|aggregate)" >&2
+        echo "--lane requires an argument (core|web-ui|web-core-contract|chat-apps|aggregate)" >&2
         exit 1
       fi
       shift 2
@@ -94,10 +94,10 @@ need_cmd make
 FAST_TEST_MARKERS='not integration and not slow'
 FAST_TEST_ENFORCE_BUDGET="${CODEX_FAST_TEST_ENFORCE_BUDGET:-0}"
 FAST_TEST_WORKERS="${CODEX_FAST_TEST_WORKERS:-4}"
+STAGED_FILES="$(git diff --cached --name-only --diff-filter=ACMRD 2>/dev/null || true)"
 
 # --- Lane detection (if not explicitly set) ----------------------------------
 if [[ -z "$LANE" ]]; then
-  STAGED_FILES="$(git diff --cached --name-only --diff-filter=ACM 2>/dev/null || true)"
   if [[ -n "$STAGED_FILES" ]]; then
     SELECTION_TEXT="$(printf '%s\n' "$STAGED_FILES" | "$PYTHON_BIN" scripts/select_validation_lane.py)"
     LANE="$(
@@ -135,6 +135,11 @@ case "$LANE" in
     RUN_WEB_UI=true
     RUN_CHAT_APPS=false
     ;;
+  web-core-contract)
+    RUN_CORE=true
+    RUN_WEB_UI=true
+    RUN_CHAT_APPS=false
+    ;;
   chat-apps)
     RUN_CORE=true
     RUN_WEB_UI=false
@@ -162,6 +167,11 @@ if [[ "${CODEX_CHECK_REQUIRE_NODE:-0}" != "1" ]] && [[ "$LANE" == "aggregate" ]]
     RUN_WEB_UI=false
     RUN_CHAT_APPS=false
   fi
+fi
+
+if [[ "$RUN_WEB_UI" == true && -n "$STAGED_FILES" ]]; then
+  echo "Checking Web static asset preflight..."
+  printf '%s\n' "$STAGED_FILES" | "$PYTHON_BIN" scripts/check_web_static_preflight.py
 fi
 
 # --- Always-on guardrails (non-negotiable safety checks) ---------------------
@@ -284,7 +294,10 @@ if [[ "$RUN_WEB_UI" == true ]]; then
   need_cmd pnpm
 
   echo "Linting Web Hub frontend..."
-  pnpm web:lint
+  WEB_LINT_OUTPUT="$(mktemp)"
+  pnpm web:lint 2>&1 | tee "$WEB_LINT_OUTPUT"
+  "$PYTHON_BIN" scripts/check_svelte_warning_baseline.py "$WEB_LINT_OUTPUT"
+  rm -f "$WEB_LINT_OUTPUT"
 
   echo "Build Web Hub static assets (pnpm run build)..."
   pnpm run build

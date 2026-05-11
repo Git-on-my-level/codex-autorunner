@@ -24,6 +24,13 @@
     selectReadMarkers,
     syntheticProjectionCursor
   } from '$lib/data';
+  import {
+    executePmaChatCommandPlan,
+    planInterruptExistingChat,
+    planQueueExistingChat,
+    planSendExistingChat,
+    planStartChat
+  } from '$lib/application/pmaChatCommands';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import { openChatSurfaceEventSource, openPmaTailEventSource, type StreamSubscription } from '$lib/api/streaming';
   import {
@@ -42,8 +49,6 @@
     SurfaceArtifact
   } from '$lib/viewModels/domain';
   import {
-    buildManagedThreadCreatePayload,
-    buildExistingPmaChatSendPlan,
     buildPmaChatListEntries,
     buildPmaChatScopeOptions,
     buildManagedThreadMessagePayload,
@@ -1062,8 +1067,9 @@
   async function createChat(): Promise<void> {
     creating = true;
     composeError = null;
-    const result = await pmaApi.pma.createChat(
-      buildManagedThreadCreatePayload(selectedAgent, selectedScope, newChatDisplayName(), selectedModel, selectedProfile)
+    const result = await executePmaChatCommandPlan(
+      pmaApi,
+      planStartChat(selectedScope, selectedAgent, selectedProfile, selectedModel, newChatDisplayName())
     );
     if (result.ok) {
       upsertPmaChats([result.data]);
@@ -1143,31 +1149,32 @@
     }
     const attachmentsForMessage = uploaded;
     const message = composeMessageWithAttachments(draftSnapshot, attachmentsForMessage);
-    const sendPlan = buildExistingPmaChatSendPlan({
-      activeChatId,
-      activeChat,
-      selectedProfile
-    });
-    const targetChatId = sendPlan.targetChatId;
-    if (!targetChatId) {
-      restoreDraft();
-      sending = false;
-      return;
-    }
-    const targetIsRunning = targetChatId === activeChatId && progress?.status === 'running';
-    const resolvedBusyPolicy = busyPolicy ?? (targetIsRunning ? 'queue' : null);
-    const result = await pmaApi.pma.sendMessage(
-      targetChatId,
-      buildManagedThreadMessagePayload(
-        message,
-        selectedModel,
-        targetIsRunning,
-        attachmentsForMessage,
-        selectedReasoning,
-        sendPlan.profile,
-        resolvedBusyPolicy
-      )
-    );
+    const targetChatId = activeChatId;
+    const targetIsRunning = progress?.status === 'running';
+    const profileForSend =
+      activeChat?.agentProfile?.trim() || selectedProfile?.trim() || '';
+    const commandPlan =
+      busyPolicy === 'interrupt'
+        ? planInterruptExistingChat(targetChatId, message, {
+            model: selectedModel,
+            attachments: attachmentsForMessage,
+            reasoning: selectedReasoning,
+            profile: profileForSend
+          })
+        : busyPolicy === 'queue' || targetIsRunning
+          ? planQueueExistingChat(targetChatId, message, {
+              model: selectedModel,
+              attachments: attachmentsForMessage,
+              reasoning: selectedReasoning,
+              profile: profileForSend
+            })
+          : planSendExistingChat(targetChatId, message, {
+              model: selectedModel,
+              attachments: attachmentsForMessage,
+              reasoning: selectedReasoning,
+              profile: profileForSend
+            });
+    const result = await executePmaChatCommandPlan(pmaApi, commandPlan);
     if (result.ok) {
       const optimisticFromBackend = optimisticUserTimelineItemFromSend(
         result.data.raw,
@@ -1189,8 +1196,8 @@
       }
       await refreshActive(targetChatId, { quiet: true });
       removeOptimistic();
-      if (activeChat?.agentId === 'hermes' && sendPlan.profile.trim()) {
-        const stamped = sendPlan.profile.trim();
+      if (activeChat?.agentId === 'hermes' && profileForSend.trim()) {
+        const stamped = profileForSend.trim();
         const chat = chats.find((row) => row.id === targetChatId);
         if (chat) upsertPmaChats([{ ...chat, agentProfile: stamped }]);
       }
@@ -1234,17 +1241,16 @@
       chatId,
       queuedTurns.filter((item) => item.managedTurnId !== turn.managedTurnId)
     );
-    const result = await pmaApi.pma.sendMessage(
-      chatId,
-      buildManagedThreadMessagePayload(
-        turn.prompt,
-        turn.model ?? selectedModel,
-        true,
-        turn.attachments as DocumentFileIntentPayload[],
-        turn.reasoning ?? selectedReasoning,
-        selectedProfile,
-        'interrupt'
-      )
+    const profileForSend =
+      activeChat?.agentProfile?.trim() || selectedProfile?.trim() || '';
+    const result = await executePmaChatCommandPlan(
+      pmaApi,
+      planInterruptExistingChat(chatId, turn.prompt, {
+        model: turn.model ?? selectedModel,
+        attachments: turn.attachments as DocumentFileIntentPayload[],
+        reasoning: turn.reasoning ?? selectedReasoning,
+        profile: profileForSend
+      })
     );
     if (result.ok) {
       const optimisticFromBackend = optimisticUserTimelineItemFromSend(

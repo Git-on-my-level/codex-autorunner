@@ -1,0 +1,1 @@
+import"../chunks/ozYPIdMu.js";import{p as e,a as r,g as s,u as t}from"../chunks/D3KSs0za.js";import{p as c}from"../chunks/BP3oijmG.js";import{S as m}from"../chunks/PGBPF0PQ.js";function u(o,p){e(p,!0);const a=t(()=>c.params.workspaceId??"local");m(o,{get workspaceId(){return s(a)}}),r()}export{u as component};

@@ -9,7 +9,7 @@ Notes for running codex-autorunner inside containerized or cloud-provisioned VMs
 |---------|-----------|-------|
 | Web Hub (dev: FastAPI reload + Vite HMR) | `make serve` — hub on **4173**, Web UI on **5173** (`WEB_DEV_PORT`) | Open the printed **Vite** URL; `CAR_DEV_INCLUDE_ROOT_REPO=1` is set by the script |
 | Python tests | `make test` or `.venv/bin/python -m pytest -m "not integration"` | Serial by default; use `-n auto` for xdist parallelism |
-| Lane-aware checks | `./scripts/check.sh` (auto-detect) or `./scripts/check.sh --lane <lane>` | Lanes: `core`, `web-ui`, `chat-apps`, `aggregate` (full) |
+| Lane-aware checks | `./scripts/check.sh` (auto-detect) or `./scripts/check.sh --lane <lane>` | Lanes: `core`, `web-ui`, `web-core-contract`, `chat-apps`, `aggregate` (full) |
 | Full validation | `./scripts/check.sh --full` or `make check-full` | Runs all lanes plus extended checks |
 | Linting | `black --check src tests`, `ruff check src tests`, `make typecheck-strict` | Individual linters for targeted runs |
 | Web Hub build | `pnpm run build` or `make build` | Builds the default Svelte UI in `src/codex_autorunner/web_frontend/` → `src/codex_autorunner/web_static/`; always rebuild after Web UI changes |
@@ -22,7 +22,7 @@ Notes for running codex-autorunner inside containerized or cloud-provisioned VMs
 - **Process termination tests**: A few tests in `tests/test_opencode_supervisor_process_management.py` and `tests/test_process_termination.py` may fail in containerized environments due to PID namespace / signal handling constraints. These are environment-specific, not code bugs.
 - **Text delta coalescer**: `tests/unit/test_text_delta_coalescer.py::test_multibyte_unicode_newline` may occasionally error in containerized VMs. This is environment-specific.
 - **Test suite is large**: ~6300+ tests. Run via `make test` (serial, `-m "not integration"`) or in parallel with `-n auto` (used by `scripts/check.sh`).
-- **Lane-based validation**: `scripts/check.sh` auto-detects the appropriate lane from staged files. Backend-only changes run the `core` lane (no frontend build); UI changes run `web-ui`; chat integration changes run `chat-apps`. Multi-lane or shared-risk diffs fall back to `aggregate` (full checks). Force full checks with `--full`.
+- **Lane-based validation**: `scripts/check.sh` auto-detects the appropriate lane from staged files. Backend-only changes run the `core` lane (no frontend build); UI changes run `web-ui`; scoped core + Web surface contract changes run `web-core-contract`; chat integration changes run `chat-apps`. Broad multi-lane or shared-risk diffs fall back to `aggregate` (full checks). Force full checks with `--full`.
 - **Tests are hermetic**: Tests use isolated temp directories (via fixtures and `tmp_path`). A guard script (`scripts/check_test_tmp_usage.py`) runs as part of the standard check flow and blocks new non-hermetic `/tmp` writable patterns in tests. Known read-only exceptions are allowlisted in `scripts/test_tmp_usage_allowlist.json`.
 - **No external services required**: SQLite is embedded (stdlib); no Postgres/Redis/Docker needed for core dev workflows.
 - **Pre-commit subset**: The pre-commit hook (`scripts/check.sh`) runs `pytest -m "not integration and not slow"` with lane-aware scoping. Use the same marker set when iterating locally to match pre-commit behavior.

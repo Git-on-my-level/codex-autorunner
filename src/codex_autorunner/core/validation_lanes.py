@@ -5,7 +5,9 @@ from fnmatch import fnmatch
 from pathlib import PurePosixPath
 from typing import Iterable, Literal, Sequence
 
-ValidationLane = Literal["core", "web-ui", "chat-apps", "aggregate"]
+ValidationLane = Literal[
+    "core", "web-ui", "web-core-contract", "chat-apps", "aggregate"
+]
 ScopedValidationLane = Literal["core", "web-ui", "chat-apps"]
 
 _SCOPED_LANES: tuple[ScopedValidationLane, ...] = ("core", "web-ui", "chat-apps")
@@ -152,6 +154,9 @@ def classify_changed_files(paths: Iterable[str]) -> ValidationLaneSelection:
     elif unknown_paths:
         selected_lane = "aggregate"
         reason = "unknown-path"
+    elif lanes_touched == ("core", "web-ui"):
+        selected_lane = "web-core-contract"
+        reason = "web-core-contract-diff"
     elif len(lanes_touched) > 1:
         selected_lane = "aggregate"
         reason = "multi-lane-diff"
