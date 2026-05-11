@@ -186,6 +186,45 @@ def test_chat_detail_snapshot_contains_timeline_queue_and_cursor(hub_env) -> Non
     assert older.json()["contract_version"] == "chat_timeline_page.v1"
 
 
+def test_older_timeline_page_reaches_past_detail_snapshot_cap(hub_env) -> None:
+    store = ManagedThreadStore(hub_env.hub_root, durable=True)
+    thread = store.create_thread(
+        "codex",
+        hub_env.repo_root,
+        repo_id="repo",
+        resource_kind="repo",
+        resource_id="repo",
+        name="Long detail thread",
+    )
+    thread_id = str(thread["managed_thread_id"])
+    for index in range(250):
+        store.create_turn(
+            thread_id,
+            prompt=f"turn {index:03d}",
+            busy_policy="queue" if index > 0 else "reject",
+            force_queue=index > 0,
+        )
+
+    client = TestClient(create_hub_app(hub_env.hub_root))
+    detail = client.get(
+        f"/hub/chat/threads/{thread_id}/detail",
+        params={"timeline_limit": 200},
+    ).json()
+    assert detail["timeline"]["window"]["has_older"] is True
+    oldest_visible = detail["timeline"]["window"]["oldest_order_key"]
+
+    older = client.get(
+        f"/hub/chat/threads/{thread_id}/timeline/older",
+        params={"before_order_key": oldest_visible, "limit": 25},
+    )
+
+    assert older.status_code == 200
+    payload = older.json()
+    assert payload["window"]["returned"] == 25
+    assert payload["window"]["has_older"] is True
+    assert payload["items"][-1]["order_key"] < oldest_visible
+
+
 def test_chat_patch_stream_replays_cursor_ordered_patches(hub_env) -> None:
     journal = SQLiteChatSurfaceEventJournal(hub_env.hub_root, durable=True)
     first = journal.append_event(

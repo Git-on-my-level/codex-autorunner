@@ -23,6 +23,7 @@ DEFAULT_CHAT_INDEX_LIMIT = 50
 MAX_CHAT_INDEX_LIMIT = 200
 DEFAULT_CHAT_TIMELINE_LIMIT = 50
 MAX_CHAT_TIMELINE_LIMIT = 200
+MAX_CHAT_TIMELINE_PAGE_SOURCE_LIMIT = 1000
 
 _TERMINAL_SUCCESS_STATUSES = {"completed", "succeeded", "success", "delivered"}
 _TERMINAL_FAILED_STATUSES = {"failed", "error", "cancelled", "canceled", "timeout"}
@@ -423,11 +424,27 @@ class ChatSurfaceReadService:
         before_order_key: Optional[str],
         limit: int = DEFAULT_CHAT_TIMELINE_LIMIT,
     ) -> dict[str, Any]:
-        detail = self.chat_detail_snapshot(
-            managed_thread_id,
-            timeline_limit=MAX_CHAT_TIMELINE_LIMIT,
+        normalized_thread_id = _normalize_text(managed_thread_id)
+        if normalized_thread_id is None:
+            raise ValueError("managed_thread_id is required")
+
+        from ..managed_thread_store import ManagedThreadStore
+        from .managed_thread_timeline import build_managed_thread_timeline
+
+        thread_store = ManagedThreadStore.connect_readonly(
+            self._hub_root,
+            durable=self._durable,
         )
-        all_items = list(detail["timeline"]["items"])
+        if thread_store.get_thread(normalized_thread_id) is None:
+            raise KeyError(normalized_thread_id)
+
+        timeline = build_managed_thread_timeline(
+            self._hub_root,
+            thread_store=thread_store,
+            managed_thread_id=normalized_thread_id,
+            limit=MAX_CHAT_TIMELINE_PAGE_SOURCE_LIMIT,
+        )
+        all_items = list(timeline.get("items") or [])
         if before_order_key is not None:
             all_items = [
                 item
@@ -438,8 +455,8 @@ class ChatSurfaceReadService:
         page = all_items[-bounded_limit:]
         return {
             "contract_version": "chat_timeline_page.v1",
-            "managed_thread_id": detail["thread"]["managed_thread_id"],
-            "cursor": detail["cursor"],
+            "managed_thread_id": normalized_thread_id,
+            "cursor": self.latest_cursor(),
             "items": page,
             "window": {
                 "before_order_key": before_order_key,
