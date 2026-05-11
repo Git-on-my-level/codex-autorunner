@@ -3,6 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Optional, cast
 
+from ...core.chat_bindings import (
+    emit_adapter_archive_chat_surface_event,
+    emit_adapter_binding_chat_surface_event,
+)
 from ..chat.pma_context_selection import (
     PmaContextSelection,
     PmaContextSelectionError,
@@ -147,6 +151,12 @@ async def _rollback_pma_on_attempt(
         )
     else:
         await service._store.delete_binding(channel_id=channel_id)
+        emit_adapter_archive_chat_surface_event(
+            hub_root=Path(service._config.root),
+            surface_kind="discord",
+            surface_key=channel_id,
+            source_kind="discord.adapter.binding",
+        )
 
 
 async def handle_pma_on_switch(
@@ -250,6 +260,23 @@ async def handle_pma_on_switch(
         resource_kind=pma_context.resource_kind,
         resource_id=pma_context.resource_id,
     )
+    emit_adapter_binding_chat_surface_event(
+        hub_root=Path(service._config.root),
+        surface_kind="discord",
+        surface_key=channel_id,
+        workspace_root=str(pma_context.workspace_root),
+        repo_id=pma_context.repo_id,
+        resource_kind=pma_context.resource_kind,
+        resource_id=pma_context.resource_id,
+        previous_workspace_root=prev_workspace,
+        previous_repo_id=prev_repo_id,
+        previous_resource_kind=prev_resource_kind,
+        previous_resource_id=prev_resource_id,
+        external_conversation_id=(
+            f"guild:{guild_id}:channel:{channel_id}" if guild_id else channel_id
+        ),
+        source_kind="discord.adapter.binding",
+    )
     prefix_lines = (
         (f"PMA mode enabled ({pma_context.scope_label}). Previous binding saved.",)
         if prev_workspace
@@ -290,6 +317,25 @@ async def _restore_previous_binding(
         resource_kind=prev_resource_kind,
         resource_id=prev_resource_id,
     )
+    emit_adapter_binding_chat_surface_event(
+        hub_root=Path(service._config.root),
+        surface_kind="discord",
+        surface_key=channel_id,
+        workspace_root=prev_workspace,
+        repo_id=prev_repo_id,
+        resource_kind=prev_resource_kind,
+        resource_id=prev_resource_id,
+        previous_workspace_root=binding.get("workspace_path"),
+        previous_repo_id=binding.get("repo_id"),
+        previous_resource_kind=binding.get("resource_kind"),
+        previous_resource_id=binding.get("resource_id"),
+        external_conversation_id=(
+            f"guild:{binding.get('guild_id')}:channel:{channel_id}"
+            if binding.get("guild_id")
+            else channel_id
+        ),
+        source_kind="discord.adapter.binding",
+    )
     restored = await service._store.get_binding(channel_id=channel_id)
     if restored is None:
         return None
@@ -297,6 +343,21 @@ async def _restore_previous_binding(
     if workspace_root.exists() and workspace_root.is_dir():
         return cast(dict[str, Any], restored)
     await service._store.delete_binding(channel_id=channel_id)
+    emit_adapter_archive_chat_surface_event(
+        hub_root=Path(service._config.root),
+        surface_kind="discord",
+        surface_key=channel_id,
+        workspace_root=restored.get("workspace_path"),
+        repo_id=restored.get("repo_id"),
+        resource_kind=restored.get("resource_kind"),
+        resource_id=restored.get("resource_id"),
+        external_conversation_id=(
+            f"guild:{restored.get('guild_id')}:channel:{channel_id}"
+            if restored.get("guild_id")
+            else channel_id
+        ),
+        source_kind="discord.adapter.binding",
+    )
     return None
 
 
@@ -326,6 +387,21 @@ async def handle_pma_off_switch(
     )
     if prev_workspace is None:
         await service._store.delete_binding(channel_id=channel_id)
+        emit_adapter_archive_chat_surface_event(
+            hub_root=Path(service._config.root),
+            surface_kind="discord",
+            surface_key=channel_id,
+            workspace_root=binding.get("workspace_path"),
+            repo_id=binding.get("repo_id"),
+            resource_kind=binding.get("resource_kind"),
+            resource_id=binding.get("resource_id"),
+            external_conversation_id=(
+                f"guild:{binding.get('guild_id')}:channel:{channel_id}"
+                if binding.get("guild_id")
+                else channel_id
+            ),
+            source_kind="discord.adapter.binding",
+        )
         await _clear_seed_and_respond(
             service,
             interaction_id,

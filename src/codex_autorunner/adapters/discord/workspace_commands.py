@@ -15,6 +15,7 @@ from ...adapters.chat.picker_filter import filter_picker_items, resolve_picker_q
 from ...adapters.chat.status_diagnostics import (
     build_process_monitor_lines_for_root,
 )
+from ...core.chat_bindings import emit_adapter_binding_chat_surface_event
 from ...core.flows import FlowRunStatus
 from ...core.logging_utils import log_event
 from ...core.utils import canonicalize_path
@@ -504,6 +505,7 @@ async def _bind_to_workspace_candidate(
         )
         return
 
+    previous_binding = await service._store.get_binding(channel_id=channel_id)
     await service._store.upsert_binding(
         channel_id=channel_id,
         guild_id=guild_id,
@@ -511,6 +513,29 @@ async def _bind_to_workspace_candidate(
         repo_id=(selected_resource_id if selected_resource_kind == "repo" else None),
         resource_kind=selected_resource_kind,
         resource_id=selected_resource_id,
+    )
+    emit_adapter_binding_chat_surface_event(
+        hub_root=Path(service._config.root),
+        surface_kind="discord",
+        surface_key=channel_id,
+        workspace_root=str(workspace),
+        repo_id=(selected_resource_id if selected_resource_kind == "repo" else None),
+        resource_kind=selected_resource_kind,
+        resource_id=selected_resource_id,
+        previous_workspace_root=(
+            previous_binding.get("workspace_path") if previous_binding else None
+        ),
+        previous_repo_id=previous_binding.get("repo_id") if previous_binding else None,
+        previous_resource_kind=(
+            previous_binding.get("resource_kind") if previous_binding else None
+        ),
+        previous_resource_id=(
+            previous_binding.get("resource_id") if previous_binding else None
+        ),
+        external_conversation_id=(
+            f"guild:{guild_id}:channel:{channel_id}" if guild_id else channel_id
+        ),
+        source_kind="discord.adapter.binding",
     )
     await service._store.clear_pending_compact_seed(channel_id=channel_id)
 

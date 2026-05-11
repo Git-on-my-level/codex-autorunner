@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Optional
 
+from .....core.chat_bindings import emit_adapter_binding_chat_surface_event
 from .....manifest import load_manifest
 from ...adapter import TelegramCallbackQuery, TelegramMessage
 from ...constants import BIND_PICKER_PROMPT
 from ...helpers import _split_topic_key
+from ...state import topic_key
 from ...types import SelectionState
 
 if TYPE_CHECKING:
@@ -13,6 +15,44 @@ if TYPE_CHECKING:
 
 
 class WorkspaceBindingMixin:
+    def _emit_telegram_topic_binding_event(
+        self,
+        *,
+        surface_key: str,
+        workspace_path: str,
+        repo_id: Optional[str],
+        resource_kind: Optional[str],
+        resource_id: Optional[str],
+        previous: Optional[TelegramTopicRecord],
+    ) -> None:
+        hub_root = getattr(self, "_hub_root", None)
+        if hub_root is None:
+            return
+        emit_adapter_binding_chat_surface_event(
+            hub_root=hub_root,
+            surface_kind="telegram",
+            surface_key=surface_key,
+            workspace_root=workspace_path,
+            repo_id=repo_id,
+            resource_kind=resource_kind,
+            resource_id=resource_id,
+            previous_workspace_root=(
+                getattr(previous, "workspace_path", None) if previous else None
+            ),
+            previous_repo_id=getattr(previous, "repo_id", None) if previous else None,
+            previous_resource_kind=(
+                getattr(previous, "resource_kind", None) if previous else None
+            ),
+            previous_resource_id=(
+                getattr(previous, "resource_id", None) if previous else None
+            ),
+            managed_thread_id=(
+                getattr(previous, "active_thread_id", None) if previous else None
+            ),
+            external_conversation_id=surface_key,
+            source_kind="telegram.adapter.binding",
+        )
+
     async def _handle_repos(
         self, message: TelegramMessage, _args: str, _runtime: Any
     ) -> None:
@@ -100,6 +140,7 @@ class WorkspaceBindingMixin:
             return
         workspace_path, resolved_repo_id, resource_kind, resource_id = resolved
         chat_id, thread_id = _split_topic_key(key)
+        previous = await self._router.get_topic(key)
         scope = self._topic_scope_id(resolved_repo_id, workspace_path)
         await self._router.set_topic_scope(chat_id, thread_id, scope)
         resolved_workspace_id = self._workspace_id_for_path(workspace_path)
@@ -112,6 +153,15 @@ class WorkspaceBindingMixin:
             resource_id=resource_id,
             workspace_id=resolved_workspace_id,
             scope=scope,
+        )
+        scoped_surface_key = topic_key(chat_id, thread_id, scope=scope)
+        self._emit_telegram_topic_binding_event(
+            surface_key=scoped_surface_key,
+            workspace_path=workspace_path,
+            repo_id=resolved_repo_id,
+            resource_kind=resource_kind,
+            resource_id=resource_id,
+            previous=previous,
         )
 
         def apply_bind_updates(record: TelegramTopicRecord) -> None:
@@ -156,6 +206,7 @@ class WorkspaceBindingMixin:
             )
             return
         workspace_path, repo_id, resource_kind, resource_id = resolved
+        previous = await self._router.get_topic(key)
         scope = self._topic_scope_id(repo_id, workspace_path)
         await self._router.set_topic_scope(message.chat_id, message.thread_id, scope)
         resolved_workspace_id = self._workspace_id_for_path(workspace_path)
@@ -168,6 +219,15 @@ class WorkspaceBindingMixin:
             resource_id=resource_id,
             workspace_id=resolved_workspace_id,
             scope=scope,
+        )
+        scoped_surface_key = topic_key(message.chat_id, message.thread_id, scope=scope)
+        self._emit_telegram_topic_binding_event(
+            surface_key=scoped_surface_key,
+            workspace_path=workspace_path,
+            repo_id=repo_id,
+            resource_kind=resource_kind,
+            resource_id=resource_id,
+            previous=previous,
         )
 
         def apply_bind_updates(record: TelegramTopicRecord) -> None:

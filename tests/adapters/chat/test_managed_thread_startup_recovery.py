@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -19,6 +20,53 @@ from codex_autorunner.adapters.chat.managed_thread_turns import (
     build_managed_thread_delivery_intent,
 )
 from codex_autorunner.core.orchestration import SQLiteManagedThreadDeliveryEngine
+
+
+@pytest.mark.anyio
+async def test_startup_recovery_backfills_adapter_chat_surface_events(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls: list[tuple[Path, dict[str, object]]] = []
+
+    def _backfill(*, hub_root: Path, raw_config: dict[str, object]):
+        calls.append((hub_root, raw_config))
+        return {"discord": 1, "telegram": 2}
+
+    class FakeThreadStore:
+        def list_thread_ids_with_running_executions(self, limit=None):
+            _ = limit
+            return []
+
+    class FakeOrchestrationService:
+        thread_store = FakeThreadStore()
+
+    monkeypatch.setattr(
+        recovery_module,
+        "backfill_adapter_chat_surface_events",
+        _backfill,
+    )
+    service = SimpleNamespace(
+        _logger=logging.getLogger("test.startup_recovery.backfill"),
+        _config=SimpleNamespace(
+            root=tmp_path / "hub",
+            raw={"discord_bot": {"enabled": True}},
+        ),
+    )
+
+    await recovery_module.recover_managed_thread_executions_on_startup(
+        service,
+        surface_kind="discord",
+        build_orchestration_service=lambda _service: FakeOrchestrationService(),
+        build_durable_delivery=lambda *_args: None,
+        public_execution_error="Discord PMA turn failed",
+        failure_event_name="discord.turn.startup_execution_recovery_failed",
+        finished_event_name="discord.turn.startup_execution_recovery_finished",
+    )
+
+    assert calls == [
+        (tmp_path / "hub", {"discord_bot": {"enabled": True}}),
+    ]
 
 
 @pytest.mark.anyio
