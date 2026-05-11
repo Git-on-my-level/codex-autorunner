@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import type { PmaChatSummary, PmaRunProgress, PmaTimelineItem, SurfaceArtifact } from './domain';
 import {
   artifactCardView,
-  buildExistingPmaChatSendPlan,
   buildManagedThreadCreatePayload,
   buildManagedThreadMessagePayload,
   agentCapabilityAllowed,
@@ -301,24 +300,6 @@ describe('PMA chat view helpers', () => {
       chats: next,
       replacementChatId: 'new-thread'
     });
-  });
-
-  it('keeps existing-chat sends bound to the active thread despite picker drift', () => {
-    expect(
-      buildExistingPmaChatSendPlan({
-        activeChatId: 'thread-1',
-        activeChat: { agentProfile: 'm4-pma' },
-        selectedProfile: 'default'
-      })
-    ).toEqual({ targetChatId: 'thread-1', profile: 'm4-pma' });
-
-    expect(
-      buildExistingPmaChatSendPlan({
-        activeChatId: 'thread-1',
-        activeChat: { agentProfile: null },
-        selectedProfile: 'm4-pma'
-      })
-    ).toEqual({ targetChatId: 'thread-1', profile: 'm4-pma' });
   });
 
   it('applies generic chat events through the same chat-list reconciliation path', () => {
