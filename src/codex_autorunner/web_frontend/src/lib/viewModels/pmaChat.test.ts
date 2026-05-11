@@ -733,6 +733,63 @@ describe('PMA chat view helpers', () => {
     ]);
   });
 
+  it('does not merge live progress notices across tool activity', () => {
+    const cards = buildPmaActivityCards(
+      [
+        {
+          ...baseArtifact,
+          id: 'prog-1',
+          kind: 'progress',
+          createdAt: '2026-05-08T12:00:01Z',
+          raw: {
+            progress_item: {
+              kind: 'notice',
+              title: 'Progress',
+              summary: 'Starting',
+              event_ids: [1]
+            }
+          }
+        },
+        {
+          ...baseArtifact,
+          id: 'tool-2',
+          kind: 'progress',
+          createdAt: '2026-05-08T12:00:02Z',
+          raw: {
+            progress_item: {
+              kind: 'tool',
+              state: 'completed',
+              title: 'rg',
+              summary: 'rg TODO',
+              event_ids: [2]
+            }
+          }
+        },
+        {
+          ...baseArtifact,
+          id: 'prog-3',
+          kind: 'progress',
+          createdAt: '2026-05-08T12:00:03Z',
+          raw: {
+            progress_item: {
+              kind: 'notice',
+              title: 'Progress',
+              summary: 'Continuing',
+              event_ids: [3]
+            }
+          }
+        }
+      ],
+      { fallbackTurnId: 'one' }
+    );
+
+    expect(cards).toMatchObject([
+      { kind: 'intermediate', title: 'Progress', text: 'Starting', turnId: 'one' },
+      { kind: 'tool_group', tools: [{ title: 'rg' }], turnId: 'one' },
+      { kind: 'intermediate', title: 'Progress', text: 'Continuing', turnId: 'one' }
+    ]);
+  });
+
   it('anchors live progress after the user row when SSE timestamps precede the persisted prompt', () => {
     const canonical = buildPmaCards(
       [

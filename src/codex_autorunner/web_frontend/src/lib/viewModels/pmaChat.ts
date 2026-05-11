@@ -790,8 +790,10 @@ function findMergeableIntermediate(
 ): Extract<PmaCard, { kind: 'intermediate' }> | null {
   for (let index = cards.length - 1; index >= 0; index -= 1) {
     const card = cards[index];
-    if (card.kind !== 'intermediate') continue;
+    if (card.kind !== 'intermediate') return null;
     if (shouldMergeIntermediate(card, event, fallbackTurnId)) return card;
+    if (isCommentaryTraceCard(card)) continue;
+    return null;
   }
   return null;
 }
