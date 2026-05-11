@@ -26,6 +26,7 @@ PMA_MANUAL_SCREENSHOT_ROUTES = (
     "/repos/smoke-repo/worktrees/smoke-repo--review",
     "/repos/smoke-repo/worktrees/smoke-repo--review/contextspace",
     "/repos/smoke-repo/worktrees/smoke-repo--review/tickets",
+    "/contextspace/local",
     "/tickets",
     "/tickets/TICKET-350-smoke-fixture",
     "/settings",
@@ -107,7 +108,6 @@ def test_removed_legacy_frontend_routes_redirect_permanently(tmp_path):
 
     worktrees = client.get("/worktrees")
     worktree = client.get("/worktrees/base--ticket-290/tickets/TICKET-100")
-    contextspace = client.get("/contextspace/base--ticket-290")
 
     assert worktrees.status_code == 308
     assert worktrees.headers["location"] == "/repos"
@@ -116,8 +116,6 @@ def test_removed_legacy_frontend_routes_redirect_permanently(tmp_path):
         worktree.headers["location"]
         == "/repos/base/worktrees/base--ticket-290/tickets/TICKET-100"
     )
-    assert contextspace.status_code == 308
-    assert contextspace.headers["location"] == "/repos/base--ticket-290/contextspace"
 
 
 def test_scope_frontend_routes_cover_hub_repo_and_parent_scoped_worktree(tmp_path):

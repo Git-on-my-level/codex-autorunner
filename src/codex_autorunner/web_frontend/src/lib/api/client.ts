@@ -802,14 +802,14 @@ function isWorktreeItem(item: JsonRecord): boolean {
 
 function contextspaceApiPath(workspaceId?: string): string {
   const id = workspaceId?.trim();
-  if (!id) return '/repos/__missing_workspace__/api/contextspace';
+  if (!id || id === 'local') return '/api/contextspace';
   return `/repos/${encodeURIComponent(id)}/api/contextspace`;
 }
 
 function contextspaceUpdateApiPath(workspaceId: string | undefined, kind: string): string {
   const encodedKind = encodeURIComponent(kind);
   const id = workspaceId?.trim();
-  if (!id) return `/api/contextspace/${encodedKind}`;
+  if (!id || id === 'local') return `/api/contextspace/${encodedKind}`;
   return `/repos/${encodeURIComponent(id)}/api/contextspace/${encodedKind}`;
 }
 

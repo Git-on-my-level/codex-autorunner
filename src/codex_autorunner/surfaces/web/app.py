@@ -967,8 +967,8 @@ def create_hub_app(
         return _legacy_spa_redirect(f"/repos/{parent_repo_id}/worktrees/{worktree_id}")
 
     @app.get("/contextspace/{workspace_id}", include_in_schema=False)
-    def legacy_contextspace_redirect(workspace_id: str):
-        return _legacy_spa_redirect(f"/repos/{workspace_id}/contextspace")
+    def pma_contextspace_shell(workspace_id: str):
+        return _web_index_response()
 
     @app.get("/repos/{repo_id}/terminal", include_in_schema=False)
     @app.get("/repos/{repo_id}/terminal/{rest:path}", include_in_schema=False)
