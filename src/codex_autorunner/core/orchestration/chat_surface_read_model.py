@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional
 
 from ..domain.refs import SurfaceRef
-from ..text_utils import _normalize_optional_text
+from ..text_utils import _normalize_optional_text, _parse_iso_timestamp
 from .chat_surface_events import ChatSurfaceEvent, SQLiteChatSurfaceEventJournal
 from .sqlite import open_orchestration_sqlite
 
@@ -1074,7 +1074,7 @@ def _filter_chat_index_rows(
     return filtered
 
 
-def _chat_index_sort_key(row: Mapping[str, Any]) -> tuple[int, str, str]:
+def _chat_index_sort_key(row: Mapping[str, Any]) -> tuple[int, float, str]:
     lifecycle = str(row.get("lifecycle") or "")
     priority = 0
     if int(row.get("queue_depth") or 0) > 0:
@@ -1083,9 +1083,12 @@ def _chat_index_sort_key(row: Mapping[str, Any]) -> tuple[int, str, str]:
         priority = 2
     elif row.get("unread"):
         priority = 1
+    raw = str(row.get("updated_at") or row.get("created_at") or "")
+    parsed = _parse_iso_timestamp(raw)
+    updated_key = float("inf") if parsed is None else -parsed.timestamp()
     return (
         -priority,
-        str(row.get("updated_at") or row.get("created_at") or ""),
+        updated_key,
         str(row.get("row_id") or ""),
     )
 
