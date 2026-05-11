@@ -3,7 +3,7 @@
   import { page } from '$app/state';
   import { onDestroy, onMount } from 'svelte';
   import TicketViews from '$lib/components/TicketViews.svelte';
-  import { dataOr, partialPageIssue, pmaApi, type ApiError, type JsonRecord, type PartialPageIssue } from '$lib/api/client';
+  import { partialPageIssue, pmaApi, type ApiError, type JsonRecord, type PartialPageIssue } from '$lib/api/client';
   import { openFlowRunEventSource, type StreamSubscription } from '$lib/api/streaming';
   import { stripRuntimeBasePath, withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import {
@@ -19,7 +19,17 @@
     type TicketEditPayload
   } from '$lib/viewModels/ticket';
   import { legacyWorktreeRedirectPath } from '$lib/viewModels/routes';
-  import type { PmaChatSummary, PmaRunProgress, SurfaceArtifact, TicketDetail, TicketSummary } from '$lib/viewModels/domain';
+  import {
+    mapPmaChatSummary,
+    mapPmaRunProgress,
+    mapTicketDetail,
+    mapTicketSummary,
+    type PmaChatSummary,
+    type PmaRunProgress,
+    type SurfaceArtifact,
+    type TicketDetail,
+    type TicketSummary
+  } from '$lib/viewModels/domain';
   import { cachedTickets, rememberTickets } from '$lib/viewModels/ticketCache';
   import { agentCanListModels, agentId } from '$lib/viewModels/modelPickers';
   import { buildManagedThreadMessagePayload } from '$lib/viewModels/pmaChat';
@@ -92,40 +102,31 @@
     sectionIssues = [];
     const cachedList = cachedTickets({ worktree: ownerId });
     if (showLoading && cachedList) renderCachedTicket(cachedList, ownerId, routeTicketId);
-    const [tickets, worktrees] = await Promise.all([pmaApi.ticketFlow.listTickets({ worktree: ownerId }), pmaApi.hub.listWorktrees()]);
+    const snapshot = await pmaApi.readModels.ticketDetail(routeTicketId, { kind: 'worktree', id: ownerId });
     if (!isCurrentRequest()) return;
-    if (!worktrees.ok) {
-      error = worktrees.error;
+    if (!snapshot.ok) {
+      error = snapshot.error;
       loading = false;
       return;
     }
-    const matchedWorktree = worktrees.data.find((worktree) => worktree.id === ownerId);
-    const redirectTo = legacyWorktreeRedirectPath(stripRuntimeBasePath(page.url.pathname), ownerId, matchedWorktree?.repoId ?? null);
+    const legacyTicket = (snapshot.data.legacyTicket ?? {}) as JsonRecord;
+    const parentRepoId = typeof legacyTicket.base_repo_id === 'string' ? legacyTicket.base_repo_id : null;
+    const redirectTo = legacyWorktreeRedirectPath(stripRuntimeBasePath(page.url.pathname), ownerId, parentRepoId);
     if (redirectTo) {
       await goto(href(redirectTo), { replaceState: true });
       return;
     }
-    const ticketList = dataOr(tickets, []);
-    if (tickets.ok) rememberTickets({ worktree: ownerId }, ticketList);
-    const selected = tickets.ok ? resolveTicketRouteId(ticketList, routeTicketId) : null;
-    if (!selected) {
-      error = tickets.ok
-        ? { kind: 'http', status: 404, code: 'ticket_not_found', message: `Ticket ${routeTicketId} was not found in worktree ${ownerId}.` }
-        : tickets.error;
-      loading = false;
-      return;
-    }
-    const ticketDetail = ticketDetailFromSummary(selected);
+    const ticketList = (snapshot.data.scopedTickets ?? []).map(mapTicketSummary);
+    rememberTickets({ worktree: ownerId }, ticketList);
+    const ticketDetail = mapTicketDetail(legacyTicket);
     detail = buildTicketDetailViewModel(ticketDetail, { tickets: ticketList, runs: [], chats: [], artifacts: [] });
     sectionIssues = [];
     loading = false;
-    const [runs, chats] = await Promise.all([pmaApi.ticketFlow.listRuns({ worktree: ownerId }), pmaApi.pma.listChats()]);
-    const baseIssues = [
-      !runs.ok ? partialPageIssue('timeline', 'Run state unavailable', runs.error) : null,
-      !chats.ok ? partialPageIssue('linked_chat', 'Chats unavailable', chats.error) : null
-    ].filter((issue): issue is PartialPageIssue => Boolean(issue));
+    const runs = (snapshot.data.scopedRuns ?? []).map(mapPmaRunProgress);
+    const chats = (snapshot.data.scopedChats ?? []).map(mapPmaChatSummary);
+    const baseIssues: PartialPageIssue[] = [];
     if (!isCurrentRequest()) return;
-    await renderTicketDetail(ticketDetail, ticketList, dataOr(runs, []), dataOr(chats, []), baseIssues, ownerId, isCurrentRequest);
+    await renderTicketDetail(ticketDetail, ticketList, runs, chats, baseIssues, ownerId, isCurrentRequest);
   }
 
   function renderCachedTicket(ticketList: TicketSummary[], ownerId: string, routeTicketId: string): void {

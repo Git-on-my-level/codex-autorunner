@@ -3,7 +3,9 @@
   import AutoDismissNotice from '$lib/components/AutoDismissNotice.svelte';
   import RepoWorktreeViews from '$lib/components/RepoWorktreeViews.svelte';
   import { confirmAndArchiveState, confirmAndCleanupWorktree, type ActionNotice } from '$lib/actions/repoWorktreeActions';
-  import { dataOr, partialPageIssue, pmaApi, type ApiError, type PartialPageIssue } from '$lib/api/client';
+  import { pmaApi, type ApiError, type JsonRecord, type PartialPageIssue } from '$lib/api/client';
+  import { mapRepoSummary, mapWorktreeSummary } from '$lib/viewModels/domain';
+  import type { RepoTopology, RuntimeProjection, WorktreeTopology } from '$lib/api/readModelContracts';
   import {
     buildRepoWorktreeIndexViewModel,
     type RepoWorktreeIndexViewModel
@@ -23,37 +25,78 @@
     loading = true;
     error = null;
     sectionIssues = [];
-    const [repos, worktrees, runs, chats, tickets] = await Promise.all([
-      pmaApi.hub.listRepos(),
-      pmaApi.hub.listWorktrees(),
-      pmaApi.ticketFlow.listRuns(),
-      pmaApi.pma.listChats(),
-      pmaApi.ticketFlow.listTickets()
+    const [topology, runtime] = await Promise.all([
+      pmaApi.readModels.repoWorktreeTopology('all', 200),
+      pmaApi.readModels.repoWorktreeRuntime('all', 200)
     ]);
-    const primaryError = !repos.ok ? repos.error : !worktrees.ok ? worktrees.error : null;
-    if (primaryError) {
-      error = primaryError;
+    if (!topology.ok) {
+      error = topology.error;
       loading = false;
       return;
     }
-    sectionIssues = [
-      !runs.ok ? partialPageIssue('current_run', 'Active runs unavailable', runs.error) : null,
-      !chats.ok ? partialPageIssue('current_run', 'Chats unavailable', chats.error) : null,
-      !tickets.ok ? partialPageIssue('tickets', 'Ticket queue unavailable', tickets.error) : null
-    ].filter((issue): issue is PartialPageIssue => Boolean(issue));
+    if (!runtime.ok) {
+      error = runtime.error;
+      loading = false;
+      return;
+    }
+    sectionIssues = [];
+    const runtimeById = new Map<string, RuntimeProjection>(runtime.data.runtime.map((row: RuntimeProjection) => [row.entityId, row]));
+    const repos = topology.data.repos.map((repo: RepoTopology) =>
+      mapRepoSummary({
+        id: repo.repoId,
+        name: repo.label,
+        path: repo.path,
+        kind: 'base',
+        worktree_count: repo.childWorktreeIds.length,
+        ...runtimeRaw(runtimeById.get(repo.repoId))
+      })
+    );
+    const worktrees = topology.data.worktrees.map((worktree: WorktreeTopology) =>
+      mapWorktreeSummary({
+        id: worktree.worktreeId,
+        name: worktree.label,
+        path: worktree.path,
+        kind: 'worktree',
+        worktree_of: worktree.repoId,
+        branch: worktree.branch,
+        ...runtimeRaw(runtimeById.get(worktree.worktreeId))
+      })
+    );
     index = buildRepoWorktreeIndexViewModel(
       {
-        repos: dataOr(repos, []),
-        worktrees: dataOr(worktrees, []),
-        runs: dataOr(runs, []),
-        chats: dataOr(chats, []),
-        tickets: dataOr(tickets, []),
+        repos,
+        worktrees,
+        runs: [],
+        chats: [],
+        tickets: [],
         artifacts: [],
-        ticketsListLoaded: tickets.ok
+        ticketsListLoaded: false
       },
       'worktree'
     );
     loading = false;
+  }
+
+  function runtimeRaw(row: RuntimeProjection | undefined): JsonRecord {
+    return row
+      ? {
+          active_runs: row.activeRunId ? 1 : 0,
+          open_tickets: row.waitingTicketCount + row.runningTicketCount,
+          ticket_flow_display: {
+            status: row.activeRunStatus,
+            is_active: Boolean(row.activeRunId),
+            total_count: row.waitingTicketCount + row.runningTicketCount,
+            done_count: 0,
+            run_id: row.activeRunId
+          },
+          git_status: {
+            dirty: row.gitDirty,
+            ahead: row.gitAhead,
+            behind: row.gitBehind
+          },
+          chat_bound_thread_count: row.chatCount
+        }
+      : {};
   }
 
   async function handleCleanupWorktree(target: Parameters<typeof confirmAndCleanupWorktree>[0]): Promise<void> {

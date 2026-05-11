@@ -3,7 +3,7 @@
   import { page } from '$app/state';
   import { onDestroy, onMount } from 'svelte';
   import TicketViews from '$lib/components/TicketViews.svelte';
-  import { dataOr, partialPageIssue, pmaApi, type ApiError, type JsonRecord, type PartialPageIssue } from '$lib/api/client';
+  import { partialPageIssue, pmaApi, type ApiError, type JsonRecord, type PartialPageIssue } from '$lib/api/client';
   import { openFlowRunEventSource, type StreamSubscription } from '$lib/api/streaming';
   import {
     buildTicketWorkerActivity,
@@ -17,7 +17,17 @@
     type TicketDetailViewModel,
     type TicketEditPayload
   } from '$lib/viewModels/ticket';
-  import type { PmaChatSummary, PmaRunProgress, SurfaceArtifact, TicketDetail, TicketSummary } from '$lib/viewModels/domain';
+  import {
+    mapPmaChatSummary,
+    mapPmaRunProgress,
+    mapTicketDetail,
+    mapTicketSummary,
+    type PmaChatSummary,
+    type PmaRunProgress,
+    type SurfaceArtifact,
+    type TicketDetail,
+    type TicketSummary
+  } from '$lib/viewModels/domain';
   import { cachedTickets, rememberTickets } from '$lib/viewModels/ticketCache';
   import { agentCanListModels, agentId } from '$lib/viewModels/modelPickers';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
@@ -91,29 +101,24 @@
     sectionIssues = [];
     const cachedList = cachedTickets({ repo: ownerId });
     if (showLoading && cachedList) renderCachedTicket(cachedList, ownerId, routeTicketId);
-    const tickets = await pmaApi.ticketFlow.listTickets({ repo: ownerId });
+    const snapshot = await pmaApi.readModels.ticketDetail(routeTicketId, { kind: 'repo', id: ownerId });
     if (!isCurrentRequest()) return;
-    const ticketList = dataOr(tickets, []);
-    if (tickets.ok) rememberTickets({ repo: ownerId }, ticketList);
-    const selected = tickets.ok ? resolveTicketRouteId(ticketList, routeTicketId) : null;
-    if (!selected) {
-      error = tickets.ok
-        ? { kind: 'http', status: 404, code: 'ticket_not_found', message: `Ticket ${routeTicketId} was not found in repo ${ownerId}.` }
-        : tickets.error;
+    if (!snapshot.ok) {
+      error = snapshot.error;
       loading = false;
       return;
     }
-    const ticketDetail = ticketDetailFromSummary(selected);
+    const ticketList = (snapshot.data.scopedTickets ?? []).map(mapTicketSummary);
+    rememberTickets({ repo: ownerId }, ticketList);
+    const ticketDetail = mapTicketDetail((snapshot.data.legacyTicket ?? {}) as JsonRecord);
     detail = buildTicketDetailViewModel(ticketDetail, { tickets: ticketList, runs: [], chats: [], artifacts: [] });
     sectionIssues = [];
     loading = false;
-    const [runs, chats] = await Promise.all([pmaApi.ticketFlow.listRuns({ repo: ownerId }), pmaApi.pma.listChats()]);
-    const baseIssues = [
-      !runs.ok ? partialPageIssue('timeline', 'Run state unavailable', runs.error) : null,
-      !chats.ok ? partialPageIssue('linked_chat', 'Chats unavailable', chats.error) : null
-    ].filter((issue): issue is PartialPageIssue => Boolean(issue));
+    const runs = (snapshot.data.scopedRuns ?? []).map(mapPmaRunProgress);
+    const chats = (snapshot.data.scopedChats ?? []).map(mapPmaChatSummary);
+    const baseIssues: PartialPageIssue[] = [];
     if (!isCurrentRequest()) return;
-    await renderTicketDetail(ticketDetail, ticketList, dataOr(runs, []), dataOr(chats, []), baseIssues, ownerId, isCurrentRequest);
+    await renderTicketDetail(ticketDetail, ticketList, runs, chats, baseIssues, ownerId, isCurrentRequest);
   }
 
   function renderCachedTicket(ticketList: TicketSummary[], ownerId: string, routeTicketId: string): void {

@@ -4,12 +4,20 @@
   import AutoDismissNotice from '$lib/components/AutoDismissNotice.svelte';
   import RepoWorktreeViews from '$lib/components/RepoWorktreeViews.svelte';
   import { confirmAndArchiveState, confirmAndCleanupWorktree, type ActionNotice } from '$lib/actions/repoWorktreeActions';
-  import { dataOr, partialPageIssue, pmaApi, type ApiError, type PartialPageIssue } from '$lib/api/client';
+  import { pmaApi, type ApiError, type JsonRecord, type PartialPageIssue } from '$lib/api/client';
+  import {
+    mapContextspaceDocument,
+    mapPmaChatSummary,
+    mapPmaRunProgress,
+    mapRepoSummary,
+    mapSurfaceArtifact,
+    mapTicketSummary,
+    mapWorktreeSummary
+  } from '$lib/viewModels/domain';
   import {
     buildRepoWorktreeDetailViewModel,
     type RepoWorktreeDetailViewModel
   } from '$lib/viewModels/repoWorktree';
-  import type { SurfaceArtifact } from '$lib/viewModels/domain';
 
   const repoId = $derived(page.params.repoId ?? 'unknown-repo');
   let detail = $state<RepoWorktreeDetailViewModel | null>(null);
@@ -33,34 +41,22 @@
     if (showLoading) loading = true;
     error = null;
     sectionIssues = [];
-    const [repos, worktrees, runs, chats, tickets, contextspace] = await Promise.all([
-      pmaApi.hub.listRepos(),
-      pmaApi.hub.listWorktrees(),
-      pmaApi.ticketFlow.listRuns({ repo: repoId }),
-      pmaApi.pma.listChats(),
-      pmaApi.ticketFlow.listTickets({ repo: repoId }),
-      pmaApi.contextspace.listDocuments(repoId)
-    ]);
-    const primaryError = !repos.ok ? repos.error : !worktrees.ok ? worktrees.error : null;
-    if (primaryError) {
-      error = primaryError;
+    const snapshot = await pmaApi.readModels.repoDetail(repoId);
+    if (!snapshot.ok) {
+      error = snapshot.error;
       loading = false;
       return;
     }
-    const baseIssues = [
-      !runs.ok ? partialPageIssue('current_run', 'Active runs unavailable', runs.error) : null,
-      !chats.ok ? partialPageIssue('current_run', 'Chats unavailable', chats.error) : null,
-      !tickets.ok ? partialPageIssue('tickets', 'Ticket queue unavailable', tickets.error) : null,
-      !contextspace.ok ? partialPageIssue('contextspace', 'Contextspace unavailable', contextspace.error) : null
-    ].filter((issue): issue is PartialPageIssue => Boolean(issue));
+    const payload = snapshot.data;
+    const baseIssues: PartialPageIssue[] = [];
     const baseSource = {
-      repos: dataOr(repos, []),
-      worktrees: dataOr(worktrees, []),
-      runs: dataOr(runs, []),
-      chats: dataOr(chats, []),
-      tickets: dataOr(tickets, []),
-      contextspaceDocs: dataOr(contextspace, []),
-      artifacts: [] as SurfaceArtifact[]
+      repos: [mapRepoSummary(payload.identity)],
+      worktrees: childrenFromTopology(payload.topology).map(mapWorktreeSummary),
+      runs: payload.scopedRuns.map(mapPmaRunProgress),
+      chats: payload.scopedChats.map(mapPmaChatSummary),
+      tickets: payload.scopedTickets.map(mapTicketSummary),
+      contextspaceDocs: payload.contextspaceSummary.map(mapContextspaceDocument),
+      artifacts: payload.currentArtifacts.map(mapSurfaceArtifact)
     };
     const baseDetail = buildRepoWorktreeDetailViewModel(baseSource, 'repo', repoId);
     if (baseDetail.isMissing) {
@@ -69,17 +65,13 @@
       loading = false;
       return;
     }
-    const artifactResults = await Promise.all(
-      baseDetail.currentRuns.map((run) => pmaApi.ticketFlow.listArtifacts(run.id, { repo: repoId }))
-    );
-    const artifactIssues = artifactResults
-      .filter((result): result is { ok: false; error: ApiError } => !result.ok)
-      .filter((result) => result.error.status !== 404)
-      .map((result) => partialPageIssue('artifacts', 'Surfaced artifacts unavailable', result.error));
-    sectionIssues = [...baseIssues, ...artifactIssues];
-    const artifacts = artifactResults.flatMap((result) => (result.ok ? result.data : []));
-    detail = buildRepoWorktreeDetailViewModel({ ...baseSource, artifacts }, 'repo', repoId);
+    sectionIssues = baseIssues;
+    detail = baseDetail;
     loading = false;
+  }
+
+  function childrenFromTopology(topology: Record<string, unknown>): JsonRecord[] {
+    return Array.isArray(topology.children) ? (topology.children as JsonRecord[]) : [];
   }
 
   async function handleCleanupWorktree(target: Parameters<typeof confirmAndCleanupWorktree>[0]): Promise<void> {

@@ -1,4 +1,11 @@
 import {
+  mapReadModelContract,
+  type RepoWorktreeDetailSnapshot,
+  type RepoWorktreeRuntimeSnapshot,
+  type RepoWorktreeTopologySnapshot,
+  type TicketDetailSnapshot
+} from '$lib/api/readModelContracts';
+import {
   mapContextspaceDocument,
   mapDashboardSummary,
   mapPmaChatMessage,
@@ -476,6 +483,54 @@ export class PmaApiClient {
         method: 'POST',
         body: { commands }
       })
+  };
+
+  readModels = {
+    repoWorktreeTopology: async (
+      kind: 'all' | 'repo' | 'worktree' = 'all',
+      limit = 50,
+      cursor?: string | null
+    ): Promise<ApiResult<RepoWorktreeTopologySnapshot>> => {
+      const params = new URLSearchParams({ kind, limit: String(limit) });
+      if (cursor) params.set('cursor', cursor);
+      return mapResult(
+        await this.getJson<JsonRecord>(`/hub/read-models/repo-worktree/topology?${params.toString()}`),
+        (payload) => mapReadModelContract<RepoWorktreeTopologySnapshot>(payload)
+      );
+    },
+    repoWorktreeRuntime: async (
+      kind: 'all' | 'repo' | 'worktree' = 'all',
+      limit = 50,
+      cursor?: string | null
+    ): Promise<ApiResult<RepoWorktreeRuntimeSnapshot>> => {
+      const params = new URLSearchParams({ kind, limit: String(limit) });
+      if (cursor) params.set('cursor', cursor);
+      return mapResult(
+        await this.getJson<JsonRecord>(`/hub/read-models/repo-worktree/runtime?${params.toString()}`),
+        (payload) => mapReadModelContract<RepoWorktreeRuntimeSnapshot>(payload)
+      );
+    },
+    repoDetail: async (repoId: string): Promise<ApiResult<RepoWorktreeDetailSnapshot>> =>
+      mapResult(
+        await this.getJson<JsonRecord>(`/hub/read-models/repos/${encodeURIComponent(repoId)}/detail`),
+        (payload) => mapReadModelContract<RepoWorktreeDetailSnapshot>(payload)
+      ),
+    worktreeDetail: async (worktreeId: string): Promise<ApiResult<RepoWorktreeDetailSnapshot>> =>
+      mapResult(
+        await this.getJson<JsonRecord>(`/hub/read-models/worktrees/${encodeURIComponent(worktreeId)}/detail`),
+        (payload) => mapReadModelContract<RepoWorktreeDetailSnapshot>(payload)
+      ),
+    ticketDetail: async (
+      ticketId: string,
+      owner: { kind: 'repo' | 'worktree'; id: string }
+    ): Promise<ApiResult<TicketDetailSnapshot & { legacyTicket?: JsonRecord; scopedTickets?: JsonRecord[]; scopedRuns?: JsonRecord[]; scopedChats?: JsonRecord[] }>> => {
+      const params = new URLSearchParams({ owner_kind: owner.kind, owner_id: owner.id });
+      return mapResult(
+        await this.getJson<JsonRecord>(`/hub/read-models/tickets/${encodeURIComponent(ticketId)}?${params.toString()}`),
+        (payload) =>
+          mapReadModelContract<TicketDetailSnapshot & { legacyTicket?: JsonRecord; scopedTickets?: JsonRecord[]; scopedRuns?: JsonRecord[]; scopedChats?: JsonRecord[] }>(payload)
+      );
+    }
   };
 
   ticketFlow = {

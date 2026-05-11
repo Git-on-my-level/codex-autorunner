@@ -42,15 +42,15 @@
     if (showLoading) loading = true;
     error = null;
     sectionIssues = [];
-    const worktrees = await pmaApi.hub.listWorktrees();
-    if (!worktrees.ok) {
-      error = worktrees.error;
+    const detail = await pmaApi.readModels.worktreeDetail(worktreeId);
+    if (!detail.ok) {
+      error = detail.error;
       loading = false;
       return;
     }
-    const matchedWorktree = worktrees.data.find((worktree) => worktree.id === worktreeId);
-    hubParentRepoId = matchedWorktree?.repoId ?? null;
-    const redirectTo = legacyWorktreeRedirectPath(stripRuntimeBasePath(page.url.pathname), worktreeId, matchedWorktree?.repoId ?? null);
+    const parentRepoId = typeof detail.data.parentLinks.repo_id === 'string' ? detail.data.parentLinks.repo_id : null;
+    hubParentRepoId = parentRepoId;
+    const redirectTo = legacyWorktreeRedirectPath(stripRuntimeBasePath(page.url.pathname), worktreeId, parentRepoId);
     if (redirectTo) {
       await goto(href(redirectTo), { replaceState: true });
       return;

@@ -235,6 +235,28 @@ export type RepoWorktreePatchEvent = {
   patch: RepoWorktreePatch;
 };
 
+export type RepoWorktreeDetailSnapshot = {
+  contractVersion: ReadModelContractVersion;
+  kind: 'repo_worktree.detail.snapshot';
+  cursor: ProjectionCursor;
+  ownerKind: 'repo' | 'worktree';
+  ownerId: string;
+  identity: Record<string, unknown>;
+  parentLinks: Record<string, unknown>;
+  topology: Record<string, unknown>;
+  runtime: Record<string, unknown>;
+  scopedTickets: Record<string, unknown>[];
+  scopedRuns: Record<string, unknown>[];
+  scopedChats: Record<string, unknown>[];
+  contextspaceSummary: Record<string, unknown>[];
+  currentArtifacts: Record<string, unknown>[];
+  ticketWindow: PageWindow;
+  runWindow: PageWindow;
+  chatWindow: PageWindow;
+  artifactWindow: PageWindow;
+  repair: RepairPolicy;
+};
+
 export type TicketProjection = {
   ticketId: string;
   routeId: string;
@@ -298,6 +320,7 @@ export type ReadModelSnapshot =
   | ChatDetailSnapshot
   | RepoWorktreeTopologySnapshot
   | RepoWorktreeRuntimeSnapshot
+  | RepoWorktreeDetailSnapshot
   | TicketDetailSnapshot;
 
 export type ReadModelPatchEvent =

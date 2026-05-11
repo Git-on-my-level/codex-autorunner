@@ -268,6 +268,28 @@ class RepoWorktreePatchEvent(ReadModelContract):
     patch: RepoWorktreePatch
 
 
+class RepoWorktreeDetailSnapshot(ReadModelContract):
+    contract_version: Literal["web-read-models.v1"] = READ_MODEL_CONTRACT_VERSION
+    kind: Literal["repo_worktree.detail.snapshot"] = "repo_worktree.detail.snapshot"
+    cursor: ProjectionCursor
+    owner_kind: Literal["repo", "worktree"]
+    owner_id: str
+    identity: dict[str, Any]
+    parent_links: dict[str, Any] = Field(default_factory=dict)
+    topology: dict[str, Any] = Field(default_factory=dict)
+    runtime: dict[str, Any] = Field(default_factory=dict)
+    scoped_tickets: list[dict[str, Any]] = Field(default_factory=list)
+    scoped_runs: list[dict[str, Any]] = Field(default_factory=list)
+    scoped_chats: list[dict[str, Any]] = Field(default_factory=list)
+    contextspace_summary: list[dict[str, Any]] = Field(default_factory=list)
+    current_artifacts: list[dict[str, Any]] = Field(default_factory=list)
+    ticket_window: PageWindow
+    run_window: PageWindow
+    chat_window: PageWindow
+    artifact_window: PageWindow
+    repair: RepairPolicy
+
+
 class TicketProjection(ReadModelContract):
     ticket_id: str
     route_id: str

@@ -5,14 +5,14 @@
   import AutoDismissNotice from '$lib/components/AutoDismissNotice.svelte';
   import RepoWorktreeViews from '$lib/components/RepoWorktreeViews.svelte';
   import { confirmAndArchiveState, confirmAndCleanupWorktree, type ActionNotice } from '$lib/actions/repoWorktreeActions';
-  import { dataOr, partialPageIssue, pmaApi, type ApiError, type PartialPageIssue } from '$lib/api/client';
+  import { pmaApi, type ApiError, type PartialPageIssue } from '$lib/api/client';
+  import { mapContextspaceDocument, mapPmaChatSummary, mapPmaRunProgress, mapSurfaceArtifact, mapTicketSummary, mapWorktreeSummary } from '$lib/viewModels/domain';
   import { stripRuntimeBasePath, withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import {
     buildRepoWorktreeDetailViewModel,
     type RepoWorktreeDetailViewModel
   } from '$lib/viewModels/repoWorktree';
   import { legacyWorktreeRedirectPath } from '$lib/viewModels/routes';
-  import type { SurfaceArtifact } from '$lib/viewModels/domain';
 
   const worktreeId = $derived(page.params.worktreeId ?? 'unknown-worktree');
   let detail = $state<RepoWorktreeDetailViewModel | null>(null);
@@ -38,20 +38,14 @@
     error = null;
     sectionIssues = [];
     backingRepoId = null;
-    const [repos, worktrees, runs, chats, tickets] = await Promise.all([
-      pmaApi.hub.listRepos(),
-      pmaApi.hub.listWorktrees(),
-      pmaApi.ticketFlow.listRuns({ worktree: worktreeId }),
-      pmaApi.pma.listChats(),
-      pmaApi.ticketFlow.listTickets({ worktree: worktreeId })
-    ]);
-    const primaryError = !repos.ok ? repos.error : !worktrees.ok ? worktrees.error : null;
-    if (primaryError) {
-      error = primaryError;
+    const snapshot = await pmaApi.readModels.worktreeDetail(worktreeId);
+    if (!snapshot.ok) {
+      error = snapshot.error;
       loading = false;
       return;
     }
-    const worktreeList = dataOr(worktrees, []);
+    const payload = snapshot.data;
+    const worktreeList = [mapWorktreeSummary(payload.identity)];
     const matchedWorktree = worktreeList.find((worktree) => worktree.id === worktreeId);
     const redirectTo = legacyWorktreeRedirectPath(stripRuntimeBasePath(page.url.pathname), worktreeId, matchedWorktree?.repoId ?? null);
     if (redirectTo) {
@@ -59,21 +53,15 @@
       return;
     }
     backingRepoId = matchedWorktree?.repoId ?? null;
-    const contextspace = await pmaApi.contextspace.listDocuments(worktreeId);
-    const baseIssues = [
-      !runs.ok ? partialPageIssue('current_run', 'Active runs unavailable', runs.error) : null,
-      !chats.ok ? partialPageIssue('current_run', 'Chats unavailable', chats.error) : null,
-      !tickets.ok ? partialPageIssue('tickets', 'Ticket queue unavailable', tickets.error) : null,
-      !contextspace.ok ? partialPageIssue('contextspace', 'Contextspace unavailable', contextspace.error) : null
-    ].filter((issue): issue is PartialPageIssue => Boolean(issue));
+    const baseIssues: PartialPageIssue[] = [];
     const baseSource = {
-      repos: dataOr(repos, []),
+      repos: [],
       worktrees: worktreeList,
-      runs: dataOr(runs, []),
-      chats: dataOr(chats, []),
-      tickets: dataOr(tickets, []),
-      contextspaceDocs: dataOr(contextspace, []),
-      artifacts: [] as SurfaceArtifact[]
+      runs: payload.scopedRuns.map(mapPmaRunProgress),
+      chats: payload.scopedChats.map(mapPmaChatSummary),
+      tickets: payload.scopedTickets.map(mapTicketSummary),
+      contextspaceDocs: payload.contextspaceSummary.map(mapContextspaceDocument),
+      artifacts: payload.currentArtifacts.map(mapSurfaceArtifact)
     };
     const baseDetail = buildRepoWorktreeDetailViewModel(baseSource, 'worktree', worktreeId);
     if (baseDetail.isMissing) {
@@ -82,16 +70,8 @@
       loading = false;
       return;
     }
-    const artifactResults = await Promise.all(
-      baseDetail.currentRuns.map((run) => pmaApi.ticketFlow.listArtifacts(run.id, { worktree: worktreeId }))
-    );
-    const artifactIssues = artifactResults
-      .filter((result): result is { ok: false; error: ApiError } => !result.ok)
-      .filter((result) => result.error.status !== 404)
-      .map((result) => partialPageIssue('artifacts', 'Surfaced artifacts unavailable', result.error));
-    sectionIssues = [...baseIssues, ...artifactIssues];
-    const artifacts = artifactResults.flatMap((result) => (result.ok ? result.data : []));
-    detail = buildRepoWorktreeDetailViewModel({ ...baseSource, artifacts }, 'worktree', worktreeId);
+    sectionIssues = baseIssues;
+    detail = baseDetail;
     loading = false;
   }
 
