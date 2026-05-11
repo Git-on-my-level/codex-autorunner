@@ -297,10 +297,16 @@ def read_discord_bindings(
                 row["agent_profile"] if "agent_profile" in columns else None,
                 context=context,
             )
+            guild_id = row["guild_id"] if "guild_id" in columns else None
             binding = {
                 "platform": "discord",
                 "chat_id": channel_id.strip(),
                 "surface_key": channel_id.strip(),
+                "guild_id": (
+                    guild_id.strip()
+                    if isinstance(guild_id, str) and guild_id.strip()
+                    else None
+                ),
                 "workspace_path": wp,
                 "repo_id": repo_id,
                 "resource_kind": (
@@ -323,10 +329,16 @@ def read_discord_bindings(
                 "agent": agent,
                 "agent_profile": agent_profile,
                 "active_thread_id": None,
+                "updated_at": (
+                    row["updated_at"]
+                    if "updated_at" in columns
+                    and isinstance(row["updated_at"], str)
+                    and row["updated_at"].strip()
+                    else None
+                ),
             }
             primary_key = f"discord:{binding['chat_id']}"
             bindings.setdefault(primary_key, binding)
-            guild_id = row["guild_id"] if "guild_id" in columns else None
             if isinstance(guild_id, str) and guild_id.strip():
                 bindings.setdefault(
                     f"discord:{binding['chat_id']}:{guild_id.strip()}",
@@ -508,6 +520,13 @@ def read_telegram_bindings(
                     "agent": agent,
                     "agent_profile": agent_profile,
                     "active_thread_id": active_thread_id,
+                    "updated_at": (
+                        row["updated_at"]
+                        if "updated_at" in columns
+                        and isinstance(row["updated_at"], str)
+                        and row["updated_at"].strip()
+                        else None
+                    ),
                 },
             )
     except (sqlite3.Error, OSError, ValueError, TypeError, KeyError) as exc:

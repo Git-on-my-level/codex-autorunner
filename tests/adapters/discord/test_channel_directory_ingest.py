@@ -118,6 +118,37 @@ async def test_message_create_records_channel_directory_with_names(
 
 
 @pytest.mark.anyio
+async def test_interaction_payload_records_channel_directory_with_channel_object(
+    tmp_path: Path,
+) -> None:
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=_FakeRest(),
+        gateway_client=_FakeGateway(),
+    )
+
+    await service._record_channel_directory_seen_from_message_payload(
+        {
+            "id": "interaction-1",
+            "channel_id": "channel-1",
+            "guild_id": "guild-1",
+            "channel": {"id": "channel-1", "name": "pma"},
+            "data": {"name": "pma"},
+            "member": {"user": {"id": "user-1"}},
+        },
+    )
+
+    entries = ChannelDirectoryStore(tmp_path).list_entries(limit=None)
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry["platform"] == "discord"
+    assert entry["chat_id"] == "channel-1"
+    assert entry["display"] == "guild:guild-1 / #pma"
+    assert entry["meta"] == {"guild_id": "guild-1"}
+
+
+@pytest.mark.anyio
 async def test_message_create_records_channel_directory_with_id_fallbacks(
     tmp_path: Path,
 ) -> None:

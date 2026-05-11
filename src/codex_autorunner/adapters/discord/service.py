@@ -4066,6 +4066,9 @@ class DiscordBotService(DiscordInteractionResponseMixin):
 
     async def _on_dispatch(self, event_type: str, payload: dict[str, Any]) -> None:
         if event_type == "INTERACTION_CREATE":
+            self._spawn_task(
+                self._record_channel_directory_seen_from_message_payload(payload)
+            )
             await self._handle_interaction_create(payload)
             return
         if event_type == "MESSAGE_CREATE":

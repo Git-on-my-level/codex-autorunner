@@ -84,6 +84,26 @@ def test_hub_channel_directory_route_lists_and_filters(tmp_path: Path) -> None:
     assert "limit must be <= 1000" in bad_limit_high.json()["detail"]
 
 
+def test_hub_channel_directory_route_cache_invalidates_when_directory_changes(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    create_test_hub_supervisor(hub_root)
+    store = ChannelDirectoryStore(hub_root)
+    store.record_seen("discord", "chan-first", None, "CAR / #first", {})
+
+    client = TestClient(create_hub_app(hub_root))
+    first_rows = client.get("/hub/chat/channels").json()["entries"]
+    assert {row["key"] for row in first_rows} == {"discord:chan-first"}
+
+    store.record_seen("discord", "chan-second", None, "CAR / #second", {})
+    second_rows = client.get("/hub/chat/channels").json()["entries"]
+    assert {row["key"] for row in second_rows} == {
+        "discord:chan-first",
+        "discord:chan-second",
+    }
+
+
 def test_hub_channel_directory_route_enriches_entries_best_effort(
     tmp_path: Path,
 ) -> None:
@@ -364,6 +384,61 @@ def test_hub_channel_directory_route_enriches_entries_best_effort(
     assert telegram_clean["provenance"]["source"] == "telegram"
     assert telegram_clean["channel_status"] == "clean"
     assert telegram_clean["status_label"] == "clean"
+
+
+def test_hub_channel_directory_route_includes_binding_rows_without_directory_entries(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    supervisor = create_test_hub_supervisor(hub_root)
+    repo = supervisor.create_repo("work")
+    init_git_repo(repo.path)
+
+    write_discord_binding_rows(
+        hub_root / ".codex-autorunner" / "discord_state.sqlite3",
+        rows=[
+            {
+                "channel_id": "chan-bound",
+                "guild_id": "guild-1",
+                "workspace_path": str(repo.path),
+                "repo_id": None,
+                "pma_enabled": 0,
+                "agent": "codex",
+                "updated_at": "2026-01-01T00:00:01Z",
+            }
+        ],
+    )
+    write_telegram_topic_rows(
+        hub_root / ".codex-autorunner" / "telegram_state.sqlite3",
+        topics=[
+            {
+                "topic_key": telegram_topic_key(-1001, 77),
+                "chat_id": -1001,
+                "thread_id": 77,
+                "scope": None,
+                "workspace_path": str(repo.path),
+                "repo_id": None,
+                "active_thread_id": "telegram-thread",
+                "payload_json": {"agent": "codex"},
+                "updated_at": "2026-01-01T00:00:02Z",
+            }
+        ],
+        scopes=[],
+    )
+
+    client = TestClient(create_hub_app(hub_root))
+    rows = client.get("/hub/chat/channels", params={"limit": 20}).json()["entries"]
+    by_key = {row["key"]: row for row in rows}
+
+    assert "discord:chan-bound" in by_key
+    assert by_key["discord:chan-bound"]["display"] == "guild:guild-1 / #chan-bound"
+    assert by_key["discord:chan-bound"]["repo_id"] == "work"
+    assert by_key["discord:chan-bound"]["workspace_path"] == str(repo.path)
+
+    assert "telegram:-1001:77" in by_key
+    assert by_key["telegram:-1001:77"]["display"] == "telegram:-1001:77"
+    assert by_key["telegram:-1001:77"]["active_thread_id"] == "telegram-thread"
+    assert by_key["telegram:-1001:77"]["repo_id"] == "work"
 
 
 def test_hub_channel_directory_route_uses_managed_thread_id_for_pma_usage(
