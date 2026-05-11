@@ -5,6 +5,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
+from ..hub_projection_store import HubProjectionStore
 from ..logging_utils import log_event
 from ..text_utils import _normalize_optional_text
 from .chat_surface_events import (
@@ -90,6 +91,27 @@ def emit_chat_surface_event(
         inserted=result.inserted,
         cursor=result.event.cursor,
     )
+    try:
+        HubProjectionStore(Path(hub_root), durable=durable).append_event(
+            idempotency_key=f"chat_surface:{result.event.cursor}",
+            entity_kind="chat_surface",
+            entity_id=f"{result.event.surface_kind}:{result.event.surface_key}",
+            operation=_hub_operation_from_chat_surface_event(result.event.event_type),
+            payload=result.event.to_dict(),
+            source_revision=f"chat_surface:{result.event.cursor}",
+            generated_at=result.event.created_at,
+        )
+    except Exception as exc:
+        log_event(
+            logger,
+            logging.WARNING,
+            "chat_surface.hub_ui_event_emit_failed",
+            event_type=result.event.event_type,
+            surface_kind=result.event.surface_kind,
+            surface_key=result.event.surface_key,
+            source_revision=f"chat_surface:{result.event.cursor}",
+            error=str(exc),
+        )
     return result
 
 
@@ -130,6 +152,18 @@ def emit_binding_event(
 def pma_surface_key(managed_thread_id: Any) -> Optional[str]:
     normalized = _normalize_optional_text(managed_thread_id)
     return normalized
+
+
+def _hub_operation_from_chat_surface_event(event_type: str) -> str:
+    if event_type == "surface.archived":
+        return "delete"
+    if event_type in {
+        "surface.bound",
+        "surface.rebound",
+        "channel_directory.discovered",
+    }:
+        return "upsert"
+    return "patch"
 
 
 __all__ = [

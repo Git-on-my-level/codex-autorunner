@@ -710,6 +710,7 @@ def build_hub_context(
         config.root,
         durable=bool(getattr(config, "durable_writes", False)),
     )
+    projection_store.validate_or_reset_projection_state()
     hub_web_static_dir, _hub_web_static_context = resolve_web_static_dir()
     resolved_asset_version = asset_version(hub_web_static_dir)
     shared_state_service = HubSharedStateService(
