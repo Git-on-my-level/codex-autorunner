@@ -42,3 +42,28 @@ def test_managed_thread_timeline_endpoint_returns_canonical_items(hub_env) -> No
     ]
     assert payload["items"][0]["payload"]["text"] == "hello timeline"
     assert payload["items"][1]["payload"]["text"] == "hello from assistant"
+
+
+def test_managed_thread_chat_events_endpoint_returns_snapshot(hub_env) -> None:
+    _enable_pma(
+        hub_env.hub_root,
+        managed_thread_terminal_followup_default=False,
+    )
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", **_repo_owner(hub_env)},
+        )
+        assert create_resp.status_code == 200
+        managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+        events_resp = client.get("/hub/pma/events?once=true")
+
+    assert events_resp.status_code == 200
+    assert events_resp.headers["content-type"].startswith("text/event-stream")
+    body = events_resp.text
+    assert "event: chat_snapshot" in body
+    assert f'"managed_thread_id": "{managed_thread_id}"' in body
+    assert '"contract_version": "pma_chat_events.v1"' in body

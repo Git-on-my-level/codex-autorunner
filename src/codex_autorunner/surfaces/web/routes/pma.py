@@ -20,6 +20,7 @@ from .pma_routes import (
     PmaRuntimeState,
     build_action_manifest_routes,
     build_automation_routes,
+    build_chat_event_routes,
     build_chat_runtime_router,
     build_history_files_docs_router,
     build_managed_thread_crud_routes,
@@ -53,6 +54,7 @@ def build_pma_routes(*, container: PmaApplicationContainer | None = None) -> API
 
     build_automation_routes(router, _get_runtime_state)
     build_action_manifest_routes(router)
+    build_chat_event_routes(router, _get_runtime_state)
     build_managed_thread_crud_routes(router, _get_runtime_state)
     build_managed_thread_tail_routes(router, _get_runtime_state)
     build_managed_thread_runtime_routes(router, _get_runtime_state)

@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { normalizePmaTailStreamEvent, openPmaTailEventSource, parseJsonSseFrame, parseSseFrame } from './streaming';
+import {
+  normalizePmaChatStreamEvent,
+  normalizePmaTailStreamEvent,
+  openPmaChatEventSource,
+  openPmaTailEventSource,
+  parseJsonSseFrame,
+  parseSseFrame
+} from './streaming';
 
 describe('SSE helpers', () => {
   afterEach(() => {
@@ -40,6 +47,17 @@ describe('SSE helpers', () => {
     });
   });
 
+  it('normalizes PMA chat snapshot stream events', () => {
+    const parsed = parseJsonSseFrame('id: abc\nevent: chat_snapshot\ndata: {"threads":[{"managed_thread_id":"thread-1"}]}\n\n');
+    expect(parsed).not.toBeNull();
+
+    expect(normalizePmaChatStreamEvent(parsed!)).toEqual({
+      kind: 'chat_snapshot',
+      lastEventId: 'abc',
+      payload: { threads: [{ managed_thread_id: 'thread-1' }] }
+    });
+  });
+
   it('opens PMA tail EventSource under the configured hub base path', () => {
     const close = vi.fn();
     const addEventListener = vi.fn();
@@ -54,6 +72,24 @@ describe('SSE helpers', () => {
       withCredentials: undefined
     });
     expect(addEventListener).toHaveBeenCalledWith('timeline', expect.any(Function));
+    subscription.close();
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it('opens PMA chat EventSource under the configured hub base path', () => {
+    const close = vi.fn();
+    const addEventListener = vi.fn();
+    const eventSource = vi.fn(function EventSourceMock() {
+      return { addEventListener, close };
+    });
+    vi.stubGlobal('EventSource', eventSource);
+
+    const subscription = openPmaChatEventSource({ onEvent: vi.fn() }, '/car');
+
+    expect(eventSource).toHaveBeenCalledWith('/car/hub/pma/events', {
+      withCredentials: undefined
+    });
+    expect(addEventListener).toHaveBeenCalledWith('chat_snapshot', expect.any(Function));
     subscription.close();
     expect(close).toHaveBeenCalledOnce();
   });

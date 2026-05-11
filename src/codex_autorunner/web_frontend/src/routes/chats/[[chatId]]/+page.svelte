@@ -9,7 +9,7 @@
   import VoiceComposerButton from '$lib/components/VoiceComposerButton.svelte';
   import { pmaApi, type ApiError, type JsonRecord, type PmaQueuedTurn } from '$lib/api/client';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
-  import { openPmaTailEventSource, type StreamSubscription } from '$lib/api/streaming';
+  import { openPmaChatEventSource, openPmaTailEventSource, type StreamSubscription } from '$lib/api/streaming';
   import {
     repoContextspaceRoute,
     repoRoute,
@@ -18,7 +18,7 @@
     worktreeRoute,
     worktreeTicketRoute
   } from '$lib/viewModels/routes';
-  import { mapPmaRunProgress, mapPmaTimelineItem } from '$lib/viewModels/domain';
+  import { mapPmaChatSummary, mapPmaRunProgress, mapPmaTimelineItem } from '$lib/viewModels/domain';
   import type {
     PmaChatSummary,
     PmaRunProgress,
@@ -133,6 +133,7 @@
   let streamState = $state<'idle' | 'connecting' | 'connected' | 'interrupted'>('idle');
   let streamError = $state<string | null>(null);
   let streamSubscription: StreamSubscription | null = null;
+  let chatStreamSubscription: StreamSubscription | null = null;
   let fileInput: HTMLInputElement | null = $state(null);
   let imageInput: HTMLInputElement | null = $state(null);
   let messageStack: HTMLDivElement | null = $state(null);
@@ -412,6 +413,7 @@
   onMount(() => {
     draft = page.url.searchParams.get('draft') ?? draft;
     void loadInitial();
+    connectChatStream();
     const interval = window.setInterval(() => {
       if (activeChatId) void refreshActive(activeChatId, { quiet: true });
     }, 7000);
@@ -457,6 +459,7 @@
   onDestroy(() => {
     if (pendingRefreshTimer) window.clearTimeout(pendingRefreshTimer);
     closeStream();
+    closeChatStream();
   });
 
   $effect(() => {
@@ -752,6 +755,58 @@
     streamSubscription?.close();
     streamSubscription = null;
     streamState = 'idle';
+  }
+
+  function connectChatStream(): void {
+    chatStreamSubscription?.close();
+    chatStreamSubscription = openPmaChatEventSource({
+      onEvent: (event) => {
+        if (event.kind !== 'chat_snapshot') return;
+        const rawThreads = Array.isArray(event.payload.threads) ? event.payload.threads : [];
+        const nextChats = rawThreads
+          .filter((item): item is JsonRecord => Boolean(item && typeof item === 'object' && !Array.isArray(item)))
+          .map((item) => mapPmaChatSummary(item));
+        reconcileChatSnapshot(nextChats);
+      }
+    });
+  }
+
+  function closeChatStream(): void {
+    chatStreamSubscription?.close();
+    chatStreamSubscription = null;
+  }
+
+  function chatBindingKey(chat: PmaChatSummary | null): string | null {
+    if (!chat) return null;
+    const kind = typeof chat.raw.binding_kind === 'string' ? chat.raw.binding_kind.trim() : '';
+    const id = typeof chat.raw.binding_id === 'string' ? chat.raw.binding_id.trim() : '';
+    if (kind && id) return `${kind}:${id}`;
+    const titleMatch = /^(telegram|discord):(.+)$/.exec(chat.title.trim());
+    return titleMatch ? `${titleMatch[1]}:${titleMatch[2]}` : null;
+  }
+
+  function isArchivedChat(chat: PmaChatSummary | null): boolean {
+    if (!chat) return false;
+    const lifecycle = typeof chat.raw.lifecycle_status === 'string' ? chat.raw.lifecycle_status.toLowerCase() : '';
+    return lifecycle === 'archived';
+  }
+
+  function reconcileChatSnapshot(nextChats: PmaChatSummary[]): void {
+    const priorActiveId = activeChatId;
+    const priorActive = priorActiveId ? chats.find((chat) => chat.id === priorActiveId) ?? null : null;
+    const priorBinding = chatBindingKey(priorActive);
+    const nextActive = priorActiveId ? nextChats.find((chat) => chat.id === priorActiveId) ?? null : null;
+    chats = nextChats;
+
+    if (!priorActiveId) return;
+    if (nextActive && !isArchivedChat(nextActive)) return;
+    if (!priorBinding) return;
+
+    const replacement = nextChats.find(
+      (chat) => chat.id !== priorActiveId && chatBindingKey(chat) === priorBinding && !isArchivedChat(chat)
+    );
+    if (!replacement) return;
+    void selectChat(replacement.id);
   }
 
   function updateProgress(nextProgress: PmaRunProgress): void {

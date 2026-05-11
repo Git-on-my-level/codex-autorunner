@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .action_manifest import build_action_manifest_routes
 from .automation_adapter import notify_managed_thread_terminal_transition
+from .chat_events import build_chat_event_routes
 from .chat_runtime import build_chat_runtime_router
 from .history_files_docs import build_history_files_docs_router
 from .managed_thread_runtime import build_managed_thread_runtime_routes
@@ -15,6 +16,7 @@ __all__ = [
     "PmaRuntimeState",
     "build_automation_routes",
     "build_action_manifest_routes",
+    "build_chat_event_routes",
     "build_chat_runtime_router",
     "build_history_files_docs_router",
     "build_managed_thread_crud_routes",
