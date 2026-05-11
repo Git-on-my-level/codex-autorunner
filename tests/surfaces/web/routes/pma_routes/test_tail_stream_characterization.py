@@ -406,6 +406,140 @@ class TestTailSnapshotEnumContracts:
         if payload["turn_status"] is not None:
             assert payload["phase"] in valid_phases
 
+    async def test_tail_snapshot_resolves_profiled_thread_harness(
+        self, monkeypatch, hub_env
+    ) -> None:
+        calls: list[tuple[str, str | None]] = []
+
+        class Harness:
+            def supports(self, capability: str) -> bool:
+                return capability == "event_streaming"
+
+            async def list_progress_events(
+                self,
+                _backend_thread_id: str,
+                _backend_turn_id: str,
+                **_kwargs,
+            ) -> list[dict[str, object]]:
+                return []
+
+        class Service:
+            def harness_factory(self, agent_id: str, profile: str | None = None):
+                calls.append((agent_id, profile))
+                return Harness()
+
+        monkeypatch.setattr(
+            tail_stream,
+            "get_pma_request_context",
+            lambda _request: SimpleNamespace(
+                hub_root=hub_env.hub_root,
+                thread_store=lambda: object(),
+            ),
+        )
+        monkeypatch.setattr(
+            tail_stream,
+            "_load_managed_thread_tail_store_state",
+            lambda **_kwargs: (
+                SimpleNamespace(
+                    agent_id="hermes",
+                    agent_profile="m4-pma",
+                    backend_thread_id="hermes-session-1",
+                    status="running",
+                    lifecycle_status="active",
+                    metadata={"agent_profile": "m4-pma"},
+                ),
+                SimpleNamespace(
+                    execution_id="managed-turn-1",
+                    status="running",
+                    started_at="2026-05-10T17:00:00+00:00",
+                    finished_at=None,
+                    backend_id="turn-1",
+                ),
+                [],
+                None,
+            ),
+        )
+
+        payload = await tail_stream._build_managed_thread_tail_snapshot(
+            request=object(),
+            service=Service(),
+            managed_thread_id="thread-1",
+            limit=50,
+            level="info",
+            since_ms=None,
+            resume_after=0,
+        )
+
+        assert calls == [("hermes", "m4-pma")]
+        assert payload["stream_available"] is True
+
+    async def test_tail_snapshot_falls_back_for_legacy_harness_factory(
+        self, monkeypatch, hub_env
+    ) -> None:
+        calls: list[str] = []
+
+        class Harness:
+            def supports(self, capability: str) -> bool:
+                return capability == "event_streaming"
+
+            async def list_progress_events(
+                self,
+                _backend_thread_id: str,
+                _backend_turn_id: str,
+                **_kwargs,
+            ) -> list[dict[str, object]]:
+                return []
+
+        class Service:
+            def harness_factory(self, agent_id: str):
+                calls.append(agent_id)
+                return Harness()
+
+        monkeypatch.setattr(
+            tail_stream,
+            "get_pma_request_context",
+            lambda _request: SimpleNamespace(
+                hub_root=hub_env.hub_root,
+                thread_store=lambda: object(),
+            ),
+        )
+        monkeypatch.setattr(
+            tail_stream,
+            "_load_managed_thread_tail_store_state",
+            lambda **_kwargs: (
+                SimpleNamespace(
+                    agent_id="hermes",
+                    agent_profile="m4-pma",
+                    backend_thread_id="hermes-session-1",
+                    status="running",
+                    lifecycle_status="active",
+                    metadata={"agent_profile": "m4-pma"},
+                ),
+                SimpleNamespace(
+                    execution_id="managed-turn-1",
+                    status="running",
+                    started_at="2026-05-10T17:00:00+00:00",
+                    finished_at=None,
+                    backend_id="turn-1",
+                ),
+                [],
+                None,
+            ),
+        )
+
+        payload = await tail_stream._build_managed_thread_tail_snapshot(
+            request=object(),
+            service=Service(),
+            managed_thread_id="thread-1",
+            limit=50,
+            level="info",
+            since_ms=None,
+            resume_after=0,
+        )
+
+        assert calls == ["hermes"]
+        assert payload["stream_available"] is True
+
     async def test_tail_snapshot_captures_token_usage_from_runtime_fallback(
         self, monkeypatch, hub_env
     ) -> None:
