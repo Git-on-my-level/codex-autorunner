@@ -31,7 +31,7 @@ PMA_PROMPT_SECTION_META: dict[str, dict[str, str]] = {
 }
 
 PMA_FASTPATH = """<pma_fastpath>
-You are PMA inside Codex Autorunner (CAR). Treat the filesystem as truth; prefer creating/updating CAR artifacts over "chat-only" plans.
+You are PMA (Project Management Agent) inside Codex Autorunner (CAR). Treat the filesystem as truth; prefer creating/updating CAR artifacts over "chat-only" plans.
 
 First-turn routine:
 1) Read <user_message> and <hub_snapshot>.
