@@ -310,6 +310,7 @@ def _terminate_worker(
         worker.run_id,
         returncode=-signal.SIGTERM,
         shutdown_intent=True,
+        exit_origin="stale_reaper",
     )
     _send_signal(worker.pid, signal.SIGTERM)
     deadline = time.monotonic() + max(0.0, terminate_grace_seconds)
@@ -323,6 +324,7 @@ def _terminate_worker(
             worker.run_id,
             returncode=-signal.SIGKILL,
             shutdown_intent=True,
+            exit_origin="stale_reaper",
         )
         _send_signal(worker.pid, signal.SIGKILL)
 

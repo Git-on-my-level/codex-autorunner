@@ -135,6 +135,18 @@ def test_shutdown_intent_transitions_to_stopped_not_failed():
     assert dec.finished_at == _NOW
 
 
+def test_stale_reaper_shutdown_intent_transitions_to_failed_not_stopped():
+    state = {"ticket_engine": {"status": "running"}}
+    health = _health_with_shutdown(alive=False, shutdown_intent=True)
+    health.exit_origin = "stale_reaper"
+
+    dec = _apply(_rec(FlowRunStatus.RUNNING, state), health)
+
+    assert dec.status == FlowRunStatus.FAILED
+    assert dec.note == "worker-dead"
+    assert "Worker died" in (dec.error_message or "")
+
+
 def test_no_shutdown_intent_still_fails():
     state = {"ticket_engine": {"status": "running"}}
     dec = _apply(

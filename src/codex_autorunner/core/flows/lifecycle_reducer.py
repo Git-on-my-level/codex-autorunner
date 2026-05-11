@@ -706,7 +706,8 @@ def resolve_reconcile_trigger(
 
         if not is_alive:
             shutdown_intent = getattr(health, "shutdown_intent", False)
-            if shutdown_intent:
+            exit_origin = getattr(health, "exit_origin", None)
+            if shutdown_intent and exit_origin != "stale_reaper":
                 return FlowTrigger(kind=TriggerKind.RECONCILE_WORKER_SHUTDOWN)
 
             error_msg = f"Worker died (status={getattr(health, 'status', 'unknown')}"

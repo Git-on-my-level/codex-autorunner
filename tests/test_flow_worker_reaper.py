@@ -113,7 +113,40 @@ def test_reap_stale_flow_workers_writes_exit_info_and_signals(
         )
     )
     assert exit_info["shutdown_intent"] is True
+    assert exit_info["exit_origin"] == "stale_reaper"
     assert exit_info["returncode"] == -signal.SIGTERM
+
+
+def test_reap_stale_flow_workers_exit_metadata_distinguishes_reaper_from_user_shutdown(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repo = _repo(tmp_path)
+    run_id = str(uuid.uuid4())
+    _create_run(repo, run_id, FlowRunStatus.RUNNING)
+    _write_worker(repo, run_id, 445, time.time() - 7200)
+    signals: list[tuple[int, signal.Signals]] = []
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.worker_reaper._pid_is_running",
+        lambda pid: not signals,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.flows.worker_reaper._send_signal",
+        lambda pid, sig: signals.append((pid, sig)),
+    )
+
+    summary = reap_stale_flow_workers(
+        repo, max_age_seconds=60.0, terminate_grace_seconds=0.01
+    )
+
+    assert summary.pruned_count == 1
+    exit_info = json.loads(
+        (repo / ".codex-autorunner" / "flows" / run_id / "worker.exit.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert exit_info["shutdown_intent"] is True
+    assert exit_info["exit_origin"] == "stale_reaper"
 
 
 def test_reap_stale_flow_workers_skips_prune_when_flows_db_unreadable(

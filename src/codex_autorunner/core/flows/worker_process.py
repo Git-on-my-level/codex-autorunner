@@ -57,6 +57,7 @@ class FlowWorkerHealth:
     crash_path: Optional[Path] = None
     crash_info: Optional[dict[str, Any]] = None
     shutdown_intent: bool = False
+    exit_origin: Optional[str] = None
     active_tool: Optional[FlowActiveTool] = None
 
     @property
@@ -139,6 +140,7 @@ def write_worker_exit_info(
     *,
     returncode: Optional[int],
     shutdown_intent: bool = False,
+    exit_origin: Optional[str] = None,
     artifacts_root: Optional[Path] = None,
 ) -> None:
     """Persist worker exit status + log tails for fast postmortem debugging.
@@ -184,6 +186,8 @@ def write_worker_exit_info(
         "stderr_tail": _tail_file(artifacts_dir / "worker.err.log"),
         "stdout_tail": _tail_file(artifacts_dir / "worker.out.log"),
     }
+    if exit_origin:
+        data["exit_origin"] = exit_origin
     try:
         _worker_exit_path(artifacts_dir).write_text(
             json.dumps(data, indent=2), encoding="utf-8"
@@ -544,6 +548,7 @@ def check_worker_health(
         stderr_tail = None
         crash_info = None
         shutdown_intent = False
+        exit_origin = None
         crash_path = _worker_crash_path(artifacts_dir)
         if exit_path.exists():
             try:
@@ -561,6 +566,9 @@ def check_worker_health(
                         raw_shutdown = exit_data.get("shutdown_intent")
                         if isinstance(raw_shutdown, bool):
                             shutdown_intent = raw_shutdown
+                        raw_origin = exit_data.get("exit_origin")
+                        if isinstance(raw_origin, str) and raw_origin.strip():
+                            exit_origin = raw_origin.strip()
             except (json.JSONDecodeError, OSError):
                 exit_code = None
                 stderr_tail = None
@@ -591,6 +599,7 @@ def check_worker_health(
             crash_path=crash_path if crash_path.exists() else None,
             crash_info=crash_info if isinstance(crash_info, dict) else None,
             shutdown_intent=shutdown_intent,
+            exit_origin=exit_origin,
         )
 
     expected_cmd = cmd or _build_worker_cmd(entrypoint, run_id, repo_root)

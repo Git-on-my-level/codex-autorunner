@@ -1705,6 +1705,56 @@ async def test_ticket_runner_requires_commit_before_advancing_done_ticket(
 
 
 @pytest.mark.asyncio
+async def test_ticket_runner_recovers_missing_commit_pending_for_done_current_ticket_with_dirty_worktree(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path
+    _init_git_repo(workspace_root)
+    ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    first_ticket = ticket_dir / "TICKET-001.md"
+    second_ticket = ticket_dir / "TICKET-002.md"
+    _write_ticket(first_ticket, done=True)
+    _write_ticket(second_ticket, done=False)
+    (workspace_root / "work.txt").write_text("dirty\n", encoding="utf-8")
+
+    def handler(req: AgentTurnRequest) -> AgentTurnResult:
+        assert "<CAR_COMMIT_REQUIRED>" in req.prompt
+        assert "TICKET-001.md" in req.prompt
+        assert "TICKET-002.md" not in req.prompt
+        return AgentTurnResult(
+            agent_id=req.agent_id,
+            conversation_id="conv1",
+            turn_id="t1",
+            text="commit still pending",
+        )
+
+    runner = TicketRunner(
+        workspace_root=workspace_root,
+        run_id="run-1",
+        config=TicketRunConfig(
+            ticket_dir=Path(".codex-autorunner/tickets"),
+            auto_commit=False,
+        ),
+        agent_pool=FakeAgentPool(handler),
+    )
+
+    result = await runner.step(
+        {
+            "current_ticket": ".codex-autorunner/tickets/TICKET-001.md",
+            "current_ticket_id": "ticket-1",
+        }
+    )
+
+    assert result.status == "continue"
+    assert result.state.get("current_ticket") == (
+        ".codex-autorunner/tickets/TICKET-001.md"
+    )
+    assert result.state.get("commit", {}).get("pending") is True
+    assert "work.txt" in (result.state.get("commit", {}).get("status_porcelain") or "")
+
+
+@pytest.mark.asyncio
 async def test_ticket_runner_pauses_when_commit_retries_exhausted(
     tmp_path: Path,
 ) -> None:
