@@ -767,6 +767,7 @@ function upsertChatThread(state: ReadModelEntityState, thread: ChatThreadProject
     ticketId: thread.ticketId,
     runId: thread.runId,
     agent: thread.agent,
+    agentProfile: thread.agentProfile,
     model: thread.model,
     lastActivityAt: state.chats[thread.chatId]?.lastActivityAt ?? null,
     groupId: state.chats[thread.chatId]?.groupId ?? null

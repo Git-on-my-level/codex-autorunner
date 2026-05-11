@@ -19,6 +19,10 @@ def _seed_thread_rows(hub_root: Path, count: int) -> None:
         with conn:
             for index in range(count):
                 status = "running" if index == 3 else "idle"
+                agent_id = "hermes" if index == 3 else "codex"
+                metadata = {"model": "gpt-5.5"}
+                if index == 3:
+                    metadata["agent_profile"] = "m4-pma"
                 lifecycle = "archived" if index == 7 else "active"
                 resource_kind = "ticket" if index < 12 else "repo"
                 resource_id = "TICKET-900" if index < 12 else "repo"
@@ -40,14 +44,14 @@ def _seed_thread_rows(hub_root: Path, count: int) -> None:
                     """,
                     (
                         f"thread-{index:04d}",
-                        "codex",
+                        agent_id,
                         "repo",
                         resource_kind,
                         resource_id,
                         f"Thread {index:04d}",
                         lifecycle,
                         status,
-                        json.dumps({"model": "gpt-5.5"}),
+                        json.dumps(metadata),
                         "2026-05-11T00:00:00Z",
                         f"2026-05-11T00:{index % 60:02d}:00Z",
                     ),
@@ -110,6 +114,8 @@ def test_chat_index_snapshot_filters_groups_and_bounds_large_windows(hub_env) ->
     assert payload["contract_version"] == "chat_index_read.v1"
     assert payload["window"]["returned"] == 1
     assert payload["rows"][0]["managed_thread_id"] == "thread-0003"
+    assert payload["rows"][0]["agent"] == "hermes"
+    assert payload["rows"][0]["agent_profile"] == "m4-pma"
     assert "discord" in payload["rows"][0]["surface_kinds"]
     assert payload["window"]["total_count"] == 1
 
@@ -137,13 +143,13 @@ def test_chat_index_snapshot_filters_groups_and_bounds_large_windows(hub_env) ->
 def test_chat_detail_snapshot_contains_timeline_queue_and_cursor(hub_env) -> None:
     store = ManagedThreadStore(hub_env.hub_root, durable=True)
     thread = store.create_thread(
-        "codex",
+        "hermes",
         hub_env.repo_root,
         repo_id="repo",
         resource_kind="repo",
         resource_id="repo",
         name="Detail thread",
-        metadata={"model": "gpt-5.5"},
+        metadata={"model": "gpt-5.5", "agent_profile": "m4-pma"},
     )
     thread_id = str(thread["managed_thread_id"])
     running = store.create_turn(thread_id, prompt="hello detail")
@@ -171,6 +177,7 @@ def test_chat_detail_snapshot_contains_timeline_queue_and_cursor(hub_env) -> Non
     payload = response.json()
     assert payload["contract_version"] == "chat_detail_read.v1"
     assert payload["thread"]["managed_thread_id"] == thread_id
+    assert payload["thread"]["agent_profile"] == "m4-pma"
     assert (
         payload["active_turn_status"]["managed_turn_id"] == running["managed_turn_id"]
     )

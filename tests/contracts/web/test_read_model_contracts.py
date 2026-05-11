@@ -80,6 +80,7 @@ def chat_row() -> ChatIndexRow:
         ticket_id="TICKET-001",
         run_id="run-1",
         agent="codex",
+        agent_profile="m4-pma",
         model="gpt-5.3-codex",
         group_id="ticket-run:run-1",
     )
@@ -123,6 +124,8 @@ def test_chat_detail_snapshot_and_patch_round_trip_without_legacy_thread_payload
         worktree_id="wt-1",
         ticket_id="TICKET-001",
         run_id="run-1",
+        agent="hermes",
+        agent_profile="m4-pma",
     )
     item = ChatTimelineItem(
         item_id="timeline-1",

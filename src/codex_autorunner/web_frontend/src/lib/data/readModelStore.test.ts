@@ -84,7 +84,8 @@ function detailSnapshot(chatId = 'chat-1'): ChatDetailSnapshot {
       worktreeId: null,
       ticketId: null,
       runId: 'run-1',
-      agent: 'codex',
+      agent: 'hermes',
+      agentProfile: 'm4-pma',
       model: 'gpt-5.5',
       archived: false
     },
@@ -159,6 +160,7 @@ describe('read model entity store', () => {
   it('applies chat detail timeline patches and reconciles optimistic sends', () => {
     const store = new ReadModelEntityStore();
     store.applyChatDetailSnapshot(detailSnapshot());
+    expect(selectChatIndexView(store.snapshot()).rows[0].agentProfile).toBe('m4-pma');
     store.optimisticSend(
       'chat-1',
       {

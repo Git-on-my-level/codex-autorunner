@@ -207,6 +207,8 @@ describe('view model mappers', () => {
       phase: 'editing',
       queue_depth: 2,
       last_event_id: 7,
+      started_at: '2026-05-04T00:00:00Z',
+      elapsed_seconds: 12,
       events: [{ event_id: 7, event_type: 'tool_completed', summary: 'Tests passed' }]
     });
 
@@ -216,6 +218,8 @@ describe('view model mappers', () => {
     expect(vm.terminal).toBe(false);
     expect(vm.workStatus).toBe('running');
     expect(vm.queueDepth).toBe(2);
+    expect(vm.startedAt).toBe('2026-05-04T00:00:00Z');
+    expect(vm.elapsedSeconds).toBe(12);
     expect(vm.events[0]).toMatchObject({
       id: '7',
       kind: 'progress',

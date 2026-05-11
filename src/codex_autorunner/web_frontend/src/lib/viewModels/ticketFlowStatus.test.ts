@@ -58,6 +58,7 @@ describe('ticket flow status routes', () => {
           guidance: 'Stop requested',
           queueDepth: 0,
           elapsedSeconds: null,
+          startedAt: null,
           idleSeconds: null,
           lastEventId: null,
           lastEventAt: '2026-05-04T00:02:00Z',
