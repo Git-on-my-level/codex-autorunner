@@ -27,10 +27,10 @@ from .lifecycle_reducer import (
     NO_CHANGE,
     EffectKind,
     reduce_flow_lifecycle,
-    resolve_reconcile_trigger,
 )
 from .models import FlowEventType, FlowRunRecord, FlowRunStatus
 from .store import UNSET, FlowStore, now_iso
+from .supervisor import resolve_supervisor_reconcile_trigger
 from .worker_process import (
     FlowWorkerHealth,
     check_worker_health,
@@ -371,7 +371,7 @@ def reconcile_flow_run(
                 crash_info = _ensure_crash_payload(repo_root, record, store, health)
 
             now = now_iso()
-            trigger = resolve_reconcile_trigger(record, health)
+            trigger = resolve_supervisor_reconcile_trigger(record, health)
 
             if trigger is None:
                 if record.status == FlowRunStatus.PAUSED and health.status in {
