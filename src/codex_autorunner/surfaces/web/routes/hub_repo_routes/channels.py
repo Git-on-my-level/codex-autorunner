@@ -266,18 +266,25 @@ class HubChannelService:
             entry["thread_id"] = thread_id
         return entry
 
+    def _binding_merge_identity(self, entry: dict[str, Any]) -> Optional[str]:
+        platform = str(entry.get("platform") or "").strip().lower()
+        chat_id = str(entry.get("chat_id") or "").strip()
+        if platform == "discord" and chat_id:
+            return f"discord:{chat_id}"
+        return channel_entry_key(entry)
+
     def _merge_binding_entries(
         self,
         entries: list[dict[str, Any]],
         *binding_sources: dict[str, dict[str, Any]],
     ) -> list[dict[str, Any]]:
         merged = list(entries)
-        seen = {
-            key
+        seen_identities = {
+            identity
             for entry in merged
-            if isinstance((key := channel_entry_key(entry)), str)
+            if isinstance((identity := self._binding_merge_identity(entry)), str)
         }
-        synthesized_seen: set[str] = set()
+        synthesized_seen_identities: set[str] = set()
         for bindings in binding_sources:
             for binding in bindings.values():
                 if not isinstance(binding, dict):
@@ -285,12 +292,15 @@ class HubChannelService:
                 entry = self._binding_directory_entry(binding)
                 if entry is None:
                     continue
-                key = channel_entry_key(entry)
-                if not isinstance(key, str):
+                identity = self._binding_merge_identity(entry)
+                if not isinstance(identity, str):
                     continue
-                if key in seen or key in synthesized_seen:
+                if (
+                    identity in seen_identities
+                    or identity in synthesized_seen_identities
+                ):
                     continue
-                synthesized_seen.add(key)
+                synthesized_seen_identities.add(identity)
                 merged.append(entry)
         return merged
 

@@ -441,6 +441,50 @@ def test_hub_channel_directory_route_includes_binding_rows_without_directory_ent
     assert by_key["telegram:-1001:77"]["repo_id"] == "work"
 
 
+def test_hub_channel_directory_route_deduplicates_legacy_discord_guild_keys(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    supervisor = create_test_hub_supervisor(hub_root)
+    repo = supervisor.create_repo("work")
+
+    ChannelDirectoryStore(hub_root).record_seen(
+        "discord",
+        "chan-legacy",
+        "guild-1",
+        "CAR / #legacy",
+        {"guild_id": "guild-1"},
+    )
+    write_discord_binding_rows(
+        hub_root / ".codex-autorunner" / "discord_state.sqlite3",
+        rows=[
+            {
+                "channel_id": "chan-legacy",
+                "guild_id": "guild-1",
+                "workspace_path": str(repo.path),
+                "repo_id": "work",
+                "pma_enabled": 0,
+                "agent": "codex",
+                "updated_at": "2026-01-01T00:00:01Z",
+            }
+        ],
+    )
+
+    client = TestClient(create_hub_app(hub_root))
+    rows = client.get("/hub/chat/channels", params={"limit": 20}).json()["entries"]
+    matching_rows = [
+        row
+        for row in rows
+        if row.get("entry", {}).get("platform") == "discord"
+        and row.get("entry", {}).get("chat_id") == "chan-legacy"
+    ]
+
+    assert len(matching_rows) == 1
+    assert matching_rows[0]["key"] == "discord:chan-legacy:guild-1"
+    assert matching_rows[0]["repo_id"] == "work"
+    assert matching_rows[0]["display"] == "CAR / #legacy"
+
+
 def test_hub_channel_directory_route_uses_managed_thread_id_for_pma_usage(
     tmp_path: Path,
 ) -> None:
