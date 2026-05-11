@@ -934,8 +934,8 @@
   async function ensureChatForSelectedAgent(): Promise<string | null> {
     const activeAgent = activeChat?.agentId?.trim().toLowerCase() ?? '';
     const requestedAgent = selectedAgent.trim().toLowerCase();
-    const activeProfile = activeChat?.agentProfile?.trim() ?? '';
-    const requestedProfile = requestedAgent === 'hermes' ? selectedProfile.trim() : '';
+    const activeProfile = (activeChat?.agentProfile?.trim() ?? '').toLowerCase();
+    const requestedProfile = requestedAgent === 'hermes' ? selectedProfile.trim().toLowerCase() : '';
     const profileMatches = requestedAgent !== 'hermes' || activeProfile === requestedProfile;
     if (activeAgent && activeAgent === requestedAgent && profileMatches) return activeChatId;
     const result = await pmaApi.pma.createChat(

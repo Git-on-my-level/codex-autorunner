@@ -183,10 +183,9 @@ def build_pma_meta_routes(
             include_builtin=False,
         )
         payload: dict[str, Any] = {
-            "agents": agents,
+            "agents": enriched_agents,
             "default": effective_default_agent,
         }
-        payload["agents"] = enriched_agents
         if (
             effective_default_agent
             or defaults.get("profile")
