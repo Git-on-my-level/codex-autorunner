@@ -56,7 +56,6 @@
   let flowEvents = $state<JsonRecord[]>([]);
   let workerActivity = $derived(buildTicketWorkerActivity(dispatchHistory, flowEvents));
   let streamSubscription: StreamSubscription | null = null;
-  let refreshTimer: ReturnType<typeof setInterval> | null = null;
   let agents = $state<JsonRecord[]>([]);
   let modelCatalogs = $state<Record<string, JsonRecord[] | null>>({});
   // SvelteKit reuses this page while only route params change; slow refreshes must not repaint a previous ticket.
@@ -66,7 +65,6 @@
     unsubscribeReadModels = readModelEntityStore.subscribe((state) => {
       readModelState = state;
     });
-    refreshTimer = setInterval(() => void loadTicketDetail(false), 10000);
     void loadPickerSupport();
   });
 
@@ -88,7 +86,6 @@
 
   onDestroy(() => {
     unsubscribeReadModels?.();
-    if (refreshTimer) clearInterval(refreshTimer);
     closeFlowStream();
   });
 
@@ -200,15 +197,28 @@
     closeFlowStream();
     streamSubscription = openFlowRunEventSource(runId, { repo: ownerId }, {
       onEvent: (event) => {
-        flowEvents = [...flowEvents, { ...event.payload, seq: event.payload.seq ?? event.id }].slice(-120);
+        const payload = { ...event.payload, seq: event.payload.seq ?? event.id };
+        flowEvents = [...flowEvents, payload].slice(-120);
+        if (isTerminalFlowEvent(payload)) {
+          void loadTicketDetail(false, ownerId, ticketId);
+          closeFlowStream();
+        }
       },
-      onError: () => closeFlowStream()
+      onError: () => {
+        void loadTicketDetail(false, ownerId, ticketId);
+      }
     });
   }
 
   function closeFlowStream(): void {
     streamSubscription?.close();
     streamSubscription = null;
+  }
+
+  function isTerminalFlowEvent(payload: JsonRecord): boolean {
+    const status = String(payload.status ?? payload.flow_status ?? payload.state ?? '').toLowerCase();
+    const eventType = String(payload.event_type ?? payload.type ?? '').toLowerCase();
+    return ['completed', 'complete', 'done', 'failed', 'cancelled', 'canceled'].includes(status) || eventType.includes('terminal');
   }
 
   async function runCommand(command: 'resume' | 'bootstrap'): Promise<void> {

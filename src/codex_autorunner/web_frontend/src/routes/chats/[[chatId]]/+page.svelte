@@ -441,10 +441,6 @@
     draft = page.url.searchParams.get('draft') ?? draft;
     void loadInitial();
     connectChatStream();
-    const interval = window.setInterval(() => {
-      if (activeChatId) void refreshActive(activeChatId, { quiet: true });
-    }, 7000);
-    return () => window.clearInterval(interval);
   });
 
   $effect(() => {
@@ -790,6 +786,15 @@
     streamState = 'connecting';
     streamError = null;
     streamSubscription = openPmaTailEventSource(chatId, {
+      onStatus: (status) => {
+        if (activeChatId !== chatId) return;
+        if (status === 'connecting' && streamState !== 'connected') streamState = 'connecting';
+        if (status === 'connected') {
+          streamState = 'connected';
+          streamError = null;
+        }
+        if (status === 'interrupted') streamState = 'interrupted';
+      },
       onEvent: (event) => {
         if (activeChatId !== chatId) return;
         streamState = 'connected';
@@ -824,7 +829,8 @@
           return;
         }
         streamState = 'interrupted';
-        streamError = 'Live chat updates were interrupted. Polling continues in the background.';
+        streamError = 'Live chat updates were interrupted. Reconnecting and repairing from the latest snapshot.';
+        scheduleActiveRefresh(chatId, 900);
       }
     });
   }
@@ -859,6 +865,9 @@
         if (event.kind === 'chat_event') {
           replacePmaChatList(reconcileChatSurfaceEvent(chats, event.payload));
         }
+      },
+      onError: () => {
+        if (activeChatId) scheduleActiveRefresh(activeChatId, 900);
       }
     });
   }

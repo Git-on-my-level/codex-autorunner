@@ -1,6 +1,6 @@
 <script lang="ts">
   import { page } from '$app/state';
-  import { onDestroy, onMount } from 'svelte';
+  import { onMount } from 'svelte';
   import AutoDismissNotice from '$lib/components/AutoDismissNotice.svelte';
   import RepoWorktreeViews from '$lib/components/RepoWorktreeViews.svelte';
   import { confirmAndArchiveState, confirmAndCleanupWorktree, type ActionNotice } from '$lib/actions/repoWorktreeActions';
@@ -26,15 +26,9 @@
   let sectionIssues = $state<PartialPageIssue[]>([]);
   let notice = $state<ActionNotice | null>(null);
   let syncRepoBusy = $state(false);
-  let refreshTimer: ReturnType<typeof setInterval> | null = null;
 
   onMount(() => {
     void loadRepoDetail();
-    refreshTimer = setInterval(() => void loadRepoDetail(false), 10000);
-  });
-
-  onDestroy(() => {
-    if (refreshTimer) clearInterval(refreshTimer);
   });
 
   async function loadRepoDetail(showLoading = true): Promise<void> {

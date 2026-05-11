@@ -3,6 +3,7 @@ import {
   normalizeChatSurfaceStreamEvent,
   normalizePmaChatStreamEvent,
   normalizePmaTailStreamEvent,
+  openFlowRunEventSource,
   openChatSurfaceEventSource,
   openPmaChatEventSource,
   openPmaTailEventSource,
@@ -10,9 +11,42 @@ import {
   parseSseFrame
 } from './streaming';
 
+class FakeEventSource extends EventTarget {
+  static instances: FakeEventSource[] = [];
+  closed = false;
+
+  constructor(
+    readonly url: string,
+    readonly init?: EventSourceInit
+  ) {
+    super();
+    FakeEventSource.instances.push(this);
+  }
+
+  close(): void {
+    this.closed = true;
+  }
+
+  emit(type: string, data: unknown, id = ''): void {
+    this.dispatchEvent(
+      new MessageEvent(type, {
+        data: typeof data === 'string' ? data : JSON.stringify(data),
+        lastEventId: id
+      })
+    );
+  }
+
+  fail(): void {
+    this.dispatchEvent(new Event('error'));
+  }
+}
+
 describe('SSE helpers', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.useRealTimers();
+    if (typeof localStorage !== 'undefined') localStorage.clear();
+    FakeEventSource.instances = [];
   });
 
   it('parses named SSE frames with ids and retry hints', () => {
@@ -130,4 +164,59 @@ describe('SSE helpers', () => {
     subscription.close();
     expect(close).toHaveBeenCalledOnce();
   });
+
+  it('persists chat surface cursors and reconnects with backoff', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('EventSource', FakeEventSource);
+    vi.stubGlobal('localStorage', memoryStorage());
+    const events: unknown[] = [];
+
+    const subscription = openChatSurfaceEventSource({ onEvent: (event) => events.push(event) }, '/car');
+    expect(FakeEventSource.instances[0].url).toBe('/car/hub/chat/events');
+
+    FakeEventSource.instances[0].emit('chat.event', { event_type: 'surface.updated' }, '22');
+    expect(localStorage.getItem('car.stream.cursor.chat.surface')).toBe('22');
+    FakeEventSource.instances[0].fail();
+    expect(FakeEventSource.instances[0].closed).toBe(true);
+
+    vi.advanceTimersByTime(500);
+    expect(FakeEventSource.instances[1].url).toBe('/car/hub/chat/events?cursor=22');
+    expect(events).toHaveLength(1);
+    subscription.close();
+  });
+
+  it('resumes flow run streams by persisted event id after interruption', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('EventSource', FakeEventSource);
+    vi.stubGlobal('localStorage', memoryStorage());
+    const events: unknown[] = [];
+
+    const subscription = openFlowRunEventSource('run-1', { repo: 'repo-1' }, { onEvent: (event) => events.push(event) }, '/car');
+    expect(FakeEventSource.instances[0].url).toBe('/car/repos/repo-1/api/flows/run-1/events');
+
+    FakeEventSource.instances[0].emit('message', { status: 'running' }, '7');
+    expect(localStorage.getItem('car.stream.cursor.flow.repo-1.run-1')).toBe('7');
+    FakeEventSource.instances[0].fail();
+    vi.advanceTimersByTime(500);
+
+    expect(FakeEventSource.instances[1].url).toBe('/car/repos/repo-1/api/flows/run-1/events?after=7');
+    expect(events).toEqual([{ id: '7', payload: { status: 'running' } }]);
+    subscription.close();
+  });
 });
+
+function memoryStorage(): Storage {
+  const values = new Map<string, string>();
+  return {
+    get length() {
+      return values.size;
+    },
+    clear: () => values.clear(),
+    getItem: (key) => values.get(key) ?? null,
+    key: (index) => Array.from(values.keys())[index] ?? null,
+    removeItem: (key) => values.delete(key),
+    setItem: (key, value) => {
+      values.set(key, value);
+    }
+  };
+}

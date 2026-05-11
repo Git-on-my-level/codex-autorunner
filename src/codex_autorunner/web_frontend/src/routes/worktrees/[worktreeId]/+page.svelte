@@ -1,7 +1,7 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
-  import { onDestroy, onMount } from 'svelte';
+  import { onMount } from 'svelte';
   import AutoDismissNotice from '$lib/components/AutoDismissNotice.svelte';
   import RepoWorktreeViews from '$lib/components/RepoWorktreeViews.svelte';
   import { confirmAndArchiveState, confirmAndCleanupWorktree, type ActionNotice } from '$lib/actions/repoWorktreeActions';
@@ -22,15 +22,9 @@
   let notice = $state<ActionNotice | null>(null);
   let syncRepoBusy = $state(false);
   let backingRepoId = $state<string | null>(null);
-  let refreshTimer: ReturnType<typeof setInterval> | null = null;
 
   onMount(() => {
     void loadWorktreeDetail();
-    refreshTimer = setInterval(() => void loadWorktreeDetail(false), 10000);
-  });
-
-  onDestroy(() => {
-    if (refreshTimer) clearInterval(refreshTimer);
   });
 
   async function loadWorktreeDetail(showLoading = true): Promise<void> {

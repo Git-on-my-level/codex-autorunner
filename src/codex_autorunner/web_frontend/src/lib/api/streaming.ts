@@ -35,6 +35,7 @@ export type FlowRunStreamEvent = {
 export type JsonStreamOptions = {
   onEvent: (event: PmaTailStreamEvent) => void;
   onError?: (error: Event) => void;
+  onStatus?: (status: 'connecting' | 'connected' | 'interrupted' | 'closed') => void;
   withCredentials?: boolean;
 };
 
@@ -47,6 +48,7 @@ export type PmaChatStreamOptions = {
 export type ChatSurfaceStreamOptions = {
   onEvent: (event: ChatSurfaceStreamEvent) => void;
   onError?: (error: Event) => void;
+  onStatus?: (status: 'connecting' | 'connected' | 'interrupted' | 'closed') => void;
   withCredentials?: boolean;
 };
 
@@ -115,10 +117,13 @@ export function openPmaTailEventSource(
   basePath = runtimeBasePath()
 ): StreamSubscription {
   const encoded = encodeURIComponent(managedThreadId);
-  const source = new EventSource(withRuntimeBasePath(`/hub/pma/threads/${encoded}/tail/events`, basePath), {
-    withCredentials: options.withCredentials
-  });
+  let closed = false;
+  let source: EventSource | null = null;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let attempt = 0;
   const handle = (message: MessageEvent) => {
+    attempt = 0;
+    options.onStatus?.('connected');
     options.onEvent(
       normalizePmaTailStreamEvent({
         id: message.lastEventId || null,
@@ -128,13 +133,40 @@ export function openPmaTailEventSource(
       })
     );
   };
-  source.addEventListener('state', handle);
-  source.addEventListener('tail', handle);
-  source.addEventListener('timeline', handle);
-  source.addEventListener('progress', handle);
-  source.addEventListener('message', handle);
-  source.addEventListener('error', (event) => options.onError?.(event));
-  return { close: () => source.close() };
+  const connect = () => {
+    if (closed) return;
+    options.onStatus?.('connecting');
+    source = new EventSource(withRuntimeBasePath(`/hub/pma/threads/${encoded}/tail/events`, basePath), {
+      withCredentials: options.withCredentials
+    });
+    source.addEventListener('state', handle);
+    source.addEventListener('tail', handle);
+    source.addEventListener('timeline', handle);
+    source.addEventListener('progress', handle);
+    source.addEventListener('message', handle);
+    source.addEventListener('error', (event) => {
+      if (closed) return;
+      options.onStatus?.('interrupted');
+      options.onError?.(event);
+      source?.close();
+      const delay = Math.min(8000, 500 * 2 ** attempt);
+      attempt += 1;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        connect();
+      }, delay);
+    });
+  };
+  connect();
+  return {
+    close: () => {
+      closed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      source?.close();
+      options.onStatus?.('closed');
+    }
+  };
 }
 
 export function openPmaChatEventSource(
@@ -164,10 +196,15 @@ export function openChatSurfaceEventSource(
   options: ChatSurfaceStreamOptions,
   basePath = runtimeBasePath()
 ): StreamSubscription {
-  const source = new EventSource(withRuntimeBasePath('/hub/chat/events', basePath), {
-    withCredentials: options.withCredentials
-  });
+  let closed = false;
+  let source: EventSource | null = null;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let attempt = 0;
+  const storageKey = 'car.stream.cursor.chat.surface';
   const handle = (message: MessageEvent) => {
+    attempt = 0;
+    options.onStatus?.('connected');
+    if (message.lastEventId) rememberCursor(storageKey, message.lastEventId);
     options.onEvent(
       normalizeChatSurfaceStreamEvent({
         id: message.lastEventId || null,
@@ -177,11 +214,40 @@ export function openChatSurfaceEventSource(
       })
     );
   };
-  source.addEventListener('chat.snapshot', handle);
-  source.addEventListener('chat.event', handle);
-  source.addEventListener('message', handle);
-  source.addEventListener('error', (event) => options.onError?.(event));
-  return { close: () => source.close() };
+  const connect = () => {
+    if (closed) return;
+    options.onStatus?.('connecting');
+    const cursor = readCursor(storageKey);
+    const path = cursor ? `/hub/chat/events?cursor=${encodeURIComponent(cursor)}` : '/hub/chat/events';
+    source = new EventSource(withRuntimeBasePath(path, basePath), {
+      withCredentials: options.withCredentials
+    });
+    source.addEventListener('chat.snapshot', handle);
+    source.addEventListener('chat.event', handle);
+    source.addEventListener('message', handle);
+    source.addEventListener('error', (event) => {
+      if (closed) return;
+      options.onStatus?.('interrupted');
+      options.onError?.(event);
+      source?.close();
+      const delay = Math.min(8000, 500 * 2 ** attempt);
+      attempt += 1;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        connect();
+      }, delay);
+    });
+  };
+  connect();
+  return {
+    close: () => {
+      closed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      source?.close();
+      options.onStatus?.('closed');
+    }
+  };
 }
 
 export function openFlowRunEventSource(
@@ -196,14 +262,44 @@ export function openFlowRunEventSource(
 ): StreamSubscription {
   const workspaceId = owner?.repo ?? owner?.worktree;
   const prefix = workspaceId ? `/repos/${encodeURIComponent(workspaceId)}/api/flows` : '/api/flows';
-  const source = new EventSource(withRuntimeBasePath(`${prefix}/${encodeURIComponent(runId)}/events`, basePath), {
-    withCredentials: options.withCredentials
-  });
-  source.addEventListener('message', (message: MessageEvent) => {
-    options.onEvent({ id: message.lastEventId || null, payload: asRecord(parseJson(message.data)) });
-  });
-  source.addEventListener('error', (event) => options.onError?.(event));
-  return { close: () => source.close() };
+  const storageKey = `car.stream.cursor.flow.${workspaceId ?? 'hub'}.${runId}`;
+  let closed = false;
+  let source: EventSource | null = null;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let attempt = 0;
+  const connect = () => {
+    if (closed) return;
+    const after = readCursor(storageKey);
+    const query = after ? `?after=${encodeURIComponent(after)}` : '';
+    source = new EventSource(withRuntimeBasePath(`${prefix}/${encodeURIComponent(runId)}/events${query}`, basePath), {
+      withCredentials: options.withCredentials
+    });
+    source.addEventListener('message', (message: MessageEvent) => {
+      attempt = 0;
+      if (message.lastEventId) rememberCursor(storageKey, message.lastEventId);
+      options.onEvent({ id: message.lastEventId || null, payload: asRecord(parseJson(message.data)) });
+    });
+    source.addEventListener('error', (event) => {
+      if (closed) return;
+      options.onError?.(event);
+      source?.close();
+      const delay = Math.min(8000, 500 * 2 ** attempt);
+      attempt += 1;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        connect();
+      }, delay);
+    });
+  };
+  connect();
+  return {
+    close: () => {
+      closed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      source?.close();
+    }
+  };
 }
 
 function parseRetry(value: string): number | null {
@@ -222,4 +318,20 @@ function parseJson(value: string): unknown {
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function readCursor(key: string): string | null {
+  try {
+    return typeof localStorage === 'undefined' ? null : localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function rememberCursor(key: string, cursor: string): void {
+  try {
+    if (typeof localStorage !== 'undefined') localStorage.setItem(key, cursor);
+  } catch {
+    // Cursor persistence is best-effort; streams still resume through browser Last-Event-ID within one connection.
+  }
 }
