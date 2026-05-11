@@ -29,6 +29,7 @@ from .....adapters.chat.managed_thread_turns import (
     ManagedThreadSurfaceInfo,
     ManagedThreadTurnCoordinator,
     build_managed_thread_delivery_intent,
+    build_managed_thread_input_items,
 )
 from .....adapters.github.managed_thread_pr_binding import (
     self_claim_and_arm_pr_binding,
@@ -904,7 +905,10 @@ def build_managed_thread_runtime_routes(
                 reasoning=options.reasoning,
                 approval_mode=options.approval_policy,
                 context_profile=options.context_profile,
-                input_items=options.execution_input_items,
+                input_items=build_managed_thread_input_items(
+                    options.execution_prompt,
+                    options.execution_input_items,
+                ),
                 metadata=merge_bound_chat_execution_metadata(
                     {
                         "runtime_prompt": options.execution_prompt,

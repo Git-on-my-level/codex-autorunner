@@ -70,19 +70,23 @@ def resolve_managed_thread_message_options(
 ) -> ManagedThreadMessageOptions:
     busy_policy = normalize_busy_policy(input.busy_policy)
     message = str(input.message or "")
-    if not message.strip():
+    attachments = normalize_managed_thread_attachments(input.attachments)
+    if not message.strip() and not attachments:
         raise ValueError("message is required")
     max_text_chars = int(input.defaults.get("max_text_chars", 0) or 0)
     validate_max_text_chars(message, max_text_chars)
 
-    attachments = normalize_managed_thread_attachments(input.attachments)
     attachment_context = build_managed_thread_attachment_execution_context(
         attachments,
         hub_root=input.hub_root,
     )
     execution_message = message
     if attachment_context is not None:
-        execution_message = f"{message}\n\n{attachment_context.prompt_text}"
+        execution_message = (
+            f"{message}\n\n{attachment_context.prompt_text}"
+            if message.strip()
+            else attachment_context.prompt_text
+        )
     model = _normalize_optional_text(input.model) or input.defaults.get("model")
     reasoning = _normalize_optional_text(input.reasoning) or input.defaults.get(
         "reasoning"
