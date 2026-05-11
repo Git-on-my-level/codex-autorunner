@@ -350,6 +350,7 @@ class ChatSurfaceReadService:
                 )
             projection = _projection(projections, "pma", thread_id)
             lifecycle_status = _normalize_text(row["lifecycle_status"]) or "active"
+            metadata = _json_object(_row_get(row, "metadata_json"))
             projection.merge(
                 lifecycle=lifecycle,
                 lifecycle_status=lifecycle_status,
@@ -372,11 +373,11 @@ class ChatSurfaceReadService:
                 fact="managed_thread",
                 metadata={
                     "agent_id": _normalize_text(row["agent_id"]),
-                    "agent_profile": _normalize_text(_row_get(row, "agent_profile")),
+                    "agent_profile": _normalize_text(metadata.get("agent_profile")),
                     "backend_thread_id": _normalize_text(
                         _row_get(row, "backend_thread_id")
                     ),
-                    "model": _normalize_text(_row_get(row, "model")),
+                    "model": _normalize_text(metadata.get("model")),
                     "runtime_status": _normalize_text(row["runtime_status"]),
                     "target_runtime_status": _normalize_text(row["runtime_status"]),
                     "queue_depth": queue_depth_by_thread.get(thread_id, 0),

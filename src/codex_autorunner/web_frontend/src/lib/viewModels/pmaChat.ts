@@ -2064,6 +2064,25 @@ export function buildManagedThreadMessagePayload(
   };
 }
 
+export type ExistingPmaChatSendPlanInput = {
+  activeChatId: string | null;
+  activeChat: Pick<PmaChatSummary, 'agentProfile'> | null;
+  selectedProfile?: string | null;
+};
+
+export type ExistingPmaChatSendPlan = {
+  targetChatId: string | null;
+  profile: string;
+};
+
+export function buildExistingPmaChatSendPlan(input: ExistingPmaChatSendPlanInput): ExistingPmaChatSendPlan {
+  const persistedProfile = input.activeChat?.agentProfile?.trim();
+  return {
+    targetChatId: input.activeChatId,
+    profile: persistedProfile || input.selectedProfile?.trim() || ''
+  };
+}
+
 export function modelReasoningOptions(model: Record<string, unknown> | null): string[] {
   if (!model) return [];
   if (model.supports_reasoning === false || model.supportsReasoning === false) return [];

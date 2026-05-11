@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { PmaChatSummary, PmaRunProgress, PmaTimelineItem, SurfaceArtifact } from './domain';
 import {
   artifactCardView,
+  buildExistingPmaChatSendPlan,
   buildManagedThreadCreatePayload,
   buildManagedThreadMessagePayload,
   agentCapabilityAllowed,
@@ -238,7 +239,7 @@ describe('PMA chat view helpers', () => {
           resource_owner: { repo_id: 'repo-1', resource_kind: 'repo', resource_id: 'repo-1' },
           display: { display_name: 'Discord Ops' },
           updated_at: '2026-05-04T01:00:00Z',
-          metadata: { agent_id: 'codex', latest_execution_status: 'running' }
+          metadata: { agent_id: 'codex', agent_profile: 'm4-pma', latest_execution_status: 'running' }
         },
         {
           surface_kind: 'telegram',
@@ -254,6 +255,7 @@ describe('PMA chat view helpers', () => {
         id: 'thread-1',
         title: 'Discord Ops',
         status: 'running',
+        agentProfile: 'm4-pma',
         repoId: 'repo-1',
         raw: { surface_kind: 'discord', surface_key: 'channel-1', binding_kind: 'discord', binding_id: 'channel-1' }
       },
@@ -299,6 +301,24 @@ describe('PMA chat view helpers', () => {
       chats: next,
       replacementChatId: 'new-thread'
     });
+  });
+
+  it('keeps existing-chat sends bound to the active thread despite picker drift', () => {
+    expect(
+      buildExistingPmaChatSendPlan({
+        activeChatId: 'thread-1',
+        activeChat: { agentProfile: 'm4-pma' },
+        selectedProfile: 'default'
+      })
+    ).toEqual({ targetChatId: 'thread-1', profile: 'm4-pma' });
+
+    expect(
+      buildExistingPmaChatSendPlan({
+        activeChatId: 'thread-1',
+        activeChat: { agentProfile: null },
+        selectedProfile: 'm4-pma'
+      })
+    ).toEqual({ targetChatId: 'thread-1', profile: 'm4-pma' });
   });
 
   it('applies generic chat events through the same chat-list reconciliation path', () => {
