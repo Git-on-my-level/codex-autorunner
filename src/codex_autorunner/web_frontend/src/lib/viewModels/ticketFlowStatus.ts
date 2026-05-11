@@ -36,6 +36,7 @@ export function buildTicketFlowStatusViewModel(
   const doneCount = scopedTickets.filter((ticket) => ticket.status === 'done').length;
   const totalCount = scopedTickets.length;
   const status = activeRun?.status ?? currentTicket?.status ?? (doneCount > 0 && doneCount === totalCount ? 'done' : 'idle');
+  const recoveryState = recoveryStateFromRun(run);
   const lastActivityAt =
     run?.lastEventAt ??
     currentTicket?.updatedAt ??
@@ -57,7 +58,7 @@ export function buildTicketFlowStatusViewModel(
     numberFromRaw(run?.raw, ['elapsed_seconds', 'duration_seconds', 'state.elapsed_seconds']);
   return {
     status,
-    statusLabel: statusLabel(status),
+    statusLabel: recoveryStatusLabel(recoveryState) ?? statusLabel(status),
     currentTicketLabel: currentTicket ? ticketDisplayLabel(currentTicket) : 'None',
     currentTicketHref: currentTicket ? ticketDetailHref(currentTicket) : null,
     currentTicketId: currentTicket?.id ?? null,
@@ -65,8 +66,8 @@ export function buildTicketFlowStatusViewModel(
     elapsedLabel: formatElapsed(elapsed),
     progressLabel: `${doneCount}/${totalCount}`,
     lastActivityLabel: formatRelativeTime(lastActivityAt, now),
-    reasonLabel: reasonFromRun(run) ?? reasonFromTickets(scopedTickets) ?? 'No reason reported',
-    signal: statusSignal(status)
+    reasonLabel: recoveryReasonFromRun(run) ?? reasonFromRun(run) ?? reasonFromTickets(scopedTickets) ?? 'No reason reported',
+    signal: recoverySignal(recoveryState) ?? statusSignal(status)
   };
 }
 
@@ -238,6 +239,53 @@ function reasonFromRun(run: PmaRunProgress | null): string | null {
     stringFromRaw(run.raw, 'state.ticket_engine.reason') ??
     run.phase
   );
+}
+
+function recoveryStateFromRun(run: PmaRunProgress | null): string | null {
+  if (!run) return null;
+  return (
+    stringFromRaw(run.raw, 'run_state.recovery_state') ??
+    stringFromRaw(run.raw, 'canonical_state_v1.recovery_state') ??
+    stringFromRaw(run.raw, 'recovery_state')
+  );
+}
+
+function recoveryReasonFromRun(run: PmaRunProgress | null): string | null {
+  if (!run) return null;
+  const state = recoveryStateFromRun(run);
+  if (state === 'commit_barrier_pending') {
+    return 'Committing or preserving completed ticket work before advancing';
+  }
+  if (state === 'restart_exhausted') {
+    return (
+      stringFromRaw(run.raw, 'run_state.blocking_reason') ??
+      'Restart attempts exhausted; inspect the crash artifact and resume or restart intentionally'
+    );
+  }
+  if (state === 'recovering') {
+    return stringFromRaw(run.raw, 'run_state.crash_reason') ?? 'Worker recovery in progress';
+  }
+  if (state === 'restarted') {
+    return 'Worker restarted after recovery';
+  }
+  return null;
+}
+
+function recoveryStatusLabel(state: string | null): string | null {
+  if (state === 'commit_barrier_pending') return 'Preserving work';
+  if (state === 'restart_exhausted') return 'Recovery exhausted';
+  if (state === 'recovering') return 'Recovering';
+  if (state === 'restarted') return 'Restarted';
+  if (state === 'failed') return 'Recovery failed';
+  return null;
+}
+
+function recoverySignal(state: string | null): TicketFlowStatusViewModel['signal'] | null {
+  if (state === 'restarted') return 'active';
+  if (state === 'recovering' || state === 'commit_barrier_pending') return 'waiting';
+  if (state === 'restart_exhausted') return 'failed';
+  if (state === 'failed') return 'failed';
+  return null;
 }
 
 function reasonFromTickets(tickets: TicketSummary[]): string | null {

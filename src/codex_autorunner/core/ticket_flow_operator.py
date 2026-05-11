@@ -111,6 +111,7 @@ class TicketFlowWorkerCrash(TypedDict):
 
 class TicketFlowRunState(TypedDict, total=False):
     state: str
+    recovery_state: Optional[str]
     blocking_reason: Optional[str]
     current_ticket: Optional[str]
     last_progress_at: Optional[str]
@@ -118,6 +119,14 @@ class TicketFlowRunState(TypedDict, total=False):
     recommended_actions: list[str]
     attention_required: bool
     worker_status: Optional[str]
+    restart_attempts: int
+    restart_max_attempts: Optional[int]
+    restart_exhausted: bool
+    last_recovery_action: Optional[str]
+    crash_reason: Optional[str]
+    reap_reason: Optional[str]
+    commit_barrier_pending: bool
+    commit_barrier: Optional[dict[str, Any]]
     crash: Optional[TicketFlowWorkerCrash]
     flow_status: str
     duration_seconds: Optional[float]
@@ -1041,19 +1050,7 @@ def _canonical_flow_status_state(
 
     run_state = None
     try:
-        has_dispatch, reason = _resolve_pending_dispatch_state(
-            repo_root=repo_root,
-            record=record,
-            max_text_chars=DEFAULT_MAX_TEXT_CHARS,
-        )
-        run_state = build_ticket_flow_run_state(
-            repo_root=repo_root,
-            repo_id=repo_root.name,
-            record=record,
-            store=store,
-            has_pending_dispatch=has_dispatch,
-            dispatch_state_reason=reason,
-        )
+        run_state = _build_status_run_state(repo_root, record, store)
     except (AttributeError, KeyError, OSError, RuntimeError, TypeError, ValueError):
         run_state = None
 
@@ -1071,6 +1068,31 @@ def _canonical_flow_status_state(
         return None
 
 
+def _build_status_run_state(
+    repo_root: Path,
+    record: FlowRunRecord,
+    store: Optional[FlowStore],
+) -> Optional[TicketFlowRunState]:
+    if store is None:
+        return None
+    try:
+        has_dispatch, reason = _resolve_pending_dispatch_state(
+            repo_root=repo_root,
+            record=record,
+            max_text_chars=DEFAULT_MAX_TEXT_CHARS,
+        )
+        return build_ticket_flow_run_state(
+            repo_root=repo_root,
+            repo_id=repo_root.name,
+            record=record,
+            store=store,
+            has_pending_dispatch=has_dispatch,
+            dispatch_state_reason=reason,
+        )
+    except (AttributeError, KeyError, OSError, RuntimeError, TypeError, ValueError):
+        return None
+
+
 def _extract_restart_status(record: FlowRunRecord) -> Optional[dict[str, Any]]:
     state = record.state if isinstance(record.state, dict) else {}
     recovery = state.get("recovery") if isinstance(state, dict) else {}
@@ -1083,8 +1105,97 @@ def _extract_restart_status(record: FlowRunRecord) -> Optional[dict[str, Any]]:
         "max_attempts": restart.get("max_attempts"),
         "last_attempted_at": restart.get("last_attempted_at"),
         "last_failure_reason": restart.get("last_failure_reason"),
+        "last_reason": restart.get("last_reason"),
         "exhausted": bool(restart.get("exhausted")),
     }
+
+
+def _extract_commit_barrier_status(record: FlowRunRecord) -> Optional[dict[str, Any]]:
+    state = record.state if isinstance(record.state, dict) else {}
+    recovery = state.get("recovery") if isinstance(state, dict) else {}
+    recovery = recovery if isinstance(recovery, dict) else {}
+    candidates = [
+        recovery.get("commit_barrier"),
+        recovery.get("commit"),
+        state.get("commit_barrier") if isinstance(state, dict) else None,
+    ]
+    for candidate in candidates:
+        if not isinstance(candidate, dict) or not candidate:
+            continue
+        payload = dict(candidate)
+        pending = any(
+            bool(payload.get(key))
+            for key in (
+                "pending",
+                "required",
+                "commit_pending",
+                "worktree_dirty",
+            )
+        )
+        if pending:
+            payload["pending"] = True
+            return payload
+    return None
+
+
+def _normalize_crash_reason(
+    crash_info: Optional[dict[str, Any]],
+    health: Any,
+    error_message: Optional[str],
+) -> tuple[Optional[str], Optional[str]]:
+    reap_reason = None
+    if health is not None:
+        candidate = getattr(health, "reap_reason", None)
+        if isinstance(candidate, str) and candidate.strip():
+            reap_reason = candidate.strip()
+    if isinstance(crash_info, dict):
+        candidate = crash_info.get("reap_reason")
+        if isinstance(candidate, str) and candidate.strip():
+            reap_reason = candidate.strip()
+        for key in ("exception", "exit_kind", "signal", "last_event"):
+            value = crash_info.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip(), reap_reason
+        exit_code = crash_info.get("exit_code")
+        if isinstance(exit_code, int):
+            return f"exit_code={exit_code}", reap_reason
+    if isinstance(error_message, str) and error_message.strip():
+        return error_message.strip(), reap_reason
+    return None, reap_reason
+
+
+def _derive_recovery_state(
+    *,
+    record_status: FlowRunStatus,
+    dead_worker: bool,
+    restart_status: Optional[dict[str, Any]],
+    commit_barrier: Optional[dict[str, Any]],
+) -> Optional[str]:
+    if isinstance(commit_barrier, dict) and commit_barrier.get("pending"):
+        return "commit_barrier_pending"
+    if isinstance(restart_status, dict) and restart_status.get("exhausted"):
+        return "restart_exhausted"
+    restart_count = 0
+    if isinstance(restart_status, dict):
+        raw_restart_count = restart_status.get("count")
+        if isinstance(raw_restart_count, int) and not isinstance(
+            raw_restart_count, bool
+        ):
+            restart_count = raw_restart_count
+    if restart_count > 0 and record_status == FlowRunStatus.RUNNING:
+        return "restarted"
+    if dead_worker and record_status in {
+        FlowRunStatus.RUNNING,
+        FlowRunStatus.STOPPING,
+        FlowRunStatus.PAUSED,
+    }:
+        return "recovering"
+    if restart_count > 0 and record_status in {
+        FlowRunStatus.FAILED,
+        FlowRunStatus.STOPPED,
+    }:
+        return "failed"
+    return None
 
 
 def _resolve_ticket_path(repo_root: Path, ticket_ref: str) -> Optional[Path]:
@@ -1208,6 +1319,7 @@ def build_ticket_flow_status_snapshot(
             "app": app_metadata,
             "ticket_progress": None,
             "state": updated_state,
+            "run_state": _build_status_run_state(repo_root, record, store),
             "canonical_state_v1": None,
             "freshness": None,
         }
@@ -1221,6 +1333,7 @@ def build_ticket_flow_status_snapshot(
             last_event_seq, last_event_at = None, None
 
     health = check_worker_health(repo_root, record.id)
+    run_state = _build_status_run_state(repo_root, record, store)
     canonical_state = _canonical_flow_status_state(repo_root, record, store)
     freshness = (
         canonical_state.get("freshness") if isinstance(canonical_state, dict) else None
@@ -1252,6 +1365,7 @@ def build_ticket_flow_status_snapshot(
         "app": app_metadata,
         "ticket_progress": ticket_progress(repo_root),
         "state": updated_state,
+        "run_state": run_state,
         "canonical_state_v1": canonical_state,
         "freshness": effective_freshness,
     }
@@ -1297,6 +1411,7 @@ def _ticket_flow_recommended_actions(
     record_status: FlowRunStatus,
     run_id: str,
     has_pending_dispatch: bool,
+    recovery_state: Optional[str] = None,
 ) -> list[str]:
     quoted_repo = shlex.quote(str(repo_root))
     archive_cmd = f"car ticket-flow archive --repo {quoted_repo} --run-id {run_id}"
@@ -1304,12 +1419,19 @@ def _ticket_flow_recommended_actions(
     resume_cmd = f"car ticket-flow start --repo {quoted_repo}"
     start_cmd = f"car ticket-flow start --repo {quoted_repo}"
     stop_cmd = f"car ticket-flow stop --repo {quoted_repo} --run-id {run_id}"
+    if recovery_state == "restart_exhausted":
+        crash_cmd = f"open {shlex.quote(str(repo_root / '.codex-autorunner' / 'flows' / run_id / 'crash.json'))}"
+        return [crash_cmd, status_cmd, f"{resume_cmd} --force-new"]
+    if recovery_state == "commit_barrier_pending":
+        return [status_cmd, stop_cmd]
     if state == "completed":
         return [start_cmd]
     if record_status in {FlowRunStatus.FAILED, FlowRunStatus.STOPPED}:
         return [archive_cmd, status_cmd]
     if state == "dead":
         return [f"{resume_cmd} --force-new", status_cmd, stop_cmd]
+    if recovery_state == "recovering":
+        return [status_cmd, stop_cmd]
     if record_status == FlowRunStatus.PAUSED:
         if has_pending_dispatch:
             return [resume_cmd, status_cmd, stop_cmd]
@@ -1399,9 +1521,27 @@ def build_ticket_flow_run_state(
             if parts:
                 crash_summary = " | ".join(parts)
 
+    restart_status = _extract_restart_status(record)
+    commit_barrier = _extract_commit_barrier_status(record)
+    recovery_state = _derive_recovery_state(
+        record_status=record.status,
+        dead_worker=dead_worker,
+        restart_status=restart_status,
+        commit_barrier=commit_barrier,
+    )
+    crash_reason, reap_reason = _normalize_crash_reason(
+        crash_info,
+        health,
+        error_message,
+    )
+
     state = "running"
     if record.status == FlowRunStatus.COMPLETED:
         state = "completed"
+    elif recovery_state == "restart_exhausted":
+        state = "restart_exhausted"
+    elif recovery_state == "commit_barrier_pending":
+        state = "commit_barrier_pending"
     elif dead_worker:
         state = "dead"
     elif record.status == FlowRunStatus.PAUSED:
@@ -1411,7 +1551,8 @@ def build_ticket_flow_run_state(
 
     is_terminal = record.status.is_terminal()
     attention_required = not is_terminal and (
-        state in ("dead", "blocked") or record.status == FlowRunStatus.PAUSED
+        state in ("dead", "blocked", "restart_exhausted", "commit_barrier_pending")
+        or record.status == FlowRunStatus.PAUSED
     )
 
     worker_status = None
@@ -1430,6 +1571,13 @@ def build_ticket_flow_run_state(
             if isinstance(detail, str) and detail.strip()
             else "Worker not running"
         )
+    elif state == "restart_exhausted":
+        blocking_reason = (
+            "Restart attempts exhausted. Inspect the crash artifact before resuming "
+            "or intentionally starting a replacement run."
+        )
+    elif state == "commit_barrier_pending":
+        blocking_reason = "Recovery is preserving completed ticket work while the commit barrier is pending."
     elif state == "blocked":
         blocking_reason = (
             dispatch_state_reason
@@ -1447,10 +1595,40 @@ def build_ticket_flow_run_state(
         record_status=record.status,
         run_id=run_id,
         has_pending_dispatch=has_pending_dispatch,
+        recovery_state=recovery_state,
     )
+    restart_attempts = 0
+    if isinstance(restart_status, dict):
+        raw_restart_attempts = restart_status.get("count")
+        if isinstance(raw_restart_attempts, int) and not isinstance(
+            raw_restart_attempts, bool
+        ):
+            restart_attempts = raw_restart_attempts
+    restart_max_attempts = (
+        restart_status.get("max_attempts") if isinstance(restart_status, dict) else None
+    )
+    if not isinstance(restart_max_attempts, int) or isinstance(
+        restart_max_attempts, bool
+    ):
+        restart_max_attempts = None
+    restart_exhausted = bool(
+        restart_status.get("exhausted") if isinstance(restart_status, dict) else False
+    )
+    last_recovery_action = None
+    if recovery_state == "commit_barrier_pending":
+        last_recovery_action = "commit_barrier_pending"
+    elif isinstance(restart_status, dict):
+        last_recovery_action = _normalize_optional_text(
+            restart_status.get("last_reason")
+        ) or _normalize_optional_text(restart_status.get("last_failure_reason"))
+        if last_recovery_action is None and restart_attempts:
+            last_recovery_action = "restart_attempted"
+    elif recovery_state:
+        last_recovery_action = recovery_state
 
     return {
         "state": state,
+        "recovery_state": recovery_state,
         "blocking_reason": blocking_reason,
         "current_ticket": current_ticket,
         "last_progress_at": last_progress_at,
@@ -1458,6 +1636,16 @@ def build_ticket_flow_run_state(
         "recommended_actions": recommended_actions,
         "attention_required": attention_required,
         "worker_status": worker_status,
+        "restart_attempts": restart_attempts,
+        "restart_max_attempts": restart_max_attempts,
+        "restart_exhausted": restart_exhausted,
+        "last_recovery_action": last_recovery_action,
+        "crash_reason": crash_reason,
+        "reap_reason": reap_reason,
+        "commit_barrier_pending": bool(
+            isinstance(commit_barrier, dict) and commit_barrier.get("pending")
+        ),
+        "commit_barrier": commit_barrier,
         "crash": (
             {
                 "summary": crash_summary,

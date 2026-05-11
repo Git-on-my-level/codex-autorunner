@@ -56,7 +56,7 @@ from ...core.state import now_iso
 from ...core.state_roots import resolve_discord_state_path
 from ..chat.agents import normalize_hermes_profile
 
-DISCORD_STATE_SCHEMA_VERSION = 13
+DISCORD_STATE_SCHEMA_VERSION = 14
 DISCORD_INTERACTION_LEDGER_RETENTION_DAYS = 14
 _UNSET = object()
 _logger = logging.getLogger(__name__)
@@ -214,6 +214,7 @@ class ChannelBinding:
     last_pause_run_id: Optional[str]
     last_pause_dispatch_seq: Optional[str]
     last_terminal_run_id: Optional[str]
+    last_recovery_fingerprint: Optional[str]
     pending_compact_seed: Optional[str]
     pending_compact_session_key: Optional[str]
     updated_at: str
@@ -465,6 +466,18 @@ class DiscordStateStore:
             self._mark_terminal_run_seen_sync,
             channel_id,
             run_id,
+        )
+
+    async def mark_recovery_seen(
+        self,
+        *,
+        channel_id: str,
+        fingerprint: str,
+    ) -> None:
+        await self._run(
+            self._mark_recovery_seen_sync,
+            channel_id,
+            fingerprint,
         )
 
     async def update_pma_state(
@@ -927,6 +940,11 @@ class DiscordStateStore:
                         name="interaction_completion_columns",
                         apply=self._migration_v13,
                     ),
+                    SqliteMigrationStep(
+                        version=14,
+                        name="flow_recovery_cursor",
+                        apply=self._migration_v14,
+                    ),
                 ),
             )
             conn.execute(
@@ -1068,6 +1086,13 @@ class DiscordStateStore:
             ),
         )
 
+    def _migration_v14(self, conn: sqlite3.Connection) -> None:
+        ensure_columns(
+            conn,
+            "channel_bindings",
+            (("last_recovery_fingerprint", "last_recovery_fingerprint TEXT"),),
+        )
+
     def _upsert_binding_sync(
         self,
         channel_id: str,
@@ -1135,6 +1160,11 @@ class DiscordStateStore:
         last_terminal_run_id_raw = (
             row["last_terminal_run_id"]
             if "last_terminal_run_id" in row.keys()
+            else None
+        )
+        last_recovery_fingerprint_raw = (
+            row["last_recovery_fingerprint"]
+            if "last_recovery_fingerprint" in row.keys()
             else None
         )
         pending_compact_seed_raw = (
@@ -1249,6 +1279,11 @@ class DiscordStateStore:
                 if isinstance(last_terminal_run_id_raw, str)
                 else None
             ),
+            last_recovery_fingerprint=(
+                last_recovery_fingerprint_raw
+                if isinstance(last_recovery_fingerprint_raw, str)
+                else None
+            ),
             pending_compact_seed=(
                 pending_compact_seed_raw
                 if isinstance(pending_compact_seed_raw, str)
@@ -1340,6 +1375,23 @@ class DiscordStateStore:
                 WHERE channel_id = ?
                 """,
                 (run_id, now_iso(), channel_id),
+            )
+
+    def _mark_recovery_seen_sync(
+        self,
+        channel_id: str,
+        fingerprint: str,
+    ) -> None:
+        conn = self._connection_sync()
+        with conn:
+            conn.execute(
+                """
+                UPDATE channel_bindings
+                SET last_recovery_fingerprint = ?,
+                    updated_at = ?
+                WHERE channel_id = ?
+                """,
+                (fingerprint, now_iso(), channel_id),
             )
 
     def _update_pma_state_sync(

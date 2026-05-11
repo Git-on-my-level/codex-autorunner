@@ -451,6 +451,46 @@ def test_hub_messages_dead_worker_includes_crash_summary_and_open_url(
         assert crash.get("path") == f".codex-autorunner/flows/{run_id}/crash.json"
 
 
+def test_hub_messages_restart_exhausted_uses_recovery_projection(
+    hub_env, monkeypatch
+) -> None:
+    run_id = "77777777-7777-7777-7777-777777777777"
+    _seed_failed_run(
+        hub_env.repo_root,
+        run_id,
+        state={
+            "recovery": {
+                "restart": {
+                    "count": 2,
+                    "max_attempts": 2,
+                    "exhausted": True,
+                    "last_reason": "worker_dead",
+                    "last_failure_reason": "restart-attempts-exhausted",
+                }
+            }
+        },
+        error_message="Worker died after restart attempts",
+    )
+
+    app = _build_hub_messages_app(hub_env.hub_root, monkeypatch)
+    with TestClient(app) as client:
+        res = client.get("/hub/messages")
+        assert res.status_code == 200
+        items = res.json()["items"]
+        assert len(items) == 1
+        run_state = items[0].get("run_state") or {}
+        assert run_state.get("state") == "restart_exhausted"
+        assert run_state.get("recovery_state") == "restart_exhausted"
+        assert run_state.get("restart_attempts") == 2
+        assert run_state.get("restart_max_attempts") == 2
+        assert run_state.get("restart_exhausted") is True
+        assert "crash.json" in (run_state.get("recommended_action") or "")
+        canonical = items[0].get("canonical_state_v1") or {}
+        assert canonical.get("recovery_state") == "restart_exhausted"
+        assert canonical.get("restart_attempts") == 2
+        assert canonical.get("restart_exhausted") is True
+
+
 def test_hub_messages_surfaces_unreadable_latest_dispatch(hub_env, monkeypatch) -> None:
     run_id = "55555555-5555-5555-5555-555555555555"
     _seed_paused_run(hub_env.repo_root, run_id)

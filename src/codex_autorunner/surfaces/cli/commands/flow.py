@@ -215,6 +215,7 @@ def register_flow_commands(
             ),
             "active_tool": snapshot.get("active_tool"),
             "freshness": snapshot.get("freshness"),
+            "run_state": snapshot.get("run_state"),
             "current_ticket": effective_ticket,
             "app": snapshot.get("app"),
             "ticket_progress": snapshot.get("ticket_progress"),
@@ -280,6 +281,34 @@ def register_flow_commands(
                     detail_parts.append(f"output_updated={output_updated_at.strip()}")
                 suffix = f" {' '.join(detail_parts)}" if detail_parts else ""
                 typer.echo(f"active_tool: {command.strip()}{suffix}")
+        run_state = payload.get("run_state")
+        if isinstance(run_state, dict):
+            recovery_state = run_state.get("recovery_state")
+            if isinstance(recovery_state, str) and recovery_state.strip():
+                typer.echo(f"recovery_state: {recovery_state.strip()}")
+            worker_status = run_state.get("worker_status")
+            if isinstance(worker_status, str) and worker_status.strip():
+                typer.echo(f"worker_status: {worker_status.strip()}")
+            restart_attempts = run_state.get("restart_attempts")
+            restart_max = run_state.get("restart_max_attempts")
+            if isinstance(restart_attempts, int) and not isinstance(
+                restart_attempts, bool
+            ):
+                if isinstance(restart_max, int) and not isinstance(restart_max, bool):
+                    typer.echo(f"restart_attempts: {restart_attempts}/{restart_max}")
+                else:
+                    typer.echo(f"restart_attempts: {restart_attempts}")
+            if run_state.get("commit_barrier_pending"):
+                typer.echo("commit_barrier: pending preserving completed ticket work")
+            last_recovery_action = run_state.get("last_recovery_action")
+            if isinstance(last_recovery_action, str) and last_recovery_action.strip():
+                typer.echo(f"last_recovery_action: {last_recovery_action.strip()}")
+            crash_reason = run_state.get("crash_reason") or run_state.get("reap_reason")
+            if isinstance(crash_reason, str) and crash_reason.strip():
+                typer.echo(f"crash_reap_reason: {crash_reason.strip()}")
+            recommended = run_state.get("recommended_action")
+            if isinstance(recommended, str) and recommended.strip():
+                typer.echo(f"recommended: {recommended.strip()}")
         status = payload.get("status") or ""
         reason_summary = payload.get("reason_summary")
         if isinstance(reason_summary, str) and reason_summary.strip():

@@ -16,7 +16,14 @@ from .state_roots import resolve_repo_flows_db_path, resolve_repo_state_root
 from .text_utils import _iso_now
 
 _COMPLETED_FLOW_STATUSES = {"completed", "done"}
-_ATTENTION_STATES = {"blocked", "dead", "paused"}
+_ATTENTION_STATES = {
+    "blocked",
+    "commit_barrier_pending",
+    "dead",
+    "paused",
+    "recovering",
+    "restart_exhausted",
+}
 _PR_URL_RE = re.compile(r"https://github\.com/[^/\s]+/[^/\s]+/pull/\d+", re.IGNORECASE)
 
 
@@ -310,6 +317,7 @@ def build_canonical_state_v1(
         state = latest_run_status
 
     blocking_reason = _normalize_optional_str(run_state_payload.get("blocking_reason"))
+    recovery_state = _normalize_optional_str(run_state_payload.get("recovery_state"))
     flow_current_ticket = _normalize_optional_str(
         run_state_payload.get("current_ticket")
     )
@@ -408,8 +416,25 @@ def build_canonical_state_v1(
         "last_event_seq": last_event_seq,
         "last_event_at": last_event_at,
         "state": state,
+        "recovery_state": recovery_state,
         "blocking_reason": blocking_reason,
         "attention_required": attention_required,
+        "worker_status": _normalize_optional_str(
+            run_state_payload.get("worker_status")
+        ),
+        "restart_attempts": _normalize_optional_int(
+            run_state_payload.get("restart_attempts")
+        ),
+        "restart_max_attempts": _normalize_optional_int(
+            run_state_payload.get("restart_max_attempts")
+        ),
+        "restart_exhausted": bool(run_state_payload.get("restart_exhausted")),
+        "last_recovery_action": _normalize_optional_str(
+            run_state_payload.get("last_recovery_action")
+        ),
+        "crash_reason": _normalize_optional_str(run_state_payload.get("crash_reason")),
+        "reap_reason": _normalize_optional_str(run_state_payload.get("reap_reason")),
+        "commit_barrier_pending": bool(run_state_payload.get("commit_barrier_pending")),
         "recommended_action": recommended_action,
         "recommended_actions": recommended_actions,
         "recommendation_generated_at": observed_at,
