@@ -29,6 +29,8 @@ from .....core.managed_thread_identity import (
     pma_base_key,
     pma_topic_scoped_key,
 )
+from .....core.managed_thread_store import default_managed_threads_db_path
+from .....core.orchestration.sqlite import resolve_orchestration_sqlite_path
 from .....core.pma_context import (
     get_latest_ticket_flow_run_state_with_record,
 )
@@ -59,6 +61,7 @@ _CHANNEL_DIR_CACHE_TTL_SECONDS = 60.0
 @dataclass(frozen=True)
 class _ChannelDirectoryCacheEntry:
     expires_at: float
+    source_token: tuple[tuple[str, int, int], ...]
     rows: list[dict[str, Any]]
 
 
@@ -218,6 +221,88 @@ class HubChannelService:
         if not isinstance(workspace_path, str) or not workspace_path.strip():
             return None
         return file_chat_discord_key(agent, channel_id, workspace_path)
+
+    def _binding_directory_entry(
+        self, binding: dict[str, Any]
+    ) -> Optional[dict[str, Any]]:
+        platform = str(binding.get("platform") or "").strip().lower()
+        if platform not in {"discord", "telegram"}:
+            return None
+        chat_id = binding.get("chat_id")
+        if not isinstance(chat_id, str) or not chat_id.strip():
+            return None
+        chat_id = chat_id.strip()
+        thread_id = binding.get("thread_id")
+        if not isinstance(thread_id, str) or not thread_id.strip():
+            thread_id = None
+        else:
+            thread_id = thread_id.strip()
+
+        meta: dict[str, Any] = {}
+        if platform == "discord":
+            guild_id = binding.get("guild_id")
+            if isinstance(guild_id, str) and guild_id.strip():
+                meta["guild_id"] = guild_id.strip()
+            display = (
+                f"guild:{meta['guild_id']} / #{chat_id}"
+                if "guild_id" in meta
+                else f"discord:{chat_id}"
+            )
+        else:
+            display = (
+                f"telegram:{chat_id}:{thread_id}"
+                if thread_id
+                else f"telegram:{chat_id}"
+            )
+
+        entry: dict[str, Any] = {
+            "platform": platform,
+            "chat_id": chat_id,
+            "display": display,
+            "seen_at": binding.get("updated_at") or "",
+            "meta": meta,
+        }
+        if thread_id is not None:
+            entry["thread_id"] = thread_id
+        return entry
+
+    def _binding_merge_identity(self, entry: dict[str, Any]) -> Optional[str]:
+        platform = str(entry.get("platform") or "").strip().lower()
+        chat_id = str(entry.get("chat_id") or "").strip()
+        if platform == "discord" and chat_id:
+            return f"discord:{chat_id}"
+        return channel_entry_key(entry)
+
+    def _merge_binding_entries(
+        self,
+        entries: list[dict[str, Any]],
+        *binding_sources: dict[str, dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        merged = list(entries)
+        seen_identities = {
+            identity
+            for entry in merged
+            if isinstance((identity := self._binding_merge_identity(entry)), str)
+        }
+        synthesized_seen_identities: set[str] = set()
+        for bindings in binding_sources:
+            for binding in bindings.values():
+                if not isinstance(binding, dict):
+                    continue
+                entry = self._binding_directory_entry(binding)
+                if entry is None:
+                    continue
+                identity = self._binding_merge_identity(entry)
+                if not isinstance(identity, str):
+                    continue
+                if (
+                    identity in seen_identities
+                    or identity in synthesized_seen_identities
+                ):
+                    continue
+                synthesized_seen_identities.add(identity)
+                merged.append(entry)
+        return merged
 
     def _registry_thread_id(
         self,
@@ -406,6 +491,11 @@ class HubChannelService:
             telegram_thread_bindings_task,
             managed_threads_task,
             return_exceptions=False,
+        )
+        entries = self._merge_binding_entries(
+            entries,
+            discord_bindings,
+            telegram_bindings,
         )
         run_cache: dict[str, dict[str, Any]] = {}
         usage_cache: dict[str, dict[str, dict[str, Any]]] = {}
@@ -711,15 +801,39 @@ class HubChannelService:
     async def _list_cached_channel_rows(self) -> list[dict[str, Any]]:
         now = time.monotonic()
         cached = self._channel_dir_cache
-        if cached is not None and cached.expires_at > now:
+        source_token = self._cache_source_token()
+        if (
+            cached is not None
+            and cached.expires_at > now
+            and cached.source_token == source_token
+        ):
             return copy.deepcopy(cached.rows)
 
         rows = await self._build_channel_rows()
         self._channel_dir_cache = _ChannelDirectoryCacheEntry(
             expires_at=time.monotonic() + _CHANNEL_DIR_CACHE_TTL_SECONDS,
+            source_token=source_token,
             rows=copy.deepcopy(rows),
         )
         return rows
+
+    def _cache_source_token(self) -> tuple[tuple[str, int, int], ...]:
+        paths = [
+            ChannelDirectoryStore(self._context.config.root).path,
+            state_db_path(self._context, "discord_bot", DISCORD_STATE_FILE_DEFAULT),
+            state_db_path(self._context, "telegram_bot", TELEGRAM_STATE_FILE_DEFAULT),
+            resolve_orchestration_sqlite_path(self._context.config.root),
+            default_managed_threads_db_path(self._context.config.root),
+        ]
+        token: list[tuple[str, int, int]] = []
+        for path in paths:
+            try:
+                stat = path.stat()
+            except OSError:
+                token.append((str(path), 0, 0))
+                continue
+            token.append((str(path), stat.st_mtime_ns, stat.st_size))
+        return tuple(token)
 
 
 def build_hub_channel_router(context: HubAppContext) -> APIRouter:
