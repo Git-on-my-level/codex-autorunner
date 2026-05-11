@@ -36,6 +36,11 @@ from .chat_operation_state import (
     ChatOperationSnapshot,
     ChatOperationState,
 )
+from .chat_surface_emitters import (
+    emit_binding_event,
+    emit_chat_surface_event,
+    pma_surface_key,
+)
 from .chat_surface_events import (
     CHAT_SURFACE_EVENT_TYPES,
     ChatSurfaceEvent,
@@ -242,6 +247,8 @@ __all__ = [
     "discord_scheduler_state_to_chat_operation_state",
     "discord_scheduler_terminal_outcome",
     "export_execution_history_bundle",
+    "emit_binding_event",
+    "emit_chat_surface_event",
     "get_agent_definition",
     "initialize_orchestration_sqlite",
     "is_valid_managed_thread_delivery_transition",
@@ -257,6 +264,7 @@ __all__ = [
     "plan_chat_operation_duplicate",
     "plan_chat_operation_recovery",
     "plan_managed_thread_delivery_recovery",
+    "pma_surface_key",
     "record_from_intent",
     "resolve_execution_history_maintenance_policy",
     "resolve_orchestration_sqlite_path",

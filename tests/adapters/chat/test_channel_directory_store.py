@@ -10,6 +10,7 @@ from codex_autorunner.adapters.chat.channel_directory import (
     ChannelDirectoryStore,
     channel_entry_key,
 )
+from codex_autorunner.core.orchestration import SQLiteChatSurfaceEventJournal
 
 
 def test_load_defaults_when_missing(tmp_path: Path) -> None:
@@ -68,6 +69,21 @@ def test_record_seen_keys_by_thread_id(tmp_path: Path) -> None:
         if isinstance(key, str)
     }
     assert keys == {"telegram:123", "telegram:123:777"}
+
+
+def test_record_seen_emits_discovery_event(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    store = ChannelDirectoryStore(hub_root)
+
+    store.record_seen("discord", "channel-1", None, "Ops", {"guild_id": "g1"})
+    store.record_seen("discord", "channel-1", None, "Ops", {"guild_id": "g1"})
+
+    events = SQLiteChatSurfaceEventJournal(hub_root).read_history()
+    assert len(events) == 1
+    assert events[0].event_type == "channel_directory.discovered"
+    assert events[0].surface_kind == "discord"
+    assert events[0].surface_key == "channel-1"
+    assert events[0].status == "discovered"
 
 
 def test_eviction_uses_least_recently_seen_deterministically(

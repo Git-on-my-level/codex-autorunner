@@ -9,6 +9,7 @@ from typing import Any, Optional
 
 from ..text_utils import _normalize_text
 from ..time_utils import now_iso
+from .chat_surface_emitters import emit_binding_event
 from .models import Binding, normalize_resource_owner_fields
 from .sqlite import open_orchestration_sqlite
 
@@ -87,6 +88,9 @@ class OrchestrationBindingStore:
 
         timestamp = now_iso()
         payload = json.dumps(metadata or {}, sort_keys=True, ensure_ascii=True)
+        event_action = "bound"
+        previous_binding_id: Optional[str] = None
+        previous_thread_target_id: Optional[str] = None
         with open_orchestration_sqlite(self._hub_root, durable=self._durable) as conn:
             row = conn.execute(
                 """
@@ -100,6 +104,8 @@ class OrchestrationBindingStore:
                 (normalized_surface_kind, normalized_surface_key),
             ).fetchone()
             if row is not None:
+                previous_binding_id = str(row["binding_id"])
+                previous_thread_target_id = _normalize_text(row["target_id"])
                 existing_target_id = _normalize_text(row["target_id"])
                 existing_agent_id = _normalize_text(row["agent_id"])
                 existing_resource_kind, existing_resource_id, existing_repo_id = (
@@ -120,6 +126,7 @@ class OrchestrationBindingStore:
                     and existing_mode == _normalize_text(mode)
                     and existing_metadata == (metadata or {})
                 ):
+                    event_action = "bound"
                     conn.execute(
                         """
                         UPDATE orch_bindings
@@ -129,6 +136,7 @@ class OrchestrationBindingStore:
                         (timestamp, row["binding_id"]),
                     )
                 else:
+                    event_action = "rebound"
                     conn.execute(
                         """
                         UPDATE orch_bindings
@@ -176,6 +184,7 @@ class OrchestrationBindingStore:
                         ),
                     )
             else:
+                event_action = "bound"
                 conn.execute(
                     """
                     INSERT INTO orch_bindings (
@@ -226,7 +235,22 @@ class OrchestrationBindingStore:
             ).fetchone()
         if refreshed is None:
             raise RuntimeError("binding row missing after upsert")
-        return _binding_from_row(refreshed)
+        binding = _binding_from_row(refreshed)
+        emit_binding_event(
+            self._hub_root,
+            binding,
+            durable=self._durable,
+            event_type=(
+                "surface.rebound" if event_action == "rebound" else "surface.bound"
+            ),
+            idempotency_action=event_action,
+            status=event_action,
+            payload={
+                "previous_binding_id": previous_binding_id,
+                "previous_thread_target_id": previous_thread_target_id,
+            },
+        )
+        return binding
 
     def disable_binding(self, *, binding_id: str) -> Optional[Binding]:
         normalized_binding_id = _normalize_text(binding_id)
@@ -261,7 +285,18 @@ class OrchestrationBindingStore:
                 """,
                 (normalized_binding_id,),
             ).fetchone()
-        return _binding_from_row(refreshed) if refreshed is not None else None
+        binding = _binding_from_row(refreshed) if refreshed is not None else None
+        if binding is not None:
+            emit_binding_event(
+                self._hub_root,
+                binding,
+                durable=self._durable,
+                event_type="surface.archived",
+                idempotency_action="archived",
+                lifecycle_status="archived",
+                status="disabled",
+            )
+        return binding
 
     def get_binding(
         self,

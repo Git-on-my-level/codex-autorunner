@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Mapping, Optional, cast
 
 from ..time_utils import now_iso
+from .chat_surface_emitters import emit_chat_surface_event
 from .managed_thread_delivery import (
     MANAGED_THREAD_DELIVERY_TERMINAL_STATES,
     ManagedThreadDeliveryAttemptResult,
@@ -72,6 +73,7 @@ class SQLiteManagedThreadDeliveryLedger:
             raise RuntimeError(
                 f"delivery record missing after insert: {record.delivery_id}"
             )
+        _emit_delivery_event(self._hub_root, self._durable, stored)
         return ManagedThreadDeliveryRegistration(record=stored, inserted=True)
 
     def get_delivery(self, delivery_id: str) -> Optional[ManagedThreadDeliveryRecord]:
@@ -156,7 +158,14 @@ class SQLiteManagedThreadDeliveryLedger:
             metadata=metadata,
         )
         self._upsert_record(updated)
-        return self.get_delivery(delivery_id)
+        stored = self.get_delivery(delivery_id)
+        if stored is not None and (
+            has_state_update
+            or metadata_updates
+            or changes.get("last_error") is not None
+        ):
+            _emit_delivery_event(self._hub_root, self._durable, stored)
+        return stored
 
     def list_due_deliveries(
         self,
@@ -865,6 +874,39 @@ def _compute_next_attempt_at(
         delay_seconds = min(delay_seconds, max_backoff.total_seconds())
     delay = timedelta(seconds=max(0.0, delay_seconds))
     return (base + delay).isoformat()
+
+
+def _emit_delivery_event(
+    hub_root: Path, durable: bool, record: ManagedThreadDeliveryRecord
+) -> None:
+    state = record.state.value
+    emit_chat_surface_event(
+        hub_root,
+        durable=durable,
+        idempotency_key=(
+            f"delivery:{record.delivery_id}:{state}:{record.attempt_count}"
+        ),
+        event_type="delivery.status_changed",
+        surface_kind=record.target.surface_kind,
+        surface_key=record.target.surface_key,
+        managed_thread_id=record.managed_thread_id,
+        lifecycle_status="active",
+        status=state,
+        source_kind="managed_thread.delivery",
+        source_id=record.delivery_id,
+        payload={
+            "delivery_id": record.delivery_id,
+            "managed_turn_id": record.managed_turn_id,
+            "idempotency_key": record.idempotency_key,
+            "adapter_key": record.target.adapter_key,
+            "attempt_count": record.attempt_count,
+            "next_attempt_at": record.next_attempt_at,
+            "delivered_at": record.delivered_at,
+            "last_error": record.last_error,
+            "final_status": record.envelope.final_status,
+        },
+        occurred_at=record.updated_at or record.created_at,
+    )
 
 
 def _record_to_row_values(record: ManagedThreadDeliveryRecord) -> tuple[Any, ...]:

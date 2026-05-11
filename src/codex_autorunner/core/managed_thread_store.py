@@ -53,6 +53,7 @@ from .managed_thread_store_rows import (
 from .managed_thread_store_rows import (
     workspace_head_branch as _workspace_head_branch,
 )
+from .orchestration.chat_surface_emitters import emit_chat_surface_event
 from .orchestration.models import (
     BackendBinding,
     normalize_resource_owner_fields,
@@ -230,6 +231,86 @@ class ManagedThreadStore:
     def _write_conn(self) -> Iterator[Any]:
         with self._bootstrap.write_conn() as conn:
             yield conn
+
+    def _chat_surface_rows_for_thread(
+        self, managed_thread_id: str
+    ) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = [
+            {"surface_kind": "pma", "surface_key": managed_thread_id}
+        ]
+        with self._read_conn() as conn:
+            binding_rows = conn.execute(
+                """
+                SELECT surface_kind, surface_key, binding_id
+                  FROM orch_bindings
+                 WHERE target_kind = 'thread'
+                   AND target_id = ?
+                   AND disabled_at IS NULL
+                 ORDER BY updated_at DESC, created_at DESC
+                """,
+                (managed_thread_id,),
+            ).fetchall()
+        for row in binding_rows:
+            surface_kind = _coerce_text(row["surface_kind"])
+            surface_key = _coerce_text(row["surface_key"])
+            if surface_kind is None or surface_key is None:
+                continue
+            rows.append(
+                {
+                    "surface_kind": surface_kind,
+                    "surface_key": surface_key,
+                    "binding_id": _coerce_text(row["binding_id"]),
+                }
+            )
+        return rows
+
+    def _emit_thread_event(
+        self,
+        managed_thread_id: str,
+        *,
+        idempotency_action: str,
+        event_type: str,
+        status: str,
+        lifecycle_status: Optional[str] = "active",
+        source_kind: str = "managed_thread.lifecycle",
+        source_id: Optional[str] = None,
+        payload: Optional[dict[str, Any]] = None,
+        occurred_at: Optional[str] = None,
+        include_bindings: bool = True,
+    ) -> None:
+        thread = self.get_thread(managed_thread_id)
+        if thread is None:
+            return
+        surfaces = (
+            self._chat_surface_rows_for_thread(managed_thread_id)
+            if include_bindings
+            else [{"surface_kind": "pma", "surface_key": managed_thread_id}]
+        )
+        for surface in surfaces:
+            surface_kind = str(surface["surface_kind"])
+            surface_key = str(surface["surface_key"])
+            emit_chat_surface_event(
+                self._hub_root,
+                durable=self._durable,
+                idempotency_key=(
+                    f"thread:{managed_thread_id}:{surface_kind}:"
+                    f"{surface_key}:{idempotency_action}"
+                ),
+                event_type=event_type,  # type: ignore[arg-type]
+                surface_kind=surface_kind,
+                surface_key=surface_key,
+                managed_thread_id=managed_thread_id,
+                repo_id=_coerce_text(thread.get("repo_id")),
+                resource_kind=_coerce_text(thread.get("resource_kind")),
+                resource_id=_coerce_text(thread.get("resource_id")),
+                workspace_root=_coerce_text(thread.get("workspace_root")),
+                lifecycle_status=lifecycle_status,
+                status=status,
+                source_kind=source_kind,
+                source_id=source_id or managed_thread_id,
+                payload={"thread": thread, "surface": surface, **dict(payload or {})},
+                occurred_at=occurred_at,
+            )
 
     def get_thread_runtime_binding(
         self, managed_thread_id: str
@@ -491,6 +572,16 @@ class ManagedThreadStore:
             created = self._fetch_thread(conn, managed_thread_id)
         if created is None:
             raise RuntimeError("Failed to create managed PMA thread")
+        self._emit_thread_event(
+            managed_thread_id,
+            idempotency_action="created",
+            event_type="lifecycle.status_changed",
+            status=str(snapshot.status),
+            lifecycle_status="active",
+            source_id=managed_thread_id,
+            occurred_at=now,
+            include_bindings=False,
+        )
         return created
 
     def get_thread_model(self, managed_thread_id: str) -> Optional[Any]:
@@ -939,6 +1030,15 @@ class ManagedThreadStore:
                 changed_at=changed_at,
             )
         clear_runtime_thread_binding(self._hub_root, managed_thread_id)
+        self._emit_thread_event(
+            managed_thread_id,
+            idempotency_action="archived",
+            event_type="surface.archived",
+            status="archived",
+            lifecycle_status="archived",
+            source_id=managed_thread_id,
+            occurred_at=changed_at,
+        )
 
     def activate_thread(self, managed_thread_id: str) -> None:
         changed_at = now_iso()
@@ -959,6 +1059,15 @@ class ManagedThreadStore:
                 reason=ManagedThreadStatusReason.THREAD_RESUMED,
                 changed_at=changed_at,
             )
+        self._emit_thread_event(
+            managed_thread_id,
+            idempotency_action=f"active:{changed_at}",
+            event_type="lifecycle.status_changed",
+            status="active",
+            lifecycle_status="active",
+            source_id=managed_thread_id,
+            occurred_at=changed_at,
+        )
 
     def create_turn(
         self,
@@ -1093,7 +1202,28 @@ class ManagedThreadStore:
 
         if row is None:
             raise RuntimeError("Failed to create managed PMA turn")
-        return _execution_row_to_record(row)
+        record = _execution_row_to_record(row)
+        self._emit_thread_event(
+            managed_thread_id,
+            idempotency_action=f"execution:{managed_turn_id}:{execution_status}",
+            event_type=(
+                "queue.state_changed"
+                if execution_status == "queued"
+                else "execution.progress"
+            ),
+            status=execution_status,
+            lifecycle_status="active",
+            source_kind="managed_thread.execution",
+            source_id=managed_turn_id,
+            payload={
+                "execution": record,
+                "request_kind": normalized_request_kind,
+                "client_turn_id": client_turn_id,
+                "busy_policy": busy_policy,
+            },
+            occurred_at=started_at,
+        )
+        return record
 
     def mark_turn_finished(
         self,
@@ -1172,6 +1302,23 @@ class ManagedThreadStore:
                 changed_at=finished_at,
                 turn_id=managed_turn_id,
             )
+        self._emit_thread_event(
+            managed_thread_id,
+            idempotency_action=f"execution:{managed_turn_id}:{status}",
+            event_type="execution.progress",
+            status=status,
+            lifecycle_status="active",
+            source_kind="managed_thread.execution",
+            source_id=managed_turn_id,
+            payload={
+                "managed_turn_id": managed_turn_id,
+                "assistant_text": assistant_text or "",
+                "error": error or "",
+                "backend_turn_id": backend_turn_id or "",
+                "transcript_turn_id": transcript_turn_id or "",
+            },
+            occurred_at=finished_at,
+        )
         return True
 
     def set_turn_backend_turn_id(
@@ -1266,6 +1413,17 @@ class ManagedThreadStore:
                 changed_at=finished_at,
                 turn_id=managed_turn_id,
             )
+        self._emit_thread_event(
+            managed_thread_id,
+            idempotency_action=f"execution:{managed_turn_id}:interrupted",
+            event_type="execution.progress",
+            status="interrupted",
+            lifecycle_status="active",
+            source_kind="managed_thread.execution",
+            source_id=managed_turn_id,
+            payload={"managed_turn_id": managed_turn_id},
+            occurred_at=finished_at,
+        )
         return True
 
     def list_turns(
@@ -1556,7 +1714,19 @@ class ManagedThreadStore:
                     """,
                     (managed_turn_id,),
                 ).fetchone()
-        return _execution_row_to_record(row) if row is not None else None
+        record = _execution_row_to_record(row) if row is not None else None
+        if record is not None:
+            self._emit_thread_event(
+                managed_thread_id,
+                idempotency_action=f"queue:{managed_turn_id}:updated:{updated_at}",
+                event_type="queue.state_changed",
+                status="updated",
+                source_kind="managed_thread.queue",
+                source_id=managed_turn_id,
+                payload={"execution": record, "queue_payload": queue_payload},
+                occurred_at=updated_at,
+            )
+        return record
 
     def get_queue_depth(self, managed_thread_id: str) -> int:
         with self._read_conn() as conn:
@@ -1635,29 +1805,76 @@ class ManagedThreadStore:
 
     def cancel_queued_turns(self, managed_thread_id: str) -> list[str]:
         with self._write_conn() as conn:
-            return self._lifecycle.cancel_queued_turns(conn, managed_thread_id)
+            cancelled = self._lifecycle.cancel_queued_turns(conn, managed_thread_id)
+        for execution_id in cancelled:
+            self._emit_thread_event(
+                managed_thread_id,
+                idempotency_action=f"queue:{execution_id}:cancelled",
+                event_type="queue.state_changed",
+                status="cancelled",
+                source_kind="managed_thread.queue",
+                source_id=execution_id,
+                payload={"managed_turn_id": execution_id},
+            )
+        return cancelled
 
     def cancel_queued_turn(self, managed_thread_id: str, execution_id: str) -> bool:
         with self._write_conn() as conn:
-            return self._lifecycle.cancel_queued_turn(
+            cancelled = self._lifecycle.cancel_queued_turn(
                 conn,
                 managed_thread_id,
                 execution_id,
             )
+        if cancelled:
+            self._emit_thread_event(
+                managed_thread_id,
+                idempotency_action=f"queue:{execution_id}:cancelled",
+                event_type="queue.state_changed",
+                status="cancelled",
+                source_kind="managed_thread.queue",
+                source_id=execution_id,
+                payload={"managed_turn_id": execution_id},
+            )
+        return cancelled
 
     def promote_queued_turn(self, managed_thread_id: str, execution_id: str) -> bool:
         with self._write_conn() as conn:
-            return self._lifecycle.promote_queued_turn(
+            promoted = self._lifecycle.promote_queued_turn(
                 conn,
                 managed_thread_id,
                 execution_id,
             )
+        if promoted:
+            self._emit_thread_event(
+                managed_thread_id,
+                idempotency_action=f"queue:{execution_id}:promoted",
+                event_type="queue.state_changed",
+                status="promoted",
+                source_kind="managed_thread.queue",
+                source_id=execution_id,
+                payload={"managed_turn_id": execution_id},
+            )
+        return promoted
 
     def claim_next_queued_turn(
         self, managed_thread_id: str
     ) -> Optional[tuple[dict[str, Any], dict[str, Any]]]:
         with self._write_conn() as conn:
-            return self._lifecycle.claim_next_queued_turn(conn, managed_thread_id)
+            claimed = self._lifecycle.claim_next_queued_turn(conn, managed_thread_id)
+        if claimed is not None:
+            execution, payload = claimed
+            execution_id = str(execution.get("managed_turn_id") or "")
+            if execution_id:
+                self._emit_thread_event(
+                    managed_thread_id,
+                    idempotency_action=f"queue:{execution_id}:claimed",
+                    event_type="queue.state_changed",
+                    status="claimed",
+                    source_kind="managed_thread.queue",
+                    source_id=execution_id,
+                    payload={"execution": execution, "queue_payload": payload},
+                )
+        return claimed
 
     def append_action(
         self,

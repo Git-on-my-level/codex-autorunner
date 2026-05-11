@@ -286,10 +286,21 @@ def test_chat_resolve_from_notifications_uses_recent_targets(tmp_path: Path) -> 
     try:
         conn.execute(
             """
-            CREATE TABLE orch_notification_conversations (
+            CREATE TABLE IF NOT EXISTS orch_notification_conversations (
                 notification_id TEXT PRIMARY KEY,
+                correlation_id TEXT NOT NULL DEFAULT 'test',
+                source_kind TEXT NOT NULL DEFAULT 'test',
+                delivery_mode TEXT NOT NULL DEFAULT 'chat',
                 surface_kind TEXT NOT NULL,
                 surface_key TEXT NOT NULL,
+                delivery_record_id TEXT NOT NULL UNIQUE DEFAULT 'test',
+                delivered_message_id TEXT,
+                repo_id TEXT,
+                workspace_root TEXT,
+                run_id TEXT,
+                managed_thread_id TEXT,
+                continuation_thread_target_id TEXT,
+                context_json TEXT NOT NULL DEFAULT '{}',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
@@ -298,28 +309,45 @@ def test_chat_resolve_from_notifications_uses_recent_targets(tmp_path: Path) -> 
         conn.executemany(
             """
             INSERT INTO orch_notification_conversations (
-                notification_id, surface_kind, surface_key, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?)
+                notification_id, correlation_id, source_kind, delivery_mode,
+                surface_kind, surface_key, delivery_record_id, context_json,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 (
                     "n-1",
+                    "corr-1",
+                    "test",
+                    "chat",
                     "discord",
                     "channel-9",
+                    "delivery-1",
+                    "{}",
                     "2026-04-25T00:00:00Z",
                     "2026-04-25T00:00:10Z",
                 ),
                 (
                     "n-2",
+                    "corr-2",
+                    "test",
+                    "chat",
                     "telegram",
                     "-1002:42",
+                    "delivery-2",
+                    "{}",
                     "2026-04-25T00:00:01Z",
                     "2026-04-25T00:00:09Z",
                 ),
                 (
                     "n-3",
+                    "corr-3",
+                    "test",
+                    "chat",
                     "discord",
                     "channel-9",
+                    "delivery-3",
+                    "{}",
                     "2026-04-25T00:00:02Z",
                     "2026-04-25T00:00:08Z",
                 ),
