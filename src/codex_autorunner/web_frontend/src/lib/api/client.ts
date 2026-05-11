@@ -445,6 +445,11 @@ export class PmaApiClient {
     syncRepoMain: async (repoId: string): Promise<ApiResult<JsonRecord>> =>
       this.requestJson<JsonRecord>(`/hub/repos/${encodeURIComponent(repoId)}/sync-main`, {
         method: 'POST'
+      }),
+    setWorktreeSetup: async (repoId: string, commands: string[]): Promise<ApiResult<JsonRecord>> =>
+      this.requestJson<JsonRecord>(`/hub/repos/${encodeURIComponent(repoId)}/worktree-setup`, {
+        method: 'POST',
+        body: { commands }
       })
   };
 

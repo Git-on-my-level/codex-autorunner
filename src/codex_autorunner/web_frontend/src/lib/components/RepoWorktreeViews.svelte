@@ -25,7 +25,8 @@
     onSyncRepo = undefined,
     syncRepoBusy = false,
     onCreateRepo = undefined,
-    onCreateWorktree = undefined
+    onCreateWorktree = undefined,
+    onOpenRepoSettings = undefined
   }: {
     state: 'loading' | 'error' | 'ready';
     mode: 'index' | 'detail';
@@ -40,6 +41,7 @@
     syncRepoBusy?: boolean;
     onCreateRepo?: (() => void) | undefined;
     onCreateWorktree?: ((target: { id: string; label: string }) => void) | undefined;
+    onOpenRepoSettings?: ((target: { id: string; label: string; worktreeSetupCommands: string[] }) => void) | undefined;
   } = $props();
 
   const currentRunIssues = $derived(sectionIssues.filter((issue) => issue.id === 'current_run'));
@@ -324,8 +326,27 @@
                 </div>
               {/if}
             </div>
-            {#if (onArchiveState && canArchiveState(row)) || (row.kind === 'worktree' && onCleanupWorktree) || (row.kind === 'repo' && onCreateWorktree)}
+            {#if (onArchiveState && canArchiveState(row)) || (row.kind === 'worktree' && onCleanupWorktree) || (row.kind === 'repo' && onCreateWorktree) || (row.kind === 'repo' && onOpenRepoSettings)}
               <div class="repo-action-buttons repo-head-actions" aria-label={`Actions for ${row.label}`}>
+                {#if row.kind === 'repo' && onOpenRepoSettings}
+                  <button
+                    class="icon-action settings"
+                    type="button"
+                    title="Repo settings (worktree setup, etc.)"
+                    aria-label={`Settings for ${row.label}`}
+                    onclick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      onOpenRepoSettings?.({
+                        id: row.id,
+                        label: row.label,
+                        worktreeSetupCommands: row.worktreeSetupCommands ?? []
+                      });
+                    }}
+                  >
+                    <span class="emoji-icon" aria-hidden="true">⚙️</span>
+                  </button>
+                {/if}
                 {#if row.kind === 'repo' && onCreateWorktree}
                   <button
                     class="row-action-button"

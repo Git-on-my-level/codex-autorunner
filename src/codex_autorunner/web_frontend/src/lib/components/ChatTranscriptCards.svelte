@@ -2,7 +2,7 @@
   import SurfaceArtifactCard from '$lib/components/SurfaceArtifactCard.svelte';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import { renderMarkdownToHtml } from '$lib/viewModels/contextspace';
-  import type { PmaCard } from '$lib/viewModels/pmaChat';
+  import { formatCompactMessageDateTime, type PmaCard } from '$lib/viewModels/pmaChat';
   import type { SurfaceArtifact } from '$lib/viewModels/domain';
 
   let { cards, assistantLabel = 'Assistant' }: { cards: PmaCard[]; assistantLabel?: string } = $props();
@@ -36,7 +36,7 @@
     <article class={`message ${card.message.role === 'user' ? 'user' : 'assistant'}`}>
       <span>{card.message.role === 'user' ? 'You' : assistantLabel}</span>
       <div class="message-markdown markdown-body">
-        {@html renderMarkdownToHtml(card.message.text)}
+        {@html renderMarkdownToHtml(card.message.text, { openLinksInNewTab: true })}
       </div>
       {#if card.message.role === 'user' && card.message.artifacts.length > 0}
         <ul class="message-attachments" aria-label="Attachments">
@@ -58,6 +58,14 @@
           {/each}
         </ul>
       {/if}
+      {#if card.message.role === 'user' || card.message.role === 'assistant'}
+        {@const sentLabel = formatCompactMessageDateTime(card.message.createdAt)}
+        {#if sentLabel}
+          <time class="message-timestamp" datetime={card.message.createdAt ?? undefined} title={card.message.createdAt ?? undefined}>
+            {sentLabel}
+          </time>
+        {/if}
+      {/if}
     </article>
   {:else if card.kind === 'intermediate'}
     {#if isThinkingTrace(card)}
@@ -67,14 +75,14 @@
           <strong>{thinkingTraceLabel(card)}</strong>
         </summary>
         <div class="thinking-trace-body markdown-body">
-          {@html renderMarkdownToHtml(card.text)}
+          {@html renderMarkdownToHtml(card.text, { openLinksInNewTab: true })}
         </div>
       </details>
     {:else}
       <article class="message commentary">
         <span class="commentary-kind">{card.title}</span>
         <div class="message-markdown markdown-body">
-          {@html renderMarkdownToHtml(card.text)}
+          {@html renderMarkdownToHtml(card.text, { openLinksInNewTab: true })}
         </div>
       </article>
     {/if}
@@ -121,14 +129,14 @@
                   <strong>{thinkingTraceLabel(traceCard)}</strong>
                 </summary>
                 <div class="thinking-trace-body markdown-body">
-                  {@html renderMarkdownToHtml(traceCard.text)}
+                  {@html renderMarkdownToHtml(traceCard.text, { openLinksInNewTab: true })}
                 </div>
               </details>
             {:else}
               <article class="message commentary nested-commentary">
                 <span class="commentary-kind">{traceCard.title}</span>
                 <div class="message-markdown markdown-body">
-                  {@html renderMarkdownToHtml(traceCard.text)}
+                  {@html renderMarkdownToHtml(traceCard.text, { openLinksInNewTab: true })}
                 </div>
               </article>
             {/if}
@@ -192,7 +200,7 @@
       <section>
         <strong>{card.title}</strong>
         <div class="message-markdown markdown-body">
-          {@html renderMarkdownToHtml(card.text)}
+          {@html renderMarkdownToHtml(card.text, { openLinksInNewTab: true })}
         </div>
       </section>
       <div></div>

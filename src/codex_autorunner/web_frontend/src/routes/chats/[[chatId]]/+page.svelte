@@ -86,6 +86,7 @@
     pickerReasoningOptions,
     stringField
   } from '$lib/viewModels/modelPickers';
+  import { getLastModelForAgent, persistLastModelForAgent } from '$lib/viewModels/lastModelByAgent';
   import {
     buildSlashCommandSuggestions,
     parseSlashCommand,
@@ -124,6 +125,8 @@
   let sending = $state(false);
   let creating = $state(false);
   let loadingModels = $state(false);
+  /** Invalidates in-flight `listAgentModels` results when the user switches agents quickly. */
+  let loadModelsSeq = 0;
   let chatError = $state<ApiError | null>(null);
   let activeError = $state<ApiError | null>(null);
   let composeError = $state<ApiError | null>(null);
@@ -559,16 +562,24 @@
     });
   }
 
-  async function loadModels(agentId: string, preferredModel = ''): Promise<void> {
+  async function loadModels(agentId: string, preferredModel?: string): Promise<void> {
     if (!agentCanListModels(agentRecordForId(agents, agentId))) {
+      loadModelsSeq += 1;
       models = [];
       selectedModel = '';
       selectedReasoning = '';
       loadingModels = false;
       return;
     }
+    const seq = ++loadModelsSeq;
     loadingModels = true;
+    models = [];
+    selectedModel = '';
+    selectedReasoning = '';
+
     const result = await pmaApi.pma.listAgentModels(agentId);
+    if (seq !== loadModelsSeq) return;
+
     if (!result.ok) {
       models = [];
       selectedModel = '';
@@ -577,12 +588,17 @@
       return;
     }
     models = result.data;
-    selectedModel = preferredModel && modelExists(result.data, preferredModel)
-      ? preferredModel
-      : firstModelValue(result.data);
+    const remembered = getLastModelForAgent(agentId);
+    const pref = preferredModel?.trim();
+    let pick = '';
+    if (pref && modelExists(result.data, pref)) pick = pref;
+    else if (remembered && modelExists(result.data, remembered)) pick = remembered;
+    else pick = firstModelValue(result.data);
+    selectedModel = pick;
     if (selectedReasoning && !pickerReasoningOptions(result.data, selectedModel).includes(selectedReasoning)) {
       selectedReasoning = '';
     }
+    persistLastModelForAgent(agentId, selectedModel);
     loadingModels = false;
   }
 
@@ -802,6 +818,16 @@
   function handleAgentChange(): void {
     if (selectedAgent !== 'hermes') selectedProfile = '';
     void loadModels(selectedAgent);
+  }
+
+  function handlePickerChange(): void {
+    if (loadingModels) return;
+    if (!agentCanListModels(agentRecordForId(agents, selectedAgent))) return;
+    if (!selectedModel.trim()) {
+      persistLastModelForAgent(selectedAgent, '');
+      return;
+    }
+    if (modelExists(models, selectedModel)) persistLastModelForAgent(selectedAgent, selectedModel);
   }
 
   function newChatDisplayName(): string {
@@ -1165,6 +1191,7 @@
         showCommandNotice(`Known models: ${models.map((record) => modelLabel(record)).join(', ') || 'none loaded'}`);
         return true;
       } else selectedModel = next;
+      persistLastModelForAgent(selectedAgent, selectedModel);
       showCommandNotice(selectedModel ? `Model set to ${selectedModel}.` : 'Model override cleared.');
       clearSlashDraft();
       return true;
@@ -1514,6 +1541,7 @@
         class:nested
         class={`chat-card status-${chat.status}`}
         type="button"
+        aria-current={chat.id === activeChatId ? 'true' : undefined}
         onclick={() => selectChat(chat.id)}
       >
         {#if listScopeAccent && listScopeAccentHex}
@@ -1704,7 +1732,7 @@
           <div class="chat-header-scope-line">
             <span class="chat-header-scope-primary">
               {#if activeRepoIngress}
-                <a class="chat-header-scope-link" href={href(activeRepoIngress.href)}>
+                <a class="chat-header-scope-link" href={href(activeRepoIngress.href)} target="_blank" rel="noopener noreferrer">
                   <span class="chat-header-scope">{activeRepoIngress.detail}</span>
                   <span class="chat-header-scope-arrow" aria-hidden="true">→</span>
                 </a>
@@ -1792,6 +1820,7 @@
             loading={loadingModels}
             showAgent={showAgentSelector}
             onAgentChange={handleAgentChange}
+            onPickerChange={handlePickerChange}
           />
         </div>
       {:else}

@@ -74,4 +74,12 @@ describe('contextspace view models', () => {
     expect(html).not.toContain('javascript:alert');
     expect(html).toContain('bad');
   });
+
+  it('can force markdown links to open in a new tab', () => {
+    const html = renderMarkdownToHtml('[Ticket](/tmp/TICKET-001.md)', { openLinksInNewTab: true });
+
+    expect(html).toContain('href="/tmp/TICKET-001.md"');
+    expect(html).toContain('target="_blank"');
+    expect(html).toContain('rel="noopener noreferrer"');
+  });
 });

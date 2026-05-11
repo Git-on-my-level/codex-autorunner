@@ -1533,6 +1533,31 @@ export function formatRelativeTime(value: string | null, now = new Date()): stri
   return `${days}d ago`;
 }
 
+/** Compact local datetime for message footers; pass `locale` in tests for stable output. */
+export function formatCompactMessageDateTime(
+  value: string | null,
+  now = new Date(),
+  locale: Intl.LocalesArgument = undefined
+): string | null {
+  if (!value?.trim()) return null;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  const timeFmt = new Intl.DateTimeFormat(locale, { hour: 'numeric', minute: '2-digit' });
+  const timeStr = timeFmt.format(parsed);
+  const sameCalendarDay =
+    parsed.getFullYear() === now.getFullYear() &&
+    parsed.getMonth() === now.getMonth() &&
+    parsed.getDate() === now.getDate();
+  if (sameCalendarDay) return timeStr;
+  const sameYear = parsed.getFullYear() === now.getFullYear();
+  if (sameYear) {
+    const dateFmt = new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric' });
+    return `${dateFmt.format(parsed)} · ${timeStr}`;
+  }
+  const dateFmt = new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric', year: 'numeric' });
+  return `${dateFmt.format(parsed)} · ${timeStr}`;
+}
+
 export function progressPercent(chat: PmaChatSummary, progress: PmaRunProgress | null = null): number {
   if (typeof chat.progressPercent === 'number') return clampPercent(chat.progressPercent);
   if (progress?.status === 'done') return 100;

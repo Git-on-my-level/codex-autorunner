@@ -3,6 +3,7 @@ import os
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -171,6 +172,116 @@ def test_pma_files_download_rejects_legacy_path(hub_env) -> None:
 
     resp = client.get("/hub/pma/files/inbox/legacy.txt")
     assert resp.status_code == 404
+
+
+def test_pma_files_download_falls_back_to_registered_repo_filebox(hub_env) -> None:
+    seed_hub_files(hub_env.hub_root, force=True)
+    _enable_pma(hub_env.hub_root)
+    filebox.ensure_structure(hub_env.repo_root)
+    (filebox.inbox_dir(hub_env.repo_root) / "image.png").write_bytes(b"repo-image")
+
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    resp = client.get("/hub/pma/files/inbox/image.png")
+
+    assert resp.status_code == 200
+    assert resp.content == b"repo-image"
+    assert resp.headers["content-type"].startswith("image/png")
+    assert resp.headers["content-disposition"].startswith("inline;")
+
+
+def test_pma_files_download_keeps_svg_attachment_disposition(hub_env) -> None:
+    seed_hub_files(hub_env.hub_root, force=True)
+    _enable_pma(hub_env.hub_root)
+    filebox.ensure_structure(hub_env.repo_root)
+    (filebox.inbox_dir(hub_env.repo_root) / "active.svg").write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>',
+        encoding="utf-8",
+    )
+
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    resp = client.get("/hub/pma/files/inbox/active.svg")
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("image/svg+xml")
+    assert resp.headers["content-disposition"].startswith("attachment;")
+
+
+def test_pma_files_download_does_not_create_missing_repo_filebox(hub_env) -> None:
+    seed_hub_files(hub_env.hub_root, force=True)
+    _enable_pma(hub_env.hub_root)
+    repo_filebox = filebox.filebox_root(hub_env.repo_root)
+    assert not repo_filebox.exists()
+
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    resp = client.get("/hub/pma/files/inbox/missing.txt")
+
+    assert resp.status_code == 404
+    assert not repo_filebox.exists()
+
+
+def test_pma_files_download_skips_unreadable_repo_filebox_root(
+    hub_env, monkeypatch
+) -> None:
+    seed_hub_files(hub_env.hub_root, force=True)
+    _enable_pma(hub_env.hub_root)
+
+    broken_root = hub_env.hub_root / "worktrees" / "broken"
+    broken_root.mkdir(parents=True)
+    (broken_root / ".git").mkdir()
+    (broken_root / ".codex-autorunner").symlink_to(broken_root / "missing-control")
+
+    second_root = hub_env.hub_root / "worktrees" / "second"
+    second_root.mkdir(parents=True)
+    (second_root / ".git").mkdir()
+    filebox.ensure_structure(second_root)
+    (filebox.inbox_dir(second_root) / "later.png").write_bytes(b"later-image")
+
+    app = create_hub_app(hub_env.hub_root)
+    monkeypatch.setattr(
+        app.state.hub_supervisor,
+        "list_repos",
+        lambda: [
+            SimpleNamespace(
+                path=broken_root,
+                initialized=True,
+                exists_on_disk=True,
+            ),
+            SimpleNamespace(
+                path=second_root,
+                initialized=True,
+                exists_on_disk=True,
+            ),
+        ],
+    )
+    client = TestClient(app)
+
+    resp = client.get("/hub/pma/files/inbox/later.png")
+
+    assert resp.status_code == 200
+    assert resp.content == b"later-image"
+
+
+def test_pma_files_download_prefers_hub_filebox_over_repo_fallback(hub_env) -> None:
+    seed_hub_files(hub_env.hub_root, force=True)
+    _enable_pma(hub_env.hub_root)
+    filebox.ensure_structure(hub_env.hub_root)
+    filebox.ensure_structure(hub_env.repo_root)
+    (filebox.inbox_dir(hub_env.hub_root) / "shared.txt").write_bytes(b"hub")
+    (filebox.inbox_dir(hub_env.repo_root) / "shared.txt").write_bytes(b"repo")
+
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    resp = client.get("/hub/pma/files/inbox/shared.txt")
+
+    assert resp.status_code == 200
+    assert resp.content == b"hub"
 
 
 def test_pma_files_outbox(hub_env) -> None:

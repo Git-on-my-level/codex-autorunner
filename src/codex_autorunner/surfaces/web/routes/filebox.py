@@ -35,7 +35,7 @@ UPLOAD_CHUNK_BYTES = 1024 * 1024
 def _serialize_entry(entry: FileBoxEntry, *, request: Request) -> dict[str, Any]:
     base = request.scope.get("root_path", "") or ""
     # Provide a download URL that survives base_path rewrites.
-    download = f"{base}/api/filebox/{entry.box}/{entry.name}"
+    download = f"{base}/api/filebox/{entry.box}/{quote(entry.name, safe='')}"
     return {
         "name": entry.name,
         "box": entry.box,
@@ -244,7 +244,10 @@ def _serialize_hub_entry(
     entry: FileBoxEntry, *, request: Request, repo_id: str
 ) -> dict[str, Any]:
     base = request.scope.get("root_path", "") or ""
-    download = f"{base}/hub/filebox/{repo_id}/{entry.box}/{entry.name}"
+    download = (
+        f"{base}/hub/filebox/{quote(repo_id, safe='')}/{entry.box}/"
+        f"{quote(entry.name, safe='')}"
+    )
     return {
         "name": entry.name,
         "box": entry.box,

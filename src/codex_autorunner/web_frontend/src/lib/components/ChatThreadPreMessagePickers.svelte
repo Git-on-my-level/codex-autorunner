@@ -17,7 +17,8 @@
     loading = false,
     modelCatalogError = null,
     showAgent = undefined,
-    onAgentChange = undefined
+    onAgentChange = undefined,
+    onPickerChange = undefined
   }: {
     agents?: PickerRecord[];
     agentValue?: string;
@@ -29,6 +30,8 @@
     modelCatalogError?: string | null;
     showAgent?: boolean;
     onAgentChange?: (() => void) | undefined;
+    /** Fires when agent / profile / model / effort controls change (including programmatic binds). */
+    onPickerChange?: (() => void) | undefined;
   } = $props();
 </script>
 
@@ -45,4 +48,5 @@
   {showAgent}
   {modelCatalogError}
   onAgentChange={onAgentChange}
+  onchange={onPickerChange}
 />
