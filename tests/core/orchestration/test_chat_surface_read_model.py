@@ -187,6 +187,88 @@ def test_chat_surface_read_model_orders_and_limits_snapshot(tmp_path: Path) -> N
     assert snapshot["cursor"] == 2
 
 
+def test_chat_surface_read_model_allows_lifecycle_recovery_events(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    journal = SQLiteChatSurfaceEventJournal(hub_root, durable=False)
+    journal.append_event(
+        idempotency_key="recovering:failed",
+        event_type="execution.progress",
+        surface_kind="telegram",
+        surface_key="-100:1",
+        managed_thread_id="thread-recovering",
+        repo_id="repo-1",
+        status="failed",
+    )
+    journal.append_event(
+        idempotency_key="recovering:running",
+        event_type="execution.progress",
+        surface_kind="telegram",
+        surface_key="-100:1",
+        managed_thread_id="thread-recovering",
+        repo_id="repo-1",
+        status="running",
+    )
+    journal.append_event(
+        idempotency_key="completed:failed",
+        event_type="execution.progress",
+        surface_kind="discord",
+        surface_key="guild:done",
+        managed_thread_id="thread-completed",
+        repo_id="repo-1",
+        status="failed",
+    )
+    journal.append_event(
+        idempotency_key="completed:delivered",
+        event_type="delivery.status_changed",
+        surface_kind="discord",
+        surface_key="guild:done",
+        managed_thread_id="thread-completed",
+        repo_id="repo-1",
+        status="delivered",
+    )
+    _seed_thread(hub_root, thread_id="thread-still-failed")
+    _seed_execution(hub_root, thread_id="thread-still-failed", status="failed")
+    journal.append_event(
+        idempotency_key="still-failed:old-bound",
+        event_type="surface.bound",
+        surface_kind="pma",
+        surface_key="thread-still-failed",
+        managed_thread_id="thread-still-failed",
+        repo_id="repo-1",
+        status="bound",
+        occurred_at="2026-05-10T00:00:00Z",
+    )
+    _seed_thread(hub_root, thread_id="thread-pma-recovered")
+    _seed_execution(hub_root, thread_id="thread-pma-recovered", status="failed")
+    journal.append_event(
+        idempotency_key="pma-recovered:running",
+        event_type="execution.progress",
+        surface_kind="pma",
+        surface_key="thread-pma-recovered",
+        managed_thread_id="thread-pma-recovered",
+        repo_id="repo-1",
+        status="running",
+        occurred_at="2026-05-11T00:02:00Z",
+    )
+
+    snapshot = ChatSurfaceReadService(hub_root, durable=False).snapshot()
+    by_kind_key = {
+        (surface["surface_kind"], surface["surface_key"]): surface
+        for surface in snapshot["surfaces"]
+    }
+
+    assert by_kind_key[("telegram", "-100:1")]["lifecycle"] == "running"
+    assert by_kind_key[("discord", "guild:done")]["lifecycle"] == "idle"
+    assert by_kind_key[("pma", "thread-still-failed")]["lifecycle"] == "failed"
+    pma_snapshot = ChatSurfaceReadService(hub_root, durable=False).pma_compat_snapshot()
+    by_thread_id = {
+        thread["managed_thread_id"]: thread for thread in pma_snapshot["threads"]
+    }
+    assert by_thread_id["thread-pma-recovered"]["normalized_status"] == "running"
+
+
 def test_chat_surface_read_model_builds_pma_compat_snapshot(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     _seed_thread(hub_root, thread_id="thread-pma", runtime_status="idle")

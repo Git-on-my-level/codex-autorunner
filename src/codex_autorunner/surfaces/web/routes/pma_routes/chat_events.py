@@ -19,12 +19,6 @@ _POLL_INTERVAL_SECONDS = 1.5
 _HEARTBEAT_SECONDS = 15.0
 
 
-def _serialize_chat_snapshot(request: Request) -> dict[str, Any]:
-    context = get_pma_request_context(request)
-    service = ChatSurfaceReadService(context.hub_root, durable=True)
-    return service.pma_compat_snapshot(limit=500)
-
-
 def _sse_frame(event: str, payload: dict[str, Any], *, event_id: Optional[str]) -> str:
     event_id_line = f"id: {event_id}\n" if event_id else ""
     return (
@@ -46,11 +40,7 @@ def build_chat_event_routes(router: APIRouter, get_runtime_state) -> None:
         event_limit: int = Query(100, ge=1, le=1000),
     ):
         header_cursor = request.headers.get("last-event-id")
-        raw_cursor = cursor if cursor is not None else header_cursor
-        try:
-            parsed_cursor = parse_chat_surface_cursor(raw_cursor)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        parsed_cursor = _parse_pma_stream_cursor(cursor, header_cursor)
 
         context = get_pma_request_context(request)
         service = ChatSurfaceReadService(context.hub_root, durable=True)
@@ -65,9 +55,11 @@ def build_chat_event_routes(router: APIRouter, get_runtime_state) -> None:
                 )
                 revision = str(payload["revision"])
                 if revision != last_revision:
-                    yield _sse_frame("chat_snapshot", payload, event_id=revision)
-                    last_revision = revision
                     last_cursor = int(payload.get("cursor") or last_cursor)
+                    yield _sse_frame(
+                        "chat_snapshot", payload, event_id=str(last_cursor)
+                    )
+                    last_revision = revision
                     last_heartbeat_at = asyncio.get_running_loop().time()
                     if once:
                         return
@@ -84,8 +76,9 @@ def build_chat_event_routes(router: APIRouter, get_runtime_state) -> None:
                         )
                         revision = str(payload["revision"])
                         if revision != last_revision:
+                            last_cursor = int(payload.get("cursor") or last_cursor)
                             yield _sse_frame(
-                                "chat_snapshot", payload, event_id=revision
+                                "chat_snapshot", payload, event_id=str(last_cursor)
                             )
                             last_revision = revision
                             last_heartbeat_at = asyncio.get_running_loop().time()
@@ -101,6 +94,34 @@ def build_chat_event_routes(router: APIRouter, get_runtime_state) -> None:
             media_type="text/event-stream",
             headers=SSE_HEADERS,
         )
+
+
+def _parse_pma_stream_cursor(
+    query_cursor: Optional[str], header_cursor: Optional[str]
+) -> int:
+    if query_cursor is not None:
+        try:
+            return parse_chat_surface_cursor(query_cursor)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        return parse_chat_surface_cursor(header_cursor)
+    except ValueError as exc:
+        # Older PMA clients received snapshot revision hashes as SSE ids. Browsers
+        # replay those ids as Last-Event-ID on reconnect, so tolerate them and let
+        # the snapshot revision decide whether the client needs a fresh frame.
+        if _is_legacy_revision_id(header_cursor):
+            return 0
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _is_legacy_revision_id(value: Optional[str]) -> bool:
+    if value is None:
+        return False
+    normalized = value.strip()
+    return len(normalized) == 64 and all(
+        character in "0123456789abcdefABCDEF" for character in normalized
+    )
 
 
 __all__ = ["CHAT_EVENTS_CONTRACT_VERSION", "build_chat_event_routes"]

@@ -23,6 +23,7 @@ _TERMINAL_FAILED_STATUSES = {"failed", "error", "cancelled", "canceled", "timeou
 _RUNNING_STATUSES = {"running", "in_progress", "started", "claimed", "delivering"}
 _QUEUED_STATUSES = {"queued", "pending"}
 _DELIVERY_RETRY_STATUSES = {"retry_scheduled"}
+_DYNAMIC_LIFECYCLES = frozenset({"idle", "queued", "running", "failed"})
 
 
 @dataclass
@@ -75,8 +76,12 @@ class ChatSurfaceProjection:
         latest_event_cursor: Optional[int] = None,
         fact: Optional[str] = None,
         metadata: Optional[Mapping[str, Any]] = None,
+        ordered_lifecycle: bool = False,
     ) -> None:
-        self.lifecycle = _choose_lifecycle(self.lifecycle, lifecycle)
+        if ordered_lifecycle:
+            self.lifecycle = _choose_ordered_lifecycle(self.lifecycle, lifecycle)
+        else:
+            self.lifecycle = _choose_lifecycle(self.lifecycle, lifecycle)
         if lifecycle_status is not None:
             self.lifecycle_status = lifecycle_status
         self.repo_id = _prefer(self.repo_id, repo_id)
@@ -509,6 +514,7 @@ class ChatSurfaceReadService:
                     "latest_event_type": event.event_type,
                     "latest_event_status": event.status,
                 },
+                ordered_lifecycle=_event_is_ordered_after_projection(projection, event),
             )
 
 
@@ -628,6 +634,8 @@ def _merge_display(
 def _choose_lifecycle(current: str, candidate: Optional[str]) -> str:
     if candidate is None:
         return current
+    if current == "archived" or candidate == "archived":
+        return "archived"
     # Journal replay can emit both "running" and "idle" for one execution; taking the
     # numeric max sticks on "running" after completion. When merging those two, prefer "idle".
     if {current, candidate} == {"idle", "running"}:
@@ -642,6 +650,28 @@ def _choose_lifecycle(current: str, candidate: Optional[str]) -> str:
         "archived": 6,
     }
     return candidate if order.get(candidate, 0) >= order.get(current, 0) else current
+
+
+def _choose_ordered_lifecycle(current: str, candidate: Optional[str]) -> str:
+    if candidate is None:
+        return current
+    if current == "archived" or candidate == "archived":
+        return "archived"
+    if current in _DYNAMIC_LIFECYCLES and candidate in _DYNAMIC_LIFECYCLES:
+        return candidate
+    if current == "failed" and candidate == "bound":
+        return candidate
+    return _choose_lifecycle(current, candidate)
+
+
+def _event_is_ordered_after_projection(
+    projection: ChatSurfaceProjection, event: ChatSurfaceEvent
+) -> bool:
+    if projection.updated_at is None:
+        return True
+    if event.occurred_at is None:
+        return False
+    return event.occurred_at >= projection.updated_at
 
 
 def _status_to_lifecycle(status: Any) -> Optional[str]:
@@ -830,10 +860,13 @@ def _pma_thread_from_surface(surface: Mapping[str, Any]) -> dict[str, Any]:
         display = {}
     lifecycle = _normalize_text(surface.get("lifecycle"))
     lifecycle_status = _normalize_text(surface.get("lifecycle_status")) or "active"
+    projected_runtime_status = (
+        lifecycle if lifecycle in {"idle", "queued", "running", "failed"} else None
+    )
     runtime_status = (
         (lifecycle if lifecycle_status == "archived" else None)
+        or projected_runtime_status
         or _normalize_text(metadata.get("latest_execution_status"))
-        or (lifecycle if lifecycle in {"queued", "running", "failed"} else None)
         or _normalize_text(metadata.get("runtime_status"))
         or lifecycle
         or ""

@@ -184,6 +184,23 @@ def _event_payloads(text: str, event_name: str) -> list[dict[str, Any]]:
     return payloads
 
 
+def _event_ids(text: str, event_name: str) -> list[str]:
+    ids: list[str] = []
+    current_event: str | None = None
+    current_id: str | None = None
+    for line in text.splitlines():
+        if line.startswith("event: "):
+            current_event = line.removeprefix("event: ")
+            current_id = None
+        elif line.startswith("id: "):
+            current_id = line.removeprefix("id: ")
+        elif line == "" and current_event == event_name and current_id is not None:
+            ids.append(current_id)
+            current_event = None
+            current_id = None
+    return ids
+
+
 def _surface_by_key(snapshot: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]:
     return {
         (surface["surface_kind"], surface["surface_key"]): surface
@@ -429,6 +446,42 @@ def test_end_to_end_chat_surface_contracts_keep_routes_in_sync(hub_env) -> None:
         "notification.reply_context_changed",
         "channel_directory.discovered",
     }
+
+
+def test_pma_chat_events_use_numeric_resume_ids_and_tolerate_revision_ids(
+    hub_env,
+) -> None:
+    hub_root = hub_env.hub_root
+    _seed_cross_surface_contract_facts(hub_root)
+    client = TestClient(create_hub_app(hub_root))
+
+    response = client.get("/hub/pma/events?once=true")
+
+    assert response.status_code == 200
+    snapshot = _event_payloads(response.text, "chat_snapshot")[0]
+    assert _event_ids(response.text, "chat_snapshot") == [str(snapshot["cursor"])]
+
+    reconnect_response = client.get(
+        "/hub/pma/events?once=true",
+        headers={"Last-Event-ID": snapshot["revision"]},
+    )
+
+    assert reconnect_response.status_code == 200
+    assert _event_payloads(reconnect_response.text, "chat_snapshot")
+
+
+def test_pma_chat_events_reject_malformed_non_revision_last_event_id(
+    hub_env,
+) -> None:
+    client = TestClient(create_hub_app(hub_env.hub_root))
+
+    response = client.get(
+        "/hub/pma/events?once=true",
+        headers={"Last-Event-ID": "not-a-cursor"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "cursor must be a non-negative integer"
 
 
 def test_chat_surface_contract_stream_resumes_after_startup_recovery(hub_env) -> None:
