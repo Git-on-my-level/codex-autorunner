@@ -9,13 +9,17 @@ export default defineConfig(() => {
   return {
     plugins: [sveltekit()],
     server: {
+      // Keep the browser Host (Vite dev URL) on proxied hub requests — do not rewrite
+      // Host to the hub target. HostOriginMiddleware compares Origin to scheme+Host;
+      // changeOrigin:true breaks that for split-port dev (5173 UI vs 4173 API) while
+      // production serves the built SPA from the hub (single origin, no proxy).
       proxy: {
-        '/hub': { target: hubTarget, changeOrigin: true, ws: true },
-        '/api': { target: hubTarget, changeOrigin: true },
-        '/health': { target: hubTarget, changeOrigin: true },
+        '/hub': { target: hubTarget, changeOrigin: false, ws: true },
+        '/api': { target: hubTarget, changeOrigin: false },
+        '/health': { target: hubTarget, changeOrigin: false },
         '/repos': {
           target: hubTarget,
-          changeOrigin: true,
+          changeOrigin: false,
           bypass(req) {
             const path = req.url?.split('?')[0] ?? '';
             if (/^\/repos\/[^/]+\/api(\/|$)/.test(path)) {

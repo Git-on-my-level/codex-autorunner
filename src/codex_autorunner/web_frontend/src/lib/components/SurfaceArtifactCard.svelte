@@ -22,7 +22,7 @@
   {/if}
   <div class="artifact-actions">
     {#if artifact.url && view.primaryAction}
-      <a href={href(artifact.url)}>{view.primaryAction}</a>
+      <a href={href(artifact.url)} target="_blank" rel="noopener noreferrer">{view.primaryAction}</a>
     {/if}
     <details>
       <summary>{view.detailLabel}</summary>

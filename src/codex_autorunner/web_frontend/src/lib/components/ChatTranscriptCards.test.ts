@@ -83,4 +83,47 @@ describe('ChatTranscriptCards', () => {
     expect(body).toContain('class="message commentary nested-commentary"');
     expect(body).toContain('Nested visible update.');
   });
+
+  it('renders compact timestamps on user and assistant message bubbles', () => {
+    const cards: PmaCard[] = [
+      {
+        kind: 'message',
+        id: 'u1',
+        turnId: 't1',
+        orderKey: '00000001|u1',
+        timestamp: '2026-05-10T12:00:00.000Z',
+        message: {
+          id: 'u1',
+          chatId: 'c1',
+          role: 'user',
+          text: 'Hello',
+          createdAt: '2026-05-10T12:00:00.000Z',
+          status: null,
+          artifacts: [],
+          raw: {}
+        }
+      },
+      {
+        kind: 'message',
+        id: 'a1',
+        turnId: 't1',
+        orderKey: '00000002|a1',
+        timestamp: '2026-05-10T12:05:00.000Z',
+        message: {
+          id: 'a1',
+          chatId: 'c1',
+          role: 'assistant',
+          text: 'Hi there',
+          createdAt: '2026-05-10T12:05:00.000Z',
+          status: 'done',
+          artifacts: [],
+          raw: {}
+        }
+      }
+    ];
+    const { body } = render(ChatTranscriptCards, { props: { cards } });
+    expect(body).toContain('class="message-timestamp"');
+    expect(body).toContain('datetime="2026-05-10T12:00:00.000Z"');
+    expect(body).toContain('datetime="2026-05-10T12:05:00.000Z"');
+  });
 });

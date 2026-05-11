@@ -18,6 +18,7 @@ import {
   filterPmaChatEntries,
   filterArtifactsForActiveChat,
   formatRelativeTime,
+  formatCompactMessageDateTime,
   isPrimaryProgressArtifact,
   mergePmaActivityEvents,
   mergePmaTimelineAndActivityCards,
@@ -1048,6 +1049,21 @@ describe('PMA chat view helpers', () => {
     expect(progressPercent(baseChat, baseProgress)).toBe(64);
     expect(progressPercent({ ...baseChat, progressPercent: 41 }, baseProgress)).toBe(41);
     expect(formatRelativeTime('2026-05-04T00:00:00Z', new Date('2026-05-04T00:03:00Z'))).toBe('3m ago');
+  });
+
+  it('formats compact message datetimes for footers', () => {
+    expect(formatCompactMessageDateTime(null, new Date(2026, 4, 10), 'en-US')).toBeNull();
+    expect(formatCompactMessageDateTime('', new Date(2026, 4, 10), 'en-US')).toBeNull();
+    expect(formatCompactMessageDateTime('not-a-date', new Date(2026, 4, 10), 'en-US')).toBeNull();
+    const may10 = new Date(2026, 4, 10, 18, 30, 0);
+    const may10Noon = new Date(2026, 4, 10, 12, 0, 0);
+    expect(formatCompactMessageDateTime(may10.toISOString(), may10Noon, 'en-US')).toMatch(/6:30/);
+    const apr1 = new Date(2026, 3, 1, 9, 0, 0);
+    const out = formatCompactMessageDateTime(apr1.toISOString(), may10Noon, 'en-US');
+    expect(out).toContain('·');
+    expect(out).toMatch(/Apr/);
+    const jan2025 = new Date(2025, 0, 3, 8, 0, 0);
+    expect(formatCompactMessageDateTime(jan2025.toISOString(), may10Noon, 'en-US')).toMatch(/2025/);
   });
 
   it('builds managed thread creation payloads for local, repo, and worktree scopes', () => {

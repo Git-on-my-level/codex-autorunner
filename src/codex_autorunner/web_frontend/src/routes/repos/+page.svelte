@@ -4,6 +4,7 @@
   import RepoWorktreeViews from '$lib/components/RepoWorktreeViews.svelte';
   import NewRepoDialog from '$lib/components/NewRepoDialog.svelte';
   import NewWorktreeDialog from '$lib/components/NewWorktreeDialog.svelte';
+  import RepoSettingsDialog, { type RepoSettingsTarget } from '$lib/components/RepoSettingsDialog.svelte';
   import { confirmAndArchiveState, confirmAndCleanupWorktree, type ActionNotice } from '$lib/actions/repoWorktreeActions';
   import { dataOr, partialPageIssue, pmaApi, type ApiError, type PartialPageIssue } from '$lib/api/client';
   import {
@@ -20,6 +21,8 @@
   let newRepoOpen = $state(false);
   let newWorktreeOpen = $state(false);
   let newWorktreeTarget = $state<{ id: string; label: string } | null>(null);
+  let repoSettingsOpen = $state(false);
+  let repoSettingsTarget = $state<RepoSettingsTarget | null>(null);
 
   onMount(() => {
     void loadRepos();
@@ -82,6 +85,11 @@
     newWorktreeOpen = true;
   }
 
+  function openRepoSettings(target: RepoSettingsTarget): void {
+    repoSettingsTarget = target;
+    repoSettingsOpen = true;
+  }
+
   async function handleDialogResult(result: ActionNotice): Promise<void> {
     notice = result;
     if (result.tone === 'success') await loadRepos();
@@ -99,6 +107,7 @@
   onArchiveState={handleArchiveState}
   onCreateRepo={openNewRepo}
   onCreateWorktree={openNewWorktree}
+  onOpenRepoSettings={openRepoSettings}
   errorMessage={error?.message ?? null}
 />
 
@@ -106,5 +115,10 @@
 <NewWorktreeDialog
   bind:open={newWorktreeOpen}
   target={newWorktreeTarget}
+  onResult={handleDialogResult}
+/>
+<RepoSettingsDialog
+  bind:open={repoSettingsOpen}
+  target={repoSettingsTarget}
   onResult={handleDialogResult}
 />

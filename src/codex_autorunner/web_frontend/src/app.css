@@ -1076,9 +1076,14 @@ a.scope-chip-label:hover {
 }
 
 .chat-card.active {
-  border-color: transparent;
+  border-color: color-mix(in srgb, var(--color-accent) 38%, var(--color-border));
   background: var(--color-accent-soft);
-  box-shadow: none;
+  box-shadow: inset 3px 0 0 var(--color-accent);
+}
+
+.chat-card.active:hover {
+  border-color: color-mix(in srgb, var(--color-accent) 52%, var(--color-border-strong));
+  background: color-mix(in srgb, var(--color-accent-soft) 85%, var(--color-surface-muted));
 }
 
 .chat-card.active .chat-title-row strong {
@@ -1820,6 +1825,21 @@ textarea:hover {
 
 .message.user span {
   display: none;
+}
+
+.message-timestamp {
+  display: block;
+  margin-top: var(--space-2);
+  font-size: 10px;
+  font-weight: 550;
+  letter-spacing: 0.02em;
+  color: var(--color-ink-faint);
+  opacity: 0.88;
+  line-height: 1.35;
+}
+
+.message.user .message-timestamp {
+  text-align: right;
 }
 
 .message.assistant {
@@ -6554,6 +6574,17 @@ textarea:disabled {
 
 .chat-run-group-children .chat-card.nested:hover {
   background: var(--color-surface);
+}
+
+.chat-run-group-children .chat-card.nested.active {
+  border-color: color-mix(in srgb, var(--color-accent) 38%, var(--color-border));
+  background: var(--color-accent-soft);
+  box-shadow: inset 3px 0 0 var(--color-accent);
+}
+
+.chat-run-group-children .chat-card.nested.active:hover {
+  border-color: color-mix(in srgb, var(--color-accent) 52%, var(--color-border-strong));
+  background: color-mix(in srgb, var(--color-accent-soft) 85%, var(--color-surface-muted));
 }
 
 .chat-nested-title {

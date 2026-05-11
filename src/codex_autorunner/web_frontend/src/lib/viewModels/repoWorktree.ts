@@ -60,6 +60,8 @@ export type RepoWorktreeIndexRow = {
   inUseWorktrees: number;
   /** Subset of in-use that are dirty (used for tooltip detail). */
   dirtyWorktrees: number;
+  /** Configured per-repo worktree setup commands. Null for worktree rows. */
+  worktreeSetupCommands: string[] | null;
 };
 
 export type RepoWorktreeChildRow = {
@@ -559,7 +561,8 @@ function repoToIndexRow(repo: RepoSummary, worktrees: WorktreeSummary[], source:
     cleanupBlockedByChatBinding: boolFromRaw(repo.raw, 'cleanup_blocked_by_chat_binding'),
     totalWorktrees: childWorktrees.length,
     inUseWorktrees,
-    dirtyWorktrees
+    dirtyWorktrees,
+    worktreeSetupCommands: stringArrayFromRaw(repo.raw, 'worktree_setup_commands')
   };
 }
 
@@ -630,7 +633,8 @@ function worktreeToIndexRow(worktree: WorktreeSummary, source: RepoWorktreeSourc
     cleanupBlockedByChatBinding: boolFromRaw(worktree.raw, 'cleanup_blocked_by_chat_binding'),
     totalWorktrees: 0,
     inUseWorktrees: 0,
-    dirtyWorktrees: 0
+    dirtyWorktrees: 0,
+    worktreeSetupCommands: null
   };
 }
 
@@ -984,6 +988,12 @@ function boolFromRaw(raw: Record<string, unknown>, key: string): boolean {
 function numberFromRaw(raw: Record<string, unknown>, key: string): number {
   const value = raw[key];
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function stringArrayFromRaw(raw: Record<string, unknown>, key: string): string[] | null {
+  const value = raw[key];
+  if (!Array.isArray(value)) return null;
+  return value.filter((item): item is string => typeof item === 'string');
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

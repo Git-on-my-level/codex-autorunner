@@ -150,6 +150,24 @@ export async function submitCreateWorktree(input: CreateWorktreeInput): Promise<
   };
 }
 
+export type SetWorktreeSetupInput = {
+  repoId: string;
+  repoLabel: string;
+  commands: string[];
+};
+
+export async function submitSetWorktreeSetup(input: SetWorktreeSetupInput): Promise<ActionNotice> {
+  const cleaned = input.commands.map((cmd) => cmd.trim()).filter((cmd) => cmd.length > 0);
+  const result = await pmaApi.hub.setWorktreeSetup(input.repoId, cleaned);
+  if (!result.ok) return { tone: 'danger', message: result.error.message };
+  return {
+    tone: 'success',
+    message: cleaned.length
+      ? `Saved ${cleaned.length} setup command${cleaned.length === 1 ? '' : 's'} for ${input.repoLabel}.`
+      : `Cleared setup commands for ${input.repoLabel}.`
+  };
+}
+
 function stringValue(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value : null;
 }

@@ -20,12 +20,35 @@ const PURIFY_CONFIG = {
   FORBID_ATTR: ['style', 'onerror', 'onload', 'onclick', 'onmouseover']
 };
 
-export function renderMarkdownToHtml(markdown: string): string {
+export type RenderMarkdownOptions = {
+  /** When true, every `<a>` gets `target="_blank"` and `rel="noopener noreferrer"`. */
+  openLinksInNewTab?: boolean;
+};
+
+function stripAnchorNavigationAttrs(attrs: string): string {
+  return attrs
+    .replace(/\starget\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+    .replace(/\srel\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+    .trim();
+}
+
+function forceMarkdownLinksOpenInNewTab(html: string): string {
+  return html.replace(/<a\b([^>]*)>/gi, (_full, attrs: string) => {
+    const rest = stripAnchorNavigationAttrs(attrs);
+    return rest
+      ? `<a ${rest} target="_blank" rel="noopener noreferrer">`
+      : `<a target="_blank" rel="noopener noreferrer">`;
+  });
+}
+
+export function renderMarkdownToHtml(markdown: string, options?: RenderMarkdownOptions): string {
   if (!markdown) return '';
   const rawHtml = marked.parse(markdown, { async: false }) as string;
   const purified = DOMPurify.sanitize(rawHtml, PURIFY_CONFIG);
   // Strip any href that survived sanitize but resolves to a dangerous scheme.
   // DOMPurify already blocks `javascript:` by default, but we also reject
   // `data:` and `vbscript:` to match the legacy renderer's contract.
-  return purified.replace(/href="(data|vbscript):[^"]*"/gi, 'href="#"');
+  let out = purified.replace(/href="(data|vbscript):[^"]*"/gi, 'href="#"');
+  if (options?.openLinksInNewTab) out = forceMarkdownLinksOpenInNewTab(out);
+  return out;
 }
