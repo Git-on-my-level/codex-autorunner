@@ -185,3 +185,67 @@ def test_chat_surface_read_model_orders_and_limits_snapshot(tmp_path: Path) -> N
     assert [surface["surface_urn"] for surface in snapshot["surfaces"]] == ["discord:1"]
     assert snapshot["limits"] == {"requested": 1, "returned": 1, "max": 1000}
     assert snapshot["cursor"] == 2
+
+
+def test_chat_surface_read_model_builds_pma_compat_snapshot(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    _seed_thread(hub_root, thread_id="thread-pma", runtime_status="idle")
+    _seed_execution(hub_root, thread_id="thread-pma", status="queued")
+    OrchestrationBindingStore(hub_root, durable=False).upsert_binding(
+        surface_kind="discord",
+        surface_key="guild:channel",
+        thread_target_id="thread-pma",
+        repo_id="repo-1",
+        resource_kind="repo",
+        resource_id="repo-1",
+        metadata={"display_name": "Discord channel"},
+    )
+
+    snapshot = ChatSurfaceReadService(hub_root, durable=False).pma_compat_snapshot()
+
+    assert snapshot["contract_version"] == "pma_chat_events.v1"
+    assert snapshot["cursor"] == 1
+    assert len(snapshot["revision"]) == 64
+    assert snapshot["threads"] == [
+        {
+            "managed_thread_id": "thread-pma",
+            "agent": "codex",
+            "agent_profile": None,
+            "repo_id": "repo-1",
+            "resource_kind": "repo",
+            "resource_id": "repo-1",
+            "workspace_root": None,
+            "name": "Thread thread-pma",
+            "model": None,
+            "backend_thread_id": None,
+            "lifecycle_status": "active",
+            "runtime_status": "queued",
+            "normalized_status": "queued",
+            "status": "queued",
+            "target_runtime_status": "idle",
+            "execution_status": "queued",
+            "active_turn_id": "exec-thread-pma-queued",
+            "queued_count": 1,
+            "status_reason": None,
+            "status_changed_at": None,
+            "status_terminal": False,
+            "status_turn_id": None,
+            "last_turn_id": None,
+            "last_message_preview": None,
+            "compact_seed": None,
+            "accepts_messages": True,
+            "updated_at": "2026-05-11T00:01:00Z",
+            "created_at": "2026-05-11T00:00:00Z",
+            "operator_status": "queued",
+            "is_reusable": False,
+            "chat_bound": True,
+            "binding_kind": "discord",
+            "binding_id": "guild:channel",
+            "chat_display_name": "Discord channel",
+            "binding_count": 1,
+            "binding_kinds": ["discord"],
+            "binding_ids": ["guild:channel"],
+            "chat_display_names": ["Discord channel"],
+            "cleanup_protected": False,
+        }
+    ]

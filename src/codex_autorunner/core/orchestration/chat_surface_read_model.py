@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -11,6 +12,7 @@ from .chat_surface_events import ChatSurfaceEvent, SQLiteChatSurfaceEventJournal
 from .sqlite import open_orchestration_sqlite
 
 CHAT_SURFACE_READ_CONTRACT_VERSION = "chat_surface_read.v1"
+PMA_CHAT_EVENTS_CONTRACT_VERSION = "pma_chat_events.v1"
 DEFAULT_CHAT_SURFACE_SNAPSHOT_LIMIT = 500
 MAX_CHAT_SURFACE_SNAPSHOT_LIMIT = 1000
 DEFAULT_CHAT_SURFACE_EVENT_LIMIT = 100
@@ -179,6 +181,36 @@ class ChatSurfaceReadService:
             },
         }
 
+    def pma_compat_snapshot(
+        self, *, limit: int = DEFAULT_CHAT_SURFACE_SNAPSHOT_LIMIT
+    ) -> dict[str, Any]:
+        """Return the legacy PMA chat snapshot shape from the generic projection."""
+
+        snapshot = self.snapshot(limit=limit)
+        threads = [
+            _pma_thread_from_surface(surface)
+            for surface in snapshot["surfaces"]
+            if surface.get("surface_kind") == "pma"
+            and surface.get("managed_thread_id") is not None
+            and "managed_thread" in set(surface.get("facts") or [])
+        ]
+        payload = {
+            "contract_version": PMA_CHAT_EVENTS_CONTRACT_VERSION,
+            "cursor": int(snapshot["cursor"] or 0),
+            "threads": sorted(
+                threads,
+                key=lambda item: (
+                    str(item.get("updated_at") or ""),
+                    str(item.get("created_at") or ""),
+                    str(item.get("managed_thread_id") or ""),
+                ),
+                reverse=True,
+            ),
+        }
+        revision_basis = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        payload["revision"] = hashlib.sha256(revision_basis.encode("utf-8")).hexdigest()
+        return payload
+
     def events_since(
         self,
         cursor: Optional[int],
@@ -238,6 +270,7 @@ class ChatSurfaceReadService:
             execution_rows = conn.execute(
                 """
                 SELECT thread_target_id,
+                       execution_id,
                        status,
                        created_at,
                        started_at,
@@ -294,12 +327,14 @@ class ChatSurfaceReadService:
         delivery_by_surface = _latest_delivery_by_surface(delivery_rows)
         delivery_by_thread = _latest_delivery_by_thread(delivery_rows)
         thread_owner: dict[str, Mapping[str, Any]] = {}
+        binding_summary_by_thread = _binding_summary_by_thread(binding_rows)
 
         for row in thread_rows:
             thread_id = str(row["thread_target_id"])
             thread_owner[thread_id] = row
             execution = execution_by_thread.get(thread_id)
             delivery = delivery_by_thread.get(thread_id)
+            binding_summary = binding_summary_by_thread.get(thread_id, {})
             lifecycle = _thread_lifecycle(
                 row, execution, queue_depth_by_thread.get(thread_id, 0)
             )
@@ -319,7 +354,10 @@ class ChatSurfaceReadService:
                 managed_thread_id=thread_id,
                 display_name=_normalize_text(row["display_name"]) or thread_id,
                 created_at=_normalize_text(row["created_at"]),
-                updated_at=_normalize_text(row["updated_at"]),
+                updated_at=_max_iso(
+                    _normalize_text(row["updated_at"]),
+                    _normalize_text(execution["created_at"]) if execution else None,
+                ),
                 archived_at=(
                     _normalize_text(row["updated_at"])
                     if lifecycle_status == "archived"
@@ -328,11 +366,34 @@ class ChatSurfaceReadService:
                 fact="managed_thread",
                 metadata={
                     "agent_id": _normalize_text(row["agent_id"]),
+                    "agent_profile": _normalize_text(_row_get(row, "agent_profile")),
+                    "backend_thread_id": _normalize_text(
+                        _row_get(row, "backend_thread_id")
+                    ),
+                    "model": _normalize_text(_row_get(row, "model")),
                     "runtime_status": _normalize_text(row["runtime_status"]),
+                    "target_runtime_status": _normalize_text(row["runtime_status"]),
                     "queue_depth": queue_depth_by_thread.get(thread_id, 0),
+                    "active_turn_id": (
+                        _normalize_text(execution["execution_id"])
+                        if execution
+                        else None
+                    ),
                     "latest_execution_status": (
                         _normalize_text(execution["status"]) if execution else None
                     ),
+                    "status_reason": _normalize_text(_row_get(row, "status_reason")),
+                    "status_changed_at": _normalize_text(
+                        _row_get(row, "status_changed_at")
+                    ),
+                    "status_terminal": bool(_row_get(row, "status_terminal")),
+                    "status_turn_id": _normalize_text(_row_get(row, "status_turn_id")),
+                    "last_turn_id": _normalize_text(_row_get(row, "last_execution_id")),
+                    "last_message_preview": _normalize_text(
+                        _row_get(row, "last_message_preview")
+                    ),
+                    "compact_seed": _normalize_text(_row_get(row, "compact_seed")),
+                    **binding_summary,
                 },
             )
 
@@ -678,6 +739,55 @@ def _latest_delivery_by_thread(
     return result
 
 
+def _binding_summary_by_thread(
+    rows: Iterable[Mapping[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    summaries: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        thread_id = _normalize_text(row["target_id"])
+        if thread_id is None:
+            continue
+        summary = summaries.setdefault(
+            thread_id,
+            {
+                "chat_bound": False,
+                "binding_kind": None,
+                "binding_id": None,
+                "chat_display_name": None,
+                "binding_count": 0,
+                "binding_kinds": [],
+                "binding_ids": [],
+                "chat_display_names": [],
+                "cleanup_protected": False,
+            },
+        )
+        metadata = _json_object(row["metadata_json"])
+        surface_kind = _normalize_kind(row["surface_kind"])
+        surface_key = _normalize_text(row["surface_key"])
+        display_name = _binding_display(row)
+        summary["chat_bound"] = True
+        summary["binding_count"] = int(summary["binding_count"] or 0) + 1
+        if summary["binding_kind"] is None:
+            summary["binding_kind"] = surface_kind
+        if summary["binding_id"] is None:
+            summary["binding_id"] = surface_key
+        if summary["chat_display_name"] is None:
+            summary["chat_display_name"] = display_name
+        if surface_kind is not None and surface_kind not in summary["binding_kinds"]:
+            summary["binding_kinds"].append(surface_kind)
+        if surface_key is not None and surface_key not in summary["binding_ids"]:
+            summary["binding_ids"].append(surface_key)
+        if (
+            display_name is not None
+            and display_name not in summary["chat_display_names"]
+        ):
+            summary["chat_display_names"].append(display_name)
+        summary["cleanup_protected"] = bool(
+            summary["cleanup_protected"] or metadata.get("cleanup_protected")
+        )
+    return summaries
+
+
 def _binding_display(row: Mapping[str, Any]) -> Optional[str]:
     metadata = _json_object(row["metadata_json"])
     for key in ("display_name", "title", "name"):
@@ -697,6 +807,77 @@ def _json_object(raw: Any) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _pma_thread_from_surface(surface: Mapping[str, Any]) -> dict[str, Any]:
+    metadata = surface.get("metadata")
+    if not isinstance(metadata, Mapping):
+        metadata = {}
+    owner = surface.get("resource_owner")
+    if not isinstance(owner, Mapping):
+        owner = {}
+    display = surface.get("display")
+    if not isinstance(display, Mapping):
+        display = {}
+    lifecycle = _normalize_text(surface.get("lifecycle"))
+    runtime_status = (
+        _normalize_text(metadata.get("latest_execution_status"))
+        or (lifecycle if lifecycle in {"queued", "running", "failed"} else None)
+        or _normalize_text(metadata.get("runtime_status"))
+        or lifecycle
+        or ""
+    )
+    lifecycle_status = _normalize_text(surface.get("lifecycle_status")) or "active"
+    managed_thread_id = _normalize_text(surface.get("managed_thread_id"))
+    payload: dict[str, Any] = {
+        "managed_thread_id": managed_thread_id,
+        "agent": _normalize_text(metadata.get("agent_id")) or "unknown",
+        "agent_profile": _normalize_text(metadata.get("agent_profile")),
+        "repo_id": _normalize_text(owner.get("repo_id")),
+        "resource_kind": _normalize_text(owner.get("resource_kind")),
+        "resource_id": _normalize_text(owner.get("resource_id")),
+        "workspace_root": _normalize_text(owner.get("workspace_root")),
+        "name": _normalize_text(display.get("display_name")) or managed_thread_id,
+        "model": _normalize_text(metadata.get("model")),
+        "backend_thread_id": _normalize_text(metadata.get("backend_thread_id")),
+        "lifecycle_status": lifecycle_status,
+        "runtime_status": runtime_status,
+        "normalized_status": runtime_status,
+        "status": runtime_status,
+        "target_runtime_status": _normalize_text(metadata.get("target_runtime_status")),
+        "execution_status": _normalize_text(metadata.get("latest_execution_status")),
+        "active_turn_id": _normalize_text(metadata.get("active_turn_id")),
+        "queued_count": int(metadata.get("queue_depth") or 0),
+        "status_reason": _normalize_text(metadata.get("status_reason")),
+        "status_changed_at": _normalize_text(metadata.get("status_changed_at")),
+        "status_terminal": bool(metadata.get("status_terminal")),
+        "status_turn_id": _normalize_text(metadata.get("status_turn_id")),
+        "last_turn_id": _normalize_text(metadata.get("last_turn_id")),
+        "last_message_preview": _normalize_text(metadata.get("last_message_preview")),
+        "compact_seed": _normalize_text(metadata.get("compact_seed")),
+        "accepts_messages": lifecycle_status == "active",
+        "updated_at": _normalize_text(surface.get("updated_at")),
+        "created_at": _normalize_text(surface.get("created_at")),
+        "operator_status": (
+            "idle" if runtime_status in {"idle", "bound"} else runtime_status
+        ),
+        "is_reusable": runtime_status in {"idle", "bound"},
+    }
+    binding_defaults: dict[str, Any] = {
+        "chat_bound": False,
+        "binding_kind": None,
+        "binding_id": None,
+        "chat_display_name": None,
+        "binding_count": 0,
+        "binding_kinds": [],
+        "binding_ids": [],
+        "chat_display_names": [],
+        "cleanup_protected": False,
+    }
+    for key, default in binding_defaults.items():
+        value = metadata.get(key, default)
+        payload[key] = list(value) if isinstance(default, list) else value
+    return payload
 
 
 def _read_channel_directory_entries(hub_root: Path) -> list[dict[str, Any]]:
@@ -788,6 +969,7 @@ def _table_exists(conn: Any, table_name: str) -> bool:
 
 __all__ = [
     "CHAT_SURFACE_READ_CONTRACT_VERSION",
+    "PMA_CHAT_EVENTS_CONTRACT_VERSION",
     "ChatSurfaceProjection",
     "ChatSurfaceReadService",
     "parse_chat_surface_cursor",
