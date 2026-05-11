@@ -237,10 +237,6 @@
     return Boolean(await onSave?.({ title: editTitle, agent: editAgent, model: editModel, reasoning: editReasoning, done: editDone, frontmatterYaml: editFrontmatterYaml, body: content }));
   }
 
-  async function saveFrontmatter(): Promise<boolean> {
-    return saveSettings();
-  }
-
   function routeNumber(routeId: string): number | null {
     const value = Number(routeId);
     return Number.isInteger(value) ? value : null;
@@ -655,7 +651,7 @@
               ></textarea>
             </label>
             <div class="ticket-frontmatter-controls">
-              <button type="button" class="primary-button" disabled={!onSave} onclick={() => void saveFrontmatter()}>Save frontmatter</button>
+              <button type="button" class="primary-button" disabled={!onSave} onclick={() => void saveSettings()}>Save frontmatter</button>
               <span class="ticket-repair-hint">Edit the YAML block exactly as it should appear between <code>---</code> delimiters.</span>
             </div>
             {#if detail.pathLabel}

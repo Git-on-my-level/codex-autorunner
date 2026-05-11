@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { mockArtifact, mockChatSummary, mockRunProgress, mockTicketDetail, mockTicketSummary } from './mockData';
 import {
   buildTicketDetailViewModel,
+  buildTicketRepairChatCreatePayload,
+  buildTicketRepairPrompt,
   buildTicketListViewModel,
   buildTicketUpdateContent,
   filterTicketRows,
@@ -492,5 +494,60 @@ Users can inspect tickets.
     expect(md).toContain('done: false');
     expect(md).toContain('custom_flag: keep');
     expect(md).toContain('Body text');
+  });
+
+  it('only upserts top-level frontmatter keys', () => {
+    const detail = buildTicketDetailViewModel(
+      {
+        ...mockTicketDetail,
+        raw: {
+          frontmatter: { title: 'Broken', agent: 'codex', done: false },
+          frontmatter_yaml: 'title: Broken\nagent: codex\ndone: false\nnested:\n  title: keep nested title\n  done: keep nested done'
+        }
+      },
+      { tickets: [mockTicketSummary], runs: [], chats: [], artifacts: [] }
+    );
+
+    const md = buildTicketUpdateContent(detail, {
+      title: 'Fixed',
+      agent: 'opencode',
+      model: '',
+      reasoning: '',
+      done: true,
+      frontmatterYaml: detail.frontmatterEditableYaml,
+      body: 'Body text'
+    });
+
+    expect(md).toContain('title: "Fixed"');
+    expect(md).toContain('agent: "opencode"');
+    expect(md).toContain('done: true');
+    expect(md).toContain('  title: keep nested title');
+    expect(md).toContain('  done: keep nested done');
+  });
+
+  it('builds PMA ticket repair chat payloads from ticket metadata', () => {
+    const detail = buildTicketDetailViewModel(
+      {
+        ...mockTicketDetail,
+        errors: ['frontmatter.done is required'],
+        raw: {
+          hub_root: '/hub',
+          workspace_root: '/workspace/repo',
+          repo_id: 'repo-1',
+          frontmatter: { ticket_id: 'TICKET-110', agent: 'codex', done: false }
+        }
+      },
+      { tickets: [mockTicketSummary], runs: [], chats: [], artifacts: [] }
+    );
+
+    expect(buildTicketRepairChatCreatePayload(detail)).toEqual({
+      agent: 'codex',
+      name: 'Repair #110 frontmatter',
+      scope_urn: 'worktree:repo-1/worktree-1'
+    });
+    expect(buildTicketRepairPrompt(detail)).toContain('Hub root: /hub');
+    expect(buildTicketRepairPrompt(detail)).toContain('Workspace root: /workspace/repo');
+    expect(buildTicketRepairPrompt(detail)).toContain('Ticket path: .codex-autorunner/tickets/TICKET-110.md');
+    expect(buildTicketRepairPrompt(detail)).toContain('- frontmatter.done is required');
   });
 });
