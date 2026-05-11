@@ -69,6 +69,7 @@ def test_initialize_orchestration_sqlite_creates_canonical_tables(
             "orch_reaction_state",
             "orch_feedback_reports",
             "orch_chat_operations",
+            "orch_chat_surface_events",
         }.issubset(names)
         assert {
             "operation_id",
@@ -157,6 +158,26 @@ def test_initialize_orchestration_sqlite_creates_canonical_tables(
             "terminal_detail",
             "metadata_json",
         }.issubset(_column_names(conn, "orch_chat_operations"))
+        assert {
+            "event_id",
+            "idempotency_key",
+            "event_type",
+            "surface_kind",
+            "surface_key",
+            "managed_thread_id",
+            "external_conversation_id",
+            "repo_id",
+            "resource_kind",
+            "resource_id",
+            "workspace_root",
+            "lifecycle_status",
+            "status",
+            "source_kind",
+            "source_id",
+            "occurred_at",
+            "created_at",
+            "payload_json",
+        }.issubset(_column_names(conn, "orch_chat_surface_events"))
         assert {
             "report_id",
             "repo_id",
