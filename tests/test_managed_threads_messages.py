@@ -221,7 +221,8 @@ def test_send_message_round_trips_structured_attachments(hub_env) -> None:
     assert f"  Saved to: {inbox_file}" in runtime_prompt
     assert "  URL: /hub/pma/files/inbox/screen.png" in runtime_prompt
     assert fake_supervisor.client.turn_start_calls[0]["turn_kwargs"]["input_items"] == [
-        {"type": "localImage", "path": str(inbox_file)}
+        {"type": "text", "text": runtime_prompt},
+        {"type": "localImage", "path": str(inbox_file)},
     ]
     assert turns[0]["attachments"] == [
         {
@@ -250,6 +251,58 @@ def test_send_message_round_trips_structured_attachments(hub_env) -> None:
             "url": "https://example.test/preview",
             "metadata": {"kind": "link"},
         },
+    ]
+
+
+def test_send_message_accepts_attachment_only_turn(hub_env) -> None:
+    _enable_pma(
+        hub_env.hub_root,
+        reactive_enabled=False,
+        managed_thread_terminal_followup_default=False,
+    )
+    app = create_hub_app(hub_env.hub_root)
+
+    fake_client = FakeClient(sequential=True)
+    fake_supervisor = FakeSupervisor(fake_client)
+    inbox_file = (
+        hub_env.hub_root / ".codex-autorunner" / "filebox" / "inbox" / "screen.png"
+    )
+    inbox_file.parent.mkdir(parents=True, exist_ok=True)
+    inbox_file.write_bytes(b"png")
+
+    attachments = [
+        {
+            "id": "att-1",
+            "kind": "image",
+            "title": "screen.png",
+            "url": "/hub/pma/files/inbox/screen.png",
+            "uploadedName": "screen.png",
+        }
+    ]
+
+    with TestClient(app) as client:
+        app.state.app_server_supervisor = fake_supervisor
+        app.state.app_server_events = object()
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", **_repo_owner(hub_env)},
+        )
+        assert create_resp.status_code == 200
+        managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+        send_resp = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/messages",
+            json={"message": "", "attachments": attachments},
+        )
+
+    assert send_resp.status_code == 200
+    runtime_prompt = str(fake_supervisor.client.turn_start_calls[0]["prompt"])
+    assert "<user_message>\nPMA File Inbox:" in runtime_prompt
+    assert "- screen.png" in runtime_prompt
+    assert f"  Saved to: {inbox_file}" in runtime_prompt
+    assert fake_supervisor.client.turn_start_calls[0]["turn_kwargs"]["input_items"] == [
+        {"type": "text", "text": runtime_prompt},
+        {"type": "localImage", "path": str(inbox_file)},
     ]
 
 

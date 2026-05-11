@@ -10,6 +10,23 @@ from ....core.text_utils import _normalize_optional_text
 logger = logging.getLogger(__name__)
 
 
+def _validation_context(request: Request) -> tuple[Any, Any]:
+    try:
+        from ..services.pma import get_pma_request_context
+
+        pma_context = get_pma_request_context(request)
+        return pma_context.config, pma_context.agent_context
+    except (
+        AttributeError,
+        ImportError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ):  # intentional: shared non-PMA routes use app.state directly
+        app_state = getattr(request.app, "state", None)
+        return getattr(app_state, "config", None), app_state
+
+
 def resolve_requested_agent_profile(
     request: Request,
     agent_id: str,
@@ -19,7 +36,7 @@ def resolve_requested_agent_profile(
 ) -> Optional[str]:
     """Validate an optional agent profile against runtime-aware config state."""
 
-    config = getattr(request.app.state, "config", None)
+    config, agent_context = _validation_context(request)
     profile_getter = getattr(config, "agent_profiles", None)
     default_profile_getter = getattr(config, "agent_default_profile", None)
     available_profiles: dict[str, Any] = {}
@@ -37,8 +54,7 @@ def resolve_requested_agent_profile(
                 from ....adapters.chat.agents import chat_hermes_profile_options
 
                 hermes_valid |= {
-                    opt.profile
-                    for opt in chat_hermes_profile_options(request.app.state)
+                    opt.profile for opt in chat_hermes_profile_options(agent_context)
                 }
             except (
                 ImportError,
@@ -69,7 +85,7 @@ def resolve_requested_agent_profile(
             from ....adapters.chat.agents import chat_hermes_profile_options
 
             fallback_keys |= {
-                opt.profile for opt in chat_hermes_profile_options(request.app.state)
+                opt.profile for opt in chat_hermes_profile_options(agent_context)
             }
         except (
             ImportError,

@@ -126,6 +126,9 @@ def build_pma_meta_routes(
             raise HTTPException(status_code=404, detail="PMA unavailable")
         agents, default_agent = _available_agents(request)
         defaults = _get_pma_config(request)
+        configured_default_agent = (
+            str(defaults.get("default_agent") or "").strip().lower() or None
+        )
         default_profile = str(defaults.get("profile") or "").strip().lower() or None
         available_agent_ids = {
             str(agent.get("id") or "").strip().lower()
@@ -158,23 +161,36 @@ def build_pma_meta_routes(
                         include_supervisor_metadata=False,
                     )
                 )
+        effective_default_agent = (
+            configured_default_agent
+            if configured_default_agent in available_agent_ids
+            else default_agent
+        )
         try:
             state = load_state(request.app.state.engine.state_path)
         except (OSError, ValueError, AttributeError):
             state = None
         default_model = resolve_model_for_agent(
-            default_agent,
+            effective_default_agent,
             state=state,
             config=request.app.state.config,
             configured_default=defaults.get("model"),
             include_builtin=False,
         )
-        payload: dict[str, Any] = {"agents": agents, "default": default_agent}
-        payload["agents"] = enriched_agents
-        if defaults.get("profile") or default_model or defaults.get("reasoning"):
+        payload: dict[str, Any] = {
+            "agents": enriched_agents,
+            "default": effective_default_agent,
+        }
+        if (
+            effective_default_agent
+            or defaults.get("profile")
+            or default_model
+            or defaults.get("reasoning")
+        ):
             payload["defaults"] = {
                 key: value
                 for key, value in {
+                    "agent": effective_default_agent,
                     "profile": defaults.get("profile"),
                     "model": default_model,
                     "reasoning": defaults.get("reasoning"),

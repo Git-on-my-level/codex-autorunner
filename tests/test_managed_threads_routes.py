@@ -19,6 +19,7 @@ from codex_autorunner.core.orchestration import (
 )
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.routes.pma_routes import (
+    managed_thread_route_helpers,
     managed_threads,
 )
 from codex_autorunner.surfaces.web.routes.pma_routes.managed_threads import (
@@ -239,6 +240,10 @@ def test_list_managed_threads_uses_active_execution_status(hub_env) -> None:
     assert listed["runtime_status"] == "running"
     assert listed["normalized_status"] == "running"
     assert listed["status"] == "running"
+    assert listed["latest_turn_id"] == running_turn["managed_turn_id"]
+    assert listed["latest_turn_status"] == "running"
+    assert listed["latest_turn_started_at"] == running_turn["started_at"]
+    assert listed["last_activity_at"] == running_turn["started_at"]
 
     queued_listed = threads[queued_thread_id]
     assert queued_turn["status"] == "queued"
@@ -738,6 +743,45 @@ def test_create_managed_thread_canonicalizes_alias_agent_input(hub_env) -> None:
     assert stored["metadata"]["agent_profile"] == "m4-pma"
 
 
+def test_create_managed_thread_accepts_canonical_profile_style_alias(
+    hub_env,
+) -> None:
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg.setdefault("agents", {})
+    cfg["agents"]["hermes"] = {
+        "binary": "hermes",
+        "profiles": {
+            "m4-pma": {
+                "display_name": "M4 PMA",
+                "binary": "hermes-m4-pma",
+            }
+        },
+    }
+    write_test_config(hub_env.hub_root / CONFIG_FILENAME, cfg)
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "hermes-m4-pma",
+                **_repo_owner(hub_env),
+                "name": "Hermes canonical profile alias thread",
+            },
+        )
+
+    assert resp.status_code == 200
+    thread = resp.json()["thread"]
+    assert thread["agent"] == "hermes"
+    assert thread["agent_profile"] == "m4-pma"
+
+    store = ManagedThreadStore(hub_env.hub_root)
+    stored = store.get_thread(thread["managed_thread_id"])
+    assert stored is not None
+    assert stored["agent"] == "hermes"
+    assert stored["metadata"]["agent_profile"] == "m4-pma"
+
+
 def test_create_managed_thread_accepts_explicit_approval_mode(hub_env) -> None:
     app = create_hub_app(hub_env.hub_root)
 
@@ -1018,7 +1062,7 @@ def test_create_managed_thread_succeeds_when_binding_metadata_lookup_fails(
 ) -> None:
     app = create_hub_app(hub_env.hub_root)
     monkeypatch.setattr(
-        managed_threads,
+        managed_thread_route_helpers,
         "active_chat_binding_metadata_by_thread",
         lambda *, hub_root: (_ for _ in ()).throw(
             RuntimeError("binding db unavailable")

@@ -648,3 +648,30 @@ class TestHermesHarness:
         assert resolved.runtime_agent_id == "hermes-m4-pma"
         assert resolved.runtime_profile is None
         assert resolved.resolution_kind == "alias_profile"
+
+    def test_resolve_agent_runtime_accepts_canonical_profile_style_alias(self):
+        class MockConfig:
+            agents = {
+                "hermes": AgentConfig(
+                    backend=None,
+                    binary="hermes",
+                    serve_command=None,
+                    base_url=None,
+                    subagent_models=None,
+                    profiles={"m4-pma": object()},
+                )
+            }
+
+            @staticmethod
+            def agent_binary(agent_id: str, profile: str | None = None) -> str:
+                _ = profile
+                return MockConfig.agents[agent_id].binary
+
+        resolved = resolve_agent_runtime("hermes-m4-pma", context=MockConfig)
+
+        assert resolved.logical_agent_id == "hermes"
+        assert resolved.logical_profile == "m4-pma"
+        assert resolved.runtime_agent_id == "hermes"
+        assert resolved.runtime_profile == "m4-pma"
+        assert resolved.resolution_kind == "canonical_profile"
+        assert validate_agent_id("hermes-m4-pma", MockConfig) == "hermes-m4-pma"

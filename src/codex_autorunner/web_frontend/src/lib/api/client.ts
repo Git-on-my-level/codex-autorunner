@@ -352,9 +352,10 @@ export class PmaApiClient {
         Array.isArray(payload.saved) ? payload.saved.filter((name): name is string => typeof name === 'string') : []
       );
     },
-    listAgents: async (): Promise<ApiResult<{ agents: JsonRecord[]; defaults: JsonRecord }>> =>
+    listAgents: async (): Promise<ApiResult<{ agents: JsonRecord[]; default: string; defaults: JsonRecord }>> =>
       mapResult(await this.getJson<JsonRecord>('/hub/pma/agents'), (payload) => ({
         agents: asArray(payload.agents),
+        default: typeof payload.default === 'string' ? payload.default : '',
         defaults: asRecord(payload.defaults)
       })),
     listAgentModels: async (agentId: string): Promise<ApiResult<JsonRecord[]>> =>

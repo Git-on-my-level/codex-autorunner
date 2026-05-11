@@ -898,9 +898,23 @@ def get_agent_descriptor(
 
 def validate_agent_id(agent_id: str, context: Any = None) -> str:
     normalized = (agent_id or "").strip().lower()
-    if normalized not in get_registered_agents(context):
-        raise ValueError(f"Unknown agent: {agent_id!r}")
-    return normalized
+    registered = get_registered_agents(context)
+    if normalized in registered:
+        return normalized
+    try:
+        resolved = resolve_agent_runtime(normalized, context=context)
+    except (ConfigError, RuntimeError, TypeError, ValueError):
+        resolved = None
+    if (
+        resolved is not None
+        and resolved.resolution_kind != "passthrough"
+        and (
+            resolved.logical_agent_id in registered
+            or resolved.runtime_agent_id in registered
+        )
+    ):
+        return normalized
+    raise ValueError(f"Unknown agent: {agent_id!r}")
 
 
 def has_capability(agent_id: str, capability: str, context: Any = None) -> bool:

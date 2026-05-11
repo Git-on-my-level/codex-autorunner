@@ -525,10 +525,17 @@
     if (agentResult.ok) {
       agents = agentResult.data.agents;
       const defaults = agentResult.data.defaults;
+      const defaultAgent =
+        typeof defaults.agent === 'string' && defaults.agent.trim()
+          ? defaults.agent.trim().toLowerCase()
+          : agentResult.data.default;
       const defaultProfile =
         typeof defaults.profile === 'string' && defaults.profile.trim() ? defaults.profile.trim() : '';
       if (!activeChat?.agentId) {
-        selectedAgent = agentResult.data.agents[0] ? agentId(agentResult.data.agents[0]) : selectedAgent;
+        const configuredDefault = agents.find((record) => agentId(record) === defaultAgent);
+        selectedAgent = configuredDefault
+          ? agentId(configuredDefault)
+          : agentResult.data.agents[0] ? agentId(agentResult.data.agents[0]) : selectedAgent;
         if (selectedAgent === 'hermes' && defaultProfile && !selectedProfile.trim()) {
           selectedProfile = defaultProfile;
         }
@@ -925,7 +932,12 @@
   }
 
   async function ensureChatForSelectedAgent(): Promise<string | null> {
-    if (!activeChat?.agentId || activeChat.agentId === selectedAgent) return activeChatId;
+    const activeAgent = activeChat?.agentId?.trim().toLowerCase() ?? '';
+    const requestedAgent = selectedAgent.trim().toLowerCase();
+    const activeProfile = activeChat?.agentProfile?.trim().toLowerCase() ?? '';
+    const requestedProfile = requestedAgent === 'hermes' ? selectedProfile.trim().toLowerCase() : '';
+    const profileMatches = requestedAgent !== 'hermes' || activeProfile === requestedProfile;
+    if (activeAgent && activeAgent === requestedAgent && profileMatches) return activeChatId;
     const result = await pmaApi.pma.createChat(
       buildManagedThreadCreatePayload(selectedAgent, selectedScope, newChatDisplayName(), selectedModel, selectedProfile)
     );
