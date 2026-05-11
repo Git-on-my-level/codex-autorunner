@@ -1,16 +1,27 @@
 <script lang="ts">
   import { page } from '$app/state';
-  import { onMount } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import TicketViews from '$lib/components/TicketViews.svelte';
-  import { pmaApi, type ApiError, type PartialPageIssue } from '$lib/api/client';
+  import { dataOr, partialPageIssue, pmaApi, type ApiError, type PartialPageIssue } from '$lib/api/client';
   import {
-    loadScopedTicketQueue,
+    pmaChatSummaryToChatIndexRow,
+    readModelEntityStore,
+    scopedOwnerKey,
+    selectTicketListView
+  } from '$lib/data';
+  import {
+    loadScopedActionManifest,
     reorderScopedTicket,
     runScopedTicketQueueCommand,
     scopedTicketActionStatus,
+    scopedTicketQueueOwner,
+    scopedTicketQueueScope,
     type ScopedTicketQueueConfig
   } from '$lib/viewModels/scopedTicketQueue';
+  import type { SurfaceActionManifest } from '$lib/viewModels/ticket';
   import type { TicketFilter, TicketListViewModel } from '$lib/viewModels/ticket';
+  import { rememberTickets } from '$lib/viewModels/ticketCache';
+  import { mapPmaChatSummary, mapPmaRunProgress, mapTicketSummary } from '$lib/viewModels/domain';
 
   const repoId = $derived(page.params.repoId ?? 'unknown-repo');
   const queueConfig = $derived<ScopedTicketQueueConfig>({
@@ -19,7 +30,12 @@
     apiBasePath: `/repos/${encodeURIComponent(repoId)}/api/flows`,
     displayLabel: 'repo'
   });
-  let list = $state<TicketListViewModel | null>(null);
+  let readModelState = $state(readModelEntityStore.snapshot());
+  let unsubscribeReadModels: (() => void) | null = null;
+  let actionManifest = $state<SurfaceActionManifest | null>(null);
+  const ownerScope = $derived(scopedTicketQueueScope(queueConfig));
+  const ownerKey = $derived(scopedOwnerKey(ownerScope));
+  const list = $derived<TicketListViewModel | null>(selectTicketListView(readModelState, ownerScope, actionManifest));
   let selectedFilter = $state<TicketFilter>('all');
   let loading = $state(true);
   let error = $state<ApiError | null>(null);
@@ -27,25 +43,41 @@
   let actionStatus = $state<string | null>(null);
 
   onMount(() => {
+    unsubscribeReadModels = readModelEntityStore.subscribe((state) => {
+      readModelState = state;
+    });
     void loadTickets();
+  });
+
+  onDestroy(() => {
+    unsubscribeReadModels?.();
   });
 
   async function loadTickets(showLoading = true): Promise<void> {
     if (showLoading) loading = true;
     error = null;
     sectionIssues = [];
-    const result = await loadScopedTicketQueue(pmaApi, queueConfig, (initialList) => {
-      list = initialList;
-      selectedFilter = 'all';
-      loading = false;
-    });
-    if (!result.ok) {
-      error = result.error;
+    const owner = scopedTicketQueueOwner(queueConfig);
+    const snapshot = await pmaApi.readModels.repoDetail(repoId);
+    if (!snapshot.ok) {
+      error = snapshot.error;
       loading = false;
       return;
     }
-    list = result.list;
-    sectionIssues = result.sectionIssues;
+    const tickets = snapshot.data.scopedTickets.map(mapTicketSummary);
+    const runs = snapshot.data.scopedRuns.map(mapPmaRunProgress);
+    const chats = snapshot.data.scopedChats.map(mapPmaChatSummary);
+    rememberTickets(owner, tickets);
+    readModelEntityStore.replaceScopedTicketSummaries(ownerKey, tickets);
+    readModelEntityStore.replaceScopedRuns(ownerKey, runs);
+    readModelEntityStore.upsertChatIndexRows(chats.map(pmaChatSummaryToChatIndexRow));
+    selectedFilter = 'all';
+    loading = false;
+    const manifest = await loadScopedActionManifest(pmaApi, queueConfig);
+    actionManifest = dataOr(manifest, null);
+    sectionIssues = [
+      !manifest.ok ? partialPageIssue('action_manifest', 'Action manifest unavailable', manifest.error) : null
+    ].filter((issue): issue is PartialPageIssue => Boolean(issue));
     selectedFilter = 'all';
     loading = false;
   }

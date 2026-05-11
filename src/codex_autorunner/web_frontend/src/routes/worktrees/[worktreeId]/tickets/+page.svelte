@@ -1,19 +1,29 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
-  import { onMount } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import TicketViews from '$lib/components/TicketViews.svelte';
-  import { pmaApi, type ApiError, type PartialPageIssue } from '$lib/api/client';
+  import { dataOr, partialPageIssue, pmaApi, type ApiError, type PartialPageIssue } from '$lib/api/client';
+  import {
+    pmaChatSummaryToChatIndexRow,
+    readModelEntityStore,
+    scopedOwnerKey,
+    selectTicketListView
+  } from '$lib/data';
   import { stripRuntimeBasePath, withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import {
-    loadScopedTicketQueue,
+    loadScopedActionManifest,
     reorderScopedTicket,
     runScopedTicketQueueCommand,
     scopedTicketActionStatus,
+    scopedTicketQueueOwner,
+    scopedTicketQueueScope,
     type ScopedTicketQueueConfig
   } from '$lib/viewModels/scopedTicketQueue';
   import { legacyWorktreeRedirectPath } from '$lib/viewModels/routes';
-  import type { TicketFilter, TicketListViewModel } from '$lib/viewModels/ticket';
+  import type { SurfaceActionManifest, TicketFilter, TicketListViewModel } from '$lib/viewModels/ticket';
+  import { rememberTickets } from '$lib/viewModels/ticketCache';
+  import { mapPmaChatSummary, mapPmaRunProgress, mapTicketSummary } from '$lib/viewModels/domain';
 
   const worktreeId = $derived(page.params.worktreeId ?? 'unknown-worktree');
   const routeRepoId = $derived(page.params.repoId ?? null);
@@ -27,7 +37,12 @@
     displayLabel: 'worktree',
     parentRepoId: routeRepoId ?? hubParentRepoId
   });
-  let list = $state<TicketListViewModel | null>(null);
+  let readModelState = $state(readModelEntityStore.snapshot());
+  let unsubscribeReadModels: (() => void) | null = null;
+  let actionManifest = $state<SurfaceActionManifest | null>(null);
+  const ownerScope = $derived(scopedTicketQueueScope(queueConfig));
+  const ownerKey = $derived(scopedOwnerKey(ownerScope));
+  const list = $derived<TicketListViewModel | null>(selectTicketListView(readModelState, ownerScope, actionManifest));
   let selectedFilter = $state<TicketFilter>('all');
   let loading = $state(true);
   let error = $state<ApiError | null>(null);
@@ -35,7 +50,14 @@
   let actionStatus = $state<string | null>(null);
 
   onMount(() => {
+    unsubscribeReadModels = readModelEntityStore.subscribe((state) => {
+      readModelState = state;
+    });
     void loadTickets();
+  });
+
+  onDestroy(() => {
+    unsubscribeReadModels?.();
   });
 
   async function loadTickets(showLoading = true): Promise<void> {
@@ -55,18 +77,21 @@
       await goto(href(redirectTo), { replaceState: true });
       return;
     }
-    const result = await loadScopedTicketQueue(pmaApi, queueConfig, (initialList) => {
-      list = initialList;
-      selectedFilter = 'all';
-      loading = false;
-    });
-    if (!result.ok) {
-      error = result.error;
-      loading = false;
-      return;
-    }
-    list = result.list;
-    sectionIssues = result.sectionIssues;
+    const owner = scopedTicketQueueOwner(queueConfig);
+    const tickets = detail.data.scopedTickets.map(mapTicketSummary);
+    const runs = detail.data.scopedRuns.map(mapPmaRunProgress);
+    const chats = detail.data.scopedChats.map(mapPmaChatSummary);
+    rememberTickets(owner, tickets);
+    readModelEntityStore.replaceScopedTicketSummaries(ownerKey, tickets);
+    readModelEntityStore.replaceScopedRuns(ownerKey, runs);
+    readModelEntityStore.upsertChatIndexRows(chats.map(pmaChatSummaryToChatIndexRow));
+    selectedFilter = 'all';
+    loading = false;
+    const manifest = await loadScopedActionManifest(pmaApi, queueConfig);
+    actionManifest = dataOr(manifest, null);
+    sectionIssues = [
+      !manifest.ok ? partialPageIssue('action_manifest', 'Action manifest unavailable', manifest.error) : null
+    ].filter((issue): issue is PartialPageIssue => Boolean(issue));
     selectedFilter = 'all';
     loading = false;
   }

@@ -8,6 +8,19 @@
   import ChatThreadPreMessagePickers from '$lib/components/ChatThreadPreMessagePickers.svelte';
   import VoiceComposerButton from '$lib/components/VoiceComposerButton.svelte';
   import { pmaApi, type ApiError, type JsonRecord, type PmaQueuedTurn } from '$lib/api/client';
+  import {
+    legacyChatIndexRecordToChatIndexRow,
+    pmaChatCounters,
+    pmaChatSummaryToChatIndexRow,
+    readModelEntityStore,
+    selectPmaArtifacts,
+    selectPmaChats,
+    selectPmaProgress,
+    selectPmaQueue,
+    selectPmaTimeline,
+    selectReadMarkers,
+    syntheticProjectionCursor
+  } from '$lib/data';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import { openChatSurfaceEventSource, openPmaTailEventSource, type StreamSubscription } from '$lib/api/streaming';
   import {
@@ -103,18 +116,21 @@
   const COMPACT_SUMMARY_PROMPT =
     'Summarize the conversation so far into a concise context block I can paste into a new thread. Include goals, constraints, decisions, and current state.';
 
-  let chats = $state<PmaChatSummary[]>([]);
-  let timeline = $state<PmaTimelineItem[]>([]);
-  let progress = $state<PmaRunProgress | null>(null);
-  let artifacts = $state<SurfaceArtifact[]>([]);
-  let queuedTurns = $state<PmaQueuedTurn[]>([]);
+  let readModelState = $state(readModelEntityStore.snapshot());
+  let unsubscribeReadModels: (() => void) | null = null;
+  let activeChatId = $state<string | null>(null);
+  const chats = $derived<PmaChatSummary[]>(selectPmaChats(readModelState));
+  const timeline = $derived<PmaTimelineItem[]>(selectPmaTimeline(readModelState, activeChatId));
+  const progress = $derived<PmaRunProgress | null>(selectPmaProgress(readModelState, activeChatId));
+  const artifacts = $derived<SurfaceArtifact[]>(selectPmaArtifacts(readModelState, activeChatId));
+  const queuedTurns = $derived<PmaQueuedTurn[]>(selectPmaQueue(readModelState, activeChatId));
+  const lastSeenMap = $derived<ChatLastSeenMap>(selectReadMarkers(readModelState) as ChatLastSeenMap);
   let agents = $state<JsonRecord[]>([]);
   let models = $state<JsonRecord[]>([]);
   let scopeOptions = $state<PmaChatScopeOption[]>(buildPmaChatScopeOptions([], []));
   let pendingAttachments = $state<PendingAttachment[]>([]);
   let linkDialogOpen = $state(false);
   let linkDraft = $state('');
-  let activeChatId = $state<string | null>(null);
   let selectedAgent = $state('codex');
   let selectedModel = $state('');
   let selectedReasoning = $state('');
@@ -248,7 +264,6 @@
   let lastScrolledChatId: string | null = null;
   let lastScrolledCardCount = 0;
   let lastScrolledEventCount = 0;
-  let lastSeenMap = $state<ChatLastSeenMap>(loadLastSeenMap());
 
   const activeChat = $derived(
     activeChatId
@@ -294,7 +309,7 @@
       next = markChatRead(next, chat.id, stamp);
     }
     if (next === lastSeenMap) return;
-    lastSeenMap = next;
+    readModelEntityStore.optimisticReadMarkers(next, `read-group:${group.key}:${Date.now()}`);
     saveLastSeenMap(next);
   }
 
@@ -418,6 +433,10 @@
   }
 
   onMount(() => {
+    unsubscribeReadModels = readModelEntityStore.subscribe((state) => {
+      readModelState = state;
+    });
+    readModelEntityStore.setReadMarkers(loadLastSeenMap());
     draft = page.url.searchParams.get('draft') ?? draft;
     void loadInitial();
     connectChatStream();
@@ -431,11 +450,9 @@
     const requestedDetail = requestedDetailFromUrl();
     if (!requestedDetail) {
       if (activeChatId !== null) {
+        clearActiveDetailState(activeChatId);
         closeStream();
         activeChatId = null;
-        timeline = [];
-        progress = null;
-        queuedTurns = [];
         detailMode = 'list';
       }
       return;
@@ -459,11 +476,12 @@
     if (seen && seen >= stamp) return;
     const next = markChatRead(lastSeenMap, activeChat.id, stamp);
     if (next === lastSeenMap) return;
-    lastSeenMap = next;
+    readModelEntityStore.optimisticReadMarkers(next, `read-active:${activeChat.id}:${Date.now()}`);
     saveLastSeenMap(next);
   });
 
   onDestroy(() => {
+    unsubscribeReadModels?.();
     if (pendingRefreshTimer) window.clearTimeout(pendingRefreshTimer);
     closeStream();
     closeChatStream();
@@ -489,8 +507,8 @@
     loadingChats = true;
     chatError = null;
     const [activeChatResult, archivedChatResult, artifactResult, agentResult, repoResult, worktreeResult] = await Promise.all([
-      pmaApi.pma.listChats('active'),
-      pmaApi.pma.listChats('archived'),
+      pmaApi.getJson<JsonRecord>('/hub/chat/index?view=all&limit=200'),
+      pmaApi.getJson<JsonRecord>('/hub/chat/index?view=archived&limit=200'),
       pmaApi.pma.listFiles(),
       pmaApi.pma.listAgents(),
       pmaApi.hub.listRepos(),
@@ -498,15 +516,21 @@
     ]);
 
     if (activeChatResult.ok) {
-      chats = [
-        ...activeChatResult.data,
-        ...(archivedChatResult.ok ? archivedChatResult.data : [])
+      const loadedRows = [
+        ...asRecords(activeChatResult.data.rows).map(legacyChatIndexRecordToChatIndexRow),
+        ...(archivedChatResult.ok ? asRecords(archivedChatResult.data.rows).map(legacyChatIndexRecordToChatIndexRow) : [])
       ];
+      readModelEntityStore.replaceChatIndexRows(
+        loadedRows,
+        syntheticProjectionCursor('pma.thread-list'),
+        undefined
+      );
+      const loadedChats = selectPmaChats(readModelEntityStore.snapshot());
       const requestedChat = page.params.chatId ?? page.url.searchParams.get('chat');
-      activeChatId = chooseActiveChatId(chats, activeChatId, requestedChat);
+      activeChatId = chooseActiveChatId(loadedChats, activeChatId, requestedChat);
       if (activeChatId) {
         detailMode = 'detail';
-        const selected = chats.find((chat) => chat.id === activeChatId);
+        const selected = loadedChats.find((chat) => chat.id === activeChatId);
         if (selected && isPmaChatArchived(selected)) filter = 'archived';
         syncSelectorsToActiveChat();
         void refreshActive(activeChatId);
@@ -516,7 +540,7 @@
       chatError = activeChatResult.error;
     }
 
-    if (artifactResult.ok) artifacts = artifactResult.data;
+    if (artifactResult.ok) readModelEntityStore.setPmaArtifacts('__global__', artifactResult.data);
     scopeOptions = buildPmaChatScopeOptions(
       repoResult.ok ? repoResult.data : [],
       worktreeResult.ok ? worktreeResult.data : []
@@ -545,6 +569,10 @@
     }
     applyNewChatQueryParam();
     loadingChats = false;
+  }
+
+  function asRecords(value: unknown): JsonRecord[] {
+    return Array.isArray(value) ? value.filter((item): item is JsonRecord => Boolean(item) && typeof item === 'object' && !Array.isArray(item)) : [];
   }
 
   function applyNewChatQueryParam(): void {
@@ -626,10 +654,8 @@
   }
 
   async function selectChat(chatId: string): Promise<void> {
+    clearActiveDetailState(chatId);
     activeChatId = chatId;
-    timeline = [];
-    progress = null;
-    queuedTurns = [];
     detailMode = 'detail';
     syncSelectorsToActiveChat();
     markActiveChatRead();
@@ -652,10 +678,8 @@
   }
 
   async function selectChatWithoutUrl(chatId: string): Promise<void> {
+    clearActiveDetailState(chatId);
     activeChatId = chatId;
-    timeline = [];
-    progress = null;
-    queuedTurns = [];
     detailMode = 'detail';
     syncSelectorsToActiveChat();
     markActiveChatRead();
@@ -669,14 +693,14 @@
     const stamp = chat?.updatedAt ?? new Date().toISOString();
     const next = markChatRead(lastSeenMap, activeChatId, stamp);
     if (next === lastSeenMap) return;
-    lastSeenMap = next;
+    readModelEntityStore.optimisticReadMarkers(next, `read-chat:${activeChatId}:${Date.now()}`);
     saveLastSeenMap(next);
   }
 
   function markAllUnreadChatsRead(): void {
     const next = markAllChatsRead(lastSeenMap, chats.filter((chat) => !isPmaChatArchived(chat)));
     if (next === lastSeenMap) return;
-    lastSeenMap = next;
+    readModelEntityStore.optimisticReadMarkers(next, `read-all:${Date.now()}`);
     saveLastSeenMap(next);
   }
 
@@ -684,15 +708,18 @@
     if (archiving) return;
     archiving = true;
     composeError = null;
+    const reconciliationId = `archive:${chatId}:${Date.now()}`;
+    readModelEntityStore.optimisticArchiveChat(chatId, reconciliationId);
     const result = await pmaApi.pma.archiveThread(chatId);
     if (result.ok) {
-      chats = chats.map((chat) => (chat.id === result.data.id ? result.data : chat));
+      upsertPmaChats([result.data]);
       showCommandNotice('Chat archived.');
       if (activeChatId === chatId) {
         closeStream();
         await goto(href('/chats'));
       }
     } else {
+      readModelEntityStore.revertOptimisticMutation(reconciliationId);
       composeError = result.error;
     }
     archiving = false;
@@ -706,8 +733,7 @@
     composeError = null;
     const result = await pmaApi.pma.archiveThreads(targets);
     if (result.ok) {
-      const archivedById = new Map(result.data.threads.map((chat) => [chat.id, chat]));
-      chats = chats.map((chat) => archivedById.get(chat.id) ?? chat);
+      upsertPmaChats(result.data.threads);
       showCommandNotice(
         result.data.errorCount > 0
           ? `Archived ${result.data.archivedCount}; ${result.data.errorCount} failed.`
@@ -746,14 +772,14 @@
     ]);
 
     if (activeChatId !== chatId) return;
-    if (messageResult.ok) timeline = reconcilePmaTimeline(timeline, messageResult.data);
+    if (messageResult.ok) readModelEntityStore.replacePmaTimeline(chatId, reconcilePmaTimeline(timeline, messageResult.data));
     else if (!options.quiet) activeError = messageResult.error;
 
     if (tailResult.ok) updateProgress(tailResult.data);
     else if (statusResult.ok) updateProgress(statusResult.data);
     else if (!options.quiet) activeError = tailResult.error;
 
-    if (queueResult.ok) queuedTurns = queueResult.data.queuedTurns;
+    if (queueResult.ok) readModelEntityStore.setPmaQueue(chatId, queueResult.data.queuedTurns);
 
     loadingActive = false;
   }
@@ -768,7 +794,7 @@
         streamState = 'connected';
         if (event.kind === 'timeline') {
           const item = mapPmaTimelineItem(event.payload);
-          timeline = reconcilePmaTimeline(timeline, [item]);
+          readModelEntityStore.replacePmaTimeline(chatId, reconcilePmaTimeline(timeline, [item]));
           if (item.kind === 'user_message') dropOptimisticPlaceholders();
           return;
         }
@@ -830,7 +856,7 @@
           return;
         }
         if (event.kind === 'chat_event') {
-          chats = reconcileChatSurfaceEvent(chats, event.payload);
+          replacePmaChatList(reconcileChatSurfaceEvent(chats, event.payload));
         }
       }
     });
@@ -841,14 +867,28 @@
     chatStreamSubscription = null;
   }
 
+  function replacePmaChatList(nextChats: PmaChatSummary[]): void {
+    readModelEntityStore.replaceChatIndexRows(
+      nextChats.map(pmaChatSummaryToChatIndexRow),
+      syntheticProjectionCursor('pma.chat-list'),
+      pmaChatCounters(nextChats)
+    );
+  }
+
+  function upsertPmaChats(nextChats: PmaChatSummary[]): void {
+    readModelEntityStore.upsertChatIndexRows(nextChats.map(pmaChatSummaryToChatIndexRow));
+  }
+
   function reconcileChatSnapshot(nextChats: PmaChatSummary[]): void {
     const reconciled = reconcileChatSurfaceSnapshot(chats, nextChats, activeChatId);
-    chats = reconciled.chats;
+    replacePmaChatList(reconciled.chats);
     if (reconciled.replacementChatId) void selectChat(reconciled.replacementChatId);
   }
 
   function updateProgress(nextProgress: PmaRunProgress): void {
     syncChatListStatusFromProgress(nextProgress);
+    const chatId = nextProgress.chatId ?? activeChatId;
+    if (!chatId) return;
     if (progress && progress.id === nextProgress.id) {
       const seen = new Set<string>();
       const merged: SurfaceArtifact[] = [];
@@ -857,18 +897,25 @@
         seen.add(ev.id);
         merged.push(ev);
       }
-      progress = { ...nextProgress, events: merged };
+      readModelEntityStore.setPmaProgress(chatId, { ...nextProgress, events: merged });
     } else {
-      progress = nextProgress;
+      readModelEntityStore.setPmaProgress(chatId, nextProgress);
     }
+  }
+
+  function clearActiveDetailState(chatId: string): void {
+    readModelEntityStore.replacePmaTimeline(chatId, []);
+    readModelEntityStore.setPmaProgress(chatId, null);
+    readModelEntityStore.setPmaQueue(chatId, []);
   }
 
   function syncChatListStatusFromProgress(nextProgress: PmaRunProgress): void {
     const chatId = nextProgress.chatId ?? activeChatId;
     if (!chatId) return;
-    chats = chats.map((chat) => {
-      if (chat.id !== chatId) return chat;
-      return {
+    const chat = chats.find((item) => item.id === chatId);
+    if (!chat) return;
+    upsertPmaChats([
+      {
         ...chat,
         status: nextProgress.status,
         progressPercent: nextProgress.progressPercent ?? chat.progressPercent,
@@ -884,14 +931,12 @@
           active_turn_id: nextProgress.id,
           queued_count: nextProgress.queueDepth
         }
-      };
-    });
+      }
+    ]);
   }
 
   function dropOptimisticPlaceholders(): void {
-    if (timeline.some((item) => item.id.startsWith('optimistic:'))) {
-      timeline = timeline.filter((item) => !item.id.startsWith('optimistic:'));
-    }
+    if (activeChatId) readModelEntityStore.removeOptimisticPmaTimelineItems(activeChatId);
   }
 
   function retryStream(): void {
@@ -1004,7 +1049,7 @@
       buildManagedThreadCreatePayload(selectedAgent, selectedScope, newChatDisplayName(), selectedModel, selectedProfile)
     );
     if (result.ok) {
-      chats = [result.data, ...chats.filter((chat) => chat.id !== result.data.id)];
+      upsertPmaChats([result.data]);
       await selectChat(result.data.id);
       selectedScopeId = scopeIdForChat(result.data) ?? 'local';
       newChatKind = 'pma';
@@ -1042,7 +1087,20 @@
       },
       raw: { optimistic: true }
     };
-    timeline = reconcilePmaTimeline(timeline, [optimisticPlaceholder]);
+    readModelEntityStore.optimisticSend(
+      optimisticChatId,
+      {
+        itemId: optimisticId,
+        kind: 'user_message',
+        role: 'user',
+        createdAt: optimisticTimestamp,
+        text: draftSnapshot,
+        artifactIds: [],
+        clientMessageId: optimisticId
+      },
+      optimisticId
+    );
+    readModelEntityStore.replacePmaTimeline(optimisticChatId, reconcilePmaTimeline(timeline, [optimisticPlaceholder]));
     draft = '';
     pendingAttachments = [];
     const composerVersionAtClear = composerEditVersion;
@@ -1050,10 +1108,11 @@
     composeError = null;
 
     const removeOptimistic = () => {
-      timeline = timeline.filter((item) => !item.id.startsWith('optimistic:'));
+      readModelEntityStore.removeOptimisticPmaTimelineItems(optimisticChatId);
     };
     const restoreDraft = () => {
       removeOptimistic();
+      readModelEntityStore.failOptimisticMutation(optimisticId);
       if (composerEditVersion !== composerVersionAtClear) return;
       draft = draftSnapshot;
       pendingAttachments = attachmentsSnapshot;
@@ -1098,12 +1157,25 @@
         draftSnapshot,
         targetChatId
       );
-      if (optimisticFromBackend) timeline = reconcilePmaTimeline(timeline, [optimisticFromBackend]);
+      if (optimisticFromBackend) {
+        readModelEntityStore.replacePmaTimeline(targetChatId, reconcilePmaTimeline(timeline, [optimisticFromBackend]));
+        readModelEntityStore.reconcileOptimisticTimelineItem(targetChatId, optimisticId, {
+          itemId: optimisticFromBackend.id,
+          kind: 'user_message',
+          role: 'user',
+          createdAt: optimisticFromBackend.timestamp ?? optimisticTimestamp,
+          text: draftSnapshot,
+          artifactIds: [],
+          clientMessageId: optimisticId,
+          backendMessageId: optimisticFromBackend.turnId || undefined
+        });
+      }
       await refreshActive(targetChatId, { quiet: true });
       removeOptimistic();
       if (activeChat?.agentId === 'hermes' && sendPlan.profile.trim()) {
         const stamped = sendPlan.profile.trim();
-        chats = chats.map((row) => (row.id === targetChatId ? { ...row, agentProfile: stamped } : row));
+        const chat = chats.find((row) => row.id === targetChatId);
+        if (chat) upsertPmaChats([{ ...chat, agentProfile: stamped }]);
       }
     } else {
       restoreDraft();
@@ -1122,7 +1194,10 @@
     composeError = null;
     const result = await pmaApi.pma.cancelQueuedTurn(activeChatId, turn.managedTurnId);
     if (result.ok) {
-      queuedTurns = queuedTurns.filter((item) => item.managedTurnId !== turn.managedTurnId);
+      readModelEntityStore.setPmaQueue(
+        activeChatId,
+        queuedTurns.filter((item) => item.managedTurnId !== turn.managedTurnId)
+      );
       await refreshActive(activeChatId, { quiet: true });
     } else {
       composeError = result.error;
@@ -1138,7 +1213,10 @@
       composeError = cancelResult.error;
       return;
     }
-    queuedTurns = queuedTurns.filter((item) => item.managedTurnId !== turn.managedTurnId);
+    readModelEntityStore.setPmaQueue(
+      chatId,
+      queuedTurns.filter((item) => item.managedTurnId !== turn.managedTurnId)
+    );
     const result = await pmaApi.pma.sendMessage(
       chatId,
       buildManagedThreadMessagePayload(
@@ -1157,7 +1235,7 @@
         turn.prompt,
         chatId
       );
-      if (optimisticFromBackend) timeline = reconcilePmaTimeline(timeline, [optimisticFromBackend]);
+      if (optimisticFromBackend) readModelEntityStore.replacePmaTimeline(chatId, reconcilePmaTimeline(timeline, [optimisticFromBackend]));
       await refreshActive(chatId, { quiet: true });
     } else {
       composeError = result.error;
@@ -1205,7 +1283,7 @@
       sending = false;
       return;
     }
-    chats = chats.map((chat) => (chat.id === compactResult.data.id ? compactResult.data : chat));
+    upsertPmaChats([compactResult.data]);
     showCommandNotice('Compact summary generated and saved.');
     sending = false;
     await refreshActive(chatId, { quiet: true });
@@ -1349,7 +1427,7 @@
       const result = await pmaApi.pma.listFiles();
       if (!result.ok) composeError = result.error;
       else {
-        artifacts = result.data;
+        readModelEntityStore.setPmaArtifacts(activeChatId ?? '__global__', result.data);
         showCommandNotice(result.data.length ? `Files refreshed (${result.data.length}).` : 'No PMA files yet.');
         clearSlashDraft();
       }
@@ -1369,7 +1447,7 @@
       const result = await pmaApi.pma.resumeThread(activeChatId);
       if (!result.ok) composeError = result.error;
       else {
-        chats = chats.map((chat) => (chat.id === result.data.id ? result.data : chat));
+        upsertPmaChats([result.data]);
         showCommandNotice('Thread resumed.');
         await refreshActive(activeChatId, { quiet: true });
         clearSlashDraft();
@@ -1384,7 +1462,7 @@
       const result = await pmaApi.pma.compactThread(activeChatId, args);
       if (!result.ok) composeError = result.error;
       else {
-        chats = chats.map((chat) => (chat.id === result.data.id ? result.data : chat));
+        upsertPmaChats([result.data]);
         showCommandNotice('Compaction seed saved.');
         await refreshActive(activeChatId, { quiet: true });
         clearSlashDraft();
@@ -1411,7 +1489,7 @@
       const result = await pmaApi.pma.clearQueue(activeChatId);
       if (!result.ok) composeError = result.error;
       else {
-        queuedTurns = [];
+        readModelEntityStore.setPmaQueue(activeChatId, []);
         showCommandNotice('Queue cleared.');
         await refreshActive(activeChatId, { quiet: true });
         clearSlashDraft();

@@ -5,6 +5,14 @@
   import TicketViews from '$lib/components/TicketViews.svelte';
   import { partialPageIssue, pmaApi, type ApiError, type JsonRecord, type PartialPageIssue } from '$lib/api/client';
   import { openFlowRunEventSource, type StreamSubscription } from '$lib/api/streaming';
+  import {
+    pmaChatSummaryToChatIndexRow,
+    readModelEntityStore,
+    scopedOwnerKey,
+    selectPmaChats,
+    selectPmaRuns,
+    selectTicketSummaries
+  } from '$lib/data';
   import { stripRuntimeBasePath, withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import {
     buildTicketWorkerActivity,
@@ -36,6 +44,8 @@
 
   const worktreeId = $derived(page.params.worktreeId ?? 'unknown-worktree');
   const ticketId = $derived(page.params.ticketId ?? 'unknown-ticket');
+  let readModelState = $state(readModelEntityStore.snapshot());
+  let unsubscribeReadModels: (() => void) | null = null;
   let detail = $state<TicketDetailViewModel | null>(null);
   let loading = $state(true);
   let error = $state<ApiError | null>(null);
@@ -54,6 +64,9 @@
   let detailRequestSeq = 0;
 
   onMount(() => {
+    unsubscribeReadModels = readModelEntityStore.subscribe((state) => {
+      readModelState = state;
+    });
     refreshTimer = setInterval(() => void loadTicketDetail(false), 10000);
     void loadPickerSupport();
   });
@@ -75,6 +88,7 @@
   }
 
   onDestroy(() => {
+    unsubscribeReadModels?.();
     if (refreshTimer) clearInterval(refreshTimer);
     closeFlowStream();
   });
@@ -116,14 +130,21 @@
       await goto(href(redirectTo), { replaceState: true });
       return;
     }
-    const ticketList = (snapshot.data.scopedTickets ?? []).map(mapTicketSummary);
-    rememberTickets({ worktree: ownerId }, ticketList);
+    const loadedTicketList = (snapshot.data.scopedTickets ?? []).map(mapTicketSummary);
+    const loadedRuns = (snapshot.data.scopedRuns ?? []).map(mapPmaRunProgress);
+    const loadedChats = (snapshot.data.scopedChats ?? []).map(mapPmaChatSummary);
+    const ownerKey = scopedOwnerKey({ kind: 'worktree', id: ownerId, parentRepoId });
+    rememberTickets({ worktree: ownerId }, loadedTicketList);
+    readModelEntityStore.replaceScopedTicketSummaries(ownerKey, loadedTicketList);
+    readModelEntityStore.replaceScopedRuns(ownerKey, loadedRuns);
+    readModelEntityStore.upsertChatIndexRows(loadedChats.map(pmaChatSummaryToChatIndexRow));
+    const ticketList = selectTicketSummaries(readModelState, ownerKey);
     const ticketDetail = mapTicketDetail(legacyTicket);
     detail = buildTicketDetailViewModel(ticketDetail, { tickets: ticketList, runs: [], chats: [], artifacts: [] });
     sectionIssues = [];
     loading = false;
-    const runs = (snapshot.data.scopedRuns ?? []).map(mapPmaRunProgress);
-    const chats = (snapshot.data.scopedChats ?? []).map(mapPmaChatSummary);
+    const runs = selectPmaRuns(readModelState, ownerKey);
+    const chats = selectPmaChats(readModelState);
     const baseIssues: PartialPageIssue[] = [];
     if (!isCurrentRequest()) return;
     await renderTicketDetail(ticketDetail, ticketList, runs, chats, baseIssues, ownerId, isCurrentRequest);
@@ -133,6 +154,7 @@
     if (ownerId !== worktreeId || routeTicketId !== ticketId) return;
     const selected = resolveTicketRouteId(ticketList, routeTicketId);
     if (!selected) return;
+    readModelEntityStore.replaceScopedTicketSummaries(scopedOwnerKey({ kind: 'worktree', id: ownerId }), ticketList);
     detail = buildTicketDetailViewModel(ticketDetailFromSummary(selected), {
       tickets: ticketList,
       runs: [],

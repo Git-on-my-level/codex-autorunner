@@ -1,20 +1,31 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import AutoDismissNotice from '$lib/components/AutoDismissNotice.svelte';
   import RepoWorktreeViews from '$lib/components/RepoWorktreeViews.svelte';
   import NewRepoDialog from '$lib/components/NewRepoDialog.svelte';
   import NewWorktreeDialog from '$lib/components/NewWorktreeDialog.svelte';
   import RepoSettingsDialog, { type RepoSettingsTarget } from '$lib/components/RepoSettingsDialog.svelte';
   import { confirmAndArchiveState, confirmAndCleanupWorktree, type ActionNotice } from '$lib/actions/repoWorktreeActions';
-  import { pmaApi, type ApiError, type JsonRecord, type PartialPageIssue } from '$lib/api/client';
-  import type { RepoTopology, RuntimeProjection, WorktreeTopology } from '$lib/api/readModelContracts';
-  import { mapRepoSummary, mapWorktreeSummary } from '$lib/viewModels/domain';
+  import { pmaApi, type ApiError, type PartialPageIssue } from '$lib/api/client';
+  import { readModelEntityStore, selectRepoSummaries, selectWorktreeSummaries } from '$lib/data';
   import {
     buildRepoWorktreeIndexViewModel,
     type RepoWorktreeIndexViewModel
   } from '$lib/viewModels/repoWorktree';
 
-  let index = $state<RepoWorktreeIndexViewModel | null>(null);
+  let readModelState = $state(readModelEntityStore.snapshot());
+  let unsubscribeReadModels: (() => void) | null = null;
+  const index = $derived<RepoWorktreeIndexViewModel | null>(
+    buildRepoWorktreeIndexViewModel({
+      repos: selectRepoSummaries(readModelState),
+      worktrees: selectWorktreeSummaries(readModelState),
+      runs: [],
+      chats: [],
+      tickets: [],
+      artifacts: [],
+      ticketsListLoaded: false
+    })
+  );
   let loading = $state(true);
   let error = $state<ApiError | null>(null);
   let sectionIssues = $state<PartialPageIssue[]>([]);
@@ -27,7 +38,14 @@
   let repoSettingsTarget = $state<RepoSettingsTarget | null>(null);
 
   onMount(() => {
+    unsubscribeReadModels = readModelEntityStore.subscribe((state) => {
+      readModelState = state;
+    });
     void loadRepos();
+  });
+
+  onDestroy(() => {
+    unsubscribeReadModels?.();
   });
 
   async function loadRepos(): Promise<void> {
@@ -48,61 +66,10 @@
       loading = false;
       return;
     }
+    readModelEntityStore.applyRepoWorktreeTopologySnapshot(topology.data);
+    readModelEntityStore.applyRepoWorktreeRuntimeSnapshot(runtime.data);
     sectionIssues = [];
-    const runtimeById = new Map<string, RuntimeProjection>(runtime.data.runtime.map((row: RuntimeProjection) => [row.entityId, row]));
-    const repos = topology.data.repos.map((repo: RepoTopology) =>
-      mapRepoSummary({
-        id: repo.repoId,
-        name: repo.label,
-        path: repo.path,
-        kind: 'base',
-        worktree_count: repo.childWorktreeIds.length,
-        ...runtimeRaw(runtimeById.get(repo.repoId))
-      })
-    );
-    const worktrees = topology.data.worktrees.map((worktree: WorktreeTopology) =>
-      mapWorktreeSummary({
-        id: worktree.worktreeId,
-        name: worktree.label,
-        path: worktree.path,
-        kind: 'worktree',
-        worktree_of: worktree.repoId,
-        branch: worktree.branch,
-        ...runtimeRaw(runtimeById.get(worktree.worktreeId))
-      })
-    );
-    index = buildRepoWorktreeIndexViewModel({
-      repos,
-      worktrees,
-      runs: [],
-      chats: [],
-      tickets: [],
-      artifacts: [],
-      ticketsListLoaded: false
-    });
     loading = false;
-  }
-
-  function runtimeRaw(row: RuntimeProjection | undefined): JsonRecord {
-    return row
-      ? {
-          active_runs: row.activeRunId ? 1 : 0,
-          open_tickets: row.waitingTicketCount + row.runningTicketCount,
-          ticket_flow_display: {
-            status: row.activeRunStatus,
-            is_active: Boolean(row.activeRunId),
-            total_count: row.waitingTicketCount + row.runningTicketCount,
-            done_count: 0,
-            run_id: row.activeRunId
-          },
-          git_status: {
-            dirty: row.gitDirty,
-            ahead: row.gitAhead,
-            behind: row.gitBehind
-          },
-          chat_bound_thread_count: row.chatCount
-        }
-      : {};
   }
 
   async function handleCleanupWorktree(target: Parameters<typeof confirmAndCleanupWorktree>[0]): Promise<void> {
