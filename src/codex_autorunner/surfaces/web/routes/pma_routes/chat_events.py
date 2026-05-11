@@ -8,7 +8,6 @@ from typing import Any, Optional
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
-from .....core.orchestration.sqlite import open_orchestration_sqlite
 from ...services.pma import get_pma_request_context
 from ..shared import SSE_HEADERS
 from .managed_thread_route_helpers import (
@@ -22,64 +21,7 @@ _POLL_INTERVAL_SECONDS = 1.5
 _HEARTBEAT_SECONDS = 15.0
 
 
-def _latest_text(values: list[Any]) -> str:
-    normalized = [
-        str(value or "").strip() for value in values if str(value or "").strip()
-    ]
-    return max(normalized) if normalized else ""
-
-
-def _chat_event_revision(hub_root: Any) -> str:
-    with open_orchestration_sqlite(hub_root, migrate=True) as conn:
-        thread_row = conn.execute(
-            """
-            SELECT COUNT(*) AS count,
-                   MAX(updated_at) AS updated_at,
-                   MAX(status_updated_at) AS status_updated_at
-              FROM orch_thread_targets
-            """
-        ).fetchone()
-        binding_row = conn.execute(
-            """
-            SELECT COUNT(*) AS count,
-                   MAX(updated_at) AS updated_at,
-                   MAX(disabled_at) AS disabled_at
-              FROM orch_bindings
-             WHERE target_kind = 'thread'
-            """
-        ).fetchone()
-        execution_row = conn.execute(
-            """
-            SELECT COUNT(*) AS count,
-                   MAX(created_at) AS created_at,
-                   MAX(started_at) AS started_at,
-                   MAX(finished_at) AS finished_at
-              FROM orch_thread_executions
-            """
-        ).fetchone()
-    parts = {
-        "threads": int(thread_row["count"] or 0),
-        "thread_at": _latest_text(
-            [thread_row["updated_at"], thread_row["status_updated_at"]]
-        ),
-        "bindings": int(binding_row["count"] or 0),
-        "binding_at": _latest_text(
-            [binding_row["updated_at"], binding_row["disabled_at"]]
-        ),
-        "executions": int(execution_row["count"] or 0),
-        "execution_at": _latest_text(
-            [
-                execution_row["created_at"],
-                execution_row["started_at"],
-                execution_row["finished_at"],
-            ]
-        ),
-    }
-    revision_basis = json.dumps(parts, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(revision_basis.encode("utf-8")).hexdigest()
-
-
-def _serialize_chat_snapshot(request: Request, *, revision: str) -> dict[str, Any]:
+def _serialize_chat_snapshot(request: Request) -> dict[str, Any]:
     context = get_pma_request_context(request)
     service = build_managed_thread_orchestration_service(request)
     threads = service.list_thread_targets(limit=500)
@@ -88,9 +30,8 @@ def _serialize_chat_snapshot(request: Request, *, revision: str) -> dict[str, An
         for summary in service.list_active_work_summaries(limit=max(len(threads), 1))
     }
     binding_metadata = _load_chat_binding_metadata_by_thread(context.hub_root)
-    return {
+    payload = {
         "contract_version": CHAT_EVENTS_CONTRACT_VERSION,
-        "revision": revision,
         "threads": [
             _serialize_thread_target(
                 thread,
@@ -100,6 +41,9 @@ def _serialize_chat_snapshot(request: Request, *, revision: str) -> dict[str, An
             for thread in threads
         ],
     }
+    revision_basis = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    payload["revision"] = hashlib.sha256(revision_basis.encode("utf-8")).hexdigest()
+    return payload
 
 
 def _sse_frame(event: str, payload: dict[str, Any], *, event_id: Optional[str]) -> str:
@@ -121,16 +65,9 @@ def build_chat_event_routes(router: APIRouter, get_runtime_state) -> None:
             last_revision: Optional[str] = None
             last_heartbeat_at = asyncio.get_running_loop().time()
             while True:
-                revision = await asyncio.to_thread(
-                    _chat_event_revision,
-                    get_pma_request_context(request).hub_root,
-                )
+                payload = await asyncio.to_thread(_serialize_chat_snapshot, request)
+                revision = str(payload["revision"])
                 if revision != last_revision:
-                    payload = await asyncio.to_thread(
-                        _serialize_chat_snapshot,
-                        request,
-                        revision=revision,
-                    )
                     yield _sse_frame("chat_snapshot", payload, event_id=revision)
                     last_revision = revision
                     last_heartbeat_at = asyncio.get_running_loop().time()
