@@ -1,7 +1,11 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from codex_autorunner.adapters.telegram.handlers.commands.workspace_binding import (
+    WorkspaceBindingMixin,
+)
 from codex_autorunner.adapters.telegram.state import (
     OutboxRecord,
     PendingApprovalRecord,
@@ -10,10 +14,14 @@ from codex_autorunner.adapters.telegram.state import (
     TelegramTopicRecord,
     topic_key,
 )
+from codex_autorunner.adapters.telegram.topic_router import TopicRouter
 from codex_autorunner.core.chat_bindings import repo_has_active_non_pma_chat_binding
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration.bindings import OrchestrationBindingStore
+from codex_autorunner.core.orchestration.chat_surface_events import (
+    SQLiteChatSurfaceEventJournal,
+)
 from codex_autorunner.core.orchestration.sqlite import initialize_orchestration_sqlite
 from codex_autorunner.manifest import (
     MANIFEST_VERSION,
@@ -32,6 +40,67 @@ async def test_telegram_state_global_update_id(tmp_path: Path) -> None:
         assert await store.update_last_update_id_global(10) == 10
         assert await store.get_last_update_id_global() == 10
         assert await store.update_last_update_id_global(3) == 10
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_telegram_bind_command_emits_chat_surface_events(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    first_workspace = hub_root / "repo-1"
+    second_workspace = hub_root / "repo-2"
+    first_workspace.mkdir(parents=True)
+    second_workspace.mkdir(parents=True)
+    store = TelegramStateStore(
+        hub_root / ".codex-autorunner" / "telegram_state.sqlite3"
+    )
+
+    class FakeHandler(WorkspaceBindingMixin):
+        def __init__(self) -> None:
+            self._hub_root = hub_root
+            self._router = TopicRouter(store)
+            self._bind_options = {}
+            self.messages: list[str] = []
+
+        async def _resolve_topic_key(self, chat_id: int, thread_id) -> str:
+            return await self._router.resolve_key(chat_id, thread_id)
+
+        def _resolve_workspace(self, arg: str):
+            if arg == "repo-1":
+                return str(first_workspace), "repo-1", "repo", "repo-1"
+            if arg == "repo-2":
+                return str(second_workspace), "repo-2", "repo", "repo-2"
+            return None
+
+        def _topic_scope_id(self, repo_id, workspace_path):
+            return repo_id or workspace_path
+
+        def _workspace_id_for_path(self, _workspace_path):
+            return None
+
+        async def _send_message(self, *args, **kwargs) -> None:
+            self.messages.append(str(args[1]))
+
+    handler = FakeHandler()
+    message = SimpleNamespace(chat_id=123, thread_id=None, message_id=456)
+    try:
+        await handler._bind_topic_with_arg(topic_key(123, None), "repo-1", message)
+        await handler._bind_topic_with_arg(
+            topic_key(123, None, scope="repo-1"), "repo-2", message
+        )
+
+        events = [
+            event
+            for event in SQLiteChatSurfaceEventJournal(hub_root).read_events_since(0)
+            if event.source_kind == "telegram.adapter.binding"
+        ]
+        assert [
+            (event.event_type, event.surface_kind, event.surface_key, event.repo_id)
+            for event in events
+        ] == [
+            ("surface.bound", "telegram", "123:root:repo-1", "repo-1"),
+            ("surface.rebound", "telegram", "123:root:repo-2", "repo-2"),
+        ]
     finally:
         await store.close()
 

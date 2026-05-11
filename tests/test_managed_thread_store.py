@@ -16,6 +16,9 @@ from codex_autorunner.core.managed_thread_store import (
 )
 from codex_autorunner.core.managed_thread_store_rows import ManagedThreadRecord
 from codex_autorunner.core.orchestration import ColdTraceStore
+from codex_autorunner.core.orchestration.chat_surface_events import (
+    SQLiteChatSurfaceEventJournal,
+)
 from codex_autorunner.core.orchestration.execution_history import ExecutionCheckpoint
 from codex_autorunner.core.orchestration.models import BackendBinding
 from codex_autorunner.core.orchestration.runtime_bindings import (
@@ -560,7 +563,8 @@ def test_create_turn_rejects_when_running_turn_exists(tmp_path: Path) -> None:
 
 
 def test_create_turn_can_queue_behind_running_turn(tmp_path: Path) -> None:
-    store = ManagedThreadStore(tmp_path / "hub")
+    hub_root = tmp_path / "hub"
+    store = ManagedThreadStore(hub_root)
     thread = store.create_thread("codex", tmp_path / "workspace")
 
     running_turn = store.create_turn(thread["managed_thread_id"], prompt="first")
@@ -580,6 +584,14 @@ def test_create_turn_can_queue_behind_running_turn(tmp_path: Path) -> None:
     assert len(queued_items) == 1
     assert queued_items[0]["managed_turn_id"] == queued_turn["managed_turn_id"]
     assert queued_items[0]["request_kind"] == "review"
+    events = SQLiteChatSurfaceEventJournal(hub_root, durable=False).read_history()
+    statuses = [
+        event.status
+        for event in events
+        if event.managed_thread_id == thread["managed_thread_id"]
+    ]
+    assert "running" in statuses
+    assert "queued" in statuses
 
 
 def test_get_turn_by_client_turn_id_prefers_current_execution(tmp_path: Path) -> None:
@@ -1305,7 +1317,8 @@ def test_concurrent_create_turn_admission_is_atomic(tmp_path: Path) -> None:
 
 
 def test_archive_thread_changes_status(tmp_path: Path) -> None:
-    store = ManagedThreadStore(tmp_path / "hub")
+    hub_root = tmp_path / "hub"
+    store = ManagedThreadStore(hub_root)
     thread = store.create_thread("opencode", tmp_path / "workspace")
 
     store.archive_thread(thread["managed_thread_id"])
@@ -1316,6 +1329,9 @@ def test_archive_thread_changes_status(tmp_path: Path) -> None:
     assert archived["normalized_status"] == "archived"
     assert archived["status_reason_code"] == "thread_archived"
     assert archived["status_terminal"] is True
+    events = SQLiteChatSurfaceEventJournal(hub_root, durable=False).read_history()
+    assert events[-1].event_type == "surface.archived"
+    assert events[-1].managed_thread_id == thread["managed_thread_id"]
 
 
 def test_create_turn_rejects_archived_thread(tmp_path: Path) -> None:

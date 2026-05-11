@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable, Optional
 
+from ...core.chat_bindings import backfill_adapter_chat_surface_events
 from ...core.logging_utils import log_event
 from .bound_chat_execution_metadata import (
     bound_chat_origin_matches_surface_from_execution_mapping,
@@ -149,6 +151,35 @@ def find_surface_keys_for_pending_queue(
     return tuple(dict.fromkeys(owned_surface_keys))
 
 
+def _backfill_adapter_chat_surfaces(service: Any, *, surface_kind: str) -> None:
+    config = getattr(service, "_config", None)
+    raw_config = getattr(config, "raw", None)
+    root = getattr(config, "root", None)
+    if root is None:
+        return
+    try:
+        counts = backfill_adapter_chat_surface_events(
+            hub_root=Path(root),
+            raw_config=raw_config if isinstance(raw_config, dict) else {},
+        )
+    except Exception as exc:
+        log_event(
+            service._logger,
+            logging.WARNING,
+            f"{surface_kind}.chat_surface.backfill_failed",
+            exc=exc,
+        )
+        return
+    log_event(
+        service._logger,
+        logging.INFO,
+        f"{surface_kind}.chat_surface.backfill_finished",
+        emitted=sum(counts.values()),
+        discord=counts.get("discord", 0),
+        telegram=counts.get("telegram", 0),
+    )
+
+
 async def recover_managed_thread_executions_on_startup(
     service: Any,
     *,
@@ -161,6 +192,7 @@ async def recover_managed_thread_executions_on_startup(
     failure_event_name: str,
     finished_event_name: str,
 ) -> None:
+    _backfill_adapter_chat_surfaces(service, surface_kind=surface_kind)
     orchestration_service = build_orchestration_service(service)
     thread_store = getattr(orchestration_service, "thread_store", None)
     list_running = getattr(

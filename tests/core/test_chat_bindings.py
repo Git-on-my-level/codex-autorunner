@@ -7,6 +7,7 @@ from pathlib import Path
 from codex_autorunner.core.chat_bindings import (
     active_chat_binding_counts,
     active_chat_binding_counts_by_source,
+    backfill_adapter_chat_surface_events,
     preferred_non_pma_chat_notification_source_for_workspace,
     repo_has_active_chat_binding,
     repo_has_active_non_pma_chat_binding,
@@ -16,6 +17,9 @@ from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration import (
     OrchestrationBindingStore,
     initialize_orchestration_sqlite,
+)
+from codex_autorunner.core.orchestration.chat_surface_events import (
+    SQLiteChatSurfaceEventJournal,
 )
 from codex_autorunner.manifest import (
     MANIFEST_VERSION,
@@ -276,6 +280,58 @@ def test_active_chat_binding_counts_aggregates_persisted_sources(
     )
     assert counts_by_source["repo-a"] == {"pma": 2, "discord": 1}
     assert counts_by_source["repo-b"] == {"discord": 1, "telegram": 1}
+
+
+def test_backfill_adapter_chat_surface_events_populates_shared_journal(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg["discord_bot"]["enabled"] = True
+    cfg["telegram_bot"]["enabled"] = True
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    workspace = _write_manifest_repo(
+        hub_root,
+        repo_id="repo-a",
+        relative_path="worktrees/repo-a",
+    )
+    _write_discord_binding(
+        hub_root / ".codex-autorunner" / "discord_state.sqlite3",
+        channel_id="discord-chan-1",
+        repo_id=None,
+        workspace_path=str(workspace),
+        updated_at="2026-03-12T10:00:00Z",
+    )
+    _write_telegram_binding(
+        hub_root / ".codex-autorunner" / "telegram_state.sqlite3",
+        topic_key="123:root:repo-a",
+        repo_id=None,
+        workspace_path=str(workspace),
+        updated_at="2026-03-12T10:01:00Z",
+    )
+    _write_telegram_topic_scope(
+        hub_root / ".codex-autorunner" / "telegram_state.sqlite3",
+        chat_id=123,
+        thread_id=None,
+        scope="repo-a",
+    )
+
+    counts = backfill_adapter_chat_surface_events(hub_root=hub_root, raw_config=cfg)
+    assert counts == {"discord": 1, "telegram": 1}
+    assert backfill_adapter_chat_surface_events(hub_root=hub_root, raw_config=cfg) == {
+        "discord": 0,
+        "telegram": 0,
+    }
+
+    events = SQLiteChatSurfaceEventJournal(hub_root, durable=False).read_events_since(0)
+    assert [
+        (event.event_type, event.surface_kind, event.surface_key, event.repo_id)
+        for event in events
+    ] == [
+        ("surface.bound", "discord", "discord-chan-1", "repo-a"),
+        ("surface.bound", "telegram", "123:root:repo-a", "repo-a"),
+    ]
+    assert {event.status for event in events} == {"backfilled"}
 
 
 def test_repo_has_active_chat_binding_uses_configured_state_files(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -10,10 +11,16 @@ from codex_autorunner.adapters.discord.state import (
     DiscordStateStore,
     OutboxRecord,
 )
+from codex_autorunner.adapters.discord.workspace_commands import (
+    _bind_to_workspace_candidate,
+)
 from codex_autorunner.core.managed_thread_store import ManagedThreadStore
 from codex_autorunner.core.orchestration import (
     OrchestrationBindingStore,
     initialize_orchestration_sqlite,
+)
+from codex_autorunner.core.orchestration.chat_surface_events import (
+    SQLiteChatSurfaceEventJournal,
 )
 
 
@@ -58,6 +65,73 @@ async def test_channel_binding_crud(tmp_path: Path) -> None:
 
         all_bindings = await store.list_bindings()
         assert len(all_bindings) == 1
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_discord_workspace_bind_command_emits_chat_surface_events(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    first_workspace = hub_root / "repo-1"
+    second_workspace = hub_root / "repo-2"
+    first_workspace.mkdir(parents=True)
+    second_workspace.mkdir(parents=True)
+    store = DiscordStateStore(hub_root / ".codex-autorunner" / "discord_state.sqlite3")
+
+    class FakeService:
+        def __init__(self) -> None:
+            self._config = SimpleNamespace(root=hub_root)
+            self._store = store
+            self.messages: list[str] = []
+
+        def interaction_is_deferred(self, _interaction_token: str) -> bool:
+            return False
+
+        def interaction_has_initial_response(self, _interaction_token: str) -> bool:
+            return False
+
+        async def respond_ephemeral(
+            self, _interaction_id: str, _interaction_token: str, text: str
+        ) -> None:
+            self.messages.append(text)
+
+    service = FakeService()
+    try:
+        await _bind_to_workspace_candidate(
+            service,
+            "interaction-1",
+            "token-1",
+            channel_id="channel-1",
+            guild_id="guild-1",
+            selected_resource_kind="repo",
+            selected_resource_id="repo-1",
+            workspace_path=str(first_workspace),
+        )
+        await _bind_to_workspace_candidate(
+            service,
+            "interaction-2",
+            "token-2",
+            channel_id="channel-1",
+            guild_id="guild-1",
+            selected_resource_kind="repo",
+            selected_resource_id="repo-2",
+            workspace_path=str(second_workspace),
+        )
+
+        events = [
+            event
+            for event in SQLiteChatSurfaceEventJournal(hub_root).read_events_since(0)
+            if event.source_kind == "discord.adapter.binding"
+        ]
+        assert [
+            (event.event_type, event.surface_kind, event.surface_key, event.repo_id)
+            for event in events
+        ] == [
+            ("surface.bound", "discord", "channel-1", "repo-1"),
+            ("surface.rebound", "discord", "channel-1", "repo-2"),
+        ]
     finally:
         await store.close()
 

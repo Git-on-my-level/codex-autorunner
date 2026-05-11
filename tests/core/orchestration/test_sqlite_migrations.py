@@ -615,6 +615,64 @@ def test_apply_orchestration_migrations_adds_chat_operation_ledger_from_v20(
     assert table is not None
 
 
+def test_apply_orchestration_migrations_adds_chat_surface_event_journal_from_v29(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "orchestration.sqlite3"
+
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE orch_schema_migrations (
+                version INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                applied_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE orch_migration_runs (
+                run_id TEXT PRIMARY KEY,
+                from_version INTEGER NOT NULL,
+                target_version INTEGER NOT NULL,
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                status TEXT NOT NULL,
+                error_text TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO orch_schema_migrations (version, name, applied_at)
+            VALUES (29, 'purge_removed_workspace_scope_threads_and_bindings', '2026-04-15T00:00:00Z')
+            """
+        )
+
+        version_after = apply_orchestration_migrations(conn)
+        table = conn.execute(
+            """
+            SELECT name
+              FROM sqlite_master
+             WHERE type = 'table'
+               AND name = 'orch_chat_surface_events'
+            """
+        ).fetchone()
+        unique_index = conn.execute(
+            """
+            SELECT name
+              FROM sqlite_master
+             WHERE type = 'index'
+               AND name = 'sqlite_autoindex_orch_chat_surface_events_1'
+            """
+        ).fetchone()
+
+    assert version_after == ORCHESTRATION_SCHEMA_VERSION
+    assert table is not None
+    assert unique_index is not None
+
+
 def test_apply_orchestration_migrations_adds_pr_binding_table_from_v9(
     tmp_path: Path,
 ) -> None:

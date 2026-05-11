@@ -35,6 +35,7 @@ from codex_autorunner.core.managed_thread_store import (
     ManagedThreadStore,
     prepare_managed_thread_store,
 )
+from codex_autorunner.core.orchestration import SQLiteChatSurfaceEventJournal
 from codex_autorunner.core.orchestration.cold_trace_store import ColdTraceStore
 from codex_autorunner.core.orchestration.sqlite import prepare_orchestration_sqlite
 from codex_autorunner.core.pma_notification_store import PmaNotificationStore
@@ -177,6 +178,17 @@ def test_shared_state_service_reply_lookup_and_binding_idempotency(
     assert reply_target.record is not None
     assert reply_target.record.notification_id == recorded.notification_id
     assert reply_target.record.delivered_message_id == "99"
+
+    events = SQLiteChatSurfaceEventJournal(tmp_path / "hub").read_history()
+    notification_events = [
+        event
+        for event in events
+        if event.event_type == "notification.reply_context_changed"
+    ]
+    assert [event.status for event in notification_events] == [
+        "recorded",
+        "delivered",
+    ]
 
 
 def test_shared_state_service_lists_surface_bindings_with_filters(
