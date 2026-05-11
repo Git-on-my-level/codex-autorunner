@@ -45,6 +45,17 @@ logger = logging.getLogger(__name__)
 PMA_CONTEXT_SNAPSHOT_MAX_BYTES = 200_000
 PMA_CONTEXT_LOG_SOFT_LIMIT_BYTES = 5_000_000
 PMA_BULK_DELETE_SAMPLE_LIMIT = 10
+PMA_INLINE_IMAGE_CONTENT_TYPES = frozenset(
+    {
+        "image/avif",
+        "image/bmp",
+        "image/gif",
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+        "image/x-icon",
+    }
+)
 
 
 def _stream_file(handle: BinaryIO) -> Iterator[bytes]:
@@ -63,7 +74,11 @@ def _file_download_response(
 ) -> StreamingResponse:
     encoded = quote(entry.name, safe="")
     content_type = mimetypes.guess_type(entry.name)[0] or "application/octet-stream"
-    disposition = "inline" if content_type.startswith("image/") else "attachment"
+    disposition = (
+        "inline"
+        if content_type.lower() in PMA_INLINE_IMAGE_CONTENT_TYPES
+        else "attachment"
+    )
     headers = {"Content-Disposition": f"{disposition}; filename*=UTF-8''{encoded}"}
     if entry.size is not None:
         headers["Content-Length"] = str(entry.size)
@@ -149,8 +164,24 @@ def build_history_files_docs_router(
     def _open_pma_file_from_registered_roots(
         request: Request, box: str, filename: str
     ) -> tuple[Path, filebox.FileBoxEntry, BinaryIO] | None:
+        safe_filename = filebox.sanitize_filename(filename)
         for root in _registered_filebox_roots(request):
-            result = filebox.open_file(root, box, filename)
+            box_dir = (
+                filebox.inbox_dir(root) if box == "inbox" else filebox.outbox_dir(root)
+            )
+            if not box_dir.exists() or box_dir.is_symlink():
+                continue
+            try:
+                result = filebox.open_file(root, box, safe_filename)
+            except (OSError, ValueError):
+                logger.debug(
+                    "Skipping unreadable PMA FileBox root while downloading %s/%s: %s",
+                    box,
+                    safe_filename,
+                    root,
+                    exc_info=True,
+                )
+                continue
             if result is None:
                 continue
             entry, handle = result
