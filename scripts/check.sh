@@ -94,7 +94,7 @@ need_cmd make
 FAST_TEST_MARKERS='not integration and not slow'
 FAST_TEST_ENFORCE_BUDGET="${CODEX_FAST_TEST_ENFORCE_BUDGET:-0}"
 FAST_TEST_WORKERS="${CODEX_FAST_TEST_WORKERS:-4}"
-STAGED_FILES="$(git diff --cached --name-only --diff-filter=ACM 2>/dev/null || true)"
+STAGED_FILES="$(git diff --cached --name-only --diff-filter=ACMRD 2>/dev/null || true)"
 
 # --- Lane detection (if not explicitly set) ----------------------------------
 if [[ -z "$LANE" ]]; then

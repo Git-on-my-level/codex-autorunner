@@ -15,10 +15,30 @@ def _script_path() -> Path:
     )
 
 
+def test_check_script_feeds_deletions_and_renames_to_preflight() -> None:
+    check_script = (
+        Path(__file__).resolve().parents[1] / "scripts" / "check.sh"
+    ).read_text(encoding="utf-8")
+
+    assert "--diff-filter=ACMRD" in check_script
+
+
 def test_missing_static_for_web_source_change() -> None:
     assert missing_static_for_paths(
         ["src/codex_autorunner/web_frontend/src/routes/+page.svelte"]
     ) == ("src/codex_autorunner/web_frontend/src/routes/+page.svelte",)
+
+
+def test_missing_static_normalizes_changed_paths_with_shared_lane_helper() -> None:
+    assert missing_static_for_paths(
+        [".\\src\\codex_autorunner\\web_frontend\\src\\routes\\+page.svelte"]
+    ) == ("src/codex_autorunner/web_frontend/src/routes/+page.svelte",)
+
+
+def test_missing_static_for_deleted_web_source_path() -> None:
+    assert missing_static_for_paths(
+        ["src/codex_autorunner/web_frontend/src/routes/old/+page.svelte"]
+    ) == ("src/codex_autorunner/web_frontend/src/routes/old/+page.svelte",)
 
 
 def test_static_output_satisfies_web_source_change() -> None:

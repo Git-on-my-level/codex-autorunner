@@ -30,8 +30,8 @@ def _load_validation_lanes_module():
 
 
 _VALIDATION_LANES = _load_validation_lanes_module()
-normalize_path = _VALIDATION_LANES.normalize_changed_path
-_matches_prefix = _VALIDATION_LANES._matches_prefix
+normalize_changed_path = _VALIDATION_LANES.normalize_changed_path
+matches_prefix = _VALIDATION_LANES._matches_prefix
 
 WEB_FRONTEND_SOURCE_PREFIX = "src/codex_autorunner/web_frontend/src"
 WEB_STATIC_PREFIX = "src/codex_autorunner/web_static"
@@ -55,18 +55,18 @@ WEB_SOURCE_TEST_SUFFIXES = (
 def needs_web_static_refresh(path: str) -> bool:
     if path in WEB_BUILD_CONFIG_PATHS:
         return True
-    if not _matches_prefix(path, WEB_FRONTEND_SOURCE_PREFIX):
+    if not matches_prefix(path, WEB_FRONTEND_SOURCE_PREFIX):
         return False
     return not path.endswith(WEB_SOURCE_TEST_SUFFIXES)
 
 
 def includes_web_static(path: str) -> bool:
-    return _matches_prefix(path, WEB_STATIC_PREFIX)
+    return matches_prefix(path, WEB_STATIC_PREFIX)
 
 
 def missing_static_for_paths(paths: Sequence[str]) -> tuple[str, ...]:
     normalized_paths = tuple(
-        sorted({path for path in map(normalize_path, paths) if path})
+        sorted({path for path in map(normalize_changed_path, paths) if path})
     )
     if any(includes_web_static(path) for path in normalized_paths):
         return ()
