@@ -161,14 +161,9 @@ def build_pma_meta_routes(
                         include_supervisor_metadata=False,
                     )
                 )
-        enriched_agent_ids = {
-            str(agent.get("id") or "").strip().lower()
-            for agent in enriched_agents
-            if isinstance(agent, dict)
-        }
         effective_default_agent = (
             configured_default_agent
-            if configured_default_agent in enriched_agent_ids
+            if configured_default_agent in available_agent_ids
             else default_agent
         )
         try:
