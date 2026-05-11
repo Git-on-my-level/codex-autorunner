@@ -115,6 +115,20 @@ def _normalize_requested_agent_target(
         if derived_profile is not None:
             return runtime_kind, derived_profile
 
+    for raw_base_id, base_agent in agents.items():
+        base_id = _normalize_token(raw_base_id)
+        if not base_id or base_id == logical_agent_id:
+            continue
+        configured_profiles = base_agent.profiles
+        if not isinstance(configured_profiles, dict):
+            continue
+        derived_profile = _strip_agent_prefix(logical_agent_id, base_id)
+        configured_profile_ids = {
+            _normalize_token(profile_id) for profile_id in configured_profiles
+        }
+        if derived_profile is not None and derived_profile in configured_profile_ids:
+            return base_id, derived_profile
+
     if runtime_alias_kinds is not None:
         runtime_kind = _normalize_token(runtime_alias_kinds.get(logical_agent_id))
         derived_profile = _strip_agent_prefix(logical_agent_id, runtime_kind)

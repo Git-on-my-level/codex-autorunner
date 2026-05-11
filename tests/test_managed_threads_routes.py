@@ -738,6 +738,45 @@ def test_create_managed_thread_canonicalizes_alias_agent_input(hub_env) -> None:
     assert stored["metadata"]["agent_profile"] == "m4-pma"
 
 
+def test_create_managed_thread_accepts_canonical_profile_style_alias(
+    hub_env,
+) -> None:
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg.setdefault("agents", {})
+    cfg["agents"]["hermes"] = {
+        "binary": "hermes",
+        "profiles": {
+            "m4-pma": {
+                "display_name": "M4 PMA",
+                "binary": "hermes-m4-pma",
+            }
+        },
+    }
+    write_test_config(hub_env.hub_root / CONFIG_FILENAME, cfg)
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "hermes-m4-pma",
+                **_repo_owner(hub_env),
+                "name": "Hermes canonical profile alias thread",
+            },
+        )
+
+    assert resp.status_code == 200
+    thread = resp.json()["thread"]
+    assert thread["agent"] == "hermes"
+    assert thread["agent_profile"] == "m4-pma"
+
+    store = ManagedThreadStore(hub_env.hub_root)
+    stored = store.get_thread(thread["managed_thread_id"])
+    assert stored is not None
+    assert stored["agent"] == "hermes"
+    assert stored["metadata"]["agent_profile"] == "m4-pma"
+
+
 def test_create_managed_thread_accepts_explicit_approval_mode(hub_env) -> None:
     app = create_hub_app(hub_env.hub_root)
 

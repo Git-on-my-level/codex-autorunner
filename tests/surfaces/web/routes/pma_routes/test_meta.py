@@ -163,9 +163,57 @@ def test_pma_agents_includes_profile_defaults(monkeypatch) -> None:
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["defaults"] == {"profile": "m4"}
+    assert payload["defaults"]["profile"] == "m4"
     agents = {agent["id"]: agent for agent in payload["agents"]}
     assert agents["hermes"]["default_profile"] == "m4"
+
+
+def test_pma_agents_honors_configured_default_agent(tmp_path) -> None:
+    app = FastAPI()
+    router = app.router
+    state_path = tmp_path / "state.sqlite3"
+    save_state(
+        state_path,
+        RunnerState(
+            last_run_id=None,
+            status="idle",
+            last_exit_code=None,
+            last_run_started_at=None,
+            last_run_finished_at=None,
+            autorunner_model_overrides={"opencode": "zai/glm-4.6"},
+        ),
+    )
+    app.state.app_server_supervisor = MagicMock()
+    app.state.opencode_supervisor = MagicMock()
+    app.state.app_server_events = MagicMock()
+    app.state.config = SimpleNamespace(
+        root=_TEST_HUB_ROOT,
+        raw={"pma": {"enabled": True, "default_agent": "opencode"}},
+        agent_binary=lambda _agent_id: "opencode",
+    )
+    app.state.engine = SimpleNamespace(
+        repo_root=_TEST_REPO_ROOT,
+        state_path=state_path,
+    )
+
+    def get_runtime_state():
+        return SimpleNamespace(
+            get_safety_checker=lambda _hub_root, _request: MagicMock(
+                _audit_log=MagicMock(list_recent=lambda limit: []),
+                get_stats=lambda: {},
+            )
+        )
+
+    build_pma_meta_routes(router, get_runtime_state)
+
+    with TestClient(app) as client:
+        response = client.get("/agents")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["default"] == "opencode"
+    assert payload["defaults"]["agent"] == "opencode"
+    assert payload["defaults"]["model"] == "zai/glm-4.6"
 
 
 def test_pma_agents_defaults_include_settings_default_model(tmp_path) -> None:
