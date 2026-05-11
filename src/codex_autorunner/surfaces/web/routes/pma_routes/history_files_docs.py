@@ -63,7 +63,8 @@ def _file_download_response(
 ) -> StreamingResponse:
     encoded = quote(entry.name, safe="")
     content_type = mimetypes.guess_type(entry.name)[0] or "application/octet-stream"
-    headers = {"Content-Disposition": f"attachment; filename*=UTF-8''{encoded}"}
+    disposition = "inline" if content_type.startswith("image/") else "attachment"
+    headers = {"Content-Disposition": f"{disposition}; filename*=UTF-8''{encoded}"}
     if entry.size is not None:
         headers["Content-Length"] = str(entry.size)
     if entry.modified_at:
@@ -114,6 +115,47 @@ def build_history_files_docs_router(
         context = get_pma_request_context(request)
         runtime_state = get_runtime_state()
         return runtime_state.get_safety_checker(context.hub_root, context)
+
+    def _registered_filebox_roots(request: Request) -> list[Path]:
+        context = get_pma_request_context(request)
+        roots: list[Path] = [context.hub_root]
+        supervisor = context.hub_supervisor
+        if supervisor is None:
+            return roots
+        try:
+            snapshots = supervisor.list_repos()
+        except (OSError, RuntimeError, ValueError):
+            logger.debug("Failed to list repo FileBox fallback roots", exc_info=True)
+            return roots
+        seen = {context.hub_root.resolve()}
+        for snapshot in snapshots:
+            repo_root = getattr(snapshot, "path", None)
+            if not isinstance(repo_root, Path):
+                continue
+            if not getattr(snapshot, "initialized", True):
+                continue
+            if not getattr(snapshot, "exists_on_disk", True):
+                continue
+            try:
+                resolved = repo_root.resolve()
+            except OSError:
+                continue
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            roots.append(repo_root)
+        return roots
+
+    def _open_pma_file_from_registered_roots(
+        request: Request, box: str, filename: str
+    ) -> tuple[Path, filebox.FileBoxEntry, BinaryIO] | None:
+        for root in _registered_filebox_roots(request):
+            result = filebox.open_file(root, box, filename)
+            if result is None:
+                continue
+            entry, handle = result
+            return root, entry, handle
+        return None
 
     async def _append_text_file(path: Path, content: str) -> None:
         def _append() -> None:
@@ -202,7 +244,7 @@ def build_history_files_docs_router(
         base = get_pma_request_context(request).root_path
         box = entry.box
         filename = entry.name
-        download = f"{base}/hub/pma/files/{box}/{filename}"
+        download = f"{base}/hub/pma/files/{box}/{quote(filename, safe='')}"
         payload: dict[str, Any] = {
             "item_type": "pma_file",
             "name": filename,
@@ -310,23 +352,22 @@ def build_history_files_docs_router(
     def download_pma_file(box: str, filename: str, request: Request):
         if box not in BOXES:
             raise HTTPException(status_code=400, detail="Invalid box")
-        context = get_pma_request_context(request)
-        hub_root = context.hub_root
         try:
-            result = filebox.open_file(hub_root, box, filename)
+            result = _open_pma_file_from_registered_roots(request, box, filename)
         except ValueError as exc:
             logger.warning("Invalid filename in PMA download: %s (%s)", filename, exc)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if result is None:
             logger.warning("File not found in PMA download: %s", filename)
             raise HTTPException(status_code=404, detail="File not found")
-        entry, handle = result
+        root, entry, handle = result
         _get_safety_checker(request).record_action(
             action_type=PmaActionType.FILE_DOWNLOADED,
             details={
                 "box": box,
                 "filename": entry.name,
                 "size": entry.size,
+                "filebox_root": str(root),
             },
         )
         return _file_download_response(entry, handle)

@@ -173,6 +173,40 @@ def test_pma_files_download_rejects_legacy_path(hub_env) -> None:
     assert resp.status_code == 404
 
 
+def test_pma_files_download_falls_back_to_registered_repo_filebox(hub_env) -> None:
+    seed_hub_files(hub_env.hub_root, force=True)
+    _enable_pma(hub_env.hub_root)
+    filebox.ensure_structure(hub_env.repo_root)
+    (filebox.inbox_dir(hub_env.repo_root) / "image.png").write_bytes(b"repo-image")
+
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    resp = client.get("/hub/pma/files/inbox/image.png")
+
+    assert resp.status_code == 200
+    assert resp.content == b"repo-image"
+    assert resp.headers["content-type"].startswith("image/png")
+    assert resp.headers["content-disposition"].startswith("inline;")
+
+
+def test_pma_files_download_prefers_hub_filebox_over_repo_fallback(hub_env) -> None:
+    seed_hub_files(hub_env.hub_root, force=True)
+    _enable_pma(hub_env.hub_root)
+    filebox.ensure_structure(hub_env.hub_root)
+    filebox.ensure_structure(hub_env.repo_root)
+    (filebox.inbox_dir(hub_env.hub_root) / "shared.txt").write_bytes(b"hub")
+    (filebox.inbox_dir(hub_env.repo_root) / "shared.txt").write_bytes(b"repo")
+
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    resp = client.get("/hub/pma/files/inbox/shared.txt")
+
+    assert resp.status_code == 200
+    assert resp.content == b"hub"
+
+
 def test_pma_files_outbox(hub_env) -> None:
     seed_hub_files(hub_env.hub_root, force=True)
     _enable_pma(hub_env.hub_root)
