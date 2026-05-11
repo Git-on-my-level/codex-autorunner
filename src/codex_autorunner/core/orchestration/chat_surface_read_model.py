@@ -22,6 +22,7 @@ _TERMINAL_SUCCESS_STATUSES = {"completed", "succeeded", "success", "delivered"}
 _TERMINAL_FAILED_STATUSES = {"failed", "error", "cancelled", "canceled", "timeout"}
 _RUNNING_STATUSES = {"running", "in_progress", "started", "claimed", "delivering"}
 _QUEUED_STATUSES = {"queued", "pending"}
+_DELIVERY_RETRY_STATUSES = {"retry_scheduled"}
 
 
 @dataclass
@@ -651,6 +652,8 @@ def _status_to_lifecycle(status: Any) -> Optional[str]:
         return "failed"
     if normalized in _TERMINAL_SUCCESS_STATUSES:
         return "idle"
+    if normalized in _DELIVERY_RETRY_STATUSES:
+        return "idle"
     if normalized in {"archived"}:
         return "archived"
     if normalized in {"bound", "recorded", "delivered", "continuation_bound"}:
@@ -665,6 +668,8 @@ def _event_lifecycle(event: ChatSurfaceEvent) -> str:
         return "archived"
     if event.event_type == "channel_directory.discovered":
         return "discovered"
+    if event.event_type == "notification.reply_context_changed":
+        return "bound" if event.managed_thread_id is not None else "discovered"
     if event.event_type in {"surface.bound", "surface.rebound"}:
         return "bound"
     status_lifecycle = _status_to_lifecycle(event.status)
@@ -820,14 +825,15 @@ def _pma_thread_from_surface(surface: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(display, Mapping):
         display = {}
     lifecycle = _normalize_text(surface.get("lifecycle"))
+    lifecycle_status = _normalize_text(surface.get("lifecycle_status")) or "active"
     runtime_status = (
-        _normalize_text(metadata.get("latest_execution_status"))
+        (lifecycle if lifecycle_status == "archived" else None)
+        or _normalize_text(metadata.get("latest_execution_status"))
         or (lifecycle if lifecycle in {"queued", "running", "failed"} else None)
         or _normalize_text(metadata.get("runtime_status"))
         or lifecycle
         or ""
     )
-    lifecycle_status = _normalize_text(surface.get("lifecycle_status")) or "active"
     managed_thread_id = _normalize_text(surface.get("managed_thread_id"))
     payload: dict[str, Any] = {
         "managed_thread_id": managed_thread_id,
