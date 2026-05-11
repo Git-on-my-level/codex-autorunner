@@ -39,3 +39,13 @@ From artifacts alone, a debugger must be able to answer:
 - why did it happen?
 - where did it fail/stall?
 - what is the safest replay/retry path?
+
+## Web read-model diagnostics
+- Projection lag, snapshot latency, event journal latency, stream lag, cursor
+  gaps, and virtualized DOM row counts are part of the Web Hub responsiveness
+  budget.
+- Use `docs/ops/web-read-models.md` for the concrete rebuild and diagnostic
+  commands before changing projection code.
+- A stream or snapshot regression must identify the failing family: chat index,
+  chat detail, repo/worktree topology, repo/worktree runtime, ticket detail, or
+  a newer documented family.

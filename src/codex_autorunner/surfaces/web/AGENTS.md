@@ -13,6 +13,17 @@ This surface owns FastAPI routes, web-specific services, and static asset servin
 - Shared web-specific logic belongs in `services/`, `static_assets.py`, `static_refresh.py`, or nearby helpers.
 - Web Hub UI: `../../web_frontend/` → `../../web_static/`.
 - PMA managed-thread chat routes expose backend-owned timeline, progress, queue, and delivery state from `adapters/chat/` and `core/orchestration/`. Do not add web-local transcript composition or delivery state machines.
+- Web UI screen routes should expose screen-shaped read models with cursors and
+  repair policies. Keep contracts in `read_model_contracts.py`, route assembly
+  under `routes/`, and projection/rebuild logic in `core/` near the canonical
+  data source.
+- Do not add new broad list endpoints or normal polling endpoints as primary UI
+  data sources when a scoped read model would fit. Existing broad endpoints must
+  remain diagnostics/tests-only or have a documented migration exception.
+- Every stream event must be typed, ordered within its source, idempotent, and
+  repairable from a snapshot route. Cursor gaps must be explicit.
+- For a new high-cardinality read model, add route coverage for bounded windows
+  and extend the web responsiveness budget smoke where appropriate.
 - Broader surface overview: `README.md`.
 
 ### Web Hub SPA shell (deep links)

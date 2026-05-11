@@ -80,3 +80,32 @@ Projections and summaries (read-only, consumed by hub/PMA/CLI surfaces):
 - **Runner/Logs**: `/api/run/*`, `/api/logs/*`
 - **Terminal**: `/api/terminal` (websocket), `/api/sessions`
 - **Hub**: `/hub/*` (repos, worktrees, usage)
+
+### Web UI read-model architecture
+The Web Hub responsiveness path is backend-owned read models plus cursor patch
+streams. See `docs/architecture/web-ui-read-model-contracts.md` for the full
+contract and `docs/ops/web-read-models.md` for rebuild and diagnostics commands.
+
+- **Core projection store**:
+  `src/codex_autorunner/core/hub_projection_store.py` owns durable hub UI event
+  and projection tables under `.codex-autorunner/hub_projection.sqlite3`.
+- **Core projection service**:
+  `src/codex_autorunner/core/hub_projection_service.py` owns shared rebuild,
+  event replay, cursor-window reads, and schema validation. Family-specific
+  projection logic stays near its canonical domain state, for example
+  `core/orchestration/chat_surface_read_model.py` and
+  `core/hub_repo_projection.py`.
+- **Web route contracts**:
+  `src/codex_autorunner/surfaces/web/read_model_contracts.py` defines the
+  versioned snapshot/event shapes. Screen-shaped routes live under
+  `src/codex_autorunner/surfaces/web/routes/`, especially
+  `routes/hub_repo_routes/read_models.py` for repo/worktree/ticket projections.
+- **Frontend data layer**:
+  `src/codex_autorunner/web_frontend/src/lib/data/` owns typed snapshot clients,
+  stream cursor persistence, normalized entities, patch application, optimistic
+  reconciliation, and selectors. Page components should subscribe to selectors
+  and own only interaction/viewport state.
+- **Scale guardrails**:
+  High-cardinality screen surfaces must use server-side windows and frontend
+  virtualization. Extend `tests/chat_surface_lab/web_responsiveness_budgets.py`
+  when adding a new large read model or stream family.

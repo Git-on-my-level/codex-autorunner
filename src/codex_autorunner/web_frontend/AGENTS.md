@@ -16,6 +16,18 @@ hubs serve by default.
   `tests/surfaces/web/test_web_static_routes.py`.
 - Design system: `DESIGN.md`
 - PMA chat renders the backend canonical timeline (`/hub/pma/threads/{id}/timeline`). Frontend helpers may map canonical items to cards and reconcile temporary optimistic items by stable backend IDs, but must not compose `/turns` into a parallel transcript or own final-delivery state.
+- Screen data should come from Web Hub read models, not broad page-local
+  choreography. For chats, repo/worktree, ticket, run, and artifact surfaces,
+  prefer `src/lib/data/readModelClients.ts`, `readModelStream.ts`,
+  `readModelStore.ts`, and selectors in `readModelViewModels.ts`.
+- Normal updates should arrive through cursor streams plus repair snapshots.
+  Do not add recurring `setInterval`/quiet-refresh loops for migrated screens.
+- High-cardinality UI must stay windowed and virtualized. Do not render
+  unbounded chat, timeline, repo/worktree, ticket, artifact, or dispatch lists
+  with raw `{#each}` loops.
+- Legacy broad client methods are diagnostics/tests-only unless a durable doc
+  explicitly says otherwise. A new screen shape needs a backend projection,
+  typed event/contract, selector, and scale test.
 
 ## Validation
 
