@@ -238,8 +238,7 @@
   }
 
   async function saveFrontmatter(): Promise<boolean> {
-    if (!onSave) return false;
-    return Boolean(await onSave({ title: editTitle, agent: editAgent, model: editModel, reasoning: editReasoning, done: editDone, frontmatterYaml: editFrontmatterYaml, body: editBody }));
+    return saveSettings();
   }
 
   function routeNumber(routeId: string): number | null {
