@@ -266,6 +266,26 @@ describe('PMA chat view helpers', () => {
     ]);
   });
 
+  it('maps chat surface unread activity from visible event metadata before row updates', () => {
+    const chats = mapChatSurfaceSnapshotToPmaChats({
+      surfaces: [
+        {
+          surface_kind: 'discord',
+          surface_key: 'channel-1',
+          managed_thread_id: 'thread-1',
+          lifecycle: 'completed',
+          display: { display_name: 'Discord Ops' },
+          updated_at: '2026-05-11T05:48:46Z',
+          metadata: {
+            last_activity_at: '2026-05-08T12:00:00Z'
+          }
+        }
+      ]
+    });
+
+    expect(chats[0].updatedAt).toBe('2026-05-08T12:00:00Z');
+  });
+
   it('reconciles generic chat snapshots with active-thread replacement by surface binding', () => {
     const current: PmaChatSummary[] = [
       { ...baseChat, id: 'old-thread', lifecycleStatus: 'active', raw: { binding_kind: 'discord', binding_id: 'channel-1' } }

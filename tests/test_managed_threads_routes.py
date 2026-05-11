@@ -19,6 +19,7 @@ from codex_autorunner.core.orchestration import (
 )
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.routes.pma_routes import (
+    managed_thread_route_helpers,
     managed_threads,
 )
 from codex_autorunner.surfaces.web.routes.pma_routes.managed_threads import (
@@ -239,6 +240,10 @@ def test_list_managed_threads_uses_active_execution_status(hub_env) -> None:
     assert listed["runtime_status"] == "running"
     assert listed["normalized_status"] == "running"
     assert listed["status"] == "running"
+    assert listed["latest_turn_id"] == running_turn["managed_turn_id"]
+    assert listed["latest_turn_status"] == "running"
+    assert listed["latest_turn_started_at"] == running_turn["started_at"]
+    assert listed["last_activity_at"] == running_turn["started_at"]
 
     queued_listed = threads[queued_thread_id]
     assert queued_turn["status"] == "queued"
@@ -1057,7 +1062,7 @@ def test_create_managed_thread_succeeds_when_binding_metadata_lookup_fails(
 ) -> None:
     app = create_hub_app(hub_env.hub_root)
     monkeypatch.setattr(
-        managed_threads,
+        managed_thread_route_helpers,
         "active_chat_binding_metadata_by_thread",
         lambda *, hub_root: (_ for _ in ()).throw(
             RuntimeError("binding db unavailable")

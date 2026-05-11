@@ -118,6 +118,19 @@ describe('view model mappers', () => {
     expect(vm.updatedAt).toBe('2026-05-08T12:00:00Z');
   });
 
+  it('prefers latest visible turn activity over broad thread-row maintenance timestamps', () => {
+    const vm = mapPmaChatSummary({
+      managed_thread_id: 't-maintenance',
+      name: 'Old chat',
+      agent: 'codex',
+      normalized_status: 'done',
+      last_activity_at: '2026-05-08T12:00:00Z',
+      updated_at: '2026-05-11T05:48:46Z'
+    });
+
+    expect(vm.updatedAt).toBe('2026-05-08T12:00:00Z');
+  });
+
   it('maps invalid ticket frontmatter to needs-repair status instead of run failure', () => {
     const vm = mapTicketSummary({
       id: 'tkt-invalid',
