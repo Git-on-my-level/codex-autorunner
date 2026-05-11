@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional
@@ -28,6 +30,8 @@ _RUNNING_STATUSES = {"running", "in_progress", "started", "claimed", "delivering
 _QUEUED_STATUSES = {"queued", "pending"}
 _DELIVERY_RETRY_STATUSES = {"retry_scheduled"}
 _DYNAMIC_LIFECYCLES = frozenset({"idle", "queued", "running", "failed"})
+
+logger = logging.getLogger("codex_autorunner.chat_surface_read_model")
 
 
 @dataclass
@@ -170,6 +174,7 @@ class ChatSurfaceReadService:
     def snapshot(
         self, *, limit: int = DEFAULT_CHAT_SURFACE_SNAPSHOT_LIMIT
     ) -> dict[str, Any]:
+        started_at = time.perf_counter()
         row_limit = _bounded_limit(limit, MAX_CHAT_SURFACE_SNAPSHOT_LIMIT)
         projections: dict[tuple[str, str], ChatSurfaceProjection] = {}
         self._project_channel_directory(projections)
@@ -180,7 +185,7 @@ class ChatSurfaceReadService:
             key=lambda item: (item["surface_kind"], item["surface_key"]),
         )[:row_limit]
         cursor = self._journal.latest_cursor()
-        return {
+        payload = {
             "contract_version": CHAT_SURFACE_READ_CONTRACT_VERSION,
             "cursor": cursor,
             "surfaces": surfaces,
@@ -190,6 +195,14 @@ class ChatSurfaceReadService:
                 "max": MAX_CHAT_SURFACE_SNAPSHOT_LIMIT,
             },
         }
+        _log_read_model_metric(
+            "projection_rebuild_time",
+            started_at,
+            returned=len(surfaces),
+            limit=row_limit,
+            cursor=cursor,
+        )
+        return payload
 
     def pma_compat_snapshot(
         self, *, limit: int = DEFAULT_CHAT_SURFACE_SNAPSHOT_LIMIT
@@ -239,6 +252,7 @@ class ChatSurfaceReadService:
         window with server-owned filtering, search, grouping, and cursor repair.
         """
 
+        started_at = time.perf_counter()
         surfaces = self.snapshot(limit=MAX_CHAT_SURFACE_SNAPSHOT_LIMIT)["surfaces"]
         rows = _chat_index_rows_from_surfaces(surfaces)
         rows = _filter_chat_index_rows(
@@ -296,6 +310,14 @@ class ChatSurfaceReadService:
             "rows": window,
             "groups": groups if group_by == "ticket_run" else [],
         }
+        _log_read_model_metric(
+            "snapshot_query_latency",
+            started_at,
+            snapshot="chat_index",
+            returned=len(window),
+            total_count=total_count,
+            cursor=cursor,
+        )
         return payload
 
     def chat_detail_snapshot(
@@ -304,6 +326,7 @@ class ChatSurfaceReadService:
         *,
         timeline_limit: int = DEFAULT_CHAT_TIMELINE_LIMIT,
     ) -> dict[str, Any]:
+        started_at = time.perf_counter()
         normalized_thread_id = _normalize_text(managed_thread_id)
         if normalized_thread_id is None:
             raise ValueError("managed_thread_id is required")
@@ -383,6 +406,14 @@ class ChatSurfaceReadService:
                 "patch_url": "/hub/chat/patches",
             },
         }
+        _log_read_model_metric(
+            "snapshot_query_latency",
+            started_at,
+            snapshot="chat_detail",
+            returned=len(visible),
+            total_count=len(items),
+            cursor=cursor,
+        )
         return payload
 
     def older_timeline_page(
@@ -425,13 +456,14 @@ class ChatSurfaceReadService:
         *,
         limit: int = DEFAULT_CHAT_SURFACE_EVENT_LIMIT,
     ) -> dict[str, Any]:
+        started_at = time.perf_counter()
         events = self._journal.read_events_since(
             cursor or 0,
             limit=_bounded_limit(limit, MAX_CHAT_SURFACE_EVENT_LIMIT),
         )
         patches = [_chat_patch_from_event(event) for event in events]
         next_cursor = patches[-1]["cursor"] if patches else int(cursor or 0)
-        return {
+        payload = {
             "contract_version": "chat_patch_stream.v1",
             "cursor": next_cursor,
             "patches": patches,
@@ -441,6 +473,18 @@ class ChatSurfaceReadService:
                 "max": MAX_CHAT_SURFACE_EVENT_LIMIT,
             },
         }
+        _log_read_model_metric(
+            "stream_read_latency",
+            started_at,
+            returned=len(patches),
+            cursor=next_cursor,
+            cursor_gap_count=(
+                1
+                if len(patches) >= _bounded_limit(limit, MAX_CHAT_SURFACE_EVENT_LIMIT)
+                else 0
+            ),
+        )
+        return payload
 
     def events_since(
         self,
@@ -448,11 +492,24 @@ class ChatSurfaceReadService:
         *,
         limit: int = DEFAULT_CHAT_SURFACE_EVENT_LIMIT,
     ) -> list[dict[str, Any]]:
+        started_at = time.perf_counter()
         events = self._journal.read_events_since(
             cursor or 0,
             limit=_bounded_limit(limit, MAX_CHAT_SURFACE_EVENT_LIMIT),
         )
-        return [serialize_chat_surface_event(event) for event in events]
+        payload = [serialize_chat_surface_event(event) for event in events]
+        _log_read_model_metric(
+            "stream_read_latency",
+            started_at,
+            returned=len(payload),
+            cursor=payload[-1]["cursor"] if payload else int(cursor or 0),
+            cursor_gap_count=(
+                1
+                if len(payload) >= _bounded_limit(limit, MAX_CHAT_SURFACE_EVENT_LIMIT)
+                else 0
+            ),
+        )
+        return payload
 
     def latest_cursor(self) -> int:
         return self._journal.latest_cursor()
@@ -929,6 +986,22 @@ def _display_title(display: Mapping[str, Any], fallback: str) -> str:
         _normalize_text(display.get("title"))
         or _normalize_text(display.get("display_name"))
         or fallback
+    )
+
+
+def _log_read_model_metric(
+    metric: str,
+    started_at: float,
+    **fields: Any,
+) -> None:
+    logger.debug(
+        "chat_surface_read_model_metric",
+        extra={
+            "event": "chat_surface_read_model_metric",
+            "metric": metric,
+            "latency_ms": round((time.perf_counter() - started_at) * 1000, 3),
+            **fields,
+        },
     )
 
 

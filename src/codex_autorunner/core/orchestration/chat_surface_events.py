@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Mapping, Optional, Union
@@ -40,6 +42,8 @@ CHAT_SURFACE_EVENT_TYPES: frozenset[str] = frozenset(
         "channel_directory.discovered",
     }
 )
+
+logger = logging.getLogger("codex_autorunner.chat_surface_events")
 
 
 @dataclass(frozen=True)
@@ -102,9 +106,17 @@ class SQLiteChatSurfaceEventJournal:
         payload: Optional[Mapping[str, Any]] = None,
         occurred_at: Optional[str] = None,
     ) -> ChatSurfaceEventAppendResult:
+        started_at = time.perf_counter()
         normalized_key = _normalize_required_text(idempotency_key, "idempotency_key")
         existing = self.get_event_by_idempotency_key(normalized_key)
         if existing is not None:
+            _log_journal_metric(
+                "event_journal_write_latency",
+                started_at,
+                event_type=str(event_type),
+                inserted=False,
+                cursor=existing.cursor,
+            )
             return ChatSurfaceEventAppendResult(event=existing, inserted=False)
 
         normalized_type = normalize_chat_surface_event_type(event_type)
@@ -161,10 +173,18 @@ class SQLiteChatSurfaceEventJournal:
             raise RuntimeError(
                 f"chat surface event missing after append: {normalized_key}"
             )
-        return ChatSurfaceEventAppendResult(
+        append_result = ChatSurfaceEventAppendResult(
             event=stored,
             inserted=result.rowcount > 0,
         )
+        _log_journal_metric(
+            "event_journal_write_latency",
+            started_at,
+            event_type=normalized_type,
+            inserted=append_result.inserted,
+            cursor=stored.cursor,
+        )
+        return append_result
 
     def get_event_by_idempotency_key(
         self, idempotency_key: str
@@ -193,6 +213,7 @@ class SQLiteChatSurfaceEventJournal:
         *,
         limit: int = 100,
     ) -> list[ChatSurfaceEvent]:
+        started_at = time.perf_counter()
         after_cursor = max(0, int(cursor or 0))
         row_limit = _bounded_limit(limit)
         with open_orchestration_sqlite(
@@ -208,7 +229,15 @@ class SQLiteChatSurfaceEventJournal:
                 """,
                 (after_cursor, row_limit),
             ).fetchall()
-        return [_event_from_row(row) for row in rows]
+        events = [_event_from_row(row) for row in rows]
+        _log_journal_metric(
+            "event_journal_read_latency",
+            started_at,
+            cursor=after_cursor,
+            limit=row_limit,
+            returned=len(events),
+        )
+        return events
 
     def latest_cursor(self) -> int:
         with open_orchestration_sqlite(
@@ -277,6 +306,22 @@ def _event_from_row(row: Any) -> ChatSurfaceEvent:
         occurred_at=str(row["occurred_at"]),
         created_at=str(row["created_at"]),
         payload=payload,
+    )
+
+
+def _log_journal_metric(
+    metric: str,
+    started_at: float,
+    **fields: Any,
+) -> None:
+    logger.debug(
+        "chat_surface_event_journal_metric",
+        extra={
+            "event": "chat_surface_event_journal_metric",
+            "metric": metric,
+            "latency_ms": round((time.perf_counter() - started_at) * 1000, 3),
+            **fields,
+        },
     )
 
 
