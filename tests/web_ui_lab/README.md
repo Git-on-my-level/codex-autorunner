@@ -34,11 +34,10 @@ Scenarios live in `corpus.py` and use typed dataclasses from
 
 ## Agent Usage
 
-Start with the corpus tests when changing route contracts, read-model mappers, or
-future browser evidence tooling:
+Run the fast agent gate before closing ordinary Web UI tickets:
 
 ```bash
-.venv/bin/python -m pytest tests/web_ui_lab/test_scenario_corpus.py -q
+make web-ui-fast
 ```
 
 Each executed scenario writes:
@@ -46,8 +45,23 @@ Each executed scenario writes:
 - `fixture_payload.json`
 - `report.json`
 
-The default diagnostics root is `.codex-autorunner/diagnostics/web_ui_lab/`;
-tests pass a temporary directory so the committed tree stays clean.
+The default diagnostics root is `.codex-autorunner/diagnostics/web_ui_lab/`.
+`latest.json` is the stable pointer for agents. If the command fails, inspect
+`failures[0].inspect_first` first; it names the scenario report with the failed
+invariant, route, fixture kind, and normalized screen model. To reprint the last
+summary without rerunning scenarios:
+
+```bash
+.venv/bin/python scripts/web_ui_lab_check.py --summary
+```
+
+The direct corpus test remains useful while editing this package:
+
+```bash
+.venv/bin/python -m pytest tests/web_ui_lab/test_scenario_corpus.py -q
+```
+
+Tests pass a temporary diagnostics directory so the committed tree stays clean.
 
 If a route is added to `scripts/web_ui_screens.py`, add a matching corpus entry.
 If a screen stops depending on a listed endpoint or mapper, update the scenario
