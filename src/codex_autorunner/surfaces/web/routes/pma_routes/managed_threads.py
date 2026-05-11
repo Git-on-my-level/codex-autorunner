@@ -532,12 +532,16 @@ def build_managed_thread_crud_routes(
         )
         return {
             "threads": [
-                _serialize_thread_target(
-                    thread,
-                    binding_metadata_by_thread=binding_metadata,
-                    active_work_summary=active_work_by_thread.get(
-                        thread.thread_target_id
+                _attach_latest_execution_fields(
+                    _serialize_thread_target(
+                        thread,
+                        binding_metadata_by_thread=binding_metadata,
+                        active_work_summary=active_work_by_thread.get(
+                            thread.thread_target_id
+                        ),
                     ),
+                    service=service,
+                    managed_thread_id=thread.thread_target_id,
                 )
                 for thread in threads
             ]

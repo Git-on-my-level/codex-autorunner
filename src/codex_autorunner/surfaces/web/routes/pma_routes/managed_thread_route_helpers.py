@@ -493,6 +493,9 @@ def _attach_latest_execution_fields(
             {
                 "latest_turn_id": None,
                 "latest_turn_status": None,
+                "latest_turn_started_at": None,
+                "latest_turn_finished_at": None,
+                "last_activity_at": None,
                 "latest_assistant_text": "",
                 "latest_output_excerpt": "",
             }
@@ -500,6 +503,8 @@ def _attach_latest_execution_fields(
         return payload
 
     assistant_text = str(getattr(execution, "output_text", "") or "")
+    started_at = normalize_optional_text(getattr(execution, "started_at", None))
+    finished_at = normalize_optional_text(getattr(execution, "finished_at", None))
     payload.update(
         {
             "latest_turn_id": normalize_optional_text(
@@ -508,6 +513,9 @@ def _attach_latest_execution_fields(
             "latest_turn_status": normalize_optional_text(
                 getattr(execution, "status", None)
             ),
+            "latest_turn_started_at": started_at,
+            "latest_turn_finished_at": finished_at,
+            "last_activity_at": finished_at or started_at,
             "latest_assistant_text": assistant_text,
             "latest_output_excerpt": _truncate_text(assistant_text, 240),
         }

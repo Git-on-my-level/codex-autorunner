@@ -246,13 +246,15 @@ export function mapPmaChatSummary(raw: JsonRecord): PmaChatSummary {
     isTicketFlow,
     progressPercent: numberOrNull(raw.progress_percent ?? raw.progress),
     updatedAt: dateString(
-      raw.updated_at ??
-        raw.last_activity_at ??
-        raw.status_changed_at ??
-        raw.created_at ??
+      raw.last_activity_at ??
+        raw.latest_turn_finished_at ??
+        raw.latest_turn_started_at ??
         latest.last_event_at ??
         latest.finished_at ??
-        latest.started_at
+        latest.started_at ??
+        raw.status_changed_at ??
+        raw.created_at ??
+        raw.updated_at
     ),
     raw
   };

@@ -239,6 +239,10 @@ def test_list_managed_threads_uses_active_execution_status(hub_env) -> None:
     assert listed["runtime_status"] == "running"
     assert listed["normalized_status"] == "running"
     assert listed["status"] == "running"
+    assert listed["latest_turn_id"] == running_turn["managed_turn_id"]
+    assert listed["latest_turn_status"] == "running"
+    assert listed["latest_turn_started_at"] == running_turn["started_at"]
+    assert listed["last_activity_at"] == running_turn["started_at"]
 
     queued_listed = threads[queued_thread_id]
     assert queued_turn["status"] == "queued"
