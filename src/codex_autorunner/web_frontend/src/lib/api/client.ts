@@ -266,6 +266,7 @@ export class PmaApiClient {
   }
 
   pma = {
+    // Legacy diagnostics/tests only. Screen routes use chat index/detail projections.
     listChats: async (status: 'active' | 'archived' | null = 'active'): Promise<ApiResult<PmaChatSummary[]>> => {
       const query = status ? `?status=${encodeURIComponent(status)}` : '';
       return mapResult(await this.getJson<JsonRecord>(`/hub/pma/threads${query}`), (payload) =>
@@ -422,10 +423,12 @@ export class PmaApiClient {
         await this.getJson<JsonRecord>('/hub/messages?sections=inbox,managed_threads,pma_files_detail,automation,action_queue,freshness'),
         mapDashboardSummary
       ),
+    // Legacy diagnostics and mutation follow-up only. Screen inventory uses repo/worktree read models.
     listRepos: async (): Promise<ApiResult<RepoSummary[]>> =>
       mapResult(await this.getJson<JsonRecord>('/hub/repos'), (payload) =>
         asArray(payload.repos ?? payload.items).filter((item) => !isWorktreeItem(item)).map(mapRepoSummary)
       ),
+    // Legacy diagnostics and mutation follow-up only. Screen inventory uses repo/worktree read models.
     listWorktrees: async (): Promise<ApiResult<WorktreeSummary[]>> =>
       mapResult(await this.getJson<JsonRecord>('/hub/repos'), (payload) =>
         asArray(payload.worktrees ?? payload.repos ?? payload.items).filter(isWorktreeItem).map(mapWorktreeSummary)
@@ -534,12 +537,14 @@ export class PmaApiClient {
   };
 
   ticketFlow = {
+    // Legacy diagnostics/tests only. Ticket and owner screens read scoped ticket/run projections.
     listRuns: async (owner?: { repo?: string; worktree?: string }): Promise<ApiResult<PmaRunProgress[]>> =>
       mapResult(await this.getJson<JsonRecord[]>(flowRunsPath(owner)), (payload) =>
         payload.map(mapPmaRunProgress)
       ),
     getRun: async (runId: string): Promise<ApiResult<PmaRunProgress>> =>
       mapResult(await this.getJson<JsonRecord>(`/api/flows/${encodeURIComponent(runId)}/status`), mapPmaRunProgress),
+    // Legacy diagnostics/tests only. Ticket and owner screens read scoped ticket projections.
     listTickets: async (owner?: { repo?: string; worktree?: string }): Promise<ApiResult<TicketSummary[]>> => {
       const hubResult = await this.getJson<JsonRecord>(hubTicketPath(owner));
       if (hubResult.ok || hubResult.error.status !== 404) {
@@ -616,14 +621,14 @@ export class PmaApiClient {
   };
 
   private async listLegacyMountedTickets(): Promise<ApiResult<TicketSummary[]>> {
-    const [repoResult, worktreeResult] = await Promise.all([this.hub.listRepos(), this.hub.listWorktrees()]);
-    if (!repoResult.ok && !worktreeResult.ok) {
+    const topologyResult = await this.readModels.repoWorktreeTopology('all', 200);
+    if (!topologyResult.ok) {
       const legacyResult = await this.getJson<JsonRecord>(legacyTicketPath());
       return mapResult(legacyResult, (payload) => asArray(payload.tickets).map((ticket) => mapTicketSummary(ticketWithFallbackOwner(ticket))));
     }
     const owners = [
-      ...dataOr(repoResult, []).map((repo) => ({ repo: repo.id })),
-      ...dataOr(worktreeResult, []).map((worktree) => ({ worktree: worktree.id }))
+      ...topologyResult.data.repos.map((repo) => ({ repo: repo.repoId })),
+      ...topologyResult.data.worktrees.map((worktree) => ({ worktree: worktree.worktreeId }))
     ];
     const results = await Promise.all(
       owners.map(async (owner) => ({

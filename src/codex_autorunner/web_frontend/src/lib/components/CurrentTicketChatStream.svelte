@@ -1,6 +1,5 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
-  import { pmaApi } from '$lib/api/client';
   import { openPmaTailEventSource, type StreamSubscription } from '$lib/api/streaming';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import type { PmaTimelineItem } from '$lib/viewModels/domain';
@@ -35,19 +34,10 @@
     teardown();
     activeChatId = id;
     streamState = 'connecting';
-    void prime(id);
     connect(id);
   });
 
   onDestroy(() => teardown());
-
-  async function prime(id: string): Promise<void> {
-    const result = await pmaApi.pma.getTimeline(id);
-    if (activeChatId !== id) return;
-    if (!result.ok) return;
-    const last = pickLatest(result.data);
-    if (last) applyItem(last);
-  }
 
   function connect(id: string): void {
     subscription = openPmaTailEventSource(id, {
@@ -76,27 +66,6 @@
         streamState = 'interrupted';
       }
     });
-  }
-
-  function applyItem(item: PmaTimelineItem): void {
-    const text = String((item.payload as { text?: unknown } | undefined)?.text ?? '').trim();
-    if (!text) return;
-    latestText = text;
-    if (item.kind === 'assistant_message') latestRole = 'assistant';
-    else if (item.kind === 'user_message') latestRole = 'user';
-    else latestRole = 'intermediate';
-  }
-
-  function pickLatest(items: PmaTimelineItem[]): PmaTimelineItem | null {
-    for (let i = items.length - 1; i >= 0; i -= 1) {
-      const it = items[i];
-      if (it.kind === 'assistant_message') return it;
-    }
-    for (let i = items.length - 1; i >= 0; i -= 1) {
-      const it = items[i];
-      if (it.kind === 'user_message' || it.kind === 'intermediate') return it;
-    }
-    return null;
   }
 
   function teardown(): void {

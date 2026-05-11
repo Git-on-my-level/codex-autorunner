@@ -31,6 +31,7 @@ from ...read_model_contracts import (
     read_model_now,
 )
 from ...services import flow_store as flow_store_service
+from ..flow_routes.history_artifacts import get_dispatch_history
 from .tickets import (
     _enrich_current_ticket_payload,
     _mark_duplicate_ticket_numbers,
@@ -605,6 +606,19 @@ class RepoWorktreeReadModelService:
             if linked_run_payload is not None
             else None
         )
+        dispatches: list[dict[str, Any]] = []
+        if linked_run is not None:
+            try:
+                history = get_dispatch_history(
+                    snapshot_obj.path, linked_run.run_id, "ticket_flow"
+                )
+                raw_history = history.get("history")
+                if isinstance(raw_history, list):
+                    dispatches = [
+                        item for item in raw_history[:25] if isinstance(item, dict)
+                    ]
+            except Exception:
+                dispatches = []
         detail = TicketDetailSnapshot(
             cursor=_cursor("ticket.detail"),
             ticket=_ticket_projection(selected),
@@ -612,8 +626,8 @@ class RepoWorktreeReadModelService:
             linked_run=linked_run,
             linked_chats=[],
             artifacts=[],
-            dispatch_window=_window(offset=0, limit=25, total=0),
-            dispatches=[],
+            dispatch_window=_window(offset=0, limit=25, total=len(dispatches)),
+            dispatches=dispatches,
             repair=RepairPolicy(snapshot_route=f"/hub/read-models/tickets/{ticket_id}"),
         )
         payload = dump_read_model_contract(detail)

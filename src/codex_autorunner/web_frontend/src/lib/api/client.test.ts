@@ -226,13 +226,20 @@ describe('API client error handling', () => {
           headers: { 'content-type': 'application/json' }
         });
       }
-      if (url === '/hub/repos') {
+      if (url === '/hub/read-models/repo-worktree/topology?kind=all&limit=200') {
         return Response.json({
-          repos: [
-            { id: 'repo-1', name: 'Repo 1' },
-            { id: 'wt-1', name: 'Worktree 1', kind: 'worktree', worktree_of: 'repo-1' }
-          ],
-          worktrees: [{ id: 'wt-1', name: 'Worktree 1', worktree_of: 'repo-1' }]
+          contractVersion: 'web-read-models.v1',
+          kind: 'repo_worktree.topology.snapshot',
+          cursor: { value: 'topology:1', sequence: 1, source: 'topology', issuedAt: '2026-05-11T00:00:00Z' },
+          window: { limit: 200, totalEstimate: 2, totalIsExact: true },
+          repos: [{ repoId: 'repo-1', label: 'Repo 1', path: '/repo-1', archived: false, childWorktreeIds: ['wt-1'] }],
+          worktrees: [{ worktreeId: 'wt-1', repoId: 'repo-1', label: 'Worktree 1', path: '/wt-1', archived: false }],
+          repair: {
+            snapshotRoute: '/hub/read-models/repo-worktree/topology',
+            cursorQueryParam: 'after',
+            gapEventType: 'projection.cursor_gap',
+            behavior: 'repair_snapshot_required'
+          }
         });
       }
       if (url === '/repos/repo-1/api/flows/ticket_flow/tickets') {

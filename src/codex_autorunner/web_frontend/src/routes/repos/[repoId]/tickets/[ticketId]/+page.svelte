@@ -3,7 +3,7 @@
   import { page } from '$app/state';
   import { onDestroy, onMount } from 'svelte';
   import TicketViews from '$lib/components/TicketViews.svelte';
-  import { partialPageIssue, pmaApi, type ApiError, type JsonRecord, type PartialPageIssue } from '$lib/api/client';
+  import { pmaApi, type ApiError, type JsonRecord, type PartialPageIssue } from '$lib/api/client';
   import { openFlowRunEventSource, type StreamSubscription } from '$lib/api/streaming';
   import {
     pmaChatSummaryToChatIndexRow,
@@ -19,7 +19,6 @@
     buildTicketDetailViewModel,
     buildTicketRepairChatCreatePayload,
     buildTicketRepairPrompt,
-    mergeTicketRunProgress,
     resolveTicketRouteId,
     ticketDetailFromSummary,
     type TicketDetailViewModel,
@@ -134,9 +133,8 @@
     loading = false;
     const runs = selectPmaRuns(readModelState, ownerKey);
     const chats = selectPmaChats(readModelState);
-    const baseIssues: PartialPageIssue[] = [];
     if (!isCurrentRequest()) return;
-    await renderTicketDetail(ticketDetail, ticketList, runs, chats, baseIssues, ownerId, isCurrentRequest);
+    renderTicketDetail(ticketDetail, ticketList, runs, chats, snapshot.data.dispatches ?? [], [], ownerId, isCurrentRequest);
   }
 
   function renderCachedTicket(ticketList: TicketSummary[], ownerId: string, routeTicketId: string): void {
@@ -153,15 +151,16 @@
     loading = false;
   }
 
-  async function renderTicketDetail(
+  function renderTicketDetail(
     ticketDetail: TicketDetail,
     ticketList: TicketSummary[],
     runs: PmaRunProgress[],
     chats: PmaChatSummary[],
+    dispatches: JsonRecord[],
     baseIssues: PartialPageIssue[],
     ownerId: string,
     isCurrentRequest = () => true
-  ): Promise<void> {
+  ): void {
     if (!isCurrentRequest()) return;
     const baseSource = { tickets: ticketList, runs, chats, artifacts: [] as SurfaceArtifact[] };
     const baseDetail = buildTicketDetailViewModel(ticketDetail, baseSource);
@@ -169,26 +168,11 @@
     detail = baseDetail;
     sectionIssues = baseIssues;
     loading = false;
-    const [dispatchResult, timelineResult, tailResult, statusResult] = await Promise.all([
-      currentRunId ? pmaApi.ticketFlow.getDispatchHistory(currentRunId, { repo: ownerId }) : Promise.resolve(null),
-      baseDetail.linkedChatId ? pmaApi.pma.getTimeline(baseDetail.linkedChatId) : Promise.resolve(null),
-      baseDetail.linkedChatId ? pmaApi.pma.getTail(baseDetail.linkedChatId) : Promise.resolve(null),
-      baseDetail.linkedChatId ? pmaApi.pma.getStatus(baseDetail.linkedChatId) : Promise.resolve(null)
-    ]);
-    if (!isCurrentRequest()) return;
-    sectionIssues = [
-      ...baseIssues,
-      dispatchResult && !dispatchResult.ok ? partialPageIssue('timeline', 'Worker output unavailable', dispatchResult.error) : null,
-      timelineResult && !timelineResult.ok ? partialPageIssue('linked_chat', 'Ticket chat history unavailable', timelineResult.error) : null
-    ].filter((issue): issue is PartialPageIssue => Boolean(issue));
-    dispatchHistory = dispatchResult?.ok ? dispatchResult.data : [];
+    dispatchHistory = dispatches;
     if (currentRunId) connectFlowStream(currentRunId, ownerId);
-    const latestProgress = tailResult?.ok ? tailResult.data : statusResult?.ok ? statusResult.data : null;
     detail = buildTicketDetailViewModel(ticketDetail, {
       ...baseSource,
-      runs: mergeTicketRunProgress(runs, latestProgress),
-      artifacts: [],
-      timeline: timelineResult?.ok ? timelineResult.data : []
+      artifacts: []
     });
     loading = false;
   }

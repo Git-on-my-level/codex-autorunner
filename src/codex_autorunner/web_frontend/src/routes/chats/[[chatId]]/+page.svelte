@@ -14,11 +14,13 @@
     pmaChatCounters,
     pmaChatSummaryToChatIndexRow,
     readModelEntityStore,
+    selectRepoSummaries,
     selectPmaArtifacts,
     selectPmaChats,
     selectPmaProgress,
     selectPmaQueue,
     selectPmaTimeline,
+    selectWorktreeSummaries,
     selectReadMarkers,
     syntheticProjectionCursor
   } from '$lib/data';
@@ -503,13 +505,13 @@
   async function loadInitial(): Promise<void> {
     loadingChats = true;
     chatError = null;
-    const [activeChatResult, archivedChatResult, artifactResult, agentResult, repoResult, worktreeResult] = await Promise.all([
+    const [activeChatResult, archivedChatResult, artifactResult, agentResult, topologyResult, runtimeResult] = await Promise.all([
       pmaApi.getJson<JsonRecord>('/hub/chat/index?view=all&limit=200'),
       pmaApi.getJson<JsonRecord>('/hub/chat/index?view=archived&limit=200'),
       pmaApi.pma.listFiles(),
       pmaApi.pma.listAgents(),
-      pmaApi.hub.listRepos(),
-      pmaApi.hub.listWorktrees()
+      pmaApi.readModels.repoWorktreeTopology('all', 200),
+      pmaApi.readModels.repoWorktreeRuntime('all', 200)
     ]);
 
     if (activeChatResult.ok) {
@@ -538,9 +540,12 @@
     }
 
     if (artifactResult.ok) readModelEntityStore.setPmaArtifacts('__global__', artifactResult.data);
+    if (topologyResult.ok) readModelEntityStore.applyRepoWorktreeTopologySnapshot(topologyResult.data);
+    if (runtimeResult.ok) readModelEntityStore.applyRepoWorktreeRuntimeSnapshot(runtimeResult.data);
+    const scopeState = readModelEntityStore.snapshot();
     scopeOptions = buildPmaChatScopeOptions(
-      repoResult.ok ? repoResult.data : [],
-      worktreeResult.ok ? worktreeResult.data : []
+      topologyResult.ok ? selectRepoSummaries(scopeState) : [],
+      topologyResult.ok ? selectWorktreeSummaries(scopeState) : []
     );
     if (!scopeOptions.some((scope) => scope.id === selectedScopeId)) selectedScopeId = 'local';
     if (!canStartCodingAgentChat) newChatKind = 'pma';

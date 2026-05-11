@@ -3,7 +3,7 @@
   import ContextspaceView from '$lib/components/ContextspaceView.svelte';
   import { pmaApi, type ApiError } from '$lib/api/client';
   import { buildContextspaceViewModel, type ContextspaceViewModel } from '$lib/viewModels/contextspace';
-  import type { RepoSummary, WorktreeSummary } from '$lib/viewModels/domain';
+  import { mapRepoSummary, mapWorktreeSummary, type RepoSummary, type WorktreeSummary } from '$lib/viewModels/domain';
   import type { ScopeRef } from '$lib/viewModels/scope';
 
   let {
@@ -31,12 +31,30 @@
   }
 
   async function loadInventory(): Promise<void> {
-    const [repos, worktrees] = await Promise.all([
-      pmaApi.hub.listRepos(),
-      pmaApi.hub.listWorktrees()
-    ]);
-    repoList = repos.ok ? repos.data : [];
-    worktreeList = worktrees.ok ? worktrees.data : [];
+    const topology = await pmaApi.readModels.repoWorktreeTopology('all', 200);
+    repoList = topology.ok
+      ? topology.data.repos.map((repo) =>
+          mapRepoSummary({
+            id: repo.repoId,
+            name: repo.label,
+            path: repo.path,
+            kind: 'base',
+            worktree_count: repo.childWorktreeIds.length
+          })
+        )
+      : [];
+    worktreeList = topology.ok
+      ? topology.data.worktrees.map((worktree) =>
+          mapWorktreeSummary({
+            id: worktree.worktreeId,
+            name: worktree.label,
+            path: worktree.path,
+            kind: 'worktree',
+            worktree_of: worktree.repoId,
+            branch: worktree.branch
+          })
+        )
+      : [];
   }
 
   async function loadContextspace(): Promise<void> {
