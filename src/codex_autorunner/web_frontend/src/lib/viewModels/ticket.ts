@@ -1,5 +1,6 @@
 import type { PmaChatSummary, PmaRunProgress, PmaTimelineItem, SurfaceArtifact, TicketDetail, TicketSummary, WorkStatus } from './domain';
 import {
+  buildManagedThreadCreatePayload,
   buildPmaTranscriptCards,
   formatRelativeTime,
   pmaChatKind,
@@ -7,7 +8,9 @@ import {
   progressPercent,
   statusLabel,
   type PmaCard,
-  type PmaChatKind
+  type PmaChatKind,
+  type ManagedThreadCreatePayload,
+  type PmaChatScopeOption
 } from './pmaChat';
 import { repoRoute, repoTicketRoute, worktreeRoute, worktreeTicketRoute } from './routes';
 import {
@@ -404,7 +407,7 @@ function ticketFrontmatterYamlFromDetail(detail: TicketDetail, frontmatter: Reco
 
 function upsertYamlScalar(block: string, key: string, value: string | boolean | null): string {
   const lines = block.replace(/\r\n/g, '\n').split('\n');
-  const keyPattern = new RegExp(`^\\s*${key}\\s*:`);
+  const keyPattern = new RegExp(`^${key}\\s*:`);
   const replacement = value === null ? null : `${key}: ${yamlScalar(value)}`;
   const nextLines: string[] = [];
   let replaced = false;
@@ -533,6 +536,57 @@ export function buildTicketUpdateContent(detail: TicketDetailViewModel, payload:
     frontmatterYaml = serializeFrontmatter(frontmatter).trimEnd();
   }
   return `---\n${frontmatterYaml}\n---\n\n${payload.body.trimEnd()}\n`;
+}
+
+function stringField(raw: Record<string, unknown>, key: string): string | null {
+  const value = raw[key];
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+export function ticketRepairChatScope(ticket: TicketDetailViewModel): PmaChatScopeOption {
+  const parentRepoId =
+    stringField(ticket.raw, 'repo_id') ??
+    stringField(ticket.raw, 'base_repo_id') ??
+    stringField(ticket.frontmatter, 'repo_id') ??
+    stringField(ticket.frontmatter, 'base_repo_id');
+  if (ticket.workspaceKind === 'worktree' && ticket.workspaceId) {
+    const workspaceRoot = stringField(ticket.raw, 'workspace_root') ?? ticket.workspacePathLabel ?? '.';
+    return {
+      id: `worktree:${ticket.workspaceId}`,
+      kind: 'worktree',
+      label: ticket.workspaceId,
+      detail: `Worktree · ${parentRepoId ?? ticket.workspaceId}`,
+      workspaceRoot,
+      resourceId: ticket.workspaceId,
+      parentRepoId,
+      scopeUrn: parentRepoId ? `worktree:${parentRepoId}/${ticket.workspaceId}` : `filesystem:${encodeURIComponent(workspaceRoot)}`
+    };
+  }
+  if (ticket.workspaceKind === 'repo' && ticket.workspaceId) {
+    return {
+      id: `repo:${ticket.workspaceId}`,
+      kind: 'repo',
+      label: ticket.workspaceId,
+      detail: `Repo · ${ticket.workspaceId}`,
+      resourceKind: 'repo',
+      resourceId: ticket.workspaceId,
+      scopeUrn: `repo:${ticket.workspaceId}`
+    };
+  }
+  return { id: 'local', kind: 'local', label: 'Local hub', detail: 'Current workspace', scopeUrn: 'hub' };
+}
+
+export function buildTicketRepairChatCreatePayload(ticket: TicketDetailViewModel): ManagedThreadCreatePayload {
+  return buildManagedThreadCreatePayload('codex', ticketRepairChatScope(ticket), `Repair ${ticket.numberLabel} frontmatter`);
+}
+
+export function buildTicketRepairPrompt(ticket: TicketDetailViewModel): string {
+  const raw = ticket.raw;
+  const hubRoot = stringField(raw, 'hub_root') ?? '(hub root from the serving CAR instance)';
+  const workspaceRoot = stringField(raw, 'workspace_root') ?? ticket.workspacePathLabel ?? '(unknown workspace root)';
+  const ticketPath = ticket.pathLabel ?? '(unknown ticket path)';
+  const errors = ticket.errors.length ? ticket.errors.map((err) => `- ${err}`).join('\n') : '- Frontmatter validation failed';
+  return `Please repair this CAR ticket frontmatter and lint the ticket queue.\n\nHub root: ${hubRoot}\nWorkspace root: ${workspaceRoot}\nTicket path: ${ticketPath}\nAbsolute ticket path: ${workspaceRoot}/${ticketPath}\n\nValidation errors:\n${errors}\n\nRequirements:\n- Edit only the ticket file unless linting reveals directly related ticket metadata issues.\n- Fix the YAML frontmatter so the ticket can run.\n- Preserve the ticket body content.\n- Run: python3 .codex-autorunner/bin/lint_tickets.py from the workspace root.\n- Report exactly what changed and the lint result.`;
 }
 
 export function mergeTicketRunProgress(runs: PmaRunProgress[], progress: PmaRunProgress | null): PmaRunProgress[] {
