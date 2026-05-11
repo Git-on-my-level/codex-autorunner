@@ -19,6 +19,13 @@ def build_fixture_payload(fixture_kind: SeedFixtureKind) -> JsonDict:
         SeedFixtureKind.PMA_PENDING: _pma_pending,
         SeedFixtureKind.PMA_RUNNING: _pma_running,
         SeedFixtureKind.PMA_FINAL: _pma_final,
+        SeedFixtureKind.PMA_NEW_CHAT: _pma_new_chat,
+        SeedFixtureKind.PMA_QUEUED: _pma_queued,
+        SeedFixtureKind.PMA_ERROR: _pma_error,
+        SeedFixtureKind.PMA_APPROVAL: _pma_approval,
+        SeedFixtureKind.PMA_INTERRUPT: _pma_interrupt,
+        SeedFixtureKind.PMA_ATTACHMENT: _pma_attachment,
+        SeedFixtureKind.PMA_DUPLICATE_REPAIR: _pma_duplicate_repair,
     }
     return builders[fixture_kind]()
 
@@ -30,6 +37,7 @@ def _empty_hub() -> JsonDict:
         "tickets": [],
         "runs": [],
         "chats": [],
+        "timeline": [],
         "contextspace_docs": [],
         "artifacts": [],
         "settings": {
@@ -157,6 +165,24 @@ def _pma_running() -> JsonDict:
             status="running", phase="implementation", queue_depth=0, progress_percent=46
         )
     ]
+    payload["timeline"] = [
+        _timeline_item("turn:one:user", "user_message", {"text": "Run a smoke test"}),
+        _timeline_item(
+            "turn:one:intermediate:1",
+            "intermediate",
+            {"intermediate_kind": "thinking", "text": "Reading files"},
+            order="00000002",
+        ),
+        _timeline_item(
+            "turn:one:tool:rg",
+            "tool_group",
+            {
+                "tool_name": "rg",
+                "result": {"status": "completed", "summary": "Matched tests"},
+            },
+            order="00000003",
+        ),
+    ]
     return payload
 
 
@@ -182,6 +208,173 @@ def _pma_final() -> JsonDict:
             "created_at": "2026-05-01T10:30:00Z",
         }
     ]
+    payload["timeline"] = [
+        _timeline_item("turn:one:user", "user_message", {"text": "Finish the ticket"}),
+        _timeline_item(
+            "turn:one:assistant",
+            "assistant_message",
+            {"text": "Final answer delivered."},
+            order="00000002",
+            status="done",
+        ),
+    ]
+    return payload
+
+
+def _pma_new_chat() -> JsonDict:
+    payload = _seeded_repo_worktree_ticket()
+    payload["chats"] = []
+    payload["timeline"] = []
+    return payload
+
+
+def _pma_queued() -> JsonDict:
+    payload = _chat_list_detail()
+    payload["chats"][0]["status"] = "waiting"
+    payload["chats"][0]["progress_percent"] = 0
+    payload["runs"] = [
+        _run_progress(
+            status="waiting", phase="queued", queue_depth=1, progress_percent=0
+        )
+    ]
+    payload["timeline"] = [
+        _timeline_item(
+            "turn:queued:user",
+            "user_message",
+            {"text": "Queued follow-up"},
+            status="waiting",
+        )
+    ]
+    return payload
+
+
+def _pma_error() -> JsonDict:
+    payload = _chat_list_detail()
+    payload["chats"][0]["status"] = "failed"
+    payload["runs"] = [
+        _run_progress(
+            status="failed",
+            phase="error",
+            queue_depth=0,
+            progress_percent=60,
+            terminal=True,
+        )
+    ]
+    payload["timeline"] = [
+        _timeline_item("turn:failed:user", "user_message", {"text": "Run the check"}),
+        _timeline_item(
+            "turn:failed:status",
+            "lifecycle",
+            {"title": "Turn failed", "text": "Command exited with status 1."},
+            order="00000002",
+            status="failed",
+        ),
+    ]
+    return payload
+
+
+def _pma_approval() -> JsonDict:
+    payload = _chat_list_detail()
+    payload["chats"][0]["status"] = "waiting"
+    payload["runs"] = [
+        _run_progress(
+            status="waiting", phase="approval", queue_depth=0, progress_percent=50
+        )
+    ]
+    payload["timeline"] = [
+        _timeline_item(
+            "turn:approval:user", "user_message", {"text": "Install dependencies"}
+        ),
+        _timeline_item(
+            "turn:approval:request",
+            "approval",
+            {"description": "Run pnpm install?", "summary": "Approval required"},
+            order="00000002",
+            status="waiting",
+        ),
+    ]
+    return payload
+
+
+def _pma_interrupt() -> JsonDict:
+    payload = _chat_list_detail()
+    payload["chats"][0]["status"] = "running"
+    payload["runs"] = [
+        _run_progress(
+            status="running", phase="implementation", queue_depth=1, progress_percent=35
+        )
+    ]
+    payload["timeline"] = [
+        _timeline_item(
+            "turn:active:user", "user_message", {"text": "Implement current plan"}
+        ),
+        _timeline_item(
+            "turn:active:intermediate",
+            "intermediate",
+            {"intermediate_kind": "thinking", "text": "Applying patch"},
+            order="00000002",
+        ),
+        _timeline_item(
+            "turn:interrupt:user",
+            "user_message",
+            {"text": "Change direction now"},
+            order="00000003",
+            status="waiting",
+        ),
+    ]
+    return payload
+
+
+def _pma_attachment() -> JsonDict:
+    payload = _chat_list_detail()
+    attachment = {
+        "id": "upload-report",
+        "kind": "file",
+        "title": "report.md",
+        "url": "/hub/pma/files/inbox/report.md",
+        "summary": "Attached report",
+    }
+    payload["timeline"] = [
+        _timeline_item(
+            "turn:attachment:user",
+            "user_message",
+            {"text": "Review this file", "attachments": [attachment]},
+        )
+    ]
+    payload["artifacts"] = [attachment]
+    return payload
+
+
+def _pma_duplicate_repair() -> JsonDict:
+    payload = _pma_final()
+    payload["timeline"] = [
+        _timeline_item("turn:dup:user", "user_message", {"text": "Summarize"}),
+        _timeline_item(
+            "turn:dup:assistant:a",
+            "assistant_message",
+            {"text": "Summary complete."},
+            order="00000002",
+            status="done",
+        ),
+        _timeline_item(
+            "turn:dup:assistant:b",
+            "assistant_message",
+            {"text": "Summary complete."},
+            order="00000003",
+            status="done",
+        ),
+        _timeline_item(
+            "snapshot:repair",
+            "lifecycle",
+            {
+                "title": "Snapshot repair",
+                "text": "Repaired stream gap from latest snapshot.",
+            },
+            order="00000004",
+            status="done",
+        ),
+    ]
+    payload["repair"] = {"stream_gap_repaired": True, "snapshot_cursor": "00000004"}
     return payload
 
 
@@ -245,6 +438,27 @@ def _run_progress(
         "resource_id": "smoke-repo--review",
         "repo_id": "smoke-repo",
         "worktree_id": "smoke-repo--review",
+    }
+
+
+def _timeline_item(
+    item_id: str,
+    kind: str,
+    payload: JsonDict,
+    *,
+    order: str = "00000001",
+    status: str = "running",
+) -> JsonDict:
+    turn_id = item_id.split(":")[1] if ":" in item_id else None
+    return {
+        "item_id": item_id,
+        "kind": kind,
+        "order_key": order,
+        "timestamp": "2026-05-01T10:12:00Z",
+        "managed_thread_id": "chat-smoke-1",
+        "managed_turn_id": turn_id,
+        "status": status,
+        "payload": payload,
     }
 
 

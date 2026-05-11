@@ -70,6 +70,13 @@ def test_high_signal_seed_states_are_present() -> None:
         SeedFixtureKind.PMA_PENDING,
         SeedFixtureKind.PMA_RUNNING,
         SeedFixtureKind.PMA_FINAL,
+        SeedFixtureKind.PMA_NEW_CHAT,
+        SeedFixtureKind.PMA_QUEUED,
+        SeedFixtureKind.PMA_ERROR,
+        SeedFixtureKind.PMA_APPROVAL,
+        SeedFixtureKind.PMA_INTERRUPT,
+        SeedFixtureKind.PMA_ATTACHMENT,
+        SeedFixtureKind.PMA_DUPLICATE_REPAIR,
     }
     missing = required.difference(fixture_kinds)
     assert not missing, f"high-signal fixture coverage missing: {missing}"

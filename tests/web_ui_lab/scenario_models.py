@@ -14,6 +14,13 @@ class SeedFixtureKind(str, Enum):
     PMA_PENDING = "pma_pending"
     PMA_RUNNING = "pma_running"
     PMA_FINAL = "pma_final"
+    PMA_NEW_CHAT = "pma_new_chat"
+    PMA_QUEUED = "pma_queued"
+    PMA_ERROR = "pma_error"
+    PMA_APPROVAL = "pma_approval"
+    PMA_INTERRUPT = "pma_interrupt"
+    PMA_ATTACHMENT = "pma_attachment"
+    PMA_DUPLICATE_REPAIR = "pma_duplicate_repair"
 
 
 class ViewportName(str, Enum):

@@ -69,6 +69,7 @@ def _normalize_screen_model(
     tickets = _records(payload, "tickets")
     runs = _records(payload, "runs")
     chats = _records(payload, "chats")
+    timeline = _records(payload, "timeline")
     docs = _records(payload, "contextspace_docs")
     settings = (
         payload.get("settings") if isinstance(payload.get("settings"), dict) else {}
@@ -82,6 +83,7 @@ def _normalize_screen_model(
         tickets=tickets,
         runs=runs,
         chats=chats,
+        timeline=timeline,
         docs=docs,
         settings=settings,
     )
@@ -91,6 +93,7 @@ def _normalize_screen_model(
         worktrees=worktrees,
         tickets=tickets,
         chats=chats,
+        timeline=timeline,
         docs=docs,
     )
     visible_rows = min(row_count, MAX_VISIBLE_ROWS)
@@ -107,11 +110,12 @@ def _normalize_screen_model(
         "visible_rows": visible_rows,
         "windowed": row_count <= MAX_VISIBLE_ROWS or visible_rows <= MAX_VISIBLE_ROWS,
         "unknown_status_normalized": _unknown_status_normalized(
-            chats + runs + tickets + repos + worktrees
+            chats + runs + tickets + repos + worktrees + timeline
         ),
         "missing_optional_fields_safe": _missing_optional_fields_safe(payload),
         "cursor_snapshot": _cursor_snapshot(scenario, payload),
         "repair_snapshot": _repair_snapshot(tickets),
+        "pma_timeline": _pma_timeline_summary(timeline, payload),
     }
 
 
@@ -196,6 +200,9 @@ def _evaluate_invariants(
                 "message": "Repair snapshot shape changed after JSON roundtrip.",
             }
         )
+    pma_failure = _pma_timeline_invariant_failure(scenario, screen_model)
+    if pma_failure:
+        failures.append(pma_failure)
     return failures
 
 
@@ -207,6 +214,7 @@ def _landmarks_for_route(
     tickets: list[dict[str, Any]],
     runs: list[dict[str, Any]],
     chats: list[dict[str, Any]],
+    timeline: list[dict[str, Any]],
     docs: list[dict[str, Any]],
     settings: Any,
 ) -> list[str]:
@@ -259,6 +267,12 @@ def _landmarks_for_route(
             "Chats",
             "Search chats, repos, tickets",
             *[_label(chat) for chat in chats],
+            *[_timeline_label(item) for item in timeline],
+            *[
+                _label(attachment)
+                for item in timeline
+                for attachment in _records(_payload(item), "attachments")
+            ],
         ]
     if route_name == "worktrees":
         return ["Repo worktree variants", *[_label(worktree) for worktree in worktrees]]
@@ -303,6 +317,7 @@ def _row_count_for_route(
     worktrees: list[dict[str, Any]],
     tickets: list[dict[str, Any]],
     chats: list[dict[str, Any]],
+    timeline: list[dict[str, Any]],
     docs: list[dict[str, Any]],
 ) -> int:
     if route_name in {"repos", "repo-detail"}:
@@ -312,7 +327,7 @@ def _row_count_for_route(
     if route_name in {"repo-tickets", "worktree-tickets", "tickets"}:
         return len(tickets)
     if route_name == "chat":
-        return len(chats)
+        return max(len(chats), len(timeline))
     if "contextspace" in route_name:
         return len(docs)
     return 1
@@ -331,6 +346,20 @@ def _label(record: dict[str, Any]) -> str:
         if isinstance(value, str) and value:
             return value
     return "unnamed"
+
+
+def _payload(record: dict[str, Any]) -> dict[str, Any]:
+    payload = record.get("payload")
+    return payload if isinstance(payload, dict) else {}
+
+
+def _timeline_label(record: dict[str, Any]) -> str:
+    payload = _payload(record)
+    for key in ("title", "tool_name", "text", "description", "summary"):
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return _label(record)
 
 
 def _unknown_status_normalized(records: list[dict[str, Any]]) -> bool:
@@ -368,7 +397,7 @@ def _cursor_snapshot(
         "route": scenario.route_path,
         "counts": {
             key: len(_records(payload, key))
-            for key in ("repos", "worktrees", "tickets", "runs", "chats")
+            for key in ("repos", "worktrees", "tickets", "runs", "chats", "timeline")
         },
         "next_cursor": None,
     }
@@ -388,3 +417,105 @@ def _repair_snapshot(tickets: list[dict[str, Any]]) -> dict[str, Any]:
 
 def _json_roundtrip(value: dict[str, Any]) -> dict[str, Any]:
     return json.loads(json.dumps(value, sort_keys=True))
+
+
+def _pma_timeline_summary(
+    timeline: list[dict[str, Any]], payload: dict[str, Any]
+) -> dict[str, Any]:
+    counts: dict[str, int] = {}
+    assistant_delivery_keys: set[str] = set()
+    duplicate_assistant_deliveries = 0
+    attachment_count = 0
+    for item in timeline:
+        kind = str(item.get("kind") or "")
+        counts[kind] = counts.get(kind, 0) + 1
+        item_payload = _payload(item)
+        attachment_count += len(_records(item_payload, "attachments"))
+        if kind == "assistant_message":
+            text = str(item_payload.get("text") or "").strip()
+            turn_id = str(item.get("managed_turn_id") or "")
+            key = f"{item.get('managed_thread_id') or ''}|{turn_id}|{text}"
+            if text and turn_id:
+                if key in assistant_delivery_keys:
+                    duplicate_assistant_deliveries += 1
+                assistant_delivery_keys.add(key)
+    repair = payload.get("repair") if isinstance(payload.get("repair"), dict) else {}
+    return {
+        "counts": counts,
+        "attachment_count": attachment_count,
+        "visible_assistant_deliveries": len(assistant_delivery_keys),
+        "duplicate_assistant_deliveries": duplicate_assistant_deliveries,
+        "approval_visible": counts.get("approval", 0) > 0,
+        "error_visible": any(
+            str(item.get("status") or "").lower() == "failed"
+            or "failed" in _timeline_label(item).lower()
+            for item in timeline
+        ),
+        "interrupt_affordance": any(
+            str(chat.get("status") or "").lower() == "running"
+            for chat in _records(payload, "chats")
+        ),
+        "stream_gap_repaired": repair.get("stream_gap_repaired") is True,
+    }
+
+
+def _pma_timeline_invariant_failure(
+    scenario: WebUiScenario, screen_model: dict[str, Any]
+) -> dict[str, Any] | None:
+    summary = screen_model.get("pma_timeline")
+    if not isinstance(summary, dict):
+        return None
+    counts = summary.get("counts") if isinstance(summary.get("counts"), dict) else {}
+    expected_by_fixture = {
+        "pma_queued": ("user_message", "queued user turn"),
+        "pma_running": ("intermediate", "running progress update"),
+        "pma_final": ("assistant_message", "final assistant delivery"),
+        "pma_approval": ("approval", "approval request"),
+        "pma_attachment": ("user_message", "attachment-bearing user message"),
+        "pma_duplicate_repair": ("assistant_message", "snapshot repair delivery"),
+    }
+    expected = expected_by_fixture.get(scenario.seed_fixture.value)
+    if expected and int(counts.get(expected[0], 0)) <= 0:
+        return {
+            "id": "pma_timeline_state_missing",
+            "message": f"PMA fixture is missing {expected[1]}.",
+            "fixture_kind": scenario.seed_fixture.value,
+            "pma_timeline": summary,
+        }
+    if scenario.seed_fixture.value == "pma_error" and not summary.get("error_visible"):
+        return {
+            "id": "pma_error_state_missing",
+            "message": "PMA error fixture did not surface a failed/error timeline state.",
+            "pma_timeline": summary,
+        }
+    if scenario.seed_fixture.value == "pma_interrupt" and not summary.get(
+        "interrupt_affordance"
+    ):
+        return {
+            "id": "pma_interrupt_affordance_missing",
+            "message": "PMA interrupt fixture did not expose an interruptable running chat.",
+            "pma_timeline": summary,
+        }
+    if (
+        scenario.seed_fixture.value == "pma_attachment"
+        and int(summary.get("attachment_count", 0)) <= 0
+    ):
+        return {
+            "id": "pma_attachment_missing",
+            "message": "PMA attachment fixture did not expose timeline attachments.",
+            "pma_timeline": summary,
+        }
+    if scenario.seed_fixture.value == "pma_duplicate_repair":
+        if int(summary.get("duplicate_assistant_deliveries", 0)) <= 0:
+            return {
+                "id": "pma_duplicate_delivery_fixture_missing",
+                "message": "Duplicate repair fixture did not include duplicate assistant deliveries.",
+                "pma_timeline": summary,
+            }
+        if not summary.get("stream_gap_repaired"):
+            return {
+                "id": "pma_stream_gap_repair_missing",
+                "message": "Duplicate repair fixture did not include a repair snapshot marker.",
+                "pma_timeline": summary,
+            }
+    return None
