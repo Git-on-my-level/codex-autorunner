@@ -917,13 +917,24 @@
     if (reconciled.replacementChatId) void selectChat(reconciled.replacementChatId);
   }
 
+  /** Elapsed seconds capped by wall clock while status is running (matches live UI). */
+  function progressElapsedWithLiveWall(value: PmaRunProgress, nowMs: number): number {
+    const base = value.elapsedSeconds ?? 0;
+    if (value.status !== 'running' || !value.startedAt) return base;
+    const startedMs = Date.parse(value.startedAt);
+    if (!Number.isFinite(startedMs)) return base;
+    const wallElapsed = Math.max(0, Math.floor((nowMs - startedMs) / 1000));
+    return Math.max(base, wallElapsed);
+  }
+
   function updateProgress(nextProgress: PmaRunProgress): void {
     syncChatListStatusFromProgress(nextProgress);
     const chatId = nextProgress.chatId ?? activeChatId;
     if (!chatId) return;
+    const nowMs = Date.now();
     if (progress && progress.id === nextProgress.id) {
-      const previousElapsed = progress.elapsedSeconds ?? 0;
       const incomingElapsed = nextProgress.elapsedSeconds ?? 0;
+      const mergedElapsed = Math.max(progressElapsedWithLiveWall(progress, nowMs), incomingElapsed);
       const seen = new Set<string>();
       const merged: SurfaceArtifact[] = [];
       for (const ev of [...progress.events, ...nextProgress.events]) {
@@ -934,7 +945,7 @@
       readModelEntityStore.setPmaProgress(chatId, {
         ...nextProgress,
         startedAt: nextProgress.startedAt ?? progress.startedAt,
-        elapsedSeconds: Math.max(previousElapsed, incomingElapsed),
+        elapsedSeconds: mergedElapsed,
         events: merged
       });
     } else {
@@ -943,11 +954,8 @@
   }
 
   function progressWithLiveElapsed(value: PmaRunProgress | null, nowMs: number): PmaRunProgress | null {
-    if (!value || value.status !== 'running' || !value.startedAt) return value;
-    const startedMs = Date.parse(value.startedAt);
-    if (!Number.isFinite(startedMs)) return value;
-    const wallElapsed = Math.max(0, Math.floor((nowMs - startedMs) / 1000));
-    const elapsedSeconds = Math.max(value.elapsedSeconds ?? 0, wallElapsed);
+    if (!value) return value;
+    const elapsedSeconds = progressElapsedWithLiveWall(value, nowMs);
     return elapsedSeconds === value.elapsedSeconds ? value : { ...value, elapsedSeconds };
   }
 
