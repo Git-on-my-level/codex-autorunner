@@ -4,6 +4,7 @@
   import { onDestroy, onMount, tick } from 'svelte';
   import MasterDetail from '$lib/components/MasterDetail.svelte';
   import ChatTranscriptCards from '$lib/components/ChatTranscriptCards.svelte';
+  import VirtualList from '$lib/components/VirtualList.svelte';
   import AutoDismissNotice from '$lib/components/AutoDismissNotice.svelte';
   import ChatThreadPreMessagePickers from '$lib/components/ChatThreadPreMessagePickers.svelte';
   import VoiceComposerButton from '$lib/components/VoiceComposerButton.svelte';
@@ -1031,15 +1032,17 @@
   }
 
   function isMessageStackNearBottom(): boolean {
-    if (!messageStack) return true;
-    const distanceFromBottom = messageStack.scrollHeight - messageStack.scrollTop - messageStack.clientHeight;
+    const scroller = messageStack?.querySelector<HTMLElement>('.chat-transcript-virtual-list') ?? messageStack;
+    if (!scroller) return true;
+    const distanceFromBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
     return distanceFromBottom < 80;
   }
 
   async function scrollMessagesToBottom(): Promise<void> {
     await tick();
-    if (!messageStack) return;
-    messageStack.scrollTop = messageStack.scrollHeight;
+    const scroller = messageStack?.querySelector<HTMLElement>('.chat-transcript-virtual-list') ?? messageStack;
+    if (!scroller) return;
+    scroller.scrollTop = scroller.scrollHeight;
   }
 
   async function createChat(): Promise<void> {
@@ -1809,7 +1812,16 @@
           <button type="button" onclick={loadInitial}>Retry</button>
         </div>
       {:else}
-        {#each filteredEntries as entry (entry.kind === 'group' ? `group:${entry.group.key}` : `chat:${entry.chat.id}`)}
+        <VirtualList
+          items={filteredEntries}
+          key={(entry) => entry.kind === 'group' ? `group:${entry.group.key}` : `chat:${entry.chat.id}`}
+          estimatedItemSize={92}
+          overscan={8}
+          initialCount={48}
+          ariaLabel="Chat rows"
+          class="chat-list-virtual-list"
+        >
+        {#snippet children(entry)}
           {#if entry.kind === 'chat'}
             {@render chatRow(entry.chat, false)}
           {:else}
@@ -1870,9 +1882,19 @@
               </button>
               {#if expanded}
                 <div id={`run-group-children-${group.key}`} class="chat-run-group-children">
-                  {#each group.chats as chat (chat.id)}
+                  <VirtualList
+                    items={group.chats}
+                    key={(chat) => chat.id}
+                    estimatedItemSize={78}
+                    overscan={5}
+                    initialCount={24}
+                    ariaLabel={`Chats in ${group.scopeLabel} ticket run`}
+                    class="chat-run-group-child-list"
+                  >
+                  {#snippet children(chat)}
                     {@render chatRow(chat, true)}
-                  {/each}
+                  {/snippet}
+                  </VirtualList>
                   {#if group.unreadCount > 0}
                     <button
                       type="button"
@@ -1884,7 +1906,8 @@
               {/if}
             </div>
           {/if}
-        {/each}
+        {/snippet}
+        </VirtualList>
         {#if filteredEntries.length === 0}
           <div class="state-panel empty-state compact-empty chat-filter-empty">
             <strong>No chats match this filter</strong>

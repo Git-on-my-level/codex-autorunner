@@ -723,6 +723,13 @@ a.scope-chip-label:hover {
   overflow-x: auto;
 }
 
+.chat-list-scroll .chat-list-virtual-list,
+.message-stack .chat-transcript-virtual-list {
+  --virtual-list-gap: var(--space-2);
+  width: 100%;
+  height: 100%;
+}
+
 .section-heading h1,
 .chat-header h1,
 .chat-header h2,
@@ -1664,6 +1671,10 @@ textarea:hover {
   scrollbar-gutter: stable;
 }
 
+.message-stack .chat-transcript-virtual-list {
+  min-height: 180px;
+}
+
 .message-stack > :first-child {
   /* Bottom-anchor short transcripts without reversing DOM, screen-reader, or keyboard order. */
   margin-top: auto;
@@ -2535,8 +2546,8 @@ textarea:hover {
 .workspace-row-list,
 .compact-link-list,
 .compact-activity-list {
-  display: grid;
-  gap: var(--space-3);
+  --virtual-list-gap: var(--space-3);
+  max-height: min(420px, 50vh);
 }
 
 .workspace-row,
@@ -5291,6 +5302,8 @@ textarea:disabled {
 
 .ticket-queue-drawer .ticket-nav-list {
   flex: 1 1 auto;
+  display: block;
+  min-height: 0;
 }
 
 .ticket-queue-footer-link {
@@ -6586,6 +6599,13 @@ textarea:disabled {
   padding: var(--space-1) var(--space-2) var(--space-2) calc(var(--space-3) + 16px);
   border-top: 1px solid var(--color-border-subtle);
   background: var(--color-surface-sunken);
+}
+
+.chat-run-group-child-list {
+  --virtual-list-gap: 1px;
+  position: relative;
+  max-height: min(420px, 48vh);
+  z-index: 1;
 }
 
 .chat-run-group-children::before {

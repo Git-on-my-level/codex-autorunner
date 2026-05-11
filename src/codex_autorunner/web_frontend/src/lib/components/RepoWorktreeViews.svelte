@@ -10,6 +10,7 @@
   import type { PartialPageIssue } from '$lib/api/client';
   import PageHero from './PageHero.svelte';
   import TicketDiffStats from './TicketDiffStats.svelte';
+  import VirtualList from '$lib/components/VirtualList.svelte';
   import { repoAccent, repoInitials } from '$lib/viewModels/repoIdentity';
 
   let {
@@ -233,12 +234,20 @@
         <p>Try a different search or filter.</p>
       </div>
     {:else}
-      <ul class="repos-list" role="list">
-        {#each filteredRows as row}
+      <VirtualList
+        items={filteredRows}
+        key={(row) => row.id}
+        estimatedItemSize={122}
+        overscan={8}
+        initialCount={40}
+        ariaLabel="Repo and worktree index"
+        class="repos-list"
+      >
+        {#snippet children(row)}
           {@const accent = repoAccent(row.label)}
           {@const collapsible = row.kind === 'repo' && row.totalWorktrees > 0}
           {@const collapsed = collapsible && isRepoCollapsed(row.id)}
-          <li class={`repo-item status-${row.status}`} class:has-children={row.childWorktrees.length > 0} class:is-collapsed={collapsed} style={`--repo-accent: ${accent};`}>
+          <div class={`repo-item status-${row.status}`} class:has-children={row.childWorktrees.length > 0} class:is-collapsed={collapsed} role="listitem" style={`--repo-accent: ${accent};`}>
             <div class="repo-head">
             {#if collapsible}
               <button
@@ -427,9 +436,18 @@
             {/if}
 
             {#if !collapsed && visibleChildren(row).length > 0}
-              <ul class="worktree-list" role="list" aria-label={`Worktrees owned by ${row.label}`}>
-                {#each visibleChildren(row) as worktree}
-                  <li class={`worktree-item status-${worktree.status}`}>
+              {@const childRows = visibleChildren(row)}
+              <VirtualList
+                items={childRows}
+                key={(worktree) => worktree.id}
+                estimatedItemSize={86}
+                overscan={6}
+                initialCount={32}
+                ariaLabel={`Worktrees owned by ${row.label}`}
+                class="worktree-list"
+              >
+                {#snippet children(worktree)}
+                  <div class={`worktree-item status-${worktree.status}`} role="listitem">
                     <div class="worktree-card">
                       <span class="worktree-rail" aria-hidden="true"></span>
                       <span class="worktree-dot" aria-hidden="true"></span>
@@ -549,13 +567,13 @@
                           {/if}
                         </div>
                     </div>
-                  </li>
-                {/each}
-              </ul>
+                  </div>
+                {/snippet}
+              </VirtualList>
             {/if}
-          </li>
-        {/each}
-      </ul>
+          </div>
+        {/snippet}
+      </VirtualList>
     {/if}
   </section>
 {:else if mode === 'detail' && detail}
@@ -903,7 +921,16 @@
                   </span>
                 </summary>
                 <div class="scoped-chat-run-children">
-                  {#each group.chats as chat (chat.id)}
+                  <VirtualList
+                    items={group.chats}
+                    key={(chat) => chat.id}
+                    estimatedItemSize={58}
+                    overscan={6}
+                    initialCount={32}
+                    ariaLabel={`Chats in ${group.scopeLabel}`}
+                    class="scoped-chat-run-child-list"
+                  >
+                  {#snippet children(chat)}
                     <a class={`scoped-chat-child-row status-${chat.status}`} href={href(chat.href)}>
                       <span class={`status-dot status-${chat.status}`} aria-hidden="true"></span>
                       <span class="scoped-chat-child-title">
@@ -923,7 +950,8 @@
                         <span class="scoped-chat-child-arrow" aria-hidden="true">→</span>
                       </span>
                     </a>
-                  {/each}
+                  {/snippet}
+                  </VirtualList>
                 </div>
               </details>
             {/each}
@@ -995,8 +1023,16 @@
       <p>{emptyText}</p>
     </div>
   {:else}
-    <div class="activity-list compact-activity-list">
-      {#each items as item}
+    <VirtualList
+      items={items}
+      key={(item) => item.id}
+      estimatedItemSize={58}
+      overscan={6}
+      initialCount={32}
+      ariaLabel="Surfaced artifacts"
+      class="activity-list compact-activity-list"
+    >
+      {#snippet children(item)}
         <a class="dashboard-row activity-row" href={href(item.href ?? '/chats')}>
           <span class={`activity-kind ${item.kind}`}>{item.kind}</span>
           <span>
@@ -1004,8 +1040,8 @@
             <span class="row-meta">{item.summary} · {rowRelativeTime({ createdAt: item.createdAt })}</span>
           </span>
         </a>
-      {/each}
-    </div>
+      {/snippet}
+    </VirtualList>
   {/if}
 {/snippet}
 
@@ -1103,11 +1139,10 @@
   }
 
   .repos-list {
-    display: grid;
-    gap: var(--space-3);
+    --virtual-list-gap: var(--space-3);
+    height: min(76vh, 1100px);
     margin: 0;
     padding: 0;
-    list-style: none;
   }
 
   .repo-item {
@@ -1571,11 +1606,10 @@
 
   /* Worktree children — Linear-style nested list with rail */
   .worktree-list {
-    display: grid;
-    gap: 0;
+    --virtual-list-gap: 0;
+    max-height: min(520px, 54vh);
     margin: 0;
     padding: 0 var(--space-5) var(--space-3);
-    list-style: none;
     background: linear-gradient(180deg, transparent, var(--color-surface-sunken) 8%);
     border-top: 1px solid var(--color-border-subtle);
   }
@@ -2294,6 +2328,10 @@
     display: flex;
     flex-direction: column;
     background: var(--color-surface-sunken);
+  }
+  .scoped-chat-run-child-list {
+    --virtual-list-gap: 0;
+    max-height: min(420px, 48vh);
   }
   .scoped-chat-child-row {
     display: flex;

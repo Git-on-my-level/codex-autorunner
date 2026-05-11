@@ -13,6 +13,7 @@
   import CurrentTicketChatStream from '$lib/components/CurrentTicketChatStream.svelte';
   import TicketDiffStats from '$lib/components/TicketDiffStats.svelte';
   import AutoDismissNotice from '$lib/components/AutoDismissNotice.svelte';
+  import VirtualList from '$lib/components/VirtualList.svelte';
   import { noticeTone } from '$lib/noticeTone';
   import { filterTicketRows, rowRelativeTime } from '$lib/viewModels/ticket';
   import { renderMarkdownToHtml } from '$lib/viewModels/markdown';
@@ -439,8 +440,16 @@
           {/if}
         </div>
       {:else}
-        <div class="ticket-card-list" role="list" aria-label="Ticket queue">
-          {#each visibleRows as row}
+        <VirtualList
+          items={visibleRows}
+          key={(row) => row.id}
+          estimatedItemSize={92}
+          overscan={8}
+          initialCount={48}
+          ariaLabel="Ticket queue"
+          class="ticket-card-list"
+        >
+          {#snippet children(row)}
             {@const numberDigits = row.numberLabel.replace(/^#/, '')}
             {@const hasNumber = numberDigits !== row.numberLabel}
             {@const agentText = row.agentLabel && row.agentLabel !== 'Unassigned' ? row.agentLabel : null}
@@ -503,8 +512,8 @@
                 {/if}
               </a>
             </article>
-          {/each}
-        </div>
+          {/snippet}
+        </VirtualList>
       {/if}
     </section>
   </section>
@@ -703,8 +712,15 @@
                 <span>Live stream</span>
                 <span class="muted">{workerActivity.items.length} item{workerActivity.items.length === 1 ? '' : 's'}</span>
               </summary>
-              <div class="ticket-worker-output-list">
-                {#each workerActivity.items as item}
+              <VirtualList
+                items={workerActivity.items}
+                estimatedItemSize={86}
+                overscan={6}
+                initialCount={32}
+                ariaLabel="Worker output"
+                class="ticket-worker-output-list"
+              >
+                {#snippet children(item)}
                   <article class={`ticket-worker-output-item ${item.status}`}>
                     <div>
                       <strong>{item.title}</strong>
@@ -713,8 +729,8 @@
                     {#if item.summary}<p>{item.summary}</p>{/if}
                     {#if item.detail}<pre>{item.detail}</pre>{/if}
                   </article>
-                {/each}
-              </div>
+                {/snippet}
+              </VirtualList>
             </details>
           </section>
         {/if}
@@ -742,8 +758,16 @@
           <h2>{queueLabel}</h2>
           <button type="button" class="ghost-button" onclick={closeQueue} aria-label="Close queue">Close</button>
         </div>
-        <div class="ticket-nav-list">
-          {#each detail.sourceTickets as row}
+        <VirtualList
+          items={detail.sourceTickets}
+          key={(row) => row.id}
+          estimatedItemSize={62}
+          overscan={8}
+          initialCount={40}
+          ariaLabel={`${queueLabel} queue rows`}
+          class="ticket-nav-list"
+        >
+          {#snippet children(row)}
             <a
               class={`ticket-nav-row ${row.status}`}
               class:active={row.routeId === detail.routeId || row.id === detail.id}
@@ -760,8 +784,8 @@
                 <TicketDiffStats stats={row.diffStats} />
               </span>
             </a>
-          {/each}
-        </div>
+          {/snippet}
+        </VirtualList>
         {#if detail.ownerTicketListHref}
           <a class="ticket-queue-footer-link" href={href(detail.ownerTicketListHref)}>View full queue →</a>
         {/if}
@@ -806,8 +830,8 @@
   }
 
   .ticket-card-list {
-    display: grid;
-    gap: var(--space-2);
+    --virtual-list-gap: var(--space-2);
+    height: min(72vh, 980px);
   }
 
   .ticket-queue-actions {
@@ -1480,6 +1504,11 @@
     border: 1px solid var(--color-border-subtle);
     border-radius: 8px;
     background: var(--color-surface);
+  }
+
+  .ticket-worker-output-list {
+    --virtual-list-gap: var(--space-2);
+    max-height: min(460px, 52vh);
   }
   .ticket-worker-output > summary {
     padding: var(--space-2) var(--space-3);
