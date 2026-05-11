@@ -18,6 +18,11 @@ export type PmaChatStreamEvent =
   | { kind: 'chat_snapshot'; payload: Record<string, unknown>; lastEventId: string | null }
   | { kind: 'message'; payload: unknown; lastEventId: string | null };
 
+export type ChatSurfaceStreamEvent =
+  | { kind: 'chat_snapshot'; payload: Record<string, unknown>; lastEventId: string | null }
+  | { kind: 'chat_event'; payload: Record<string, unknown>; lastEventId: string | null }
+  | { kind: 'message'; payload: unknown; lastEventId: string | null };
+
 export type StreamSubscription = {
   close: () => void;
 };
@@ -35,6 +40,12 @@ export type JsonStreamOptions = {
 
 export type PmaChatStreamOptions = {
   onEvent: (event: PmaChatStreamEvent) => void;
+  onError?: (error: Event) => void;
+  withCredentials?: boolean;
+};
+
+export type ChatSurfaceStreamOptions = {
+  onEvent: (event: ChatSurfaceStreamEvent) => void;
   onError?: (error: Event) => void;
   withCredentials?: boolean;
 };
@@ -88,6 +99,16 @@ export function normalizePmaChatStreamEvent(event: SseEvent<unknown>): PmaChatSt
   return { kind: 'message', payload: event.data, lastEventId: event.id };
 }
 
+export function normalizeChatSurfaceStreamEvent(event: SseEvent<unknown>): ChatSurfaceStreamEvent {
+  if (event.event === 'chat.snapshot') {
+    return { kind: 'chat_snapshot', payload: asRecord(event.data), lastEventId: event.id };
+  }
+  if (event.event === 'chat.event') {
+    return { kind: 'chat_event', payload: asRecord(event.data), lastEventId: event.id };
+  }
+  return { kind: 'message', payload: event.data, lastEventId: event.id };
+}
+
 export function openPmaTailEventSource(
   managedThreadId: string,
   options: JsonStreamOptions,
@@ -134,6 +155,30 @@ export function openPmaChatEventSource(
     );
   };
   source.addEventListener('chat_snapshot', handle);
+  source.addEventListener('message', handle);
+  source.addEventListener('error', (event) => options.onError?.(event));
+  return { close: () => source.close() };
+}
+
+export function openChatSurfaceEventSource(
+  options: ChatSurfaceStreamOptions,
+  basePath = runtimeBasePath()
+): StreamSubscription {
+  const source = new EventSource(withRuntimeBasePath('/hub/chat/events', basePath), {
+    withCredentials: options.withCredentials
+  });
+  const handle = (message: MessageEvent) => {
+    options.onEvent(
+      normalizeChatSurfaceStreamEvent({
+        id: message.lastEventId || null,
+        event: message.type || 'message',
+        data: parseJson(message.data),
+        retry: null
+      })
+    );
+  };
+  source.addEventListener('chat.snapshot', handle);
+  source.addEventListener('chat.event', handle);
   source.addEventListener('message', handle);
   source.addEventListener('error', (event) => options.onError?.(event));
   return { close: () => source.close() };

@@ -258,6 +258,219 @@ export type PmaChatScopeOption =
       scopeUrn: string;
     };
 
+type ChatSurfaceOwner = {
+  repo_id?: unknown;
+  resource_kind?: unknown;
+  resource_id?: unknown;
+  workspace_root?: unknown;
+  scope_urn?: unknown;
+};
+
+type ChatSurfaceDisplay = {
+  display_name?: unknown;
+  title?: unknown;
+  description?: unknown;
+};
+
+function rawRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function rawNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function firstRawString(...values: unknown[]): string | null {
+  for (const value of values) {
+    const text = rawString(value);
+    if (text) return text;
+  }
+  return null;
+}
+
+function surfaceTitle(kind: string, key: string, display: ChatSurfaceDisplay): string {
+  return firstRawString(display.display_name, display.title) ?? `${kind}:${key}`;
+}
+
+/** Convert one generic chat-surface projection row into the existing chat-list view shape. */
+export function mapChatSurfaceToPmaChatSummary(surface: Record<string, unknown>): PmaChatSummary | null {
+  const surfaceKind = firstRawString(surface.surface_kind);
+  const surfaceKey = firstRawString(surface.surface_key);
+  if (!surfaceKind || !surfaceKey) return null;
+  const owner = rawRecord(surface.resource_owner) as ChatSurfaceOwner;
+  const display = rawRecord(surface.display) as ChatSurfaceDisplay;
+  const metadata = rawRecord(surface.metadata);
+  const managedThreadId = firstRawString(surface.managed_thread_id);
+  const lifecycle = firstRawString(surface.lifecycle);
+  const lifecycleStatus = firstRawString(surface.lifecycle_status) ?? 'active';
+  const id = surfaceKind === 'pma' ? managedThreadId ?? surfaceKey : managedThreadId ?? `surface:${surfaceKind}:${surfaceKey}`;
+  const resourceKind = firstRawString(owner.resource_kind);
+  const resourceId = firstRawString(owner.resource_id);
+  const repoId = firstRawString(owner.repo_id) ?? (resourceKind === 'repo' ? resourceId : null);
+  const worktreeId = resourceKind === 'worktree' ? resourceId : null;
+  const bindingKind = firstRawString(metadata.binding_kind) ?? surfaceKind;
+  const bindingId = firstRawString(metadata.binding_id) ?? surfaceKey;
+
+  return {
+    id,
+    title: surfaceTitle(surfaceKind, surfaceKey, display),
+    lifecycleStatus,
+    status:
+      normalizeOptionalWorkStatus(
+        metadata.latest_execution_status ?? metadata.latest_event_status ?? metadata.runtime_status ?? lifecycle
+      ) ?? 'idle',
+    agentId: firstRawString(metadata.agent_id),
+    agentProfile: firstRawString(metadata.agent_profile),
+    model: firstRawString(metadata.model),
+    repoId,
+    worktreeId,
+    ticketId: firstRawString(metadata.ticket_id),
+    ticketDone: null,
+    ticketPath: null,
+    runId: firstRawString(metadata.run_id),
+    flowType: firstRawString(metadata.flow_type),
+    isTicketFlow: firstRawString(metadata.flow_type) === 'ticket' || firstRawString(metadata.ticket_id) !== null,
+    progressPercent: rawNumber(metadata.progress_percent),
+    updatedAt: firstRawString(surface.updated_at, surface.created_at),
+    raw: {
+      ...surface,
+      surface_kind: surfaceKind,
+      surface_key: surfaceKey,
+      binding_kind: bindingKind,
+      binding_id: bindingId,
+      managed_thread_id: managedThreadId,
+      lifecycle_status: lifecycleStatus,
+      repo_id: repoId,
+      resource_kind: resourceKind,
+      resource_id: resourceId,
+      workspace_root: firstRawString(owner.workspace_root),
+      scope_urn: firstRawString(owner.scope_urn),
+      display_name: firstRawString(display.display_name, display.title),
+      name: firstRawString(display.display_name, display.title),
+      normalized_status: metadata.latest_execution_status ?? metadata.latest_event_status ?? metadata.runtime_status ?? lifecycle,
+      status: metadata.latest_execution_status ?? metadata.latest_event_status ?? metadata.runtime_status ?? lifecycle
+    }
+  };
+}
+
+/** Normalize the `/hub/chat/events` snapshot payload into sidebar rows. */
+export function mapChatSurfaceSnapshotToPmaChats(payload: Record<string, unknown>): PmaChatSummary[] {
+  const surfaces = Array.isArray(payload.surfaces) ? payload.surfaces : [];
+  const mapped = surfaces
+    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object' && !Array.isArray(item)))
+    .map((item) => mapChatSurfaceToPmaChatSummary(item))
+    .filter((chat): chat is PmaChatSummary => chat !== null);
+  const byId = new Map<string, PmaChatSummary>();
+  for (const chat of mapped) {
+    const existing = byId.get(chat.id);
+    byId.set(chat.id, existing ? mergeDuplicateChatSurfaceRows(existing, chat) : chat);
+  }
+  return [...byId.values()];
+}
+
+function mergeDuplicateChatSurfaceRows(left: PmaChatSummary, right: PmaChatSummary): PmaChatSummary {
+  const leftKind = rawString(left.raw.surface_kind);
+  const rightKind = rawString(right.raw.surface_kind);
+  const primary = leftKind === 'pma' ? left : rightKind === 'pma' ? right : left;
+  const secondary = primary === left ? right : left;
+  const bindingKind =
+    (rawString(primary.raw.binding_kind) !== 'pma' ? rawString(primary.raw.binding_kind) : null) ??
+    (rawString(secondary.raw.binding_kind) !== 'pma' ? rawString(secondary.raw.binding_kind) : null);
+  const bindingId =
+    bindingKind === rawString(primary.raw.binding_kind) ? rawString(primary.raw.binding_id) : rawString(secondary.raw.binding_id);
+  return {
+    ...secondary,
+    ...primary,
+    raw: {
+      ...secondary.raw,
+      ...primary.raw,
+      binding_kind: bindingKind ?? primary.raw.binding_kind,
+      binding_id: bindingId ?? primary.raw.binding_id
+    }
+  };
+}
+
+export function mapChatSurfaceEventToPmaChatSummary(payload: Record<string, unknown>): PmaChatSummary | null {
+  const surface = rawRecord(payload.surface);
+  const details = rawRecord(payload.details);
+  const channel = rawRecord(details.channel);
+  const surfaceKind = firstRawString(surface.surface_kind);
+  const surfaceKey = firstRawString(surface.surface_key);
+  if (!surfaceKind || !surfaceKey) return null;
+  return mapChatSurfaceToPmaChatSummary({
+    surface_kind: surfaceKind,
+    surface_key: surfaceKey,
+    managed_thread_id: payload.managed_thread_id,
+    lifecycle: payload.lifecycle,
+    lifecycle_status: payload.lifecycle_status,
+    resource_owner: payload.resource_owner,
+    display: {
+      display_name: channel.display
+    },
+    created_at: payload.created_at ?? payload.occurred_at,
+    updated_at: payload.occurred_at ?? payload.created_at,
+    metadata: {
+      latest_event_type: payload.event_type,
+      latest_event_status: payload.status
+    }
+  });
+}
+
+export function pmaChatBindingKey(chat: PmaChatSummary | null): string | null {
+  if (!chat) return null;
+  const raw = chat.raw as Record<string, unknown>;
+  const kind = typeof raw.binding_kind === 'string' ? raw.binding_kind.trim() : '';
+  const id = typeof raw.binding_id === 'string' ? raw.binding_id.trim() : '';
+  if (kind && id) return `${kind}:${id}`;
+  const surfaceKind = typeof raw.surface_kind === 'string' ? raw.surface_kind.trim() : '';
+  const surfaceKey = typeof raw.surface_key === 'string' ? raw.surface_key.trim() : '';
+  if (surfaceKind && surfaceKey) return `${surfaceKind}:${surfaceKey}`;
+  const titleMatch = /^(telegram|discord):(.+)$/.exec(chat.title.trim());
+  return titleMatch ? `${titleMatch[1]}:${titleMatch[2]}` : null;
+}
+
+export function reconcileChatSurfaceEvent(
+  currentChats: PmaChatSummary[],
+  eventPayload: Record<string, unknown>
+): PmaChatSummary[] {
+  const eventChat = mapChatSurfaceEventToPmaChatSummary(eventPayload);
+  if (!eventChat) return currentChats;
+  const eventBinding = pmaChatBindingKey(eventChat);
+  let found = false;
+  const nextChats = currentChats.map((chat) => {
+    if (chat.id !== eventChat.id && (!eventBinding || pmaChatBindingKey(chat) !== eventBinding)) return chat;
+    found = true;
+    return {
+      ...chat,
+      ...eventChat,
+      title: eventChat.title.includes(':') ? chat.title : eventChat.title,
+      raw: {
+        ...chat.raw,
+        ...eventChat.raw
+      }
+    };
+  });
+  if (!found) nextChats.push(eventChat);
+  return nextChats;
+}
+
+export function reconcileChatSurfaceSnapshot(
+  currentChats: PmaChatSummary[],
+  nextChats: PmaChatSummary[],
+  activeChatId: string | null
+): { chats: PmaChatSummary[]; replacementChatId: string | null } {
+  if (!activeChatId) return { chats: nextChats, replacementChatId: null };
+  const priorActive = currentChats.find((chat) => chat.id === activeChatId) ?? null;
+  const priorBinding = pmaChatBindingKey(priorActive);
+  const nextActive = nextChats.find((chat) => chat.id === activeChatId) ?? null;
+  if (nextActive && !isPmaChatArchived(nextActive)) return { chats: nextChats, replacementChatId: null };
+  if (!priorBinding) return { chats: nextChats, replacementChatId: null };
+  const replacement = nextChats.find(
+    (chat) => chat.id !== activeChatId && pmaChatBindingKey(chat) === priorBinding && !isPmaChatArchived(chat)
+  );
+  return { chats: nextChats, replacementChatId: replacement?.id ?? null };
+}
+
 export type ManagedThreadMessagePayload = {
   message: string;
   attachments?: DocumentFileIntentPayload[];
