@@ -122,7 +122,11 @@ def test_ensure_worker_closes_spawned_stream_handles(monkeypatch, tmp_path: Path
         lambda *_args, **_kwargs: (proc, stdout, stderr),
     )
 
-    result = ux_helpers.ensure_worker(tmp_path, "3022db08-82b8-40dd-8cfa-d04eb0fcded2")
+    result = ux_helpers.ensure_worker(
+        tmp_path,
+        "3022db08-82b8-40dd-8cfa-d04eb0fcded2",
+        replace_stale_worker=True,
+    )
 
     assert result["status"] == "spawned"
     assert result["proc"] is proc
@@ -130,6 +134,39 @@ def test_ensure_worker_closes_spawned_stream_handles(monkeypatch, tmp_path: Path
     assert result["stderr"] is None
     assert stdout.closed is True
     assert stderr.closed is True
+
+
+def test_ensure_worker_does_not_replace_stale_worker_without_policy(
+    monkeypatch, tmp_path: Path
+) -> None:
+    health = FlowWorkerHealth(
+        status="dead",
+        pid=None,
+        cmdline=[],
+        artifact_path=tmp_path / ".codex-autorunner" / "flows" / "run",
+    )
+    health.artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        ux_helpers, "check_worker_health", lambda *_args, **_kwargs: health
+    )
+    monkeypatch.setattr(
+        ux_helpers,
+        "clear_worker_metadata",
+        lambda *_args, **_kwargs: calls.append("clear"),
+    )
+    monkeypatch.setattr(
+        ux_helpers,
+        "spawn_flow_worker",
+        lambda *_args, **_kwargs: calls.append("spawn"),
+    )
+
+    result = ux_helpers.ensure_worker(tmp_path, "3022db08-82b8-40dd-8cfa-d04eb0fcded2")
+
+    assert result["status"] == "stale_worker_requires_reconcile"
+    assert result["health"] is health
+    assert calls == []
 
 
 def _run(run_id: str, status: FlowRunStatus) -> FlowRunRecord:

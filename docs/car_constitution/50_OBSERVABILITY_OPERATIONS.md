@@ -33,6 +33,28 @@ Record transitions and blocking points:
 4) Inspect stdout/stderr/stream artifacts
 5) Only then inspect code
 
+## Debugging Ticket-Flow Recovery
+For a crashed or restarting ticket flow, keep the reducer/supervisor path as the
+mental model:
+
+1) Identify the run with `car ticket-flow status --run-id <run_id>` or from
+   `.codex-autorunner/flows.db`.
+2) Inspect `.codex-autorunner/flows/<run_id>/worker.exit.json` for process-exit
+   evidence. A stale reaper kill is marked with `exit_origin: stale_reaper`,
+   `exit_kind: reaped_stale`, and `shutdown_intent: false`.
+3) Inspect `.codex-autorunner/flows/<run_id>/crash.json` for the canonical
+   crash/reap payload used by surfaces and failure events.
+4) Inspect flow events and telemetry in `flows.db` for reconcile transitions,
+   `recovery_takeover`, failure projections, restart attempts, and restart
+   exhaustion.
+5) If the current ticket is `done: true`, check `git status --porcelain`.
+   Dirty work means the commit barrier should preserve the current ticket and
+   prevent advancement until commit/recovery is resolved.
+
+Do not treat a killed worker as a user shutdown unless the worker exit evidence
+was written by the user-stop path. Stale reaper evidence is recovery evidence;
+the reconciler/supervisor decides the user-visible state.
+
 ## Minimum “explainability” bar
 From artifacts alone, a debugger must be able to answer:
 - what happened?

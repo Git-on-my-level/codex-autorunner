@@ -445,11 +445,18 @@ def build_flow_status_snapshot(
     return _build_ticket_flow_status_snapshot(repo_root, record, store, lite=lite)
 
 
-def ensure_worker(repo_root: Path, run_id: str, is_terminal: bool = False) -> dict:
+def ensure_worker(
+    repo_root: Path,
+    run_id: str,
+    is_terminal: bool = False,
+    *,
+    replace_stale_worker: bool = False,
+) -> dict:
     return _ensure_flow_worker(
         repo_root,
         run_id,
         is_terminal=is_terminal,
+        replace_stale_worker=replace_stale_worker,
         check_worker_health_fn=check_worker_health,
         clear_worker_metadata_fn=clear_worker_metadata,
         spawn_flow_worker_fn=spawn_flow_worker,

@@ -54,6 +54,38 @@ Mapping the conceptual layers to the codebase:
 3. **Run**: Execute the configured backend (for example Codex app-server with OpenCode runtime, or Hermes and other ACP-backed runtimes; see `docs/ops/hermes-acp.md`).
 4. **Update State**: Handle stop rules (exit code, stop_after_runs, limits).
 
+## Ticket Flow Lifecycle Ownership
+- **Filesystem is source of truth**: `.codex-autorunner/tickets/`,
+  `.codex-autorunner/contextspace/`, `.codex-autorunner/flows.db`, and
+  `.codex-autorunner/flows/<run_id>/` artifacts are authoritative over in-memory
+  surface state.
+- **Reducer/supervisor own lifecycle transitions**:
+  `core/flows/supervisor.py` classifies recovery observations, emits typed
+  recovery effects, and hands lifecycle triggers to
+  `core/flows/lifecycle_reducer.py`. The reconciler applies those effects and is
+  the single active-run recovery path for worker crashes, stale-worker reaps,
+  restart attempts, restart exhaustion, commit-barrier blocking, and
+  user-visible recovery state.
+- **Worker spawn helpers are effect appliers**:
+  `spawn_flow_worker` and `ensure_flow_worker` may apply an already-authorized
+  start/resume/restart effect. They must not infer recovery policy from stale
+  metadata. A dead, invalid, or mismatched worker requires supervisor/reconciler
+  recovery unless an explicit user start/resume path opts into replacement.
+- **The stale reaper is a janitor**:
+  `core/flows/worker_reaper.py` can inspect orphaned worker metadata and signal
+  stale processes, but it never transitions runs and never claims user intent.
+  Reaper exits write `exit_origin: stale_reaper`,
+  `exit_kind: reaped_stale`, and `shutdown_intent: false`; the reconciler turns
+  that evidence into canonical failure/recovery state.
+- **Commit barrier is part of recovery**:
+  a done current ticket with dirty worktree state blocks advancement. Recovery
+  must preserve the current ticket and surface the barrier instead of moving to
+  the next ticket.
+- **Surfaces render canonical state**:
+  CLI, Web, Telegram, and Discord should show projection/run-state recovery
+  fields and crash artifacts instead of inventing surface-specific crash
+  classifications.
+
 ### Ticket-flow runner seam structure
 The ticket-flow orchestration hot path is split across focused submodules under `src/codex_autorunner/tickets/`:
 - **`runner.py`** (`TicketRunner.step`): Step controller that sequences pre-turn planning, execution, and post-turn processing without reimplementing helper contracts inline.

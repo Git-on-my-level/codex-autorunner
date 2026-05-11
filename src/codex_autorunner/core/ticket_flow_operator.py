@@ -1376,12 +1376,19 @@ def ensure_flow_worker(
     run_id: str,
     *,
     is_terminal: bool = False,
+    replace_stale_worker: bool = False,
     check_worker_health_fn=check_worker_health,
     clear_worker_metadata_fn=clear_worker_metadata,
     spawn_flow_worker_fn=spawn_flow_worker,
 ) -> dict[str, Any]:
     health = check_worker_health_fn(repo_root, run_id)
+    if is_terminal:
+        return {"status": "terminal", "health": health}
     if not is_terminal and health.status in {"dead", "mismatch", "invalid"}:
+        # Dead-worker replacement is a recovery effect. The supervisor/reconciler
+        # must authorize it, or an explicit user start/resume path must opt in.
+        if not replace_stale_worker:
+            return {"status": "stale_worker_requires_reconcile", "health": health}
         try:
             clear_worker_metadata_fn(health.artifact_path.parent)
         except OSError:
