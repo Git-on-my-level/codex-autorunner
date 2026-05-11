@@ -779,7 +779,10 @@
         ...chat,
         status: nextProgress.status,
         progressPercent: nextProgress.progressPercent ?? chat.progressPercent,
-        updatedAt: nextProgress.lastEventAt ?? chat.updatedAt,
+        updatedAt:
+          nextProgress.lastEventAt && (!chat.updatedAt || nextProgress.lastEventAt > chat.updatedAt)
+            ? nextProgress.lastEventAt
+            : chat.updatedAt,
         raw: {
           ...chat.raw,
           execution_status: nextProgress.status,

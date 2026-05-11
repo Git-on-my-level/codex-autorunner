@@ -362,6 +362,7 @@ async def _build_managed_thread_tail_snapshot(
                     event_id_start=event_id_start,
                     since_ms=since_ms,
                     projection_state=projection_state,
+                    fallback_received_at=finished_at or started_at,
                 )
                 if isinstance(state.token_usage, dict) and state.token_usage:
                     token_usage = dict(state.token_usage)

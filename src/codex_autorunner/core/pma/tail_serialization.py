@@ -811,9 +811,15 @@ async def _serialize_runtime_raw_tail_events(
     event_id_start: int,
     since_ms: Optional[int] = None,
     projection_state: ProgressProjectionState | None = None,
+    fallback_received_at: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     received_at_ms = 0
-    received_at = datetime.now(timezone.utc).isoformat()
+    fallback_dt = parse_iso_datetime(fallback_received_at)
+    if fallback_dt is not None:
+        received_at_ms = int(fallback_dt.timestamp() * 1000)
+        received_at = fallback_dt.isoformat()
+    else:
+        received_at = datetime.now(timezone.utc).isoformat()
     if isinstance(raw_event, dict):
         msg = raw_event.get("message")
         if isinstance(msg, dict) and _should_suppress_tail_event(msg):
