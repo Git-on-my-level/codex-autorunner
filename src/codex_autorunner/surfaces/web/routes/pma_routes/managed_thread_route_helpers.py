@@ -28,7 +28,7 @@ from .....core.chat_bindings import active_chat_binding_metadata_by_thread
 from .....core.domain.refs import ScopeRef, ScopeRefError
 from .....core.hub_control_plane.models import THREAD_TARGET_LIST_LIFECYCLE_STATUSES
 from .....core.managed_thread_status import derive_managed_thread_operator_status
-from .....core.orchestration import ActiveWorkSummary
+from .....core.orchestration import ActiveWorkSummary, ManagedThreadExecutionStore
 from .....core.orchestration.models import Binding, ThreadTarget
 from .....core.text_utils import _truncate_text
 from .....tickets.files import ticket_is_done
@@ -42,6 +42,27 @@ from .automation_adapter import normalize_optional_text
 
 _logger = logging.getLogger(__name__)
 _DRIVE_PREFIX_RE = re.compile(r"^[A-Za-z]:")
+
+
+def _resolve_running_or_latest_execution(
+    service: Any,
+    managed_thread_id: str,
+) -> Any:
+    """Prefer running execution, else latest; minimize redundant store reads when possible."""
+    thread_store = getattr(service, "thread_store", None)
+    if isinstance(thread_store, ManagedThreadExecutionStore):
+        get_latest_execution = getattr(service, "get_latest_execution", None)
+        if callable(get_latest_execution):
+            return get_latest_execution(managed_thread_id)
+        return None
+    get_running_execution = getattr(service, "get_running_execution", None)
+    get_latest_execution = getattr(service, "get_latest_execution", None)
+    execution = None
+    if callable(get_running_execution):
+        execution = get_running_execution(managed_thread_id)
+    if execution is None and callable(get_latest_execution):
+        execution = get_latest_execution(managed_thread_id)
+    return execution
 
 
 @dataclass(frozen=True)
@@ -480,19 +501,18 @@ def _attach_latest_execution_fields(
     *,
     service: Any,
     managed_thread_id: str,
+    execution: Any = ...,
 ) -> dict[str, Any]:
-    get_running_execution = getattr(service, "get_running_execution", None)
-    get_latest_execution = getattr(service, "get_latest_execution", None)
-    execution = None
-    if callable(get_running_execution):
-        execution = get_running_execution(managed_thread_id)
-    if execution is None and callable(get_latest_execution):
-        execution = get_latest_execution(managed_thread_id)
+    if execution is ...:
+        execution = _resolve_running_or_latest_execution(service, managed_thread_id)
     if execution is None:
         payload.update(
             {
                 "latest_turn_id": None,
                 "latest_turn_status": None,
+                "latest_turn_started_at": None,
+                "latest_turn_finished_at": None,
+                "last_activity_at": None,
                 "latest_assistant_text": "",
                 "latest_output_excerpt": "",
             }
@@ -500,6 +520,8 @@ def _attach_latest_execution_fields(
         return payload
 
     assistant_text = str(getattr(execution, "output_text", "") or "")
+    started_at = normalize_optional_text(getattr(execution, "started_at", None))
+    finished_at = normalize_optional_text(getattr(execution, "finished_at", None))
     payload.update(
         {
             "latest_turn_id": normalize_optional_text(
@@ -508,6 +530,9 @@ def _attach_latest_execution_fields(
             "latest_turn_status": normalize_optional_text(
                 getattr(execution, "status", None)
             ),
+            "latest_turn_started_at": started_at,
+            "latest_turn_finished_at": finished_at,
+            "last_activity_at": finished_at or started_at,
             "latest_assistant_text": assistant_text,
             "latest_output_excerpt": _truncate_text(assistant_text, 240),
         }
