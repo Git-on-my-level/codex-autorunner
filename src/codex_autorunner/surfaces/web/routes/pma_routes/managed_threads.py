@@ -51,6 +51,7 @@ from .managed_thread_route_helpers import (
     _apply_chat_binding_fields,
     _attach_latest_execution_fields,
     _load_chat_binding_metadata_by_thread,
+    _resolve_running_or_latest_execution,
     _serialize_managed_thread,
     _serialize_thread_target,
     provision_managed_thread_workspace,
@@ -530,6 +531,12 @@ def build_managed_thread_crud_routes(
         binding_metadata = _load_chat_binding_metadata_by_thread(
             get_pma_request_context(request).hub_root
         )
+        latest_execution_by_thread = {
+            thread.thread_target_id: _resolve_running_or_latest_execution(
+                service, thread.thread_target_id
+            )
+            for thread in threads
+        }
         return {
             "threads": [
                 _attach_latest_execution_fields(
@@ -542,6 +549,7 @@ def build_managed_thread_crud_routes(
                     ),
                     service=service,
                     managed_thread_id=thread.thread_target_id,
+                    execution=latest_execution_by_thread[thread.thread_target_id],
                 )
                 for thread in threads
             ]
