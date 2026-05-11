@@ -262,19 +262,25 @@ async def _run_turn(
         )
         collector_kwargs["stall_timeout_seconds"] = stall_timeout
         collector_kwargs["first_event_timeout_seconds"] = first_event_timeout
-    output_task = asyncio.create_task(
-        collect_opencode_output(
-            client,
-            session_id=session_id,
-            workspace_path=config.workspace_root,
-            model_payload=model_payload,
-            permission_policy=permission_policy,
-            should_stop=should_stop,
-            ready_event=ready_event,
-            logger=logger,
-            **collector_kwargs,
+
+    def _start_output_task(
+        *, ready: Optional[asyncio.Event]
+    ) -> asyncio.Task[OpenCodeTurnOutput]:
+        return asyncio.create_task(
+            collect_opencode_output(
+                client,
+                session_id=session_id,
+                workspace_path=config.workspace_root,
+                model_payload=model_payload,
+                permission_policy=permission_policy,
+                should_stop=should_stop,
+                ready_event=ready,
+                logger=logger,
+                **collector_kwargs,
+            )
         )
-    )
+
+    output_task = _start_output_task(ready=ready_event)
     with contextlib.suppress(asyncio.TimeoutError):
         await asyncio.wait_for(ready_event.wait(), timeout=2.0)
     prompt_task = asyncio.create_task(
@@ -288,7 +294,16 @@ async def _run_turn(
     timeout_task = asyncio.create_task(asyncio.sleep(config.timeout_seconds))
     grace_seconds = max(0, config.interrupt_grace_seconds or 0)
 
+    async def _await_prompt_completion() -> None:
+        try:
+            await prompt_task
+        except (RuntimeError, OSError, ConnectionError, ValueError) as exc:
+            if logger is not None:
+                logger.error(f"OpenCode prompt failed: {exc}")
+            raise RuntimeError(f"OpenCode prompt failed: {exc}") from exc
+
     try:
+        restarted_after_empty_stream = False
         tasks: set[asyncio.Task[Any]] = {output_task, prompt_task, timeout_task}
         if stop_task is not None:
             tasks.add(stop_task)
@@ -300,6 +315,20 @@ async def _run_turn(
 
             if output_task in done:
                 output_result = await output_task
+                if (
+                    not restarted_after_empty_stream
+                    and output_result is not None
+                    and not output_result.text
+                    and output_result.error is None
+                ):
+                    await _await_prompt_completion()
+                    restarted_after_empty_stream = True
+                    output_result = None
+                    output_task = _start_output_task(ready=None)
+                    tasks = {output_task, timeout_task}
+                    if stop_task is not None:
+                        tasks.add(stop_task)
+                    continue
                 if should_stop is not None and should_stop():
                     stopped = True
                 break
@@ -332,14 +361,12 @@ async def _run_turn(
 
             if prompt_task in done:
                 try:
-                    await prompt_task
-                except (RuntimeError, OSError, ConnectionError, ValueError) as exc:
-                    if logger is not None:
-                        logger.error(f"OpenCode prompt failed: {exc}")
+                    await _await_prompt_completion()
+                except RuntimeError:
                     output_task.cancel()
                     with contextlib.suppress(asyncio.CancelledError):
                         await output_task
-                    raise RuntimeError(f"OpenCode prompt failed: {exc}") from exc
+                    raise
                 tasks.discard(prompt_task)
                 tasks = pending
     finally:

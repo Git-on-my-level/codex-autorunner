@@ -98,6 +98,51 @@ async def test_run_opencode_prompt_disposes_temporary_session_after_completion(
 
 
 @pytest.mark.anyio
+async def test_run_opencode_prompt_restarts_after_empty_pre_prompt_stream(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from codex_autorunner.agents.opencode import run_prompt as run_prompt_module
+
+    client = _ClientStub("session-late-output")
+    supervisor = _SupervisorStub(client)
+    collect_calls = 0
+
+    async def _fake_collect(*_args: Any, **_kwargs: Any) -> OpenCodeTurnOutput:
+        nonlocal collect_calls
+        collect_calls += 1
+        ready_event = _kwargs.get("ready_event")
+        if ready_event is not None:
+            ready_event.set()
+        if collect_calls == 1:
+            return OpenCodeTurnOutput(text="")
+        return OpenCodeTurnOutput(text="final answer")
+
+    async def _fake_missing_env(*_args: Any, **_kwargs: Any) -> list[str]:
+        return []
+
+    monkeypatch.setattr(run_prompt_module, "collect_opencode_output", _fake_collect)
+    monkeypatch.setattr(run_prompt_module, "opencode_missing_env", _fake_missing_env)
+
+    result = await run_opencode_prompt(
+        supervisor,  # type: ignore[arg-type]
+        OpenCodeRunConfig(
+            agent="opencode",
+            model=None,
+            reasoning=None,
+            prompt="hello",
+            workspace_root=str(tmp_path),
+            timeout_seconds=5,
+        ),
+    )
+
+    assert result.output_text == "final answer"
+    assert collect_calls == 2
+    assert client.dispose_calls == ["session-late-output"]
+    assert supervisor.started == [tmp_path]
+    assert supervisor.finished == [tmp_path]
+
+
+@pytest.mark.anyio
 async def test_run_opencode_prompt_disposes_session_when_env_check_fails(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

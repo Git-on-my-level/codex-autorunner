@@ -121,6 +121,8 @@ class ManagedThreadAutomationClient:
     ) -> Optional[dict[str, Any]]:
         runtime_state = self._get_runtime_state() if self._get_runtime_state else None
         origin = resolve_runtime_pma_origin(runtime_state)
+        if not required and origin is None:
+            return None
         try:
             store = await get_automation_store(
                 self._request,

@@ -286,7 +286,18 @@ async def collect_opencode_output_from_events(
                 else:
                     event = await _stream_iter.__anext__()
             except StopAsyncIteration:
-                break
+                decision = await lifecycle.on_stream_end(now=time.monotonic())
+                if (
+                    decision.should_flush_if_pending
+                    and not assembler.has_text
+                    and assembler.has_pending_text
+                ):
+                    assembler.flush_pending()
+                if decision.error is not None:
+                    assembler.error = decision.error
+                if decision.action == LifecycleAction.BREAK:
+                    break
+                continue
             except asyncio.TimeoutError:
                 now = time.monotonic()
                 decision = await lifecycle.on_timeout_error(now=now)

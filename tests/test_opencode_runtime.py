@@ -1169,6 +1169,52 @@ async def test_collect_output_bounds_stall_reconnect_loop_if_session_missing(
 
 
 @pytest.mark.anyio
+async def test_collect_output_reconnects_when_stream_ends_while_session_busy(
+    monkeypatch,
+) -> None:
+    stream_calls = 0
+    statuses: list[dict[str, object]] = []
+
+    async def _status_fetcher():
+        statuses.append({"status": {"type": "busy"}})
+        return {"status": {"type": "busy"}}
+
+    async def _event_stream():
+        nonlocal stream_calls
+        stream_calls += 1
+        if stream_calls == 1:
+            for event in ():
+                yield event
+            return
+        yield SSEEvent(
+            event="message.part.updated",
+            data='{"sessionID":"s1","properties":{"delta":{"text":"Recovered"},'
+            '"part":{"type":"text","text":"Recovered"}}}',
+        )
+        yield SSEEvent(event="session.idle", data='{"sessionID":"s1"}')
+
+    monkeypatch.setattr(
+        opencode_stream_lifecycle,
+        "_OPENCODE_STREAM_RECONNECT_BACKOFF_SECONDS",
+        (0.0,),
+    )
+
+    output = await collect_opencode_output_from_events(
+        None,
+        session_id="s1",
+        event_stream_factory=lambda: _event_stream(),
+        session_fetcher=_status_fetcher,
+        stall_timeout_seconds=1.0,
+        first_event_timeout_seconds=1.0,
+    )
+
+    assert output.text == "Recovered"
+    assert output.error is None
+    assert stream_calls == 2
+    assert statuses
+
+
+@pytest.mark.anyio
 async def test_collect_output_waits_if_session_busy(monkeypatch) -> None:
     statuses: list[dict[str, object]] = []
     progress_events: list[dict[str, object]] = []

@@ -184,6 +184,15 @@ class StreamLifecycleController:
 
         return await self._handle_stall_recovery(now=now)
 
+    async def on_stream_end(self, *, now: float) -> LifecycleDecision:
+        status_type = await self._poll_session_status_warn()
+        if status_is_idle(status_type):
+            return LifecycleDecision(
+                action=LifecycleAction.BREAK,
+                should_flush_if_pending=True,
+            )
+        return await self._handle_stall_recovery(now=now)
+
     async def on_irrelevant_event(self, *, now: float) -> LifecycleDecision:
         if (
             not self._received_any_event

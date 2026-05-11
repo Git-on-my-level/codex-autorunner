@@ -1194,7 +1194,9 @@ def test_send_message_notify_on_terminal_auto_subscribes_once(hub_env) -> None:
     assert all_subs[0].get("match_count") == 1
 
 
-def test_send_message_defaults_to_terminal_followup_subscription(hub_env) -> None:
+def test_send_message_default_terminal_followup_without_origin_is_inert(
+    hub_env,
+) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
     install_fake_supervisor(app)
@@ -1217,10 +1219,7 @@ def test_send_message_defaults_to_terminal_followup_subscription(hub_env) -> Non
         payload = message_resp.json()
         assert payload["status"] == "ok"
         assert payload["send_state"] == "accepted"
-        notification = payload.get("notification") or {}
-        subscription = notification.get("subscription") or {}
-        assert notification.get("mode") == "terminal"
-        assert subscription.get("thread_id") == managed_thread_id
+        assert "notification" not in payload
 
     automation_store = app.state.hub_supervisor.get_pma_automation_store()
     active_subs = automation_store.list_subscriptions(thread_id=managed_thread_id)
@@ -1228,9 +1227,7 @@ def test_send_message_defaults_to_terminal_followup_subscription(hub_env) -> Non
     all_subs = automation_store.list_subscriptions(
         include_inactive=True, thread_id=managed_thread_id
     )
-    assert all_subs
-    assert all_subs[0].get("state") == "cancelled"
-    assert all_subs[0].get("match_count") == 1
+    assert all_subs == []
 
 
 @pytest.mark.anyio
