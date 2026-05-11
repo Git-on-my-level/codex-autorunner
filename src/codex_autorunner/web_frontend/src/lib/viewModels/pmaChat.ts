@@ -631,7 +631,7 @@ export function buildPmaTranscriptCards(
 ): PmaCard[] {
   const timelineCards = coalesceThinkingTraceCards(buildPmaCards(timeline, chat, artifacts));
   const activityCards = shouldSupplementWithLiveActivity(timelineCards, progress)
-    ? buildPmaActivityCards(progress?.events ?? [])
+    ? buildPmaActivityCards(progress?.events ?? [], { fallbackTurnId: progress?.id ?? null })
     : [];
   return summarizeCompletedTurnActivity(
     mergePmaTimelineAndActivityCards(
@@ -721,9 +721,13 @@ export function mergePmaActivityEvents(
   return ordered.slice(-limit);
 }
 
-export function buildPmaActivityCards(events: SurfaceArtifact[]): PmaCard[] {
+export function buildPmaActivityCards(
+  events: SurfaceArtifact[],
+  options: { fallbackTurnId?: string | null } = {}
+): PmaCard[] {
   const cards: PmaCard[] = [];
   let toolGroup: PmaToolCallCard[] = [];
+  const fallbackTurnId = options.fallbackTurnId ?? null;
 
   const flushToolGroup = () => {
     if (!toolGroup.length) return;
@@ -731,7 +735,7 @@ export function buildPmaActivityCards(events: SurfaceArtifact[]): PmaCard[] {
       kind: 'tool_group',
       id: `tools-${toolGroup[0].id}-${toolGroup.at(-1)?.id ?? toolGroup[0].id}`,
       tools: toolGroup,
-      turnId: activityTurnId(toolGroup[0].source),
+      turnId: activityTurnId(toolGroup[0].source, fallbackTurnId),
       orderKey: activityOrderKey(toolGroup[0].source),
       timestamp: toolGroup[0].source?.createdAt ?? null
     });
@@ -757,10 +761,10 @@ export function buildPmaActivityCards(events: SurfaceArtifact[]): PmaCard[] {
     const text = assistantActivityText(event);
     if (!text) continue;
     flushToolGroup();
-    const previous = cards.at(-1);
-    if (previous?.kind === 'intermediate' && shouldMergeIntermediate(previous, event)) {
-      previous.text = mergeIntermediateText(previous.text, text);
-      previous.eventIds.push(event.id);
+    const mergeTarget = findMergeableIntermediate(cards, event, fallbackTurnId);
+    if (mergeTarget) {
+      mergeTarget.text = mergeIntermediateText(mergeTarget.text, text);
+      mergeTarget.eventIds.push(event.id);
       continue;
     }
     cards.push({
@@ -770,13 +774,26 @@ export function buildPmaActivityCards(events: SurfaceArtifact[]): PmaCard[] {
       text,
       detail: null,
       eventIds: [event.id],
-      turnId: activityTurnId(event),
+      turnId: activityTurnId(event, fallbackTurnId),
       orderKey: activityOrderKey(event),
       timestamp: event.createdAt
     });
   }
   flushToolGroup();
   return cards;
+}
+
+function findMergeableIntermediate(
+  cards: PmaCard[],
+  event: SurfaceArtifact,
+  fallbackTurnId: string | null
+): Extract<PmaCard, { kind: 'intermediate' }> | null {
+  for (let index = cards.length - 1; index >= 0; index -= 1) {
+    const card = cards[index];
+    if (card.kind !== 'intermediate') continue;
+    if (shouldMergeIntermediate(card, event, fallbackTurnId)) return card;
+  }
+  return null;
 }
 
 /** Leading digits of PMA timeline `order_key` (`{sequence:08d}|…`), or an 8-digit test shorthand. */
@@ -1114,8 +1131,15 @@ function intermediateTitle(event: SurfaceArtifact): string {
   return 'Update';
 }
 
-function shouldMergeIntermediate(card: Extract<PmaCard, { kind: 'intermediate' }>, event: SurfaceArtifact): boolean {
-  return card.title === 'Thinking' && canonicalProgressItem(event)?.kind === 'assistant_update';
+function shouldMergeIntermediate(
+  card: Extract<PmaCard, { kind: 'intermediate' }>,
+  event: SurfaceArtifact,
+  fallbackTurnId: string | null = null
+): boolean {
+  if (card.turnId !== activityTurnId(event, fallbackTurnId)) return false;
+  const item = canonicalProgressItem(event);
+  if (card.title === 'Thinking' && item?.kind === 'assistant_update') return true;
+  return item?.kind === 'notice' && card.title === intermediateTitle(event) && !isCommentaryTraceCard(card);
 }
 
 function mergeIntermediateText(current: string, incoming: string): string {
@@ -1124,7 +1148,9 @@ function mergeIntermediateText(current: string, incoming: string): string {
   if (incoming === current) return current;
   if (incoming.startsWith(current)) return incoming;
   if (current.endsWith(incoming)) return current;
-  return `${current}${incoming}`;
+  if (/\s$/.test(current) || /^\s/.test(incoming)) return `${current}${incoming}`;
+  if (/^[,.;:!?)]/.test(incoming) || /[(]$/.test(current)) return `${current}${incoming}`;
+  return `${current} ${incoming}`;
 }
 
 function shouldSupplementWithLiveActivity(cards: PmaCard[], progress: PmaRunProgress | null): boolean {
@@ -1457,9 +1483,9 @@ function unknownArrayToStrings(value: unknown): string[] {
   return value.map((item) => stringValue(item)).filter(Boolean);
 }
 
-function activityTurnId(event: SurfaceArtifact | undefined): string | null {
+function activityTurnId(event: SurfaceArtifact | undefined, fallbackTurnId: string | null = null): string | null {
   if (!event) return null;
-  return stringValue(event.raw.managed_turn_id ?? event.raw.turn_id ?? event.raw.execution_id ?? event.raw.run_id) || null;
+  return stringValue(event.raw.managed_turn_id ?? event.raw.turn_id ?? event.raw.execution_id ?? event.raw.run_id) || fallbackTurnId;
 }
 
 function activityOrderKey(event: SurfaceArtifact | undefined): string {

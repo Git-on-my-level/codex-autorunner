@@ -573,7 +573,7 @@ describe('PMA chat view helpers', () => {
     });
   });
 
-  it('keeps commentary as chat bubbles while folding running raw progress under the turn summary', () => {
+  it('inherits the active turn for raw tail progress and folds merged deltas under the work summary', () => {
     const cards = buildPmaTranscriptCards(
       [
         timelineItem('turn:one:user', 'user_message', { text: 'Summarize this thread' }, '00000001')
@@ -594,8 +594,17 @@ describe('PMA chat view helpers', () => {
             createdAt: '2026-05-04T00:00:11Z',
             summary: 'The',
             raw: {
-              managed_turn_id: 'one',
               progress_item: { kind: 'notice', title: 'Progress', summary: 'The', event_ids: [11] }
+            }
+          },
+          {
+            ...baseArtifact,
+            id: 'raw-progress-2',
+            kind: 'progress',
+            createdAt: '2026-05-04T00:00:11.500Z',
+            summary: 'user',
+            raw: {
+              progress_item: { kind: 'notice', title: 'Progress', summary: 'user', event_ids: [12] }
             }
           },
           {
@@ -605,19 +614,17 @@ describe('PMA chat view helpers', () => {
             createdAt: '2026-05-04T00:00:12Z',
             summary: 'I am checking the latest context.',
             raw: {
-              managed_turn_id: 'one',
-              progress_item: { kind: 'notice', title: 'Commentary', summary: 'I am checking the latest context.', event_ids: [12] }
+              progress_item: { kind: 'notice', title: 'Commentary', summary: 'I am checking the latest context.', event_ids: [13] }
             }
           },
           {
             ...baseArtifact,
-            id: 'raw-progress-2',
+            id: 'raw-progress-3',
             kind: 'progress',
             createdAt: '2026-05-04T00:00:13Z',
-            summary: 'current',
+            summary: 'wants',
             raw: {
-              managed_turn_id: 'one',
-              progress_item: { kind: 'notice', title: 'Progress', summary: 'current', event_ids: [13] }
+              progress_item: { kind: 'notice', title: 'Progress', summary: 'wants', event_ids: [14] }
             }
           }
         ]
@@ -629,8 +636,7 @@ describe('PMA chat view helpers', () => {
       kind: 'turn_summary',
       title: 'Worked for 21s',
       cards: [
-        { kind: 'intermediate', title: 'Progress', text: 'The' },
-        { kind: 'intermediate', title: 'Progress', text: 'current' }
+        { kind: 'intermediate', title: 'Progress', text: 'The user wants' }
       ]
     });
     expect(cards[2]).toMatchObject({
@@ -772,11 +778,12 @@ describe('PMA chat view helpers', () => {
       }
     ]);
 
-    expect(mergePmaTimelineAndActivityCards(canonical, live).map((card) => card.id)).toEqual([
+    const merged = mergePmaTimelineAndActivityCards(canonical, live);
+    expect(merged.map((card) => card.id)).toEqual([
       'turn:one:user',
-      'intermediate-prog-1',
-      'intermediate-prog-2'
+      'intermediate-prog-1'
     ]);
+    expect(merged[1]).toMatchObject({ kind: 'intermediate', text: 'Starting Continuing' });
   });
 
   it('anchors live progress after optimistic user bubbles', () => {
