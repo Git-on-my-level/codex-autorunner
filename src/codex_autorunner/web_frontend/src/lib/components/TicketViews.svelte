@@ -1452,10 +1452,6 @@
     gap: var(--space-2);
   }
 
-  .ticket-flow-timeline > li {
-    margin: 0;
-  }
-
   .ticket-flow-row {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr) auto;

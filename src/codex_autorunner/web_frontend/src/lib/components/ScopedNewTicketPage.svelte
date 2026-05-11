@@ -1,5 +1,6 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
+  import { onMount, tick } from 'svelte';
   import { pmaApi } from '$lib/api/client';
   import AutoDismissNotice from '$lib/components/AutoDismissNotice.svelte';
   import { createScopedTicket, type ScopedTicketQueueConfig } from '$lib/viewModels/scopedTicketQueue';
@@ -12,12 +13,17 @@
   let body = $state('');
   let submitting = $state(false);
   let apiError = $state<string | null>(null);
+  let titleInput: HTMLInputElement | null = $state(null);
 
   const scopeLabel = $derived(
     queueConfig.kind === 'repo' ? `Repo: ${queueConfig.resourceId}` : `Worktree: ${queueConfig.resourceId}`
   );
 
   const canSubmit = $derived(Boolean(title.trim()) && !submitting);
+
+  onMount(() => {
+    void tick().then(() => titleInput?.focus());
+  });
 
   async function submit(): Promise<void> {
     const trimmed = title.trim();
@@ -59,13 +65,15 @@
   <header class="ticket-hero ticket-hero-flat">
     <div class="ticket-hero-row">
       <h1 class="ticket-hero-title">
+        <span class="sr-only">New ticket</span>
         <span class="ticket-hero-title-text">
           <input
             class="ticket-title-input"
+            bind:this={titleInput}
             bind:value={title}
+            aria-label="Ticket title"
             placeholder="Untitled ticket"
             autocomplete="off"
-            autofocus
           />
         </span>
       </h1>
@@ -130,12 +138,6 @@
     gap: var(--space-3);
     flex: 1 1 auto;
     min-width: 0;
-  }
-
-  .ticket-hero-num {
-    color: var(--color-accent);
-    font-weight: 600;
-    flex-shrink: 0;
   }
 
   .ticket-hero-title-text {
