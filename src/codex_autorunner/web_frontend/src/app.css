@@ -505,6 +505,12 @@ a {
   padding: var(--space-5);
 }
 
+.content-shell:has(.repos-index-v2) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 .master-detail,
 .pma-layout {
   display: grid;
@@ -2641,6 +2647,28 @@ textarea:hover {
   gap: var(--space-2);
 }
 
+.repos-list {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.worktree-list,
+.chat-run-group-child-list {
+  flex: 0 0 auto;
+  overflow: visible;
+  overscroll-behavior: auto;
+  scrollbar-gutter: auto;
+}
+
+.row-click-target {
+  cursor: pointer;
+}
+
+.row-click-target:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--color-accent) 62%, transparent);
+  outline-offset: 2px;
+}
+
 .child-worktree-row {
   justify-content: space-between;
   gap: var(--space-3);
@@ -3790,6 +3818,15 @@ textarea:disabled {
   max-width: 100%;
 }
 
+.repos-index-v2 {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.content-shell:has(.repos-index-v2) > .repos-index-v2 {
+  height: 100%;
+}
+
 .page-stack .section-heading h1 {
   font-size: var(--font-size-3);
 }
@@ -4396,6 +4433,32 @@ textarea:disabled {
 .markdown-body pre code {
   padding: 0;
   background: transparent;
+}
+
+.markdown-body table {
+  width: 100%;
+  margin: 0 0 var(--space-4);
+  border-collapse: collapse;
+  border: 1px solid var(--color-border);
+  font-size: var(--font-size-1);
+}
+
+.markdown-body th,
+.markdown-body td {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.markdown-body th {
+  background: var(--color-surface-muted);
+  color: var(--color-ink);
+  font-weight: 650;
+}
+
+.markdown-body tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--color-surface-muted) 42%, transparent);
 }
 
 .panel-heading-row a,

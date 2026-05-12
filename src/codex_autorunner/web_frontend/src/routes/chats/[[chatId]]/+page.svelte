@@ -833,6 +833,8 @@
       if (activeChatId !== chatId) return;
       if (messageResult.ok) {
         readModelEntityStore.replacePmaTimeline(chatId, reconcilePmaTimeline(currentTimeline(chatId), messageResult.data));
+      } else if (isMissingManagedThreadError(messageResult.error)) {
+        readModelEntityStore.replacePmaTimeline(chatId, []);
       } else if (!options.quiet) {
         activeError = messageResult.error;
       }
@@ -843,7 +845,9 @@
         if (activeChatId !== chatId) return;
         if (tailResult.ok) updateProgress(tailResult.data);
         else if (statusResult.ok) updateProgress(statusResult.data);
-        else if (!options.quiet && !activeError) activeError = tailResult.error;
+        else if (isMissingManagedThreadError(tailResult.error) || isMissingManagedThreadError(statusResult.error)) {
+          readModelEntityStore.setPmaProgress(chatId, null);
+        } else if (!options.quiet && !activeError) activeError = tailResult.error;
       }
     );
     const queueTask = pmaApi.pma.getQueue(chatId).then((queueResult) => {
@@ -945,6 +949,10 @@
         if (activeChatId) scheduleActiveRefresh(activeChatId, 900);
       }
     });
+  }
+
+  function isMissingManagedThreadError(error: ApiError): boolean {
+    return error.status === 404 && error.message.toLowerCase().includes('managed thread not found');
   }
 
   function closeChatStream(): void {
@@ -2028,6 +2036,7 @@
                     initialCount={24}
                     ariaLabel={`Chats in ${group.scopeLabel} ticket run`}
                     class="chat-run-group-child-list"
+                    scrollable={false}
                   >
                   {#snippet children(chat)}
                     {@render chatRow(chat, true)}
@@ -2173,6 +2182,11 @@
           <span class="state-icon" aria-hidden="true"></span>
           <strong>{liveActivity.title}</strong>
           <p>{liveActivity.elapsedLabel ? `${liveActivity.summary} · ${liveActivity.elapsedLabel}` : liveActivity.summary}</p>
+        </div>
+      {:else if activeCards.length === 0}
+        <div class="state-panel empty-state">
+          <strong>No transcript available</strong>
+          <p>This chat has no visible timeline yet.</p>
         </div>
       {:else}
         <ChatTranscriptCards cards={activeCards} assistantLabel={chatAgentDisplayLabel} />
