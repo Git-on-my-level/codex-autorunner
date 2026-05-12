@@ -112,8 +112,7 @@
     "required": [
       "last_scan_at",
       "repos",
-      "pinned_parent_repo_ids",
-      "title"
+      "pinned_parent_repo_ids"
     ]
   }
 }
