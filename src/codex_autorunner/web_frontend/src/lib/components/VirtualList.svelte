@@ -10,7 +10,8 @@
     initialCount = 40,
     ariaLabel = 'Virtualized list',
     class: className = '',
-    itemClass = ''
+    itemClass = '',
+    scrollable = true
   }: {
     items: T[];
     children: Snippet<[T, number]>;
@@ -21,38 +22,92 @@
     ariaLabel?: string;
     class?: string;
     itemClass?: string;
+    scrollable?: boolean;
   } = $props();
 
   let viewport: HTMLDivElement | null = $state(null);
+  let windowNode: HTMLDivElement | null = $state(null);
   let mounted = $state(false);
   let scrollTop = $state(0);
   let viewportHeight = $state(0);
+  let measuredHeights = $state<Record<string, number>>({});
+  let rowGap = $state(0);
 
   const safeItemSize = $derived(Math.max(1, estimatedItemSize));
-  const startIndex = $derived(
-    mounted ? Math.max(0, Math.floor(scrollTop / safeItemSize) - overscan) : 0
-  );
-  const visibleCapacity = $derived(
-    mounted ? Math.ceil(viewportHeight / safeItemSize) + overscan * 2 : initialCount
-  );
-  const endIndex = $derived(Math.min(items.length, startIndex + Math.max(1, visibleCapacity)));
+  const itemKeys = $derived(items.map((item, index) => key ? key(item, index) : String(index)));
+  const itemOffsets = $derived.by(() => {
+    const offsets = [0];
+    for (let index = 0; index < items.length; index += 1) {
+      const height = measuredHeights[itemKeys[index]] ?? safeItemSize;
+      offsets.push(offsets[index] + height + (index < items.length - 1 ? rowGap : 0));
+    }
+    return offsets;
+  });
+  const totalHeight = $derived(itemOffsets.at(-1) ?? 0);
+  const overscanPx = $derived(safeItemSize * overscan);
+  const startIndex = $derived.by(() => {
+    if (!mounted) return 0;
+    return Math.max(0, findOffsetIndex(itemOffsets, Math.max(0, scrollTop - overscanPx)));
+  });
+  const endIndex = $derived.by(() => {
+    if (!mounted) return Math.min(items.length, Math.max(1, initialCount));
+    const target = scrollTop + viewportHeight + overscanPx;
+    return Math.min(items.length, Math.max(startIndex + 1, findOffsetIndex(itemOffsets, target) + 1));
+  });
   const visibleItems = $derived(items.slice(startIndex, endIndex));
-  const totalHeight = $derived(items.length * safeItemSize);
-  const offsetY = $derived(startIndex * safeItemSize);
+  const offsetY = $derived(itemOffsets[startIndex] ?? 0);
   const rangeLabel = $derived(
     items.length === 0
       ? '0 items'
       : `${startIndex + 1}-${endIndex} of ${items.length} items`
   );
 
+  function findOffsetIndex(offsets: number[], target: number): number {
+    let low = 0;
+    let high = Math.max(0, offsets.length - 2);
+    while (low <= high) {
+      const mid = Math.floor((low + high) / 2);
+      const next = offsets[mid + 1] ?? Number.POSITIVE_INFINITY;
+      if (next <= target) low = mid + 1;
+      else if ((offsets[mid] ?? 0) > target) high = mid - 1;
+      else return mid;
+    }
+    return Math.max(0, Math.min(offsets.length - 2, low));
+  }
+
   function updateMeasurements(): void {
     if (!viewport) return;
     scrollTop = viewport.scrollTop;
     viewportHeight = viewport.clientHeight;
+    if (windowNode) {
+      const gap = Number.parseFloat(getComputedStyle(windowNode).rowGap);
+      rowGap = Number.isFinite(gap) ? gap : 0;
+    }
   }
 
   function handleScroll(): void {
     updateMeasurements();
+  }
+
+  function measureItem(node: HTMLElement, itemKey: string) {
+    let currentKey = itemKey;
+    const record = () => {
+      const height = node.offsetHeight;
+      if (!Number.isFinite(height) || height <= 0 || measuredHeights[currentKey] === height) return;
+      measuredHeights = { ...measuredHeights, [currentKey]: height };
+    };
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(record);
+    observer?.observe(node);
+    record();
+    return {
+      update(nextKey: string) {
+        currentKey = nextKey;
+        record();
+      },
+      destroy() {
+        observer?.disconnect();
+      }
+    };
   }
 
   onMount(() => {
@@ -66,7 +121,7 @@
 
 <div
   bind:this={viewport}
-  class={`virtual-list ${className}`}
+  class={`virtual-list ${scrollable ? '' : 'non-scrollable'} ${className}`}
   role="list"
   aria-label={`${ariaLabel}, ${items.length} total`}
   aria-describedby={items.length > initialCount ? `virtual-list-count-${ariaLabel.replace(/\W+/g, '-').toLowerCase()}` : undefined}
@@ -78,9 +133,10 @@
     </span>
   {/if}
   <div class="virtual-list-spacer" style:height={`${totalHeight}px`}>
-    <div class="virtual-list-window" style:transform={`translateY(${offsetY}px)`}>
+    <div bind:this={windowNode} class="virtual-list-window" style:transform={`translateY(${offsetY}px)`}>
       {#each visibleItems as item, localIndex (key ? key(item, startIndex + localIndex) : startIndex + localIndex)}
-        <div class={`virtual-list-item ${itemClass}`} role="presentation">
+        {@const itemKey = itemKeys[startIndex + localIndex]}
+        <div use:measureItem={itemKey} class={`virtual-list-item ${itemClass}`} role="presentation">
           {@render children(item, startIndex + localIndex)}
         </div>
       {/each}
@@ -96,6 +152,13 @@
     overflow: auto;
     overscroll-behavior: contain;
     scrollbar-gutter: stable;
+  }
+
+  .virtual-list.non-scrollable {
+    flex: 0 0 auto;
+    overflow: visible;
+    overscroll-behavior: auto;
+    scrollbar-gutter: auto;
   }
 
   .virtual-list-spacer {

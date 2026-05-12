@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { goto } from '$app/navigation';
   import type {
     RepoWorktreeIndexFilter,
     RepoWorktreeDetailViewModel,
@@ -157,6 +158,16 @@
     event.stopPropagation();
     void onArchiveState?.(target);
   }
+
+  function isInteractiveTarget(target: EventTarget | null): boolean {
+    return target instanceof Element && Boolean(target.closest('a, button, input, select, textarea, [role="button"]'));
+  }
+
+  function openRow(event: MouseEvent | KeyboardEvent, path: string): void {
+    if (isInteractiveTarget(event.target)) return;
+    event.preventDefault();
+    void goto(href(path));
+  }
 </script>
 
 {#if viewState === 'loading'}
@@ -248,7 +259,16 @@
           {@const collapsible = row.kind === 'repo' && row.totalWorktrees > 0}
           {@const collapsed = collapsible && isRepoCollapsed(row.id)}
           <div class={`repo-item status-${row.status}`} class:has-children={row.childWorktrees.length > 0} class:is-collapsed={collapsed} role="listitem" style={`--repo-accent: ${accent};`}>
-            <div class="repo-head">
+            <div
+              class="repo-head row-click-target"
+              role="link"
+              tabindex="0"
+              aria-label={`Open ${row.label} detail`}
+              onclick={(event) => openRow(event, row.href)}
+              onkeydown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') openRow(event, row.href);
+              }}
+            >
             {#if collapsible}
               <button
                 class="repo-collapse-toggle"
@@ -445,10 +465,20 @@
                 initialCount={32}
                 ariaLabel={`Worktrees owned by ${row.label}`}
                 class="worktree-list"
+                scrollable={false}
               >
                 {#snippet children(worktree)}
                   <div class={`worktree-item status-${worktree.status}`} role="listitem">
-                    <div class="worktree-card">
+                    <div
+                      class="worktree-card row-click-target"
+                      role="link"
+                      tabindex="0"
+                      aria-label={`Open ${worktree.label} detail`}
+                      onclick={(event) => openRow(event, worktree.href)}
+                      onkeydown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') openRow(event, worktree.href);
+                      }}
+                    >
                       <span class="worktree-rail" aria-hidden="true"></span>
                       <span class="worktree-dot" aria-hidden="true"></span>
                       <div class="worktree-card-body">

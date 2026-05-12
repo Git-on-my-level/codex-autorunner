@@ -53,23 +53,38 @@
     error = null;
     sectionIssues = [];
     const [topology, runtime] = await Promise.all([
-      pmaApi.readModels.repoWorktreeTopology('all', 200),
-      pmaApi.readModels.repoWorktreeRuntime('all', 200)
+      withTransientRetry(() => pmaApi.readModels.repoWorktreeTopology('all', 200)),
+      withTransientRetry(() => pmaApi.readModels.repoWorktreeRuntime('all', 200))
     ]);
     if (!topology.ok) {
       error = topology.error;
       loading = false;
       return;
     }
-    if (!runtime.ok) {
-      error = runtime.error;
-      loading = false;
-      return;
-    }
     readModelEntityStore.applyRepoWorktreeTopologySnapshot(topology.data);
-    readModelEntityStore.applyRepoWorktreeRuntimeSnapshot(runtime.data);
-    sectionIssues = [];
+    if (runtime.ok) {
+      readModelEntityStore.applyRepoWorktreeRuntimeSnapshot(runtime.data);
+      sectionIssues = [];
+    } else {
+      sectionIssues = [{
+        id: 'current_run',
+        title: 'Runtime state unavailable',
+        message: runtime.error.message,
+        retryLabel: 'Retry'
+      }];
+    }
     loading = false;
+  }
+
+  async function withTransientRetry<T>(request: () => Promise<{ ok: true; data: T } | { ok: false; error: ApiError }>): Promise<{ ok: true; data: T } | { ok: false; error: ApiError }> {
+    const first = await request();
+    if (first.ok || !isTransientLoadError(first.error)) return first;
+    await new Promise((resolve) => window.setTimeout(resolve, 180));
+    return request();
+  }
+
+  function isTransientLoadError(error: ApiError): boolean {
+    return error.kind === 'network' || error.status === 502 || error.status === 503 || error.status === 504;
   }
 
   async function handleCleanupWorktree(target: Parameters<typeof confirmAndCleanupWorktree>[0]): Promise<void> {

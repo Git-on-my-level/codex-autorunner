@@ -34,6 +34,10 @@ describe('RepoWorktreeViews', () => {
     expect(body).toContain('href="/repos/repo-1"');
     expect(body).toContain('href="/repos/repo-1/tickets"');
     expect(body).toContain('href="/repos/repo-1/worktrees/worktree-1"');
+    expect(body).toContain('repo-head row-click-target');
+    expect(body).toContain('worktree-card row-click-target');
+    expect(body).toContain('aria-label="Open codex-autorunner detail"');
+    expect(body).toContain('aria-label="Open discord-5 detail"');
     expect(body).toContain('href="/chats?new=repo:repo-1&amp;kind=pma"');
     expect(body).toContain('href="/chats?new=repo:repo-1&amp;kind=agent"');
     expect(body).toContain('href="/chats?new=worktree:worktree-1&amp;kind=pma"');

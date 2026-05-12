@@ -798,6 +798,68 @@ describe('PMA chat view helpers', () => {
     });
   });
 
+  it('folds canonical progress deltas into one accumulated trace under the work summary', () => {
+    const cards = buildPmaTranscriptCards(
+      [
+        timelineItem('turn:one:user', 'user_message', { text: 'Give me a sitrep' }, '00000001'),
+        timelineItem(
+          'turn:one:intermediate:11',
+          'intermediate',
+          { intermediate_kind: 'Progress', text: 'The', source_event_ids: [11] },
+          '00000011'
+        ),
+        timelineItem(
+          'turn:one:intermediate:12',
+          'intermediate',
+          { intermediate_kind: 'Progress', text: 'user', source_event_ids: [12] },
+          '00000012'
+        ),
+        timelineItem(
+          'turn:one:intermediate:13',
+          'intermediate',
+          { intermediate_kind: 'Progress', text: 'wants', source_event_ids: [13] },
+          '00000013'
+        )
+      ],
+      null,
+      [],
+      { ...baseProgress, id: 'one', elapsedSeconds: 69, events: [] }
+    );
+
+    expect(cards.map((card) => card.kind)).toEqual(['message', 'turn_summary']);
+    expect(cards[1]).toMatchObject({
+      kind: 'turn_summary',
+      cards: [{ kind: 'intermediate', title: 'Progress', text: 'The user wants' }]
+    });
+  });
+
+  it('treats Hermes tool_call progress items as tool cards', () => {
+    const cards = buildPmaActivityCards([
+      {
+        ...baseArtifact,
+        id: 'hermes-tool-1',
+        kind: 'progress',
+        createdAt: '2026-05-04T00:00:11Z',
+        raw: {
+          progress_item: {
+            kind: 'tool_call',
+            state: 'completed',
+            tool_name: 'shell',
+            summary: 'git status',
+            event_ids: [21]
+          }
+        }
+      }
+    ]);
+
+    expect(cards).toMatchObject([
+      {
+        kind: 'tool_group',
+        tools: [{ title: 'shell', summary: 'git status', state: 'completed' }]
+      }
+    ]);
+  });
+
   it('folds failed and interrupted turn notices under a summary instead of chat bubbles', () => {
     const cards = buildPmaTranscriptCards(
       [

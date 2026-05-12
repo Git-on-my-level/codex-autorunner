@@ -33,6 +33,8 @@ const INTERNAL_MESSENGER_SURFACE_KINDS = new Set([
   'api'
 ]);
 
+const TOOL_PROGRESS_KINDS = new Set(['tool', 'tool_call', 'tool_result', 'function_call']);
+
 function rawString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value : null;
 }
@@ -911,7 +913,7 @@ export function buildPmaTranscriptCards(
   progress: PmaRunProgress | null
 ): PmaCard[] {
   const normalizedTimeline = suppressDuplicateTimelineDeliveries(timeline);
-  const timelineCards = coalesceThinkingTraceCards(
+  const timelineCards = coalesceSequentialIntermediateTraceCards(
     buildPmaCards(normalizedTimeline, chat, artifacts)
   );
   const activityCards = shouldSupplementWithLiveActivity(timelineCards, progress)
@@ -1377,13 +1379,12 @@ function formatTokenUsageLabel(tokenUsage: Record<string, unknown> | null): stri
 export function isPrimaryProgressArtifact(artifact: SurfaceArtifact): boolean {
   const item = canonicalProgressItem(artifact);
   if (!item || item.hidden === true) return false;
-  return ['assistant_update', 'tool', 'notice', 'approval', 'turn_failed', 'turn_interrupted'].includes(
-    stringValue(item.kind)
-  );
+  const kind = stringValue(item.kind);
+  return TOOL_PROGRESS_KINDS.has(kind) || ['assistant_update', 'notice', 'approval', 'turn_failed', 'turn_interrupted'].includes(kind);
 }
 
 function isToolActivityEvent(event: SurfaceArtifact): boolean {
-  return canonicalProgressItem(event)?.kind === 'tool';
+  return TOOL_PROGRESS_KINDS.has(stringValue(canonicalProgressItem(event)?.kind));
 }
 
 function canonicalProgressItem(event: SurfaceArtifact): CanonicalProgressItem | null {
@@ -1452,29 +1453,40 @@ function shouldSupplementWithLiveActivity(cards: PmaCard[], progress: PmaRunProg
   );
 }
 
-function coalesceThinkingTraceCards(cards: PmaCard[]): PmaCard[] {
+function coalesceSequentialIntermediateTraceCards(cards: PmaCard[]): PmaCard[] {
   const output: PmaCard[] = [];
-  const thinkingByTurn = new Map<string, Extract<PmaCard, { kind: 'intermediate' }>>();
+  const intermediateByKey = new Map<string, Extract<PmaCard, { kind: 'intermediate' }>>();
+  let lastMergeKey: string | null = null;
 
   for (const card of cards) {
-    if (!isThinkingTraceCard(card) || !card.turnId) {
+    if (!isMergeableTraceCard(card) || !card.turnId) {
       output.push(card);
+      intermediateByKey.clear();
+      lastMergeKey = null;
       continue;
     }
 
-    const existing = thinkingByTurn.get(card.turnId);
+    const mergeKey = `${card.turnId}:${card.title.trim().toLowerCase()}`;
+    const existing = lastMergeKey === mergeKey ? intermediateByKey.get(mergeKey) : null;
     if (!existing) {
-      thinkingByTurn.set(card.turnId, card);
+      intermediateByKey.set(mergeKey, card);
+      lastMergeKey = mergeKey;
       output.push(card);
       continue;
     }
 
     existing.text = mergeIntermediateText(existing.text, card.text);
     existing.eventIds.push(...card.eventIds.filter((id) => !existing.eventIds.includes(id)));
-    existing.detail = thinkingDetailSummary(existing.eventIds);
+    existing.detail = traceDetailSummary(existing.title, existing.eventIds);
   }
 
   return output;
+}
+
+function isMergeableTraceCard(card: PmaCard): card is Extract<PmaCard, { kind: 'intermediate' }> {
+  if (card.kind !== 'intermediate' || isCommentaryTraceCard(card)) return false;
+  const title = card.title.trim().toLowerCase();
+  return title === 'thinking' || title === 'progress' || title === 'update';
 }
 
 function isThinkingTraceCard(card: PmaCard): card is Extract<PmaCard, { kind: 'intermediate' }> {
@@ -1484,13 +1496,14 @@ function isThinkingTraceCard(card: PmaCard): card is Extract<PmaCard, { kind: 'i
 function thinkingTimelineDetail(item: PmaTimelineItem): string | null {
   const kind = stringValue(item.payload.intermediate_kind).trim().toLowerCase();
   if (kind !== 'thinking') return null;
-  return thinkingDetailSummary(timelineSourceEventIds(item));
+  return traceDetailSummary('Thinking', timelineSourceEventIds(item));
 }
 
-function thinkingDetailSummary(eventIds: string[]): string | null {
+function traceDetailSummary(title: string, eventIds: string[]): string | null {
   const uniqueIds = Array.from(new Set(eventIds.filter(Boolean)));
   if (!uniqueIds.length) return null;
-  const label = uniqueIds.length === 1 ? '1 thinking update' : `${uniqueIds.length} thinking updates`;
+  const kind = title.trim().toLowerCase() === 'thinking' ? 'thinking' : 'progress';
+  const label = uniqueIds.length === 1 ? `1 ${kind} update` : `${uniqueIds.length} ${kind} updates`;
   return `${label} · source events ${uniqueIds.join(', ')}`;
 }
 
