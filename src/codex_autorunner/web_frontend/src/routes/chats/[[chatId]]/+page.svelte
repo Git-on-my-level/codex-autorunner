@@ -360,7 +360,9 @@
     decorated.sort((left, right) => {
       const pinnedDiff = Number(right.pinned) - Number(left.pinned);
       if (pinnedDiff !== 0) return pinnedDiff;
-      return 0;
+      const timeDiff = right.sort.localeCompare(left.sort);
+      if (timeDiff !== 0) return timeDiff;
+      return left.id.localeCompare(right.id);
     });
     return decorated.map((item) => item.entry);
   }

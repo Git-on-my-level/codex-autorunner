@@ -740,7 +740,7 @@ function buildScopedChatList(
       standaloneChats.push(chatToRow(entry.chat));
       continue;
     }
-    groups.push(scopedChatRunGroupToVm(entry.group));
+    groups.push(entry.group);
   }
   return { groups, standaloneChats, totalChatCount: chats.length };
 }
@@ -849,24 +849,6 @@ function compareScopedChatListEntries(left: ScopedChatListEntry, right: ScopedCh
   const leftId = left.kind === 'group' ? left.group.key : left.chat.id;
   const rightId = right.kind === 'group' ? right.group.key : right.chat.id;
   return leftId.localeCompare(rightId);
-}
-
-function scopedChatRunGroupToVm(group: RepoWorktreeChatRunGroup): RepoWorktreeChatRunGroup {
-  return {
-    key: group.key,
-    scopeKind: group.scopeKind,
-    scopeLabel: group.scopeLabel,
-    status: group.status,
-    totalCount: group.totalCount,
-    activeCount: group.activeCount,
-    waitingCount: group.waitingCount,
-    doneCount: group.doneCount,
-    failedCount: group.failedCount,
-    agents: group.agents,
-    updatedAt: group.updatedAt,
-    chats: group.chats,
-    href: group.chats[0]?.href ?? '/chats'
-  };
 }
 
 function chatToRow(chat: PmaChatSummary): RepoWorktreeChatRow {
