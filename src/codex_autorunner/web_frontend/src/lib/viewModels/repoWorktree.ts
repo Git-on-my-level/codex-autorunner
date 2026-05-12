@@ -11,8 +11,8 @@ import type {
   WorktreeSummary,
   ContextspaceDocument
 } from './domain';
-import { buildPmaChatListEntries, formatRelativeTime, pmaChatKind, pmaChatKindLabel, progressPercent, statusLabel } from './pmaChat';
-import type { PmaChatKind, PmaChatRunGroup } from './pmaChat';
+import { formatRelativeTime, pmaChatKind, pmaChatKindLabel, progressPercent, sortChatsUnreadFirst, statusLabel } from './pmaChat';
+import type { PmaChatKind } from './pmaChat';
 import { repoContextspaceRoute, repoRoute, repoTicketRoute, worktreeContextspaceRoute, worktreeRoute, worktreeTicketRoute } from './routes';
 import {
   aliasesOverlap,
@@ -62,6 +62,7 @@ export type RepoWorktreeIndexRow = {
   dirtyWorktrees: number;
   /** Configured per-repo worktree setup commands. Null for worktree rows. */
   worktreeSetupCommands: string[] | null;
+  isPinned: boolean;
 };
 
 export type RepoWorktreeChildRow = {
@@ -562,7 +563,8 @@ function repoToIndexRow(repo: RepoSummary, worktrees: WorktreeSummary[], source:
     totalWorktrees: childWorktrees.length,
     inUseWorktrees,
     dirtyWorktrees,
-    worktreeSetupCommands: stringArrayFromRaw(repo.raw, 'worktree_setup_commands')
+    worktreeSetupCommands: stringArrayFromRaw(repo.raw, 'worktree_setup_commands'),
+    isPinned: boolFromRaw(repo.raw, 'is_pinned') || boolFromRaw(repo.raw, 'pinned')
   };
 }
 
@@ -574,26 +576,32 @@ function worktreeToNavChildRow(
   const listLoaded = source ? hubTicketListLoaded(source) : false;
   const scoped = source ? ticketsForResource(source.tickets, 'worktree', worktree.id) : [];
   const rollup = listLoaded ? ticketIndexRollup(scoped) : { open: 0, total: 0, done: 0 };
+  const primaryRuns = source ? source.runs.filter((run) => runMatchesResource(run, 'worktree', worktree.id)) : [];
+  const primaryChats = source ? source.chats.filter((chat) => chatMatchesResource(chat, 'worktree', worktree.id)) : [];
+  const currentRun =
+    mergeRunCards(primaryRuns, primaryChats, 'worktree', worktree.id, worktree.repoId)
+      .find((run) => run.status === 'running' || run.status === 'waiting' || run.status === 'blocked') ?? null;
+  const signals = source ? scopedSignals(source, 'worktree', worktree.id) : { waiting: 0, failed: 0, active: 0 };
   return {
     id: worktree.id,
     label: shortenWorktreeLabel(worktree.name, repoName),
-    status: 'idle',
+    status: worktree.status,
     branch: worktree.branch,
     path: worktree.path,
-    activeRuns: 0,
+    activeRuns: worktree.activeRuns,
     openTickets: rollup.open,
     totalTickets: rollup.total,
     doneTickets: rollup.done,
-    currentRunTitle: null,
-    currentTicketId: null,
-    lastActivityAt: null,
+    currentRunTitle: currentRun?.title ?? null,
+    currentTicketId: currentRun?.ticketId ?? null,
+    lastActivityAt: worktree.lastActivityAt,
     href: worktreeRoute(worktree.id, worktree.repoId),
     ticketHref: worktreeTicketRoute(worktree.id, worktree.repoId),
     pmaChatHref: scopedChatHref('worktree', worktree.id, 'pma'),
     codingAgentChatHref: scopedChatHref('worktree', worktree.id, 'agent'),
-    signalWaiting: 0,
-    signalFailed: 0,
-    signalActive: 0,
+    signalWaiting: signals.waiting,
+    signalFailed: signals.failed,
+    signalActive: signals.active,
     hasCarState: boolFromRaw(worktree.raw, 'has_car_state'),
     unboundManagedThreadCount: numberFromRaw(worktree.raw, 'unbound_managed_thread_count'),
     chatBound: boolFromRaw(worktree.raw, 'chat_bound'),
@@ -634,7 +642,8 @@ function worktreeToIndexRow(worktree: WorktreeSummary, source: RepoWorktreeSourc
     totalWorktrees: 0,
     inUseWorktrees: 0,
     dirtyWorktrees: 0,
-    worktreeSetupCommands: null
+    worktreeSetupCommands: null,
+    isPinned: false
   };
 }
 
@@ -723,7 +732,7 @@ function buildScopedChatList(
   scopeKind: RepoWorktreeKind,
   scopeId: string
 ): RepoWorktreeChatList {
-  const entries = buildPmaChatListEntries(chats, { groupRuns: true });
+  const entries = buildScopedChatListEntries(chats, scopeKind, scopeId);
   const groups: RepoWorktreeChatRunGroup[] = [];
   const standaloneChats: RepoWorktreeChatRow[] = [];
   for (const entry of entries) {
@@ -733,14 +742,116 @@ function buildScopedChatList(
     }
     groups.push(scopedChatRunGroupToVm(entry.group));
   }
-  // Suppress lone empty group for non-ticket worktrees; keep parity with chat count.
-  void scopeKind;
-  void scopeId;
   return { groups, standaloneChats, totalChatCount: chats.length };
 }
 
-function scopedChatRunGroupToVm(group: PmaChatRunGroup): RepoWorktreeChatRunGroup {
-  const childChats = group.chats.map(chatToRow);
+type ScopedChatListEntry =
+  | { kind: 'group'; group: RepoWorktreeChatRunGroup }
+  | { kind: 'chat'; chat: PmaChatSummary };
+
+function buildScopedChatListEntries(
+  chats: PmaChatSummary[],
+  scopeKind: RepoWorktreeKind,
+  scopeId: string
+): ScopedChatListEntry[] {
+  const groups = new Map<string, RepoWorktreeChatRunGroup>();
+  const standalone: PmaChatSummary[] = [];
+  for (const chat of chats) {
+    const key = scopedChatRunGroupKey(chat, scopeKind, scopeId);
+    if (!key) {
+      standalone.push(chat);
+      continue;
+    }
+    const group = groups.get(key) ?? createScopedChatRunGroup(key, scopeKind, scopeId);
+    group.chats.push(chatToRow(chat));
+    groups.set(key, group);
+  }
+  for (const group of groups.values()) finalizeScopedChatRunGroup(group);
+  const entries: ScopedChatListEntry[] = [
+    ...[...groups.values()].map((group) => ({ kind: 'group' as const, group })),
+    ...sortChatsUnreadFirst(standalone).map((chat) => ({ kind: 'chat' as const, chat }))
+  ];
+  return entries.sort((left, right) => compareScopedChatListEntries(left, right));
+}
+
+function scopedChatRunGroupKey(
+  chat: PmaChatSummary,
+  scopeKind: RepoWorktreeKind,
+  scopeId: string
+): string | null {
+  if (!chat.isTicketFlow && !chat.ticketId && !chat.runId) return null;
+  if (chat.runId) return `run:${chat.runId}`;
+  if (chat.ticketId) return `ticket:${chat.ticketId}`;
+  return `${scopeKind}:${scopeId}`;
+}
+
+function createScopedChatRunGroup(
+  key: string,
+  scopeKind: RepoWorktreeKind,
+  scopeId: string
+): RepoWorktreeChatRunGroup {
+  return {
+    key,
+    scopeKind,
+    scopeLabel: groupScopeLabel(key, scopeId),
+    status: 'idle',
+    totalCount: 0,
+    activeCount: 0,
+    waitingCount: 0,
+    doneCount: 0,
+    failedCount: 0,
+    agents: [],
+    updatedAt: null,
+    chats: [],
+    href: '/chats'
+  };
+}
+
+function groupScopeLabel(key: string, fallback: string): string {
+  const separator = key.indexOf(':');
+  const kind = separator === -1 ? key : key.slice(0, separator);
+  const value = separator === -1 ? key : key.slice(separator + 1);
+  if (kind === 'run') return `Run ${value}`;
+  if (kind === 'ticket') return value;
+  return fallback;
+}
+
+function finalizeScopedChatRunGroup(group: RepoWorktreeChatRunGroup): void {
+  group.chats = [...group.chats].sort((left, right) => (right.updatedAt ?? '').localeCompare(left.updatedAt ?? '') || left.id.localeCompare(right.id));
+  group.totalCount = group.chats.length;
+  const agents = new Set<string>();
+  for (const chat of group.chats) {
+    if (chat.agentId) agents.add(chat.agentId);
+    if (chat.status === 'running') group.activeCount += 1;
+    else if (chat.status === 'waiting' || chat.status === 'blocked') group.waitingCount += 1;
+    else if (chat.status === 'failed' || chat.status === 'invalid') group.failedCount += 1;
+    else if (chat.status === 'done') group.doneCount += 1;
+    if (chat.updatedAt && (!group.updatedAt || chat.updatedAt > group.updatedAt)) group.updatedAt = chat.updatedAt;
+  }
+  group.agents = [...agents].sort();
+  group.status = rollupScopedChatRunGroupStatus(group);
+  group.href = group.chats[0]?.href ?? '/chats';
+}
+
+function rollupScopedChatRunGroupStatus(group: RepoWorktreeChatRunGroup): WorkStatus {
+  if (group.waitingCount > 0) return 'waiting';
+  if (group.activeCount > 0) return 'running';
+  if (group.failedCount > 0) return 'failed';
+  if (group.totalCount > 0 && group.doneCount === group.totalCount) return 'done';
+  return 'idle';
+}
+
+function compareScopedChatListEntries(left: ScopedChatListEntry, right: ScopedChatListEntry): number {
+  const leftUpdated = left.kind === 'group' ? left.group.updatedAt ?? '' : left.chat.updatedAt ?? '';
+  const rightUpdated = right.kind === 'group' ? right.group.updatedAt ?? '' : right.chat.updatedAt ?? '';
+  const time = rightUpdated.localeCompare(leftUpdated);
+  if (time !== 0) return time;
+  const leftId = left.kind === 'group' ? left.group.key : left.chat.id;
+  const rightId = right.kind === 'group' ? right.group.key : right.chat.id;
+  return leftId.localeCompare(rightId);
+}
+
+function scopedChatRunGroupToVm(group: RepoWorktreeChatRunGroup): RepoWorktreeChatRunGroup {
   return {
     key: group.key,
     scopeKind: group.scopeKind,
@@ -753,8 +864,8 @@ function scopedChatRunGroupToVm(group: PmaChatRunGroup): RepoWorktreeChatRunGrou
     failedCount: group.failedCount,
     agents: group.agents,
     updatedAt: group.updatedAt,
-    chats: childChats,
-    href: childChats[0]?.href ?? '/chats'
+    chats: group.chats,
+    href: group.chats[0]?.href ?? '/chats'
   };
 }
 
@@ -1015,6 +1126,8 @@ function indexRowSignalPriority(row: RepoWorktreeIndexRow): number {
 }
 
 function bySignalsThenActiveThenRecent(left: RepoWorktreeIndexRow, right: RepoWorktreeIndexRow): number {
+  const pinnedDiff = Number(right.isPinned) - Number(left.isPinned);
+  if (pinnedDiff !== 0) return pinnedDiff;
   const leftP = indexRowSignalPriority(left);
   const rightP = indexRowSignalPriority(right);
   if (leftP !== rightP) return rightP - leftP;

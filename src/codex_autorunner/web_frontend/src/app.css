@@ -214,6 +214,7 @@ a {
   font-weight: 650;
   font-size: 12px;
   letter-spacing: -0.02em;
+  text-decoration: none;
 }
 
 .brand-mark {
@@ -225,6 +226,27 @@ a {
 .brand-title {
   font-size: var(--font-size-1);
   font-weight: 600;
+}
+
+.brand-title-input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--color-ink);
+  font: inherit;
+  font-size: var(--font-size-2);
+  font-weight: 600;
+  letter-spacing: 0;
+  padding: 1px 3px;
+}
+
+.brand-title-input:hover,
+.brand-title-input:focus {
+  border-color: var(--color-border-subtle);
+  background: var(--color-surface);
+  outline: none;
 }
 
 .brand-subtitle {
@@ -1088,6 +1110,47 @@ a.scope-chip-label:hover {
 
 .chat-card:hover {
   background: var(--color-surface-muted);
+}
+
+.chat-pin-button {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin-left: auto;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 6px;
+  background: var(--color-surface);
+  color: var(--color-ink-faint);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast), background-color var(--transition-fast);
+}
+
+.chat-card:hover .chat-pin-button,
+.chat-pin-button:focus-visible,
+.chat-pin-button.is-pinned {
+  opacity: 1;
+}
+
+.chat-pin-button.is-pinned {
+  color: var(--color-accent);
+  border-color: color-mix(in srgb, var(--color-accent) 35%, var(--color-border));
+  background: var(--color-accent-soft);
+}
+
+.chat-pin-button svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chat-pin-button.is-pinned svg {
+  fill: currentColor;
 }
 
 .chat-card + .chat-card {
@@ -6665,9 +6728,9 @@ textarea:disabled {
 }
 
 .chat-run-group-child-list {
-  --virtual-list-gap: 1px;
   position: relative;
-  max-height: min(420px, 48vh);
+  display: grid;
+  gap: 1px;
   z-index: 1;
 }
 

@@ -14,4 +14,12 @@ describe('VirtualList', () => {
     expect(body).not.toContain('41: Row 41');
     expect(body).not.toContain('5000: Row 5000');
   });
+
+  it('server-renders every item for non-scrollable nested lists', () => {
+    const { body } = render(VirtualListHarness, { props: { count: 80, initialCount: 12, scrollable: false } });
+
+    expect(body).toContain('class="virtual-list non-scrollable');
+    expect(body.match(/class="seeded-row"/g)).toHaveLength(80);
+    expect(body).toContain('80: Row 80');
+  });
 });

@@ -8,6 +8,7 @@
   import AutoDismissNotice from '$lib/components/AutoDismissNotice.svelte';
   import ChatThreadPreMessagePickers from '$lib/components/ChatThreadPreMessagePickers.svelte';
   import VoiceComposerButton from '$lib/components/VoiceComposerButton.svelte';
+  import { confirmDialog } from '$lib/components/confirmDialog';
   import { pmaApi, type ApiError, type JsonRecord, type PmaQueuedTurn } from '$lib/api/client';
   import {
     legacyChatIndexRecordToChatIndexRow,
@@ -124,6 +125,7 @@
 
   const COMPACT_SUMMARY_PROMPT =
     'Summarize the conversation so far into a concise context block I can paste into a new thread. Include goals, constraints, decisions, and current state.';
+  const PINNED_CHATS_STORAGE_KEY = 'car.webHub.pinnedChats.v1';
 
   let readModelState = $state(readModelEntityStore.snapshot());
   let unsubscribeReadModels: (() => void) | null = null;
@@ -283,6 +285,7 @@
       : null
   );
   let expandedRunGroups = $state<Record<string, boolean>>({});
+  let pinnedChatIds = $state<Record<string, true>>({});
   const chatListEntries = $derived(
     buildPmaChatListEntries(chats, {
       lastSeen: lastSeenMap,
@@ -291,7 +294,7 @@
       groupRuns: true
     })
   );
-  const filteredEntries = $derived(filterPmaChatEntries(chatListEntries, filter, search, lastSeenMap));
+  const filteredEntries = $derived(sortEntriesForPins(filterPmaChatEntries(chatListEntries, filter, search, lastSeenMap), pinnedChatIds));
   const filterCounts = $derived(summarizeFilterCounts(chats, lastSeenMap));
   const surfaceFilterChips = $derived(pmaChatSurfaceFilterOptions(chats));
   const ticketRunGroupCount = $derived(countTicketRunGroups(chats));
@@ -306,6 +309,60 @@
 
   function toggleGroup(group: PmaChatRunGroup): void {
     expandedRunGroups = { ...expandedRunGroups, [group.key]: !isGroupExpanded(group) };
+  }
+
+  function loadPinnedChats(): Record<string, true> {
+    try {
+      const raw = localStorage.getItem(PINNED_CHATS_STORAGE_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      if (!Array.isArray(parsed)) return {};
+      return Object.fromEntries(parsed.filter((id): id is string => typeof id === 'string' && id.trim().length > 0).map((id) => [id, true]));
+    } catch {
+      return {};
+    }
+  }
+
+  function savePinnedChats(next: Record<string, true>): void {
+    try {
+      localStorage.setItem(PINNED_CHATS_STORAGE_KEY, JSON.stringify(Object.keys(next).sort()));
+    } catch {
+      // Private mode / quota.
+    }
+  }
+
+  function toggleChatPinned(event: MouseEvent, chatId: string): void {
+    event.preventDefault();
+    event.stopPropagation();
+    const next = { ...pinnedChatIds };
+    if (next[chatId]) delete next[chatId];
+    else next[chatId] = true;
+    pinnedChatIds = next;
+    savePinnedChats(next);
+  }
+
+  function sortEntriesForPins(entries: PmaChatListEntry[], pinned: Record<string, true>): PmaChatListEntry[] {
+    const decorated = entries.map((entry) => {
+      if (entry.kind === 'chat') {
+        return { entry, pinned: pinned[entry.chat.id] === true, sort: entry.chat.updatedAt ?? '', id: entry.chat.id };
+      }
+      const chats = [...entry.group.chats].sort((left, right) => {
+        const pinnedDiff = Number(pinned[right.id] === true) - Number(pinned[left.id] === true);
+        if (pinnedDiff !== 0) return pinnedDiff;
+        return (right.updatedAt ?? '').localeCompare(left.updatedAt ?? '');
+      });
+      return {
+        entry: { kind: 'group' as const, group: { ...entry.group, chats } },
+        pinned: chats.some((chat) => pinned[chat.id] === true),
+        sort: entry.group.updatedAt ?? '',
+        id: entry.group.key
+      };
+    });
+    decorated.sort((left, right) => {
+      const pinnedDiff = Number(right.pinned) - Number(left.pinned);
+      if (pinnedDiff !== 0) return pinnedDiff;
+      return 0;
+    });
+    return decorated.map((item) => item.entry);
   }
 
   function markGroupRead(group: PmaChatRunGroup): void {
@@ -451,6 +508,7 @@
       readModelState = state;
     });
     readModelEntityStore.setReadMarkers(loadLastSeenMap());
+    pinnedChatIds = loadPinnedChats();
     draft = page.url.searchParams.get('draft') ?? draft;
     void loadInitial();
     connectChatStream();
@@ -793,7 +851,13 @@
   async function archiveAllActiveChats(): Promise<void> {
     const targets = chats.filter((chat) => !isPmaChatArchived(chat)).map((chat) => chat.id);
     if (!targets.length || archiving) return;
-    if (!window.confirm(`Archive ${targets.length} active chat${targets.length === 1 ? '' : 's'}?`)) return;
+    const ok = await confirmDialog({
+      title: 'Archive active chats',
+      message: `Archive ${targets.length} active chat${targets.length === 1 ? '' : 's'}?`,
+      confirmText: 'Archive',
+      danger: true
+    });
+    if (!ok) return;
     archiving = true;
     composeError = null;
     const result = await pmaApi.pma.archiveThreads(targets);
@@ -1547,7 +1611,15 @@
     }
 
     if (!activeChatId) return false;
-    if (spec.destructive && !window.confirm(`Run ${spec.usage}?`)) return true;
+    if (spec.destructive) {
+      const ok = await confirmDialog({
+        title: 'Run command',
+        message: `Run ${spec.usage}?`,
+        confirmText: 'Run',
+        danger: true
+      });
+      if (!ok) return true;
+    }
 
     if (spec.id === 'status' || spec.id === 'queue') {
       await refreshActive(activeChatId, { quiet: true });
@@ -1855,13 +1927,21 @@
       {@const listScopeAccent = chatListScopeAccentLabel(chat, scopeTags)}
       {@const listScopeAccentHex = listScopeAccent ? repoAccent(listScopeAccent) : null}
       {@const listAgentLabel = agentDisplayForChat(agents, chat)}
-      <button
+      <div
         class:active={chat.id === activeChatId}
         class:nested
+        class:is-pinned={pinnedChatIds[chat.id] === true}
         class={`chat-card status-${chat.status}`}
-        type="button"
+        role="button"
+        tabindex="0"
         aria-current={chat.id === activeChatId ? 'true' : undefined}
         onclick={() => selectChat(chat.id)}
+        onkeydown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            selectChat(chat.id);
+          }
+        }}
       >
         {#if listScopeAccent && listScopeAccentHex}
           <span
@@ -1941,7 +2021,22 @@
             </span>
           {/if}
         </span>
-      </button>
+        <button
+          class="chat-pin-button"
+          class:is-pinned={pinnedChatIds[chat.id] === true}
+          type="button"
+          title={pinnedChatIds[chat.id] === true ? 'Unpin chat' : 'Pin chat'}
+          aria-label={pinnedChatIds[chat.id] === true ? `Unpin ${chat.title}` : `Pin ${chat.title}`}
+          aria-pressed={pinnedChatIds[chat.id] === true}
+          onclick={(event) => toggleChatPinned(event, chat.id)}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M14 4l6 6" />
+            <path d="M12 6l6 6-4 4-6-6 4-4z" />
+            <path d="M9 15l-5 5" />
+          </svg>
+        </button>
+      </div>
     {/snippet}
 
     <div class="chat-list-scroll">
@@ -2028,20 +2123,13 @@
               </button>
               {#if expanded}
                 <div id={`run-group-children-${group.key}`} class="chat-run-group-children">
-                  <VirtualList
-                    items={group.chats}
-                    key={(chat) => chat.id}
-                    estimatedItemSize={78}
-                    overscan={5}
-                    initialCount={24}
-                    ariaLabel={`Chats in ${group.scopeLabel} ticket run`}
-                    class="chat-run-group-child-list"
-                    scrollable={false}
-                  >
-                  {#snippet children(chat)}
-                    {@render chatRow(chat, true)}
-                  {/snippet}
-                  </VirtualList>
+                  <div class="chat-run-group-child-list" role="list" aria-label={`Chats in ${group.scopeLabel} ticket run`}>
+                    {#each group.chats as chat (chat.id)}
+                      <div class="chat-run-group-child-row" role="listitem">
+                        {@render chatRow(chat, true)}
+                      </div>
+                    {/each}
+                  </div>
                   {#if group.unreadCount > 0}
                     <button
                       type="button"

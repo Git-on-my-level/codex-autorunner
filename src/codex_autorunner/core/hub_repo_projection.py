@@ -446,6 +446,15 @@ class HubRepoProjectionService:
         repo_dict["telegram_chat_bound_thread_count"] = telegram_binding_count
         repo_dict["non_pma_chat_bound_thread_count"] = non_pma_binding_count
         repo_dict["cleanup_blocked_by_chat_binding"] = non_pma_binding_count > 0
+        supervisor_state = getattr(
+            getattr(self._context, "supervisor", None), "state", None
+        )
+        pinned_parent_repo_ids = set(
+            getattr(supervisor_state, "pinned_parent_repo_ids", []) or []
+        )
+        repo_dict["is_pinned"] = (
+            snapshot.kind == "base" and snapshot.id in pinned_parent_repo_ids
+        )
         unbound_thread_count = 0
         if snapshot.kind == "base":
             counts = (

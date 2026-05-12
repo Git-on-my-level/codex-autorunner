@@ -24,6 +24,7 @@
     onRetry = undefined,
     onCleanupWorktree = undefined,
     onArchiveState = undefined,
+    onRepoPin = undefined,
     onSyncRepo = undefined,
     syncRepoBusy = false,
     onCreateRepo = undefined,
@@ -39,6 +40,7 @@
     onRetry?: (() => void) | undefined;
     onCleanupWorktree?: ((worktree: { id: string; label: string; chatBound: boolean; cleanupBlockedByChatBinding: boolean }) => void | Promise<void>) | undefined;
     onArchiveState?: ((target: { kind: 'repo' | 'worktree'; id: string; label: string; hasCarState: boolean; unboundManagedThreadCount: number }) => void | Promise<void>) | undefined;
+    onRepoPin?: ((target: { id: string; pinned: boolean }) => void | Promise<void>) | undefined;
     onSyncRepo?: (() => void | Promise<void>) | undefined;
     syncRepoBusy?: boolean;
     onCreateRepo?: (() => void) | undefined;
@@ -157,6 +159,12 @@
     event.preventDefault();
     event.stopPropagation();
     void onArchiveState?.(target);
+  }
+
+  function handleRepoPinClick(event: MouseEvent, id: string, pinned: boolean): void {
+    event.preventDefault();
+    event.stopPropagation();
+    void onRepoPin?.({ id, pinned });
   }
 
   function isInteractiveTarget(target: EventTarget | null): boolean {
@@ -390,10 +398,23 @@
                 </button>
               {/if}
               {#if
-                (row.kind === 'repo' && onOpenRepoSettings) ||
+                (row.kind === 'repo' && (onOpenRepoSettings || onRepoPin)) ||
                 (onArchiveState && canArchiveState(row)) ||
                 (row.kind === 'worktree' && onCleanupWorktree)}
                 <span class="repo-head-icon-actions">
+                  {#if row.kind === 'repo' && onRepoPin}
+                    <button
+                      class="icon-action pin"
+                      class:is-pinned={row.isPinned}
+                      type="button"
+                      title={row.isPinned ? 'Unpin repo' : 'Pin repo'}
+                      aria-label={row.isPinned ? `Unpin ${row.label}` : `Pin ${row.label}`}
+                      aria-pressed={row.isPinned}
+                      onclick={(event) => handleRepoPinClick(event, row.id, !row.isPinned)}
+                    >
+                      {@render pinIcon(row.isPinned)}
+                    </button>
+                  {/if}
                   {#if row.kind === 'repo' && onOpenRepoSettings}
                     <button
                       class="icon-action settings"
@@ -1112,6 +1133,14 @@
   </svg>
 {/snippet}
 
+{#snippet pinIcon(filled: boolean)}
+  <svg viewBox="0 0 24 24" aria-hidden="true" class:filled>
+    <path d="M14 4l6 6" />
+    <path d="M12 6l6 6-4 4-6-6 4-4z" />
+    <path d="M9 15l-5 5" />
+  </svg>
+{/snippet}
+
 {#snippet collapseAllIcon()}
   <svg viewBox="0 0 24 24" aria-hidden="true">
     <path d="M7 14l5-5 5 5" />
@@ -1371,6 +1400,26 @@
     color: var(--color-ink);
     border-color: var(--color-border-strong);
     background: var(--color-surface-muted);
+  }
+
+  .icon-action.pin {
+    opacity: 0;
+  }
+
+  .repo-head:hover .icon-action.pin,
+  .icon-action.pin:focus-visible,
+  .icon-action.pin.is-pinned {
+    opacity: 1;
+  }
+
+  .icon-action.pin.is-pinned {
+    color: var(--color-accent);
+    border-color: color-mix(in srgb, var(--color-accent) 35%, var(--color-border));
+    background: var(--color-accent-soft);
+  }
+
+  .icon-action svg.filled {
+    fill: currentColor;
   }
 
   .icon-action.cleanup:hover,

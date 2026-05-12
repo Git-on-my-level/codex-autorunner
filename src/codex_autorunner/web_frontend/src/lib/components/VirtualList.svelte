@@ -50,10 +50,12 @@
     return Math.max(0, findOffsetIndex(itemOffsets, Math.max(0, scrollTop - overscanPx)));
   });
   const endIndex = $derived.by(() => {
+    if (!scrollable) return items.length;
     if (!mounted) return Math.min(items.length, Math.max(1, initialCount));
     const target = scrollTop + viewportHeight + overscanPx;
     return Math.min(items.length, Math.max(startIndex + 1, findOffsetIndex(itemOffsets, target) + 1));
   });
+  const canScroll = $derived(scrollable && totalHeight > viewportHeight + 1);
   const visibleItems = $derived(items.slice(startIndex, endIndex));
   const offsetY = $derived(itemOffsets[startIndex] ?? 0);
   const rangeLabel = $derived(
@@ -121,7 +123,7 @@
 
 <div
   bind:this={viewport}
-  class={`virtual-list ${scrollable ? '' : 'non-scrollable'} ${className}`}
+  class={`virtual-list ${scrollable ? '' : 'non-scrollable'} ${canScroll ? 'can-scroll' : ''} ${className}`}
   role="list"
   aria-label={`${ariaLabel}, ${items.length} total`}
   aria-describedby={items.length > initialCount ? `virtual-list-count-${ariaLabel.replace(/\W+/g, '-').toLowerCase()}` : undefined}
@@ -150,8 +152,12 @@
     min-height: 0;
     min-width: 0;
     overflow: auto;
-    overscroll-behavior: contain;
+    overscroll-behavior: auto;
     scrollbar-gutter: stable;
+  }
+
+  .virtual-list.can-scroll {
+    overscroll-behavior: contain;
   }
 
   .virtual-list.non-scrollable {

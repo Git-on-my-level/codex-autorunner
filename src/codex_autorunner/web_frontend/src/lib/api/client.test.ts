@@ -139,6 +139,23 @@ describe('API client error handling', () => {
     expect(fetcher).toHaveBeenCalledWith('/hub/pma/threads/thread-1/queue/clear', expect.objectContaining({ method: 'POST' }));
   });
 
+  it('calls hub state and repo pin endpoints', async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/hub/state') return Response.json({ title: 'Dispatch Desk' });
+      return Response.json({ status: 'ok' });
+    }) as unknown as typeof fetch;
+    const client = new PmaApiClient(fetcher);
+
+    const state = await client.hub.getState();
+    await client.hub.updateState({ title: 'Dispatch Desk' });
+    await client.hub.setRepoPinned('demo', true);
+
+    expect(state.ok && state.data.title).toBe('Dispatch Desk');
+    expect(fetcher).toHaveBeenCalledWith('/hub/state', expect.objectContaining({ method: 'PUT', body: JSON.stringify({ title: 'Dispatch Desk' }) }));
+    expect(fetcher).toHaveBeenCalledWith('/hub/repos/demo/pin', expect.objectContaining({ method: 'POST', body: JSON.stringify({ pinned: true }) }));
+  });
+
   it('prefixes API requests with the runtime hub base path when configured', async () => {
     const fetcher = vi.fn(async () =>
       Response.json({

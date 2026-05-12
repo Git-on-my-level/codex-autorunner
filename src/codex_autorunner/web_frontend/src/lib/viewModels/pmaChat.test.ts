@@ -172,6 +172,38 @@ describe('PMA chat view helpers', () => {
     expect(filtered.every((e) => e.kind === 'group')).toBe(true);
   });
 
+  it('keeps separate ticket-flow runs under the same scope when run ids differ', () => {
+    const chats: PmaChatSummary[] = [
+      { ...baseChat, id: 'run-a-ticket-1', runId: 'run-a', isTicketFlow: true, worktreeId: 'wt-1', repoId: 'repo-1' },
+      { ...baseChat, id: 'run-a-ticket-2', runId: 'run-a', isTicketFlow: true, worktreeId: 'wt-1', repoId: 'repo-1' },
+      { ...baseChat, id: 'run-b-ticket-1', runId: 'run-b', isTicketFlow: true, worktreeId: 'wt-1', repoId: 'repo-1' }
+    ];
+
+    const entries = buildPmaChatListEntries(chats, { groupRuns: true });
+
+    expect(entries).toHaveLength(2);
+    expect(entries.map((entry) => entry.kind === 'group' ? entry.group.key : '').sort()).toEqual([
+      'worktree:wt-1:run:run-a',
+      'worktree:wt-1:run:run-b'
+    ]);
+  });
+
+  it('keeps separate ticket-flow runs under the same worktree in separate groups when run ids are present', () => {
+    const chats: PmaChatSummary[] = [
+      { ...baseChat, id: 'run-1-a', runId: 'run-1', ticketId: 'TICKET-001', worktreeId: 'wt-1' },
+      { ...baseChat, id: 'run-1-b', runId: 'run-1', ticketId: 'TICKET-002', worktreeId: 'wt-1' },
+      { ...baseChat, id: 'run-2-a', runId: 'run-2', ticketId: 'TICKET-003', worktreeId: 'wt-1' }
+    ];
+
+    const entries = buildPmaChatListEntries(chats, { groupRuns: true });
+
+    expect(entries).toHaveLength(2);
+    expect(entries.filter((entry) => entry.kind === 'group').map((entry) => entry.group.key).sort()).toEqual([
+      'worktree:wt-1:run:run-1',
+      'worktree:wt-1:run:run-2'
+    ]);
+  });
+
   it('filters chat list by status and scoped search text', () => {
     const chats: PmaChatSummary[] = [
       baseChat,
@@ -342,6 +374,19 @@ describe('PMA chat view helpers', () => {
     expect(pmaChatSurfaceFilterOptions(list)).toEqual([{ slug: 'discord', label: 'Discord', count: 1 }]);
   });
 
+  it('gives notification chats their own surface filter instead of generic other when identifiable', () => {
+    const notificationChat = { ...baseChat, id: 'n1', title: 'Notification run_finished', raw: { surface_kind: 'other' } };
+    const list = [notificationChat, { ...baseChat, id: 'h1', title: 'Chat', raw: {} }];
+
+    expect(pmaChatMessengerSurface(notificationChat)).toEqual({
+      slug: 'notifications',
+      label: 'Notifications',
+      badgeClass: 'surface-notifications'
+    });
+    expect(pmaChatSurfaceFilterOptions(list)).toEqual([{ slug: 'notifications', label: 'Notifications', count: 1 }]);
+    expect(filterPmaChats(list, pmaChatSurfaceFilterToken('notifications'), '')).toEqual([notificationChat]);
+  });
+
   it('sorts waiting chats ahead of others then by recent updates', () => {
     const chats: PmaChatSummary[] = [
       { ...baseChat, id: 'a', status: 'running', updatedAt: '2026-05-04T03:00:00Z' },
@@ -374,6 +419,46 @@ describe('PMA chat view helpers', () => {
       'unread-old',
       'read-new',
       'read-old'
+    ]);
+  });
+
+  it('uses backend unread counts for unread filters, sort, and run-group unread totals when present', () => {
+    const chats: PmaChatSummary[] = [
+      { ...baseChat, id: 'backend-read', unreadCount: 0, updatedAt: '2026-05-04T05:00:00Z' },
+      { ...baseChat, id: 'backend-unread-low', unreadCount: 1, updatedAt: '2026-05-04T01:00:00Z' },
+      { ...baseChat, id: 'backend-unread-high', unreadCount: 3, updatedAt: '2026-05-04T02:00:00Z' }
+    ];
+
+    expect(filterPmaChats(chats, 'unread', '', {})).toMatchObject([
+      { id: 'backend-unread-low' },
+      { id: 'backend-unread-high' }
+    ]);
+    expect(sortChatsUnreadFirst(chats).map((chat) => chat.id)).toEqual([
+      'backend-unread-high',
+      'backend-unread-low',
+      'backend-read'
+    ]);
+
+    const entries = buildPmaChatListEntries(chats, { groupRuns: true });
+    expect(entries).toHaveLength(1);
+    expect(entries[0].kind).toBe('group');
+    if (entries[0].kind === 'group') {
+      expect(entries[0].group.unreadCount).toBe(4);
+    }
+  });
+
+  it('uses backend unread counts before timestamp read markers', () => {
+    const chats: PmaChatSummary[] = [
+      { ...baseChat, id: 'backend-unread', unreadCount: 2, updatedAt: '2026-05-04T01:00:00Z' },
+      { ...baseChat, id: 'read-newer', unreadCount: 0, updatedAt: '2026-05-04T03:00:00Z' }
+    ];
+
+    expect(filterPmaChats(chats, 'unread', '', { 'read-newer': '2026-05-04T03:00:00Z' }).map((chat) => chat.id)).toEqual([
+      'backend-unread'
+    ]);
+    expect(sortChatsUnreadFirst(chats, { 'read-newer': '2026-05-04T03:00:00Z' }).map((chat) => chat.id)).toEqual([
+      'backend-unread',
+      'read-newer'
     ]);
   });
 

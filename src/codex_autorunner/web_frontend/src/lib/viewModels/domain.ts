@@ -18,6 +18,7 @@ export type PmaChatSummary = {
   ticketDone?: boolean | null;
   ticketPath?: string | null;
   runId?: string | null;
+  unreadCount?: number | null;
   flowType?: string | null;
   /** True when the chat originates from a ticket-flow run (raw name like `ticket-flow:codex`,
    * a CAR_TICKET_FLOW_PROMPT control message, or a populated current_ticket_id). Used to
@@ -243,6 +244,7 @@ export function mapPmaChatSummary(raw: JsonRecord): PmaChatSummary {
     ticketDone: booleanOrNull(raw.ticket_done ?? raw.ticketDone),
     ticketPath: nullableString(raw.ticket_path ?? raw.ticketPath),
     runId: nullableString(raw.run_id ?? raw.runId),
+    unreadCount: numberOrNull(raw.unread_count ?? raw.unreadCount),
     flowType: nullableString(raw.flow_type ?? raw.flowType),
     isTicketFlow,
     progressPercent: numberOrNull(raw.progress_percent ?? raw.progress),

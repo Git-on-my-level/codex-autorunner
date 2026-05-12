@@ -101,6 +101,15 @@
     if (result.tone === 'success') await loadRepos();
   }
 
+  async function handleRepoPin(target: { id: string; pinned: boolean }): Promise<void> {
+    const result = await pmaApi.hub.setRepoPinned(target.id, target.pinned);
+    if (!result.ok) {
+      notice = { tone: 'danger', message: result.error.message };
+      return;
+    }
+    await loadRepos();
+  }
+
   function openNewRepo(): void {
     newRepoOpen = true;
   }
@@ -130,6 +139,7 @@
   onRetry={loadRepos}
   onCleanupWorktree={handleCleanupWorktree}
   onArchiveState={handleArchiveState}
+  onRepoPin={handleRepoPin}
   onCreateRepo={openNewRepo}
   onCreateWorktree={openNewWorktree}
   onOpenRepoSettings={openRepoSettings}

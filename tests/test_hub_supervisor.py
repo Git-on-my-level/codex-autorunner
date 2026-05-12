@@ -878,6 +878,27 @@ def test_hub_pin_parent_repo_endpoint_persists(tmp_path: Path):
     assert "demo" not in unpin_resp.json()["pinned_parent_repo_ids"]
 
 
+def test_hub_state_title_endpoint_persists(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    _write_default_hub_config(hub_root)
+
+    app = create_hub_app(hub_root)
+    client = TestClient(app)
+
+    initial_resp = client.get("/hub/state")
+    assert initial_resp.status_code == 200
+    assert initial_resp.json()["title"] == "Web Hub"
+
+    update_resp = client.put("/hub/state", json={"title": "Dispatch Desk"})
+    assert update_resp.status_code == 200
+    assert update_resp.json()["title"] == "Dispatch Desk"
+
+    state_path = hub_root / ".codex-autorunner" / "hub_state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state["title"] == "Dispatch Desk"
+    assert client.get("/hub/state").json()["title"] == "Dispatch Desk"
+
+
 def test_hub_pin_parent_repo_rejects_unknown_keys(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     _write_default_hub_config(hub_root)

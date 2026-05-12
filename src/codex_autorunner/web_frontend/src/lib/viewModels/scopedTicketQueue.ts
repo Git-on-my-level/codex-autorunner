@@ -200,10 +200,10 @@ export async function runScopedTicketQueueCommand(
   config: ScopedTicketQueueConfig,
   command: ScopedTicketQueueCommand,
   runId: string | null,
-  confirmRestart: () => boolean,
+  confirmRestart: () => boolean | Promise<boolean>,
   action: TicketQueueAction | null = null
 ): Promise<ScopedTicketQueueCommandResult> {
-  if (action?.requiresConfirmation && !confirmRestart()) {
+  if (action?.requiresConfirmation && !(await confirmRestart())) {
     return { status: null, shouldReload: false };
   }
   if (action?.enabled && action.route) {
@@ -220,7 +220,7 @@ export async function runScopedTicketQueueCommand(
   if ((command === 'stop' || command === 'restart') && !runId) {
     return { status: scopedTicketMissingRunStatus(config), shouldReload: false };
   }
-  if (command === 'restart' && !confirmRestart()) {
+  if (command === 'restart' && !(await confirmRestart())) {
     return { status: null, shouldReload: false };
   }
   const plan = buildScopedTicketQueueCommandPlan(command, config, runId);
