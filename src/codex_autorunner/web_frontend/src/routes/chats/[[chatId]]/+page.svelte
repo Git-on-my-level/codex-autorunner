@@ -829,8 +829,18 @@
     saveLastSeenMap(next);
   }
 
-  async function archiveChat(chatId: string): Promise<void> {
+  async function archiveChat(chatId: string, options: { confirmed?: boolean } = {}): Promise<void> {
     if (archiving) return;
+    if (!options.confirmed) {
+      const chat = chats.find((item) => item.id === chatId);
+      const ok = await confirmDialog({
+        title: 'Archive chat',
+        message: `Archive "${chat?.title ?? chatId}"?`,
+        confirmText: 'Archive',
+        danger: true
+      });
+      if (!ok) return;
+    }
     archiving = true;
     composeError = null;
     const reconciliationId = `archive:${chatId}:${Date.now()}`;
@@ -959,6 +969,14 @@
           }
         }
         if (event.kind === 'message') {
+          const payload = event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload)
+            ? (event.payload as JsonRecord)
+            : null;
+          if (payload && (payload.kind || payload.item_id || payload.managed_turn_id || payload.turn_id || payload.message_id)) {
+            const item = mapPmaTimelineItem(payload);
+            readModelEntityStore.replacePmaTimeline(chatId, reconcilePmaTimeline(currentTimeline(chatId), [item]));
+            if (item.kind === 'user_message') dropOptimisticPlaceholders();
+          }
           scheduleActiveRefresh(chatId, 250);
           return;
         }
@@ -1145,10 +1163,15 @@
     const scopeId = scopeIdForChat(chat);
     if (scopeId) selectedScopeId = scopeId;
     if (!chat?.agentId) return;
+    const previousAgent = selectedAgent;
     selectedAgent = chat.agentId;
     selectedProfile = chat.agentProfile ?? '';
     selectedReasoning = stringField(chat.raw, 'reasoning') ?? '';
-    void loadModels(chat.agentId, chat.model ?? selectedModel);
+    if (previousAgent !== chat.agentId || models.length === 0) {
+      void loadModels(chat.agentId, chat.model ?? selectedModel);
+    } else if (chat.model) {
+      selectedModel = chat.model;
+    }
   }
 
   function handleAgentChange(): void {
@@ -1407,8 +1430,17 @@
     await sendMessage('interrupt');
   }
 
-  async function cancelQueuedTurn(turn: PmaQueuedTurn): Promise<void> {
+  async function cancelQueuedTurn(turn: PmaQueuedTurn, options: { confirmed?: boolean } = {}): Promise<void> {
     if (!activeChatId || !turn.managedTurnId) return;
+    if (!options.confirmed) {
+      const ok = await confirmDialog({
+        title: 'Cancel queued message',
+        message: `Cancel queued message ${turn.position}?`,
+        confirmText: 'Cancel message',
+        danger: true
+      });
+      if (!ok) return;
+    }
     composeError = null;
     const result = await pmaApi.pma.cancelQueuedTurn(activeChatId, turn.managedTurnId);
     if (result.ok) {
@@ -1701,7 +1733,7 @@
     }
     if (spec.id === 'archive') {
       const archivedId = activeChatId;
-      await archiveChat(archivedId);
+      await archiveChat(archivedId, { confirmed: true });
       clearSlashDraft();
       return true;
     }
@@ -1711,7 +1743,7 @@
         showCommandNotice('Use /cancel with a queued position or turn id.');
         return true;
       }
-      await cancelQueuedTurn(turn);
+      await cancelQueuedTurn(turn, { confirmed: true });
       clearSlashDraft();
       return true;
     }

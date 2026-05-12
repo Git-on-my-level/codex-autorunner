@@ -679,6 +679,8 @@ class ChatSurfaceReadService:
                         _row_get(row, "backend_thread_id")
                     ),
                     "model": _normalize_text(metadata.get("model")),
+                    "chat_kind": _normalize_text(metadata.get("chat_kind")),
+                    "thread_kind": _normalize_text(metadata.get("thread_kind")),
                     "runtime_status": _normalize_text(row["runtime_status"]),
                     "target_runtime_status": _normalize_text(row["runtime_status"]),
                     "queue_depth": queue_depth_by_thread.get(thread_id, 0),

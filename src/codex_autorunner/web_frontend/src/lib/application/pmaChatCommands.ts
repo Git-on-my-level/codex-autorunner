@@ -9,6 +9,7 @@ import {
   type PendingAttachment,
   type PmaChatScopeOption
 } from '$lib/viewModels/pmaChat';
+import type { PmaChatKind } from '$lib/viewModels/pmaChat';
 
 export type PmaChatBusyPolicy = 'queue' | 'interrupt' | 'reject';
 
@@ -60,7 +61,7 @@ export function planStartChat(
   profile = '',
   model = '',
   name = 'New chat',
-  chatKind: 'pma' | 'coding_agent' = 'pma'
+  chatKind: PmaChatKind = 'pma'
 ): StartPmaChatPlan {
   return {
     kind: 'StartChat',

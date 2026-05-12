@@ -1324,6 +1324,24 @@ describe('PMA chat view helpers', () => {
     expect(merged.map((item) => item.id)).toEqual(['turn:turn-1:user', 'turn:turn-2:user']);
   });
 
+  it('keeps timeline reconciliation bounded while preserving the first user message', () => {
+    const existing = [
+      timelineItem('turn:first:user', 'user_message', { text: 'first prompt' }, '001'),
+      ...Array.from({ length: 8 }, (_, index) =>
+        timelineItem(`event:${index}`, 'intermediate', { text: `step ${index}` }, `00${index + 2}`)
+      )
+    ];
+    const merged = reconcilePmaTimeline(
+      existing,
+      [timelineItem('turn:last:assistant', 'assistant_message', { text: 'done' }, '999')],
+      5
+    );
+
+    expect(merged).toHaveLength(5);
+    expect(merged[0].id).toBe('turn:first:user');
+    expect(merged.map((item) => item.id)).toContain('turn:last:assistant');
+  });
+
   it('suppresses duplicate assistant deliveries for the same turn while preserving separate turns', () => {
     const cards = buildPmaTranscriptCards(
       [
@@ -1682,6 +1700,7 @@ describe('PMA chat view helpers', () => {
     expect(pmaChatKind(baseChat)).toBe('pma');
     expect(pmaChatKind({ ...baseChat, chatKind: 'coding_agent', raw: { name: 'New chat' } })).toBe('coding_agent');
     expect(pmaChatKind({ ...baseChat, raw: { name: 'New coding agent chat' } })).toBe('coding_agent');
+    expect(pmaChatKind({ ...baseChat, raw: { chat_kind: 'pma', name: 'New coding agent chat' } })).toBe('pma');
     expect(pmaChatKind({ ...baseChat, raw: { chat_kind: 'direct_agent' } })).toBe('coding_agent');
     expect(pmaChatKindLabel('coding_agent')).toBe('Coding agent');
     expect(pmaChatKindLabel('pma')).toBe('Chat');
