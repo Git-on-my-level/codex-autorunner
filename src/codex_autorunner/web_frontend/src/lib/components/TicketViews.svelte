@@ -22,6 +22,7 @@
   import { statusLabel } from '$lib/viewModels/pmaChat';
   import type { JsonRecord, PartialPageIssue } from '$lib/api/client';
   import AgentModelReasoningPicker from '$lib/components/AgentModelReasoningPicker.svelte';
+  import ContentSkeleton from '$lib/components/ContentSkeleton.svelte';
   import { agentCanListModels, agentRecordForId } from '$lib/viewModels/modelPickers';
   import { agentIdsFromPmaAgentsPayload } from '$lib/viewModels/ticketSettingsContract';
 
@@ -326,9 +327,7 @@
 </script>
 
 {#if viewState === 'loading'}
-  <section class="page-stack">
-    <div class="state-panel">Loading tickets...</div>
-  </section>
+  <ContentSkeleton variant="index" rows={5} />
 {:else if viewState === 'error'}
   <section class="page-stack">
     <div class="state-panel error">Could not load tickets. {errorMessage}</div>
@@ -473,7 +472,7 @@
               >
                 <span aria-hidden="true">☰</span>
               </button>
-              <a class="ticket-card-body" href={href(row.href)} data-sveltekit-preload-data="tap">
+              <a class="ticket-card-body" href={href(row.href)} data-sveltekit-preload-data="hover">
                 <span class="ticket-card-num" aria-label={hasNumber ? `Ticket ${numberDigits}` : row.numberLabel}>
                   {#if hasNumber}
                     <span class="ticket-card-num-hash" aria-hidden="true">#</span><span class="ticket-card-num-value">{numberDigits}</span>
@@ -772,7 +771,7 @@
               class={`ticket-nav-row ${row.status}`}
               class:active={row.routeId === detail.routeId || row.id === detail.id}
               href={href(row.href)}
-              data-sveltekit-preload-data="tap"
+              data-sveltekit-preload-data="hover"
               onclick={closeQueue}
             >
               <span>

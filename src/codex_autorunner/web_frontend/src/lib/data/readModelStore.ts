@@ -13,6 +13,7 @@ import type {
   ChatTimelineItem,
   ProjectionCursor,
   RepoTopology,
+  RepoWorktreeDetailSnapshot,
   RepoWorktreePatchEvent,
   RepoWorktreeRuntimeSnapshot,
   RepoWorktreeTopologySnapshot,
@@ -23,7 +24,14 @@ import type {
   TicketQueueSibling,
   WorktreeTopology
 } from '$lib/api/readModelContracts';
-import type { PmaRunProgress, PmaTimelineItem, SurfaceArtifact, TicketSummary } from '$lib/viewModels/domain';
+import {
+  pmaTimelineContractFields,
+  type PmaRunProgress,
+  type PmaTimelineItem,
+  type PmaTimelineItemKind,
+  type SurfaceArtifact,
+  type TicketSummary
+} from '$lib/viewModels/domain';
 
 export type EntityKind =
   | 'chat'
@@ -96,6 +104,8 @@ export type ReadModelEntityState = {
   runs: Record<string, unknown>;
   pmaRuns: Record<string, PmaRunProgress>;
   pmaRunOrderByOwner: Record<string, string[]>;
+  repoDetails: Record<string, RepoWorktreeDetailSnapshot>;
+  worktreeDetails: Record<string, RepoWorktreeDetailSnapshot>;
   agents: Record<string, unknown>;
   models: Record<string, unknown>;
   optimistic: Record<string, OptimisticMutation>;
@@ -154,6 +164,8 @@ export function createInitialReadModelState(): ReadModelEntityState {
     runs: {},
     pmaRuns: {},
     pmaRunOrderByOwner: {},
+    repoDetails: {},
+    worktreeDetails: {},
     agents: {},
     models: {},
     optimistic: {},
@@ -275,6 +287,22 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
       order: snapshot.timeline.map((item) => item.itemId),
       windowLimit: snapshot.timelineWindow.limit
     };
+    next.pmaTimelines[snapshot.thread.chatId] = {
+      itemsById: keyed(snapshot.timeline.map((item) => chatTimelineItemToPmaItem(snapshot.thread.chatId, item)), (item) => item.id),
+      order: snapshot.timeline.map((item) => item.itemId)
+    };
+    next.pmaQueues[snapshot.thread.chatId] = snapshot.queue.queuedTurnIds.map((id, index) => ({
+      managedTurnId: id,
+      position: index + 1,
+      state: 'queued',
+      prompt: '',
+      promptPreview: id,
+      attachments: [],
+      model: null,
+      reasoning: null,
+      enqueuedAt: null,
+      raw: { queued_turn_id: id }
+    }));
     for (const artifact of snapshot.artifacts) {
       next.artifacts[artifact.artifactId] = artifact;
       bump(next, 'artifact', artifact.artifactId);
@@ -432,6 +460,22 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
       bump(next, runtime.entityKind, runtime.entityId);
     }
     rememberCursor(next, 'repo_worktree.runtime', snapshot.cursor);
+    this.commit(next);
+  }
+
+  applyRepoDetailSnapshot(snapshot: RepoWorktreeDetailSnapshot): void {
+    const next = cloneState(this.state);
+    next.repoDetails[snapshot.ownerId] = snapshot;
+    bump(next, 'repo', snapshot.ownerId);
+    rememberCursor(next, `repo.detail:${snapshot.ownerId}`, snapshot.cursor);
+    this.commit(next);
+  }
+
+  applyWorktreeDetailSnapshot(snapshot: RepoWorktreeDetailSnapshot): void {
+    const next = cloneState(this.state);
+    next.worktreeDetails[snapshot.ownerId] = snapshot;
+    bump(next, 'worktree', snapshot.ownerId);
+    rememberCursor(next, `worktree.detail:${snapshot.ownerId}`, snapshot.cursor);
     this.commit(next);
   }
 
@@ -712,6 +756,8 @@ function cloneState(state: ReadModelEntityState): ReadModelEntityState {
     runs: { ...state.runs },
     pmaRuns: { ...state.pmaRuns },
     pmaRunOrderByOwner: cloneRecord(state.pmaRunOrderByOwner),
+    repoDetails: cloneRecord(state.repoDetails),
+    worktreeDetails: cloneRecord(state.worktreeDetails),
     agents: { ...state.agents },
     models: { ...state.models },
     optimistic: { ...state.optimistic },
@@ -738,6 +784,33 @@ function keyed<T>(items: T[], key: (item: T) => string): Record<string, T> {
   const record: Record<string, T> = {};
   for (const item of items) record[key(item)] = item;
   return record;
+}
+
+function chatTimelineItemToPmaItem(chatId: string, item: ChatTimelineItem): PmaTimelineItem {
+  return {
+    id: item.itemId,
+    kind: pmaKindForChatTimelineItem(item.kind),
+    orderKey: item.itemId,
+    timestamp: item.createdAt,
+    chatId,
+    turnId: item.backendMessageId ?? null,
+    status: null,
+    ...pmaTimelineContractFields(item.itemId),
+    payload: {
+      text: item.text ?? '',
+      text_preview: item.text ?? '',
+      role: item.role ?? null,
+      artifact_ids: item.artifactIds
+    },
+    raw: item as unknown as PmaTimelineItem['raw']
+  };
+}
+
+function pmaKindForChatTimelineItem(kind: ChatTimelineItem['kind']): PmaTimelineItemKind {
+  if (kind === 'user_message' || kind === 'assistant_message' || kind === 'artifact') return kind;
+  if (kind === 'progress') return 'status';
+  if (kind === 'system') return 'lifecycle';
+  return 'intermediate';
 }
 
 function pmaTimelineEntityId(item: PmaTimelineItem): string {

@@ -9,13 +9,16 @@
   import AutoDismissNotice from '$lib/components/AutoDismissNotice.svelte';
   import ChatThreadPreMessagePickers from '$lib/components/ChatThreadPreMessagePickers.svelte';
   import VoiceComposerButton from '$lib/components/VoiceComposerButton.svelte';
+  import ContentSkeleton from '$lib/components/ContentSkeleton.svelte';
   import { confirmDialog } from '$lib/components/confirmDialog';
   import { pmaApi, type ApiError, type JsonRecord, type PmaQueuedTurn } from '$lib/api/client';
   import {
-    legacyChatIndexRecordToChatIndexRow,
-    pmaChatCounters,
     pmaChatSummaryToChatIndexRow,
+    chatIndexSession,
+    invalidateReadModelTags,
     readModelEntityStore,
+    readModelEntityTags,
+    type ReadModelLoaderResult,
     selectRepoSummaries,
     selectPmaArtifacts,
     selectPmaChats,
@@ -23,8 +26,7 @@
     selectPmaQueue,
     selectPmaTimeline,
     selectWorktreeSummaries,
-    selectReadMarkers,
-    syntheticProjectionCursor
+    selectReadMarkers
   } from '$lib/data';
   import {
     executePmaChatCommandPlan,
@@ -34,7 +36,7 @@
     planStartChat
   } from '$lib/application/pmaChatCommands';
   import { withRuntimeBasePath as href } from '$lib/runtime/basePath';
-  import { openChatSurfaceEventSource, openPmaTailEventSource, type StreamSubscription } from '$lib/api/streaming';
+  import { openPmaTailEventSource, type StreamSubscription } from '$lib/api/streaming';
   import {
     repoContextspaceRoute,
     repoRoute,
@@ -65,13 +67,11 @@
     formatRelativeTime,
     isPmaChatArchived,
     localPmaChatScopeOption,
-    mapChatSurfaceSnapshotToPmaChats,
     PMA_CHAT_FILTER_ORDER,
     PMA_CHAT_TICKET_RUNS_FILTER,
-    reconcileChatSurfaceEvent,
-    reconcileChatSurfaceSnapshot,
     pmaChatKind,
     pmaChatKindLabel,
+    pmaChatBindingKey,
     pmaChatHeaderScopeLine,
     pmaChatMessengerSurface,
     pmaChatScopeTagView,
@@ -123,6 +123,7 @@
     type SlashCommandSpec,
     type SlashCommandSuggestion
   } from '$lib/viewModels/slashCommands';
+  import type { ChatRouteLoadData } from './+page';
 
   const COMPACT_SUMMARY_PROMPT =
     'Summarize the conversation so far into a concise context block I can paste into a new thread. Include goals, constraints, decisions, and current state.';
@@ -130,6 +131,7 @@
 
   let readModelState = $state(readModelEntityStore.snapshot());
   let unsubscribeReadModels: (() => void) | null = null;
+  let unsubscribeChatIndexSession: (() => void) | null = null;
   let activeChatId = $state<string | null>(null);
   const chats = $derived<PmaChatSummary[]>(selectPmaChats(readModelState));
   const timeline = $derived<PmaTimelineItem[]>(selectPmaTimeline(readModelState, activeChatId));
@@ -167,7 +169,6 @@
   let streamState = $state<'idle' | 'connecting' | 'connected' | 'interrupted'>('idle');
   let streamError = $state<string | null>(null);
   let streamSubscription: StreamSubscription | null = null;
-  let chatStreamSubscription: StreamSubscription | null = null;
   let fileInput: HTMLInputElement | null = $state(null);
   let imageInput: HTMLInputElement | null = $state(null);
   let messageStack: HTMLDivElement | null = $state(null);
@@ -523,13 +524,35 @@
 
   onMount(() => {
     unsubscribeReadModels = readModelEntityStore.subscribe((state) => {
+      const replacementChatId = replacementForActiveChat(readModelState, state);
       readModelState = state;
+      if (state.chatIndexCursor) {
+        loadingChats = false;
+        chatError = null;
+        activateRequestedChatFromCurrentRows();
+      }
+      if (replacementChatId) void selectChat(replacementChatId);
+    });
+    unsubscribeChatIndexSession = chatIndexSession.state.subscribe((session) => {
+      if (session.status === 'loading' && !readModelEntityStore.snapshot().chatIndexCursor) {
+        loadingChats = true;
+      }
+      if (session.error) {
+        chatError = session.error;
+        loadingChats = false;
+      }
     });
     readModelEntityStore.setReadMarkers(loadLastSeenMap());
     pinnedChatIds = loadPinnedChats();
     draft = page.url.searchParams.get('draft') ?? draft;
-    void loadInitial();
-    connectChatStream();
+    loadingChats = !readModelEntityStore.snapshot().chatIndexCursor;
+    if (!loadingChats) activateRequestedChatFromCurrentRows();
+    void loadInitialSupportingData(
+      pmaApi.pma.listFiles(),
+      pmaApi.pma.listAgents(),
+      pmaApi.readModels.repoWorktreeTopology('all', 200),
+      pmaApi.readModels.repoWorktreeRuntime('all', 200)
+    );
     activeClockInterval = window.setInterval(() => {
       if (progress?.status === 'running') clockNowMs = Date.now();
     }, 1000);
@@ -573,11 +596,11 @@
 
   onDestroy(() => {
     unsubscribeReadModels?.();
+    unsubscribeChatIndexSession?.();
     if (pendingRefreshTimer) window.clearTimeout(pendingRefreshTimer);
     if (activeRepairInterval) window.clearInterval(activeRepairInterval);
     if (activeClockInterval) window.clearInterval(activeClockInterval);
     closeStream();
-    closeChatStream();
   });
 
   $effect(() => {
@@ -596,43 +619,6 @@
     if (shouldFollowLatest) void scrollMessagesToBottom();
   });
 
-  async function loadInitial(): Promise<void> {
-    loadingChats = true;
-    chatError = null;
-    const archivedChatPromise = pmaApi.getJson<JsonRecord>('/hub/chat/index?view=archived&limit=200');
-    const artifactPromise = pmaApi.pma.listFiles();
-    const agentPromise = pmaApi.pma.listAgents();
-    const topologyPromise = pmaApi.readModels.repoWorktreeTopology('all', 200);
-    const runtimePromise = pmaApi.readModels.repoWorktreeRuntime('all', 200);
-    const activeChatResult = await pmaApi.getJson<JsonRecord>('/hub/chat/index?view=all&limit=200');
-
-    if (activeChatResult.ok) {
-      applyInitialChatRows(asRecords(activeChatResult.data.rows), 'pma.thread-list');
-    } else {
-      chatError = activeChatResult.error;
-    }
-
-    loadingChats = false;
-    void archivedChatPromise.then((archivedChatResult) => {
-      if (!archivedChatResult.ok) return;
-      const currentRows = selectPmaChats(readModelEntityStore.snapshot()).map(pmaChatSummaryToChatIndexRow);
-      readModelEntityStore.replaceChatIndexRows(
-        [...currentRows, ...asRecords(archivedChatResult.data.rows).map(legacyChatIndexRecordToChatIndexRow)],
-        syntheticProjectionCursor('pma.thread-list.archived')
-      );
-      activateRequestedChatFromCurrentRows();
-    });
-    void loadInitialSupportingData(artifactPromise, agentPromise, topologyPromise, runtimePromise);
-  }
-
-  function applyInitialChatRows(rows: JsonRecord[], cursorSource: string): void {
-    readModelEntityStore.replaceChatIndexRows(
-      rows.map(legacyChatIndexRecordToChatIndexRow),
-      syntheticProjectionCursor(cursorSource)
-    );
-    activateRequestedChatFromCurrentRows();
-  }
-
   function activateRequestedChatFromCurrentRows(): void {
     const loadedChats = selectPmaChats(readModelEntityStore.snapshot());
     const requestedChat = page.params.chatId ?? page.url.searchParams.get('chat');
@@ -647,20 +633,22 @@
     void refreshActive(selectedChatId, { quiet: hasCachedDetail(selectedChatId) });
   }
 
-  async function refreshChatListQuiet(): Promise<void> {
-    const [activeChatResult, archivedChatResult] = await Promise.all([
-      pmaApi.getJson<JsonRecord>('/hub/chat/index?view=all&limit=200'),
-      pmaApi.getJson<JsonRecord>('/hub/chat/index?view=archived&limit=200')
-    ]);
-    if (!activeChatResult.ok) return;
-    const rows = [
-      ...asRecords(activeChatResult.data.rows).map(legacyChatIndexRecordToChatIndexRow),
-      ...(archivedChatResult.ok ? asRecords(archivedChatResult.data.rows).map(legacyChatIndexRecordToChatIndexRow) : [])
-    ];
-    readModelEntityStore.replaceChatIndexRows(rows, syntheticProjectionCursor('pma.thread-list.repair'));
-    activateRequestedChatFromCurrentRows();
+  function replacementForActiveChat(
+    previousState: typeof readModelState,
+    nextState: typeof readModelState
+  ): string | null {
+    if (!activeChatId) return null;
+    const previousActive = selectPmaChats(previousState).find((chat) => chat.id === activeChatId) ?? null;
+    const previousBinding = pmaChatBindingKey(previousActive);
+    if (!previousBinding) return null;
+    const nextChats = selectPmaChats(nextState);
+    const nextActive = nextChats.find((chat) => chat.id === activeChatId) ?? null;
+    if (nextActive && !isPmaChatArchived(nextActive)) return null;
+    const replacement = nextChats.find(
+      (chat) => chat.id !== activeChatId && pmaChatBindingKey(chat) === previousBinding && !isPmaChatArchived(chat)
+    );
+    return replacement?.id ?? null;
   }
-
 
   async function loadInitialSupportingData(
     artifactPromise: ReturnType<typeof pmaApi.pma.listFiles>,
@@ -705,10 +693,6 @@
       void loadModels(selectedAgent, activeChat?.model ?? selectedModel);
     }
     applyNewChatQueryParam();
-  }
-
-  function asRecords(value: unknown): JsonRecord[] {
-    return Array.isArray(value) ? value.filter((item): item is JsonRecord => Boolean(item) && typeof item === 'object' && !Array.isArray(item)) : [];
   }
 
   function applyNewChatQueryParam(): void {
@@ -818,14 +802,16 @@
 
   async function selectChatWithoutUrl(chatId: string): Promise<void> {
     const cached = hasCachedDetail(chatId);
+    const loaderResult = activeDetailLoadResult(chatId);
+    const loaderOwnsInitialDetail = Boolean(loaderResult && loaderResult.status !== 'cold');
     activeChatId = chatId;
     detailMode = 'detail';
-    loadingActive = !cached;
-    activeError = null;
+    loadingActive = !(cached || loaderOwnsInitialDetail);
+    activeError = loaderResult?.status === 'error' ? loaderResult.error : null;
     syncSelectorsToActiveChat();
     markActiveChatRead();
     connectStream(chatId);
-    void refreshActive(chatId, { quiet: cached });
+    if (!loaderOwnsInitialDetail) void refreshActive(chatId, { quiet: cached });
   }
 
   function markActiveChatRead(): void {
@@ -843,6 +829,13 @@
     if (next === lastSeenMap) return;
     readModelEntityStore.optimisticReadMarkers(next, `read-all:${Date.now()}`);
     saveLastSeenMap(next);
+  }
+
+  function invalidateChatMutation(chatId: string): Promise<void> {
+    return invalidateReadModelTags([
+      readModelEntityTags.chatIndex,
+      readModelEntityTags.chat(chatId)
+    ]);
   }
 
   async function archiveChat(chatId: string, options: { confirmed?: boolean } = {}): Promise<void> {
@@ -863,6 +856,7 @@
     readModelEntityStore.optimisticArchiveChat(chatId, reconciliationId);
     const result = await pmaApi.pma.archiveThread(chatId);
     if (result.ok) {
+      await invalidateChatMutation(chatId);
       upsertPmaChats([result.data]);
       showCommandNotice('Chat archived.');
       if (activeChatId === chatId) {
@@ -890,6 +884,10 @@
     composeError = null;
     const result = await pmaApi.pma.archiveThreads(targets);
     if (result.ok) {
+      await invalidateReadModelTags([
+        readModelEntityTags.chatIndex,
+        ...targets.map((chatId) => readModelEntityTags.chat(chatId))
+      ]);
       upsertPmaChats(result.data.threads);
       showCommandNotice(
         result.data.errorCount > 0
@@ -1031,51 +1029,12 @@
     streamState = 'idle';
   }
 
-  function connectChatStream(): void {
-    chatStreamSubscription?.close();
-    chatStreamSubscription = openChatSurfaceEventSource({
-      onEvent: (event) => {
-        if (event.kind === 'chat_snapshot') {
-          const nextChats = mapChatSurfaceSnapshotToPmaChats(event.payload);
-          reconcileChatSnapshot(nextChats);
-          return;
-        }
-        if (event.kind === 'chat_event') {
-          replacePmaChatList(reconcileChatSurfaceEvent(chats, event.payload));
-        }
-      },
-      onError: () => {
-        void refreshChatListQuiet();
-        if (activeChatId) scheduleActiveRefresh(activeChatId, 900);
-      }
-    });
-  }
-
   function isMissingManagedThreadError(error: ApiError): boolean {
     return error.status === 404 && error.message.toLowerCase().includes('managed thread not found');
   }
 
-  function closeChatStream(): void {
-    chatStreamSubscription?.close();
-    chatStreamSubscription = null;
-  }
-
-  function replacePmaChatList(nextChats: PmaChatSummary[]): void {
-    readModelEntityStore.replaceChatIndexRows(
-      nextChats.map(pmaChatSummaryToChatIndexRow),
-      syntheticProjectionCursor('pma.chat-list'),
-      pmaChatCounters(nextChats)
-    );
-  }
-
   function upsertPmaChats(nextChats: PmaChatSummary[]): void {
     readModelEntityStore.upsertChatIndexRows(nextChats.map(pmaChatSummaryToChatIndexRow));
-  }
-
-  function reconcileChatSnapshot(nextChats: PmaChatSummary[]): void {
-    const reconciled = reconcileChatSurfaceSnapshot(chats, nextChats, activeChatId);
-    replacePmaChatList(reconciled.chats);
-    if (reconciled.replacementChatId) void selectChat(reconciled.replacementChatId);
   }
 
   /** Elapsed seconds capped by wall clock while status is running (matches live UI). */
@@ -1126,8 +1085,16 @@
     return Boolean(
       state.pmaTimelines[chatId]?.order.length ||
       state.pmaProgress[chatId] ||
-      state.pmaQueues[chatId]?.length
+      state.pmaQueues[chatId]?.length ||
+      state.timelines[chatId]?.order.length ||
+      state.chatDetails[chatId]?.thread
     );
+  }
+
+  function activeDetailLoadResult(chatId: string): ReadModelLoaderResult | null {
+    const data = page.data as ChatRouteLoadData | undefined;
+    if (data?.chatId !== chatId) return null;
+    return data.activeDetail ?? null;
   }
 
   function currentTimeline(chatId: string): PmaTimelineItem[] {
@@ -1293,6 +1260,7 @@
       )
     );
     if (result.ok) {
+      await invalidateChatMutation(result.data.id);
       upsertPmaChats([result.data]);
       activeChatId = result.data.id;
       detailMode = 'detail';
@@ -1410,6 +1378,7 @@
             });
     const result = await executePmaChatCommandPlan(pmaApi, commandPlan);
     if (result.ok) {
+      await invalidateChatMutation(targetChatId);
       const optimisticFromBackend = optimisticUserTimelineItemFromSend(
         result.data.raw,
         draftSnapshot,
@@ -1499,6 +1468,7 @@
       })
     );
     if (result.ok) {
+      await invalidateChatMutation(chatId);
       const optimisticFromBackend = optimisticUserTimelineItemFromSend(
         result.data.raw,
         turn.prompt,
@@ -1544,6 +1514,7 @@
       sending = false;
       return;
     }
+    await invalidateChatMutation(chatId);
     const summary = summaryResult.data.text.trim();
     if (!summary) {
       showCommandNotice('Compaction returned an empty summary; current chat was left unchanged.');
@@ -1557,6 +1528,7 @@
       sending = false;
       return;
     }
+    await invalidateChatMutation(chatId);
     upsertPmaChats([compactResult.data]);
     showCommandNotice('Compact summary generated and saved.');
     sending = false;
@@ -1729,6 +1701,7 @@
       const result = await pmaApi.pma.resumeThread(activeChatId);
       if (!result.ok) composeError = result.error;
       else {
+        await invalidateChatMutation(activeChatId);
         upsertPmaChats([result.data]);
         showCommandNotice('Thread resumed.');
         await refreshActive(activeChatId, { quiet: true });
@@ -1744,6 +1717,7 @@
       const result = await pmaApi.pma.compactThread(activeChatId, args);
       if (!result.ok) composeError = result.error;
       else {
+        await invalidateChatMutation(activeChatId);
         upsertPmaChats([result.data]);
         showCommandNotice('Compaction seed saved.');
         await refreshActive(activeChatId, { quiet: true });
@@ -2094,16 +2068,12 @@
 
     <div class="chat-list-scroll">
       {#if loadingChats}
-        <div class="state-panel loading-state">
-          <span class="state-icon" aria-hidden="true"></span>
-          <strong>Loading chats</strong>
-          <p>Fetching managed threads and current run status.</p>
-        </div>
+        <ContentSkeleton variant="chat-list" rows={6} />
       {:else if chatError}
         <div class="state-panel error">
           <strong>Could not load chats</strong>
           <p>{chatError.message}</p>
-          <button type="button" onclick={loadInitial}>Retry</button>
+          <button type="button" onclick={() => void chatIndexSession.refresh()}>Retry</button>
         </div>
       {:else}
         <VirtualList

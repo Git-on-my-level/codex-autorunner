@@ -3,6 +3,10 @@ import {
   confirmDialog,
   confirmDialogTyped
 } from '$lib/components/confirmDialog';
+import {
+  invalidateReadModelTags,
+  readModelEntityTags
+} from '$lib/data';
 
 export type ActionNotice = {
   message: string;
@@ -66,6 +70,10 @@ export async function confirmAndCleanupWorktree(target: CleanupWorktreeTarget): 
     archiveNote: null
   });
   if (!result.ok) return { tone: 'danger', message: result.error.message };
+  await invalidateReadModelTags([
+    readModelEntityTags.repoWorktreeIndex,
+    readModelEntityTags.worktree(target.id)
+  ]);
   return { tone: 'success', message: `Cleaned up worktree ${target.label}.` };
 }
 
@@ -95,6 +103,10 @@ export async function confirmAndArchiveState(target: ArchiveStateTarget): Promis
     archiveNote: null
   });
   if (!result.ok) return { tone: 'danger', message: result.error.message };
+  await invalidateReadModelTags([
+    readModelEntityTags.repoWorktreeIndex,
+    target.kind === 'repo' ? readModelEntityTags.repo(target.id) : readModelEntityTags.worktree(target.id)
+  ]);
 
   const payload = result.data;
   const snapshotText = stringValue(payload.snapshot_id) ?? 'managed threads only';
@@ -120,6 +132,7 @@ export async function submitCreateRepo(input: CreateRepoInput): Promise<ActionNo
   }
   const result = await pmaApi.hub.createRepo({ repoId, gitUrl });
   if (!result.ok) return { tone: 'danger', message: result.error.message };
+  await invalidateReadModelTags([readModelEntityTags.repoWorktreeIndex]);
   const label = stringValue(result.data.repo_id) ?? repoId ?? gitUrl ?? 'repo';
   const createdRepoId = stringValue(result.data.id) ?? stringValue(result.data.repo_id) ?? repoId ?? null;
   return {
@@ -147,6 +160,10 @@ export async function submitCreateWorktree(input: CreateWorktreeInput): Promise<
     // after a fresh `git fetch --prune origin`.
   });
   if (!result.ok) return { tone: 'danger', message: result.error.message };
+  await invalidateReadModelTags([
+    readModelEntityTags.repoWorktreeIndex,
+    readModelEntityTags.repo(input.baseRepoId)
+  ]);
   const worktreeId =
     stringValue(result.data.id) ??
     stringValue(result.data.repo_id) ??
@@ -172,6 +189,10 @@ export async function submitSetWorktreeSetup(input: SetWorktreeSetupInput): Prom
   const cleaned = input.commands.map((cmd) => cmd.trim()).filter((cmd) => cmd.length > 0);
   const result = await pmaApi.hub.setWorktreeSetup(input.repoId, cleaned);
   if (!result.ok) return { tone: 'danger', message: result.error.message };
+  await invalidateReadModelTags([
+    readModelEntityTags.repoWorktreeIndex,
+    readModelEntityTags.repo(input.repoId)
+  ]);
   return {
     tone: 'success',
     message: cleaned.length

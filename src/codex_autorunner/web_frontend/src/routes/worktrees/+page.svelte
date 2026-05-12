@@ -3,13 +3,14 @@
   import AutoDismissNotice from '$lib/components/AutoDismissNotice.svelte';
   import RepoWorktreeViews from '$lib/components/RepoWorktreeViews.svelte';
   import { confirmAndArchiveState, confirmAndCleanupWorktree, type ActionNotice } from '$lib/actions/repoWorktreeActions';
-  import { pmaApi, type ApiError, type PartialPageIssue } from '$lib/api/client';
-  import { readModelEntityStore, selectRepoSummaries, selectWorktreeSummaries } from '$lib/data';
+  import { type ApiError } from '$lib/api/client';
+  import { ensureRepoWorktreeIndexLoaded, readModelEntityStore, selectRepoSummaries, selectWorktreeSummaries } from '$lib/data';
   import {
     buildRepoWorktreeIndexViewModel,
     type RepoWorktreeIndexViewModel
   } from '$lib/viewModels/repoWorktree';
 
+  let { data = { status: 'cold' as const, tags: [] } } = $props();
   let readModelState = $state(readModelEntityStore.snapshot());
   let unsubscribeReadModels: (() => void) | null = null;
   const index = $derived<RepoWorktreeIndexViewModel | null>(
@@ -26,16 +27,14 @@
       'worktree'
     )
   );
-  let loading = $state(true);
-  let error = $state<ApiError | null>(null);
-  let sectionIssues = $state<PartialPageIssue[]>([]);
+  let loading = $state<boolean>(data.status === 'cold');
+  let error = $state<ApiError | null>(data.status === 'error' ? data.error : null);
   let notice = $state<ActionNotice | null>(null);
 
   onMount(() => {
     unsubscribeReadModels = readModelEntityStore.subscribe((state) => {
       readModelState = state;
     });
-    void loadWorktrees();
   });
 
   onDestroy(() => {
@@ -45,24 +44,10 @@
   async function loadWorktrees(): Promise<void> {
     loading = true;
     error = null;
-    sectionIssues = [];
-    const [topology, runtime] = await Promise.all([
-      pmaApi.readModels.repoWorktreeTopology('all', 200),
-      pmaApi.readModels.repoWorktreeRuntime('all', 200)
-    ]);
-    if (!topology.ok) {
-      error = topology.error;
-      loading = false;
-      return;
+    const result = await ensureRepoWorktreeIndexLoaded({ refresh: true });
+    if (result.status === 'error') {
+      error = result.error;
     }
-    if (!runtime.ok) {
-      error = runtime.error;
-      loading = false;
-      return;
-    }
-    readModelEntityStore.applyRepoWorktreeTopologySnapshot(topology.data);
-    readModelEntityStore.applyRepoWorktreeRuntimeSnapshot(runtime.data);
-    sectionIssues = [];
     loading = false;
   }
 
@@ -86,7 +71,6 @@
   state={loading ? 'loading' : error ? 'error' : 'ready'}
   mode="index"
   {index}
-  {sectionIssues}
   onRetry={loadWorktrees}
   onCleanupWorktree={handleCleanupWorktree}
   onArchiveState={handleArchiveState}

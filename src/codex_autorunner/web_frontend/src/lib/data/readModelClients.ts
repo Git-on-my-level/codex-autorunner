@@ -1,4 +1,5 @@
 import { mapResult, pmaApi, type ApiResult, type PmaApiClient } from '$lib/api/client';
+import type { TicketSummary } from '$lib/viewModels/domain';
 import {
   mapReadModelContract,
   READ_MODEL_CONTRACT_VERSION,
@@ -33,6 +34,7 @@ export type ReadModelSnapshotClient = {
   repoDetail(repoId: string): Promise<ApiResult<RepoWorktreeDetailSnapshot>>;
   worktreeDetail(worktreeId: string): Promise<ApiResult<RepoWorktreeDetailSnapshot>>;
   ticketDetail(ticketId: string, owner: { kind: 'repo' | 'worktree'; id: string }): Promise<ApiResult<TicketDetailSnapshot>>;
+  ticketIndex(owner?: { repo?: string; worktree?: string }): Promise<ApiResult<TicketSummary[]>>;
 };
 
 export function createReadModelSnapshotClient(api: PmaApiClient = pmaApi): ReadModelSnapshotClient {
@@ -59,7 +61,8 @@ export function createReadModelSnapshotClient(api: PmaApiClient = pmaApi): ReadM
     repoDetail: (repoId) => api.readModels.repoDetail(repoId),
     worktreeDetail: (worktreeId) => api.readModels.worktreeDetail(worktreeId),
     ticketDetail: async (ticketId, owner) =>
-      mapResult(await api.readModels.ticketDetail(ticketId, owner), (payload) => mapReadModelContract<TicketDetailSnapshot>(payload))
+      mapResult(await api.readModels.ticketDetail(ticketId, owner), (payload) => mapReadModelContract<TicketDetailSnapshot>(payload)),
+    ticketIndex: async (owner) => api.ticketFlow.listTickets(owner)
   };
 }
 

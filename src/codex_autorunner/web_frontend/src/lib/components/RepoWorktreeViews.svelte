@@ -14,6 +14,7 @@
   import VirtualList from '$lib/components/VirtualList.svelte';
   import FilterRow from '$lib/components/FilterRow.svelte';
   import { repoAccent, repoInitials } from '$lib/viewModels/repoIdentity';
+  import ContentSkeleton from '$lib/components/ContentSkeleton.svelte';
 
   let {
     state: viewState,
@@ -180,9 +181,7 @@
 </script>
 
 {#if viewState === 'loading'}
-  <section class="page-stack">
-    <div class="state-panel">Loading workspace state...</div>
-  </section>
+  <ContentSkeleton variant="index" rows={4} />
 {:else if viewState === 'error'}
   <section class="page-stack">
     <div class="state-panel error">Could not load workspace state. {errorMessage}</div>

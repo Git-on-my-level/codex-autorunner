@@ -5,6 +5,7 @@
   import { primaryNav, isActiveRoute } from '$lib/navigation';
   import { stripRuntimeBasePath, withRuntimeBasePath as href } from '$lib/runtime/basePath';
   import { pmaApi } from '$lib/api/client';
+  import { chatIndexSession } from '$lib/data';
   import { Palette, createPaletteStore, scopeSource } from '$lib/palette';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import {
@@ -47,11 +48,13 @@
       /* private mode / quota */
     }
     void loadHubState();
+    chatIndexSession.start();
   });
 
   onDestroy(() => {
     paletteStore.destroy();
     detachThemeSchemeListener();
+    chatIndexSession.stop();
   });
 
   const closeMobile = () => {
