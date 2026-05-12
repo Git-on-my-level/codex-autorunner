@@ -108,6 +108,12 @@ jobs:
           cache: "pip"
           cache-dependency-path: "pyproject.toml"
 
+      # setup-node's pnpm cache requires pnpm on PATH before this step runs.
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+
       - name: Set up Node
         uses: actions/setup-node@v5
         with:
@@ -115,11 +121,6 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           cache: "pnpm"
           cache-dependency-path: "pnpm-lock.yaml"
-
-      - name: Enable pnpm
-        run: |
-          corepack enable
-          corepack prepare pnpm@9.15.4 --activate
 
       - name: Install Python deps
         run: pip install -e .[dev]
@@ -195,6 +196,11 @@ jobs:
           cache: "pip"
           cache-dependency-path: "pyproject.toml"
 
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+
       - name: Set up Node
         uses: actions/setup-node@v5
         with:
@@ -202,11 +208,6 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           cache: "pnpm"
           cache-dependency-path: "pnpm-lock.yaml"
-
-      - name: Enable pnpm
-        run: |
-          corepack enable
-          corepack prepare pnpm@9.15.4 --activate
 
       - name: Install Python deps
         run: pip install -e .[dev]
