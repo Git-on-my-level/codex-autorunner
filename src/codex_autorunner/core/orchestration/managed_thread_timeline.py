@@ -731,9 +731,16 @@ def timeline_item_from_tail_event(
         tool_stable_id = stable_suffix
         if source_event_ids:
             try:
-                tool_stable_id = str(int(source_event_ids[0]))
+                tool_stable_id = str(min(int(x) for x in source_event_ids))
             except (TypeError, ValueError):
                 tool_stable_id = str(source_event_ids[0])
+        elif progress_group_id and progress_group_id.startswith("tools:"):
+            parts = progress_group_id.split(":", 2)
+            if len(parts) >= 2 and parts[1].strip():
+                try:
+                    tool_stable_id = str(int(parts[1]))
+                except ValueError:
+                    tool_stable_id = parts[1].strip()
         item_id = f"turn:{normalized_turn_id}:tool:{tool_stable_id}:{tool_name}"
         state = str(tail_event.get("tool_state") or progress.get("state") or "")
         result = None

@@ -66,6 +66,7 @@ class ProgressProjectionState:
     tool_group_index: int = 0
     active_tool_group_id: Optional[str] = None
     active_tool_name: Optional[str] = None
+    active_tool_call_event_id: Optional[int] = None
     last_item: Optional[ProgressProjectionItem] = None
     tool_group_items: dict[str, tuple[ProgressProjectionItem, ...]] = field(
         default_factory=dict
@@ -308,21 +309,32 @@ def _tool_item(
         state.tool_group_index += 1
         state.active_tool_group_id = f"tools:{state.tool_group_index:04d}:{tool_name}"
         state.active_tool_name = tool_name
+        state.active_tool_call_event_id = event_id
     elif state.active_tool_name != tool_name:
         state.tool_group_index += 1
         state.active_tool_group_id = f"tools:{state.tool_group_index:04d}:{tool_name}"
         state.active_tool_name = tool_name
+        state.active_tool_call_event_id = event_id
     group_id = state.active_tool_group_id
     if tool_state in {"completed", "failed"}:
+        call_id = state.active_tool_call_event_id
+        if call_id is not None and call_id != event_id:
+            merged_event_ids = (call_id, event_id)
+        else:
+            merged_event_ids = (event_id,)
         state.active_tool_group_id = None
         state.active_tool_name = None
+        state.active_tool_call_event_id = None
+        event_ids_tuple = merged_event_ids
+    else:
+        event_ids_tuple = (event_id,)
     return ProgressProjectionItem(
         item_id=f"progress:tool:{event_key}:{tool_name}",
         kind="tool",
         state=tool_state,
         title=tool_name,
         summary=_summary(summary, "Tool activity"),
-        event_ids=(event_id,),
+        event_ids=event_ids_tuple,
         timestamp=timestamp,
         group_id=group_id,
         group_kind="tool_group",

@@ -25,6 +25,8 @@ from codex_autorunner.adapters.telegram.handlers.commands import (
 
 
 @pytest.mark.anyio
+@pytest.mark.slow
+@pytest.mark.timeout(120)
 async def test_discord_pma_turn_completes_for_official_hermes_prompt(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
@@ -76,6 +78,8 @@ async def test_discord_pma_turn_completes_for_official_hermes_prompt(
 
 
 @pytest.mark.anyio
+@pytest.mark.slow
+@pytest.mark.timeout(120)
 async def test_telegram_pma_turn_completes_for_official_hermes_prompt(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
