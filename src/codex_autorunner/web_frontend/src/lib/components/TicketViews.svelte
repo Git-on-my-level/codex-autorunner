@@ -14,6 +14,7 @@
   import TicketDiffStats from '$lib/components/TicketDiffStats.svelte';
   import AutoDismissNotice from '$lib/components/AutoDismissNotice.svelte';
   import VirtualList from '$lib/components/VirtualList.svelte';
+  import FilterRow from '$lib/components/FilterRow.svelte';
   import { noticeTone } from '$lib/noticeTone';
   import { filterTicketRows, rowRelativeTime } from '$lib/viewModels/ticket';
   import { renderMarkdownToHtml } from '$lib/viewModels/markdown';
@@ -380,21 +381,20 @@
         <span class="sr-only">Search tickets</span>
         <input bind:value={search} type="search" placeholder="Search tickets, body, agent" />
       </label>
-      <div class="filter-row ticket-filter-row" role="tablist" aria-label="Ticket filters">
-        {#each visibleFilters as filter}
-          <button
-            class:active={selectedFilter === filter.id}
-            class="chip"
-            type="button"
-            role="tab"
-            aria-selected={selectedFilter === filter.id}
-            onclick={() => onFilter?.(filter.id)}
-          >
-            {filter.label}
-            <span>{filter.count}</span>
-          </button>
-        {/each}
-      </div>
+      <FilterRow
+        rootClass="ticket-filter-row"
+        ariaLabel="Ticket filters"
+        role="tablist"
+        itemRole="tab"
+        items={visibleFilters.map((filter) => ({
+          key: filter.id,
+          label: filter.label,
+          count: filter.count,
+          active: selectedFilter === filter.id,
+          ariaSelected: selectedFilter === filter.id,
+          onSelect: () => onFilter?.(filter.id)
+        }))}
+      />
     </header>
 
     <AutoDismissNotice message={actionStatus} tone={noticeTone(actionStatus)} />

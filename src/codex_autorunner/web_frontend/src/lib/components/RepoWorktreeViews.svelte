@@ -12,6 +12,7 @@
   import PageHero from './PageHero.svelte';
   import TicketDiffStats from './TicketDiffStats.svelte';
   import VirtualList from '$lib/components/VirtualList.svelte';
+  import FilterRow from '$lib/components/FilterRow.svelte';
   import { repoAccent, repoInitials } from '$lib/viewModels/repoIdentity';
 
   let {
@@ -201,36 +202,36 @@
             </button>
           {/if}
         </div>
-        <div class="filter-row" aria-label="Repo status filters">
-          {#each REPO_FILTERS as item}
-            <button
-              class:active={filter === item}
-              class="chip"
-              type="button"
-              onclick={() => (filter = item)}
-            >
-              {repoFilterLabel(item)}
-              <span>{repoFilterCount(item)}</span>
-            </button>
-          {/each}
-          {#if collapsibleRepoCount > 0}
-            <button
-              class="chip collapse-all-chip"
-              type="button"
-              title={globalCollapsed ? 'Expand all repos' : 'Collapse all repos'}
-              aria-label={globalCollapsed ? 'Expand all repos' : 'Collapse all repos'}
-              onclick={() => setAllCollapsed(!globalCollapsed)}
-            >
-              {#if globalCollapsed}
-                {@render expandAllIcon()}
-                <span>Expand all</span>
-              {:else}
-                {@render collapseAllIcon()}
-                <span>Collapse all</span>
-              {/if}
-            </button>
-          {/if}
-        </div>
+        <FilterRow
+          ariaLabel="Repo status filters"
+          items={REPO_FILTERS.map((item) => ({
+            key: item,
+            label: repoFilterLabel(item),
+            count: repoFilterCount(item),
+            active: filter === item,
+            onSelect: () => (filter = item)
+          }))}
+        >
+          {#snippet trailing()}
+            {#if collapsibleRepoCount > 0}
+              <button
+                class="chip collapse-all-chip"
+                type="button"
+                title={globalCollapsed ? 'Expand all repos' : 'Collapse all repos'}
+                aria-label={globalCollapsed ? 'Expand all repos' : 'Collapse all repos'}
+                onclick={() => setAllCollapsed(!globalCollapsed)}
+              >
+                {#if globalCollapsed}
+                  {@render expandAllIcon()}
+                  <span>Expand all</span>
+                {:else}
+                  {@render collapseAllIcon()}
+                  <span>Collapse all</span>
+                {/if}
+              </button>
+            {/if}
+          {/snippet}
+        </FilterRow>
       </header>
     {/if}
 
@@ -255,7 +256,7 @@
     {:else}
       <VirtualList
         items={filteredRows}
-        key={(row) => row.id}
+        key={(row) => `${row.id}:${row.isPinned ? 1 : 0}`}
         estimatedItemSize={122}
         overscan={8}
         initialCount={40}

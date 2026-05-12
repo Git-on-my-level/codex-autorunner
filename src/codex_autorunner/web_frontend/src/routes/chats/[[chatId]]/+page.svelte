@@ -5,6 +5,7 @@
   import MasterDetail from '$lib/components/MasterDetail.svelte';
   import ChatTranscriptCards from '$lib/components/ChatTranscriptCards.svelte';
   import VirtualList from '$lib/components/VirtualList.svelte';
+  import FilterRow from '$lib/components/FilterRow.svelte';
   import AutoDismissNotice from '$lib/components/AutoDismissNotice.svelte';
   import ChatThreadPreMessagePickers from '$lib/components/ChatThreadPreMessagePickers.svelte';
   import VoiceComposerButton from '$lib/components/VoiceComposerButton.svelte';
@@ -338,6 +339,21 @@
     else next[chatId] = true;
     pinnedChatIds = next;
     savePinnedChats(next);
+  }
+
+  /** VirtualList keys must change when pin state or pin-driven order changes, or keyed {#each} reuses stale row DOM. */
+  function chatListVirtualKey(entry: PmaChatListEntry): string {
+    if (entry.kind === 'group') {
+      const pinOrder = entry.group.chats
+        .map((c) => `${c.id}:${pinnedChatIds[c.id] ? 1 : 0}`)
+        .join('|');
+      return `group:${entry.group.key}:${pinOrder}`;
+    }
+    return `chat:${entry.chat.id}:${pinnedChatIds[entry.chat.id] ? 1 : 0}`;
+  }
+
+  function pinAwareChatRowKey(chat: PmaChatSummary): string {
+    return `${chat.id}:${pinnedChatIds[chat.id] ? 1 : 0}`;
   }
 
   function sortEntriesForPins(entries: PmaChatListEntry[], pinned: Record<string, true>): PmaChatListEntry[] {
@@ -1897,45 +1913,41 @@
     </div>
 
     <div class="chat-filter-bar">
-      <div class="filter-row chat-filter-chips-row" aria-label="Chat filters">
-        {#each PMA_CHAT_FILTER_ORDER as item}
-          {#if item !== 'unread' || filterCounts.unread > 0 || filter === 'unread'}
-            <button
-              class:active={filter === item}
-              class="chip"
-              type="button"
-              onclick={() => (filter = item)}
-            >
-              {filterChipLabel(item)}
-              <span>{filterCounts[item]}</span>
-            </button>
-          {/if}
-        {/each}
-        {#if ticketRunGroupCount > 0 || filter === PMA_CHAT_TICKET_RUNS_FILTER}
-          <button
-            class:active={filter === PMA_CHAT_TICKET_RUNS_FILTER}
-            class="chip"
-            type="button"
-            onclick={() => (filter = PMA_CHAT_TICKET_RUNS_FILTER)}
-          >
-            Ticket Runs
-            <span>{ticketRunGroupCount}</span>
-          </button>
-        {/if}
-        {#each surfaceFilterChips as surf (surf.slug)}
-          {#if surf.count > 0 || filter === pmaChatSurfaceFilterToken(surf.slug)}
-            <button
-              class:active={filter === pmaChatSurfaceFilterToken(surf.slug)}
-              class="chip"
-              type="button"
-              onclick={() => (filter = pmaChatSurfaceFilterToken(surf.slug))}
-            >
-              {surf.label}
-              <span>{surf.count}</span>
-            </button>
-          {/if}
-        {/each}
-      </div>
+      <FilterRow
+        rootClass="chat-filter-chips-row"
+        ariaLabel="Chat filters"
+        items={[
+          ...PMA_CHAT_FILTER_ORDER.filter(
+            (item) => item !== 'unread' || filterCounts.unread > 0 || filter === 'unread'
+          ).map((item) => ({
+            key: `status:${item}`,
+            label: filterChipLabel(item),
+            count: filterCounts[item],
+            active: filter === item,
+            onSelect: () => (filter = item)
+          })),
+          ...(ticketRunGroupCount > 0 || filter === PMA_CHAT_TICKET_RUNS_FILTER
+            ? [
+                {
+                  key: 'ticket-runs',
+                  label: 'Ticket Runs',
+                  count: ticketRunGroupCount,
+                  active: filter === PMA_CHAT_TICKET_RUNS_FILTER,
+                  onSelect: () => (filter = PMA_CHAT_TICKET_RUNS_FILTER)
+                }
+              ]
+            : []),
+          ...surfaceFilterChips
+            .filter((surf) => surf.count > 0 || filter === pmaChatSurfaceFilterToken(surf.slug))
+            .map((surf) => ({
+              key: `surface:${surf.slug}`,
+              label: surf.label,
+              count: surf.count,
+              active: filter === pmaChatSurfaceFilterToken(surf.slug),
+              onSelect: () => (filter = pmaChatSurfaceFilterToken(surf.slug))
+            }))
+        ]}
+      />
       {#if filter === 'unread' && filterCounts.unread > 0}
         <button
           class="new-chat-button"
@@ -2092,7 +2104,7 @@
       {:else}
         <VirtualList
           items={filteredEntries}
-          key={(entry) => entry.kind === 'group' ? `group:${entry.group.key}` : `chat:${entry.chat.id}`}
+          key={(entry) => chatListVirtualKey(entry)}
           estimatedItemSize={92}
           overscan={8}
           initialCount={48}
@@ -2161,7 +2173,7 @@
               {#if expanded}
                 <div id={`run-group-children-${group.key}`} class="chat-run-group-children">
                   <div class="chat-run-group-child-list" role="list" aria-label={`Chats in ${group.scopeLabel} ticket run`}>
-                    {#each group.chats as chat (chat.id)}
+                    {#each group.chats as chat (pinAwareChatRowKey(chat))}
                       <div class="chat-run-group-child-row" role="listitem">
                         {@render chatRow(chat, true)}
                       </div>
