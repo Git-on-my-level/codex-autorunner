@@ -964,12 +964,12 @@ class DiscordBotService(DiscordInteractionResponseMixin):
             raise SystemExit(1)
         self._reap_managed_processes(stage="startup")
         await self._store.initialize()
-        await _reconcile_progress_leases_on_startup_impl(self)
         await self._resume_interaction_recovery()
         _validate_command_sync_config_impl(self)
         self._outbox.start()
         outbox_task = asyncio.create_task(self._outbox.run_loop())
         await _recover_managed_thread_executions_on_startup_impl(self)
+        await _reconcile_progress_leases_on_startup_impl(self)
         self._opencode_prune_task = asyncio.create_task(
             _run_opencode_prune_loop_impl(self)
         )
