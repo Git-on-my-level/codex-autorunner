@@ -10,6 +10,7 @@ import type {
 } from './domain';
 import { normalizeOptionalWorkStatus } from './domain';
 import { surfaceRefFromThreadRaw } from './thread';
+import { isChatUnread } from './unread';
 
 /** Status chips (All / Waiting / …) on the chat list. */
 export type PmaChatStatusFilter = 'all' | 'active' | 'waiting' | 'unread' | 'archived';
@@ -564,8 +565,6 @@ export function sortChatsUnreadFirst(
   return [...chats].sort((left, right) => {
     const unreadDiff = Number(isUnread(right, lastSeen)) - Number(isUnread(left, lastSeen));
     if (unreadDiff !== 0) return unreadDiff;
-    const unreadCountDiff = (chatUnreadCount(right) ?? 0) - (chatUnreadCount(left) ?? 0);
-    if (unreadCountDiff !== 0) return unreadCountDiff;
     const leftTime = Date.parse(left.updatedAt ?? '') || 0;
     const rightTime = Date.parse(right.updatedAt ?? '') || 0;
     const timeDiff = rightTime - leftTime;
@@ -649,21 +648,7 @@ export function countTicketRunGroups(chats: PmaChatSummary[]): number {
 }
 
 function isUnread(chat: PmaChatSummary, lastSeen: Record<string, string>): boolean {
-  const count = chatUnreadCount(chat);
-  if (count !== null) return count > 0;
-  if (!chat.updatedAt) return false;
-  const seen = lastSeen[chat.id];
-  return !seen || chat.updatedAt > seen;
-}
-
-function chatUnreadCount(chat: PmaChatSummary): number | null {
-  if (typeof chat.unreadCount === 'number' && Number.isFinite(chat.unreadCount)) {
-    return Math.max(0, chat.unreadCount);
-  }
-  const raw = chat.raw as Record<string, unknown>;
-  const row = raw.row && typeof raw.row === 'object' && !Array.isArray(raw.row) ? (raw.row as Record<string, unknown>) : {};
-  const rawCount = rawNumber(raw.unread_count ?? raw.unreadCount ?? row.unread_count ?? row.unreadCount);
-  return rawCount === null ? null : Math.max(0, rawCount);
+  return isChatUnread(chat, lastSeen);
 }
 
 function rollupGroupStatus(group: PmaChatRunGroup): WorkStatus {
@@ -733,7 +718,7 @@ export function buildPmaChatListEntries(
     const agentSet = new Set<string>();
     for (const chat of group.chats) {
       if (chat.agentId) agentSet.add(chat.agentId);
-      if (isUnread(chat, lastSeen)) group.unreadCount += chatUnreadCount(chat) ?? 1;
+      if (isUnread(chat, lastSeen)) group.unreadCount += 1;
       if (chat.status === 'running') group.activeCount += 1;
       else if (chat.status === 'waiting' || chat.status === 'blocked') group.waitingCount += 1;
       else if (chatCountsDoneForRun(chat)) group.doneCount += 1;
@@ -812,7 +797,7 @@ export function filterPmaChatEntries(
     const agentSet = new Set<string>();
     for (const chat of matchedChats) {
       if (chat.agentId) agentSet.add(chat.agentId);
-      if (isUnread(chat, lastSeen)) trimmed.unreadCount += chatUnreadCount(chat) ?? 1;
+      if (isUnread(chat, lastSeen)) trimmed.unreadCount += 1;
       if (chat.status === 'running') trimmed.activeCount += 1;
       else if (chat.status === 'waiting' || chat.status === 'blocked') trimmed.waitingCount += 1;
       else if (chatCountsDoneForRun(chat)) trimmed.doneCount += 1;

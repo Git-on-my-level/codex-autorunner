@@ -422,40 +422,46 @@ describe('PMA chat view helpers', () => {
     ]);
   });
 
-  it('uses backend unread counts for unread filters, sort, and run-group unread totals when present', () => {
+  it('ignores backend unread counts for filters, sort, and run-group unread totals', () => {
     const chats: PmaChatSummary[] = [
       { ...baseChat, id: 'backend-read', unreadCount: 0, updatedAt: '2026-05-04T05:00:00Z' },
       { ...baseChat, id: 'backend-unread-low', unreadCount: 1, updatedAt: '2026-05-04T01:00:00Z' },
       { ...baseChat, id: 'backend-unread-high', unreadCount: 3, updatedAt: '2026-05-04T02:00:00Z' }
     ];
+    const lastSeen = {
+      'backend-read': '2026-05-04T05:00:00Z'
+    };
 
-    expect(filterPmaChats(chats, 'unread', '', {})).toMatchObject([
+    expect(filterPmaChats(chats, 'unread', '', lastSeen)).toMatchObject([
       { id: 'backend-unread-low' },
       { id: 'backend-unread-high' }
     ]);
-    expect(sortChatsUnreadFirst(chats).map((chat) => chat.id)).toEqual([
+    expect(sortChatsUnreadFirst(chats, lastSeen).map((chat) => chat.id)).toEqual([
       'backend-unread-high',
       'backend-unread-low',
       'backend-read'
     ]);
 
-    const entries = buildPmaChatListEntries(chats, { groupRuns: true });
+    const entries = buildPmaChatListEntries(chats, { groupRuns: true, lastSeen });
     expect(entries).toHaveLength(1);
     expect(entries[0].kind).toBe('group');
     if (entries[0].kind === 'group') {
-      expect(entries[0].group.unreadCount).toBe(4);
+      expect(entries[0].group.unreadCount).toBe(2);
     }
   });
 
-  it('uses backend unread counts before timestamp read markers', () => {
+  it('uses timestamp read markers instead of backend unread counts', () => {
     const chats: PmaChatSummary[] = [
       { ...baseChat, id: 'backend-unread', unreadCount: 2, updatedAt: '2026-05-04T01:00:00Z' },
       { ...baseChat, id: 'read-newer', unreadCount: 0, updatedAt: '2026-05-04T03:00:00Z' }
     ];
 
-    expect(filterPmaChats(chats, 'unread', '', { 'read-newer': '2026-05-04T03:00:00Z' }).map((chat) => chat.id)).toEqual([
-      'backend-unread'
-    ]);
+    expect(
+      filterPmaChats(chats, 'unread', '', {
+        'backend-unread': '2026-05-04T01:00:00Z',
+        'read-newer': '2026-05-04T03:00:00Z'
+      }).map((chat) => chat.id)
+    ).toEqual([]);
     expect(sortChatsUnreadFirst(chats, { 'read-newer': '2026-05-04T03:00:00Z' }).map((chat) => chat.id)).toEqual([
       'backend-unread',
       'read-newer'
