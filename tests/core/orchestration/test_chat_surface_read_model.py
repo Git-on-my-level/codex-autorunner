@@ -62,7 +62,15 @@ def _seed_thread(
         )
 
 
-def _seed_execution(hub_root: Path, *, thread_id: str, status: str) -> None:
+def _seed_execution(
+    hub_root: Path,
+    *,
+    thread_id: str,
+    status: str,
+    execution_id: str | None = None,
+    created_at: str = "2026-05-11T00:01:00Z",
+) -> None:
+    eid = execution_id or f"exec-{thread_id}-{status}"
     with open_orchestration_sqlite(hub_root, durable=False, migrate=True) as conn:
         conn.execute(
             """
@@ -75,11 +83,11 @@ def _seed_execution(hub_root: Path, *, thread_id: str, status: str) -> None:
             ) VALUES (?, ?, ?, ?, ?)
             """,
             (
-                f"exec-{thread_id}-{status}",
+                eid,
                 thread_id,
                 "message",
                 status,
-                "2026-05-11T00:01:00Z",
+                created_at,
             ),
         )
 
@@ -211,6 +219,69 @@ def test_chat_surface_read_model_projects_thread_identity_from_metadata_json(
     assert surface["metadata"]["agent_id"] == "codex"
     assert surface["metadata"]["agent_profile"] == "m4-pma"
     assert surface["metadata"]["model"] == "gpt-5.5"
+
+
+def test_chat_surface_read_model_ignores_running_execution_on_archived_thread(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    _seed_thread(
+        hub_root,
+        thread_id="thread-archived",
+        lifecycle_status="archived",
+        runtime_status="archived",
+    )
+    _seed_execution(hub_root, thread_id="thread-archived", status="running")
+
+    snapshot = ChatSurfaceReadService(hub_root, durable=False).snapshot()
+    by_kind_key = {
+        (surface["surface_kind"], surface["surface_key"]): surface
+        for surface in snapshot["surfaces"]
+    }
+
+    surface = by_kind_key[("pma", "thread-archived")]
+    assert surface["lifecycle"] == "archived"
+    assert surface["metadata"]["runtime_status"] == "archived"
+    assert surface["metadata"]["latest_execution_status"] is None
+    assert surface["metadata"]["active_turn_id"] is None
+
+
+def test_chat_surface_read_model_keeps_queued_execution_when_runtime_completed(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    thread_id = "thread-queued-followup"
+    _seed_thread(
+        hub_root,
+        thread_id=thread_id,
+        runtime_status="completed",
+    )
+    _seed_execution(
+        hub_root,
+        thread_id=thread_id,
+        status="completed",
+        execution_id=f"{thread_id}-turn-a",
+        created_at="2026-05-11T00:01:00Z",
+    )
+    _seed_execution(
+        hub_root,
+        thread_id=thread_id,
+        status="queued",
+        execution_id=f"{thread_id}-turn-b",
+        created_at="2026-05-11T00:02:00Z",
+    )
+
+    snapshot = ChatSurfaceReadService(hub_root, durable=False).snapshot()
+    by_kind_key = {
+        (surface["surface_kind"], surface["surface_key"]): surface
+        for surface in snapshot["surfaces"]
+    }
+
+    surface = by_kind_key[("pma", thread_id)]
+    assert surface["lifecycle"] == "queued"
+    assert surface["metadata"]["runtime_status"] == "completed"
+    assert surface["metadata"]["latest_execution_status"] == "queued"
+    assert surface["metadata"]["active_turn_id"] == f"{thread_id}-turn-b"
 
 
 def test_chat_index_and_detail_prefer_bound_chat_display_for_fallback_titles(

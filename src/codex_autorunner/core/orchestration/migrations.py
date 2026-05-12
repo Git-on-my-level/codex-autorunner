@@ -9,7 +9,7 @@ from ..sqlite_utils import table_columns, table_exists
 from ..time_utils import now_iso
 from .models import OrchestrationTableDefinition
 
-ORCHESTRATION_SCHEMA_VERSION = 30
+ORCHESTRATION_SCHEMA_VERSION = 31
 
 
 @dataclass(frozen=True)
@@ -1563,6 +1563,83 @@ def _apply_v30(conn: sqlite3.Connection) -> None:
     )
 
 
+def _apply_v31(conn: sqlite3.Connection) -> None:
+    finished_at = now_iso()
+    if table_exists(conn, "orch_thread_executions") and table_exists(
+        conn, "orch_thread_targets"
+    ):
+        conn.execute(
+            """
+            UPDATE orch_thread_executions
+               SET status = 'interrupted',
+                   error_text = COALESCE(
+                       error_text,
+                       'reconciled running execution after terminal thread status'
+                   ),
+                   finished_at = COALESCE(
+                       finished_at,
+                       (
+                           SELECT COALESCE(t.status_updated_at, t.updated_at, ?)
+                             FROM orch_thread_targets AS t
+                            WHERE t.thread_target_id = orch_thread_executions.thread_target_id
+                       ),
+                       ?
+                   )
+             WHERE status = 'running'
+               AND EXISTS (
+                       SELECT 1
+                         FROM orch_thread_targets AS t
+                        WHERE t.thread_target_id = orch_thread_executions.thread_target_id
+                          AND (
+                              t.lifecycle_status = 'archived'
+                              OR t.runtime_status IN (
+                                  'completed',
+                                  'interrupted',
+                                  'failed',
+                                  'archived'
+                              )
+                          )
+                   )
+            """,
+            (finished_at, finished_at),
+        )
+        conn.execute(
+            """
+            WITH ranked AS (
+                SELECT execution_id,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY thread_target_id
+                           ORDER BY COALESCE(started_at, created_at) DESC,
+                                    created_at DESC,
+                                    execution_id DESC
+                       ) AS running_rank
+                  FROM orch_thread_executions
+                 WHERE status = 'running'
+            )
+            UPDATE orch_thread_executions
+               SET status = 'interrupted',
+                   error_text = COALESCE(
+                       error_text,
+                       'reconciled duplicate running execution'
+                   ),
+                   finished_at = COALESCE(finished_at, ?)
+             WHERE execution_id IN (
+                       SELECT execution_id
+                         FROM ranked
+                        WHERE running_rank > 1
+                   )
+            """,
+            (finished_at,),
+        )
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_orch_thread_executions_one_running
+                ON orch_thread_executions(thread_target_id)
+             WHERE status = 'running'
+            """
+        )
+
+
 _MIGRATIONS = (
     _MigrationStep(1, "create_core_orchestration_schema", _apply_v1),
     _MigrationStep(2, "add_binding_and_flow_projection_scaffolding", _apply_v2),
@@ -1610,6 +1687,11 @@ _MIGRATIONS = (
         _apply_v29,
     ),
     _MigrationStep(30, "add_chat_surface_event_journal", _apply_v30),
+    _MigrationStep(
+        31,
+        "enforce_one_running_execution_per_active_thread",
+        _apply_v31,
+    ),
 )
 
 

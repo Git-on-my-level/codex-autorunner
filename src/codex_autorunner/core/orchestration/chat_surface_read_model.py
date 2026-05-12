@@ -637,7 +637,9 @@ class ChatSurfaceReadService:
         for row in thread_rows:
             thread_id = str(row["thread_target_id"])
             thread_owner[thread_id] = row
-            execution = execution_by_thread.get(thread_id)
+            execution = _thread_execution_for_projection(
+                row, execution_by_thread.get(thread_id)
+            )
             delivery = delivery_by_thread.get(thread_id)
             binding_summary = binding_summary_by_thread.get(thread_id, {})
             lifecycle = _thread_lifecycle(
@@ -713,7 +715,9 @@ class ChatSurfaceReadService:
             if surface_kind is None or surface_key is None:
                 continue
             owner = thread_owner.get(binding_thread_id or "")
-            execution = execution_by_thread.get(binding_thread_id or "")
+            execution = _thread_execution_for_projection(
+                owner, execution_by_thread.get(binding_thread_id or "")
+            )
             delivery = delivery_by_surface.get((surface_kind, surface_key))
             lifecycle = _thread_lifecycle(
                 owner,
@@ -1537,6 +1541,37 @@ def _thread_lifecycle(
     if execution_status is not None:
         return execution_status
     return "bound"
+
+
+def _thread_execution_for_projection(
+    row: Optional[Mapping[str, Any]],
+    execution: Optional[Mapping[str, Any]],
+) -> Optional[Mapping[str, Any]]:
+    if execution is None:
+        return None
+    execution_status = _status_to_lifecycle(_row_get(execution, "status"))
+    if row is None:
+        if execution_status in {"running", "queued"}:
+            return None
+        return execution
+    if execution_status not in {"running", "queued"}:
+        return execution
+    lifecycle_status = _normalize_kind(_row_get(row, "lifecycle_status"))
+    if lifecycle_status == "archived":
+        return None
+    runtime_status = _normalize_kind(_row_get(row, "runtime_status"))
+    # A prior turn can leave runtime terminal while another execution is still
+    # queued; keep queued rows visible for queue_depth / active-turn projections.
+    if execution_status == "queued":
+        return execution
+    if runtime_status in {
+        "completed",
+        "interrupted",
+        "failed",
+        "archived",
+    }:
+        return None
+    return execution
 
 
 def _latest_execution_by_thread(

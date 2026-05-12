@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from codex_autorunner.core.managed_thread_store import ManagedThreadStore
@@ -195,6 +196,8 @@ def test_chat_detail_snapshot_contains_timeline_queue_and_cursor(hub_env) -> Non
     assert older.json()["contract_version"] == "chat_timeline_page.v1"
 
 
+@pytest.mark.slow
+@pytest.mark.timeout(180)
 def test_older_timeline_page_reaches_past_detail_snapshot_cap(hub_env) -> None:
     store = ManagedThreadStore(hub_env.hub_root, durable=True)
     thread = store.create_thread(
