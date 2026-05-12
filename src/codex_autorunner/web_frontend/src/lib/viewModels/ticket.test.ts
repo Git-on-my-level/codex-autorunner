@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { mockArtifact, mockChatSummary, mockRunProgress, mockTicketDetail, mockTicketSummary } from './mockData';
+import { pmaTimelineContractFields } from './domain';
 import {
   buildTicketDetailViewModel,
   buildTicketRepairChatCreatePayload,
@@ -312,6 +313,7 @@ Users can inspect tickets.
             turnId: 'turn-1',
             status: 'running',
             payload: { text: 'I am implementing the ticket now.' },
+            ...pmaTimelineContractFields('timeline-assistant-1'),
             raw: {}
           }
         ]

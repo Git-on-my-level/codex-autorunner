@@ -2,6 +2,7 @@ import { render } from 'svelte/server';
 import { describe, expect, it } from 'vitest';
 import TicketViews from './TicketViews.svelte';
 import { mockArtifact, mockChatSummary, mockRunProgress, mockTicketDetail, mockTicketSummary } from '$lib/viewModels/mockData';
+import { pmaTimelineContractFields } from '$lib/viewModels/domain';
 import { buildTicketDetailViewModel, buildTicketListViewModel } from '$lib/viewModels/ticket';
 
 const codexAgent = {
@@ -275,6 +276,7 @@ Users can browse tickets.
             turnId: 'turn-1',
             status: 'done',
             payload: { text: 'Ticket implementation is in progress.' },
+            ...pmaTimelineContractFields('assistant-1'),
             raw: {}
           }
         ]

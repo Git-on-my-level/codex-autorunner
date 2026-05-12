@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { PmaChatSummary, PmaRunProgress, PmaTimelineItem, SurfaceArtifact } from './domain';
+import { pmaTimelineContractFields } from './domain';
 import {
   artifactCardView,
   buildManagedThreadCreatePayload,
@@ -87,6 +88,7 @@ function timelineItem(
     turnId: id.split(':')[1] ?? null,
     status: 'running',
     payload,
+    ...pmaTimelineContractFields(id),
     raw: { item_id: id, kind, payload }
   };
 }

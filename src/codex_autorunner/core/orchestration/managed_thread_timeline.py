@@ -22,7 +22,39 @@ from .progress_projection import (
 )
 from .turn_timeline import list_turn_timeline, list_turn_timelines
 
-TIMELINE_CONTRACT_VERSION = "managed_thread_timeline.v1"
+TIMELINE_CONTRACT_VERSION = "managed_thread_timeline.v2"
+
+
+@dataclass(frozen=True)
+class ManagedThreadTimelineIdentity:
+    """Backend-authored reconciliation identity for a PMA timeline item."""
+
+    timeline_item_id: str
+    progress_item_ids: tuple[str, ...] = ()
+    correlation_id: Optional[str] = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "timeline_item_id": self.timeline_item_id,
+            "progress_item_ids": list(self.progress_item_ids),
+            "correlation_id": self.correlation_id,
+        }
+
+
+@dataclass(frozen=True)
+class ManagedThreadTimelineProvenance:
+    """Backend-authored event provenance; cursor_event_id is never item identity."""
+
+    source_event_ids: tuple[Any, ...] = ()
+    progress_event_ids: tuple[Any, ...] = ()
+    cursor_event_id: Optional[str] = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "source_event_ids": list(self.source_event_ids),
+            "progress_event_ids": list(self.progress_event_ids),
+            "cursor_event_id": self.cursor_event_id,
+        }
 
 
 @dataclass(frozen=True)
@@ -35,9 +67,20 @@ class ManagedThreadTimelineItem:
     managed_turn_id: Optional[str] = None
     status: Optional[str] = None
     payload: dict[str, Any] = field(default_factory=dict)
+    identity: Optional[ManagedThreadTimelineIdentity] = None
+    provenance: Optional[ManagedThreadTimelineProvenance] = None
 
     def to_dict(self) -> dict[str, Any]:
+        identity = self.identity or ManagedThreadTimelineIdentity(
+            timeline_item_id=self.item_id,
+            progress_item_ids=tuple(_progress_item_ids_from_payload(self.payload)),
+        )
+        provenance = self.provenance or ManagedThreadTimelineProvenance(
+            source_event_ids=tuple(_source_event_ids_from_payload(self.payload)),
+            progress_event_ids=tuple(_progress_event_ids_from_payload(self.payload)),
+        )
         data: dict[str, Any] = {
+            "contract_version": TIMELINE_CONTRACT_VERSION,
             "item_id": self.item_id,
             "kind": self.kind,
             "order_key": self.order_key,
@@ -45,9 +88,106 @@ class ManagedThreadTimelineItem:
             "managed_thread_id": self.managed_thread_id,
             "managed_turn_id": self.managed_turn_id,
             "status": self.status,
+            "identity": identity.to_dict(),
+            "provenance": provenance.to_dict(),
             "payload": dict(self.payload),
         }
         return data
+
+
+def _progress_item_ids_from_payload(payload: dict[str, Any]) -> list[str]:
+    progress_items: list[dict[str, Any]] = []
+    progress_item = payload.get("progress_item")
+    if isinstance(progress_item, dict):
+        progress_items.append(progress_item)
+    raw_progress_items = payload.get("progress_items")
+    if isinstance(raw_progress_items, list):
+        progress_items.extend(
+            item for item in raw_progress_items if isinstance(item, dict)
+        )
+    ids: list[str] = []
+    for item in progress_items:
+        item_id = _normalize_optional_text(item.get("item_id"))
+        if item_id is not None and item_id not in ids:
+            ids.append(item_id)
+    return ids
+
+
+def _source_event_ids_from_payload(payload: dict[str, Any]) -> list[Any]:
+    value = payload.get("source_event_ids")
+    if isinstance(value, list):
+        return list(value)
+    return []
+
+
+def _progress_event_ids_from_payload(payload: dict[str, Any]) -> list[Any]:
+    event_ids: list[Any] = []
+    progress_items: list[dict[str, Any]] = []
+    progress_item = payload.get("progress_item")
+    if isinstance(progress_item, dict):
+        progress_items.append(progress_item)
+    raw_progress_items = payload.get("progress_items")
+    if isinstance(raw_progress_items, list):
+        progress_items.extend(
+            item for item in raw_progress_items if isinstance(item, dict)
+        )
+    for item in progress_items:
+        raw_event_ids = item.get("event_ids")
+        if not isinstance(raw_event_ids, list):
+            continue
+        for event_id in raw_event_ids:
+            if event_id not in event_ids:
+                event_ids.append(event_id)
+    if event_ids:
+        return event_ids
+    return _source_event_ids_from_payload(payload)
+
+
+def _with_contract_metadata(
+    item: dict[str, Any],
+    *,
+    progress_item_ids: Optional[list[str]] = None,
+    source_event_ids: Optional[list[Any]] = None,
+    progress_event_ids: Optional[list[Any]] = None,
+    cursor_event_id: Optional[str] = None,
+) -> dict[str, Any]:
+    """Attach v2 identity/provenance to live timeline frames.
+
+    Transport/SSE event ids are cursors. They stay in provenance.cursor_event_id
+    and are intentionally not copied into identity.timeline_item_id.
+    """
+
+    item_id = str(item.get("item_id") or "")
+    payload = item.get("payload")
+    payload_dict = dict(payload) if isinstance(payload, dict) else {}
+    resolved_source_event_ids = (
+        source_event_ids
+        if source_event_ids is not None
+        else _source_event_ids_from_payload(payload_dict)
+    )
+    resolved_progress_event_ids = (
+        progress_event_ids
+        if progress_event_ids is not None
+        else _progress_event_ids_from_payload(payload_dict)
+    )
+    return {
+        "contract_version": TIMELINE_CONTRACT_VERSION,
+        **item,
+        "identity": {
+            "timeline_item_id": item_id,
+            "progress_item_ids": (
+                progress_item_ids
+                if progress_item_ids is not None
+                else _progress_item_ids_from_payload(payload_dict)
+            ),
+            "correlation_id": None,
+        },
+        "provenance": {
+            "source_event_ids": list(resolved_source_event_ids),
+            "progress_event_ids": list(resolved_progress_event_ids),
+            "cursor_event_id": cursor_event_id,
+        },
+    }
 
 
 def _normalize_optional_text(value: Any) -> Optional[str]:
@@ -181,6 +321,15 @@ def _terminal_timestamp_from_timeline(
     return timestamp
 
 
+def _terminal_event_ids_from_timeline(entries: Iterable[dict[str, Any]]) -> list[int]:
+    event_ids: list[int] = []
+    for fallback, entry in enumerate(entries, start=1):
+        if str(entry.get("event_type") or "") not in {"turn_completed", "turn_failed"}:
+            continue
+        event_ids.append(_event_index(entry, fallback))
+    return event_ids
+
+
 def _append_user_message(
     items: list[ManagedThreadTimelineItem],
     *,
@@ -223,6 +372,7 @@ def _append_status(
     turn: dict[str, Any],
     sequence: int,
     terminal_timestamp: Optional[str] = None,
+    source_event_ids: Optional[list[int]] = None,
 ) -> int:
     managed_turn_id = str(turn.get("managed_turn_id") or "")
     status = str(turn.get("status") or "unknown")
@@ -243,6 +393,7 @@ def _append_status(
                 "started_at": turn.get("started_at"),
                 "finished_at": turn.get("finished_at"),
                 "backend_turn_id": turn.get("backend_turn_id"),
+                "source_event_ids": list(source_event_ids or []),
             },
         )
     )
@@ -266,6 +417,12 @@ def _append_timeline_event_items(
         nonlocal sequence, tool_group
         if tool_group is None:
             return
+        progress_items = [
+            item
+            for item in tool_group.get("progress_items", [])
+            if isinstance(item, dict)
+        ]
+        source_event_ids = list(tool_group.get("source_event_ids") or [])
         item_id = (
             f"turn:{managed_turn_id}:tool:"
             f"{tool_group.get('first_index')}:{tool_group.get('tool_name')}"
@@ -284,11 +441,9 @@ def _append_timeline_event_items(
                     "tool_name": tool_group.get("tool_name"),
                     "call": tool_group.get("call"),
                     "result": tool_group.get("result"),
-                    "progress_items": [
-                        item
-                        for item in tool_group.get("progress_items", [])
-                        if isinstance(item, dict)
-                    ],
+                    "progress_items": progress_items,
+                    "source_event_ids": source_event_ids,
+                    "source_event_type": "tool_group",
                 },
             )
         )
@@ -319,6 +474,7 @@ def _append_timeline_event_items(
                     "call": event,
                     "result": None,
                     "status": "running",
+                    "source_event_ids": [event_index],
                     "progress_items": (
                         [progress_item.to_dict()] if progress_item is not None else []
                     ),
@@ -333,10 +489,15 @@ def _append_timeline_event_items(
                         "call": None,
                         "result": None,
                         "status": "running",
+                        "source_event_ids": [event_index],
                         "progress_items": [],
                     }
                 tool_group["result"] = event
                 tool_group["status"] = str(event.get("status") or "completed")
+                source_event_ids = list(tool_group.get("source_event_ids") or [])
+                if event_index not in source_event_ids:
+                    source_event_ids.append(event_index)
+                tool_group["source_event_ids"] = source_event_ids
                 if progress_item is not None:
                     tool_group.setdefault("progress_items", []).append(
                         progress_item.to_dict()
@@ -469,16 +630,17 @@ def timeline_item_from_tail_event(
     stable_suffix = (
         progress_group_id
         or progress_item_id
-        or event_id
         or str(tail_event.get("summary") or "event")
+        or event_type
+        or "event"
     )
     source_event_ids = progress.get("event_ids")
-    if not isinstance(source_event_ids, list) or not source_event_ids:
-        source_event_ids = [int(tail_event.get("event_id") or 0)]
+    if not isinstance(source_event_ids, list):
+        source_event_ids = []
     try:
         source_event_key = f"{int(source_event_ids[-1]):04d}"
-    except (TypeError, ValueError):
-        source_event_key = event_id or stable_suffix
+    except (IndexError, TypeError, ValueError):
+        source_event_key = progress_item_id or stable_suffix
 
     base = {
         "order_key": _order_key(
@@ -514,7 +676,7 @@ def timeline_item_from_tail_event(
                 "status": "error" if state == "failed" else "completed",
                 "summary": tail_event.get("summary"),
             }
-        return {
+        item = {
             **base,
             "item_id": item_id,
             "kind": "tool_group",
@@ -533,6 +695,12 @@ def timeline_item_from_tail_event(
                 "live_tail_event": dict(tail_event),
             },
         }
+        return _with_contract_metadata(
+            item,
+            source_event_ids=source_event_ids,
+            progress_event_ids=list(source_event_ids),
+            cursor_event_id=event_id or None,
+        )
 
     if event_type in {"progress", "assistant_update"} or progress_kind in {
         "assistant_update",
@@ -546,7 +714,7 @@ def timeline_item_from_tail_event(
             if progress_kind == "assistant_update" or title.lower() == "thinking"
             else event_type or "notice"
         )
-        return {
+        item = {
             **base,
             "item_id": item_id,
             "kind": "intermediate",
@@ -562,10 +730,16 @@ def timeline_item_from_tail_event(
                 "live_tail_event": dict(tail_event),
             },
         }
+        return _with_contract_metadata(
+            item,
+            source_event_ids=source_event_ids,
+            progress_event_ids=list(source_event_ids),
+            cursor_event_id=event_id or None,
+        )
 
     if progress_kind == "approval" or event_type == "approval_requested":
         request_id = stable_suffix
-        return {
+        item = {
             **base,
             "item_id": f"turn:{normalized_turn_id}:approval:{request_id}",
             "kind": "approval",
@@ -580,10 +754,16 @@ def timeline_item_from_tail_event(
                 "live_tail_event": dict(tail_event),
             },
         }
+        return _with_contract_metadata(
+            item,
+            source_event_ids=source_event_ids,
+            progress_event_ids=list(source_event_ids),
+            cursor_event_id=event_id or None,
+        )
 
     if event_type in {"turn_failed", "turn_interrupted"}:
         item_id = f"turn:{normalized_turn_id}:intermediate:{source_event_key}"
-        return {
+        item = {
             **base,
             "item_id": item_id,
             "kind": "intermediate",
@@ -600,6 +780,12 @@ def timeline_item_from_tail_event(
                 "live_tail_event": dict(tail_event),
             },
         }
+        return _with_contract_metadata(
+            item,
+            source_event_ids=source_event_ids,
+            progress_event_ids=list(source_event_ids),
+            cursor_event_id=event_id or None,
+        )
 
     return None
 
@@ -623,6 +809,7 @@ def _append_assistant_message(
         or _normalize_optional_text(turn.get("finished_at"))
         or _turn_timestamp(turn)
     )
+    source_event_ids = _terminal_event_ids_from_timeline(entries)
     item_id = f"turn:{managed_turn_id}:assistant"
     items.append(
         ManagedThreadTimelineItem(
@@ -637,6 +824,7 @@ def _append_assistant_message(
                 "text": assistant_text,
                 "text_preview": _truncate_text(assistant_text, 240),
                 "backend_turn_id": turn.get("backend_turn_id"),
+                "source_event_ids": source_event_ids,
             },
         )
     )
@@ -835,6 +1023,7 @@ def _append_turn_timeline_items(
         sequence=sequence,
     )
     if str(turn.get("status") or "") not in {"queued", "running"}:
+        terminal_event_ids = _terminal_event_ids_from_timeline(entries)
         sequence = _append_status(
             items,
             managed_thread_id=managed_thread_id,
@@ -844,6 +1033,7 @@ def _append_turn_timeline_items(
                 _terminal_timestamp_from_timeline(entries)
                 or _normalize_optional_text(turn.get("finished_at"))
             ),
+            source_event_ids=terminal_event_ids,
         )
     sequence = _append_attachment_artifacts(
         items,
@@ -948,7 +1138,9 @@ def build_managed_thread_timeline(
 
 __all__ = [
     "TIMELINE_CONTRACT_VERSION",
+    "ManagedThreadTimelineIdentity",
     "ManagedThreadTimelineItem",
+    "ManagedThreadTimelineProvenance",
     "build_managed_thread_timeline",
     "timeline_item_from_tail_event",
 ]

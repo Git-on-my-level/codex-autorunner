@@ -43,7 +43,7 @@
     worktreeRoute,
     worktreeTicketRoute
   } from '$lib/viewModels/routes';
-  import { mapPmaRunProgress, mapPmaTimelineItem } from '$lib/viewModels/domain';
+  import { mapPmaRunProgress, mapPmaTimelineItem, pmaTimelineContractFields } from '$lib/viewModels/domain';
   import type {
     PmaChatSummary,
     PmaRunProgress,
@@ -1335,6 +1335,7 @@
           size_label: att.sizeLabel
         }))
       },
+      ...pmaTimelineContractFields(optimisticId, { correlationId: optimisticId }),
       raw: { optimistic: true }
     };
     readModelEntityStore.optimisticSend(

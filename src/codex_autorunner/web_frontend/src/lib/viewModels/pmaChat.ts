@@ -8,7 +8,7 @@ import type {
   WorktreeSummary,
   WorkStatus
 } from './domain';
-import { normalizeOptionalWorkStatus } from './domain';
+import { normalizeOptionalWorkStatus, pmaTimelineContractFields } from './domain';
 import { surfaceRefFromThreadRaw } from './thread';
 import { isChatUnread } from './unread';
 
@@ -1007,6 +1007,9 @@ export function optimisticUserTimelineItemFromSend(
       text_preview: text.slice(0, 240),
       attachments: Array.isArray(raw.attachments) ? raw.attachments : []
     },
+    ...pmaTimelineContractFields(`turn:${turnId}:user`, {
+      correlationId: stringValue(raw.client_turn_id) || null
+    }),
     raw: { optimistic: true, ...raw }
   };
 }

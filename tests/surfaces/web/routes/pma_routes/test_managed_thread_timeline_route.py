@@ -39,7 +39,7 @@ def test_managed_thread_timeline_endpoint_returns_canonical_items(hub_env) -> No
 
     assert timeline_resp.status_code == 200
     payload = timeline_resp.json()
-    assert payload["contract_version"] == "managed_thread_timeline.v1"
+    assert payload["contract_version"] == "managed_thread_timeline.v2"
     assert [item["kind"] for item in payload["items"]] == [
         "user_message",
         "assistant_message",
