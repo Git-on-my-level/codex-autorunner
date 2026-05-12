@@ -542,6 +542,26 @@ export function filterPmaChats(
     });
 }
 
+/** Unread chats first, then most recently updated. Waiting/running only break ties. */
+export function sortChatsUnreadFirst(
+  chats: PmaChatSummary[],
+  lastSeen: Record<string, string> = {}
+): PmaChatSummary[] {
+  const statusRank = (status: WorkStatus) =>
+    status === 'waiting' || status === 'blocked' ? 0 : status === 'running' ? 1 : 2;
+  return [...chats].sort((left, right) => {
+    const unreadDiff = Number(isUnread(right, lastSeen)) - Number(isUnread(left, lastSeen));
+    if (unreadDiff !== 0) return unreadDiff;
+    const leftTime = Date.parse(left.updatedAt ?? '') || 0;
+    const rightTime = Date.parse(right.updatedAt ?? '') || 0;
+    const timeDiff = rightTime - leftTime;
+    if (timeDiff !== 0) return timeDiff;
+    const rankDiff = statusRank(left.status) - statusRank(right.status);
+    if (rankDiff !== 0) return rankDiff;
+    return left.id.localeCompare(right.id);
+  });
+}
+
 /** Waiting/blocked chats first (operator inbox), then most recently updated. */
 export function sortChatsWaitingFirst(chats: PmaChatSummary[]): PmaChatSummary[] {
   const waitingRank = (status: WorkStatus) =>
@@ -645,7 +665,7 @@ export function buildPmaChatListEntries(
 ): PmaChatListEntry[] {
   const lastSeen = options.lastSeen ?? {};
   if (options.groupRuns === false) {
-    return sortChatsWaitingFirst(chats).map((chat) => ({ kind: 'chat', chat }) as PmaChatListEntry);
+    return sortChatsUnreadFirst(chats, lastSeen).map((chat) => ({ kind: 'chat', chat }) as PmaChatListEntry);
   }
   const groups = new Map<string, PmaChatRunGroup>();
   const standalone: PmaChatSummary[] = [];
@@ -683,7 +703,7 @@ export function buildPmaChatListEntries(
   }
 
   for (const group of groups.values()) {
-    group.chats = sortChatsWaitingFirst(group.chats);
+    group.chats = sortChatsUnreadFirst(group.chats, lastSeen);
     group.totalCount = group.chats.length;
     const agentSet = new Set<string>();
     for (const chat of group.chats) {
@@ -701,25 +721,32 @@ export function buildPmaChatListEntries(
     group.status = rollupGroupStatus(group);
   }
 
-  type Sortable = { entry: PmaChatListEntry; waitingRank: number; sort: string };
+  type Sortable = { entry: PmaChatListEntry; unreadRank: number; statusRank: number; sort: string; id: string };
   const sortables: Sortable[] = [];
   for (const group of groups.values()) {
     sortables.push({
       entry: { kind: 'group', group },
-      waitingRank: group.waitingCount > 0 ? 0 : group.activeCount > 0 ? 1 : 2,
-      sort: group.updatedAt ?? ''
+      unreadRank: group.unreadCount > 0 ? 0 : 1,
+      statusRank: group.waitingCount > 0 ? 0 : group.activeCount > 0 ? 1 : 2,
+      sort: group.updatedAt ?? '',
+      id: group.key
     });
   }
   for (const chat of standalone) {
     sortables.push({
       entry: { kind: 'chat', chat },
-      waitingRank: chat.status === 'waiting' || chat.status === 'blocked' ? 0 : chat.status === 'running' ? 1 : 2,
-      sort: chat.updatedAt ?? ''
+      unreadRank: isUnread(chat, lastSeen) ? 0 : 1,
+      statusRank: chat.status === 'waiting' || chat.status === 'blocked' ? 0 : chat.status === 'running' ? 1 : 2,
+      sort: chat.updatedAt ?? '',
+      id: chat.id
     });
   }
   sortables.sort((a, b) => {
-    if (a.waitingRank !== b.waitingRank) return a.waitingRank - b.waitingRank;
-    return (b.sort || '').localeCompare(a.sort || '');
+    if (a.unreadRank !== b.unreadRank) return a.unreadRank - b.unreadRank;
+    const timeDiff = (b.sort || '').localeCompare(a.sort || '');
+    if (timeDiff !== 0) return timeDiff;
+    if (a.statusRank !== b.statusRank) return a.statusRank - b.statusRank;
+    return a.id.localeCompare(b.id);
   });
   return sortables.map((item) => item.entry);
 }

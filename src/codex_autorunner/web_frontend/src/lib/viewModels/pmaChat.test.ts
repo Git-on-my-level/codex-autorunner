@@ -39,6 +39,7 @@ import {
   reconcileChatSurfaceEvent,
   reconcileChatSurfaceSnapshot,
   removePendingAttachment,
+  sortChatsUnreadFirst,
   sortChatsWaitingFirst,
   summarizeFilterCounts,
   buildPmaChatListEntries
@@ -348,6 +349,32 @@ describe('PMA chat view helpers', () => {
       { ...baseChat, id: 'c', status: 'waiting', updatedAt: '2026-05-04T02:00:00Z' }
     ];
     expect(sortChatsWaitingFirst(chats).map((chat) => chat.id)).toEqual(['c', 'b', 'a']);
+  });
+
+  it('sorts chats unread first, then by recent updates', () => {
+    const chats: PmaChatSummary[] = [
+      { ...baseChat, id: 'read-new', status: 'running', updatedAt: '2026-05-04T04:00:00Z' },
+      { ...baseChat, id: 'unread-old', status: 'idle', updatedAt: '2026-05-04T01:00:00Z' },
+      { ...baseChat, id: 'unread-new', status: 'idle', updatedAt: '2026-05-04T03:00:00Z' },
+      { ...baseChat, id: 'read-old', status: 'waiting', updatedAt: '2026-05-04T02:00:00Z' }
+    ];
+    const lastSeen = {
+      'read-new': '2026-05-04T04:00:00Z',
+      'read-old': '2026-05-04T02:00:00Z'
+    };
+
+    expect(sortChatsUnreadFirst(chats, lastSeen).map((chat) => chat.id)).toEqual([
+      'unread-new',
+      'unread-old',
+      'read-new',
+      'read-old'
+    ]);
+    expect(buildPmaChatListEntries(chats, { groupRuns: false, lastSeen }).map((entry) => entry.kind === 'chat' ? entry.chat.id : '')).toEqual([
+      'unread-new',
+      'unread-old',
+      'read-new',
+      'read-old'
+    ]);
   });
 
   it('formats header scope lines for PMA global, repo, and worktree chats', () => {

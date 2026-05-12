@@ -51,6 +51,7 @@
   import {
     buildPmaChatListEntries,
     buildPmaChatScopeOptions,
+    buildPmaLiveActivity,
     buildManagedThreadMessagePayload,
     buildPmaTranscriptCards,
     buildPmaStatusBar,
@@ -337,6 +338,7 @@
     return parts;
   }
   const displayedProgress = $derived(progressWithLiveElapsed(progress, clockNowMs));
+  const liveActivity = $derived(buildPmaLiveActivity(displayedProgress));
   const activeCards = $derived<PmaCard[]>(buildPmaTranscriptCards(timeline, activeChat, artifacts, displayedProgress));
   const statusBar = $derived(buildPmaStatusBar(displayedProgress, activeChat));
   const selectedScope = $derived(scopeOptions.find((scope) => scope.id === selectedScopeId) ?? localPmaChatScopeOption());
@@ -712,13 +714,16 @@
   }
 
   async function selectChat(chatId: string): Promise<void> {
+    const cached = hasCachedDetail(chatId);
     activeChatId = chatId;
     detailMode = 'detail';
+    loadingActive = !cached;
+    activeError = null;
     syncSelectorsToActiveChat();
     markActiveChatRead();
     connectStream(chatId);
     const urlPromise = syncDetailUrl(chatId);
-    void refreshActive(chatId, { quiet: hasCachedDetail(chatId) });
+    void refreshActive(chatId, { quiet: cached });
     await urlPromise;
   }
 
@@ -736,12 +741,15 @@
   }
 
   async function selectChatWithoutUrl(chatId: string): Promise<void> {
+    const cached = hasCachedDetail(chatId);
     activeChatId = chatId;
     detailMode = 'detail';
+    loadingActive = !cached;
+    activeError = null;
     syncSelectorsToActiveChat();
     markActiveChatRead();
     connectStream(chatId);
-    void refreshActive(chatId, { quiet: hasCachedDetail(chatId) });
+    void refreshActive(chatId, { quiet: cached });
   }
 
   function markActiveChatRead(): void {
@@ -2159,6 +2167,12 @@
             onAgentChange={handleAgentChange}
             onPickerChange={handlePickerChange}
           />
+        </div>
+      {:else if activeCards.length === 0 && liveActivity}
+        <div class={`state-panel live-activity-state ${liveActivity.state}`} role="status">
+          <span class="state-icon" aria-hidden="true"></span>
+          <strong>{liveActivity.title}</strong>
+          <p>{liveActivity.elapsedLabel ? `${liveActivity.summary} · ${liveActivity.elapsedLabel}` : liveActivity.summary}</p>
         </div>
       {:else}
         <ChatTranscriptCards cards={activeCards} assistantLabel={chatAgentDisplayLabel} />

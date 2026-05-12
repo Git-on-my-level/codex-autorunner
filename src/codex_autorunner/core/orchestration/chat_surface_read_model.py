@@ -889,6 +889,7 @@ def _chat_index_rows_from_surfaces(
             "surface_urn": surface.get("surface_urn"),
             "lifecycle": surface.get("lifecycle"),
             "display_name": display_map.get("display_name"),
+            "title": display_map.get("title"),
         }
         if managed_thread_id is None:
             external_rows.append(
@@ -986,6 +987,11 @@ def _chat_index_rows_from_surfaces(
             )
     rows = list(by_thread.values()) + external_rows
     for row in rows:
+        friendly_title = _friendly_chat_title(row)
+        if friendly_title is not None:
+            row["chat_display_name"] = friendly_title
+            if _is_fallback_chat_title(row.get("title"), row):
+                row["title"] = friendly_title
         row["group_id"] = _chat_ticket_group_id(row)
         row["surface_kinds"] = sorted(
             {
@@ -1004,6 +1010,49 @@ def _display_title(display: Mapping[str, Any], fallback: str) -> str:
         or _normalize_text(display.get("display_name"))
         or fallback
     )
+
+
+def _friendly_chat_title(row: Mapping[str, Any]) -> Optional[str]:
+    """Return a non-technical chat surface label, preferring bound messenger names."""
+
+    for surface in row.get("surfaces", []) or []:
+        if not isinstance(surface, Mapping):
+            continue
+        kind = _normalize_kind(surface.get("surface_kind"))
+        if kind == "pma":
+            continue
+        for key in ("title", "display_name"):
+            value = _normalize_text(surface.get(key))
+            if value is None:
+                continue
+            if _is_surface_id_title(value, surface):
+                continue
+            return value
+    return None
+
+
+def _is_surface_id_title(value: Any, row: Mapping[str, Any]) -> bool:
+    title = _normalize_text(value)
+    if title is None:
+        return False
+    lowered = title.lower()
+    surface_kind = _normalize_kind(row.get("surface_kind"))
+    if surface_kind in {"discord", "telegram"} and lowered.startswith(
+        f"{surface_kind}:"
+    ):
+        return True
+    return lowered.startswith("discord:") or lowered.startswith("telegram:")
+
+
+def _is_fallback_chat_title(value: Any, row: Mapping[str, Any]) -> bool:
+    title = _normalize_text(value)
+    if title is None:
+        return True
+    if title == _normalize_text(row.get("managed_thread_id")):
+        return True
+    if _is_surface_id_title(title, row):
+        return True
+    return title.lower().startswith("ticket-flow:")
 
 
 def _log_read_model_metric(
@@ -1092,14 +1141,7 @@ def _filter_chat_index_rows(
 
 
 def _chat_index_sort_key(row: Mapping[str, Any]) -> tuple[int, float, str]:
-    lifecycle = str(row.get("lifecycle") or "")
-    priority = 0
-    if int(row.get("queue_depth") or 0) > 0:
-        priority = 3
-    elif lifecycle == "running":
-        priority = 2
-    elif row.get("unread"):
-        priority = 1
+    priority = 1 if row.get("unread") else 0
     raw = str(row.get("updated_at") or row.get("created_at") or "")
     parsed = _parse_iso_timestamp(raw)
     updated_key = float("inf") if parsed is None else -parsed.timestamp()
@@ -1183,10 +1225,20 @@ def _chat_detail_thread_metadata(
 ) -> dict[str, Any]:
     metadata = thread.get("metadata")
     metadata_map = dict(metadata) if isinstance(metadata, Mapping) else {}
+    stored_title = thread.get("display_name") or thread.get("name")
+    chat_display_name = next(
+        (
+            _normalize_text(row.get("chat_display_name"))
+            for row in surface_rows
+            if _normalize_text(row.get("chat_display_name")) is not None
+        ),
+        None,
+    )
     return {
         "managed_thread_id": thread.get("managed_thread_id")
         or thread.get("thread_target_id"),
-        "title": thread.get("display_name"),
+        "title": chat_display_name or stored_title,
+        "chat_display_name": chat_display_name,
         "agent": thread.get("agent") or thread.get("agent_id"),
         "agent_profile": metadata_map.get("agent_profile"),
         "model": metadata_map.get("model"),
@@ -1620,6 +1672,7 @@ def _pma_thread_from_surface(surface: Mapping[str, Any]) -> dict[str, Any]:
         or ""
     )
     managed_thread_id = _normalize_text(surface.get("managed_thread_id"))
+    chat_display_name = _normalize_text(metadata.get("chat_display_name"))
     payload: dict[str, Any] = {
         "managed_thread_id": managed_thread_id,
         "agent": _normalize_text(metadata.get("agent_id")) or "unknown",
@@ -1629,6 +1682,7 @@ def _pma_thread_from_surface(surface: Mapping[str, Any]) -> dict[str, Any]:
         "resource_id": _normalize_text(owner.get("resource_id")),
         "workspace_root": _normalize_text(owner.get("workspace_root")),
         "name": _normalize_text(display.get("display_name")) or managed_thread_id,
+        "chat_display_name": chat_display_name,
         "model": _normalize_text(metadata.get("model")),
         "backend_thread_id": _normalize_text(metadata.get("backend_thread_id")),
         "lifecycle_status": lifecycle_status,

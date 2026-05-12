@@ -58,6 +58,21 @@ describe('read model view-model selectors', () => {
     expect(pmaChatSummaryToChatIndexRow(summary).unreadCount).toBe(3);
   });
 
+  it('flags generic ticket-flow rows as ticket flows for grouping', () => {
+    const summary = chatIndexRowToPmaChatSummary({
+      chatId: 'chat-ticket-flow',
+      surface: 'pma',
+      title: 'ticket-flow:codex',
+      status: 'idle',
+      unreadCount: 0,
+      lastActivityAt: now,
+      repoId: 'repo-1',
+      worktreeId: 'repo-1--ticket-flow'
+    });
+
+    expect(summary.isTicketFlow).toBe(true);
+  });
+
   it('selects chat and repo/worktree summaries from normalized state', () => {
     const store = new ReadModelEntityStore();
     store.applyChatIndexSnapshot({
