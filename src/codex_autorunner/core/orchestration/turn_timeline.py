@@ -4,7 +4,7 @@ import json
 import logging
 from dataclasses import asdict
 from datetime import datetime, timezone
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, Optional, Sequence
 
 from ..ports.run_event import (
     RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
@@ -925,6 +925,46 @@ def list_turn_timeline(hub_root, *, execution_id: str) -> list[dict[str, Any]]:
             """,
             (_EVENT_FAMILY, normalized_execution_id),
         ).fetchall()
+    return _timeline_entries_from_rows(rows)
+
+
+def list_turn_timelines(
+    hub_root,
+    *,
+    execution_ids: Sequence[str],
+) -> dict[str, list[dict[str, Any]]]:
+    normalized_ids = [str(execution_id or "").strip() for execution_id in execution_ids]
+    normalized_ids = list(
+        dict.fromkeys(execution_id for execution_id in normalized_ids if execution_id)
+    )
+    if not normalized_ids:
+        return {}
+    grouped: dict[str, list[dict[str, Any]]] = {
+        execution_id: [] for execution_id in normalized_ids
+    }
+    with open_orchestration_sqlite(hub_root) as conn:
+        for offset in range(0, len(normalized_ids), 500):
+            chunk = normalized_ids[offset : offset + 500]
+            placeholders = ",".join("?" for _ in chunk)
+            rows = conn.execute(
+                f"""
+                SELECT execution_id, event_id, event_type, timestamp, status, payload_json
+                  FROM orch_event_projections
+                 INDEXED BY idx_orch_event_projections_family_execution_order
+                 WHERE event_family = ?
+                   AND execution_id IN ({placeholders})
+                 ORDER BY execution_id ASC, timestamp ASC, event_id ASC
+                """,
+                (_EVENT_FAMILY, *chunk),
+            ).fetchall()
+            for row in rows:
+                execution_id = str(row["execution_id"] or "")
+                if execution_id in grouped:
+                    grouped[execution_id].extend(_timeline_entries_from_rows([row]))
+    return grouped
+
+
+def _timeline_entries_from_rows(rows: Iterable[Any]) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
     for row in rows:
         try:
@@ -945,5 +985,6 @@ __all__ = [
     "append_turn_events_to_cold_trace",
     "iso_from_epoch_millis",
     "list_turn_timeline",
+    "list_turn_timelines",
     "persist_turn_timeline",
 ]
