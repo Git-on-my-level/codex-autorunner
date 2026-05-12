@@ -16,6 +16,7 @@
     pmaChatSummaryToChatIndexRow,
     chatIndexSession,
     readModelEntityStore,
+    type ReadModelLoaderResult,
     selectRepoSummaries,
     selectPmaArtifacts,
     selectPmaChats,
@@ -120,6 +121,7 @@
     type SlashCommandSpec,
     type SlashCommandSuggestion
   } from '$lib/viewModels/slashCommands';
+  import type { ChatRouteLoadData } from './+page';
 
   const COMPACT_SUMMARY_PROMPT =
     'Summarize the conversation so far into a concise context block I can paste into a new thread. Include goals, constraints, decisions, and current state.';
@@ -798,14 +800,16 @@
 
   async function selectChatWithoutUrl(chatId: string): Promise<void> {
     const cached = hasCachedDetail(chatId);
+    const loaderResult = activeDetailLoadResult(chatId);
+    const loaderOwnsInitialDetail = Boolean(loaderResult && loaderResult.status !== 'cold');
     activeChatId = chatId;
     detailMode = 'detail';
-    loadingActive = !cached;
-    activeError = null;
+    loadingActive = !(cached || loaderOwnsInitialDetail);
+    activeError = loaderResult?.status === 'error' ? loaderResult.error : null;
     syncSelectorsToActiveChat();
     markActiveChatRead();
     connectStream(chatId);
-    void refreshActive(chatId, { quiet: cached });
+    if (!loaderOwnsInitialDetail) void refreshActive(chatId, { quiet: cached });
   }
 
   function markActiveChatRead(): void {
@@ -1067,8 +1071,16 @@
     return Boolean(
       state.pmaTimelines[chatId]?.order.length ||
       state.pmaProgress[chatId] ||
-      state.pmaQueues[chatId]?.length
+      state.pmaQueues[chatId]?.length ||
+      state.timelines[chatId]?.order.length ||
+      state.chatDetails[chatId]?.thread
     );
+  }
+
+  function activeDetailLoadResult(chatId: string): ReadModelLoaderResult | null {
+    const data = page.data as ChatRouteLoadData | undefined;
+    if (data?.chatId !== chatId) return null;
+    return data.activeDetail ?? null;
   }
 
   function currentTimeline(chatId: string): PmaTimelineItem[] {

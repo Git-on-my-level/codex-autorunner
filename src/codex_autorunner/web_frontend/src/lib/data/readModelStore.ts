@@ -23,7 +23,13 @@ import type {
   TicketQueueSibling,
   WorktreeTopology
 } from '$lib/api/readModelContracts';
-import type { PmaRunProgress, PmaTimelineItem, SurfaceArtifact, TicketSummary } from '$lib/viewModels/domain';
+import type {
+  PmaRunProgress,
+  PmaTimelineItem,
+  PmaTimelineItemKind,
+  SurfaceArtifact,
+  TicketSummary
+} from '$lib/viewModels/domain';
 
 export type EntityKind =
   | 'chat'
@@ -275,6 +281,22 @@ export class ReadModelEntityStore implements Readable<ReadModelEntityState> {
       order: snapshot.timeline.map((item) => item.itemId),
       windowLimit: snapshot.timelineWindow.limit
     };
+    next.pmaTimelines[snapshot.thread.chatId] = {
+      itemsById: keyed(snapshot.timeline.map((item) => chatTimelineItemToPmaItem(snapshot.thread.chatId, item)), (item) => item.id),
+      order: snapshot.timeline.map((item) => item.itemId)
+    };
+    next.pmaQueues[snapshot.thread.chatId] = snapshot.queue.queuedTurnIds.map((id, index) => ({
+      managedTurnId: id,
+      position: index + 1,
+      state: 'queued',
+      prompt: '',
+      promptPreview: id,
+      attachments: [],
+      model: null,
+      reasoning: null,
+      enqueuedAt: null,
+      raw: { queued_turn_id: id }
+    }));
     for (const artifact of snapshot.artifacts) {
       next.artifacts[artifact.artifactId] = artifact;
       bump(next, 'artifact', artifact.artifactId);
@@ -737,6 +759,32 @@ function keyed<T>(items: T[], key: (item: T) => string): Record<string, T> {
   const record: Record<string, T> = {};
   for (const item of items) record[key(item)] = item;
   return record;
+}
+
+function chatTimelineItemToPmaItem(chatId: string, item: ChatTimelineItem): PmaTimelineItem {
+  return {
+    id: item.itemId,
+    kind: pmaKindForChatTimelineItem(item.kind),
+    orderKey: item.itemId,
+    timestamp: item.createdAt,
+    chatId,
+    turnId: item.backendMessageId ?? null,
+    status: null,
+    payload: {
+      text: item.text ?? '',
+      text_preview: item.text ?? '',
+      role: item.role ?? null,
+      artifact_ids: item.artifactIds
+    },
+    raw: item
+  };
+}
+
+function pmaKindForChatTimelineItem(kind: ChatTimelineItem['kind']): PmaTimelineItemKind {
+  if (kind === 'user_message' || kind === 'assistant_message' || kind === 'artifact') return kind;
+  if (kind === 'progress') return 'status';
+  if (kind === 'system') return 'lifecycle';
+  return 'intermediate';
 }
 
 function bump(state: ReadModelEntityState, kind: EntityKind, id: string): void {
