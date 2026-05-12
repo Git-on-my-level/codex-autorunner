@@ -692,7 +692,7 @@ def timeline_item_from_tail_event(
     stable_suffix = (
         progress_group_id
         or progress_item_id
-        or str(tail_event.get("summary") or "event")
+        or str(tail_event.get("summary") or "")
         or event_type
         or "event"
     )
